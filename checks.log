@@ -1,0 +1,34 @@
+
+$ test -x /Users/runner/Applications/ClaudeOS.app/Contents/MacOS/ClaudeOS
+
+$ codesign --verify --deep --strict --verbose=2 /Users/runner/Applications/ClaudeOS.app
+/Users/runner/Applications/ClaudeOS.app: valid on disk
+/Users/runner/Applications/ClaudeOS.app: satisfies its Designated Requirement
+
+$ sh -c lipo -archs '/Users/runner/Applications/ClaudeOS.app/Contents/MacOS/ClaudeOS' | grep -q arm64 && lipo -archs '/Users/runner/Applications/ClaudeOS.app/Contents/MacOS/ClaudeOS' | grep -q x86_64
+
+$ sh -c ! xattr -lr '/Users/runner/Applications/ClaudeOS.app' | grep -q com.apple.quarantine
+
+$ sh -c test -x '/Users/runner/ClaudeOS/runtime/bin/python' && test -f '/Users/runner/ClaudeOS/python/cpython-3.12.14-macos-aarch64-none/lib/libpython3.12.dylib'
+
+$ plutil -lint /Users/runner/Library/LaunchAgents/com.claudeos.start.plist
+/Users/runner/Library/LaunchAgents/com.claudeos.start.plist: OK
+
+$ sh -c test -f '/Users/runner/ClaudeOS/models/kokoro/kokoro-v1.0.int8.onnx' && test -f '/Users/runner/ClaudeOS/models/whisper/faster-whisper-small.en/model.bin'
+
+$ /Users/runner/ClaudeOS/runtime/bin/python -c 
+import json, sys
+d = json.load(open(sys.argv[1]))
+sw, sh = d["screen"]
+mine = [w for w in d["windows"] if w["owner"] == "ClaudeOS"]
+print(mine)
+sys.exit(0 if any(w["w"] == sw and w["h"] == sh for w in mine) else 1) /Users/runner/work/_temp/results/3-windows.json
+[{'owner': 'ClaudeOS', 'name': 'ClaudeOS', 'layer': 0, 'w': 1024.0, 'h': 768.0}]
+
+$ test ! -e /Users/runner/ClaudeOS
+
+$ test ! -e /Users/runner/Applications/ClaudeOS.app
+
+$ test ! -e /Users/runner/Library/LaunchAgents/com.claudeos.start.plist
+
+$ sh -c ! pgrep -f 'ClaudeOS.app/Contents/MacOS/ClaudeOS'

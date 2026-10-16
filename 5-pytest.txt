@@ -1,0 +1,33 @@
+........................................................................ [ 39%]
+........................................................................ [ 78%]
+........................................                                 [100%]
+=============================== warnings summary ===============================
+../../../ClaudeOS/runtime/lib/python3.12/site-packages/_pytest/config/__init__.py:1464
+  /Users/runner/ClaudeOS/runtime/lib/python3.12/site-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+tests/test_brain_e2e.py:79
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:79: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+tests/test_brain_e2e.py:103
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:103: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+tests/test_brain_e2e.py:123
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:123: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+tests/test_brain_e2e.py:139
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:139: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+tests/test_brain_e2e.py:161
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:161: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_rendering.py:5: could not import 'claudeos.ui.gtk_app': No module named 'gi'
+184 passed, 1 skipped, 6 warnings in 37.77s

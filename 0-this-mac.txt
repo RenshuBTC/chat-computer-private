@@ -1,0 +1,42 @@
+ProductName:		macOS
+ProductVersion:		26.6.2
+BuildVersion:		25G83
+Darwin dsm12-dh252-f719ee69-5a42-41aa-a219-324b4ec9862d-AE35CA1B8152.local 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:16:43 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_VMAPPLE arm64
+Apple M2 Pro (Virtual)
+arm64 hardware: 1
+bash: 3.2.57(1)-release
+Filesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on
+/dev/disk2s5   320Gi   204Gi    96Gi    68%    1.9M  1.0G    0%   /System/Volumes/Data
+Audio:
+
+    Devices:
+
+        Apple Virtual Sound Device:
+
+          Default Input Device: Yes
+          Input Channels: 2
+          Manufacturer: Apple Inc.
+          Current SampleRate: 48000
+          Transport: Built-in
+          Input Source: Microphone
+
+        Apple Virtual Sound Device:
+
+          Default Output Device: Yes
+          Default System Output Device: Yes
+          Manufacturer: Apple Inc.
+          Output Channels: 2
+          Current SampleRate: 48000
+          Transport: Built-in
+          Output Source: Speakers
+
+        Null Audio Device:
+
+          Input Channels: 2
+          Manufacturer: Apple Inc.
+          Output Channels: 2
+          Current SampleRate: 44100
+          Transport: Virtual
+          Input Source: Data Source Item 0
+          Output Source: Data Source Item 0
+

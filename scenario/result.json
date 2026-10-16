@@ -1,0 +1,118 @@
+{
+ "ok": false,
+ "steps": [
+  {
+   "step": "starts full screen and greets",
+   "ok": true,
+   "greeted": true,
+   "spoke": true,
+   "geometry": {
+    "screen": [
+     1024.0,
+     768.0
+    ],
+    "window": [
+     1024.0,
+     768.0
+    ],
+    "scale": 1.0
+   },
+   "layout": {
+    "scale": 0.875,
+    "font_px": 14.0,
+    "column_px": 672,
+    "web_zoom": 0.9,
+    "distance_mm": 500,
+    "distance_estimated": true,
+    "size_known": false,
+    "diagonal_in": 13.333,
+    "summary": "13-inch screen (size assumed), viewed from about 50 cm away (estimated): drawn at 88% (text 14 px), websites at 90%."
+   }
+  },
+  {
+   "step": "whole-Mac mode: in front, no Dock, no menu bar, no app switching",
+   "ok": false,
+   "active": false,
+   "hidden": false,
+   "window_visible": true,
+   "nothing_of_macos": false,
+   "options": 0
+  },
+  {
+   "step": "voice: opens the website and clicks in it",
+   "ok": true,
+   "content": {
+    "mode": "content",
+    "url": "http://127.0.0.1:49225/watch.html",
+    "title": "Calm piano music - Test Video Site"
+   },
+   "heard": [
+    "reminder>\n\n[Fri 16 Oct 11:21 \u00b7 screen: conversation]\nPlay some calm piano music."
+   ],
+   "voice": true
+  },
+  {
+   "step": "back to the conversation",
+   "ok": true
+  },
+  {
+   "step": "shows a document",
+   "ok": true,
+   "content": {
+    "mode": "content",
+    "url": "file:///Users/runner/work/_temp/results/scenario/home/ClaudeOS/pages/_view1.html",
+    "title": "Plan for Saturday"
+   }
+  },
+  {
+   "step": "sleeps and wakes to its name",
+   "ok": true
+  },
+  {
+   "step": "steps aside to show macOS, and comes back to the front",
+   "ok": true,
+   "hidden": true,
+   "listening_for_name_only": true,
+   "back": true,
+   "state": {
+    "active": true,
+    "hidden": false,
+    "window_visible": true,
+    "nothing_of_macos": true,
+    "options": 42
+   }
+  },
+  {
+   "step": "comes back to the front from another app",
+   "ok": true,
+   "other_app_in_front": true,
+   "state": {
+    "active": true,
+    "hidden": false,
+    "window_visible": true,
+    "nothing_of_macos": true,
+    "options": 42
+   }
+  },
+  {
+   "step": "rebuilds the conversation after its page stops",
+   "ok": true
+  }
+ ],
+ "voice_models": true,
+ "models_dir": "/Users/runner/ClaudeOS/models",
+ "page_errors": [
+  "Error Domain=WKErrorDomain Code=4 \"A JavaScript exception occurred\" UserInfo={WKJavaScriptExceptionLineNumber=1, WKJavaScriptExceptionMessage=TypeError: null is not an object (evaluating 'document.getElementById('greeting').textContent'), WKJavaScriptExceptionColumnNumber=36, NSLocalizedDescription="
+ ],
+ "spoken_chunks": 14,
+ "tool_results": [
+  "[{\"tool_use_id\": \"toolu_7758ae3605e141569173\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Showing: Test Video Site \\u2014 http://127.0.0.1:49225/\\nUse read_screen to read it or find things to click.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_d82bbd29851e4b9cb1d4\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Clicked \\u201cCalm piano music for focus\\u201d. Now showing: Calm piano music - Test Video Site \\u2014 http://127.0.0.1:49225/watch.html\"}]}]",
+  "[{\"tool_use_id\": \"toolu_203f862ec5ff486cb7a2\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Back to the conversation.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_d9099c8bec584a489465\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Showing the document.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_8de8bb0375354198a0af\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Back to the conversation.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_520f876a898e4f3fbcbf\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"OK \\u2014 switch to macos in 4 seconds. Say a short goodbye.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_d53072386dcd4e1baf49\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"OK \\u2014 switch to macos in 4 seconds. Say a short goodbye.\"}]}]"
+ ],
+ "quit_asked_at": 1792149728.7137861
+}

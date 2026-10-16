@@ -390,7 +390,8 @@ mount_mac_drive() {
   if [ "$DRY_RUN" -eq 1 ]; then log "[dry-run] mount PARTUUID=$id at $USER_HOME/Mac (fstab)"; return 0; fi
   uid="$(id -u "$USER_NAME")" gid="$(id -g "$USER_NAME")"
   install -d -o "$USER_NAME" -g "$USER_NAME" -m 0700 "$USER_HOME/Mac"
-  line="PARTUUID=$id $USER_HOME/Mac exfat uid=$uid,gid=$gid,umask=077,nofail,x-systemd.device-timeout=10s 0 0"
+  # nofail: the start doesn't wait for the drive, so waiting up to 90 s for its disk costs nothing.
+  line="PARTUUID=$id $USER_HOME/Mac exfat uid=$uid,gid=$gid,umask=077,nofail,x-systemd.device-timeout=90s 0 0"
   tmp="$(mktemp)"
   { grep -v -e "[[:space:]]$USER_HOME/Mac[[:space:]]" -e '^# ClaudeOS: the drive macOS and ClaudeOS share' "$fstab" 2>/dev/null || true
     printf '# ClaudeOS: the drive macOS and ClaudeOS share (ClaudeOS in macOS'"'"'s Finder)\n%s\n' "$line"
@@ -457,6 +458,7 @@ PACKAGES=(
 
   # --- ClaudeOS's own screen: GTK 3 + WebKitGTK via python3-gobject. ---
   python3-gobject gtk3 webkit2gtk4.1
+  gobject-introspection      # cairo-1.0.typelib, which GTK's typelib needs (only a weak dependency otherwise)
   gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav gstreamer1-plugin-openh264
   poppler-utils              # pdftoppm: show PDFs as their real pages
 

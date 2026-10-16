@@ -378,9 +378,13 @@ and `restorecon` at the end.
   install steps.
 * An emulated Mac (QEMU `virt`, `-cpu neoverse-n1` for 16K pages, UEFI), its disk built from the real Fedora
   package with setup's own `write_first_start`: Fedora's 16K kernel starts, the first start runs and restarts,
-  and `claudeos-finish-install` takes over. (QEMU 8.2's `-cpu max` crashes this kernel early: an emulator
-  problem, not a Mac one.)
+  `claudeos-finish-install` installs everything (dnf, then pip on Python 3.14) and restarts, and ClaudeOS's
+  screen comes up, with SELinux enforcing and no denials. On 16K pages the Claude program runs and GTK,
+  WebKit, numpy, onnxruntime, CTranslate2 and the voice packages load. It also found what the pretend tests
+  couldn't: the first-start quoting, the default target, Fedora Asahi Remix's os-release ID, kokoro-onnx's
+  Python bound, and GTK's cairo typelib (in `gobject-introspection`, only a weak dependency). (QEMU 8.2's
+  `-cpu max` crashes this kernel early: an emulator problem, not a Mac one.)
 
 Not yet tried on a real Mac. Unknowns: AirPods' microphone (Bluetooth HFP) under Asahi; AirPods paired in
-ClaudeOS may need pairing again in macOS (the same Mac, a new key); ClaudeOS's Python wheels and the Claude
-program on 16K pages.
+ClaudeOS may need pairing again in macOS (the same Mac, a new key); the Mac's own graphics (the emulated Mac
+used a virtual one).

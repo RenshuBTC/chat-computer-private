@@ -43,6 +43,7 @@ has   fedora '\[dry-run\] dnf install -y --setopt=install_weak_deps=False .*xorg
 has   fedora 'dnf install .*asahi-bless' "asahi-bless, to restart into macOS"
 has   fedora 'dnf install .*exfatprogs' "exFAT, for the drive macOS shares"
 has   fedora 'dnf install .*webkit2gtk4\.1' "WebKitGTK 4.1 for ClaudeOS's screen"
+has   fedora 'dnf install .*gobject-introspection' "cairo's typelib, which GTK's needs (weak dependencies are off)"
 has   fedora '51-claudeos-bluetooth\.conf' "WirePlumber 0.5 settings (SPA-JSON)"
 has   fedora 'no ClaudeOS drive recorded|PARTUUID=.*/Mac' "looks for the drive macOS shares"
 has   fedora 'hidden menu, quiet rhgb' "GRUB starts ClaudeOS without its menu"

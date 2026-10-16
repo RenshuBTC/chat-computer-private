@@ -56,7 +56,7 @@ On an Apple silicon Mac the same script runs on Fedora Asahi Remix 44 Minimal (a
 
 | Area | Fedora | Why |
 |---|---|---|
-| Packages | the same set by Fedora's names (`xorg-x11-server-Xorg`, `python3-gobject`, `webkit2gtk4.1`, `pipewire-pulseaudio`, ...), `dnf install --setopt=install_weak_deps=False` | Nothing beyond what ClaudeOS needs; the Asahi image already has the Mac's own parts. All 40 names checked against Fedora 44's aarch64 repositories. |
+| Packages | the same set by Fedora's names (`xorg-x11-server-Xorg`, `python3-gobject`, `webkit2gtk4.1`, `pipewire-pulseaudio`, ...), `dnf install --setopt=install_weak_deps=False` | Nothing beyond what ClaudeOS needs; the Asahi image already has the Mac's own parts. All 41 names checked against Fedora 44's aarch64 repositories; `gobject-introspection` is listed because GTK needs its cairo typelib and weak dependencies are off. |
 | The Mac | `asahi-bless`, `exfatprogs` | "Switch to macOS" chooses the start-up volume; the drive macOS shares is exFAT. |
 | Audio | `51-claudeos-bluetooth.conf` (WirePlumber 0.5, SPA-JSON) | Fedora's WirePlumber reads SPA-JSON, not Lua. |
 | Files | fstab line for the ClaudeOS drive at `~/Mac` (`PARTUUID` from `/etc/claudeos/mac-files-partuuid`) | Folders sent over from macOS. No Windows mount, no netplan, no Xwrapper (logind gives Xorg the devices). |

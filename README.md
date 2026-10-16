@@ -179,9 +179,11 @@ copies the folders you choose onto a drive called **ClaudeOS** that both systems
 in your Mac folder; in macOS, the ClaudeOS drive shows in Finder. What you save there in one system is
 there in the other. To bring more folders over later, run setup in macOS again.
 
-ClaudeOS for Mac hasn't been tried on a real Mac yet: its setup has been tested on a pretend Mac and, in
-parts, on GitHub's virtual Macs (which can't start Linux). Whether AirPods' microphone works in Asahi Linux
-isn't known yet; the built-in microphones of M1, M2 and M3 laptops do work.
+ClaudeOS for Mac hasn't been tried on a real Mac yet. Its setup has been tested on a pretend Mac and, in
+parts, on GitHub's virtual Macs (which can't start Linux). Its first start and installation have been tested
+on an emulated Mac running the real Fedora image, through to ClaudeOS's screen. The step in the Mac's startup
+options, Wi-Fi, sound and the Mac's own hardware can only be tried on a real Mac. Whether AirPods' microphone
+works in Asahi Linux isn't known yet; the built-in microphones of M1, M2 and M3 laptops do work.
 
 ### What you need on a Mac
 

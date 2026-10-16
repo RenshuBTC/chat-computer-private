@@ -1,0 +1,71 @@
+﻿............F.F......                                                    [100%]
+================================== FAILURES ===================================
+_________ test_flow_says_what_to_do_when_the_page_file_is_in_the_way __________
+
+tmp_path = WindowsPath('C:/Users/runneradmin/AppData/Local/Temp/pytest-of-runneradmin/pytest-0/test_flow_says_what_to_do_when0')
+
+    @needs_pwsh
+    def test_flow_says_what_to_do_when_the_page_file_is_in_the_way(tmp_path):
+>       out, res = _flow(tmp_path, "stuck")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+
+windows\tests\test_windows_setup.py:578: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp_path = WindowsPath('C:/Users/runneradmin/AppData/Local/Temp/pytest-of-runneradmin/pytest-0/test_flow_says_what_to_do_when0')
+scenario = 'stuck'
+
+    def _flow(tmp_path, scenario):
+        out = tmp_path / scenario
+        r = subprocess.run([str(PWSH), "-NoProfile", "-File", str(WIN / "tests/Flow-Test.ps1"), "-Scenario", scenario,
+                            "-OutDir", str(out)], capture_output=True, text=True, timeout=600)
+        assert (out / "flow.json").exists(), r.stdout + r.stderr
+        res = json.loads((out / "flow.json").read_text())
+>       assert res["answers_left"] == 0, res                     # every scripted answer was asked for
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: {'scenario': 'stuck', 'ok': False, 'error': 'Exception calling "SetLength" with "1" argument(s): "There is not enough ...
+E         "', 'calls': ['Mount-EspPartition 0 1', 'Dismount-EspPartition', 'Invoke-ClaudeBrowserSignIn', 'Get-UbuntuIso'], ...}
+E       assert 1 == 0
+
+windows\tests\test_windows_setup.py:365: AssertionError
+____________________ test_flow_with_a_pasted_sign_in_code _____________________
+
+tmp_path = WindowsPath('C:/Users/runneradmin/AppData/Local/Temp/pytest-of-runneradmin/pytest-0/test_flow_with_a_pasted_sign_i0')
+
+    @needs_pwsh
+    def test_flow_with_a_pasted_sign_in_code(tmp_path):
+>       out, res = _flow(tmp_path, "paste")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+
+windows\tests\test_windows_setup.py:597: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp_path = WindowsPath('C:/Users/runneradmin/AppData/Local/Temp/pytest-of-runneradmin/pytest-0/test_flow_with_a_pasted_sign_i0')
+scenario = 'paste'
+
+    def _flow(tmp_path, scenario):
+        out = tmp_path / scenario
+        r = subprocess.run([str(PWSH), "-NoProfile", "-File", str(WIN / "tests/Flow-Test.ps1"), "-Scenario", scenario,
+                            "-OutDir", str(out)], capture_output=True, text=True, timeout=600)
+        assert (out / "flow.json").exists(), r.stdout + r.stderr
+        res = json.loads((out / "flow.json").read_text())
+>       assert res["answers_left"] == 0, res                     # every scripted answer was asked for
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: {'scenario': 'paste', 'ok': False, 'error': 'Exception calling "SetLength" with "1" argument(s): "There is not enough ...0 1', 'Dismount-EspPartition', 'Q Type a number (Enter = 1) -> 1', 'Invoke-ClaudeBrowserSignIn', 'Get-UbuntuIso'], ...}
+E       assert 2 == 0
+
+windows\tests\test_windows_setup.py:365: AssertionError
+============================== warnings summary ===============================
+C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\_pytest\config\__init__.py:1464
+  C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\_pytest\config\__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED windows/tests/test_windows_setup.py::test_flow_says_what_to_do_when_the_page_file_is_in_the_way - AssertionError: {'scenario': 'stuck', 'ok': False, 'error': 'Exception calling "SetLength" with "1" argument(s): "There is not enough ...
+  "', 'calls': ['Mount-EspPartition 0 1', 'Dismount-EspPartition', 'Invoke-ClaudeBrowserSignIn', 'Get-UbuntuIso'], ...}
+assert 1 == 0
+FAILED windows/tests/test_windows_setup.py::test_flow_with_a_pasted_sign_in_code - AssertionError: {'scenario': 'paste', 'ok': False, 'error': 'Exception calling "SetLength" with "1" argument(s): "There is not enough ...0 1', 'Dismount-EspPartition', 'Q Type a number (Enter = 1) -> 1', 'Invoke-ClaudeBrowserSignIn', 'Get-UbuntuIso'], ...}
+assert 2 == 0
+2 failed, 19 passed, 23 deselected, 1 warning in 63.97s (0:01:03)

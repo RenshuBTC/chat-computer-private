@@ -389,7 +389,8 @@ function Remove-ClaudeOS {
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
     $signin = Join-Path $env:USERPROFILE 'ClaudeOS'
-    if (Test-Path -LiteralPath $signin) { Remove-Item -LiteralPath $signin -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $signin) { Remove-Folder $signin }
+    Remove-OldSignInFolders
     $docs = $DocumentsDir
     if (-not $docs) { $docs = [Environment]::GetFolderPath('MyDocuments') }
     $note = Join-Path $docs 'ClaudeOS recovery password.txt'

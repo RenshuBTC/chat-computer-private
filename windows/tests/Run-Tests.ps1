@@ -223,6 +223,74 @@ ${function:Read-Choice} = $origChoice
 ${function:Read-PastedSecret} = $origPasted
 $env:TEMP = $savedTemp
 
+# ------------------------------------------------------------------ folders, and short (8.3) folder names
+# Remove-Folder deletes a folder with everything in it, quietly; a missing folder is fine.
+$rf = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-rf-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path (Join-Path $rf 'a/b') -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $rf 'a/b/x.json'), '{}')
+$out = @(Remove-Folder $rf)
+Assert-True (-not (Test-Path -LiteralPath $rf) -and $out.Count -eq 0) 'remove folder: gone, and nothing written to the output'
+Remove-Folder $rf
+Assert-True (-not (Test-Path -LiteralPath $rf)) 'remove folder: a missing folder is fine'
+# Sign-in folders an earlier, stopped run left behind are deleted; other folders stay.
+$tr = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-tr-' + [guid]::NewGuid().ToString('N'))
+foreach ($d in 'claudeos-signin-1/config', 'claudeos-signin-2', 'keep-me') { New-Item -ItemType Directory -Path (Join-Path $tr $d) -Force | Out-Null }
+[IO.File]::WriteAllText((Join-Path $tr 'claudeos-signin-1/config/.credentials.json'), '{}')
+Remove-OldSignInFolders -Root $tr
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $tr 'claudeos-signin-1')) -and -not (Test-Path -LiteralPath (Join-Path $tr 'claudeos-signin-2')) -and
+             (Test-Path -LiteralPath (Join-Path $tr 'keep-me'))) 'old sign-in folders: deleted, others kept'
+Remove-Folder $tr
+Assert-Equal 'C:\Users\Ren Shu\x' (Get-LongPath 'C:\Users\Ren Shu\x') 'long path: no short names, unchanged'
+Assert-True ([string]::IsNullOrEmpty((Get-LongPath $null))) 'long path: nothing in, nothing out'
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    # The PC that needed this: user folder "Ren Shu", so %TEMP% is C:\Users\RENSHU~1\AppData\Local\Temp, and setup
+    # runs in a folder on C:. A folder with a space gets a short name like that (where the drive makes them).
+    $base = Get-LongPath ([Environment]::GetFolderPath('LocalApplicationData'))    # on C:, like the user folder
+    $long = Join-Path $base ('ClaudeOS short ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $long -Force | Out-Null
+    $short = $null
+    try { $short = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($long).ShortPath } catch { $short = $null }
+    if ($short -and $short.Contains('~')) {
+        Assert-Equal $long.ToLowerInvariant() (Get-LongPath $short).ToLowerInvariant() 'long path: short names spelled out'
+        $savedEnvTemp = $env:TEMP
+        Push-Location (Split-Path -Qualifier $long)
+        try {
+            # What Windows PowerShell 5.1 does with Remove-Item -Recurse there (logged, not judged).
+            New-Item -ItemType Directory -Path (Join-Path $long 'probe') -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $long 'probe/x.json'), '{}')
+            try { Remove-Item -LiteralPath (Join-Path $short 'probe') -Recurse -Force -ErrorAction SilentlyContinue; Write-Host 'short path: Remove-Item -Recurse worked here' }
+            catch { Write-Host ('short path: Remove-Item -Recurse failed here: ' + $_.Exception.Message) }
+            # The sign-in, start to finish, with %TEMP% spelled the short way: setup carries on.
+            $env:TEMP = $short
+            ${function:Start-SignInWindow} = {
+                param($ClaudeExe, $Folder)
+                $Script:Opened += $Folder
+                [IO.File]::WriteAllText((Join-Path (Join-Path $Folder 'config') '.credentials.json'), '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}')
+                return $true
+            }
+            $Script:Opened = @()
+            $r = $null
+            try { $r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 5 } catch { Write-Host ('short path: sign-in failed: ' + $_.Exception.Message) }
+            Assert-True ($null -ne $r -and (Test-ClaudeLogin $r.Login)) 'short path: the sign-in comes through'
+            Assert-True ($Script:Opened.Count -eq 1 -and -not [IO.Directory]::Exists((Join-Path $Script:Opened[0] 'config'))) 'short path: the sign-in it saved is deleted'
+            # Setup spells %TEMP% out at the start.
+            $savedTmp = $env:TMP
+            $env:TMP = $short
+            Use-LongTempPath
+            Assert-Equal $long.ToLowerInvariant() $env:TEMP.ToLowerInvariant() 'short path: %TEMP% spelled out'
+            Assert-Equal $long.ToLowerInvariant() $env:TMP.ToLowerInvariant() 'short path: %TMP% spelled out'
+            $env:TMP = $savedTmp
+        } finally {
+            Pop-Location
+            $env:TEMP = $savedEnvTemp
+            ${function:Start-SignInWindow} = $origStart
+        }
+    } else {
+        Write-Host 'short path: this drive makes no short names; skipped'
+    }
+    Remove-Folder $long
+}
+
 # ------------------------------------------------------------------ what stops C: from shrinking
 # Event 259 as real Windows writes it (fields from GitHub's Windows Server 2025, and the PC that needed this).
 $ev = [pscustomobject]@{

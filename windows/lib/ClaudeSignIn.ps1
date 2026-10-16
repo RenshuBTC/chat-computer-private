@@ -218,12 +218,25 @@ function Read-SignInCode {
     return $null
 }
 
+function Remove-OldSignInFolders {
+    # Sign-in folders that earlier runs of setup left in %TEMP%. A run that stopped can leave a sign-in in one,
+    # so they are deleted before a new sign-in starts (their windows have long closed).
+    param([string]$Root = $env:TEMP)
+    try {
+        if (-not $Root -or -not [IO.Directory]::Exists($Root)) { return }
+        foreach ($dir in [IO.Directory]::GetDirectories($Root, 'claudeos-signin-*')) { Remove-Folder $dir }
+    } catch {
+        Write-SetupLog ('Old sign-in folders: ' + $_.Exception.Message)
+    }
+}
+
 function Invoke-ClaudeBrowserSignIn {
     # Signs in to Claude: the sign-in window, then the browser, then setup picks the sign-in up by itself.
     # Returns @{ Login = the full sign-in (or $null); Token = a pasted sign-in code (or $null) }: one of them.
     # The sign-in window's settings folder (the sign-in itself) is deleted as soon as setup has it; its .cmd
     # stays in %TEMP% (nothing secret in it), because the window may still be reading it.
     param([Parameter(Mandatory = $true)][string]$ClaudeExe, [int]$WaitSeconds = 900)
+    Remove-OldSignInFolders
     while ($true) {
         $folder = Join-Path $env:TEMP ('claudeos-signin-' + [guid]::NewGuid().ToString('N'))
         $config = Join-Path $folder 'config'
@@ -244,7 +257,7 @@ function Invoke-ClaudeBrowserSignIn {
                 return [pscustomobject]@{ Login = $login; Token = $null }
             }
         } finally {
-            Remove-Item -LiteralPath $config -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Folder $config
         }
         Write-Warn 'The sign-in did not come through.'
         $pick = Read-Choice 'What would you like to do?' @('Try signing in again', 'Paste a sign-in code instead', 'Stop setup') 0

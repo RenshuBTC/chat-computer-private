@@ -46,6 +46,7 @@ $WorkDir = Join-Path $env:LOCALAPPDATA 'ClaudeOS\setup'
 New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 $LogPath = Join-Path $WorkDir 'setup.log'
 Initialize-SetupLog $LogPath
+Use-LongTempPath                     # C:\Users\Ren Shu\..., not C:\Users\RENSHU~1\... (see Remove-Folder)
 $null = Disable-ConsoleQuickEdit     # a click in this window can't pause setup
 Unblock-SetupFiles -Root $RepoRoot   # no "publisher could not be verified" warning next time
 

@@ -220,6 +220,54 @@ function Disable-ConsoleQuickEdit {
     }
 }
 
+function Get-LongPath {
+    # The full spelling of a path that may contain short (8.3) folder names: C:\Users\Ren Shu for
+    # C:\Users\RENSHU~1. Windows spells %TEMP% the short way when the user folder's name has a space in it, and
+    # some of Windows PowerShell 5.1's commands fail on such paths (see Remove-Folder). The path as given when
+    # it has no short names, doesn't exist, or can't be expanded.
+    param([AllowNull()][AllowEmptyString()][string]$Path)
+    if ([string]::IsNullOrEmpty($Path) -or $Path.IndexOf('~') -lt 0) { return $Path }
+    try {
+        if (-not ('ClaudeOSLongPath' -as [type])) {
+            Add-Type -Namespace '' -Name 'ClaudeOSLongPath' -MemberDefinition @'
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern uint GetLongPathName(string shortPath, System.Text.StringBuilder longPath, uint size);
+'@ -ErrorAction Stop
+        }
+        $sb = New-Object System.Text.StringBuilder 32768
+        $n = [ClaudeOSLongPath]::GetLongPathName($Path, $sb, [uint32]$sb.Capacity)
+        if ($n -gt 0 -and $n -lt $sb.Capacity) { return $sb.ToString() }
+    } catch {
+        Write-SetupLog ('Full name of ' + $Path + ': ' + $_.Exception.Message)
+    }
+    return $Path
+}
+
+function Use-LongTempPath {
+    # Gives %TEMP% and %TMP% their full spelling (Get-LongPath) in setup and the programs it starts.
+    foreach ($name in @('TEMP', 'TMP')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        $long = Get-LongPath $value
+        if ($long -and $long -ne $value) {
+            [Environment]::SetEnvironmentVariable($name, $long)
+            Write-SetupLog ('%' + $name + '% is ' + $long)
+        }
+    }
+}
+
+function Remove-Folder {
+    # Deletes a folder and everything in it. It never stops setup: a folder that can't be deleted is only
+    # logged. Not Remove-Item -Recurse: in Windows PowerShell 5.1 that fails on a path with a short (8.3) name
+    # in it when the current folder is on the same drive ("An object at the specified path C:\Users\RENSHU~1
+    # does not exist"), even with -ErrorAction SilentlyContinue.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try {
+        if ([IO.Directory]::Exists($Path)) { [IO.Directory]::Delete($Path, $true) }
+    } catch {
+        Write-SetupLog ('Could not delete ' + $Path + ': ' + $_.Exception.Message)
+    }
+}
+
 function Unblock-SetupFiles {
     # Takes the "downloaded from the internet" mark off setup's own files, so Windows doesn't warn "The publisher
     # could not be verified" every time setup is opened (only the first time, before this has run).

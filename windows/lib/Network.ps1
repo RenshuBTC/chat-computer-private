@@ -60,7 +60,7 @@ function Get-WifiForInstaller {
         }
         return [pscustomobject]@{ Ssid = $ssid; Authentication = 'unknown'; Password = $null; Usable = $false }
     } finally {
-        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Folder $tmp    # it holds Wi-Fi passwords in plain text
     }
 }
 

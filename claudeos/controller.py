@@ -299,7 +299,8 @@ class Controller:
 
     def _other_os_files(self) -> str | None:
         """The other system's files: Windows' home folder on a PC; on a Mac, the drive with what ClaudeOS Setup
-        sent over from macOS (macOS's own files can't be opened from here: FileVault locks them to macOS)."""
+        sent over from macOS (macOS's own files can't be opened from here: Apple silicon keeps them encrypted with
+        keys in the Secure Enclave, FileVault or not, which Linux can't use yet)."""
         if self.platform.name == "mac":
             from .platform.linux import MAC_FILES
             p = os.path.expanduser(MAC_FILES)

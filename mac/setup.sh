@@ -10,8 +10,9 @@
 #
 # Installing it:
 #   1. checks this Mac, signs in to Claude (the official Claude program from Anthropic's Agent SDK), notes
-#      the Wi-Fi, and asks which folders to bring over: ClaudeOS can't open macOS's own files (FileVault, on
-#      most Macs, locks them to macOS), so setup copies them now, onto a drive called ClaudeOS that both open;
+#      the Wi-Fi, and asks which folders to bring over: ClaudeOS can't open macOS's own files (on Apple silicon
+#      they're always encrypted, FileVault or not, with keys in the Secure Enclave that Linux can't use yet),
+#      so setup copies them now, onto a drive called ClaudeOS that both open;
 #   2. downloads the Asahi installer and Fedora Asahi Remix's Minimal image (mac/manifest.sh: pinned, checked
 #      against SHA-256 fingerprints) and runs the installer, answering its questions (mac/drive-installer.exp):
 #      it makes room next to macOS and installs Fedora there; you type your Mac's password once;
@@ -348,9 +349,10 @@ folder_bytes() {   # the size of a folder, as macOS reports file sizes (files ke
 
 choose_folders() {
   step "Your files"
-  say "ClaudeOS can't open macOS's own files: FileVault, which most Macs have on, locks them to macOS. So setup copies"
-  say "the folders you choose onto a drive called ClaudeOS that both systems open; macOS keeps its own copies. What"
-  say "you save on that drive in ClaudeOS is in macOS too, and you can send more later (run setup again)."
+  say "ClaudeOS can't open macOS's own files: on this Mac they're always encrypted, with keys only macOS can use"
+  say "(FileVault or not). So setup copies the folders you choose onto a drive called ClaudeOS that both systems open;"
+  say "macOS keeps its own copies. What you save on that drive in ClaudeOS is in macOS too, and you can send more"
+  say "later (run setup again)."
   say "macOS may ask whether Terminal can open your Desktop, Documents and Downloads folders: choose OK."
   say ""
   local f b names="" sizes="" total=0

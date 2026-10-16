@@ -174,8 +174,9 @@ on:
 * A separate screen (a Mac mini's, say) must be connected to the Mac's HDMI port: screens connected over
   USB-C or Thunderbolt don't work in Asahi Linux yet.
 
-ClaudeOS can't open macOS's own files: FileVault, which most Macs have on, locks them to macOS. So setup
-copies the folders you choose onto a drive called **ClaudeOS** that both systems open. In ClaudeOS they're
+ClaudeOS can't open macOS's own files. On a Mac with Apple silicon they're always encrypted, FileVault or
+not, with keys kept by the Mac's Secure Enclave, and Linux can't use those yet. So setup copies the folders
+you choose onto a drive called **ClaudeOS** that both systems open. In ClaudeOS they're
 in your Mac folder; in macOS, the ClaudeOS drive shows in Finder. What you save there in one system is
 there in the other. To bring more folders over later, run setup in macOS again.
 

@@ -280,6 +280,13 @@ M3 Max (not M3 Ultra, M4, M5; on M3 for now without graphics acceleration, brigh
 Asahi's feature tables). The runtime (`claudeos/`) is the same as on a PC; `claudeos/platform/linux.py` has
 `MacPlatform` (chosen when `/proc/device-tree/compatible` starts with `apple,`).
 
+macOS's own files can't be read from Linux, unlike Windows' on a PC: Apple silicon encrypts every internal APFS
+volume ("Encrypted at rest", FileVault or not), and the disk controller decrypts a request only when it carries
+the volume's encryption details, which macOS sets up with the Secure Enclave. Linux's driver leaves those fields
+empty (`aes_iv` in `drivers/nvme/host/apple.c`), and Asahi has no Secure Enclave driver yet; apfs-fuse lists
+hardware-encrypted volumes as unsupported. So setup copies folders onto an exFAT
+drive both systems open.
+
 | What | Path / value |
 |---|---|
 | Image | Fedora Asahi Remix 44 Minimal, unmodified (`mac/manifest.sh`: the package's URL, SHA-256, kernel, file system ids) |

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AllDisks</key>
+	<array>
+		<string>disk0</string>
+		<string>disk0s1</string>
+		<string>disk0s2</string>
+		<string>disk0s3</string>
+	</array>
+	<key>AllDisksAndPartitions</key>
+	<array>
+		<dict>
+			<key>Content</key>
+			<string>GUID_partition_scheme</string>
+			<key>DeviceIdentifier</key>
+			<string>disk0</string>
+			<key>OSInternal</key>
+			<false/>
+			<key>Partitions</key>
+			<array>
+				<dict>
+					<key>Content</key>
+					<string>Apple_APFS_ISC</string>
+					<key>DeviceIdentifier</key>
+					<string>disk0s1</string>
+					<key>DiskUUID</key>
+					<string>EAA719BF-866A-4501-A71A-C1A060FB132A</string>
+					<key>Size</key>
+					<integer>524288000</integer>
+				</dict>
+				<dict>
+					<key>Content</key>
+					<string>Apple_APFS</string>
+					<key>DeviceIdentifier</key>
+					<string>disk0s2</string>
+					<key>DiskUUID</key>
+					<string>639353D7-3A94-4E64-97F2-C5B82C1F7C1A</string>
+					<key>Size</key>
+					<integer>343073095680</integer>
+				</dict>
+				<dict>
+					<key>Content</key>
+					<string>Apple_APFS_Recovery</string>
+					<key>DeviceIdentifier</key>
+					<string>disk0s3</string>
+					<key>DiskUUID</key>
+					<string>F576C5EA-58B0-4A70-BB73-7AC52054ACDA</string>
+					<key>Size</key>
+					<integer>5368668672</integer>
+				</dict>
+			</array>
+			<key>Size</key>
+			<integer>348966092800</integer>
+		</dict>
+	</array>
+	<key>VolumesFromDisks</key>
+	<array/>
+	<key>WholeDisks</key>
+	<array>
+		<string>disk0</string>
+	</array>
+</dict>
+</plist>

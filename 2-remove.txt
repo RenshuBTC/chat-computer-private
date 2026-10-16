@@ -1,0 +1,13 @@
+
+[1;36mRemove ClaudeOS from this Mac[0m
+This deletes ClaudeOS and gives its space back to macOS:
+  * its EFI partition and its two Linux partitions (disk5s4 disk5s5 disk5s6)
+  * the ClaudeOS drive (disk5s7), with 3 MB of files
+macOS, your apps and the files in your macOS folders stay as they are.
+Copy what's on the ClaudeOS drive into a folder "ClaudeOS files" in your home folder first? [Y/n] Copying...
+[32mCopied to "ClaudeOS files" in your home folder.[0m
+Type REMOVE to remove ClaudeOS (anything else keeps it): Your Mac's password, to make macOS the start-up disk again (it stays hidden): 
+[33mmacOS didn't take the password; after this, choose macOS in System Settings, General, Startup Disk.[0m
+[32mClaudeOS is deleted.[0m
+[33mmacOS's partition couldn't grow into the free space now (details: /tmp/claudeos-ci.BFGFIZ/work/setup.log). Run setup again to try once more.[0m
+[32mDone. This Mac is back to just macOS.[0m

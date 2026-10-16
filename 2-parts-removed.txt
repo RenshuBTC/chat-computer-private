@@ -1,0 +1,10 @@
+disk5s1|EFI|EFI
+disk5s2|Apple_APFS|/tmp/claudeos-ci.BFGFIZ/list.plist: Could not extract value, error: No value at that key path or invalid key path: AllDisksAndPartitions.0.Partitions.1.VolumeName
+disk5s3|Apple_APFS|/tmp/claudeos-ci.BFGFIZ/list.plist: Could not extract value, error: No value at that key path or invalid key path: AllDisksAndPartitions.0.Partitions.2.VolumeName
+/dev/disk5 (disk image):
+   #:                       TYPE NAME                    SIZE       IDENTIFIER
+   0:      GUID_partition_scheme                        +6.4 GB     disk5
+   1:                        EFI EFI                     209.7 MB   disk5s1
+   2:                 Apple_APFS Container disk6         1.5 GB     disk5s2
+   3:                 Apple_APFS Container disk7         700.0 MB   disk5s3
+                    (free space)                         4.0 GB     -

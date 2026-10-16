@@ -1,0 +1,75 @@
+13:47:30  == The ClaudeOS drive
+The new partition to be added will be of a filesystem personality of ExFAT exfat ExFAT Windows_NTFS
+The new partition will be added following disk5s6
+Started partitioning on disk5
+Modifying partition map
+Volume name      : ClaudeOS
+Partition offset : 7245824 sectors (3709861888 bytes)
+Volume size      : 5335040 sectors (2731540480 bytes)
+Bytes per sector : 512
+Bytes per cluster: 32768
+FAT offset       : 128 sectors (65536 bytes)
+# FAT sectors    : 768
+Number of FATs   : 1
+Cluster offset   : 896 sectors (458752 bytes)
+# Clusters       : 83346
+Volume Serial #  : 6ad22af5
+Bitmap start     : 2
+Bitmap file size : 10419
+Upcase start     : 3
+Upcase file size : 5836
+Root start       : 4
+Mounting disk
+Finished partitioning on disk5
+2026-10-16 13:47:37.404 mdutil[4754:17825] mdutil disabling Spotlight: /System/Volumes/Data/Volumes/ClaudeOS 1 -> kMDConfigSearchLevelFSSearchOnly
+/System/Volumes/Data/Volumes/ClaudeOS 1:
+	Indexing disabled.
+13:47:37  OK The ClaudeOS drive is ready (2.0 GB).
+13:47:41  Copying Desktop...
+13:47:41  Copying Documents...
+13:47:42  Copying Pictures...
+13:47:43  == Preparing ClaudeOS's first start
+Volume EFI - CLAUD on disk5s4 mounted
+Volume EFI - CLAUD on disk5s4 unmounted
+13:47:50  OK ClaudeOS will set itself up when it first starts.
+13:47:59  == Remove ClaudeOS from this Mac
+13:47:59  This deletes ClaudeOS and gives its space back to macOS:
+13:47:59    * its EFI partition and its two Linux partitions (disk5s4 disk5s5 disk5s6)
+Volume ClaudeOS on disk5s7 mounted
+13:48:05    * the ClaudeOS drive (disk5s7), with 3 MB of files
+13:48:05  macOS, your apps and the files in your macOS folders stay as they are.
+13:48:05  Q: Copy what's on the ClaudeOS drive into a folder "ClaudeOS files" in your home folder first? -> y
+13:48:05  Copying...
+13:48:05  OK Copied to "ClaudeOS files" in your home folder.
+13:48:05  Q: Type REMOVE to remove ClaudeOS (anything else keeps it): -> REMOVE
+Failed to extract service from disk /tmp/claudeos-ci.BFGFIZ/work/root.plist: Could not extract value, error: No value at that key path or invalid key path: DeviceI
+13:48:05  WARNING macOS didn't take the password; after this, choose macOS in System Settings, General, Startup Disk.
+Volume ClaudeOS on disk5s7 force-unmounted
+Started erase on disk5s4 (EFI - CLAUD)
+Unmounting disk
+Finished erase on disk5
+Started erase on disk5s5
+Unmounting disk
+Finished erase on disk5
+Started erase on disk5s6
+Unmounting disk
+Finished erase on disk5
+Started erase on disk5s7 (ClaudeOS)
+Unmounting disk
+Finished erase on disk5
+13:48:26  OK ClaudeOS is deleted.
+Started APFS operation
+Error: -69519: The target disk is too small for this operation, or a gap is required in your partition map which is missing or too small, which is often caused by an attempt to grow a partition beyond the beginning of another partition or beyond the end of partition map usable space
+13:48:28  WARNING macOS's partition couldn't grow into the free space now (details: /tmp/claudeos-ci.BFGFIZ/work/setup.log). Run setup again to try once more.
+13:48:28  OK Done. This Mac is back to just macOS.
+13:48:29  == Downloading
+13:48:29  Downloading the Asahi installer...
+13:48:30  Downloading Fedora Asahi Remix (about 1.1 GB)...
+13:48:47  == Downloading
+13:48:52  Fedora Asahi Remix is downloaded already.
+13:48:52  == Installing ClaudeOS next to macOS
+13:48:52  The Asahi installer makes room next to macOS and installs ClaudeOS's base (Fedora Linux) there. Setup
+13:48:52  answers its questions. When it asks for your Mac's password, type it (it stays hidden) and press Enter.
+13:48:52  It takes about 10 to 20 minutes; your Mac may seem to freeze while macOS's partition shrinks. That's normal.
+13:48:52  First, your Mac's password for setup itself:
+13:48:54  STOPPED The Asahi installer didn't finish (see above; its log is /tmp/claudeos-ci.BFGFIZ/work/asahi-installer.log). If it made room or partitions, run setup again and choose "Remove ClaudeOS from this Mac" to clean up.

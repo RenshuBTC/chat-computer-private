@@ -1,0 +1,3 @@
+2026-10-16 10:45:09,282 INFO claudeos.ui: Layout: 13-inch screen (size assumed), viewed from about 50 cm away (estimated): drawn at 88% (text 14 px), websites at 90%.
+2026-10-16 10:45:10,141 INFO claude_agent_sdk._internal.transport.subprocess_cli: Using bundled Claude Code CLI: /Users/runner/ClaudeOS/runtime/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude
+2026-10-16 10:45:10,599 INFO claudeos.brain: Claude session started (token sign-in)

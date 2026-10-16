@@ -1,0 +1,7 @@
+2026-10-16 10:45:42,820 INFO claudeos.ui: Layout: 13-inch screen (size assumed), viewed from about 50 cm away (estimated): drawn at 88% (text 14 px), websites at 90%.
+2026-10-16 10:45:42,835 DEBUG asyncio: Using selector: KqueueSelector
+2026-10-16 10:45:42,853 DEBUG mcp.server.lowlevel.server: Initializing server 'claudeos'
+2026-10-16 10:45:43,204 INFO claude_agent_sdk._internal.transport.subprocess_cli: Using bundled Claude Code CLI: /Users/runner/ClaudeOS/runtime/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude
+2026-10-16 10:45:43,252 WARNING asyncio: Unknown child process pid 1919, will report returncode 255
+2026-10-16 10:45:43,737 INFO claudeos.brain: Claude session started (token sign-in)
+2026-10-16 10:45:43,740 DEBUG mcp.server.runner: no handler for notification notifications/initialized

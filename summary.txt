@@ -1,0 +1,40 @@
+
+== This Mac
+      macOS 26.6.2 on arm64
+
+== 1. Setup (mac/setup.sh)
+      setup took 10 seconds
+PASS  setup installs ClaudeOS
+
+== 2. What setup installed
+PASS  the app is in Applications
+PASS  its signature is intact
+PASS  it's one program for Apple silicon and Intel
+PASS  no quarantine mark on it
+PASS  launch.conf names ClaudeOS's Python and its library
+PASS  the login item is a valid LaunchAgent
+PASS  the voice and speech recognition downloaded
+PASS  "claudeos doctor" says it's usable
+
+== 3. The app
+FAIL  it opens and keeps running
+FAIL  its window fills the screen
+PASS  it quits when asked (0 seconds)
+
+== 4. Talking to it (scripted Claude)
+FAIL  the scenario ran (no result: [Errno 2] No such file or directory: '/Users/runner/work/_temp/results/scenario/result.json'; exit 134)
+
+== 5. The Python tests
+      2 failed, 174 passed, 6 skipped, 6 warnings in 147.26s (0:02:27)
+FAIL  the Python tests pass on this Mac (see 5-pytest.txt)
+
+== 6. Remove (setup's fourth choice)
+PASS  setup removes ClaudeOS
+PASS  the ClaudeOS folder is gone
+PASS  the app is gone
+PASS  the login item is gone
+PASS  ClaudeOS isn't running
+
+== Done
+      passed: 15
+      failed: 4

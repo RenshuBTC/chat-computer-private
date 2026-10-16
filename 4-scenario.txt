@@ -1,0 +1,56 @@
+2026-10-16 10:45:42,820 INFO claudeos.ui: Layout: 13-inch screen (size assumed), viewed from about 50 cm away (estimated): drawn at 88% (text 14 px), websites at 90%.
+2026-10-16 10:45:42,835 DEBUG asyncio: Using selector: KqueueSelector
+2026-10-16 10:45:42,853 DEBUG mcp.server.lowlevel.server: Initializing server 'claudeos'
+2026-10-16 10:45:43,204 INFO claude_agent_sdk._internal.transport.subprocess_cli: Using bundled Claude Code CLI: /Users/runner/ClaudeOS/runtime/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude
+2026-10-16 10:45:43,252 WARNING asyncio: Unknown child process pid 1919, will report returncode 255
+2026-10-16 10:45:43,737 INFO claudeos.brain: Claude session started (token sign-in)
+2026-10-16 10:45:43,740 DEBUG mcp.server.runner: no handler for notification notifications/initialized
+*** Terminating app due to uncaught exception 'OC_PythonException', reason: '<class 'TypeError'>: cannot call block without a signature'
+*** First throw call stack:
+(
+	0   CoreFoundation                      0x000000018912b1f0 __exceptionPreprocess + 176
+	1   libobjc.A.dylib                     0x0000000188ba691c objc_exception_throw + 88
+	2   _objc.cpython-312-darwin.so         0x00000001098cc938 PyObjCErr_ToObjCWithGILState + 1204
+	3   _objc.cpython-312-darwin.so         0x00000001098ad07c method_stub + 2468
+	4   libffi.dylib                        0x000000019d7d19f4 ffi_closure_SYSV_inner + 864
+	5   libffi.dylib                        0x000000019d7c81e8 ffi_closure_SYSV + 56
+	6   WebKit                              0x00000001b40ad32c _ZN6WebKit15NavigationState16NavigationClient33decidePolicyForNavigationResponseERNS_12WebPageProxyEON3WTF3RefIN3API18NavigationResponseENS4_12RawPtrTraitsIS7_EENS4_21DefaultRefDerefTraitsIS7_EEE	7   WebKit                              0x00000001b44e8fb0 _ZN6WebKit12WebPageProxy29decidePolicyForResponseSharedEON3WTF3RefINS_15WebProcessProxyENS1_12RawPtrTraitsIS3_EENS1_21DefaultRefDerefTraitsIS3_EEEENS1_23ObjectIdentifierGenericIN7WebCore18PageIde	8   WebKit                              0x00000001b44e8834 _ZN6WebKit12WebPageProxy23decidePolicyForResponseERN3IPC10ConnectionEONS_13FrameInfoDataENSt3__18optionalIN3WTF23ObjectIdentifierGenericIN7WebCore24NavigationIdentifierTypeENS8_38ObjectIdentifier	9   WebKit                              0x00000001b3f08b4c _ZN6WebKit12WebPageProxy17didReceiveMessageERN3IPC10ConnectionERNS1_7DecoderE + 9660
+	10  WebKit                              0x00000001b4ad3aa0 _ZN3IPC18MessageReceiverMap15dispatchMessageERNS_10ConnectionERNS_7DecoderE + 376
+	11  WebKit                              0x00000001b457fdcc _ZN6WebKit15WebProcessProxy15dispatchMessageERN3IPC10ConnectionERNS1_7DecoderE + 44
+	12  WebKit                              0x00000001b3f80f78 _ZN6WebKit15WebProcessProxy17didReceiveMessageERN3IPC10ConnectionERNS1_7DecoderE + 2012
+	13  WebKit                              0x00000001b4aaab24 _ZN3IPC10Connection15dispatchMessageEN3WTF9UniqueRefINS_7DecoderEEE + 324
+	14  WebKit                              0x00000001b4aab004 _ZN3IPC10Connection24dispatchIncomingMessagesEv + 520
+	15  JavaScriptCore                      0x00000001ab22d548 _ZN3WTF7RunLoop11performWorkEv + 460
+	16  JavaScriptCore                      0x00000001ab22eaf8 _ZN3WTF7RunLoop11performWorkEPv + 36
+	17  CoreFoundation                      0x00000001890bcf60 __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 28
+	18  CoreFoundation                      0x00000001890bcef4 __CFRunLoopDoSource0 + 172
+	19  CoreFoundation                      0x00000001890bcc60 __CFRunLoopDoSources0 + 232
+	20  CoreFoundation                      0x00000001890bb884 __CFRunLoopRun + 820
+	21  CoreFoundation                      0x000000018918e264 _CFRunLoopRunSpecificWithOptions + 532
+	22  HIToolbox                           0x0000000195ea7560 RunCurrentEventLoopInMode + 320
+	23  HIToolbox                           0x0000000195eaa8bc ReceiveNextEventCommon + 488
+	24  HIToolbox                           0x000000019603414c _BlockUntilNextEventMatchingListInMode + 48
+	25  AppKit                              0x000000018db9e3d0 _DPSBlockUntilNextEventMatchingListInMode + 228
+	26  AppKit                              0x000000018d4f2084 _DPSNextEvent + 576
+	27  AppKit                              0x000000018e08796c -[NSApplication(NSEventRouting) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 688
+	28  AppKit                              0x000000018e087678 -[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:] + 72
+	29  AppKit                              0x000000018d4e513c -[NSApplication run] + 368
+	30  libffi.dylib                        0x000000019d7c8050 ffi_call_SYSV + 80
+	31  libffi.dylib                        0x000000019d7d15b8 ffi_call_int + 1220
+	32  _objc.cpython-312-darwin.so         0x00000001098b2a88 PyObjCFFI_Caller_SimpleSEL + 508
+	33  _objc.cpython-312-darwin.so         0x00000001098d45c4 objcsel_vectorcall_simple + 504
+	34  python3.12                          0x0000000102dc3810 _PyEval_EvalFrameDefault + 223188
+	35  python3.12                          0x0000000102e2a134 PyEval_EvalCode + 216
+	36  python3.12                          0x0000000102e29f18 run_mod + 228
+	37  python3.12                          0x0000000102f30230 pyrun_file + 156
+	38  python3.12                          0x0000000102f2fa84 _PyRun_SimpleFileObject + 288
+	39  python3.12                          0x0000000102f2f81c _PyRun_AnyFileObject + 80
+	40  python3.12                          0x0000000102f2f60c pymain_run_file_obj + 164
+	41  python3.12                          0x0000000102f2f4b0 pymain_run_file + 72
+	42  python3.12                          0x0000000102ebba50 Py_RunMain + 1068
+	43  python3.12                          0x0000000102e812fc pymain_main + 472
+	44  python3.12                          0x0000000102e81118 main + 44
+	45  dyld                                0x0000000188c344e4 start + 6992
+)
+libc++abi: terminating due to uncaught exception of type NSException
+tests/mac_ci/run.sh: line 39:  1827 Abort trap: 6           perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' "$secs" "$@"

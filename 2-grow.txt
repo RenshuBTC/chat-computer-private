@@ -1,0 +1,34 @@
+Started APFS operation
+Aligning shrink delta to 4,732,698,624 bytes and targeting a new container size of 1,499,996,160 bytes
+Determined the minimum size for the APFS Container to be 130,023,424 bytes
+Resizing APFS Container designated by APFS Container Reference disk6
+The specific APFS Physical Store being resized is disk5s2
+Verifying storage system
+Performing fsck_apfs -n -x /dev/disk5s2
+Checking the container superblock
+Checking the checkpoint with transaction ID 5
+Checking the space manager
+Checking the space manager free queue trees
+Checking the object map
+Checking volume /dev/rdisk6s1
+Checking the APFS volume superblock
+The volume Macintosh HD was formatted by newfs_apfs (2332.140.13.702.2) and last modified by 
+Checking the object map
+Checking the snapshot metadata tree
+Checking the snapshot metadata
+Checking the fsroot tree
+Checking the extent ref tree
+Verifying volume object map space
+The volume /dev/rdisk6s1 with UUID AA36CB3C-3F0F-4179-B5AF-923342748B84 appears to be OK
+Verifying allocated space
+The container /dev/disk5s2 appears to be OK
+Storage system check exit code is 0
+Shrinking APFS Physical Store disk5s2 from 6,232,694,784 to 1,499,996,160 bytes
+Shrinking APFS data structures
+Shrinking partition
+Modifying partition map
+Finished APFS operation
+
+[1;36mRemove ClaudeOS from this Mac[0m
+ClaudeOS isn't on this Mac, but 4.7 GB of free space is right after macOS's partition.
+Give that space back to macOS? [Y/n] [32mmacOS has its space back.[0m

@@ -274,3 +274,63 @@ def test_sound_follows_airpods_connecting_on_a_mac(tmp_path, monkeypatch):
     asyncio.run(run())
     assert steps == ["mic closed", "speaker closed", "PortAudio restarted", "mic opened"]
     assert A.default_devices.__name__ == "<lambda>" and A.restart_portaudio.__name__ == "<lambda>"
+
+
+# ------------------------------------------------------------------ WebKit's blocks (decision handlers)
+def test_webkit_blocks_get_a_signature_before_they_are_called():
+    """WebKit's decision handlers come without a signature PyObjC can read; on a real Mac calling one as it
+    was made ClaudeOS quit at its first page ("cannot call block without a signature")."""
+    from claudeos.ui.mac_blocks import call_block
+
+    class Block:                      # what PyObjC hands over: callable only once it has a signature
+        def __init__(self):
+            self.__block_signature__ = None
+            self.calls = []
+
+        def __call__(self, *args):
+            if self.__block_signature__ is None:
+                raise TypeError("cannot call block without a signature")
+            self.calls.append(args)
+
+    b = Block()
+    assert call_block(b, b"v@?q", 2) == "pyobjc"
+    assert b.__block_signature__ == b"v@?q" and b.calls == [(2,)]
+
+
+def test_webkit_blocks_are_called_directly_when_pyobjc_cant():
+    import ctypes
+
+    from claudeos.ui.mac_blocks import _BlockLayout, call_block
+
+    class Block:                      # a block whose signature can't be set either
+        __block_signature__ = None
+
+        def __setattr__(self, name, value):
+            raise AttributeError("read-only")
+
+        def __call__(self, *args):
+            raise TypeError("cannot call block without a signature")
+
+    seen = []
+    invoke = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_long)(lambda blk, v: seen.append((blk, v)))
+    layout = _BlockLayout(invoke=ctypes.cast(invoke, ctypes.c_void_p).value)
+    addr = ctypes.addressof(layout)
+    assert call_block(Block(), b"v@?q", 2, object_id=lambda o: addr) == "direct"
+    assert seen == [(addr, 2)]                       # the block itself first, then the NSInteger
+    # An object goes as its Objective-C pointer.
+    got = []
+    invoke2 = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)(lambda blk, obj: got.append(obj))
+    layout2 = _BlockLayout(invoke=ctypes.cast(invoke2, ctypes.c_void_p).value)
+    url = object()
+    call_block(Block(), b"v@?@", url, object_id=lambda o: 0x1234 if o is url else ctypes.addressof(layout2))
+    assert got == [0x1234]
+
+
+def test_other_errors_from_a_block_are_not_hidden():
+    from claudeos.ui.mac_blocks import call_block
+
+    def block(*args):
+        raise TypeError("expected 1 argument")
+    block.__block_signature__ = b"v@?q"
+    with pytest.raises(TypeError, match="expected 1 argument"):
+        call_block(block, b"v@?q", 1, 2)

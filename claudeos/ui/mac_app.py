@@ -43,6 +43,7 @@ from WebKit import (WKContentWorld, WKUserContentController, WKUserScript, WKWeb
 from ..config import Paths, Settings
 from ..screen import Screen
 from .layout import Layout, compute, css_vars, screen_from_monitor
+from .mac_blocks import call_block
 from .render import ASSETS, NATIVE, asset
 
 log = logging.getLogger("claudeos.ui")
@@ -139,7 +140,7 @@ class _NavDelegate(NSObject, protocols=[objc.protocolNamed("WKNavigationDelegate
             download = view == self.screen.content and not response.canShowMIMEType()
         except Exception:
             download = False
-        handler(RESPONSE_DOWNLOAD if download else RESPONSE_ALLOW)
+        call_block(handler, b"v@?q", RESPONSE_DOWNLOAD if download else RESPONSE_ALLOW)
 
     def webView_navigationResponse_didBecomeDownload_(self, view, response, download):
         download.setDelegate_(self.screen._downloads)
@@ -165,7 +166,7 @@ class _UIDelegate(NSObject, protocols=[objc.protocolNamed("WKUIDelegate")]):
 
     def webView_requestMediaCapturePermissionForOrigin_initiatedByFrame_type_decisionHandler_(self, view, origin, frame,
                                                                                               kind, handler):
-        handler(PERMISSION_DENY)        # websites don't get the camera or microphone
+        call_block(handler, b"v@?q", PERMISSION_DENY)      # websites don't get the camera or microphone
 
 
 class _Downloads(NSObject, protocols=[objc.protocolNamed("WKDownloadDelegate")]):
@@ -186,7 +187,7 @@ class _Downloads(NSObject, protocols=[objc.protocolNamed("WKDownloadDelegate")])
             target = dest / f"{Path(name).stem} ({i}){Path(name).suffix}"
             i += 1
         self.screen.notice(f"Downloading {target.name} to Downloads.")
-        handler(NSURL.fileURLWithPath_(str(target)))
+        call_block(handler, b"v@?@", NSURL.fileURLWithPath_(str(target)))
 
     def downloadDidFinish_(self, download):
         self.screen.notice("Download finished.")

@@ -174,11 +174,13 @@ def shot(name):
 
 
 def chat_text(screen):
-    """The conversation as the page shows it."""
+    """The conversation as the page shows it ("" if the page can't say: not loaded, or no conversation)."""
     box, ev = {}, threading.Event()
 
     def done(res, err):
-        box["text"] = str(res) if res is not None else f"(error: {err})"
+        box["text"] = str(res) if (res is not None and err is None) else ""
+        if err is not None:
+            result.setdefault("page_errors", []).append(str(err)[:300])
         ev.set()
     AppHelper.callAfter(lambda: screen.chat.evaluateJavaScript_completionHandler_(
         "document.getElementById('log').innerText", done))
@@ -226,15 +228,17 @@ def scenario():
         c = holder["c"]
         app = NSApplication.sharedApplication()
 
-        # 1. Started: the window fills the screen, in front, and Claude's greeting is on it.
-        greeted = wait_for(lambda: len(mock.requests) >= 1 and "Hello" in chat_text(c.screen), 90, 1)
+        # 1. Started: the window fills the screen and ClaudeOS's greeting is on it ("Hi Ren. I'm listening.",
+        #    said without asking Claude). Whether macOS lets it come to the front isn't up to ClaudeOS when a
+        #    script starts it, so that's only noted.
+        greeted = wait_for(lambda: "listening" in chat_text(c.screen), 90, 1)
         time.sleep(2)
         shot("01-start")
         geo = on_main(lambda: {"screen": tuple(NSScreen.mainScreen().frame().size),
                                "window": tuple(c.screen.win.frame().size),
                                "scale": float(NSScreen.mainScreen().backingScaleFactor()),
                                "visible": bool(c.screen.win.isVisible()), "active": bool(app.isActive())})
-        step("starts full screen with Claude's greeting", greeted and geo["visible"] and geo["window"] == geo["screen"],
+        step("starts full screen and greets", greeted and geo["visible"] and geo["window"] == geo["screen"],
              greeted=greeted, geometry=geo, layout=c.screen.layout_info(), requests=len(mock.requests))
 
         # 2. Talking: real speech through the pretend microphone, Silero, Whisper; Claude opens a website and

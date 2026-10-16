@@ -13,7 +13,6 @@ documents and your files.
 ## What you need on a Windows PC
 
 * This Windows PC. It must start in UEFI mode, which every PC sold in the last ten years does.
-* A USB stick of 8 GB or more. It will be erased.
 * About 70 GB of free disk space, or a spare internal disk.
 * The internet. A network cable is best; Wi-Fi works if it uses a normal password.
 * A Claude subscription (Pro or Max).
@@ -35,22 +34,23 @@ documents and your files.
      it, paste it back into setup and press Enter.
    * **Typing from your phone.** Setup asks whether to set up typing from the Claude app on your
      phone. Say yes: your browser opens once more; approve it with the same account.
-   * **The USB stick.** Pick the stick to use.
 
    Nothing on your disks changes until you answer **y** to **Go ahead?**.
-4. **Wait while setup downloads and writes the stick.** Setup downloads the official Ubuntu
-   installer, about 4 GB. Ubuntu is what ClaudeOS uses to talk to your Wi-Fi, Bluetooth, sound and
-   screen. Setup checks that the download is genuine, then writes the USB stick.
-5. **Restart from the USB stick.** Let setup restart into the boot options, then choose
-   **Use a device** and your USB stick. Alternatively, press the boot-menu key while the PC starts
-   (often F12, F11, F8, F9 or Esc) and pick the stick.
+4. **Wait while setup prepares the installer.** Setup downloads the official Ubuntu installer, about
+   4 GB. Ubuntu is what ClaudeOS uses to talk to your Wi-Fi, Bluetooth, sound and screen. Setup checks
+   that the download is genuine, then puts the installer in the last 6 GB of ClaudeOS's space, a small
+   temporary partition, and adds **ClaudeOS setup** to the PC's power-on menu. No USB stick is needed.
+5. **Restart.** Setup asks to restart. The PC then starts the installer by itself, once. If Windows
+   starts instead, restart and press the boot-menu key while the PC starts (often F12, F11, F8, F9 or
+   Esc), then choose **ClaudeOS setup**.
 6. **Let it install.** ClaudeOS installs itself without any questions, using only the free space.
    This usually takes well under an hour, depending on your internet. Don't turn the PC off. If the
    internet drops out near the end, the install still finishes; ClaudeOS completes the rest the next
    time the PC starts (see "Finishing the installation" below).
-7. **Start ClaudeOS.** The PC restarts into ClaudeOS by itself. Once you see ClaudeOS, take out the
-   USB stick. If the PC starts from the stick again, the stick notices that ClaudeOS is already
-   installed: its menu says **Start ClaudeOS** and starts it after 5 seconds. It never installs twice.
+7. **Start ClaudeOS.** The PC restarts into ClaudeOS by itself. The first time it starts, ClaudeOS
+   deletes the installer's temporary partition, takes over its space, and takes **ClaudeOS setup** out
+   of the power-on menu. The installer never installs twice: if it starts again before that, its menu
+   says **Start ClaudeOS** and starts it after 5 seconds.
 8. **Wait for the voice download.** The first time ClaudeOS starts, it downloads its voice, about
    600 MB. Then it says hello.
 
@@ -104,9 +104,9 @@ You can go back for one restart, for every day, or for good.
   again, run ClaudeOS Setup and choose **Restart into ClaudeOS now, just this once**, or make it the
   first choice again the same way.
 * **For good:** run ClaudeOS Setup in Windows and choose **Remove ClaudeOS from this PC**, then type
-  REMOVE. Setup deletes ClaudeOS's partition and its boot files, takes it out of the power-on menu,
-  gives its space back to C: when it sits right after C:, and deletes what setup left on Windows (the
-  download and the sign-in copies). Windows, your apps and your Windows files stay as they are. Anything
+  REMOVE. Setup deletes ClaudeOS's partition and its boot files (and its installer, if it's still
+  there), takes it out of the power-on menu, gives its space back to C: when it sits right after C:,
+  and deletes what setup left on Windows (the download and the sign-in copies). Windows, your apps and your Windows files stay as they are. Anything
   you saved only inside ClaudeOS is deleted with it.
 
 If Windows uses BitLocker, Windows may ask for its recovery key once after ClaudeOS is installed.
@@ -114,9 +114,13 @@ Setup showed you this key and asked you to save it.
 
 ## If something goes wrong on a PC
 
-* **The PC doesn't start from the USB stick.** Use the boot-menu key, or setup's "Use a device"
-  restart. If the stick still isn't listed, turn off "Fast Boot" in the PC's firmware settings. Some
-  PCs also need "Allow Microsoft third-party UEFI CA" (Secure Boot) turned on.
+* **Windows starts instead of the installer.** Restart, press the boot-menu key while the PC starts
+  (often F12, F11, F8, F9 or Esc) and choose **ClaudeOS setup**. If it isn't listed, or the PC refuses
+  to start it, look in the PC's firmware settings: some PCs need "Allow Microsoft third-party UEFI CA"
+  (under Secure Boot) turned on, and "Fast Boot" turned off. To give up instead, run ClaudeOS Setup and
+  choose **Remove ClaudeOS from this PC**: it deletes the installer and gives C: its space back.
+* **Setup stops with an error after "Go ahead".** Setup takes back what it did (the installer, the
+  power-on entry, and C:'s space), and says if anything is left. Run it again later.
 * **The installer shows an error.** Windows and your files are untouched; the installer only ever
   uses free space. Take a photo of the screen, restart into Windows and run setup again.
 * **The screen says "Finishing the installation".** The installer couldn't finish everything,
@@ -140,10 +144,12 @@ Run ClaudeOS Setup in Windows and choose **Remove ClaudeOS from this PC** (see "
 If setup can't do it, you can do it by hand in Windows:
 
 1. Open **Disk Management** (right-click the Start button).
-2. Delete the ClaudeOS partition. It's the large partition with no drive letter right after C:.
+2. Delete the ClaudeOS partition. It's the large partition with no drive letter right after C:. If a
+   6 GB partition called CLAUDEOS is there too (an install that didn't finish), delete it as well.
 3. Right-click C: and choose **Extend Volume** to take the space back.
-4. Optionally remove its start-up entry. In an administrator Terminal, run
-   `bcdedit /enum firmware`, find the entry named "ubuntu", and run `bcdedit /delete {its id}`.
+4. Optionally remove its start-up entries. In an administrator Terminal, run
+   `bcdedit /enum firmware`, find the entries named "ubuntu" and "ClaudeOS setup", and run
+   `bcdedit /delete {its id}` for each.
 
 ## ClaudeOS on a Mac
 

@@ -35,11 +35,12 @@ extern char **environ;
 static char home_dir[PATH_MAX], co_home[PATH_MAX + 32], conf_python[LINE_MAX_LEN], conf_libpython[LINE_MAX_LEN];
 
 /* Tells the person something went wrong: in the log, and on a Mac in a small window, so that starting
-   ClaudeOS from the Dock is never silently nothing. */
+   ClaudeOS from the Dock is never silently nothing. (The tests build it without the window, which would
+   wait for a click.) */
 static void tell(const char *msg) {
     fprintf(stderr, "ClaudeOS: %s\n", msg);
     fflush(stderr);
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(CLAUDEOS_NO_ALERT)
     char script[1024];
     snprintf(script, sizeof script, "display alert \"ClaudeOS couldn't start\" message \"%s\"", msg);
     char *args[] = {"/usr/bin/osascript", "-e", script, NULL};

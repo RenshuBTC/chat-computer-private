@@ -105,7 +105,7 @@ PipeWire/WirePlumber run as systemd user services (dbus-user-session). Logs: `~/
 | `system-update` | `apt-get update && apt-get -y upgrade` |
 | `bt-import-windows-keys` | Copy Bluetooth Classic link keys (e.g. AirPods) from the Windows SYSTEM registry hive into BlueZ, restart bluetooth |
 | `set-timezone ZONE` | validated against /usr/share/zoneinfo |
-| `wipe-install-secrets` | Remove `/claudeos/secrets` from an inserted ClaudeOS install USB (label `CLAUDEOS`) |
+| `wipe-install-secrets` | Remove `/claudeos/secrets` from a ClaudeOS installer (FAT32 labelled `CLAUDEOS`) still on the PC or plugged in |
 
 ClaudeOS asks the user (spoken yes/no) before calling any verb except `status`.
 
@@ -124,34 +124,55 @@ The boot splash is a Plymouth script theme (`/usr/share/plymouth/themes/claudeos
 wait-online service are turned off, since NetworkManager owns the network; otherwise every start would wait
 two minutes for a network networkd doesn't manage.
 
-## Windows setup → install USB contract
+## Windows setup → installer contract
 
-USB: FAT32 volume labelled `CLAUDEOS` containing the official Ubuntu Server 24.04.x ISO contents, plus:
+No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Installer.ps1`).
 
-* `/autoinstall.yaml` (generated from `windows/autoinstall.template.yaml`). The USB's GRUB menu becomes
-  "Install ClaudeOS" (HWE kernel, default, 5 s) and "Install ClaudeOS (older kernel)", both with
-  `autoinstall subiquity-storage-version=2` on the kernel command line: unattended, and able to see free space
-  next to existing partitions (the installer's default storage version 1 sees none on a disk with partitions).
-* `/claudeos/app/`: a copy of this repo, without `windows/`, `.venv` or caches.
-* `/claudeos/secrets/claude_token`: the subscription token the user pasted after `claude setup-token`.
-* `/claudeos/settings.json`: initial settings (keys above).
-* `/claudeos/guard.sh`, `/claudeos/finish.sh`: copied from `windows/usb/`, with LF line endings.
+* **Where.** The space ClaudeOS gets (shrunk from C:, a free area, or a separate disk the person erased) also
+  holds its installer at first: a FAT32 partition labelled `CLAUDEOS`, 6 GiB (`InstallerBytes`), GPT basic
+  data type, without a drive letter, at the *end* of the largest free area on that disk (`Get-FreeExtents`,
+  `Get-InstallerPlacement`: whole MiBs, the first and last MiB of the disk left alone). ClaudeOS installs into
+  the rest, right before it. Setup refuses ISOs bigger than 5 GiB.
+* **What's on it.** The official Ubuntu Server 24.04.x ISO's files (copied from the ISO as Windows mounts it;
+  its links, like `ubuntu -> .`, aren't folders there and aren't copied), plus:
+  * `/claudeos/installer-<install-id>` (`id=<install-id>`): the mark, written first, so even a half-made
+    installer can be found by "Remove ClaudeOS" and, later, by ClaudeOS;
+  * `/autoinstall.yaml` (generated from `windows/autoinstall.template.yaml`). The installer's GRUB menu
+    becomes "Install ClaudeOS" (HWE kernel, default, 5 s) and "Install ClaudeOS (older kernel)", both with
+    `autoinstall subiquity-storage-version=2` on the kernel command line: unattended, and able to see free
+    space next to existing partitions (the installer's default storage version 1 sees none on a disk with
+    partitions);
+  * `/claudeos/app/`: a copy of this repo, without `windows/`, `mac/`, `.venv` or caches;
+  * `/claudeos/secrets/claude_token`: the subscription token the user pasted after `claude setup-token`;
+  * `/claudeos/settings.json`: initial settings (keys above);
+  * `/claudeos/guard.sh`, `network.sh`, `finish.sh`: copied from `windows/installer/`, with LF line endings.
+* **How the PC starts it.** The ISO's signed boot loader goes to `\EFI\claudeos-setup\` on the EFI partition
+  Windows starts from: `EFI/boot/bootx64.efi` (shim, signed by Microsoft's third-party UEFI CA) as
+  `shimx64.efi`, with `grubx64.efi` (signed by Canonical) and `mmx64.efi`. A power-on entry "ClaudeOS setup"
+  starts it: `bcdedit /copy {bootmgr} /d "ClaudeOS setup"` (so it points at the same EFI partition; the new
+  `{id}` is found by comparing `bcdedit /enum firmware` before and after, never by reading Windows' language),
+  `/set {id} path \EFI\claudeos-setup\shimx64.efi`, `/set {fwbootmgr} displayorder {id} /addlast`; and,
+  once everything is ready, `/set {fwbootmgr} bootsequence {id}` (UEFI `BootNext`: the next start only). That
+  GRUB's built-in configuration finds no `/boot/grub` on the EFI partition, so it looks for the partition with
+  `/.disk/info`, the installer partition, and reads its menu from there. casper finds the live system on that
+  partition too. Tested in QEMU with OVMF, Secure Boot and Microsoft's keys.
+* **Order, and taking it back.** Nothing changes before "Go ahead". Then the power-on entry comes first: if the
+  PC won't take one, setup stops with nothing else changed (and deletes a half-made copy). If any later step
+  fails, setup takes back what it did (`Undo-InstallSteps`): the entry, the boot loader, the installer partition
+  (only if it's still the one it made, same offset and size), and C:'s space; it says what it couldn't.
 
-Storage is always `layout: {name: direct, mode: use_gap, match: [rules]}`. The installer never reformats
-a disk. Shrinking C: or erasing a separate disk happens on Windows, before the stick is made, after
-"Go ahead". The match rules are tried in order:
-1. `{serial: "*<serial>", size: largest}`;
-2. `{model: "*w*o*r*d*s*", size: largest}`, if no other disk has that model;
-3. `{size: largest}`, only if no other disk has room.
+Storage is always `layout: {name: direct, mode: use_gap, match: {install-media: true}}`: the largest free
+area on the disk the installer is on, which is ClaudeOS's space right before the installer partition. The
+installer never reformats a disk. Shrinking C: or erasing a separate disk happens on Windows, after "Go
+ahead". (subiquity only leaves out disks in use when a match names `size` or `ssd`; `install-media` picks the
+disk holding the partition mounted at `/cdrom`.)
 
-`size` makes subiquity skip disks in use, which excludes the install USB.
-
-* The stick's boot menu checks first: if `/EFI/claudeos/installed-<install-id>` exists on any partition
-  (GRUB `search --file`), this stick already installed ClaudeOS here, and the menu offers only
-  "Start ClaudeOS (already installed; you can take out the USB stick)", which reads the installed system's
-  boot menu (`configfile /EFI/ubuntu/grub.cfg` on the EFI partition). It doesn't chainload the installed
-  shim: with Secure Boot on, GRUB 2.12 starts it without a file system and it can't find the rest of the boot
-  loader (tested). Otherwise the menu offers the two install entries.
+* The installer's boot menu checks first: if `/EFI/claudeos/installed-<install-id>` exists on any partition
+  (GRUB `search --file`), this installer already installed ClaudeOS here, and the menu offers only
+  "Start ClaudeOS (already installed)", which reads the installed system's boot menu
+  (`configfile /EFI/ubuntu/grub.cfg` on the EFI partition). It doesn't chainload the installed shim: with
+  Secure Boot on, GRUB 2.12 starts it without a file system and it can't find the rest of the boot loader
+  (tested). Otherwise the menu offers the two install entries.
 * `early-commands`: `sh /cdrom/claudeos/guard.sh <install-id>`, the second check for the same marker, in
   case the installer starts anyway. The installer has no `efibootmgr`, so the guard writes UEFI `BootNext`
   through efivarfs (the entry described `ubuntu`) and restarts; if it can't, it stops the installer with a
@@ -164,13 +185,24 @@ a disk. Shrinking C: or erasing a separate disk happens on Windows, before the s
   3. writes the marker `/EFI/claudeos/installed-<install-id>` to the ESP: `id=<install-id>` and
      `root=<PARTUUID>` (ClaudeOS's root partition, from `findmnt` + `blkid`), which "Remove ClaudeOS" in
      ClaudeOS Setup uses to delete exactly that partition;
-  4. sets up the first-start safety net: `/etc/claudeos/install-user` and `claudeos-finish-install.service`
-     (`linux/firstboot`), enabled by its `multi-user.target.wants` link. Until
-     `/var/lib/claudeos/base-installed` exists, it runs before `getty@tty1`, retries `install-claudeos.sh`
-     with growing waits (30 s doubling to 5 min, `dpkg --configure -a` before each try), then reboots;
+  4. sets up the first start: `/etc/claudeos/install-user`, `/etc/claudeos/install-id`, and two services from
+     `linux/firstboot`, enabled by their `multi-user.target.wants` links:
+     * `claudeos-finish-install.service`, the safety net: until `/var/lib/claudeos/base-installed` exists, it
+       runs before `getty@tty1`, retries `install-claudeos.sh` with growing waits (30 s doubling to 5 min,
+       `dpkg --configure -a` before each try), then reboots;
+     * `claudeos-reclaim-installer.service`, once (`/var/lib/claudeos/installer-reclaimed`): finds the
+       installer partition (vfat, label `CLAUDEOS`, `claudeos/installer-<this install's id>`, neither the root
+       partition nor an EFI partition), overwrites the sign-in it carried in place, deletes it (`sfdisk
+       --delete`), grows ClaudeOS's partition and file system into the space when it sits right after it
+       (`growpart`, `resize2fs`; up to 2 MiB between them counts as right after), deletes
+       `\EFI\claudeos-setup` from every EFI partition and the power-on entries that start it
+       (`efibootmgr -B`). If deleting fails it tries again at the next start;
   5. runs `curtin in-target -- bash /opt/claudeos/app/linux/install-claudeos.sh --user <user> --from-installer`,
      up to three tries. If all fail (usually no internet), it still exits 0, so the Ubuntu install ends
      normally and the safety net finishes the job on the first start.
+
+"Remove ClaudeOS from this PC" (Windows) also deletes installer partitions with a mark, the "ClaudeOS setup"
+entries and `\EFI\claudeos-setup`, so it cleans up an install that never finished too.
 
 `install-claudeos.sh` stops with exit status 1 at the first essential failure (apt packages, the venv,
 pip), before later steps depend on it (for example handing networking to NetworkManager). On success it

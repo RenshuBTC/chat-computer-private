@@ -1,6 +1,6 @@
 @echo off
 rem ClaudeOS Setup: double-click this file.
-rem Windows asks for permission to make changes (needed to prepare a disk and the USB stick).
+rem Windows asks for permission to make changes (needed to prepare a disk and the installer).
 setlocal
 set "CLAUDEOS_SELF=%~f0"
 set "SETUP=%~dp0setup.ps1"

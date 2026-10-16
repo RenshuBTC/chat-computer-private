@@ -48,7 +48,9 @@ def mac_app(tmp_path):
     (contents / "MacOS").mkdir(parents=True)
     (contents / "Resources").mkdir()
     exe = contents / "MacOS/ClaudeOS"
-    subprocess.run([CC, "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(exe), str(SRC), "-ldl"], check=True)
+    # Without the alert window on a Mac, which would wait for a click.
+    subprocess.run([CC, "-O2", "-Wall", "-Wextra", "-Werror", "-DCLAUDEOS_NO_ALERT", "-o", str(exe), str(SRC), "-ldl"],
+                   check=True)
     co = tmp_path / "home/ClaudeOS"
     runtime = co / "runtime"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(runtime)], check=True)

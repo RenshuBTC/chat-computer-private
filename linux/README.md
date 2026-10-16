@@ -57,6 +57,10 @@ session/                   claudeos-session (exit-code supervisor + recovery), o
 grub/07_claudeos           Boot menu: "ClaudeOS" (default) + "Windows" (chainload bootmgfw.efi).
 root-helper/claudeos-root  The ONLY privileged entry point (sudo -n), strict arg validation, JSON out.
 root-helper/bt-import-windows-keys.py  Copy Bluetooth Classic link keys from the Windows SYSTEM hive into BlueZ.
+firstboot/                 The first start after the installer (the installer's finish.sh enables both):
+                           claudeos-finish-install: finishes install-claudeos.sh if the installer couldn't;
+                           claudeos-reclaim-installer: deletes the installer's temporary partition, grows
+                           ClaudeOS into its space, removes \EFI\claudeos-setup and its power-on entry.
 tests/                     Test suite (see below).
 ```
 
@@ -121,7 +125,8 @@ bash tests/run.sh               # everything except the chroot test (auto-skips 
 ```
 
 `run.sh` shellchecks every script, syntax-checks the Python, and runs:
-`test_grub_07_claudeos.sh`, `test_root_helper.sh`, `test_session_supervisor.sh`
+`test_grub_07_claudeos.sh`, `test_root_helper.sh`, `test_session_supervisor.sh`,
+`test_finish_install.sh`, `test_reclaim_installer.sh` (a pretend disk in a fake `/sys`)
 (under Xvfb), `test_bt_import.sh` (synthetic SYSTEM hive → BlueZ `info`), and
 `test_install_chroot.sh` (debootstrap a noble chroot, install for real, verify,
 prove idempotency). It finds or builds a Python with `regipy` for the

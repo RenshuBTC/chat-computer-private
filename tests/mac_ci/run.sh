@@ -172,7 +172,12 @@ cp "$OUT/scenario/home/ClaudeOS/logs/claudeos.log" "$OUT/4-claudeos.log" 2>/dev/
 
 # ------------------------------------------------------------------ 5. the Python tests
 section "5. The Python tests"
-(cd "$REPO" && with_timeout 1200 "$CO/runtime/bin/python" -m pytest -q -p no:cacheprovider -rs tests) > "$OUT/5-pytest.txt" 2>&1
+# The voice tests find the models in one folder (tests/test_voice.py): the ones setup downloaded.
+TM="$(mktemp -d)"
+ln -s "$CO/models/kokoro/kokoro-v1.0.int8.onnx" "$CO/models/kokoro/voices-v1.0.bin" "$TM/"
+ln -s "$CO/models/whisper" "$TM/whisper"
+(cd "$REPO" && CLAUDEOS_TEST_MODELS="$TM" with_timeout 1200 "$CO/runtime/bin/python" -m pytest -q -p no:cacheprovider -rs tests) \
+  > "$OUT/5-pytest.txt" 2>&1
 rc=$?
 note "$(tail -n 1 "$OUT/5-pytest.txt")"
 if [ $rc = 0 ]; then pass "the Python tests pass on this Mac"; else fail "the Python tests pass on this Mac (see 5-pytest.txt)"; fi

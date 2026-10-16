@@ -1,0 +1,56 @@
+Started APFS operation
+Aligning shrink delta to 4,732,698,624 bytes and targeting a new container size of 1,499,996,160 bytes
+Determined the minimum size for the APFS Container to be 100,663,296 bytes
+Resizing APFS Container designated by APFS Container Reference disk6
+The specific APFS Physical Store being resized is disk5s2
+Verifying storage system
+Performing fsck_apfs -n -x /dev/disk5s2
+Checking the container superblock
+Checking the checkpoint with transaction ID 2
+Checking the space manager
+Checking the space manager free queue trees
+Checking the object map
+Checking volume /dev/rdisk6s1
+Checking the APFS volume superblock
+The volume Macintosh HD was formatted by newfs_apfs (2332.140.13.702.2) and last modified by 
+Checking the object map
+Checking the snapshot metadata tree
+Checking the snapshot metadata
+Checking the fsroot tree
+Checking the extent ref tree
+Verifying volume object map space
+The volume /dev/rdisk6s1 with UUID CE8BDFBC-6153-470E-AADC-D22BB51E641B appears to be OK
+Verifying allocated space
+The container /dev/disk5s2 appears to be OK
+Storage system check exit code is 0
+Shrinking APFS Physical Store disk5s2 from 6,232,694,784 to 1,499,996,160 bytes
+Shrinking APFS data structures
+Shrinking partition
+Modifying partition map
+Finished APFS operation
+The new partition to be added will be of a filesystem personality of APFS apfs APFS 7C3457EF-0000-11AA-AA11-00306543ECAC
+The new partition will be added following disk5s2
+Started partitioning on disk5
+Modifying partition map
+Mounting disk
+Finished partitioning on disk5
+The new partition to be added will be of a human-readable content type of EFI
+The new partition will be added following disk5s3
+Started partitioning on disk5
+Modifying partition map
+Finished partitioning on disk5
+512 bytes per physical sector
+/dev/rdisk5s4: 974624 sectors in 121828 FAT32 clusters (4096 bytes/cluster)
+bps=512 spc=8 res=32 nft=2 mid=0xf8 spt=32 hds=54 hid=4706504 drv=0x80 bsec=976560 bspf=952 rdcl=2 infs=1 bkbs=6
+The new partition to be added will be of a human-readable content type of Linux
+The new partition will be added following disk5s4
+Started partitioning on disk5
+Modifying partition map
+Finished partitioning on disk5
+The new partition to be added will be of a human-readable content type of Linux
+The new partition will be added following disk5s5
+Started partitioning on disk5
+Modifying partition map
+Finished partitioning on disk5
+Volume EFI - CLAUD on disk5s4 mounted
+Volume EFI - CLAUD on disk5s4 unmounted

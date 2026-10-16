@@ -1,0 +1,147 @@
+16:22:18  == The ClaudeOS drive
+The new partition to be added will be of a filesystem personality of ExFAT exfat ExFAT Windows_NTFS
+The new partition will be added following disk5s6
+Started partitioning on disk5
+Modifying partition map
+Volume name      : ClaudeOS
+Partition offset : 7245824 sectors (3709861888 bytes)
+Volume size      : 5335040 sectors (2731540480 bytes)
+Bytes per sector : 512
+Bytes per cluster: 32768
+FAT offset       : 128 sectors (65536 bytes)
+# FAT sectors    : 768
+Number of FATs   : 1
+Cluster offset   : 896 sectors (458752 bytes)
+# Clusters       : 83346
+Volume Serial #  : 6ad24f3d
+Bitmap start     : 2
+Bitmap file size : 10419
+Upcase start     : 3
+Upcase file size : 5836
+Root start       : 4
+Mounting disk
+Finished partitioning on disk5
+2026-10-16 16:22:24.834 mdutil[3956:14842] mdutil disabling Spotlight: /System/Volumes/Data/Volumes/ClaudeOS 1 -> kMDConfigSearchLevelFSSearchOnly
+/System/Volumes/Data/Volumes/ClaudeOS 1:
+	Indexing disabled.
+16:22:24  OK The ClaudeOS drive is ready (2.0 GB).
+16:22:28  Copying Desktop...
+16:22:28  Copying Documents...
+16:22:28  Copying Pictures...
+16:22:28  == Preparing ClaudeOS's first start
+Volume EFI - CLAUD on disk5s4 mounted
+Volume EFI - CLAUD on disk5s4 unmounted
+16:22:31  OK ClaudeOS will set itself up when it first starts.
+16:22:34  == Remove ClaudeOS from this Mac
+16:22:34  This deletes ClaudeOS and gives its space back to macOS:
+16:22:34    * its start-up volume (disk5s3)
+16:22:34    * its EFI partition and its two Linux partitions (disk5s4 disk5s5 disk5s6)
+Volume ClaudeOS on disk5s7 mounted
+16:22:36    * the ClaudeOS drive (disk5s7), with 3 MB of files
+16:22:36  macOS, your apps and the files in your macOS folders stay as they are.
+16:22:36  Q: Copy what's on the ClaudeOS drive into a folder "ClaudeOS files" in your home folder first? -> y
+16:22:36  Copying...
+16:22:36  OK Copied to "ClaudeOS files" in your home folder.
+16:22:36  Q: Type REMOVE to remove ClaudeOS (anything else keeps it): -> REMOVE
+Failed to authenticate owner
+16:22:36  WARNING macOS didn't take the password; after this, choose macOS in System Settings, General, Startup Disk.
+Volume ClaudeOS on disk5s7 force-unmounted
+Started APFS operation on disk7
+Deleting APFS Container with all of its APFS Volumes
+Unmounting Volumes
+Unmounting Volume "ClaudeOS" on disk7s1
+Deleting Volumes
+Deleting Container
+Wiping former APFS disks
+Switching content types
+1 new disk created or changed due to APFS operation
+Disk from APFS operation: disk5s3
+Finished APFS operation on disk7
+Removing disk5s3 from partition map
+Started erase on disk5s4 (EFI - CLAUD)
+Unmounting disk
+Finished erase on disk5
+Started erase on disk5s5
+Unmounting disk
+Finished erase on disk5
+Started erase on disk5s6
+Unmounting disk
+Finished erase on disk5
+Started erase on disk5s7 (ClaudeOS)
+Unmounting disk
+Finished erase on disk5
+16:22:53  OK ClaudeOS is deleted.
+Started APFS operation
+Aligning grow delta to 4,732,698,624 bytes and targeting a new container size of 6,232,694,784 bytes
+Determined the maximum size for the APFS Container to be 6,231,666,688 bytes
+Resizing APFS Container designated by APFS Container Reference disk6
+The specific APFS Physical Store being resized is disk5s2
+Verifying storage system
+Performing fsck_apfs -n -x /dev/disk5s2
+Checking the container superblock
+Checking the checkpoint with transaction ID 4
+Checking the space manager
+Checking the space manager free queue trees
+Checking the object map
+Checking volume /dev/rdisk6s1
+Checking the APFS volume superblock
+The volume Macintosh HD was formatted by newfs_apfs (2332.140.13.702.2) and last modified by 
+Checking the object map
+Checking the snapshot metadata tree
+Checking the snapshot metadata
+Checking the fsroot tree
+Checking the extent ref tree
+Verifying volume object map space
+The volume /dev/rdisk6s1 with UUID CE8BDFBC-6153-470E-AADC-D22BB51E641B appears to be OK
+Verifying allocated space
+The container /dev/disk5s2 appears to be OK
+Storage system check exit code is 0
+Growing APFS Physical Store disk5s2 from 1,499,996,160 to 6,232,694,784 bytes
+Modifying partition map
+Growing APFS data structures
+Finished APFS operation
+16:22:58  OK macOS has its space back. This Mac is back to just macOS.
+16:23:07  == Remove ClaudeOS from this Mac
+16:23:08  ClaudeOS isn't on this Mac, but 4.7 GB of free space is right after macOS's partition.
+16:23:08  Q: Give that space back to macOS? -> y
+Started APFS operation
+Aligning grow delta to 4,732,698,624 bytes and targeting a new container size of 6,232,694,784 bytes
+Determined the maximum size for the APFS Container to be 6,231,666,688 bytes
+Resizing APFS Container designated by APFS Container Reference disk6
+The specific APFS Physical Store being resized is disk5s2
+Verifying storage system
+Performing fsck_apfs -n -x /dev/disk5s2
+Checking the container superblock
+Checking the checkpoint with transaction ID 7
+Checking the space manager
+Checking the space manager free queue trees
+Checking the object map
+Checking volume /dev/rdisk6s1
+Checking the APFS volume superblock
+The volume Macintosh HD was formatted by newfs_apfs (2332.140.13.702.2) and last modified by 
+Checking the object map
+Checking the snapshot metadata tree
+Checking the snapshot metadata
+Checking the fsroot tree
+Checking the extent ref tree
+Verifying volume object map space
+The volume /dev/rdisk6s1 with UUID CE8BDFBC-6153-470E-AADC-D22BB51E641B appears to be OK
+Verifying allocated space
+The container /dev/disk5s2 appears to be OK
+Storage system check exit code is 0
+Growing APFS Physical Store disk5s2 from 1,499,996,160 to 6,232,694,784 bytes
+Modifying partition map
+Growing APFS data structures
+Finished APFS operation
+16:23:14  OK macOS has its space back.
+16:23:14  == Downloading
+16:23:14  Downloading the Asahi installer...
+16:23:16  Downloading Fedora Asahi Remix (about 1.1 GB)...
+16:24:04  == Downloading
+16:24:08  Fedora Asahi Remix is downloaded already.
+16:24:08  == Installing ClaudeOS next to macOS
+16:24:08  The Asahi installer makes room next to macOS and installs ClaudeOS's base (Fedora Linux) there. Setup
+16:24:08  answers its questions. When it asks for your Mac's password, type it (it stays hidden) and press Enter.
+16:24:08  It takes about 10 to 20 minutes; your Mac may seem to freeze while macOS's partition shrinks. That's normal.
+16:24:08  First, your Mac's password for setup itself:
+16:24:10  STOPPED The Asahi installer didn't finish (see above; its log is /tmp/claudeos-ci.v8T2ZK/work/asahi-installer.log). If it made room or partitions, run setup again and choose "Remove ClaudeOS from this Mac" to clean up.

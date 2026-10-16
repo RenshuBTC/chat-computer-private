@@ -1,0 +1,57 @@
+{
+ "screen": [
+  1920.0,
+  1080.0
+ ],
+ "windows": [
+  {
+   "owner": "Window Server",
+   "name": "StatusIndicator",
+   "layer": 2147483630,
+   "w": 28.0,
+   "h": 28.0
+  },
+  {
+   "owner": "Window Server",
+   "name": "StatusIndicator",
+   "layer": 2147483630,
+   "w": 28.0,
+   "h": 28.0
+  },
+  {
+   "owner": "Dock",
+   "name": "Dock",
+   "layer": 20,
+   "w": 1920.0,
+   "h": 1080.0
+  },
+  {
+   "owner": "ClaudeOS",
+   "name": "ClaudeOS",
+   "layer": 0,
+   "w": 1920.0,
+   "h": 1080.0
+  },
+  {
+   "owner": "Finder",
+   "name": "",
+   "layer": -2147483603,
+   "w": 1920.0,
+   "h": 1080.0
+  },
+  {
+   "owner": "Dock",
+   "name": "Wallpaper-",
+   "layer": -2147483624,
+   "w": 1920.0,
+   "h": 1080.0
+  },
+  {
+   "owner": "Window Server",
+   "name": "Display 1800000 Backstop",
+   "layer": -2147483626,
+   "w": 1920.0,
+   "h": 1080.0
+  }
+ ]
+}

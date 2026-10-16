@@ -1,0 +1,47 @@
+{
+ "ok": false,
+ "steps": [
+  {
+   "step": "starts full screen and greets",
+   "ok": true,
+   "greeted": true,
+   "spoke": true,
+   "geometry": {
+    "screen": [
+     1920.0,
+     1080.0
+    ],
+    "window": [
+     1920.0,
+     1080.0
+    ],
+    "scale": 1.0
+   },
+   "layout": {
+    "scale": 0.875,
+    "font_px": 14.0,
+    "column_px": 672,
+    "web_zoom": 0.9,
+    "distance_mm": 701,
+    "distance_estimated": true,
+    "size_known": true,
+    "diagonal_in": 30.278,
+    "summary": "30-inch screen, viewed from about 70 cm away (estimated): drawn at 88% (text 14 px), websites at 90%."
+   }
+  },
+  {
+   "step": "whole-Mac mode: in front, no Dock, no menu bar, no app switching",
+   "ok": false,
+   "active": false,
+   "hidden": false,
+   "window_visible": true,
+   "nothing_of_macos": false,
+   "options": 0
+  }
+ ],
+ "voice_models": true,
+ "models_dir": "/Users/runner/ClaudeOS/models",
+ "page_errors": [
+  "Error Domain=WKErrorDomain Code=4 \"A JavaScript exception occurred\" UserInfo={WKJavaScriptExceptionLineNumber=1, WKJavaScriptExceptionMessage=TypeError: null is not an object (evaluating 'document.getElementById('greeting').textContent'), WKJavaScriptExceptionColumnNumber=36, NSLocalizedDescription="
+ ]
+}

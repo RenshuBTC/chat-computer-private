@@ -1,0 +1,35 @@
+{
+  "version": "0.1.0",
+  "modules": {
+    "claude_agent_sdk": "ok",
+    "sounddevice": "ok",
+    "faster_whisper": "ok",
+    "kokoro_onnx": "ok",
+    "onnxruntime": "ok",
+    "mss": "ok",
+    "PIL": "ok",
+    "numpy": "ok",
+    "webkit": "ok"
+  },
+  "claude_engine": "2.1.300 (Claude Code)",
+  "signed_in": "yes (Claude subscription)",
+  "voice": {
+    "speech_recognition": {
+      "model": "small.en",
+      "ready": true,
+      "path": "/Users/runner/ClaudeOS/models/whisper/faster-whisper-small.en"
+    },
+    "voice": {
+      "ready": true,
+      "path": "/Users/runner/ClaudeOS/models/kokoro"
+    },
+    "fallback_voice": false
+  },
+  "audio": {
+    "input": "Null Audio Device",
+    "output": "Null Audio Device"
+  },
+  "internet": "ok",
+  "display": "none",
+  "usable": true
+}

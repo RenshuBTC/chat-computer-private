@@ -325,7 +325,12 @@ function Invoke-ClaudeBrowserSignIn {
 function Get-UbuntuIso {
     Add-Call 'Get-UbuntuIso'
     $iso = Join-Path $OutDir 'ubuntu-24.04.5-live-server-amd64.iso'
-    $fs = [IO.File]::Create($iso)
+    [IO.File]::WriteAllBytes($iso, [byte[]]@())
+    if ($env:OS -eq 'Windows_NT') {
+        # A sparse file, as on Linux, or every scenario would take 4 GB of the test machine's disk.
+        & (Join-Path $env:WINDIR 'System32\fsutil.exe') sparse setflag $iso | Out-Null
+    }
+    $fs = [IO.File]::OpenWrite($iso)
     try { $fs.SetLength([int64]4080486400) } finally { $fs.Close() }      # as big as the real one, without the bytes
     return $iso
 }

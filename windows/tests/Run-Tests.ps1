@@ -207,16 +207,17 @@ ${function:Start-SignInWindow} = {
     [IO.File]::WriteAllText((Join-Path (Join-Path $Folder 'config') '.credentials.json'), '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}')
     return $true
 }
-$r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 5 -CloseDelaySeconds 0
+$r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 5
 Assert-True ((Test-ClaudeLogin $r.Login) -and $null -eq $r.Token) 'sign-in: the full sign-in, no code'
-Assert-True ($Script:Opened.Count -eq 1 -and -not (Test-Path -LiteralPath $Script:Opened[0])) 'sign-in: one window; its folder is deleted'
+Assert-True ($Script:Opened.Count -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $Script:Opened[0] 'config'))) 'sign-in: one window; the sign-in it saved is deleted'
+Remove-Item -LiteralPath $Script:Opened[0] -Recurse -Force
 ${function:Start-SignInWindow} = { param($ClaudeExe, $Folder) return $false }
 ${function:Read-Choice} = { param($Question, $Options, $Default) return 1 }
 $Script:Pasted.Enqueue($tok)
-$r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 1 -CloseDelaySeconds 0
+$r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 1
 Assert-True ($null -eq $r.Login -and $r.Token -eq $tok) 'sign-in: no window, a pasted code instead'
 ${function:Read-Choice} = { param($Question, $Options, $Default) return 2 }
-Assert-Throws { Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 1 -CloseDelaySeconds 0 } 'sign-in: stopping stops setup'
+Assert-Throws { Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 1 } 'sign-in: stopping stops setup'
 ${function:Start-SignInWindow} = $origStart
 ${function:Read-Choice} = $origChoice
 ${function:Read-PastedSecret} = $origPasted

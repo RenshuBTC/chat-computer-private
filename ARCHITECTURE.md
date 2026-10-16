@@ -152,7 +152,9 @@ No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Instal
     space next to existing partitions (the installer's default storage version 1 sees none on a disk with
     partitions);
   * `/claudeos/app/`: a copy of this repo, without `windows/`, `mac/`, `.venv` or caches;
-  * `/claudeos/secrets/claude_token`: the subscription token the user pasted after `claude setup-token`;
+  * `/claudeos/secrets/claude_login.json`: the full sign-in from `claude auth login --claudeai` (Claude Code's
+    `.credentials.json`), which setup picks up by itself; or, when the person pasted a code instead,
+    `/claudeos/secrets/claude_token`, a one-year token from `claude setup-token`;
   * `/claudeos/settings.json`: initial settings (keys above);
   * `/claudeos/guard.sh`, `network.sh`, `finish.sh`: copied from `windows/installer/`, with LF line endings.
 * **How the PC starts it.** The ISO's signed boot loader goes to `\EFI\claudeos-setup\` on the EFI partition
@@ -168,7 +170,28 @@ No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Instal
 * **Order, and taking it back.** Nothing changes before "Go ahead". Then the power-on entry comes first: if the
   PC won't take one, setup stops with nothing else changed (and deletes a half-made copy). If any later step
   fails, setup takes back what it did (`Undo-InstallSteps`): the entry, the boot loader, the installer partition
-  (only if it's still the one it made, same offset and size), and C:'s space; it says what it couldn't.
+  (only if it's still the one it made, same offset and size), and C:'s space (back to the size C: had); it says
+  what it couldn't. Fast Startup is turned off last, just before the PC is told to start the installer.
+* **Making room on C:** (`Invoke-MakeRoom`, after "Go ahead"). ClaudeOS's space is the empty space right after
+  C:, grown by shrinking C:: 70 GiB wanted (64 for ClaudeOS, 6 for the installer), 46 at least. Windows can
+  only shrink a volume up to the last file it can't move while it runs, and `Get-PartitionSupportedSize`
+  names that file in Application event 259 (Microsoft-Windows-Defrag; field 2 is the file, the same in every
+  language; checked on Windows Server 2025). Setup shrinks as far as Windows allows, never leaving C: less
+  than 25 GiB free, then deals with the file in the way and shrinks again, up to 12 rounds: the change journal
+  (`\$Extend\$UsnJrnl`) is reset whenever it's in the way, which is harmless (Windows starts a new one at
+  once, possibly near the end again, hence the rounds); restore points (`\System Volume Information\{...}
+  {3808876b-c176-4e48-b7ae-04046e6cc752}`, shadow copies) are deleted and hibernation is turned off only when
+  the minimum can't be reached otherwise. The page file and the file system's own records (`\$Mft`...) can't
+  be moved while Windows runs: below the minimum, setup stops, undoes, and says what to do. The PC this was
+  built for had 272 GiB free on C:, which could shrink by nothing: a restore point, then the journal twice,
+  then `$Mft::$BITMAP` were in the way, and the rounds above made 63 GiB.
+* **Signing in** (`windows/lib/ClaudeSignIn.ps1`). `claude auth login --claudeai` runs in a window of its own,
+  opened through `explorer.exe` so it runs as the person without administrator rights, in Windows Terminal when
+  `wt.exe` is there, from the home folder, with a throwaway `CLAUDE_CONFIG_DIR` under `%TEMP%`. Setup polls for
+  the `.credentials.json` it saves, takes it, and deletes the folder. Run from setup's administrator console
+  instead, the same program showed nothing at all on a real PC (twice), while it worked at once in an ordinary
+  Windows Terminal window. Fallback: a code from `claude setup-token`, run in an ordinary window and pasted
+  into setup with a right-click.
 
 Storage is always `layout: {name: direct, mode: use_gap, match: {install-media: true}}`: the largest free
 area on the disk the installer is on, which is ClaudeOS's space right before the installer partition. The
@@ -233,7 +256,8 @@ retrying with backoff, then starts listening.
 ## Runtime (claudeos package)
 
 * Brain: Claude Agent SDK (`claude-agent-sdk`, bundles the official Claude Code binary) with the user's
-  subscription and an isolated `CLAUDE_CONFIG_DIR` (`~/ClaudeOS/.engine`). Two sign-ins:
+  subscription and an isolated `CLAUDE_CONFIG_DIR` (`~/ClaudeOS/.engine`). Two sign-ins (Windows setup gives
+  the full one; a pasted code gives the token):
   * the one-year token from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`. It can only make model
     requests;
   * the full sign-in from `claude auth login` (`.engine/.credentials.json`, refreshed by Claude Code itself),

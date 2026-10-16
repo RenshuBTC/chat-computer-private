@@ -202,7 +202,8 @@ function Read-SignInCode {
     param([Parameter(Mandatory = $true)][string]$ClaudeExe)
     Write-Line ''
     Write-Line 'To make a sign-in code: open PowerShell (not as administrator), run the line below and sign in. It shows'
-    Write-Line 'a long code that starts with sk-ant-: copy it, then paste it here with a RIGHT-CLICK (it stays hidden).'
+    Write-Line 'a long code that starts with sk-ant-: copy it, then paste it here with a RIGHT-CLICK (choose Paste if a'
+    Write-Line 'menu opens). It stays hidden; then press Enter.'
     Write-Line ('  & "' + $ClaudeExe + '" setup-token')
     for ($try = 1; $try -le 3; $try++) {
         $raw = Read-PastedSecret 'Your code (right-click to paste), or Enter to go back'
@@ -220,10 +221,13 @@ function Read-SignInCode {
 function Invoke-ClaudeBrowserSignIn {
     # Signs in to Claude: the sign-in window, then the browser, then setup picks the sign-in up by itself.
     # Returns @{ Login = the full sign-in (or $null); Token = a pasted sign-in code (or $null) }: one of them.
-    param([Parameter(Mandatory = $true)][string]$ClaudeExe, [int]$WaitSeconds = 900, [int]$CloseDelaySeconds = 6)
+    # The sign-in window's settings folder (the sign-in itself) is deleted as soon as setup has it; its .cmd
+    # stays in %TEMP% (nothing secret in it), because the window may still be reading it.
+    param([Parameter(Mandatory = $true)][string]$ClaudeExe, [int]$WaitSeconds = 900)
     while ($true) {
         $folder = Join-Path $env:TEMP ('claudeos-signin-' + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path (Join-Path $folder 'config') -Force | Out-Null
+        $config = Join-Path $folder 'config'
+        New-Item -ItemType Directory -Path $config -Force | Out-Null
         $login = $null
         try {
             Write-Line ''
@@ -231,17 +235,16 @@ function Invoke-ClaudeBrowserSignIn {
             Write-Line 'Sign in with the account that has your Claude subscription, and approve. Setup carries on by itself.'
             Write-Line '(Press Enter here to stop waiting.)'
             if (Start-SignInWindow -ClaudeExe $ClaudeExe -Folder $folder) {
-                $login = Wait-ClaudeSignIn -File (Join-Path $folder 'config\.credentials.json') -Seconds $WaitSeconds
+                $login = Wait-ClaudeSignIn -File (Join-Path $config '.credentials.json') -Seconds $WaitSeconds
             } else {
                 Write-Warn 'Setup could not open the sign-in window.'
             }
             if ($login) {
-                Start-Sleep -Seconds $CloseDelaySeconds     # the window reads its .cmd until it closes
                 Write-Good 'Signed in to Claude. You can also type to ClaudeOS from the Claude app on your phone.'
                 return [pscustomobject]@{ Login = $login; Token = $null }
             }
         } finally {
-            Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $config -Recurse -Force -ErrorAction SilentlyContinue
         }
         Write-Warn 'The sign-in did not come through.'
         $pick = Read-Choice 'What would you like to do?' @('Try signing in again', 'Paste a sign-in code instead', 'Stop setup') 0

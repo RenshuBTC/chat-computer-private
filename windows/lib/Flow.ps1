@@ -131,6 +131,7 @@ function Invoke-ClaudeOSSetup {
     $instGb = [Math]::Round($Script:InstallerBytes / $Script:GB)
     $needBytes = $Script:MinInstallBytes + $Script:InstallerBytes
     $wantBytes = $Script:DefaultInstallBytes + $Script:InstallerBytes
+    Write-Line 'Checking how much room Windows can make next to it (this can take a minute)...'
     $plan = Get-SystemDiskPlan
     $sysDisk = $plan.Disk
     $others = Get-OtherDiskCandidates

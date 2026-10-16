@@ -25,22 +25,28 @@ documents and your files.
 
 1. **Unzip the ClaudeOS folder.** Right-click the download, choose **Extract All**, and open the
    extracted folder.
-2. **Double-click `ClaudeOS Setup`.** If Windows says "Windows protected your PC", click
-   **More info**, then **Run anyway**. Then click **Yes** when Windows asks for permission.
-3. **Answer setup's questions.**
-   * **Where ClaudeOS goes.** Normally that's next to Windows: setup shrinks drive C: to make room,
-     like Windows' own "Shrink volume", and all your files stay.
-   * **Signing in to Claude.** Your browser opens, and you sign in with your subscription account.
-     Setup's window then shows a code that starts with `sk-ant-`. It may run over two lines: copy all of
-     it, paste it back into setup and press Enter.
-   * **Typing from your phone.** Setup asks whether to set up typing from the Claude app on your
-     phone. Say yes: your browser opens once more; approve it with the same account.
+2. **Double-click `ClaudeOS Setup`.** The first time, Windows warns that "the publisher could not be
+   verified" (or says "Windows protected your PC": click **More info**). Click **Run**. Then click
+   **Yes** when Windows asks for permission.
+3. **Sign in to Claude.** A small window called "Sign in to Claude" opens, then your browser. Sign in
+   with the account that has your subscription and approve. That's all: setup picks up the sign-in by
+   itself, and it also lets you type to ClaudeOS from the Claude app on your phone.
+4. **Check the list and type `y`.** Setup downloads the official Ubuntu installer (about 4 GB; Ubuntu
+   is what ClaudeOS uses to talk to your Wi-Fi, Bluetooth, sound and screen) and checks it's genuine.
+   Then it lists everything it's about to change. Nothing on your disks changes until you answer **y**
+   to **Go ahead?**. Then setup:
+   * **makes room next to Windows.** It shrinks drive C:, like Windows' own "Shrink volume"; all
+     your files stay. ClaudeOS gets 64 GB when there's room (at least 40). If files Windows keeps at
+     the end of C: are in the way, setup moves them out of the way first: it resets the drive's
+     change journal, and only if that isn't enough, deletes your restore points (Windows makes new
+     ones) and turns hibernation off. If something it can't move is in the way, such as the page
+     file, setup stops, puts everything back, and tells you exactly what to do.
+   * puts the installer in the last 6 GB of ClaudeOS's space, a small temporary partition, and adds
+     **ClaudeOS setup** to the PC's power-on menu. No USB stick is needed.
+   * turns off Windows "Fast Startup", which would keep ClaudeOS from saving to your Windows files.
 
-   Nothing on your disks changes until you answer **y** to **Go ahead?**.
-4. **Wait while setup prepares the installer.** Setup downloads the official Ubuntu installer, about
-   4 GB. Ubuntu is what ClaudeOS uses to talk to your Wi-Fi, Bluetooth, sound and screen. Setup checks
-   that the download is genuine, then puts the installer in the last 6 GB of ClaudeOS's space, a small
-   temporary partition, and adds **ClaudeOS setup** to the PC's power-on menu. No USB stick is needed.
+   If your PC has a second internal disk, setup first asks where ClaudeOS should go. On a PC without a
+   network cable whose Wi-Fi password Windows doesn't know, it asks for a Wi-Fi network.
 5. **Restart.** Setup asks to restart. The PC then starts the installer by itself, once. If Windows
    starts instead, restart and press the boot-menu key while the PC starts (often F12, F11, F8, F9 or
    Esc), then choose **ClaudeOS setup**.
@@ -92,9 +98,9 @@ so it works the same at your desk or away from home. You can also attach photos 
 * While the phone is connected, Anthropic keeps a copy of the conversation on its servers so your
   devices stay in step (this is how the Claude app's Remote Control works). To switch it off, say
   "turn off typing from my phone".
-* Didn't set it up, or it stopped working? Run ClaudeOS Setup (in Windows, or in macOS on a Mac),
-  choose **Sign ClaudeOS in to Claude again**, and say yes to typing from your phone. ClaudeOS picks up
-  the new sign-in when it next starts.
+* Stopped working? Run ClaudeOS Setup (in Windows, or in macOS on a Mac) and choose **Sign ClaudeOS in
+  to Claude again**. ClaudeOS picks up the new sign-in when it next starts. (On a Mac, say yes to typing
+  from your phone.)
 
 ## Going back to Windows
 
@@ -125,7 +131,14 @@ Setup showed you this key and asked you to save it.
   (under Secure Boot) turned on, and "Fast Boot" turned off. To give up instead, run ClaudeOS Setup and
   choose **Remove ClaudeOS from this PC**: it deletes the installer and gives C: its space back.
 * **Setup stops with an error after "Go ahead".** Setup takes back what it did (the installer, the
-  power-on entry, and C:'s space), and says if anything is left. Run it again later.
+  power-on entry, and C:'s space), and says if anything is left. Run it again later. (Restore points it
+  deleted to make room stay deleted; Windows makes new ones.)
+* **Setup says Windows can't make room.** It names what's in the way. Windows' page file: follow the
+  steps setup shows to turn it off for a moment, restart, and run setup again. The file system's own
+  records: ClaudeOS needs a separate disk, or a partition tool that works while Windows is off.
+* **The "Sign in to Claude" window or your browser doesn't open.** Press Enter in setup's window and
+  choose **Try signing in again**, or **Paste a sign-in code instead**: setup shows a line to run in an
+  ordinary PowerShell window, which prints a code; paste it into setup with a right-click.
 * **The installer shows an error.** Windows and your files are untouched; the installer only ever
   uses free space. Take a photo of the screen, restart into Windows and run setup again.
 * **The screen says "Finishing the installation".** The installer couldn't finish everything,

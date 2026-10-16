@@ -233,7 +233,7 @@ function Invoke-ClaudeBrowserSignIn {
             Write-Line ''
             Write-Line 'A window called "Sign in to Claude" opens, and then your browser on Claude''s sign-in page.'
             Write-Line 'Sign in with the account that has your Claude subscription, and approve. Setup carries on by itself.'
-            Write-Line '(Press Enter here to stop waiting.)'
+            Write-Line 'If you don''t see them, look for them on the taskbar. (Press Enter here to stop waiting.)'
             if (Start-SignInWindow -ClaudeExe $ClaudeExe -Folder $folder) {
                 $login = Wait-ClaudeSignIn -File (Join-Path $config '.credentials.json') -Seconds $WaitSeconds
             } else {

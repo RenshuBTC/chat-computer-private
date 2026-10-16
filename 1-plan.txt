@@ -1,0 +1,33 @@
+
+[1mClaudeOS Setup[0m
+ClaudeOS is its own system, started instead of macOS. macOS, your apps and your files stay, one restart away.
+[33mPlan only: nothing will be changed.[0m
+
+What would you like to do?
+  1. Install ClaudeOS on this Mac
+  2. Send more files to ClaudeOS
+  3. Sign ClaudeOS in to Claude again
+  4. Choose what starts when the Mac turns on: ClaudeOS or macOS
+  5. Remove ClaudeOS from this Mac
+Type a number (Enter = 1) 
+[1;36mChecking this Mac[0m
+macOS 26.6.2 on an Apple M2 Pro (Virtual).
+
+[1;36mYour files[0m
+ClaudeOS can't open macOS's files itself: Apple encrypts them so only macOS can. So setup copies the folders
+you choose onto a drive called ClaudeOS that both systems open; macOS keeps its own copies. Anything you save
+on that drive in ClaudeOS is in macOS too, and you can send more later (run setup again).
+macOS may ask whether Terminal can open your Desktop, Documents and Downloads folders: choose OK.
+
+  Desktop    0 MB
+  Documents  0 MB
+  Pictures   3 MB
+Bring all of these to ClaudeOS (3 MB)? [Y/n] 
+[1;36mWhere ClaudeOS goes[0m
+macOS's partition is 343.1 GB with 102.8 GB free.
+ClaudeOS gets 53.8 GB, and the ClaudeOS drive 10.0 GB.
+Name: Anka   Account: runner   Time zone: UTC
+
+[1;36mPlan only[0m
+Nothing was changed. setup would shrink macOS's partition (disk0s2) to 279.2 GB,
+give ClaudeOS 53.8 GB and the ClaudeOS drive 10.0 GB, and copy: Desktop Documents Pictures.

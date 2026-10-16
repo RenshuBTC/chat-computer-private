@@ -1,0 +1,10 @@
+disk7s1|EFI|EFI
+disk7s2|Apple_APFS|
+disk7s3|Apple_APFS|
+/dev/disk7 (disk image):
+   #:                       TYPE NAME                    SIZE       IDENTIFIER
+   0:      GUID_partition_scheme                        +6.4 GB     disk7
+   1:                        EFI EFI                     209.7 MB   disk7s1
+   2:                 Apple_APFS Container disk8         1.5 GB     disk7s2
+   3:                 Apple_APFS Container disk9         700.0 MB   disk7s3
+                    (free space)                         4.0 GB     -

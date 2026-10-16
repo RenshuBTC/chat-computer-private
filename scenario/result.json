@@ -1,0 +1,91 @@
+{
+ "ok": false,
+ "steps": [
+  {
+   "step": "starts full screen and greets",
+   "ok": false,
+   "greeted": false,
+   "geometry": {
+    "screen": [
+     1920.0,
+     1080.0
+    ],
+    "window": [
+     1920.0,
+     1080.0
+    ],
+    "scale": 1.0,
+    "visible": true,
+    "active": false
+   },
+   "layout": {
+    "scale": 0.875,
+    "font_px": 14.0,
+    "column_px": 672,
+    "web_zoom": 0.9,
+    "distance_mm": 701,
+    "distance_estimated": true,
+    "size_known": true,
+    "diagonal_in": 30.278,
+    "summary": "30-inch screen, viewed from about 70 cm away (estimated): drawn at 88% (text 14 px), websites at 90%."
+   },
+   "requests": 0
+  },
+  {
+   "step": "voice: opens the website and clicks in it",
+   "ok": false,
+   "content": {
+    "mode": "content",
+    "url": "http://127.0.0.1:49224/",
+    "title": "Test Video Site"
+   },
+   "heard": [
+    "reminder>\n\n[Fri 16 Oct 11:05 \u00b7 screen: conversation]\nPlay some calm piano music."
+   ],
+   "voice": true
+  },
+  {
+   "step": "back to the conversation",
+   "ok": true
+  },
+  {
+   "step": "shows a document",
+   "ok": true,
+   "content": {
+    "mode": "content",
+    "url": "file:///Users/runner/work/_temp/results/scenario/home/ClaudeOS/pages/_view1.html",
+    "title": "Plan for Saturday"
+   }
+  },
+  {
+   "step": "sleeps and wakes to its name",
+   "ok": true
+  },
+  {
+   "step": "steps aside to show macOS, and comes back",
+   "ok": true,
+   "hidden": true,
+   "listening_for_name_only": true,
+   "back": true
+  },
+  {
+   "step": "rebuilds the conversation after its page stops",
+   "ok": true
+  }
+ ],
+ "voice_models": true,
+ "models_dir": "/Users/runner/ClaudeOS/models",
+ "page_errors": [
+  "Error Domain=WKErrorDomain Code=4 \"A JavaScript exception occurred\" UserInfo={WKJavaScriptExceptionLineNumber=1, WKJavaScriptExceptionMessage=TypeError: null is not an object (evaluating 'document.getElementById('log').innerText'), WKJavaScriptExceptionColumnNumber=31, WKJavaScriptExceptionSourceURL"
+ ],
+ "spoken_chunks": 8,
+ "tool_results": [
+  "[{\"tool_use_id\": \"toolu_433b16b3aa0c4e8bad5d\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Showing: Test Video Site \\u2014 http://127.0.0.1:49224/\\nUse read_screen to read it or find things to click.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_99cd316537d747cfa7da\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Clicked \\u201cCalm piano music for focus\\u201d. Now showing: Test Video Site \\u2014 http://127.0.0.1:49224/\"}]}]",
+  "[{\"tool_use_id\": \"toolu_9f3d7b26457743548824\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Back to the conversation.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_378ceda2949b48979e00\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Showing the document.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_7400828b56c149e39f52\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Back to the conversation.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_2df4ac1dea824aa7a684\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"OK \\u2014 switch to macos in 4 seconds. Say a short goodbye.\"}]}]"
+ ],
+ "quit_asked_at": 1792148784.560982
+}

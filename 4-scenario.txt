@@ -1,0 +1,77 @@
+2026-10-16 11:04:00,914 INFO claudeos.ui: Layout: 30-inch screen, viewed from about 70 cm away (estimated): drawn at 88% (text 14 px), websites at 90%.
+2026-10-16 11:04:00,936 DEBUG asyncio: Using selector: KqueueSelector
+2026-10-16 11:04:00,946 DEBUG mcp.server.lowlevel.server: Initializing server 'claudeos'
+2026-10-16 11:04:01,554 DEBUG claudeos.ui: couldn't give a block its signature: New value must be a method signature
+2026-10-16 11:04:01,559 INFO claudeos.ui: calling a WebKit block directly (cannot call block without a signature)
+2026-10-16 11:04:01,852 INFO claude_agent_sdk._internal.transport.subprocess_cli: Using bundled Claude Code CLI: /Users/runner/ClaudeOS/runtime/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude
+2026-10-16 11:04:03,079 INFO claudeos.brain: Claude session started (token sign-in)
+2026-10-16 11:04:03,084 DEBUG mcp.server.runner: no handler for notification notifications/initialized
+2026-10-16 11:05:34,506 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 11:05:34,507 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 11:05:34,507 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 11:05:34,507 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 11:05:39,117 INFO faster_whisper: Processing audio with duration 00:00.544
+2026-10-16 11:05:39,221 DEBUG faster_whisper: Processing segment at 00:00.000
+2026-10-16 11:05:42,993 INFO faster_whisper: Processing audio with duration 00:02.112
+2026-10-16 11:05:42,999 DEBUG faster_whisper: Processing segment at 00:00.000
+2026-10-16 11:05:46,043 INFO faster_whisper: Processing audio with duration 00:01.952
+2026-10-16 11:05:46,048 DEBUG faster_whisper: Processing segment at 00:00.000
+2026-10-16 11:05:48,577 DEBUG claudeos.controller: heard 'Play some calm piano music.' (asleep=False, busy=False)
+2026-10-16 11:05:48,778 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:48 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 2113 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:05:49,169 DEBUG claudeos.ui: couldn't give a block its signature: New value must be a method signature
+2026-10-16 11:05:49,169 INFO claudeos.ui: calling a WebKit block directly (cannot call block without a signature)
+2026-10-16 11:05:49,613 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:49 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1213 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:05:50,531 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:50 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1369 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:05:54,305 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 11:05:54,305 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 11:05:54,306 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 11:05:54,306 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 11:05:54,310 DEBUG claudeos.controller: heard 'go back to the chat' (asleep=False, busy=False)
+2026-10-16 11:05:54,447 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:54 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1195 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:05:54,498 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:54 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1099 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:05:56,692 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 11:05:56,693 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 11:05:56,693 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 11:05:56,693 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 11:05:56,696 DEBUG claudeos.controller: heard 'make me a plan for saturday' (asleep=False, busy=False)
+2026-10-16 11:05:56,769 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:56 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1448 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:05:56,922 DEBUG claudeos.ui: couldn't give a block its signature: New value must be a method signature
+2026-10-16 11:05:56,922 INFO claudeos.ui: calling a WebKit block directly (cannot call block without a signature)
+2026-10-16 11:05:57,193 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:57 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1900 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:05:57,452 WARNING phonemizer: words count mismatch on 100.0% of the lines (1/1)
+2026-10-16 11:05:59,651 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 11:05:59,652 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 11:05:59,652 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 11:05:59,652 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 11:05:59,657 DEBUG claudeos.controller: heard 'show the chat' (asleep=False, busy=False)
+2026-10-16 11:05:59,699 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:59 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1195 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:05:59,742 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:05:59 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1099 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:06:02,728 DEBUG claudeos.controller: heard 'go to sleep' (asleep=False, busy=False)
+2026-10-16 11:06:07,925 DEBUG claudeos.controller: going to sleep
+2026-10-16 11:06:10,337 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 11:06:10,338 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 11:06:10,338 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 11:06:10,338 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 11:06:10,340 DEBUG claudeos.controller: heard 'Claude' (asleep=True, busy=False)
+2026-10-16 11:06:11,425 DEBUG claudeos.controller: heard 'switch to macOS' (asleep=False, busy=False)
+2026-10-16 11:06:11,685 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:06:11 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1214 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:06:11,908 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:11:06:11 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1099 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 11:06:18,272 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 11:06:18,273 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 11:06:18,273 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 11:06:18,273 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 11:06:18,274 DEBUG claudeos.controller: heard 'Claude' (asleep=True, busy=False)
+2026-10-16 11:06:21,262 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 11:06:21,263 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 11:06:21,263 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 11:06:21,263 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 11:06:21,266 ERROR claudeos.ui: The conversation page's renderer stopped; loading it again
+2026-10-16 11:06:21,636 DEBUG claudeos.ui: couldn't give a block its signature: New value must be a method signature
+2026-10-16 11:06:21,636 INFO claudeos.ui: calling a WebKit block directly (cannot call block without a signature)
+2026-10-16 11:06:24,558 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 11:06:24,558 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 11:06:24,558 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 11:06:24,559 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 11:06:24,567 DEBUG claude_agent_sdk._internal.query: Read task cancelled
+/Users/runner/ClaudeOS/python/cpython-3.12.14-macos-x86_64-none/lib/python3.12/multiprocessing/resource_tracker.py:279: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

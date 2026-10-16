@@ -1,0 +1,4 @@
+2026-10-16 11:03:11,630 INFO claudeos.ui: Layout: 30-inch screen, viewed from about 70 cm away (estimated): drawn at 88% (text 14 px), websites at 90%.
+2026-10-16 11:03:13,286 INFO claudeos.ui: calling a WebKit block directly (cannot call block without a signature)
+2026-10-16 11:03:13,831 INFO claude_agent_sdk._internal.transport.subprocess_cli: Using bundled Claude Code CLI: /Users/runner/ClaudeOS/runtime/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude
+2026-10-16 11:03:14,837 INFO claudeos.brain: Claude session started (token sign-in)

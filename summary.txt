@@ -1,0 +1,48 @@
+
+== This Mac
+      macOS 26.6.1 on x86_64
+
+== 1. Setup (mac/setup.sh)
+      setup took 21 seconds
+PASS  setup installs ClaudeOS
+
+== 2. What setup installed
+PASS  the app is in Applications
+PASS  its signature is intact
+PASS  it's one program for Apple silicon and Intel
+PASS  no quarantine mark on it
+PASS  launch.conf names ClaudeOS's Python and its library
+PASS  the login item is a valid LaunchAgent
+PASS  the voice and speech recognition downloaded
+PASS  "claudeos doctor" says it's usable
+
+== 3. The app
+PASS  it opens and keeps running
+PASS  its window fills the screen
+PASS  it quits when asked (10 seconds)
+
+== 4. Talking to it (scripted Claude)
+FAIL  starts full screen and greets
+FAIL  voice: opens the website and clicks in it
+PASS  back to the conversation
+PASS  shows a document
+PASS  sleeps and wakes to its name
+PASS  steps aside to show macOS, and comes back
+PASS  rebuilds the conversation after its page stops
+PASS  it quits cleanly, the way Command-Q does (exit 0)
+      voice models used: True; 8 spoken pieces; took 151 s
+
+== 5. The Python tests
+      1 failed, 183 passed, 1 skipped, 6 warnings in 99.77s (0:01:39)
+FAIL  the Python tests pass on this Mac (see 5-pytest.txt)
+
+== 6. Remove (setup's fourth choice)
+PASS  setup removes ClaudeOS
+PASS  the ClaudeOS folder is gone
+PASS  the app is gone
+PASS  the login item is gone
+PASS  ClaudeOS isn't running
+
+== Done
+      passed: 23
+      failed: 3

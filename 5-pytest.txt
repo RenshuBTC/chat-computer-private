@@ -1,0 +1,58 @@
+........................................................................ [ 39%]
+........................................................................ [ 78%]
+....................................F...                                 [100%]
+=================================== FAILURES ===================================
+_______________________ test_listener_hears_two_requests _______________________
+
+tts = <claudeos.voice.tts.TTS object at 0x1143cc530>
+stt = <claudeos.voice.stt.STT object at 0x1146cd3d0>
+
+    def test_listener_hears_two_requests(tts, stt):
+        sil = lambda s: np.zeros(int(16000 * s), dtype=np.float32)
+        a1 = speech16k(tts, "Open YouTube and play some calm piano music.")
+        a2 = speech16k(tts, "What's the weather like in Singapore today?")
+        audio = np.concatenate([sil(0.6), a1, sil(1.2), a2, sil(1.2)])
+        t0 = time.time()
+        got = run_listener(stt, audio)
+        took = time.time() - t0
+        print(f"\nheard: {got['utt']} partials={len(got['partials'])} in {took:.1f}s for {audio.size/16000:.1f}s of audio")
+>       assert len(got["utt"]) == 2
+E       AssertionError: assert 1 == 2
+E        +  where 1 = len(['Open YouTube and play some calm piano music.'])
+
+tests/test_voice.py:121: AssertionError
+----------------------------- Captured stdout call -----------------------------
+
+heard: ['Open YouTube and play some calm piano music.'] partials=0 in 20.7s for 8.1s of audio
+------------------------------ Captured log call -------------------------------
+WARNING  phonemizer:words_mismatch.py:97 words count mismatch on 100.0% of the lines (1/1)
+=============================== warnings summary ===============================
+../../../ClaudeOS/runtime/lib/python3.12/site-packages/_pytest/config/__init__.py:1464
+  /Users/runner/ClaudeOS/runtime/lib/python3.12/site-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+tests/test_brain_e2e.py:79
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:79: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+tests/test_brain_e2e.py:103
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:103: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+tests/test_brain_e2e.py:123
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:123: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+tests/test_brain_e2e.py:139
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:139: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+tests/test_brain_e2e.py:161
+  /Users/runner/work/claudeos-mac-test/claudeos-mac-test/tests/test_brain_e2e.py:161: PytestUnknownMarkWarning: Unknown pytest.mark.timeout - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.timeout(120)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_rendering.py:5: could not import 'claudeos.ui.gtk_app': No module named 'gi'
+1 failed, 183 passed, 1 skipped, 6 warnings in 99.77s (0:01:39)

@@ -1,0 +1,47 @@
+ProductName:		macOS
+ProductVersion:		26.6.1
+BuildVersion:		25G76
+Darwin sjc20-av659-b621df61-8c23-4a04-8f6d-bdc240f7b3c4-1678CA377C57.local 25.6.0 Darwin Kernel Version 25.6.0: Sat Jul 11 15:22:40 PDT 2026; root:xnu-12377.161.13~4/RELEASE_X86_64 x86_64
+Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz
+arm64 hardware: 0
+bash: 3.2.57(1)-release
+Filesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on
+/dev/disk1s1   325Gi   173Gi   136Gi    57%    1.9M  1.4G    0%   /System/Volumes/Data
+Graphics/Displays:
+
+    Apple Paravirtualized Graphics Device:
+
+      Chipset Model: Apple Paravirtualized Graphics Device
+      Type: GPU
+      VRAM (Total): 64 MB
+      Vendor: Apple (0x106b)
+      Device ID: 0xeeee
+      Revision ID: 0x0000
+      Metal Support: Metal 2
+      Displays:
+        Display:
+          Resolution: 1920 x 1080 (1080p FHD - Full High Definition)
+          UI Looks like: 1920 x 1080 @ 30.00Hz
+          Framebuffer Depth: 24-Bit Color (ARGB8888)
+          Main Display: Yes
+          Mirror: Off
+          Online: Yes
+          Connection Type: Internal
+
+Audio:
+
+    Devices:
+
+        Null Audio Device:
+
+          Default Input Device: Yes
+          Default Output Device: Yes
+          Default System Output Device: Yes
+          Input Channels: 2
+          Manufacturer: Apple Inc.
+          Output Channels: 2
+          Current SampleRate: 44100
+          Transport: Virtual
+          Input Source: Data Source Item 0
+          Output Source: Data Source Item 0
+

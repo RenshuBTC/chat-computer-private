@@ -195,3 +195,39 @@ function ConvertTo-YamlString {
     [void]$sb.Append('"')
     return $sb.ToString()
 }
+
+function Disable-ConsoleQuickEdit {
+    # Turns off "QuickEdit" in this console window: with it on, a click inside the window starts selecting text
+    # and pauses whatever runs in it (the title then begins with "Select") until a key is pressed. People click
+    # into the window without knowing that. A right-click still pastes. Windows only; harmless elsewhere.
+    try {
+        if (-not ('ClaudeOSConsoleMode' -as [type])) {
+            Add-Type -Namespace '' -Name 'ClaudeOSConsoleMode' -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)] public static extern System.IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(System.IntPtr h, out uint mode);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleMode(System.IntPtr h, uint mode);
+'@ -ErrorAction Stop
+        }
+        $h = [ClaudeOSConsoleMode]::GetStdHandle(-10)        # the console's input
+        $mode = [uint32]0
+        if (-not [ClaudeOSConsoleMode]::GetConsoleMode($h, [ref]$mode)) { return $false }
+        # ENABLE_EXTENDED_FLAGS (0x80) on, so the change sticks; ENABLE_QUICK_EDIT_MODE (0x40) off.
+        $new = ($mode -bor 0x80) -band (-bnot [uint32]0x40)
+        return [ClaudeOSConsoleMode]::SetConsoleMode($h, [uint32]$new)
+    } catch {
+        Write-SetupLog ('QuickEdit: ' + $_.Exception.Message)
+        return $false
+    }
+}
+
+function Unblock-SetupFiles {
+    # Takes the "downloaded from the internet" mark off setup's own files, so Windows doesn't warn "The publisher
+    # could not be verified" every time setup is opened (only the first time, before this has run).
+    param([Parameter(Mandatory = $true)][string]$Root)
+    try {
+        Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue |
+            Unblock-File -ErrorAction SilentlyContinue
+    } catch {
+        Write-SetupLog ('Unblocking setup''s files: ' + $_.Exception.Message)
+    }
+}

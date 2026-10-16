@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 from . import __version__
-from .config import Paths, Settings, read_token, save_token, token_kind
+from .config import Paths, Settings, has_login, read_token, save_token, token_kind
 
 
 def _doctor(paths: Paths, settings: Settings) -> int:
@@ -49,9 +49,13 @@ def _doctor(paths: Paths, settings: Settings) -> int:
         report["claude_engine"] = f"unavailable ({exc})"
         ok = False
     kind = token_kind(read_token(paths))
-    report["signed_in"] = {"subscription": "yes (Claude subscription)", "api_key": "yes (API key)"}.get(kind, "no")
-    if kind == "invalid":
-        ok = False
+    if has_login(paths):
+        # The full sign-in ClaudeOS Setup gives it (Claude Code's .credentials.json): the phone works too.
+        report["signed_in"] = "yes (Claude subscription, full sign-in)"
+    else:
+        report["signed_in"] = {"subscription": "yes (Claude subscription)", "api_key": "yes (API key)"}.get(kind, "no")
+        if kind == "invalid":
+            ok = False
     from .voice import models as M
     report["voice"] = M.status(paths, settings)
     try:

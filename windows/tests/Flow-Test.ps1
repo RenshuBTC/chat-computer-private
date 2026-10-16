@@ -5,6 +5,12 @@
 # and keep track of the disks' partitions, the power-on menu and the EFI partition (a folder).
 # Scenarios:
 #   plan, shrink, disk         install (plan only; making room on C:; on the separate disk)
+#   blocked                    install on a PC like the one setup was first tried on: one disk, C: can't shrink
+#                              at first because of restore points, then the change journal, then $Mft
+#   gap63                      install into 63 GB already empty after C: (made by hand), $Mft in the way of more
+#   stuck                      install when Windows' page file stops C: from shrinking at all: stops, undoes
+#   nospace                    install when C: hasn't the free space: stops before changing anything
+#   paste                      install with a pasted sign-in code instead of the browser sign-in
 #   no-entry, install-fails    install, when the PC won't take the power-on entry / when copying fails
 #   leftover                   install, while the installer of an earlier try is still there
 #   bitlocker, bitlocker-fails install on an encrypted C: (ClaudeOS gets its own key) / when a later step fails
@@ -15,7 +21,8 @@
 #   remove-unfinished          remove an installer that never installed
 param(
     [Parameter(Mandatory = $true)][ValidateSet('plan', 'shrink', 'disk', 'no-entry', 'install-fails', 'leftover', 'bitlocker', 'bitlocker-fails', 'bitlocker-stop',
-        'signin', 'startup-windows', 'startup-once', 'remove', 'remove-keep', 'remove-both', 'remove-unfinished')][string]$Scenario,
+        'signin', 'startup-windows', 'startup-once', 'remove', 'remove-keep', 'remove-both', 'remove-unfinished',
+        'blocked', 'gap63', 'stuck', 'nospace', 'paste')][string]$Scenario,
     [Parameter(Mandatory = $true)][string]$OutDir
 )
 $ErrorActionPreference = 'Stop'
@@ -41,7 +48,9 @@ $env:USERNAME = 'rensh'
 $env:USERPROFILE = (Join-Path $OutDir 'Users/rensh')
 $Script:BitLocker = ($Scenario -in @('bitlocker', 'bitlocker-fails', 'bitlocker-stop'))
 # ClaudeOS installed (and its installer cleaned up, except in remove-both); or only an installer, never used.
-$Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-both', 'startup-windows', 'startup-once')
+$Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-both', 'startup-windows', 'startup-once', 'signin')
+# A PC with just the one disk, like most laptops (no "Where should ClaudeOS go?" question then).
+$Script:OneDisk = $Scenario -in @('blocked', 'gap63', 'stuck', 'nospace')
 $Script:InstallerLeft = $Scenario -in @('remove-both', 'remove-unfinished', 'leftover')
 $Script:Disk0Size = 277 * $Script:MockMB + 951 * $Script:MockGB + 2 * $Script:MockMB
 $Script:Disks = @(
@@ -49,6 +58,7 @@ $Script:Disks = @(
         Size = $Script:Disk0Size; BusType = 'NVMe'; IsBoot = $true; IsSystem = $true; OperationalStatus = 'Online'; PartitionStyle = 'GPT'; LargestFreeExtent = [int64]0 },
     [pscustomobject]@{ Number = 1; FriendlyName = 'WDC WD20EZAZ-00GGJB0'; Model = 'WDC WD20EZAZ-00GGJB0'; SerialNumber = 'WD-WX12A3456789'
         Size = 2000 * $Script:MockGB; BusType = 'SATA'; IsBoot = $false; IsSystem = $false; OperationalStatus = 'Online'; PartitionStyle = 'GPT'; LargestFreeExtent = [int64]0 })
+if ($Script:OneDisk) { $Script:Disks = @($Script:Disks[0]) }
 
 # The partitions, in bytes. Disk 0: EFI, reserved, C: (950 GB before ClaudeOS), then ClaudeOS's space, then
 # Windows' recovery partition. Disk 1: reserved, D: (data).
@@ -73,6 +83,7 @@ $cOff = 277 * $Script:MockMB
 $cGb = 950
 if ($Script:Installed) { $cGb = 870 }
 if ($Script:InstallerLeft) { $cGb = 864 }
+if ($Scenario -eq 'gap63') { $cGb = 887 }      # 63 GB already empty after C:
 $null = Add-MockPartition 0 1 (1 * $Script:MockMB) (260 * $Script:MockMB) 'System' $Script:TypeEsp '{0a000000-0000-0000-0000-000000000001}' $true
 $null = Add-MockPartition 0 2 (261 * $Script:MockMB) (16 * $Script:MockMB) 'Reserved' $Script:TypeMsr '{0a000000-0000-0000-0000-000000000002}'
 $null = Add-MockPartition 0 3 $cOff ($cGb * $Script:MockGB) 'Basic' $Script:TypeData '{0a000000-0000-0000-0000-000000000003}' $false $true 'C'
@@ -90,8 +101,10 @@ if ($Script:InstallerLeft) {
     New-Item -ItemType Directory -Path (Join-Path $Script:LeftoverVolume 'claudeos') -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $Script:LeftoverVolume 'claudeos/installer-0123456789abcdef01234567'), "id=0123456789abcdef01234567`n")
 }
-$null = Add-MockPartition 1 1 (1 * $Script:MockMB) (16 * $Script:MockMB) 'Reserved' $Script:TypeMsr '{1a000000-0000-0000-0000-000000000001}'
-$null = Add-MockPartition 1 2 (17 * $Script:MockMB) (1999 * $Script:MockGB) 'Basic' $Script:TypeData '{1a000000-0000-0000-0000-000000000002}' $false $false 'D'
+if (-not $Script:OneDisk) {
+    $null = Add-MockPartition 1 1 (1 * $Script:MockMB) (16 * $Script:MockMB) 'Reserved' $Script:TypeMsr '{1a000000-0000-0000-0000-000000000001}'
+    $null = Add-MockPartition 1 2 (17 * $Script:MockMB) (1999 * $Script:MockGB) 'Basic' $Script:TypeData '{1a000000-0000-0000-0000-000000000002}' $false $false 'D'
+}
 function Get-MockC { return ($Script:Parts | Where-Object { [string]$_.DriveLetter -eq 'C' } | Select-Object -First 1) }
 
 function Confirm-SecureBootUEFI { return $true }
@@ -163,6 +176,11 @@ function netsh.exe {
 }
 function Get-Disk {
     param([int]$Number = -1)
+    foreach ($d in $Script:Disks) {
+        $free = Get-FreeExtents -Partitions @($Script:Parts | Where-Object { $_.DiskNumber -eq $d.Number }) -DiskSize ([int64]$d.Size)
+        $d.LargestFreeExtent = [int64]0
+        if ($free.Count -gt 0) { $d.LargestFreeExtent = [int64]$free[0].Size }
+    }
     if ($Number -ge 0) { return ($Script:Disks | Where-Object { $_.Number -eq $Number }) }
     return $Script:Disks
 }
@@ -187,18 +205,75 @@ function Get-Partition {
         return $all
     }
 }
+# Files Windows can't move while it runs, by how far into C: they reach (C: can't shrink below that), as on
+# the PC setup was first tried on: a restore point at the very end, the change journal 2 GB before it (Windows
+# starts a new journal 37 GB from the end after the first reset, then far down), and $Mft's bitmap 63 GB in.
+$Script:Unmovable = [ordered]@{}
+$Script:JournalSpots = New-Object System.Collections.Queue
+$Script:Svi = '\System Volume Information\{9db92f71-c6a1-11f1-ae98-00155d606220}{3808876b-c176-4e48-b7ae-04046e6cc752}::$DATA'
+$Script:Journal = '\$Extend\$UsnJrnl:$J:$DATA'
+switch ($Scenario) {
+    'blocked' {
+        $Script:Unmovable[$Script:Svi] = 950 * $Script:MockGB
+        $Script:Unmovable[$Script:Journal] = 948 * $Script:MockGB
+        $Script:Unmovable['\$Mft::$BITMAP'] = 887 * $Script:MockGB
+        $Script:JournalSpots.Enqueue(913 * $Script:MockGB)
+        $Script:JournalSpots.Enqueue(200 * $Script:MockGB)
+    }
+    'gap63' { $Script:Unmovable['\$Mft::$BITMAP'] = 887 * $Script:MockGB }
+    'stuck' { $Script:Unmovable['\pagefile.sys'] = 950 * $Script:MockGB }
+}
+$Script:LastBlocker = $null
 function Get-PartitionSupportedSize {
-    # C: can shrink to 300 GB, and grow up to the next partition.
+    # C: can shrink to 300 GB (or to the last file Windows can't move), and grow up to the next partition.
+    # Like Windows, working that out writes event 259 naming that last file.
     $c = Get-MockC
     $next = @($Script:Parts | Where-Object { $_.DiskNumber -eq $c.DiskNumber -and $_.Offset -gt $c.Offset } | Sort-Object Offset)
     $end = $Script:Disk0Size - $Script:MockMB
     if ($next.Count -gt 0) { $end = $next[0].Offset }
-    return [pscustomobject]@{ SizeMin = 300 * $Script:MockGB; SizeMax = $end - $c.Offset }
+    $min = 300 * $Script:MockGB
+    $Script:LastBlocker = $null
+    foreach ($k in $Script:Unmovable.Keys) {
+        if ([int64]$Script:Unmovable[$k] -gt $min) { $min = [int64]$Script:Unmovable[$k]; $Script:LastBlocker = $k }
+    }
+    return [pscustomobject]@{ SizeMin = $min; SizeMax = $end - $c.Offset }
+}
+function Get-WinEvent {
+    param([hashtable]$FilterHashtable, [int]$MaxEvents)
+    if (-not $Script:LastBlocker) { throw 'No events were found that match the specified selection criteria.' }
+    return [pscustomobject]@{ Id = 259; ProviderName = 'Microsoft-Windows-Defrag'; TimeCreated = (Get-Date)
+        Properties = @([pscustomobject]@{ Value = 'Windows (C:)' }, [pscustomobject]@{ Value = '\\?\Volume{cb9ec628-0753-4fba-a216-523bf2d0eb7c}' },
+                       [pscustomobject]@{ Value = $Script:LastBlocker }, [pscustomobject]@{ Value = '0x1d175df3' }, [pscustomobject]@{ Value = '0x18d4dda5' })
+        Message = ('A volume shrink analysis was initiated on volume Windows (C:). ... The last unmovable file appears to be: ' + $Script:LastBlocker) }
+}
+function vssadmin.exe {
+    Add-Call ('vssadmin ' + ($args -join ' '))
+    $gone = @($Script:Unmovable.Keys | Where-Object { $_ -like '\System Volume Information\*' })
+    foreach ($k in $gone) { $Script:Unmovable.Remove($k) }
+    $global:LASTEXITCODE = 0
+    if ($gone.Count -eq 0) { $global:LASTEXITCODE = 1; return 'No items found that satisfy the query.' }
+}
+function fsutil.exe {
+    Add-Call ('fsutil ' + ($args -join ' '))
+    if ($Script:Unmovable.Contains($Script:Journal)) {
+        if ($Script:JournalSpots.Count -gt 0) { $Script:Unmovable[$Script:Journal] = $Script:JournalSpots.Dequeue() }
+        else { $Script:Unmovable.Remove($Script:Journal) }
+    }
+    $global:LASTEXITCODE = 0
+}
+function powercfg.exe {
+    Add-Call ('powercfg ' + ($args -join ' '))
+    if ($Script:Unmovable.Contains('\hiberfil.sys')) { $Script:Unmovable.Remove('\hiberfil.sys') }
+    $global:LASTEXITCODE = 0
 }
 function Get-Volume {
     param([Parameter(ValueFromPipeline = $true)]$InputObject, [string]$DriveLetter)
     process {
-        if ($DriveLetter -eq 'C') { return [pscustomobject]@{ Size = (Get-MockC).Size; SizeRemaining = 400 * $Script:MockGB } }
+        if ($DriveLetter -eq 'C') {
+            $freeGb = 400
+            if ($Scenario -eq 'nospace') { $freeGb = 50 }
+            return [pscustomobject]@{ Size = (Get-MockC).Size; SizeRemaining = $freeGb * $Script:MockGB }
+        }
         if ($InputObject) {
             if ([string]$InputObject.DriveLetter -notmatch '^[A-Z]$') { return }
             return [pscustomobject]@{ Size = $InputObject.Size; SizeRemaining = [int64]($InputObject.Size / 2); FileSystemLabel = 'Data'; FileSystem = 'NTFS' }
@@ -214,7 +289,8 @@ function Get-Volume {
 function Resize-Partition {
     param([string]$DriveLetter, [int64]$Size)
     Add-Call ('Resize-Partition ' + $DriveLetter + ' ' + ($Size / $Script:MockGB))
-    if ($Size -gt (Get-PartitionSupportedSize).SizeMax) { throw 'Size Not Supported' }
+    $supported = Get-PartitionSupportedSize
+    if ($Size -gt $supported.SizeMax -or $Size -lt $supported.SizeMin) { throw 'Size Not Supported' }
     (Get-MockC).Size = $Size
 }
 function Remove-Partition {
@@ -238,10 +314,13 @@ function Initialize-Disk {
 function Get-TimeZone { return [pscustomobject]@{ Id = 'Singapore Standard Time' } }
 function Get-LocalUser { return [pscustomobject]@{ FullName = 'Ren Shu' } }
 function Get-ClaudeProgram { return '/fake/claude.exe' }
-function Invoke-ClaudeSignIn { Add-Call 'Invoke-ClaudeSignIn'; return ('sk-ant-oat01-' + ('x' * 90)) }
-function Invoke-ClaudeLogin {
-    Add-Call 'Invoke-ClaudeLogin'
-    return ('{"claudeAiOauth":{"accessToken":"' + ('a' * 40) + '","refreshToken":"' + ('r' * 40) + '","expiresAt":1}}')
+function Invoke-ClaudeBrowserSignIn {
+    # One approval in the browser gives the full sign-in; in 'paste', a sign-in code was pasted instead.
+    param([string]$ClaudeExe)
+    Add-Call 'Invoke-ClaudeBrowserSignIn'
+    if ($Scenario -eq 'paste') { return [pscustomobject]@{ Login = $null; Token = ('sk-ant-oat01-' + ('x' * 90)) } }
+    return [pscustomobject]@{ Token = $null
+        Login = ('{"claudeAiOauth":{"accessToken":"' + ('a' * 40) + '","refreshToken":"' + ('r' * 40) + '","expiresAt":1}}') }
 }
 function Get-UbuntuIso {
     Add-Call 'Get-UbuntuIso'
@@ -353,17 +432,23 @@ function Dismount-EspPartition { param($Mount) Add-Call 'Dismount-EspPartition' 
 
 # The answers, in order. The first picks what to do: 1 install, 2 sign in again, 3 what starts, 4 remove.
 $Script:Answers = New-Object System.Collections.Queue
+# No menu unless ClaudeOS (or an earlier installer) is already there.
 $scripted = switch ($Scenario) {
-    'plan' { @('1', 'y', '1', '') }                         # turn off Fast Startup, shrink C:, size (Enter)
-    'shrink' { @('1', 'y', '1', '80', 'y', 'y', 'n') }       # ..., 80 GB, phone, go ahead, restart later
-    'disk' { @('1', 'n', '2', '1', 'n', 'y', 'y') }          # keep Fast Startup, disk 1, type 1, no phone, go, restart
-    'no-entry' { @('1', 'y', '1', '80', 'y', 'y') }
-    'install-fails' { @('1', 'y', '1', '80', 'y', 'y') }
-    'leftover' { @('1') }
-    'bitlocker' { @('1', 'y', 'y', '1', '80', 'y', 'y', 'n') }     # recovery key saved, then as in shrink
-    'bitlocker-fails' { @('1', 'y', 'y', '1', '80', 'y', 'y') }
-    'bitlocker-stop' { @('1', 'n') }                         # recovery key not saved
-    'signin' { @('2', 'y') }                                 # with the phone
+    'plan' { @('1') }                                       # next to Windows (the pretend PC also has disk 1)
+    'shrink' { @('1', 'y', 'n') }                           # next to Windows, go ahead, restart later
+    'disk' { @('2', '1', 'y', 'y') }                        # the separate disk, type 1, go ahead, restart
+    'no-entry' { @('1', 'y') }
+    'install-fails' { @('1', 'y') }
+    'leftover' { @('1') }                                   # (menu) install
+    'bitlocker' { @('y', '1', 'y', 'n') }                   # recovery key saved, then as in shrink
+    'bitlocker-fails' { @('y', '1', 'y') }
+    'bitlocker-stop' { @('n') }                             # recovery key not saved
+    'signin' { @('2') }                                     # (menu) sign in again
+    'blocked' { @('y', 'n') }                               # one disk: go ahead, restart later
+    'gap63' { @('y', 'n') }
+    'stuck' { @('y') }
+    'nospace' { @() }
+    'paste' { @('1', 'y', 'n') }
     'startup-windows' { @('3', '2') }                        # Windows
     'startup-once' { @('3', '3', 'n') }                      # ClaudeOS once, restart later
     'remove' { @('4', 'REMOVE') }

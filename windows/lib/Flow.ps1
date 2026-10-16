@@ -1,4 +1,6 @@
 # The setup conversation, step by step (setup.ps1 runs it; tests run it with a pretend PC).
+# On a PC without ClaudeOS it asks as little as it can: everything it would change is in one list at the end,
+# and nothing changes before "Go ahead?". Sign-in is one approval in the browser.
 # ASCII-only file (see Common.ps1).
 
 function Stop-Setup {
@@ -22,11 +24,21 @@ function Invoke-ClaudeOSSetup {
     Write-Line 'as they are. You need about 70 GB of free disk space and the internet. No USB stick is needed.'
     if ($PlanOnly) { Write-Warn 'Plan only: nothing will be changed.' }
 
-    $mode = Read-Choice 'What would you like to do?' @(
-        'Install ClaudeOS on this PC',
-        'Sign ClaudeOS in to Claude again (ClaudeOS is already installed)',
-        'Choose what starts when the PC turns on: ClaudeOS or Windows',
-        'Remove ClaudeOS from this PC') 0
+    # The menu only when ClaudeOS (or an earlier try's installer) is already on this PC; otherwise: install.
+    $installed = Find-ClaudeOSInstall
+    # (These return their list as one object: @(...) around them would count that list as one item.)
+    $leftInstallers = Find-InstallerPartitions
+    $leftEntries = Get-SetupBootEntries
+    $mode = 0
+    if ($installed -or $leftInstallers.Count -gt 0 -or $leftEntries.Count -gt 0) {
+        $default = 0
+        if ($installed) { $default = 1 }
+        $mode = Read-Choice 'What would you like to do?' @(
+            'Install ClaudeOS on this PC',
+            'Sign ClaudeOS in to Claude again (ClaudeOS is already installed)',
+            'Choose what starts when the PC turns on: ClaudeOS or Windows',
+            'Remove ClaudeOS from this PC') $default
+    }
     if ($mode -eq 1) {
         Invoke-SignInAgain -WorkDir $WorkDir -PlanOnly:$PlanOnly
         return
@@ -48,12 +60,9 @@ function Invoke-ClaudeOSSetup {
                     'Most PCs can switch in their firmware settings, but Windows would also need converting, so setup stops here.')
     }
     Write-Good 'Starts in UEFI mode.'
-    if (Find-ClaudeOSInstall) {
+    if ($installed) {
         Stop-Setup ('ClaudeOS is already installed on this PC. To install it again, first choose "Remove ClaudeOS from this PC".')
     }
-    # (These return their list as one object: @(...) around them would count that list as one item.)
-    $leftInstallers = Find-InstallerPartitions
-    $leftEntries = Get-SetupBootEntries
     if ($leftInstallers.Count -gt 0 -or $leftEntries.Count -gt 0) {
         Stop-Setup ('An installer from an earlier try is still on this PC. Choose "Remove ClaudeOS from this PC" first, ' +
                     'then install again.')
@@ -80,15 +89,9 @@ function Invoke-ClaudeOSSetup {
         }
     }
 
-    if (Get-FastStartupEnabled) {
-        Write-Line ''
-        Write-Line 'Windows "Fast Startup" is on. It leaves the Windows drive half-closed, so ClaudeOS could read your'
-        Write-Line 'files but not save to them. Turning it off makes Windows start a few seconds slower.'
-        if (Read-YesNo 'Turn off Fast Startup?' $true) {
-            if (-not $PlanOnly) { Disable-FastStartup }
-            Write-Good 'Fast Startup is off.'
-        }
-    }
+    # Fast Startup leaves the Windows drive half-closed, so ClaudeOS could read your files but not save to them.
+    # Turning it off is in the list at the end, with everything else that changes.
+    $fastStartup = Get-FastStartupEnabled
 
     $pods = Get-PairedAirPods
     if ($pods.Count -gt 0) {
@@ -120,22 +123,31 @@ function Invoke-ClaudeOSSetup {
     }
 
     # ------------------------------------------------------------- 3. where ClaudeOS goes
+    # Next to Windows: the empty space right after C:, made bigger by shrinking C: (after "Go ahead?", in steps,
+    # dealing with what Windows can't move: Invoke-MakeRoom). Or a whole separate disk.
     # The space ClaudeOS gets also holds its installer at first (Installer.ps1); ClaudeOS takes that space
     # over when it first starts.
     Write-Step 'Where ClaudeOS goes'
     $instGb = [Math]::Round($Script:InstallerBytes / $Script:GB)
     $needBytes = $Script:MinInstallBytes + $Script:InstallerBytes
+    $wantBytes = $Script:DefaultInstallBytes + $Script:InstallerBytes
     $plan = Get-SystemDiskPlan
     $sysDisk = $plan.Disk
     $others = Get-OtherDiskCandidates
+    $gap = [int64]$plan.GapAfterC
     $options = @()
     $kinds = @()
-    if ($plan.FreeBytes -ge $needBytes) {
-        $options += ('Next to Windows, in the free space on ' + (Get-DiskLabel $sysDisk) + ' (' + (Format-Size $plan.FreeBytes) + ' free)')
-        $kinds += 'gap'
-    } elseif ($plan.MaxShrink -ge $needBytes) {
-        $options += ('Next to Windows, on ' + (Get-DiskLabel $sysDisk) + ': make room by shrinking C: (your files stay)')
-        $kinds += 'shrink'
+    $clearing = $false
+    if ($plan.FreeBytes -ge $wantBytes -and $gap -lt $needBytes) {
+        # Plenty of empty space elsewhere on the disk already (left by the person): use that as it is.
+        $options += ('Next to Windows, in the empty space on ' + (Get-DiskLabel $sysDisk) + ' (' + (Format-Size $plan.FreeBytes) + ')')
+        $kinds += 'free'
+    } elseif ($gap + [int64]$plan.MaxShrinkByFreeSpace -ge $needBytes) {
+        # C: has the free space. If Windows can't shrink C: that far right now, Invoke-MakeRoom deals with what's
+        # in the way after "Go ahead?".
+        $options += ('Next to Windows, on ' + (Get-DiskLabel $sysDisk) + ': room made from C: (your files stay)')
+        $kinds += 'room'
+        $clearing = ($gap + [int64]$plan.MaxShrink -lt $needBytes)
     }
     foreach ($d in $others) {
         if ([int64]$d.Size -lt $needBytes) { continue }
@@ -143,28 +155,24 @@ function Invoke-ClaudeOSSetup {
         $kinds += ('disk:' + $d.Number)
     }
     if ($options.Count -eq 0) {
-        Stop-Setup ('There is not enough room: ClaudeOS needs ' + (Format-Size $needBytes) + ', and Windows must keep ' +
-                    (Format-Size $Script:MinWindowsFreeBytes) + ' free. Free up space on C: or add a disk, then run setup again.')
+        $short = $needBytes + $Script:MinWindowsFreeBytes - ($gap + [int64]$plan.WindowsFree)
+        Stop-Setup ('There is not enough free space: C: has ' + (Format-Size $plan.WindowsFree) + ' free. ClaudeOS needs ' +
+                    (Format-Size $needBytes) + ', and Windows keeps ' + (Format-Size $Script:MinWindowsFreeBytes) + ' free for itself. ' +
+                    'Free up about ' + (Format-Size ([Math]::Max($short, $Script:GB))) + ' on C: (Settings, System, Storage), or add a disk, ' +
+                    'then run setup again.')
     }
     $pick = 0
     if ($options.Count -gt 1) { $pick = Read-Choice 'Where should ClaudeOS go?' $options 0 } else { Write-Line $options[0] }
     $kind = $kinds[$pick]
-    $shrinkBytes = [int64]0
     $eraseNumber = -1
     $targetDisk = $sysDisk
-    if ($kind -eq 'shrink') {
-        $maxGb = [Math]::Floor(($plan.MaxShrink - $Script:InstallerBytes) / $Script:GB)
-        $suggest = [Math]::Min(64, $maxGb)
-        Write-Line ('Windows can give ClaudeOS up to ' + $maxGb + ' GB, plus ' + $instGb + ' GB for its installer, and still keep ' +
-                    (Format-Size $Script:MinWindowsFreeBytes) + ' free.')
-        while ($true) {
-            $a = Read-Host ('How many GB for ClaudeOS? (40 to ' + $maxGb + ', Enter = ' + $suggest + ')')
-            if ([string]::IsNullOrWhiteSpace($a)) { $sizeGb = $suggest; break }
-            $sizeGb = 0
-            if ([int]::TryParse($a.Trim(), [ref]$sizeGb) -and $sizeGb -ge 40 -and $sizeGb -le $maxGb) { break }
-            Write-Line ('Please type a number from 40 to ' + $maxGb + '.')
+    if ($kind -eq 'room') {
+        if ($gap -ge $wantBytes) {
+            Write-Line ('ClaudeOS gets the ' + (Format-Size $gap) + ' of empty space right after C:.')
+        } else {
+            Write-Line ('ClaudeOS gets ' + (Format-Size ($wantBytes - $Script:InstallerBytes)) + ' if Windows can spare it, and at least ' +
+                        (Format-Size $Script:MinInstallBytes) + '.')
         }
-        $shrinkBytes = [int64]$sizeGb * $Script:GB + $Script:InstallerBytes
     } elseif ($kind -like 'disk:*') {
         $eraseNumber = [int]($kind.Substring(5))
         $targetDisk = Get-Disk -Number $eraseNumber
@@ -195,8 +203,9 @@ function Invoke-ClaudeOSSetup {
         Write-Line '(Plan only: skipping sign-in.)'
     } else {
         $exe = Get-ClaudeProgram -WorkDir $WorkDir
-        $token = Invoke-ClaudeSignIn -ClaudeExe $exe
-        $login = Read-PhoneSignIn -ClaudeExe $exe
+        $signin = Invoke-ClaudeBrowserSignIn -ClaudeExe $exe
+        $login = $signin.Login
+        $token = [string]$signin.Token
     }
 
     # ------------------------------------------------------------- 6. Ubuntu
@@ -222,8 +231,17 @@ function Invoke-ClaudeOSSetup {
     Write-Step 'Ready'
     Write-Line 'This is what happens now:'
     $n = 1
-    if ($shrinkBytes -gt 0) {
-        Write-Line ('  ' + $n + '. C: shrinks by ' + (Format-Size $shrinkBytes) + ' to make room for ClaudeOS. Your files stay.'); $n++
+    if ($fastStartup) {
+        Write-Line ('  ' + $n + '. Windows "Fast Startup" is turned off, so ClaudeOS can save to your Windows files.'); $n++
+        Write-Line '     (Windows then starts a few seconds slower.)'
+    }
+    if ($kind -eq 'room' -and $gap -lt $wantBytes) {
+        Write-Line ('  ' + $n + '. C: shrinks by up to ' + (Format-Size ($wantBytes - $gap)) + ' to make room for ClaudeOS. Your files stay.'); $n++
+        if ($clearing) {
+            Write-Line '     Windows keeps some of its own files at the end of C:. Setup moves them out of the way where it can:'
+            Write-Line '     it resets the drive''s change journal (Windows starts a new one), and only if that is not enough,'
+            Write-Line '     it deletes your restore points (Windows makes new ones) and turns hibernation off.'
+        }
     }
     if ($eraseNumber -ge 0) { Write-Line ('  ' + $n + '. ' + (Get-DiskLabel $targetDisk) + ' is erased for ClaudeOS.'); $n++ }
     Write-Line ('  ' + $n + '. The last ' + $instGb + ' GB of that space hold ClaudeOS''s installer for now, and "ClaudeOS setup"')
@@ -250,16 +268,20 @@ function Invoke-ClaudeOSSetup {
     } catch {
         Stop-Setup ($_.Exception.Message + ' ClaudeOS needs that to start its installer.')
     }
+    $cSizeBefore = [int64]$plan.Partition.Size
     $shrunk = $false
     $erased = $false
     $inst = $null
     $blKey = $null
     try {
-        if ($shrinkBytes -gt 0) {
+        if ($kind -eq 'room' -and $gap -lt $wantBytes) {
             Write-Step 'Making room on C:'
-            Invoke-ShrinkWindows -ShrinkBytes $shrinkBytes
-            $shrunk = $true
-            Write-Good ('C: is ' + (Format-Size $shrinkBytes) + ' smaller; that space is now free for ClaudeOS.')
+            $made = Invoke-MakeRoom -NeedBytes $needBytes -WantBytes $wantBytes
+            $shrunk = ($made.ShrunkBy -gt 0)
+            if ($made.Gap -lt $needBytes) {
+                throw (Get-RoomAdvice -Blocker $made.Blocker -Made $made.Gap -NeedBytes $needBytes)
+            }
+            Write-Good ('There is ' + (Format-Size $made.Gap) + ' of room for ClaudeOS next to Windows.')
         }
         if ($eraseNumber -ge 0) {
             Write-Step ('Erasing disk ' + $eraseNumber)
@@ -297,19 +319,23 @@ function Invoke-ClaudeOSSetup {
         } finally {
             Close-InstallerPartition $inst
         }
+        if ($fastStartup) {
+            Disable-FastStartup
+            Write-Good 'Fast Startup is off.'
+        }
         # Start it once, at the next restart; after that the PC starts what it started before.
         Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $entry)
     } catch {
         $why = $_.Exception.Message
         Write-SetupLog ('Install step failed: ' + $why)
         Write-Line 'Something went wrong; setup is taking back what it did...'
-        $left = Undo-InstallSteps -Installer $inst -Shrunk:$shrunk -BitLockerKey:($null -ne $blKey)
+        $left = Undo-InstallSteps -Installer $inst -Shrunk:$shrunk -BitLockerKey:($null -ne $blKey) -CSize $cSizeBefore
         $msg = 'Setup stopped: ' + $why + ' Windows starts normally.'
         if ($left -contains 'installer' -or $left -contains 'entry') {
             $msg += ' To delete what setup made, run setup again and choose "Remove ClaudeOS from this PC".'
         } elseif ($left -contains 'space') {
-            $msg += (' C: is still ' + (Format-Size $shrinkBytes) + ' smaller: to give that back, open Disk Management, ' +
-                     'right-click C: and choose "Extend Volume".')
+            $msg += ' C: is still smaller than before: to give it its space back, open Disk Management, right-click C: and ' +
+                    'choose "Extend Volume".'
         } elseif ($shrunk) {
             $msg += ' C: has its space back.'
         }
@@ -346,9 +372,10 @@ function Invoke-ClaudeOSSetup {
 function Undo-InstallSteps {
     # After a failed install step: takes back what this run of setup did, as far as it can. The installer's
     # power-on entry and boot loader go, then ClaudeOS's BitLocker key and the installer's partition, and if C:
-    # was shrunk for it, C: grows back. (A separate disk that was erased stays empty.) Returns what is left:
-    # 'entry', 'installer' and/or 'space'.
-    param($Installer, [switch]$Shrunk, [switch]$BitLockerKey)
+    # was shrunk for it, C: grows back to the size it had ($CSize). (A separate disk that was erased stays
+    # empty; restore points that were deleted stay deleted.) Returns what is left: 'entry', 'installer' and/or
+    # 'space'.
+    param($Installer, [switch]$Shrunk, [switch]$BitLockerKey, [int64]$CSize = 0)
     $left = @()
     try { Remove-SetupBootEntries } catch { Write-SetupLog ('Undo, power-on entry: ' + $_.Exception.Message); $left += 'entry' }
     try { Clear-SetupLoader } catch { Write-SetupLog ('Undo, boot loader: ' + $_.Exception.Message) }
@@ -370,10 +397,12 @@ function Undo-InstallSteps {
             $c = Get-Partition -DriveLetter C -ErrorAction Stop
             Update-Disk -Number $c.DiskNumber -ErrorAction SilentlyContinue
             $max = [int64](Get-PartitionSupportedSize -DriveLetter C -ErrorAction Stop).SizeMax
-            if ($max -gt [int64]$c.Size + 1GB) {
-                Resize-Partition -DriveLetter C -Size $max -ErrorAction Stop
-                Write-SetupLog ('Undo: C: grew back to ' + $max + ' bytes.')
-            } else {
+            $target = $max
+            if ($CSize -gt 0) { $target = [Math]::Min($max, $CSize) }
+            if ($target -gt [int64]$c.Size + 1GB) {
+                Resize-Partition -DriveLetter C -Size $target -ErrorAction Stop
+                Write-SetupLog ('Undo: C: grew back to ' + $target + ' bytes.')
+            } elseif ($target -lt $CSize - 1GB) {
                 $left += 'space'
             }
         } catch {
@@ -384,36 +413,29 @@ function Undo-InstallSteps {
     return , $left
 }
 
-function Read-PhoneSignIn {
-    # Offers the full sign-in the Claude app on the phone needs. Returns it, or $null.
-    param([Parameter(Mandatory = $true)][string]$ClaudeExe)
-    Write-Line ''
-    Write-Line 'Besides talking, you type to ClaudeOS in the Claude app on your phone: the phone is its keyboard.'
-    Write-Line 'That needs one more approval in the browser.'
-    if (-not (Read-YesNo 'Set up typing from your phone?' $true)) { return $null }
-    return (Invoke-ClaudeLogin -ClaudeExe $ClaudeExe)
-}
-
 function Invoke-SignInAgain {
-    # For when ClaudeOS says it isn't signed in (a sign-in lasts about a year), or to add the phone: sign
-    # in here and leave the new sign-in where ClaudeOS looks on its next start, C:\Users\<you>\ClaudeOS
-    # (claude_token, and claude_login.json for the phone). ClaudeOS takes them into its private folder
-    # and deletes these copies.
+    # For when ClaudeOS says it isn't signed in, or to add the Claude app on the phone: sign in here and leave
+    # the new sign-in where ClaudeOS looks on its next start, C:\Users\<you>\ClaudeOS (claude_login.json, the
+    # full sign-in; or claude_token, a pasted sign-in code). ClaudeOS takes it into its private folder and
+    # deletes the copy.
     param([Parameter(Mandatory = $true)][string]$WorkDir, [switch]$PlanOnly)
     Write-Step 'Sign in to Claude'
     if ($PlanOnly) { Write-Line '(Plan only: skipping sign-in.)'; return }
     $exe = Get-ClaudeProgram -WorkDir $WorkDir
-    $token = Invoke-ClaudeSignIn -ClaudeExe $exe
-    $login = Read-PhoneSignIn -ClaudeExe $exe
+    $signin = Invoke-ClaudeBrowserSignIn -ClaudeExe $exe
     $dir = Join-Path $env:USERPROFILE 'ClaudeOS'
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    $file = Join-Path $dir 'claude_token'
-    Write-TextFileLf -Path $file -Text ($token + "`n")
-    $token = $null
-    if ($login) {
-        Write-TextFileLf -Path (Join-Path $dir 'claude_login.json') -Text $login
-        $login = $null
+    $file = Join-Path $dir 'claude_login.json'
+    $other = Join-Path $dir 'claude_token'
+    if (-not $signin.Login) { $file, $other = $other, $file }
+    # Only the new sign-in waits there: an older one of the other kind would be taken too.
+    Remove-Item -LiteralPath $other -Force -ErrorAction SilentlyContinue
+    if ($signin.Login) {
+        Write-TextFileLf -Path $file -Text $signin.Login
+    } else {
+        Write-TextFileLf -Path $file -Text ([string]$signin.Token + "`n")
     }
+    $signin = $null
     Write-Good 'Done. Restart into ClaudeOS; it picks up the new sign-in when it starts.'
     Write-Line ('If ClaudeOS still says it is not signed in, Windows'' Fast Startup may be keeping the drive locked:')
     Write-Line ('shut Windows down with Shift held on "Shut down", then start ClaudeOS. The sign-in waits in ' + $file + '.')

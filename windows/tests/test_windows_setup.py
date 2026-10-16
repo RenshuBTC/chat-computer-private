@@ -343,7 +343,8 @@ def test_windows_powershell_5_1_compatible():
 
 # ------------------------------------------------------------------ the whole conversation, on a pretend PC
 DESTRUCTIVE = ("Resize-Partition", "Clear-Disk", "Initialize-Disk", "New-InstallerPartition", "Remove-Partition",
-               "Disable-FastStartup", "Suspend-BitLocker", "BitLocker add", "BitLocker delete", "bcdedit", "shutdown")
+               "Disable-FastStartup", "Suspend-BitLocker", "BitLocker add", "BitLocker delete", "bcdedit", "shutdown",
+               "vssadmin", "fsutil", "powercfg")
 USER_KEY = "{0b000000-0000-4000-8000-000000000001}"           # the person's own BitLocker recovery password
 CLAUDE_KEY = "{2b000000-0000-4000-8000-0000000000c1}"         # the one setup adds for ClaudeOS
 CLAUDE_KEY_PASSWORD = "123456-234567-345678-456789-567890-678901-789012-890123"
@@ -393,19 +394,24 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     out, res = _flow(tmp_path, "shrink")
     assert res["ok"], res
     calls = res["calls"]
-    # C: gives 80 GB for ClaudeOS plus 6 GB for its installer. The installer goes at the end of that space,
-    # right before Windows' recovery partition; ClaudeOS installs into the 80 GB before it.
+    # C: gives 64 GB for ClaudeOS plus 6 GB for its installer, without a question about the size. The installer
+    # goes at the end of that space, right before Windows' recovery partition; ClaudeOS installs into the 64 GB.
     made = f"New-InstallerPartition 0 {RECOVERY - 6144} 6144"
-    assert _disk(res, 0) == [*DISK0[:2], (3, 277, 864 * 1024), (5, RECOVERY - 6144, 6144), DISK0[3]]
-    # Nothing changes before "Go ahead" but Fast Startup. Then the power-on entry first (if the PC won't take
-    # one, nothing else changes), and only when all is ready, the PC is told to start the installer once.
+    assert _disk(res, 0) == [*DISK0[:2], (3, 277, 880 * 1024), (5, RECOVERY - 6144, 6144), DISK0[3]]
+    # The only questions: where (this pretend PC also has a second disk), "Go ahead?" and "Restart now?".
+    assert [c for c in calls if c.startswith("Q ")] == [
+        "Q Type a number (Enter = 1) -> 1", "Q Go ahead? [y/N] -> y", "Q Restart now? [Y/n] -> n"]
+    # Nothing changes before "Go ahead". Then the power-on entry first (if the PC won't take one, nothing else
+    # changes), and only when all is ready, Fast Startup goes off and the PC is told to start the installer once.
     go = "Q Go ahead? [y/N] -> y"
-    assert _changes(calls[:calls.index(go)]) == ["Disable-FastStartup"]
+    assert _changes(calls[:calls.index(go)]) == []
     _in_order(calls, go, "bcdedit /copy {bootmgr} /d ClaudeOS setup",
               f"bcdedit /set {SETUP_ID} path \\EFI\\claudeos-setup\\shimx64.efi",
-              f"bcdedit /set {{fwbootmgr}} displayorder {SETUP_ID} /addlast", "Resize-Partition C 864", made,
-              "Copy-IsoToInstaller", "Close-InstallerPartition", f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}",
-              "Q Restart now? [Y/n] -> n")
+              f"bcdedit /set {{fwbootmgr}} displayorder {SETUP_ID} /addlast", "Resize-Partition C 880", made,
+              "Copy-IsoToInstaller", "Close-InstallerPartition", "Disable-FastStartup",
+              f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}", "Q Restart now? [Y/n] -> n")
+    # Plenty of room: nothing else had to be cleared out of the way.
+    assert not [c for c in calls if c.startswith(("vssadmin", "fsutil", "powercfg"))]
     assert res["boot_entries"] == {SETUP_ID: "\\EFI\\claudeos-setup\\shimx64.efi"}
     assert not [c for c in calls if c.startswith(("Clear-Disk", "Remove-Partition", "shutdown"))]
     # The boot loader that entry starts, on Windows' EFI partition: Ubuntu's signed shim, GRUB and MokManager.
@@ -423,11 +429,12 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     assert (inst / f"claudeos/installer-{install_id}").read_text() == f"id={install_id}\n"
     assert ai["network"]["wifis"]["any-wifi"]["access-points"] == {"Home 5G": {"password": "correct horse"}}
     assert ai["timezone"] == "Asia/Singapore" and ai["identity"]["realname"] == "Ren Shu"
-    assert (inst / "claudeos/secrets/claude_token").read_text().startswith("sk-ant-oat01-")
-    # The full sign-in for the Claude app on the phone, asked after the token and before "Go ahead?".
+    # One sign-in in the browser before "Go ahead?": the full sign-in, which ClaudeOS and the phone both use.
+    # No one-year code to paste.
     login = json.loads((inst / "claudeos/secrets/claude_login.json").read_text())
     assert login["claudeAiOauth"]["refreshToken"].startswith("r")
-    _in_order(calls, "Invoke-ClaudeSignIn", "Invoke-ClaudeLogin", go)
+    assert not (inst / "claudeos/secrets/claude_token").exists()
+    _in_order(calls, "Invoke-ClaudeBrowserSignIn", go)
     assert (inst / "claudeos/app/claudeos/__init__.py").exists()
     assert not (inst / "claudeos/app/windows").exists() and not (inst / "claudeos/app/.venv").exists()
     for script in ("guard.sh", "network.sh", "finish.sh"):
@@ -455,9 +462,7 @@ def test_flow_separate_disk(tmp_path):
     assert "Mount-EspPartition 0 1" in calls[calls.index("Copy-IsoToInstaller"):]
     assert (out / "esp/EFI/claudeos-setup/shimx64.efi").exists()
     assert _load(out / "installer/autoinstall.yaml")["storage"]["layout"]["match"] == {"install-media": True}
-    # No phone this time: no full sign-in in the installer.
-    assert "Invoke-ClaudeLogin" not in calls
-    assert not (out / "installer/claudeos/secrets/claude_login.json").exists()
+    assert (out / "installer/claudeos/secrets/claude_login.json").exists()
     assert calls[-1] == "shutdown /r /t 5"
 
 
@@ -465,7 +470,7 @@ def test_flow_separate_disk(tmp_path):
 def test_flow_stops_before_changing_anything_when_the_pc_wont_take_the_entry(tmp_path):
     out, res = _flow(tmp_path, "no-entry")
     assert not res["ok"] and res["error"].endswith("No disks were changed."), res
-    assert _changes(res["calls"]) == ["Disable-FastStartup", "bcdedit /copy {bootmgr} /d ClaudeOS setup"]
+    assert _changes(res["calls"]) == ["bcdedit /copy {bootmgr} /d ClaudeOS setup"]
     assert _disk(res, 0) == DISK0
 
 
@@ -524,15 +529,77 @@ def test_flow_deletes_claudeos_bitlocker_key_when_a_later_step_fails(tmp_path):
 
 
 @needs_pwsh
-def test_flow_sign_in_again_leaves_the_token_for_claudeos(tmp_path):
+def test_flow_sign_in_again_leaves_the_sign_in_for_claudeos(tmp_path):
     out, res = _flow(tmp_path, "signin")
     assert res["ok"], res
-    assert "Invoke-ClaudeSignIn" in res["calls"]
+    assert "Invoke-ClaudeBrowserSignIn" in res["calls"]
     assert not _changes(res["calls"])
-    tok = (out / "Users/rensh/ClaudeOS/claude_token").read_text()
-    assert tok.startswith("sk-ant-oat01-") and tok.endswith("\n")
-    assert "Invoke-ClaudeLogin" in res["calls"]
     assert json.loads((out / "Users/rensh/ClaudeOS/claude_login.json").read_text())["claudeAiOauth"]
+    assert not (out / "Users/rensh/ClaudeOS/claude_token").exists()
+
+
+@needs_pwsh
+def test_flow_makes_room_like_by_hand_when_windows_files_are_in_the_way(tmp_path):
+    # The PC setup was first tried on: one disk, 272 GB free on C:, yet Windows could shrink C: by nothing,
+    # because a restore point sat at its very end; then the change journal was in the way (twice, as Windows
+    # starts a new one), then the file system's own $Mft. Setup does what was done there by hand, after the one
+    # "Go ahead?", and installs into the 63 GB it made.
+    out, res = _flow(tmp_path, "blocked")
+    assert res["ok"], res
+    calls = res["calls"]
+    assert [c for c in calls if c.startswith("Q ")] == ["Q Go ahead? [y/N] -> y", "Q Restart now? [Y/n] -> n"]
+    go = "Q Go ahead? [y/N] -> y"
+    assert _changes(calls[:calls.index(go)]) == []
+    room = [c for c in calls if c.startswith(("vssadmin", "fsutil", "powercfg", "Resize-Partition"))]
+    assert room == ["vssadmin delete shadows /for=C: /quiet", "Resize-Partition C 948", "fsutil usn deletejournal /n C:",
+                    "Resize-Partition C 913", "fsutil usn deletejournal /n C:", "Resize-Partition C 887"]
+    assert _disk(res, 0) == [*DISK0[:2], (3, 277, 887 * 1024), (5, RECOVERY - 6144, 6144), DISK0[3]]
+    _in_order(calls, go, "bcdedit /copy {bootmgr} /d ClaudeOS setup", "vssadmin delete shadows /for=C: /quiet",
+              f"New-InstallerPartition 0 {RECOVERY - 6144} 6144", f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}")
+    # The list before "Go ahead?" said so.
+    log = (out / "setup.log").read_text()
+    assert "deletes your restore points" in log and "resets the drive's change journal" in log
+    assert "\\$Mft::$BITMAP (ntfs)" in log
+
+
+@needs_pwsh
+def test_flow_uses_space_already_made_after_c(tmp_path):
+    # The same PC once the room was made by hand: 63 GB empty after C:, $Mft in the way of more. Nothing is
+    # deleted or reset to get the last few GB.
+    out, res = _flow(tmp_path, "gap63")
+    assert res["ok"], res
+    calls = res["calls"]
+    assert not [c for c in calls if c.startswith(("vssadmin", "fsutil", "powercfg", "Resize-Partition"))]
+    assert _disk(res, 0) == [*DISK0[:2], (3, 277, 887 * 1024), (5, RECOVERY - 6144, 6144), DISK0[3]]
+
+
+@needs_pwsh
+def test_flow_says_what_to_do_when_the_page_file_is_in_the_way(tmp_path):
+    out, res = _flow(tmp_path, "stuck")
+    assert not res["ok"], res
+    err = res["error"]
+    assert "page file" in err and "Virtual memory" in err and err.endswith("Windows starts normally. No disks were changed."), err
+    assert _disk(res, 0) == DISK0 and res["boot_entries"] == {}
+    # It deletes nothing it doesn't need to: restore points stay when they aren't what's in the way.
+    assert not [c for c in res["calls"] if c.startswith(("vssadmin", "Disable-FastStartup", "New-InstallerPartition"))]
+
+
+@needs_pwsh
+def test_flow_says_how_much_to_free_up(tmp_path):
+    out, res = _flow(tmp_path, "nospace")
+    assert not res["ok"], res
+    assert "C: has 50 GB free" in res["error"] and "Free up about 21 GB" in res["error"], res["error"]
+    assert not _changes(res["calls"]) and "Invoke-ClaudeBrowserSignIn" not in res["calls"]
+
+
+@needs_pwsh
+def test_flow_with_a_pasted_sign_in_code(tmp_path):
+    out, res = _flow(tmp_path, "paste")
+    assert res["ok"], res
+    secrets = out / "installer/claudeos/secrets"
+    assert (secrets / "claude_token").read_text().startswith("sk-ant-oat01-")
+    assert not (secrets / "claude_login.json").exists()
+    assert "sk-ant-oat01-" not in (out / "setup.log").read_text()
 
 
 def _run_network(tmp_path, cfg_text, wifi_iface):

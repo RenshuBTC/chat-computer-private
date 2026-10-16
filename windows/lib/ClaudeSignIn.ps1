@@ -1,13 +1,16 @@
 # Signing in to Claude with the person's subscription.
 #
 # Uses the official Claude Code program, taken from Anthropic's claude-agent-sdk package on PyPI
-# (the same version ClaudeOS runs on Linux). The download is checked against a fixed SHA-256, then
-# "claude setup-token" opens the browser to sign in and prints a long-lived token, which the person
-# pastes back here; a token they already made that way can be pasted straight away instead.
-# The token is never shown, logged or sent anywhere except onto the installer partition.
-# For the Claude app on the phone (Claude Code's Remote Control), that token isn't enough: it needs a
-# full sign-in, which "claude auth login" saves as .credentials.json in a throwaway settings folder.
-# That file goes onto the installer partition the same way, and is never shown or logged either.
+# (the same version ClaudeOS runs on Linux). The download is checked against a fixed SHA-256.
+#
+# The sign-in is one approval in the browser, with nothing to copy: "claude auth login" runs in a window of
+# its own and saves a full sign-in (.credentials.json) in a throwaway settings folder, which setup picks up.
+# That window is opened as the person, without administrator rights: run from setup's administrator window,
+# the program can hang without showing anything (seen on a real PC, where the same program worked in an
+# ordinary window). The full sign-in is also what the Claude app on the phone needs (Remote Control), and
+# ClaudeOS uses it for everything. If it doesn't come through, a one-year sign-in code made with "claude
+# setup-token" can be pasted instead. Sign-ins are never shown, logged or sent anywhere except onto the
+# installer partition (or, for "Sign in again", the person's own ClaudeOS folder).
 # ASCII-only file (see Common.ps1).
 
 $Script:ClaudeWheel = [pscustomobject]@{
@@ -90,61 +93,6 @@ function Get-ClaudeProgram {
     return $exe
 }
 
-function Invoke-ClaudeSignIn {
-    # Asks first for a sign-in code the person already has: a code made with "claude setup-token" in any
-    # window works the same. Without one, runs "claude setup-token" in this window, then asks for the code it
-    # printed. On some PCs that program shows nothing at all when setup (an administrator window) runs it, so
-    # the message says how to make the code in an ordinary window instead and bring it here.
-    param([Parameter(Mandatory = $true)][string]$ClaudeExe)
-    Write-Line ''
-    Write-Line 'If you already have a Claude sign-in code (a long code that starts with sk-ant-), copy it and paste'
-    Write-Line 'it here with a RIGHT-CLICK (Ctrl+V may not work in this window). It stays hidden; then press Enter.'
-    Write-Line 'If you have no code yet, just press Enter and your browser will open to sign in.'
-    for ($try = 1; $try -le 3; $try++) {
-        $raw = Read-PastedSecret 'Your code (right-click to paste), or Enter'
-        if ([string]::IsNullOrWhiteSpace($raw)) { break }
-        $token = ConvertTo-CleanToken $raw
-        if (Test-ClaudeToken $token) {
-            Write-Good 'Got it. Claude is signed in for ClaudeOS.'
-            return $token
-        }
-        Write-Warn ('That does not look like a sign-in code (it starts with sk-ant- and is about 100 characters long). ' +
-                    'Copy it again and paste it with a right-click, or press Enter to sign in with your browser.')
-    }
-    $config = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-signin-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $config -Force | Out-Null
-    $oldConfig = $env:CLAUDE_CONFIG_DIR
-    try {
-        # A throwaway settings folder, so any Claude Code you already use is left alone.
-        $env:CLAUDE_CONFIG_DIR = $config
-        Write-Line ''
-        Write-Line 'Your browser will open to sign in to Claude. Use the account with your Claude subscription.'
-        Write-Line 'When it finishes, this window shows a long code starting with sk-ant-. It may run over two'
-        Write-Line 'lines: copy all of it (select it with the mouse and press Enter, or Ctrl+C).'
-        Write-Line 'Until the code appears, do not click inside this window: a click pauses it (press Esc to go on).'
-        Write-Line 'If nothing new appears here within a minute, close this window and make the code another way:'
-        Write-Line 'open PowerShell (not as administrator), run the line below, sign in, then run ClaudeOS Setup'
-        Write-Line 'again and paste the code when it asks.'
-        Write-Line ('  & "' + $ClaudeExe + '" setup-token')
-        Write-Line ''
-        & $ClaudeExe setup-token
-        Write-SetupLog ('claude setup-token exit code ' + $LASTEXITCODE)
-    } finally {
-        $env:CLAUDE_CONFIG_DIR = $oldConfig
-        Remove-Item -LiteralPath $config -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    for ($try = 1; $try -le 3; $try++) {
-        $raw = Read-PastedSecret 'Paste the code here with a right-click (it stays hidden), then press Enter'
-        $token = ConvertTo-CleanToken $raw
-        if (Test-ClaudeToken $token) {
-            Write-Good 'Got it. Claude is signed in for ClaudeOS.'
-            return $token
-        }
-        Write-Warn 'That does not look like the code. It starts with sk-ant- and is about 100 characters long.'
-    }
-    throw 'No valid Claude sign-in code was entered.'
-}
-
 function Test-ClaudeLogin {
     # The contents of Claude Code's .credentials.json after "claude auth login": a claude.ai sign-in.
     param([AllowNull()][string]$Json)
@@ -160,36 +108,147 @@ function Test-ClaudeLogin {
     return $true
 }
 
-function Invoke-ClaudeLogin {
-    # Runs "claude auth login" in a throwaway settings folder and returns the full sign-in it saved, which
-    # the Claude app on the phone needs to reach ClaudeOS. Returns $null if it didn't work.
-    param([Parameter(Mandatory = $true)][string]$ClaudeExe)
-    for ($try = 1; $try -le 2; $try++) {
-        $config = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-login-' + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $config -Force | Out-Null
-        $oldConfig = $env:CLAUDE_CONFIG_DIR
-        $json = $null
-        try {
-            $env:CLAUDE_CONFIG_DIR = $config
-            Write-Line ''
-            Write-Line 'Your browser opens once more. Approve it with the same Claude account.'
-            Write-Line 'If the browser shows a code instead, paste it here when asked.'
-            Write-Line ''
-            & $ClaudeExe auth login --claudeai
-            Write-SetupLog ('claude auth login exit code ' + $LASTEXITCODE)
-            $file = Join-Path $config '.credentials.json'
-            if (Test-Path -LiteralPath $file) { $json = [IO.File]::ReadAllText($file) }
-        } finally {
-            $env:CLAUDE_CONFIG_DIR = $oldConfig
-            Remove-Item -LiteralPath $config -Recurse -Force -ErrorAction SilentlyContinue
+function ConvertTo-CmdPath {
+    # A path as a .cmd file should spell it: through %LOCALAPPDATA%, %TEMP% or %USERPROFILE% when it is inside
+    # one of them, so a user folder with letters outside ASCII still works (a .cmd file is read in the console's
+    # code page).
+    param([Parameter(Mandatory = $true)][string]$Path)
+    foreach ($name in @('TEMP', 'LOCALAPPDATA', 'USERPROFILE')) {
+        $base = [Environment]::GetEnvironmentVariable($name)
+        if (-not $base) { continue }
+        $base = $base.TrimEnd('\')
+        if ($Path.Length -gt $base.Length -and $Path.Substring(0, $base.Length + 1) -ieq ($base + '\')) {
+            return ('%' + $name + '%' + $Path.Substring($base.Length))
         }
-        if (Test-ClaudeLogin $json) {
-            Write-Good 'Done. You can type to ClaudeOS in the Claude app on your phone.'
-            return $json
-        }
-        Write-Warn 'That sign-in did not finish.'
-        if ($try -lt 2 -and -not (Read-YesNo 'Try again?' $true)) { break }
     }
-    Write-Warn 'Skipping the phone. ClaudeOS works without it; to add it later, run ClaudeOS Setup again and choose "Sign ClaudeOS in to Claude again".'
+    return $Path
+}
+
+function New-SignInWindowScript {
+    # The .cmd that runs the sign-in in its own window. When Windows Terminal is there, the window reopens itself
+    # in it (where Claude's sign-in program is known to work); it runs from the person's home folder, with a
+    # throwaway settings folder, so any Claude Code they already use is left alone. Paths are given as a .cmd
+    # file spells them (ConvertTo-CmdPath).
+    param([Parameter(Mandatory = $true)][string]$ClaudeExe, [Parameter(Mandatory = $true)][string]$ConfigDir)
+    $lines = @(
+        '@echo off',
+        'rem ClaudeOS Setup''s sign-in window (opened without administrator rights).',
+        'title Sign in to Claude',
+        'if not "%~1"=="here" (',
+        '  where wt.exe >nul 2>nul && (',
+        '    start "" wt.exe -d "%~dp0." cmd /c signin.cmd here',
+        '    exit /b 0',
+        '  )',
+        ')',
+        'cd /d "%USERPROFILE%"',
+        ('set "CLAUDE_CONFIG_DIR=' + $ConfigDir + '"'),
+        'echo Your browser opens on Claude''s sign-in page. Sign in with the account that has your Claude',
+        'echo subscription, and approve. ClaudeOS Setup carries on by itself.',
+        'echo If the browser shows a code instead, paste it here: Ctrl+V or a right-click.',
+        'echo.',
+        ('"' + $ClaudeExe + '" auth login --claudeai'),
+        ('if exist "' + $ConfigDir + '\.credentials.json" ('),
+        '  echo.',
+        '  echo Signed in. This window closes in a moment.',
+        '  timeout /t 4 >nul',
+        ') else (',
+        '  echo.',
+        '  echo The sign-in did not finish. Close this window: ClaudeOS Setup offers to try again.',
+        '  pause',
+        ')'
+    )
+    return (($lines -join "`r`n") + "`r`n")
+}
+
+function Start-SignInWindow {
+    # Writes the sign-in window's .cmd into $Folder and opens it as the person signed in to Windows, without
+    # administrator rights: File Explorer opens it, and File Explorer runs without them. $true if it was opened.
+    param([Parameter(Mandatory = $true)][string]$ClaudeExe, [Parameter(Mandatory = $true)][string]$Folder)
+    $script = Join-Path $Folder 'signin.cmd'
+    $text = New-SignInWindowScript -ClaudeExe (ConvertTo-CmdPath $ClaudeExe) -ConfigDir (ConvertTo-CmdPath (Join-Path $Folder 'config'))
+    [IO.File]::WriteAllText($script, $text, [Text.Encoding]::ASCII)
+    try {
+        Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('"' + $script + '"') -ErrorAction Stop
+        return $true
+    } catch {
+        Write-SetupLog ('Opening the sign-in window: ' + $_.Exception.Message)
+        return $false
+    }
+}
+
+function Wait-ClaudeSignIn {
+    # Waits until the sign-in window has saved a full sign-in in $File, and returns it. Enter, or $Seconds
+    # passing, stops the wait ($null).
+    param([Parameter(Mandatory = $true)][string]$File, [int]$Seconds = 900, [int]$PollMs = 500)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $File) {
+            $text = $null
+            try { $text = [IO.File]::ReadAllText($File) } catch { $text = $null }    # still being written
+            if (Test-ClaudeLogin $text) { return $text }
+        }
+        if (Test-InputWaiting) {
+            try { $key = [Console]::ReadKey($true) } catch { $key = $null }
+            if ($key -and $key.Key -eq [ConsoleKey]::Enter) { return $null }
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
     return $null
+}
+
+function Read-SignInCode {
+    # A one-year sign-in code, made with "claude setup-token" in an ordinary window and pasted here. $null if
+    # the person pressed Enter (or gave up after three tries).
+    param([Parameter(Mandatory = $true)][string]$ClaudeExe)
+    Write-Line ''
+    Write-Line 'To make a sign-in code: open PowerShell (not as administrator), run the line below and sign in. It shows'
+    Write-Line 'a long code that starts with sk-ant-: copy it, then paste it here with a RIGHT-CLICK (it stays hidden).'
+    Write-Line ('  & "' + $ClaudeExe + '" setup-token')
+    for ($try = 1; $try -le 3; $try++) {
+        $raw = Read-PastedSecret 'Your code (right-click to paste), or Enter to go back'
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        $token = ConvertTo-CleanToken $raw
+        if (Test-ClaudeToken $token) {
+            Write-Good 'Got it. Claude is signed in for ClaudeOS.'
+            return $token
+        }
+        Write-Warn 'That does not look like a sign-in code (it starts with sk-ant- and is about 100 characters long).'
+    }
+    return $null
+}
+
+function Invoke-ClaudeBrowserSignIn {
+    # Signs in to Claude: the sign-in window, then the browser, then setup picks the sign-in up by itself.
+    # Returns @{ Login = the full sign-in (or $null); Token = a pasted sign-in code (or $null) }: one of them.
+    param([Parameter(Mandatory = $true)][string]$ClaudeExe, [int]$WaitSeconds = 900, [int]$CloseDelaySeconds = 6)
+    while ($true) {
+        $folder = Join-Path $env:TEMP ('claudeos-signin-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $folder 'config') -Force | Out-Null
+        $login = $null
+        try {
+            Write-Line ''
+            Write-Line 'A window called "Sign in to Claude" opens, and then your browser on Claude''s sign-in page.'
+            Write-Line 'Sign in with the account that has your Claude subscription, and approve. Setup carries on by itself.'
+            Write-Line '(Press Enter here to stop waiting.)'
+            if (Start-SignInWindow -ClaudeExe $ClaudeExe -Folder $folder) {
+                $login = Wait-ClaudeSignIn -File (Join-Path $folder 'config\.credentials.json') -Seconds $WaitSeconds
+            } else {
+                Write-Warn 'Setup could not open the sign-in window.'
+            }
+            if ($login) {
+                Start-Sleep -Seconds $CloseDelaySeconds     # the window reads its .cmd until it closes
+                Write-Good 'Signed in to Claude. You can also type to ClaudeOS from the Claude app on your phone.'
+                return [pscustomobject]@{ Login = $login; Token = $null }
+            }
+        } finally {
+            Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Write-Warn 'The sign-in did not come through.'
+        $pick = Read-Choice 'What would you like to do?' @('Try signing in again', 'Paste a sign-in code instead', 'Stop setup') 0
+        if ($pick -eq 2) { throw 'Stopped at your request. No disks were changed.' }
+        if ($pick -eq 1) {
+            $code = Read-SignInCode -ClaudeExe $ClaudeExe
+            if ($code) { return [pscustomobject]@{ Login = $null; Token = $code } }
+        }
+    }
 }

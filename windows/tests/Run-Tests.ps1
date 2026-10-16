@@ -145,41 +145,107 @@ ${function:Read-Secret} = $origReadSecret
 ${function:Read-SecretLine} = $origReadSecretLine
 ${function:Test-InputWaiting} = $origInputWaiting
 
-# A code the person already has is taken first, and then the Claude program is never run (on some PCs it
-# shows nothing when setup runs it). Enter, or something that isn't a code, starts the browser sign-in.
+# A sign-in code pasted instead of the browser sign-in: taken whole, asked again after a bad paste (Ctrl+V can
+# give one stray character), and Enter goes back.
 $origPasted = ${function:Read-PastedSecret}
 $Script:Pasted = New-Object System.Collections.Queue
 ${function:Read-PastedSecret} = { param($Prompt, $SettleMs) return $Script:Pasted.Dequeue() }
 $Script:Pasted.Enqueue('  ' + $tok.Substring(0, 60) + "`r`n" + $tok.Substring(60) + ' ')
-Assert-Equal $tok (Invoke-ClaudeSignIn -ClaudeExe (Join-Path ([IO.Path]::GetTempPath()) 'no-such-claude.exe')) 'sign-in: a code pasted first is used without running the program'
-Assert-Equal 0 $Script:Pasted.Count 'sign-in: asked once'
-if (-not $IsWindows) {
-    $fakeDir = Join-Path ([IO.Path]::GetTempPath()) ('fake-claude-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $fakeDir -Force | Out-Null
-    $fake = Join-Path $fakeDir 'claude'
-    [IO.File]::WriteAllText($fake, "#!/bin/sh`necho `"`$1`" >> '" + (Join-Path $fakeDir 'ran') + "'`n")
-    & chmod 755 $fake
-    $ran = Join-Path $fakeDir 'ran'
-    # Enter: the browser sign-in runs once, then the code it printed is pasted.
-    $Script:Pasted.Enqueue('')
-    $Script:Pasted.Enqueue($tok)
-    Assert-Equal $tok (Invoke-ClaudeSignIn -ClaudeExe $fake) 'sign-in: Enter starts the browser sign-in, then takes the code'
-    Assert-Equal 'setup-token' ([IO.File]::ReadAllText($ran)).Trim() 'sign-in: Enter runs setup-token once'
-    # A paste that went wrong (one stray character from Ctrl+V) asks again instead of starting the browser sign-in.
-    Remove-Item -LiteralPath $ran -Force
-    $Script:Pasted.Enqueue([string][char]22)
-    $Script:Pasted.Enqueue($tok)
-    Assert-Equal $tok (Invoke-ClaudeSignIn -ClaudeExe $fake) 'sign-in: a bad paste is asked again'
-    Assert-True (-not (Test-Path -LiteralPath $ran)) 'sign-in: a bad paste does not start the program'
-    # Three bad pastes: on to the browser sign-in.
-    foreach ($i in 1..3) { $Script:Pasted.Enqueue('hello') }
-    $Script:Pasted.Enqueue($tok)
-    Assert-Equal $tok (Invoke-ClaudeSignIn -ClaudeExe $fake) 'sign-in: after three bad pastes the browser sign-in runs'
-    Assert-Equal 'setup-token' ([IO.File]::ReadAllText($ran)).Trim() 'sign-in: three bad pastes run setup-token once'
-    Assert-Equal 0 $Script:Pasted.Count 'sign-in: every answer used'
-    Remove-Item -LiteralPath $fakeDir -Recurse -Force
+Assert-Equal $tok (Read-SignInCode -ClaudeExe 'C:\x\claude.exe') 'code: a wrapped paste is read whole'
+$Script:Pasted.Enqueue([string][char]22)
+$Script:Pasted.Enqueue($tok)
+Assert-Equal $tok (Read-SignInCode -ClaudeExe 'C:\x\claude.exe') 'code: a bad paste is asked again'
+$Script:Pasted.Enqueue('')
+Assert-True ($null -eq (Read-SignInCode -ClaudeExe 'C:\x\claude.exe')) 'code: Enter goes back'
+foreach ($i in 1..3) { $Script:Pasted.Enqueue('hello') }
+Assert-True ($null -eq (Read-SignInCode -ClaudeExe 'C:\x\claude.exe')) 'code: three bad pastes go back'
+Assert-Equal 0 $Script:Pasted.Count 'code: every answer used'
+
+# The sign-in window's .cmd: Windows Terminal when it's there, the person's home folder, a throwaway
+# settings folder, "claude auth login"; ASCII with Windows line endings.
+$cmd = New-SignInWindowScript -ClaudeExe '%LOCALAPPDATA%\ClaudeOS\setup\claude\claude.exe' -ConfigDir '%TEMP%\claudeos-signin-1\config'
+Assert-True ($cmd.Contains('start "" wt.exe -d "%~dp0." cmd /c signin.cmd here')) 'window: reopens in Windows Terminal'
+Assert-True ($cmd.Contains("cd /d `"%USERPROFILE%`"`r`n")) 'window: runs from the home folder'
+Assert-True ($cmd.Contains('set "CLAUDE_CONFIG_DIR=%TEMP%\claudeos-signin-1\config"')) 'window: throwaway settings folder'
+Assert-True ($cmd.Contains('"%LOCALAPPDATA%\ClaudeOS\setup\claude\claude.exe" auth login --claudeai')) 'window: claude auth login'
+Assert-True ($cmd.Contains('if exist "%TEMP%\claudeos-signin-1\config\.credentials.json" (')) 'window: says whether it worked'
+Assert-True (-not ($cmd -replace "`r`n", '').Contains("`n") -and $cmd -notmatch '[^\x00-\x7F]') 'window: ASCII, Windows line endings'
+# Paths in it go through the variables, so a user folder with other letters works.
+$saved = @{}
+foreach ($v in 'TEMP', 'LOCALAPPDATA', 'USERPROFILE') { $saved[$v] = [Environment]::GetEnvironmentVariable($v) }
+[Environment]::SetEnvironmentVariable('TEMP', 'C:\Users\Ren Shu\AppData\Local\Temp')
+[Environment]::SetEnvironmentVariable('LOCALAPPDATA', 'C:\Users\Ren Shu\AppData\Local')
+[Environment]::SetEnvironmentVariable('USERPROFILE', 'C:\Users\Ren Shu')
+Assert-Equal '%TEMP%\claudeos-signin-1\config' (ConvertTo-CmdPath 'C:\Users\Ren Shu\AppData\Local\Temp\claudeos-signin-1\config') 'cmd path: temp'
+Assert-Equal '%LOCALAPPDATA%\ClaudeOS\setup\claude\claude.exe' (ConvertTo-CmdPath 'c:\users\ren shu\appdata\local\ClaudeOS\setup\claude\claude.exe') 'cmd path: local app data, any case'
+Assert-Equal 'D:\Tools\claude.exe' (ConvertTo-CmdPath 'D:\Tools\claude.exe') 'cmd path: elsewhere unchanged'
+Assert-Equal '%USERPROFILE%\TempX\a' (ConvertTo-CmdPath 'C:\Users\Ren Shu\TempX\a') 'cmd path: only whole folder names'
+foreach ($v in @($saved.Keys)) { [Environment]::SetEnvironmentVariable($v, $saved[$v]) }
+
+# Waiting for the sign-in: the saved sign-in is returned; none within the time: $null.
+$signDir = Join-Path ([IO.Path]::GetTempPath()) ('signin-test-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path (Join-Path $signDir 'config') -Force | Out-Null
+$credFile = Join-Path (Join-Path $signDir 'config') '.credentials.json'
+$fullLogin = '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt","expiresAt":1}}'
+Assert-True ($null -eq (Wait-ClaudeSignIn -File $credFile -Seconds 1 -PollMs 100)) 'wait: nothing saved, nothing returned'
+[IO.File]::WriteAllText($credFile, '{"claudeAiOauth":{"accessT')       # still being written
+Assert-True ($null -eq (Wait-ClaudeSignIn -File $credFile -Seconds 1 -PollMs 100)) 'wait: half a file is not a sign-in'
+[IO.File]::WriteAllText($credFile, $fullLogin)
+Assert-Equal $fullLogin (Wait-ClaudeSignIn -File $credFile -Seconds 5 -PollMs 100) 'wait: the saved sign-in'
+Remove-Item -LiteralPath $signDir -Recurse -Force
+
+# The whole sign-in, with the window standing in: one approval, nothing pasted; if the window can't open,
+# the person picks "Paste a sign-in code instead".
+$savedTemp = $env:TEMP
+$env:TEMP = [IO.Path]::GetTempPath().TrimEnd('\', '/')
+$origStart = ${function:Start-SignInWindow}
+$origChoice = ${function:Read-Choice}
+$Script:Opened = @()
+${function:Start-SignInWindow} = {
+    param($ClaudeExe, $Folder)
+    $Script:Opened += $Folder
+    [IO.File]::WriteAllText((Join-Path (Join-Path $Folder 'config') '.credentials.json'), '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}')
+    return $true
 }
+$r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 5 -CloseDelaySeconds 0
+Assert-True ((Test-ClaudeLogin $r.Login) -and $null -eq $r.Token) 'sign-in: the full sign-in, no code'
+Assert-True ($Script:Opened.Count -eq 1 -and -not (Test-Path -LiteralPath $Script:Opened[0])) 'sign-in: one window; its folder is deleted'
+${function:Start-SignInWindow} = { param($ClaudeExe, $Folder) return $false }
+${function:Read-Choice} = { param($Question, $Options, $Default) return 1 }
+$Script:Pasted.Enqueue($tok)
+$r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 1 -CloseDelaySeconds 0
+Assert-True ($null -eq $r.Login -and $r.Token -eq $tok) 'sign-in: no window, a pasted code instead'
+${function:Read-Choice} = { param($Question, $Options, $Default) return 2 }
+Assert-Throws { Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 1 -CloseDelaySeconds 0 } 'sign-in: stopping stops setup'
+${function:Start-SignInWindow} = $origStart
+${function:Read-Choice} = $origChoice
 ${function:Read-PastedSecret} = $origPasted
+$env:TEMP = $savedTemp
+
+# ------------------------------------------------------------------ what stops C: from shrinking
+# Event 259 as real Windows writes it (fields from GitHub's Windows Server 2025, and the PC that needed this).
+$ev = [pscustomobject]@{
+    Properties = @([pscustomobject]@{ Value = 'Windows (C:)' }, [pscustomobject]@{ Value = '\\?\Volume{6f146b24-4f0e-4ba2-97d1-29ea630e5753}' },
+                   [pscustomobject]@{ Value = '\$Mft::$BITMAP' }, [pscustomobject]@{ Value = '0x24fa0b2' }, [pscustomobject]@{ Value = '-S--S' })
+    Message    = 'A volume shrink analysis was initiated on volume Windows (C:). ...'
+}
+Assert-Equal '\$Mft::$BITMAP' (ConvertFrom-ShrinkEvent $ev) 'event 259: the file, from its fields'
+$evText = [pscustomobject]@{ Message = "Diagnostic details:`r`n - The last unmovable file appears to be: \`$Extend\`$UsnJrnl:`$J:`$DATA`r`n - The last cluster" }
+Assert-Equal '\$Extend\$UsnJrnl:$J:$DATA' (ConvertFrom-ShrinkEvent $evText) 'event 259: the file, from the English message'
+$svi = '\System Volume Information\{9db92f71-c6a1-11f1-ae98-00155d606220}{3808876b-c176-4e48-b7ae-04046e6cc752}::$DATA'
+Assert-Equal 'restorepoints' (Get-ShrinkBlockerKind $svi) 'kind: restore points'
+Assert-Equal 'journal' (Get-ShrinkBlockerKind '\$Extend\$UsnJrnl:$J:$DATA') 'kind: change journal'
+Assert-Equal 'hibernation' (Get-ShrinkBlockerKind '\hiberfil.sys') 'kind: hibernation'
+Assert-Equal 'pagefile' (Get-ShrinkBlockerKind '\pagefile.sys') 'kind: page file'
+Assert-Equal 'pagefile' (Get-ShrinkBlockerKind '\swapfile.sys') 'kind: swap file'
+Assert-Equal 'ntfs' (Get-ShrinkBlockerKind '\$Mft::$BITMAP') 'kind: file system records'
+Assert-Equal 'other' (Get-ShrinkBlockerKind '\Windows\System32\x.dll') 'kind: other'
+Assert-Equal 'other' (Get-ShrinkBlockerKind '\System Volume Information\tracking.log') 'kind: other System Volume Information file'
+Assert-Equal 'unknown' (Get-ShrinkBlockerKind '') 'kind: no event'
+Assert-True ((Get-RoomAdvice -Blocker ([pscustomobject]@{ Kind = 'space'; File = $null }) -Made 0 -NeedBytes 46GB) -match 'free some up') 'advice: free space'
+Assert-True ((Get-RoomAdvice -Blocker ([pscustomobject]@{ Kind = 'pagefile'; File = '\pagefile.sys' }) -Made 10GB -NeedBytes 46GB) -match 'Virtual memory') 'advice: page file'
+Assert-True ((Get-RoomAdvice -Blocker ([pscustomobject]@{ Kind = 'ntfs'; File = '\$Mft::$BITMAP' }) -Made 10GB -NeedBytes 46GB) -match 'separate disk') 'advice: file system records'
+Assert-True ((Get-RoomAdvice -Blocker $null -Made 10GB -NeedBytes 46GB) -match '10 GB of room') 'advice: says what was made'
 
 # Only real answers reach the log, so a stray piece of a code typed at a yes/no question never does.
 $Script:SetupLogFile = [IO.Path]::GetTempFileName()
@@ -187,7 +253,7 @@ $Script:Answers = New-Object System.Collections.Queue
 function Read-Host { param([Parameter(Position = 0)]$Prompt, [switch]$AsSecureString) return $Script:Answers.Dequeue() }
 $Script:Answers.Enqueue('Ab9_-Ab9_-Ab9_-tail-of-a-code')
 $Script:Answers.Enqueue('y')
-Assert-True (Read-YesNo 'Set up typing from your phone?') 'yes after a stray line'
+Assert-True (Read-YesNo 'Go ahead?') 'yes after a stray line'
 $Script:Answers.Enqueue('Ab9_-tail-of-a-code')
 $Script:Answers.Enqueue('2')
 Assert-Equal 1 (Read-Choice 'What would you like to do?' @('One', 'Two')) 'choice after a stray line'
@@ -195,39 +261,18 @@ $Script:Answers.Enqueue('Ab9_-tail-of-a-code')
 Assert-True (-not (Read-ConfirmWord 'Type REMOVE' 'REMOVE')) 'confirm word not matched'
 $logText = [IO.File]::ReadAllText($Script:SetupLogFile)
 Assert-True ($logText -notmatch 'tail-of-a-code') 'stray text is not logged'
-Assert-True ($logText -match 'phone\? -> y' -and $logText -match 'do\? -> 2') 'real answers are logged'
+Assert-True ($logText -match 'ahead\? -> y' -and $logText -match 'do\? -> 2') 'real answers are logged'
 Remove-Item Function:\Read-Host
 Remove-Item -LiteralPath $Script:SetupLogFile -Force
 $Script:SetupLogFile = $null
 Assert-True (-not (Protect-SetupText ('x ' + $tok + ' y')).Contains('Ab9_')) 'token hidden in logs'
-# The full sign-in for the phone (Claude Code's .credentials.json).
+# The full sign-in (Claude Code's .credentials.json).
 Assert-True (Test-ClaudeLogin '{"claudeAiOauth":{"accessToken":"abc","refreshToken":"def","expiresAt":1}}') 'full sign-in accepted'
 Assert-True (-not (Test-ClaudeLogin '{"claudeAiOauth":{"accessToken":"abc"}}')) 'sign-in without refresh token rejected'
 Assert-True (-not (Test-ClaudeLogin '{"claudeAiOauth":{"accessToken":"abc","refreshToken":5}}')) 'non-text token rejected'
 Assert-True (-not (Test-ClaudeLogin '{"other":1}')) 'other json rejected'
 Assert-True (-not (Test-ClaudeLogin 'not json')) 'junk sign-in rejected'
 Assert-True (-not (Test-ClaudeLogin '')) 'empty sign-in rejected'
-if (-not $IsWindows) {
-    # "claude auth login" stand-in: saves a sign-in where Claude Code would, in the folder it was given.
-    $fakeDir = Join-Path ([IO.Path]::GetTempPath()) ('fake-claude-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $fakeDir -Force | Out-Null
-    $fake = Join-Path $fakeDir 'claude'
-    $fakeScript = "#!/bin/sh`necho `"`$CLAUDE_CONFIG_DIR`" > '" + (Join-Path $fakeDir 'used-dir') + "'`n" +
-        "printf '%s' '{`"claudeAiOauth`":{`"accessToken`":`"at`",`"refreshToken`":`"rt`"}}' > `"`$CLAUDE_CONFIG_DIR/.credentials.json`"`n"
-    [IO.File]::WriteAllText($fake, $fakeScript)
-    & chmod 755 $fake
-    function Write-Line([string]$Text) { }
-    function Write-Good([string]$Text) { }
-    $env:CLAUDE_CONFIG_DIR = 'kept'
-    $login = Invoke-ClaudeLogin -ClaudeExe $fake
-    Assert-True (Test-ClaudeLogin $login) 'auth login: the saved sign-in is returned'
-    $used = ([IO.File]::ReadAllText((Join-Path $fakeDir 'used-dir'))).Trim()
-    Assert-True ($used -ne 'kept' -and $used.Contains('claudeos-login-')) 'auth login: runs in a throwaway settings folder'
-    Assert-True (-not (Test-Path -LiteralPath $used)) 'auth login: the throwaway folder is removed'
-    Assert-Equal 'kept' $env:CLAUDE_CONFIG_DIR 'auth login: the settings folder variable is restored'
-    Remove-Item Env:CLAUDE_CONFIG_DIR
-    Remove-Item -LiteralPath $fakeDir -Recurse -Force
-}
 
 # ------------------------------------------------------------------ time zones and settings
 Assert-Equal 'Asia/Singapore' (Get-IanaTimeZone 'Singapore Standard Time') 'singapore'

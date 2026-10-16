@@ -76,4 +76,39 @@ Remove-Item -LiteralPath $f -Force
 Save 'programs.txt' (@('explorer.exe: ' + (Test-Path -LiteralPath (Join-Path $env:WINDIR 'explorer.exe')),
                       'wt.exe: ' + [string](Get-Command wt.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source),
                       'TEMP: ' + [IO.Path]::GetTempPath()))
+# 8. Setup's own helpers on real Windows.
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'Flow')) {
+    . ([IO.Path]::Combine($repo, 'windows', 'lib', $lib + '.ps1'))
+}
+# What stops C: from shrinking, as setup reads it.
+$plan = Get-SystemDiskPlan
+$b = Get-ShrinkBlocker -Since $plan.AskedAt
+Save 'setup-plan.txt' (@(('gap after C: ' + $plan.GapAfterC + ', can shrink ' + $plan.MaxShrink + ' (layout ' + $plan.MaxShrinkByLayout +
+                          ', free space ' + $plan.MaxShrinkByFreeSpace + ')'), ('in the way: ' + $b.File + ' (' + $b.Kind + ')')))
+# QuickEdit off, in a console window of its own (the runner's steps have none).
+$qe = Join-Path $Out 'quickedit.txt'
+$child = "Set-StrictMode -Version 2.0; . '" + (Join-Path $repo 'windows\lib\Common.ps1') + "'; " +
+         "`$r = Disable-ConsoleQuickEdit; Set-Content -LiteralPath '" + $qe + "' -Value ('Disable-ConsoleQuickEdit: ' + `$r)"
+Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', $child) -Wait -WindowStyle Minimized
+if (-not (Test-Path -LiteralPath $qe)) { Save 'quickedit.txt' 'the console window did not run' }
+# The sign-in window's .cmd, run as setup would have it run, with a stand-in for Claude that saves a sign-in.
+$signDir = Join-Path $env:TEMP ('claudeos-signin-probe')
+New-Item -ItemType Directory -Path (Join-Path $signDir 'config') -Force | Out-Null
+$fake = Join-Path $signDir 'fake claude.cmd'
+Set-Content -LiteralPath $fake -Encoding ASCII -Value @('@echo off', 'echo args: %*',
+    '>"%CLAUDE_CONFIG_DIR%\.credentials.json" echo {"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}')
+$text = New-SignInWindowScript -ClaudeExe (ConvertTo-CmdPath $fake) -ConfigDir (ConvertTo-CmdPath (Join-Path $signDir 'config'))
+[IO.File]::WriteAllText((Join-Path $signDir 'signin.cmd'), $text, [Text.Encoding]::ASCII)
+$ran = & cmd.exe /c ('cd /d "' + $signDir + '" && signin.cmd here < nul') 2>&1
+$saved = Join-Path $signDir 'config\.credentials.json'
+Save 'signin-cmd.txt' (@(('script:'), $text, ('ran:'), ($ran | Out-String), ('saved a sign-in: ' + (Test-Path -LiteralPath $saved)),
+                        ('setup reads it: ' + [bool](Wait-ClaudeSignIn -File $saved -Seconds 2))))
+Remove-Item -LiteralPath $saved -Force -ErrorAction SilentlyContinue
+# Opened through File Explorer, as setup opens it (no desktop here, so this may not run at all).
+$opened = Start-SignInWindow -ClaudeExe $fake -Folder $signDir
+$got = $null
+if ($opened) { $got = Wait-ClaudeSignIn -File $saved -Seconds 45 }
+Save 'signin-explorer.txt' ('opened: ' + $opened + '; sign-in saved through it: ' + [bool]$got)
 Write-Host 'probe done'
+

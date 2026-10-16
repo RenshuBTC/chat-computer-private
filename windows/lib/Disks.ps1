@@ -49,22 +49,204 @@ function Get-DiskVolumesText {
 }
 
 function Get-SystemDiskPlan {
-    # The disk Windows runs from: how much free space it has, and how far C: can shrink.
+    # The disk Windows runs from: how much free space it has, how far C: can shrink, and how much empty space
+    # there already is right after C: (where shrinking C: adds to it).
+    # MaxShrink is how much C: can give now. Two things limit it: Windows keeps MinWindowsFreeBytes free
+    # (MaxShrinkByFreeSpace), and C: can't shrink past the last file Windows can't move while it runs
+    # (MaxShrinkByLayout; Get-ShrinkBlocker says which file that is).
     $c = Get-Partition -DriveLetter C -ErrorAction Stop
     $disk = Get-Disk -Number $c.DiskNumber -ErrorAction Stop
+    $asked = (Get-Date).AddSeconds(-2)
     $supported = Get-PartitionSupportedSize -DriveLetter C -ErrorAction Stop
     $vol = Get-Volume -DriveLetter C -ErrorAction Stop
     $free = [int64](Get-Prop $disk 'LargestFreeExtent')
-    $maxShrinkByLayout = [int64]$c.Size - [int64]$supported.SizeMin
-    $maxShrinkByFreeSpace = [int64]$vol.SizeRemaining - $Script:MinWindowsFreeBytes
-    $maxShrink = [Math]::Max([int64]0, [Math]::Min($maxShrinkByLayout, $maxShrinkByFreeSpace))
+    $maxShrinkByLayout = [Math]::Max([int64]0, [int64]$c.Size - [int64]$supported.SizeMin)
+    $maxShrinkByFreeSpace = [Math]::Max([int64]0, [int64]$vol.SizeRemaining - $Script:MinWindowsFreeBytes)
+    $maxShrink = [Math]::Min($maxShrinkByLayout, $maxShrinkByFreeSpace)
+    $gap = [int64]0
+    try {
+        $extents = Get-FreeExtents -Partitions @(Get-Partition -DiskNumber $c.DiskNumber -ErrorAction Stop) -DiskSize ([int64]$disk.Size)
+        $cEnd = [int64]$c.Offset + [int64]$c.Size
+        $after = @($extents | Where-Object { [int64]$_.Offset -ge $cEnd -and [int64]$_.Offset -lt $cEnd + $Script:MiB })
+        if ($after.Count -gt 0) { $gap = [int64]$after[0].Size }
+    } catch {
+        Write-SetupLog ('Reading the empty space after C: ' + $_.Exception.Message)
+    }
+    Write-SetupLog ('C: ' + $c.Size + ' bytes, ' + $vol.SizeRemaining + ' free, can shrink to ' + $supported.SizeMin +
+                    '; empty right after it ' + $gap + ', largest empty space on its disk ' + $free)
     return [pscustomobject]@{
-        Disk          = $disk
-        Partition     = $c
-        FreeBytes     = $free
-        MaxShrink     = $maxShrink
-        WindowsFree   = [int64]$vol.SizeRemaining
-        PartitionStyle = [string](Get-Prop $disk 'PartitionStyle')
+        Disk                 = $disk
+        Partition            = $c
+        FreeBytes            = $free
+        GapAfterC            = $gap
+        MaxShrink            = $maxShrink
+        MaxShrinkByLayout    = $maxShrinkByLayout
+        MaxShrinkByFreeSpace = $maxShrinkByFreeSpace
+        WindowsFree          = [int64]$vol.SizeRemaining
+        PartitionStyle       = [string](Get-Prop $disk 'PartitionStyle')
+        AskedAt              = $asked
+    }
+}
+
+# ------------------------------------------------------------------ what stops C: from shrinking
+# When Windows works out how far a drive can shrink (Get-PartitionSupportedSize does), it writes event 259 to
+# the Application log naming the last file it can't move; C: can't shrink past that file. Microsoft's
+# "Shrink a basic volume" says to check that event when a shrink stops short.
+$Script:ShadowCopyFile = '{3808876b-c176-4e48-b7ae-04046e6cc752}'
+
+function ConvertFrom-ShrinkEvent {
+    # The file an event 259 names, from its fields (the same in every Windows language): the one that is a
+    # path on the drive (\...), as opposed to the drive's name or its \\?\Volume{...} path. Falls back to the
+    # English message.
+    param([Parameter(Mandatory = $true)]$Event)
+    foreach ($p in @(Get-Prop $Event 'Properties')) {
+        $v = ([string](Get-Prop $p 'Value')).Trim()
+        if ($v -match '^\\[^\\?]' -and $v -notmatch '^\\\\') { return $v }
+    }
+    $m = [regex]::Match([string](Get-Prop $Event 'Message'), 'unmovable file appears to be:\s*([^\r\n]+)')
+    if ($m.Success) { return $m.Groups[1].Value.Trim() }
+    return $null
+}
+
+function Get-ShrinkBlockerKind {
+    # What kind of file stops the shrink, and so what can be done about it.
+    #   restorepoints  System Restore's restore points (shadow copies): deleting them frees the space
+    #   journal        the drive's change journal: resetting it is harmless (Windows starts a new one)
+    #   hibernation    hiberfil.sys: turning hibernation off deletes it
+    #   pagefile       pagefile.sys or swapfile.sys: only movable after a restart without a page file
+    #   ntfs           the file system's own records ($Mft, $LogFile...): not movable while Windows runs
+    #   other, unknown anything else, or no event
+    param([AllowNull()][AllowEmptyString()][string]$File)
+    if (-not $File) { return 'unknown' }
+    if ($File -match '(?i)^\\System Volume Information\\' -and $File.ToLowerInvariant().Contains($Script:ShadowCopyFile)) { return 'restorepoints' }
+    if ($File -match '(?i)^\\\$Extend\\\$UsnJrnl') { return 'journal' }
+    if ($File -match '(?i)^\\hiberfil\.sys') { return 'hibernation' }
+    if ($File -match '(?i)^\\(pagefile|swapfile)\.sys') { return 'pagefile' }
+    if ($File -match '^\\\$') { return 'ntfs' }
+    return 'other'
+}
+
+function Get-ShrinkBlocker {
+    # The newest event 259 written since $Since (by the Get-PartitionSupportedSize behind Get-SystemDiskPlan):
+    # the file in the way and its kind, or $null when Windows wrote none.
+    param([Parameter(Mandatory = $true)][datetime]$Since)
+    $ev = $null
+    try {
+        $ev = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 259; StartTime = $Since } -MaxEvents 1 -ErrorAction Stop |
+            Select-Object -First 1
+    } catch {
+        return $null
+    }
+    if (-not $ev) { return $null }
+    $file = ConvertFrom-ShrinkEvent $ev
+    $kind = Get-ShrinkBlockerKind $file
+    Write-SetupLog ('In the way of shrinking C: ' + $file + ' (' + $kind + ')')
+    return [pscustomobject]@{ File = $file; Kind = $kind }
+}
+
+function Invoke-WindowsTool {
+    # Runs one of Windows' own command-line tools; logs what it said. Returns its exit code.
+    param([Parameter(Mandatory = $true)][string]$Tool, [string[]]$Arguments = @())
+    $text = & $Tool @Arguments 2>&1
+    $code = $LASTEXITCODE
+    Write-SetupLog ($Tool + ' ' + ($Arguments -join ' ') + ' -> exit ' + $code + ': ' + ((@($text) | ForEach-Object { [string]$_ }) -join ' / '))
+    return $code
+}
+
+function Remove-RestorePoints {
+    # Deletes the shadow copies on C: (System Restore's restore points are shadow copies). Microsoft's
+    # KB5005357 gives this command; Windows makes new restore points by itself later.
+    $null = Invoke-WindowsTool 'vssadmin.exe' @('delete', 'shadows', '/for=C:', '/quiet')
+}
+
+function Reset-ChangeJournal {
+    # Deletes C:'s change journal (NTFS's running list of changed files). Windows starts a new one straight away;
+    # programs that read it (Windows Search) look through the drive once more.
+    $null = Invoke-WindowsTool 'fsutil.exe' @('usn', 'deletejournal', '/n', 'C:')
+}
+
+function Disable-Hibernation {
+    # Turns hibernation off, which deletes hiberfil.sys. (Fast Startup, which needs it, is off anyway.)
+    $null = Invoke-WindowsTool 'powercfg.exe' @('/hibernate', 'off')
+}
+
+function Invoke-MakeRoom {
+    # Makes the empty space right after C: at least $NeedBytes big, and up to $WantBytes, as one would by hand:
+    # shrink C: as far as Windows allows (never below MinWindowsFreeBytes free); when a file Windows can't move
+    # is in the way, deal with it if possible and try again. The change journal is reset whenever it is in the
+    # way (harmless); restore points are deleted and hibernation turned off only when the minimum can't be
+    # reached otherwise. Returns what it did and the space it made: Gap, ShrunkBy, Blocker (what stopped it
+    # short of $WantBytes, if anything), ClearedRestorePoints, HibernationOff.
+    param([Parameter(Mandatory = $true)][int64]$NeedBytes, [Parameter(Mandatory = $true)][int64]$WantBytes, [int]$Rounds = 12)
+    $result = [pscustomobject]@{ Gap = [int64]0; ShrunkBy = [int64]0; Blocker = $null; ClearedRestorePoints = $false
+        HibernationOff = $false; JournalResets = 0 }
+    for ($round = 1; $round -le $Rounds; $round++) {
+        $plan = Get-SystemDiskPlan
+        $gap = [int64]$plan.GapAfterC
+        $result.Gap = $gap
+        if ($gap -ge $WantBytes) { $result.Blocker = $null; break }
+        $take = [int64]([Math]::Floor([double]([Math]::Min([int64]$plan.MaxShrink, $WantBytes - $gap)) / $Script:MiB)) * $Script:MiB
+        if ($take -ge $Script:GB) {
+            Write-Line ('Making room: C: gives ' + (Format-Size $take) + '. Windows moves files out of the way first, which can take a while...')
+            Invoke-ShrinkWindows -ShrinkBytes $take
+            $result.ShrunkBy += $take
+            continue
+        }
+        if ([int64]$plan.MaxShrinkByFreeSpace -lt $Script:GB) {
+            # Windows' own free space is what's left; nothing to clear.
+            $result.Blocker = [pscustomobject]@{ File = $null; Kind = 'space' }
+            break
+        }
+        $b = Get-ShrinkBlocker -Since $plan.AskedAt
+        if (-not $b) { $b = [pscustomobject]@{ File = $null; Kind = 'unknown' } }
+        $result.Blocker = $b
+        if ($b.Kind -eq 'journal' -and $result.JournalResets -lt 4) {
+            Write-Line 'Making room: resetting the drive''s change journal (Windows starts a new one by itself)...'
+            Reset-ChangeJournal
+            $result.JournalResets++
+            continue
+        }
+        if ($gap -ge $NeedBytes) { break }     # enough for ClaudeOS; the rest isn't worth deleting anything for
+        if ($b.Kind -eq 'restorepoints' -and -not $result.ClearedRestorePoints) {
+            Write-Line 'Making room: deleting your restore points (Windows makes new ones by itself)...'
+            Remove-RestorePoints
+            $result.ClearedRestorePoints = $true
+            continue
+        }
+        if ($b.Kind -eq 'hibernation' -and -not $result.HibernationOff) {
+            Write-Line 'Making room: turning hibernation off...'
+            Disable-Hibernation
+            $result.HibernationOff = $true
+            continue
+        }
+        break
+    }
+    $result.Gap = [int64](Get-SystemDiskPlan).GapAfterC
+    if ($result.Gap -ge $WantBytes) { $result.Blocker = $null }
+    return $result
+}
+
+function Get-RoomAdvice {
+    # What the person can do when Windows can't make enough room on C:, by what is in the way.
+    param($Blocker, [int64]$Made, [int64]$NeedBytes)
+    $have = 'Windows can''t make room for ClaudeOS next to it right now.'
+    if ($Made -ge $Script:GB) { $have = 'Windows could make ' + (Format-Size $Made) + ' of room next to it; ClaudeOS needs ' + (Format-Size $NeedBytes) + '.' }
+    $kind = 'unknown'
+    $file = ''
+    if ($Blocker) { $kind = [string]$Blocker.Kind; $file = [string]$Blocker.File }
+    switch ($kind) {
+        'space' { return ($have + ' C: needs more free space: free some up (Settings, System, Storage), then run setup again.') }
+        'pagefile' { return ($have + ' Windows'' page file (' + $file.TrimStart('\') + ') is in the way, and Windows can only move it ' +
+                             'after a restart without one. Turn it off for now: Settings, System, About, Advanced system settings, ' +
+                             'Performance Settings, Advanced, Virtual memory: Change, untick "Automatically manage", choose "No paging ' +
+                             'file", Set, OK. Restart, run setup again, then turn it back on the same way.') }
+        'ntfs' { return ($have + ' The file system''s own records (' + $file.TrimStart('\') + ') are in the way, and Windows can''t ' +
+                         'move them while it runs. ClaudeOS can go on a separate disk instead, or a partition tool that works while ' +
+                         'Windows is off can make the room.') }
+        default {
+            if ($file) { return ($have + ' A file Windows can''t move while it runs is in the way: ' + $file + '.') }
+            return ($have + ' Something Windows can''t move while it runs is in the way.')
+        }
     }
 }
 

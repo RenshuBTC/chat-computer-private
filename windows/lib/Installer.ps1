@@ -197,13 +197,14 @@ function Copy-IsoToInstaller {
 }
 
 function Write-InstallerPayload {
-    # ClaudeOS itself, the sign-in, the settings, the answers file and the boot menu change.
+    # ClaudeOS itself, the sign-in (a full one, or a sign-in code), the settings, the answers file and the boot
+    # menu change.
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$AutoinstallYaml,
         [Parameter(Mandatory = $true)][string]$SettingsJson,
-        [Parameter(Mandatory = $true)][string]$Token,
+        [AllowNull()][AllowEmptyString()][string]$Token = '',
         [Parameter(Mandatory = $true)][string]$InstallId,
         [AllowNull()][AllowEmptyString()][string]$Login = '',
         [AllowNull()]$BitLockerKey = $null
@@ -224,11 +225,16 @@ function Write-InstallerPayload {
     }
     $secrets = Join-Path $payload 'secrets'
     New-Item -ItemType Directory -Path $secrets -Force | Out-Null
-    Write-TextFileLf -Path (Join-Path $secrets 'claude_token') -Text ($Token + "`n")
+    if (-not [string]::IsNullOrEmpty($Token)) {
+        # A one-year sign-in code, when the person pasted one instead of signing in with the browser.
+        Write-TextFileLf -Path (Join-Path $secrets 'claude_token') -Text ($Token + "`n")
+    }
     if (-not [string]::IsNullOrEmpty($Login)) {
-        # The full sign-in for the Claude app on the phone (finish.sh puts it where Claude Code looks).
+        # The full sign-in: ClaudeOS uses it, and so does the Claude app on the phone (finish.sh puts it where
+        # Claude Code looks).
         Write-TextFileLf -Path (Join-Path $secrets 'claude_login.json') -Text $Login
     }
+    if ([string]::IsNullOrEmpty($Token) -and [string]::IsNullOrEmpty($Login)) { throw 'There is no Claude sign-in to give ClaudeOS.' }
     if ($BitLockerKey) {
         # ClaudeOS's own recovery password for C: (finish.sh puts it where ClaudeOS opens Windows' drive with it).
         Write-TextFileLf -Path (Join-Path $secrets 'bitlocker-key') -Text ([string]$BitLockerKey.Password + "`n")

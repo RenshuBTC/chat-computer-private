@@ -1,0 +1,22 @@
+14:03:16  ClaudeOS is its own system, started instead of macOS. macOS, your apps and your files stay, one restart away.
+14:03:16  WARNING Plan only: nothing will be changed.
+14:03:16  Q: What would you like to do? -> 1
+14:03:16  == Checking this Mac
+14:03:16  macOS 26.6.2 on an Apple M2 Pro (Virtual).
+14:03:17  == Your files
+14:03:17  ClaudeOS can't open macOS's own files: FileVault, which most Macs have on, locks them to macOS. So setup copies
+14:03:17  the folders you choose onto a drive called ClaudeOS that both systems open; macOS keeps its own copies. What
+14:03:17  you save on that drive in ClaudeOS is in macOS too, and you can send more later (run setup again).
+14:03:17  macOS may ask whether Terminal can open your Desktop, Documents and Downloads folders: choose OK.
+14:03:17  
+14:03:17  Q: Bring all of these to ClaudeOS (3 MB)? -> y
+14:03:17  folders: Desktop Documents Pictures (3006464 bytes)
+14:03:17  == Where ClaudeOS goes
+14:03:17  disk: container=disk2 store=disk0s2 total=343073095680 free=103110541312 preferred-min=267385202278 available=64110541312
+14:03:17  macOS's partition is 343.1 GB with 103.1 GB free.
+14:03:18  ClaudeOS gets 54.1 GB, and the ClaudeOS drive 10.0 GB.
+14:03:18  Name: Anka   Account: runner   Time zone: UTC
+14:03:18  == Plan only
+14:03:18  Nothing was changed. setup would shrink macOS's partition (disk0s2) to 279.0 GB,
+14:03:18  give ClaudeOS 54.1 GB and the ClaudeOS drive 10.0 GB, and copy: Desktop Documents Pictures.
+PLAN store=disk0s2 macos_new=278962554368 claudeos=54107234202 drive=10003307110 folders= Desktop Documents Pictures

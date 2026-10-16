@@ -1,0 +1,16 @@
+disk7s1|EFI|EFI
+disk7s2|Apple_APFS|
+disk7s3|Apple_APFS|
+disk7s4|EFI|EFI - CLAUD
+disk7s5|Linux Filesystem|
+disk7s6|Linux Filesystem|
+/dev/disk7 (disk image):
+   #:                       TYPE NAME                    SIZE       IDENTIFIER
+   0:      GUID_partition_scheme                        +6.4 GB     disk7
+   1:                        EFI EFI                     209.7 MB   disk7s1
+   2:                 Apple_APFS Container disk8         1.5 GB     disk7s2
+   3:                 Apple_APFS Container disk9         700.0 MB   disk7s3
+   4:                        EFI EFI - CLAUD             500.0 MB   disk7s4
+   5:           Linux Filesystem                         200.0 MB   disk7s5
+   6:           Linux Filesystem                         600.0 MB   disk7s6
+                    (free space)                         2.7 GB     -

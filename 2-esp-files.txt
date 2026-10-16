@@ -1,0 +1,42 @@
+total 32
+drwx------@ 1 runner  staff     0 Oct 16 17:53 .
+drwxr-xr-x  6 root    wheel   192 Oct 16 17:53 ..
+drwx------  1 runner  staff  4096 Oct 16 17:53 .fseventsd
+drwx------  1 runner  staff  4096 Oct 16 17:53 claudeos
+drwx------  1 runner  staff  4096 Oct 16 17:53 EFI
+
+/Volumes/EFI - CLAUD/.fseventsd:
+total 24
+drwx------  1 runner  staff  4096 Oct 16 17:53 .
+drwx------@ 1 runner  staff     0 Oct 16 17:53 ..
+-rwx------  1 runner  staff    36 Oct 16 17:53 fseventsd-uuid
+
+/Volumes/EFI - CLAUD/claudeos:
+total 432
+drwx------  1 runner  staff    4096 Oct 16 17:53 .
+drwx------@ 1 runner  staff       0 Oct 16 17:53 ..
+-rwx------  1 runner  staff  185693 Oct 16 17:53 app.tar.gz
+-rwx------  1 runner  staff     124 Oct 16 17:53 fedora-grub.cfg
+-rwx------  1 runner  staff    7944 Oct 16 17:53 firstboot.sh
+drwx------  1 runner  staff    4096 Oct 16 17:53 secrets
+-rwx------  1 runner  staff      92 Oct 16 17:53 settings.json
+-rwx------  1 runner  staff     284 Oct 16 17:53 setup.env
+
+/Volumes/EFI - CLAUD/claudeos/secrets:
+total 32
+drwx------  1 runner  staff  4096 Oct 16 17:53 .
+drwx------  1 runner  staff  4096 Oct 16 17:53 ..
+-rwx------  1 runner  staff    39 Oct 16 17:53 claude_login.json
+-rwx------  1 runner  staff   104 Oct 16 17:53 claude_token
+
+/Volumes/EFI - CLAUD/EFI:
+total 24
+drwx------  1 runner  staff  4096 Oct 16 17:53 .
+drwx------@ 1 runner  staff     0 Oct 16 17:53 ..
+drwx------  1 runner  staff  4096 Oct 16 17:53 fedora
+
+/Volumes/EFI - CLAUD/EFI/fedora:
+total 24
+drwx------  1 runner  staff  4096 Oct 16 17:53 .
+drwx------  1 runner  staff  4096 Oct 16 17:53 ..
+-rwx------  1 runner  staff  1343 Oct 16 17:53 grub.cfg

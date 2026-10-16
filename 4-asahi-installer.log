@@ -1,0 +1,39 @@
+10-16 17:54 root         INFO     Startup
+10-16 17:54 root         INFO     Environment:
+10-16 17:54 root         INFO       INSTALLER_BASE=None
+10-16 17:54 root         INFO       INSTALLER_DATA=None
+10-16 17:54 root         INFO       REPO_BASE=/tmp/claudeos-ci.HTyWqx/work
+10-16 17:54 root         INFO       IPSW_BASE=None
+10-16 17:54 root         INFO       EXPERT=None
+10-16 17:54 root         INFO       REPORT=None
+10-16 17:54 root         INFO       REPORT_TAG=None
+10-16 17:54 root         INFO     Version: v0.9.2
+10-16 17:54 root         INFO     MSG: Welcome to the ClaudeOS installer!
+10-16 17:54 root         INFO     MSG: This installer will guide you through the process of setting up
+10-16 17:54 root         INFO     MSG: ClaudeOS on your Mac.
+10-16 17:54 root         INFO     MSG: Please make sure you are familiar with our documentation at:
+10-16 17:54 root         INFO     MSG:   [34;1mhttps://docs.fedoraproject.org/en-US/fedora-asahi-remix/[m[m
+10-16 17:54 root         INFO     MSG: Press enter to continue.
+10-16 17:54 root         INFO     MSG: Collecting system information...
+10-16 17:54 root         INFO     MSG:   Product name: [mApple Virtual Machine 1[m
+10-16 17:54 root         INFO     MSG:   SoC: [mApple M2 Pro (Virtual)[m
+10-16 17:54 root         INFO     MSG:   Device class: [mvma2macosap[m
+10-16 17:54 root         INFO     MSG:   Product type: [mVirtualMac2,1[m
+10-16 17:54 root         INFO     MSG:   Board ID: [m0x20[m
+10-16 17:54 root         INFO     MSG:   Chip ID: [m0xfe00[m
+10-16 17:54 root         INFO     MSG:   System firmware: [mmBoot-18000.161.10[m
+10-16 17:54 root         INFO     MSG:   Boot UUID: [m995BAA35-FC3B-4105-B6D9-D45D24A66DEB[m
+10-16 17:54 root         INFO     MSG:   Boot VGID: [m995BAA35-FC3B-4105-B6D9-D45D24A66DEB[m
+10-16 17:54 root         INFO     MSG:   Default boot VGID: [m995BAA35-FC3B-4105-B6D9-D45D24A66DEB[m
+10-16 17:54 root         INFO     MSG:   Boot mode: [mmacOS (overriden)[m
+10-16 17:54 root         INFO     MSG:   OS version: [m15.7.9 (24G830)[m
+10-16 17:54 root         INFO     MSG:   OS restore version: [m24.7.830.0.0,0[m
+10-16 17:54 root         INFO     MSG:   Main firmware version: [m26.6.2 (25G83)[m
+10-16 17:54 root         INFO     MSG:   No Fallback System Firmware / rOS
+10-16 17:54 root         INFO     MSG:   SFR version: [m25.7.83.0.0,0[m
+10-16 17:54 root         INFO     MSG:   SystemRecovery version: [m25.4.125.0.0,0 (26.3 25D125)[m
+10-16 17:54 root         INFO     MSG:   Login user: [mrunner[m
+10-16 17:54 root         INFO     bugs: Not a ProMotion device
+10-16 17:54 root         INFO     MSG: This device is not supported yet!
+10-16 17:54 root         INFO     MSG: Please check out the Asahi Linux Blog for updates on device support:
+10-16 17:54 root         INFO     MSG:    https://asahilinux.org/blog/

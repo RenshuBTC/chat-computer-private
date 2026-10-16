@@ -54,6 +54,14 @@ if [ -f "$SRC/settings.json" ]; then
   chmod 0644 "$H/settings.json"     # FAT32, where every file looks executable
 fi
 curtin in-target --target="$T" -- chown -R "$USER_NAME:$USER_NAME" "/home/$USER_NAME/ClaudeOS"
+# ClaudeOS's own BitLocker key for Windows' drive (when it's encrypted): root only. ClaudeOS opens Windows'
+# drive with it (claudeos-root mount-windows).
+if [ -f "$SRC/secrets/bitlocker-key" ]; then
+  mkdir -p "$T/etc/claudeos"
+  ( umask 077; cp "$SRC/secrets/bitlocker-key" "$T/etc/claudeos/bitlocker-recovery-key" )
+  chown 0:0 "$T/etc/claudeos/bitlocker-recovery-key"
+  chmod 0600 "$T/etc/claudeos/bitlocker-recovery-key"
+fi
 
 # 3. Mark this installer as used on this PC, before the long step below. If the PC starts the installer
 #    again, its boot menu finds this file and starts ClaudeOS instead of installing it again (guard.sh

@@ -297,6 +297,8 @@ function Remove-ClaudeOS {
     if (-not $root -and $installers.Count -eq 0) {
         Write-Line 'It takes "ClaudeOS setup" out of the power-on menu (left from an install that didn''t finish).'
     }
+    $hasKey = Test-Path -LiteralPath (Join-Path (Get-ClaudeOSStateDir) 'bitlocker-key-id')
+    if ($hasKey) { Write-Line 'It deletes the BitLocker key setup made for ClaudeOS. Your own keys stay.' }
     Write-Line 'Windows, your apps and your files stay as they are. Windows starts when the PC turns on.'
     if ($root) { Write-Line 'Anything you saved only inside ClaudeOS is lost. Files you kept in your Windows folders stay.' }
     if (-not (Read-ConfirmWord 'Type REMOVE to remove ClaudeOS (anything else keeps it)' 'REMOVE')) {
@@ -348,6 +350,17 @@ function Remove-ClaudeOS {
                '). Run setup again to finish, or delete the partition in Disk Management.')
     }
     if ($root) { Write-Good 'ClaudeOS is deleted.' } else { Write-Good 'The installer is deleted.' }
+
+    # ClaudeOS's BitLocker key: nothing can use it now.
+    if ($hasKey) {
+        try {
+            if (Remove-ClaudeOSBitLockerKey) { Write-Good 'ClaudeOS''s BitLocker key is deleted.' }
+        } catch {
+            Write-SetupLog ('BitLocker key: ' + $_.Exception.Message)
+            Write-Warn ('Setup could not delete the BitLocker key it made for ClaudeOS (' + $_.Exception.Message + '). ' +
+                        'Run setup again to try once more.')
+        }
+    }
 
     # 3. Its space back to C: when it sits right after C:.
     $grown = $false

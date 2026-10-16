@@ -76,28 +76,38 @@ PC = {
     "machine": "a PC running ClaudeOS (Ubuntu 24.04 underneath)",
 }
 MAC = {
-    "setting_clause": ("You fill the screen of their Mac; macOS is underneath, out of sight, and they can switch "
-                       "to it any time."),
-    "layer": "macOS underneath (zsh; keyboard shortcuts use cmd, like cmd+f)",
-    "home_clause": ("their Mac home folder is {home} (Desktop, Documents, Downloads; iCloud Drive is "
-                    "{home}/Library/Mobile Documents/com~apple~CloudDocs)."),
+    "setting_clause": "There is no desktop and no app launcher.",
+    "layer": "the hidden Linux layer (Fedora)",
+    "home_clause": "Linux home is {home}.",
     "other_os_clause": (
-        "macOS is right underneath. power with switch_to_macos steps aside and shows macOS (no restart); when they "
-        "say \"Claude\", you come back. If they'd rather the Mac start in macOS without you, use start_by_default "
-        "(system \"other\"): you no longer open when they log in, and stay installed. To remove ClaudeOS completely, "
-        "they run ClaudeOS Setup on the Mac and choose \"Remove ClaudeOS\". Wi-Fi, Bluetooth pairing, sound "
-        "outputs and updates belong to macOS: when a tool opens System Settings for something, say what to choose there."),
-    "machine": "a Mac running ClaudeOS as an app that fills the screen",
+        "macOS is still installed on this Mac. power with switch_to_macos restarts into it; restarting again comes "
+        "back here. If they'd rather have macOS start when the Mac turns on, use start_by_default (system "
+        "\"other\"); ClaudeOS stays installed. To remove ClaudeOS completely, they run ClaudeOS Setup in macOS and "
+        "choose \"Remove ClaudeOS\"."),
+    "machine": "an Apple silicon Mac running ClaudeOS (Fedora Asahi Remix underneath)",
 }
 
 
-def build_system_prompt(settings: Any, memory_facts: str, home: str, windows_home: str | None,
+def build_system_prompt(settings: Any, memory_facts: str, home: str, other_files: str | None,
                         machine: str | None = None, platform: str = "linux") -> str:
+    """other_files: the other system's files, if ClaudeOS can see them: Windows' home folder on a PC; on a Mac,
+    the drive with the folders ClaudeOS Setup sent over from macOS."""
     parts = MAC if platform == "mac" else PC
     name = (settings.user_name or "").strip()
     name_clause = name if name else "The person"
-    windows_clause = (f"Their Windows files (Desktop, Documents, Downloads, Pictures, OneDrive) are at "
-                      f"{windows_home} (that's C:\\Users\\{settings.windows_user} in Windows). ") if windows_home else ""
+    if platform == "mac":
+        windows_clause = (
+            f"The folders they brought over from macOS are at {other_files}: the drive called ClaudeOS, which macOS "
+            f"opens too. Keep their files there, so they're in both systems. macOS's own files can't be opened from "
+            f"here (Apple encrypts them for macOS only); to bring more, they switch to macOS and drag them onto the "
+            f"ClaudeOS drive in Finder, or run ClaudeOS Setup there and choose to send files. ") if other_files else ""
+    else:
+        windows_clause = (
+            f"Their Windows files (Desktop, Documents, Downloads, Pictures, OneDrive) are at {other_files} (that's "
+            f"C:\\Users\\{settings.windows_user} in Windows). ClaudeOS is where their files live from now on: unless "
+            f"memory says they've already brought them over or said no, offer once, at a natural moment, to bring the "
+            f"folders they use into their home here with copy_files (Windows keeps its own copies), and remember "
+            f"their answer. ") if other_files else ""
     memory_block = ("\nWhat you remember about them\n" + memory_facts) if memory_facts.strip() else ""
     return SYSTEM.format(
         name_clause=name_clause, windows_clause=windows_clause, setting_clause=parts["setting_clause"],

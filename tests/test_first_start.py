@@ -63,7 +63,7 @@ def test_new_signin_left_on_windows_is_taken_and_removed(tmp_path, monkeypatch):
     (win_home / "ClaudeOS").mkdir(parents=True)
     tok = "sk-ant-oat01-" + "A" * 90
     (win_home / "ClaudeOS/claude_token").write_text("﻿" + tok + "\r\n", encoding="utf-8")
-    c._import_windows_signin(str(win_home))
+    c._import_signin(str(win_home / "ClaudeOS"))
     from claudeos.config import read_token
     assert read_token(paths) == tok
     assert not (win_home / "ClaudeOS/claude_token").exists()
@@ -75,6 +75,6 @@ def test_junk_left_on_windows_is_ignored(tmp_path, monkeypatch):
     win_home = tmp_path / "windows/Users/rensh"
     (win_home / "ClaudeOS").mkdir(parents=True)
     (win_home / "ClaudeOS/claude_token").write_text("hello", encoding="utf-8")
-    c._import_windows_signin(str(win_home))
+    c._import_signin(str(win_home / "ClaudeOS"))
     from claudeos.config import read_token
     assert read_token(paths) is None

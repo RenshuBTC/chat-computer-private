@@ -1,6 +1,7 @@
 #!/bin/bash
 # Finishes installing ClaudeOS on the first start when the Ubuntu installer couldn't (no internet
-# at the time, a power cut, the computer turned off). Run by claudeos-finish-install.service before
+# at the time, a power cut, the computer turned off), and on a Mac always: there, ClaudeOS's first start
+# (mac/esp/firstboot.sh) leaves the whole install to this. Run by claudeos-finish-install.service before
 # the login prompt. Keeps trying until it works, then restarts the computer into ClaudeOS.
 set -u
 STAMP="${CLAUDEOS_STAMP:-/var/lib/claudeos/base-installed}"
@@ -24,8 +25,9 @@ if command -v plymouth >/dev/null 2>&1; then plymouth quit >/dev/null 2>&1 || tr
 say "Finishing the installation. This needs the internet and can take a while. Please leave the computer on."
 try=1
 while :; do
-  # A power cut in the middle of installing packages leaves them half set up; finish that first.
-  dpkg --configure -a >/dev/null 2>&1 || true
+  # A power cut in the middle of installing packages leaves them half set up; finish that first (Ubuntu;
+  # Fedora's dnf finishes or undoes its transactions itself).
+  if command -v dpkg >/dev/null 2>&1; then dpkg --configure -a >/dev/null 2>&1 || true; fi
   if bash "$APP/linux/install-claudeos.sh" --user "$user" --from-installer; then
     break
   fi

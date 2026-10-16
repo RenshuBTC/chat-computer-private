@@ -1,205 +1,321 @@
 #!/bin/bash
-# The Mac test: ClaudeOS on a real Mac, start to finish. GitHub's Macs run it (.github/workflows/mac.yml); it
-# also runs on any Mac where installing and then removing ClaudeOS is fine (it uses the real ~/ClaudeOS and
-# ~/Applications, and removes them at the end).
+# ClaudeOS Setup for Mac (mac/setup.sh) on one of GitHub's Macs. They are virtual Macs with Apple silicon, so
+# ClaudeOS can't really be installed there (Asahi Linux needs a real Mac), but they have macOS's own tools: each
+# part of setup that uses them runs here against real macOS. Nothing touches this Mac's own disk: a disk image
+# stands in for it.
 #
-#   bash tests/mac_ci/run.sh OUTDIR
+#   bash tests/mac_ci/run.sh RESULTS_DIR          (run by .github/workflows/mac.yml)
 #
-#   1. setup: mac/setup.sh, answered the way a person would (a stand-in Claude sign-in, since nobody can sign
-#      in here; everything else is real: uv, Python, the packages, the voice download, the app, the login item)
-#   2. what setup made: the app's signature and architectures, launch.conf, "python -m claudeos doctor"
-#   3. the app, opened the way macOS opens it: does it run, fill the screen, and quit when asked
-#   4. ClaudeOS on the screen with a scripted Claude: talking, websites, documents, sleep, "switch to macOS"
-#      and back, quitting (tests/mac_ci/mac_scenario.py)
-#   5. the Python tests, on the Mac
-#   6. setup's "Remove ClaudeOS from this Mac"
-# Everything it sees goes to OUTDIR: summary.txt (PASS/FAIL per check), logs and screenshots. Exit status 1
-# if any check failed. Written for macOS's own bash 3.2.
+#  1. Setup as a person starts it, plan only: its checks, this Mac's disk read with diskutil (kept in RESULTS_DIR)
+#     and the folders' sizes. GitHub's Macs have little free space, so it may stop for lack of space: that's fine.
+#  2. A disk image laid out the way the Asahi installer leaves a Mac, made with the installer's own commands:
+#     setup finds ClaudeOS's pieces on it, makes the ClaudeOS drive and copies folders onto it, writes ClaudeOS's
+#     first start to its EFI partition, and then removes ClaudeOS again.
+#  3. The real downloads: the Asahi installer and Fedora's image, checked against their fingerprints, ClaudeOS's
+#     icon added with the installer's own Python; then a second run, which mustn't download Fedora again.
+#  4. The real Asahi installer, started by setup and answered by drive-installer.exp, until it turns down a
+#     virtual Mac (as it does before it changes anything).
+# summary.txt in RESULTS_DIR has a PASS or FAIL line for each check. Exit status 1 if any failed.
+# (Variables set here are read by setup's parts; output of commands run with sudo goes to these results on purpose.)
+# shellcheck disable=SC2024,SC2034
 set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-OUT="${1:?usage: run.sh OUTDIR}"
+OUT="${1:?usage: run.sh RESULTS_DIR}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
-CO="$HOME/ClaudeOS"
-APP="$HOME/Applications/ClaudeOS.app"
-AGENT="$HOME/Library/LaunchAgents/com.claudeos.start.plist"
-APP_PROC="ClaudeOS.app/Contents/MacOS/ClaudeOS"
+SUM="$OUT/summary.txt"
+: > "$SUM"
 FAILED=0
-: > "$OUT/summary.txt"
-
-pass() { printf 'PASS  %s\n' "$*" | tee -a "$OUT/summary.txt"; }
-fail() { printf 'FAIL  %s\n' "$*" | tee -a "$OUT/summary.txt"; FAILED=1; }
-note() { printf '      %s\n' "$*" | tee -a "$OUT/summary.txt"; }
-check() {   # check WHAT COMMAND...: PASS if the command succeeds (its output goes to checks.log)
+pass() { printf 'PASS %s\n' "$1" | tee -a "$SUM"; }
+fail() { printf 'FAIL %s\n' "$1" | tee -a "$SUM"; FAILED=1; }
+note() { printf '     %s\n' "$1" | tee -a "$SUM"; }
+ok() {   # ok WHAT COMMAND...: PASS if the command succeeds
   local what="$1"
   shift
-  printf '\n$ %s\n' "$*" >> "$OUT/checks.log"
-  if "$@" >> "$OUT/checks.log" 2>&1; then pass "$what"; else fail "$what"; fi
+  if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi
 }
-with_timeout() {   # with_timeout SECONDS COMMAND...: macOS has no timeout(1); an alarm survives exec
-  local secs="$1"
-  shift
-  perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' "$secs" "$@"
-}
-app_running() { pgrep -f "$APP_PROC" >/dev/null 2>&1; }
-section() { printf '\n== %s\n' "$*" | tee -a "$OUT/summary.txt"; }
+section() { printf '\n== %s\n' "$1" | tee -a "$SUM"; }
+PY="$(command -v python3)"
+T="$(mktemp -d /tmp/claudeos-ci.XXXXXX)"
 
-# ------------------------------------------------------------------ 0. this Mac
-section "This Mac"
-{
-  sw_vers
-  uname -a
-  sysctl -n machdep.cpu.brand_string 2>/dev/null
-  printf 'arm64 hardware: %s\n' "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
-  printf 'bash: %s\n' "$BASH_VERSION"
-  df -h "$HOME"
-  system_profiler SPDisplaysDataType SPAudioDataType 2>/dev/null
-} > "$OUT/0-this-mac.txt" 2>&1
-note "macOS $(sw_vers -productVersion) on $(uname -m)"
+{ sw_vers; uname -m; sysctl -n machdep.cpu.brand_string; echo "virtual: $(sysctl -n kern.hv_vmm_present)"
+  /bin/bash --version | head -n 1; rsync --version 2>&1 | head -n 1; tar --version; expect -v; df -h /; id
+} > "$OUT/mac.txt" 2>&1
+note "$(sw_vers -productVersion) on $(sysctl -n machdep.cpu.brand_string), $(/bin/bash --version | head -n 1)"
 
-# ------------------------------------------------------------------ 1. setup, as a person runs it
-section "1. Setup (mac/setup.sh)"
-# Nobody can sign in to Claude here: a stand-in sign-in makes setup skip that step ("already signed in").
-mkdir -p "$CO/secrets"
-chmod 700 "$CO/secrets"
-(umask 077 && printf 'sk-ant-oat01-%s\n' "$(head -c 90 /dev/zero | tr '\0' 'x')" > "$CO/secrets/claude_token")
-# Answers: Install; Go ahead; don't sign in again; open at login: yes; start now: no (step 3 opens it).
-t0=$(date +%s)
-printf '1\ny\nn\ny\nn\n' | with_timeout 1800 bash "$REPO/mac/setup.sh" > "$OUT/1-setup.txt" 2>&1
+# A person's folders: Finder's .DS_Store files, a Photos library (not copied), files with extended attributes
+# (which exFAT and FAT would keep as ._ files if they were copied), something big.
+H="$T/home"
+mkdir -p "$H/Desktop" "$H/Documents/Projects" "$H/Pictures/Photos Library.photoslibrary/originals"
+printf 'buy milk\n' > "$H/Desktop/todo.txt"
+printf '\0finder' > "$H/Desktop/.DS_Store"
+printf 'hello from macOS\n' > "$H/Documents/Projects/notes.txt"
+xattr -w com.apple.quarantine "0081;00000000;Safari;" "$H/Documents/Projects/notes.txt"
+xattr -w com.example.claudeos "an extended attribute" "$H/Desktop/todo.txt"
+head -c 3000000 /dev/urandom > "$H/Pictures/beach.jpg"
+printf 'h' > "$H/Pictures/Photos Library.photoslibrary/originals/IMG_1.heic"
+# The downloaded ClaudeOS folder carries the download's quarantine mark (on a GitHub Mac it doesn't by itself).
+xattr -w com.apple.quarantine "0081;00000000;Safari;" "$REPO/mac/esp/firstboot.sh"
+
+# ------------------------------------------------------------------ 1. plan only, as a person starts it
+section "1. Setup, plan only, on this Mac"
+W1="$T/work-plan"
+printf '1\ny\n' | CLAUDEOS_PLAN_ONLY=1 CLAUDEOS_MAC_ROOT="$H" CLAUDEOS_SETUP_WORK="$W1" /bin/bash "$REPO/mac/setup.sh" \
+  > "$OUT/1-plan.txt" 2>&1
 rc=$?
-note "setup took $(( $(date +%s) - t0 )) seconds"
-cp "$CO/logs/setup.log" "$OUT/1-setup.log" 2>/dev/null
-if [ $rc = 0 ]; then pass "setup installs ClaudeOS"; else fail "setup installs ClaudeOS (exit $rc; see 1-setup.txt)"; fi
-
-# ------------------------------------------------------------------ 2. what setup made
-section "2. What setup installed"
-check "the app is in Applications" test -x "$APP/Contents/MacOS/ClaudeOS"
-check "its signature is intact" codesign --verify --deep --strict --verbose=2 "$APP"
-check "it's one program for Apple silicon and Intel" sh -c "lipo -archs '$APP/Contents/MacOS/ClaudeOS' | grep -q arm64 && lipo -archs '$APP/Contents/MacOS/ClaudeOS' | grep -q x86_64"
-check "no quarantine mark on it" sh -c "! xattr -lr '$APP' | grep -q com.apple.quarantine"
-{
-  codesign -dvvv "$APP"
-  lipo -archs "$APP/Contents/MacOS/ClaudeOS"
-  printf -- '--- Gatekeeper (an ad hoc signed app is expected to be "rejected" here; it still opens):\n'
-  spctl --assess --type execute -vv "$APP"
-  plutil -p "$APP/Contents/Info.plist"
-  cat "$CO/launch.conf"
-} > "$OUT/2-app.txt" 2>&1
-PY="$(sed -n 's/^python=//p' "$CO/launch.conf" 2>/dev/null)"
-LIBPY="$(sed -n 's/^libpython=//p' "$CO/launch.conf" 2>/dev/null)"
-check "launch.conf names ClaudeOS's Python and its library" sh -c "test -x '$PY' && test -f '$LIBPY'"
-check "the login item is a valid LaunchAgent" plutil -lint "$AGENT"
-check "the voice and speech recognition downloaded" sh -c "test -f '$CO/models/kokoro/kokoro-v1.0.int8.onnx' && test -f '$CO/models/whisper/faster-whisper-small.en/model.bin'"
-with_timeout 180 "$CO/runtime/bin/python" -m claudeos doctor > "$OUT/2-doctor.json" 2> "$OUT/2-doctor.err"
-rc=$?
-if [ $rc = 0 ]; then pass "\"claudeos doctor\" says it's usable"; else fail "\"claudeos doctor\" says it's usable (exit $rc; see 2-doctor.json)"; fi
-
-# ------------------------------------------------------------------ 3. the app, as macOS opens it
-section "3. The app"
-open "$APP" > "$OUT/3-open.txt" 2>&1
-for _ in $(seq 1 60); do app_running && break; sleep 1; done
-sleep 30
-screencapture -x "$OUT/3-app.png" 2>> "$OUT/3-open.txt"
-pgrep -fl "$APP_PROC" > "$OUT/3-processes.txt" 2>&1
-if app_running; then pass "it opens and keeps running"; else fail "it opens and keeps running"; fi
-# Its windows, as the window server lists them.
-"$CO/runtime/bin/python" - > "$OUT/3-windows.json" 2>&1 <<'EOF'
-import json
-import Quartz
-from AppKit import NSScreen
-wins = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID) or []
-f = NSScreen.mainScreen().frame()
-out = {"screen": [f.size.width, f.size.height], "windows": []}
-for w in wins:
-    b = w.get("kCGWindowBounds") or {}
-    out["windows"].append({"owner": w.get("kCGWindowOwnerName"), "name": w.get("kCGWindowName"),
-                           "layer": w.get("kCGWindowLayer"), "w": b.get("Width"), "h": b.get("Height")})
-print(json.dumps(out, indent=1, default=str))
-EOF
-check "its window fills the screen" "$CO/runtime/bin/python" -c '
-import json, sys
-d = json.load(open(sys.argv[1]))
-sw, sh = d["screen"]
-mine = [w for w in d["windows"] if w["owner"] == "ClaudeOS"]
-print(mine)
-sys.exit(0 if any(w["w"] == sw and w["h"] == sh for w in mine) else 1)' "$OUT/3-windows.json"
-cp "$CO/logs/claudeos.log" "$OUT/3-claudeos.log" 2>/dev/null
-# Quitting: the Apple event Command-Q also sends; ClaudeOS stops cleanly, then macOS ends it.
-t0=$(date +%s)
-with_timeout 30 osascript -e 'tell application id "com.claudeos.app" to quit' > "$OUT/3-quit.txt" 2>&1
-for _ in $(seq 1 20); do app_running || break; sleep 1; done
-if app_running; then
-  fail "it quits when asked (still running after $(( $(date +%s) - t0 )) seconds)"
-  pkill -9 -f "$APP_PROC"
+for f in "$W1"/*.plist "$W1/setup.log"; do [ -f "$f" ] && cp "$f" "$OUT/1-$(basename "$f")"; done
+ok "checks accept this (virtual) Apple silicon Mac in plan-only mode" grep -q "on an Apple M" "$OUT/1-plan.txt"
+if grep -q "already on this Mac" "$OUT/1-plan.txt"; then fail "finds no ClaudeOS on this Mac's disk"; else pass "finds no ClaudeOS on this Mac's disk"; fi
+ok "folder sizes from du -A" grep -Eq "Pictures +[0-9.]+ MB" "$OUT/1-plan.txt"
+line="$(grep -E 'disk: container=disk[0-9]+ store=disk[0-9]+s[0-9]+ total=[0-9]+ free=[0-9]+ preferred-min=[0-9]+ available=[0-9]+' "$W1/setup.log" 2>/dev/null)"
+if [ -n "$line" ]; then pass "reads macOS's disk with diskutil and plutil"; note "${line#*  }"; else fail "reads macOS's disk with diskutil and plutil"; fi
+if [ "$rc" = 0 ] && grep -q "Nothing was changed" "$OUT/1-plan.txt"; then
+  pass "plan made"
+  note "$(grep '^PLAN ' "$W1/setup.log")"
+elif [ "$rc" = 1 ] && grep -q "ClaudeOS needs" "$OUT/1-plan.txt"; then
+  pass "plan stops for lack of space (GitHub's Macs have little), before changing anything"
 else
-  pass "it quits when asked ($(( $(date +%s) - t0 )) seconds)"
+  fail "plan (exit status $rc; see 1-plan.txt)"
 fi
-cp "$CO/logs/claudeos.log" "$OUT/3-claudeos.log" 2>/dev/null
-log show --style compact --last 10m --predicate 'process == "tccd"' 2>/dev/null | grep -i -E "claudeos|python" | tail -80 > "$OUT/3-permissions.txt"
-# The microphone question ClaudeOS asked stays on the screen (nobody here can answer it); close it.
-killall -q UserNotificationCenter universalAccessAuthWarn 2>/dev/null
-cp "$HOME"/Library/Logs/DiagnosticReports/*ClaudeOS* "$HOME"/Library/Logs/DiagnosticReports/*Python* "$OUT/" 2>/dev/null
 
-# ------------------------------------------------------------------ 4. ClaudeOS on the screen, scripted Claude
-section "4. Talking to it (scripted Claude)"
-UV="$(ls "$CO"/.setup/uv-*.data/scripts/uv 2>/dev/null | head -n 1)"
-if [ -z "$UV" ]; then
-  python3 -m pip install --quiet --user uv > "$OUT/4-test-packages.txt" 2>&1
-  UV="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts", "posix_user"))')/uv"
+# ------------------------------------------------------------------ 2. on a disk image
+section "2. On a disk image laid out like a Mac after the Asahi installer"
+export CLAUDEOS_MAC_ROOT="$H" CLAUDEOS_SETUP_WORK="$T/work"
+# shellcheck source=../../mac/setup.sh
+. "$REPO/mac/setup.sh"          # its parts; it doesn't start when sourced
+mkdir -p "$WORK"
+
+parts() {   # parts DISK: "identifier|content|volume name" per partition, in order
+  local i=0 id
+  diskutil list -plist "$1" > "$T/list.plist" 2>/dev/null || return 1
+  while id="$(plist "$T/list.plist" "AllDisksAndPartitions.0.Partitions.$i.DeviceIdentifier")" && [ -n "$id" ]; do
+    printf '%s|%s|%s\n' "$id" "$(plist "$T/list.plist" "AllDisksAndPartitions.0.Partitions.$i.Content")" \
+      "$(plist "$T/list.plist" "AllDisksAndPartitions.0.Partitions.$i.VolumeName")"
+    i=$((i + 1))
+  done
+}
+after() { parts "$D" | awk -F'|' -v p="$1" 'found { print $1; exit } $1 == p { found = 1 }'; }
+info() { diskutil info -plist "$1" > "$T/info.plist" 2>/dev/null; plist "$T/info.plist" "$2"; }
+
+IMG="$T/mac"
+D=""
+if hdiutil create -quiet -size 6g -type SPARSE -layout GPTSPUD -fs APFS -volname "Macintosh HD" "$IMG" \
+   && D="$(hdiutil attach -nomount -noverify -noautofsck "$IMG.sparseimage" | awk 'NR == 1 { sub("/dev/", "", $1); print $1 }')" \
+   && [ -n "$D" ]; then
+  pass "disk image attached ($D)"
+else
+  fail "disk image attached"
 fi
-# Test-only packages, into ClaudeOS's Python: the pretend Claude (aiohttp) and the test runner.
-"$UV" pip install --python "$CO/runtime/bin/python" aiohttp pytest pyyaml jsonschema >> "$OUT/4-test-packages.txt" 2>&1
-t0=$(date +%s)
-# Inside the real app (its program started directly, so the test can hand it the scenario): ClaudeOS as macOS
-# sees it, with its name and permissions, and coming to the front the way the app does.
-mkdir -p "$OUT/scenario"
-CLAUDEOS_TEST_MODELS="$CO/models" CLAUDEOS_TEST_SCENARIO="$REPO/tests/mac_ci/mac_scenario.py" \
-  CLAUDEOS_TEST_SCENARIO_ARGS="$OUT/scenario" with_timeout 900 "$APP/Contents/MacOS/ClaudeOS" > "$OUT/4-scenario.txt" 2>&1
-rc=$?
-cp "$CO/logs/app.log" "$OUT/4-app.log" 2>/dev/null
-"$CO/runtime/bin/python" - "$OUT/scenario/result.json" "$rc" "$(( $(date +%s) - t0 ))" 2>&1 <<'EOF' | tee -a "$OUT/summary.txt"
-import json, sys, time
-path, rc, took = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-try:
-    r = json.load(open(path))
-except Exception as exc:
-    print(f"FAIL  the scenario ran (no result: {exc}; exit {rc})")
-    sys.exit()
-for s in r.get("steps", []):
-    print(("PASS  " if s["ok"] else "FAIL  ") + s["step"])
-if r.get("error"):
-    print("FAIL  the scenario finished (it stopped with an error; see scenario/result.json)")
-quit_s = time.time() - r.get("quit_asked_at", time.time())
-print(("PASS  " if rc == 0 else "FAIL  ") + f"it quits cleanly, the way Command-Q does (exit {rc})")
-print(f"      voice models used: {r.get('voice_models')}; {r.get('spoken_chunks', 0)} spoken pieces; took {took} s")
+MACPART="$(parts "$D" | awk -F'|' '$2 == "Apple_APFS" { print $1; exit }')"
+# As the Asahi installer does it: macOS's container shrinks, then (main.py, osinstall.py) the start-up volume's
+# container (2.5 GB there), the EFI partition (FAT32, named "EFI - " and the OS's name, 11 letters), Boot, Root.
+{
+  sudo diskutil apfs resizeContainer "$MACPART" 1.5G
+  sudo diskutil addPartition "$MACPART" APFS ClaudeOS 700M
+} > "$OUT/2-layout.txt" 2>&1
+STUBPART="$(after "$MACPART")"
+sudo diskutil addPartition "$STUBPART" %EFI% %noformat% 500M >> "$OUT/2-layout.txt" 2>&1
+ESP="$(after "$STUBPART")"
+sudo newfs_msdos -F 32 -v "EFI - Claud" "/dev/r$ESP" >> "$OUT/2-layout.txt" 2>&1
+sudo diskutil addPartition "$ESP" %Linux% %noformat% 200M >> "$OUT/2-layout.txt" 2>&1
+BOOTP="$(after "$ESP")"
+sudo diskutil addPartition "$BOOTP" %Linux% %noformat% 600M >> "$OUT/2-layout.txt" 2>&1
+ROOTP="$(after "$BOOTP")"
+diskutil mount "$ESP" >> "$OUT/2-layout.txt" 2>&1
+ESPMNT="$(info "$ESP" MountPoint)"
+FEDORA_GRUB="search --fs-uuid --set=root $FEDORA_BOOT_UUID
+set prefix=(\$root)/grub2
+configfile (\$root)/grub2/grub.cfg"
+if [ -n "$ESPMNT" ] && sudo mkdir -p "$ESPMNT/EFI/fedora" \
+   && printf '%s\n' "$FEDORA_GRUB" | sudo tee "$ESPMNT/EFI/fedora/grub.cfg" > /dev/null; then
+  pass "the image has macOS's container, ClaudeOS's start-up volume, EFI ($ESP), Boot and Root, like the installer makes them"
+else
+  fail "the image laid out like the installer leaves a Mac (see 2-layout.txt)"
+fi
+diskutil unmount "$ESP" >> "$OUT/2-layout.txt" 2>&1
+parts "$D" > "$OUT/2-parts-installed.txt"
+diskutil list "$D" >> "$OUT/2-parts-installed.txt" 2>&1
+cp "$T/list.plist" "$OUT/2-list-installed.plist"
+
+find_install "$D"
+note "found: start-up volume $FOUND_STUB, EFI $FOUND_ESP, Boot $FOUND_BOOT, Linux $FOUND_LINUX, drive ${FOUND_DRIVE:-none}"
+if [ -n "$STUBPART" ] && [ "$FOUND_STUB:$FOUND_ESP:$FOUND_BOOT:$FOUND_LINUX" = "$STUBPART:$ESP:$BOOTP:$ROOTP" ] \
+   && [ -z "$FOUND_DRIVE" ]; then
+  pass "find_install finds each of ClaudeOS's pieces in diskutil's real output"
+else
+  fail "find_install (wanted $STUBPART $ESP $BOOTP $ROOTP)"
+fi
+
+# The ClaudeOS drive, in the space left over, and the folders copied onto it.
+(
+  ROOT_DEV="$ROOTP" DISK="$D" DRIVE_BYTES=$((2 * GB))
+  make_drive
+  printf 'FOUND_DRIVE=%s\nDRIVE_MOUNT=%q\nDRIVE_PARTUUID=%s\n' "$FOUND_DRIVE" "$DRIVE_MOUNT" "$DRIVE_PARTUUID" > "$T/drive.vars"
+) > "$OUT/2-make-drive.txt" 2>&1
+FOUND_DRIVE="" DRIVE_MOUNT="" DRIVE_PARTUUID=""
+[ -f "$T/drive.vars" ] && . "$T/drive.vars"
+if [ -n "$FOUND_DRIVE" ] && [ -d "$DRIVE_MOUNT" ] && [ -d "$DRIVE_MOUNT/.claudeos" ]; then
+  pass "make_drive makes the ClaudeOS drive ($FOUND_DRIVE, at $DRIVE_MOUNT)"
+else
+  fail "make_drive (see 2-make-drive.txt)"
+fi
+ok "the drive is exFAT" test "$(info "$FOUND_DRIVE" FilesystemType)" = exfat
+diskutil info -plist "$FOUND_DRIVE" > "$OUT/2-drive-info.plist" 2>/dev/null
+# ClaudeOS mounts the drive by its partition's GPT id (fstab PARTUUID=); setup takes it from diskutil's DiskUUID.
+if sudo "$PY" - "/dev/r$D" "$DRIVE_PARTUUID" <<'EOF' >> "$OUT/2-make-drive.txt" 2>&1
+import struct, sys, uuid
+dev, want = sys.argv[1], sys.argv[2].upper()
+with open(dev, "rb") as f:
+    head = f.read(512 * 64)
+lba, count, size = struct.unpack_from("<QII", head, 512 + 72)
+for i in range(count):
+    e = head[lba * 512 + i * size: lba * 512 + (i + 1) * size]
+    if len(e) == size and str(uuid.UUID(bytes_le=e[16:32])).upper() == want:
+        print("GPT entry", i + 1, "has the id", want)
+        sys.exit(0)
+print("no GPT entry has the id", want)
+sys.exit(1)
 EOF
-grep -q '^FAIL' "$OUT/summary.txt" && FAILED=1
-cp "$OUT/scenario/home/ClaudeOS/logs/claudeos.log" "$OUT/4-claudeos.log" 2>/dev/null
+then
+  pass "diskutil's DiskUUID is the partition's GPT id (what ClaudeOS's fstab uses)"
+else
+  fail "diskutil's DiskUUID ($DRIVE_PARTUUID) is the partition's GPT id"
+fi
 
-# ------------------------------------------------------------------ 5. the Python tests
-section "5. The Python tests"
-# The voice tests find the models in one folder (tests/test_voice.py): the ones setup downloaded.
-TM="$(mktemp -d)"
-ln -s "$CO/models/kokoro/kokoro-v1.0.int8.onnx" "$CO/models/kokoro/voices-v1.0.bin" "$TM/"
-ln -s "$CO/models/whisper" "$TM/whisper"
-(cd "$REPO" && CLAUDEOS_TEST_MODELS="$TM" with_timeout 1200 "$CO/runtime/bin/python" -m pytest -q -p no:cacheprovider -rs tests) \
-  > "$OUT/5-pytest.txt" 2>&1
+( copy_folders "$DRIVE_MOUNT" Desktop Documents Pictures ) > "$OUT/2-copy.txt" 2>&1
+ok "folders copied" test "$(cat "$DRIVE_MOUNT/Desktop/todo.txt" 2>/dev/null)" = "buy milk"
+ok "big files copied whole" cmp -s "$H/Pictures/beach.jpg" "$DRIVE_MOUNT/Pictures/beach.jpg"
+ok "no .DS_Store or Photos library copied" test ! -e "$DRIVE_MOUNT/Desktop/.DS_Store" -a ! -e "$DRIVE_MOUNT/Pictures/Photos Library.photoslibrary"
+dot="$(find "$DRIVE_MOUNT" -name '._*' 2>/dev/null | head -n 5)"
+if [ -z "$dot" ]; then pass "no ._ files on the drive (extended attributes not copied)"; else fail "._ files on the drive: $dot"; fi
+
+# ClaudeOS's first start, on its EFI partition.
+(
+  EFI_DEV="$ESP" ACCOUNT="rensh" REAL_NAME='Ren "Shu"' RECOVERY="abcd-efgh-jkmn-pqrs" TZONE="Asia/Singapore"
+  INSTALL_ID="0123456789abcdef01234567" WIFI_SSID='Home "5G"' WIFI_PSK="correct horse"
+  TOKEN="sk-ant-oat01-$(printf 'x%.0s' $(seq 1 90))" LOGIN='{"claudeAiOauth":{"refreshToken":"r"}}'
+  write_first_start
+) > "$OUT/2-first-start.txt" 2>&1
 rc=$?
-note "$(tail -n 1 "$OUT/5-pytest.txt")"
-if [ $rc = 0 ]; then pass "the Python tests pass on this Mac"; else fail "the Python tests pass on this Mac (see 5-pytest.txt)"; fi
+ok "write_first_start finishes" test "$rc" = 0
+diskutil mount "$ESP" > /dev/null 2>&1
+E="$(info "$ESP" MountPoint)"
+ok "first start's program on the EFI partition" cmp -s "$REPO/mac/esp/firstboot.sh" "$E/claudeos/firstboot.sh"
+ok "Fedora's own start kept, to put back" test "$(cat "$E/claudeos/fedora-grub.cfg" 2>/dev/null)" = "$FEDORA_GRUB"
+g="$E/EFI/fedora/grub.cfg"
+if grep -q "vmlinuz-$FEDORA_KERNEL" "$g" && grep -q "root=UUID=$FEDORA_ROOT_UUID" "$g" && ! grep -q @ "$g" \
+   && grep -q "systemd.run=\"/bin/sh /boot/efi/claudeos/firstboot.sh\"" "$g"; then
+  pass "GRUB starts the first start once (kernel, root and program filled in)"
+else
+  fail "the first start's GRUB file"
+fi
+cp "$g" "$OUT/2-grub.cfg" 2>/dev/null
+if "$PY" - "$E/claudeos" "$DRIVE_PARTUUID" <<'EOF' > "$OUT/2-first-start-check.txt" 2>&1
+import base64, json, sys, tarfile
+p, drive = sys.argv[1], sys.argv[2]
+env = dict(line.split("=", 1) for line in open(p + "/setup.env").read().splitlines())
+v = {k: base64.b64decode(x).decode() for k, x in env.items()}
+assert v["USER_NAME"] == "rensh" and v["REAL_NAME"] == 'Ren "Shu"', v
+assert v["WIFI_SSID"] == 'Home "5G"' and v["WIFI_PSK"] == "correct horse" and v["TIMEZONE"] == "Asia/Singapore"
+assert v["MAC_FILES_PARTUUID"].upper() == drive.upper() and v["RECOVERY_PASSWORD"] == "abcd-efgh-jkmn-pqrs"
+assert open(p + "/secrets/claude_token").read().startswith("sk-ant-oat01-")
+assert json.load(open(p + "/secrets/claude_login.json"))["claudeAiOauth"]["refreshToken"] == "r"
+assert json.load(open(p + "/settings.json"))["user_name"] == 'Ren "Shu"'
+with tarfile.open(p + "/app.tar.gz") as t:
+    members = t.getmembers()
+names = [m.name for m in members]
+assert "claudeos/__init__.py" in names and "linux/install-claudeos.sh" in names, names[:20]
+bad = [n for n in names if n.split("/")[-1].startswith("._") or "__pycache__" in n or n.startswith(("mac/", "windows/"))]
+assert not bad, bad
+xattrs = sorted({k for m in members for k in m.pax_headers if "xattr" in k.lower() or "acl" in k.lower()})
+assert not xattrs, xattrs
+print("setup.env, sign-in, settings and ClaudeOS's package as ClaudeOS's first start reads them;", len(names), "files")
+EOF
+then
+  pass "settings, sign-in and ClaudeOS's package read back as the first start reads them (no ._ or xattr entries)"
+else
+  fail "what's on the EFI partition (see 2-first-start-check.txt)"
+fi
+dot="$(find "$E" -name '._*' 2>/dev/null | head -n 5)"
+if [ -z "$dot" ]; then pass "no ._ files on the EFI partition"; else fail "._ files on the EFI partition: $dot"; fi
+ls -laR "$E" > "$OUT/2-esp-files.txt" 2>&1
+diskutil unmount "$ESP" > /dev/null 2>&1
 
-# ------------------------------------------------------------------ 6. removing it
-section "6. Remove (setup's fourth choice)"
-# Answers: Remove; type REMOVE; don't keep what it remembers.
-printf '4\nREMOVE\nn\n' | with_timeout 300 bash "$REPO/mac/setup.sh" > "$OUT/6-remove.txt" 2>&1
+# Removing ClaudeOS: the image stands in for macOS's disk (setup's read_disk would read this Mac's own).
+read -r IMGCONT MACVOL <<EOF
+$(diskutil apfs list -plist | "$PY" -c '
+import plistlib, sys
+for c in plistlib.load(sys.stdin.buffer)["Containers"]:
+    if c.get("DesignatedPhysicalStore") == sys.argv[1]:
+        print(c["ContainerReference"], c["Volumes"][0]["DeviceIdentifier"])' "$MACPART")
+EOF
+read_disk() {
+  CONTAINER="$IMGCONT" STORE="$MACPART" DISK="$D"
+  diskutil info -plist "$MACVOL" > "$WORK/root.plist" 2>/dev/null
+}
+mkdir -p "$H/Documents"
+printf 'note\n' > "$H/Documents/ClaudeOS recovery password.txt"
+# Remove; copy the drive's files to macOS first; REMOVE; the Mac's password (none here: bless only warns).
+printf 'y\nREMOVE\n\n' | ( remove ) > "$OUT/2-remove.txt" 2>&1
 rc=$?
-if [ $rc = 0 ]; then pass "setup removes ClaudeOS"; else fail "setup removes ClaudeOS (exit $rc)"; fi
-check "the ClaudeOS folder is gone" test ! -e "$CO"
-check "the app is gone" test ! -e "$APP"
-check "the login item is gone" test ! -e "$AGENT"
-check "ClaudeOS isn't running" sh -c "! pgrep -f '$APP_PROC'"
+ok "remove finishes" test "$rc" = 0
+ok "it says ClaudeOS is deleted and macOS has its space back" grep -q "macOS has its space back" "$OUT/2-remove.txt"
+parts "$D" > "$OUT/2-parts-removed.txt"
+diskutil list "$D" >> "$OUT/2-parts-removed.txt" 2>&1
+left="$(parts "$D" | awk -F'|' '{ print $2 }' | tr '\n' ' ')"
+if [ "$left" = "EFI Apple_APFS " ]; then pass "only macOS's partitions are left"; else fail "partitions left: $left"; fi
+cap="$(diskutil apfs list -plist "$IMGCONT" > "$T/c.plist" 2>/dev/null; plist "$T/c.plist" Containers.0.CapacityCeiling)"
+note "macOS's container: $(size_text "${cap:-0}") (was 1.5 GB)"
+ok "macOS's container grew into the space" test "${cap:-0}" -gt 5000000000
+ok "the drive's files were copied to \"ClaudeOS files\" first" test "$(cat "$H/ClaudeOS files/Desktop/todo.txt" 2>/dev/null)" = "buy milk"
+ok "the recovery note is gone" test ! -e "$H/Documents/ClaudeOS recovery password.txt"
+hdiutil detach -force "$D" > /dev/null 2>&1
+rm -f "$IMG.sparseimage"
 
-section "Done"
-grep -c '^PASS' "$OUT/summary.txt" | sed 's/^/      passed: /' | tee -a "$OUT/summary.txt"
-grep -c '^FAIL' "$OUT/summary.txt" | sed 's/^/      failed: /' | tee -a "$OUT/summary.txt"
+# ------------------------------------------------------------------ 3. the real downloads
+section "3. Downloads: the Asahi installer and Fedora's image"
+( prepare_installer; printf 'INST=%q\n' "$INST" > "$T/inst.vars" ) > "$OUT/3-download.txt" 2>&1
+rc=$?
+ok "prepare_installer finishes (both fingerprints match)" test "$rc" = 0
+INST=""
+[ -f "$T/inst.vars" ] && . "$T/inst.vars"
+pkg="$WORK/os/$FEDORA_PACKAGE"
+if "$PY" - "$pkg" "$REPO/mac/claudeos.icns" <<'EOF' >> "$OUT/3-download.txt" 2>&1
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+names = set(z.namelist())
+assert {"boot.img", "root.img", "claudeos.icns"} <= names and any(n.startswith("esp/") for n in names), sorted(names)[:20]
+assert z.read("claudeos.icns") == open(sys.argv[2], "rb").read()
+for n in names:
+    if n.startswith("esp/") and not n.endswith("/"):
+        z.read(n)          # checks each small file's CRC
+print("package:", len(names), "files, with ClaudeOS's icon")
+EOF
+then
+  pass "ClaudeOS's icon is in Fedora's package (added with the installer's Python), and the package still reads"
+else
+  fail "Fedora's package with ClaudeOS's icon (see 3-download.txt)"
+fi
+ok "the installer gets ClaudeOS's installer_data.json" cmp -s "$REPO/mac/installer_data.json" "$INST/installer_data.json"
+ok "the new fingerprint is noted" test -s "$pkg.with-icon"
+( prepare_installer ) > "$OUT/3-download-again.txt" 2>&1
+ok "a second run doesn't download Fedora again" grep -q "downloaded already" "$OUT/3-download-again.txt"
+
+# ------------------------------------------------------------------ 4. the real installer's start
+section "4. The Asahi installer, answered by drive-installer.exp"
+( MACOS_NEW=$((100 * GB)); CLAUDEOS_BYTES=$((60 * GB)); run_installer ) > "$OUT/4-installer.txt" 2>&1
+rc=$?
+[ -f "$WORK/asahi-installer.log" ] && cp "$WORK/asahi-installer.log" "$OUT/4-asahi-installer.log"
+ok "the installer starts as ClaudeOS's" grep -q "Welcome to the ClaudeOS installer" "$OUT/4-installer.txt"
+ok "setup's answer reached it (past \"Press enter to continue.\")" grep -q "Collecting system information" "$OUT/4-installer.txt"
+if grep -q "not supported" "$OUT/4-installer.txt" && [ "$rc" = 1 ] && grep -q "The Asahi installer didn't finish" "$OUT/4-installer.txt"; then
+  pass "it turns down the virtual Mac, and setup stops and says so"
+else
+  fail "the installer's end on a virtual Mac (exit status $rc; see 4-installer.txt)"
+fi
+
+cp "$WORK/setup.log" "$OUT/setup.log" 2>/dev/null
+section "Summary"
+printf '%s checks passed, %s failed\n' "$(grep -c '^PASS' "$SUM")" "$(grep -c '^FAIL' "$SUM")" | tee -a "$SUM"
+rm -rf "$T"
 exit "$FAILED"

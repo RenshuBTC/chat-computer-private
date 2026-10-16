@@ -15,9 +15,11 @@
 #   * Exit 0 = success, non-zero = failure (JSON still printed on stdout).
 #   * Unknown verbs are rejected.
 #
-# Verbs (per ARCHITECTURE.md): status, boot-windows-next, boot-default, mount-windows,
+# Verbs (per ARCHITECTURE.md): status, boot-windows-next, boot-macos-next, boot-default, mount-windows,
 # apt-install, apt-remove, system-update, bt-import-windows-keys,
 # set-timezone, wipe-install-secrets.
+# On a PC ClaudeOS runs on Ubuntu next to Windows; on an Apple silicon Mac on Fedora Asahi Remix next to
+# macOS, where the start-up volume is chosen with asahi-bless and packages come from dnf.
 
 set -u
 umask 022
@@ -30,8 +32,16 @@ export LC_ALL=C
 export PATH="${CLAUDEOS_ROOT_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
 
 WINDOWS_MOUNT=/mnt/windows
-BITLOCKER_KEY_FILE=/etc/claudeos/bitlocker-recovery-key
-DISLOCKER_MNT=/run/claudeos/dislocker
+# ClaudeOS's own BitLocker recovery password for Windows' drive, from ClaudeOS Setup (root, 0600).
+# CLAUDEOS_TEST_BITLOCKER_KEY is a TEST-ONLY override, dropped by sudo like CLAUDEOS_ROOT_PATH.
+BITLOCKER_KEY_FILE="${CLAUDEOS_TEST_BITLOCKER_KEY:-/etc/claudeos/bitlocker-recovery-key}"
+# Windows' drive, opened with that key: /dev/mapper/claudeos-windows. (CLAUDEOS_TEST_MAPPER_DIR: test only.)
+WINDOWS_MAPPER=claudeos-windows
+MAPPER_DIR="${CLAUDEOS_TEST_MAPPER_DIR:-/dev/mapper}"
+# What the machine is (CLAUDEOS_TEST_DT_COMPATIBLE: test only, dropped by sudo).
+DT_COMPATIBLE="${CLAUDEOS_TEST_DT_COMPATIBLE:-/proc/device-tree/compatible}"
+# ClaudeOS's start-up volume on a Mac: the name ClaudeOS Setup gives it in the Asahi installer.
+MAC_CLAUDEOS_VOLUME=ClaudeOS
 VENV_PYTHON=/opt/claudeos/venv/bin/python
 BT_IMPORT_PY=/usr/local/libexec/claudeos/bt-import-windows-keys.py
 
@@ -96,36 +106,29 @@ is_efi() {
 # Windows partition discovery + mounting.
 # ---------------------------------------------------------------------------
 
-# Find the block device of the NTFS partition that contains a Windows install
-# (has /Windows/System32). Echoes the device path, or nothing. We only consider
-# partitions blkid reports as ntfs, and probe each read-only.
-find_windows_partition() {
-  local dev fstype tmp found=""
+# Does a device hold Windows (an NTFS file system with Windows/System32)? Probed read-only, without touching
+# what's on it.
+windows_on() {
+  local dev=$1 tmp found=1
   tmp=$(mktemp -d /run/claudeos/winprobe.XXXXXX 2>/dev/null || mktemp -d)
-  # lsblk gives a stable, parseable device+fstype list.
-  while IFS='|' read -r dev fstype; do
-    [ -n "$dev" ] || continue
-    [ "$fstype" = "ntfs" ] || continue
-    # Probe read-only without touching the partition contents.
-    if mount -o ro,noexec,nodev,nosuid -t ntfs3 "/dev/$dev" "$tmp" 2>/dev/null \
-       || mount -o ro,noexec,nodev,nosuid -t ntfs-3g "/dev/$dev" "$tmp" 2>/dev/null \
-       || mount -o ro,noexec,nodev,nosuid "/dev/$dev" "$tmp" 2>/dev/null; then
-      if [ -d "$tmp/Windows/System32" ]; then
-        found="/dev/$dev"
-      fi
-      umount "$tmp" 2>/dev/null || true
-    fi
-    [ -n "$found" ] && break
-  done < <(lsblk -rno NAME,FSTYPE 2>/dev/null | awk 'NF>=1 {name=$1; ft=($2==""?"":$2); print name"|"ft}')
+  if mount -o ro,noexec,nodev,nosuid -t ntfs3 "$dev" "$tmp" 2>/dev/null \
+     || mount -o ro,noexec,nodev,nosuid -t ntfs-3g "$dev" "$tmp" 2>/dev/null \
+     || mount -o ro,noexec,nodev,nosuid "$dev" "$tmp" 2>/dev/null; then
+    [ -d "$tmp/Windows/System32" ] && found=0
+    umount "$tmp" 2>/dev/null || true
+  fi
   rmdir "$tmp" 2>/dev/null || true
-  printf '%s' "$found"
+  return $found
 }
 
-# Is a device a BitLocker volume? blkid tags these TYPE="BitLocker".
-is_bitlocker() {
-  local dev=$1 t
-  t=$(blkid -o value -s TYPE "$dev" 2>/dev/null || true)
-  [ "$t" = "BitLocker" ]
+# The plain (not encrypted) NTFS partition that holds Windows. Echoes its device path, or nothing.
+find_windows_partition() {
+  local dev fstype
+  # lsblk gives a stable, parseable device+fstype list.
+  while IFS='|' read -r dev fstype; do
+    [ -n "$dev" ] && [ "$fstype" = "ntfs" ] || continue
+    if windows_on "/dev/$dev"; then printf '%s' "/dev/$dev"; return 0; fi
+  done < <(lsblk -rno NAME,FSTYPE 2>/dev/null | awk 'NF>=1 {name=$1; ft=($2==""?"":$2); print name"|"ft}')
 }
 
 # Is an NTFS device "clean" (not left dirty / hibernated by Windows)? We treat a
@@ -169,14 +172,36 @@ do_mount_windows() {
   dev=$(find_windows_partition)
 
   if [ -z "$dev" ]; then
-    # Maybe the Windows partition is BitLocker-locked (no readable NTFS yet).
-    # Scan for a BitLocker partition to unlock.
-    local b
+    # Windows' drive may be encrypted with BitLocker (no readable NTFS until it's opened). ClaudeOS Setup
+    # gives ClaudeOS a recovery password of its own for it; the BitLocker partition that opens with that
+    # key and holds Windows is the one. Opened with the kernel's own BitLocker support (cryptsetup's
+    # BITLK); the key goes in on standard input, never on a command line other programs could read.
+    local b any=false key opened
     for b in $(lsblk -rno NAME,FSTYPE 2>/dev/null | awk '$2=="BitLocker"{print $1}'); do
-      dev="/dev/$b"; bitlocker=true; break
+      any=true
+      if [ ! -r "$BITLOCKER_KEY_FILE" ]; then break; fi
+      if [ ! -e "$MAPPER_DIR/$WINDOWS_MAPPER" ]; then
+        key=$(tr -d '\r\n' < "$BITLOCKER_KEY_FILE")
+        printf '%s' "$key" | cryptsetup open --type bitlk --key-file=- "/dev/$b" "$WINDOWS_MAPPER" >/dev/null 2>&1
+        opened=$?
+        key=""
+        [ "$opened" -eq 0 ] || continue
+      fi
+      if windows_on "$MAPPER_DIR/$WINDOWS_MAPPER"; then
+        dev="/dev/$b"; bitlocker=true; break
+      fi
+      cryptsetup close "$WINDOWS_MAPPER" >/dev/null 2>&1 || true
     done
-  elif is_bitlocker "$dev"; then
-    bitlocker=true
+    if [ -z "$dev" ] && [ "$any" = true ]; then
+      if [ ! -r "$BITLOCKER_KEY_FILE" ]; then
+        emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
+          note="Windows' drive is encrypted (BitLocker) and ClaudeOS has no key for it"
+      else
+        emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
+          note="ClaudeOS's BitLocker key did not open Windows' drive"
+      fi
+      return 0
+    fi
   fi
 
   if [ -z "$dev" ]; then
@@ -186,47 +211,14 @@ do_mount_windows() {
   fi
 
   target_dev="$dev"
-
-  if [ "$bitlocker" = true ]; then
-    if [ ! -r "$BITLOCKER_KEY_FILE" ]; then
-      emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
-        note="BitLocker locked and no recovery key at $BITLOCKER_KEY_FILE; skipping"
-      return 0
-    fi
-    # Unlock with dislocker into a loopback-backed decrypted container, then
-    # mount that. dislocker reads the key file; we pass the path, never the key
-    # on the command line.
-    mkdir -p "$DISLOCKER_MNT"
-    if ! dislocker -r -p"$(cat "$BITLOCKER_KEY_FILE")" -- "$dev" "$DISLOCKER_MNT" 2>/dev/null; then
-      # -p expects the recovery password; try -f (BEK file) as a fallback only
-      # if the file looks like a .bek. We keep it simple: report failure.
-      emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
-        note="dislocker failed to unlock"
-      return 0
-    fi
-    target_dev="$DISLOCKER_MNT/dislocker-file"
-    if [ ! -e "$target_dev" ]; then
-      emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
-        note="dislocker produced no clear-text device"
-      return 0
-    fi
-  fi
+  [ "$bitlocker" = true ] && target_dev="$MAPPER_DIR/$WINDOWS_MAPPER"
 
   # Decide rw vs ro by cleanliness. NEVER pass remove_hiberfile.
   local opts rw=false
-  if [ "$bitlocker" = true ]; then
-    # target_dev is a file; loop-mount it. Cleanliness check on the decrypted fs.
-    if ntfs_is_clean "$target_dev"; then
-      opts="rw,loop,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"; rw=true
-    else
-      opts="ro,loop,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"
-    fi
+  if ntfs_is_clean "$target_dev"; then
+    opts="rw,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"; rw=true
   else
-    if ntfs_is_clean "$target_dev"; then
-      opts="rw,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"; rw=true
-    else
-      opts="ro,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"
-    fi
+    opts="ro,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"
   fi
 
   if mount -t ntfs-3g -o "$opts" "$target_dev" "$WINDOWS_MOUNT" 2>/dev/null \
@@ -236,8 +228,8 @@ do_mount_windows() {
     return 0
   fi
 
-  # Mount failed; tidy up any dislocker mapping.
-  [ "$bitlocker" = true ] && umount "$DISLOCKER_MNT" 2>/dev/null || true
+  # Mount failed; close Windows' drive again if this opened it.
+  if [ "$bitlocker" = true ]; then cryptsetup close "$WINDOWS_MAPPER" >/dev/null 2>&1 || true; fi
   emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker="$bitlocker" \
     note="mount failed"
   return 0
@@ -289,11 +281,51 @@ verb_boot_windows_next() {
   die "could not set next boot to Windows (no EFI entry and grub-reboot failed)"
 }
 
+# An Apple silicon Mac (its device tree says "apple,...")?
+on_apple_silicon() { tr '\0' '\n' < "$DT_COMPATIBLE" 2>/dev/null | grep -q '^apple,'; }
+
+# bless_macos [--next] — make macOS the Mac's start-up volume (for the next start only, with --next).
+# asahi-bless finds macOS by its usual name ("Macintosh HD"); if it was renamed, the one start-up volume
+# that isn't ClaudeOS's is macOS. With more than one, there's no telling: the person picks in the Mac's
+# startup options (hold the power button).
+bless_macos() {
+  local list picks
+  command -v asahi-bless >/dev/null 2>&1 || die "asahi-bless is not installed"
+  if asahi-bless --set-boot-macos "$@" --yes >/dev/null 2>&1; then
+    emit_json ok=true method=asahi-bless volume=macos
+    return 0
+  fi
+  list=$(asahi-bless --list-volumes 2>/dev/null) || die "asahi-bless could not list the Mac's start-up volumes"
+  picks=$(printf '%s\n' "$list" | sed -n 's/^[* ]\{0,1\}\([0-9][0-9]*\)) \(.*\)$/\1|\2/p' \
+          | grep -v -i "|$MAC_CLAUDEOS_VOLUME\$" || true)
+  [ -n "$picks" ] || die "the Mac has no other start-up volume"
+  [ "$(printf '%s\n' "$picks" | wc -l)" -eq 1 ] \
+    || die "the Mac has more than one other system; choose macOS in its startup options (hold the power button)"
+  asahi-bless --set-boot "${picks%%|*}" "$@" --yes >/dev/null 2>&1 || die "asahi-bless could not choose macOS"
+  emit_json ok=true method=asahi-bless volume="${picks#*|}"
+}
+
+verb_boot_macos_next() {
+  on_apple_silicon || die "this computer isn't a Mac"
+  bless_macos --next
+}
+
 verb_boot_default() {
-  # What starts when the computer turns on: put Windows Boot Manager's or ClaudeOS's ("ubuntu")
-  # UEFI entry first in BootOrder, keeping every other entry in its place. Nothing is removed, so the
-  # other system stays one choice away (the PC's boot menu, or ClaudeOS Setup in Windows).
-  [ "$#" -eq 1 ] || die "boot-default takes one argument: windows or claudeos"
+  # What starts when the computer turns on, removing nothing, so the other system stays one choice away.
+  # PC: put Windows Boot Manager's or ClaudeOS's ("ubuntu") UEFI entry first in BootOrder, keeping every
+  # other entry in its place. Mac: the start-up volume, with asahi-bless (macos or claudeos).
+  [ "$#" -eq 1 ] || die "boot-default takes one argument: windows, macos or claudeos"
+  if on_apple_silicon; then
+    case "$1" in
+      macos) bless_macos; return 0 ;;
+      claudeos)
+        command -v asahi-bless >/dev/null 2>&1 || die "asahi-bless is not installed"
+        asahi-bless --set-boot "$MAC_CLAUDEOS_VOLUME" --yes >/dev/null 2>&1 || die "asahi-bless could not choose ClaudeOS"
+        emit_json ok=true default=claudeos method=asahi-bless
+        return 0 ;;
+      *) die "boot-default takes macos or claudeos on a Mac" ;;
+    esac
+  fi
   local num out order rest new
   is_efi && command -v efibootmgr >/dev/null 2>&1 || die "this computer has no UEFI boot entries to change"
   out=$(efibootmgr 2>/dev/null) || die "could not read the UEFI boot entries"
@@ -315,10 +347,21 @@ verb_mount_windows() { do_mount_windows; }
 # Package-name validation shared by apt-install / apt-remove.
 valid_pkg() { [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]{1,62}$ ]]; }
 
+# Ubuntu (a PC) has apt-get; Fedora (a Mac) has dnf. (CLAUDEOS_TEST_PKG: test only, dropped by sudo.)
+have_dnf() {
+  case "${CLAUDEOS_TEST_PKG:-}" in dnf) return 0 ;; apt) return 1 ;; esac
+  ! command -v apt-get >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1
+}
+
 verb_apt_install() {
   [ "$#" -ge 1 ] || die "apt-install needs at least one package"
   local p
   for p in "$@"; do valid_pkg "$p" || die "invalid package name: $p"; done
+  if have_dnf; then
+    dnf install -y --setopt=install_weak_deps=False "$@" >/dev/null 2>&1 || die "dnf install failed"
+    emit_json ok=true action=install @packages="$(json_array "$@")"
+    return 0
+  fi
   export DEBIAN_FRONTEND=noninteractive
   if apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends "$@" >/dev/null 2>&1; then
     emit_json ok=true action=install @packages="$(json_array "$@")"
@@ -331,6 +374,11 @@ verb_apt_remove() {
   [ "$#" -ge 1 ] || die "apt-remove needs at least one package"
   local p
   for p in "$@"; do valid_pkg "$p" || die "invalid package name: $p"; done
+  if have_dnf; then
+    dnf remove -y "$@" >/dev/null 2>&1 || die "dnf remove failed"
+    emit_json ok=true action=remove @packages="$(json_array "$@")"
+    return 0
+  fi
   export DEBIAN_FRONTEND=noninteractive
   if apt-get remove -y "$@" >/dev/null 2>&1; then
     emit_json ok=true action=remove @packages="$(json_array "$@")"
@@ -351,6 +399,11 @@ json_array() {
 }
 
 verb_system_update() {
+  if have_dnf; then
+    dnf upgrade -y --refresh >/dev/null 2>&1 || die "system update failed"
+    emit_json ok=true action=system-update
+    return 0
+  fi
   export DEBIAN_FRONTEND=noninteractive
   if apt-get update >/dev/null 2>&1 && apt-get -y upgrade >/dev/null 2>&1; then
     emit_json ok=true action=system-update
@@ -443,6 +496,7 @@ mkdir -p /run/claudeos 2>/dev/null || true
 case "$verb" in
   status)                 [ "$#" -eq 0 ] || die "status takes no args"; verb_status ;;
   boot-windows-next)      [ "$#" -eq 0 ] || die "boot-windows-next takes no args"; verb_boot_windows_next ;;
+  boot-macos-next)        [ "$#" -eq 0 ] || die "boot-macos-next takes no args"; verb_boot_macos_next ;;
   boot-default)           verb_boot_default "$@" ;;
   mount-windows)          [ "$#" -eq 0 ] || die "mount-windows takes no args"; verb_mount_windows ;;
   apt-install)            verb_apt_install "$@" ;;

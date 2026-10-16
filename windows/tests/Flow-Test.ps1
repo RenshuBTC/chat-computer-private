@@ -7,13 +7,14 @@
 #   plan, shrink, disk         install (plan only; making room on C:; on the separate disk)
 #   no-entry, install-fails    install, when the PC won't take the power-on entry / when copying fails
 #   leftover                   install, while the installer of an earlier try is still there
+#   bitlocker, bitlocker-fails install on an encrypted C: (ClaudeOS gets its own key) / when a later step fails
 #   bitlocker-stop, signin     stop at the recovery-key question; sign in again
 #   startup-windows, startup-once
 #   remove, remove-keep        remove ClaudeOS (confirmed / not confirmed)
 #   remove-both                remove ClaudeOS before it has cleaned up its installer
 #   remove-unfinished          remove an installer that never installed
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('plan', 'shrink', 'disk', 'no-entry', 'install-fails', 'leftover', 'bitlocker-stop',
+    [Parameter(Mandatory = $true)][ValidateSet('plan', 'shrink', 'disk', 'no-entry', 'install-fails', 'leftover', 'bitlocker', 'bitlocker-fails', 'bitlocker-stop',
         'signin', 'startup-windows', 'startup-once', 'remove', 'remove-keep', 'remove-both', 'remove-unfinished')][string]$Scenario,
     [Parameter(Mandatory = $true)][string]$OutDir
 )
@@ -38,7 +39,7 @@ $Script:SetupId = '{5e7e0a00-0000-4000-8000-00000000000a}'     # the "ClaudeOS s
 $env:firmware_type = 'UEFI'
 $env:USERNAME = 'rensh'
 $env:USERPROFILE = (Join-Path $OutDir 'Users/rensh')
-$Script:BitLocker = ($Scenario -eq 'bitlocker-stop')
+$Script:BitLocker = ($Scenario -in @('bitlocker', 'bitlocker-fails', 'bitlocker-stop'))
 # ClaudeOS installed (and its installer cleaned up, except in remove-both); or only an installer, never used.
 $Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-both', 'startup-windows', 'startup-once')
 $Script:InstallerLeft = $Scenario -in @('remove-both', 'remove-unfinished', 'leftover')
@@ -104,6 +105,41 @@ function Get-BitLockerVolume {
     $on = 'Off'
     if ($Scenario -eq 'remove') { $on = 'On' }
     return [pscustomobject]@{ VolumeStatus = $status; KeyProtector = $prot; ProtectionStatus = $on }
+}
+# BitLocker's key protectors on C: (id -> type; 3 = recovery password), through its WMI class. In 'remove',
+# ClaudeOS's own key is there, with setup's record of it.
+$env:CLAUDEOS_STATE_DIR = Join-Path $OutDir 'ProgramData/ClaudeOS'
+$Script:Protectors = [ordered]@{ '{0b000000-0000-4000-8000-000000000001}' = 3 }
+$Script:ClaudeKeyId = '{2b000000-0000-4000-8000-0000000000c1}'
+$Script:ClaudeKey = '123456-234567-345678-456789-567890-678901-789012-890123'
+if ($Scenario -eq 'remove') {
+    $Script:Protectors[$Script:ClaudeKeyId] = 3
+    New-Item -ItemType Directory -Path $env:CLAUDEOS_STATE_DIR -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $env:CLAUDEOS_STATE_DIR 'bitlocker-key-id'), $Script:ClaudeKeyId + "`n")
+}
+function Get-CimInstance { param([string]$Namespace, [string]$ClassName, [string]$Filter) return [pscustomobject]@{ DriveLetter = 'C:' } }
+function Invoke-CimMethod {
+    param($InputObject, [string]$MethodName, [hashtable]$Arguments)
+    $id = ''
+    if ($Arguments -and $Arguments.ContainsKey('VolumeKeyProtectorID')) { $id = [string]$Arguments['VolumeKeyProtectorID'] }
+    switch ($MethodName) {
+        'ProtectKeyWithNumericalPassword' {
+            Add-Call 'BitLocker add key'
+            $Script:Protectors[$Script:ClaudeKeyId] = 3
+            return [pscustomobject]@{ ReturnValue = 0; VolumeKeyProtectorID = $Script:ClaudeKeyId }
+        }
+        'GetKeyProtectorNumericalPassword' { return [pscustomobject]@{ ReturnValue = 0; NumericalPassword = $Script:ClaudeKey } }
+        'GetKeyProtectorType' {
+            if ($Script:Protectors.Contains($id)) { return [pscustomobject]@{ ReturnValue = 0; KeyProtectorType = $Script:Protectors[$id] } }
+            return [pscustomobject]@{ ReturnValue = 2150694920; KeyProtectorType = 0 }     # 0x80310008: no such key
+        }
+        'DeleteKeyProtector' {
+            Add-Call ('BitLocker delete key ' + $id)
+            $Script:Protectors.Remove($id)
+            return [pscustomobject]@{ ReturnValue = 0 }
+        }
+    }
+    throw ('The pretend BitLocker has no ' + $MethodName)
 }
 function Get-ItemProperty { return [pscustomobject]@{ HiberbootEnabled = 1; PEFirmwareType = 2 } }
 function Disable-FastStartup { Add-Call 'Disable-FastStartup' }
@@ -302,7 +338,17 @@ if ($Script:Installed -or $Script:InstallerLeft) {
     $docs = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Documents') -Force
     [IO.File]::WriteAllText((Join-Path $docs.FullName 'ClaudeOS recovery password.txt'), 'Password: x')
 }
-function Mount-EspPartition { param($Partition) Add-Call ('Mount-EspPartition ' + $Partition.DiskNumber + ' ' + $Partition.PartitionNumber); return [pscustomobject]@{ Root = $Script:Esp; Letter = 'S'; How = 'test'; Partition = $Partition } }
+# In 'bitlocker-fails', opening the EFI partition fails once, after ClaudeOS's BitLocker key was made.
+$Script:EspFailed = $false
+function Mount-EspPartition {
+    param($Partition)
+    Add-Call ('Mount-EspPartition ' + $Partition.DiskNumber + ' ' + $Partition.PartitionNumber)
+    if ($Scenario -eq 'bitlocker-fails' -and $Script:Protectors.Contains($Script:ClaudeKeyId) -and -not $Script:EspFailed) {
+        $Script:EspFailed = $true
+        throw 'Windows could not open its EFI partition: access denied.'
+    }
+    return [pscustomobject]@{ Root = $Script:Esp; Letter = 'S'; How = 'test'; Partition = $Partition }
+}
 function Dismount-EspPartition { param($Mount) Add-Call 'Dismount-EspPartition' }
 
 # The answers, in order. The first picks what to do: 1 install, 2 sign in again, 3 what starts, 4 remove.
@@ -314,6 +360,8 @@ $scripted = switch ($Scenario) {
     'no-entry' { @('1', 'y', '1', '80', 'y', 'y') }
     'install-fails' { @('1', 'y', '1', '80', 'y', 'y') }
     'leftover' { @('1') }
+    'bitlocker' { @('1', 'y', 'y', '1', '80', 'y', 'y', 'n') }     # recovery key saved, then as in shrink
+    'bitlocker-fails' { @('1', 'y', 'y', '1', '80', 'y', 'y') }
     'bitlocker-stop' { @('1', 'n') }                         # recovery key not saved
     'signin' { @('2', 'y') }                                 # with the phone
     'startup-windows' { @('3', '2') }                        # Windows
@@ -344,6 +392,7 @@ try {
 $result.calls = @($Script:Calls)
 $result.answers_left = $Script:Answers.Count
 $result.boot_entries = $Script:BcdAdded
+$result.bitlocker_keys = @($Script:Protectors.Keys)
 $result.partitions = @($Script:Parts | Sort-Object DiskNumber, Offset | ForEach-Object {
         [ordered]@{ disk = $_.DiskNumber; number = $_.PartitionNumber; start_mib = $_.Offset / $Script:MockMB; size_mib = $_.Size / $Script:MockMB; letter = ([string]$_.DriveLetter).Trim([char]0) } })
 [IO.File]::WriteAllText((Join-Path $OutDir 'flow.json'), ($result | ConvertTo-Json -Depth 5))

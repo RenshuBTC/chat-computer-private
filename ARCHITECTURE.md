@@ -42,7 +42,7 @@ ClaudeOS/
 * Packages are the minimum for: display (Xorg, no desktop), Wi-Fi/Ethernet (NetworkManager), Bluetooth + audio
   (BlueZ, PipeWire, WirePlumber, libspa-0.2-bluetooth), web rendering for ClaudeOS's own screen (WebKitGTK 4.1 via
   python3-gi + gir1.2-webkit2-4.1, GStreamer codecs), screen control (xdotool, wmctrl), Windows files (ntfs-3g,
-  dislocker), boot control (efibootmgr), fonts, Python 3.12 venv.
+  cryptsetup-bin for BitLocker), boot control (efibootmgr), fonts, Python 3.12 venv.
 
 ## Installed paths and users
 
@@ -57,7 +57,7 @@ ClaudeOS/
 | Claude subscription token | `/home/<user>/ClaudeOS/secrets/claude_token` (mode 0600, single line `sk-ant-oat01-...`) |
 | Initial settings from Windows setup | `/home/<user>/ClaudeOS/settings.json` (JSON; keys below) |
 | Voice models | `/home/<user>/ClaudeOS/models/` (layout owned by `claudeos.voice.models`) |
-| Windows partition | `/mnt/windows` (rw when NTFS is clean, else ro; absent if BitLocker-locked) |
+| Windows partition | `/mnt/windows` (rw when NTFS is clean, else ro). A BitLocker drive is opened with ClaudeOS's own recovery password (`/etc/claudeos/bitlocker-recovery-key`, from setup) as `/dev/mapper/claudeos-windows` |
 | Root helper | `/usr/local/libexec/claudeos/claudeos-root`, sudoers: `<user> ALL=(root) NOPASSWD: /usr/local/libexec/claudeos/claudeos-root` |
 
 `settings.json` keys written by the Windows setup (all optional): `user_name` (display name), `windows_user`

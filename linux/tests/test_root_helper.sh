@@ -307,6 +307,82 @@ fi
 rm -f "$WORK/dirty"
 
 # ===========================================================================
+# mount-windows with BitLocker: opened with ClaudeOS's key (on stdin), then mounted
+# ===========================================================================
+# Windows' partition sda3 is BitLocker now; sda4 a BitLocker data drive the key doesn't open.
+BLK="$WORK/bitlocker-recovery-key"
+MAPDIR="$WORK/mapper"
+mkdir -p "$MAPDIR"
+printf '%s\n' "111111-222222-333333-444444-555555-666666-777777-888888" > "$BLK"
+shim lsblk <<SH
+#!/bin/bash
+echo "lsblk \$*" >> "$LOG"
+if printf '%s' "\$*" | grep -q 'NAME,FSTYPE'; then
+  printf 'sda\nsda1 vfat\nsda2 ext4\nsda4 BitLocker\nsda3 BitLocker\n'
+fi
+SH
+shim cryptsetup <<SH
+#!/bin/bash
+echo "cryptsetup \$*" >> "$LOG"
+if [ "\$1" = "open" ]; then
+  key=\$(cat)
+  printf '%s' "\$key" > "$WORK/key-seen"
+  # The key opens sda3 (Windows' drive) only.
+  case "\$*" in *"/dev/sda3 claudeos-windows"*) ;; *) exit 2 ;; esac
+  [ "\$key" = "111111-222222-333333-444444-555555-666666-777777-888888" ] || exit 2
+  : > "$MAPDIR/claudeos-windows"; exit 0
+fi
+if [ "\$1" = "close" ]; then rm -f "$MAPDIR/claudeos-windows"; exit 0; fi
+exit 1
+SH
+shim mount <<SH
+#!/bin/bash
+echo "mount \$*" >> "$LOG"
+mp="\${@: -1}"; dev="\${@: -2:1}"
+mkdir -p "\$mp"
+case "\$dev" in */claudeos-windows) mkdir -p "\$mp/Windows/System32" ;; esac
+exit 0
+SH
+export CLAUDEOS_TEST_BITLOCKER_KEY="$BLK" CLAUDEOS_TEST_MAPPER_DIR="$MAPDIR"
+: > "$LOG"; rm -f "$WORK/mounted" "$MAPDIR/claudeos-windows" "$WORK/key-seen"
+OUT="$(runhelper mount-windows 2>/dev/null)"
+if [ "$(jget "$OUT" windows_mounted)" = "True" ] && [ "$(jget "$OUT" windows_bitlocker)" = "True" ] && [ "$(jget "$OUT" device)" = "/dev/sda3" ]; then
+  pass "mount-windows: opened the BitLocker drive with ClaudeOS's key and mounted it"
+else
+  fail "mount-windows (BitLocker): expected mounted; got $OUT"; cat "$LOG"
+fi
+if grep -q "cryptsetup open --type bitlk --key-file=- /dev/sda3 claudeos-windows" "$LOG" \
+   && [ "$(cat "$WORK/key-seen" 2>/dev/null)" = "111111-222222-333333-444444-555555-666666-777777-888888" ]; then
+  pass "mount-windows: the key went to cryptsetup on stdin, without the newline"
+else
+  fail "mount-windows: cryptsetup not called as expected"; cat "$LOG"
+fi
+if grep -q "111111-222222" "$LOG"; then fail "mount-windows: the key appeared on a command line"; else pass "mount-windows: the key never appeared on a command line"; fi
+if grep -q "mount -t ntfs-3g -o rw,.* $MAPDIR/claudeos-windows /mnt/windows" "$LOG"; then
+  pass "mount-windows: mounted the opened drive (rw when clean)"
+else
+  fail "mount-windows: did not mount the opened drive"; cat "$LOG"
+fi
+# No key: reported, nothing opened.
+: > "$LOG"; rm -f "$MAPDIR/claudeos-windows"
+export CLAUDEOS_TEST_BITLOCKER_KEY="$WORK/no-such-key"
+OUT="$(runhelper mount-windows 2>/dev/null)"
+unset CLAUDEOS_TEST_BITLOCKER_KEY CLAUDEOS_TEST_MAPPER_DIR
+if [ "$(jget "$OUT" windows_mounted)" = "False" ] && [ "$(jget "$OUT" windows_bitlocker)" = "True" ] && ! grep -q "cryptsetup open" "$LOG"; then
+  pass "mount-windows: without a key, says the drive is encrypted and opens nothing"
+else
+  fail "mount-windows (no key): got $OUT"; cat "$LOG"
+fi
+# Restore the plain-NTFS shims for the tests below.
+shim lsblk <<SH
+#!/bin/bash
+echo "lsblk \$*" >> "$LOG"
+if printf '%s' "\$*" | grep -q 'NAME,FSTYPE'; then
+  printf 'sda\nsda1 vfat\nsda2 ext4\nsda3 ntfs\nsda4 ntfs\n'
+fi
+SH
+
+# ===========================================================================
 # wipe-install-secrets: only CLAUDEOS device, removes secrets
 # ===========================================================================
 : > "$LOG"
@@ -354,6 +430,85 @@ else
   OUT="$(runhelper wipe-install-secrets 2>/dev/null)"
   if [ "$(jget "$OUT" ok)" = "False" ]; then pass "wipe-install-secrets: rejects non-block CLAUDEOS target (no loop dev to test happy path)"; else fail "wipe-install-secrets: should reject non-block device"; fi
 fi
+
+# ===========================================================================
+# On a Mac (Fedora Asahi Remix): macOS for the next start, what starts, packages with dnf
+# ===========================================================================
+DT="$WORK/compatible"
+printf 'apple,j313\0apple,t8103\0apple,arm-platform\0' > "$DT"
+VOLS="$WORK/volumes"
+shim asahi-bless <<SH
+#!/bin/bash
+echo "asahi-bless \$*" >> "$LOG"
+case "\$*" in
+  *--set-boot-macos*) [ -f "$WORK/macos-renamed" ] && { echo "Error: Unable to find the macos volume" >&2; exit 1; }; exit 0 ;;
+  --list-volumes) cat "$VOLS"; exit 0 ;;
+  *--set-boot*) exit 0 ;;
+esac
+exit 1
+SH
+shim dnf <<SH
+#!/bin/bash
+echo "dnf \$*" >> "$LOG"
+exit 0
+SH
+export CLAUDEOS_TEST_DT_COMPATIBLE="$DT"
+: > "$LOG"; rm -f "$WORK/macos-renamed"
+OUT="$(runhelper boot-macos-next 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot-macos --next --yes" "$LOG"; then
+  pass "boot-macos-next: macOS for the next start only (asahi-bless --set-boot-macos --next)"
+else
+  fail "boot-macos-next: $OUT"; cat "$LOG"
+fi
+# macOS renamed (not "Macintosh ..."): the one start-up volume that isn't ClaudeOS's.
+touch "$WORK/macos-renamed"
+printf '*1) ClaudeOS\n 2) Ren'"'"'s Mac\n' > "$VOLS"
+: > "$LOG"
+OUT="$(runhelper boot-macos-next 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot 2 --next --yes" "$LOG" && [ "$(jget "$OUT" volume)" = "Ren's Mac" ]; then
+  pass "boot-macos-next: a renamed macOS is found as the one other start-up volume"
+else
+  fail "boot-macos-next (renamed): $OUT"; cat "$LOG"
+fi
+printf '*1) ClaudeOS\n 2) Ren'"'"'s Mac\n 3) Fedora Linux\n' > "$VOLS"
+: > "$LOG"
+OUT="$(runhelper boot-macos-next 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q -- "--set-boot [0-9]" "$LOG"; then
+  pass "boot-macos-next: with two other systems, guesses nothing"
+else
+  fail "boot-macos-next (two others): $OUT"; cat "$LOG"
+fi
+rm -f "$WORK/macos-renamed"
+: > "$LOG"
+OUT="$(runhelper boot-default macos 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot-macos --yes" "$LOG" && ! grep -q -- "--next" "$LOG"; then
+  pass "boot-default macos: macOS from now on"
+else
+  fail "boot-default macos: $OUT"; cat "$LOG"
+fi
+: > "$LOG"
+OUT="$(runhelper boot-default claudeos 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot ClaudeOS --yes" "$LOG" && ! grep -q efibootmgr "$LOG"; then
+  pass "boot-default claudeos on a Mac: ClaudeOS's start-up volume, no UEFI entries"
+else
+  fail "boot-default claudeos (Mac): $OUT"; cat "$LOG"
+fi
+OUT="$(runhelper boot-default windows 2>/dev/null)"
+[ "$(jget "$OUT" ok)" = "False" ] && pass "boot-default windows refused on a Mac" || fail "boot-default windows on a Mac: $OUT"
+: > "$LOG"
+OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper apt-install vlc 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q "dnf install -y --setopt=install_weak_deps=False vlc" "$LOG" && ! grep -q apt-get "$LOG"; then
+  pass "apt-install on Fedora: dnf install"
+else
+  fail "apt-install with dnf: $OUT"; cat "$LOG"
+fi
+: > "$LOG"
+OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper system-update 2>/dev/null)"
+grep -q "dnf upgrade -y --refresh" "$LOG" && pass "system-update on Fedora: dnf upgrade" || fail "system-update with dnf: $OUT"
+unset CLAUDEOS_TEST_DT_COMPATIBLE
+printf 'qemu,virt\0' > "$DT"
+OUT="$(CLAUDEOS_TEST_DT_COMPATIBLE="$DT" runhelper boot-macos-next 2>/dev/null)"
+[ "$(jget "$OUT" ok)" = "False" ] && pass "boot-macos-next refused on a PC" || fail "boot-macos-next on a PC: $OUT"
 
 # ===========================================================================
 # Rejections: unknown verb, bad arg counts, no verb

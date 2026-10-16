@@ -1,7 +1,8 @@
 #!/bin/bash
-# install-claudeos.sh — turn a fresh Ubuntu Server 24.04 into the ClaudeOS
-# "thin Linux base": boot straight into one full-screen voice session, with no
-# desktop, display manager, login prompt, browser or SSH server.
+# install-claudeos.sh — turn a fresh Linux into the ClaudeOS "thin Linux base": boot straight into one
+# full-screen voice session, with no desktop, display manager, login prompt, browser or SSH server.
+# On a PC it's Ubuntu Server 24.04, next to Windows; on an Apple silicon Mac it's Fedora Asahi Remix 44
+# (Minimal), next to macOS. The few differences are marked "Fedora" / "Ubuntu" below.
 #
 # Idempotent: safe to run repeatedly. Normally invoked by the autoinstaller:
 #   curtin in-target --target=/target -- \
@@ -16,6 +17,7 @@
 #                      do not assume a running systemd/udev.
 #   --dry-run          print the actions that would run; change nothing.
 #   --skip-models      do not download voice models (done later, as the user).
+#   --distro NAME      ubuntu or fedora (default: from /etc/os-release).
 #
 # Exit status: 0 once everything is in place (then /var/lib/claudeos/base-installed exists);
 # 1 when a step ClaudeOS can't work without failed, usually for lack of internet. Run it again.
@@ -32,10 +34,11 @@ USER_NAME=""
 FROM_INSTALLER=0
 DRY_RUN=0
 SKIP_MODELS=0
+DISTRO=""
 
 usage() {
   cat >&2 <<EOF
-Usage: install-claudeos.sh --user NAME [--from-installer] [--dry-run] [--skip-models]
+Usage: install-claudeos.sh --user NAME [--from-installer] [--dry-run] [--skip-models] [--distro ubuntu|fedora]
 EOF
   exit 2
 }
@@ -47,6 +50,7 @@ while [ "$#" -gt 0 ]; do
     --from-installer)  FROM_INSTALLER=1; shift ;;
     --dry-run)         DRY_RUN=1; shift ;;
     --skip-models)     SKIP_MODELS=1; shift ;;
+    --distro)          DISTRO="${2:-}"; shift 2 || usage ;;
     -h|--help)         usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
@@ -58,6 +62,16 @@ if ! [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
   echo "error: invalid --user name: $USER_NAME" >&2
   exit 2
 fi
+
+# Which Linux this is: Ubuntu (a PC) or Fedora (an Apple silicon Mac).
+if [ -z "$DISTRO" ]; then
+  # shellcheck disable=SC1091
+  case "$( (. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}") )" in
+    fedora) DISTRO=fedora ;;
+    *) DISTRO=ubuntu ;;
+  esac
+fi
+case "$DISTRO" in ubuntu|fedora) ;; *) echo "error: --distro must be ubuntu or fedora" >&2; exit 2 ;; esac
 
 # ---------------------------------------------------------------------------
 # Paths & constants.
@@ -185,13 +199,18 @@ install_templated() {
 # exactly what `enable` would have done, and keeps us chroot-safe + idempotent.
 sctl_enable() {
   local unit=$1
-  if [ "$FROM_INSTALLER" -eq 1 ]; then
-    run systemctl enable "$unit" 2>/dev/null || true
-  else
-    run systemctl enable "$unit" 2>/dev/null || true
-    run systemctl start "$unit" 2>/dev/null || warn "could not start $unit now"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    # (Printed here: the calls below send systemctl's chroot noise, and so run's dry-run line, to /dev/null.)
+    printf '[dry-run] systemctl enable %s\n' "$unit" >&2
+    [ "$FROM_INSTALLER" -eq 1 ] || printf '[dry-run] systemctl start %s\n' "$unit" >&2
+    return 0
   fi
-  [ "$DRY_RUN" -eq 1 ] && return 0
+  if [ "$FROM_INSTALLER" -eq 1 ]; then
+    systemctl enable "$unit" 2>/dev/null || true
+  else
+    systemctl enable "$unit" 2>/dev/null || true
+    systemctl start "$unit" 2>/dev/null || warn "could not start $unit now"
+  fi
   ensure_wants_symlink "$unit"
 }
 
@@ -316,7 +335,7 @@ install_plymouth_theme() {
   # (script.so ships with plymouth, text drawing with plymouth-label).
   local themedir=/usr/share/plymouth/themes/claudeos
   if [ "$DRY_RUN" -eq 1 ]; then log "[dry-run] install ClaudeOS plymouth theme"; return 0; fi
-  if ! ls /usr/lib/*/plymouth/script.so >/dev/null 2>&1; then
+  if ! ls /usr/lib/*/plymouth/script.so /usr/lib64/plymouth/script.so >/dev/null 2>&1; then
     log "plymouth's script plugin is absent; keeping the stock splash"
     return 0
   fi
@@ -332,6 +351,15 @@ install_plymouth_theme() {
     'word.SetY(Window.GetY() + Window.GetHeight() / 2 - word.GetImage().GetHeight() / 2);' \
     > "$themedir/claudeos.script"
   chmod 0644 "$themedir/claudeos.plymouth" "$themedir/claudeos.script"
+  if [ "$DISTRO" = fedora ]; then
+    # Fedora picks the splash with plymouth-set-default-theme; -R rebuilds the initramfs with it.
+    if plymouth-set-default-theme claudeos -R >/dev/null 2>&1; then
+      log "ClaudeOS boot splash set"
+    else
+      warn "could not set the boot splash (continuing with the stock one)"
+    fi
+    return 0
+  fi
   if update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth \
        "$themedir/claudeos.plymouth" 150 >/dev/null 2>&1 \
      && update-alternatives --set default.plymouth "$themedir/claudeos.plymouth" >/dev/null 2>&1; then
@@ -345,12 +373,112 @@ install_plymouth_theme() {
   fi
 }
 
-log "ClaudeOS installer: user=$USER_NAME from_installer=$FROM_INSTALLER dry_run=$DRY_RUN skip_models=$SKIP_MODELS"
+# mount_mac_drive — a Mac: the drive macOS and ClaudeOS share (exFAT, "ClaudeOS" in macOS's Finder), with
+# the folders ClaudeOS Setup sent over from macOS, mounted at ~/Mac. ClaudeOS's first start on the Mac
+# (mac/esp/firstboot.sh) wrote its GPT partition id to /etc/claudeos/mac-files-partuuid.
+mount_mac_drive() {
+  local id_file=/etc/claudeos/mac-files-partuuid id uid gid line fstab=/etc/fstab tmp
+  [ -r "$id_file" ] || { log "no ClaudeOS drive recorded (setup brought no folders); skipping ~/Mac"; return 0; }
+  id="$(tr -d ' \n' < "$id_file")"
+  [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || { warn "bad drive id in $id_file; skipping ~/Mac"; return 0; }
+  if [ "$DRY_RUN" -eq 1 ]; then log "[dry-run] mount PARTUUID=$id at $USER_HOME/Mac (fstab)"; return 0; fi
+  uid="$(id -u "$USER_NAME")" gid="$(id -g "$USER_NAME")"
+  install -d -o "$USER_NAME" -g "$USER_NAME" -m 0700 "$USER_HOME/Mac"
+  line="PARTUUID=$id $USER_HOME/Mac exfat uid=$uid,gid=$gid,umask=077,nofail,x-systemd.device-timeout=10s 0 0"
+  tmp="$(mktemp)"
+  { grep -v -e "[[:space:]]$USER_HOME/Mac[[:space:]]" -e '^# ClaudeOS: the drive macOS and ClaudeOS share' "$fstab" 2>/dev/null || true
+    printf '# ClaudeOS: the drive macOS and ClaudeOS share (ClaudeOS in macOS'"'"'s Finder)\n%s\n' "$line"
+  } > "$tmp"
+  if ! cmp -s "$tmp" "$fstab"; then install -m 0644 "$tmp" "$fstab"; fi
+  rm -f "$tmp"
+  log "the ClaudeOS drive mounts at $USER_HOME/Mac"
+}
+
+# quiet_fedora_grub — a Mac: GRUB starts the newest kernel straight away, without its menu, quietly into the
+# splash. Its config is regenerated; existing boot entries get "quiet rhgb".
+quiet_fedora_grub() {
+  local f=/etc/default/grub
+  if [ "$DRY_RUN" -eq 1 ]; then log "[dry-run] GRUB_TIMEOUT=0, hidden menu, quiet rhgb; grub2-mkconfig"; return 0; fi
+  [ -f "$f" ] || : > "$f"
+  set_conf "$f" GRUB_TIMEOUT 0
+  set_conf "$f" GRUB_TIMEOUT_STYLE hidden
+  if command -v grubby >/dev/null 2>&1; then
+    grubby --update-kernel=ALL --args="quiet rhgb" >/dev/null 2>&1 || warn "grubby couldn't add quiet rhgb"
+  fi
+  if command -v grub2-mkconfig >/dev/null 2>&1; then
+    grub2-mkconfig -o /boot/grub2/grub.cfg >/dev/null 2>&1 || warn "grub2-mkconfig failed (the menu may still show)"
+  fi
+}
+
+# set_conf FILE KEY VALUE — KEY=VALUE in a shell-style config file, replacing an existing KEY= line.
+set_conf() {
+  local f=$1 k=$2 v=$3
+  if grep -q "^$k=" "$f"; then sed -i "s|^$k=.*|$k=$v|" "$f"; else printf '%s=%s\n' "$k" "$v" >> "$f"; fi
+}
+
+# fedora_firewall — a Mac: firewalld's default zone without the SSH and Cockpit openings Fedora's server-style
+# images come with (DHCPv6 stays, for the network). Written offline, so it works before firewalld runs.
+fedora_firewall() {
+  local zone svc
+  if [ "$DRY_RUN" -eq 1 ]; then log "[dry-run] firewalld: remove ssh and cockpit from the default zone"; return 0; fi
+  command -v firewall-offline-cmd >/dev/null 2>&1 || { warn "firewall-offline-cmd missing; skipping firewall"; return 0; }
+  zone="$(firewall-offline-cmd --get-default-zone 2>/dev/null)"
+  for svc in ssh cockpit; do
+    firewall-offline-cmd --zone="${zone:-public}" --remove-service="$svc" >/dev/null 2>&1 || true
+  done
+}
+
+log "ClaudeOS installer: user=$USER_NAME from_installer=$FROM_INSTALLER dry_run=$DRY_RUN skip_models=$SKIP_MODELS distro=$DISTRO"
 log "repo: $APP_DIR"
 
 # ===========================================================================
 # 1) Packages.
 # ===========================================================================
+if [ "$DISTRO" = fedora ]; then
+# Fedora Asahi Remix's Minimal image already has the Mac's own parts (Asahi's audio profiles and speaker
+# safety, its firmware tools, Mesa), PipeWire, BlueZ, NetworkManager with Wi-Fi, firewalld and plymouth.
+# This adds the same set as on Ubuntu below, by Fedora's names. Weak dependencies off: nothing extra.
+PACKAGES=(
+  # --- Display: Xorg with NO desktop environment. ---
+  xorg-x11-server-Xorg       # the X server itself
+  xorg-x11-drv-libinput      # keyboard, trackpad and mouse
+  xorg-x11-xinit             # startx
+  xset xsetroot              # disable DPMS, set black root
+  openbox                    # tiny WM: borderless, maximized windows, no menu
+  xdotool wmctrl             # screen/window control for the runtime
+  unclutter-xfixes           # hide the idle mouse cursor (voice-first)
+  xterm                      # the recovery screen, shown if ClaudeOS keeps failing to start
+
+  # --- ClaudeOS's own screen: GTK 3 + WebKitGTK via python3-gobject. ---
+  python3-gobject gtk3 webkit2gtk4.1
+  gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav gstreamer1-plugin-openh264
+  poppler-utils              # pdftoppm: show PDFs as their real pages
+
+  # --- Audio + Bluetooth (AirPods). ---
+  pipewire pipewire-pulseaudio pipewire-alsa wireplumber bluez
+  portaudio                  # PortAudio runtime (sounddevice)
+  espeak-ng                  # fallback/phonemiser TTS
+
+  # --- The Mac: its start-up volume ("switch to macOS") and the drive macOS shares. ---
+  asahi-bless                # choose the Mac's start-up volume from Linux
+  exfatprogs                 # the ClaudeOS drive is exFAT, which macOS opens too
+
+  # --- Fonts (so the UI and emoji render). ---
+  google-noto-sans-fonts google-noto-serif-fonts google-noto-sans-cjk-fonts google-noto-color-emoji-fonts
+  dejavu-sans-fonts
+
+  # --- Trust, fetching, security. ---
+  ca-certificates curl sudo
+  firewalld                  # host firewall (nothing incoming but what the network itself needs)
+  dnf5-plugin-automatic      # automatic security updates
+
+  # --- Boot UX. ---
+  plymouth plymouth-plugin-script plymouth-plugin-label
+)
+log "installing ${#PACKAGES[@]} Fedora packages (minimal set)"
+retry dnf install -y --setopt=install_weak_deps=False "${PACKAGES[@]}" \
+  || needed "dnf install failed: ClaudeOS's packages are not all installed"
+else
 # The minimal set. Justification per group in comments. --no-install-recommends
 # everywhere: we want nothing beyond these. Any package already installed is a
 # no-op, so this stays idempotent.
@@ -397,7 +525,7 @@ PACKAGES=(
 
   # --- Windows files + dual-boot plumbing. ---
   ntfs-3g                    # read/write NTFS (Windows partition)
-  dislocker                  # unlock BitLocker volumes (when a key is provided)
+  cryptsetup-bin             # open Windows' BitLocker drive with ClaudeOS's own key (cryptsetup BITLK)
   efibootmgr                 # UEFI BootNext ("switch to Windows")
 
   # --- Voice I/O helpers for the runtime. ---
@@ -450,6 +578,8 @@ else
   log "no discrete GPU detected via lspci (or lspci missing); skipping driver install"
 fi
 
+fi
+
 # ===========================================================================
 # 2) Python venv for the runtime.
 # ===========================================================================
@@ -462,7 +592,7 @@ else
   log "venv already present at $VENV_DIR"
 fi
 
-if [ -f "$REQ_FILE" ]; then
+if [ -f "$REQ_FILE" ] || [ "$DRY_RUN" -eq 1 ]; then
   log "installing Python requirements from $REQ_FILE"
   retry "$VENV_DIR/bin/pip" install --upgrade pip || warn "pip self-upgrade failed (continuing)"
   retry "$VENV_DIR/bin/pip" install -r "$REQ_FILE" || needed "pip install failed: the ClaudeOS runtime is incomplete"
@@ -529,8 +659,10 @@ if [ "$DRY_RUN" -eq 0 ]; then
   chmod 0755 "$LINUX_DIR/session/claudeos-session" "$LINUX_DIR/session/claudeos-restart" 2>/dev/null || true
 fi
 
-# Rootless X for the console user.
-install_file "$SYSTEM_DIR/etc/X11/Xwrapper.config" "/etc/X11/Xwrapper.config" 0644
+# Rootless X for the console user (Ubuntu's Xorg.wrap; Fedora's Xorg gets the devices from logind).
+if [ "$DISTRO" = ubuntu ]; then
+  install_file "$SYSTEM_DIR/etc/X11/Xwrapper.config" "/etc/X11/Xwrapper.config" 0644
+fi
 
 # getty@tty1 is already enabled by default; our drop-in just adds autologin.
 # Ensure it is enabled (symlink) so first boot has it.
@@ -540,10 +672,16 @@ sctl_enable "getty@tty1.service"
 # 5) Audio / Bluetooth config.
 # ===========================================================================
 log "installing WirePlumber + BlueZ configuration"
-install_file "$SYSTEM_DIR/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.lua" \
-  "/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.lua" 0644
-install_file "$SYSTEM_DIR/etc/wireplumber/wireplumber.conf.d/51-claudeos-policy.lua" \
-  "/etc/wireplumber/wireplumber.conf.d/51-claudeos-policy.lua" 0644
+if [ "$DISTRO" = fedora ]; then
+  # Fedora's WirePlumber is 0.5, configured in SPA-JSON; Ubuntu's 0.4 in Lua. The same settings.
+  install_file "$SYSTEM_DIR/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.conf" \
+    "/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.conf" 0644
+else
+  install_file "$SYSTEM_DIR/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.lua" \
+    "/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.lua" 0644
+  install_file "$SYSTEM_DIR/etc/wireplumber/wireplumber.conf.d/51-claudeos-policy.lua" \
+    "/etc/wireplumber/wireplumber.conf.d/51-claudeos-policy.lua" 0644
+fi
 
 # BlueZ 5.72 on noble does not read main.conf.d, so apply our settings directly
 # into /etc/bluetooth/main.conf, idempotently, via a marked block. We keep the
@@ -570,11 +708,13 @@ sctl_enable "bluetooth.service"
 log "configuring NetworkManager as the sole network manager"
 install_file "$SYSTEM_DIR/etc/NetworkManager/conf.d/10-claudeos-manage-all.conf" \
   "/etc/NetworkManager/conf.d/10-claudeos-manage-all.conf" 0644
+if [ "$DISTRO" = ubuntu ]; then
 # netplan: set the global renderer to NetworkManager and neutralise the
 # installer's networkd config so NM owns the links.
 install_file "$SYSTEM_DIR/etc/netplan/99-claudeos-nm.yaml" \
   "/etc/netplan/99-claudeos-nm.yaml" 0600
 neutralise_installer_netplan
+fi
 sctl_enable "NetworkManager.service"
 # systemd-networkd has nothing left to manage, and its wait-online service would hold up every
 # start by two minutes, waiting for a network it doesn't manage.
@@ -585,16 +725,20 @@ done
 [ "$DRY_RUN" -eq 1 ] || find /etc/systemd/system -path '*.wants/*' \( -name systemd-networkd-wait-online.service \
   -o -name systemd-networkd.service -o -name systemd-networkd.socket \) -delete
 # Generate backend config from netplan (safe in chroot: just writes files).
-run_sh 'netplan generate' || warn "netplan generate failed (continuing)"
+[ "$DISTRO" = ubuntu ] && { run_sh 'netplan generate' || warn "netplan generate failed (continuing)"; }
 
 # ===========================================================================
-# 7) Windows mount service.
+# 7) The other system's files: Windows' drive (a PC), or the drive macOS shares (a Mac).
 # ===========================================================================
-log "installing Windows auto-mount service"
-install_file "$SYSTEM_DIR/etc/systemd/system/claudeos-windows-mount.service" \
-  "/etc/systemd/system/claudeos-windows-mount.service" 0644
-run install -d -m 0755 /mnt/windows
-sctl_enable "claudeos-windows-mount.service"
+if [ "$DISTRO" = ubuntu ]; then
+  log "installing Windows auto-mount service"
+  install_file "$SYSTEM_DIR/etc/systemd/system/claudeos-windows-mount.service" \
+    "/etc/systemd/system/claudeos-windows-mount.service" 0644
+  run install -d -m 0755 /mnt/windows
+  sctl_enable "claudeos-windows-mount.service"
+else
+  mount_mac_drive
+fi
 
 # ===========================================================================
 # 8) Root helper + sudoers + BT import script.
@@ -625,6 +769,12 @@ fi
 # ===========================================================================
 # 9) GRUB boot menu.
 # ===========================================================================
+if [ "$DISTRO" = fedora ]; then
+  # A Mac chooses between macOS and ClaudeOS itself (its startup options, asahi-bless), so GRUB only
+  # starts Fedora's newest kernel, without showing its menu, and quietly into the splash.
+  log "hiding the GRUB menu"
+  quiet_fedora_grub
+else
 log "installing GRUB entries (ClaudeOS default, Windows)"
 install_file "$LINUX_DIR/grub/07_claudeos" "/etc/grub.d/07_claudeos" 0755 "root:root"
 install_file "$SYSTEM_DIR/etc/default/grub.d/99-claudeos.cfg" \
@@ -642,10 +792,24 @@ if command -v update-grub >/dev/null 2>&1; then
 elif command -v grub-mkconfig >/dev/null 2>&1; then
   run_sh 'grub-mkconfig -o /boot/grub/grub.cfg' || warn "grub-mkconfig failed (run it on the target)"
 fi
+fi
 
 # ===========================================================================
 # 10) Firewall + security.
 # ===========================================================================
+if [ "$DISTRO" = fedora ]; then
+  log "configuring firewalld (nothing incoming but what the network needs) and automatic security updates"
+  fedora_firewall
+  sctl_enable "firewalld.service"
+  install_file "$SYSTEM_DIR/etc/dnf/automatic.conf" "/etc/dnf/automatic.conf" 0644
+  sctl_enable "dnf5-automatic.timer"
+  # No SSH server (contract: no SSH). Fedora's Minimal image comes with one turned on.
+  if [ -f /usr/lib/systemd/system/sshd.service ]; then
+    log "turning off the SSH server (contract: no SSH server)"
+    run systemctl disable --now sshd.service sshd.socket 2>/dev/null || run systemctl disable sshd.service 2>/dev/null || true
+    [ "$DRY_RUN" -eq 1 ] || find /etc/systemd/system -path '*.wants/*' \( -name sshd.service -o -name sshd.socket \) -delete
+  fi
+else
 log "configuring ufw (default deny incoming, allow outgoing) and unattended-upgrades"
 # Set policy via config edits (works in chroot; `ufw enable` needs iptables and
 # is applied at boot by the ufw unit).
@@ -661,6 +825,7 @@ sctl_enable "unattended-upgrades.service"
 if dpkg -s openssh-server >/dev/null 2>&1; then
   warn "openssh-server is installed; disabling it (contract: no SSH server)"
   run systemctl disable --now ssh.service 2>/dev/null || run systemctl disable ssh.service 2>/dev/null || true
+fi
 fi
 
 # ===========================================================================
@@ -686,6 +851,11 @@ fi
 # ===========================================================================
 # Done.
 # ===========================================================================
+# Fedora checks SELinux labels: give everything written above the labels its policy says.
+if [ "$DISTRO" = fedora ] && [ "$DRY_RUN" -eq 0 ] && command -v restorecon >/dev/null 2>&1; then
+  restorecon -RF /etc /opt/claudeos /usr/local "$USER_HOME" /var/lib/claudeos >/dev/null 2>&1 \
+    || warn "restorecon reported problems (continuing)"
+fi
 log "ClaudeOS base install complete."
 if [ "$FROM_INSTALLER" -eq 1 ]; then
   log "services enabled; they start on first boot into the target."

@@ -52,6 +52,84 @@ function Get-BitLockerState {
     return $state
 }
 
+# ------------------------------------------------------------------ ClaudeOS's own BitLocker key
+# When C: is encrypted, ClaudeOS gets a recovery password of its own for it (a second key; the person's own keys
+# stay as they are), so it can open the Windows files. Linux can open BitLocker with a recovery password, not
+# through the PC's security chip. Its id is kept in ProgramData\ClaudeOS, so "Remove ClaudeOS" can delete exactly
+# this key again. These use BitLocker's WMI class, which Windows Home (device encryption) has too.
+
+function Get-ClaudeOSStateDir {
+    if ($env:CLAUDEOS_STATE_DIR) { return $env:CLAUDEOS_STATE_DIR }     # tests
+    return (Join-Path $env:ProgramData 'ClaudeOS')
+}
+
+function Get-SystemEncryptableVolume {
+    $drive = $env:SystemDrive
+    if (-not $drive) { $drive = 'C:' }
+    $vol = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume `
+        -Filter ("DriveLetter='" + $drive + "'") -ErrorAction Stop
+    if (-not $vol) { throw ('BitLocker does not know ' + $drive) }
+    return $vol
+}
+
+function Assert-BitLockerResult {
+    param($Result, [Parameter(Mandatory = $true)][string]$What)
+    $code = [int64](Get-Prop $Result 'ReturnValue')
+    if ($code -ne 0) { throw ($What + ' (BitLocker error 0x' + ('{0:X8}' -f $code) + ').') }
+}
+
+function New-ClaudeOSBitLockerKey {
+    # Adds the key and records its id. Returns @{ Id = '{guid}'; Password = '000000-...-000000' }.
+    $vol = Get-SystemEncryptableVolume
+    $r = Invoke-CimMethod -InputObject $vol -MethodName ProtectKeyWithNumericalPassword `
+        -Arguments @{ FriendlyName = 'ClaudeOS' } -ErrorAction Stop
+    Assert-BitLockerResult $r 'BitLocker would not add a key for ClaudeOS'
+    $id = [string](Get-Prop $r 'VolumeKeyProtectorID')
+    if ($id -notmatch '^\{[0-9A-Fa-f-]{36}\}$') { throw 'BitLocker added a key but did not say which.' }
+    try {
+        $p = Invoke-CimMethod -InputObject $vol -MethodName GetKeyProtectorNumericalPassword `
+            -Arguments @{ VolumeKeyProtectorID = $id } -ErrorAction Stop
+        Assert-BitLockerResult $p 'BitLocker would not show the new key'
+        $password = [string](Get-Prop $p 'NumericalPassword')
+        if ($password -notmatch '^\d{6}(-\d{6}){7}$') { throw 'BitLocker showed the new key in an unexpected form.' }
+        $dir = Get-ClaudeOSStateDir
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Write-TextFileLf -Path (Join-Path $dir 'bitlocker-key-id') -Text ($id + "`n")
+    } catch {
+        $null = Invoke-CimMethod -InputObject $vol -MethodName DeleteKeyProtector -Arguments @{ VolumeKeyProtectorID = $id } -ErrorAction SilentlyContinue
+        throw
+    }
+    Write-SetupLog ('Added ClaudeOS''s BitLocker key ' + $id)
+    return [pscustomobject]@{ Id = $id; Password = $password }
+}
+
+function Remove-ClaudeOSBitLockerKey {
+    # Deletes the key setup made for ClaudeOS, if there is one. Returns $true if a key was deleted. Only ever a
+    # recovery password with the recorded id: never one of the person's own keys.
+    $record = Join-Path (Get-ClaudeOSStateDir) 'bitlocker-key-id'
+    if (-not (Test-Path -LiteralPath $record)) { return $false }
+    $id = ([IO.File]::ReadAllText($record)).Trim()
+    if ($id -notmatch '^\{[0-9A-Fa-f-]{36}\}$') {
+        Remove-Item -LiteralPath $record -Force
+        return $false
+    }
+    $vol = Get-SystemEncryptableVolume
+    $t = Invoke-CimMethod -InputObject $vol -MethodName GetKeyProtectorType -Arguments @{ VolumeKeyProtectorID = $id } -ErrorAction Stop
+    $deleted = $false
+    if ([int64](Get-Prop $t 'ReturnValue') -eq 0) {
+        # 3 = a recovery password ("numerical password").
+        if ([int](Get-Prop $t 'KeyProtectorType') -ne 3) { throw 'The key setup recorded for ClaudeOS is not a recovery password.' }
+        $r = Invoke-CimMethod -InputObject $vol -MethodName DeleteKeyProtector -Arguments @{ VolumeKeyProtectorID = $id } -ErrorAction Stop
+        Assert-BitLockerResult $r 'BitLocker would not delete ClaudeOS''s key'
+        $deleted = $true
+        Write-SetupLog ('Deleted ClaudeOS''s BitLocker key ' + $id)
+    } else {
+        Write-SetupLog ('ClaudeOS''s BitLocker key ' + $id + ' was already gone')
+    }
+    Remove-Item -LiteralPath $record -Force
+    return $deleted
+}
+
 function Get-FastStartupEnabled {
     try {
         $v = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -ErrorAction Stop).HiberbootEnabled

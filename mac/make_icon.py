@@ -1,4 +1,4 @@
-"""Draws the ClaudeOS app icon for the Mac (mac/ClaudeOS.icns): the word ClaudeOS in black on a white tile,
+"""Draws ClaudeOS's icon in the Mac's startup options (mac/claudeos.icns): the word ClaudeOS in black on a white tile,
 like the screen itself. Run once when the look changes: python mac/make_icon.py [font.ttf]
 (Noto Sans by default; any plain sans-serif works)."""
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 FONT = sys.argv[1] if len(sys.argv) > 1 else "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
-OUT = Path(__file__).resolve().parent / "ClaudeOS.icns"
+OUT = Path(__file__).resolve().parent / "claudeos.icns"
 SIZE, BODY, RADIUS = 1024, 824, 185          # Apple's icon grid: an 824-pixel tile on a 1024 canvas
 
 

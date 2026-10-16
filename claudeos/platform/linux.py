@@ -1,5 +1,9 @@
 """The Linux engine: NetworkManager (Wi-Fi), BlueZ (AirPods), PipeWire (sound), systemd
 (power), X11 + xdotool (screen input), and the ClaudeOS root helper for admin tasks.
+
+`LinuxPlatform` is ClaudeOS on a PC, next to Windows (Ubuntu underneath). `MacPlatform` is ClaudeOS on an
+Apple silicon Mac, next to macOS (Fedora Asahi Remix underneath): the same, except how it goes back to macOS
+and that macOS's files come from the drive macOS setup sends them to.
 """
 from __future__ import annotations
 
@@ -15,6 +19,18 @@ from typing import Any
 from .base import CommandResult, Platform, run
 
 ROOT_HELPER = "/usr/local/libexec/claudeos/claudeos-root"
+# On a Mac: the drive both macOS and ClaudeOS open (exFAT, "ClaudeOS" in macOS's Finder), with the folders
+# ClaudeOS Setup sent over from macOS. Mounted here (linux/system/etc/fstab line written at the first start).
+MAC_FILES = "~/Mac"
+
+
+def is_apple_silicon(compatible: str = "/proc/device-tree/compatible") -> bool:
+    """True on an Apple silicon Mac running Linux (its device tree says "apple,...")."""
+    try:
+        with open(compatible, "rb") as f:
+            return any(c.startswith(b"apple,") for c in f.read().split(b"\0"))
+    except OSError:
+        return False
 MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]{1,62}$")
 
@@ -420,6 +436,56 @@ class LinuxPlatform(Platform):
         if x is not None and y is not None:
             args += ["mousemove", "--sync", str(int(x)), str(int(y))]
         self._xdo(*args, "click", "--repeat", str(max(1, min(amount, 30))), "--delay", "30", btn)
+
+
+class MacPlatform(LinuxPlatform):
+    """ClaudeOS on an Apple silicon Mac (M1 to M3), started instead of macOS. macOS stays installed: going back
+    is a restart (the Mac's startup disk, set with asahi-bless through the root helper)."""
+    name = "mac"
+    other_os = "macOS"
+    setup_place = "ClaudeOS Setup in macOS"
+
+    def power(self, action: str) -> str:
+        if action == "switch_to_macos":
+            d = self._root("boot-macos-next", timeout=30)
+            if not d.get("ok"):
+                return "I couldn't set macOS for the next start: " + str(d.get("error", "unknown error"))
+            return self._say(run(["systemctl", "reboot"], timeout=20), "Restarting into macOS.")
+        if action == "switch_to_windows":
+            return "There's no Windows on this Mac."
+        return super().power(action)
+
+    def set_default_os(self, system: str) -> str:
+        which = "claudeos" if system == "claudeos" else "macos"
+        d = self._root("boot-default", which, timeout=30)
+        if not d.get("ok"):
+            return "I couldn't change what starts first: " + str(d.get("error", "unknown error"))
+        if which == "macos":
+            return ("Done: macOS now starts when the Mac turns on. ClaudeOS is still installed. To use it, hold the "
+                    "power button while the Mac starts and choose ClaudeOS, or choose it in macOS's System Settings, "
+                    "General, Startup Disk.")
+        return "Done: ClaudeOS starts when the Mac turns on."
+
+    def bt_import_windows_keys(self) -> str:
+        return "There's no Windows on this Mac to copy pairings from."
+
+    def system_info(self) -> dict[str, Any]:
+        info = super().system_info()
+        disks = {k: v for k, v in info.get("disks", {}).items() if k != "windows"}
+        path = os.path.expanduser(MAC_FILES)
+        try:
+            if os.path.ismount(path):
+                du = shutil.disk_usage(path)
+                disks["mac"] = {"free_gb": round(du.free / 1e9, 1), "total_gb": round(du.total / 1e9, 1)}
+        except OSError:
+            pass
+        info["disks"] = disks
+        return info
+
+    def windows_status(self) -> dict[str, Any]:
+        """For a Mac: the drive with the files from macOS (no Windows here)."""
+        path = os.path.expanduser(MAC_FILES)
+        return {"macos_files": path if os.path.ismount(path) else None}
 
 
 def png_to_jpeg_scaled(png: bytes, max_w: int = 1366, max_h: int = 1366, quality: int = 80) -> tuple[bytes, float]:

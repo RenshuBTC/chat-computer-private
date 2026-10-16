@@ -64,13 +64,11 @@ function Invoke-ClaudeOSSetup {
     elseif ($sb -eq $false) { Write-Line 'Secure Boot is off. That is fine.' }
 
     $bl = Get-BitLockerState
-    $windowsFilesNote = $true
     if ($bl.Encrypted) {
-        Write-Warn 'Your Windows drive is encrypted (BitLocker / Device encryption).'
-        Write-Line 'Two things to know:'
-        Write-Line '  * ClaudeOS will not be able to read your Windows files while the drive is encrypted.'
-        Write-Line '    To let it, turn off "Device encryption" in Windows Settings first, then run setup again.'
-        Write-Line '  * After ClaudeOS is installed, Windows may ask for the BitLocker recovery key once.'
+        Write-Line 'Your Windows drive is encrypted (BitLocker / Device encryption). Two things to know:'
+        Write-Line '  * Setup gives ClaudeOS a BitLocker key of its own, so ClaudeOS can open your Windows files.'
+        Write-Line '    Your own keys stay as they are. Removing ClaudeOS deletes its key again.'
+        Write-Line '  * After ClaudeOS is installed, Windows may ask for its recovery key once.'
         if ($bl.RecoveryPasswords.Count -gt 0) {
             Write-Line '    Your recovery key (write it down or take a photo now):'
             foreach ($k in $bl.RecoveryPasswords) { Write-Host ('      ' + $k) -ForegroundColor White }
@@ -80,7 +78,6 @@ function Invoke-ClaudeOSSetup {
         if (-not (Read-YesNo 'Have you saved the recovery key somewhere other than this PC?' $false)) {
             Stop-Setup 'Please save the recovery key first, then run setup again.'
         }
-        $windowsFilesNote = $false
     }
 
     if (Get-FastStartupEnabled) {
@@ -256,6 +253,7 @@ function Invoke-ClaudeOSSetup {
     $shrunk = $false
     $erased = $false
     $inst = $null
+    $blKey = $null
     try {
         if ($shrinkBytes -gt 0) {
             Write-Step 'Making room on C:'
@@ -280,8 +278,18 @@ function Invoke-ClaudeOSSetup {
         try {
             Write-InstallerMark -Root $inst.Root -InstallId $installId
             Copy-IsoToInstaller -IsoPath $iso -Root $inst.Root
+            if ($bl.Encrypted) {
+                try {
+                    $blKey = New-ClaudeOSBitLockerKey
+                    Write-Good 'ClaudeOS has a BitLocker key of its own, so it can open your Windows files.'
+                } catch {
+                    Write-SetupLog ('BitLocker key: ' + $_.Exception.Message)
+                    Write-Warn ('Setup could not make a BitLocker key for ClaudeOS (' + $_.Exception.Message + '), so ' +
+                                'ClaudeOS will not be able to open your Windows files. Everything else works.')
+                }
+            }
             Write-InstallerPayload -Root $inst.Root -RepoRoot $RepoRoot -AutoinstallYaml $yaml -SettingsJson $settingsJson `
-                -Token $token -InstallId $installId -Login $login
+                -Token $token -InstallId $installId -Login $login -BitLockerKey $blKey
             $esp = Get-WindowsEsp
             if (-not $esp) { throw 'Setup could not find Windows'' EFI partition.' }
             $m = Mount-EspPartition $esp
@@ -295,7 +303,7 @@ function Invoke-ClaudeOSSetup {
         $why = $_.Exception.Message
         Write-SetupLog ('Install step failed: ' + $why)
         Write-Line 'Something went wrong; setup is taking back what it did...'
-        $left = Undo-InstallSteps -Installer $inst -Shrunk:$shrunk
+        $left = Undo-InstallSteps -Installer $inst -Shrunk:$shrunk -BitLockerKey:($null -ne $blKey)
         $msg = 'Setup stopped: ' + $why + ' Windows starts normally.'
         if ($left -contains 'installer' -or $left -contains 'entry') {
             $msg += ' To delete what setup made, run setup again and choose "Remove ClaudeOS from this PC".'
@@ -311,6 +319,7 @@ function Invoke-ClaudeOSSetup {
     }
     $token = $null
     $login = $null
+    $blKey = $null
     Write-Good 'The installer is ready.'
 
     # ------------------------------------------------------------- 10. recovery password and restart
@@ -327,7 +336,8 @@ function Invoke-ClaudeOSSetup {
     Write-Line 'restarts into ClaudeOS.'
     Write-Line 'If Windows starts again instead, press the boot-menu key while the PC starts (often F12, F11, F8, F9 or Esc)'
     Write-Line 'and choose "ClaudeOS setup".'
-    if ($windowsFilesNote) { Write-Line 'In ClaudeOS, say "switch to Windows" whenever you want Windows back.' }
+    Write-Line 'In ClaudeOS your Windows files are there to open and bring over. Say "switch to Windows" whenever you want'
+    Write-Line 'Windows back.'
     if (Read-YesNo 'Restart now?' $true) {
         & shutdown.exe /r /t 5
     }
@@ -335,12 +345,17 @@ function Invoke-ClaudeOSSetup {
 
 function Undo-InstallSteps {
     # After a failed install step: takes back what this run of setup did, as far as it can. The installer's
-    # power-on entry and boot loader go, then its partition, and if C: was shrunk for it, C: grows back. (A
-    # separate disk that was erased stays empty.) Returns what is left: 'entry', 'installer' and/or 'space'.
-    param($Installer, [switch]$Shrunk)
+    # power-on entry and boot loader go, then ClaudeOS's BitLocker key and the installer's partition, and if C:
+    # was shrunk for it, C: grows back. (A separate disk that was erased stays empty.) Returns what is left:
+    # 'entry', 'installer' and/or 'space'.
+    param($Installer, [switch]$Shrunk, [switch]$BitLockerKey)
     $left = @()
     try { Remove-SetupBootEntries } catch { Write-SetupLog ('Undo, power-on entry: ' + $_.Exception.Message); $left += 'entry' }
     try { Clear-SetupLoader } catch { Write-SetupLog ('Undo, boot loader: ' + $_.Exception.Message) }
+    if ($BitLockerKey) {
+        try { $null = Remove-ClaudeOSBitLockerKey; Write-SetupLog 'Undo: deleted ClaudeOS''s BitLocker key.' }
+        catch { Write-SetupLog ('Undo, BitLocker key: ' + $_.Exception.Message) }
+    }
     if ($Installer) {
         try {
             Remove-InstallerPartition $Installer

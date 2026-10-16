@@ -20,7 +20,7 @@ sets up:
 | ClaudeOS screen | `python3-gi`, `gir1.2-webkit2-4.1`, `gir1.2-gtk-3.0`, `gstreamer1.0-plugins-good/-bad`, `gstreamer1.0-libav` | pywebview + WebKitGTK 4.1 render the ClaudeOS UI and web media. |
 | Audio + Bluetooth | `pipewire`, `pipewire-pulse`, `pipewire-alsa`, `wireplumber`, `libspa-0.2-bluetooth`, `bluez`, `dbus-user-session` | AirPods over PipeWire; WirePlumber auto-switches to the headset mic profile when ClaudeOS listens; mSBC wideband speech enabled. |
 | Networking | `network-manager`, `wpasupplicant` | NM manages **all** devices (netplan renderer = NetworkManager); no admin needed. |
-| Windows files | `ntfs-3g`, `dislocker`, `efibootmgr` | Mount the Windows partition (rw if clean, ro if dirty, never touching the hiberfile); BitLocker unlock when a key is present; UEFI BootNext to switch to Windows. |
+| Windows files | `ntfs-3g`, `cryptsetup-bin`, `efibootmgr` | Mount the Windows partition (rw if clean, ro if dirty, never touching the hiberfile); a BitLocker drive is opened with ClaudeOS's own key (cryptsetup's BITLK, the key on stdin); UEFI BootNext to switch to Windows. |
 | Voice I/O | `libportaudio2`, `espeak-ng` | PortAudio for capture; espeak-ng as a TTS fallback. |
 | Fonts | `fonts-noto-core`, `fonts-noto-color-emoji`, `fonts-dejavu-core` | UI text + emoji. |
 | Security | `sudo`, `ufw`, `unattended-upgrades`, `ca-certificates`, `curl` | Root helper reached via `sudo -n`; firewall default-deny inbound; security-only auto-updates; TLS trust. |
@@ -113,9 +113,11 @@ file, re-applies the BlueZ block (exactly once), and regenerates GRUB.
   `bt-import-windows-keys` (copies the pairing from Windows). As a last resort
   an admin can set `ControllerMode = bredr` in `/etc/bluetooth/main.conf`
   (see `system/etc/bluetooth/main.conf.d/90-claudeos-bredr-fallback.conf.disabled`).
-- **BitLocker-locked Windows partition:** place the recovery key at
-  `/etc/claudeos/bitlocker-recovery-key` (root, 0600); otherwise ClaudeOS skips
-  mounting it.
+- **BitLocker-encrypted Windows partition:** ClaudeOS Setup gives ClaudeOS a
+  recovery password of its own for it, which the installer puts in
+  `/etc/claudeos/bitlocker-recovery-key` (root, 0600). Without that file (or if
+  the key was deleted in Windows), ClaudeOS doesn't mount Windows; any recovery
+  password for that drive placed there works too.
 
 ## Tests
 

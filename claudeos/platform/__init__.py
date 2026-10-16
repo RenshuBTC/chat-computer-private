@@ -1,22 +1,23 @@
 """The hidden layer: how ClaudeOS talks to the machine (Wi-Fi, Bluetooth, sound, power,
-screen input). Linux is the engine next to Windows, `MacPlatform` the one on a Mac; `FakePlatform`
+screen input). ClaudeOS is Linux underneath on every computer: `LinuxPlatform` on a PC, next to Windows
+(Ubuntu), and `MacPlatform` on an Apple silicon Mac, next to macOS (Fedora Asahi Remix). `FakePlatform`
 stands in for tests and previews.
 """
 from __future__ import annotations
 
 import os
-import sys
 
 from .base import Platform, CommandResult
 
 
 def get_platform(name: str | None = None) -> Platform:
-    name = name or os.environ.get("CLAUDEOS_PLATFORM") or ("mac" if sys.platform == "darwin" else "linux")
+    from .linux import is_apple_silicon
+    name = name or os.environ.get("CLAUDEOS_PLATFORM") or ("mac" if is_apple_silicon() else "linux")
     if name == "fake":
         from .fake import FakePlatform
         return FakePlatform()
     if name == "mac":
-        from .mac import MacPlatform
+        from .linux import MacPlatform
         return MacPlatform()
     from .linux import LinuxPlatform
     return LinuxPlatform()

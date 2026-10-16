@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -88,16 +87,14 @@ class Controller:
         self.screen.apply_settings(s.theme, s.text_size, (s.user_name or "").split(" ")[0] if s.user_name else "")
         self._show_history()
 
-        # Files: index Linux home + the Windows user folder in the background.
-        win_home = self._windows_home()
-        self._import_windows_signin(win_home)   # before the file index can see it
+        # Files: index Linux home + the other system's files (Windows' user folder, or on a Mac the drive
+        # with the files sent from macOS) in the background.
+        other_files = self._other_os_files()
+        self._import_signin(self._signin_drop())   # before the file index can see it
         if self.use_index:
             roots = [("home", os.path.expanduser("~"))]
-            if win_home:
-                roots.append(("windows", win_home))
-            icloud = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs")
-            if sys.platform == "darwin" and os.path.isdir(icloud):
-                roots.append(("iCloud Drive", icloud))
+            if other_files:
+                roots.append(("mac" if self.platform.name == "mac" else "windows", other_files))
             roots += [(f"extra{i}", os.path.expanduser(p)) for i, p in enumerate(s.extra_search_roots)]
             self.index = FileIndex(self.paths.index / "files.db", roots, windows_root=s.windows_mount)
             self.index.start()
@@ -113,7 +110,7 @@ class Controller:
             self.brain = Brain(self.paths, s, self.state, self.token, server, self.gate, self._system_prompt,
                                BrainEvents(self._on_turn_start, self._on_text, self._on_activity, self._on_turn_end,
                                            self._on_rate_limit, self._on_user_text, self._on_remote),
-                               extra_env=self.extra_env, add_dirs=[d for d in (win_home,) if d])
+                               extra_env=self.extra_env, add_dirs=[d for d in (other_files,) if d])
             self.loop.create_task(self._warm_up())
 
         if self.voice_enabled:
@@ -123,13 +120,8 @@ class Controller:
             else:
                 await self._start_voice()
         self.loop.create_task(self._housekeeping())
-        if self.voice_enabled and sys.platform == "darwin":
-            self.loop.create_task(self._follow_audio_devices())
         self.screen.state("listening")
         self.ready.set()
-
-        if hasattr(self.platform, "on_step_aside"):
-            self.platform.on_step_aside = lambda: self.loop.call_soon_threadsafe(self._step_aside)
 
         if self.brain is None:
             msg = (f"I'm not signed in to Claude yet. Sign in with {self.platform.setup_place}, then start me again. "
@@ -229,36 +221,6 @@ class Controller:
             self.screen.notice("I can't hear a microphone. Connect your AirPods, or say nothing and check Bluetooth.", "warn")
             self.loop.create_task(self._retry_mic())
 
-    async def _follow_audio_devices(self, every_s: float = 2.0) -> None:
-        """On a Mac: when the default microphone or speaker changes (AirPods connect or go back in their
-        case), reopen the sound on the new ones."""
-        from .voice import audio as A
-        last = await asyncio.to_thread(A.default_devices)
-        while True:
-            await asyncio.sleep(every_s)
-            now = await asyncio.to_thread(A.default_devices)
-            if now is None or now == last:
-                continue
-            log.info("default sound devices changed: %s -> %s", last, now)
-            last = now
-            try:
-                await asyncio.to_thread(self._reopen_audio, A.restart_portaudio)
-            except Exception:
-                log.exception("reopening the sound")
-
-    def _reopen_audio(self, restart: Callable[[], None]) -> None:
-        from .voice.audio import PORTAUDIO_LOCK
-        # One step, so a sentence starting meanwhile can't open a stream that the restart then closes.
-        with PORTAUDIO_LOCK:
-            mic_was_open = bool(self.mic and self.mic.is_open)
-            if self.mic and mic_was_open:
-                self.mic.close()
-            if self.player is not None and hasattr(self.player, "reset"):
-                self.player.reset()
-            restart()
-            if self.mic and mic_was_open and not self.mic_released:
-                self.mic.open()
-
     async def _retry_mic(self) -> None:
         while self.mic and not self.mic.is_open:
             await asyncio.sleep(5)
@@ -278,45 +240,55 @@ class Controller:
             return True
 
     # ================================================================ helpers
-    def _import_windows_signin(self, win_home: str | None) -> None:
-        """A new Claude sign-in made on Windows (ClaudeOS Setup, "Sign in to Claude again") is left in
-        C:\\Users\\<you>\\ClaudeOS: claude_token (the one-year token) and claude_login.json (the full sign-in
-        the Claude app on the phone needs). Take them, keep them private, and remove the Windows copies."""
-        if not win_home:
+    def _signin_drop(self) -> str | None:
+        """Where ClaudeOS Setup on the other system leaves a new Claude sign-in ("Sign in to Claude again"):
+        C:\\Users\\<you>\\ClaudeOS on Windows; on a Mac, a hidden folder on the drive both systems open."""
+        other = self._other_os_files()
+        if not other:
+            return None
+        return os.path.join(other, ".claudeos" if self.platform.name == "mac" else "ClaudeOS")
+
+    def _import_signin(self, drop: str | None) -> None:
+        """Take a new sign-in left by ClaudeOS Setup on the other system: claude_token (the one-year token) and
+        claude_login.json (the full sign-in the Claude app on the phone needs). Keep them private, and remove
+        the copies left there."""
+        if not drop:
             return
-        self._import_windows_login(os.path.join(win_home, "ClaudeOS", "claude_login.json"))
-        src = os.path.join(win_home, "ClaudeOS", "claude_token")
+        other = self.platform.other_os
+        self._import_login(os.path.join(drop, "claude_login.json"))
+        src = os.path.join(drop, "claude_token")
         try:
             with open(src, encoding="utf-8-sig") as f:
                 tok = f.read().strip()
         except OSError:
             return
         if token_kind(tok) == "invalid":
-            log.warning("ignoring an invalid sign-in left on Windows")
+            log.warning("ignoring an invalid sign-in left on %s", other)
             return
         if tok != (read_token(self.paths) or ""):
             save_token(self.paths, tok)
-            self.screen.notice("Signed in to Claude with the new sign-in from Windows.")
+            self.screen.notice(f"Signed in to Claude with the new sign-in from {other}.")
         try:
             os.remove(src)
         except OSError:
-            log.info("couldn't remove the Windows copy of the sign-in (Windows drive is read-only)")
+            log.info("couldn't remove the %s copy of the sign-in (its drive is read-only)", other)
 
-    def _import_windows_login(self, src: str) -> None:
+    def _import_login(self, src: str) -> None:
+        other = self.platform.other_os
         try:
             with open(src, encoding="utf-8-sig") as f:
                 text = f.read()
         except OSError:
             return
         if not login_valid(text):
-            log.warning("ignoring an invalid full sign-in left on Windows")
+            log.warning("ignoring an invalid full sign-in left on %s", other)
         else:
             save_login(self.paths, text)
-            self.screen.notice("Signed in again from Windows. You can type to me in the Claude app on your phone.")
+            self.screen.notice(f"Signed in again from {other}. You can type to me in the Claude app on your phone.")
         try:
             os.remove(src)
         except OSError:
-            log.info("couldn't remove the Windows copy of the full sign-in (Windows drive is read-only)")
+            log.info("couldn't remove the %s copy of the full sign-in (its drive is read-only)", other)
 
     def _windows_home(self) -> str | None:
         wu = self.settings.windows_user
@@ -325,9 +297,18 @@ class Controller:
             return os.path.join(base, wu)
         return None
 
+    def _other_os_files(self) -> str | None:
+        """The other system's files: Windows' home folder on a PC; on a Mac, the drive with what ClaudeOS Setup
+        sent over from macOS (macOS's own files can't be opened from here: Apple encrypts them for macOS)."""
+        if self.platform.name == "mac":
+            from .platform.linux import MAC_FILES
+            p = os.path.expanduser(MAC_FILES)
+            return p if os.path.isdir(p) else None
+        return self._windows_home()
+
     def _system_prompt(self) -> str:
-        return build_system_prompt(self.settings, self.memory.for_prompt(), os.path.expanduser("~"), self._windows_home(),
-                                   platform=self.platform.name)
+        return build_system_prompt(self.settings, self.memory.for_prompt(), os.path.expanduser("~"),
+                                   self._other_os_files(), platform=self.platform.name)
 
     def _say(self, text: str) -> None:
         if self.speaker:
@@ -658,20 +639,6 @@ class Controller:
             self.asleep = False
             self.last_heard = time.time()
             self.screen.state("listening")
-            self.screen.come_back()
-
-    def _step_aside(self) -> None:
-        """On a Mac: show macOS and wait for the wake word (or an AirPods press) to come back."""
-        self.went_aside()
-        self.screen.step_aside()
-
-    def went_aside(self) -> None:
-        """On a Mac: ClaudeOS is out of sight (asked to step aside, or hidden with Command-H). It listens only
-        for the wake word, so talking to someone else isn't taken as a request."""
-        if not self.asleep:
-            self.asleep = True
-            self.screen.partial("")
-            self.screen.state("sleeping")
 
     async def _keep_phone_reachable(self) -> None:
         """With the phone set up, the engine must be running for the Claude app to reach it: start it again
@@ -791,15 +758,14 @@ class Controller:
             else:
                 up = any(w in t for w in ("up", "louder", "increase", "higher"))
                 reply = await run(p.set_volume, None, 15 if up else -15)
-        elif (self.platform.name == "mac" and any(w in t for w in ("macos", "mac os", "the mac", "desktop"))
-              and any(w in t for w in ("switch", "go", "show", "open", "back"))):
-            reply = await run(p.power, "switch_to_macos")
-        elif "windows" in t and any(w in t for w in ("switch", "go", "restart", "open", "boot")):
-            verdict, _ = await self.confirm("Restart into Windows?")
+        elif (any(w in t for w in (("macos", "mac os") if p.name == "mac" else ("windows",)))
+              and any(w in t for w in ("switch", "go", "restart", "open", "boot", "back"))):
+            other = p.other_os
+            verdict, _ = await self.confirm(f"Restart into {other}?")
             if verdict == "yes":
-                self._say("Restarting into Windows.")
+                self._say(f"Restarting into {other}.")
                 await asyncio.sleep(3)
-                reply = await run(p.power, "switch_to_windows")
+                reply = await run(p.power, "switch_to_macos" if p.name == "mac" else "switch_to_windows")
             else:
                 reply = "Okay, staying here."
         elif any(w in t for w in ("shut down", "shutdown", "turn off", "power off")):

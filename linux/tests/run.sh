@@ -9,6 +9,7 @@
 #      test_session_supervisor.sh  (exit-code contract under Xvfb)
 #      test_bt_import.sh           (synthetic hive -> BlueZ info)
 #      test_reclaim_installer.sh   (first-start clean-up of the installer partition, pretend disk)
+#      test_install_dryrun.sh      (install-claudeos.sh --dry-run for Ubuntu and for Fedora)
 #      test_install_chroot.sh      (real debootstrap install; opt-in)
 #
 # Some tests need a Python with `regipy`. We look for one and export it as
@@ -120,6 +121,7 @@ run_test test_session_supervisor.sh
 run_test test_bt_import.sh
 run_test test_finish_install.sh
 run_test test_reclaim_installer.sh
+run_test test_install_dryrun.sh
 run_test test_install_chroot.sh
 
 section "summary"

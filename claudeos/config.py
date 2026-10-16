@@ -9,10 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
-import sys
 import tempfile
-import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -213,14 +210,9 @@ def login_valid(text: str | None) -> bool:
 
 def has_login(paths: Paths) -> bool:
     try:
-        if login_valid(paths.login_file.read_text(encoding="utf-8")):
-            return True
+        return login_valid(paths.login_file.read_text(encoding="utf-8"))
     except OSError:
-        pass
-    return sys.platform == "darwin" and keychain_login(paths)
-
-
-_KEYCHAIN_LOGIN: dict[str, tuple[float, bool]] = {}
+        return False
 
 
 def engine_cli() -> str | None:
@@ -231,29 +223,6 @@ def engine_cli() -> str | None:
         return str(p) if p.exists() else None
     except Exception:
         return None
-
-
-def keychain_login(paths: Paths, max_age: float = 300.0, runner: Any = subprocess.run) -> bool:
-    """On a Mac, Claude Code keeps the full sign-in in the Keychain rather than in .credentials.json, so ask
-    the engine whether it has one for ClaudeOS's settings folder (a claude.ai sign-in, not a token)."""
-    key = str(paths.engine)
-    hit = _KEYCHAIN_LOGIN.get(key)
-    if hit and time.time() - hit[0] < max_age:
-        return hit[1]
-    cli = engine_cli()
-    ok = False
-    if cli:
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
-        env["CLAUDE_CONFIG_DIR"] = str(paths.engine)
-        try:
-            r = runner([cli, "auth", "status", "--json"], capture_output=True, text=True, timeout=30, env=env)
-            data = json.loads(r.stdout or "{}")
-            ok = bool(data.get("loggedIn")) and data.get("authMethod") == "claude.ai"
-        except Exception:
-            ok = False
-    _KEYCHAIN_LOGIN[key] = (time.time(), ok)
-    return ok
 
 
 def save_login(paths: Paths, text: str) -> None:

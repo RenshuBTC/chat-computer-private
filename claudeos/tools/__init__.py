@@ -326,7 +326,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
 
     @reg("show_file", "Show a file from this computer full screen: PDFs, photos, videos, music, Word, Excel, "
          "PowerPoint, text. Paths can be like ~/Downloads/x.pdf" +
-         (" or C:\\Users\\...\\x.pdf (the Windows drive)." if not on_mac else "."),
+         (" or ~/Mac/Documents/x.pdf (the files from macOS)." if on_mac else
+          " or C:\\Users\\...\\x.pdf (the Windows drive)."),
          obj({"path": S}, ["path"]))
     async def show_file(a):
         path = ctx.resolve(a["path"])
@@ -357,7 +358,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         return _text(f"Answer: {verdict}. They said: “{said}”" if said else f"Answer: {verdict} (no reply).")
 
     # ================================================================ files
-    @reg("search_files", ("Search the user's files on this Mac (home folder and iCloud Drive), " if on_mac else
+    @reg("search_files", ("Search the user's files on this Mac, including the folders sent over from macOS, " if on_mac else
                            "Search the user's files on this PC, including their Windows Desktop, Documents, Downloads, "
                            "Pictures and OneDrive, ") +
          "by name and by the text inside documents. Leave query empty for the most recent "
@@ -479,14 +480,14 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
 
     # ================================================================ the machine
     @reg("system_status", "Check the computer: internet, Wi-Fi, Bluetooth/AirPods, sound, disks, time, " +
-         ("" if on_mac else "the Windows drive, ") + "and the user's Claude usage limits.", obj({}))
+         ("the drive with the files from macOS, " if on_mac else "the Windows drive, ") +
+         "and the user's Claude usage limits.", obj({}))
     async def system_status(a):
         def gather() -> dict[str, Any]:
             st: dict[str, Any] = {"internet": ctx.platform.internet_ok()}
             parts = [("machine", ctx.platform.system_info), ("wifi", ctx.platform.wifi_status),
                      ("bluetooth", ctx.platform.bt_status), ("sound", ctx.platform.audio_status)]
-            if not on_mac:
-                parts.append(("windows_drive", ctx.platform.windows_status))
+            parts.append(("macos_files" if on_mac else "windows_drive", ctx.platform.windows_status))
             for key, fn in parts:
                 try:
                     st[key] = fn()
@@ -551,8 +552,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
 
     @reg("bluetooth", "Bluetooth (AirPods, speakers, keyboards): status, scan, pair (put the device in pairing "
          "mode first; for AirPods hold the button on the case), connect, disconnect, forget" +
-         (". On a Mac, pairing and forgetting happen in System Settings, which these open." if on_mac
-          else ", import_from_windows."),
+         ("." if on_mac else ", import_from_windows."),
          obj({"action": {"type": "string", "enum": bt_actions}, "device": S}, ["action"]), _bt_policy)
     async def bluetooth(a):
         act, p = a["action"], ctx.platform
@@ -591,7 +591,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         "sleep": "Put the computer to sleep?",
     }
     if on_mac:
-        POWER_Q["switch_to_macos"] = None     # stepping aside changes nothing: no need to ask
+        POWER_Q["switch_to_macos"] = "Restart into macOS? To come back to ClaudeOS, just restart: it starts by default."
     else:
         POWER_Q["switch_to_windows"] = "Restart into Windows? To come back to ClaudeOS, just restart: it starts by default."
 
@@ -610,8 +610,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         ctx.journal.record("start_by_default", a["system"])
         return _text(await asyncio.to_thread(ctx.platform.set_default_os, a["system"]))
 
-    @reg("power", ("Shut down, restart, sleep, or step aside to show macOS (switch_to_macos; saying “Claude” brings "
-                    "you back)." if on_mac else "Shut down, restart, sleep, or restart into Windows (switch_to_windows)."),
+    @reg("power", ("Shut down, restart, sleep, or restart into macOS (switch_to_macos)." if on_mac else
+                   "Shut down, restart, sleep, or restart into Windows (switch_to_windows)."),
          obj({"action": {"type": "string", "enum": list(POWER_Q)}}, ["action"]),
          lambda a: POWER_Q.get(a.get("action", ""), "Do that?"))
     async def power(a):
@@ -624,18 +624,14 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
     def _sw_policy(a: dict[str, Any]) -> str | None:
         pk = ", ".join(a.get("packages") or [])
         if a.get("action") == "install":
-            return f"Install {pk}? It comes from " + ("Homebrew." if on_mac else "Ubuntu's software library.")
+            return f"Install {pk}? It comes from " + ("Fedora's software library." if on_mac else "Ubuntu's software library.")
         if a.get("action") == "remove":
             return f"Remove {pk}?"
-        if on_mac:
-            return "Open Software Update, to update macOS and Apple's apps?"
         return "Update all the software on this computer? It can take a few minutes."
 
-    @reg("software", ("Install or remove command-line programs with Homebrew, when it's installed (apps come from "
-                       "the App Store or websites); update opens Software Update. Most things don't need a program: "
-                       "use websites and pages instead." if on_mac else
-                       "Install, remove or update programs on the hidden Linux layer (Ubuntu package names, e.g. "
-                       "'vlc', 'libreoffice', 'ffmpeg'). Most things don't need a program: use websites and pages instead."),
+    @reg("software", "Install, remove or update programs on the hidden Linux layer (" +
+         ("Fedora" if on_mac else "Ubuntu") + " package names, e.g. 'vlc', 'libreoffice', 'ffmpeg'). Most things "
+         "don't need a program: use websites and pages instead.",
          obj({"action": {"type": "string", "enum": ["install", "remove", "update"]},
               "packages": {"type": "array", "items": S}}, ["action"]), _sw_policy)
     async def software(a):

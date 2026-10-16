@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -32,14 +31,10 @@ def _doctor(paths: Paths, settings: Settings) -> int:
             mods[mod] = f"missing ({exc.__class__.__name__})"
             ok = ok and mod not in ("claude_agent_sdk",)
     try:
-        if sys.platform == "darwin":
-            import AppKit  # noqa: F401
-            import WebKit  # noqa: F401
-        else:
-            import gi
-            gi.require_version("Gtk", "3.0")
-            gi.require_version("WebKit2", "4.1")
-            from gi.repository import WebKit2  # noqa: F401
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", "4.1")
+        from gi.repository import WebKit2  # noqa: F401
         mods["webkit"] = "ok"
     except Exception as exc:
         mods["webkit"] = f"missing ({exc})"
@@ -73,20 +68,18 @@ def _doctor(paths: Paths, settings: Settings) -> int:
         report["internet"] = f"no ({exc.__class__.__name__})"
     report["display"] = os.environ.get("DISPLAY") or "none"
     if os.path.exists("/usr/local/libexec/claudeos/claudeos-root"):
-        from .platform.linux import LinuxPlatform
+        from .platform import get_platform
+        p = get_platform()
         try:
-            report["windows"] = LinuxPlatform().windows_status()
+            report[p.other_os.lower()] = p.windows_status()
         except Exception as exc:
-            report["windows"] = f"unknown ({exc})"
+            report[p.other_os.lower()] = f"unknown ({exc})"
     report["usable"] = ok
     print(json.dumps(report, indent=2))
     return 0 if ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
-    # The Mac app's launcher (mac/launcher/launcher.c) points Python at ClaudeOS's environment with
-    # PYTHONEXECUTABLE. Programs ClaudeOS starts must not inherit it: another Python would take it as its own.
-    os.environ.pop("PYTHONEXECUTABLE", None)
     ap = argparse.ArgumentParser(prog="claudeos")
     sub = ap.add_subparsers(dest="cmd")
     r = sub.add_parser("run")
@@ -140,25 +133,12 @@ def main(argv: list[str] | None = None) -> int:
         print("Saved. Restart ClaudeOS.")
         return 0
     if args.cmd in (None, "run"):
-        scenario = os.environ.get("CLAUDEOS_TEST_SCENARIO")
-        if scenario:
-            # Tests only (tests/mac_ci/run.sh): a scripted session inside the real Mac app, in place of the
-            # usual start, so it runs the way the app does (its name, its permissions, coming to the front).
-            import runpy
-            import shlex
-            sys.argv = [scenario, *shlex.split(os.environ.get("CLAUDEOS_TEST_SCENARIO_ARGS", ""))]
-            runpy.run_path(scenario, run_name="__main__")
-            return 0
         from .journal import setup_logging
         setup_logging(paths, verbose=getattr(args, "verbose", False))
-        os.environ.setdefault("CLAUDEOS_ENGINE", "mac" if sys.platform == "darwin" else "linux")
         from .platform import get_platform
         platform = get_platform("fake" if getattr(args, "fake", False) else None)
         from .controller import Controller
-        if sys.platform == "darwin":
-            from .ui.mac_app import run_app
-        else:
-            from .ui.gtk_app import run_app
+        from .ui.gtk_app import run_app
         voice = not getattr(args, "no_voice", False)
         return run_app(paths, settings, lambda screen: Controller(paths, settings, platform, screen, voice=voice),
                        windowed=getattr(args, "windowed", False))

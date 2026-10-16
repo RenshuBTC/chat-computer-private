@@ -413,13 +413,13 @@ def test_full_sign_in_left_on_windows_is_taken_and_removed(tmp_path, monkeypatch
     win = tmp_path / "Users" / "rensh"
     (win / "ClaudeOS").mkdir(parents=True)
     (win / "ClaudeOS" / "claude_login.json").write_text("﻿" + LOGIN, encoding="utf-8")
-    c._import_windows_signin(str(win))
+    c._import_signin(str(win / "ClaudeOS"))
     assert has_login(paths) and not (win / "ClaudeOS" / "claude_login.json").exists()
     assert any("Claude app on your phone" in str(e) for e in screen.events)
     # Something that isn't a sign-in is ignored (and removed).
     (win / "ClaudeOS" / "claude_login.json").write_text("{}", encoding="utf-8")
     paths.login_file.unlink()
-    c._import_windows_signin(str(win))
+    c._import_signin(str(win / "ClaudeOS"))
     assert not has_login(paths)
 
 

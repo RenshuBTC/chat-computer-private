@@ -3,9 +3,7 @@ for tests."""
 from __future__ import annotations
 
 import collections
-import ctypes
 import logging
-import sys
 import threading
 import time
 from typing import Callable
@@ -146,42 +144,6 @@ class Player:
     def close_if_idle(self, idle_s: float = 4.0) -> None:
         if self.stream is not None and not self.busy and time.monotonic() - self.last_sound > idle_s:
             self.reset()
-
-
-def default_devices() -> tuple[int, int] | None:
-    """On a Mac: Core Audio's default input and output device ids, to notice AirPods connecting or leaving.
-    PortAudio reads the Mac's devices only when it starts, so ClaudeOS restarts it when these change.
-    None elsewhere, or if Core Audio can't be asked."""
-    if sys.platform != "darwin":
-        return None
-    try:
-        ca = ctypes.CDLL("/System/Library/Frameworks/CoreAudio.framework/CoreAudio")
-    except OSError:
-        return None
-
-    class Address(ctypes.Structure):          # AudioObjectPropertyAddress
-        _fields_ = [("selector", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("element", ctypes.c_uint32)]
-
-    def code(s: str) -> int:
-        return int.from_bytes(s.encode("ascii"), "big")
-    ids = []
-    for selector in ("dIn ", "dOut"):        # kAudioHardwarePropertyDefaultInputDevice / ...OutputDevice
-        addr = Address(code(selector), code("glob"), 0)
-        dev, size = ctypes.c_uint32(0), ctypes.c_uint32(4)
-        status = ca.AudioObjectGetPropertyData(ctypes.c_uint32(1), ctypes.byref(addr), ctypes.c_uint32(0), None,
-                                               ctypes.byref(size), ctypes.byref(dev))   # 1 = the system object
-        if status != 0:
-            return None
-        ids.append(dev.value)
-    return ids[0], ids[1]
-
-
-def restart_portaudio() -> None:
-    """Makes PortAudio read the list of microphones and speakers again (all its streams must be closed)."""
-    import sounddevice as sd
-    with PORTAUDIO_LOCK:
-        sd._terminate()
-        sd._initialize()
 
 
 class FakeMic:

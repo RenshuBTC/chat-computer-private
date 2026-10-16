@@ -136,7 +136,7 @@ def test_installer_scripts_shellcheck():
     assert r.returncode == 0, r.stdout
 
 
-def _run_finish(tmp_path, installer_works=True):
+def _run_finish(tmp_path, installer_works=True, bitlocker_key=None):
     """finish.sh against a fake installer partition and a fake new system; curtin is a stand-in that records its calls."""
     src = tmp_path / "cdrom/claudeos"
     target = tmp_path / "target"
@@ -153,6 +153,8 @@ def _run_finish(tmp_path, installer_works=True):
     (src / "secrets/claude_token").write_text("sk-ant-oat01-test\n")
     (src / "secrets/claude_login.json").write_text('{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}}')
     (src / "settings.json").write_text("{}\n")
+    if bitlocker_key:
+        (src / "secrets/bitlocker-key").write_text(bitlocker_key + "\n")
     for p in src.rglob("*"):
         if p.is_file():
             p.chmod(0o777)        # FAT32 shows every file as executable
@@ -203,6 +205,17 @@ def test_finish_script_against_a_fake_system(tmp_path):
     assert (target / "etc/systemd/system/claudeos-reclaim-installer.service").exists()
     link = target / "etc/systemd/system/multi-user.target.wants/claudeos-reclaim-installer.service"
     assert os.readlink(link) == "/etc/systemd/system/claudeos-reclaim-installer.service"
+
+
+def test_finish_script_gives_claudeos_its_bitlocker_key(tmp_path):
+    r, target, _ = _run_finish(tmp_path, bitlocker_key="111111-222222-333333-444444-555555-666666-777777-888888")
+    assert r.returncode == 0, r.stdout + r.stderr
+    key = target / "etc/claudeos/bitlocker-recovery-key"
+    assert key.read_text() == "111111-222222-333333-444444-555555-666666-777777-888888\n"
+    assert stat.S_IMODE(key.stat().st_mode) == 0o600 and key.stat().st_uid == 0
+    # Without one (Windows' drive isn't encrypted), there's no key file.
+    r, target, _ = _run_finish(tmp_path / "plain")
+    assert not (target / "etc/claudeos/bitlocker-recovery-key").exists()
 
 
 def test_finish_script_names_the_claudeos_partition(tmp_path):
@@ -330,7 +343,10 @@ def test_windows_powershell_5_1_compatible():
 
 # ------------------------------------------------------------------ the whole conversation, on a pretend PC
 DESTRUCTIVE = ("Resize-Partition", "Clear-Disk", "Initialize-Disk", "New-InstallerPartition", "Remove-Partition",
-               "Disable-FastStartup", "Suspend-BitLocker", "bcdedit", "shutdown")
+               "Disable-FastStartup", "Suspend-BitLocker", "BitLocker add", "BitLocker delete", "bcdedit", "shutdown")
+USER_KEY = "{0b000000-0000-4000-8000-000000000001}"           # the person's own BitLocker recovery password
+CLAUDE_KEY = "{2b000000-0000-4000-8000-0000000000c1}"         # the one setup adds for ClaudeOS
+CLAUDE_KEY_PASSWORD = "123456-234567-345678-456789-567890-678901-789012-890123"
 SETUP_ID = "{5e7e0a00-0000-4000-8000-00000000000a}"          # the "ClaudeOS setup" entry the pretend bcdedit makes
 CLAUDEOS_ID = "{9f62d3e2-5c1a-11ef-a1b2-806e6f6e6963}"       # ClaudeOS's own entry, once installed
 # The pretend PC's Windows disk before ClaudeOS, in MiB: EFI, reserved, C: (950 GB), Windows' recovery partition.
@@ -481,6 +497,33 @@ def test_flow_stops_when_bitlocker_key_not_saved(tmp_path):
 
 
 @needs_pwsh
+def test_flow_gives_claudeos_its_own_bitlocker_key(tmp_path):
+    out, res = _flow(tmp_path, "bitlocker")
+    assert res["ok"], res
+    calls = res["calls"]
+    # Made after "Go ahead", with the installer, before the PC is told to start it.
+    _in_order(calls, "Q Go ahead? [y/N] -> y", "Copy-IsoToInstaller", "BitLocker add key",
+              f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}")
+    assert res["bitlocker_keys"] == [USER_KEY, CLAUDE_KEY]          # the person's own key stays
+    # ClaudeOS gets the key in the installer's secrets (finish.sh puts it in /etc/claudeos), and setup keeps
+    # its id, so "Remove ClaudeOS" deletes exactly this key.
+    assert (out / "installer/claudeos/secrets/bitlocker-key").read_text() == CLAUDE_KEY_PASSWORD + "\n"
+    assert (out / "ProgramData/ClaudeOS/bitlocker-key-id").read_text() == CLAUDE_KEY + "\n"
+    assert CLAUDE_KEY_PASSWORD not in (out / "setup.log").read_text()
+
+
+@needs_pwsh
+def test_flow_deletes_claudeos_bitlocker_key_when_a_later_step_fails(tmp_path):
+    out, res = _flow(tmp_path, "bitlocker-fails")
+    assert not res["ok"] and "EFI partition" in res["error"], res
+    _in_order(res["calls"], "BitLocker add key", f"BitLocker delete key {CLAUDE_KEY}", "Remove-Partition 0 5",
+              "Resize-Partition C 950")
+    assert res["bitlocker_keys"] == [USER_KEY]
+    assert not (out / "ProgramData/ClaudeOS/bitlocker-key-id").exists()
+    assert _disk(res, 0) == DISK0
+
+
+@needs_pwsh
 def test_flow_sign_in_again_leaves_the_token_for_claudeos(tmp_path):
     out, res = _flow(tmp_path, "signin")
     assert res["ok"], res
@@ -561,6 +604,10 @@ def test_removing_claudeos_gives_windows_everything_back(tmp_path):
               f"bcdedit /delete {CLAUDEOS_ID}", "Remove-Partition 0 5", "Resize-Partition C 950")
     assert [c for c in calls if c.startswith("Remove-Partition")] == ["Remove-Partition 0 5"]
     assert _disk(res, 0) == DISK0
+    # ClaudeOS's BitLocker key goes too, and only that one.
+    _in_order(calls, "Remove-Partition 0 5", f"BitLocker delete key {CLAUDE_KEY}")
+    assert res["bitlocker_keys"] == [USER_KEY]
+    assert not (out / "ProgramData/ClaudeOS/bitlocker-key-id").exists()
     esp = out / "esp/EFI"
     assert not (esp / "ubuntu").exists() and not (esp / "claudeos").exists()
     assert (esp / "BOOT/BOOTX64.EFI").read_text() == "Windows Boot Manager"     # Windows back in the fallback slot

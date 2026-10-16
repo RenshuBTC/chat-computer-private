@@ -11,7 +11,6 @@ import logging
 import logging.handlers
 import os
 import shutil
-import sys
 import threading
 import time
 import uuid
@@ -188,22 +187,13 @@ class Journal:
 
 def move_to_trash(path: str) -> str | None:
     """Moves a file or folder to the trash. Returns where it is in the trash, for undo (None if unknown)."""
-    if sys.platform == "darwin":
-        # macOS's own call, which says where the item went (send2trash on a Mac doesn't).
-        from Foundation import NSURL, NSFileManager  # type: ignore
-        res = NSFileManager.defaultManager().trashItemAtURL_resultingItemURL_error_(
-            NSURL.fileURLWithPath_(path), None, None)
-        ok, where, err = (res[0], res[1] if len(res) > 2 else None, res[-1]) if isinstance(res, tuple) else (res, None, None)
-        if not ok:
-            raise OSError(str(err.localizedDescription()) if err is not None else f"couldn't move {path} to the Trash")
-        return str(where.path()) if where is not None else None
     import send2trash
     send2trash.send2trash(path)
     return find_in_trash(path)
 
 
 def untrash(original: str, trashed: str | None) -> str:
-    """Put a trashed file back (the freedesktop.org trash on Linux, the Trash on a Mac)."""
+    """Put a trashed file back (the freedesktop.org trash)."""
     if not trashed:
         return f"couldn't find {original} in the trash"
     if os.path.lexists(original):
@@ -213,11 +203,8 @@ def untrash(original: str, trashed: str | None) -> str:
         shutil.move(trashed, original)
     except FileNotFoundError:
         return f"couldn't find {original} in the trash"
-    except PermissionError:
-        # macOS protects the Trash folder; Finder can still put things back.
-        name = os.path.basename(trashed)
-        return (f"macOS didn't let me take {name} out of the Trash. Open the Trash in the Dock, right-click "
-                f"{name} and choose Put Back.")
+    except PermissionError as exc:
+        return f"couldn't put {original} back: {exc.strerror or exc}"
     info = Path(trashed).parent.parent / "info" / (Path(trashed).name + ".trashinfo")
     try:
         info.unlink()

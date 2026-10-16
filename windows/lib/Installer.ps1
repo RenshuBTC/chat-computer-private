@@ -205,7 +205,8 @@ function Write-InstallerPayload {
         [Parameter(Mandatory = $true)][string]$SettingsJson,
         [Parameter(Mandatory = $true)][string]$Token,
         [Parameter(Mandatory = $true)][string]$InstallId,
-        [AllowNull()][AllowEmptyString()][string]$Login = ''
+        [AllowNull()][AllowEmptyString()][string]$Login = '',
+        [AllowNull()]$BitLockerKey = $null
     )
     if ($InstallId -notmatch '^[0-9a-f]{8,64}$') { throw 'Bad install id' }
     $root = $Root
@@ -227,6 +228,10 @@ function Write-InstallerPayload {
     if (-not [string]::IsNullOrEmpty($Login)) {
         # The full sign-in for the Claude app on the phone (finish.sh puts it where Claude Code looks).
         Write-TextFileLf -Path (Join-Path $secrets 'claude_login.json') -Text $Login
+    }
+    if ($BitLockerKey) {
+        # ClaudeOS's own recovery password for C: (finish.sh puts it where ClaudeOS opens Windows' drive with it).
+        Write-TextFileLf -Path (Join-Path $secrets 'bitlocker-key') -Text ([string]$BitLockerKey.Password + "`n")
     }
     Write-TextFileLf -Path (Join-Path $payload 'settings.json') -Text $SettingsJson
     Write-TextFileLf -Path (Join-Path $root 'autoinstall.yaml') -Text $AutoinstallYaml

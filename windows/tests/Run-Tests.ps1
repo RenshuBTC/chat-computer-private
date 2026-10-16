@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $Here = $PSScriptRoot
 $Win = Split-Path -Parent $Here
-foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Startup')) {
+foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Checks', 'Startup')) {
     . (Join-Path $Win ('lib/' + $lib + '.ps1'))
 }
 
@@ -424,6 +424,45 @@ Assert-True (Test-Path -LiteralPath (Join-Path $tmpInst 'esp/EFI/claudeos-setup/
 Remove-Item -LiteralPath (Join-Path $tmpInst 'inst/EFI/boot/grubx64.efi')
 Assert-Throws { Install-SetupLoader -InstallerRoot (Join-Path $tmpInst 'inst') -EspRoot (Join-Path $tmpInst 'esp') } 'boot loader: missing files are an error'
 Remove-Item -LiteralPath $tmpInst -Recurse -Force
+
+# ------------------------------------------------------------------ ClaudeOS's own BitLocker key
+$tmpState = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-state-' + [guid]::NewGuid().ToString('N'))
+$env:CLAUDEOS_STATE_DIR = $tmpState
+$Script:BlCalls = New-Object System.Collections.ArrayList
+$Script:BlType = 3
+$Script:BlPassword = '123456-234567-345678-456789-567890-678901-789012-890123'
+function Get-CimInstance { return [pscustomobject]@{ DriveLetter = 'C:' } }
+function Invoke-CimMethod {
+    param($InputObject, [string]$MethodName, [hashtable]$Arguments)
+    [void]$Script:BlCalls.Add($MethodName)
+    switch ($MethodName) {
+        'ProtectKeyWithNumericalPassword' { return [pscustomobject]@{ ReturnValue = 0; VolumeKeyProtectorID = '{2b000000-0000-4000-8000-0000000000c1}' } }
+        'GetKeyProtectorNumericalPassword' { return [pscustomobject]@{ ReturnValue = 0; NumericalPassword = $Script:BlPassword } }
+        'GetKeyProtectorType' { return [pscustomobject]@{ ReturnValue = 0; KeyProtectorType = $Script:BlType } }
+        'DeleteKeyProtector' { return [pscustomobject]@{ ReturnValue = 0 } }
+    }
+}
+$k = New-ClaudeOSBitLockerKey
+Assert-Equal '{2b000000-0000-4000-8000-0000000000c1}' $k.Id 'BitLocker key: its id'
+Assert-Equal $Script:BlPassword $k.Password 'BitLocker key: its recovery password'
+Assert-Equal "{2b000000-0000-4000-8000-0000000000c1}`n" ([IO.File]::ReadAllText((Join-Path $tmpState 'bitlocker-key-id'))) 'BitLocker key: id recorded'
+# Only ever deletes a recovery password: if the recorded id names another kind of key, nothing is deleted.
+$Script:BlType = 1
+[void]$Script:BlCalls.Clear()
+Assert-Throws { Remove-ClaudeOSBitLockerKey } 'BitLocker key: refuses to delete a key that is not a recovery password'
+Assert-True ($Script:BlCalls -notcontains 'DeleteKeyProtector') 'BitLocker key: nothing deleted then'
+$Script:BlType = 3
+Assert-True (Remove-ClaudeOSBitLockerKey) 'BitLocker key: deleted'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $tmpState 'bitlocker-key-id'))) 'BitLocker key: record gone'
+Assert-True (-not (Remove-ClaudeOSBitLockerKey)) 'BitLocker key: nothing to delete without a record'
+# A key BitLocker shows in an unexpected form is not kept: it's deleted again and setup says so.
+$Script:BlPassword = 'not-a-key'
+[void]$Script:BlCalls.Clear()
+Assert-Throws { New-ClaudeOSBitLockerKey } 'BitLocker key: an unexpected form is an error'
+Assert-True ($Script:BlCalls -contains 'DeleteKeyProtector') 'BitLocker key: the half-made key is deleted'
+Remove-Item -LiteralPath $tmpState -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item Function:\Get-CimInstance, Function:\Invoke-CimMethod
+$env:CLAUDEOS_STATE_DIR = $null
 
 if ($OutDir) {
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null

@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import sqlite3
-import sys
 import threading
 import time
 from datetime import datetime
@@ -38,26 +37,15 @@ SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".venv", "venv", "site-packa
              "System Volume Information", "AppData", "Application Data", "Local Settings", "snap", ".cache",
              ".local", ".config", ".engine", "undo", "web", "index", "models", "logs", "Temp", "tmp",
              "OneDriveTemp", ".Trash-1000"}
-# Folders that are really one thing (an app, the Photos or Music library): not walked into.
+# Folders that are really one thing (an app, the Photos or Music library, e.g. copied over from macOS): not
+# walked into.
 PACKAGE_SUFFIXES = (".app", ".photoslibrary", ".musiclibrary", ".tvlibrary", ".imovielibrary", ".fcpbundle",
                     ".bundle", ".framework", ".plugin")
-# On a Mac, Library holds apps' own data (macOS asks "allow access to data from other apps?" each time it's
-# read, and iCloud Drive is indexed on its own) and Applications holds apps: neither is your files.
-MAC_HOME_SKIP = {"Library", "Applications"}
-SF_DATALESS = 0x40000000   # macOS: the contents are in iCloud only; reading the file would download it
 # Sign-ins ClaudeOS Setup may leave on the Windows drive (normally removed at start): never indexed.
 SECRET_FILES = {"claude_token", "claude_login.json"}
 MAX_FILES = 2_000_000
 MAX_CONTENT_BYTES = 15_000_000
 CONTENT_CHARS = 20_000
-
-
-def dataless(path: str) -> bool:
-    """True for a file whose contents macOS keeps only in iCloud (reading it would download it)."""
-    try:
-        return bool(getattr(os.stat(path), "st_flags", 0) & SF_DATALESS)
-    except OSError:
-        return False
 
 
 def kind_of(path: str) -> str:
@@ -209,8 +197,7 @@ class FileIndex:
                 if not os.path.isdir(root):
                     continue
                 batch = 0
-                skip_top = MAC_HOME_SKIP if sys.platform == "darwin" and label == "home" else frozenset()
-                for e in self._walk(root, skip_top):
+                for e in self._walk(root):
                     if count >= MAX_FILES:
                         break
                     try:
@@ -266,7 +253,7 @@ class FileIndex:
             for r in rows:
                 if self._stop.is_set():
                     break
-                text = "" if dataless(r["path"]) else extract_text(r["path"])
+                text = extract_text(r["path"])
                 fts = db.execute("SELECT words FROM fts WHERE rowid=?", (r["id"],)).fetchone()
                 words = fts["words"] if fts else words_of(r["path"])
                 db.execute("DELETE FROM fts WHERE rowid=?", (r["id"],))

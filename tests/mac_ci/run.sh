@@ -211,7 +211,7 @@ ok "first start's program on the EFI partition" cmp -s "$REPO/mac/esp/firstboot.
 ok "Fedora's own start kept, to put back" test "$(cat "$E/claudeos/fedora-grub.cfg" 2>/dev/null)" = "$FEDORA_GRUB"
 g="$E/EFI/fedora/grub.cfg"
 if grep -q "vmlinuz-$FEDORA_KERNEL" "$g" && grep -q "root=UUID=$FEDORA_ROOT_UUID" "$g" && ! grep -q @ "$g" \
-   && grep -q "systemd.run=\"/bin/sh /boot/efi/claudeos/firstboot.sh\"" "$g"; then
+   && grep -qF '"systemd.run=/bin/sh /boot/efi/claudeos/firstboot.sh" systemd.unit=kernel-command-line.target' "$g"; then
   pass "GRUB starts the first start once (kernel, root and program filled in)"
 else
   fail "the first start's GRUB file"

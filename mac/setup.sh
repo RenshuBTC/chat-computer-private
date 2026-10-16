@@ -642,7 +642,7 @@ write_first_start() {
       printf 'WIFI_PSK=%s\n' "$(b64 "$WIFI_PSK")"
     } > "$p/setup.env"
     printf '%s\n' "$TOKEN" > "$p/secrets/claude_token"
-    [ -n "$LOGIN" ] && printf '%s\n' "$LOGIN" > "$p/secrets/claude_login.json"
+    if [ -n "$LOGIN" ]; then printf '%s\n' "$LOGIN" > "$p/secrets/claude_login.json"; fi
   )
   printf '{\n  "user_name": "%s",\n  "timezone": "%s",\n  "locale": "en_US.UTF-8"\n}\n' \
     "$(printf '%s' "$REAL_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')" "$TZONE" > "$p/settings.json"
@@ -769,7 +769,7 @@ sign_in_again() {
   mkdir -p "$mount/.claudeos"
   ( umask 077
     printf '%s\n' "$TOKEN" > "$mount/.claudeos/claude_token"
-    [ -n "$LOGIN" ] && printf '%s\n' "$LOGIN" > "$mount/.claudeos/claude_login.json"
+    if [ -n "$LOGIN" ]; then printf '%s\n' "$LOGIN" > "$mount/.claudeos/claude_login.json"; fi
   )
   TOKEN="" LOGIN=""
   good "Done. Restart into ClaudeOS; it takes the new sign-in when it starts and deletes this copy."

@@ -63,11 +63,12 @@ if ! [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
   exit 2
 fi
 
-# Which Linux this is: Ubuntu (a PC) or Fedora (an Apple silicon Mac).
+# Which Linux this is: Ubuntu (a PC) or Fedora (an Apple silicon Mac). Fedora Asahi Remix calls itself
+# ID=fedora-asahi-remix, ID_LIKE=fedora.
 if [ -z "$DISTRO" ]; then
-  # shellcheck disable=SC1091
-  case "$( (. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}") )" in
-    fedora) DISTRO=fedora ;;
+  # shellcheck disable=SC1090,SC1091
+  case " $( (. "${CLAUDEOS_OS_RELEASE:-/etc/os-release}" 2>/dev/null && printf '%s %s' "${ID:-}" "${ID_LIKE:-}") ) " in
+    *" fedora "*|*" fedora-asahi-remix "*) DISTRO=fedora ;;
     *) DISTRO=ubuntu ;;
   esac
 fi
@@ -335,7 +336,12 @@ install_plymouth_theme() {
   # (script.so ships with plymouth, text drawing with plymouth-label).
   local themedir=/usr/share/plymouth/themes/claudeos
   if [ "$DRY_RUN" -eq 1 ]; then log "[dry-run] install ClaudeOS plymouth theme"; return 0; fi
-  if ! ls /usr/lib/*/plymouth/script.so /usr/lib64/plymouth/script.so >/dev/null 2>&1; then
+  # Ubuntu keeps it in /usr/lib/<arch>/plymouth, Fedora in /usr/lib64/plymouth.
+  local plugin found=""
+  for plugin in /usr/lib/*/plymouth/script.so /usr/lib64/plymouth/script.so; do
+    [ -e "$plugin" ] && found=1
+  done
+  if [ -z "$found" ]; then
     log "plymouth's script plugin is absent; keeping the stock splash"
     return 0
   fi
@@ -595,7 +601,19 @@ fi
 if [ -f "$REQ_FILE" ] || [ "$DRY_RUN" -eq 1 ]; then
   log "installing Python requirements from $REQ_FILE"
   retry "$VENV_DIR/bin/pip" install --upgrade pip || warn "pip self-upgrade failed (continuing)"
-  retry "$VENV_DIR/bin/pip" install -r "$REQ_FILE" || needed "pip install failed: the ClaudeOS runtime is incomplete"
+  # kokoro-onnx (the voice) says it needs a Python older than 3.14. Fedora 44 has 3.14 (Ubuntu 24.04 has 3.12);
+  # it's plain Python and works there, so with 3.14 or newer it goes in after the rest, without that check.
+  pyver="$("$VENV_DIR/bin/python" -c 'import sys; print("%d%02d" % sys.version_info[:2])' 2>/dev/null || echo 0)"
+  voice="$(sed -n 's/^\(kokoro-onnx==[^ #]*\).*/\1/p' "$REQ_FILE" 2>/dev/null)"
+  if [ "$pyver" -ge 314 ] && [ -n "$voice" ]; then
+    req_rest="$(mktemp)"
+    grep -v '^kokoro-onnx' "$REQ_FILE" > "$req_rest"
+    retry "$VENV_DIR/bin/pip" install -r "$req_rest" || { rm -f "$req_rest"; needed "pip install failed: the ClaudeOS runtime is incomplete"; }
+    rm -f "$req_rest"
+    retry "$VENV_DIR/bin/pip" install --ignore-requires-python "$voice" || needed "pip install failed: ClaudeOS's voice is missing"
+  else
+    retry "$VENV_DIR/bin/pip" install -r "$REQ_FILE" || needed "pip install failed: the ClaudeOS runtime is incomplete"
+  fi
 else
   needed "requirements file $REQ_FILE not found"
 fi

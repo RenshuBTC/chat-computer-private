@@ -62,6 +62,16 @@ for p in xserver-xorg-core libspa-0.2-bluetooth network-manager ntfs-3g efibootm
 done
 pass "fedora: no Ubuntu package names in the dnf list"
 
+# Which system it is, from os-release, when --distro isn't given.
+for case in "fedora-asahi-remix|fedora|fedora" "fedora||fedora" "ubuntu|debian|ubuntu"; do
+  IFS='|' read -r id like want <<EOF
+$case
+EOF
+  printf 'NAME=x\nID=%s\nID_LIKE="%s"\n' "$id" "$like" > "$W/os-release"
+  CLAUDEOS_OS_RELEASE="$W/os-release" bash "$REPO/install-claudeos.sh" --user testuser --dry-run --skip-models > "$W/detect" 2>&1
+  grep -q "distro=$want" "$W/detect" && pass "ID=$id ID_LIKE=$like is $want" || fail "ID=$id ID_LIKE=$like: $(grep -o 'distro=[a-z]*' "$W/detect")"
+done
+
 # Bad arguments.
 bash "$REPO/install-claudeos.sh" --user testuser --dry-run --distro debian >/dev/null 2>&1
 [ $? -eq 2 ] && pass "refuses an unknown --distro" || fail "accepted --distro debian"

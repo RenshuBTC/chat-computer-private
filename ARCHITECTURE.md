@@ -213,6 +213,11 @@ disk holding the partition mounted at `/cdrom`.)
 "Remove ClaudeOS from this PC" (Windows) also deletes installer partitions with a mark, the "ClaudeOS setup"
 entries and `\EFI\claudeos-setup`, so it cleans up an install that never finished too.
 
+Tested end to end in QEMU (OVMF with Secure Boot and Microsoft's keys, an NVMe disk laid out as setup leaves a
+PC): the "ClaudeOS setup" entry starts the installer from its partition, the install finishes, ClaudeOS starts,
+and its first start deletes the installer partition, grows ClaudeOS's partition into it, and removes
+`\EFI\claudeos-setup` and the entry; Windows' partition is untouched.
+
 `install-claudeos.sh` stops with exit status 1 at the first essential failure (apt packages, the venv,
 pip), before later steps depend on it (for example handing networking to NetworkManager). On success it
 writes `/var/lib/claudeos/base-installed` and removes the safety net's link.
@@ -332,9 +337,12 @@ and phone sign-in to the drive's `.claudeos/`.
 
 ### First start (`mac/esp/firstboot.sh`)
 
-GRUB starts Fedora's kernel with `systemd.run="/bin/sh /boot/efi/claudeos/firstboot.sh"` (single-quoted, so
-it's one argument) and `systemd.run_success_action=reboot`, `systemd.run_failure_action=reboot`, instead of
-Fedora's first-start questions. firstboot.sh (POSIX sh, as root, SELinux enforcing): hostname `claudeos`;
+GRUB starts Fedora's kernel with `"systemd.run=/bin/sh /boot/efi/claudeos/firstboot.sh"`,
+`systemd.unit=kernel-command-line.target`, `systemd.run_success_action=reboot` and
+`systemd.run_failure_action=reboot`, instead of Fedora's first-start questions. Two details matter, both found
+in an emulated Mac: the whole argument is in double quotes (GRUB passes it on in double quotes, which systemd
+removes; quotes inside it would reach systemd as `\"`, which it doesn't read as quotes), and `systemd.unit` names
+the target outright (systemd-run-generator's own `default.target` loses to the one Fedora's image has in /etc). firstboot.sh (POSIX sh, as root, SELinux enforcing): hostname `claudeos`;
 the account (`useradd --groups wheel`, its password the recovery password, through `chpasswd`); time zone and
 `LANG`; a NetworkManager keyfile for the Wi-Fi (0600); ClaudeOS to `/opt/claudeos/app` (root-owned); the token,
 phone sign-in and settings into `~/ClaudeOS`; `/etc/claudeos/install-user`, `install-id`,
@@ -368,6 +376,10 @@ and `restorecon` at the end.
   removing; the real downloads; the real installer until it turns down a virtual Mac.
 * `tests/test_mac.py`: `MacPlatform` and the runtime on a Mac; `linux/tests/test_install_dryrun.sh`: the Fedora
   install steps.
+* An emulated Mac (QEMU `virt`, `-cpu neoverse-n1` for 16K pages, UEFI), its disk built from the real Fedora
+  package with setup's own `write_first_start`: Fedora's 16K kernel starts, the first start runs and restarts,
+  and `claudeos-finish-install` takes over. (QEMU 8.2's `-cpu max` crashes this kernel early: an emulator
+  problem, not a Mac one.)
 
 Not yet tried on a real Mac. Unknowns: AirPods' microphone (Bluetooth HFP) under Asahi; AirPods paired in
 ClaudeOS may need pairing again in macOS (the same Mac, a new key); ClaudeOS's Python wheels and the Claude

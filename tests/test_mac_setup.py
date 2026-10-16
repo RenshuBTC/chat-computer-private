@@ -576,8 +576,75 @@ def test_manifest_installer_data_and_first_start_agree():
     assert m["ASAHI_INSTALLER_URL"].endswith(f"installer-{m['ASAHI_INSTALLER_VERSION']}.tar.gz")
     grub = (MAC / "esp/grub-firststart.cfg").read_text()
     assert {"@KERNEL@", "@BOOT_UUID@", "@ROOT_UUID@"} <= set(re.findall(r"@[A-Z_]+@", grub))
-    # GRUB keeps single-quoted words as they are, so the kernel gets systemd.run="...": one argument.
-    assert "'systemd.run=\"/bin/sh /boot/efi/claudeos/firstboot.sh\"'" in grub
+
+
+def _grub_words(line):
+    """GRUB's script lexer, for what a linux line uses: words split on blanks, '...' and "..." quoting removed."""
+    words, cur, quote, have = [], "", None, False
+    for ch in line:
+        if quote:
+            if ch == quote:
+                quote = None
+            else:
+                cur += ch
+        elif ch in "'\"":
+            quote, have = ch, True
+        elif ch in " \t":
+            if cur or have:
+                words.append(cur)
+            cur, have = "", False
+        else:
+            cur += ch
+    if cur or have:
+        words.append(cur)
+    return words
+
+
+def _grub_cmdline(args):
+    """grub_create_loader_cmdline: \\, ' and " escaped with a backslash; an argument with a space in quotes."""
+    out = []
+    for a in args:
+        e = "".join("\\" + c if c in "\\'\"" else c for c in a)
+        out.append(f'"{e}"' if " " in a else e)
+    return " ".join(out)
+
+
+def _systemd_cmdline(line):
+    """systemd's reading of /proc/cmdline: extract_first_word with UNQUOTE|RELAX|RETAIN_ESCAPE (backslash is
+    an ordinary character there)."""
+    words, cur, quote, have = [], "", None, False
+    for ch in line:
+        if quote:
+            if ch == quote:
+                quote = None
+            else:
+                cur += ch
+        elif ch in "'\"":
+            quote, have = ch, True
+        elif ch.isspace():
+            if cur or have:
+                words.append(cur)
+            cur, have = "", False
+        else:
+            cur += ch
+    if cur or have:
+        words.append(cur)
+    return words
+
+
+def test_first_start_command_reaches_systemd_whole():
+    # What happened in an emulated Mac: a systemd.run= value with quotes inside reached systemd broken up.
+    line = next(l for l in (MAC / "esp/grub-firststart.cfg").read_text().splitlines() if l.startswith("linux "))
+    kernel_cmdline = _grub_cmdline(_grub_words(line)[2:])
+    words = _systemd_cmdline(kernel_cmdline)
+    assert "systemd.run=/bin/sh /boot/efi/claudeos/firstboot.sh" in words, words
+    assert {"systemd.run_success_action=reboot", "systemd.run_failure_action=reboot", "rootflags=subvol=root"} <= set(words)
+    # systemd-run-generator writes its default.target where /etc's wins (Fedora's image has one), so the unit
+    # to start is named outright.
+    assert "systemd.unit=kernel-command-line.target" in words
+    # The old way, for the record: GRUB escapes the inner quotes, and systemd keeps the backslashes.
+    old = _systemd_cmdline(_grub_cmdline(_grub_words("""linux x 'systemd.run="/bin/sh /boot/efi/claudeos/firstboot.sh"'""")[2:]))
+    assert "systemd.run=/bin/sh /boot/efi/claudeos/firstboot.sh" not in old
 
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="needs shellcheck")

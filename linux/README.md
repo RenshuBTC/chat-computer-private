@@ -63,6 +63,8 @@ On an Apple silicon Mac the same script runs on Fedora Asahi Remix 44 Minimal (a
 | Security | firewalld without `ssh` and `cockpit` (`firewall-offline-cmd`), `dnf5-automatic.timer` with `upgrade_type = security`, `sshd` off | Same contract as ufw/unattended-upgrades on Ubuntu. |
 | Boot | `GRUB_TIMEOUT=0`, hidden menu, `quiet rhgb`, `plymouth-set-default-theme claudeos -R` | The Mac picks the system itself (startup options), so GRUB shows nothing. |
 | SELinux | `restorecon -RF` over everything written | Fedora enforces SELinux labels. |
+| Python | Fedora 44's Python is 3.14; `kokoro-onnx` (the voice) is installed after the rest with `--ignore-requires-python` | It declares Python older than 3.14 but is plain Python; ClaudeOS's whole test suite passes on 3.14, speaking and hearing included. Every other package has ARM wheels for 3.14. |
+| Which system | `ID`/`ID_LIKE` in `/etc/os-release` (Fedora Asahi Remix is `ID=fedora-asahi-remix`, `ID_LIKE=fedora`) | |
 
 ## Layout
 

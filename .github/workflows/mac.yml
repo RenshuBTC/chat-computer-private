@@ -7,6 +7,7 @@ name: Mac setup test
 on:
   push:
     branches: [main]
+    paths: ['mac/**', 'tests/mac_ci/**', 'tests/mac_pretend.py', 'tests/test_mac_setup.py', '.github/workflows/mac.yml']
   workflow_dispatch:
 permissions:
   contents: write          # to save the results branch

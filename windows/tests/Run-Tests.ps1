@@ -145,6 +145,42 @@ ${function:Read-Secret} = $origReadSecret
 ${function:Read-SecretLine} = $origReadSecretLine
 ${function:Test-InputWaiting} = $origInputWaiting
 
+# A code the person already has is taken first, and then the Claude program is never run (on some PCs it
+# shows nothing when setup runs it). Enter, or something that isn't a code, starts the browser sign-in.
+$origPasted = ${function:Read-PastedSecret}
+$Script:Pasted = New-Object System.Collections.Queue
+${function:Read-PastedSecret} = { param($Prompt, $SettleMs) return $Script:Pasted.Dequeue() }
+$Script:Pasted.Enqueue('  ' + $tok.Substring(0, 60) + "`r`n" + $tok.Substring(60) + ' ')
+Assert-Equal $tok (Invoke-ClaudeSignIn -ClaudeExe (Join-Path ([IO.Path]::GetTempPath()) 'no-such-claude.exe')) 'sign-in: a code pasted first is used without running the program'
+Assert-Equal 0 $Script:Pasted.Count 'sign-in: asked once'
+if (-not $IsWindows) {
+    $fakeDir = Join-Path ([IO.Path]::GetTempPath()) ('fake-claude-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $fakeDir -Force | Out-Null
+    $fake = Join-Path $fakeDir 'claude'
+    [IO.File]::WriteAllText($fake, "#!/bin/sh`necho `"`$1`" >> '" + (Join-Path $fakeDir 'ran') + "'`n")
+    & chmod 755 $fake
+    $ran = Join-Path $fakeDir 'ran'
+    # Enter: the browser sign-in runs once, then the code it printed is pasted.
+    $Script:Pasted.Enqueue('')
+    $Script:Pasted.Enqueue($tok)
+    Assert-Equal $tok (Invoke-ClaudeSignIn -ClaudeExe $fake) 'sign-in: Enter starts the browser sign-in, then takes the code'
+    Assert-Equal 'setup-token' ([IO.File]::ReadAllText($ran)).Trim() 'sign-in: Enter runs setup-token once'
+    # A paste that went wrong (one stray character from Ctrl+V) asks again instead of starting the browser sign-in.
+    Remove-Item -LiteralPath $ran -Force
+    $Script:Pasted.Enqueue([string][char]22)
+    $Script:Pasted.Enqueue($tok)
+    Assert-Equal $tok (Invoke-ClaudeSignIn -ClaudeExe $fake) 'sign-in: a bad paste is asked again'
+    Assert-True (-not (Test-Path -LiteralPath $ran)) 'sign-in: a bad paste does not start the program'
+    # Three bad pastes: on to the browser sign-in.
+    foreach ($i in 1..3) { $Script:Pasted.Enqueue('hello') }
+    $Script:Pasted.Enqueue($tok)
+    Assert-Equal $tok (Invoke-ClaudeSignIn -ClaudeExe $fake) 'sign-in: after three bad pastes the browser sign-in runs'
+    Assert-Equal 'setup-token' ([IO.File]::ReadAllText($ran)).Trim() 'sign-in: three bad pastes run setup-token once'
+    Assert-Equal 0 $Script:Pasted.Count 'sign-in: every answer used'
+    Remove-Item -LiteralPath $fakeDir -Recurse -Force
+}
+${function:Read-PastedSecret} = $origPasted
+
 # Only real answers reach the log, so a stray piece of a code typed at a yes/no question never does.
 $Script:SetupLogFile = [IO.Path]::GetTempFileName()
 $Script:Answers = New-Object System.Collections.Queue

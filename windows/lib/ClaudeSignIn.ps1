@@ -3,7 +3,8 @@
 # Uses the official Claude Code program, taken from Anthropic's claude-agent-sdk package on PyPI
 # (the same version ClaudeOS runs on Linux). The download is checked against a fixed SHA-256, then
 # "claude setup-token" opens the browser to sign in and prints a long-lived token, which the person
-# pastes back here. The token is never shown, logged or sent anywhere except onto the installer partition.
+# pastes back here; a token they already made that way can be pasted straight away instead.
+# The token is never shown, logged or sent anywhere except onto the installer partition.
 # For the Claude app on the phone (Claude Code's Remote Control), that token isn't enough: it needs a
 # full sign-in, which "claude auth login" saves as .credentials.json in a throwaway settings folder.
 # That file goes onto the installer partition the same way, and is never shown or logged either.
@@ -90,8 +91,26 @@ function Get-ClaudeProgram {
 }
 
 function Invoke-ClaudeSignIn {
-    # Runs "claude setup-token" in this window, then asks for the token it printed.
+    # Asks first for a sign-in code the person already has: a code made with "claude setup-token" in any
+    # window works the same. Without one, runs "claude setup-token" in this window, then asks for the code it
+    # printed. On some PCs that program shows nothing at all when setup (an administrator window) runs it, so
+    # the message says how to make the code in an ordinary window instead and bring it here.
     param([Parameter(Mandatory = $true)][string]$ClaudeExe)
+    Write-Line ''
+    Write-Line 'If you already have a Claude sign-in code (a long code that starts with sk-ant-), copy it and paste'
+    Write-Line 'it here with a RIGHT-CLICK (Ctrl+V may not work in this window). It stays hidden; then press Enter.'
+    Write-Line 'If you have no code yet, just press Enter and your browser will open to sign in.'
+    for ($try = 1; $try -le 3; $try++) {
+        $raw = Read-PastedSecret 'Your code (right-click to paste), or Enter'
+        if ([string]::IsNullOrWhiteSpace($raw)) { break }
+        $token = ConvertTo-CleanToken $raw
+        if (Test-ClaudeToken $token) {
+            Write-Good 'Got it. Claude is signed in for ClaudeOS.'
+            return $token
+        }
+        Write-Warn ('That does not look like a sign-in code (it starts with sk-ant- and is about 100 characters long). ' +
+                    'Copy it again and paste it with a right-click, or press Enter to sign in with your browser.')
+    }
     $config = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-signin-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $config -Force | Out-Null
     $oldConfig = $env:CLAUDE_CONFIG_DIR
@@ -102,6 +121,11 @@ function Invoke-ClaudeSignIn {
         Write-Line 'Your browser will open to sign in to Claude. Use the account with your Claude subscription.'
         Write-Line 'When it finishes, this window shows a long code starting with sk-ant-. It may run over two'
         Write-Line 'lines: copy all of it (select it with the mouse and press Enter, or Ctrl+C).'
+        Write-Line 'Until the code appears, do not click inside this window: a click pauses it (press Esc to go on).'
+        Write-Line 'If nothing new appears here within a minute, close this window and make the code another way:'
+        Write-Line 'open PowerShell (not as administrator), run the line below, sign in, then run ClaudeOS Setup'
+        Write-Line 'again and paste the code when it asks.'
+        Write-Line ('  & "' + $ClaudeExe + '" setup-token')
         Write-Line ''
         & $ClaudeExe setup-token
         Write-SetupLog ('claude setup-token exit code ' + $LASTEXITCODE)
@@ -110,7 +134,7 @@ function Invoke-ClaudeSignIn {
         Remove-Item -LiteralPath $config -Recurse -Force -ErrorAction SilentlyContinue
     }
     for ($try = 1; $try -le 3; $try++) {
-        $raw = Read-PastedSecret 'Paste the code here (it stays hidden), then press Enter'
+        $raw = Read-PastedSecret 'Paste the code here with a right-click (it stays hidden), then press Enter'
         $token = ConvertTo-CleanToken $raw
         if (Test-ClaudeToken $token) {
             Write-Good 'Got it. Claude is signed in for ClaudeOS.'

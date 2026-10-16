@@ -1,0 +1,91 @@
+{
+ "ok": false,
+ "steps": [
+  {
+   "step": "starts full screen and greets",
+   "ok": false,
+   "greeted": false,
+   "geometry": {
+    "screen": [
+     1024.0,
+     768.0
+    ],
+    "window": [
+     1024.0,
+     768.0
+    ],
+    "scale": 1.0,
+    "visible": true,
+    "active": true
+   },
+   "layout": {
+    "scale": 0.875,
+    "font_px": 14.0,
+    "column_px": 672,
+    "web_zoom": 0.9,
+    "distance_mm": 500,
+    "distance_estimated": true,
+    "size_known": false,
+    "diagonal_in": 13.333,
+    "summary": "13-inch screen (size assumed), viewed from about 50 cm away (estimated): drawn at 88% (text 14 px), websites at 90%."
+   },
+   "requests": 0
+  },
+  {
+   "step": "voice: opens the website and clicks in it",
+   "ok": true,
+   "content": {
+    "mode": "content",
+    "url": "http://127.0.0.1:49247/watch.html",
+    "title": "Calm piano music - Test Video Site"
+   },
+   "heard": [
+    "reminder>\n\n[Fri 16 Oct 11:05 \u00b7 screen: conversation]\nPlay some calm piano music."
+   ],
+   "voice": true
+  },
+  {
+   "step": "back to the conversation",
+   "ok": true
+  },
+  {
+   "step": "shows a document",
+   "ok": true,
+   "content": {
+    "mode": "content",
+    "url": "file:///Users/runner/work/_temp/results/scenario/home/ClaudeOS/pages/_view1.html",
+    "title": "Plan for Saturday"
+   }
+  },
+  {
+   "step": "sleeps and wakes to its name",
+   "ok": true
+  },
+  {
+   "step": "steps aside to show macOS, and comes back",
+   "ok": true,
+   "hidden": true,
+   "listening_for_name_only": true,
+   "back": true
+  },
+  {
+   "step": "rebuilds the conversation after its page stops",
+   "ok": true
+  }
+ ],
+ "voice_models": true,
+ "models_dir": "/Users/runner/ClaudeOS/models",
+ "page_errors": [
+  "Error Domain=WKErrorDomain Code=4 \"A JavaScript exception occurred\" UserInfo={WKJavaScriptExceptionLineNumber=1, WKJavaScriptExceptionMessage=TypeError: null is not an object (evaluating 'document.getElementById('log').innerText'), WKJavaScriptExceptionColumnNumber=31, WKJavaScriptExceptionSourceURL"
+ ],
+ "spoken_chunks": 12,
+ "tool_results": [
+  "[{\"tool_use_id\": \"toolu_97f7d3f2b8004e3688f5\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Showing: Test Video Site \\u2014 http://127.0.0.1:49247/\\nUse read_screen to read it or find things to click.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_87747f6cc2514283be7a\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Clicked \\u201cCalm piano music for focus\\u201d. Now showing: Calm piano music - Test Video Site \\u2014 http://127.0.0.1:49247/watch.html\"}]}]",
+  "[{\"tool_use_id\": \"toolu_6d3a6167e1e947428ddb\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Back to the conversation.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_37bb3602333f42339456\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Showing the document.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_f6ad8d36345d4d9fbf8f\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Back to the conversation.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_158b908d8ab74246bfc5\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"OK \\u2014 switch to macos in 4 seconds. Say a short goodbye.\"}]}]"
+ ],
+ "quit_asked_at": 1792148744.5306711
+}

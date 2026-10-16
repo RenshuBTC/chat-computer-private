@@ -1,0 +1,15 @@
+
+[1mClaudeOS Setup[0m
+ClaudeOS fills this Mac's screen and you talk to it, or type to it from the Claude app on your phone.
+macOS, your apps and your files stay as they are.
+
+What would you like to do?
+  1. Update ClaudeOS
+  2. Sign ClaudeOS in to Claude again
+  3. Choose whether ClaudeOS opens when you log in
+  4. Remove ClaudeOS from this Mac
+Type a number (Enter = 1) 
+[1;36mRemove ClaudeOS from this Mac[0m
+This deletes the ClaudeOS app, its Python and voice, its sign-in and its website sign-ins and cookies.
+macOS, your apps and your files stay as they are.
+Type REMOVE to remove ClaudeOS (anything else keeps it): Keep what ClaudeOS remembers about you, its notes and your conversations (in /Users/runner/ClaudeOS)? [y/N] [32mClaudeOS is removed, with everything it kept.[0m

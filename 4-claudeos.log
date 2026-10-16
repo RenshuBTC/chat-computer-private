@@ -1,0 +1,64 @@
+2026-10-16 10:46:55,294 INFO claudeos.ui: Layout: 30-inch screen, viewed from about 70 cm away (estimated): drawn at 88% (text 14 px), websites at 90%.
+2026-10-16 10:46:55,322 DEBUG asyncio: Using selector: KqueueSelector
+2026-10-16 10:46:55,333 DEBUG mcp.server.lowlevel.server: Initializing server 'claudeos'
+2026-10-16 10:46:56,542 INFO claude_agent_sdk._internal.transport.subprocess_cli: Using bundled Claude Code CLI: /Users/runner/ClaudeOS/runtime/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude
+2026-10-16 10:46:57,811 INFO claudeos.brain: Claude session started (token sign-in)
+2026-10-16 10:46:57,849 DEBUG mcp.server.runner: no handler for notification notifications/initialized
+2026-10-16 10:48:29,512 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 10:48:29,512 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 10:48:29,512 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 10:48:29,512 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 10:48:34,667 INFO faster_whisper: Processing audio with duration 00:00.672
+2026-10-16 10:48:34,761 DEBUG faster_whisper: Processing segment at 00:00.000
+2026-10-16 10:48:41,214 INFO faster_whisper: Processing audio with duration 00:01.952
+2026-10-16 10:48:41,246 DEBUG faster_whisper: Processing segment at 00:00.000
+2026-10-16 10:48:43,956 DEBUG claudeos.controller: heard 'Play some calm piano music.' (asleep=False, busy=False)
+2026-10-16 10:48:44,201 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:48:44 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 2113 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:49:04,563 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:49:04 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1099 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:50:45,222 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 10:50:45,223 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 10:50:45,223 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 10:50:45,223 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 10:50:45,233 DEBUG claudeos.controller: heard 'go back to the chat' (asleep=False, busy=False)
+2026-10-16 10:50:45,362 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:50:45 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1195 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:50:45,424 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:50:45 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1099 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:50:47,859 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 10:50:47,860 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 10:50:47,861 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 10:50:47,861 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 10:50:47,864 DEBUG claudeos.controller: heard 'make me a plan for saturday' (asleep=False, busy=False)
+2026-10-16 10:50:47,909 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:50:47 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1448 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:51:07,971 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:51:07 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1900 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:51:07,987 WARNING phonemizer: words count mismatch on 100.0% of the lines (1/1)
+2026-10-16 10:51:30,490 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 10:51:30,491 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 10:51:30,491 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 10:51:30,491 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 10:51:30,496 DEBUG claudeos.controller: heard 'show the chat' (asleep=False, busy=False)
+2026-10-16 10:51:30,572 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:51:30 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1195 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:51:30,614 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:51:30 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1099 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:51:33,651 DEBUG claudeos.controller: heard 'go to sleep' (asleep=False, busy=False)
+2026-10-16 10:51:40,020 DEBUG claudeos.controller: going to sleep
+2026-10-16 10:51:42,483 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 10:51:42,484 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 10:51:42,484 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 10:51:42,484 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 10:51:42,485 DEBUG claudeos.controller: heard 'Claude' (asleep=True, busy=False)
+2026-10-16 10:51:43,509 DEBUG claudeos.controller: heard 'switch to macOS' (asleep=False, busy=False)
+2026-10-16 10:51:43,586 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:51:43 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1214 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:51:43,662 INFO aiohttp.access: 127.0.0.1 [16/Oct/2026:10:51:43 +0000] "POST /v1/messages?beta=true HTTP/1.1" 200 1099 "-" "claude-cli/2.1.300 (external, sdk-py, agent-sdk/0.2.167, client-app/claudeos/0.1)"
+2026-10-16 10:51:50,391 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 10:51:50,393 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 10:51:50,393 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 10:51:50,394 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 10:51:50,396 DEBUG claudeos.controller: heard 'Claude' (asleep=True, busy=False)
+2026-10-16 10:51:53,260 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 10:51:53,263 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 10:51:53,264 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 10:51:53,264 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 10:51:53,415 ERROR claudeos.ui: The conversation page's renderer stopped; loading it again
+2026-10-16 10:52:17,842 DEBUG PIL.PngImagePlugin: STREAM b'IHDR' 16 13
+2026-10-16 10:52:17,846 DEBUG PIL.PngImagePlugin: STREAM b'sRGB' 41 1
+2026-10-16 10:52:17,847 DEBUG PIL.PngImagePlugin: STREAM b'eXIf' 54 68
+2026-10-16 10:52:17,847 DEBUG PIL.PngImagePlugin: STREAM b'IDAT' 134 16384
+2026-10-16 10:52:17,962 DEBUG claude_agent_sdk._internal.query: Read task cancelled

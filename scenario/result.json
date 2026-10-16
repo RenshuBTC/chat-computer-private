@@ -1,0 +1,87 @@
+{
+ "ok": false,
+ "steps": [
+  {
+   "step": "starts full screen with Claude's greeting",
+   "ok": false,
+   "greeted": false,
+   "geometry": {
+    "screen": [
+     1920.0,
+     1080.0
+    ],
+    "window": [
+     1920.0,
+     1080.0
+    ],
+    "scale": 1.0,
+    "visible": true,
+    "active": false
+   },
+   "layout": {
+    "scale": 0.875,
+    "font_px": 14.0,
+    "column_px": 672,
+    "web_zoom": 0.9,
+    "distance_mm": 701,
+    "distance_estimated": true,
+    "size_known": true,
+    "diagonal_in": 30.278,
+    "summary": "30-inch screen, viewed from about 70 cm away (estimated): drawn at 88% (text 14 px), websites at 90%."
+   },
+   "requests": 0
+  },
+  {
+   "step": "voice: opens the website and clicks in it",
+   "ok": false,
+   "content": {
+    "mode": "content",
+    "url": null,
+    "title": ""
+   },
+   "heard": [
+    "reminder>\n\n[Fri 16 Oct 10:48 \u00b7 screen: conversation]\nPlay some calm piano music."
+   ],
+   "voice": true
+  },
+  {
+   "step": "back to the conversation",
+   "ok": true
+  },
+  {
+   "step": "shows a document",
+   "ok": false,
+   "content": {
+    "mode": "content",
+    "url": "file:///Users/runner/work/_temp/results/scenario/home/ClaudeOS/pages/_view1.html",
+    "title": ""
+   }
+  },
+  {
+   "step": "sleeps and wakes to its name",
+   "ok": true
+  },
+  {
+   "step": "steps aside to show macOS, and comes back",
+   "ok": true,
+   "hidden": true,
+   "listening_for_name_only": true,
+   "back": true
+  },
+  {
+   "step": "rebuilds the conversation after its page stops",
+   "ok": true
+  }
+ ],
+ "voice_models": true,
+ "models_dir": "/Users/runner/ClaudeOS/models",
+ "spoken_chunks": 11,
+ "tool_results": [
+  "[{\"tool_use_id\": \"toolu_fef06bdc75ea421bba0b\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Showing:  \\u2014 http://127.0.0.1:49231/\\nUse read_screen to read it or find things to click.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_4df79695f7b9480bb385\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Back to the conversation.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_a6cd36950ca44c339d7e\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Showing the document.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_c990636576124b5da7c5\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"Back to the conversation.\"}]}]",
+  "[{\"tool_use_id\": \"toolu_fe3f431406e5496eb7a0\", \"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"OK \\u2014 switch to macos in 4 seconds. Say a short goodbye.\"}]}]"
+ ],
+ "quit_asked_at": 1792147937.9471629
+}

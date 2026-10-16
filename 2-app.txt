@@ -1,0 +1,42 @@
+Executable=/Users/runner/Applications/ClaudeOS.app/Contents/MacOS/ClaudeOS
+Identifier=com.claudeos.app
+Format=app bundle with Mach-O universal (x86_64 arm64)
+CodeDirectory v=20400 size=361 flags=0x2(adhoc) hashes=5+3 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=61c97868d26d293b20af4696090a0aabc1cf05c3
+CandidateCDHashFull sha256=61c97868d26d293b20af4696090a0aabc1cf05c3f377e282ab316f77aee5db31
+Hash choices=sha256
+CMSDigest=61c97868d26d293b20af4696090a0aabc1cf05c3f377e282ab316f77aee5db31
+CMSDigestType=2
+CDHash=61c97868d26d293b20af4696090a0aabc1cf05c3
+Signature=adhoc
+Info.plist entries=17
+TeamIdentifier=not set
+Sealed Resources version=2 rules=13 files=1
+Internal requirements count=0 size=12
+arm64 x86_64
+--- Gatekeeper (an ad hoc signed app is expected to be "rejected" here; it still opens):
+/Users/runner/Applications/ClaudeOS.app: rejected
+{
+  "CFBundleDisplayName" => "ClaudeOS"
+  "CFBundleExecutable" => "ClaudeOS"
+  "CFBundleIconFile" => "ClaudeOS"
+  "CFBundleIdentifier" => "com.claudeos.app"
+  "CFBundleInfoDictionaryVersion" => "6.0"
+  "CFBundleName" => "ClaudeOS"
+  "CFBundlePackageType" => "APPL"
+  "CFBundleShortVersionString" => "0.1.0"
+  "CFBundleVersion" => "1"
+  "LSMinimumSystemVersion" => "13.0"
+  "NSAppleEventsUsageDescription" => "ClaudeOS asks macOS to shut down or restart when you tell it to."
+  "NSAppTransportSecurity" => {
+    "NSAllowsArbitraryLoadsInWebContent" => true
+  }
+  "NSBluetoothAlwaysUsageDescription" => "ClaudeOS connects your AirPods when you ask it to."
+  "NSHighResolutionCapable" => true
+  "NSLocationUsageDescription" => "macOS shows Wi-Fi network names only to apps allowed to use Location."
+  "NSLocationWhenInUseUsageDescription" => "macOS shows Wi-Fi network names only to apps allowed to use Location."
+  "NSMicrophoneUsageDescription" => "ClaudeOS listens for your voice, through your AirPods or the Mac's microphone, so you can talk to it."
+}
+python=/Users/runner/ClaudeOS/runtime/bin/python
+libpython=/Users/runner/ClaudeOS/python/cpython-3.12.14-macos-x86_64-none/lib/libpython3.12.dylib

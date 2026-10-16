@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: ClaudeOS Setup's parts on real macOS
-        run: bash tests/mac_ci/run.sh "$RUNNER_TEMP/results"
+        run: /bin/bash tests/mac_ci/run.sh "$RUNNER_TEMP/results"   # macOS's own bash 3.2, as people run setup
       - name: Save what it saw to results/${{ github.run_number }}-${{ matrix.os }}
         if: always()
         env:

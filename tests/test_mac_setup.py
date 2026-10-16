@@ -340,6 +340,7 @@ def test_removing_claudeos_gives_macos_everything_back(tmp_path):
                                       f"diskutil eraseVolume free free {made['EFI']}",
                                       "diskutil eraseVolume free free disk0s9", "diskutil apfs resizeContainer disk0s2 0")]
     assert order == sorted(order)
+    assert "bless --setBoot --device /dev/disk3s1 " in calls     # macOS's system volume, not the snapshot / is on
     assert "bless password: hunter2" in calls
     parts = [p for p in mac.disk()["parts"] if not p.get("free")]
     assert [p["content"] for p in parts] == ["Apple_APFS_ISC", "Apple_APFS", "Apple_APFS_Recovery"]
@@ -347,6 +348,23 @@ def test_removing_claudeos_gives_macos_everything_back(tmp_path):
     kept = mac.home / "ClaudeOS files/Documents/notes from ClaudeOS.txt"
     assert kept.read_text() == "hello from ClaudeOS\n"
     assert "hunter2" not in (mac.home / ".claudeos-setup/setup.log").read_text()
+
+
+@needs_tools
+def test_space_left_after_a_removal_goes_back_to_macos_on_the_next_run(tmp_path):
+    mac = PretendMac(tmp_path)
+    _installed(mac)
+    st = mac.disk()
+    st["resize_fails"] = 1                                   # macOS's partition can't grow the first time
+    mac.state.write_text(json.dumps(st))
+    r = mac.run(["5", "n", "REMOVE", "hunter2"])
+    assert r.returncode == 0 and "couldn't grow" in r.stdout, r.stdout[-2000:]
+    assert mac.disk()["parts"][1]["size"] == 400 * GB
+    r = mac.run(["5", "y"])                                  # again: ClaudeOS is gone, the space comes back
+    assert r.returncode == 0 and "free space is right after macOS's partition" in r.stdout, r.stdout[-2000:]
+    assert mac.disk()["parts"][1]["size"] == 494 * GB
+    r = mac.run(["5"])
+    assert r.returncode == 0 and "isn't installed on this Mac. Nothing was changed." in r.stdout
 
 
 @needs_tools

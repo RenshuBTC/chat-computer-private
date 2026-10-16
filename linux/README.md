@@ -47,6 +47,22 @@ and stops if it doesn't work.
   (never start), no interactive prompts.
 - `--dry-run` — print every action, change nothing.
 - `--skip-models` — don't download voice models (done on first boot as the user).
+- `--distro ubuntu|fedora` — which system it installs on (default: from `/etc/os-release`).
+
+### On a Mac: Fedora Asahi Remix
+
+On an Apple silicon Mac the same script runs on Fedora Asahi Remix 44 Minimal (aarch64), started by
+`claudeos-finish-install.service` after ClaudeOS's first start (`../mac/esp/firstboot.sh`). The differences:
+
+| Area | Fedora | Why |
+|---|---|---|
+| Packages | the same set by Fedora's names (`xorg-x11-server-Xorg`, `python3-gobject`, `webkit2gtk4.1`, `pipewire-pulseaudio`, ...), `dnf install --setopt=install_weak_deps=False` | Nothing beyond what ClaudeOS needs; the Asahi image already has the Mac's own parts. All 40 names checked against Fedora 44's aarch64 repositories. |
+| The Mac | `asahi-bless`, `exfatprogs` | "Switch to macOS" chooses the start-up volume; the drive macOS shares is exFAT. |
+| Audio | `51-claudeos-bluetooth.conf` (WirePlumber 0.5, SPA-JSON) | Fedora's WirePlumber reads SPA-JSON, not Lua. |
+| Files | fstab line for the ClaudeOS drive at `~/Mac` (`PARTUUID` from `/etc/claudeos/mac-files-partuuid`) | Folders sent over from macOS. No Windows mount, no netplan, no Xwrapper (logind gives Xorg the devices). |
+| Security | firewalld without `ssh` and `cockpit` (`firewall-offline-cmd`), `dnf5-automatic.timer` with `upgrade_type = security`, `sshd` off | Same contract as ufw/unattended-upgrades on Ubuntu. |
+| Boot | `GRUB_TIMEOUT=0`, hidden menu, `quiet rhgb`, `plymouth-set-default-theme claudeos -R` | The Mac picks the system itself (startup options), so GRUB shows nothing. |
+| SELinux | `restorecon -RF` over everything written | Fedora enforces SELinux labels. |
 
 ## Layout
 
@@ -82,9 +98,10 @@ Escape hatch: **Ctrl+Alt+Backspace** restarts ClaudeOS (ends X → getty respawn
 ## Root helper verbs
 
 `sudo -n /usr/local/libexec/claudeos/claudeos-root <verb>` →
-`status`, `boot-windows-next`, `mount-windows`, `apt-install PKG…`,
+`status`, `boot-windows-next`, `boot-default windows|claudeos`, `mount-windows`, `apt-install PKG…`,
 `apt-remove PKG…`, `system-update`, `bt-import-windows-keys`,
-`set-timezone ZONE`, `wipe-install-secrets`. Every verb validates its arguments,
+`set-timezone ZONE`, `wipe-install-secrets`; on a Mac also `boot-macos-next` and
+`boot-default macos|claudeos` (asahi-bless), and the package verbs use dnf. Every verb validates its arguments,
 emits one JSON object on stdout, and never interpolates caller input into a
 shell. ClaudeOS asks the user (spoken yes/no) before any verb except `status`.
 
@@ -128,7 +145,8 @@ bash tests/run.sh               # everything except the chroot test (auto-skips 
 
 `run.sh` shellchecks every script, syntax-checks the Python, and runs:
 `test_grub_07_claudeos.sh`, `test_root_helper.sh`, `test_session_supervisor.sh`,
-`test_finish_install.sh`, `test_reclaim_installer.sh` (a pretend disk in a fake `/sys`)
+`test_finish_install.sh`, `test_reclaim_installer.sh` (a pretend disk in a fake `/sys`),
+`test_install_dryrun.sh` (`--dry-run` for Ubuntu and for Fedora)
 (under Xvfb), `test_bt_import.sh` (synthetic SYSTEM hive → BlueZ `info`), and
 `test_install_chroot.sh` (debootstrap a noble chroot, install for real, verify,
 prove idempotency). It finds or builds a Python with `regipy` for the

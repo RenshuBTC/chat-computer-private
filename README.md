@@ -7,10 +7,9 @@ documents and your files.
 
 * **On a Windows PC** it sits next to Windows. When you press the power button, ClaudeOS starts by
   itself. Windows stays installed, and you can go back to it whenever you like.
-* **On a Mac** it takes over the whole Mac from the moment you log in: none of macOS shows, no Dock and
-  no menu bar. macOS, your apps and your files stay as they are, and "switch to macOS" brings them back
-  at once. It works on every Mac with Apple silicon, including the newest, and on Intel Macs with macOS 13
-  or newer. See [ClaudeOS on a Mac](#claudeos-on-a-mac).
+* **On a Mac with Apple silicon (M1, M2 or M3)** it sits next to macOS the same way: when the Mac
+  starts, ClaudeOS starts. macOS, your apps and your files stay, one restart away. See
+  [ClaudeOS on a Mac](#claudeos-on-a-mac).
 
 ## What you need on a Windows PC
 
@@ -76,7 +75,9 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   typed. Most file changes can be undone: say "undo that".
 * **Your files.** On a PC, everything on Windows' drive is there to open, and ClaudeOS offers to bring
   the folders you use over, so your files live in ClaudeOS from then on (Windows keeps its copies). If
-  Windows' drive is encrypted with BitLocker, setup gives ClaudeOS a key of its own for it. On a Mac, it's your home folder.
+  Windows' drive is encrypted with BitLocker, setup gives ClaudeOS a key of its own for it. On a Mac,
+  setup copies the folders you choose onto a drive called ClaudeOS, which macOS opens too; in ClaudeOS
+  they're in your Mac folder.
 
 ## Typing: your phone is the keyboard
 
@@ -91,7 +92,7 @@ so it works the same at your desk or away from home. You can also attach photos 
 * While the phone is connected, Anthropic keeps a copy of the conversation on its servers so your
   devices stay in step (this is how the Claude app's Remote Control works). To switch it off, say
   "turn off typing from my phone".
-* Didn't set it up, or it stopped working? Run ClaudeOS Setup (on Windows, or in Terminal on a Mac),
+* Didn't set it up, or it stopped working? Run ClaudeOS Setup (in Windows, or in macOS on a Mac),
   choose **Sign ClaudeOS in to Claude again**, and say yes to typing from your phone. ClaudeOS picks up
   the new sign-in when it next starts.
 
@@ -157,30 +158,43 @@ If setup can't do it, you can do it by hand in Windows:
 
 ## ClaudeOS on a Mac
 
-On a Mac, ClaudeOS takes over the whole Mac from the moment you log in. It fills the screen, and none
-of macOS shows: no Dock, no menu bar, no app switcher, and the screen stays on while ClaudeOS is in front
-(if it went dark, the Mac would lock, and you can't talk your way past a lock screen). Talking, typing from
-your phone and asking for things work as described above. Your Mac's files are there for ClaudeOS to find.
+On a Mac with Apple silicon, ClaudeOS sits next to macOS the way it sits next to Windows on a PC. When the
+Mac starts, ClaudeOS starts; macOS, your apps and your files stay, one restart away. Talking, typing from
+your phone and asking for things work as described above.
 
-macOS stays installed underneath, with your apps and files, and handles the Wi-Fi, the sound and your
-AirPods. That's why it works on every Mac, including the newest: Apple's newest Macs can't start another
-system yet, so on a Mac ClaudeOS doesn't replace macOS at power-on the way it replaces Windows on a PC. If
-FileVault is on (it usually is), you type your Mac's password once when it starts, like a PC with
-BitLocker; then ClaudeOS appears by itself.
+On a Mac, ClaudeOS is built on Fedora Asahi Remix, the Linux for Apple silicon Macs made by the Asahi Linux
+project and Fedora, and setup installs it with their official installer. That decides which Macs it works
+on:
 
-ClaudeOS for Mac has been tried on GitHub's virtual Macs (Apple silicon and Intel, macOS 26): setup, the
-app, a scripted conversation, switching to macOS and back, and removing it. It hasn't been tried with
-AirPods on a physical Mac yet. If something doesn't work, the details are in the `logs` folder inside the
-`ClaudeOS` folder in your home folder.
+* **M1 and M2 Macs:** everything ClaudeOS needs works.
+* **M3, M3 Pro and M3 Max Macs:** ClaudeOS works with limits for now: no graphics acceleration (pages and
+  videos are slower), no brightness control, and no second screen. On the iMac with M3, the speakers and
+  microphones don't work yet; AirPods do.
+* **Not yet:** Macs with M4 or M5, the Mac Studio with M3 Ultra, and Intel Macs.
+* A separate screen (a Mac mini's, say) must be connected to the Mac's HDMI port: screens connected over
+  USB-C or Thunderbolt don't work in Asahi Linux yet.
+
+ClaudeOS can't open macOS's own files: FileVault, which most Macs have on, locks them to macOS. So setup
+copies the folders you choose onto a drive called **ClaudeOS** that both systems open. In ClaudeOS they're
+in your Mac folder; in macOS, the ClaudeOS drive shows in Finder. What you save there in one system is
+there in the other. To bring more folders over later, run setup in macOS again.
+
+ClaudeOS for Mac hasn't been tried on a real Mac yet: its setup has been tested on a pretend Mac and, in
+parts, on GitHub's virtual Macs (which can't start Linux). Whether AirPods' microphone works in Asahi Linux
+isn't known yet; the built-in microphones of M1, M2 and M3 laptops do work.
 
 ### What you need on a Mac
 
-* A Mac with Apple silicon (M1 or newer) and macOS 14 Sonoma or newer, or an Intel Mac with macOS 13
-  Ventura or newer.
-* About 5 GB of free space, and the internet.
+* A Mac with M1, M2 or M3 (see above) and macOS 13.5 or newer.
+* About 80 GB of free space in macOS, plus the size of the folders you bring. ClaudeOS gets 60 GB when
+  there's room (30 GB at least), the ClaudeOS drive gets your folders plus 10 GB, and macOS keeps 38 GB
+  free for its updates.
+* Wi-Fi with a normal password: ClaudeOS finishes installing itself from the internet the first time it
+  starts.
 * A Claude subscription (Pro or Max).
-* Your AirPods, connected to the Mac.
 * The Claude app on your phone, signed in with the same account, for typing.
+* Your AirPods. In ClaudeOS, put them in pairing mode (lid open, button on the back held until the light
+  flashes white) and say or type "pair my AirPods". You may have to pair them again in macOS afterwards.
 
 ### Installing on a Mac
 
@@ -190,50 +204,75 @@ AirPods on a physical Mac yet. If something doesn't work, the details are in the
    `mac` folder into Terminal. You can also double-click `ClaudeOS Setup.command` in the folder; if macOS
    won't open it because it came from the internet, use Terminal.
 3. **Answer setup's questions.**
+   * **Your files.** Which of your folders to bring over: Desktop, Documents, Downloads, Pictures, Movies
+     and Music. If macOS asks whether Terminal may open them, choose **OK**.
    * **Signing in to Claude.** Your browser opens, and you sign in with your subscription account. Setup
      then shows a code that starts with `sk-ant-`. It may run over two lines: copy all of it, paste it
      back into Terminal (it stays hidden) and press Return.
    * **Typing from your phone.** Say yes: your browser opens once more; approve it with the same account.
-   * **Opening when you log in.** Say yes: that's what makes ClaudeOS take over the Mac from the moment you
-     log in.
+   * **Wi-Fi.** Setup shows the Wi-Fi the Mac uses and asks for its password. Press Return to let setup
+     look it up in the Mac's keychain instead (macOS may ask for your Mac's password).
 
-   Nothing changes on the Mac until you answer **y** to **Go ahead?**. Setup then installs ClaudeOS with
-   its own copy of Python and its voice in the `ClaudeOS` folder in your home folder (about 3 GB), and
-   makes the ClaudeOS app in the Applications folder in your home folder.
-4. **Start ClaudeOS.** macOS asks a few questions the first time. Choose **Allow** for:
-   * the microphone, so it can hear you;
-   * your Desktop, Documents and Downloads folders and iCloud Drive, so it can find your files;
-   * Location, when you first ask about Wi-Fi (macOS shows Wi-Fi names only to apps allowed to use it).
+   Nothing changes on the Mac until you answer **y** to **Go ahead?**.
+4. **Let setup install.** Setup downloads the Asahi installer and Fedora Asahi Remix (about 1.2 GB), checks
+   that both are genuine, and runs the installer, answering its questions. It makes room next to macOS by
+   shrinking macOS's partition, like Disk Utility does, and installs ClaudeOS's base there. Type your Mac's
+   password when asked (it stays hidden). This takes 10 to 20 minutes, and the Mac may seem to freeze while
+   macOS's partition shrinks. Then setup makes the ClaudeOS drive and copies your folders onto it.
+5. **Do the one step Apple requires.** Setup shows these steps and shuts the Mac down. Take a photo of
+   them:
+   1. When the Mac has turned off, wait 25 seconds.
+   2. Press and hold the power button. Let go when "Loading startup options..." appears.
+   3. Click **ClaudeOS**, then **Continue**.
+   4. If it asks you to "Select a volume to recover", choose your usual macOS (Macintosh HD), click
+      **Next** and type your Mac's password.
+   5. A window "ClaudeOS installer (second step)" opens. Press Enter, then type your Mac's user name and
+      password when asked (it asks twice). The note about the security level is about ClaudeOS only:
+      macOS keeps its own.
+   6. At "Installation complete! Press enter to reboot.", press Enter.
 
-   To let it click and type on websites for you, turn on ClaudeOS in **System Settings**, **Privacy &
-   Security**, **Accessibility** (macOS offers to take you there the first time it's needed).
+   If the Mac starts macOS instead, start again from the first of these steps.
+6. **Let ClaudeOS set itself up.** On its first start, ClaudeOS makes your account, joins your Wi-Fi and
+   restarts. It then installs the rest from the internet (20 to 40 minutes), restarts once more, downloads
+   its voice (about 600 MB) and says hello.
+
+Setup saves a **recovery password** in your Documents folder in macOS, in `ClaudeOS recovery password.txt`.
+You won't need it day to day; it's only for repairs.
 
 ### Going back to macOS
 
-* **Right now:** say **"switch to macOS"**, or press Command-H. ClaudeOS steps aside and macOS shows, with
-  everything as you left it. Say **"Claude"**, press an AirPod stem or click ClaudeOS in the Dock to come
-  back. Command-Q quits ClaudeOS. If ClaudeOS ever stops responding, Option-Command-Esc (Force Quit) still
-  works.
-* **Every day:** say **"start macOS when the computer turns on"**, or run setup again and choose
-  **Choose whether ClaudeOS opens when you log in**. ClaudeOS stays in Applications for when you want it.
-* **For good:** run setup again, choose **Remove ClaudeOS from this Mac** and type REMOVE. Setup deletes
-  the app, its Python and voice, its sign-in and its website sign-ins. It asks whether to keep what
-  ClaudeOS remembers about you, its notes and your conversations. macOS, your apps and your files stay as
-  they are.
+* **For one restart:** say **"switch to macOS"**. ClaudeOS asks, then the Mac restarts into macOS.
+  Restarting from macOS brings you back to ClaudeOS. You can also hold the power button while the Mac
+  starts and choose **Macintosh HD**.
+* **macOS every day, ClaudeOS still there:** say **"start macOS when the Mac turns on"**, or run setup in
+  macOS and choose **Choose what starts when the Mac turns on**. To use ClaudeOS then, hold the power button
+  while the Mac starts and choose **ClaudeOS**, or make it the first choice again the same way.
+* **For good:** run setup in macOS, choose **Remove ClaudeOS from this Mac** and type REMOVE. If the ClaudeOS
+  drive has files on it, setup first offers to copy them into a folder called `ClaudeOS files` in your home
+  folder. It then makes macOS the start-up disk, deletes ClaudeOS, its partitions and the ClaudeOS drive,
+  and gives their space back to macOS. macOS, your apps and the files in your macOS folders stay as they
+  are.
 
 ### If something goes wrong on a Mac
 
-* **Setup says the Mac is too old.** Update macOS in System Settings, then run setup again.
-* **ClaudeOS doesn't open, or says it couldn't start.** Run setup again and choose **Update ClaudeOS**.
-* **ClaudeOS doesn't hear you.** In **System Settings**, **Privacy & Security**, **Microphone**, turn on
-  ClaudeOS. Check that your AirPods are connected to the Mac.
-* **Claude says it isn't signed in.** Run setup and choose **Sign ClaudeOS in to Claude again**, then
-  quit ClaudeOS (Command-Q) and open it again.
-* **Notifications from other apps pop up over ClaudeOS.** Turn on a Focus (Control Center, **Focus**, for
-  example **Do Not Disturb**) while you use ClaudeOS.
+* **Setup says this Mac can't run ClaudeOS.** ClaudeOS starts on its own only on Macs with M1, M2 or M3
+  (not M3 Ultra). Asahi Linux, which it's built on, doesn't support newer Macs yet.
+* **Setup says macOS's partition couldn't be made smaller.** Time Machine's local snapshots can hold on to
+  space. See https://alx.sh/tmcleanup, then run setup again.
+* **The installer stopped part way.** Run setup again and choose **Remove ClaudeOS from this Mac** to
+  clean up, then install again.
+* **The Mac starts macOS instead of ClaudeOS.** Do the startup-options steps above again, or run setup and
+  choose **Choose what starts when the Mac turns on**.
+* **The screen says "Finishing the installation".** ClaudeOS needs the internet to finish. Leave the Mac on
+  near your Wi-Fi: it keeps trying and restarts into ClaudeOS when it's done.
+* **The Mac shows Fedora's own setup questions instead of ClaudeOS.** ClaudeOS's first start didn't work
+  three times in a row. Restart into macOS (hold the power button, choose Macintosh HD), run setup, remove
+  ClaudeOS and install it again.
+* **Claude says it isn't signed in.** Say "switch to macOS", run setup and choose **Sign ClaudeOS in to
+  Claude again**, then restart into ClaudeOS.
 
 ## For the curious
 
 * `ARCHITECTURE.md` explains how it fits together.
-* `windows/` holds the PC setup tool, `linux/` the thin Ubuntu base, `mac/` the Mac setup and app, and
-  `claudeos/` ClaudeOS itself.
+* `windows/` holds the PC setup tool, `mac/` the Mac setup, `linux/` the thin Linux base (Ubuntu on a PC,
+  Fedora Asahi Remix on a Mac), and `claudeos/` ClaudeOS itself.

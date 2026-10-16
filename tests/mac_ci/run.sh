@@ -4,7 +4,7 @@
 # part of setup that uses them runs here against real macOS. Nothing touches this Mac's own disk: a disk image
 # stands in for it.
 #
-#   bash tests/mac_ci/run.sh RESULTS_DIR          (run by .github/workflows/mac.yml)
+#   /bin/bash tests/mac_ci/run.sh RESULTS_DIR     (run by .github/workflows/mac.yml; macOS's bash 3.2)
 #
 #  1. Setup as a person starts it, plan only: its checks, this Mac's disk read with diskutil (kept in RESULTS_DIR)
 #     and the folders' sizes. GitHub's Macs have little free space, so it may stop for lack of space: that's fine.
@@ -138,13 +138,20 @@ diskutil list "$D" >> "$OUT/2-parts-installed.txt" 2>&1
 cp "$T/list.plist" "$OUT/2-list-installed.plist"
 
 find_install "$D"
-note "found: start-up volume $FOUND_STUB, EFI $FOUND_ESP, Boot $FOUND_BOOT, Linux $FOUND_LINUX, drive ${FOUND_DRIVE:-none}"
+cp "$WORK/apfs.plist" "$OUT/2-apfs-installed.plist" 2>/dev/null
+note "found: start-up volume $FOUND_STUB ($FOUND_STUB_VOLUME), EFI $FOUND_ESP, Boot $FOUND_BOOT, Linux $FOUND_LINUX, drive ${FOUND_DRIVE:-none}"
 if [ -n "$STUBPART" ] && [ "$FOUND_STUB:$FOUND_ESP:$FOUND_BOOT:$FOUND_LINUX" = "$STUBPART:$ESP:$BOOTP:$ROOTP" ] \
-   && [ -z "$FOUND_DRIVE" ]; then
+   && [ -z "$FOUND_DRIVE" ] && [ -n "$FOUND_STUB_VOLUME" ]; then
   pass "find_install finds each of ClaudeOS's pieces in diskutil's real output"
 else
   fail "find_install (wanted $STUBPART $ESP $BOOTP $ROOTP)"
 fi
+# This Mac's own system volume, as setup blesses it to make macOS the start-up disk again (not the snapshot
+# / is mounted from).
+mv_="$(macos_volume)"
+mv_name="$(info "$mv_" VolumeName)"
+note "macOS's system volume: $mv_ ($mv_name); / is on $(plist "$WORK/root.plist" DeviceIdentifier)"
+if [[ "$mv_" =~ ^disk[0-9]+s[0-9]+$ ]] && [ -n "$mv_name" ]; then pass "finds macOS's own system volume"; else fail "macOS's system volume ($mv_)"; fi
 
 # The ClaudeOS drive, in the space left over, and the folders copied onto it.
 (
@@ -242,17 +249,15 @@ ls -laR "$E" > "$OUT/2-esp-files.txt" 2>&1
 diskutil unmount "$ESP" > /dev/null 2>&1
 
 # Removing ClaudeOS: the image stands in for macOS's disk (setup's read_disk would read this Mac's own).
-read -r IMGCONT MACVOL <<EOF
-$(diskutil apfs list -plist | "$PY" -c '
-import plistlib, sys
-for c in plistlib.load(sys.stdin.buffer)["Containers"]:
-    if c.get("DesignatedPhysicalStore") == sys.argv[1]:
-        print(c["ContainerReference"], c["Volumes"][0]["DeviceIdentifier"])' "$MACPART")
-EOF
+read_apfs
+c="$(container_on "$MACPART")"
+IMGCONT="$(plist "$WORK/apfs.plist" "Containers.${c:-x}.ContainerReference")"
+MACVOL="$(system_volume "${c:-x}")"
+note "the image's macOS: container $IMGCONT on $MACPART, volume $MACVOL"
 read_disk() {
   CONTAINER="$IMGCONT" STORE="$MACPART" DISK="$D"
-  diskutil info -plist "$MACVOL" > "$WORK/root.plist" 2>/dev/null
 }
+macos_volume() { printf '%s' "$MACVOL"; }
 mkdir -p "$H/Documents"
 printf 'note\n' > "$H/Documents/ClaudeOS recovery password.txt"
 # Remove; copy the drive's files to macOS first; REMOVE; the Mac's password (none here: bless only warns).
@@ -260,6 +265,7 @@ printf 'y\nREMOVE\n\n' | ( remove ) > "$OUT/2-remove.txt" 2>&1
 rc=$?
 ok "remove finishes" test "$rc" = 0
 ok "it says ClaudeOS is deleted and macOS has its space back" grep -q "macOS has its space back" "$OUT/2-remove.txt"
+ok "it blesses the image's macOS volume" grep -q "Your Mac's password, to make macOS the start-up disk" "$OUT/2-remove.txt"
 parts "$D" > "$OUT/2-parts-removed.txt"
 diskutil list "$D" >> "$OUT/2-parts-removed.txt" 2>&1
 left="$(parts "$D" | awk -F'|' '{ print $2 }' | tr '\n' ' ')"
@@ -269,6 +275,15 @@ note "macOS's container: $(size_text "${cap:-0}") (was 1.5 GB)"
 ok "macOS's container grew into the space" test "${cap:-0}" -gt 5000000000
 ok "the drive's files were copied to \"ClaudeOS files\" first" test "$(cat "$H/ClaudeOS files/Desktop/todo.txt" 2>/dev/null)" = "buy milk"
 ok "the recovery note is gone" test ! -e "$H/Documents/ClaudeOS recovery password.txt"
+# Space left after macOS's partition (a removal whose last step failed) goes back to macOS on the next run.
+sudo diskutil apfs resizeContainer "$MACPART" 1.5G > "$OUT/2-grow.txt" 2>&1
+printf 'y\n' | ( remove ) >> "$OUT/2-grow.txt" 2>&1
+cap="$(diskutil apfs list -plist "$IMGCONT" > "$T/c.plist" 2>/dev/null; plist "$T/c.plist" Containers.0.CapacityCeiling)"
+if grep -q "free space is right after macOS's partition" "$OUT/2-grow.txt" && [ "${cap:-0}" -gt 5000000000 ]; then
+  pass "a later run gives macOS the free space after its partition"
+else
+  fail "a later run gives macOS the free space after its partition (see 2-grow.txt)"
+fi
 hdiutil detach -force "$D" > /dev/null 2>&1
 rm -f "$IMG.sparseimage"
 

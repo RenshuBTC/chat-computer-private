@@ -99,7 +99,7 @@ def build_system_prompt(settings: Any, memory_facts: str, home: str, other_files
         windows_clause = (
             f"The folders they brought over from macOS are at {other_files}: the drive called ClaudeOS, which macOS "
             f"opens too. Keep their files there, so they're in both systems. macOS's own files can't be opened from "
-            f"here (Apple encrypts them for macOS only); to bring more, they switch to macOS and drag them onto the "
+            f"here (FileVault, on most Macs, locks them to macOS); to bring more, they switch to macOS and drag them onto the "
             f"ClaudeOS drive in Finder, or run ClaudeOS Setup there and choose to send files. ") if other_files else ""
     else:
         windows_clause = (

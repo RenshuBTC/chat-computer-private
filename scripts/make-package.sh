@@ -14,8 +14,7 @@ mkdir -p "$DEST"
 # The things to double-click sit at the top of the folder: one for Windows, one for a Mac.
 cp "$REPO/windows/ClaudeOS Setup.cmd" "$DEST/ClaudeOS Setup.cmd"
 cp -p "$REPO/ClaudeOS Setup.command" "$DEST/ClaudeOS Setup.command"
-chmod 755 "$DEST/ClaudeOS Setup.command" "$DEST/mac/setup.sh" "$DEST/mac/ClaudeOS.app/Contents/MacOS/ClaudeOS" \
-    "$DEST/mac/launcher/build.sh"
+chmod 755 "$DEST/ClaudeOS Setup.command" "$DEST/mac/setup.sh" "$DEST/mac/drive-installer.exp"
 mkdir -p "$OUT"
 rm -f "$OUT/ClaudeOS.zip"
 ( cd "$STAGE" && zip -q -r -X "$OUT/ClaudeOS.zip" ClaudeOS )

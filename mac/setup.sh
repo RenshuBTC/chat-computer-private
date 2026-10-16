@@ -10,8 +10,8 @@
 #
 # Installing it:
 #   1. checks this Mac, signs in to Claude (the official Claude program from Anthropic's Agent SDK), notes
-#      the Wi-Fi, and asks which folders to bring over: ClaudeOS can't open macOS's own files (Apple encrypts
-#      them for macOS only), so setup copies them now, onto a drive called ClaudeOS that both systems open;
+#      the Wi-Fi, and asks which folders to bring over: ClaudeOS can't open macOS's own files (FileVault, on
+#      most Macs, locks them to macOS), so setup copies them now, onto a drive called ClaudeOS that both open;
 #   2. downloads the Asahi installer and Fedora Asahi Remix's Minimal image (mac/manifest.sh: pinned, checked
 #      against SHA-256 fingerprints) and runs the installer, answering its questions (mac/drive-installer.exp):
 #      it makes room next to macOS and installs Fedora there; you type your Mac's password once;
@@ -212,8 +212,9 @@ check_mac() {
     "Apple M3 Ultra"*)
       stop "This Mac has an $CHIP. ClaudeOS works on M1, M2 and M3 Macs, but not yet on the Mac Studio with M3 Ultra: Asahi Linux, which it's built on, doesn't support it yet." ;;
     "Apple M3"*)
-      say "This Mac has an $CHIP. On M3 Macs, Asahi Linux doesn't yet have fast graphics, sleep or HDMI;"
-      say "ClaudeOS works, but the Mac stays awake when it's on, and screens connect over USB-C only." ;;
+      say "This Mac has an $CHIP. Asahi Linux, which ClaudeOS is built on, supports M3 Macs only in part so far:"
+      say "no graphics acceleration (pages and videos are slower), no brightness control and no other screens."
+      say "On the iMac with M3, its speakers and microphones don't work yet either; AirPods do." ;;
     *)
       [ -n "$CHIP" ] || CHIP="Apple chip setup doesn't know"
       stop "This Mac has an $CHIP. ClaudeOS can start on its own only on Macs with M1, M2 or M3: Asahi Linux, which it's built on, doesn't support newer chips yet." ;;
@@ -233,20 +234,70 @@ check_mac() {
     stop "Your account on this Mac isn't an administrator. Log in as one, then run setup again."
   fi
   say "macOS $MACOS on an $CHIP."
+  # Asahi Linux can't use screens connected over USB-C or Thunderbolt yet, only the HDMI port.
+  case "$(system_profiler SPHardwareDataType 2>/dev/null | sed -n 's/^ *Model Name: //p')" in
+    "Mac mini"*|"Mac Studio"*|"Mac Pro"*)
+      say "In ClaudeOS, the screen must be connected to this Mac's HDMI port: screens on USB-C or Thunderbolt"
+      say "don't work in Asahi Linux yet." ;;
+  esac
 }
 
-# ClaudeOS's pieces on this Mac, from diskutil: its start-up volume ("ClaudeOS"), its EFI partition
-# ("EFI - CLAUD", the Asahi installer's name for it), the two Linux partitions after it, and the ClaudeOS drive.
+# APFS containers, from the list of all of them: diskutil describes a container by its own name (disk3), not by
+# the partition it's on (disk0s2), and the partition list doesn't say what's inside.
+read_apfs() { diskutil apfs list -plist > "$WORK/apfs.plist" 2>/dev/null; }
+container_on() {   # container_on PARTITION: the number of the APFS container on it (in apfs.plist), or fails
+  local c=0 ref store
+  while ref="$(plist "$WORK/apfs.plist" "Containers.$c.ContainerReference")" && [ -n "$ref" ]; do
+    store="$(plist "$WORK/apfs.plist" "Containers.$c.DesignatedPhysicalStore")"
+    [ -n "$store" ] || store="$(plist "$WORK/apfs.plist" "Containers.$c.PhysicalStores.0.DeviceIdentifier")"
+    if [ "$store" = "$1" ]; then printf '%s' "$c"; return 0; fi
+    c=$((c + 1))
+  done
+  return 1
+}
+volume_names() {   # volume_names CONTAINER: its volumes' names, one per line
+  local v=0 name
+  while name="$(plist "$WORK/apfs.plist" "Containers.$1.Volumes.$v.Name")" && [ -n "$name" ]; do
+    printf '%s\n' "$name"
+    v=$((v + 1))
+  done
+}
+system_volume() {   # system_volume CONTAINER: its system volume (the one bless takes), else its first volume
+  local v=0 id first=""
+  while id="$(plist "$WORK/apfs.plist" "Containers.$1.Volumes.$v.DeviceIdentifier")" && [ -n "$id" ]; do
+    [ -n "$first" ] || first="$id"
+    if [ "$(plist "$WORK/apfs.plist" "Containers.$1.Volumes.$v.Roles.0")" = System ]; then printf '%s' "$id"; return 0; fi
+    v=$((v + 1))
+  done
+  printf '%s' "$first"
+  [ -n "$first" ]
+}
+macos_volume() {   # macOS's system volume, like disk3s1 (/ is mounted from a snapshot of it, which bless doesn't take)
+  local store c
+  diskutil info -plist / > "$WORK/root.plist" 2>/dev/null || return 1
+  store="$(plist "$WORK/root.plist" APFSPhysicalStores.0.APFSPhysicalStore)"
+  read_apfs
+  c="$(container_on "$store")" || return 1
+  system_volume "$c"
+}
+
+# ClaudeOS's pieces on this Mac, from diskutil: its start-up volume's container (with a volume "ClaudeOS"), its
+# EFI partition ("EFI - CLAUD", the Asahi installer's name for it), the two Linux partitions after it, and the
+# ClaudeOS drive.
 find_install() {
-  FOUND_STUB="" FOUND_ESP="" FOUND_BOOT="" FOUND_LINUX="" FOUND_DRIVE=""
-  local d="$1" i=0 id content name after=""
+  FOUND_STUB="" FOUND_STUB_VOLUME="" FOUND_ESP="" FOUND_BOOT="" FOUND_LINUX="" FOUND_DRIVE=""
+  local d="$1" i=0 id content name after="" c
   diskutil list -plist "$d" > "$WORK/parts.plist" 2>/dev/null || return 1
+  read_apfs
   while id="$(plist "$WORK/parts.plist" "AllDisksAndPartitions.0.Partitions.$i.DeviceIdentifier")" && [ -n "$id" ]; do
     content="$(plist "$WORK/parts.plist" "AllDisksAndPartitions.0.Partitions.$i.Content")"
     name="$(plist "$WORK/parts.plist" "AllDisksAndPartitions.0.Partitions.$i.VolumeName")"
     case "$content" in
       Apple_APFS)
-        if diskutil apfs list -plist "$id" 2>/dev/null | grep -q "<string>$OS_NAME</string>"; then FOUND_STUB="$id"; fi
+        if c="$(container_on "$id")" && volume_names "$c" | grep -qx "$OS_NAME"; then
+          FOUND_STUB="$id"
+          FOUND_STUB_VOLUME="$(system_volume "$c")"
+        fi
         after="" ;;
       EFI)
         case "$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')" in "EFI - CLAUD"*) FOUND_ESP="$id"; after=esp ;; *) after="" ;; esac ;;
@@ -297,9 +348,9 @@ folder_bytes() {   # the size of a folder, as macOS reports file sizes (files ke
 
 choose_folders() {
   step "Your files"
-  say "ClaudeOS can't open macOS's files itself: Apple encrypts them so only macOS can. So setup copies the folders"
-  say "you choose onto a drive called ClaudeOS that both systems open; macOS keeps its own copies. Anything you save"
-  say "on that drive in ClaudeOS is in macOS too, and you can send more later (run setup again)."
+  say "ClaudeOS can't open macOS's own files: FileVault, which most Macs have on, locks them to macOS. So setup copies"
+  say "the folders you choose onto a drive called ClaudeOS that both systems open; macOS keeps its own copies. What"
+  say "you save on that drive in ClaudeOS is in macOS too, and you can send more later (run setup again)."
   say "macOS may ask whether Terminal can open your Desktop, Documents and Downloads folders: choose OK."
   say ""
   local f b names="" sizes="" total=0
@@ -733,9 +784,9 @@ choose_start() {
     "macOS (ClaudeOS stays installed: hold the power button at start to choose it)"
   local target
   if [ "$CHOICE" = 1 ]; then
-    target="$(diskutil apfs list -plist "$FOUND_STUB" 2>/dev/null > "$WORK/stub.plist"; plist "$WORK/stub.plist" Containers.0.Volumes.0.DeviceIdentifier)"
+    target="$FOUND_STUB_VOLUME"
   else
-    target="$(plist "$WORK/root.plist" DeviceIdentifier)"
+    target="$(macos_volume)"
   fi
   [ -n "$target" ] || stop "Setup couldn't find that system's start-up volume."
   read_secret "Your Mac's password (it stays hidden):"
@@ -752,7 +803,10 @@ choose_start() {
 remove() {
   step "Remove ClaudeOS from this Mac"
   read_disk
-  find_install "$DISK" || { say "ClaudeOS isn't installed on this Mac. Nothing was changed."; return 0; }
+  if ! find_install "$DISK"; then
+    grow_macos || say "ClaudeOS isn't installed on this Mac. Nothing was changed."
+    return 0
+  fi
   say "This deletes ClaudeOS and gives its space back to macOS:"
   [ -n "$FOUND_STUB" ] && say "  * its start-up volume ($FOUND_STUB)"
   [ -n "$FOUND_ESP" ] && say "  * its EFI partition and its two Linux partitions ($FOUND_ESP ${FOUND_BOOT:-} ${FOUND_LINUX:-})"
@@ -784,12 +838,16 @@ remove() {
   sudo -v || stop "Setup needs your Mac's password to remove ClaudeOS."
   # macOS first in the startup options, so the Mac starts it by itself afterwards.
   local macos_vol
-  macos_vol="$(plist "$WORK/root.plist" DeviceIdentifier)"
-  read_secret "Your Mac's password, to make macOS the start-up disk again (it stays hidden):"
-  if ! printf '%s' "$SECRET" | sudo bless --setBoot --device "/dev/$macos_vol" --user "$(id -un)" --stdinpass >> "$LOG" 2>&1; then
-    warn "macOS didn't take the password; after this, choose macOS in System Settings, General, Startup Disk."
+  macos_vol="$(macos_volume)"
+  if [ -n "$macos_vol" ]; then
+    read_secret "Your Mac's password, to make macOS the start-up disk again (it stays hidden):"
+    if ! printf '%s' "$SECRET" | sudo bless --setBoot --device "/dev/$macos_vol" --user "$(id -un)" --stdinpass >> "$LOG" 2>&1; then
+      warn "macOS didn't take the password; after this, choose macOS in System Settings, General, Startup Disk."
+    fi
+    SECRET=""
+  else
+    warn "Setup couldn't find macOS's start-up volume; after this, choose macOS in System Settings, General, Startup Disk."
   fi
-  SECRET=""
   [ -n "$mount" ] && diskutil unmount force "$FOUND_DRIVE" >> "$LOG" 2>&1
   if [ -n "$FOUND_STUB" ]; then
     sudo diskutil apfs deleteContainer "$FOUND_STUB" >> "$LOG" 2>&1 || stop "Couldn't delete ClaudeOS's start-up volume (details: $LOG)."
@@ -799,13 +857,31 @@ remove() {
     sudo diskutil eraseVolume free free "$part" >> "$LOG" 2>&1 || stop "Couldn't delete $part (details: $LOG). Run setup again to finish."
   done
   good "ClaudeOS is deleted."
+  rm -f "$ROOT/Documents/ClaudeOS recovery password.txt"
+  if sudo diskutil apfs resizeContainer "$STORE" 0 >> "$LOG" 2>&1; then
+    good "macOS has its space back. This Mac is back to just macOS."
+  else
+    warn "macOS's partition couldn't grow into the free space now (details: $LOG). To try again, run setup and"
+    warn "choose \"Remove ClaudeOS from this Mac\" once more."
+  fi
+}
+
+# After a removal whose last step didn't work: free space right after macOS's partition goes back to macOS.
+grow_macos() {
+  local cur max
+  diskutil apfs resizeContainer "$STORE" limits -plist > "$WORK/limits.plist" 2>/dev/null || return 1
+  cur="$(plist "$WORK/limits.plist" CurrentSize)"
+  max="$(plist "$WORK/limits.plist" MaximumSize)"
+  case "$cur$max" in ''|*[!0-9]*) return 1 ;; esac
+  [ $((max - cur)) -gt "$GB" ] || return 1
+  say "ClaudeOS isn't on this Mac, but $(size_text $((max - cur))) of free space is right after macOS's partition."
+  ask_yes "Give that space back to macOS?" y || { say "Nothing was changed."; return 0; }
+  sudo -v || stop "Setup needs your Mac's password to give macOS its space."
   if sudo diskutil apfs resizeContainer "$STORE" 0 >> "$LOG" 2>&1; then
     good "macOS has its space back."
   else
-    warn "macOS's partition couldn't grow into the free space now (details: $LOG). Run setup again to try once more."
+    warn "macOS's partition couldn't grow into the free space (details: $LOG)."
   fi
-  rm -f "$ROOT/Documents/ClaudeOS recovery password.txt"
-  good "Done. This Mac is back to just macOS."
 }
 
 main() {

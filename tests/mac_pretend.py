@@ -101,6 +101,29 @@ def install_os(st, os_size, name="ClaudeOS"):
     return {k: p["id"] for k, p in made}
 
 
+def _containers(st):
+    """The APFS containers, as `diskutil apfs list -plist` lists them: macOS's, then each start-up volume's."""
+    m = st["macos"]
+    mac = st["parts"][_index(st, m["store"])]
+    out = [{"ContainerReference": m["container"], "DesignatedPhysicalStore": m["store"],
+            "PhysicalStores": [{"DeviceIdentifier": m["store"], "Size": mac["size"]}],
+            "CapacityCeiling": mac["size"], "CapacityFree": m["free"],
+            "Volumes": [{"Name": "Macintosh HD", "DeviceIdentifier": m["system"], "Roles": ["System"]},
+                        {"Name": "Preboot", "DeviceIdentifier": "disk3s2", "Roles": ["Preboot"]},
+                        {"Name": "Macintosh HD - Data", "DeviceIdentifier": "disk3s5", "Roles": ["Data"]}]}]
+    n = 5
+    for p in st["parts"]:
+        if p.get("apfs") == "stub":
+            ref = f"disk{n}"
+            out.append({"ContainerReference": ref, "DesignatedPhysicalStore": p["id"],
+                        "PhysicalStores": [{"DeviceIdentifier": p["id"], "Size": p["size"]}],
+                        "CapacityCeiling": p["size"], "CapacityFree": 0,
+                        "Volumes": [{"Name": p["stub_name"] + " - Data", "DeviceIdentifier": ref + "s2", "Roles": ["Data"]},
+                                    {"Name": p["stub_name"], "DeviceIdentifier": ref + "s1", "Roles": ["System"]}]})
+            n += 1
+    return out
+
+
 def _plist(obj):
     sys.stdout.buffer.write(plistlib.dumps(obj))
 
@@ -133,26 +156,31 @@ def diskutil(args):
         _plist(out)
         return 0
     if a[:3] == ["apfs", "list", "-plist"]:
-        ref = a[3]
-        if ref in (m["container"], m["store"]):
-            mac = st["parts"][_index(st, m["store"])]
-            _plist({"Containers": [{"ContainerReference": m["container"], "CapacityCeiling": mac["size"],
-                                    "CapacityFree": m["free"],
-                                    "Volumes": [{"Name": "Macintosh HD", "DeviceIdentifier": m["system"]},
-                                                {"Name": "Macintosh HD - Data", "DeviceIdentifier": "disk3s5"}]}]})
+        # Like the real one (seen on GitHub's Macs): every container, or one by its own name (disk3), not by
+        # the partition it's on.
+        found = _containers(st)
+        if len(a) == 3:
+            _plist({"Containers": found})
             return 0
-        p = st["parts"][_index(st, ref)]
-        if p.get("apfs") == "stub":
-            _plist({"Containers": [{"ContainerReference": "disk5", "CapacityCeiling": p["size"], "CapacityFree": 0,
-                                    "Volumes": [{"Name": p["stub_name"], "DeviceIdentifier": "disk5s1"},
-                                                {"Name": p["stub_name"] + " - Data", "DeviceIdentifier": "disk5s2"}]}]})
-            return 0
-        return 1
+        found = [c for c in found if c["ContainerReference"] == a[3]]
+        if not found:
+            print(f"pretend diskutil: {a[3]} is not an APFS Container", file=sys.stderr)
+            return 1
+        _plist({"Containers": found})
+        return 0
     if a[:2] == ["apfs", "resizeContainer"] and a[3:5] == ["limits", "-plist"]:
-        mac = st["parts"][_index(st, m["store"])]
-        _plist({"CurrentSize": mac["size"], "MinimumSizePreferred": m["min_pref"], "MaximumSize": mac["size"]})
+        i = _index(st, m["store"])
+        mac = st["parts"][i]
+        gap = st["parts"][i + 1]["size"] if i + 1 < len(st["parts"]) and st["parts"][i + 1].get("free") else 0
+        _plist({"CurrentSize": mac["size"], "MinimumSizePreferred": m["min_pref"], "MaximumSize": mac["size"] + gap,
+                "Type": "APFSPhysicalStore"})
         return 0
     if a[:2] == ["apfs", "resizeContainer"] and a[3] == "0":
+        if st.get("resize_fails", 0) > 0:
+            st["resize_fails"] -= 1
+            save(st)
+            print("Error: -69519: The target disk is too small for this operation", file=sys.stderr)
+            return 1
         i = _index(st, a[2])
         if i + 1 < len(st["parts"]) and st["parts"][i + 1].get("free"):
             grow = st["parts"][i + 1]["size"]

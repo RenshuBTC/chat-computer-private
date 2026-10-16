@@ -5,7 +5,8 @@ screen + phone)**. ClaudeOS is a conversational shell: you talk (AirPods) or typ
 keyboard), and both are one conversation.
 Power on → boot menu ("ClaudeOS" default, "Windows") → straight into the full-screen ClaudeOS conversation.
 No login screen, no desktop environment, no display manager, no browser UI. Windows stays installed untouched.
-On a Mac, ClaudeOS is a full-screen app on macOS instead of a second system (see "Mac" at the end).
+On an Apple silicon Mac (M1, M2, M3) it is the same: a second system next to macOS, on Fedora Asahi Remix instead
+of Ubuntu, chosen with the Mac's own start-up volume instead of a boot menu (see "Mac" at the end).
 
 ## Repository layout
 
@@ -24,11 +25,13 @@ ClaudeOS/
     setup.ps1, lib/*.ps1
     autoinstall.template.yaml
     tests/
-  mac/                      ClaudeOS for Mac: an app; macOS stays as it is
-    setup.sh                Install/update, sign in again, open at login, remove (bash 3.2, run in Terminal)
-    requirements-mac.txt    Pinned Python deps for the Mac runtime
-    launcher/               The app's main program (C; built with Zig for arm64 and x86_64)
-    ClaudeOS.icns           App icon (make_icon.py)
+  mac/                      One-time setup run in macOS (bash 3.2, in Terminal)
+    setup.sh                Install, send files, sign in again, choose what starts, remove
+    manifest.sh             What setup downloads, pinned with SHA-256: Asahi installer, Fedora's image
+    installer_data.json     The Asahi installer's OS list: ClaudeOS (Fedora Asahi Remix 44 Minimal)
+    drive-installer.exp     Answers the Asahi installer's questions (expect)
+    esp/                    ClaudeOS's first start on the Mac: grub-firststart.cfg, firstboot.sh
+    claudeos.icns           Icon in the Mac's startup options (make_icon.py)
   "ClaudeOS Setup.command"  Double-click entry point for Mac setup (runs mac/setup.sh)
   requirements-linux.txt    Pinned Python deps for the Linux runtime
   tests/                    Python tests for the runtime (+ mock Claude API)
@@ -43,6 +46,9 @@ ClaudeOS/
   (BlueZ, PipeWire, WirePlumber, libspa-0.2-bluetooth), web rendering for ClaudeOS's own screen (WebKitGTK 4.1 via
   python3-gi + gir1.2-webkit2-4.1, GStreamer codecs), screen control (xdotool, wmctrl), Windows files (ntfs-3g,
   cryptsetup-bin for BitLocker), boot control (efibootmgr), fonts, Python 3.12 venv.
+* On a Mac: Fedora Asahi Remix 44 Minimal (aarch64, 16K pages), installed by the official Asahi installer, and the
+  same set by Fedora's names (`install-claudeos.sh --distro fedora`, chosen from `/etc/os-release`), plus
+  `asahi-bless` (start-up volume) and `exfatprogs` (the drive macOS shares). See "Mac".
 
 ## Installed paths and users
 
@@ -103,11 +109,14 @@ PipeWire/WirePlumber run as systemd user services (dbus-user-session). Logs: `~/
 | `apt-install PKG...` | `apt-get install -y` validated package names (`^[a-z0-9][a-z0-9+.-]{1,62}$`) |
 | `apt-remove PKG...` | same validation |
 | `system-update` | `apt-get update && apt-get -y upgrade` |
+| `boot-macos-next` | Mac: macOS for the next start only (`asahi-bless --set-boot-macos --next`; if macOS was renamed, the one start-up volume that isn't ClaudeOS) |
+| `boot-default macos\|claudeos` | Mac: the start-up volume (`asahi-bless --set-boot-macos`, or `--set-boot ClaudeOS`) |
 | `bt-import-windows-keys` | Copy Bluetooth Classic link keys (e.g. AirPods) from the Windows SYSTEM registry hive into BlueZ, restart bluetooth |
 | `set-timezone ZONE` | validated against /usr/share/zoneinfo |
 | `wipe-install-secrets` | Remove `/claudeos/secrets` from a ClaudeOS installer (FAT32 labelled `CLAUDEOS`) still on the PC or plugged in |
 
-ClaudeOS asks the user (spoken yes/no) before calling any verb except `status`.
+On Fedora (a Mac), `apt-install`, `apt-remove` and `system-update` use `dnf` (`install -y
+--setopt=install_weak_deps=False`, `remove -y`, `upgrade -y --refresh`). ClaudeOS asks the user (spoken yes/no) before calling any verb except `status`.
 
 ### Boot menu
 
@@ -259,107 +268,107 @@ retrying with backoff, then starts listening.
 
 ## Mac
 
-On a Mac, ClaudeOS runs as an app on macOS that takes over the whole Mac from login ("whole-Mac mode"), not as
-a second system: on Apple silicon only Asahi Linux can start another system, not yet on M4/M5, and Linux there
-can't open the Mac's files (encrypted with keys only that Mac's macOS can use). The runtime (`claudeos/`) is the
-same; the platform layer is `claudeos/platform/mac.py` (engine name `mac`, chosen on `sys.platform ==
-"darwin"`) and the screen is `claudeos/ui/mac_app.py`.
+On a Mac with Apple silicon, ClaudeOS is a second system next to macOS, as on a PC. Only Asahi Linux can start
+another system on these Macs, so ClaudeOS's Linux base there is Fedora Asahi Remix (the Asahi project's
+flagship distribution), installed by the Asahi installer. That sets the Macs it works on: M1, M2, and M3, M3 Pro,
+M3 Max (not M3 Ultra, M4, M5; on M3 for now without graphics acceleration, brightness or other screens, per
+Asahi's feature tables). The runtime (`claudeos/`) is the same as on a PC; `claudeos/platform/linux.py` has
+`MacPlatform` (chosen when `/proc/device-tree/compatible` starts with `apple,`).
 
 | What | Path / value |
 |---|---|
-| App | `~/Applications/ClaudeOS.app`, a copy of `mac/ClaudeOS.app`: `Info.plist` (from `mac/app`; id `com.claudeos.app`, reasons for the microphone, Bluetooth, Apple events and Location, `NSAllowsArbitraryLoadsInWebContent`), `Contents/MacOS/ClaudeOS` (universal, from `mac/launcher`), the icon. Signed ad hoc when it's built (rcodesign), so it is identical on every Mac and nothing is signed there (`codesign` needs Apple's developer tools for `codesign_allocate`). |
-| Launch settings | `~/ClaudeOS/launch.conf`: `python=` (the venv's python) and `libpython=` (the shared library), written by setup |
-| Runtime code | `~/ClaudeOS/app` (`claudeos/`, `mac/`, docs) |
-| Python | uv 0.12.20 (PyPI wheel, fixed SHA-256) installs CPython 3.12 into `~/ClaudeOS/python`; venv `~/ClaudeOS/runtime` with `claudeos-app.pth` → `~/ClaudeOS/app`. Packages are wheels only (`--only-binary :all:`). uv runs `install_name_tool` after downloading Python; setup gives it a do-nothing one first on `PATH`, because on a Mac without the developer tools the real one only opens an install window. |
-| User data | `~/ClaudeOS/` with the same layout as on Linux (token, settings, models, logs, memory, notes) |
-| Engine sign-in | `CLAUDE_CONFIG_DIR=~/ClaudeOS/.engine`; on macOS Claude Code keeps the full sign-in in the login Keychain, so `config.keychain_login` asks `claude auth status --json` (`authMethod` `claude.ai`) instead of looking for `.credentials.json`. |
-| Opening at login | `~/Library/LaunchAgents/com.claudeos.start.plist`: `/usr/bin/open -a <app>`, `RunAtLoad`, no `KeepAlive` (quitting is respected) |
-| Website data | WebKit's default data store for `com.claudeos.app`; the conversation page uses a non-persistent store |
+| Image | Fedora Asahi Remix 44 Minimal, unmodified (`mac/manifest.sh`: the package's URL, SHA-256, kernel, file system ids) |
+| Installer | Asahi installer v0.9.2 (`cdn.asahilinux.org`, SHA-256 pinned), run locally: `REPO_BASE` is setup's work folder (`os/<package>`), `installer_data.json` is ClaudeOS's (one OS, Fedora's partitions exactly: EFI 500 MiB FAT32 with Fedora's volume id, Boot 1 GiB, Root expanding), `DISTRO=ClaudeOS` |
+| Partitions | macOS's container (shrunk), the start-up volume's container (`ClaudeOS`, 2.5 GB, made by the installer), EFI (`EFI - CLAUD`), Boot, Root, then the ClaudeOS drive (exFAT, `ClaudeOS`) in the space left |
+| The drive macOS shares | `~/Mac` in ClaudeOS: fstab `PARTUUID=<id> exfat uid,gid,umask=077,nofail`; the id (GPT partition GUID, diskutil's `DiskUUID`) is in `/etc/claudeos/mac-files-partuuid` |
+| Sign-in left by "Sign in again" | `.claudeos/` on the ClaudeOS drive; imported at start and deleted, like `C:\Users\<you>\ClaudeOS` on a PC |
 
-Requirements: Apple silicon with macOS 14+ (onnxruntime 1.31.0 publishes Apple silicon wheels for macOS 14+
-only), or Intel with macOS 13+ (onnxruntime 1.23.2, the last release with Intel Mac wheels, via a
-`platform_machine` marker). Both sets were checked with `uv pip compile --python-platform ... --only-binary :all:`.
+### Setup (`mac/setup.sh`, in macOS)
 
-### The app's main program
+Menu: Install ClaudeOS on this Mac, Send more files to ClaudeOS, Sign ClaudeOS in to Claude again, Choose
+what starts when the Mac turns on, Remove ClaudeOS from this Mac. Written for macOS's bash 3.2.
 
-`mac/launcher/launcher.c` reads `~/ClaudeOS/launch.conf` (or `$CLAUDEOS_HOME/launch.conf`), sends
-stdout/stderr to `~/ClaudeOS/logs/app.log`, removes `PYTHONHOME`, `PYTHONPATH`, `PYTHONSTARTUP` and
-`PYTHONINSPECT`, sets `PYTHONEXECUTABLE` to the venv's python and `CLAUDEOS_HOME`, changes to the home folder,
-`dlopen`s the shared `libpython3.12.dylib` that python-build-standalone ships (`RTLD_GLOBAL`, so extension
-modules resolve against it) and calls `Py_BytesMain` with `<venv python> -P -m claudeos run` (`-P`: the home
-folder isn't put on the import path, so a `~/json.py` can't replace part of Python; the PC's session uses `-P`
-too). CPython's `getpath.py` takes
-`PYTHONEXECUTABLE` as `sys.executable` and the place to look for `pyvenv.cfg`, so the venv applies.
-`claudeos.__main__` removes `PYTHONEXECUTABLE` again before anything starts other programs. Running inside the
-bundle's own process means macOS attributes the Dock icon, the menu name and permission requests (TCC) to
-ClaudeOS.app; a script that started a separate Python would be attributed to that Python, which has no
-usage descriptions. On failure the launcher shows an alert through `/usr/bin/osascript`. It uses only
-libSystem; `mac/launcher/build.sh` builds it with Zig (`aarch64-macos.11.0`, `x86_64-macos.11.0`), joins the
-two into a universal program (`universal.py`) and signs the app with rcodesign 0.29.0. The build is
-reproducible (`mac/launcher/BUILT-WITH.txt`), so the app, and the permissions macOS remembers for its signature,
-stay the same across updates unless the launcher changes.
+Install:
 
-### Screen and switching
+1. Checks: Apple silicon (`sysctl hw.optional.arm64`, so a Rosetta Terminal counts), the chip
+   (`machdep.cpu.brand_string`: M1, M2, M3; M3 Ultra, M4, M5 refused with the reason), not a virtual Mac
+   (`kern.hv_vmm_present`, allowed with `CLAUDEOS_PLAN_ONLY=1`), macOS 13.5 or newer, an admin account, no
+   ClaudeOS already on the disk (`find_install`), and the internet. On a Mac mini, Studio or Pro it says screens
+   must use the HDMI port.
+2. The folders to bring (Desktop, Documents, Downloads, Pictures, Movies, Music; sizes from `du -A`, so files
+   kept only in iCloud count).
+3. The space, as the installer works it out: macOS keeps what it uses plus 38 GB, never less than diskutil's
+   `MinimumSizePreferred`, plus 1 GB. ClaudeOS gets 60 GB when there's room (at least 30 GB); the ClaudeOS
+   drive gets the folders plus 10 % plus 10 GB. Plan-only stops after this.
+4. Sign-in: the official Claude program from the `claude-agent-sdk` macOS wheel (pinned), `claude setup-token`
+   in a throwaway config dir, the pasted token read with bracketed paste (it can span lines); optionally
+   `claude auth login --claudeai` for the phone.
+5. Wi-Fi: the network in use (`networksetup`, `ipconfig getsummary`), its password typed or taken from the
+   keychain (`security find-generic-password -D 'AirPort network password'`).
+6. "Go ahead?", then: download and check the installer and the image; add `claudeos.icns` to the image's zip
+   with the installer's own Python (its new SHA-256 is noted next to it, so a second run doesn't download it
+   again; if the icon can't be added, the copy of `installer_data.json` loses its `icon` line); run the
+   installer under `expect` (`mac/drive-installer.exp`), which answers each question a second after it
+   appears (the installer clears typed-ahead input before each one) and lets the person type their password
+   to it. Exit codes: 2 resize failed, 3 not enough space, 4 a question it can't answer, 5 macOS too old, 6
+   failed. The partitions it made come from its `installer.log`.
+7. The ClaudeOS drive: `diskutil addPartition <Root> ExFAT ClaudeOS 0` (the space left), Spotlight off; the
+   folders copied with `rsync -rt` and `COPYFILE_DISABLE=1`, without `.DS_Store`, `*.photoslibrary` or
+   extended attributes (no `._` files).
+8. The first start, on ClaudeOS's EFI partition (`claudeos/`): `app.tar.gz` (`claudeos/`, `linux/`, the
+   requirements and docs; `--no-xattrs`), `firstboot.sh`, `setup.env` (base64 values: account, name,
+   recovery password, time zone, install id, the drive's id, Wi-Fi name and password), `secrets/` (token,
+   phone sign-in), `settings.json`; Fedora's `EFI/fedora/grub.cfg` kept as `claudeos/fedora-grub.cfg` and
+   replaced by `esp/grub-firststart.cfg` with the kernel and ids filled in.
+9. The recovery password to `~/Documents/ClaudeOS recovery password.txt`; the downloads deleted; the one step
+   Apple requires (choosing ClaudeOS in the startup options and finishing the installer's second step in
+   1TR), shown to be photographed; shutdown.
 
-* One borderless window the size of the screen (`NSWindow`), the conversation in a `WKWebView` and the
-  content layer in a second one (`content.js` injected in the `WKContentWorld` "claudeos", messages through
-  the `claudeosPage` handler), captions as `NSTextField`s. While ClaudeOS is in front, the presentation
-  options `HideDock | HideMenuBar | DisableProcessSwitching` leave nothing of macOS on screen (Force Quit still
-  works), and an `NSProcessInfo` activity (`IdleDisplaySleepDisabled | UserInitiated`) keeps the display on:
-  when it goes dark macOS locks, and nobody can talk past a lock screen. Hiding ends the activity. Pages use
-  the Mac's system font (`system-ui`).
-* WebKit's decision and completion handlers (navigation response policy, downloads, camera requests) reach
-  Python as blocks without a signature PyObjC can call; `claudeos/ui/mac_blocks.py` calls their invoke
-  function directly. (Found on GitHub's Macs: ClaudeOS quit at its first page on Apple silicon, and no page
-  finished loading on Intel.)
-* "Switch to macOS" is `power(switch_to_macos)`: no restart. The platform calls `on_step_aside`; the
-  controller goes to sleep (wake word only) and the screen hides the app. Command-H does the same through
-  `applicationDidHide:`. Coming back: the wake word, an AirPods press (`MPRemoteCommandCenter`), or
-  activating the app (Dock), which wakes the controller. It unhides and asks to be active; since macOS 14 that
-  can be refused while another app is in use, so if it isn't active 0.4 s later it opens its own bundle with
-  `NSWorkspace openApplicationAtURL` (activates: YES), the way the Dock does.
-* `start_by_default` (claudeos | other) writes or removes the LaunchAgent (`MacPlatform.set_default_os`).
-* Quitting (Command-Q, logging out, a restart or shutdown): `applicationShouldTerminate:` answers
-  `NSTerminateLater`, stops ClaudeOS on its loop, flushes the logs, then `replyToApplicationShouldTerminate:YES`;
-  macOS ends the process. A thread's timer replies after 10 s if stopping hangs (while macOS waits, the run loop
-  runs only in the modal-panel mode, where `callLater` timers don't fire). If pages keep failing to draw, ClaudeOS quits
-  this way and opens itself again.
-* Sound: PortAudio reads the Mac's devices only when it starts, so every 2 s ClaudeOS reads Core Audio's default
-  input and output device ids (`AudioObjectGetPropertyData`, through ctypes); when they change (AirPods connect
-  or go back in their case), it closes the microphone and speaker, restarts PortAudio and opens the microphone
-  again, all under one lock (`audio.PORTAUDIO_LOCK`) that every stream open and close also takes.
-* Permissions are asked for when first needed: Accessibility with `AXIsProcessTrustedWithOptions` (prompt, once
-  per run), Location with `CLLocationManager.requestWhenInUseAuthorization` on the main thread the first time
-  Wi-Fi names come back hidden.
-* Files: the index skips `~/Library` (other apps' data; reading it makes macOS ask about "data from other
-  apps" every run) and `~/Applications`, and doesn't walk into packages (`.app`, `.photoslibrary`, ...). iCloud
-  Drive is its own root; files kept only in iCloud (`SF_DATALESS`) are listed but not read. Trashing uses
-  `NSFileManager trashItemAtURL:resultingItemURL:` so undo knows where the item went; if macOS won't let
-  ClaudeOS take it out of the Trash, it says how to use Put Back.
-* Platform: Wi-Fi through `networksetup` and Core WLAN; Bluetooth and sound devices from `system_profiler -json`,
-  connecting with IOBluetooth; volume through AppleScript; sleep with `pmset`, shutdown/restart through
-  System Events; clicks and keys for websites with Quartz `CGEvent` (needs Accessibility, and only while
-  ClaudeOS is the app in front, so events never land in another app; otherwise through the page); software through
-  Homebrew when it's installed.
+Remove: copies the drive's files to `~/ClaudeOS files` first if asked, typed REMOVE, `bless --setBoot` on
+macOS's volume (`--stdinpass`), `diskutil apfs deleteContainer` on the start-up volume's container, `diskutil
+eraseVolume free free` on the EFI, Boot, Root and drive partitions, then `diskutil apfs resizeContainer <macOS's>
+0`. Choose what starts: `bless --setBoot --device` on ClaudeOS's or macOS's volume. Sign in again: the token
+and phone sign-in to the drive's `.claudeos/`.
 
-### Setup (`mac/setup.sh`)
+### First start (`mac/esp/firstboot.sh`)
 
-Menu: Install (or Update), Sign ClaudeOS in to Claude again, Choose whether ClaudeOS opens when you log in,
-Remove ClaudeOS from this Mac. Install checks the Mac (`sysctl hw.optional.arm64` so Rosetta Terminals count
-as Apple silicon), asks "Go ahead?", then quits a running ClaudeOS, gets uv, copies the app, makes the
-runtime, writes `settings.json` (name from `id -F`, time zone from `/etc/localtime`), signs in
-(`claude setup-token` in a throwaway config dir, then the pasted token → `secrets/claude_token` 0600;
-optionally `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR=~/ClaudeOS/.engine`), downloads the voice,
-copies the app and writes `launch.conf`, and asks about opening at login. Claude Code wraps the token with real
-line breaks, so a copy can hold two or more lines: setup reads it with the terminal in non-canonical mode and
-bracketed paste on (`ESC[?2004h`), so line breaks inside the paste don't end it and the Enter after it does; in a
-terminal without paste marks, a line break followed within half a second by more text counts as part of the paste
-(Windows setup reads the lines already waiting in the console for the same reason). Only
-recognised answers are written to the setup log, and anything shaped like a token is blanked out there. Remove (typed REMOVE): quits ClaudeOS, runs `claude auth logout` for
-`~/ClaudeOS/.engine` (which removes that Keychain item), removes the LaunchAgent, the app, WebKit's data for
-`com.claudeos.app` and `~/ClaudeOS` (optionally keeping memory, notes and conversations).
+GRUB starts Fedora's kernel with `systemd.run="/bin/sh /boot/efi/claudeos/firstboot.sh"` (single-quoted, so
+it's one argument) and `systemd.run_success_action=reboot`, `systemd.run_failure_action=reboot`, instead of
+Fedora's first-start questions. firstboot.sh (POSIX sh, as root, SELinux enforcing): hostname `claudeos`;
+the account (`useradd --groups wheel`, its password the recovery password, through `chpasswd`); time zone and
+`LANG`; a NetworkManager keyfile for the Wi-Fi (0600); ClaudeOS to `/opt/claudeos/app` (root-owned); the token,
+phone sign-in and settings into `~/ClaudeOS`; `/etc/claudeos/install-user`, `install-id`,
+`mac-files-partuuid`; `claudeos-finish-install.service` enabled; `restorecon` on all of it. Only then: Fedora's
+first-start questions off (`/etc/reconfigSys`, `initial-setup.service`), Fedora's `grub.cfg` back, and the
+sign-in copies deleted from the EFI partition (FAT: readable by anyone who starts the Mac). On failure it counts
+tries in `claudeos/tries`; at the third it puts Fedora's start back, so the Mac never loops.
 
-Test hooks: `CLAUDEOS_MAC_ROOT` (home folder), `CLAUDEOS_UV`, `CLAUDEOS_ENGINE_CLI`, `CLAUDEOS_SKIP_MODELS`.
-Tests: `tests/test_mac_setup.py` (setup against stand-ins for macOS's commands), `tests/test_mac_launcher.py`
-(the launcher built for Linux, plus a check of the universal program's Mach-O headers and signature), `tests/test_mac.py`. None of
-this has run on a real Mac yet.
+The next start is Fedora's usual one: `claudeos-finish-install.service` runs `install-claudeos.sh --user <user>
+--from-installer` with the internet until it works (as on a PC), then restarts. On Fedora that script installs
+with `dnf --setopt=install_weak_deps=False`, WirePlumber 0.5 settings (SPA-JSON), firewalld without the ssh and
+cockpit services, `dnf5-automatic` for security updates, no SSH server, the Plymouth theme
+(`plymouth-set-default-theme -R`), GRUB without its menu (`GRUB_TIMEOUT=0`, `quiet rhgb`), the drive in fstab,
+and `restorecon` at the end.
+
+### Switching
+
+* "Switch to macOS": `power(switch_to_macos)` → root helper `boot-macos-next`, then `systemctl reboot`. The
+  next start after that is ClaudeOS again.
+* `start_by_default` (claudeos | other): root helper `boot-default claudeos|macos`.
+* From macOS: setup's "Choose what starts", or the startup options (hold the power button).
+
+### Tests
+
+* `tests/test_mac_setup.py`: setup on a pretend Mac (stand-ins for `diskutil`, `plutil` and the rest in
+  `tests/mac_pretend.py`), the real `drive-installer.exp` against `tests/mac_fake_installer.py` (the v0.9.2
+  installer's questions, colours and terminal handling), first start against a pretend Fedora, and the pinned
+  values agreeing with each other. Run with macOS's bash 3.2 (`CLAUDEOS_TEST_BASH`).
+* `tests/mac_ci/run.sh` on GitHub's Macs (`.github/workflows/mac.yml`): plan-only on the real disk; a disk
+  image laid out with the installer's own commands for finding, the drive, copying, the first start and
+  removing; the real downloads; the real installer until it turns down a virtual Mac.
+* `tests/test_mac.py`: `MacPlatform` and the runtime on a Mac; `linux/tests/test_install_dryrun.sh`: the Fedora
+  install steps.
+
+Not yet tried on a real Mac. Unknowns: AirPods' microphone (Bluetooth HFP) under Asahi; AirPods paired in
+ClaudeOS may need pairing again in macOS (the same Mac, a new key); ClaudeOS's Python wheels and the Claude
+program on 16K pages.

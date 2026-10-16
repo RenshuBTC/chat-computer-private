@@ -109,8 +109,7 @@
       });
       trim();
     },
-    settings: function (theme, name) {
-      document.documentElement.setAttribute("data-theme", theme === "dark" ? "dark" : "light");
+    settings: function (name) {
       var h = new Date().getHours();
       var part = h < 5 ? "Hello" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
       document.getElementById("greeting").textContent = part + (name ? ", " + name : "") + ".";
@@ -124,6 +123,6 @@
     },
     clear: function () { log.innerHTML = ""; ai = {}; users = {}; trim(); }
   };
-  window.CO.settings("light", "");
+  window.CO.settings("");
   try { window.webkit.messageHandlers.claudeos.postMessage(JSON.stringify({ type: "ready" })); } catch (e) {}
 })();

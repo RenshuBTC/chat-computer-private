@@ -129,6 +129,9 @@ def test_settings_and_memory(tmp_path):
     assert json.loads(ctx.paths.settings_file.read_text())["speech_speed"] == 1.2
     text, err = call(server, "claudeos_settings", {"action": "set", "key": "windows_mount", "value": "/"})
     assert err
+    # The screen is black on white only: there is no theme to change.
+    text, err = call(server, "claudeos_settings", {"action": "set", "key": "theme", "value": "dark"})
+    assert err and not hasattr(ctx.settings, "theme")
     call(server, "memory", {"action": "remember", "text": "Prefers Bitcoin charts in SGD"})
     assert "Bitcoin charts" in ctx.memory.for_prompt()
     call(server, "memory", {"action": "forget", "text": "bitcoin charts"})

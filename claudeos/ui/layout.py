@@ -1,9 +1,16 @@
 """How big ClaudeOS draws things, on any screen.
 
-Text is the usual desktop size (16 pixels at 100%) in a column at most 48 rem wide (768 pixels at 100%).
-That is drawn 1:1 on a standard desktop monitor (96 dots per inch, viewed from about 60 cm). Sharper
-screens, and screens farther away, are scaled up the way the system's display scaling does, so the text
-looks the same size on a 4K monitor or on a TV across the room. Websites get the same zoom.
+Text is sized for reading speed. What counts is the visual angle of the letters' x-height (the height of
+a lowercase x). Reading speed rises with size up to a "critical print size" of about 0.2 degrees for people
+with normal sight; between people it ranges from 0.15 to 0.3 degrees, and it grows with age. Above that
+size, reading gets no faster until about 2 degrees (Legge & Bigelow 2011, Journal of Vision 11(5):8;
+Calabrese et al. 2016, IOVS 57(8):3836). ClaudeOS aims at 0.3 degrees, the top of the normal range, so
+nearly everyone reads at full speed. Atkinson Hyperlegible Next's x-height is 0.496 of its size, so on a
+standard desktop monitor (96 dots per inch, viewed from about 60 cm) that is about 24 pixels (100%). Lines
+hold about 70 characters (a column 30 rem wide), within the 80 that WCAG's AAA level allows.
+
+Sharper screens, and screens farther away, are scaled up the way the system's display scaling does, so
+the text covers the same angle on a 4K monitor or on a TV across the room. Websites get the same zoom.
 
 The screen's real size comes from the monitor (EDID). The viewing distance is estimated from the
 screen size unless you tell Claude how far you sit: about 50 cm for a laptop, 60-80 cm for a desk
@@ -18,8 +25,12 @@ from typing import Any
 
 REF_PX_PER_MM = 96 / 25.4      # a standard desktop monitor...
 REF_DISTANCE_MM = 600.0        # ...at arm's length
-BASE_FONT_PX = 16.0            # the usual desktop text size at 100%
-COLUMN_REM = 48.0              # the widest the conversation column gets
+X_HEIGHT_DEG = 0.3             # the visual angle the x-height aims for (see above)
+X_HEIGHT_EM = 0.496            # Atkinson Hyperlegible Next's x-height (OS/2 sxHeight 496 / 1000 units)
+# Text size at 100%: 0.3 degrees of x-height on the reference monitor at the reference distance (23.9 px).
+BASE_FONT_PX = REF_DISTANCE_MM * math.tan(math.radians(X_HEIGHT_DEG)) * REF_PX_PER_MM / X_HEIGHT_EM
+AVG_CHAR_EM = 0.43             # Atkinson Hyperlegible Next's average character width in English (WebKit)
+COLUMN_REM = 30.0              # the widest the conversation column gets: about 70 characters a line
 MARGIN_REM = 1.5               # space kept at each side on narrow screens
 SCALE_STEP = 0.125
 SCALE_RANGE = (0.75, 4.0)

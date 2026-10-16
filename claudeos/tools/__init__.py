@@ -36,7 +36,7 @@ SERVER = "claudeos"
 ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
 
 SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
-            "theme", "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
+            "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
             "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "phone_access"}
 WINDOWS_SYSTEM = re.compile(r"/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
 
@@ -664,9 +664,11 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         return _text(ctx.memory.for_prompt() or "Nothing remembered yet.")
 
     @reg("claudeos_settings", "Read or change ClaudeOS settings: voice (af_heart, af_bella, af_nicole, am_michael, "
-         "am_fenrir, bf_emma, bm_george...), speech_speed (0.7-1.6), theme (light = white background with black "
-         "text, dark = the reverse), show_activity (true/false), auto_sleep_minutes (0 = never), barge_in, wake_words, "
-         "model, effort, user_name. Text size is worked out from the screen's real size and viewing distance; "
+         "am_fenrir, bf_emma, bm_george...), speech_speed (0.7-1.6), show_activity (true/false), "
+         "auto_sleep_minutes (0 = never), barge_in, wake_words, model, effort, user_name. The screen is always "
+         "black text on white in Atkinson Hyperlegible, a font made to be easy to read; there is no dark mode "
+         "(if it's too bright, they can turn down the screen's own brightness). Text size is worked out from the "
+         "screen's real size and viewing distance; "
          "'get' shows the result. To make all text bigger or smaller set text_scale (1.0 = automatic; e.g. 1.15 "
          "bigger, 0.87 smaller). When the user says how far they sit from the screen, set viewing_distance_cm. "
          "If the screen's size is wrong (some TVs don't report it), set screen_inches (the diagonal). web_zoom "

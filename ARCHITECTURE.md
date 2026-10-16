@@ -284,14 +284,22 @@ retrying with backoff, then starts listening.
 * Screen: one full-screen GTK 3 window (`claudeos/ui/gtk_app.py`) with two WebKitGTK 4.1 views in a stack:
   the conversation (`ui/assets/chat.html`: only the user's words and Claude's words) and the content layer (a
   real browser with a persistent profile in `~/ClaudeOS/web`, plus a GTK caption strip over it). No buttons.
-* Look: plain. Black text on white (white on black in dark mode) in the system's standard font (CSS
-  `sans-serif` and GTK's default, which is Noto Sans on the Ubuntu base). The user's words are grey and Claude's
-  are black, flush left in one column in the middle of the screen, newest at the bottom. No bundled fonts and
-  no imitation of any app.
-* Size and width: `ui/layout.py` scales the usual desktop size (16 px text, a column at most 48 rem wide) for
+* Look: plain. Black text (#000000) on white (#FFFFFF) and nothing else: no dark mode, no grey text. Full
+  black on full white is the most contrast a screen can show (21:1). Dimming belongs to the screen's
+  brightness, because a grey background would cost contrast. The font is Atkinson Hyperlegible Next, with
+  Atkinson Hyperlegible Mono for code. They ship in `ui/assets/fonts` (SIL OFL 1.1, from google/fonts; see
+  its README), and `theme.css` loads them with `@font-face`. Pages written elsewhere get the fonts' file
+  address (`render._theme_css`). `gtk_app.register_fonts` hands the folder to fontconfig (FcConfigAppFontAddDir)
+  for the GTK captions. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
+  (Noto). The user's words are in italics and Claude's are upright, flush left in one column in the middle of
+  the screen, newest at the bottom. No imitation of any app.
+* Size and width: text is sized so that the x-height covers 0.3 degrees of view. That is the top of the
+  normal range of critical print size (0.15-0.3 degrees; Legge & Bigelow 2011), above which reading gets no
+  faster until about 2 degrees. With Atkinson's x-height (0.496 em), that is 23.9 px at 100%. The column is
+  at most 30 rem wide, about 70 characters a line (WCAG 1.4.8 AAA allows 80). `ui/layout.py` scales this for
   the monitor's physical size (EDID via GDK) and the viewing distance (estimated from the screen size, or set
-  by voice), the way display scaling does. Websites get the same zoom. Recomputed when the window, monitor or
-  settings change. Settings: `text_size` (0 = auto), `text_scale`, `viewing_distance_cm`, `screen_inches`
+  by voice), the way display scaling does. Websites get the display-scaling zoom, not the bigger text.
+  Everything is recomputed when the window, monitor or settings change. Settings: `text_size` (0 = auto), `text_scale`, `viewing_distance_cm`, `screen_inches`
   (0 = reported), `web_zoom` (0 = auto).
 * Voice: PipeWire/AirPods, Silero VAD, faster-whisper (local), Kokoro TTS (local), barge-in.
 

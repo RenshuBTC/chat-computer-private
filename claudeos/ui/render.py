@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 ASSETS = Path(__file__).resolve().parent / "assets"
+FONTS = ASSETS / "fonts"    # Atkinson Hyperlegible Next and Mono (see fonts/README.md)
 
 
 def asset(name: str) -> str:
@@ -19,31 +20,30 @@ def asset(name: str) -> str:
 
 NATIVE = 'data-claudeos="native"'   # marks pages laid out by ClaudeOS (the screen fills in the size)
 
+# Black on white like the conversation, except that a video plays on black, as in any video player.
 DOC_CSS = """
 body { overflow-y: auto; cursor: none; }
-article { width: var(--co-column, min(48rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto; padding: 2rem 0 4rem; }
+article { width: var(--co-column, min(30rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto; padding: 2rem 0 4rem; }
 article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; margin: 0 0 1rem; }
-.pages img { display: block; width: 100%; margin: 0 0 1rem; border: 1px solid var(--rule); }
+.pages img { display: block; width: 100%; margin: 0 0 1rem; border: 1px solid var(--ink); }
 .media { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; }
 .media video { width: 100vw; height: 100vh; object-fit: contain; }
-.media .audio { text-align: center; color: #fff; }
+.sound { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; }
 .image { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--ground); }
 .image img { max-width: 100vw; max-height: 100vh; object-fit: contain; }
 """
 
 
-def _theme_attr(settings: Any) -> str:
-    return "dark" if getattr(settings, "theme", "light") == "dark" else "light"
-
-
 def _theme_css() -> str:
-    return asset("theme.css")
+    # theme.css finds its fonts next to it (fonts/...). The pages made here are shown from another folder,
+    # so they get the fonts' full address.
+    return asset("theme.css").replace('url("fonts/', f'url("{FONTS.as_uri()}/')
 
 
 def _shell(title: str, body: str, settings: Any, script: str = "") -> str:
     # The text size and column width (--co-size, --co-column) are added by the screen when the
     # page is shown, because they depend on the monitor and how far away you sit.
-    return (f'<!doctype html><html lang="en" data-theme="{_theme_attr(settings)}" {NATIVE}><head><meta charset="utf-8">'
+    return (f'<!doctype html><html lang="en" {NATIVE}><head><meta charset="utf-8">'
             f"<title>{htmllib.escape(title)}</title><style>{_theme_css()}\n{DOC_CSS}"
             f"</style></head><body>{body}{script}</body></html>")
 
@@ -178,8 +178,8 @@ def file_view(path: str, settings: Any, paths: Any) -> tuple[str, str]:
     if ext in VIDEO:
         return "html", _shell(name, f'<div class="media"><video src="{uri}" autoplay playsinline></video></div>', settings)
     if ext in AUDIO:
-        return "html", _shell(name, f'<div class="media"><div class="audio">♪ {htmllib.escape(name)}'
-                                    f'<audio src="{uri}" autoplay></audio></div></div>', settings)
+        return "html", _shell(name, f'<div class="sound">♪ {htmllib.escape(name)}'
+                                    f'<audio src="{uri}" autoplay></audio></div>', settings)
     if ext == ".pdf":
         return "html", _pdf_view(path, settings, paths)
     if ext in (".html", ".htm"):

@@ -84,7 +84,7 @@ class Controller:
         self.confirm_lock = asyncio.Lock()
         self.ready = asyncio.Event()
         s = self.settings
-        self.screen.apply_settings(s.theme, s.text_size, (s.user_name or "").split(" ")[0] if s.user_name else "")
+        self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0] if s.user_name else "")
         self._show_history()
 
         # Files: index Linux home + the other system's files (Windows' user folder, or on a Mac the drive
@@ -712,9 +712,9 @@ class Controller:
 
     def _settings_changed(self, keys: list[str]) -> None:
         s = self.settings
-        if {"theme", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
+        if {"text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "user_name"} & set(keys):
-            self.screen.apply_settings(s.theme, s.text_size, (s.user_name or "").split(" ")[0])
+            self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0])
         if "phone_access" in keys and self.brain:
             self.remote_told = False
             self.loop.create_task(self._restart_brain_when_idle())

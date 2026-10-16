@@ -10,6 +10,8 @@ the window is handed to the main thread with GLib.idle_add.
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import ctypes.util
 import json
 import logging
 import os
@@ -29,25 +31,44 @@ from gi.repository import Gdk, GLib, Gtk, WebKit2  # noqa: E402
 from ..config import Paths, Settings  # noqa: E402
 from ..screen import Screen  # noqa: E402
 from .layout import Layout, compute, css_vars, screen_from_monitor  # noqa: E402
-from .render import ASSETS, NATIVE, asset  # noqa: E402
+from .render import ASSETS, FONTS, NATIVE, asset  # noqa: E402
 
 log = logging.getLogger("claudeos.ui")
 WORLD = "claudeos"
 MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86AudioMedia", "XF86AudioNext",
               "XF86AudioPrev", "XF86AudioStop"}
-# Same colours as theme.css (plain: black on white, or white on black in dark mode). The captions use the
-# system's standard font, like the conversation.
-LIGHT = {"bg": "#FFFFFF", "ink": "#000000", "soft": "#595959", "rule": "#D9D9D9"}
-DARK = {"bg": "#000000", "ink": "#FFFFFF", "soft": "#A6A6A6", "rule": "#404040"}
+# The captions over websites look like the conversation (theme.css): black on white in Atkinson Hyperlegible
+# Next, your words in italics. register_fonts() makes ClaudeOS's own copy of the font known to GTK.
+COLORS = {"bg": "#FFFFFF", "ink": "#000000"}
 
 CSS_TEMPLATE = """
 window, stack {{ background-color: {bg}; }}
-.captions {{ background-color: {bg}; border: 1px solid {rule}; padding: {pad_v}px {pad_h}px; }}
-.cap-you {{ color: {soft}; font-size: {size}px; }}
-.cap-ai {{ color: {ink}; font-size: {size}px; }}
+.captions {{ background-color: {bg}; border: 1px solid {ink}; padding: {pad_v}px {pad_h}px; }}
+.cap-you, .cap-ai {{ color: {ink}; font-family: "Atkinson Hyperlegible Next", sans-serif; font-size: {size}px; }}
+.cap-you {{ font-style: italic; }}
 """
 SET_VARS_JS = ("(function(){{var r=document.documentElement.style;r.setProperty('--co-size','{size}px');"
                "r.setProperty('--co-column','{column}px');}})()")
+_fonts_registered: bool | None = None
+
+
+def register_fonts(folder: Path = FONTS) -> bool:
+    """Make ClaudeOS's fonts (assets/fonts) known to GTK in this process, for the captions. Pages load them
+    themselves (theme.css). Without them the captions use the system's standard font. Call it before the
+    window is built."""
+    global _fonts_registered
+    if _fonts_registered is None:
+        try:
+            lib = ctypes.util.find_library("fontconfig") or "libfontconfig.so.1"
+            fc = ctypes.CDLL(lib)
+            fc.FcConfigAppFontAddDir.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            fc.FcConfigAppFontAddDir.restype = ctypes.c_int
+            _fonts_registered = bool(fc.FcConfigAppFontAddDir(None, os.fsencode(folder)))
+        except Exception:
+            log.warning("ClaudeOS's fonts couldn't be given to GTK; captions use the standard font", exc_info=True)
+            _fonts_registered = False
+    return _fonts_registered
+
 
 # WebKit draws pages with the graphics chip. Where the system offers none for drawing (a virtual
 # machine, graphics the kernel can't drive yet) that crashes and leaves a blank screen; these make it
@@ -117,6 +138,7 @@ class GtkScreen(Screen):
 
     # ================================================================ building the window
     def _build(self, windowed: bool) -> None:
+        register_fonts()   # before any text is laid out
         self.css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
@@ -222,11 +244,10 @@ class GtkScreen(Screen):
         self.win.connect("size-allocate", self._on_size_allocate)
         Gdk.Screen.get_default().connect("monitors-changed", lambda *_: self._schedule_relayout())
 
-    def _load_css(self, theme: str) -> None:
-        c = DARK if theme == "dark" else LIGHT
+    def _load_css(self) -> None:
         rem = self.layout.font_px if self.layout else 16
         self.css.load_from_data(CSS_TEMPLATE.format(
-            size=round(rem, 1), pad_v=round(rem * 0.5), pad_h=round(rem * 0.75), **c).encode())
+            size=round(rem, 1), pad_v=round(rem * 0.5), pad_h=round(rem * 0.75), **COLORS).encode())
 
     # ================================================================ text size and line width
     def _monitor(self) -> Any:
@@ -255,7 +276,7 @@ class GtkScreen(Screen):
         first = self.layout is None
         changed = first or lay.to_dict() != self.layout.to_dict()
         self.layout = lay
-        self._load_css(self.settings.theme)
+        self._load_css()
         if not changed:
             return
         self._chat_run(f"CO.layout({lay.font_px},{lay.column_px})", "layout")
@@ -656,10 +677,10 @@ class GtkScreen(Screen):
     def history(self, items: list[dict[str, Any]]) -> None:
         self._chat_js(f"CO.history({json.dumps(items)})")
 
-    def apply_settings(self, theme: str, text_size: int, user_name: str) -> None:
+    def apply_settings(self, text_size: int, user_name: str) -> None:
         # Size settings (text_size, text_scale, viewing_distance_cm, screen_inches, web_zoom) are
         # read from self.settings, the same object the controller changes.
-        self._chat_js(f"CO.settings({json.dumps(theme)},{json.dumps(user_name)})", "settings")
+        self._chat_js(f"CO.settings({json.dumps(user_name)})", "settings")
         self._ui(self._apply_layout)
 
     # captions over content

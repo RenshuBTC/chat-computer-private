@@ -26,7 +26,7 @@ class Screen:
     def notice(self, text: str, kind: str = "info") -> None: ...
     def state(self, name: str) -> None: ...
     def history(self, items: list[dict[str, Any]]) -> None: ...
-    def apply_settings(self, theme: str, text_size: int, user_name: str) -> None: ...
+    def apply_settings(self, text_size: int, user_name: str) -> None: ...
     def layout_info(self) -> dict[str, Any]:
         """The screen's size, the estimated viewing distance and the text size worked out from them."""
         return {}
@@ -102,8 +102,8 @@ class RecordingScreen(Screen):
     def history(self, items: list[dict[str, Any]]) -> None:
         self.events.append(("history", len(items)))
 
-    def apply_settings(self, theme: str, text_size: int, user_name: str) -> None:
-        self.events.append(("settings", (theme, text_size, user_name)))
+    def apply_settings(self, text_size: int, user_name: str) -> None:
+        self.events.append(("settings", (text_size, user_name)))
 
     # test helpers
     def ai_text(self) -> str:

@@ -22,7 +22,7 @@ sets up:
 | Networking | `network-manager`, `wpasupplicant` | NM manages **all** devices (netplan renderer = NetworkManager); no admin needed. |
 | Windows files | `ntfs-3g`, `cryptsetup-bin`, `efibootmgr` | Mount the Windows partition (rw if clean, ro if dirty, never touching the hiberfile); a BitLocker drive is opened with ClaudeOS's own key (cryptsetup's BITLK, the key on stdin); UEFI BootNext to switch to Windows. |
 | Voice I/O | `libportaudio2`, `espeak-ng` | PortAudio for capture; espeak-ng as a TTS fallback. |
-| Fonts | `fonts-noto-core`, `fonts-noto-color-emoji`, `fonts-dejavu-core` | UI text + emoji. |
+| Fonts | `fonts-noto-core`, `fonts-noto-cjk`, `fonts-noto-color-emoji`, `fonts-dejavu-core` | The characters ClaudeOS's own font lacks (CJK, Greek, Cyrillic) and emoji. ClaudeOS brings Atkinson Hyperlegible Next and Mono itself (`claudeos/ui/assets/fonts`). |
 | Security | `sudo`, `ufw`, `unattended-upgrades`, `ca-certificates`, `curl` | Root helper reached via `sudo -n`; firewall default-deny inbound; security-only auto-updates; TLS trust. |
 | Boot UX | `plymouth`, `plymouth-label` | Boot splash: "ClaudeOS" in black on white (a Plymouth script theme). |
 | Recovery | `xterm` | The recovery screen shown if ClaudeOS keeps failing to start. |

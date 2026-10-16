@@ -1,10 +1,11 @@
-/* The conversation: your words in grey, Claude's words in black, newest at the bottom, in one column in
-   the middle of the screen. Spoken and typed (from the Claude app on the phone) look the same. Nothing else. */
+/* The conversation: your words in italics and Claude's upright, all in black, newest at the bottom, in one
+   column in the middle of the screen. Spoken and typed (from the Claude app on the phone) look the same.
+   Nothing else. */
 body { overflow: hidden; }
 #column {
   position: fixed; inset: 0;
   display: flex; flex-direction: column; justify-content: flex-end;
-  width: var(--co-column, min(48rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto;
+  width: var(--co-column, min(30rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto;
   padding: 0 0 2.5rem;
   overflow: hidden;
 }
@@ -12,34 +13,34 @@ body:not(.has-log) #column { justify-content: center; }
 #log { display: flex; flex-direction: column; gap: 1.25rem; }
 #log > .gone { display: none; }
 
-.you { color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.you { font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ai { overflow-wrap: anywhere; }
-.ai .activity { display: block; color: var(--ink-soft); margin: 0 0 0.5em; }
+/* What Claude is doing (when show_activity is on), in the mono font, above the words it leads to. */
+.ai .activity { display: block; font-family: var(--mono); margin: 0 0 0.5em; }
 .ai.thinking .md:empty::after {
   content: ""; display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%;
-  background: var(--ink-soft); animation: pulse 1.2s ease-in-out infinite;
+  background: var(--ink); animation: pulse 1.2s ease-in-out infinite;
 }
-.notice { color: var(--ink-soft); }
 
 /* What you're saying right now, and a small dot that shows ClaudeOS is listening. */
-#live { margin-top: 1.25rem; min-height: 1.5em; color: var(--ink-soft); white-space: pre-wrap; visibility: hidden; }
+#live { margin-top: 1.25rem; min-height: 1.5em; font-style: italic; white-space: pre-wrap; visibility: hidden; }
 body.listening #live, body.hearing #live { visibility: visible; }
 #caret {
   display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%; margin-left: 0.35em; vertical-align: middle;
-  background: var(--ink-soft); animation: pulse 1.6s ease-in-out infinite;
+  background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 body:not(.listening):not(.hearing) #caret { visibility: hidden; }
 
 /* Empty screen: a greeting and one line saying how to talk or type. */
 #welcome { margin: 0; }
 #greeting { font-size: 1.5rem; font-weight: normal; line-height: 1.3; margin: 0 0 0.25em; }
-#hint { color: var(--ink-soft); margin: 0; }
+#hint { margin: 0; }
 body.has-log #welcome { display: none; }
 
 /* Sleeping: the words go away; one line says how to wake ClaudeOS. */
 #sleep-note {
   position: fixed; left: 0; right: 0; bottom: 2.5rem; text-align: center;
-  color: var(--ink-soft); visibility: hidden;
+  visibility: hidden;
 }
 body.sleeping #column { visibility: hidden; }
 body.sleeping #sleep-note { visibility: visible; }

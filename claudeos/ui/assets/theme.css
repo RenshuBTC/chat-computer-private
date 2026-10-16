@@ -1,21 +1,37 @@
-/* ClaudeOS look: plain. Black text on white (white on black in dark mode) in the system's standard font,
-   that is whatever the system calls sans-serif (Noto Sans on ClaudeOS's Ubuntu base). No bundled fonts and
-   no imitation of any app. Sizes are in rem; the screen sets the root size for this monitor
-   (claudeos/ui/layout.py), the way the system's display scaling would. */
+/* ClaudeOS look: black text on a white background and nothing else. The font is Atkinson Hyperlegible Next
+   (by the Braille Institute, made so that letters that are easy to confuse look different), and code is in
+   Atkinson Hyperlegible Mono. Both come with ClaudeOS (fonts/, SIL Open Font License 1.1). Characters they
+   don't have (Chinese, Japanese, Korean, Greek, Cyrillic, emoji) come from the system's fonts.
+   Full white and full black give the most contrast a screen can show (21:1). Off-whites from #FAFAFA to
+   #F0F0F0 are only 4-13% dimmer, so greying the background would cost contrast without making the screen
+   much less bright; to dim it, turn down the screen's brightness. No dark mode and no grey text: your words
+   are told apart from Claude's by italics. Sizes are in rem. The screen sets the root size for this
+   monitor and viewing distance (claudeos/ui/layout.py), so the letters' x-height covers 0.3 degrees of
+   view and lines hold about 70 characters. */
+@font-face {
+  font-family: "Atkinson Hyperlegible Next"; font-style: normal; font-weight: 200 800;
+  src: url("fonts/AtkinsonHyperlegibleNext.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next"; font-style: italic; font-weight: 200 800;
+  src: url("fonts/AtkinsonHyperlegibleNext-Italic.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono"; font-style: normal; font-weight: 200 800;
+  src: url("fonts/AtkinsonHyperlegibleMono.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono"; font-style: italic; font-weight: 200 800;
+  src: url("fonts/AtkinsonHyperlegibleMono-Italic.ttf") format("truetype");
+}
 :root {
   --ground: #FFFFFF;
   --ink: #000000;
-  --ink-soft: #595959;
-  --rule: #D9D9D9;
-  --code: #F2F2F2;
-  --sans: sans-serif;
-  --mono: monospace;
-}
-:root[data-theme="dark"] {
-  --ground: #000000; --ink: #FFFFFF; --ink-soft: #A6A6A6; --rule: #404040; --code: #1A1A1A;
+  --sans: "Atkinson Hyperlegible Next", sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", monospace;
 }
 * { box-sizing: border-box; }
-html { font-size: var(--co-size, 16px); }
+html { font-size: var(--co-size, 24px); }
 html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink); cursor: none; }
 body { font-family: var(--sans); font-size: 1rem; line-height: 1.5; }
 ::selection { background: transparent; }
@@ -33,14 +49,15 @@ body { font-family: var(--sans); font-size: 1rem; line-height: 1.5; }
 .md li.task { list-style: none; margin-left: -1.5em; }
 .md li.task::before { content: "\2610\00a0 "; }
 .md li.task.done::before { content: "\2611\00a0 "; }
-.md li.task.done { text-decoration: line-through; color: var(--ink-soft); }
-.md code { font-family: var(--mono); font-size: 0.9em; background: var(--code); padding: 0.1em 0.3em; }
-.md pre { margin: 0 0 1em; padding: 0.75em 1em; background: var(--code); white-space: pre-wrap; }
-.md pre code { background: none; padding: 0; }
-.md blockquote { margin: 0 0 1em; padding-left: 1em; border-left: 3px solid var(--rule); color: var(--ink-soft); }
+.md li.task.done { text-decoration: line-through; }
+/* Code: the mono font at the same size as the words around it (its letters are the same height). Blocks of
+   code get a thin black frame. */
+.md code, .md pre { font-family: var(--mono); font-size: 1em; }
+.md pre { margin: 0 0 1em; padding: 0.75em 1em; border: 1px solid var(--ink); white-space: pre-wrap; }
+.md blockquote { margin: 0 0 1em; padding-left: 1em; border-left: 2px solid var(--ink); }
 .md table { border-collapse: collapse; margin: 0 0 1em; }
-.md th, .md td { text-align: left; padding: 0.4em 1em 0.4em 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.md th, .md td { text-align: left; padding: 0.4em 1em 0.4em 0; border-bottom: 1px solid var(--ink); vertical-align: top; }
 .md th { font-weight: bold; }
-.md hr { border: 0; border-top: 1px solid var(--rule); margin: 1.2em 0; }
+.md hr { border: 0; border-top: 1px solid var(--ink); margin: 1.2em 0; }
 .md .link { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

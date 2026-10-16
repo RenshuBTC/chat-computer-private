@@ -1,0 +1,18 @@
+﻿
+If you already have a Claude sign-in code (a long code that starts with sk-ant-), copy it and paste
+it here with a RIGHT-CLICK (Ctrl+V may not work in this window). It stays hidden; then press Enter.
+If you have no code yet, just press Enter and your browser will open to sign in.
+Got it. Claude is signed in for ClaudeOS.
+powershell.exe : The variable '$IsWindows' cannot be retrieved because it has not been set.
+At D:\a\ClaudeOS\ClaudeOS\tests\win_ci\run.ps1:12 char:9
++ $unit = & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $re ...
++         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (The variable '$...s not been set.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+At D:\a\ClaudeOS\ClaudeOS\windows\tests\Run-Tests.ps1:156 char:10
++ if (-not $IsWindows) {
++          ~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (IsWindows:String) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : VariableIsUndefined
+ 

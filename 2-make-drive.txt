@@ -1,0 +1,4 @@
+
+[1;36mThe ClaudeOS drive[0m
+[32mThe ClaudeOS drive is ready (2.0 GB).[0m
+GPT entry 7 has the id 4F0AB5E3-8E26-4881-B569-27A91C33D4B6

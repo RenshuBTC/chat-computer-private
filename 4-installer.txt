@@ -1,0 +1,48 @@
+
+[1;36mInstalling ClaudeOS next to macOS[0m
+The Asahi installer makes room next to macOS and installs ClaudeOS's base (Fedora Linux) there. Setup
+answers its questions. When it asks for your Mac's password, type it (it stays hidden) and press Enter.
+It takes about 10 to 20 minutes; your Mac may seem to freeze while macOS's partition shrinks. That's normal.
+First, your Mac's password for setup itself:
+
+[1mWelcome to the ClaudeOS installer![m
+
+[1mThis installer will guide you through the process of setting up[m
+[1mClaudeOS on your Mac.[m
+
+[1mPlease make sure you are familiar with our documentation at:[m
+[m  [34;1mhttps://docs.fedoraproject.org/en-US/fedora-asahi-remix/[m[m
+
+[1;36mPress enter to continue.[m
+
+
+[1;35mCollecting system information...[m
+[1;34m  Product name: [mApple Virtual Machine 1[m
+[1;34m  SoC: [mApple M2 Pro (Virtual)[m
+[1;34m  Device class: [mvma2macosap[m
+[1;34m  Product type: [mVirtualMac2,1[m
+[1;34m  Board ID: [m0x20[m
+[1;34m  Chip ID: [m0xfe00[m
+[1;34m  System firmware: [mmBoot-18000.161.10[m
+[1;34m  Boot UUID: [m995BAA35-FC3B-4105-B6D9-D45D24A66DEB[m
+[1;34m  Boot VGID: [m995BAA35-FC3B-4105-B6D9-D45D24A66DEB[m
+[1;34m  Default boot VGID: [m995BAA35-FC3B-4105-B6D9-D45D24A66DEB[m
+[1;34m  Boot mode: [mmacOS (overriden)[m
+[1;34m  OS version: [m15.7.9 (24G830)[m
+[1;34m  OS restore version: [m24.7.830.0.0,0[m
+[1;34m  Main firmware version: [m26.6.2 (25G83)[m
+[1;34m  No Fallback System Firmware / rOS[m
+[1;34m  SFR version: [m25.7.83.0.0,0[m
+[1;34m  SystemRecovery version: [m25.4.125.0.0,0 (26.3 25D125)[m
+[1;34m  Login user: [mrunner[m
+
+[1;31mThis device is not supported yet![m
+[1;31mPlease check out the Asahi Linux Blog for updates on device support:[m
+
+[1;31m   https://asahilinux.org/blog/[m
+
+
+
+ClaudeOS Setup: the installer stopped before ClaudeOS was installed (see above).
+
+[33mSetup stopped: The Asahi installer didn't finish (see above; its log is /tmp/claudeos-ci.P0d8LE/work/asahi-installer.log). If it made room or partitions, run setup again and choose "Remove ClaudeOS from this Mac" to clean up.[0m

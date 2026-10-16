@@ -1,0 +1,18 @@
+20:23:22  ClaudeOS is its own system, started instead of macOS. macOS, your apps and your files stay, one restart away.
+20:23:22  WARNING Plan only: nothing will be changed.
+20:23:22  Q: What would you like to do? -> 1
+20:23:22  == Checking this Mac
+20:23:22  macOS 15.7.9 on an Apple M2 Pro (Virtual).
+20:23:22  == Your files
+20:23:22  ClaudeOS can't open macOS's own files: on this Mac they're always encrypted, with keys only macOS can use
+20:23:23  (FileVault or not). So setup copies the folders you choose onto a drive called ClaudeOS that both systems open;
+20:23:23  macOS keeps its own copies. What you save on that drive in ClaudeOS is in macOS too, and you can send more
+20:23:23  later (run setup again).
+20:23:23  macOS may ask whether Terminal can open your Desktop, Documents and Downloads folders: choose OK.
+20:23:23  
+20:23:23  Q: Bring all of these to ClaudeOS (3 MB)? -> y
+20:23:23  folders: Desktop Documents Pictures (3006464 bytes)
+20:23:23  == Where ClaudeOS goes
+20:23:23  disk: container=disk2 store=disk0s2 total=343073095680 free=45790052352 preferred-min=328512988774 available=6790052352
+20:23:23  macOS can give ClaudeOS 6.8 GB and still keep 38 GB free for its updates.
+20:23:23  STOPPED ClaudeOS needs 40.0 GB. Free up space in macOS, then run setup again.

@@ -1,0 +1,16 @@
+disk5s1|EFI|EFI
+disk5s2|Apple_APFS|/tmp/claudeos-ci.P0d8LE/list.plist: Could not extract value, error: No value at that key path or invalid key path: AllDisksAndPartitions.0.Partitions.1.VolumeName
+disk5s3|Apple_APFS|/tmp/claudeos-ci.P0d8LE/list.plist: Could not extract value, error: No value at that key path or invalid key path: AllDisksAndPartitions.0.Partitions.2.VolumeName
+disk5s4|EFI|EFI - CLAUD
+disk5s5|Linux Filesystem|/tmp/claudeos-ci.P0d8LE/list.plist: Could not extract value, error: No value at that key path or invalid key path: AllDisksAndPartitions.0.Partitions.4.VolumeName
+disk5s6|Linux Filesystem|/tmp/claudeos-ci.P0d8LE/list.plist: Could not extract value, error: No value at that key path or invalid key path: AllDisksAndPartitions.0.Partitions.5.VolumeName
+/dev/disk5 (disk image):
+   #:                       TYPE NAME                    SIZE       IDENTIFIER
+   0:      GUID_partition_scheme                        +6.4 GB     disk5
+   1:                        EFI EFI                     209.7 MB   disk5s1
+   2:                 Apple_APFS Container disk6         1.5 GB     disk5s2
+   3:                 Apple_APFS Container disk7         700.0 MB   disk5s3
+   4:                        EFI EFI - CLAUD             500.0 MB   disk5s4
+   5:           Linux Filesystem                         200.0 MB   disk5s5
+   6:           Linux Filesystem                         600.0 MB   disk5s6
+                    (free space)                         2.7 GB     -

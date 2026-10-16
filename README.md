@@ -7,8 +7,10 @@ documents and your files.
 
 * **On a Windows PC** it sits next to Windows. When you press the power button, ClaudeOS starts by
   itself. Windows stays installed, and you can go back to it whenever you like.
-* **On a Mac** it's an app that fills the screen. macOS, your apps and your files stay as they are, and
-  you can switch back to macOS whenever you like. See [ClaudeOS on a Mac](#claudeos-on-a-mac).
+* **On a Mac** it takes over the whole Mac from the moment you log in: none of macOS shows, no Dock and
+  no menu bar. macOS, your apps and your files stay as they are, and "switch to macOS" brings them back
+  at once. It works on every Mac with Apple silicon, including the newest, and on Intel Macs with macOS 13
+  or newer. See [ClaudeOS on a Mac](#claudeos-on-a-mac).
 
 ## What you need on a Windows PC
 
@@ -153,13 +155,21 @@ If setup can't do it, you can do it by hand in Windows:
 
 ## ClaudeOS on a Mac
 
-On a Mac, ClaudeOS is an app that fills the screen and hides the Dock and the menu bar while it's in
-front. Nothing about macOS changes. Talking, typing from your phone and asking for things work as
-described above.
+On a Mac, ClaudeOS takes over the whole Mac from the moment you log in. It fills the screen, and none
+of macOS shows: no Dock, no menu bar, no app switcher, and the screen stays on while ClaudeOS is in front
+(if it went dark, the Mac would lock, and you can't talk your way past a lock screen). Talking, typing from
+your phone and asking for things work as described above. Your Mac's files are there for ClaudeOS to find.
 
-ClaudeOS for Mac is new: it has been built and checked on other computers, but not yet tried on a real
-Mac. If something doesn't work, the details are in the `logs` folder inside the `ClaudeOS` folder in your
-home folder.
+macOS stays installed underneath, with your apps and files, and handles the Wi-Fi, the sound and your
+AirPods. That's why it works on every Mac, including the newest: Apple's newest Macs can't start another
+system yet, so on a Mac ClaudeOS doesn't replace macOS at power-on the way it replaces Windows on a PC. If
+FileVault is on (it usually is), you type your Mac's password once when it starts, like a PC with
+BitLocker; then ClaudeOS appears by itself.
+
+ClaudeOS for Mac has been tried on GitHub's virtual Macs (Apple silicon and Intel, macOS 26): setup, the
+app, a scripted conversation, switching to macOS and back, and removing it. It hasn't been tried with
+AirPods on a physical Mac yet. If something doesn't work, the details are in the `logs` folder inside the
+`ClaudeOS` folder in your home folder.
 
 ### What you need on a Mac
 
@@ -182,7 +192,8 @@ home folder.
      then shows a code that starts with `sk-ant-`. It may run over two lines: copy all of it, paste it
      back into Terminal (it stays hidden) and press Return.
    * **Typing from your phone.** Say yes: your browser opens once more; approve it with the same account.
-   * **Opening when you log in.** Say yes if you want ClaudeOS to be the first thing you see.
+   * **Opening when you log in.** Say yes: that's what makes ClaudeOS take over the Mac from the moment you
+     log in.
 
    Nothing changes on the Mac until you answer **y** to **Go ahead?**. Setup then installs ClaudeOS with
    its own copy of Python and its voice in the `ClaudeOS` folder in your home folder (about 3 GB), and
@@ -197,8 +208,10 @@ home folder.
 
 ### Going back to macOS
 
-* **Right now:** say **"switch to macOS"**, or press Command-H. ClaudeOS steps aside and macOS shows. Say
-  **"Claude"**, press an AirPod stem or click ClaudeOS in the Dock to come back. Command-Q quits ClaudeOS.
+* **Right now:** say **"switch to macOS"**, or press Command-H. ClaudeOS steps aside and macOS shows, with
+  everything as you left it. Say **"Claude"**, press an AirPod stem or click ClaudeOS in the Dock to come
+  back. Command-Q quits ClaudeOS. If ClaudeOS ever stops responding, Option-Command-Esc (Force Quit) still
+  works.
 * **Every day:** say **"start macOS when the computer turns on"**, or run setup again and choose
   **Choose whether ClaudeOS opens when you log in**. ClaudeOS stays in Applications for when you want it.
 * **For good:** run setup again, choose **Remove ClaudeOS from this Mac** and type REMOVE. Setup deletes
@@ -214,6 +227,8 @@ home folder.
   ClaudeOS. Check that your AirPods are connected to the Mac.
 * **Claude says it isn't signed in.** Run setup and choose **Sign ClaudeOS in to Claude again**, then
   quit ClaudeOS (Command-Q) and open it again.
+* **Notifications from other apps pop up over ClaudeOS.** Turn on a Focus (Control Center, **Focus**, for
+  example **Do Not Disturb**) while you use ClaudeOS.
 
 ## For the curious
 

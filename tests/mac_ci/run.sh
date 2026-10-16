@@ -136,6 +136,8 @@ else
 fi
 cp "$CO/logs/claudeos.log" "$OUT/3-claudeos.log" 2>/dev/null
 log show --style compact --last 10m --predicate 'process == "tccd"' 2>/dev/null | grep -i -E "claudeos|python" | tail -80 > "$OUT/3-permissions.txt"
+# The microphone question ClaudeOS asked stays on the screen (nobody here can answer it); close it.
+killall -q UserNotificationCenter universalAccessAuthWarn 2>/dev/null
 cp "$HOME"/Library/Logs/DiagnosticReports/*ClaudeOS* "$HOME"/Library/Logs/DiagnosticReports/*Python* "$OUT/" 2>/dev/null
 
 # ------------------------------------------------------------------ 4. ClaudeOS on the screen, scripted Claude
@@ -148,9 +150,13 @@ fi
 # Test-only packages, into ClaudeOS's Python: the pretend Claude (aiohttp) and the test runner.
 "$UV" pip install --python "$CO/runtime/bin/python" aiohttp pytest pyyaml jsonschema >> "$OUT/4-test-packages.txt" 2>&1
 t0=$(date +%s)
-CLAUDEOS_TEST_MODELS="$CO/models" with_timeout 900 "$CO/runtime/bin/python" "$REPO/tests/mac_ci/mac_scenario.py" \
-  "$OUT/scenario" > "$OUT/4-scenario.txt" 2>&1
+# Inside the real app (its program started directly, so the test can hand it the scenario): ClaudeOS as macOS
+# sees it, with its name and permissions, and coming to the front the way the app does.
+mkdir -p "$OUT/scenario"
+CLAUDEOS_TEST_MODELS="$CO/models" CLAUDEOS_TEST_SCENARIO="$REPO/tests/mac_ci/mac_scenario.py" \
+  CLAUDEOS_TEST_SCENARIO_ARGS="$OUT/scenario" with_timeout 900 "$APP/Contents/MacOS/ClaudeOS" > "$OUT/4-scenario.txt" 2>&1
 rc=$?
+cp "$CO/logs/app.log" "$OUT/4-app.log" 2>/dev/null
 "$CO/runtime/bin/python" - "$OUT/scenario/result.json" "$rc" "$(( $(date +%s) - t0 ))" 2>&1 <<'EOF' | tee -a "$OUT/summary.txt"
 import json, sys, time
 path, rc, took = sys.argv[1], int(sys.argv[2]), sys.argv[3]

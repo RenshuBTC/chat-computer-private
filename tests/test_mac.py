@@ -277,37 +277,21 @@ def test_sound_follows_airpods_connecting_on_a_mac(tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------------ WebKit's blocks (decision handlers)
-def test_webkit_blocks_get_a_signature_before_they_are_called():
-    """WebKit's decision handlers come without a signature PyObjC can read; on a real Mac calling one as it
-    was made ClaudeOS quit at its first page ("cannot call block without a signature")."""
+def test_blocks_pyobjc_can_call_are_called_the_usual_way():
     from claudeos.ui.mac_blocks import call_block
-
-    class Block:                      # what PyObjC hands over: callable only once it has a signature
-        def __init__(self):
-            self.__block_signature__ = None
-            self.calls = []
-
-        def __call__(self, *args):
-            if self.__block_signature__ is None:
-                raise TypeError("cannot call block without a signature")
-            self.calls.append(args)
-
-    b = Block()
-    assert call_block(b, b"v@?q", 2) == "pyobjc"
-    assert b.__block_signature__ == b"v@?q" and b.calls == [(2,)]
+    calls = []
+    assert call_block(lambda *a: calls.append(a), b"v@?q", 2) == "pyobjc"
+    assert calls == [(2,)]
 
 
 def test_webkit_blocks_are_called_directly_when_pyobjc_cant():
+    """WebKit's decision handlers come without a signature PyObjC can read; on a real Mac calling one as it
+    was made ClaudeOS quit at its first page ("cannot call block without a signature")."""
     import ctypes
 
     from claudeos.ui.mac_blocks import _BlockLayout, call_block
 
-    class Block:                      # a block whose signature can't be set either
-        __block_signature__ = None
-
-        def __setattr__(self, name, value):
-            raise AttributeError("read-only")
-
+    class Block:                      # what PyObjC hands over for such a block
         def __call__(self, *args):
             raise TypeError("cannot call block without a signature")
 
@@ -331,6 +315,5 @@ def test_other_errors_from_a_block_are_not_hidden():
 
     def block(*args):
         raise TypeError("expected 1 argument")
-    block.__block_signature__ = b"v@?q"
     with pytest.raises(TypeError, match="expected 1 argument"):
         call_block(block, b"v@?q", 1, 2)

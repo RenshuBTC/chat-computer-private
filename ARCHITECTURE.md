@@ -259,9 +259,11 @@ retrying with backoff, then starts listening.
 
 ## Mac
 
-On a Mac, ClaudeOS runs as an app on macOS, not as a second system. The runtime (`claudeos/`) is the same; the
-platform layer is `claudeos/platform/mac.py` (engine name `mac`, chosen on `sys.platform == "darwin"`) and the
-screen is `claudeos/ui/mac_app.py`.
+On a Mac, ClaudeOS runs as an app on macOS that takes over the whole Mac from login ("whole-Mac mode"), not as
+a second system: on Apple silicon only Asahi Linux can start another system, not yet on M4/M5, and Linux there
+can't open the Mac's files (encrypted with keys only that Mac's macOS can use). The runtime (`claudeos/`) is the
+same; the platform layer is `claudeos/platform/mac.py` (engine name `mac`, chosen on `sys.platform ==
+"darwin"`) and the screen is `claudeos/ui/mac_app.py`.
 
 | What | Path / value |
 |---|---|
@@ -301,12 +303,21 @@ stay the same across updates unless the launcher changes.
 
 * One borderless window the size of the screen (`NSWindow`), the conversation in a `WKWebView` and the
   content layer in a second one (`content.js` injected in the `WKContentWorld` "claudeos", messages through
-  the `claudeosPage` handler), captions as `NSTextField`s. While ClaudeOS is in front, presentation options
-  hide the Dock and the menu bar. Pages use the Mac's system font (`system-ui`).
+  the `claudeosPage` handler), captions as `NSTextField`s. While ClaudeOS is in front, the presentation
+  options `HideDock | HideMenuBar | DisableProcessSwitching` leave nothing of macOS on screen (Force Quit still
+  works), and an `NSProcessInfo` activity (`IdleDisplaySleepDisabled | UserInitiated`) keeps the display on:
+  when it goes dark macOS locks, and nobody can talk past a lock screen. Hiding ends the activity. Pages use
+  the Mac's system font (`system-ui`).
+* WebKit's decision and completion handlers (navigation response policy, downloads, camera requests) reach
+  Python as blocks without a signature PyObjC can call; `claudeos/ui/mac_blocks.py` calls their invoke
+  function directly. (Found on GitHub's Macs: ClaudeOS quit at its first page on Apple silicon, and no page
+  finished loading on Intel.)
 * "Switch to macOS" is `power(switch_to_macos)`: no restart. The platform calls `on_step_aside`; the
   controller goes to sleep (wake word only) and the screen hides the app. Command-H does the same through
   `applicationDidHide:`. Coming back: the wake word, an AirPods press (`MPRemoteCommandCenter`), or
-  activating the app (Dock, Command-Tab), which wakes the controller.
+  activating the app (Dock), which wakes the controller. It unhides and asks to be active; since macOS 14 that
+  can be refused while another app is in use, so if it isn't active 0.4 s later it opens its own bundle with
+  `NSWorkspace openApplicationAtURL` (activates: YES), the way the Dock does.
 * `start_by_default` (claudeos | other) writes or removes the LaunchAgent (`MacPlatform.set_default_os`).
 * Quitting (Command-Q, logging out, a restart or shutdown): `applicationShouldTerminate:` answers
   `NSTerminateLater`, stops ClaudeOS on its loop, flushes the logs, then `replyToApplicationShouldTerminate:YES`;
@@ -327,7 +338,8 @@ stay the same across updates unless the launcher changes.
   ClaudeOS take it out of the Trash, it says how to use Put Back.
 * Platform: Wi-Fi through `networksetup` and Core WLAN; Bluetooth and sound devices from `system_profiler -json`,
   connecting with IOBluetooth; volume through AppleScript; sleep with `pmset`, shutdown/restart through
-  System Events; clicks and keys for websites with Quartz `CGEvent` (needs Accessibility); software through
+  System Events; clicks and keys for websites with Quartz `CGEvent` (needs Accessibility, and only while
+  ClaudeOS is the app in front, so events never land in another app; otherwise through the page); software through
   Homebrew when it's installed.
 
 ### Setup (`mac/setup.sh`)

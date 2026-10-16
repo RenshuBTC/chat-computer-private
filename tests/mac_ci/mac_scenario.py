@@ -2,15 +2,19 @@
 account: the real window (AppKit and WebKit), the real Claude Code engine, the real tools, the real Mac layer
 (claudeos/platform/mac.py) and the real speech models, with a pretend microphone.
 
-Run it with ClaudeOS's own Python after setup (it has AppKit, WebKit and the speech packages, plus aiohttp for
-the pretend Claude), from the repository:
+It runs inside the real app, after setup, the way tests/mac_ci/run.sh starts it on GitHub's Macs:
 
-    ~/ClaudeOS/runtime/bin/python tests/mac_ci/mac_scenario.py OUTDIR
+    CLAUDEOS_TEST_SCENARIO=tests/mac_ci/mac_scenario.py CLAUDEOS_TEST_SCENARIO_ARGS=OUTDIR \
+        ~/Applications/ClaudeOS.app/Contents/MacOS/ClaudeOS
+
+(ClaudeOS's Python needs aiohttp for the pretend Claude.) Inside the app it is ClaudeOS as macOS sees it: its
+name, its permissions, and how it comes to the front.
 
 It talks to ClaudeOS (by voice, then typed), opens a website and a document, goes to sleep and wakes, steps aside
-to show macOS and comes back, rebuilds its conversation page, and at the end quits the way Command-Q does.
-Screenshots and result.json go to OUTDIR. The exit status is ClaudeOS's own, after quitting: 0 means it quit
-cleanly (result.json says whether each step worked). tests/mac_ci/run.sh runs this on GitHub's Macs.
+to show macOS and comes back (also while another app is in use), checks that nothing of macOS shows while
+ClaudeOS is in front, rebuilds its conversation page, and at the end quits the way Command-Q does. Screenshots and
+result.json go to OUTDIR. The exit status is ClaudeOS's own, after quitting: 0 means it quit cleanly
+(result.json says whether each step worked).
 """
 import asyncio
 import http.server
@@ -99,7 +103,8 @@ def rule(req):
 mock.rules.append(rule)
 
 # ------------------------------------------------------------------ ClaudeOS
-from AppKit import NSApplication, NSScreen  # noqa: E402
+from AppKit import (NSApplication, NSApplicationPresentationDisableProcessSwitching,  # noqa: E402
+                    NSApplicationPresentationHideDock, NSApplicationPresentationHideMenuBar, NSScreen)
 from PyObjCTools import AppHelper  # noqa: E402
 
 from claudeos.config import Paths, Settings, save_token  # noqa: E402
@@ -173,8 +178,8 @@ def shot(name):
         pass
 
 
-def chat_text(screen):
-    """The conversation as the page shows it ("" if the page can't say: not loaded, or no conversation)."""
+def chat_text(screen, script="document.getElementById('log').innerText"):
+    """What the conversation page shows: by default the conversation ("" if the page can't say)."""
     box, ev = {}, threading.Event()
 
     def done(res, err):
@@ -182,10 +187,32 @@ def chat_text(screen):
         if err is not None:
             result.setdefault("page_errors", []).append(str(err)[:300])
         ev.set()
-    AppHelper.callAfter(lambda: screen.chat.evaluateJavaScript_completionHandler_(
-        "document.getElementById('log').innerText", done))
+    AppHelper.callAfter(lambda: screen.chat.evaluateJavaScript_completionHandler_(script, done))
     ev.wait(10)
     return box.get("text", "")
+
+
+WHOLE_MAC = (NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar |
+             NSApplicationPresentationDisableProcessSwitching)
+
+
+def dismiss_prompts():
+    """Closes macOS's permission windows (the microphone, Accessibility): on a real Mac the person answers them
+    once; here nobody can, and they'd stay over the screen."""
+    subprocess.run(["killall", "-q", "UserNotificationCenter", "universalAccessAuthWarn"], timeout=30,
+                   capture_output=True)
+    time.sleep(1)
+
+
+def front_state(c):
+    """Whether ClaudeOS is the app in front, and whether macOS shows nothing of itself (whole-Mac mode)."""
+    def look():
+        app = NSApplication.sharedApplication()
+        opts = int(app.currentSystemPresentationOptions())
+        return {"active": bool(app.isActive()), "hidden": bool(app.isHidden()),
+                "window_visible": bool(c.screen.win.isVisible()),
+                "nothing_of_macos": (opts & WHOLE_MAC) == WHOLE_MAC, "options": opts}
+    return on_main(look)
 
 
 def wait_for(cond, seconds, step=0.5):
@@ -228,18 +255,21 @@ def scenario():
         c = holder["c"]
         app = NSApplication.sharedApplication()
 
-        # 1. Started: the window fills the screen and ClaudeOS's greeting is on it ("Hi Ren. I'm listening.",
-        #    said without asking Claude). Whether macOS lets it come to the front isn't up to ClaudeOS when a
-        #    script starts it, so that's only noted.
-        greeted = wait_for(lambda: "listening" in chat_text(c.screen), 90, 1)
+        # 1. Started: the window fills the screen, the page greets the person by name, and ClaudeOS says hello
+        #    ("Hi Ren. I'm listening.", spoken without asking Claude).
+        greeted = wait_for(lambda: "Ren" in chat_text(c.screen, "document.getElementById('greeting').textContent"),
+                           90, 1)
+        spoke = wait_for(lambda: len(player.played) > 0, 30) if VOICE else True
         time.sleep(2)
         shot("01-start")
         geo = on_main(lambda: {"screen": tuple(NSScreen.mainScreen().frame().size),
                                "window": tuple(c.screen.win.frame().size),
-                               "scale": float(NSScreen.mainScreen().backingScaleFactor()),
-                               "visible": bool(c.screen.win.isVisible()), "active": bool(app.isActive())})
-        step("starts full screen and greets", greeted and geo["visible"] and geo["window"] == geo["screen"],
-             greeted=greeted, geometry=geo, layout=c.screen.layout_info(), requests=len(mock.requests))
+                               "scale": float(NSScreen.mainScreen().backingScaleFactor())})
+        step("starts full screen and greets", greeted and spoke and geo["window"] == geo["screen"],
+             greeted=greeted, spoke=spoke, geometry=geo, layout=c.screen.layout_info())
+        front = front_state(c)
+        step("whole-Mac mode: in front, no Dock, no menu bar, no app switching",
+             front["active"] and front["window_visible"] and front["nothing_of_macos"], **front)
 
         # 2. Talking: real speech through the pretend microphone, Silero, Whisper; Claude opens a website and
         #    clicks in it.
@@ -286,18 +316,36 @@ def scenario():
         time.sleep(1)
         step("sleeps and wakes to its name", asleep and not c.asleep)
 
-        # 6. "Switch to macOS": ClaudeOS hides and the Mac's desktop shows; its name brings it back.
+        # 6. "Switch to macOS": ClaudeOS hides and the Mac's desktop shows; its name brings it back, all the way
+        #    to the front, with nothing of macOS showing.
+        dismiss_prompts()
         say(c, "switch to macOS")
         hidden = wait_for(lambda: on_main(lambda: bool(app.isHidden())), 30)
         time.sleep(2)
         shot("06-macos-showing")
         aside = c.asleep
         say(c, "Claude")
-        back = wait_for(lambda: on_main(lambda: not app.isHidden() and bool(c.screen.win.isVisible())), 30)
+        back = wait_for(lambda: front_state(c)["active"] and front_state(c)["nothing_of_macos"], 20)
         time.sleep(2)
         shot("07-back")
-        step("steps aside to show macOS, and comes back", hidden and aside and back, hidden=hidden,
-             listening_for_name_only=aside, back=back)
+        step("steps aside to show macOS, and comes back to the front", hidden and aside and back, hidden=hidden,
+             listening_for_name_only=aside, back=back, state=front_state(c))
+
+        # 6b. The same while the person is using another app (TextEdit): since macOS 14 an app may be refused
+        #     when it asks to come to the front, so this is the case that matters.
+        say(c, "switch to macOS")
+        wait_for(lambda: on_main(lambda: bool(app.isHidden())), 30)
+        subprocess.run(["open", "-a", "TextEdit"], timeout=30, capture_output=True)
+        other = wait_for(lambda: on_main(lambda: not app.isActive()), 15)
+        time.sleep(3)
+        shot("09-another-app")
+        say(c, "Claude")
+        back = wait_for(lambda: front_state(c)["active"] and front_state(c)["nothing_of_macos"], 20)
+        time.sleep(2)
+        shot("10-back-from-another-app")
+        step("comes back to the front from another app", other and back, other_app_in_front=other,
+             state=front_state(c))
+        subprocess.run(["pkill", "-x", "TextEdit"], timeout=30, capture_output=True)   # no Apple events: no prompt
 
         # 7. The conversation page's renderer stops (WebKit reports that when its process dies): the page is
         #    loaded again with the conversation as it was.

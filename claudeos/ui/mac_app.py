@@ -5,9 +5,10 @@ window (gtk_app.py):
 * The content layer: websites, videos, documents and pages, in a WebKit view (WKWebView), with a caption
   strip over it. Sign-ins and cookies are kept by macOS's WebKit for this app.
 
-ClaudeOS hides the Dock and the menu bar while it is in front. "Switch to macOS" hides ClaudeOS (the Mac's
-desktop shows); saying "Claude", an AirPods press or clicking ClaudeOS in the Dock brings it back. Cmd+H
-hides it too, Cmd+Q quits it.
+Whole-Mac mode: while ClaudeOS is in front, none of macOS shows. The Dock and the menu bar are gone (not just
+tucked away), switching apps with Cmd+Tab is off, and the display doesn't go to sleep (which would lock the Mac
+while you're talking to it). "Switch to macOS" hides ClaudeOS and the Mac's desktop shows; saying "Claude", an
+AirPods press or clicking ClaudeOS in the Dock brings it back. Cmd+H hides it too, Cmd+Q quits it.
 
 AppKit runs on the main thread; ClaudeOS's logic runs on an asyncio thread. Everything that touches the
 window is handed to the main thread with AppHelper.callAfter.
@@ -28,14 +29,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 import objc
-from AppKit import (NSApplication, NSApplicationActivationPolicyRegular, NSApplicationPresentationHideDock,
+from AppKit import (NSApplication, NSApplicationActivationPolicyRegular,
+                    NSApplicationPresentationDisableProcessSwitching, NSApplicationPresentationHideDock,
                     NSApplicationPresentationHideMenuBar, NSBackingStoreBuffered, NSBitmapImageFileTypePNG,
                     NSBitmapImageRep, NSColor, NSCursor, NSEvent, NSEventMaskKeyDown, NSEventModifierFlagCommand,
                     NSEventModifierFlagControl, NSFont, NSLineBreakByWordWrapping, NSMenu, NSMenuItem, NSScreen,
                     NSTextField, NSView, NSViewHeightSizable, NSViewWidthSizable, NSWindow,
                     NSWindowStyleMaskBorderless, NSWindowStyleMaskClosable, NSWindowStyleMaskMiniaturizable,
                     NSWindowStyleMaskResizable, NSWindowStyleMaskTitled)
-from Foundation import NSURL, NSBundle, NSMakeRect, NSObject, NSURLRequest
+from Foundation import NSURL, NSBundle, NSMakeRect, NSObject, NSProcessInfo, NSURLRequest
 from PyObjCTools import AppHelper
 from WebKit import (WKContentWorld, WKUserContentController, WKUserScript, WKWebsiteDataStore, WKWebView,
                     WKWebViewConfiguration)
@@ -52,6 +54,12 @@ INJECT_AT_DOCUMENT_END = 1           # WKUserScriptInjectionTimeAtDocumentEnd
 RESPONSE_ALLOW, RESPONSE_DOWNLOAD = 1, 2   # WKNavigationResponsePolicy
 PERMISSION_DENY = 2                  # WKPermissionDecisionDeny
 TERMINATE_NOW, TERMINATE_LATER = 1, 2   # NSTerminateNow, NSTerminateLater
+# NSActivityIdleDisplaySleepDisabled | NSActivityUserInitiated: the display stays on (and the Mac awake) while
+# ClaudeOS is in front; when it goes dark, macOS locks, and nobody can talk their way past the lock screen.
+AWAKE_WHILE_SHOWN = (1 << 40) | 0x00FFFFFF | (1 << 20)
+# What macOS shows while ClaudeOS is in front: nothing (no Dock, no menu bar, no Cmd+Tab).
+PRESENTATION = (NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar |
+                NSApplicationPresentationDisableProcessSwitching)
 KEY_RETURN, KEY_ENTER, KEY_BACKSPACE, KEY_ESCAPE = 36, 76, 51, 53
 # Same colours as theme.css (plain: black on white, or white on black in dark mode).
 LIGHT = {"bg": "#FFFFFF", "ink": "#000000", "soft": "#595959", "rule": "#D9D9D9"}
@@ -227,10 +235,11 @@ class _AppDelegate(NSObject):
         self.screen.on_shown()          # brought back by hand (the Dock, Command-Tab): listening again
 
     def applicationDidHide_(self, note):
+        self.screen._stay_awake(False)
         self.screen.on_hidden()         # Command-H, or "switch to macOS"
 
     def applicationShouldHandleReopen_hasVisibleWindows_(self, app, flag):
-        self.screen._do_come_back()
+        self.screen._do_come_back(via_launch_services=False)    # the Dock, or our own "open" below
         return True
 
     def applicationShouldTerminate_(self, app):
@@ -294,6 +303,7 @@ class MacScreen(Screen):
         self._replay_last: dict[str, str] = {}
         self._reloading = False
         self._renderer_stops: list[float] = []
+        self._awake: Any = None
         self._build(windowed)
 
     def bind(self, loop: asyncio.AbstractEventLoop, *, on_media_key: Callable[[str], None],
@@ -390,13 +400,25 @@ class MacScreen(Screen):
                                                        NSURL.fileURLWithPath_(str(ASSETS)))
 
     def _present(self) -> None:
-        """While ClaudeOS is in front, the Dock and the menu bar stay out of sight."""
-        if self.windowed:
-            return
+        """While ClaudeOS is in front, nothing of macOS shows: no Dock, no menu bar, no Cmd+Tab app switcher
+        (Force Quit still works, as a way out if something hangs). And the display stays on."""
+        if not self.windowed:
+            try:
+                _app().setPresentationOptions_(PRESENTATION)
+            except Exception:
+                log.exception("hiding the Dock and menu bar")
+        self._stay_awake(True)
+
+    def _stay_awake(self, on: bool) -> None:
         try:
-            _app().setPresentationOptions_(NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar)
+            if on and self._awake is None:
+                self._awake = NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
+                    AWAKE_WHILE_SHOWN, "ClaudeOS is on the screen")
+            elif not on and self._awake is not None:
+                NSProcessInfo.processInfo().endActivity_(self._awake)
+                self._awake = None
         except Exception:
-            log.exception("hiding the Dock and menu bar")
+            log.exception("keeping the display on")
 
     def _setup_media_keys(self) -> None:
         """AirPods presses (and the keyboard's play key) reach ClaudeOS as media commands."""
@@ -427,17 +449,38 @@ class MacScreen(Screen):
 
     def _do_step_aside(self) -> None:
         self._show_chat()
+        self._stay_awake(False)
         _app().hide_(None)
 
     def come_back(self) -> None:
         self._ui(self._do_come_back)
 
-    def _do_come_back(self) -> None:
+    def _do_come_back(self, via_launch_services: bool = True) -> None:
         app = _app()
         if app.isHidden():
             app.unhide_(None)
         _bring_to_front(app, self.win)
         self._present()
+        if via_launch_services:
+            # Since macOS 14 an app that asks to come to the front while another one is in use may be told no,
+            # and then the Dock and the menu bar stay. Opening it the way the Dock does always works.
+            AppHelper.callLater(0.4, self._make_sure_in_front)
+
+    def _make_sure_in_front(self) -> None:
+        app = _app()
+        if app.isActive() or app.isHidden():
+            return
+        bundle = NSBundle.mainBundle().bundleURL()
+        if bundle is None or not str(bundle.path()).endswith(".app"):
+            return
+        try:
+            from AppKit import NSWorkspace, NSWorkspaceOpenConfiguration
+            cfg = NSWorkspaceOpenConfiguration.configuration()
+            cfg.setActivates_(True)
+            NSWorkspace.sharedWorkspace().openApplicationAtURL_configuration_completionHandler_(bundle, cfg, None)
+            log.info("came back to the front through LaunchServices")
+        except Exception:
+            log.exception("coming back to the front")
 
     def _quit_requested(self) -> int:
         """macOS asks whether ClaudeOS may quit (main thread)."""

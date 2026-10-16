@@ -1,9 +1,16 @@
 # ClaudeOS for Mac
 
-On a Mac, ClaudeOS is an app that fills the screen. macOS, your apps and your files stay as they are. The
-steps for people are in the main `README.md` ("ClaudeOS on a Mac"); this file is for anyone looking under
-the hood. **It hasn't been tried on a real Mac yet**: everything here was built and checked on Linux, with
-stand-ins for macOS's commands (see "Tests").
+On a Mac, ClaudeOS takes over the whole Mac from login ("whole-Mac mode"): an app whose window fills the
+screen, opened at login, that while it's in front hides the Dock and the menu bar entirely, turns off Cmd+Tab
+and keeps the display on. macOS, your apps and your files stay as they are. The steps for people are in the
+main `README.md` ("ClaudeOS on a Mac"); this file is for anyone looking under the hood.
+
+Why not start ClaudeOS on its own, as on a PC: on Apple silicon only Asahi Linux can start another system, and
+not yet on M4 and M5 Macs; even where it can, Linux can't open the Mac's files (Apple silicon encrypts them
+with keys only macOS on that Mac can use), and switching would mean restarting.
+
+It has been tried on GitHub's virtual Macs (Apple silicon and Intel, macOS 26) with `tests/mac_ci` (see
+"Tests"), but not yet with AirPods on a physical Mac.
 
 | File | What it does |
 |---|---|
@@ -40,6 +47,21 @@ an Intel Mac with macOS 13 or newer; about 5 GB free; the internet.
   ClaudeOS's website data and `~/ClaudeOS`. It can keep what ClaudeOS remembers, its notes and your
   conversations.
 
+## Whole-Mac mode, in detail
+
+* **In front:** `NSApplicationPresentationHideDock | HideMenuBar | DisableProcessSwitching` (the Dock and the
+  menu bar are unavailable, not tucked away; Cmd+Tab is off; Force Quit still works), and an `NSProcessInfo`
+  activity that keeps the display on and the Mac awake.
+* **"Switch to macOS" or Cmd+H:** ClaudeOS hides, the activity ends (macOS's usual display sleep and lock
+  apply again), and ClaudeOS listens only for its name.
+* **Coming back** ("Claude", an AirPods press, the Dock): unhide and ask to be the app in front. Since macOS 14
+  an app that asks while another is in use can be told no; then ClaudeOS opens itself through LaunchServices,
+  the way the Dock does.
+* **Clicks and typing on websites** go through macOS's input events only while ClaudeOS is in front (and
+  allowed in Accessibility); otherwise through the page, so they never land in someone else's app.
+* **WebKit's decision handlers** (which page loads may go on, downloads, camera requests) are blocks PyObjC
+  can't call; `claudeos/ui/mac_blocks.py` calls them directly. Without that, ClaudeOS quit at its first page.
+
 ## Tests
 
 * `tests/test_mac_setup.py` runs `setup.sh` against a pretend Mac: stand-ins for `sw_vers`, `uname`,
@@ -49,4 +71,10 @@ an Intel Mac with macOS 13 or newer; about 5 GB free; the internet.
   checks the app's program is one signed universal program, for Apple silicon and Intel, that uses only
   the system library.
 * `tests/test_mac.py` covers the Mac engine (`claudeos/platform/mac.py`) with stand-ins for macOS's
-  commands, and the tools and instructions Claude gets on a Mac.
+  commands, the tools and instructions Claude gets on a Mac, and calling WebKit's blocks.
+* `tests/mac_ci/run.sh` is the whole thing on a real Mac, start to finish, and `.github/workflows/mac.yml`
+  runs it on GitHub's Macs (Apple silicon and Intel): setup as a person runs it, the app opened the way
+  macOS opens it, a scripted conversation inside the real app with a pretend Claude
+  (`tests/mac_ci/mac_scenario.py`: talking with real speech models, a website, a document, sleep, switching
+  to macOS and back, also while another app is in use, and quitting), the Python tests, then setup's
+  Remove. Screenshots and logs are saved to a `results/...` branch.

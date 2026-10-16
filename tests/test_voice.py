@@ -104,7 +104,13 @@ def run_listener(stt, audio, speaking=lambda: False, barge=lambda: True):
             await asyncio.sleep(0.05)
             if not any(t for t in asyncio.all_tasks() if t is not asyncio.current_task()):
                 break
-        ex.shutdown(wait=True)
+        # A slow computer (GitHub's Intel Macs) may still be transcribing: wait for the worker without blocking
+        # the loop, then let the loop deliver what it heard.
+        await loop.run_in_executor(None, ex.shutdown, True)
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if not any(t for t in asyncio.all_tasks() if t is not asyncio.current_task()):
+                break
     asyncio.run(go())
     return got
 

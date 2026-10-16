@@ -140,6 +140,15 @@ def main(argv: list[str] | None = None) -> int:
         print("Saved. Restart ClaudeOS.")
         return 0
     if args.cmd in (None, "run"):
+        scenario = os.environ.get("CLAUDEOS_TEST_SCENARIO")
+        if scenario:
+            # Tests only (tests/mac_ci/run.sh): a scripted session inside the real Mac app, in place of the
+            # usual start, so it runs the way the app does (its name, its permissions, coming to the front).
+            import runpy
+            import shlex
+            sys.argv = [scenario, *shlex.split(os.environ.get("CLAUDEOS_TEST_SCENARIO_ARGS", ""))]
+            runpy.run_path(scenario, run_name="__main__")
+            return 0
         from .journal import setup_logging
         setup_logging(paths, verbose=getattr(args, "verbose", False))
         os.environ.setdefault("CLAUDEOS_ENGINE", "mac" if sys.platform == "darwin" else "linux")

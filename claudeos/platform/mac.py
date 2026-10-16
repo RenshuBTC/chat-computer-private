@@ -560,7 +560,18 @@ class MacPlatform(Platform):
                     self._open_pane("accessibility")
             raise RuntimeError("macOS hasn't allowed ClaudeOS to click and type yet. Turn on ClaudeOS in System "
                                "Settings → Privacy & Security → Accessibility, then ask again.")
+        # Clicks and key presses go to whatever is in front: if that isn't ClaudeOS (it's hidden, or macOS
+        # didn't let it come to the front), they would land in someone else's app. The page is used instead.
+        if not self._in_front():
+            raise RuntimeError("ClaudeOS isn't in front, so clicking and typing go through the page instead.")
         return Quartz
+
+    def _in_front(self) -> bool:
+        try:
+            from AppKit import NSRunningApplication  # type: ignore
+            return bool(NSRunningApplication.currentApplication().isActive())
+        except Exception:
+            return True
 
     def _post_mouse(self, kind: str, x: float, y: float, button: str = "left", clicks: int = 1) -> None:
         Q = self._need_accessibility()

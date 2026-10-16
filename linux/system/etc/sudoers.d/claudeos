@@ -1,0 +1,11 @@
+# ClaudeOS sudoers drop-in. Installed as /etc/sudoers.d/claudeos, mode 0440.
+#
+# The ClaudeOS user may run ONLY the root helper, with no password, and nothing
+# else. The AI calls `sudo -n /usr/local/libexec/claudeos/claudeos-root <verb>`.
+# All argument validation happens inside the helper; sudo grants the single
+# binary. @CLAUDEOS_USER@ is replaced with the real username by
+# install-claudeos.sh.
+#
+# NOTE: no wildcards on the command — the helper is the trust boundary, and
+# allowing arbitrary args here is intentional (the helper validates them).
+@CLAUDEOS_USER@ ALL=(root) NOPASSWD: /usr/local/libexec/claudeos/claudeos-root

@@ -1,0 +1,5 @@
+zig 0.17.0
+apple-codesign 0.29.0
+df14e1b18a382646102487fe357e1e2b634add06600a18abd23c6bc13b118d93  ClaudeOS.app/Contents/MacOS/ClaudeOS
+b77ce4b739b1f9dd25754875025c0c3a673c1cb1e053e959be0aaf46d09c8cf3  ClaudeOS.app/Contents/Info.plist
+22bede955072b81ddd47c073cfed68d9a79595281099d4a44fc2fe5ff1985cf6  ClaudeOS.app/Contents/_CodeSignature/CodeResources

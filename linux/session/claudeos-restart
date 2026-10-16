@@ -1,0 +1,19 @@
+#!/bin/sh
+# claudeos-restart — the Ctrl+Alt+Backspace escape hatch.
+#
+# Bound in openbox-rc.xml. Terminating the X server is the cleanest "restart
+# ClaudeOS": startx returns, the tty1 getty respawns the login shell, and
+# ~/.bash_profile execs startx again, bringing the whole session back fresh.
+#
+# We politely ask openbox to exit (which ends the session startx is waiting on);
+# if that is unavailable, kill the X server directly.
+if command -v openbox >/dev/null 2>&1; then
+  openbox --exit 2>/dev/null && exit 0
+fi
+# Fallback: end the X server that owns this display.
+if [ -n "${DISPLAY:-}" ] && command -v xdotool >/dev/null 2>&1; then
+  # No clean "quit X" via xdotool; fall through to killing the server.
+  :
+fi
+# Last resort: terminate the X server process group.
+pkill -x Xorg 2>/dev/null || pkill -x X 2>/dev/null || true

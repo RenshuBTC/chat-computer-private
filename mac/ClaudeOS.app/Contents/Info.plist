@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.claudeos.app</string>
+  <key>CFBundleName</key><string>ClaudeOS</string>
+  <key>CFBundleDisplayName</key><string>ClaudeOS</string>
+  <key>CFBundleExecutable</key><string>ClaudeOS</string>
+  <key>CFBundleIconFile</key><string>ClaudeOS</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>ClaudeOS listens for your voice, through your AirPods or the Mac's microphone, so you can talk to it.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>ClaudeOS connects your AirPods when you ask it to.</string>
+  <key>NSAppleEventsUsageDescription</key><string>ClaudeOS asks macOS to shut down or restart when you tell it to.</string>
+  <key>NSLocationUsageDescription</key><string>macOS shows Wi-Fi network names only to apps allowed to use Location.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>macOS shows Wi-Fi network names only to apps allowed to use Location.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <!-- Websites shown in ClaudeOS may use plain http, as in any browser. -->
+    <key>NSAllowsArbitraryLoadsInWebContent</key><true/>
+  </dict>
+</dict>
+</plist>

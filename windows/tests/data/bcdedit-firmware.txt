@@ -1,0 +1,33 @@
+Firmware Boot Manager
+---------------------
+identifier              {fwbootmgr}
+displayorder            {9f62d3e2-5c1a-11ef-a1b2-806e6f6e6963}
+                        {bootmgr}
+                        {9f62d3e3-5c1a-11ef-a1b2-806e6f6e6963}
+timeout                 0
+
+Windows Boot Manager
+--------------------
+identifier              {bootmgr}
+device                  partition=\Device\HarddiskVolume1
+path                    \EFI\Microsoft\Boot\bootmgfw.efi
+description             Windows Boot Manager
+locale                  en-US
+inherit                 {globalsettings}
+default                 {current}
+resumeobject            {7d3a8c4e-5c1a-11ef-a1b2-806e6f6e6963}
+displayorder            {current}
+toolsdisplayorder       {memdiag}
+timeout                 30
+
+Firmware Application (101fffff)
+-------------------------------
+identifier              {9f62d3e2-5c1a-11ef-a1b2-806e6f6e6963}
+device                  partition=\Device\HarddiskVolume1
+path                    \EFI\ubuntu\shimx64.efi
+description             ubuntu
+
+Firmware Application (101fffff)
+-------------------------------
+identifier              {9f62d3e3-5c1a-11ef-a1b2-806e6f6e6963}
+description             UEFI: PXE IPv4 Intel(R) Ethernet Connection I219-V

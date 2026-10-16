@@ -1,0 +1,49 @@
+#cloud-config
+# ClaudeOS: answers for the official Ubuntu Server 24.04 installer (subiquity "autoinstall").
+# ClaudeOS Setup on Windows fills in the marked fields and writes the result to the root of the
+# installer partition (a temporary FAT32 partition labelled CLAUDEOS on the PC's own disk) as
+# autoinstall.yaml. The word "autoinstall" on the installer's boot menu makes it run without questions.
+#
+# Disks: the installer only uses FREE space ("use_gap"), on the disk it started from ("install-media":
+# the disk holding the installer partition, which setup put on the disk ClaudeOS goes on, at the end of
+# ClaudeOS's free space). It never reformats a disk; Windows and its files are left exactly as they are.
+autoinstall:
+  version: 1
+  interactive-sections: []
+  refresh-installer:
+    update: false
+  locale: "en_US.UTF-8"
+  keyboard:
+    layout: "us"
+  timezone: {{TIMEZONE}}
+  source:
+    id: ubuntu-server-minimal
+    search_drivers: true
+  kernel:
+    flavor: hwe
+  network:
+{{NETWORK}}
+  identity:
+    hostname: claudeos
+    realname: {{REALNAME}}
+    username: {{USERNAME}}
+    password: {{PASSWORD_HASH}}
+  ssh:
+    install-server: false
+  drivers:
+    install: true
+  storage:
+    layout:
+      name: direct
+      mode: use_gap
+      match:
+        install-media: true
+  early-commands:
+    # Never install twice from the same installer (see claudeos/guard.sh on the installer partition).
+    - ["sh", "/cdrom/claudeos/guard.sh", {{INSTALL_ID}}]
+    # Put the Wi-Fi card's Linux name into the network settings (see claudeos/network.sh).
+    - ["sh", "/cdrom/claudeos/network.sh"]
+  late-commands:
+    # Copy ClaudeOS, the Claude sign-in and settings, then set up the ClaudeOS session.
+    - ["sh", "/cdrom/claudeos/finish.sh", {{USERNAME}}, {{INSTALL_ID}}]
+  shutdown: reboot

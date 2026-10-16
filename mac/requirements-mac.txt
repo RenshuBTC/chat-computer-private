@@ -1,0 +1,29 @@
+# ClaudeOS for Mac: the Python packages its own Python environment gets (~/ClaudeOS/runtime). The same
+# versions as on Linux, plus PyObjC for the screen (AppKit + WebKit), screen control, Wi-Fi and Bluetooth.
+claude-agent-sdk==0.2.167      # Anthropic's official Agent SDK; bundles the official Claude Code engine
+numpy==2.5.4
+sounddevice==0.5.6             # microphone and speaker (PortAudio -> Core Audio; the wheel includes PortAudio)
+onnxruntime==1.31.0; platform_machine == "arm64"     # speech detection (Silero) and the Kokoro voice
+onnxruntime==1.23.2; platform_machine == "x86_64"    # (1.23.2 is the last with Intel Mac builds)
+faster-whisper==1.2.1          # speech recognition on the Mac
+ctranslate2==4.8.3
+kokoro-onnx==0.6.1             # natural local voice
+soxr==1.1.0                    # audio resampling
+huggingface-hub==2.2.0         # downloads the speech recognition model
+mss==10.2.0                    # screenshots
+pillow==12.3.0
+psutil==7.2.2
+pypdf==6.20.1                  # reading PDFs
+python-docx==1.2.0             # reading Word files
+openpyxl==3.1.5                # reading Excel files
+python-pptx==1.0.2             # reading PowerPoint files
+send2trash==2.1.0              # recoverable deletes (the Mac's Trash)
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2         # the window (AppKit)
+pyobjc-framework-WebKit==12.2.2        # the conversation and websites (WKWebView)
+pyobjc-framework-Quartz==12.2.2        # clicking and typing for websites, screen size
+pyobjc-framework-ApplicationServices==12.2.2   # asking for Accessibility (AXIsProcessTrusted)
+pyobjc-framework-CoreLocation==12.2.2  # Location, which macOS 14+ requires to see Wi-Fi names
+pyobjc-framework-CoreWLAN==12.2.2      # Wi-Fi
+pyobjc-framework-IOBluetooth==12.2.2   # Bluetooth (AirPods)
+pyobjc-framework-MediaPlayer==12.2.2   # AirPods presses (play/pause)

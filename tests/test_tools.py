@@ -1,0 +1,197 @@
+"""ClaudeOS tools called directly (no Claude), against a recording screen and fake machine."""
+import asyncio
+import json
+import os
+import time
+from pathlib import Path
+
+import pytest
+
+from claudeos import tools as T
+from claudeos.config import Paths, Settings
+from claudeos.files_index import FileIndex, parse_date, words_of
+from claudeos.journal import Journal
+from claudeos.memory import Memory
+from claudeos.platform.fake import FakePlatform
+from claudeos.screen import RecordingScreen
+from claudeos.ui import render
+
+
+def make(tmp_path, clean=True):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
+    paths = Paths(home / "ClaudeOS").ensure()
+    win = tmp_path / "windows"
+    (win / "Users" / "rensh" / "Documents").mkdir(parents=True)
+    settings = Settings(windows_user="rensh", windows_mount=str(win))
+    screen = RecordingScreen()
+    ctx = T.ToolContext(paths, settings, FakePlatform(), Journal(paths), screen, Memory(paths), power_delay_s=0.05)
+    server, policies, names = T.build(ctx)
+    return ctx, server, policies, names
+
+
+def call(server, name, args):
+    """Invoke a tool through the in-process MCP server like Claude Code would."""
+    entry = server["instance"].get_request_handler("tools/call")
+    out = asyncio.get_event_loop().run_until_complete(entry.handler(None, entry.params_type(name=name, arguments=args)))
+    texts = [c.text for c in out.content if getattr(c, "type", "") == "text"]
+    return "\n".join(texts), bool(getattr(out, "is_error", False) or getattr(out, "isError", False))
+
+
+@pytest.fixture(autouse=True)
+def loop():
+    lp = asyncio.new_event_loop()
+    asyncio.set_event_loop(lp)
+    yield lp
+    lp.close()
+
+
+def test_windows_paths_are_understood(tmp_path):
+    ctx, *_ = make(tmp_path)
+    p = ctx.resolve(r"C:\Users\rensh\Documents\tax.pdf")
+    assert p == str(tmp_path / "windows" / "Users" / "rensh" / "Documents" / "tax.pdf")
+    assert ctx.resolve("~/x.txt") == os.path.join(os.path.expanduser("~"), "x.txt")
+
+
+def test_show_website_normalizes_urls_and_searches(tmp_path):
+    ctx, server, *_ = make(tmp_path)
+    call(server, "show_website", {"url": "youtube.com"})
+    call(server, "show_website", {"url": "best laksa in singapore"})
+    urls = [e[1] for e in ctx.screen.events if e[0] == "show_url"]
+    assert urls[0] == "https://youtube.com"
+    assert urls[1].startswith("https://www.google.com/search?q=best+laksa")
+
+
+def test_page_tools_need_something_on_screen(tmp_path):
+    ctx, server, *_ = make(tmp_path)
+    text, err = call(server, "click", {"text": "Play"})
+    assert err and "Nothing is open" in text
+
+
+def test_move_copy_trash_and_undo(tmp_path):
+    ctx, server, policies, _ = make(tmp_path)
+    docs = tmp_path / "windows" / "Users" / "rensh" / "Documents"
+    a = docs / "a.txt"
+    a.write_text("A")
+    # moving onto an existing file asks first
+    (docs / "b.txt").write_text("B")
+    q = policies["move_files"]({"items": [{"from": str(a), "to": str(docs / "b.txt")}]})
+    assert q and "replace b.txt" in q
+    assert policies["move_files"]({"items": [{"from": str(a), "to": str(docs / "c.txt")}]}) is None
+    call(server, "move_files", {"items": [{"from": str(a), "to": str(docs / "c.txt")}]})
+    assert not a.exists() and (docs / "c.txt").read_text() == "A"
+    call(server, "copy_files", {"items": [{"from": str(docs / "c.txt"), "to": str(docs / "d.txt")}]})
+    assert (docs / "d.txt").exists()
+    assert "Move 1 item to the trash: d.txt?" == policies["trash_files"]({"paths": [str(docs / "d.txt")]})
+    call(server, "trash_files", {"paths": [str(docs / "d.txt")]})
+    assert not (docs / "d.txt").exists()
+    text, _ = call(server, "undo_last_change", {"count": 3})
+    assert (docs / "d.txt").exists() is False  # undoing the copy removes it again after restoring from trash
+    assert a.exists() and (docs / "c.txt").exists() is False
+    assert "moved" in text
+
+
+def test_windows_system_files_cannot_be_trashed(tmp_path):
+    ctx, server, policies, _ = make(tmp_path)
+    win = tmp_path / "windows" / "Windows" / "System32"
+    win.mkdir(parents=True)
+    assert policies["trash_files"]({"paths": [str(win / "kernel32.dll")]}).startswith("DENY:")
+    assert policies["trash_files"]({"paths": [str(ctx.paths.token_file)]}).startswith("DENY:")
+
+
+def test_power_always_asks_and_runs_later(tmp_path, loop):
+    ctx, server, policies, _ = make(tmp_path)
+    assert policies["power"]({"action": "switch_to_windows"}).startswith("Restart into Windows?")
+    call(server, "power", {"action": "restart"})
+    loop.run_until_complete(asyncio.sleep(0.3))
+    assert ("power", ("restart",)) in ctx.platform.calls
+
+
+def test_windows_can_start_by_default_and_back(tmp_path):
+    ctx, server, policies, names = make(tmp_path)
+    assert "start_by_default" in names
+    assert policies["start_by_default"]({"system": "other"}) == (
+        "Start Windows when the computer turns on instead of ClaudeOS? ClaudeOS stays installed.")
+    assert policies["start_by_default"]({"system": "claudeos"}) == "Start ClaudeOS when the computer turns on?"
+    text, err = call(server, "start_by_default", {"system": "other"})
+    assert not err and ("set_default_os", ("other",)) in ctx.platform.calls
+    call(server, "start_by_default", {"system": "claudeos"})
+    assert ctx.platform.default_os == "claudeos"
+
+
+def test_settings_and_memory(tmp_path):
+    ctx, server, *_ = make(tmp_path)
+    changed = []
+    ctx.on_settings_changed = changed.append
+    text, err = call(server, "claudeos_settings", {"action": "set", "key": "speech_speed", "value": "1.2"})
+    assert not err and ctx.settings.speech_speed == 1.2 and changed == [["speech_speed"]]
+    assert json.loads(ctx.paths.settings_file.read_text())["speech_speed"] == 1.2
+    text, err = call(server, "claudeos_settings", {"action": "set", "key": "windows_mount", "value": "/"})
+    assert err
+    call(server, "memory", {"action": "remember", "text": "Prefers Bitcoin charts in SGD"})
+    assert "Bitcoin charts" in ctx.memory.for_prompt()
+    call(server, "memory", {"action": "forget", "text": "bitcoin charts"})
+    assert "Bitcoin" not in ctx.memory.for_prompt()
+
+
+def test_show_page_can_be_saved_and_reopened(tmp_path):
+    ctx, server, *_ = make(tmp_path)
+    call(server, "show_page", {"title": "BTC chart", "html": "<h1>hi</h1>", "save_as": "Bitcoin chart"})
+    assert (ctx.paths.pages / "bitcoin-chart.html").exists()
+    text, _ = call(server, "saved_pages", {"action": "list"})
+    assert "Bitcoin chart" in text
+    call(server, "saved_pages", {"action": "open", "name": "bitcoin"})
+    assert ctx.screen.events[-1][1].endswith("bitcoin-chart.html")
+
+
+def test_file_index_finds_files_by_name_and_content(tmp_path):
+    root = tmp_path / "Users" / "rensh"
+    (root / "Documents").mkdir(parents=True)
+    (root / "AppData" / "Local").mkdir(parents=True)
+    (root / "Documents" / "Tax_Return_2025.txt").write_text("IRAS assessment for year of assessment 2025")
+    (root / "Documents" / "notes.md").write_text("Buy durian for mum's birthday")
+    (root / "AppData" / "Local" / "cache.txt").write_text("durian")
+    old = root / "Documents" / "old.txt"
+    old.write_text("x")
+    os.utime(old, (time.time() - 400 * 86400, time.time() - 400 * 86400))
+    idx = FileIndex(tmp_path / "idx.db", [("windows", str(root))], windows_root=str(tmp_path))
+    assert idx.crawl_once() == 3          # AppData is skipped
+    idx.extract_contents()
+    hits = idx.search("tax return")
+    assert hits and hits[0]["path"].endswith("Tax_Return_2025.txt")
+    assert hits[0]["where"].startswith("C:\\Users\\rensh")
+    hits = idx.search("durian")
+    assert len(hits) == 1 and hits[0]["path"].endswith("notes.md") and "durian" in hits[0]["match"].lower()
+    recent = idx.search("", after="30d")
+    assert {Path(h["path"]).name for h in recent} == {"Tax_Return_2025.txt", "notes.md"}
+    # deletions are noticed on the next scan
+    (root / "Documents" / "notes.md").unlink()
+    idx.crawl_once()
+    assert idx.search("durian") == []
+
+
+def test_words_and_dates():
+    assert "Tax Return 2025" in words_of("Tax_Return-2025.pdf")
+    assert parse_date("7d") < time.time() - 6 * 86400
+    assert parse_date("2025-01-31") is not None and parse_date("nonsense") is None
+
+
+def test_render_files(tmp_path):
+    s = Settings()
+    (tmp_path / "a.csv").write_text("name,amount\nrent,1200\n")
+    kind, html = render.file_view(str(tmp_path / "a.csv"), s, Paths(tmp_path / "c"))
+    assert kind == "html" and "rent" in html and "renderMarkdown" in html
+    kind, html = render.file_view(str(tmp_path), s, Paths(tmp_path / "c"))
+    assert "a.csv" in html
+    from PIL import Image
+    Image.new("RGB", (10, 10)).save(tmp_path / "p.png")
+    kind, html = render.file_view(str(tmp_path / "p.png"), s, Paths(tmp_path / "c"))
+    assert "<img" in html
+    import docx
+    d = docx.Document()
+    d.add_heading("Quarterly plan", 1)
+    d.add_paragraph("Ship ClaudeOS.")
+    d.save(tmp_path / "plan.docx")
+    kind, html = render.file_view(str(tmp_path / "plan.docx"), s, Paths(tmp_path / "c"))
+    assert "Quarterly plan" in html and "Ship ClaudeOS." in html

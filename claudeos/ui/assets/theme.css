@@ -1,0 +1,46 @@
+/* ClaudeOS look: plain. Black text on white (white on black in dark mode) in the system's standard font,
+   that is whatever the system calls sans-serif (Noto Sans on ClaudeOS's Ubuntu base). No bundled fonts and
+   no imitation of any app. Sizes are in rem; the screen sets the root size for this monitor
+   (claudeos/ui/layout.py), the way the system's display scaling would. */
+:root {
+  --ground: #FFFFFF;
+  --ink: #000000;
+  --ink-soft: #595959;
+  --rule: #D9D9D9;
+  --code: #F2F2F2;
+  --sans: sans-serif;
+  --mono: monospace;
+}
+:root[data-theme="dark"] {
+  --ground: #000000; --ink: #FFFFFF; --ink-soft: #A6A6A6; --rule: #404040; --code: #1A1A1A;
+}
+* { box-sizing: border-box; }
+html { font-size: var(--co-size, 16px); }
+html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink); cursor: none; }
+body { font-family: var(--sans); font-size: 1rem; line-height: 1.5; }
+::selection { background: transparent; }
+
+/* Claude's words as written (Markdown), in the same font and size as everything else. */
+.md p { margin: 0 0 1em; }
+.md p:last-child { margin-bottom: 0; }
+.md h1 { font-size: 1.5rem; }
+.md h2 { font-size: 1.25rem; }
+.md h3, .md h4 { font-size: 1rem; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: bold; line-height: 1.3; margin: 1.2em 0 0.5em; }
+.md > :first-child { margin-top: 0; }
+.md ul, .md ol { margin: 0 0 1em; padding-left: 1.5em; }
+.md li { margin: 0.25em 0; }
+.md li.task { list-style: none; margin-left: -1.5em; }
+.md li.task::before { content: "\2610\00a0 "; }
+.md li.task.done::before { content: "\2611\00a0 "; }
+.md li.task.done { text-decoration: line-through; color: var(--ink-soft); }
+.md code { font-family: var(--mono); font-size: 0.9em; background: var(--code); padding: 0.1em 0.3em; }
+.md pre { margin: 0 0 1em; padding: 0.75em 1em; background: var(--code); white-space: pre-wrap; }
+.md pre code { background: none; padding: 0; }
+.md blockquote { margin: 0 0 1em; padding-left: 1em; border-left: 3px solid var(--rule); color: var(--ink-soft); }
+.md table { border-collapse: collapse; margin: 0 0 1em; }
+.md th, .md td { text-align: left; padding: 0.4em 1em 0.4em 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.md th { font-weight: bold; }
+.md hr { border: 0; border-top: 1px solid var(--rule); margin: 1.2em 0; }
+.md .link { text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

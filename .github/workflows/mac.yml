@@ -1,0 +1,42 @@
+# ClaudeOS for Mac on GitHub's Macs: Apple silicon (macos-26) and Intel (macos-26-intel). Each runs
+# tests/mac_ci/run.sh: setup as a person runs it, the app, a scripted conversation on the screen, the Python
+# tests on the Mac, then setup's "Remove ClaudeOS". What it saw (summary.txt, logs, screenshots) is saved to the
+# branch results/<run number>-<runner>.
+name: Mac test
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write          # to save the results branch
+concurrency:
+  group: mac-test
+  cancel-in-progress: true
+jobs:
+  mac:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-26-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: ClaudeOS on this Mac, start to finish
+        run: bash tests/mac_ci/run.sh "$RUNNER_TEMP/results"
+      - name: Save what it saw to results/${{ github.run_number }}-${{ matrix.os }}
+        if: always()
+        env:
+          TOKEN: ${{ github.token }}
+          BRANCH: results/${{ github.run_number }}-${{ matrix.os }}
+          STATUS: ${{ job.status }}
+        run: |
+          cd "$RUNNER_TEMP/results" || exit 0
+          rm -rf scenario/home scenario/site
+          find . -type f -size +20M -print -delete
+          git init -q
+          git checkout -q -b "$BRANCH"
+          git add -A
+          git -c user.name="ClaudeOS Mac test" -c user.email="noreply@github.com" commit -q -m "Mac test results ($STATUS)"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"

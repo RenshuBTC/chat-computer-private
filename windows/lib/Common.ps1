@@ -1,0 +1,197 @@
+# Shared helpers for ClaudeOS Setup: talking to the person, asking questions, and a log that
+# never contains secrets. Works in Windows PowerShell 5.1 and PowerShell 7.
+# Keep this file ASCII-only: Windows PowerShell 5.1 reads files without a BOM as ANSI.
+
+$Script:SetupLogFile = $null
+
+function Initialize-SetupLog {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $Script:SetupLogFile = $Path
+    Write-SetupLog ('ClaudeOS Setup started ' + (Get-Date -Format 's'))
+}
+
+function Protect-SetupText {
+    # Removes anything that looks like a Claude token from text before it is logged or shown.
+    param([AllowNull()][string]$Text)
+    if ($null -eq $Text) { return '' }
+    return [regex]::Replace($Text, 'sk-ant-[A-Za-z0-9_\-]+', 'sk-ant-(hidden)')
+}
+
+function Write-SetupLog {
+    param([AllowNull()][string]$Message)
+    if (-not $Script:SetupLogFile) { return }
+    try {
+        $line = (Get-Date -Format 'HH:mm:ss') + '  ' + (Protect-SetupText $Message)
+        Add-Content -LiteralPath $Script:SetupLogFile -Value $line -Encoding UTF8
+    } catch {
+        # Logging must never stop the setup.
+        $null = $_
+    }
+}
+
+function Write-Line {
+    param([AllowEmptyString()][string]$Text = '')
+    Write-Host $Text
+    Write-SetupLog $Text
+}
+
+function Write-Step {
+    param([Parameter(Mandatory = $true)][string]$Text)
+    Write-Host ''
+    Write-Host $Text -ForegroundColor Cyan
+    Write-SetupLog ('== ' + $Text)
+}
+
+function Write-Warn {
+    param([Parameter(Mandatory = $true)][string]$Text)
+    Write-Host $Text -ForegroundColor Yellow
+    Write-SetupLog ('WARNING ' + $Text)
+}
+
+function Write-Good {
+    param([Parameter(Mandatory = $true)][string]$Text)
+    Write-Host $Text -ForegroundColor Green
+    Write-SetupLog ('OK ' + $Text)
+}
+
+function Read-YesNo {
+    param(
+        [Parameter(Mandatory = $true)][string]$Question,
+        [bool]$Default = $true
+    )
+    $suffix = ' [y/N]'
+    if ($Default) { $suffix = ' [Y/n]' }
+    while ($true) {
+        $answer = Read-Host ($Question + $suffix)
+        $a = ([string]$answer).Trim().ToLowerInvariant()
+        # Only real answers are logged: anything else could be part of something secret typed in the wrong place.
+        if ($a -in @('', 'y', 'yes', 'n', 'no')) { Write-SetupLog ('Q: ' + $Question + ' -> ' + $a) }
+        else { Write-SetupLog ('Q: ' + $Question + ' -> (not y or n)') }
+        if ($a -eq '') { return $Default }
+        if ($a -eq 'y' -or $a -eq 'yes') { return $true }
+        if ($a -eq 'n' -or $a -eq 'no') { return $false }
+        Write-Host 'Please type y for yes or n for no.'
+    }
+}
+
+function Read-Choice {
+    # Shows numbered options and returns the index (0-based) of the one picked.
+    param(
+        [Parameter(Mandatory = $true)][string]$Question,
+        [Parameter(Mandatory = $true)][string[]]$Options,
+        [int]$Default = 0
+    )
+    Write-Host ''
+    Write-Host $Question
+    for ($i = 0; $i -lt $Options.Count; $i++) {
+        Write-Host ('  ' + ($i + 1) + '. ' + $Options[$i])
+    }
+    while ($true) {
+        $answer = Read-Host ('Type a number (Enter = ' + ($Default + 1) + ')')
+        if ([string]::IsNullOrWhiteSpace($answer)) { Write-SetupLog ('Q: ' + $Question + ' -> (Enter)'); return $Default }
+        $n = 0
+        if ([int]::TryParse($answer.Trim(), [ref]$n) -and $n -ge 1 -and $n -le $Options.Count) {
+            Write-SetupLog ('Q: ' + $Question + ' -> ' + $n)
+            return ($n - 1)
+        }
+        Write-SetupLog ('Q: ' + $Question + ' -> (not a number on the list)')
+        Write-Host ('Please type a number from 1 to ' + $Options.Count + '.')
+    }
+}
+
+function Read-Secret {
+    # Reads text without showing it on screen. The value is never logged.
+    param([Parameter(Mandatory = $true)][string]$Prompt)
+    return (ConvertFrom-SecureText (Read-Host -Prompt $Prompt -AsSecureString))
+}
+
+function ConvertFrom-SecureText {
+    param([Parameter(Mandatory = $true)][Security.SecureString]$Secure)
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    }
+}
+
+function Read-SecretLine {
+    # One more hidden line, without a prompt: the rest of something pasted.
+    return (ConvertFrom-SecureText ($Host.UI.ReadLineAsSecureString()))
+}
+
+function Test-InputWaiting {
+    # True when keys are already waiting in the console window (the rest of a paste).
+    try { return [Console]::KeyAvailable } catch { return $false }
+}
+
+function Read-PastedSecret {
+    # Reads something pasted, hidden, however many lines it has. Claude's sign-in code is longer than many
+    # windows are wide, and Claude Code wraps it with real line breaks, so a copy of it can hold two or more
+    # lines. A paste arrives all at once, so the lines already waiting after the first one belong to it.
+    param([Parameter(Mandatory = $true)][string]$Prompt, [int]$SettleMs = 300)
+    $text = Read-Secret $Prompt
+    for ($more = 0; $more -lt 10; $more++) {
+        Start-Sleep -Milliseconds $SettleMs
+        if (-not (Test-InputWaiting)) { break }
+        $text += Read-SecretLine
+    }
+    return $text
+}
+
+function Get-Prop {
+    # Reads a property that may not exist on this version of Windows (safe under StrictMode).
+    param($Object, [Parameter(Mandatory = $true)][string]$Name)
+    if ($null -eq $Object) { return $null }
+    $p = $Object.PSObject.Properties[$Name]
+    if ($null -eq $p) { return $null }
+    return $p.Value
+}
+
+function Format-Size {
+    param([double]$Bytes)
+    if ($Bytes -ge 1TB) { return ('{0:N1} TB' -f ($Bytes / 1TB)) }
+    if ($Bytes -ge 1GB) { return ('{0:N0} GB' -f ($Bytes / 1GB)) }
+    return ('{0:N0} MB' -f ($Bytes / 1MB))
+}
+
+function Write-TextFileLf {
+    # Writes UTF-8 without a byte-order mark and with Linux line endings. The installer, GRUB and
+    # the shell scripts on the installer partition all expect exactly that.
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
+    )
+    $t = $Text -replace "`r`n", "`n"
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $t, $enc)
+}
+
+function ConvertTo-YamlString {
+    # A double-quoted YAML scalar (the JSON subset), safe for any text.
+    param([AllowNull()][AllowEmptyString()][string]$Value)
+    if ($null -eq $Value) { $Value = '' }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    foreach ($ch in $Value.ToCharArray()) {
+        $code = [int]$ch
+        switch ($code) {
+            34 { [void]$sb.Append('\"') }
+            92 { [void]$sb.Append('\\') }
+            9 { [void]$sb.Append('\t') }
+            10 { [void]$sb.Append('\n') }
+            13 { [void]$sb.Append('\r') }
+            default {
+                if ($code -lt 32 -or $code -eq 127 -or ($code -ge 0x80 -and $code -le 0x9F) -or ($code -ge 0xD800 -and $code -le 0xDFFF)) {
+                    [void]$sb.Append(('\u{0:x4}' -f $code))
+                } else {
+                    [void]$sb.Append($ch)
+                }
+            }
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}

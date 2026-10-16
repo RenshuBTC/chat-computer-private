@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClaudeOS openbox menu: intentionally empty.
+
+  openbox expects a menu file to exist; ClaudeOS has no root menu (a
+  right-click on the desktop must do nothing), so this defines a single empty
+  menu bound to nothing. The real UI is the ClaudeOS window itself.
+-->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="ClaudeOS">
+    <!-- no items -->
+  </menu>
+</openbox_menu>

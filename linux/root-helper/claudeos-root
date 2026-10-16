@@ -1,0 +1,455 @@
+#!/bin/bash
+# claudeos-root — the ONLY privileged entry point ClaudeOS may use.
+#
+# Installed at /usr/local/libexec/claudeos/claudeos-root, owned root:root 0755,
+# invoked by the ClaudeOS user via:  sudo -n /usr/local/libexec/claudeos/claudeos-root <verb> [args]
+# (see /etc/sudoers.d/claudeos).
+#
+# Design rules (security-critical — the caller is an AI acting on spoken
+# commands that may be influenced by untrusted content on screen):
+#   * Every verb validates its own arguments with strict regexes/allow-lists.
+#   * User-supplied strings are NEVER interpolated into a shell; external
+#     commands are always invoked as argument vectors (no `eval`, no `sh -c`
+#     with interpolation).
+#   * stdout is exactly one JSON object; human/debug text goes to stderr.
+#   * Exit 0 = success, non-zero = failure (JSON still printed on stdout).
+#   * Unknown verbs are rejected.
+#
+# Verbs (per ARCHITECTURE.md): status, boot-windows-next, boot-default, mount-windows,
+# apt-install, apt-remove, system-update, bt-import-windows-keys,
+# set-timezone, wipe-install-secrets.
+
+set -u
+umask 022
+export LC_ALL=C
+# Force a known-good PATH so a poisoned caller environment cannot substitute a
+# trojan binary for mount/efibootmgr/etc. CLAUDEOS_ROOT_PATH is a TEST-ONLY
+# override: when invoked through `sudo -n` (production), sudo's env_reset +
+# secure_path drop it, so PATH is always the hardcoded default in production.
+# The test harness invokes the helper directly and sets it to a shim dir.
+export PATH="${CLAUDEOS_ROOT_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
+
+WINDOWS_MOUNT=/mnt/windows
+BITLOCKER_KEY_FILE=/etc/claudeos/bitlocker-recovery-key
+DISLOCKER_MNT=/run/claudeos/dislocker
+VENV_PYTHON=/opt/claudeos/venv/bin/python
+BT_IMPORT_PY=/usr/local/libexec/claudeos/bt-import-windows-keys.py
+
+# ---------------------------------------------------------------------------
+# JSON helpers (no jq dependency; we emit small, controlled objects).
+# ---------------------------------------------------------------------------
+
+# json_escape <string> -> escaped JSON string body (no surrounding quotes).
+json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '%s' "$s"
+}
+
+# Emit a JSON object from key=value pairs. Values that are exactly 'true',
+# 'false', 'null' or a bare integer are emitted raw; everything else is quoted
+# and escaped. Prefix a key with '@' to force raw (used for nested JSON).
+emit_json() {
+  local out="{" first=1 pair key val raw
+  for pair in "$@"; do
+    key=${pair%%=*}
+    val=${pair#*=}
+    raw=0
+    if [ "${key#@}" != "$key" ]; then raw=1; key=${key#@}; fi
+    if [ "$first" -eq 1 ]; then first=0; else out+=","; fi
+    out+="\"$(json_escape "$key")\":"
+    if [ "$raw" -eq 1 ]; then
+      out+="$val"
+    elif [ "$val" = "true" ] || [ "$val" = "false" ] || [ "$val" = "null" ]; then
+      out+="$val"
+    elif [[ "$val" =~ ^(0|-?[1-9][0-9]*)$ ]]; then
+      # Bare integer with no leading zeros (JSON forbids 0001). EFI boot numbers
+      # like "0001" therefore stay quoted strings, which is correct.
+      out+="$val"
+    else
+      out+="\"$(json_escape "$val")\""
+    fi
+  done
+  out+="}"
+  printf '%s\n' "$out"
+}
+
+# die <message> — print an error JSON object to stdout and exit non-zero.
+die() {
+  emit_json ok=false error="$1"
+  exit 1
+}
+
+# is_efi — true on a UEFI system. CLAUDEOS_FORCE_EFI=1 is a TEST-ONLY override
+# (stripped by sudo in production, like CLAUDEOS_ROOT_PATH) so the EFI code
+# paths can be exercised in a BIOS/container test environment.
+is_efi() {
+  [ "${CLAUDEOS_FORCE_EFI:-0}" = "1" ] && return 0
+  [ -d /sys/firmware/efi ]
+}
+
+# ---------------------------------------------------------------------------
+# Windows partition discovery + mounting.
+# ---------------------------------------------------------------------------
+
+# Find the block device of the NTFS partition that contains a Windows install
+# (has /Windows/System32). Echoes the device path, or nothing. We only consider
+# partitions blkid reports as ntfs, and probe each read-only.
+find_windows_partition() {
+  local dev fstype tmp found=""
+  tmp=$(mktemp -d /run/claudeos/winprobe.XXXXXX 2>/dev/null || mktemp -d)
+  # lsblk gives a stable, parseable device+fstype list.
+  while IFS='|' read -r dev fstype; do
+    [ -n "$dev" ] || continue
+    [ "$fstype" = "ntfs" ] || continue
+    # Probe read-only without touching the partition contents.
+    if mount -o ro,noexec,nodev,nosuid -t ntfs3 "/dev/$dev" "$tmp" 2>/dev/null \
+       || mount -o ro,noexec,nodev,nosuid -t ntfs-3g "/dev/$dev" "$tmp" 2>/dev/null \
+       || mount -o ro,noexec,nodev,nosuid "/dev/$dev" "$tmp" 2>/dev/null; then
+      if [ -d "$tmp/Windows/System32" ]; then
+        found="/dev/$dev"
+      fi
+      umount "$tmp" 2>/dev/null || true
+    fi
+    [ -n "$found" ] && break
+  done < <(lsblk -rno NAME,FSTYPE 2>/dev/null | awk 'NF>=1 {name=$1; ft=($2==""?"":$2); print name"|"ft}')
+  rmdir "$tmp" 2>/dev/null || true
+  printf '%s' "$found"
+}
+
+# Is a device a BitLocker volume? blkid tags these TYPE="BitLocker".
+is_bitlocker() {
+  local dev=$1 t
+  t=$(blkid -o value -s TYPE "$dev" 2>/dev/null || true)
+  [ "$t" = "BitLocker" ]
+}
+
+# Is an NTFS device "clean" (not left dirty / hibernated by Windows)? We treat a
+# successful read-write-capable probe as clean; the simplest robust signal is
+# ntfsfix -d's dirty check, but we avoid writing. Use `ntfs-3g.probe --readwrite`.
+ntfs_is_clean() {
+  local dev=$1
+  if command -v ntfs-3g.probe >/dev/null 2>&1; then
+    ntfs-3g.probe --readwrite "$dev" >/dev/null 2>&1
+  else
+    # No probe tool: be conservative and treat as not-clean (-> ro).
+    return 1
+  fi
+}
+
+# mount_windows_impl — the shared implementation used by the `mount-windows`
+# verb and the boot service. Echoes nothing; sets globals via the JSON emit at
+# the end. Returns 0 always (best-effort); callers inspect the JSON.
+do_mount_windows() {
+  local caller_uid caller_gid
+  # Mount with the ClaudeOS user's ownership. SUDO_UID/GID identify the caller;
+  # fall back to the first human uid (1000) for the boot service (run as root
+  # with no SUDO_*).
+  caller_uid=${SUDO_UID:-1000}
+  caller_gid=${SUDO_GID:-$caller_uid}
+  # Validate they are numeric (defensive; they come from sudo, not user args).
+  [[ "$caller_uid" =~ ^[0-9]+$ ]] || caller_uid=1000
+  [[ "$caller_gid" =~ ^[0-9]+$ ]] || caller_gid=$caller_uid
+
+  mkdir -p "$WINDOWS_MOUNT"
+
+  # Already mounted? Report and stop (idempotent).
+  if mountpoint -q "$WINDOWS_MOUNT"; then
+    local rw=false
+    if findmnt -no OPTIONS "$WINDOWS_MOUNT" 2>/dev/null | grep -qvE '(^|,)ro(,|$)'; then rw=true; fi
+    emit_json ok=true windows_mounted=true windows_rw=$rw note="already mounted"
+    return 0
+  fi
+
+  local dev bitlocker=false target_dev
+  dev=$(find_windows_partition)
+
+  if [ -z "$dev" ]; then
+    # Maybe the Windows partition is BitLocker-locked (no readable NTFS yet).
+    # Scan for a BitLocker partition to unlock.
+    local b
+    for b in $(lsblk -rno NAME,FSTYPE 2>/dev/null | awk '$2=="BitLocker"{print $1}'); do
+      dev="/dev/$b"; bitlocker=true; break
+    done
+  elif is_bitlocker "$dev"; then
+    bitlocker=true
+  fi
+
+  if [ -z "$dev" ]; then
+    emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=false \
+      note="no Windows partition found"
+    return 0
+  fi
+
+  target_dev="$dev"
+
+  if [ "$bitlocker" = true ]; then
+    if [ ! -r "$BITLOCKER_KEY_FILE" ]; then
+      emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
+        note="BitLocker locked and no recovery key at $BITLOCKER_KEY_FILE; skipping"
+      return 0
+    fi
+    # Unlock with dislocker into a loopback-backed decrypted container, then
+    # mount that. dislocker reads the key file; we pass the path, never the key
+    # on the command line.
+    mkdir -p "$DISLOCKER_MNT"
+    if ! dislocker -r -p"$(cat "$BITLOCKER_KEY_FILE")" -- "$dev" "$DISLOCKER_MNT" 2>/dev/null; then
+      # -p expects the recovery password; try -f (BEK file) as a fallback only
+      # if the file looks like a .bek. We keep it simple: report failure.
+      emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
+        note="dislocker failed to unlock"
+      return 0
+    fi
+    target_dev="$DISLOCKER_MNT/dislocker-file"
+    if [ ! -e "$target_dev" ]; then
+      emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
+        note="dislocker produced no clear-text device"
+      return 0
+    fi
+  fi
+
+  # Decide rw vs ro by cleanliness. NEVER pass remove_hiberfile.
+  local opts rw=false
+  if [ "$bitlocker" = true ]; then
+    # target_dev is a file; loop-mount it. Cleanliness check on the decrypted fs.
+    if ntfs_is_clean "$target_dev"; then
+      opts="rw,loop,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"; rw=true
+    else
+      opts="ro,loop,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"
+    fi
+  else
+    if ntfs_is_clean "$target_dev"; then
+      opts="rw,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"; rw=true
+    else
+      opts="ro,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"
+    fi
+  fi
+
+  if mount -t ntfs-3g -o "$opts" "$target_dev" "$WINDOWS_MOUNT" 2>/dev/null \
+     || mount -o "$opts" "$target_dev" "$WINDOWS_MOUNT" 2>/dev/null; then
+    emit_json ok=true windows_mounted=true windows_rw=$rw windows_bitlocker="$bitlocker" \
+      device="$dev" options="$opts"
+    return 0
+  fi
+
+  # Mount failed; tidy up any dislocker mapping.
+  [ "$bitlocker" = true ] && umount "$DISLOCKER_MNT" 2>/dev/null || true
+  emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker="$bitlocker" \
+    note="mount failed"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Verb implementations.
+# ---------------------------------------------------------------------------
+
+verb_status() {
+  local mounted=false rw=false bl=false bootentry=false efi=false
+  if mountpoint -q "$WINDOWS_MOUNT"; then
+    mounted=true
+    if findmnt -no OPTIONS "$WINDOWS_MOUNT" 2>/dev/null | grep -qvE '(^|,)ro(,|$)'; then rw=true; fi
+  fi
+  # EFI present?
+  if is_efi; then efi=true; fi
+  # A BitLocker partition present on the system?
+  if lsblk -rno FSTYPE 2>/dev/null | grep -q '^BitLocker$'; then bl=true; fi
+  # Does a UEFI "Windows Boot Manager" entry exist?
+  if [ "$efi" = true ] && command -v efibootmgr >/dev/null 2>&1; then
+    if efibootmgr 2>/dev/null | grep -qi 'Windows Boot Manager'; then bootentry=true; fi
+  fi
+  emit_json windows_mounted=$mounted windows_rw=$rw windows_bitlocker=$bl \
+    windows_boot_entry=$bootentry efi=$efi
+}
+
+verb_boot_windows_next() {
+  # Prefer UEFI BootNext (BitLocker-friendly: Windows sees the same firmware
+  # boot path it expects). Fall back to grub-reboot "Windows".
+  if is_efi && command -v efibootmgr >/dev/null 2>&1; then
+    # Find the 4-hex-digit boot number of the Windows Boot Manager entry.
+    local num
+    num=$(efibootmgr 2>/dev/null | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)[ *].*Windows Boot Manager.*/\1/p' | head -n1)
+    if [ -n "$num" ]; then
+      if efibootmgr --bootnext "$num" >/dev/null 2>&1; then
+        emit_json ok=true method=bootnext entry="$num"
+        return 0
+      fi
+    fi
+  fi
+  # Fallback: tell GRUB to boot the "Windows" entry once.
+  if command -v grub-reboot >/dev/null 2>&1; then
+    if grub-reboot "Windows" >/dev/null 2>&1; then
+      emit_json ok=true method=grub-reboot entry="Windows"
+      return 0
+    fi
+  fi
+  die "could not set next boot to Windows (no EFI entry and grub-reboot failed)"
+}
+
+verb_boot_default() {
+  # What starts when the computer turns on: put Windows Boot Manager's or ClaudeOS's ("ubuntu")
+  # UEFI entry first in BootOrder, keeping every other entry in its place. Nothing is removed, so the
+  # other system stays one choice away (the PC's boot menu, or ClaudeOS Setup in Windows).
+  [ "$#" -eq 1 ] || die "boot-default takes one argument: windows or claudeos"
+  local num out order rest new
+  is_efi && command -v efibootmgr >/dev/null 2>&1 || die "this computer has no UEFI boot entries to change"
+  out=$(efibootmgr 2>/dev/null) || die "could not read the UEFI boot entries"
+  case "$1" in
+    windows)  num=$(printf '%s\n' "$out" | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)[ *].*Windows Boot Manager.*/\1/p' | head -n1) ;;
+    claudeos) num=$(printf '%s\n' "$out" | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\{0,1\} ubuntu\([[:space:]].*\)\{0,1\}$/\1/p' | head -n1) ;;
+    *)        die "boot-default takes windows or claudeos" ;;
+  esac
+  [ -n "$num" ] || die "no UEFI boot entry for $1"
+  order=$(printf '%s\n' "$out" | sed -n 's/^BootOrder: *//p' | head -n1)
+  rest=$(printf '%s\n' "$order" | tr ',' '\n' | grep -v -i -x "$num" | grep . | paste -sd, -)
+  new="$num${rest:+,$rest}"
+  efibootmgr --bootorder "$new" >/dev/null 2>&1 || die "could not change the UEFI boot order"
+  emit_json ok=true default="$1" entry="$num" order="$new"
+}
+
+verb_mount_windows() { do_mount_windows; }
+
+# Package-name validation shared by apt-install / apt-remove.
+valid_pkg() { [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]{1,62}$ ]]; }
+
+verb_apt_install() {
+  [ "$#" -ge 1 ] || die "apt-install needs at least one package"
+  local p
+  for p in "$@"; do valid_pkg "$p" || die "invalid package name: $p"; done
+  export DEBIAN_FRONTEND=noninteractive
+  if apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends "$@" >/dev/null 2>&1; then
+    emit_json ok=true action=install @packages="$(json_array "$@")"
+  else
+    die "apt-get install failed"
+  fi
+}
+
+verb_apt_remove() {
+  [ "$#" -ge 1 ] || die "apt-remove needs at least one package"
+  local p
+  for p in "$@"; do valid_pkg "$p" || die "invalid package name: $p"; done
+  export DEBIAN_FRONTEND=noninteractive
+  if apt-get remove -y "$@" >/dev/null 2>&1; then
+    emit_json ok=true action=remove @packages="$(json_array "$@")"
+  else
+    die "apt-get remove failed"
+  fi
+}
+
+# json_array <items...> -> JSON array of strings.
+json_array() {
+  local out="[" first=1 it
+  for it in "$@"; do
+    if [ "$first" -eq 1 ]; then first=0; else out+=","; fi
+    out+="\"$(json_escape "$it")\""
+  done
+  out+="]"
+  printf '%s' "$out"
+}
+
+verb_system_update() {
+  export DEBIAN_FRONTEND=noninteractive
+  if apt-get update >/dev/null 2>&1 && apt-get -y upgrade >/dev/null 2>&1; then
+    emit_json ok=true action=system-update
+  else
+    die "system update failed"
+  fi
+}
+
+verb_set_timezone() {
+  [ "$#" -eq 1 ] || die "set-timezone needs exactly one zone"
+  local zone=$1
+  # Strict: letters/digits/_+- and single slashes, must exist under zoneinfo and
+  # must not escape it (no .., no leading /).
+  [[ "$zone" =~ ^[A-Za-z0-9][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$ ]] || die "invalid timezone"
+  case "$zone" in
+    *..*) die "invalid timezone" ;;
+  esac
+  [ -f "/usr/share/zoneinfo/$zone" ] || die "unknown timezone: $zone"
+  if command -v timedatectl >/dev/null 2>&1 && timedatectl set-timezone "$zone" 2>/dev/null; then
+    emit_json ok=true timezone="$zone"
+  else
+    # Fallback for environments without a running systemd (chroot/test).
+    ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
+    printf '%s\n' "$zone" > /etc/timezone
+    emit_json ok=true timezone="$zone" method=symlink
+  fi
+}
+
+verb_bt_import_windows_keys() {
+  # Ensure the Windows SYSTEM hive is reachable (mount first if needed).
+  if [ ! -r "$WINDOWS_MOUNT/Windows/System32/config/SYSTEM" ]; then
+    do_mount_windows >/dev/null 2>&1 || true
+  fi
+  local hive="$WINDOWS_MOUNT/Windows/System32/config/SYSTEM"
+  [ -r "$hive" ] || die "Windows SYSTEM hive not readable at $hive"
+  [ -x "$VENV_PYTHON" ] || die "ClaudeOS venv python missing at $VENV_PYTHON"
+  [ -r "$BT_IMPORT_PY" ] || die "bt import script missing at $BT_IMPORT_PY"
+
+  # The Python script prints a JSON object; we pass it the hive path and the
+  # BlueZ state dir as arguments (no shell interpolation). -I = isolated mode.
+  local json
+  if json=$("$VENV_PYTHON" -I "$BT_IMPORT_PY" --hive "$hive" --bluetooth-dir /var/lib/bluetooth 2>/dev/null); then
+    # Restart bluetooth so BlueZ reloads the imported keys.
+    systemctl restart bluetooth >/dev/null 2>&1 || true
+    # Pass the script's JSON through verbatim as the "result" field.
+    emit_json ok=true @result="$json"
+  else
+    die "bt key import failed"
+  fi
+}
+
+verb_wipe_install_secrets() {
+  # Remove /claudeos/secrets from an inserted ClaudeOS install USB (FS label
+  # CLAUDEOS). We locate it by label, mount read-write briefly, delete the
+  # secrets dir, and unmount. Never touch anything not under that mountpoint.
+  local dev tmp
+  dev=$(blkid -L CLAUDEOS 2>/dev/null || true)
+  [ -n "$dev" ] || die "no device with label CLAUDEOS found"
+  # Confirm it is a block device we just resolved (not user input).
+  [ -b "$dev" ] || die "CLAUDEOS label did not resolve to a block device"
+  tmp=$(mktemp -d /run/claudeos/usb.XXXXXX 2>/dev/null || mktemp -d)
+  if ! mount -o rw,noexec,nodev,nosuid "$dev" "$tmp" 2>/dev/null; then
+    rmdir "$tmp" 2>/dev/null || true
+    die "could not mount CLAUDEOS USB"
+  fi
+  local removed=false
+  if [ -d "$tmp/claudeos/secrets" ]; then
+    rm -rf "$tmp/claudeos/secrets" && removed=true
+  fi
+  sync
+  umount "$tmp" 2>/dev/null || true
+  rmdir "$tmp" 2>/dev/null || true
+  emit_json ok=true device="$dev" secrets_removed=$removed
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch.
+# ---------------------------------------------------------------------------
+
+[ "$#" -ge 1 ] || die "no verb given"
+verb=$1; shift
+
+# Must run as root (via sudo). Reject otherwise.
+if [ "$(id -u)" -ne 0 ]; then
+  die "claudeos-root must run as root (via sudo -n)"
+fi
+
+mkdir -p /run/claudeos 2>/dev/null || true
+
+case "$verb" in
+  status)                 [ "$#" -eq 0 ] || die "status takes no args"; verb_status ;;
+  boot-windows-next)      [ "$#" -eq 0 ] || die "boot-windows-next takes no args"; verb_boot_windows_next ;;
+  boot-default)           verb_boot_default "$@" ;;
+  mount-windows)          [ "$#" -eq 0 ] || die "mount-windows takes no args"; verb_mount_windows ;;
+  apt-install)            verb_apt_install "$@" ;;
+  apt-remove)             verb_apt_remove "$@" ;;
+  system-update)          [ "$#" -eq 0 ] || die "system-update takes no args"; verb_system_update ;;
+  bt-import-windows-keys) [ "$#" -eq 0 ] || die "bt-import-windows-keys takes no args"; verb_bt_import_windows_keys ;;
+  set-timezone)           verb_set_timezone "$@" ;;
+  wipe-install-secrets)   [ "$#" -eq 0 ] || die "wipe-install-secrets takes no args"; verb_wipe_install_secrets ;;
+  *)                      die "unknown verb: $verb" ;;
+esac

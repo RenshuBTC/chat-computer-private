@@ -1,0 +1,367 @@
+#!/bin/bash
+# Test root-helper/claudeos-root with faked system tools on PATH.
+#
+# We never touch the real system: a shim bin dir provides efibootmgr, lsblk,
+# blkid, mount, umount, findmnt, mountpoint, apt-get, systemctl, timedatectl,
+# grub-reboot, ntfs-3g.probe. Each shim logs its args and prints canned output.
+#
+# Coverage:
+#   * status            -> JSON with all required boolean keys
+#   * boot-windows-next -> uses efibootmgr --bootnext with the Windows boot num
+#   * apt-install       -> rejects malicious/invalid package names, accepts good
+#   * set-timezone      -> rejects traversal/unknown, accepts a real zone
+#   * mount-windows     -> finds NTFS w/ Windows/System32, mounts rw when clean
+#   * wipe-install-secrets -> only touches the CLAUDEOS-labelled device
+#   * unknown verb / arg-count rejections
+#   * every stdout is valid JSON
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+HELPER="$REPO/root-helper/claudeos-root"
+PY="${CLAUDEOS_TEST_PY:-python3}"
+FAILED=0
+pass() { printf 'PASS %s\n' "$1"; }
+fail() { printf 'FAIL %s\n' "$1"; FAILED=1; }
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+BIN="$WORK/bin"
+mkdir -p "$BIN"
+LOG="$WORK/calls.log"
+: > "$LOG"
+
+# is_json <string> -> 0 if valid JSON object
+is_json() { printf '%s' "$1" | "$PY" -c 'import sys,json; json.loads(sys.stdin.read())' 2>/dev/null; }
+jget() { printf '%s' "$1" | "$PY" -c "import sys,json; d=json.load(sys.stdin); print(d.get('$2'))" 2>/dev/null; }
+
+# --- Shims -----------------------------------------------------------------
+shim() { # shim NAME BODY
+  cat > "$BIN/$1"; chmod +x "$BIN/$1";
+}
+
+shim efibootmgr <<SH
+#!/bin/bash
+echo "efibootmgr \$*" >> "$LOG"
+# Handle --bootnext NNNN (record it) else print a listing with Windows at 0001.
+if [ "\$1" = "--bootnext" ]; then
+  echo "BootNext: \$2"
+  exit 0
+fi
+if [ "\$1" = "--bootorder" ]; then
+  echo "BootOrder: \$2"
+  exit 0
+fi
+cat <<EOF
+BootCurrent: 0003
+Timeout: 1 seconds
+BootOrder: 0001,0003,0000
+Boot0000* ubuntu	HD(1,GPT)/File(\\EFI\\ubuntu\\shimx64.efi)
+Boot0001* Windows Boot Manager	HD(1,GPT)/File(\\EFI\\Microsoft\\Boot\\bootmgfw.efi)
+Boot0003* UEFI OS	HD(1,GPT)/File(\\EFI\\BOOT\\BOOTX64.EFI)
+EOF
+SH
+
+shim lsblk <<SH
+#!/bin/bash
+echo "lsblk \$*" >> "$LOG"
+# Emulate: sda1 vfat (ESP), sda2 ext4 (linux), sda3 ntfs (Windows), sda4 ntfs (data)
+# -rno NAME,FSTYPE
+if printf '%s' "\$*" | grep -q 'NAME,FSTYPE'; then
+  echo "sda"
+  echo "sda1 vfat"
+  echo "sda2 ext4"
+  echo "sda3 ntfs"
+  echo "sda4 ntfs"
+elif printf '%s' "\$*" | grep -q 'FSTYPE'; then
+  printf 'vfat\next4\nntfs\nntfs\n'
+fi
+SH
+
+shim blkid <<SH
+#!/bin/bash
+echo "blkid \$*" >> "$LOG"
+# -L CLAUDEOS -> device; -o value -s TYPE DEV -> fstype
+if [ "\$1" = "-L" ] && [ "\$2" = "CLAUDEOS" ]; then
+  echo "$WORK/usb.img"; exit 0
+fi
+# TYPE probe: say sda3/sda4 are plain ntfs (not BitLocker)
+echo "ntfs"
+SH
+
+# mount: record, and simulate a working mount by creating marker dirs. For the
+# ro-probe of /dev/sda3 we create a Windows/System32 dir in the probe target.
+shim mount <<SH
+#!/bin/bash
+echo "mount \$*" >> "$LOG"
+# Last two args are DEVICE MOUNTPOINT (for both -o and -t forms).
+mp="\${@: -1}"
+dev="\${@: -2:1}"
+mkdir -p "\$mp"
+case "\$dev" in
+  */sda3) mkdir -p "\$mp/Windows/System32" ;;   # the Windows partition
+  *) : ;;
+esac
+# Simulate the CLAUDEOS usb containing a secrets dir on first mount.
+case "\$dev" in
+  *usb.img) mkdir -p "\$mp/claudeos/secrets"; echo secret > "\$mp/claudeos/secrets/claude_token" ;;
+esac
+exit 0
+SH
+
+shim umount <<SH
+#!/bin/bash
+echo "umount \$*" >> "$LOG"
+exit 0
+SH
+
+shim findmnt <<SH
+#!/bin/bash
+echo "findmnt \$*" >> "$LOG"
+# -no OPTIONS /mnt/windows -> report rw unless a marker says ro
+if [ -f "$WORK/winopts" ]; then cat "$WORK/winopts"; else echo "rw,relatime"; fi
+SH
+
+shim mountpoint <<SH
+#!/bin/bash
+echo "mountpoint \$*" >> "$LOG"
+# Report mounted only if a marker exists (so status/mount tests can control it).
+tgt="\${@: -1}"
+if [ -f "$WORK/mounted" ]; then exit 0; else exit 1; fi
+SH
+
+shim apt-get <<SH
+#!/bin/bash
+echo "apt-get \$*" >> "$LOG"
+exit 0
+SH
+
+shim systemctl <<SH
+#!/bin/bash
+echo "systemctl \$*" >> "$LOG"
+exit 0
+SH
+
+shim timedatectl <<SH
+#!/bin/bash
+echo "timedatectl \$*" >> "$LOG"
+exit 0
+SH
+
+shim grub-reboot <<SH
+#!/bin/bash
+echo "grub-reboot \$*" >> "$LOG"
+exit 0
+SH
+
+shim ntfs-3g.probe <<SH
+#!/bin/bash
+echo "ntfs-3g.probe \$*" >> "$LOG"
+# Exit 0 => clean (rw). A marker forces "dirty".
+if [ -f "$WORK/dirty" ]; then exit 1; else exit 0; fi
+SH
+
+# A fake /usr/share/zoneinfo for set-timezone validation.
+ZI="$WORK/zoneinfo"
+mkdir -p "$ZI/Europe" "$ZI/America"
+: > "$ZI/Europe/London"
+: > "$ZI/America/New_York"
+: > "$ZI/UTC"
+
+# runhelper: invoke the helper as "root" with our shims first on PATH. We cannot
+# truly be uid 0 here if not root, so we neuter the id check by exporting a
+# wrapper 'id' that reports 0 when the test is not run as root.
+if [ "$(id -u)" -ne 0 ]; then
+  shim id <<SH
+#!/bin/bash
+if [ "\$1" = "-u" ]; then echo 0; exit 0; fi
+# Fallback to the real id for other uses.
+exec /usr/bin/id "\$@"
+SH
+fi
+
+runhelper() {
+  # CLAUDEOS_ROOT_PATH is the helper's test-only PATH seam (stripped by sudo in
+  # production). PATH here also lets our 'id' shim (uid 0) win for the root check.
+  env PATH="$BIN:/usr/sbin:/usr/bin:/sbin:/bin" \
+      CLAUDEOS_ROOT_PATH="$BIN:/usr/sbin:/usr/bin:/sbin:/bin" \
+      CLAUDEOS_FORCE_EFI="${CLAUDEOS_FORCE_EFI:-1}" \
+      SUDO_UID=1000 SUDO_GID=1000 \
+      bash "$HELPER" "$@"
+}
+
+# Point the helper's zoneinfo + mount dirs at our sandbox by overriding the
+# constants via a tiny wrapper copy. Simplest: symlink zoneinfo check by using a
+# fake path through an env the helper reads — the helper hardcodes
+# /usr/share/zoneinfo, so for the timezone test we instead rely on a real zone
+# that exists on this system (Europe/London) and test rejection with traversal.
+
+# ===========================================================================
+# status
+# ===========================================================================
+OUT="$(runhelper status)"
+if is_json "$OUT"; then pass "status: valid JSON"; else fail "status: invalid JSON: $OUT"; fi
+ok=1
+for k in windows_mounted windows_rw windows_bitlocker windows_boot_entry efi; do
+  v="$(jget "$OUT" "$k")"
+  [ -n "$v" ] || { ok=0; fail "status: missing key $k"; }
+done
+[ "$ok" = 1 ] && pass "status: all required keys present"
+
+# ===========================================================================
+# boot-windows-next -> efibootmgr --bootnext 0001
+# ===========================================================================
+: > "$LOG"
+OUT="$(runhelper boot-windows-next)"
+if is_json "$OUT"; then pass "boot-windows-next: valid JSON"; else fail "boot-windows-next: invalid JSON: $OUT"; fi
+if grep -q 'efibootmgr --bootnext 0001' "$LOG"; then pass "boot-windows-next: set BootNext to Windows (0001)"; else fail "boot-windows-next: did not call efibootmgr --bootnext 0001"; cat "$LOG"; fi
+[ "$(jget "$OUT" method)" = "bootnext" ] && pass "boot-windows-next: reports method=bootnext" || fail "boot-windows-next: method!=bootnext"
+
+# ===========================================================================
+# boot-default -> the chosen system first in BootOrder, the rest kept in order
+# ===========================================================================
+: > "$LOG"
+OUT="$(runhelper boot-default claudeos)"
+if grep -q 'efibootmgr --bootorder 0000,0001,0003' "$LOG"; then pass "boot-default claudeos: ubuntu entry first, others kept"; else fail "boot-default claudeos: wrong order"; cat "$LOG"; fi
+[ "$(jget "$OUT" default)" = "claudeos" ] && pass "boot-default claudeos: reports default" || fail "boot-default claudeos: $OUT"
+: > "$LOG"
+OUT="$(runhelper boot-default windows)"
+if grep -q 'efibootmgr --bootorder 0001,0003,0000' "$LOG"; then pass "boot-default windows: Windows Boot Manager first"; else fail "boot-default windows: wrong order"; cat "$LOG"; fi
+for bad in "" "linux" "windows;reboot"; do
+  : > "$LOG"
+  OUT="$(runhelper boot-default $bad 2>/dev/null)"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q -- '--bootorder' "$LOG"; then
+    pass "boot-default rejects [$bad]"
+  else
+    fail "boot-default accepted [$bad] -> $OUT"
+  fi
+done
+
+# ===========================================================================
+# apt-install: reject malicious, accept valid
+# ===========================================================================
+for bad in "foo; rm -rf /" "foo&&bad" "../etc" "FOO" "a b" '$(reboot)' "-rf" "pkg|cat"; do
+  OUT="$(runhelper apt-install "$bad" 2>/dev/null)"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$(jget "$OUT" ok)" = "False" ]; then
+    pass "apt-install rejects malicious arg: [$bad]"
+  else
+    fail "apt-install ACCEPTED malicious arg: [$bad] -> $OUT"
+  fi
+done
+# Ensure apt-get was never called for the bad names.
+if grep -q 'apt-get install' "$LOG"; then fail "apt-install invoked apt-get for a bad name"; else pass "apt-install never ran apt-get on bad names"; fi
+
+: > "$LOG"
+OUT="$(runhelper apt-install firefox-esr libwebkit2gtk-4.1-0 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q 'apt-get install -y --no-install-recommends firefox-esr libwebkit2gtk-4.1-0' "$LOG"; then
+  pass "apt-install accepts valid names and calls apt-get"
+else
+  fail "apt-install valid-name path failed: $OUT"; cat "$LOG"
+fi
+
+# ===========================================================================
+# set-timezone: reject traversal/unknown, accept a real zone
+# ===========================================================================
+for bad in "../../etc/passwd" "Europe/../../root" "/etc/shadow" "Foo/\$(id)" "a;b"; do
+  OUT="$(runhelper set-timezone "$bad" 2>/dev/null)"
+  if [ "$(jget "$OUT" ok)" = "False" ]; then pass "set-timezone rejects [$bad]"; else fail "set-timezone ACCEPTED [$bad] -> $OUT"; fi
+done
+# A real zone that exists on this system.
+if [ -f /usr/share/zoneinfo/Europe/London ]; then
+  OUT="$(runhelper set-timezone Europe/London 2>/dev/null)"
+  if [ "$(jget "$OUT" ok)" = "True" ] && [ "$(jget "$OUT" timezone)" = "Europe/London" ]; then
+    pass "set-timezone accepts Europe/London"
+  else
+    fail "set-timezone valid path failed: $OUT"
+  fi
+else
+  echo "SKIP set-timezone valid (no zoneinfo on host)" >&2
+fi
+
+# ===========================================================================
+# mount-windows: discover NTFS w/ Windows, mount rw when clean
+# ===========================================================================
+: > "$LOG"; rm -f "$WORK/mounted" "$WORK/dirty"
+OUT="$(runhelper mount-windows 2>/dev/null)"
+if is_json "$OUT"; then pass "mount-windows: valid JSON"; else fail "mount-windows: invalid JSON: $OUT"; fi
+# Should have probed sda3 (ntfs with Windows/System32) and mounted it rw (clean).
+if [ "$(jget "$OUT" windows_mounted)" = "True" ] && [ "$(jget "$OUT" windows_rw)" = "True" ]; then
+  pass "mount-windows: mounted rw when clean"
+else
+  fail "mount-windows: expected mounted rw; got $OUT"; cat "$LOG"
+fi
+# Never pass remove_hiberfile.
+if grep -q 'remove_hiberfile' "$LOG"; then fail "mount-windows: used remove_hiberfile (forbidden)"; else pass "mount-windows: never used remove_hiberfile"; fi
+# Must mount with uid/gid/umask=077.
+if grep -q 'umask=077' "$LOG" && grep -q 'uid=1000' "$LOG"; then pass "mount-windows: mounted with uid/gid + umask=077"; else fail "mount-windows: missing uid/umask options"; fi
+
+# dirty -> ro
+: > "$LOG"; touch "$WORK/dirty"
+OUT="$(runhelper mount-windows 2>/dev/null)"
+if [ "$(jget "$OUT" windows_rw)" = "False" ] && [ "$(jget "$OUT" windows_mounted)" = "True" ]; then
+  pass "mount-windows: mounts ro when dirty"
+else
+  fail "mount-windows: expected ro when dirty; got $OUT"
+fi
+rm -f "$WORK/dirty"
+
+# ===========================================================================
+# wipe-install-secrets: only CLAUDEOS device, removes secrets
+# ===========================================================================
+: > "$LOG"
+# Make blkid -L resolve to a real block-like path by creating usb.img and
+# faking -b test via a 'test' override is overkill; instead we point to a device
+# node the helper will accept. The helper requires [ -b "$dev" ]; create a loop
+# file won't be a block dev. So we add a /dev-style shim: use /dev/zero? The
+# helper only needs -b true. We satisfy it by having blkid return /dev/loopX if
+# present, else we assert the not-a-block rejection path.
+# We need a real block device to satisfy the helper's [ -b "$dev" ] safety
+# check; find one below.
+# Use the first existing loop/zram/sr device as a stand-in block device.
+BDEV="$(ls /dev/loop0 /dev/ram0 /dev/sr0 2>/dev/null | head -n1 || true)"
+if [ -n "$BDEV" ] && [ -b "$BDEV" ]; then
+  shim blkid <<SH
+#!/bin/bash
+echo "blkid \$*" >> "$LOG"
+if [ "\$1" = "-L" ] && [ "\$2" = "CLAUDEOS" ]; then echo "$BDEV"; exit 0; fi
+echo "ntfs"
+SH
+  # Mount shim must create the secrets dir when the CLAUDEOS block device is
+  # mounted (so the removal path is exercised).
+  shim mount <<SH
+#!/bin/bash
+echo "mount \$*" >> "$LOG"
+mp="\${@: -1}"; dev="\${@: -2:1}"
+mkdir -p "\$mp"
+case "\$dev" in
+  $BDEV) mkdir -p "\$mp/claudeos/secrets"; echo secret > "\$mp/claudeos/secrets/claude_token" ;;
+  */sda3) mkdir -p "\$mp/Windows/System32" ;;
+esac
+exit 0
+SH
+  OUT="$(runhelper wipe-install-secrets 2>/dev/null)"
+  if is_json "$OUT" && [ "$(jget "$OUT" ok)" = "True" ]; then
+    pass "wipe-install-secrets: ran against CLAUDEOS block device"
+    [ "$(jget "$OUT" secrets_removed)" = "True" ] && pass "wipe-install-secrets: removed secrets dir" || echo "NOTE wipe-install-secrets: secrets_removed=$(jget "$OUT" secrets_removed)" >&2
+  else
+    fail "wipe-install-secrets: unexpected result: $OUT"
+  fi
+  # Confirm it only mounted the CLAUDEOS device.
+  if grep -E 'mount .*'"$BDEV" "$LOG" >/dev/null; then pass "wipe-install-secrets: mounted only the labelled device"; else fail "wipe-install-secrets: did not mount the labelled device"; fi
+else
+  # No block device available: assert the helper rejects a non-block result.
+  OUT="$(runhelper wipe-install-secrets 2>/dev/null)"
+  if [ "$(jget "$OUT" ok)" = "False" ]; then pass "wipe-install-secrets: rejects non-block CLAUDEOS target (no loop dev to test happy path)"; else fail "wipe-install-secrets: should reject non-block device"; fi
+fi
+
+# ===========================================================================
+# Rejections: unknown verb, bad arg counts, no verb
+# ===========================================================================
+OUT="$(runhelper 2>/dev/null)";            [ "$(jget "$OUT" ok)" = "False" ] && pass "no verb rejected" || fail "no verb not rejected: $OUT"
+OUT="$(runhelper bogus-verb 2>/dev/null)"; [ "$(jget "$OUT" ok)" = "False" ] && pass "unknown verb rejected" || fail "unknown verb not rejected: $OUT"
+OUT="$(runhelper status extra 2>/dev/null)"; [ "$(jget "$OUT" ok)" = "False" ] && pass "status with extra arg rejected" || fail "status extra-arg not rejected: $OUT"
+OUT="$(runhelper apt-install 2>/dev/null)"; [ "$(jget "$OUT" ok)" = "False" ] && pass "apt-install with no package rejected" || fail "apt-install empty not rejected: $OUT"
+OUT="$(runhelper set-timezone 2>/dev/null)"; [ "$(jget "$OUT" ok)" = "False" ] && pass "set-timezone with no arg rejected" || fail "set-timezone empty not rejected: $OUT"
+
+exit "$FAILED"

@@ -41,7 +41,7 @@ jobs:
           ./check.py --crash panic
       - name: Keep the pictures and the log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: own-os-screens
           path: |

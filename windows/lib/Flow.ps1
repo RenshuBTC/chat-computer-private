@@ -293,7 +293,8 @@ function Invoke-ClaudeOSSetup {
         Write-Step 'Making the installer'
         Update-Disk -Number $targetDisk.Number -ErrorAction SilentlyContinue
         $disk = Get-Disk -Number $targetDisk.Number
-        $extents = Get-FreeExtents -Partitions @(Get-Partition -DiskNumber $targetDisk.Number) -DiskSize ([int64]$disk.Size)
+        # An erased disk may have no partitions at all, and Get-Partition reports that as an error.
+        $extents = Get-FreeExtents -Partitions @(Get-Partition -DiskNumber $targetDisk.Number -ErrorAction SilentlyContinue) -DiskSize ([int64]$disk.Size)
         if ($extents.Count -eq 0) { throw 'Setup could not find the free space it just made.' }
         $place = Get-InstallerPlacement -Extent $extents[0]
         if ($place.ClaudeOSBytes -lt $Script:MinInstallBytes) { throw 'The free space is smaller than ClaudeOS needs.' }

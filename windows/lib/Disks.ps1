@@ -26,7 +26,10 @@ function Get-DiskVolumesText {
     param([Parameter(Mandatory = $true)][int]$Number)
     $lines = @()
     try {
-        foreach ($p in @(Get-Partition -DiskNumber $Number -ErrorAction Stop)) {
+        # A disk without partitions makes Get-Partition report an error; it has nothing to list.
+        $parts = @(Get-Partition -DiskNumber $Number -ErrorAction SilentlyContinue)
+        if ($parts.Count -eq 0) { $lines += '    (no partitions)' }
+        foreach ($p in $parts) {
             $vol = $null
             try { $vol = $p | Get-Volume -ErrorAction Stop } catch { $vol = $null }
             $letter = [string](Get-Prop $p 'DriveLetter')

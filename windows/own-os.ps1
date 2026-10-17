@@ -39,7 +39,14 @@ if (-not (Test-IsAdministrator)) {
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'))
     if ($Remove) { $argList += '-Remove' }
     $argList += '-Relaunched'
-    Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs
+    try {
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -ErrorAction Stop
+    } catch {
+        # The person said no to Windows' question (or it couldn't be asked).
+        Write-Host ('Windows didn''t give ClaudeOS Own System permission to make changes, so nothing was changed. (' +
+                    $_.Exception.Message + ')')
+        exit 1
+    }
     exit 0
 }
 

@@ -46,8 +46,8 @@ pub fn init() {
     unsafe {
         let stacks = STACKS.get() as u64;
         let mut ist = [0u64; 7];
-        for i in 0..3 {
-            ist[i] = stacks + (i as u64 + 1) * size_of::<Stack>() as u64; // stacks grow down
+        for (i, top) in ist.iter_mut().take(3).enumerate() {
+            *top = stacks + (i as u64 + 1) * size_of::<Stack>() as u64; // stacks grow down
         }
         (*TSS.get()).ist = ist;
 

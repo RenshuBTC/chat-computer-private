@@ -20,6 +20,8 @@ pub struct Guid(pub u32, pub u16, pub u16, pub [u8; 8]);
 
 pub const GRAPHICS_OUTPUT: Guid =
     Guid(0x9042a9de, 0x23dc, 0x4a38, [0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a]);
+/// Real devices have a device path; the firmware's virtual console devices don't.
+pub const DEVICE_PATH: Guid = Guid(0x09576e91, 0x6d3f, 0x11d2, [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b]);
 pub const EDID_ACTIVE: Guid = Guid(0xbd8c1056, 0x9f36, 0x44ec, [0x92, 0xa8, 0xa6, 0x33, 0x7f, 0x81, 0x79, 0x86]);
 pub const EDID_DISCOVERED: Guid =
     Guid(0x1c0c34f6, 0xd380, 0x41fa, [0xa0, 0x49, 0x8a, 0xd0, 0x6c, 0x1a, 0x66, 0xaa]);
@@ -165,6 +167,9 @@ pub struct GraphicsMode {
     pub frame_buffer_size: usize,
 }
 
+pub const PIXEL_RGB_RESERVED: u32 = 0;
+pub const PIXEL_BGR_RESERVED: u32 = 1;
+pub const PIXEL_BIT_MASK: u32 = 2;
 pub const PIXEL_BLT_ONLY: u32 = 3;
 
 #[repr(C)]

@@ -30,8 +30,10 @@ static SYSTEM_TABLE: AtomicPtr<SystemTable> = AtomicPtr::new(null_mut());
 
 const STACK_PAGES: usize = 64; // the kernel's first stack: 256 KiB
 
+/// # Safety
+/// Only the firmware calls this, with its own image handle and system table.
 #[unsafe(no_mangle)]
-pub extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
+pub unsafe extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
     SYSTEM_TABLE.store(st, Ordering::Release);
     // `start` only comes back if something stopped it.
     let reason = unsafe { start(image, st) };
@@ -139,9 +141,9 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
     // Room for the memory map, twice: the firmware's form, then ClaudeOS's. Allocating changes the map,
     // so leave room for more entries than there are now.
     let (raw_size, desc_size) = unsafe { map_size(bs)? };
-    let max_entries = raw_size / desc_size + 64;
-    let raw_pages = (max_entries * desc_size).div_ceil(PAGE_SIZE as usize);
+    let raw_pages = ((raw_size / desc_size + 64) * desc_size).div_ceil(PAGE_SIZE as usize);
     let raw = unsafe { pages(bs, raw_pages)? };
+    let max_entries = raw_pages * PAGE_SIZE as usize / desc_size; // as many as the firmware's form can hold
     let info_bytes = size_of::<BootInfo>() + max_entries * size_of::<MemoryRegion>();
     let info_phys = unsafe { pages(bs, info_bytes.div_ceil(PAGE_SIZE as usize))? };
 
@@ -183,25 +185,32 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
         info.secure_boot = secure_boot(st);
     }
 
-    // Last call: the final memory map, then ExitBootServices. If something changed the map in between,
-    // the firmware refuses once; get the map again and retry.
+    // Last call: the final memory map, then ExitBootServices. If something (a timer event, say) changed
+    // the map in between, the firmware refuses; get the map again and retry. After the first attempt,
+    // even a failed one, the firmware may already have shut part of itself down, and only the memory
+    // map may still be asked for: no more messages, so a failure from then on can only stop here.
+    let mut tried = false;
     let mut exited = false;
-    for _ in 0..2 {
+    for _ in 0..8 {
         size = raw_pages * PAGE_SIZE as usize;
         if unsafe { (bs.get_memory_map)(&mut size, raw as *mut u8, &mut key, &mut dsize, &mut version) } != SUCCESS {
+            if !tried {
+                return Err("the firmware wouldn't give its memory map");
+            }
             break;
         }
+        tried = true;
         if unsafe { (bs.exit_boot_services)(image, key) } == SUCCESS {
             exited = true;
             break;
         }
     }
-    if !exited {
-        return Err("the firmware wouldn't hand over the PC (ExitBootServices failed)");
-    }
-    // From here on the firmware's services are gone: no more messages, no allocations.
-    SYSTEM_TABLE.store(null_mut(), Ordering::Release);
+    SYSTEM_TABLE.store(null_mut(), Ordering::Release); // no more messages either way
     unsafe { asm!("cli", options(nomem, nostack)) };
+    if !exited {
+        halt();
+    }
+    // From here on the firmware's services are gone: no allocations.
 
     let region_phys = info_phys + size_of::<BootInfo>() as u64;
     let mut n = 0;
@@ -308,24 +317,24 @@ unsafe fn screen(bs: &BootServices, st: *mut SystemTable) -> Result<(Framebuffer
     if status != SUCCESS || count == 0 {
         return Err("the firmware offers no graphics screen");
     }
-    // Prefer the screen the firmware's own text goes to.
-    let console = unsafe { (*st).console_out_handle };
+    // The firmware's console may be a virtual device that mirrors real ones (and has no EDID). Prefer a
+    // real graphics device (it has a device path); of those, the one the console is showing on (the
+    // same framebuffer), then one with a monitor that describes itself. Otherwise, any device with a
+    // usable framebuffer.
+    let console_base = unsafe { gop_on(bs, (*st).console_out_handle) }.map(|g| unsafe { (*(*g).mode).frame_buffer_base });
     let mut chosen: *mut GraphicsOutput = null_mut();
     let mut chosen_handle: Handle = null_mut();
+    let mut chosen_rank = 0;
     for i in 0..count {
         let handle = unsafe { *handles.add(i) };
-        let mut gop: *mut c_void = null_mut();
-        if unsafe { (bs.handle_protocol)(handle, &GRAPHICS_OUTPUT, &mut gop) } != SUCCESS || gop.is_null() {
-            continue;
-        }
-        let gop = gop as *mut GraphicsOutput;
-        let format = unsafe { (*(*(*gop).mode).info).pixel_format };
-        if format == PIXEL_BLT_ONLY {
-            continue; // no framebuffer to draw into
-        }
-        if chosen.is_null() || handle == console {
-            chosen = gop;
-            chosen_handle = handle;
+        let Some(gop) = (unsafe { gop_on(bs, handle) }) else { continue };
+        let mut path: *mut c_void = null_mut();
+        let real = unsafe { (bs.handle_protocol)(handle, &DEVICE_PATH, &mut path) } == SUCCESS && !path.is_null();
+        let shows_console = Some(unsafe { (*(*gop).mode).frame_buffer_base }) == console_base;
+        let has_monitor = unsafe { edid_on(bs, handle) }.is_some();
+        let rank = 1 + real as u32 * 4 + shows_console as u32 * 2 + has_monitor as u32;
+        if rank > chosen_rank {
+            (chosen, chosen_handle, chosen_rank) = (gop, handle, rank);
         }
     }
     unsafe { (bs.free_pool)(handles as *mut c_void) };
@@ -336,24 +345,19 @@ unsafe fn screen(bs: &BootServices, st: *mut SystemTable) -> Result<(Framebuffer
     // What the monitor says about itself.
     let mut edid = [0u8; 256];
     let mut edid_len = 0u32;
-    for guid in [&EDID_ACTIVE, &EDID_DISCOVERED] {
-        let mut p: *mut c_void = null_mut();
-        if unsafe { (bs.handle_protocol)(chosen_handle, guid, &mut p) } == SUCCESS && !p.is_null() {
-            let e = unsafe { &*(p as *const EdidProtocol) };
-            if e.size >= 128 && !e.edid.is_null() {
-                let n = (e.size as usize).min(edid.len());
-                unsafe { core::ptr::copy_nonoverlapping(e.edid, edid.as_mut_ptr(), n) };
-                edid_len = n as u32;
-                break;
-            }
-        }
+    if let Some(e) = unsafe { edid_on(bs, chosen_handle) } {
+        let n = (e.size as usize).min(edid.len());
+        unsafe { core::ptr::copy_nonoverlapping(e.edid, edid.as_mut_ptr(), n) };
+        edid_len = n as u32;
     }
 
-    // The monitor's own resolution, if the firmware has a mode for it.
+    // The monitor's own resolution, if the firmware has a mode for it. If the new mode turns out not to
+    // be drawable after all, go back to the one that was.
     if let Some((w, h)) = bootinfo::edid::parse(&edid[..edid_len as usize]).and_then(|e| e.preferred_mode()) {
         unsafe {
             let mode = &*(*chosen).mode;
             let current = &*mode.info;
+            let was = mode.mode;
             if current.width != w || current.height != h {
                 for m in 0..mode.max_mode {
                     let mut size = 0usize;
@@ -361,15 +365,20 @@ unsafe fn screen(bs: &BootServices, st: *mut SystemTable) -> Result<(Framebuffer
                     if ((*chosen).query_mode)(chosen, m, &mut size, &mut info) != SUCCESS || info.is_null() {
                         continue;
                     }
-                    let fits = (*info).width == w && (*info).height == h && (*info).pixel_format != PIXEL_BLT_ONLY;
+                    let fits = (*info).width == w && (*info).height == h && drawable(&*info);
                     (bs.free_pool)(info as *mut c_void);
                     if fits {
-                        let _ = ((*chosen).set_mode)(chosen, m);
+                        if ((*chosen).set_mode)(chosen, m) == SUCCESS && gop_on(bs, chosen_handle).is_none() {
+                            let _ = ((*chosen).set_mode)(chosen, was);
+                        }
                         break;
                     }
                 }
             }
         }
+    }
+    if unsafe { gop_on(bs, chosen_handle) }.is_none() {
+        return Err("the screen can't be drawn on directly (no linear framebuffer)");
     }
 
     let (mode, info) = unsafe { (&*(*chosen).mode, &*(*(*chosen).mode).info) };
@@ -386,6 +395,57 @@ unsafe fn screen(bs: &BootServices, st: *mut SystemTable) -> Result<(Framebuffer
         reserved_mask: info.reserved_mask,
     };
     Ok((fb, edid, edid_len))
+}
+
+/// The graphics output on `handle`, if it has a linear framebuffer ClaudeOS can draw into: 32 bits a
+/// pixel, at a real address, big enough for the picture.
+unsafe fn gop_on(bs: &BootServices, handle: Handle) -> Option<*mut GraphicsOutput> {
+    if handle.is_null() {
+        return None;
+    }
+    let mut p: *mut c_void = null_mut();
+    if unsafe { (bs.handle_protocol)(handle, &GRAPHICS_OUTPUT, &mut p) } != SUCCESS || p.is_null() {
+        return None;
+    }
+    let gop = p as *mut GraphicsOutput;
+    if unsafe { (*gop).mode.is_null() || (*(*gop).mode).info.is_null() } {
+        return None;
+    }
+    let (mode, info) = unsafe { (&*(*gop).mode, &*(*(*gop).mode).info) };
+    let needed = info.pixels_per_scan_line as u64 * info.height as u64 * 4;
+    let usable = mode.frame_buffer_base != 0
+        && (mode.frame_buffer_size == 0 || mode.frame_buffer_size as u64 >= needed)
+        && drawable(info);
+    if usable { Some(gop) } else { None }
+}
+
+/// The monitor's description (EDID) the firmware keeps on `handle`: the one in use, else the one the
+/// monitor sent. At least one 128-byte block.
+unsafe fn edid_on(bs: &BootServices, handle: Handle) -> Option<&'static EdidProtocol> {
+    for guid in [&EDID_ACTIVE, &EDID_DISCOVERED] {
+        let mut p: *mut c_void = null_mut();
+        if unsafe { (bs.handle_protocol)(handle, guid, &mut p) } == SUCCESS && !p.is_null() {
+            let e = unsafe { &*(p as *const EdidProtocol) };
+            if e.size >= 128 && !e.edid.is_null() {
+                return Some(e);
+            }
+        }
+    }
+    None
+}
+
+/// Whether a mode's pixels are in memory in a form ClaudeOS draws: 32 bits each, rows at least as long
+/// as the picture is wide.
+fn drawable(info: &ModeInfo) -> bool {
+    info.width > 0
+        && info.height > 0
+        && info.pixels_per_scan_line >= info.width
+        && match info.pixel_format {
+            PIXEL_RGB_RESERVED | PIXEL_BGR_RESERVED => true,
+            // Pixels described by masks: only 32-bit pixels (the top byte holds part of the pixel).
+            PIXEL_BIT_MASK => (info.red_mask | info.green_mask | info.blue_mask | info.reserved_mask).leading_zeros() < 8,
+            _ => false, // PIXEL_BLT_ONLY: no framebuffer to draw into
+        }
 }
 
 /// Whether Secure Boot is on: the firmware's "SecureBoot" variable (1 = on), read while it can still be.

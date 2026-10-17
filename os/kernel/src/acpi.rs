@@ -97,7 +97,8 @@ impl Acpi {
             match &t[..4] {
                 b"APIC" => acpi.read_madt(t),
                 b"FACP" => acpi.read_fadt(t),
-                b"HPET" => acpi.hpet = Some(u64_at(t, 44)).filter(|a| *a != 0),
+                // Its registers' "generic address": usable when it's in memory (address space 0).
+                b"HPET" if u8_at(t, 40) == 0 => acpi.hpet = Some(u64_at(t, 44)).filter(|a| *a != 0),
                 _ => {}
             }
         }

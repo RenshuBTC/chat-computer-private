@@ -185,9 +185,9 @@ pub fn show_stop(what: &str, details: fmt::Arguments) {
         return;
     }
     let details = format!("{details}");
-    if let Some(mut guard) = WELCOME.try_lock() {
-        if let Some(w) = guard.as_mut() {
-            w.stop(what, &details);
-        }
+    if let Some(mut guard) = WELCOME.try_lock()
+        && let Some(w) = guard.as_mut()
+    {
+        w.stop(what, &details);
     }
 }

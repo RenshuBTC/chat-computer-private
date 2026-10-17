@@ -1,16 +1,29 @@
-//! Time: the local APIC timer, measured against a clock of known speed (the ACPI power-management
-//! timer, or the old PIT when there is none), ticking `HZ` times a second.
+//! Time: the local APIC timer, ticking `HZ` times a second. Its speed differs from PC to PC, so it is
+//! measured against a clock of known speed: the ACPI power-management timer, else the HPET, else the
+//! old PIT. A PC may lack any of them or have one switched off, so every wait gives up after a while,
+//! and a measurement that makes no sense is thrown away.
 
 use crate::acpi::{Acpi, PmTimer};
 use crate::apic;
-use crate::cpu::{inb, inl, outb};
+use crate::cpu::{cpuid, inb, inl, outb};
 use crate::idt::TIMER_VECTOR;
+use crate::paging::{self, Cache};
+use core::ops::RangeInclusive;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 pub const HZ: u64 = 100;
 const PM_TIMER_HZ: u64 = 3_579_545;
 const PIT_HZ: u64 = 1_193_182;
 const MEASURE_MS: u64 = 50;
+/// The most times one wait reads its clock: several times what 50 ms of a working clock takes, and
+/// a few seconds (a read takes about a microsecond) if the clock never moves.
+const MAX_READS: u32 = 5_000_000;
+/// APIC timer speeds (counts a second, after ÷16) that make sense. Below this a tick would be under
+/// 1,000 counts; above it the timer would run at more than 8 GHz.
+const PLAUSIBLE: RangeInclusive<u64> = 100_000..=500_000_000;
+/// What the timer is assumed to count when nothing could measure it: a 100 MHz clock, ÷16. This is a
+/// guess, and the log says so.
+const ASSUMED: u64 = 6_250_000;
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
@@ -23,19 +36,56 @@ pub fn uptime_ms() -> u64 {
     TICKS.load(Ordering::Relaxed) * 1000 / HZ
 }
 
-fn wait_pm(timer: PmTimer, ms: u64) {
+/// Waits `ms` milliseconds by the ACPI power-management timer. False if it stopped moving.
+fn wait_pm(timer: PmTimer, ms: u64) -> bool {
     let mask: u64 = if timer.wide { 0xFFFF_FFFF } else { 0xFF_FFFF };
     let target = PM_TIMER_HZ * ms / 1000;
     let mut last = unsafe { inl(timer.port) } as u64 & mask;
     let mut passed = 0;
-    while passed < target {
+    for _ in 0..MAX_READS {
         let now = unsafe { inl(timer.port) } as u64 & mask;
         passed += now.wrapping_sub(last) & mask;
         last = now;
+        if passed >= target {
+            return true;
+        }
     }
+    false
 }
 
-fn wait_pit(ms: u64) {
+/// Waits `ms` milliseconds by the HPET, whose registers are at `phys`. False if it isn't usable.
+fn wait_hpet(phys: u64, ms: u64) -> bool {
+    const PERIOD: u64 = 0x04; // the capabilities' upper half: femtoseconds a count
+    const CONFIG: u64 = 0x10; // bit 0: the counter runs
+    const COUNTER: u64 = 0xF0; // its lower 32 bits
+    let regs = paging::map_device(phys, 0x100, Cache::Uncached);
+    let read = |reg: u64| unsafe { core::ptr::read_volatile((regs + reg) as *const u32) };
+    let write = |reg: u64, v: u32| unsafe { core::ptr::write_volatile((regs + reg) as *mut u32, v) };
+    let period_fs = read(PERIOD) as u64;
+    if period_fs == 0 || period_fs > 100_000_000 {
+        return false; // the HPET specification allows at most 100 ns a count
+    }
+    let config = read(CONFIG);
+    if config & 1 == 0 {
+        write(CONFIG, config | 1);
+    }
+    let target = ms * 1_000_000_000_000 / period_fs;
+    let start = read(COUNTER);
+    let mut ok = false;
+    for _ in 0..MAX_READS {
+        if read(COUNTER).wrapping_sub(start) as u64 >= target {
+            ok = true;
+            break;
+        }
+    }
+    if config & 1 == 0 {
+        write(CONFIG, config); // as it was found
+    }
+    ok
+}
+
+/// Waits `ms` milliseconds by the PIT's channel 2. False if it never finished counting.
+fn wait_pit(ms: u64) -> bool {
     let count = (PIT_HZ * ms / 1000).min(0xFFFF) as u16;
     unsafe {
         let gate = inb(0x61) & 0xFC; // speaker off
@@ -45,30 +95,57 @@ fn wait_pit(ms: u64) {
         outb(0x42, (count >> 8) as u8);
         outb(0x61, gate); // restart the count
         outb(0x61, gate | 1);
-        while inb(0x61) & 0x20 == 0 {}
+        for _ in 0..MAX_READS {
+            if inb(0x61) & 0x20 != 0 {
+                return true;
+            }
+        }
     }
+    false
 }
 
-/// Measures the APIC timer and starts it. Returns its speed in counts per second (after ÷16).
+/// The APIC timer's counts a second while `wait` waits `MEASURE_MS`, if `wait` worked and the answer
+/// makes sense.
+fn measure(wait: impl FnOnce() -> bool) -> Option<u64> {
+    apic::write(apic::TIMER_INITIAL, u32::MAX); // (re)starts the count down
+    let finished = wait();
+    let left = apic::read(apic::TIMER_CURRENT);
+    apic::write(apic::TIMER_INITIAL, 0); // stops it
+    let per_second = (u32::MAX - left) as u64 * 1000 / MEASURE_MS;
+    (finished && PLAUSIBLE.contains(&per_second)).then_some(per_second)
+}
+
+/// The timer's speed when nothing could measure it. Intel processors that state their crystal clock
+/// (CPUID leaf 0x15) feed the APIC timer from it, as Linux assumes too; otherwise it's a guess.
+fn unmeasured() -> (u64, &'static str) {
+    if cpuid(0, 0).0 >= 0x15 {
+        let crystal_hz = cpuid(0x15, 0).2 as u64;
+        if PLAUSIBLE.contains(&(crystal_hz / 16)) {
+            return (crystal_hz / 16, "taken from the processor's crystal clock (no clock to measure it against)");
+        }
+    }
+    (ASSUMED, "assumed (no clock to measure it against)")
+}
+
+/// Measures the APIC timer and starts it. Returns its speed in counts a second (after ÷16), and how
+/// that speed was found.
 pub fn init(acpi: &Acpi) -> (u64, &'static str) {
-    apic::write(apic::TIMER_DIVIDE, 0x3); // ÷16
     apic::write(apic::LVT_TIMER, apic::MASKED);
-    apic::write(apic::TIMER_INITIAL, u32::MAX);
-    let source = match acpi.pm_timer {
-        Some(t) => {
-            wait_pm(t, MEASURE_MS);
-            "the ACPI power-management timer"
-        }
-        None => {
-            wait_pit(MEASURE_MS);
-            "the PIT"
-        }
-    };
-    let counted = (u32::MAX - apic::read(apic::TIMER_CURRENT)) as u64;
-    apic::write(apic::TIMER_INITIAL, 0);
-    let per_second = counted * 1000 / MEASURE_MS;
+    apic::write(apic::TIMER_DIVIDE, 0x3); // ÷16
+    let mut found = None;
+    if let Some(t) = acpi.pm_timer {
+        found = measure(|| wait_pm(t, MEASURE_MS)).map(|s| (s, "measured against the ACPI power-management timer"));
+    }
+    if found.is_none()
+        && let Some(hpet) = acpi.hpet
+    {
+        found = measure(|| wait_hpet(hpet, MEASURE_MS)).map(|s| (s, "measured against the HPET"));
+    }
+    if found.is_none() {
+        found = measure(|| wait_pit(MEASURE_MS)).map(|s| (s, "measured against the PIT"));
+    }
+    let (per_second, how) = found.unwrap_or_else(unmeasured);
     apic::write(apic::LVT_TIMER, TIMER_VECTOR as u32 | 1 << 17); // periodic
-    apic::write(apic::TIMER_DIVIDE, 0x3);
-    apic::write(apic::TIMER_INITIAL, (per_second / HZ).max(1) as u32);
-    (per_second, source)
+    apic::write(apic::TIMER_INITIAL, (per_second / HZ) as u32);
+    (per_second, how)
 }

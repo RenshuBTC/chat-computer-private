@@ -116,16 +116,18 @@ pub fn interrupts_enabled() -> bool {
     unsafe { asm!("pushfq", "pop {}", out(reg) flags, options(nomem, preserves_flags)) };
     flags & (1 << 9) != 0
 }
+// Not `nomem`: interrupt handlers read and write memory, so the compiler must not move memory accesses
+// across turning interrupts on or off, or across waiting for one.
 pub fn enable_interrupts() {
-    unsafe { asm!("sti", options(nomem, nostack)) }
+    unsafe { asm!("sti", options(nostack)) }
 }
 pub fn disable_interrupts() {
-    unsafe { asm!("cli", options(nomem, nostack)) }
+    unsafe { asm!("cli", options(nostack)) }
 }
 
 /// Sleeps until the next interrupt.
 pub fn wait_for_interrupt() {
-    unsafe { asm!("hlt", options(nomem, nostack, preserves_flags)) }
+    unsafe { asm!("hlt", options(nostack, preserves_flags)) }
 }
 
 pub fn stop() -> ! {

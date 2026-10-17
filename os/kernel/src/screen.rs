@@ -27,7 +27,13 @@ fn channel(mask: u32, level: u8) -> u32 {
 
 impl Screen {
     pub fn new(fb: &Framebuffer) -> Option<Screen> {
-        if fb.phys == 0 || fb.width == 0 || fb.height == 0 || fb.stride < fb.width {
+        let bytes = fb.stride as u64 * fb.height as u64 * 4;
+        if fb.phys == 0 || fb.width == 0 || fb.height == 0 || fb.stride < fb.width || (fb.size != 0 && fb.size < bytes) {
+            return None;
+        }
+        // Every pixel is 32 bits wide. A format described by masks that all fit in fewer bits has
+        // smaller pixels, which this code can't draw (the start-up stage doesn't pick those).
+        if fb.format == PIXEL_BITMASK && (fb.red_mask | fb.green_mask | fb.blue_mask | fb.reserved_mask).leading_zeros() >= 8 {
             return None;
         }
         let mut grey = [0u32; 256];
@@ -41,7 +47,6 @@ impl Screen {
                 _ => return None,
             };
         }
-        let bytes = fb.stride as u64 * fb.height as u64 * 4;
         let base = paging::map_device(fb.phys, bytes, Cache::WriteCombining) as *mut u32;
         Some(Screen { base, width: fb.width as usize, height: fb.height as usize, stride: fb.stride as usize, grey })
     }

@@ -49,16 +49,13 @@ impl Cache {
     }
 }
 
-const MAX_SPANS: usize = 128;
-
 struct Tables {
     pml4: u64,
     no_execute: u64,
     gib_pages: bool,
     next_device: u64,
-    /// The RAM that is mapped at PHYS_OFFSET: [start, end) physical ranges.
-    spans: [(u64, u64); MAX_SPANS],
-    span_count: usize,
+    /// The RAM that is mapped at PHYS_OFFSET: sorted [start, end) physical ranges.
+    spans: &'static [(u64, u64)],
 }
 
 static TABLES: SpinLock<Option<Tables>> = SpinLock::new(None);
@@ -117,8 +114,36 @@ impl Tables {
     }
 
     fn in_direct_map(&self, phys: u64, len: u64) -> bool {
-        self.spans[..self.span_count].iter().any(|&(s, e)| s <= phys && phys + len <= e)
+        self.spans.iter().any(|&(s, e)| s <= phys && phys.saturating_add(len) <= e)
     }
+}
+
+/// All RAM as sorted [start, end) ranges, neighbours merged so that big pages can be used. The list
+/// lives in frames of its own (there is no heap yet), reached through the RAM map: the start-up
+/// stage's covers all RAM, and so does the kernel's, since the list is that map's own outline.
+fn ram_spans(info: &BootInfo) -> &'static [(u64, u64)] {
+    let map = unsafe { info.memory_map() };
+    let room = map.len().max(1);
+    let frames = (room * core::mem::size_of::<(u64, u64)>()).div_ceil(PAGE_SIZE as usize);
+    let phys = memory::alloc_contiguous(frames).expect("no memory for the list of RAM");
+    let all = unsafe { core::slice::from_raw_parts_mut((PHYS_OFFSET + phys) as *mut (u64, u64), room) };
+    let mut n = 0;
+    for r in map.iter().filter(|r| r.is_ram() && r.pages > 0) {
+        all[n] = (r.start, r.end());
+        n += 1;
+    }
+    all[..n].sort_unstable_by_key(|r| r.0);
+    let mut merged = 0;
+    for i in 0..n {
+        let (start, end) = all[i];
+        if merged > 0 && all[merged - 1].1 >= start {
+            all[merged - 1].1 = all[merged - 1].1.max(end);
+        } else {
+            all[merged] = (start, end);
+            merged += 1;
+        }
+    }
+    &all[..merged]
 }
 
 /// Sets the page attribute table so that one of its entries means write-combining (entry 1, which
@@ -140,35 +165,12 @@ pub fn init(info: &BootInfo) {
         no_execute: if cpu::has_no_execute() { NO_EXECUTE } else { 0 },
         gib_pages: cpu::has_gib_pages(),
         next_device: DEVICE_START,
-        spans: [(0, 0); MAX_SPANS],
-        span_count: 0,
+        spans: ram_spans(info),
     };
 
-    // All RAM, merged into spans so that big pages can be used.
-    let map = unsafe { info.memory_map() };
-    let mut ram = [(0u64, 0u64); 512];
-    let mut n = 0;
-    for r in map.iter().filter(|r| r.is_ram() && r.pages > 0) {
-        if n < ram.len() {
-            ram[n] = (r.start, r.end());
-            n += 1;
-        }
-    }
-    let ram = &mut ram[..n];
-    ram.sort_unstable_by_key(|r| r.0);
-    for &(start, end) in ram.iter() {
-        match t.span_count {
-            c if c > 0 && t.spans[c - 1].1 >= start => t.spans[c - 1].1 = t.spans[c - 1].1.max(end),
-            c if c < MAX_SPANS => {
-                t.spans[c] = (start, end);
-                t.span_count += 1;
-            }
-            _ => crate::log!("ClaudeOS kernel: too many separate pieces of RAM; some left out"),
-        }
-    }
+    // All RAM. Every frame the memory record hands out is in it.
     let data = PRESENT | WRITABLE | t.no_execute;
-    for i in 0..t.span_count {
-        let (start, end) = t.spans[i];
+    for &(start, end) in t.spans {
         t.map(PHYS_OFFSET + start, start, end - start, data, true);
     }
 

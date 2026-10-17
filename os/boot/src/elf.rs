@@ -20,6 +20,9 @@ pub struct Load {
 pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
 
+/// A part's end is rounded up to a whole page, which must not wrap around the address space.
+const PAGE: u64 = 4096;
+
 fn u16_at(d: &[u8], o: usize) -> Option<u16> {
     Some(u16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?))
 }
@@ -65,8 +68,13 @@ impl<'a> Elf<'a> {
                     memsz: u64_at(self.data, p + 40)?,
                 })
             })();
+            let fits = |l: &Load| {
+                l.filesz <= l.memsz
+                    && l.offset.checked_add(l.filesz).is_some_and(|end| end <= self.data.len() as u64)
+                    && l.vaddr.checked_add(l.memsz).is_some_and(|end| end.checked_add(PAGE).is_some())
+            };
             Some(match load {
-                Some(l) if l.filesz <= l.memsz && (l.offset + l.filesz) as usize <= self.data.len() => Ok(l),
+                Some(l) if fits(&l) => Ok(l),
                 _ => Err("the kernel inside the start-up stage is damaged"),
             })
         })

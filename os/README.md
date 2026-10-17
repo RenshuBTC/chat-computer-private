@@ -31,11 +31,14 @@ open-source UEFI firmware.
     * nothing at address 0, so a null pointer faults;
     * device memory uncached, and the framebuffer write-combined;
   * a heap;
+  * the first screen, early, so that if anything after it stops the kernel, the screen says so;
   * the ACPI tables: processor cores, interrupt controllers and timers;
   * the local APIC. The old 8259 controllers and all I/O APIC inputs are masked;
-  * a timer, measured against the ACPI power-management timer and ticking 100 times a second.
+  * a timer ticking 100 times a second. Its speed is measured against the ACPI power-management timer,
+    else the HPET, else the old PIT. Every wait gives up after a few seconds, and a measurement that
+    makes no sense is thrown away.
 
-  Then it draws the first screen and keeps its clock current.
+  Then it keeps the screen's clock current.
 * `font/` is ClaudeOS's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It's tested against fontTools' reading of the same font.
 * `bootinfo/` defines what the start-up stage hands the kernel, once for both.

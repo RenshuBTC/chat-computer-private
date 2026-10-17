@@ -246,7 +246,7 @@ impl<'a> Font<'a> {
             } else if cp > last {
                 lo = mid + 1;
             } else {
-                return u16::try_from(u32_at(d, g + 8)? + (cp - first)).ok();
+                return u32_at(d, g + 8)?.checked_add(cp - first).and_then(|glyph| u16::try_from(glyph).ok());
             }
         }
         None

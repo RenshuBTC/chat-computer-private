@@ -18,11 +18,12 @@
 #   bitlocker-stop, signin     stop at the recovery-key question; sign in again
 #   startup-windows, startup-once
 #   remove, remove-keep        remove ClaudeOS (confirmed / not confirmed)
+#   remove-again               remove ClaudeOS, keeping the downloads to install it again
 #   remove-both                remove ClaudeOS before it has cleaned up its installer
 #   remove-unfinished          remove an installer that never installed
 param(
     [Parameter(Mandatory = $true)][ValidateSet('plan', 'shrink', 'disk', 'no-entry', 'install-fails', 'leftover', 'bitlocker', 'bitlocker-fails', 'bitlocker-stop',
-        'signin', 'startup-windows', 'startup-once', 'remove', 'remove-keep', 'remove-both', 'remove-unfinished',
+        'signin', 'startup-windows', 'startup-once', 'remove', 'remove-keep', 'remove-again', 'remove-both', 'remove-unfinished',
         'blocked', 'gap63', 'stuck', 'nospace', 'paste', 'nodocs')][string]$Scenario,
     [Parameter(Mandatory = $true)][string]$OutDir
 )
@@ -49,7 +50,7 @@ $env:USERNAME = 'rensh'
 $env:USERPROFILE = (Join-Path $OutDir 'Users/rensh')
 $Script:BitLocker = ($Scenario -in @('bitlocker', 'bitlocker-fails', 'bitlocker-stop'))
 # ClaudeOS installed (and its installer cleaned up, except in remove-both); or only an installer, never used.
-$Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-both', 'startup-windows', 'startup-once', 'signin')
+$Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-again', 'remove-both', 'startup-windows', 'startup-once', 'signin')
 # A PC with just the one disk, like most laptops (no "Where should ClaudeOS go?" question then).
 $Script:OneDisk = $Scenario -in @('blocked', 'gap63', 'stuck', 'nospace')
 $Script:InstallerLeft = $Scenario -in @('remove-both', 'remove-unfinished', 'leftover')
@@ -418,6 +419,9 @@ if ($Script:InstallerLeft) {
 if ($Script:Installed -or $Script:InstallerLeft) {
     $w = New-Item -ItemType Directory -Path (Join-Path $OutDir 'work') -Force
     [IO.File]::WriteAllText((Join-Path $w.FullName 'ubuntu-24.04.5-live-server-amd64.iso'), 'iso')
+    [IO.File]::WriteAllText((Join-Path $w.FullName 'claude_agent_sdk-0.2.167-py3-none-win_amd64.whl'), 'whl')
+    $engine = New-Item -ItemType Directory -Path (Join-Path $w.FullName 'claude-139597261e6d') -Force
+    [IO.File]::WriteAllText((Join-Path $engine.FullName 'claude.exe'), 'exe')
     $u = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Users/rensh/ClaudeOS') -Force
     [IO.File]::WriteAllText((Join-Path $u.FullName 'claude_token'), 'sk-ant-oat01-old')
     # In remove-both, the person also keeps a file of their own in that folder.
@@ -460,10 +464,11 @@ $scripted = switch ($Scenario) {
     'nodocs' { @('1', 'y', 'n') }
     'startup-windows' { @('3', '2') }                        # Windows
     'startup-once' { @('3', '3', 'n') }                      # ClaudeOS once, restart later
-    'remove' { @('4', 'REMOVE') }
+    'remove' { @('4', 'REMOVE', 'n') }                       # downloads deleted too
     'remove-keep' { @('4', 'no') }
-    'remove-both' { @('4', 'REMOVE') }
-    'remove-unfinished' { @('4', 'REMOVE') }
+    'remove-again' { @('4', 'REMOVE', 'y') }                 # downloads kept, to install again
+    'remove-both' { @('4', 'REMOVE', 'n') }
+    'remove-unfinished' { @('4', 'REMOVE', 'n') }
 }
 foreach ($a in $scripted) { $Script:Answers.Enqueue($a) }
 function Read-Host {

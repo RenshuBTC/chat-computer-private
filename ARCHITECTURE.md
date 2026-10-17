@@ -296,7 +296,9 @@ disk holding the partition mounted at `/cdrom`.)
      normally and the safety net finishes the job on the first start.
 
 "Remove ClaudeOS from this PC" (Windows) also deletes installer partitions with a mark, the "ClaudeOS setup"
-entries and `\EFI\claudeos-setup`, so it cleans up an install that never finished too.
+entries and `\EFI\claudeos-setup`, so it cleans up an install that never finished too. Right after the typed
+REMOVE it asks whether to keep the downloads (the Ubuntu ISO and the Agent SDK wheel, about 4 GB; default no):
+kept, installing again finds them by their SHA-256 and doesn't download them again.
 
 Tested end to end in QEMU (OVMF with Secure Boot and Microsoft's keys, an NVMe disk laid out as setup leaves a
 PC): the "ClaudeOS setup" entry starts the installer from its partition, the install finishes, ClaudeOS starts,

@@ -312,6 +312,20 @@ function Remove-ClaudeOS {
         return
     }
     if ($PlanOnly) { Write-Line '(Plan only: nothing was changed.)'; return }
+    # The downloads (the Ubuntu installer and Claude's engine, about 4 GB) can stay, to install ClaudeOS again
+    # without downloading them again.
+    $keepDownloads = @()
+    $downloads = @()
+    if ($WorkDir -and (Test-Path -LiteralPath $WorkDir)) {
+        $downloads = @(Get-ChildItem -LiteralPath $WorkDir -Force -File |
+            Where-Object { $_.Name -like 'ubuntu-*.iso' -or $_.Name -like 'claude_agent_sdk-*.whl' })
+    }
+    if ($downloads.Count -gt 0) {
+        $size = [double](($downloads | Measure-Object -Property Length -Sum).Sum)
+        if (Read-YesNo ('Keep the downloads (' + (Format-Size $size) + ') to install ClaudeOS again without downloading them again?') $false) {
+            $keepDownloads = @($downloads | ForEach-Object { $_.Name })
+        }
+    }
 
     # 1. Windows first in the power-on menu, and ClaudeOS's entries (and the installer's) out of it.
     try {
@@ -389,9 +403,10 @@ function Remove-ClaudeOS {
                     'drive, or add them to C:.')
     }
 
-    # 4. What setup left on Windows: downloads, sign-in copies and the recovery password note (setup's log stays).
+    # 4. What setup left on Windows: downloads (unless kept), sign-in copies and the recovery password note
+    #    (setup's log stays).
     if ($WorkDir -and (Test-Path -LiteralPath $WorkDir)) {
-        Get-ChildItem -LiteralPath $WorkDir -Force | Where-Object { $_.Name -ne 'setup.log' } |
+        Get-ChildItem -LiteralPath $WorkDir -Force | Where-Object { $_.Name -ne 'setup.log' -and $keepDownloads -notcontains $_.Name } |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
     # C:\Users\<you>\ClaudeOS: the sign-in copies, and the folder only when nothing else is in it (a folder of that

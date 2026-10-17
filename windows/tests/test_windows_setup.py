@@ -756,6 +756,18 @@ def test_removing_claudeos_gives_windows_everything_back(tmp_path):
 
 
 @needs_pwsh
+def test_removing_claudeos_can_keep_the_downloads_to_install_again(tmp_path):
+    # Installing again (to get a new version of ClaudeOS) then needn't download Ubuntu's 4 GB again.
+    out, res = _flow(tmp_path, "remove-again")
+    assert res["ok"], res
+    assert [c for c in res["calls"] if c.startswith("Q Keep the downloads")][0].endswith("[y/N] -> y")
+    assert sorted(f.name for f in (out / "work").iterdir()) == [
+        "claude_agent_sdk-0.2.167-py3-none-win_amd64.whl", "ubuntu-24.04.5-live-server-amd64.iso"]
+    assert _disk(res, 0) == DISK0 and not (out / "esp/EFI/claudeos").exists()     # ClaudeOS itself is gone
+    assert not (out / "Users/rensh/ClaudeOS").exists()
+
+
+@needs_pwsh
 def test_removing_claudeos_needs_the_typed_word(tmp_path):
     out, res = _flow(tmp_path, "remove-keep")
     assert res["ok"], res

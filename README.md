@@ -159,9 +159,9 @@ You can go back for one restart, for every day, or for good.
 * **For good:** run ClaudeOS Setup in Windows and choose **Remove ClaudeOS from this PC**, then type
   REMOVE. Setup deletes ClaudeOS's partition and its boot files (and its installer, if it's still
   there), takes it out of the power-on menu, gives its space back to C: when it sits right after C:,
-  and deletes what setup left on Windows (the download and the sign-in copies) and the BitLocker key it
-  gave ClaudeOS. Windows, your apps and your Windows files stay as they are. Anything
-  you saved only inside ClaudeOS is deleted with it.
+  and deletes what setup left on Windows (the download, unless you keep it to install ClaudeOS again,
+  and the sign-in copies) and the BitLocker key it gave ClaudeOS. Windows, your apps and your Windows
+  files stay as they are. Anything you saved only inside ClaudeOS is deleted with it.
 
 If Windows uses BitLocker, Windows may ask for its recovery key once after ClaudeOS is installed.
 Setup showed you this key and asked you to save it.

@@ -62,6 +62,10 @@ class Platform:
     def input_is_bluetooth(self) -> bool: raise NotImplementedError
     # --- power
     def power(self, action: str) -> str: raise NotImplementedError
+    def prepare_power(self, action: str) -> str | None:
+        """What a power action needs before the goodbye (a switch: the other system for the next start). None when
+        it's ready, else what went wrong."""
+        return None
     def set_default_os(self, system: str) -> str:
         """What starts when the computer turns on: "claudeos" or "other" (other_os). Removes nothing."""
         raise NotImplementedError

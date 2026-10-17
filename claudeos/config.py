@@ -111,6 +111,8 @@ class Settings:
                 data = json.loads(paths.settings_file.read_text(encoding="utf-8")) or {}
             except (OSError, ValueError):
                 data = {}
+            if not isinstance(data, dict):
+                data = {}        # a file that isn't a JSON object (hand-edited): the defaults, not a crash at start
         known = {f.name: f for f in fields(cls) if f.name != "extra"}
         if data.get("text_size") == 28 and "text_scale" not in data:
             data["text_size"] = 0   # 28 px was the fixed default before text was sized from the screen
@@ -247,6 +249,8 @@ class State:
         try:
             self.data = json.loads(paths.state_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            self.data = {}
+        if not isinstance(self.data, dict):
             self.data = {}
 
     def get(self, key: str, default: Any = None) -> Any:

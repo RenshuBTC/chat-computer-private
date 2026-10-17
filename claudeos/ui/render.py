@@ -50,8 +50,11 @@ def _shell(title: str, body: str, settings: Any, script: str = "") -> str:
 
 def document_html(title: str, markdown: str, settings: Any) -> str:
     body = f'<article><h1 class="title">{htmllib.escape(title)}</h1><div class="md" id="doc"></div></article>'
+    # Inside <script>, a "</script>" in the text (a web page's source, a README about HTML) would end the script
+    # there and show the rest as raw HTML; "<" written as \u003c is the same string to JavaScript.
+    text = json.dumps(markdown).replace("<", "\\u003c")
     script = (f"<script>{asset('md.js')}</script><script>document.getElementById('doc').innerHTML="
-              f"window.renderMarkdown({json.dumps(markdown)});</script>")
+              f"window.renderMarkdown({text});</script>")
     return _shell(title, body, settings, script)
 
 

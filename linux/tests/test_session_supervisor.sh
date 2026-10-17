@@ -134,7 +134,8 @@ env HOME="$HOME" FAKE_RUNS="$WORK/runs" FAKE_EXITCODE="$WORK/exitcode" FAKE_SEQ=
     CLAUDEOS_BACKOFF="0 0 0" CLAUDEOS_LOG_MAX_BYTES=256 CLAUDEOS_LOG_KEEP=2 \
     bash "$SESSION" > "$WORK/session.out" 2>&1 &
 pid=$!
-sleep 1.5
+# Up to 10 s: on a busy machine the first restarts can take longer than the second this usually takes.
+for _ in $(seq 1 100); do [ -f "$LOGDIR/session.log.1" ] && break; sleep 0.1; done
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 if [ -f "$LOGDIR/session.log.1" ]; then pass "log rotation produced session.log.1"; else fail "log rotation did not rotate (no .1)"; ls -la "$LOGDIR" >&2; fi
 

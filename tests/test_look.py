@@ -80,6 +80,16 @@ def test_pages_shown_from_elsewhere_still_find_the_fonts(tmp_path):
     assert kind == "html" and '<div class="sound">' in page and 'class="media"' not in page
 
 
+def test_a_document_mentioning_script_tags_stays_whole():
+    # The text goes into the page inside <script>: a "</script>" in it (a web page's source, a README about HTML)
+    # used to end the script there and show the rest as raw HTML, running any script in it.
+    md = 'Example:\n\n```\n<script>alert("x")</script>\n```\n<!-- note -->'
+    html = render.document_html("Notes", md, Settings())
+    assert html.count("</script>") == html.count("<script>") == 2           # md.js, and the one that renders
+    arg = re.search(r"renderMarkdown\((.*)\);</script>", html, re.S).group(1)
+    assert "<" not in arg and json.loads(arg) == md
+
+
 def test_there_is_no_theme_setting(tmp_path):
     assert not hasattr(Settings(), "theme")
     paths = Paths(tmp_path / "ClaudeOS").ensure()

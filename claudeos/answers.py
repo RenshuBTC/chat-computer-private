@@ -16,6 +16,11 @@ _NO = {
     "don't do it", "dont do it", "not yet", "no no", "cannot", "can't", "no la", "skip", "skip it", "leave it",
 }
 _FILLER = re.compile(r"\b(um+|uh+|er+|ah+|hmm+|well|so|like|just|claude)\b")
+# After a yes-word: words that take it back ("okay, wait", "yeah no", "ok stop", "yes, never mind")...
+_TAKE_BACK = {"no", "nope", "nah", "don't", "dont", "stop", "wait", "cancel", "hold", "hang", "abort", "cannot",
+              "can't", "cant", "never"}
+# ...or make it a different instruction or a question ("yes but only the PDFs", "sure, what does it cost?").
+_NOT_PLAIN = {"but", "except", "only", "instead", "not", "what", "why", "how", "which", "who", "where", "when"}
 
 
 def normalize(text: str) -> str:
@@ -40,8 +45,10 @@ def classify_answer(text: str) -> str:
     if words[0] in ("no", "nope", "nah", "don't", "dont", "cancel", "stop", "wait") or first2 in _NO:
         return "no"
     if (words[0] in ("yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright") or first2 in _YES) and len(words) <= 6:
-        # "yes but only the PDFs" is a different instruction, not a plain yes.
-        if any(w in ("but", "except", "only", "instead", "not") for w in words[1:]):
+        # Only a plain yes is a yes: "okay, wait" isn't, and nor is "yes but only the PDFs".
+        if any(w in _TAKE_BACK for w in words[1:]):
+            return "no"
+        if any(w in _NOT_PLAIN for w in words[1:]):
             return "unclear"
         return "yes"
     return "unclear"

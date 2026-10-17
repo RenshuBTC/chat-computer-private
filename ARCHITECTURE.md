@@ -154,7 +154,9 @@ No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Instal
   data type, without a drive letter, at the *end* of the largest free area on that disk (`Get-FreeExtents`,
   `Get-InstallerPlacement`: whole MiBs, the first and last MiB of the disk left alone). ClaudeOS installs into
   the rest, right before it. Setup refuses ISOs bigger than 5 GiB.
-* **What's on it.** The official Ubuntu Server 24.04.x ISO's files (copied from the ISO as Windows mounts it;
+* **What's on it.** The official Ubuntu Server 24.04.x ISO's files, 24.04.4 or newer (`MinPointRelease`: from
+  there on its installer makes the account before `late-commands`, which `finish.sh` needs; up to 24.04.3 that
+  was left to cloud-init at the first start) (copied from the ISO as Windows mounts it;
   its links, like `ubuntu -> .`, aren't folders there and aren't copied), plus:
   * `/claudeos/installer-<install-id>` (`id=<install-id>`): the mark, written first, so even a half-made
     installer can be found by "Remove ClaudeOS" and, later, by ClaudeOS;

@@ -39,7 +39,8 @@ ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
 SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
             "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "phone_access"}
-WINDOWS_SYSTEM = re.compile(r"/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
+# Windows' own folders, at the top of its drive (a folder of the person's own called Recovery or Boot is theirs).
+WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
 
 
 @dataclass
@@ -379,39 +380,58 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             note = f"\n(Still indexing: {ctx.index.status.get('state')}; results may be incomplete.)"
         return _text((_json(res) if res else "Nothing found.") + note)
 
-    def _move_policy(a: dict[str, Any]) -> str | None:
-        items = a.get("items") or []
-        srcs = [ctx.resolve(i.get("from", "")) for i in items]
-        dsts = [ctx.resolve(i.get("to", "")) for i in items]
-        # A copy of a private file would be an ordinary file anyone could read; so would a copy of a folder
-        # that holds one (like the home folder).
-        if any(is_private(ctx.paths, s) or holds_private(ctx.paths, s) for s in srcs) or \
-                any(is_private(ctx.paths, d) for d in dsts):
-            return "DENY: That includes ClaudeOS's private sign-in files, so ClaudeOS keeps them where they are."
-        if any(WINDOWS_SYSTEM.search(s[len(ctx.settings.windows_mount):]) for s in srcs if s.startswith(ctx.settings.windows_mount)):
-            return "DENY: Those are Windows system files; moving them could stop Windows from starting."
-        replaced = []
-        for i in items:
-            dst = ctx.resolve(i.get("to", ""))
-            if os.path.isdir(dst):
-                dst = os.path.join(dst, os.path.basename(ctx.resolve(i.get("from", "")).rstrip("/")))
-            if os.path.exists(dst):
-                replaced.append(dst)
-        if replaced:
-            return f"That would replace {_names(replaced)}. Go ahead?"
-        if len(items) > 20:
-            return f"Move {len(items)} items?"
-        return None
+    def _target(i: dict[str, Any]) -> tuple[str, str]:
+        """Where an item goes: into `to` when that is a folder, else to `to` itself."""
+        src, dst = ctx.resolve(i.get("from", "")), ctx.resolve(i.get("to", ""))
+        if os.path.isdir(dst):
+            dst = os.path.join(dst, os.path.basename(src.rstrip("/")))
+        return src, dst
+
+    def _in_the_way(src: str, dst: str, copy: bool) -> bool:
+        """Something at `dst` that this can't replace: a folder (moving there would put the item inside it, and
+        undoing would then move what was there before) or a file where a folder goes. A file replaces a file
+        (backed up first), and a folder copied onto a folder adds to it."""
+        if not os.path.exists(dst):
+            return False
+        if os.path.isfile(src) and os.path.isfile(dst):
+            return False
+        return not (copy and os.path.isdir(src) and os.path.isdir(dst))
+
+    def _transfer_policy(copy: bool) -> Callable[[dict[str, Any]], str | None]:
+        def policy(a: dict[str, Any]) -> str | None:
+            items = a.get("items") or []
+            srcs = [ctx.resolve(i.get("from", "")) for i in items]
+            dsts = [ctx.resolve(i.get("to", "")) for i in items]
+            # A copy of a private file would be an ordinary file anyone could read; so would a copy of a folder
+            # that holds one (like the home folder).
+            if any(is_private(ctx.paths, s) or holds_private(ctx.paths, s) for s in srcs) or \
+                    any(is_private(ctx.paths, d) for d in dsts):
+                return "DENY: That includes ClaudeOS's private sign-in files, so ClaudeOS keeps them where they are."
+            if any(WINDOWS_SYSTEM.search(s[len(ctx.settings.windows_mount):]) for s in srcs if s.startswith(ctx.settings.windows_mount)):
+                return "DENY: Those are Windows system files; moving them could stop Windows from starting."
+            replaced = []
+            for i in items:
+                src, dst = _target(i)
+                if os.path.exists(dst) and os.path.exists(src) and not _in_the_way(src, dst, copy):
+                    replaced.append(dst)
+            if replaced:
+                return f"That would replace {_names(replaced)}. Go ahead?"
+            if len(items) > 20:
+                return f"{'Copy' if copy else 'Move'} {len(items)} items?"
+            return None
+        return policy
 
     def _do_transfer(items: list[dict[str, Any]], copy: bool) -> list[str]:
         out = []
         for i in items:
-            src, dst = ctx.resolve(i.get("from", "")), ctx.resolve(i.get("to", ""))
+            src, dst = _target(i)
             if not os.path.exists(src):
                 out.append(f"missing: {src}")
                 continue
-            if os.path.isdir(dst):
-                dst = os.path.join(dst, os.path.basename(src.rstrip("/")))
+            if _in_the_way(src, dst, copy):
+                out.append(f"not {'copied' if copy else 'moved'}: there's already {'a folder' if os.path.isdir(dst) else 'a file'} "
+                           f"at {dst}. Choose another name or place.")
+                continue
             os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
             backup = ctx.journal.backup(dst) if os.path.isfile(dst) else None
             if copy:
@@ -430,12 +450,12 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
     item_schema = {"type": "array", "items": obj({"from": S, "to": S}, ["from", "to"])}
 
     @reg("move_files", "Move or rename files and folders. Each item: from, to (a new name or a folder). Undoable.",
-         obj({"items": item_schema}, ["items"]), _move_policy)
+         obj({"items": item_schema}, ["items"]), _transfer_policy(False))
     async def move_files(a):
         return _text("\n".join(await asyncio.to_thread(_do_transfer, a.get("items") or [], False)))
 
     @reg("copy_files", "Copy files or folders. Each item: from, to (a new name or a folder). Undoable.",
-         obj({"items": item_schema}, ["items"]), _move_policy)
+         obj({"items": item_schema}, ["items"]), _transfer_policy(True))
     async def copy_files(a):
         return _text("\n".join(await asyncio.to_thread(_do_transfer, a.get("items") or [], True)))
 
@@ -626,9 +646,25 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          lambda a: POWER_Q.get(a.get("action", ""), "Do that?"))
     async def power(a):
         act = a["action"]
+        # A switch first sets the other system for the next start; when that fails, Claude hears it now, before
+        # saying goodbye.
+        problem = await asyncio.to_thread(ctx.platform.prepare_power, act)
+        if problem:
+            return _err(problem)
         ctx.journal.record("power", act)
         loop = asyncio.get_running_loop()
-        loop.call_later(ctx.power_delay_s, lambda: loop.run_in_executor(None, ctx.platform.power, act))
+
+        def report(fut: asyncio.Future) -> None:
+            # Shutting down or restarting ends ClaudeOS. When it didn't happen, show why: the goodbye was said.
+            try:
+                msg = fut.result()
+            except Exception as exc:
+                msg = f"Failed: {exc}"
+            if isinstance(msg, str) and msg.startswith(("Failed", "I couldn't")):
+                ctx.screen.notice(msg, "warn")
+
+        loop.call_later(ctx.power_delay_s,
+                        lambda: loop.run_in_executor(None, ctx.platform.power, act).add_done_callback(report))
         return _text(f"OK — {act.replace('_', ' ')} in {ctx.power_delay_s:.0f} seconds. Say a short goodbye.")
 
     def _sw_policy(a: dict[str, Any]) -> str | None:
@@ -707,6 +743,19 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             from ..voice.models import WHISPER_MODELS
             if str(value) not in WHISPER_MODELS:
                 return _err(f"stt_model must be one of: {', '.join(WHISPER_MODELS)}.")
+        # Numbers out of range would break the voice (Kokoro takes 0.5 to 2.0), put ClaudeOS to sleep again within
+        # seconds of every wake (a negative auto-sleep), or forget the conversation at every restart.
+        limits = {"speech_speed": (0.5, 2.0, "speech_speed goes from 0.5 (slow) to 2.0 (fast); 1.0 is normal."),
+                  "auto_sleep_minutes": (0, 24 * 60, "auto_sleep_minutes is 0 (never) or a number of minutes."),
+                  "fresh_session_after_idle_hours": (0.1, 24 * 365, "fresh_session_after_idle_hours must be more than 0.")}
+        if key in limits:
+            lo, hi, why = limits[key]
+            try:
+                n = float(value)
+            except (TypeError, ValueError):
+                return _err(why)
+            if not lo <= n <= hi:
+                return _err(why)
         ctx.settings.set(key, value)
         ctx.settings.save(ctx.paths)
         if ctx.on_settings_changed:

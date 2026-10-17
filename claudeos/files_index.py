@@ -33,10 +33,11 @@ KINDS = {
 }
 EXT_KIND = {ext: kind for kind, exts in KINDS.items() for ext in exts}
 TEXT_EXTS = {".txt", ".md", ".csv", ".tsv", ".tex", ".log", ".rtf"} | KINDS["code"]
+# Folders that only hold programs' own files, wherever they are. (ClaudeOS's own folders are skipped by where they
+# are, `skip`: a folder of the person's called web or models is theirs.)
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".venv", "venv", "site-packages", "$RECYCLE.BIN",
              "System Volume Information", "AppData", "Application Data", "Local Settings", "snap", ".cache",
-             ".local", ".config", ".engine", "undo", "web", "index", "models", "logs", "Temp", "tmp",
-             "OneDriveTemp", ".Trash-1000"}
+             ".local", ".config", "logs", "Temp", "tmp", "OneDriveTemp", ".Trash-1000"}
 # Folders that are really one thing (an app, the Photos or Music library, e.g. copied over from macOS): not
 # walked into.
 PACKAGE_SUFFIXES = (".app", ".photoslibrary", ".musiclibrary", ".tvlibrary", ".imovielibrary", ".fcpbundle",
@@ -122,10 +123,13 @@ def parse_date(s: str | None) -> float | None:
 
 
 class FileIndex:
-    def __init__(self, db_path: Path, roots: list[tuple[str, str]], windows_root: str | None = None) -> None:
+    def __init__(self, db_path: Path, roots: list[tuple[str, str]], windows_root: str | None = None,
+                 skip: Iterable[str | os.PathLike[str]] = ()) -> None:
         self.db_path = Path(db_path)
         self.roots = [(label, os.path.realpath(p)) for label, p in roots if p]
         self.windows_root = os.path.realpath(windows_root) if windows_root else None
+        # Folders never walked into (ClaudeOS's own: the browser's logins, the voice models, backups...).
+        self.skip = {os.path.realpath(p) for p in skip}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.status: dict[str, Any] = {"state": "idle", "files": 0, "last_crawl": None}
@@ -174,11 +178,17 @@ class FileIndex:
                         name = e.name
                         if name.startswith(".") or name in SKIP_DIRS or name in SECRET_FILES:
                             continue
+                        try:
+                            name.encode("utf-8")
+                        except UnicodeEncodeError:
+                            # A name that isn't UTF-8 (from an old system): SQLite can't store it, and the error
+                            # used to stop the whole scan there, every time.
+                            continue
                         if depth == 0 and name in skip_top:
                             continue
                         try:
                             if e.is_dir(follow_symlinks=False):
-                                if depth < 25 and not name.endswith(PACKAGE_SUFFIXES):
+                                if depth < 25 and not name.endswith(PACKAGE_SUFFIXES) and e.path not in self.skip:
                                     stack.append((e.path, depth + 1))
                             elif e.is_file(follow_symlinks=False):
                                 yield e
@@ -298,8 +308,10 @@ class FileIndex:
             where.append("f.mtime<?")
             args.append(b)
         if folder:
-            where.append("f.path LIKE ?")
-            args.append(os.path.realpath(os.path.expanduser(folder)).rstrip("/") + "/%")
+            # Exactly what's under that folder: LIKE would read _ and % in its name as wildcards, and ignore case.
+            prefix = os.path.realpath(os.path.expanduser(folder)).rstrip("/") + "/"
+            where.append("substr(f.path, 1, ?) = ?")
+            args += [len(prefix), prefix]
         db = self._connect()
         try:
             tokens = [t for t in re.findall(r"\w+", query.lower()) if t]

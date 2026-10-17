@@ -11,6 +11,7 @@
 #   stuck                      install when Windows' page file stops C: from shrinking at all: stops, undoes
 #   nospace                    install when C: hasn't the free space: stops before changing anything
 #   paste                      install with a pasted sign-in code instead of the browser sign-in
+#   nodocs                     install when the recovery password can't be saved in Documents (shown instead)
 #   no-entry, install-fails    install, when the PC won't take the power-on entry / when copying fails
 #   leftover                   install, while the installer of an earlier try is still there
 #   bitlocker, bitlocker-fails install on an encrypted C: (ClaudeOS gets its own key) / when a later step fails
@@ -22,7 +23,7 @@
 param(
     [Parameter(Mandatory = $true)][ValidateSet('plan', 'shrink', 'disk', 'no-entry', 'install-fails', 'leftover', 'bitlocker', 'bitlocker-fails', 'bitlocker-stop',
         'signin', 'startup-windows', 'startup-once', 'remove', 'remove-keep', 'remove-both', 'remove-unfinished',
-        'blocked', 'gap63', 'stuck', 'nospace', 'paste')][string]$Scenario,
+        'blocked', 'gap63', 'stuck', 'nospace', 'paste', 'nodocs')][string]$Scenario,
     [Parameter(Mandatory = $true)][string]$OutDir
 )
 $ErrorActionPreference = 'Stop'
@@ -419,6 +420,8 @@ if ($Script:Installed -or $Script:InstallerLeft) {
     [IO.File]::WriteAllText((Join-Path $w.FullName 'ubuntu-24.04.5-live-server-amd64.iso'), 'iso')
     $u = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Users/rensh/ClaudeOS') -Force
     [IO.File]::WriteAllText((Join-Path $u.FullName 'claude_token'), 'sk-ant-oat01-old')
+    # In remove-both, the person also keeps a file of their own in that folder.
+    if ($Scenario -eq 'remove-both') { [IO.File]::WriteAllText((Join-Path $u.FullName 'notes.txt'), 'mine') }
     $docs = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Documents') -Force
     [IO.File]::WriteAllText((Join-Path $docs.FullName 'ClaudeOS recovery password.txt'), 'Password: x')
 }
@@ -454,6 +457,7 @@ $scripted = switch ($Scenario) {
     'stuck' { @('y') }
     'nospace' { @() }
     'paste' { @('1', 'y', 'n') }
+    'nodocs' { @('1', 'y', 'n') }
     'startup-windows' { @('3', '2') }                        # Windows
     'startup-once' { @('3', '3', 'n') }                      # ClaudeOS once, restart later
     'remove' { @('4', 'REMOVE') }
@@ -472,9 +476,11 @@ function Read-Host {
 
 Initialize-SetupLog (Join-Path $OutDir 'setup.log')
 $result = [ordered]@{ scenario = $Scenario; ok = $false; error = $null }
+$docsDir = (New-Item -ItemType Directory -Path (Join-Path $OutDir 'Documents') -Force).FullName
+if ($Scenario -eq 'nodocs') { $docsDir = Join-Path $docsDir 'not-there' }      # a folder that doesn't exist
 try {
     Invoke-ClaudeOSSetup -Here $Win -RepoRoot $Repo -WorkDir (Join-Path $OutDir 'work') -PlanOnly:($Scenario -eq 'plan') `
-        -DocumentsDir (New-Item -ItemType Directory -Path (Join-Path $OutDir 'Documents') -Force).FullName
+        -DocumentsDir $docsDir
     $result.ok = $true
 } catch {
     $result.error = $_.Exception.Message

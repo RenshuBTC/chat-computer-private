@@ -43,6 +43,28 @@ def test_claudeos_streams_tell_pipewire_who_they_are():
     assert env["PIPEWIRE_ALSA"] == '{ "node.latency": "512/16000" }'
 
 
+def test_a_voice_or_speed_kokoro_lacks_keeps_the_natural_voice():
+    # Kokoro raises for an unknown voice or a speed outside 0.5-2.0, and every sentence fell over to espeak.
+    t = TTS(None, None)
+    calls = []
+
+    class Kokoro:
+        def get_voices(self):
+            return ["af_heart", "bf_emma"]
+
+        def create(self, text, voice, speed, lang):
+            if voice not in self.get_voices() or not 0.5 <= speed <= 2.0:
+                raise ValueError("bad voice or speed")
+            calls.append((voice, speed))
+            return np.zeros(2400, dtype=np.float32), 24000
+
+    t.kokoro, t.espeak = Kokoro(), None
+    t.voice, t.speed = "robot", 5
+    assert t.synth("Hello.").size > 0 and calls == [("af_heart", 2.0)]
+    t.voice, t.speed = "bf_emma", "fast"
+    assert t.synth("Hello.").size > 0 and calls[-1] == ("bf_emma", 1.0)
+
+
 def test_sentence_splitter_streams_sentences():
     sp = SentenceSplitter()
     out = []

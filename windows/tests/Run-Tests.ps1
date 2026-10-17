@@ -59,6 +59,13 @@ Assert-Equal '"a\"b\\c"' (ConvertTo-YamlString 'a"b\c') 'yaml quote and backslas
 Assert-Equal '"x\ny"' (ConvertTo-YamlString ("x`ny")) 'yaml newline'
 Assert-Equal '""' (ConvertTo-YamlString $null) 'yaml null'
 Assert-Equal ('"caf' + [char]0x00E9 + '"') (ConvertTo-YamlString ('caf' + [char]0x00E9)) 'yaml unicode kept'
+# A character past the first 65,536 (an emoji; some Chinese names have one) stays whole: YAML reads an escaped
+# pair of halves as two broken characters.
+$emoji = [char]::ConvertFromUtf32(0x1F3E0)
+Assert-Equal ('"' + $emoji + ' Home"') (ConvertTo-YamlString ($emoji + ' Home')) 'yaml: a character past the first 65,536 stays whole'
+Assert-Equal '"a\ufffdb"' (ConvertTo-YamlString ('a' + [char]0xD83C + 'b')) 'yaml: half a pair on its own'
+Assert-Equal '"a\ufffd"' (ConvertTo-YamlString ('a' + [char]0xDFE0)) 'yaml: the second half on its own'
+Assert-Equal '"x\u2028y"' (ConvertTo-YamlString ('x' + [char]0x2028 + 'y')) 'yaml: a line separator stays on the line'
 
 # ------------------------------------------------------------------ where the installer partition goes
 $MiB = [int64]1048576
@@ -223,6 +230,31 @@ ${function:Read-Choice} = $origChoice
 ${function:Read-PastedSecret} = $origPasted
 $env:TEMP = $savedTemp
 
+# The Claude program comes out of the checked download into a folder of that download's own: an earlier setup's
+# program (another version) is neither run nor kept.
+$cp = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-cp-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path (Join-Path $cp 'claude') -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $cp 'claude/claude.exe'), 'an older version')
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$fakeWheel = Join-Path $cp 'fake.whl'
+$zip = [IO.Compression.ZipFile]::Open($fakeWheel, [IO.Compression.ZipArchiveMode]::Create)
+try {
+    $w = New-Object IO.StreamWriter(($zip.CreateEntry('claude_agent_sdk/_bundled/claude.exe')).Open())
+    try { $w.Write('this version') } finally { $w.Dispose() }
+} finally {
+    $zip.Dispose()
+}
+$savedWheel = $Script:ClaudeWheel
+$Script:ClaudeWheel = [pscustomobject]@{ Name = 'fake.whl'; Url = 'https://example.invalid/fake.whl'; Sha256 = (Get-FileSha256 $fakeWheel)
+    Exe = 'claude_agent_sdk/_bundled/claude.exe' }
+$exe = Get-ClaudeProgram -WorkDir $cp
+Assert-Equal 'this version' ([IO.File]::ReadAllText($exe)) 'claude program: the one in this download, not an earlier one'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $cp 'claude')) -and -not (Test-Path -LiteralPath ($exe + '.part'))) 'claude program: the earlier one deleted, nothing half-written'
+Assert-Equal $exe (Get-ClaudeProgram -WorkDir $cp) 'claude program: taken out once'
+$Script:ClaudeWheel = $savedWheel
+Remove-Folder $cp
+
 # ------------------------------------------------------------------ folders, and short (8.3) folder names
 # Remove-Folder deletes a folder with everything in it, quietly; a missing folder is fine.
 $rf = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-rf-' + [guid]::NewGuid().ToString('N'))
@@ -366,6 +398,17 @@ $bad['ubuntu-24.04.5-live-server-amd64.iso'] = ('0' * 64)
 Assert-Throws { Select-ServerIso $bad } 'changed fingerprint is refused'
 Assert-Equal 6 (Get-PointRelease 'ubuntu-24.04.6-live-server-amd64.iso') 'future point release recognised'
 Assert-Equal -1 (Get-PointRelease 'ubuntu-24.04.5-desktop-amd64.iso') 'desktop image ignored'
+# Up to 24.04.3 the installer made the account only at the first start, too late for ClaudeOS's last install
+# step: such an installer is refused, from the download site and with -IsoPath.
+$old = @{ 'ubuntu-24.04.3-live-server-amd64.iso' = $sums['ubuntu-24.04.3-live-server-amd64.iso'] }
+Assert-Throws { Select-ServerIso $old } 'an installer older than 24.04.4 is refused'
+$why = ''
+try {
+    $null = Get-UbuntuIso -WorkDir ([IO.Path]::GetTempPath()) -IsoPath (Join-Path ([IO.Path]::GetTempPath()) 'ubuntu-24.04.3-live-server-amd64.iso')
+} catch {
+    $why = $_.Exception.Message
+}
+Assert-True ($why -match '24\.04\.4 or newer') 'a 24.04.3 installer given with -IsoPath is refused, saying why'
 
 # ------------------------------------------------------------------ boot menu
 $grubIn = [IO.File]::ReadAllText((Join-Path $Here 'data/ubuntu-24.04.5-grub.cfg'))
@@ -457,6 +500,15 @@ Assert-True (-not $yaml.Contains('reformat_disk')) 'never reformats'
 Assert-Throws { New-AutoinstallYaml -Template $template -Account 'Bad Name' -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef' } 'bad user name refused'
 Assert-Throws { New-AutoinstallYaml -Template 'nothing' -Account 'rensh' -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef' } 'template without fields refused'
 $wiredOnly = New-AutoinstallYaml -Template $template -Account 'rensh' -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef'
+# A name as a work PC may have it: the account is made with useradd, which refuses a colon.
+$work = New-AutoinstallYaml -Template $template -Account 'rensh' -RealName ("Shu, Ren (IT: Ops)`t= x") -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef'
+Assert-True ($work.Contains('realname: "Shu Ren (IT Ops) x"')) 'name without : , = or tabs, as the installer''s form takes it'
+Assert-True ((New-AutoinstallYaml -Template $template -Account 'rensh' -RealName ('a' * 200) -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef').Contains(('realname: "' + ('a' * 160) + '"'))) 'name at most 160 characters'
+# A name and a Wi-Fi network with characters past the first 65,536 (checked by the Python tests).
+$wide = [char]::ConvertFromUtf32(0x20BB7) + [char]::ConvertFromUtf32(0x1F600)
+$wideYaml = New-AutoinstallYaml -Template $template -Account 'rensh' -RealName ('Ren ' + $wide) -PasswordHash $hash `
+    -TimeZone 'Asia/Singapore' -InstallId '0123456789abcdef01234567' -WifiSsid ([char]::ConvertFromUtf32(0x1F3E0) + ' Home') -WifiPassword 'pw'
+$wideSettings = New-SettingsJson -UserName ('Ren ' + $wide) -WindowsUser 'rensh' -TimeZone 'Asia/Singapore'
 
 # ------------------------------------------------------------------ the installer's power-on entry
 # bcdedit stand-in: a menu that /copy adds to, and calls that can be made to fail.
@@ -689,6 +741,8 @@ if ($OutDir) {
     Write-TextFileLf -Path (Join-Path $OutDir 'autoinstall-wired.yaml') -Text $wiredOnly
     Write-TextFileLf -Path (Join-Path $OutDir 'grub.cfg') -Text $grubOut
     Write-TextFileLf -Path (Join-Path $OutDir 'settings.json') -Text $settings
+    Write-TextFileLf -Path (Join-Path $OutDir 'autoinstall-wide.yaml') -Text $wideYaml
+    Write-TextFileLf -Path (Join-Path $OutDir 'settings-wide.json') -Text $wideSettings
     $vectors = @()
     foreach ($pw in @('', 'a', 'kq7m-3vtz-p9xa-hc4r', ('long ' * 30), ('p' + [char]0x00E4 + 'ss'))) {
         foreach ($salt in @('x', 'saltstring', 'abcdefghijklmnop')) {

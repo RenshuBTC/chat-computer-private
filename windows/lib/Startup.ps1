@@ -394,8 +394,17 @@ function Remove-ClaudeOS {
         Get-ChildItem -LiteralPath $WorkDir -Force | Where-Object { $_.Name -ne 'setup.log' } |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
+    # C:\Users\<you>\ClaudeOS: the sign-in copies, and the folder only when nothing else is in it (a folder of that
+    # name may hold something of the person's own, or this very ClaudeOS folder).
     $signin = Join-Path $env:USERPROFILE 'ClaudeOS'
-    if (Test-Path -LiteralPath $signin) { Remove-Folder $signin }
+    if ([IO.Directory]::Exists($signin)) {
+        try {
+            foreach ($f in @('claude_login.json', 'claude_token')) { [IO.File]::Delete((Join-Path $signin $f)) }
+            if (@([IO.Directory]::GetFileSystemEntries($signin)).Count -eq 0) { [IO.Directory]::Delete($signin, $false) }
+        } catch {
+            Write-SetupLog ('Deleting the sign-in copies: ' + $_.Exception.Message)
+        }
+    }
     Remove-OldSignInFolders
     $docs = $DocumentsDir
     if (-not $docs) { $docs = [Environment]::GetFolderPath('MyDocuments') }

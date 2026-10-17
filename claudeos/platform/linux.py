@@ -334,6 +334,13 @@ class LinuxPlatform(Platform):
             return self._say(run(["systemctl", "reboot"], timeout=20), "Restarting into Windows.")
         return f"Unknown power action {action!r}."
 
+    def prepare_power(self, action: str) -> str | None:
+        if action == "switch_to_windows":
+            d = self._root("boot-windows-next", timeout=30)
+            if not d.get("ok"):
+                return "I couldn't set Windows for the next start: " + str(d.get("error", "unknown error"))
+        return None
+
     def set_default_os(self, system: str) -> str:
         which = "claudeos" if system == "claudeos" else "windows"
         d = self._root("boot-default", which, timeout=30)
@@ -466,6 +473,16 @@ class MacPlatform(LinuxPlatform):
         if action == "switch_to_windows":
             return "There's no Windows on this Mac."
         return super().power(action)
+
+    def prepare_power(self, action: str) -> str | None:
+        if action == "switch_to_macos":
+            d = self._root("boot-macos-next", timeout=30)
+            if not d.get("ok"):
+                return "I couldn't set macOS for the next start: " + str(d.get("error", "unknown error"))
+            return None
+        if action == "switch_to_windows":
+            return "There's no Windows on this Mac."
+        return None
 
     def set_default_os(self, system: str) -> str:
         which = "claudeos" if system == "claudeos" else "macos"

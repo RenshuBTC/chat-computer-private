@@ -226,9 +226,13 @@ function New-AutoinstallYaml {
     if (-not (Test-LinuxUserName $Account)) { throw ('Not a valid Linux user name: ' + $Account) }
     if ($InstallId -notmatch '^[0-9a-f]{8,64}$') { throw 'Bad install id' }
     if ($PasswordHash -notmatch '^\$6\$[./0-9A-Za-z]{1,16}\$[./0-9A-Za-z]{86}$') { throw 'Bad password hash' }
+    # The name as the installer's own form would take it: without : , or = (the account is made with useradd,
+    # which refuses a colon) and at most 160 characters. "Shu, Ren" becomes "Shu Ren".
+    $name = ([regex]::Replace([string]$RealName, '[:,=\p{Cc}]', ' ') -replace '\s+', ' ').Trim()
+    if ($name.Length -gt 160) { $name = $name.Substring(0, 160).TrimEnd() }
     $values = @{
         '{{USERNAME}}'      = (ConvertTo-YamlString $Account)
-        '{{REALNAME}}'      = (ConvertTo-YamlString $RealName)
+        '{{REALNAME}}'      = (ConvertTo-YamlString $name)
         '{{PASSWORD_HASH}}' = (ConvertTo-YamlString $PasswordHash)
         '{{TIMEZONE}}'      = (ConvertTo-YamlString $TimeZone)
         '{{INSTALL_ID}}'    = (ConvertTo-YamlString $InstallId)

@@ -144,19 +144,30 @@ class TTS:
     def voices(self) -> list[str]:
         return sorted(self.kokoro.get_voices()) if self.kokoro else []
 
+    def _speed(self) -> float:
+        try:
+            s = float(self.speed)
+        except (TypeError, ValueError):
+            return 1.0
+        return 1.0 if np.isnan(s) else s
+
     def synth(self, text: str) -> np.ndarray:
         """24 kHz mono float32 audio for one sentence."""
         text = text.strip()
         if not text:
             return np.zeros(0, dtype=np.float32)
+        speed = self._speed()
         if self.kokoro is not None:
+            # A voice or speed Kokoro doesn't have (a settings change, a hand-edited file) would make every sentence
+            # fail over to espeak: the usual voice, and a speed in Kokoro's range (0.5 to 2.0), are used instead.
+            voice = self.voice if self.voice in self.kokoro.get_voices() else "af_heart"
             try:
-                audio, sr = self.kokoro.create(text, voice=self.voice, speed=float(self.speed), lang="en-us")
+                audio, sr = self.kokoro.create(text, voice=voice, speed=min(2.0, max(0.5, speed)), lang="en-us")
                 return _resample(np.asarray(audio, dtype=np.float32), sr, OUT_RATE)
             except Exception:
                 log.exception("Kokoro failed on %r", text[:60])
         if self.espeak:
-            r = subprocess.run([self.espeak, "--stdout", "-s", str(int(175 * float(self.speed))), "--", text],
+            r = subprocess.run([self.espeak, "--stdout", "-s", str(int(175 * min(2.0, max(0.5, speed)))), "--", text],
                                capture_output=True, timeout=30)
             if r.returncode == 0 and r.stdout:
                 return _wav_to_float(r.stdout)

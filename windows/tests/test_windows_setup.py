@@ -11,6 +11,7 @@ PSScriptAnalyzer module) and CLAUDEOS_SUBIQUITY_SCHEMA; tests that need a missin
 """
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -125,6 +126,21 @@ def test_settings_json(generated):
     data = json.loads((generated / "settings.json").read_text(encoding="utf-8"))
     assert data == {"user_name": 'Ren "R" Shu', "windows_user": "rensh", "timezone": "Asia/Singapore",
                     "locale": "en_US.UTF-8"}
+
+
+def test_names_and_wifi_with_wide_characters_reach_the_installer_whole(generated):
+    # An emoji, or a Chinese character past the first 65,536, used to be escaped as two halves: Python's YAML
+    # reader then gave two broken characters (that can't be written out again), and libyaml's refused the file.
+    import yaml
+    text = (generated / "autoinstall-wide.yaml").read_text(encoding="utf-8")
+    loaders = [yaml.SafeLoader] + ([yaml.CSafeLoader] if getattr(yaml, "__with_libyaml__", False) else [])
+    for loader in loaders:
+        ai = yaml.load(text, Loader=loader)["autoinstall"]
+        assert ai["identity"]["realname"] == "Ren \U00020BB7\U0001F600", loader
+        assert list(ai["network"]["wifis"]["any-wifi"]["access-points"]) == ["\U0001F3E0 Home"], loader
+        assert ai["identity"]["realname"].encode("utf-8")
+    data = json.loads((generated / "settings-wide.json").read_text(encoding="utf-8"))
+    assert data["user_name"] == "Ren \U00020BB7\U0001F600"
 
 
 # ------------------------------------------------------------------ scripts in the installer partition
@@ -385,6 +401,7 @@ def _flow(tmp_path, scenario):
     assert (out / "flow.json").exists(), r.stdout + r.stderr
     res = json.loads((out / "flow.json").read_text())
     assert res["answers_left"] == 0, res                     # every scripted answer was asked for
+    res["screen"] = r.stdout
     return out, res
 
 
@@ -468,6 +485,20 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     log = (out / "setup.log").read_text()
     for secret in ("sk-ant-oat01-", "correct horse", password, "a" * 40, "r" * 40):
         assert secret not in log, secret
+
+
+@needs_pwsh
+def test_flow_shows_the_recovery_password_when_documents_cant_take_it(tmp_path):
+    # By then the installer is ready and the PC starts it at the next restart: a note that couldn't be saved used
+    # to end in "Setup stopped", with the password lost.
+    out, res = _flow(tmp_path, "nodocs")
+    assert res["ok"], res
+    assert f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}" in res["calls"]
+    assert res["calls"][-1] == "Q Restart now? [Y/n] -> n"
+    shown = re.search(r"Account: rensh   Password: ([a-z2-9]{4}(?:-[a-z2-9]{4}){3})", res["screen"])
+    assert shown, res["screen"]
+    assert shown.group(1) not in (out / "setup.log").read_text()
+    assert not list(out.rglob("ClaudeOS recovery password.txt"))
 
 
 @needs_pwsh
@@ -724,6 +755,8 @@ def test_removing_claudeos_before_it_cleaned_up_its_installer(tmp_path):
               f"bcdedit /delete {SETUP_ID}", "Remove-Partition 0 5", "Remove-Partition 0 6", "Resize-Partition C 950")
     assert _disk(res, 0) == DISK0 and res["boot_entries"] == {}
     assert sorted(d.name for d in (out / "esp/EFI").iterdir()) == ["BOOT", "Microsoft"]
+    # The sign-in copy goes; a file of the person's own in that folder (and so the folder) stays.
+    assert sorted(f.name for f in (out / "Users/rensh/ClaudeOS").iterdir()) == ["notes.txt"]
 
 
 @needs_pwsh

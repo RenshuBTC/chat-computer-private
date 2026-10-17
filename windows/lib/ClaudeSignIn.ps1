@@ -67,7 +67,8 @@ function Get-ClaudeProgram {
     # Returns the path of claude.exe, downloading and checking it if needed.
     param([Parameter(Mandatory = $true)][string]$WorkDir)
     $wheel = Join-Path $WorkDir $Script:ClaudeWheel.Name
-    $exeDir = Join-Path $WorkDir 'claude'
+    # One folder per download: the program from an earlier setup (another version) is never taken for this one.
+    $exeDir = Join-Path $WorkDir ('claude-' + $Script:ClaudeWheel.Sha256.Substring(0, 12))
     $exe = Join-Path $exeDir 'claude.exe'
     if (-not (Test-Path -LiteralPath $wheel) -or (Get-FileSha256 $wheel) -ne $Script:ClaudeWheel.Sha256) {
         Write-Line 'Downloading the official Claude program (about 110 MB)...'
@@ -85,9 +86,15 @@ function Get-ClaudeProgram {
         try {
             $entry = $zip.Entries | Where-Object { $_.FullName -eq $Script:ClaudeWheel.Exe } | Select-Object -First 1
             if (-not $entry) { throw 'claude.exe was not found inside the download.' }
-            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $exe, $true)
+            # Under another name until it is whole: a setup stopped halfway leaves no half a program to run next time.
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, ($exe + '.part'), $true)
         } finally {
             $zip.Dispose()
+        }
+        Move-Item -LiteralPath ($exe + '.part') -Destination $exe -Force
+        # Earlier setups' programs.
+        foreach ($old in @(Get-ChildItem -LiteralPath $WorkDir -Directory -Filter 'claude*' -ErrorAction SilentlyContinue)) {
+            if ($old.Name -ne (Split-Path -Leaf $exeDir)) { Remove-Folder $old.FullName }
         }
     }
     return $exe

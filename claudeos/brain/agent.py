@@ -237,7 +237,13 @@ class Brain:
         if not sid:
             return None
         idle_h = (time.time() - self.last_activity) / 3600 if self.last_activity else 1e9
-        if idle_h > float(self.settings.fresh_session_after_idle_hours or 8):
+        try:
+            limit = float(self.settings.fresh_session_after_idle_hours or 8)
+        except (TypeError, ValueError):
+            limit = 8.0
+        if not limit > 0:
+            limit = 8.0          # 0 or less would forget the conversation every time the engine starts
+        if idle_h > limit:
             log.info("starting a fresh conversation (idle %.1f h)", idle_h)
             return None
         return sid
@@ -547,10 +553,12 @@ class Brain:
             self._finish(t)
 
 
-def friendly_error(res: TurnResult, rate: dict[str, Any] | None = None) -> str:
+def friendly_error(res: TurnResult, rate: dict[str, Any] | None = None,
+                   setup_place: str = "ClaudeOS Setup on Windows") -> str:
     k = res.error_kind
     if k == "auth":
-        return ("I can't sign in to Claude: your sign-in has expired or was removed. Run ClaudeOS Setup on Windows "
+        # setup_place: where this computer's people sign in again (on a Mac, ClaudeOS Setup in macOS).
+        return (f"I can't sign in to Claude: your sign-in has expired or was removed. Run {setup_place} "
                 "again to sign in, then come back.")
     if k == "billing":
         return "Your Claude plan needs attention before I can continue. Check your account at claude.ai."

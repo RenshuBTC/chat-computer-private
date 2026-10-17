@@ -149,6 +149,11 @@ def test_root_helper_via_sudo_is_not_blocked():
     ("do it", "yes"), ("Yes please.", "yes"), ("Uh, yes.", "yes"),
     ("No.", "no"), ("nope", "no"), ("don't", "no"), ("cancel", "no"), ("wait", "no"), ("no, not that one", "no"),
     ("yes but only the PDFs", "unclear"), ("what files are those?", "unclear"), ("", "unclear"),
+    # A yes-word followed by one that takes it back, or by a question, isn't consent.
+    ("okay wait", "no"), ("OK, stop.", "no"), ("yeah no", "no"), ("alright, hold on", "no"),
+    ("yes, never mind", "no"), ("OK, cancel that", "no"), ("sure, what does it cost?", "unclear"),
+    ("okay what does that mean", "unclear"), ("yes do it", "yes"), ("okay go ahead", "yes"),
+    ("yeah sounds good", "yes"),
 ])
 def test_yes_no(text, expected):
     assert classify_answer(text) == expected

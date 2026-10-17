@@ -98,6 +98,33 @@ def test_windows_system_files_cannot_be_trashed(tmp_path):
     win.mkdir(parents=True)
     assert policies["trash_files"]({"paths": [str(win / "kernel32.dll")]}).startswith("DENY:")
     assert policies["trash_files"]({"paths": [str(ctx.paths.token_file)]}).startswith("DENY:")
+    assert policies["move_files"]({"items": [{"from": r"C:\Program Files\x", "to": "~/x"}]}).startswith("DENY:")
+    # A folder of the person's own that happens to be called Recovery or Boot is theirs.
+    q = policies["trash_files"]({"paths": [r"C:\Users\rensh\Documents\Recovery"]})
+    assert q.startswith("Move 1 item to the trash"), q
+
+
+def test_moving_a_folder_onto_one_of_the_same_name_changes_nothing(tmp_path):
+    # It used to end up inside it (B/A/A), and undo then moved B/A, with what was in it before, out of B.
+    ctx, server, policies, _ = make(tmp_path)
+    home = tmp_path / "home"
+    a, b = home / "A", home / "B"
+    a.mkdir()
+    (a / "new.txt").write_text("from A")
+    (b / "A").mkdir(parents=True)
+    (b / "A" / "old.txt").write_text("was in B/A")
+    assert policies["move_files"]({"items": [{"from": str(a), "to": str(b)}]}) is None   # nothing gets replaced
+    text, err = call(server, "move_files", {"items": [{"from": str(a), "to": str(b)}]})
+    assert "already a folder" in text, text
+    assert (a / "new.txt").exists() and sorted(p.name for p in (b / "A").iterdir()) == ["old.txt"]
+    text, _ = call(server, "undo_last_change", {})
+    assert (b / "A" / "old.txt").exists() and (a / "new.txt").exists()
+    # A file onto a file still replaces it (after asking, backed up); a folder copied onto one adds to it.
+    (a / "x.txt").write_text("1")
+    (b / "A" / "x.txt").write_text("2")
+    assert "replace" in policies["copy_files"]({"items": [{"from": str(a), "to": str(b)}]})
+    call(server, "copy_files", {"items": [{"from": str(a), "to": str(b)}]})
+    assert (b / "A" / "x.txt").read_text() == "1" and (b / "A" / "old.txt").exists()
 
 
 def test_power_always_asks_and_runs_later(tmp_path, loop):
@@ -106,6 +133,21 @@ def test_power_always_asks_and_runs_later(tmp_path, loop):
     call(server, "power", {"action": "restart"})
     loop.run_until_complete(asyncio.sleep(0.3))
     assert ("power", ("restart",)) in ctx.platform.calls
+
+
+def test_a_switch_that_cant_be_set_up_is_reported_before_the_goodbye(tmp_path, loop):
+    ctx, server, policies, _ = make(tmp_path)
+    ctx.platform.prepare_power = lambda act: "I couldn't set Windows for the next start: no Windows Boot Manager"
+    text, err = call(server, "power", {"action": "switch_to_windows"})
+    loop.run_until_complete(asyncio.sleep(0.3))
+    assert err and "Windows Boot Manager" in text
+    assert not any(c[0] == "power" for c in ctx.platform.calls)          # nothing restarts
+    # And when the restart itself fails afterwards, the screen says why (Claude has already said goodbye).
+    ctx.platform.prepare_power = lambda act: None
+    ctx.platform.power = lambda act: "Failed: Access denied"
+    text, err = call(server, "power", {"action": "restart"})
+    loop.run_until_complete(asyncio.sleep(0.3))
+    assert not err and ("notice", ("Failed: Access denied", "warn")) in ctx.screen.events
 
 
 def test_windows_can_start_by_default_and_back(tmp_path):
@@ -270,6 +312,42 @@ def test_settings_that_would_stop_claude_are_refused(tmp_path):
     assert not err and ctx.settings.effort == "high"
     text, err = call(server, "claudeos_settings", {"action": "set", "key": "model", "value": "opus"})
     assert not err and ctx.settings.model == "opus"
+    # Numbers that would break the voice, put ClaudeOS back to sleep at once, or forget every conversation.
+    for key, value in (("speech_speed", 3), ("speech_speed", "fast"), ("auto_sleep_minutes", -1),
+                       ("fresh_session_after_idle_hours", 0)):
+        text, err = call(server, "claudeos_settings", {"action": "set", "key": key, "value": value})
+        assert err, (key, value, text)
+    assert ctx.settings.speech_speed == Settings().speech_speed and ctx.settings.auto_sleep_minutes == 10
+    text, err = call(server, "claudeos_settings", {"action": "set", "key": "speech_speed", "value": 1.5})
+    assert not err and ctx.settings.speech_speed == 1.5
+
+
+def test_a_settings_file_that_isnt_an_object_gives_the_defaults(tmp_path):
+    from claudeos.config import State
+    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    paths.settings_file.write_text("[1, 2]")
+    paths.state_file.write_text('"x"')
+    assert Settings.load(paths) == Settings()
+    assert State(paths).get("session_id") is None
+
+
+def test_history_still_shows_when_a_line_was_cut_short(tmp_path):
+    # One damaged line (the power went off mid-write) used to hide the whole history.
+    from claudeos.controller import Controller
+    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    now = time.time()
+    paths.transcript.write_text("\n".join([json.dumps({"ts": now, "role": "user", "text": "hello"}), '{"ts": 17',
+                                           "5", json.dumps({"ts": now, "role": "assistant", "text": "hi"})]) + "\n")
+    screen = RecordingScreen()
+    Controller(paths, Settings(), FakePlatform(), screen, voice=False, index=False)._show_history()
+    assert ("history", 2) in screen.events
+
+
+def test_friendly_errors_point_to_this_computers_setup():
+    from claudeos.brain.agent import TurnResult, friendly_error
+    res = TurnResult(ok=False, error_kind="auth")
+    assert "ClaudeOS Setup on Windows" in friendly_error(res)
+    assert "ClaudeOS Setup in macOS" in friendly_error(res, None, "ClaudeOS Setup in macOS")
 
 
 def test_command_output_that_isnt_utf8_is_still_read(tmp_path):
@@ -315,6 +393,34 @@ def test_copying_pairings_from_windows_says_what_was_copied(monkeypatch):
     assert said["two"] == "Copied 2 Bluetooth pairings from Windows."
     assert "different Bluetooth adapter" in said["other adapter"] and "Copied" not in said["other adapter"]
     assert said["none"].startswith("Windows has no Bluetooth pairings")
+
+
+def test_the_index_skips_claudeos_own_folders_not_the_persons_of_the_same_name(tmp_path):
+    home = tmp_path / "home"
+    paths = Paths(home / "ClaudeOS").ensure()
+    (paths.web / "Cookies").write_text("x")
+    (paths.models / "voice.onnx").write_text("x")
+    for d in ("web", "models", "index"):
+        (home / "Projects" / d).mkdir(parents=True)
+        (home / "Projects" / d / f"mine-{d}.txt").write_text("x")
+    # A name that isn't UTF-8 used to stop the whole scan there.
+    os.makedirs(os.fsencode(home / "Old"), exist_ok=True)
+    with open(os.fsencode(home / "Old") + b"/caf\xe9.txt", "w") as f:
+        f.write("x")
+    (home / "Old" / "fine.txt").write_text("x")
+    idx = FileIndex(tmp_path / "files.db", [("home", str(home))],
+                    skip=[paths.secrets, paths.engine, paths.web, paths.index, paths.models, paths.logs, paths.undo])
+    idx.crawl_once()
+    names = {r["path"].rsplit("/", 1)[-1] for r in idx.search("", limit=100)}
+    assert {"mine-web.txt", "mine-models.txt", "mine-index.txt", "fine.txt"} <= names, names
+    assert not {"Cookies", "voice.onnx"} & names
+    # A folder filter is exactly that folder: "_" in its name is a letter, not "any letter".
+    (home / "my_docs").mkdir()
+    (home / "my_docs" / "a.txt").write_text("x")
+    (home / "myXdocs").mkdir()
+    (home / "myXdocs" / "b.txt").write_text("x")
+    idx.crawl_once()
+    assert [r["path"].rsplit("/", 1)[-1] for r in idx.search("", folder=str(home / "my_docs"))] == ["a.txt"]
 
 
 def test_an_interrupted_scan_keeps_what_it_didnt_reach(tmp_path, monkeypatch):

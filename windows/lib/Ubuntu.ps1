@@ -4,12 +4,16 @@
 
 $Script:UbuntuMirrors = @('https://releases.ubuntu.com/24.04/', 'https://cdimage.ubuntu.com/releases/24.04/release/')
 
+# 24.04.4 or newer: from there on the installer makes the person's account before its last step, which is
+# ClaudeOS's (finish.sh hands ClaudeOS's folder to that account). Up to 24.04.3 the account was only made at
+# the first start, so that step failed and the install stopped half done.
+$Script:MinPointRelease = 4
+
 # Fingerprints of releases checked when this setup was made. A file with one of these names must
 # match exactly; newer point releases are checked against Ubuntu's published SHA256SUMS.
 $Script:KnownUbuntuIsos = @{
     'ubuntu-24.04.5-live-server-amd64.iso' = '97f3d7ffb032c3eb3b23d2c8be9cc76e60c2c1f2c0146ba5ba9fe01cafae0fd8'
     'ubuntu-24.04.4-live-server-amd64.iso' = 'e907d92eeec9df64163a7e454cbc8d7755e8ddc7ed42f99dbc80c40f1a138433'
-    'ubuntu-24.04.3-live-server-amd64.iso' = 'c3514bf0056180d09376462a7a1b4f213c1d6e8ea67fae5c25099c6fd3d8274b'
 }
 
 function ConvertFrom-Sha256Sums {
@@ -42,6 +46,9 @@ function Select-ServerIso {
         if ($n -gt $bestN) { $best = $name; $bestN = $n }
     }
     if (-not $best) { throw 'No Ubuntu 24.04 server installer is listed.' }
+    if ($bestN -lt $Script:MinPointRelease) {
+        throw ('Ubuntu''s download site offers ' + $best + ', but ClaudeOS needs 24.04.' + $Script:MinPointRelease + ' or newer.')
+    }
     $hash = $Sums[$best]
     if ($Script:KnownUbuntuIsos.ContainsKey($best) -and $Script:KnownUbuntuIsos[$best] -ne $hash) {
         throw ('The published fingerprint for ' + $best + ' does not match the known one. Stopping to be safe.')
@@ -54,6 +61,13 @@ function Get-UbuntuIso {
     param([Parameter(Mandatory = $true)][string]$WorkDir, [string]$IsoPath)
     if ($IsoPath) {
         $name = Split-Path -Leaf $IsoPath
+        $n = Get-PointRelease $name
+        if ($n -ge 0 -and $n -lt $Script:MinPointRelease) {
+            $version = '24.04'
+            if ($n -gt 0) { $version += '.' + $n }
+            throw ('That is the Ubuntu ' + $version + ' installer; ClaudeOS needs 24.04.' + $Script:MinPointRelease + ' or newer. ' +
+                   'Run setup without -IsoPath and it downloads the current one.')
+        }
         Write-Line ('Checking ' + $name + '...')
         $hash = Get-FileSha256 $IsoPath
         if ($Script:KnownUbuntuIsos.ContainsKey($name) -and $Script:KnownUbuntuIsos[$name] -eq $hash) { return $IsoPath }

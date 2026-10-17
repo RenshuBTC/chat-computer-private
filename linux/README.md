@@ -42,7 +42,9 @@ and stops if it doesn't work.
 ### Flags
 
 - `--user NAME` (required) — the ClaudeOS user (created by subiquity's identity
-  section during install, before late-commands run).
+  section during install, before late-commands run: so in Ubuntu 24.04.4 and
+  later, the only ones ClaudeOS Setup uses; up to 24.04.3 cloud-init made it at
+  the first start).
 - `--from-installer` — running in the target chroot: only `systemctl enable`
   (never start), no interactive prompts.
 - `--dry-run` — print every action, change nothing.

@@ -353,12 +353,24 @@ function Invoke-ClaudeOSSetup {
     # ------------------------------------------------------------- 10. recovery password and restart
     $docs = $DocumentsDir
     if (-not $docs) { $docs = [Environment]::GetFolderPath('MyDocuments') }
-    $recoveryFile = Join-Path $docs 'ClaudeOS recovery password.txt'
     $note = "ClaudeOS recovery password`r`n`r`nAccount: " + $userName + "`r`nPassword: " + $recovery + "`r`n`r`n" +
             "You normally never need this: ClaudeOS starts without a password. It is for repairs only.`r`n"
-    [IO.File]::WriteAllText($recoveryFile, $note)
+    $recoveryFile = $null
+    try {
+        $recoveryFile = Join-Path $docs 'ClaudeOS recovery password.txt'
+        [IO.File]::WriteAllText($recoveryFile, $note)
+    } catch {
+        # The installer is ready by now, so this mustn't end in "Setup stopped": the password is shown instead.
+        Write-SetupLog ('Saving the recovery password note: ' + $_.Exception.Message)
+        $recoveryFile = $null
+    }
     Write-Step 'Last step'
-    Write-Line ('Your ClaudeOS recovery password (for repairs only) is saved in: ' + $recoveryFile)
+    if ($recoveryFile) {
+        Write-Line ('Your ClaudeOS recovery password (for repairs only) is saved in: ' + $recoveryFile)
+    } else {
+        Write-Warn 'Setup could not save your ClaudeOS recovery password in your Documents folder. Write it down (it is for repairs only):'
+        Write-Host ('  Account: ' + $userName + '   Password: ' + $recovery) -ForegroundColor White
+    }
     Write-Line ''
     Write-Line 'The next time this PC restarts, it starts the installer, which runs by itself. When it finishes, the PC'
     Write-Line 'restarts into ClaudeOS.'

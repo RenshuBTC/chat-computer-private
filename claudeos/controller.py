@@ -97,7 +97,9 @@ class Controller:
             if other_files:
                 roots.append(("mac" if self.platform.name == "mac" else "windows", other_files))
             roots += [(f"extra{i}", os.path.expanduser(p)) for i, p in enumerate(s.extra_search_roots)]
-            self.index = FileIndex(self.paths.index / "files.db", roots, windows_root=s.windows_mount)
+            own = (self.paths.secrets, self.paths.engine, self.paths.web, self.paths.index, self.paths.models,
+                   self.paths.logs, self.paths.undo)
+            self.index = FileIndex(self.paths.index / "files.db", roots, windows_root=s.windows_mount, skip=own)
             self.index.start()
 
         # Tools + permission gate + brain.
@@ -345,11 +347,18 @@ class Controller:
     def _show_history(self) -> None:
         try:
             lines = self.paths.transcript.read_text(encoding="utf-8").splitlines()[-12:]
-            items = [json.loads(l) for l in lines]
-        except (OSError, ValueError):
-            items = []
+        except OSError:
+            lines = []
+        items = []
+        for line in lines:
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue         # a line cut short (the power went off mid-write): the others still show
+            if isinstance(item, dict) and isinstance(item.get("ts"), (int, float)) and isinstance(item.get("text"), str):
+                items.append(item)
         # Only show recent history (same day).
-        items = [i for i in items if time.time() - i.get("ts", 0) < 12 * 3600]
+        items = [i for i in items if time.time() - i["ts"] < 12 * 3600]
         if items:
             self.screen.history(items)
 
@@ -554,7 +563,7 @@ class Controller:
                 self.current_turn = None
             return
         if not res.ok and not res.interrupted:
-            msg = friendly_error(res, self.ctx.rate_limit)
+            msg = friendly_error(res, self.ctx.rate_limit, self.platform.setup_place)
             self.screen.notice(msg, "warn")
             if spoken:
                 self._say(msg)
@@ -688,7 +697,7 @@ class Controller:
             mins = self.settings.auto_sleep_minutes
             idle = time.time() - self.last_heard
             busy = (self.brain and self.brain.busy) or (self.speaker and self.speaker.speaking) or self.pending_confirm
-            if mins and not self.asleep and not busy and not self.media_playing and idle > mins * 60:
+            if mins and mins > 0 and not self.asleep and not busy and not self.media_playing and idle > mins * 60:
                 log.info("auto-sleep after %.0f min", idle / 60)
                 await self._sleep_when_quiet()
 

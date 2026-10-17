@@ -175,7 +175,9 @@ function ConvertTo-YamlString {
     if ($null -eq $Value) { $Value = '' }
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('"')
-    foreach ($ch in $Value.ToCharArray()) {
+    $chars = $Value.ToCharArray()
+    for ($i = 0; $i -lt $chars.Length; $i++) {
+        $ch = $chars[$i]
         $code = [int]$ch
         switch ($code) {
             34 { [void]$sb.Append('\"') }
@@ -184,7 +186,20 @@ function ConvertTo-YamlString {
             10 { [void]$sb.Append('\n') }
             13 { [void]$sb.Append('\r') }
             default {
-                if ($code -lt 32 -or $code -eq 127 -or ($code -ge 0x80 -and $code -le 0x9F) -or ($code -ge 0xD800 -and $code -le 0xDFFF)) {
+                $next = 0
+                if ($i + 1 -lt $chars.Length) { $next = [int]$chars[$i + 1] }
+                if ($code -ge 0xD800 -and $code -le 0xDBFF -and $next -ge 0xDC00 -and $next -le 0xDFFF) {
+                    # A character past the first 65,536 (an emoji, a rarer Chinese character) is a pair of halves
+                    # here. It stays as it is: escaped as two halves, YAML reads two broken characters (and the
+                    # installer's YAML reader refuses them), where JSON would read one.
+                    [void]$sb.Append($ch)
+                    [void]$sb.Append($chars[$i + 1])
+                    $i++
+                } elseif ($code -ge 0xD800 -and $code -le 0xDFFF) {
+                    [void]$sb.Append('\ufffd')      # half a pair on its own is no character at all
+                } elseif ($code -lt 32 -or $code -eq 127 -or ($code -ge 0x80 -and $code -le 0x9F) -or $code -eq 0x2028 -or
+                          $code -eq 0x2029 -or $code -ge 0xFFFE) {
+                    # Control characters, and the ones YAML would take as a line break or refuse.
                     [void]$sb.Append(('\u{0:x4}' -f $code))
                 } else {
                     [void]$sb.Append($ch)

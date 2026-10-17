@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Bootable</key>
+	<true/>
+	<key>BusProtocol</key>
+	<string>Disk Image</string>
+	<key>CanBeMadeBootable</key>
+	<false/>
+	<key>CanBeMadeBootableRequiresDestroy</key>
+	<false/>
+	<key>Content</key>
+	<string>Microsoft Basic Data</string>
+	<key>DeviceBlockSize</key>
+	<integer>512</integer>
+	<key>DeviceIdentifier</key>
+	<string>disk5s7</string>
+	<key>DeviceNode</key>
+	<string>/dev/disk5s7</string>
+	<key>DeviceTreePath</key>
+	<string>IODeviceTree:/</string>
+	<key>DiskUUID</key>
+	<string>0EB25FCB-A6F6-49EB-8F25-A0DCB8665E72</string>
+	<key>Ejectable</key>
+	<true/>
+	<key>EjectableMediaAutomaticUnderSoftwareControl</key>
+	<true/>
+	<key>EjectableOnly</key>
+	<true/>
+	<key>FilesystemName</key>
+	<string>ExFAT</string>
+	<key>FilesystemType</key>
+	<string>exfat</string>
+	<key>FilesystemUserVisibleName</key>
+	<string>ExFAT</string>
+	<key>FreeSpace</key>
+	<integer>2730754048</integer>
+	<key>GlobalPermissionsEnabled</key>
+	<false/>
+	<key>IOKitSize</key>
+	<integer>2731540480</integer>
+	<key>IORegistryEntryName</key>
+	<string>Untitled 7</string>
+	<key>Internal</key>
+	<false/>
+	<key>MediaName</key>
+	<string></string>
+	<key>MediaType</key>
+	<string>Generic</string>
+	<key>MountPoint</key>
+	<string>/Volumes/ClaudeOS 1</string>
+	<key>OSInternalMedia</key>
+	<false/>
+	<key>ParentWholeDisk</key>
+	<string>disk5</string>
+	<key>PartitionMapPartition</key>
+	<true/>
+	<key>PartitionMapPartitionOffset</key>
+	<integer>3709861888</integer>
+	<key>RAIDMaster</key>
+	<false/>
+	<key>RAIDSlice</key>
+	<false/>
+	<key>Removable</key>
+	<true/>
+	<key>RemovableMedia</key>
+	<true/>
+	<key>RemovableMediaOrExternalDevice</key>
+	<true/>
+	<key>SMARTDeviceSpecificKeysMayVaryNotGuaranteed</key>
+	<dict/>
+	<key>SMARTStatus</key>
+	<string>Not Supported</string>
+	<key>Size</key>
+	<integer>2731540480</integer>
+	<key>SupportsGlobalPermissionsDisable</key>
+	<false/>
+	<key>SystemImage</key>
+	<false/>
+	<key>TotalSize</key>
+	<integer>2731114496</integer>
+	<key>VolumeAllocationBlockSize</key>
+	<integer>512</integer>
+	<key>VolumeName</key>
+	<string>ClaudeOS</string>
+	<key>VolumeSize</key>
+	<integer>2731114496</integer>
+	<key>VolumeUUID</key>
+	<string>D7006E7F-6E77-3888-9155-8F0B81FD769E</string>
+	<key>WholeDisk</key>
+	<false/>
+	<key>Writable</key>
+	<true/>
+	<key>WritableMedia</key>
+	<true/>
+	<key>WritableVolume</key>
+	<true/>
+</dict>
+</plist>

@@ -2,10 +2,13 @@
 //! measured against a clock of known speed: the ACPI power-management timer, else the HPET, else the
 //! old PIT. A PC may lack any of them or have one switched off, so every wait gives up after a while,
 //! and a measurement that makes no sense is thrown away.
+//!
+//! The processor's time-stamp counter is measured at the same time. It gives drivers short waits and
+//! microsecond time that work even while interrupts are off.
 
 use crate::acpi::{Acpi, PmTimer};
 use crate::apic;
-use crate::cpu::{cpuid, inb, inl, outb};
+use crate::cpu::{cpuid, inb, inl, outb, rdtsc};
 use crate::idt::TIMER_VECTOR;
 use crate::paging::{self, Cache};
 use core::ops::RangeInclusive;
@@ -25,7 +28,13 @@ const PLAUSIBLE: RangeInclusive<u64> = 100_000..=500_000_000;
 /// guess, and the log says so.
 const ASSUMED: u64 = 6_250_000;
 
+/// Time-stamp counts a microsecond that make sense: 100 MHz to 10 GHz.
+const PLAUSIBLE_TSC: RangeInclusive<u64> = 100..=10_000;
+/// What a time-stamp counter is assumed to count when nothing could measure it (and the log says so).
+const ASSUMED_TSC_PER_US: u64 = 2_000;
+
 static TICKS: AtomicU64 = AtomicU64::new(0);
+static TSC_PER_US: AtomicU64 = AtomicU64::new(0);
 
 pub fn tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
@@ -34,6 +43,31 @@ pub fn tick() {
 /// Time since the timer started, in milliseconds.
 pub fn uptime_ms() -> u64 {
     TICKS.load(Ordering::Relaxed) * 1000 / HZ
+}
+
+fn tsc_per_us() -> u64 {
+    match TSC_PER_US.load(Ordering::Relaxed) {
+        0 => ASSUMED_TSC_PER_US,
+        n => n,
+    }
+}
+
+/// Microseconds since the processor started counting (some time before ClaudeOS did). Works with
+/// interrupts off.
+pub fn now_us() -> u64 {
+    rdtsc() / tsc_per_us()
+}
+
+/// Waits `us` microseconds without sleeping (for drivers' short waits; works with interrupts off).
+pub fn delay_us(us: u64) {
+    let end = rdtsc().saturating_add(us.saturating_mul(tsc_per_us()));
+    while rdtsc() < end {
+        core::hint::spin_loop();
+    }
+}
+
+pub fn delay_ms(ms: u64) {
+    delay_us(ms * 1000);
 }
 
 /// Waits `ms` milliseconds by the ACPI power-management timer. False if it stopped moving.
@@ -105,14 +139,26 @@ fn wait_pit(ms: u64) -> bool {
 }
 
 /// The APIC timer's counts a second while `wait` waits `MEASURE_MS`, if `wait` worked and the answer
-/// makes sense.
+/// makes sense. The time-stamp counter is measured too, and kept if it makes sense.
 fn measure(wait: impl FnOnce() -> bool) -> Option<u64> {
     apic::write(apic::TIMER_INITIAL, u32::MAX); // (re)starts the count down
+    let tsc = rdtsc();
     let finished = wait();
+    let tsc = rdtsc().wrapping_sub(tsc);
     let left = apic::read(apic::TIMER_CURRENT);
     apic::write(apic::TIMER_INITIAL, 0); // stops it
     let per_second = (u32::MAX - left) as u64 * 1000 / MEASURE_MS;
+    let tsc_per_us = tsc / (MEASURE_MS * 1000);
+    if finished && PLAUSIBLE_TSC.contains(&tsc_per_us) {
+        TSC_PER_US.store(tsc_per_us, Ordering::Relaxed);
+    }
     (finished && PLAUSIBLE.contains(&per_second)).then_some(per_second)
+}
+
+/// The time-stamp counter's speed in MHz, and whether it was measured (else it is assumed).
+pub fn tsc_mhz() -> (u64, bool) {
+    let n = TSC_PER_US.load(Ordering::Relaxed);
+    (tsc_per_us(), n != 0)
 }
 
 /// The timer's speed when nothing could measure it. Intel processors that state their crystal clock

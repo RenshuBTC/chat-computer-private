@@ -67,6 +67,13 @@ pub unsafe fn set_cr4(v: u64) {
     unsafe { asm!("mov cr4, {}", in(reg) v, options(nostack, preserves_flags)) }
 }
 
+/// The processor's time-stamp counter: counts at a steady rate on any processor from the last 15 years.
+pub fn rdtsc() -> u64 {
+    let (lo, hi): (u32, u32);
+    unsafe { asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags)) };
+    (hi as u64) << 32 | lo as u64
+}
+
 pub fn invlpg(addr: u64) {
     unsafe { asm!("invlpg [{}]", in(reg) addr, options(nostack, preserves_flags)) }
 }

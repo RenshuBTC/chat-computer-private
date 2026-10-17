@@ -5,6 +5,12 @@ from the moment the PC's firmware hands over to the screen. There is no Linux, n
 other projects. It will replace the thin Linux base in `linux/` (today's ClaudeOS runs on Ubuntu or
 Fedora). Until it can do everything that base does, the two live side by side.
 
+The aim: ClaudeOS as deep as it can go while still working on everybody's PC or laptop, installed with a
+download. The firmware stays the PC maker's on every PC (see "What ClaudeOS owns" below). From the first
+program the firmware starts, everything is ClaudeOS's own. On a PC whose parts the own kernel can't drive
+yet, ClaudeOS's start-up program will start the Linux-based ClaudeOS instead, so the same download works
+everywhere, and PCs move to the own kernel as its drivers grow (see "Reaching everybody's PC").
+
 ## What it does today
 
 The PC's UEFI firmware starts it. So far it has only run in a virtual PC: QEMU with OVMF, the
@@ -36,9 +42,30 @@ open-source UEFI firmware.
   * the local APIC. The old 8259 controllers and all I/O APIC inputs are masked;
   * a timer ticking 100 times a second. Its speed is measured against the ACPI power-management timer,
     else the HPET, else the old PIT. Every wait gives up after a few seconds, and a measurement that
-    makes no sense is thrown away.
+    makes no sense is thrown away. The processor's time-stamp counter is measured at the same time; it
+    gives drivers short waits that work with interrupts off;
+  * IOMMUs (Intel VT-d, AMD-Vi) the firmware left on are switched off. ClaudeOS doesn't use them yet, and
+    a firmware that protects itself from devices this way would otherwise keep them from ClaudeOS's
+    memory, and drop their interrupts;
+  * the PCI devices, through the PCI Express window (ACPI's MCFG table), else the old ports. Drivers
+    have devices interrupt by message: MSI-X, else MSI;
+  * the USB controllers (xHCI). Each is taken from the firmware the official way (USB legacy support
+    hand-off, which also stops the firmware making a USB keyboard look like a PS/2 one), then stopped
+    and reset before the memory the firmware used is reused. On Intel's 2012-2015 chipsets, the
+    sockets are moved over from the older controller next to it;
+  * the PS/2 keyboard controller, which most laptops' built-in keyboards use;
+  * then, with interrupts on, the USB controllers start. Interrupts come by MSI-X or MSI. A
+    controller that can do neither is checked for work every time the kernel wakes. What is plugged in
+    is found and set up:
+    * USB 2 ports are reset; USB 3 ports enable themselves (a warm reset if one doesn't);
+    * hubs, up to five in a row. This includes the USB 2 side of USB 3 hubs, where keyboards appear, and
+      the "transaction translator" fields that slow devices behind fast hubs need;
+    * keyboards, in the boot protocol every keyboard supports, with their Caps Lock light;
+    * devices plugged in and out at any time. Unplugging a hub lets go of everything behind it.
 
-  Then it keeps the screen's clock current.
+  Then it keeps the screen's clock current, and shows what is typed on the line under it, with the
+  keyboards found by name. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat work,
+  in the US layout. Typed lines go nowhere yet; Claude comes at step 8.
 * `font/` is ClaudeOS's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It's tested against fontTools' reading of the same font.
 * `bootinfo/` defines what the start-up stage hands the kernel, once for both.
@@ -67,6 +94,10 @@ With Secure Boot on, the PC first has to trust ClaudeOS's key. That takes one ap
 screen: Secure Boot, then Key Management, then Authorized Signatures (db), then Append `ClaudeOS.cer`. You
 can turn Secure Boot off there instead. The script shows the steps and restarts into the setup screen.
 
+Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock's), and so do most
+laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
+Bluetooth comes at step 10.
+
 To go back to Windows, hold the power button until the PC turns off. ClaudeOS doesn't write to any disk yet.
 Running the script again with `-Remove` (or choosing Remove) takes the file and the entry off again, and
 deletes the key.
@@ -81,12 +112,15 @@ fetches it. To try it you also need QEMU, OVMF and Pillow (`apt install qemu-sys
 python3-pil`).
 
 ```
-./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 240 KB)
+./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 350 KB)
 cargo test -p font               # the font engine's tests
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
 ./check.py --crash page-fault    # a kernel that faults on purpose: checks it stops cleanly
 ./check.py --crash panic
+./check.py --keyboard            # typing on a PS/2 keyboard, then USB keyboards on a port and behind a
+                                 # hub (MSI-X, MSI, no interrupts), with Intel's and AMD's IOMMUs
+                                 # present, plugged in and out
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/claudeos.efi
@@ -126,9 +160,22 @@ over. On any standard PC, some software stays outside. The PC this is first aime
   ([Wikipedia](https://en.wikipedia.org/wiki/Binary_blob)). ClaudeOS would carry and load that firmware,
   not write it.
 
-Secure Boot adds no one else's code to the chain. Either ClaudeOS's own key is approved once in the
-motherboard's settings (added to the firmware's allowed list, db), or Secure Boot is off. Owning the
-layers above would take hardware whose firmware can be replaced.
+The firmware can't be replaced on everybody's PC, so ClaudeOS doesn't try:
+
+* Many PCs, most laptops among them, refuse firmware their maker didn't sign. Intel's Boot Guard has the
+  maker fuse its key into the chipset ([Phoronix](https://www.phoronix.com/news/Intel-Boot-Guard-Kills-Coreboot)).
+  AMD's Platform Secure Boot ties the processor to the maker's firmware key
+  ([ServeTheHome](https://www.servethehome.com/lenovo-vendor-locking-ryzen-based-systems-with-amd-psb/)).
+* Replacement firmware such as coreboot exists only for the boards someone has adapted it to, and it
+  still needs Intel's or AMD's own closed parts.
+* Replacing firmware can leave a PC unable to start, and often needs a clip on the chip. That can't be
+  a download.
+
+Secure Boot, today, adds no one else's code to the chain. Either ClaudeOS's own key is approved once in
+the motherboard's settings (added to the firmware's allowed list, db), or Secure Boot is off. That is
+too hard for most people, so the plan for everybody's PC is the first step Linux distributions use (see
+"Reaching everybody's PC"). It puts one small program that isn't ClaudeOS's own, shim, at the start of
+the chain. The approved-key way stays, for anyone who wants none.
 
 Some things are made by others but are not software between the hardware and ClaudeOS:
 
@@ -149,10 +196,13 @@ PC.
 1. ✓ The start-up stage, the kernel's core, interrupts and timer, the font engine and the first screen.
 2. The real PC: start from its own start-up partition (no USB stick) and show the first screen on its
    monitor, with Secure Boot on and ClaudeOS's own key approved. Ready to try: see "Starting it on a PC".
-3. Keyboard: the USB host controller (xHCI) and USB keyboards.
+3. ✓ Keyboard: USB (the xHCI controllers, hubs and keyboards) and PS/2 (laptops' built-in keyboards).
+   Checked in virtual PCs; on the real PC with step 2.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
-5. Storage: NVMe, and ClaudeOS's own file system for settings, memory and logs.
-6. Network: the PC's wired network chip, then IPv4 and IPv6, DHCP, DNS and TCP.
+5. Storage: NVMe and SATA, and ClaudeOS's own file system for settings, memory and logs.
+6. Network: the internet over a USB cable (a phone's tethering, USB Ethernet adapters: standard, so one
+   driver covers most), then the common wired chips (Realtek's and Intel's), then IPv4 and IPv6, DHCP,
+   DNS and TCP.
 7. Encryption: SHA-2, HMAC and HKDF, X25519, AES-GCM, ChaCha20-Poly1305, certificate checks, and
    TLS 1.3.
 8. Claude: HTTPS and the conversation itself, streamed. There's a decision to make at this step.
@@ -163,6 +213,28 @@ PC.
 9. The conversation screen: kerning, scrolling, and the formatting Claude's answers use.
 10. Sound and AirPods: Bluetooth (HCI over USB, L2CAP, A2DP and HFP, SBC and mSBC).
 11. Speech: ClaudeOS's own speech recognition and voice, running the models itself.
-12. Power: shut down, restart and sleep. Sleep needs an AML interpreter.
+12. Power: shut down, restart and sleep; on laptops the battery and the lid. These need an AML
+    interpreter.
 13. Updates: signed, with a way back.
-14. Later: Wi-Fi, graphics acceleration, and showing websites.
+14. Later: Wi-Fi (Intel's and MediaTek's chips, which most laptops have), touchpads, graphics
+    acceleration, and showing websites.
+
+## Reaching everybody's PC
+
+Three things stand between the steps above and a download that works on any PC or laptop:
+
+1. **Secure Boot with one confirmation.** PCs ship with Secure Boot on, and their firmware then only
+   starts programs signed with a key it trusts, which ClaudeOS's own key isn't. The plan is the route
+   Linux distributions take. Shim, a small program Microsoft signs, starts ClaudeOS's own start-up
+   program once the person has confirmed ClaudeOS's key, once, on a blue screen at the next restart.
+   Setup on Windows asks for that confirmation, so there is nothing to find in the PC's settings.
+   (Microsoft could later sign ClaudeOS's own start-up program directly. That needs a registered
+   organization with an EV code-signing certificate, and Microsoft may still require the shim route:
+   [Microsoft's requirements](https://learn.microsoft.com/windows-hardware/drivers/dashboard/file-signing-reqs).)
+2. **One download installs both.** ClaudeOS's start-up program starts the own kernel when the kernel
+   can drive everything the PC needs (screen, keyboard, storage and the internet), and the Linux-based
+   ClaudeOS otherwise. Both look and work the same to the person.
+3. **Drivers, in order of how many PCs each one covers.** Standard interfaces first, where one driver
+   covers nearly every PC: USB (done), PS/2 keyboards (done), NVMe and SATA, the internet over USB, HD
+   Audio and USB audio, and laptops' power (ACPI). Then the most common chips: Realtek's and Intel's
+   wired network, then Intel's and MediaTek's Wi-Fi, the hardest single piece.

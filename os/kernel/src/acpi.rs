@@ -1,6 +1,6 @@
 //! Reads the firmware's ACPI tables: how many processor cores there are, where the interrupt
-//! controllers are, and which timers exist. Only the tables (plain data) are read; the small
-//! programs (AML) some tables contain are not run.
+//! controllers are, which timers exist, and where PCI Express devices' configuration can be read.
+//! Only the tables (plain data) are read; the small programs (AML) some tables contain are not run.
 
 use crate::paging;
 
@@ -18,6 +18,15 @@ pub struct PmTimer {
     pub wide: bool,
 }
 
+/// Where PCI Express configuration space is in memory (the MCFG table): 4 KiB for each function of
+/// buses `first_bus` to `last_bus`, starting at `base`.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct PciWindow {
+    pub base: u64,
+    pub first_bus: u8,
+    pub last_bus: u8,
+}
+
 #[derive(Default)]
 pub struct Acpi {
     pub revision: u8,
@@ -30,6 +39,15 @@ pub struct Acpi {
     pub has_legacy_pics: bool,
     pub pm_timer: Option<PmTimer>,
     pub hpet: Option<u64>,
+    /// Segment group 0's window (PCs have no other).
+    pub pci_window: Option<PciWindow>,
+    /// The firmware says this is a laptop or a tablet (the FADT's preferred power profile).
+    pub portable: bool,
+    /// The IOMMUs' register addresses: Intel's (DMAR table) and AMD's (IVRS table).
+    pub intel_iommus: [u64; 8],
+    pub intel_iommu_count: usize,
+    pub amd_iommus: [u64; 8],
+    pub amd_iommu_count: usize,
 }
 
 fn u8_at(t: &[u8], o: usize) -> u8 {
@@ -99,6 +117,9 @@ impl Acpi {
                 b"FACP" => acpi.read_fadt(t),
                 // Its registers' "generic address": usable when it's in memory (address space 0).
                 b"HPET" if u8_at(t, 40) == 0 => acpi.hpet = Some(u64_at(t, 44)).filter(|a| *a != 0),
+                b"MCFG" => acpi.read_mcfg(t),
+                b"DMAR" => acpi.read_dmar(t),
+                b"IVRS" => acpi.read_ivrs(t),
                 _ => {}
             }
         }
@@ -131,8 +152,62 @@ impl Acpi {
         }
     }
 
+    /// The MCFG: after its header and 8 reserved bytes, 16-byte entries (base address, segment group,
+    /// first bus, last bus).
+    fn read_mcfg(&mut self, t: &[u8]) {
+        let mut at = 44;
+        while at + 16 <= t.len() {
+            let (base, segment) = (u64_at(t, at), u16::from_le_bytes([u8_at(t, at + 8), u8_at(t, at + 9)]));
+            let (first_bus, last_bus) = (u8_at(t, at + 10), u8_at(t, at + 11));
+            if segment == 0 && base != 0 && first_bus <= last_bus && self.pci_window.is_none() {
+                self.pci_window = Some(PciWindow { base, first_bus, last_bus });
+            }
+            at += 16;
+        }
+    }
+
+    /// The DMAR: Intel's IOMMUs ("DMA remapping hardware units", structures of type 0 after 48 bytes).
+    fn read_dmar(&mut self, t: &[u8]) {
+        let mut at = 48;
+        while at + 4 <= t.len() {
+            let kind = u16::from_le_bytes([u8_at(t, at), u8_at(t, at + 1)]);
+            let len = u16::from_le_bytes([u8_at(t, at + 2), u8_at(t, at + 3)]) as usize;
+            if len < 4 || at + len > t.len() {
+                break;
+            }
+            let base = u64_at(t, at + 8);
+            if kind == 0 && len >= 16 && base != 0 && self.intel_iommu_count < self.intel_iommus.len() {
+                self.intel_iommus[self.intel_iommu_count] = base;
+                self.intel_iommu_count += 1;
+            }
+            at += len;
+        }
+    }
+
+    /// The IVRS: AMD's IOMMUs (hardware definition blocks of types 0x10, 0x11 and 0x40 after 48 bytes;
+    /// one IOMMU may be described more than once).
+    fn read_ivrs(&mut self, t: &[u8]) {
+        let mut at = 48;
+        while at + 4 <= t.len() {
+            let kind = u8_at(t, at);
+            let len = u16::from_le_bytes([u8_at(t, at + 2), u8_at(t, at + 3)]) as usize;
+            if len < 4 || at + len > t.len() {
+                break;
+            }
+            let base = u64_at(t, at + 8);
+            let known = self.amd_iommus[..self.amd_iommu_count].contains(&base);
+            if matches!(kind, 0x10 | 0x11 | 0x40) && len >= 16 && base != 0 && !known && self.amd_iommu_count < self.amd_iommus.len() {
+                self.amd_iommus[self.amd_iommu_count] = base;
+                self.amd_iommu_count += 1;
+            }
+            at += len;
+        }
+    }
+
     /// The FADT: fixed hardware, including the power-management timer.
     fn read_fadt(&mut self, t: &[u8]) {
+        // Preferred power profile: 2 is "mobile", 8 "tablet".
+        self.portable = matches!(u8_at(t, 45), 2 | 8);
         let wide = u32_at(t, 112) & (1 << 8) != 0;
         // ACPI 2.0+ gives the timer as a "generic address" at 208; use it when it's an I/O port.
         let mut port = u32_at(t, 76) as u64;

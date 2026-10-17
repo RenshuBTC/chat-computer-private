@@ -6,7 +6,7 @@ use crate::acpi::Acpi;
 use crate::cpu::{outb, rdmsr, wrmsr};
 use crate::idt::{APIC_ERROR_VECTOR, SPURIOUS_VECTOR};
 use crate::paging::{self, Cache};
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 const IA32_APIC_BASE: u32 = 0x1B;
 
@@ -26,6 +26,12 @@ pub const MASKED: u32 = 1 << 16;
 
 static BASE: AtomicU64 = AtomicU64::new(0);
 static X2APIC: AtomicBool = AtomicBool::new(false);
+static OWN_ID: AtomicU32 = AtomicU32::new(0);
+
+/// This core's interrupt controller id: where devices send their interrupt messages.
+pub fn id() -> u32 {
+    OWN_ID.load(Ordering::Relaxed)
+}
 
 pub fn read(reg: u32) -> u32 {
     if X2APIC.load(Ordering::Relaxed) {
@@ -112,5 +118,6 @@ pub fn init(acpi: &Acpi) -> (u32, bool) {
     write(ERROR_STATUS, 0);
     end_of_interrupt();
     let id = if x2 { read(ID) } else { read(ID) >> 24 };
+    OWN_ID.store(id, Ordering::Relaxed);
     (id, x2)
 }

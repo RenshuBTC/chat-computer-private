@@ -1,8 +1,9 @@
 # ClaudeOS's own operating system (os/).
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
 #   engine's tests; starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a
-#   crash stops it cleanly; and starts it with Secure Boot enforced (signed with a test key the firmware
-#   trusts), checking the firmware refuses it unsigned.
+#   crash stops it cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts),
+#   checking the firmware refuses it unsigned; and types on PS/2 and USB keyboards (on ports, behind a hub,
+#   plugged in and out), checking what comes out.
 # - windows: signs the release file on real Windows, the way "ClaudeOS Own System" does on a PC, and (when the
 #   machine starts in UEFI mode) puts it on the start-up partition and in the power-on menu and takes it off again.
 # - secure-boot-windows: starts the file Windows signed in a virtual PC whose firmware trusts only Microsoft's
@@ -53,6 +54,8 @@ jobs:
           ./check.py --crash panic
       - name: Secure Boot
         run: ./check.py --no-build --secure-boot
+      - name: Keyboards (PS/2; USB on ports and behind a hub, with MSI-X, MSI and no interrupts; IOMMUs)
+        run: ./check.py --keyboard
       - name: Keep the pictures and the log
         if: always()
         uses: actions/upload-artifact@v6

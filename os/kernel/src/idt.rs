@@ -7,10 +7,22 @@ use crate::sync::Static;
 use crate::{apic, time};
 use core::arch::{asm, global_asm};
 use core::mem::size_of;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const TIMER_VECTOR: u8 = 0x30;
 pub const APIC_ERROR_VECTOR: u8 = 0x31;
 pub const SPURIOUS_VECTOR: u8 = 0xFF;
+/// Vectors for devices' interrupt messages, each with its driver's handler.
+pub const DEVICE_VECTORS: core::ops::Range<u8> = 0x40..0x50;
+pub const USB_VECTOR: u8 = 0x40;
+
+static DEVICE_HANDLERS: [AtomicUsize; 16] = [const { AtomicUsize::new(0) }; 16];
+
+/// Has interrupts at `vector` (one of `DEVICE_VECTORS`) call `handler`, with interrupts off.
+pub fn set_device_handler(vector: u8, handler: fn()) {
+    assert!(DEVICE_VECTORS.contains(&vector));
+    DEVICE_HANDLERS[(vector - DEVICE_VECTORS.start) as usize].store(handler as usize, Ordering::Release);
+}
 /// The old 8259 interrupt controllers are moved to 0x20-0x2F and switched off; these two can still
 /// arrive ("spurious" interrupts) and need no answer.
 const PIC_SPURIOUS: [u64; 2] = [0x27, 0x2F];
@@ -203,6 +215,13 @@ extern "C" fn interrupt_dispatch(frame: &mut Frame) {
         apic::end_of_interrupt();
     } else if vector == SPURIOUS_VECTOR as u64 || PIC_SPURIOUS.contains(&vector) {
         // Nothing to do, and nothing to acknowledge.
+    } else if (DEVICE_VECTORS.start as u64..DEVICE_VECTORS.end as u64).contains(&vector) {
+        let handler = DEVICE_HANDLERS[(vector - DEVICE_VECTORS.start as u64) as usize].load(Ordering::Acquire);
+        if handler != 0 {
+            let handler: fn() = unsafe { core::mem::transmute(handler) };
+            handler();
+        }
+        apic::end_of_interrupt();
     } else {
         crate::log!("ClaudeOS kernel: unexpected interrupt {vector:#x}");
         apic::end_of_interrupt();

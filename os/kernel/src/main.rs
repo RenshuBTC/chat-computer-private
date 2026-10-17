@@ -3,7 +3,8 @@
 //! The start-up stage jumps to `kernel_entry` with interrupts off, on a fresh stack, with temporary
 //! page tables. From there the kernel sets up everything itself, in this order: its log, its own
 //! segment and interrupt tables, its record of free memory, its own page tables, its heap, the screen,
-//! the ACPI tables, and its interrupt controller and timer.
+//! the ACPI tables, its interrupt controller and timer, the PCI devices, and the USB controllers (taken
+//! from the firmware before the firmware's memory is reused, started once interrupts are on).
 #![no_std]
 #![no_main]
 
@@ -17,13 +18,18 @@ mod cpu;
 mod gdt;
 mod heap;
 mod idt;
+mod iommu;
+mod keyboard;
 mod layout;
 mod memory;
 mod paging;
+mod pci;
+mod ps2;
 mod screen;
 mod sync;
 mod text;
 mod time;
+mod usb;
 mod welcome;
 #[path = "../../shared/mem.rs"]
 mod mem;
@@ -92,14 +98,33 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     for io in &acpi.io_apics[..acpi.io_apic_count] {
         log!("ClaudeOS kernel: I/O APIC {} at {:#x}, inputs from {}", io.id, io.address, io.first_interrupt);
     }
-    let freed = memory::reclaim_firmware_memory(unsafe { info.memory_map() });
-    log!("ClaudeOS kernel: {} MiB the firmware used is free again", freed >> 20);
 
     let (apic_id, x2apic) = apic::init(&acpi);
     log!("ClaudeOS kernel: interrupt controller {} ({} mode)", apic_id, if x2apic { "x2APIC" } else { "xAPIC" });
     let (speed, how) = time::init(&acpi);
     log!("ClaudeOS kernel: timer speed {how}: {speed} counts a second, {} ticks a second", time::HZ);
+    let (tsc, measured) = time::tsc_mhz();
+    log!("ClaudeOS kernel: time-stamp counter {tsc} MHz{}", if measured { "" } else { " (assumed)" });
+
+    let (iommus, left_on) = iommu::take_over(&acpi);
+    if iommus > 0 {
+        let s = if iommus == 1 { "" } else { "s" };
+        log!("ClaudeOS kernel: {iommus} IOMMU{s} (not used yet), {left_on} of them left on by the firmware");
+    }
+    let (functions, how) = pci::init(&acpi);
+    log!("ClaudeOS kernel: {functions} PCI device functions, configuration read {how}");
+    // The firmware may still be using its USB controllers, with memory it was given: take them over and
+    // stop them before that memory is reused.
+    usb::take_over();
+    let freed = memory::reclaim_firmware_memory(unsafe { info.memory_map() });
+    log!("ClaudeOS kernel: {} MiB the firmware used is free again", freed >> 20);
+    // After the USB controllers: a firmware that made a USB keyboard look like a PS/2 one has stopped.
+    let ps2_name = if acpi.portable { "built-in keyboard" } else { "PS/2 keyboard" };
+    let ps2 = ps2::init();
+    log!("ClaudeOS kernel: PS/2 keyboard {}", if ps2 { "found" } else { "not found" });
+
     cpu::enable_interrupts();
+    usb::start();
     log!("ClaudeOS: ready");
 
     // Tests of the crash path, built in only when asked for (CLAUDEOS_TEST=page-fault ./build.sh).
@@ -112,8 +137,19 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         _ => {}
     }
 
+    let mut keyboards_shown = u64::MAX;
     loop {
         cpu::wait_for_interrupt();
+        usb::work();
+        ps2::poll();
+        keyboard::repeat();
+        while let Some(press) = keyboard::take() {
+            welcome::typed(press);
+        }
+        if usb::changes() != keyboards_shown {
+            keyboards_shown = usb::changes();
+            welcome::keyboards(&usb::status(), ps2::present().then_some(ps2_name));
+        }
         welcome::tick();
     }
 }

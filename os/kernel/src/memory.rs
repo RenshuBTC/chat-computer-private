@@ -79,6 +79,21 @@ pub fn alloc_contiguous(count: usize) -> Option<u64> {
     FRAMES.lock().as_mut()?.alloc(count)
 }
 
+/// One free frame below `limit` (for devices that can't reach all of memory), filled with zeros.
+pub fn alloc_zeroed_below(limit: u64) -> Option<u64> {
+    let frame = FRAMES.lock().as_mut()?.alloc_below(limit)?;
+    unsafe { core::ptr::write_bytes((PHYS_OFFSET + frame) as *mut u8, 0, PAGE_SIZE as usize) };
+    Some(frame)
+}
+
+/// Gives back the frame at `phys` (from `alloc_zeroed`, `alloc_zeroed_below` or one of
+/// `alloc_contiguous`'s).
+pub fn free(phys: u64) {
+    if let Some(f) = FRAMES.lock().as_mut() {
+        f.set_free(phys, phys + PAGE_SIZE);
+    }
+}
+
 impl Frames {
     fn test(&self, frame: usize) -> bool {
         unsafe { *self.bits.add(frame / 64) & (1 << (frame % 64)) != 0 }
@@ -110,6 +125,22 @@ impl Frames {
         for frame in first..last {
             self.mark(frame, true);
         }
+    }
+
+    fn alloc_below(&mut self, limit: u64) -> Option<u64> {
+        let frames = ((limit / PAGE_SIZE) as usize).min(self.frames);
+        for i in 0..frames.div_ceil(64) {
+            let word = unsafe { *self.bits.add(i) };
+            if word == u64::MAX {
+                continue;
+            }
+            let frame = i * 64 + (!word).trailing_zeros() as usize;
+            if frame < frames {
+                self.mark(frame, true);
+                return Some(frame as u64 * PAGE_SIZE);
+            }
+        }
+        None
     }
 
     fn alloc(&mut self, count: usize) -> Option<u64> {

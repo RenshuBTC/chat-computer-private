@@ -37,9 +37,11 @@ ClaudeOS/
   "ClaudeOS Setup.command"  Double-click entry point for Mac setup (runs mac/setup.sh)
   os/                       ClaudeOS's own operating system, from scratch (Rust, no outside code); see os/README.md
     boot/                   UEFI start-up stage (BOOTX64.EFI) that carries the kernel
-    kernel/                 The kernel
+    kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards), PS/2
+                            keyboards, the first screen with a line to type on
     font/                   Own TrueType reader and rasterizer
-    build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced)
+    build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced,
+                            and typing on PS/2 and USB keyboards)
     release/claudeos.efi    The reproducible build Windows uses (CI checks it matches the source)
   windows/own-os.ps1        "ClaudeOS Own System.cmd": signs os/release with a key Windows makes on the PC
                             (CurrentUser\My, not exportable), copies it to \EFI\claudeos-own on Windows' EFI

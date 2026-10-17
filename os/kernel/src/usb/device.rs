@@ -1,0 +1,828 @@
+//! What is plugged into a USB controller. When something is plugged in, ClaudeOS gives it a slot and
+//! an address, asks it what it is (its descriptors), and sets it up if it is something ClaudeOS uses:
+//! a keyboard, or a hub with more devices behind it. Unplugged devices (and everything behind an
+//! unplugged hub) give their slots back.
+//!
+//! Requests to a device go on its control endpoint (endpoint 0) as a setup packet, an optional data
+//! stage and a status stage. Keyboards and hubs also send small reports on an interrupt endpoint,
+//! which the controller collects from them a few hundred times a second.
+
+use super::xhci::{self, Doorbell, Page, Ring, Trb};
+use super::{changed, sleep, wait, with, Speed};
+use crate::keyboard;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::ptr::{read_volatile, write_volatile};
+
+/// The longest control transfer: one page.
+const CONTROL_MAX: usize = 4096;
+/// USB allows five hubs in a row.
+const MAX_DEPTH: u8 = 5;
+
+pub enum Role {
+    /// Something ClaudeOS doesn't use yet.
+    Other,
+    Keyboard(Keyboard),
+    Hub(Hub),
+}
+
+pub struct Keyboard {
+    pub interface: u8,
+    dci: u8,
+    size: u16,
+    last: [u8; 8],
+    /// The lights last asked for (0xFF: not yet).
+    pub lights: u8,
+}
+
+pub struct Hub {
+    ports: u8,
+    dci: u8,
+    size: u16,
+    /// Ports with changes to look at (bit n: port n).
+    pub changes: u32,
+}
+
+pub struct Device {
+    pub slot: u8,
+    speed: Speed,
+    route: u32,
+    root_port: u8,
+    /// The hub (slot) and hub port it is plugged into; None for a port of the controller itself.
+    parent: Option<(u8, u8)>,
+    /// For a low- or full-speed device behind a high-speed hub: that hub's slot and port. The hub's
+    /// "transaction translator" turns its fast signals into the device's slow ones.
+    tt: (u8, u8),
+    /// Hubs between it and the controller.
+    depth: u8,
+    output: Page,
+    input: Page,
+    /// Data for control transfers.
+    buffer: Page,
+    /// Data from its interrupt endpoint.
+    data: Page,
+    ep0: Ring,
+    rings: Vec<Option<Ring>>,
+    /// Events on endpoint 0 since its last request.
+    events: Vec<Trb>,
+    /// An interrupt endpoint that stopped after an error (to restart in the main loop).
+    pub stopped: Option<u8>,
+    pub name: String,
+    pub role: Role,
+}
+
+/// Where a new device is.
+#[derive(Clone, Copy)]
+struct Place {
+    root_port: u8,
+    route: u32,
+    parent: Option<(u8, u8)>,
+    tt: (u8, u8),
+    depth: u8,
+}
+
+impl Place {
+    /// "port 3", or "port 3.1.4" behind hubs.
+    fn describe(&self) -> String {
+        let mut s = format!("port {}", self.root_port);
+        for level in 0..self.depth {
+            s += &format!(".{}", (self.route >> (4 * level)) & 0xF);
+        }
+        s
+    }
+}
+
+/// A request on the control endpoint.
+#[derive(Clone, Copy)]
+struct Request {
+    kind: u8,
+    request: u8,
+    value: u16,
+    index: u16,
+    length: u16,
+}
+
+impl Request {
+    fn get_descriptor(kind: u8, index: u8, language: u16, length: u16) -> Request {
+        Request { kind: 0x80, request: 6, value: (kind as u16) << 8 | index as u16, index: language, length }
+    }
+    fn to_class(kind: u8, request: u8, value: u16, index: u16) -> Request {
+        Request { kind, request, value, index, length: 0 }
+    }
+}
+
+const SET_CONFIGURATION: u8 = 9;
+const HID_SET_REPORT: u8 = 0x09;
+const HID_SET_IDLE: u8 = 0x0A;
+const HID_SET_PROTOCOL: u8 = 0x0B;
+const HUB_GET_STATUS: u8 = 0;
+const HUB_CLEAR_FEATURE: u8 = 1;
+const HUB_SET_FEATURE: u8 = 3;
+const PORT_RESET: u16 = 4;
+const PORT_POWER: u16 = 8;
+const C_PORT_CONNECTION: u16 = 16;
+const C_PORT_RESET: u16 = 20;
+
+#[derive(Debug)]
+enum Error {
+    /// The device answered with this completion code.
+    Code(u8),
+    NoAnswer,
+    Gone,
+    Bad(&'static str),
+}
+
+impl Error {
+    fn say(&self) -> String {
+        match self {
+            Error::Code(c) => format!("it answered \"{}\"", xhci::code_name(*c)),
+            Error::NoAnswer => "it didn't answer".to_string(),
+            Error::Gone => "it was unplugged".to_string(),
+            Error::Bad(what) => what.to_string(),
+        }
+    }
+}
+
+fn dword(page: &Page, at: usize) -> u32 {
+    unsafe { read_volatile(page.at::<u32>(at)) }
+}
+
+fn set_dword(page: &Page, at: usize, v: u32) {
+    unsafe { write_volatile(page.at::<u32>(at), v) }
+}
+
+impl Device {
+    fn new(slot: u8, speed: Speed, place: Place, low: bool) -> Option<Device> {
+        Some(Device {
+            slot,
+            speed,
+            route: place.route,
+            root_port: place.root_port,
+            parent: place.parent,
+            tt: place.tt,
+            depth: place.depth,
+            output: Page::new(low)?,
+            input: Page::new(low)?,
+            buffer: Page::new(low)?,
+            data: Page::new(low)?,
+            ep0: Ring::new(low)?,
+            rings: (0..32).map(|_| None).collect(),
+            events: Vec::new(),
+            stopped: None,
+            name: String::new(),
+            role: Role::Other,
+        })
+    }
+
+    /// The input context for Address Device: a slot context and endpoint 0.
+    fn address_input(&self, context: usize, mps0: u16) {
+        self.input.zero();
+        set_dword(&self.input, 4, 0b11); // add the slot context and endpoint 0
+        let slot = context;
+        set_dword(&self.input, slot, self.route & 0xF_FFFF | self.speed.xhci() << 20 | 1 << 27);
+        set_dword(&self.input, slot + 4, (self.root_port as u32) << 16);
+        set_dword(&self.input, slot + 8, self.tt.0 as u32 | (self.tt.1 as u32) << 8);
+        self.ep0_context(context, mps0);
+    }
+
+    /// Endpoint 0's context in the input context: a control endpoint with packets of `mps0` bytes.
+    fn ep0_context(&self, context: usize, mps0: u16) {
+        let ep = 2 * context;
+        let start = self.ep0.start();
+        set_dword(&self.input, ep + 4, 3 << 1 | xhci::EP_CONTROL << 3 | (mps0 as u32) << 16);
+        set_dword(&self.input, ep + 8, start as u32);
+        set_dword(&self.input, ep + 12, (start >> 32) as u32);
+        set_dword(&self.input, ep + 16, 8);
+    }
+
+    fn queue_interrupt(&mut self, db: Doorbell) {
+        let (dci, size) = match &self.role {
+            Role::Keyboard(k) => (k.dci, k.size),
+            Role::Hub(h) => (h.dci, h.size),
+            Role::Other => return,
+        };
+        if let Some(Some(ring)) = self.rings.get_mut(dci as usize) {
+            ring.push(Trb::new(xhci::TRB_NORMAL, self.data.phys, size as u32, xhci::ON_COMPLETION | xhci::SHORT_OK));
+            db.ring(self.slot, dci);
+        }
+    }
+
+    /// A transfer finished (called from the interrupt).
+    pub fn transfer_event(&mut self, db: Doorbell, e: Trb) {
+        let dci = e.endpoint();
+        if dci == 1 {
+            if self.events.len() < 16 {
+                self.events.push(e);
+            }
+            return;
+        }
+        let ok = xhci::ok(e.code());
+        let data = &self.data;
+        let read = |n: usize| -> Vec<u8> { (0..n).map(|i| unsafe { read_volatile(data.at::<u8>(i)) }).collect() };
+        match &mut self.role {
+            Role::Keyboard(k) if dci == k.dci => {
+                if ok {
+                    let got = (k.size as usize).saturating_sub(e.residual() as usize).min(8);
+                    if got >= 3 {
+                        let mut report = [0u8; 8];
+                        report[..got].copy_from_slice(&read(got));
+                        keyboard::report(&mut k.last, &report);
+                    }
+                }
+            }
+            Role::Hub(h) if dci == h.dci => {
+                if ok {
+                    let got = (h.size as usize).saturating_sub(e.residual() as usize).min(4);
+                    h.changes |= read(got).iter().enumerate().fold(0u32, |a, (i, b)| a | (*b as u32) << (8 * i));
+                }
+            }
+            _ => return,
+        }
+        if ok {
+            self.queue_interrupt(db);
+        } else {
+            self.stopped = Some(dci);
+        }
+    }
+}
+
+/// Runs a command and waits for it. Returns the slot the completion names.
+fn command(hc: usize, issue: impl FnOnce(&mut xhci::Host) -> Option<u64>) -> Result<u8, Error> {
+    let at = with(hc, |c| issue(&mut c.host)).ok_or(Error::Gone)?;
+    match wait(hc, 5000, |c| match c.host.command_done {
+        Some((p, code, slot)) if p == at => Some((code, slot)),
+        _ => None,
+    }) {
+        Some((xhci::SUCCESS, slot)) => Ok(slot),
+        Some((code, _)) => Err(Error::Code(code)),
+        None => Err(Error::NoAnswer),
+    }
+}
+
+/// A request on endpoint 0, with `out` as its data if it sends any. Returns the data received.
+fn control(hc: usize, slot: u8, r: Request, out: &[u8]) -> Result<Vec<u8>, Error> {
+    let input = r.kind & 0x80 != 0;
+    let len = (r.length as usize).min(CONTROL_MAX);
+    let trbs = with(hc, |c| {
+        let db = c.host.doorbell();
+        let d = c.devices.get_mut(slot as usize)?.as_mut()?;
+        d.events.clear();
+        if !input {
+            for (i, b) in out.iter().take(len).enumerate() {
+                unsafe { write_volatile(d.buffer.at::<u8>(i), *b) };
+            }
+        }
+        let setup = r.kind as u64 | (r.request as u64) << 8 | (r.value as u64) << 16 | (r.index as u64) << 32 | (len as u64) << 48;
+        let transfer = if len == 0 { 0 } else if input { 3 } else { 2 };
+        let a = d.ep0.push(Trb::new(xhci::TRB_SETUP, setup, 8, xhci::IMMEDIATE | transfer << 16));
+        let b = if len > 0 {
+            let dir = if input { xhci::DIR_IN | xhci::SHORT_OK } else { 0 };
+            d.ep0.push(Trb::new(xhci::TRB_DATA, d.buffer.phys, len as u32, dir))
+        } else {
+            0
+        };
+        let status_dir = if len > 0 && input { 0 } else { xhci::DIR_IN };
+        let s = d.ep0.push(Trb::new(xhci::TRB_STATUS, 0, 0, xhci::ON_COMPLETION | status_dir));
+        db.ring(slot, 1);
+        Some([a, b, s])
+    })
+    .ok_or(Error::Gone)?;
+    let outcome = wait(hc, 5000, |c| {
+        let Some(Some(d)) = c.devices.get(slot as usize) else { return Some(Err(Error::Gone)) };
+        let mut residual = 0;
+        for e in &d.events {
+            if e.param == 0 || !trbs.contains(&e.param) {
+                continue;
+            }
+            if !xhci::ok(e.code()) {
+                return Some(Err(Error::Code(e.code())));
+            }
+            if e.param == trbs[1] && e.code() == xhci::SHORT_PACKET {
+                residual = e.residual() as usize;
+            }
+            if e.param == trbs[2] {
+                return Some(Ok(residual));
+            }
+        }
+        None
+    });
+    match outcome {
+        Some(Ok(residual)) => {
+            let got = len.saturating_sub(residual);
+            with(hc, |c| {
+                let d = c.devices.get(slot as usize)?.as_ref()?;
+                Some((0..got).map(|i| unsafe { read_volatile(d.buffer.at::<u8>(i)) }).collect())
+            })
+            .ok_or(Error::Gone)
+        }
+        Some(Err(e)) => {
+            if let Error::Code(_) = e {
+                restart_endpoint(hc, slot, 1);
+            }
+            Err(e)
+        }
+        None => {
+            restart_endpoint(hc, slot, 1);
+            Err(Error::NoAnswer)
+        }
+    }
+}
+
+/// After an endpoint stopped on an error, or a request on it never finished: resets it (or stops it, if
+/// it is still running), skips what was queued on it, and for an interrupt endpoint asks for the next
+/// report again.
+pub fn restart_endpoint(hc: usize, slot: u8, dci: u8) {
+    if let Err(Error::Code(xhci::WRONG_STATE)) = command(hc, |h| h.reset_endpoint(slot, dci)) {
+        let _ = command(hc, |h| h.stop_endpoint(slot, dci));
+    }
+    let next = with(hc, |c| {
+        let d = c.devices.get(slot as usize)?.as_ref()?;
+        if dci == 1 { Some(d.ep0.next()) } else { d.rings.get(dci as usize)?.as_ref().map(|r| r.next()) }
+    });
+    let Some(next) = next else { return };
+    let _ = command(hc, |h| h.set_dequeue(slot, dci, next));
+    if dci != 1 {
+        with(hc, |c| {
+            let db = c.host.doorbell();
+            if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
+                d.queue_interrupt(db);
+            }
+        });
+    }
+}
+
+fn descriptor(hc: usize, slot: u8, kind: u8, index: u8, language: u16, length: u16) -> Result<Vec<u8>, Error> {
+    control(hc, slot, Request::get_descriptor(kind, index, language, length), &[])
+}
+
+/// A string descriptor, as text.
+fn string(hc: usize, slot: u8, index: u8, language: u16) -> Option<String> {
+    if index == 0 {
+        return None;
+    }
+    let d = descriptor(hc, slot, 3, index, language, 255).ok()?;
+    let n = (*d.first()? as usize).min(d.len());
+    if n < 4 {
+        return None;
+    }
+    let units = d[2..n].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]));
+    let s: String = char::decode_utf16(units).map(|c| c.unwrap_or('\u{FFFD}')).filter(|c| !c.is_control()).collect();
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+struct Interface {
+    number: u8,
+    class: u8,
+    subclass: u8,
+    protocol: u8,
+    endpoints: Vec<Endpoint>,
+}
+
+#[derive(Clone, Copy)]
+struct Endpoint {
+    address: u8,
+    attributes: u8,
+    max_packet: u16,
+    interval: u8,
+}
+
+impl Endpoint {
+    fn interrupt_in(&self) -> bool {
+        self.address & 0x80 != 0 && self.attributes & 3 == 3
+    }
+}
+
+/// A configuration descriptor's value and interfaces (their first alternate setting).
+fn parse_configuration(d: &[u8]) -> Option<(u8, Vec<Interface>)> {
+    if d.len() < 9 || d[1] != 2 {
+        return None;
+    }
+    let mut interfaces: Vec<Interface> = Vec::new();
+    let mut first_setting = false;
+    let mut i = 0;
+    while i + 2 <= d.len() {
+        let len = d[i] as usize;
+        if len < 2 || i + len > d.len() {
+            break;
+        }
+        let e = &d[i..i + len];
+        match e[1] {
+            4 if len >= 9 => {
+                first_setting = e[3] == 0;
+                if first_setting {
+                    interfaces.push(Interface { number: e[2], class: e[5], subclass: e[6], protocol: e[7], endpoints: Vec::new() });
+                }
+            }
+            5 if len >= 7 && first_setting => {
+                if let Some(interface) = interfaces.last_mut() {
+                    let max_packet = u16::from_le_bytes([e[4], e[5]]);
+                    interface.endpoints.push(Endpoint { address: e[2], attributes: e[3], max_packet, interval: e[6] });
+                }
+            }
+            _ => {}
+        }
+        i += len;
+    }
+    Some((d[5], interfaces))
+}
+
+/// Something changed on port `port` of the controller itself.
+pub fn root_port(hc: usize, port: u8) {
+    let (sc, usb3, existing) = with(hc, |c| {
+        let sc = c.host.port_acknowledge(port);
+        let existing = c.devices.iter().flatten().find(|d| d.parent.is_none() && d.root_port == port).map(|d| d.slot);
+        (sc, c.host.protocol[port as usize] == 3, existing)
+    });
+    let connected = sc & xhci::PORT_CONNECTED != 0;
+    if let Some(slot) = existing {
+        if connected && !xhci::Host::connect_changed(sc) {
+            return; // still there (a change of another kind)
+        }
+        detach(hc, slot);
+    }
+    if !connected {
+        return;
+    }
+    if usb3 {
+        // A USB 3 port trains its link and enables itself; one that doesn't gets a warm reset.
+        let enabled = wait(hc, 300, |c| (c.host.port_status(port) & xhci::PORT_ENABLED != 0).then_some(()));
+        if enabled.is_none() {
+            with(hc, |c| c.host.port_reset(port, true));
+            if wait(hc, 1000, |c| c.host.port_reset_done(port).then_some(())).is_none() {
+                return;
+            }
+        }
+    } else {
+        sleep(hc, 100); // let the plug settle
+        with(hc, |c| c.host.port_reset(port, false));
+        if wait(hc, 1000, |c| c.host.port_reset_done(port).then_some(())).is_none() {
+            log_port(hc, &format!("port {port}"), "the port didn't finish resetting");
+            return;
+        }
+    }
+    let (sc, speed) = with(hc, |c| (c.host.port_status(port), c.host.port_speed(port)));
+    let (true, Some(speed)) = (sc & xhci::PORT_ENABLED != 0, speed) else {
+        log_port(hc, &format!("port {port}"), "something is plugged in, but the port didn't come on");
+        return;
+    };
+    sleep(hc, 10); // the device's recovery time after a reset
+    attach(hc, Place { root_port: port, route: 0, parent: None, tt: (0, 0), depth: 0 }, speed);
+}
+
+fn log_port(hc: usize, place: &str, what: &str) {
+    let name = with(hc, |c| c.host.name.clone());
+    crate::log!("ClaudeOS kernel: USB {name} {place}: {what}");
+}
+
+fn attach(hc: usize, place: Place, speed: Speed) {
+    if let Err(why) = enumerate(hc, place, speed) {
+        log_port(hc, &place.describe(), &format!("couldn't set up what is plugged in: {}", why.say()));
+    }
+}
+
+/// Gives a new device a slot and an address, finds out what it is, and sets it up.
+fn enumerate(hc: usize, place: Place, speed: Speed) -> Result<(), Error> {
+    let slot = command(hc, |h| h.enable_slot())?;
+    let (context, low) = with(hc, |c| (c.host.context_size, c.host.low));
+    let Some(device) = Device::new(slot, speed, place, low) else {
+        let _ = command(hc, |h| h.disable_slot(slot));
+        return Err(Error::Bad("out of memory"));
+    };
+    let mps0: u16 = match speed {
+        Speed::Low | Speed::Full => 8,
+        Speed::High => 64,
+        Speed::Super | Speed::SuperPlus => 512,
+    };
+    device.address_input(context, mps0);
+    let input = device.input.phys;
+    with(hc, |c| {
+        c.host.set_context(slot, Some(device.output.phys));
+        c.devices[slot as usize] = Some(device);
+    });
+    let result = set_up(hc, slot, place, speed, context, input);
+    if result.is_err() {
+        let _ = command(hc, |h| h.disable_slot(slot));
+        with(hc, |c| {
+            c.host.set_context(slot, None);
+            c.devices[slot as usize] = None;
+        });
+    }
+    result
+}
+
+fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input: u64) -> Result<(), Error> {
+    command(hc, |h| h.address_device(slot, input))?;
+    sleep(hc, 2);
+    if speed == Speed::Full {
+        // A full-speed device's first packets may be 8, 16, 32 or 64 bytes; its descriptor's first 8
+        // bytes say which.
+        let d = descriptor(hc, slot, 1, 0, 0, 8)?;
+        let mps0 = *d.get(7).ok_or(Error::Bad("its device descriptor was too short"))? as u16;
+        if mps0 != 8 && matches!(mps0, 16 | 32 | 64) {
+            let input = with(hc, |c| {
+                let d = c.devices[slot as usize].as_ref()?;
+                d.input.zero();
+                set_dword(&d.input, 4, 0b10);
+                d.ep0_context(context, mps0);
+                Some(d.input.phys)
+            })
+            .ok_or(Error::Gone)?;
+            command(hc, |h| h.evaluate_context(slot, input))?;
+        }
+    }
+    let d = descriptor(hc, slot, 1, 0, 0, 18)?;
+    if d.len() < 18 {
+        return Err(Error::Bad("its device descriptor was too short"));
+    }
+    let (class, vendor, product) = (d[4], u16::from_le_bytes([d[8], d[9]]), u16::from_le_bytes([d[10], d[11]]));
+    let (maker_index, product_index) = (d[14], d[15]);
+    let language = descriptor(hc, slot, 3, 0, 0, 4).ok().filter(|l| l.len() >= 4).map_or(0x0409, |l| u16::from_le_bytes([l[2], l[3]]));
+    let name = string(hc, slot, product_index, language).or_else(|| string(hc, slot, maker_index, language));
+    let head = descriptor(hc, slot, 2, 0, 0, 9)?;
+    if head.len() < 9 {
+        return Err(Error::Bad("its configuration descriptor was too short"));
+    }
+    let total = u16::from_le_bytes([head[2], head[3]]).max(9);
+    let config = descriptor(hc, slot, 2, 0, 0, total)?;
+    let (value, interfaces) = parse_configuration(&config).ok_or(Error::Bad("its configuration descriptor didn't make sense"))?;
+    control(hc, slot, Request::to_class(0x00, SET_CONFIGURATION, value as u16, 0), &[])?;
+
+    let keyboard = interfaces.iter().find(|i| i.class == 3 && i.subclass == 1 && i.protocol == 1);
+    let hub = interfaces.iter().find(|i| i.class == 9).filter(|_| class == 9 || class == 0);
+    let what = if let Some(i) = hub {
+        if matches!(speed, Speed::Super | Speed::SuperPlus) {
+            "a USB 3 hub (keyboards behind it show up on its USB 2 side)"
+        } else {
+            set_up_hub(hc, slot, place, speed, i)?;
+            "a hub"
+        }
+    } else if let Some(i) = keyboard {
+        set_up_keyboard(hc, slot, speed, i)?;
+        "a keyboard"
+    } else {
+        "a device ClaudeOS doesn't use yet"
+    };
+    let name = name.unwrap_or_else(|| match what {
+        "a keyboard" => "USB keyboard".to_string(),
+        "a hub" => "USB hub".to_string(),
+        _ => format!("USB device {vendor:04x}:{product:04x}"),
+    });
+    log_port(
+        hc,
+        &place.describe(),
+        &format!("{what}, \"{name}\" ({vendor:04x}:{product:04x}, {}), in slot {slot}", speed.name()),
+    );
+    let is_keyboard = what == "a keyboard";
+    with(hc, |c| {
+        if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
+            d.name = name;
+        }
+    });
+    if is_keyboard {
+        changed();
+    }
+    Ok(())
+}
+
+/// How often an interrupt endpoint is asked for data, in the controller's terms: 2^n × 125 µs.
+fn interval(speed: Speed, b_interval: u8) -> u32 {
+    match speed {
+        // Milliseconds, 1 to 255; rounded down to a power of two.
+        Speed::Low | Speed::Full => {
+            let micro = b_interval.max(1) as u32 * 8;
+            (31 - micro.leading_zeros()).clamp(3, 10)
+        }
+        // Already a power of two: 2^(bInterval - 1) × 125 µs.
+        _ => (b_interval.clamp(1, 16) - 1) as u32,
+    }
+}
+
+/// Adds an interrupt endpoint (and, for a hub, says it is a hub). Returns its device context index.
+fn add_interrupt_in(hc: usize, slot: u8, ep: Endpoint, speed: Speed, hub: Option<(u8, u32)>) -> Result<u8, Error> {
+    let dci = (ep.address & 0xF) * 2 + 1;
+    let mps = (ep.max_packet & 0x7FF) as u32;
+    let burst = if speed == Speed::High { ((ep.max_packet >> 11) & 3) as u32 } else { 0 };
+    let input = with(hc, |c| {
+        let (context, low) = (c.host.context_size, c.host.low);
+        let d = c.devices.get_mut(slot as usize)?.as_mut()?;
+        let ring = Ring::new(low)?;
+        d.input.zero();
+        set_dword(&d.input, 4, 1 | 1 << dci);
+        // The slot context as the controller has it, with room for the new endpoint.
+        for i in 0..4 {
+            set_dword(&d.input, context + 4 * i, dword(&d.output, 4 * i));
+        }
+        let entries = ((dword(&d.output, 0) >> 27) & 0x1F).max(dci as u32);
+        let mut dw0 = (dword(&d.output, 0) & !(0x1F << 27)) | entries << 27;
+        let mut dw1 = dword(&d.output, 4);
+        let mut dw2 = dword(&d.output, 8);
+        if let Some((ports, think_time)) = hub {
+            dw0 |= 1 << 26;
+            dw1 = (dw1 & !(0xFF << 24)) | (ports as u32) << 24;
+            dw2 = (dw2 & !(3 << 16)) | think_time << 16;
+        }
+        set_dword(&d.input, context, dw0);
+        set_dword(&d.input, context + 4, dw1);
+        set_dword(&d.input, context + 8, dw2);
+        set_dword(&d.input, context + 12, 0);
+        let at = context * (dci as usize + 1);
+        let start = ring.start();
+        set_dword(&d.input, at, interval(speed, ep.interval) << 16);
+        set_dword(&d.input, at + 4, 3 << 1 | xhci::EP_INTERRUPT_IN << 3 | burst << 8 | mps << 16);
+        set_dword(&d.input, at + 8, start as u32);
+        set_dword(&d.input, at + 12, (start >> 32) as u32);
+        set_dword(&d.input, at + 16, mps | (mps * (burst + 1)) << 16);
+        d.rings[dci as usize] = Some(ring);
+        Some(d.input.phys)
+    })
+    .ok_or(Error::Bad("out of memory"))?;
+    command(hc, |h| h.configure_endpoint(slot, input))?;
+    Ok(dci)
+}
+
+fn set_up_keyboard(hc: usize, slot: u8, speed: Speed, interface: &Interface) -> Result<(), Error> {
+    let ep = *interface.endpoints.iter().find(|e| e.interrupt_in()).ok_or(Error::Bad("the keyboard has no endpoint for keys"))?;
+    let number = interface.number as u16;
+    // The boot protocol: the simple 8-byte reports every keyboard can send (PC firmware uses them too).
+    // A keyboard that refuses is used anyway: most send the same reports regardless.
+    if let Err(e) = control(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 0, number), &[]) {
+        log_port(hc, &format!("slot {slot}"), &format!("the keyboard refused the boot protocol ({}); using it anyway", e.say()));
+    }
+    // Only send a report when something changes. Some keyboards don't take this; that's fine.
+    let _ = control(hc, slot, Request::to_class(0x21, HID_SET_IDLE, 0, number), &[]);
+    let dci = add_interrupt_in(hc, slot, ep, speed, None)?;
+    with(hc, |c| {
+        let db = c.host.doorbell();
+        if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
+            let size = (ep.max_packet & 0x7FF).clamp(8, 64);
+            d.role = Role::Keyboard(Keyboard { interface: interface.number, dci, size, last: [0; 8], lights: 0xFF });
+            d.queue_interrupt(db);
+        }
+    });
+    Ok(())
+}
+
+pub fn set_lights(hc: usize, slot: u8, interface: u8, lights: u8) {
+    let r = Request { kind: 0x21, request: HID_SET_REPORT, value: 0x0200, index: interface as u16, length: 1 };
+    let _ = control(hc, slot, r, &[lights]); // a keyboard without lights may refuse
+}
+
+fn set_up_hub(hc: usize, slot: u8, place: Place, speed: Speed, interface: &Interface) -> Result<(), Error> {
+    if place.depth >= MAX_DEPTH {
+        return Err(Error::Bad("too many hubs in a row"));
+    }
+    let ep = *interface.endpoints.iter().find(|e| e.interrupt_in()).ok_or(Error::Bad("the hub has no endpoint for changes"))?;
+    let d = control(hc, slot, Request { kind: 0xA0, request: 6, value: 0x29 << 8, index: 0, length: 9 }, &[])?;
+    if d.len() < 7 {
+        return Err(Error::Bad("its hub descriptor was too short"));
+    }
+    let ports = d[2].min(15);
+    let think_time = if speed == Speed::High { ((u16::from_le_bytes([d[3], d[4]]) >> 5) & 3) as u32 } else { 0 };
+    let power_ms = d[5] as u64 * 2;
+    let dci = add_interrupt_in(hc, slot, ep, speed, Some((d[2], think_time)))?;
+    for port in 1..=ports {
+        control(hc, slot, Request::to_class(0x23, HUB_SET_FEATURE, PORT_POWER, port as u16), &[])?;
+    }
+    sleep(hc, power_ms.max(100));
+    with(hc, |c| {
+        let db = c.host.doorbell();
+        if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
+            let size = (ep.max_packet & 0x7FF).clamp(1, 4);
+            // Every port is looked at once, then whenever the hub reports a change.
+            let all = ((1u32 << (ports + 1)) - 1) & !1;
+            d.role = Role::Hub(Hub { ports, dci, size, changes: all });
+            d.queue_interrupt(db);
+        }
+    });
+    Ok(())
+}
+
+/// A hub reported changes (bit n: port n; bit 0: the hub itself).
+pub fn hub_changes(hc: usize, hub: u8, changes: u32) {
+    let ports = with(hc, |c| match c.devices.get(hub as usize) {
+        Some(Some(Device { role: Role::Hub(h), .. })) => h.ports,
+        _ => 0,
+    });
+    if changes & 1 != 0 {
+        // The hub's own power or over-current changed. Clearing the change stops it being reported again.
+        let status = control(hc, hub, Request { kind: 0xA0, request: HUB_GET_STATUS, value: 0, index: 0, length: 4 }, &[]);
+        if let Ok(s) = status
+            && s.len() >= 4
+        {
+            let change = u16::from_le_bytes([s[2], s[3]]);
+            for feature in 0..2 {
+                if change & (1 << feature) != 0 {
+                    let _ = control(hc, hub, Request::to_class(0x20, HUB_CLEAR_FEATURE, feature, 0), &[]);
+                }
+            }
+        }
+    }
+    for port in 1..=ports {
+        if changes & (1 << port) != 0 {
+            hub_port(hc, hub, port);
+        }
+    }
+}
+
+fn hub_port_status(hc: usize, hub: u8, port: u8) -> Result<(u16, u16), Error> {
+    let d = control(hc, hub, Request { kind: 0xA3, request: HUB_GET_STATUS, value: 0, index: port as u16, length: 4 }, &[])?;
+    if d.len() < 4 {
+        return Err(Error::Bad("the hub's port status was too short"));
+    }
+    Ok((u16::from_le_bytes([d[0], d[1]]), u16::from_le_bytes([d[2], d[3]])))
+}
+
+fn hub_port(hc: usize, hub: u8, port: u8) {
+    let Ok((status, change)) = hub_port_status(hc, hub, port) else { return };
+    for bit in 0..5 {
+        if change & (1 << bit) != 0 {
+            let _ = control(hc, hub, Request::to_class(0x23, HUB_CLEAR_FEATURE, C_PORT_CONNECTION + bit, port as u16), &[]);
+        }
+    }
+    let connected = status & 1 != 0;
+    let existing = with(hc, |c| c.devices.iter().flatten().find(|d| d.parent == Some((hub, port))).map(|d| d.slot));
+    if let Some(slot) = existing {
+        if connected && change & 1 == 0 {
+            return;
+        }
+        detach(hc, slot);
+    }
+    if !connected {
+        return;
+    }
+    sleep(hc, 100); // let the plug settle
+    if control(hc, hub, Request::to_class(0x23, HUB_SET_FEATURE, PORT_RESET, port as u16), &[]).is_err() {
+        return;
+    }
+    let mut status = 0;
+    let mut done = false;
+    for _ in 0..50 {
+        sleep(hc, 10);
+        let Ok((s, c)) = hub_port_status(hc, hub, port) else { return };
+        if c & (1 << 4) != 0 {
+            status = s;
+            done = true;
+            break;
+        }
+    }
+    let _ = control(hc, hub, Request::to_class(0x23, HUB_CLEAR_FEATURE, C_PORT_RESET, port as u16), &[]);
+    let place = with(hc, |c| {
+        let h = c.devices.get(hub as usize)?.as_ref()?;
+        Some((h.root_port, h.route, h.depth, h.speed, h.tt))
+    });
+    let Some((root_port, route, depth, hub_speed, hub_tt)) = place else { return };
+    let mut place = Place { root_port, route: route | (port.min(15) as u32) << (4 * depth), parent: Some((hub, port)), tt: (0, 0), depth: depth + 1 };
+    if !done || status & 2 == 0 {
+        log_port(hc, &place.describe(), "something is plugged in, but the hub's port didn't come on");
+        return;
+    }
+    let speed = if status & (1 << 9) != 0 {
+        Speed::Low
+    } else if status & (1 << 10) != 0 {
+        Speed::High
+    } else {
+        Speed::Full
+    };
+    if matches!(speed, Speed::Low | Speed::Full) {
+        place.tt = if hub_speed == Speed::High { (hub, port) } else { hub_tt };
+    }
+    sleep(hc, 10);
+    attach(hc, place, speed);
+}
+
+/// A device went away: so does everything behind it, then its slot.
+fn detach(hc: usize, slot: u8) {
+    let children: Vec<u8> =
+        with(hc, |c| c.devices.iter().flatten().filter(|d| d.parent.map(|p| p.0) == Some(slot)).map(|d| d.slot).collect());
+    for child in children {
+        detach(hc, child);
+    }
+    let (name, was_keyboard) = with(hc, |c| match c.devices.get(slot as usize) {
+        Some(Some(d)) => (d.name.clone(), matches!(d.role, Role::Keyboard(_))),
+        _ => (String::new(), false),
+    });
+    let _ = command(hc, |h| h.disable_slot(slot));
+    let place = with(hc, |c| {
+        c.host.set_context(slot, None);
+        let place = c.devices.get(slot as usize).and_then(|d| d.as_ref()).map(|d| Place {
+            root_port: d.root_port,
+            route: d.route,
+            parent: d.parent,
+            tt: d.tt,
+            depth: d.depth,
+        });
+        if let Some(d) = c.devices.get_mut(slot as usize) {
+            *d = None;
+        }
+        place
+    });
+    if was_keyboard {
+        keyboard::stop_repeat();
+        changed();
+    }
+    if let Some(place) = place {
+        log_port(hc, &place.describe(), &format!("\"{name}\" was unplugged"));
+    }
+}

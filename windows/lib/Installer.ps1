@@ -173,7 +173,9 @@ function Close-InstallerPartition {
 
 function Invoke-Robocopy {
     param([string]$From, [string]$To, [string[]]$ExcludeDirs = @(), [string[]]$ExcludeFiles = @())
-    $robocopyArgs = @($From, $To, '/E', '/R:2', '/W:2', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+    # /A-:R: files on a disc image (the Ubuntu installer) are marked read-only, robocopy copies that mark,
+    # and setup has to change one of the copies (grub.cfg). The copies are left without it.
+    $robocopyArgs = @($From, $To, '/E', '/A-:R', '/R:2', '/W:2', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
     if ($ExcludeDirs.Count -gt 0) { $robocopyArgs += '/XD'; $robocopyArgs += $ExcludeDirs }
     if ($ExcludeFiles.Count -gt 0) { $robocopyArgs += '/XF'; $robocopyArgs += $ExcludeFiles }
     & robocopy.exe @robocopyArgs | Out-Null

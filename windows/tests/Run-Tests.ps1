@@ -735,6 +735,41 @@ Assert-Equal 0 (Get-SetupBootEntries).Count 'own entry: not the installer''s ent
 Assert-Equal 1 (Get-ClaudeOSBootEntries).Count 'own entry: not Linux ClaudeOS''s entry'
 Remove-Item Function:\bcdedit.exe
 
+# ------------------------------------------------------------------ files from a disc image
+# On a real PC, grub.cfg copied from the mounted Ubuntu image kept the image's read-only mark, and setup
+# couldn't patch it ("Access to the path 'S:\boot\grub\grub.cfg' is denied"). tests/win_ci/iso.ps1 checks
+# the real thing on Windows; these check the parts.
+$roDir = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-ro-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $roDir -Force | Out-Null
+try {
+    $roFile = Join-Path $roDir 'grub.cfg'
+    [IO.File]::WriteAllText($roFile, 'from the disc')
+    [IO.File]::SetAttributes($roFile, ([IO.File]::GetAttributes($roFile) -bor [IO.FileAttributes]::ReadOnly))
+    Assert-True (([IO.File]::GetAttributes($roFile) -band [IO.FileAttributes]::ReadOnly) -ne 0) 'read-only file: marked'
+    Write-TextFileLf -Path $roFile -Text "patched`r`n"
+    Assert-Equal "patched`n" ([IO.File]::ReadAllText($roFile)) 'read-only file: rewritten'
+    Assert-True (([IO.File]::GetAttributes($roFile) -band [IO.FileAttributes]::ReadOnly) -eq 0) 'read-only file: mark taken off'
+} finally {
+    Get-ChildItem -LiteralPath $roDir -Recurse -File | ForEach-Object { $_.IsReadOnly = $false }
+    Remove-Item -LiteralPath $roDir -Recurse -Force
+}
+$Script:RobocopyArgs = @()
+function robocopy.exe { $Script:RobocopyArgs = @($args); $global:LASTEXITCODE = 1 }
+Invoke-Robocopy -From 'E:\' -To 'S:\'
+Assert-True ($Script:RobocopyArgs -contains '/A-:R') 'robocopy takes the read-only mark off the copies'
+$global:LASTEXITCODE = 8
+function robocopy.exe { $global:LASTEXITCODE = 8 }
+Assert-Throws { Invoke-Robocopy -From 'E:\' -To 'S:\' } 'robocopy failing (code 8 and up) stops setup'
+Remove-Item Function:\robocopy.exe
+$global:LASTEXITCODE = 0
+
+# What went wrong, in plain words: a failed .NET call's own error, not PowerShell's wrapping of it.
+try { [IO.File]::ReadAllText((Join-Path $roDir 'not-there.txt')) | Out-Null } catch { $plain = Get-ErrorText $_ }
+Assert-True ($plain -notmatch 'Exception calling') ('error text unwrapped: ' + $plain)
+Assert-True ($plain -match 'not-there') ('error text names the file: ' + $plain)
+try { throw 'Setup stopped: something.' } catch { $own = Get-ErrorText $_ }
+Assert-Equal 'Setup stopped: something.' $own 'error text: a thrown message as it is'
+
 if ($OutDir) {
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
     Write-TextFileLf -Path (Join-Path $OutDir 'autoinstall-wifi.yaml') -Text $yaml

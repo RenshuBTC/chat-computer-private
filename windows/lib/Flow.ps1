@@ -328,8 +328,8 @@ function Invoke-ClaudeOSSetup {
         # Start it once, at the next restart; after that the PC starts what it started before.
         Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $entry)
     } catch {
-        $why = $_.Exception.Message
-        Write-SetupLog ('Install step failed: ' + $why)
+        $why = Get-ErrorText $_
+        Write-SetupLog ('Install step failed: ' + $_.Exception.ToString())
         Write-Line 'Something went wrong; setup is taking back what it did...'
         $left = Undo-InstallSteps -Installer $inst -Shrunk:$shrunk -BitLockerKey:($null -ne $blKey) -CSize $cSizeBefore
         $msg = 'Setup stopped: ' + $why + ' Windows starts normally.'

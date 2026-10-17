@@ -166,7 +166,25 @@ function Write-TextFileLf {
     )
     $t = $Text -replace "`r`n", "`n"
     $enc = New-Object System.Text.UTF8Encoding($false)
+    if ([System.IO.File]::Exists($Path)) {
+        # A file copied from a disc image (the Ubuntu installer's grub.cfg) can still carry the disc's
+        # read-only mark, and Windows then refuses to write it.
+        $attrs = [System.IO.File]::GetAttributes($Path)
+        if (($attrs -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+            [System.IO.File]::SetAttributes($Path, ($attrs -band (-bnot [System.IO.FileAttributes]::ReadOnly)))
+        }
+    }
     [System.IO.File]::WriteAllText($Path, $t, $enc)
+}
+
+function Get-ErrorText {
+    # What went wrong, in the error's own words. A .NET method that failed is reported by PowerShell as
+    # 'Exception calling "WriteAllText" with "3" argument(s): ...'; the error inside says it plainly.
+    param([Parameter(Mandatory = $true)]$ErrorRecord)
+    $e = $ErrorRecord
+    if ($e -is [System.Management.Automation.ErrorRecord]) { $e = $e.Exception }
+    while ($e -is [System.Management.Automation.MethodException] -and $null -ne $e.InnerException) { $e = $e.InnerException }
+    return [string]$e.Message
 }
 
 function ConvertTo-YamlString {

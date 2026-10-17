@@ -63,7 +63,10 @@ try {
 } catch {
     Write-SetupLog ('FAILED: ' + $_.Exception.ToString())
     Write-Host ''
-    Write-Warn ('Setup stopped: ' + (Protect-SetupText $_.Exception.Message))
+    # Messages from the install step already begin "Setup stopped:".
+    $why = Protect-SetupText (Get-ErrorText $_)
+    if ($why -notmatch '^Setup stopped') { $why = 'Setup stopped: ' + $why }
+    Write-Warn $why
     Write-Line ('Details are in ' + $LogPath)
     $exitCode = 1
 }

@@ -83,7 +83,7 @@ try {
 } catch {
     Write-SetupLog ('FAILED: ' + $_.Exception.ToString())
     Write-Host ''
-    Write-Warn ('Stopped: ' + (Protect-SetupText $_.Exception.Message))
+    Write-Warn ('Stopped: ' + (Protect-SetupText (Get-ErrorText $_)))
     Write-Line ('Details are in ' + $LogPath)
     $exitCode = 1
 }

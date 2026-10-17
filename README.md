@@ -292,3 +292,5 @@ You won't need it day to day; it's only for repairs.
 * `ARCHITECTURE.md` explains how it fits together.
 * `windows/` holds the PC setup tool, `mac/` the Mac setup, `linux/` the thin Linux base (Ubuntu on a PC,
   Fedora Asahi Remix on a Mac), and `claudeos/` ClaudeOS itself.
+* `os/` is ClaudeOS's own operating system, being written from scratch to replace the Linux base. Its
+  README says what runs so far, what no operating system can own on a PC, and the steps ahead.

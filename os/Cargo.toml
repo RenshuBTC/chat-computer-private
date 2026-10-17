@@ -1,0 +1,21 @@
+# ClaudeOS's own operating system: every piece of software from the firmware's hand-over to the screen.
+# See README.md. Each crate is built for its own target by ./build.sh (cargo can't mix targets in one build).
+[workspace]
+resolver = "3"
+members = ["bootinfo", "boot", "kernel", "font"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Personal use"
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+codegen-units = 1
+debug = false

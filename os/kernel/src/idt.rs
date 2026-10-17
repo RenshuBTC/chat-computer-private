@@ -1,0 +1,227 @@
+//! The kernel's interrupt table: where the processor goes on a fault, a timer tick, or any other
+//! interrupt. All 256 entries lead to one small stub each, which saves the registers and calls
+//! `interrupt_dispatch`.
+
+use crate::gdt;
+use crate::sync::Static;
+use crate::{apic, time};
+use core::arch::{asm, global_asm};
+use core::mem::size_of;
+
+pub const TIMER_VECTOR: u8 = 0x30;
+pub const APIC_ERROR_VECTOR: u8 = 0x31;
+pub const SPURIOUS_VECTOR: u8 = 0xFF;
+/// The old 8259 interrupt controllers are moved to 0x20-0x2F and switched off; these two can still
+/// arrive ("spurious" interrupts) and need no answer.
+const PIC_SPURIOUS: [u64; 2] = [0x27, 0x2F];
+
+// One 16-byte stub per vector. The processor pushes an error code for some exceptions; for the others
+// the stub pushes 0, so the saved frame always has the same shape.
+global_asm!(
+    r#"
+    .section .text.interrupts, "ax"
+    .global interrupt_stubs
+    .p2align 4
+interrupt_stubs:
+    .set vector, 0
+    .rept 256
+        .p2align 4
+        .if (vector == 8) || (vector == 10) || (vector == 11) || (vector == 12) || (vector == 13) || (vector == 14) || (vector == 17) || (vector == 21) || (vector == 29) || (vector == 30)
+        .else
+            pushq $0
+        .endif
+        pushq $vector
+        jmp interrupt_common
+        .set vector, vector + 1
+    .endr
+
+interrupt_common:
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    movq %rsp, %rdi
+    cld
+    call interrupt_dispatch
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    popq %rax
+    addq $16, %rsp
+    iretq
+"#,
+    options(att_syntax)
+);
+
+unsafe extern "C" {
+    static interrupt_stubs: u8;
+}
+
+/// The registers as they were when the interrupt came, in the order the stub saved them.
+#[repr(C)]
+pub struct Frame {
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rbp: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rbx: u64,
+    pub rax: u64,
+    pub vector: u64,
+    pub error: u64,
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Gate {
+    offset_low: u16,
+    selector: u16,
+    ist: u8,
+    attributes: u8,
+    offset_mid: u16,
+    offset_high: u32,
+    reserved: u32,
+}
+
+const _: () = assert!(size_of::<Gate>() == 16);
+
+static IDT: Static<[Gate; 256]> = Static::new(
+    [Gate { offset_low: 0, selector: 0, ist: 0, attributes: 0, offset_mid: 0, offset_high: 0, reserved: 0 }; 256],
+);
+
+#[repr(C, packed)]
+struct Pointer {
+    limit: u16,
+    base: u64,
+}
+
+pub fn init() {
+    let stubs = &raw const interrupt_stubs as u64;
+    let table = unsafe { &mut *IDT.get() };
+    for (vector, gate) in table.iter_mut().enumerate() {
+        let handler = stubs + 16 * vector as u64;
+        let ist = match vector {
+            2 => gdt::NMI_STACK,
+            8 => gdt::DOUBLE_FAULT_STACK,
+            18 => gdt::MACHINE_CHECK_STACK,
+            _ => 0,
+        };
+        *gate = Gate {
+            offset_low: handler as u16,
+            selector: gdt::KERNEL_CODE,
+            ist,
+            attributes: 0x8E, // present, ring 0, interrupt gate (interrupts stay off inside the handler)
+            offset_mid: (handler >> 16) as u16,
+            offset_high: (handler >> 32) as u32,
+            reserved: 0,
+        };
+    }
+    let pointer = Pointer { limit: (size_of::<[Gate; 256]>() - 1) as u16, base: IDT.get() as u64 };
+    unsafe { asm!("lidt [{}]", in(reg) &pointer, options(readonly, nostack, preserves_flags)) };
+}
+
+const EXCEPTIONS: [&str; 32] = [
+    "Divide error",
+    "Debug",
+    "Non-maskable interrupt",
+    "Breakpoint",
+    "Overflow",
+    "Bound range exceeded",
+    "Invalid opcode",
+    "Device not available",
+    "Double fault",
+    "Coprocessor segment overrun",
+    "Invalid TSS",
+    "Segment not present",
+    "Stack-segment fault",
+    "General protection fault",
+    "Page fault",
+    "Reserved (15)",
+    "x87 floating-point error",
+    "Alignment check",
+    "Machine check",
+    "SIMD floating-point error",
+    "Virtualization exception",
+    "Control protection fault",
+    "Reserved (22)",
+    "Reserved (23)",
+    "Reserved (24)",
+    "Reserved (25)",
+    "Reserved (26)",
+    "Reserved (27)",
+    "Hypervisor injection",
+    "VMM communication",
+    "Security exception",
+    "Reserved (31)",
+];
+
+#[unsafe(no_mangle)]
+extern "C" fn interrupt_dispatch(frame: &mut Frame) {
+    let vector = frame.vector;
+    if vector < 32 {
+        exception(frame);
+    } else if vector == TIMER_VECTOR as u64 {
+        time::tick();
+        apic::end_of_interrupt();
+    } else if vector == APIC_ERROR_VECTOR as u64 {
+        crate::log!("ClaudeOS kernel: the interrupt controller reported error {:#x}", apic::error_status());
+        apic::end_of_interrupt();
+    } else if vector == SPURIOUS_VECTOR as u64 || PIC_SPURIOUS.contains(&vector) {
+        // Nothing to do, and nothing to acknowledge.
+    } else {
+        crate::log!("ClaudeOS kernel: unexpected interrupt {vector:#x}");
+        apic::end_of_interrupt();
+    }
+}
+
+fn exception(f: &Frame) -> ! {
+    let name = EXCEPTIONS[f.vector as usize];
+    crate::serial::write_anyway(format_args!(
+        "\nClaudeOS kernel stopped: {name} (vector {}, error {:#x})\n\
+         rip {:#018x}  cs {:#x}  rflags {:#x}  rsp {:#018x}  ss {:#x}\n\
+         rax {:#018x}  rbx {:#018x}  rcx {:#018x}  rdx {:#018x}\n\
+         rsi {:#018x}  rdi {:#018x}  rbp {:#018x}  r8  {:#018x}\n\
+         r9  {:#018x}  r10 {:#018x}  r11 {:#018x}  r12 {:#018x}\n\
+         r13 {:#018x}  r14 {:#018x}  r15 {:#018x}  cr2 {:#018x}\n",
+        f.vector, f.error, f.rip, f.cs, f.rflags, f.rsp, f.ss, f.rax, f.rbx, f.rcx, f.rdx, f.rsi, f.rdi,
+        f.rbp, f.r8, f.r9, f.r10, f.r11, f.r12, f.r13, f.r14, f.r15,
+        crate::cpu::cr2()
+    ));
+    crate::welcome::show_stop(name);
+    crate::cpu::stop()
+}

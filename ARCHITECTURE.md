@@ -33,6 +33,11 @@ ClaudeOS/
     esp/                    ClaudeOS's first start on the Mac: grub-firststart.cfg, firstboot.sh
     claudeos.icns           Icon in the Mac's startup options (make_icon.py)
   "ClaudeOS Setup.command"  Double-click entry point for Mac setup (runs mac/setup.sh)
+  os/                       ClaudeOS's own operating system, from scratch (Rust, no outside code); see os/README.md
+    boot/                   UEFI start-up stage (BOOTX64.EFI) that carries the kernel
+    kernel/                 The kernel
+    font/                   Own TrueType reader and rasterizer
+    build.sh, check.py      Build; start in QEMU/OVMF and check the screen
   requirements-linux.txt    Pinned Python deps for the Linux runtime
   tests/                    Python tests for the runtime (+ mock Claude API)
 ```

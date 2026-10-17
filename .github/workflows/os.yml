@@ -1,0 +1,49 @@
+# ClaudeOS's own operating system (os/): builds it, runs the font engine's tests, then starts it in a
+# virtual PC (QEMU with OVMF) and checks the screen, the clock, and that a crash stops it cleanly. The
+# pictures of the screen and the kernel's log are kept as the run's artifact.
+name: Own OS test
+on:
+  push:
+    branches: [main]
+    paths: ['os/**', 'claudeos/ui/assets/fonts/**', '.github/workflows/os.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: os-test
+  cancel-in-progress: true
+jobs:
+  os:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: os
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil
+          rustup show   # installs the compiler pinned in os/rust-toolchain.toml
+      - name: Font engine tests
+        run: cargo test -p font
+      - name: Build
+        run: ./build.sh
+      - name: Start in a virtual PC
+        run: |
+          ./check.py --no-build
+          ./check.py --no-build --cpu qemu64 --memory 4096 --size 1024x768
+          ./check.py --no-build --size 2560x1440 --memory 2048
+      - name: Crashes stop cleanly
+        run: |
+          ./check.py --crash page-fault
+          ./check.py --crash panic
+      - name: Keep the pictures and the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: own-os-screens
+          path: |
+            os/out/*.png
+            os/out/serial.log

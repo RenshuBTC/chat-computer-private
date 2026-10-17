@@ -536,10 +536,10 @@ def test_an_unavailable_model_goes_back_to_the_usual_one_and_asks_again(tmp_path
     async def close():
         asked.append("closed")
 
-    async def ask(text):
+    async def ask(text, typed=False):
         asked.append(text)
     c.brain = SimpleNamespace(origin_of=lambda tid: "here", current_origin="here", use_token_instead=lambda: False,
-                              close=close, ask=ask, last_activity=0.0)
+                              typed_here=lambda tid: False, close=close, ask=ask, last_activity=0.0)
     c.gate = SimpleNamespace(phone_reply=lambda t: None)
     c.ctx = SimpleNamespace(rate_limit={})
     c.last_asked = "what's the time?"

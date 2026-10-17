@@ -332,7 +332,17 @@ def test_typed_text_reaches_claude_as_typed(tmp_path, monkeypatch):
         c.asleep = True                       # typing wakes ClaudeOS by itself: no wake word to type
         await c.handle("what's on today", typed=True)
     asyncio.run(run())
-    assert asks and asks[-1][0].endswith("what's on today") and asks[-1][1] is True and not c.asleep
+    assert asks and asks[-1][1] is True and not c.asleep
+    # Claude is told it was typed, so it answers like a chat message (see prompt.py).
+    note, words = asks[-1][0].split("\n", 1)
+    assert note.startswith("[") and note.endswith(" · typed]") and words == "what's on today"
+
+
+def test_the_note_says_typed_only_when_it_was():
+    from claudeos.brain.prompt import build_system_prompt, turn_prefix
+    assert turn_prefix({"mode": "chat"}, None).endswith("screen: conversation]\n")
+    assert turn_prefix({"mode": "chat"}, None, typed=True).endswith("screen: conversation · typed]\n")
+    assert '· typed]' in build_system_prompt(Settings(), "", "/home/ren", None)
 
 
 def test_questions_about_typed_requests_are_shown_not_said(tmp_path, monkeypatch):

@@ -654,7 +654,7 @@ class Controller:
         self._transcript("user", text)
         self.last_asked = text
         info = await self._screen_info()
-        await self.brain.ask(turn_prefix(info, self.brain.last_activity) + text, typed=typed)
+        await self.brain.ask(turn_prefix(info, self.brain.last_activity, typed=typed) + text, typed=typed)
 
     async def _screen_info(self) -> dict[str, Any]:
         try:
@@ -783,8 +783,9 @@ class Controller:
         assert self.brain is not None
         await self.brain.close()
         if self.brain.origin_of(tid) == "here" and self.last_asked:
+            typed = self.brain.typed_here(tid)
             info = await self._screen_info()
-            await self.brain.ask(turn_prefix(info, self.brain.last_activity) + self.last_asked)
+            await self.brain.ask(turn_prefix(info, self.brain.last_activity, typed=typed) + self.last_asked, typed=typed)
         else:
             await self._warm_up()
 

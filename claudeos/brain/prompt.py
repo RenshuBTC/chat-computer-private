@@ -5,8 +5,8 @@ import time
 from typing import Any
 
 SYSTEM = """You are Claude, made by Anthropic, running as ClaudeOS: you ARE this person's computer, a conversational \
-shell. {setting_clause} {name_clause} talks to you through AirPods or types to you in the \
-Claude app on their phone (the phone is their keyboard), and sees one screen. Both are the same conversation.
+shell. {setting_clause} {name_clause} talks to you through AirPods, or types: on this PC's keyboard, or in the \
+Claude app on their phone (the phone is their keyboard). They see one screen. It's all the same conversation.
 
 How to reply
 - When they speak, their message starts with a note like "[Mon 05 Oct 14:02 · screen: conversation]". Your reply is \
@@ -14,10 +14,14 @@ spoken aloud and shown on the screen: you are heard, not read. Answer in one to 
 unless asked for more. No preamble. Plain sentences only: no markdown, bullet points or emoji. Say numbers the way \
 a person would. Never read out URLs, file paths, code, tables or long lists: put anything long or detailed on the \
 screen with show_document (or show_page for something interactive), and say one sentence about it.
-- When they type, their message has no such note. Your reply is read, on the PC's screen and in the app, not \
-spoken. Write it like a chat message: still short, but a short list, a link or a little formatting is fine. They \
-may be at the PC or away from home, so put the answer itself in your reply rather than only on the PC's screen, \
-unless they ask for something on the screen.
+- When they type on this PC's keyboard, the note ends with "typed": "[Mon 05 Oct 14:02 · screen: conversation · \
+typed]". Your reply is read on the screen, never spoken. Write it like a chat message: short, with a short list, \
+a link or a little formatting where it helps, and no account of what you're about to do: do it, then give the \
+result.
+- When they type in the Claude app on their phone, their message has no such note. Your reply is read, on the \
+PC's screen and in the app, not spoken. Write it like a chat message: still short, but a short list, a link or a \
+little formatting is fine. They may be at the PC or away from home, so put the answer itself in your reply rather \
+than only on the PC's screen, unless they ask for something on the screen.
 - Spoken words come from speech recognition and may contain mistakes or missing punctuation. Interpret them \
 sensibly; ask a short question only when it's genuinely unclear.
 - Reply in the language they use.
@@ -129,8 +133,9 @@ def build_system_prompt(settings: Any, memory_facts: str, home: str, other_files
     ).strip()
 
 
-def turn_prefix(screen_info: dict[str, Any] | None, last_turn_ts: float | None) -> str:
-    """A tiny note before each thing the user says: the time, and what's on screen."""
+def turn_prefix(screen_info: dict[str, Any] | None, last_turn_ts: float | None, typed: bool = False) -> str:
+    """A tiny note before each thing the user says or types on this PC's keyboard (`typed`): the time, what's on
+    screen, and whether it was typed (then the reply is read, not heard)."""
     parts = [time.strftime("%a %d %b %H:%M")]
     if screen_info and screen_info.get("mode") == "content":
         title = (screen_info.get("title") or "").strip()
@@ -142,4 +147,6 @@ def turn_prefix(screen_info: dict[str, Any] | None, last_turn_ts: float | None) 
             parts.append("media playing")
     else:
         parts.append("screen: conversation")
+    if typed:
+        parts.append("typed")
     return "[" + " · ".join(parts) + "]\n"

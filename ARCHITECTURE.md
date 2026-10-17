@@ -346,7 +346,8 @@ retrying with backoff, then starts listening.
 * ClaudeOS tools are in-process MCP tools (screen, files, computer control, apps, system, memory, self-made tools).
 * Typed or said: what's typed on this PC's keyboard is answered in writing only (`Brain.ask(typed=True)`, and the
   controller doesn't speak that turn), like what's typed on the phone; only what's said out loud gets a spoken
-  answer. Questions about a typed request are shown, not said, and end with "(Type yes or no.)", as they do
+  answer. Its note ends with "typed" (`[time · screen: ... · typed]`), and the system prompt tells Claude to
+  answer that like a chat message, without an account of what it's about to do. Questions about a typed request are shown, not said, and end with "(Type yes or no.)", as they do
   whenever the microphone isn't listening. Things ClaudeOS says unasked (the greeting, "not signed in") are said
   only when sound plays on headphones; on the PC's or the monitor's speakers they are only shown.
 * At the start (not in tests or `--fake`): a new version of ClaudeOS to update to, then AirPods, one question at

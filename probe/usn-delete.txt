@@ -1,0 +1,2 @@
+﻿> fsutil usn deletejournal /n C: exit code 0
+

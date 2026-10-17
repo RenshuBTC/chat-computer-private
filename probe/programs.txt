@@ -1,0 +1,2 @@
+﻿explorer.exe: True wt.exe: C:\Users\runneradmin\AppData\Local\Microsoft\WindowsApps\wt.exe TEMP: C:\Users\runneradmin\AppData\Local\Temp\
+

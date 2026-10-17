@@ -1,0 +1,8 @@
+﻿resize failed: Size Not Supported
+ 
+Extended information:
+The specified shrink size is too big and will cause the volume to be smaller than the minimum volume size.
+ 
+
+Activity ID: {05016a1e-cde9-0000-d137-e22be15ddd01}
+

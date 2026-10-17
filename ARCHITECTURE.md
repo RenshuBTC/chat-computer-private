@@ -331,6 +331,45 @@ retrying with backoff, then starts listening.
   Everything is recomputed when the window, monitor or settings change. Settings: `text_size` (0 = auto), `text_scale`, `viewing_distance_cm`, `screen_inches`
   (0 = reported), `web_zoom` (0 = auto).
 * Voice: PipeWire/AirPods, Silero VAD, faster-whisper (local), Kokoro TTS (local), barge-in.
+* Speed (`tests/test_speed.py`, and the listener tests in `tests/test_voice.py`):
+  * Start: the window comes first. `run_app` shows it, then makes the controller on the asyncio thread, since
+    loading the Agent SDK takes most of a second (the permission gate imports the SDK only when the engine
+    first asks, so the window module doesn't wait for it). The voice models load side by side and speech
+    recognition gets a first run on silence right away (its first run is the slowest). The file index's first
+    crawl waits 10 s.
+  * Listening: an utterance ends after 0.7 s of silence (0.45 s for a yes/no), but its final transcription
+    starts after 0.3 s and is used if no more speech came. Partial transcriptions run only while someone is
+    talking, at most every 0.9 s or 1.5 times the last transcription's duration, whichever is longer, so the
+    recognizer is free when the utterance ends.
+  * Speaking: Kokoro uses one thread per core (onnxruntime's choice); a long first sentence is spoken from its
+    first comma, `;` or `:` after 20 characters, once 50 have arrived. Whether sound plays on headphones (for
+    barge-in) is asked on every 32 ms frame while ClaudeOS talks: it's answered from a check (wpctl, about a
+    quarter of a frame) made in the background every 5 s, not by running wpctl on the event loop each frame.
+  * The file index reads documents' text (pypdf, python-docx, openpyxl, python-pptx: pure Python) in a process
+    of its own, `TextReader`, at nice 10. In ClaudeOS's own process they held the interpreter long enough for
+    speech to skip (6 to 11 underflows in 6 s of speech under PipeWire; none since, and none from walking
+    folders). A document a reader hangs on is given up after 60 s, and stopping ClaudeOS doesn't wait for one.
+  * Tools: `system_status` asks its six parts side by side. Without a Bluetooth adapter (`/sys/class/bluetooth`
+    empty or missing) bluetoothd may not run, and each bluetoothctl command waited 8 s for it: the Bluetooth
+    calls now say so at once. `look_at_screen` makes the JPEG straight from the grab (a 4K screen: 0.65 s with a
+    PNG in between, 0.17 s without), of the whole screen (mss's monitor 0), so click positions match with more
+    than one monitor. `show_file` renders PDF pages as JPEG at quality 90 (30 pages: 7.4 s as PNG, 0.6 s), into
+    a folder kept only when complete, and drops pages of PDFs not shown for two weeks. Trashed files are found
+    by the name they were given (GLib's `name.2.ext`, send2trash's `name 1.ext`) rather than by reading every
+    `.trashinfo` (2 ms instead of 40 ms with 2,000 things in the trash), and the newest wins a tie within the
+    second, so undo restores the right one.
+  * The conversation history shown at the start comes from the last 256 KB of `transcript.jsonl` (it keeps
+    every conversation).
+  * A request doesn't wait for an internet check: a recent result, or an older "yes" (checked again in the
+    background), is used; only an older "no" is checked first.
+  * The conversation page hides messages that scrolled off one by one as words stream in (measuring before it
+    changes anything), and looks at all of them again only when there may be room (a new size, a shorter
+    message). Captions over websites change once per 40 ms flush, not per streamed word.
+  * Boot: `claudeos-windows-mount.service` waits for the disks itself (`udevadm settle` in `ExecStartPre`)
+    instead of pulling in `systemd-udev-settle.service`, which comes before `sysinit.target` and so held up the
+    whole start. If Windows' drive (or a Mac's shared drive) arrives after ClaudeOS has started, ClaudeOS takes
+    it in then: a sign-in left there, its files in the search, and the engine starts again when idle to learn
+    where they are (at the start the engine waits up to 10 s for the drive).
 
 ## Mac
 

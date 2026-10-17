@@ -879,7 +879,24 @@ install_plymouth_theme
 if [ "$SKIP_MODELS" -eq 1 ]; then
   log "--skip-models: not downloading voice models"
 elif [ "$FROM_INSTALLER" -eq 1 ]; then
-  log "running under installer: deferring model download to first boot (run as the user)"
+  # In the installer (as root, in the new system): now, so ClaudeOS can hear and speak the first time it
+  # starts, instead of first downloading them (about 600 MB) while the person waits. Into the person's
+  # ClaudeOS folder, then handed to them; the download library's own cache goes in a folder deleted after.
+  # If it fails, or takes longer than 20 minutes, ClaudeOS downloads what's missing when it starts.
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[dry-run] download the voice models into $CLAUDEOS_HOME/models (for $USER_NAME)"
+  elif [ -x "$VENV_DIR/bin/python" ]; then
+    log "downloading voice models for $USER_NAME"
+    hf_tmp="$(mktemp -d)"
+    if (cd / && HOME="$USER_HOME" CLAUDEOS_HOME="$CLAUDEOS_HOME" HF_HOME="$hf_tmp" \
+          timeout 1200 "$VENV_DIR/bin/python" -P -m claudeos models --download >/dev/null 2>&1); then
+      log "voice models ready"
+    else
+      warn "voice model download didn't finish; ClaudeOS gets them when it first starts"
+    fi
+    rm -rf "$hf_tmp"
+    chown -R "$USER_NAME:$USER_NAME" "$CLAUDEOS_HOME"
+  fi
 else
   if [ -x "$VENV_DIR/bin/python" ] && [ -f "$REQ_FILE" ]; then
     log "downloading voice models as $USER_NAME"

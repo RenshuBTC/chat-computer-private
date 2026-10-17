@@ -65,6 +65,86 @@ def test_a_voice_or_speed_kokoro_lacks_keeps_the_natural_voice():
     assert t.synth("Hello.").size > 0 and calls[-1] == ("bf_emma", 1.0)
 
 
+class _LevelVAD:
+    """Speech where the frame is loud, silence where it's quiet."""
+
+    def __call__(self, frame):
+        return 0.9 if float(np.abs(frame).mean()) > 0.05 else 0.0
+
+    def reset(self):
+        pass
+
+
+class _RecordingSTT:
+    def __init__(self):
+        self.calls = []
+
+    def transcribe(self, audio, fast=False):
+        self.calls.append((audio.size // 512, fast))
+        return f"{audio.size // 512} frames", {}
+
+
+def _drive(listener_frames, stt, partial_every=None):
+    """Pushes (kind, n) frame runs through a Listener with a level VAD, letting the loop run between frames.
+    Returns (utterances, partials, calls made by the time the first utterance's end was reached)."""
+    from claudeos.voice.listener import Listener, ListenerEvents
+    got = {"utt": [], "partials": [], "calls_at": []}
+
+    async def go():
+        ev = ListenerEvents(on_partial=got["partials"].append, on_utterance=lambda t, s: got["utt"].append(t))
+        lis = Listener(_LevelVAD(), stt, ThreadPoolExecutor(1), ev)
+        if partial_every is not None:
+            lis.PARTIAL_EVERY = partial_every
+        lis.attach(asyncio.get_running_loop())
+        speech = np.full(512, 0.3, dtype=np.float32)
+        quiet = np.zeros(512, dtype=np.float32)
+        for kind, n in listener_frames:
+            for _ in range(n):
+                lis.push(speech if kind == "talk" else quiet)
+                got["calls_at"].append(len(stt.calls))
+                await asyncio.sleep(0.002)
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+    asyncio.run(go())
+    return got
+
+
+def test_the_answer_is_transcribed_during_the_pause_and_only_once():
+    # 0.7 s of silence ends an utterance, but its transcription starts after 0.3 s: by the end it's (nearly) done.
+    stt = _RecordingSTT()
+    got = _drive([("quiet", 5), ("talk", 30), ("quiet", 30)], stt)
+    assert got["utt"] == [stt.calls[0] and f"{stt.calls[0][0]} frames"]
+    finals = [c for c in stt.calls if not c[1]]
+    assert finals == [(5 + 30 + 3, False)]              # preroll, speech, 3 frames of its silence
+    first_final = next(i for i, n in enumerate(got["calls_at"]) if n and not stt.calls[n - 1][1])
+    assert first_final < 5 + 30 + 21 - 5                # asked for well before the 21 frames of silence were up
+
+
+def test_talking_on_after_a_pause_transcribes_everything_said():
+    stt = _RecordingSTT()
+    got = _drive([("talk", 20), ("quiet", 12), ("talk", 20), ("quiet", 30)], stt)
+    # What was transcribed in each pause shows as the live words; the answer covers both parts.
+    assert [c for c in stt.calls if not c[1]] == [(20 + 3, False), (20 + 12 + 20 + 3, False)]
+    assert got["partials"] == ["23 frames", "55 frames"] and got["utt"] == ["55 frames"]
+
+
+def test_live_words_are_not_transcribed_from_silence():
+    # Partials as often as possible: still none while nobody is talking.
+    stt = _RecordingSTT()
+    got = _drive([("talk", 25), ("quiet", 30)], stt, partial_every=0.0)
+    partials = [n for n, fast in stt.calls if fast]
+    # A partial asked for in the silence would hold more frames than were spoken.
+    assert partials and max(partials) <= 25 and got["utt"] == ["28 frames"]
+
+
+def test_partials_wait_longer_when_transcribing_is_slow():
+    from claudeos.voice.listener import Listener, ListenerEvents
+    lis = Listener(_LevelVAD(), _RecordingSTT(), ThreadPoolExecutor(1), ListenerEvents())
+    assert lis.partial_every == Listener.PARTIAL_EVERY
+    lis.stt_seconds = 2.0
+    assert lis.partial_every == 3.0
+
+
 def test_sentence_splitter_streams_sentences():
     sp = SentenceSplitter()
     out = []

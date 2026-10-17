@@ -1,12 +1,14 @@
 """Turns documents, files and Claude-made pages into something the content layer can show."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import html as htmllib
 import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -147,21 +149,70 @@ def _pptx_markdown(path: str) -> str:
     return "\n\n".join(out)
 
 
+PDF_PAGES = 30
+
+
+def _pdf_pages(path: str) -> int:
+    try:
+        out = subprocess.run(["pdfinfo", path], capture_output=True, text=True, errors="replace", timeout=20,
+                             check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    for line in out.splitlines():
+        if line.startswith("Pages:") and line[6:].strip().isdigit():
+            return int(line[6:])
+    return 0
+
+
+def _prune_pdf_pages(root: Path, keep_days: int = 14) -> None:
+    """Pages rendered for PDFs not shown for two weeks (each PDF's take a few megabytes)."""
+    cutoff = time.time() - keep_days * 86400
+    try:
+        for d in root.iterdir():
+            if d.is_dir() and d.stat().st_mtime < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+    except OSError:
+        pass
+
+
 def _pdf_view(path: str, settings: Any, paths: Any) -> str:
     """Pages rendered as images (pdftoppm) so the PDF looks like itself; text if that's unavailable."""
     title = os.path.basename(path)
     if shutil.which("pdftoppm"):
         st = os.stat(path)
         key = hashlib.sha1(f"{path}:{st.st_mtime}:{st.st_size}".encode()).hexdigest()[:16]
-        out_dir = Path(paths.web) / "pdf" / key
-        if not any(out_dir.glob("p-*.png")):
-            out_dir.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["pdftoppm", "-png", "-r", "110", "-l", "30", path, str(out_dir / "p")],
-                           capture_output=True, timeout=120)
-        imgs = sorted(out_dir.glob("p-*.png"), key=lambda p: int(p.stem.split("-")[-1]))
+        root = Path(paths.web) / "pdf"
+        out_dir = root / key
+        where = out_dir
+        if not any(out_dir.glob("p-*.jpg")):
+            _prune_pdf_pages(root)
+            # Rendered into a folder of its own, kept only when complete: one cut short would otherwise show as
+            # the whole PDF from then on.
+            part = root / (key + ".part")
+            shutil.rmtree(part, ignore_errors=True)
+            part.mkdir(parents=True, exist_ok=True)
+            where = part
+            try:
+                # JPEG at quality 90: 30 pages took 7.4 s as PNG (compressing them is most of the work) and 0.6 s
+                # like this, and look the same (45-51 dB from the PNG).
+                subprocess.run(["pdftoppm", "-jpeg", "-jpegopt", "quality=90", "-r", "110", "-l", str(PDF_PAGES), path,
+                                str(part / "p")], capture_output=True, timeout=120, check=False)
+                if any(part.glob("p-*.jpg")):
+                    shutil.rmtree(out_dir, ignore_errors=True)
+                    part.rename(out_dir)
+                    where = out_dir
+            except (OSError, subprocess.SubprocessError):
+                pass            # what was rendered in time still shows
+        else:
+            with contextlib.suppress(OSError):
+                os.utime(out_dir)           # shown again: kept another two weeks
+        imgs = sorted(where.glob("p-*.jpg"), key=lambda p: int(p.stem.split("-")[-1]))
         if imgs:
+            total = _pdf_pages(path)
+            more = (f'<p>These are the first {len(imgs)} of its {total} pages.</p>' if total > len(imgs) else "")
             body = (f'<article><h1 class="title">{htmllib.escape(title)}</h1><div class="pages">' +
-                    "".join(f'<img src="{i.as_uri()}" alt="page {n}">' for n, i in enumerate(imgs, 1)) + "</div></article>")
+                    "".join(f'<img src="{i.as_uri()}" alt="page {n}">' for n, i in enumerate(imgs, 1)) +
+                    f"</div>{more}</article>")
             return _shell(title, body, settings)
     from ..files_index import extract_text
     return document_html(title, extract_text(path) or "(This PDF has no readable text.)", settings)

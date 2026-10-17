@@ -7,6 +7,7 @@ thinking (Claude is working), speaking. Saying "stop" or talking over ClaudeOS i
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -26,6 +27,9 @@ from .memory import Memory
 from .platform import Platform
 from .screen import Screen
 from . import tools as T
+
+HEADPHONES_RECHECK_S = 5.0
+HISTORY_TAIL_BYTES = 256 * 1024     # the end of the transcript, where the last messages are
 
 log = logging.getLogger("claudeos.controller")
 
@@ -75,6 +79,11 @@ class Controller:
         self.exit_code: int | None = None
         self._sleep_after_turn = False
         self._online_cache: tuple[float, bool] = (0.0, True)
+        self._online_checking = False
+        self._headphones: tuple[float, bool] | None = None   # (when checked, sound plays on headphones?)
+        self._headphones_checking = False
+        self._files_settled: asyncio.Event | None = None   # the other system's drive is there, or won't come
+        self._engine_had_files = False                      # the engine started knowing where those files are
         self.last_asked = ""                  # the last thing said here, to ask again after a sign-in switch
         self.remote_told = False
         self._phone_retry_at = 0.0
@@ -92,6 +101,11 @@ class Controller:
         # with the files sent from macOS) in the background.
         other_files = self._other_os_files()
         self._import_signin(self._signin_drop())   # before the file index can see it
+        self._files_settled = asyncio.Event()
+        if self._other_files_pending():
+            self._spawn(self._take_in_other_files())
+        else:
+            self._files_settled.set()
         if self.use_index:
             roots = [("home", os.path.expanduser("~"))]
             if other_files:
@@ -100,7 +114,7 @@ class Controller:
             own = (self.paths.secrets, self.paths.engine, self.paths.web, self.paths.index, self.paths.models,
                    self.paths.logs, self.paths.undo)
             self.index = FileIndex(self.paths.index / "files.db", roots, windows_root=s.windows_mount, skip=own)
-            self.index.start()
+            self.index.start(first_delay_s=10)      # after the voice and the engine have started
 
         # Tools + permission gate + brain.
         self.ctx = T.ToolContext(self.paths, s, self.platform, self.journal, self.screen, self.memory, self.index,
@@ -114,7 +128,7 @@ class Controller:
                                BrainEvents(self._on_turn_start, self._on_text, self._on_activity, self._on_turn_end,
                                            self._on_rate_limit, self._on_user_text, self._on_remote),
                                extra_env=self.extra_env, add_dirs=[d for d in (other_files,) if d])
-            self._spawn(self._warm_up())
+            self._spawn(self._warm_up(wait_for_files=True))
 
         if self.voice_enabled:
             if self._voice_models_missing():
@@ -149,11 +163,48 @@ class Controller:
         if not task.cancelled() and task.exception() is not None:
             log.error("a background task failed", exc_info=task.exception())
 
-    async def _warm_up(self) -> None:
+    async def _warm_up(self, wait_for_files: bool = False) -> None:
+        if wait_for_files:
+            # Claude is told where the other system's files are when its engine starts: give the drive a few
+            # seconds if the computer is still mounting it (if someone talks first, ask() starts the engine).
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._files_settled.wait(), 10)
+        self._engine_had_files = self._other_os_files() is not None
         try:
             await self.brain.connect()
         except Exception as exc:
             log.warning("Claude engine not ready yet: %s", exc)
+
+    def _other_files_pending(self) -> bool:
+        """Whether the other system's drive may still be on its way: the computer mounts it (Windows' drive, or
+        the one shared with macOS) alongside ClaudeOS's start, so for the first minutes ClaudeOS can be first."""
+        if not self.platform.just_started():
+            return False
+        if self.platform.name == "mac":
+            from .platform.linux import MAC_FILES
+            p = os.path.expanduser(MAC_FILES)
+            return os.path.isdir(p) and not os.path.ismount(p)
+        return bool(self.settings.windows_user) and not os.path.ismount(self.settings.windows_mount)
+
+    async def _take_in_other_files(self) -> None:
+        """The other system's drive arrived after ClaudeOS started: take in a sign-in left there, add its files
+        to the search, and tell Claude where they are (its engine starts again for that once it's idle)."""
+        while self._other_files_pending():
+            await asyncio.sleep(0.5)
+        self._files_settled.set()
+        other = self._other_os_files()
+        if not other:
+            return
+        log.info("the other system's files arrived after the start: %s", other)
+        self._import_signin(self._signin_drop())
+        if self.index is not None:
+            self.index.add_root("mac" if self.platform.name == "mac" else "windows", other)
+        b = self.brain
+        if b is not None:
+            if other not in b.add_dirs:
+                b.add_dirs.append(other)
+            if b.client is not None and not self._engine_had_files:
+                self._spawn(self._restart_brain_when_idle())
 
     async def stop(self) -> None:
         if self.index:
@@ -198,22 +249,38 @@ class Controller:
         from .voice import models as M
         from .voice.vad import StreamingVAD
 
-        def load():
-            stt, tts = self._stt, self._tts
-            if tts is None:
-                onnx, voices = M.kokoro_files(self.paths)
-                from .voice.tts import TTS
-                tts = TTS(str(onnx) if onnx.exists() else None, str(voices) if voices.exists() else None,
-                          self.settings.voice, self.settings.speech_speed)
-            if stt is None:
-                wdir = M.whisper_dir(self.paths, self.settings.stt_model)
-                if (wdir / "model.bin").exists():
-                    from .voice.stt import STT
-                    hint = ", ".join(x for x in ("Claude", self.settings.user_name, "YouTube") if x)
-                    stt = STT(str(wdir), self.settings.stt_language, hint=hint)
-            return stt, tts, StreamingVAD(str(M.vad_model()))
+        def load_tts() -> Any:
+            if self._tts is not None:
+                return self._tts
+            onnx, voices = M.kokoro_files(self.paths)
+            from .voice.tts import TTS
+            return TTS(str(onnx) if onnx.exists() else None, str(voices) if voices.exists() else None,
+                       self.settings.voice, self.settings.speech_speed)
 
-        stt, tts, vad = await self.loop.run_in_executor(None, load)
+        def load_stt() -> Any:
+            if self._stt is not None:
+                return self._stt
+            wdir = M.whisper_dir(self.paths, self.settings.stt_model)
+            if not (wdir / "model.bin").exists():
+                return None
+            from .voice.stt import STT
+            hint = ", ".join(x for x in ("Claude", self.settings.user_name, "YouTube") if x)
+            return STT(str(wdir), self.settings.stt_language, hint=hint)
+
+        def imports() -> None:
+            # Loaded once here, before the models load side by side below (two threads importing the same
+            # module at once is safe, but slower and pointless).
+            for mod in ("onnxruntime", "kokoro_onnx", "faster_whisper"):
+                try:
+                    __import__(mod)
+                except ImportError:
+                    pass
+
+        await self.loop.run_in_executor(None, imports)
+        # Side by side: most of the time goes to reading and preparing each model (a second each, or more).
+        stt, tts, vad = await asyncio.gather(
+            self.loop.run_in_executor(None, load_stt), self.loop.run_in_executor(None, load_tts),
+            self.loop.run_in_executor(None, lambda: StreamingVAD(str(M.vad_model()))))
         if self.player is None:
             from .voice.audio import Player
             self.player = Player()
@@ -229,6 +296,10 @@ class Controller:
                                  is_speaking=lambda: bool(self.speaker and self.speaker.speaking),
                                  barge_in=self._barge_in_allowed)
         self.listener.attach(self.loop)
+        if self.settings.barge_in == "auto":
+            self._on_headphones()           # checked now, so it's known before ClaudeOS first talks
+        if self._stt is None:
+            self._spawn(self._warm_up_hearing(stt))
         if self.mic_factory is None:
             from .voice.audio import Mic
             self.mic = Mic(self.listener.push_threadsafe)
@@ -237,6 +308,15 @@ class Controller:
         if not self.mic.open():
             self.screen.notice("I can't hear a microphone. Connect your AirPods, or say nothing and check Bluetooth.", "warn")
             self._spawn(self._retry_mic())
+
+    async def _warm_up_hearing(self, stt: Any) -> None:
+        """A first transcription, of a moment of silence, right away: the recognizer's first run is the slowest,
+        and the first thing said shouldn't wait for it."""
+        import numpy as np
+        try:
+            await self.loop.run_in_executor(self.stt_exec, lambda: stt.transcribe(np.zeros(16000, dtype=np.float32), True))
+        except Exception:
+            log.debug("warming up speech recognition failed", exc_info=True)
 
     async def _retry_mic(self) -> None:
         while self.mic and not self.mic.is_open:
@@ -251,10 +331,26 @@ class Controller:
             return True
         if b == "off":
             return False
+        return self._on_headphones()
+
+    def _on_headphones(self) -> bool:
+        """Whether sound plays on headphones (then talking over ClaudeOS stops it). The listener asks on every
+        32 ms frame while ClaudeOS talks, and the check (wpctl) takes about a quarter of a frame, on the thread
+        that also hears and shows everything: so the answer is the last check's, made again in the background
+        when it's a few seconds old. Until the first, loudspeakers (ClaudeOS doesn't hear itself)."""
+        known = self._headphones
+        if (known is None or time.monotonic() - known[0] > HEADPHONES_RECHECK_S) and not self._headphones_checking:
+            self._headphones_checking = True
+            self.loop.run_in_executor(None, self._check_headphones)
+        return known[1] if known else False
+
+    def _check_headphones(self) -> None:
         try:
-            return bool(self.platform.output_is_headset())
+            on = bool(self.platform.output_is_headset())
         except Exception:
-            return True
+            on = True       # can't tell: talking over ClaudeOS still works
+        self._headphones = (time.monotonic(), on)
+        self._headphones_checking = False
 
     # ================================================================ helpers
     def _signin_drop(self) -> str | None:
@@ -345,8 +441,15 @@ class Controller:
             pass
 
     def _show_history(self) -> None:
+        # Only the end of the transcript is read: it holds every conversation, and grows by the day.
         try:
-            lines = self.paths.transcript.read_text(encoding="utf-8").splitlines()[-12:]
+            with open(self.paths.transcript, "rb") as f:
+                size = f.seek(0, os.SEEK_END)
+                f.seek(max(0, size - HISTORY_TAIL_BYTES))
+                lines = f.read().decode("utf-8", errors="replace").splitlines()
+            if size > HISTORY_TAIL_BYTES:
+                lines = lines[1:]           # the first line read may start partway through
+            lines = lines[-12:]
         except OSError:
             lines = []
         items = []
@@ -372,6 +475,24 @@ class Controller:
             ok = True
         self._online_cache = (time.time(), ok)
         return ok
+
+    async def _online_now(self) -> bool:
+        """Whether the internet is there, without making each request wait for a check (a connection to Claude's
+        servers, up to 3 s): a recent answer is used as it is, and an older "yes" too, while it's checked again in
+        the background. Only an older "no" is checked first: they may be back online."""
+        t, ok = self._online_cache
+        if ok and time.time() - t >= 20 and not self._online_checking:
+            self._online_checking = True
+
+            async def refresh() -> None:
+                try:
+                    await self.loop.run_in_executor(None, self._online)
+                finally:
+                    self._online_checking = False
+            self._spawn(refresh())
+        if ok:
+            return True
+        return await self.loop.run_in_executor(None, self._online)
 
     def _set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -450,7 +571,7 @@ class Controller:
             self.screen.user_text(uid, text, True)
             await self._offline_command(text, signed_out=True)
             return
-        if not await self.loop.run_in_executor(None, self._online):
+        if not await self._online_now():
             self.screen.user_text(uid, text, True)
             await self._offline_command(text, signed_out=False)
             return
@@ -826,4 +947,4 @@ class Controller:
         self.screen.ai_delta(qid, reply)
         self.screen.ai_done(qid)
         self._say(reply)
-        self._online_cache = (0.0, True)
+        self._online_cache = (0.0, False)     # checked again before the next request: they may be back online

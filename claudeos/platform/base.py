@@ -75,11 +75,19 @@ class Platform:
     def update_system(self) -> str: raise NotImplementedError
     def set_timezone(self, zone: str) -> str: raise NotImplementedError
     # --- machine info
+    def just_started(self) -> bool:
+        """Whether the computer started moments ago (the other system's drive may still be mounting)."""
+        return False
     def system_info(self) -> dict[str, Any]: raise NotImplementedError
     def windows_status(self) -> dict[str, Any]: raise NotImplementedError
     # --- screen input (whole display)
     def screen_size(self) -> tuple[int, int]: raise NotImplementedError
     def screenshot_png(self) -> bytes: raise NotImplementedError
+    def screenshot_jpeg(self, max_w: int, max_h: int) -> tuple[bytes, float]:
+        """The whole screen as a JPEG no bigger than max_w x max_h, and the scale from its pixels to the
+        screen's (screen = image * scale)."""
+        from .linux import png_to_jpeg_scaled
+        return png_to_jpeg_scaled(self.screenshot_png(), max_w, max_h)
     def click(self, x: int, y: int, button: str = "left", clicks: int = 1) -> None: raise NotImplementedError
     def move(self, x: int, y: int) -> None: raise NotImplementedError
     def drag(self, x1: int, y1: int, x2: int, y2: int) -> None: raise NotImplementedError

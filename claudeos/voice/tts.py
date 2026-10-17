@@ -44,7 +44,9 @@ def speakable(text: str) -> str:
 class SentenceSplitter:
     """Feed streamed text; get back complete sentences ready to speak."""
 
-    def __init__(self, first_chunk_chars: int = 90) -> None:
+    MIN_FIRST_CHARS = 20     # a first piece shorter than this isn't worth the wait for the next one
+
+    def __init__(self, first_chunk_chars: int = 50) -> None:
         self.buf = ""
         self.in_code = False
         self.first = True
@@ -105,11 +107,12 @@ class SentenceSplitter:
             if m.group(1) == "." and re.search(r"\d$", before) and re.match(r"\d", b[m.end():m.end() + 1] or ""):
                 continue
             return end_punct
-        # Start talking sooner: cut a long first sentence at a comma.
+        # Start talking sooner: a long first sentence is cut at its first comma (or ; or :) after a few words.
+        # Speaking can't start before its first piece is made, which takes longer the longer it is.
         if self.first and len(b) > self.first_chunk_chars:
-            m = list(re.finditer(r"[,;:]\s", b[: self.first_chunk_chars + 40]))
-            if m:
-                return m[-1].end()
+            for m in re.finditer(r"[,;:]\s", b[: self.first_chunk_chars + 50]):
+                if m.end() >= self.MIN_FIRST_CHARS:
+                    return m.end()
         return None
 
 
@@ -117,7 +120,7 @@ class TTS:
     """Kokoro voice if its model is installed, otherwise espeak-ng."""
 
     def __init__(self, onnx_path: str | None, voices_path: str | None, voice: str = "af_heart", speed: float = 1.0,
-                 threads: int = 4) -> None:
+                 threads: int = 0) -> None:
         self.voice = voice
         self.speed = speed
         self.kokoro = None
@@ -126,6 +129,8 @@ class TTS:
                 import onnxruntime as ort
                 from kokoro_onnx import Kokoro
                 opts = ort.SessionOptions()
+                # 0: one thread per processor core, onnxruntime's choice. A fixed 4 took nearly twice as long on a
+                # two-core PC (threads waiting for each other) and couldn't use more cores on a bigger one.
                 opts.intra_op_num_threads = threads
                 opts.inter_op_num_threads = 1
                 sess = ort.InferenceSession(onnx_path, sess_options=opts, providers=["CPUExecutionProvider"])

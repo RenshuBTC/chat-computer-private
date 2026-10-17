@@ -106,6 +106,71 @@ def extract_text(path: str) -> str:
     return ""
 
 
+class TextReader:
+    """Reads documents' text in a process of its own, at low priority. The readers (pypdf, python-docx,
+    openpyxl, python-pptx) are pure Python: in ClaudeOS's own process they held the interpreter for long
+    stretches, and ClaudeOS's speech skipped while the index read documents (6 to 11 gaps in 6 seconds of speech,
+    measured; none while it only walks folders). A document that hangs a reader stops only that process."""
+
+    def __init__(self, timeout_s: float = 60.0, cancel: threading.Event | None = None) -> None:
+        self.timeout_s = timeout_s
+        self.cancel = cancel or threading.Event()       # ClaudeOS is stopping: don't wait for the document
+        self.proc: Any = None
+        self.conn: Any = None
+
+    def _start(self) -> None:
+        import multiprocessing
+        ctx = multiprocessing.get_context("spawn")      # never fork a process with threads (GTK, the voice)
+        mine, theirs = ctx.Pipe()
+        self.proc = ctx.Process(target=_reader_main, args=(theirs,), name="claudeos-reader", daemon=True)
+        self.proc.start()
+        theirs.close()
+        self.conn = mine
+
+    def read(self, path: str) -> str:
+        try:
+            if self.proc is None or not self.proc.is_alive():
+                self.stop()
+                self._start()
+            self.conn.send(path)
+            deadline = time.monotonic() + self.timeout_s
+            while not self.cancel.is_set() and time.monotonic() < deadline:
+                if self.conn.poll(0.5):
+                    return self.conn.recv()
+            if not self.cancel.is_set():
+                log.info("gave up reading %s after %.0f s", path, self.timeout_s)
+        except (OSError, EOFError, ValueError) as exc:
+            log.info("the document reader stopped (%s) on %s", exc, path)
+        self.stop()             # the next document gets a new reader
+        return ""
+
+    def stop(self) -> None:
+        if self.conn is not None:
+            self.conn.close()           # an idle reader ends at this
+            self.conn = None
+        if self.proc is not None:
+            self.proc.join(2)
+            if self.proc.is_alive():    # still reading (a document it hangs on)
+                self.proc.kill()
+                self.proc.join(5)
+            self.proc = None
+
+
+def _reader_main(conn: Any) -> None:
+    try:
+        os.nice(10)             # ClaudeOS's voice and screen first
+    except OSError:
+        pass
+    # Some PDFs make pypdf warn about every page; that isn't ClaudeOS's log's business.
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
+    while True:
+        try:
+            path = conn.recv()
+            conn.send(extract_text(path))
+        except (EOFError, OSError):         # ClaudeOS stopped, or gave up on this document
+            return
+
+
 def parse_date(s: str | None) -> float | None:
     if not s:
         return None
@@ -131,6 +196,7 @@ class FileIndex:
         # Folders never walked into (ClaudeOS's own: the browser's logins, the voice models, backups...).
         self.skip = {os.path.realpath(p) for p in skip}
         self._stop = threading.Event()
+        self._wake = threading.Event()        # crawl now (a folder was added), not at the next interval
         self._thread: threading.Thread | None = None
         self.status: dict[str, Any] = {"state": "idle", "files": 0, "last_crawl": None}
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,22 +217,35 @@ class FileIndex:
         return db
 
     # ------------------------------------------------------------------ crawling
-    def start(self, interval_s: float = 1800) -> None:
+    def start(self, interval_s: float = 1800, first_delay_s: float = 0) -> None:
+        """Crawls in the background now and every `interval_s`. `first_delay_s` lets a start-up finish first:
+        a crawl keeps one processor core busy for seconds (searches use the last crawl's results meanwhile)."""
         if self._thread and self._thread.is_alive():
             return
         def loop() -> None:
+            self._wake.wait(first_delay_s)
             while not self._stop.is_set():
+                self._wake.clear()
                 try:
                     self.crawl_once()
                     self.extract_contents()
                 except Exception:
                     log.exception("file index crawl failed")
-                self._stop.wait(interval_s)
+                self._wake.wait(interval_s)
         self._thread = threading.Thread(target=loop, name="file-index", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
+
+    def add_root(self, label: str, path: str) -> None:
+        """A folder to search that arrived after the start (Windows' drive, mounted moments later), or one
+        whose files did: it's crawled now."""
+        root = (label, os.path.realpath(path))
+        if root not in self.roots:
+            self.roots.append(root)
+        self._wake.set()
 
     def _walk(self, root: str, skip_top: set[str] | frozenset[str] = frozenset()) -> Iterable[os.DirEntry]:
         stack = [(root, 0)]
@@ -202,8 +281,11 @@ class FileIndex:
         start = time.time()
         count = 0
         db = self._connect()
+        # The files found this time. Unchanged ones are only noted here, not written to the database: a crawl
+        # used to rewrite every file's row (tens of MB of disk writes each time, for nothing).
+        seen: set[int] = set()
         try:
-            for label, root in self.roots:
+            for label, root in list(self.roots):
                 if not os.path.isdir(root):
                     continue
                 batch = 0
@@ -219,7 +301,7 @@ class FileIndex:
                     count += 1
                     row = db.execute("SELECT id, mtime, size FROM files WHERE path=?", (e.path,)).fetchone()
                     if row and abs(row["mtime"] - st.st_mtime) < 1 and row["size"] == st.st_size:
-                        db.execute("UPDATE files SET seen=? WHERE id=?", (start, row["id"]))
+                        seen.add(row["id"])
                     else:
                         ext = os.path.splitext(e.name)[1].lower()
                         vals = (e.path, e.name, os.path.dirname(e.path), ext, kind_of(e.name), st.st_size,
@@ -233,6 +315,7 @@ class FileIndex:
                             cur = db.execute("INSERT INTO files(path, name, dir, ext, kind, size, mtime, seen, root)"
                                              " VALUES(?,?,?,?,?,?,?,?,?)", vals)
                             fid = cur.lastrowid
+                        seen.add(fid)
                         rel = os.path.relpath(e.path, root)
                         db.execute("INSERT INTO fts(rowid, name, words, content) VALUES(?,?,?,?)",
                                    (fid, e.name, words_of(f"{label}/{rel}"), ""))
@@ -245,7 +328,7 @@ class FileIndex:
                 if not complete or self._stop.is_set():
                     continue      # cut short: files not reached yet aren't gone
                 # Files that disappeared since the last scan of this root.
-                gone = [r["id"] for r in db.execute("SELECT id FROM files WHERE root=? AND seen<?", (label, start))]
+                gone = [r["id"] for r in db.execute("SELECT id FROM files WHERE root=?", (label,)) if r["id"] not in seen]
                 for fid in gone:
                     db.execute("DELETE FROM fts WHERE rowid=?", (fid,))
                     db.execute("DELETE FROM files WHERE id=?", (fid,))
@@ -258,6 +341,7 @@ class FileIndex:
     def extract_contents(self, limit: int = 5000) -> int:
         self.status["state"] = "reading documents"
         db = self._connect()
+        reader = TextReader(cancel=self._stop)
         done = 0
         try:
             rows = db.execute(
@@ -267,7 +351,7 @@ class FileIndex:
             for r in rows:
                 if self._stop.is_set():
                     break
-                text = extract_text(r["path"])
+                text = reader.read(r["path"])
                 fts = db.execute("SELECT words FROM fts WHERE rowid=?", (r["id"],)).fetchone()
                 words = fts["words"] if fts else words_of(r["path"])
                 db.execute("DELETE FROM fts WHERE rowid=?", (r["id"],))
@@ -279,6 +363,7 @@ class FileIndex:
                 time.sleep(0.005)
             db.commit()
         finally:
+            reader.stop()           # until the next crawl finds new documents: its memory back meanwhile
             db.close()
         self.status["state"] = "idle"
         return done

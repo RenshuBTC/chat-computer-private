@@ -647,22 +647,24 @@ class GtkScreen(Screen):
     def ai_delta(self, msg_id: str, text: str) -> None:
         def add() -> None:
             self.pending_ai[msg_id] = self.pending_ai.get(msg_id, "") + text
+            if self.cap_tid != msg_id:
+                self.cap_tid = msg_id
+                self.cap_ai_text = ""
+            self.cap_ai_text += text
             if not self.flush_scheduled:
                 self.flush_scheduled = True
                 GLib.timeout_add(40, self._flush_ai)
         self._ui(add)
-        if self.cap_tid != msg_id:
-            self.cap_tid = msg_id
-            self.cap_ai_text = ""
-        self.cap_ai_text += text
-        if text:
-            self._caption(ai=_tail(self.cap_ai_text))
 
     def _flush_ai(self) -> bool:
+        """The words that streamed in during the last 40 ms, onto the page in one go; and the captions over a
+        website, which only show there (once per flush, not once for every few letters)."""
         self.flush_scheduled = False
         pending, self.pending_ai = self.pending_ai, {}
         for mid, txt in pending.items():
             self._chat_run(f"CO.ai({json.dumps(mid)},{json.dumps(txt)})" if txt else f"CO.aiStart({json.dumps(mid)})")
+        if self.mode == "content" and any(pending.values()) and self.cap_ai_text:
+            self._caption_now(ai=_tail(self.cap_ai_text))
         return False
 
     def ai_done(self, msg_id: str) -> None:
@@ -705,19 +707,20 @@ class GtkScreen(Screen):
 
     # captions over content
     def _caption(self, you: str | None = None, ai: str | None = None) -> None:
-        def run() -> None:
-            if you is not None:
-                self.cap_you.set_text(you)
-                self.cap_you.set_visible(bool(you))
-            if ai is not None:
-                self.cap_ai.set_text(ai)
-                self.cap_ai.set_visible(bool(ai))
-            show = self.mode == "content" and (self.cap_you.get_text() or self.cap_ai.get_text())
-            self.cap_box.set_visible(bool(show))
-            if self.cap_hide_id:
-                GLib.source_remove(self.cap_hide_id)
-            self.cap_hide_id = GLib.timeout_add_seconds(8, self._hide_captions)
-        self._ui(run)
+        self._ui(self._caption_now, you, ai)
+
+    def _caption_now(self, you: str | None = None, ai: str | None = None) -> None:
+        if you is not None:
+            self.cap_you.set_text(you)
+            self.cap_you.set_visible(bool(you))
+        if ai is not None:
+            self.cap_ai.set_text(ai)
+            self.cap_ai.set_visible(bool(ai))
+        show = self.mode == "content" and (self.cap_you.get_text() or self.cap_ai.get_text())
+        self.cap_box.set_visible(bool(show))
+        if self.cap_hide_id:
+            GLib.source_remove(self.cap_hide_id)
+        self.cap_hide_id = GLib.timeout_add_seconds(8, self._hide_captions)
 
     def _hide_captions(self) -> bool:
         self.cap_hide_id = 0
@@ -768,29 +771,42 @@ def _tail(text: str, n: int = 170) -> str:
 
 
 def run_app(paths: Paths, settings: Settings, controller_factory: Callable[[GtkScreen], Any], windowed: bool = False) -> int:
-    """Start GTK on this thread and ClaudeOS's logic on a background asyncio loop."""
+    """Start GTK on this thread and ClaudeOS's logic on a background asyncio loop. The window comes first: the
+    controller is made on the loop's thread once GTK is running, because loading its modules (the Agent SDK)
+    takes most of a second, and the screen shouldn't stay black meanwhile."""
     if choose_rendering() == "cpu":
         log.info("No graphics chip available for drawing pages; drawing them with the processor")
     screen = GtkScreen(paths, settings, windowed=windowed)
     loop = asyncio.new_event_loop()
     t = threading.Thread(target=loop.run_forever, name="claudeos-loop", daemon=True)
     t.start()
-    controller = controller_factory(screen)
-    screen.bind(loop, on_media_key=controller.media_key, on_media_state=controller.media_state,
-                on_typed=lambda text: controller._spawn(controller.handle(text)))
+    screen.bind(loop, on_media_key=lambda k: None, on_media_state=lambda p: None, on_typed=lambda text: None)
+    holder: dict[str, Any] = {}
+
+    async def boot() -> None:
+        controller = holder["controller"] = controller_factory(screen)
+        screen.bind(loop, on_media_key=controller.media_key, on_media_state=controller.media_state,
+                    on_typed=lambda text: controller._spawn(controller.handle(text)))
+        await controller.start()
 
     def started(f: Any) -> None:
         exc = f.exception()
         if exc:
             log.error("ClaudeOS failed to start: %s", exc, exc_info=exc)
+            holder["failed"] = True
             GLib.idle_add(Gtk.main_quit)
-    asyncio.run_coroutine_threadsafe(controller.start(), loop).add_done_callback(started)
+    # Once GTK runs, so the window is drawn while the controller loads.
+    GLib.idle_add(lambda: asyncio.run_coroutine_threadsafe(boot(), loop).add_done_callback(started) and False)
     try:
         Gtk.main()
     finally:
-        try:
-            asyncio.run_coroutine_threadsafe(controller.stop(), loop).result(10)
-        except Exception:
-            pass
+        controller = holder.get("controller")
+        if controller is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(controller.stop(), loop).result(10)
+            except Exception:
+                pass
         loop.call_soon_threadsafe(loop.stop)
-    return controller.exit_code or 0
+    if holder.get("failed"):
+        return 1      # a crash to the session: after a few, it shows what went wrong instead of retrying forever
+    return (controller.exit_code if controller is not None else None) or 0

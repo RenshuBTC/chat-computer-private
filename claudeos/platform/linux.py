@@ -131,6 +131,13 @@ class LinuxPlatform(Platform):
             return ok
         return "Failed: " + ((r.err or r.out).strip().splitlines() or [f"exit {r.code}"])[-1][:300]
 
+    def just_started(self, within_s: float = 120.0) -> bool:
+        try:
+            with open("/proc/uptime", encoding="ascii") as f:
+                return float(f.read().split()[0]) < within_s
+        except (OSError, ValueError, IndexError):
+            return False
+
     # ------------------------------------------------------------------ network
     def internet_ok(self) -> bool:
         try:
@@ -205,6 +212,20 @@ class LinuxPlatform(Platform):
                          "Wi-Fi turned " + ("on." if on else "off."))
 
     # ------------------------------------------------------------------ bluetooth
+    def has_bluetooth(self, sysfs: str = "/sys/class/bluetooth") -> bool:
+        """Whether the computer has a Bluetooth adapter. Without one bluetoothd may not run at all (its service
+        starts only when the kernel's Bluetooth folder is there), and then every bluetoothctl command waits for
+        it until it's stopped: 8 s each here."""
+        try:
+            with os.scandir(sysfs) as it:
+                return any(True for _ in it)
+        except OSError:
+            return False
+
+    def _need_bluetooth(self) -> None:
+        if not self.has_bluetooth():
+            raise RuntimeError("This computer has no Bluetooth.")
+
     def _bt_devices(self, which: str | None) -> list[dict[str, str]]:
         args = ["bluetoothctl", "devices"] + ([which] if which else [])
         out = []
@@ -215,14 +236,18 @@ class LinuxPlatform(Platform):
         return out
 
     def bt_status(self) -> dict[str, Any]:
+        if not self.has_bluetooth():
+            return {"adapter": False, "powered": False, "connected": [], "paired": []}
         show = run(["bluetoothctl", "show"], timeout=8).out
         return {
+            "adapter": True,
             "powered": "Powered: yes" in show,
             "connected": self._bt_devices("Connected"),
             "paired": self._bt_devices("Paired"),
         }
 
     def bt_scan(self, seconds: int = 10) -> list[dict[str, Any]]:
+        self._need_bluetooth()
         run(["bluetoothctl", "power", "on"], timeout=8)
         run(["bluetoothctl", "--timeout", str(max(3, min(seconds, 30))), "scan", "on"], timeout=seconds + 10)
         paired = {d["address"] for d in self._bt_devices("Paired")}
@@ -235,6 +260,7 @@ class LinuxPlatform(Platform):
 
     def bt_pair(self, address: str) -> str:
         a = self._check_mac(address)
+        self._need_bluetooth()
         run(["bluetoothctl", "power", "on"], timeout=8)
         r = run(["bluetoothctl", "--agent", "NoInputNoOutput", "--timeout", "25", "pair", a], timeout=40)
         if not r.ok and "AlreadyExists" not in (r.out + r.err):
@@ -244,15 +270,18 @@ class LinuxPlatform(Platform):
 
     def bt_connect(self, address: str) -> str:
         a = self._check_mac(address)
+        self._need_bluetooth()
         run(["bluetoothctl", "power", "on"], timeout=8)
         return self._say(run(["bluetoothctl", "--timeout", "15", "connect", a], timeout=25), "Connected.")
 
     def bt_disconnect(self, address: str) -> str:
         a = self._check_mac(address)
+        self._need_bluetooth()
         return self._say(run(["bluetoothctl", "disconnect", a], timeout=15), "Disconnected.")
 
     def bt_forget(self, address: str) -> str:
         a = self._check_mac(address)
+        self._need_bluetooth()
         return self._say(run(["bluetoothctl", "remove", a], timeout=15), "Removed.")
 
     def bt_import_windows_keys(self) -> str:
@@ -413,18 +442,26 @@ class LinuxPlatform(Platform):
         return d
 
     # ------------------------------------------------------------------ screen input
+    # The whole screen: every monitor together (mss's monitor 0), in the same pixels xdotool clicks in. (Monitor 1
+    # alone would show only one of two side by side, and clicks there would land on the other.)
     def screen_size(self) -> tuple[int, int]:
-        import mss
-        with mss.mss() as s:
-            m = s.monitors[1]
+        with _grabber() as s:
+            m = s.monitors[0]
             return m["width"], m["height"]
 
     def screenshot_png(self) -> bytes:
-        import mss
         import mss.tools
-        with mss.mss() as s:
-            shot = s.grab(s.monitors[1])
+        with _grabber() as s:
+            shot = s.grab(s.monitors[0])
             return mss.tools.to_png(shot.rgb, shot.size)
+
+    def screenshot_jpeg(self, max_w: int, max_h: int) -> tuple[bytes, float]:
+        # Straight from the grab: making a PNG of it first, to decode it again, took three quarters of the time
+        # (a 4K screen of text and photos: 0.65 s that way, 0.17 s this way).
+        from PIL import Image
+        with _grabber() as s:
+            shot = s.grab(s.monitors[0])
+        return _jpeg_that_fits(Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX"), max_w, max_h)
 
     def _xdo(self, *args: str) -> None:
         r = run(["xdotool", *args], timeout=15)
@@ -517,11 +554,14 @@ class MacPlatform(LinuxPlatform):
         return {"macos_files": path if os.path.ismount(path) else None}
 
 
-def png_to_jpeg_scaled(png: bytes, max_w: int = 1366, max_h: int = 1366, quality: int = 80) -> tuple[bytes, float]:
-    """Shrink a screenshot to fit Claude's image limits. Returns (jpeg, scale) where
-    original_coordinate = sent_coordinate * scale."""
+def _grabber() -> Any:
+    """mss's screen grabber: mss.MSS from mss 10.2 (which deprecates mss.mss), mss.mss before."""
+    import mss
+    return (getattr(mss, "MSS", None) or mss.mss)()
+
+
+def _jpeg_that_fits(im: Any, max_w: int, max_h: int, quality: int = 80) -> tuple[bytes, float]:
     from PIL import Image
-    im = Image.open(io.BytesIO(png)).convert("RGB")
     w, h = im.size
     f = min(1.0, max_w / w, max_h / h)
     if f < 1.0:
@@ -529,3 +569,10 @@ def png_to_jpeg_scaled(png: bytes, max_w: int = 1366, max_h: int = 1366, quality
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=quality, optimize=True)
     return buf.getvalue(), (1.0 / f)
+
+
+def png_to_jpeg_scaled(png: bytes, max_w: int = 1366, max_h: int = 1366, quality: int = 80) -> tuple[bytes, float]:
+    """Shrink a screenshot to fit Claude's image limits. Returns (jpeg, scale) where
+    original_coordinate = sent_coordinate * scale."""
+    from PIL import Image
+    return _jpeg_that_fits(Image.open(io.BytesIO(png)).convert("RGB"), max_w, max_h, quality)

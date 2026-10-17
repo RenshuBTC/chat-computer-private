@@ -434,3 +434,18 @@ def test_an_interrupted_scan_keeps_what_it_didnt_reach(tmp_path, monkeypatch):
     monkeypatch.setattr(FI, "MAX_FILES", 2)                  # the next scan is cut short
     idx.crawl_once()
     assert idx.count() == 5
+
+
+def test_screen_settings_stay_readable(tmp_path):
+    # A text size of 3 px (or 5000) would leave nothing to read; 0 still means automatic.
+    ctx, server, *_ = make(tmp_path)
+    for key, bad in (("text_size", 3), ("text_size", 5000), ("text_scale", 10), ("viewing_distance_cm", 5),
+                     ("screen_inches", -2), ("web_zoom", 9), ("text_scale", "big")):
+        text, err = call(server, "claudeos_settings", {"action": "set", "key": key, "value": bad})
+        assert err, (key, bad)
+    for key, good in (("text_size", 32), ("text_size", 0), ("text_scale", 1.15), ("viewing_distance_cm", 250),
+                      ("screen_inches", 0), ("screen_inches", 55), ("web_zoom", 1.5)):
+        text, err = call(server, "claudeos_settings", {"action": "set", "key": key, "value": good})
+        assert not err, (key, good, text)
+    s = ctx.settings
+    assert (s.text_size, s.text_scale, s.viewing_distance_cm, s.screen_inches, s.web_zoom) == (0, 1.15, 250, 55.0, 1.5)

@@ -27,7 +27,6 @@ from ..files_index import FileIndex
 from ..journal import Journal, move_to_trash
 from ..memory import Memory
 from ..platform import Platform
-from ..platform.linux import png_to_jpeg_scaled
 from ..screen import Screen
 from ..ui import render
 
@@ -105,6 +104,9 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
 
     def reg(name: str, description: str, schema: dict[str, Any], policy: Callable[[dict[str, Any]], str | None] | None = None):
         def deco(fn):
+            if not asyncio.iscoroutinefunction(fn):     # a helper put between @reg and the tool by mistake
+                raise TypeError(f"tool {name}: {fn.__name__} isn't an async function")
+
             async def wrapped(args: dict[str, Any]) -> dict[str, Any]:
                 try:
                     return await fn(args or {})
@@ -241,8 +243,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          "isn't enough (images, video, layout, apps without text). Coordinates in this image work with click x/y.",
          obj({}))
     async def look_at_screen(a):
-        png = await asyncio.to_thread(ctx.platform.screenshot_png)
-        jpg, scale = await asyncio.to_thread(png_to_jpeg_scaled, png, 1280, 800)
+        jpg, scale = await asyncio.to_thread(ctx.platform.screenshot_jpeg, 1280, 800)
         ctx.shot_scale = scale
         return {"content": [{"type": "image", "data": base64.b64encode(jpg).decode(), "mimeType": "image/jpeg"},
                             {"type": "text", "text": "This is the whole screen. For click, use x/y in this image's pixels."}]}
@@ -513,18 +514,19 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          ("the drive with the files from macOS, " if on_mac else "the Windows drive, ") +
          "and the user's Claude usage limits.", obj({}))
     async def system_status(a):
-        def gather() -> dict[str, Any]:
-            st: dict[str, Any] = {"internet": ctx.platform.internet_ok()}
-            parts = [("machine", ctx.platform.system_info), ("wifi", ctx.platform.wifi_status),
-                     ("bluetooth", ctx.platform.bt_status), ("sound", ctx.platform.audio_status)]
-            parts.append(("macos_files" if on_mac else "windows_drive", ctx.platform.windows_status))
-            for key, fn in parts:
-                try:
-                    st[key] = fn()
-                except Exception as exc:
-                    st[key] = f"unavailable ({exc})"
-            return st
-        st = await asyncio.to_thread(gather)
+        p = ctx.platform
+        parts = {"internet": p.internet_ok, "machine": p.system_info, "wifi": p.wifi_status,
+                 "bluetooth": p.bt_status, "sound": p.audio_status,
+                 ("macos_files" if on_mac else "windows_drive"): p.windows_status}
+
+        async def one(fn: Callable[[], Any]) -> Any:
+            try:
+                return await asyncio.to_thread(fn)
+            except Exception as exc:
+                return f"unavailable ({exc})"
+        # Side by side: each asks a different part of the system, and some wait (the internet check up to 3 s,
+        # NetworkManager's own connectivity check longer), so the answer takes as long as the slowest, not all.
+        st: dict[str, Any] = dict(zip(parts, await asyncio.gather(*(one(fn) for fn in parts.values()))))
         if ctx.index:
             st["file_index"] = {**ctx.index.status, "files": ctx.index.status.get("files")}
         if ctx.rate_limit:
@@ -598,6 +600,15 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         fn = {"pair": p.bt_pair, "connect": p.bt_connect, "disconnect": p.bt_disconnect, "forget": p.bt_forget}[act]
         return _text(await asyncio.to_thread(fn, addr))
 
+    def _amount(v: Any, default: int) -> int:
+        """A number Claude gave: 0 is a number (volume 0 is silence, not the default), and "40%" is 40."""
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return default
+        m = re.search(r"\d+(\.\d+)?", str(v))
+        if not m:
+            raise ValueError(f"{v!r} isn't a number")
+        return round(float(m.group()))
+
     @reg("sound", "Sound: status, set_volume (0-100), volume_up / volume_down (by value, default 10), mute, unmute, "
          "output (switch where sound plays, by name).",
          obj({"action": {"type": "string", "enum": ["status", "set_volume", "volume_up", "volume_down", "mute", "unmute", "output"]},
@@ -607,9 +618,9 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         if act == "status":
             return _text(_json(await asyncio.to_thread(p.audio_status)))
         if act == "set_volume":
-            return _text(await asyncio.to_thread(p.set_volume, int(float(v or 50)), None))
+            return _text(await asyncio.to_thread(p.set_volume, _amount(v, 50), None))
         if act in ("volume_up", "volume_down"):
-            step = int(float(v or 10))
+            step = _amount(v, 10)
             return _text(await asyncio.to_thread(p.set_volume, None, step if act == "volume_up" else -step))
         if act in ("mute", "unmute"):
             return _text(await asyncio.to_thread(p.set_mute, act == "mute"))
@@ -748,13 +759,19 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         limits = {"speech_speed": (0.5, 2.0, "speech_speed goes from 0.5 (slow) to 2.0 (fast); 1.0 is normal."),
                   "auto_sleep_minutes": (0, 24 * 60, "auto_sleep_minutes is 0 (never) or a number of minutes."),
                   "fresh_session_after_idle_hours": (0.1, 24 * 365, "fresh_session_after_idle_hours must be more than 0.")}
-        if key in limits:
-            lo, hi, why = limits[key]
+        # The screen's: 0 is automatic; other values must leave something people can read.
+        limits.update({"text_scale": (0.5, 3.0, "text_scale goes from 0.5 to 3.0; 1.0 is automatic.")})
+        auto_or = {"text_size": (12, 200, "text_size is 0 (automatic) or a size in pixels from 12 to 200."),
+                   "viewing_distance_cm": (20, 1000, "viewing_distance_cm is 0 (estimated) or 20 to 1000."),
+                   "screen_inches": (5, 200, "screen_inches is 0 (what the screen reports) or its diagonal, 5 to 200."),
+                   "web_zoom": (0.5, 5.0, "web_zoom is 0 (automatic) or 0.5 to 5.")}
+        if key in limits or key in auto_or:
+            lo, hi, why = limits.get(key) or auto_or[key]
             try:
                 n = float(value)
             except (TypeError, ValueError):
                 return _err(why)
-            if not lo <= n <= hi:
+            if not (lo <= n <= hi or (key in auto_or and n == 0)):
                 return _err(why)
         ctx.settings.set(key, value)
         ctx.settings.save(ctx.paths)

@@ -8,19 +8,28 @@
   var ai = {};          // id -> {el, md, text, raf}
 
   // The column is anchored at the bottom. Older messages that no longer fit are hidden whole,
-  // so a line is never cut in half at the top of the screen.
-  var fitRaf = 0;
+  // so a line is never cut in half at the top of the screen. While words stream in, this runs every
+  // frame, so it only hides what has newly scrolled off, measuring before it changes anything (hiding the
+  // oldest doesn't move the others). Everything is looked at again when there may be room for more: a new
+  // size or layout, a shorter message, a new history.
+  var fitRaf = 0, fitAll = true;
   function fit() {
     fitRaf = 0;
-    var kids = log.children, n = kids.length, i;
+    var kids = log.children, n = kids.length, i, hide = [];
     var room = parseFloat(getComputedStyle(body).fontSize || "16") * 1.5;
-    for (i = 0; i < n; i++) kids[i].classList.remove("gone");
-    for (i = 0; i < n - 1; i++) {
-      if (kids[i].getBoundingClientRect().top < room) kids[i].classList.add("gone"); else break;
+    if (fitAll) {
+      fitAll = false;
+      for (i = 0; i < n; i++) kids[i].classList.remove("gone");
     }
+    for (i = 0; i < n - 1; i++) {
+      if (kids[i].classList.contains("gone")) continue;
+      if (kids[i].getBoundingClientRect().top < room) hide.push(kids[i]); else break;
+    }
+    for (i = 0; i < hide.length; i++) hide[i].classList.add("gone");
   }
   function scheduleFit() { if (!fitRaf) fitRaf = requestAnimationFrame(fit); }
-  window.addEventListener("resize", scheduleFit);
+  function refitAll() { fitAll = true; scheduleFit(); }
+  window.addEventListener("resize", refitAll);
   function trim() {
     while (log.children.length > MAX_ITEMS) log.removeChild(log.firstChild);
     body.classList.toggle("has-log", log.children.length > 0);
@@ -56,14 +65,14 @@
       liveText.textContent = "";
       body.classList.remove("hearing");
       var u = users[id];
-      if (!u) { u = users[id] = el("you", text); log.appendChild(u); trim(); }
-      else u.textContent = text;
-      scheduleFit();
+      if (!u) { u = users[id] = el("you", text); log.appendChild(u); trim(); scheduleFit(); }
+      else { u.textContent = text; refitAll(); }
     },
     partial: function (text) {
+      var shorter = (text || "").length < liveText.textContent.length;
       liveText.textContent = text || "";
       body.classList.toggle("hearing", !!text);
-      scheduleFit();
+      if (shorter) refitAll(); else scheduleFit();
     },
     ai: function (id, delta) {
       var m = ensureAI(id);
@@ -77,7 +86,7 @@
       if (m.raf) cancelAnimationFrame(m.raf);
       paint(m);
       m.el.classList.remove("thinking");
-      if (!m.text && !m.el.querySelector(".activity")) { m.el.remove(); trim(); }
+      if (!m.text && !m.el.querySelector(".activity")) { m.el.remove(); trim(); refitAll(); }
       delete ai[id];
     },
     activity: function (id, text) {
@@ -87,6 +96,7 @@
       // Activity lines sit above the words they lead to.
       if (m.text) { m.el.appendChild(a); var md2 = el("md"); m.el.appendChild(md2); m.md = md2; m.text = ""; }
       else m.el.insertBefore(a, m.md);
+      scheduleFit();
     },
     notice: function (text, kind) {
       var n = el("notice" + (kind === "warn" ? " warn" : ""), text);
@@ -108,6 +118,7 @@
         }
       });
       trim();
+      refitAll();
     },
     settings: function (name) {
       var h = new Date().getHours();
@@ -119,9 +130,9 @@
       var r = document.documentElement.style;
       r.setProperty("--co-size", sizePx + "px");
       r.setProperty("--co-column", columnPx + "px");
-      scheduleFit();
+      refitAll();
     },
-    clear: function () { log.innerHTML = ""; ai = {}; users = {}; trim(); }
+    clear: function () { log.innerHTML = ""; ai = {}; users = {}; trim(); refitAll(); }
   };
   window.CO.settings("");
   try { window.webkit.messageHandlers.claudeos.postMessage(JSON.stringify({ type: "ready" })); } catch (e) {}

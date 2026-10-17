@@ -6,6 +6,7 @@ trashed files remember where they came from. "Undo that" walks this journal back
 """
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import logging.handlers
@@ -220,7 +221,7 @@ def untrash(original: str, trashed: str | None) -> str:
 def find_in_trash(original: str) -> str | None:
     """Locate the newest trashed copy of `original` (XDG trash in home or on the same drive)."""
     from urllib.parse import unquote
-    candidates: list[tuple[str, str]] = []
+    candidates: list[tuple[str, int, str]] = []
     homes = [Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "Trash"]
     # Trash folders on other drives: <mountpoint>/.Trash-<uid>
     p = Path(original).resolve()
@@ -228,11 +229,8 @@ def find_in_trash(original: str) -> str | None:
         if os.path.ismount(parent):
             homes.append(parent / f".Trash-{os.getuid()}")
             break
-    for trash in homes:
-        info_dir = trash / "info"
-        if not info_dir.is_dir():
-            continue
-        for info in info_dir.glob("*.trashinfo"):
+    def look(infos: list[Path], trash: Path) -> None:
+        for info in infos:
             try:
                 text = info.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -243,8 +241,27 @@ def find_in_trash(original: str) -> str | None:
             if not os.path.isabs(stored):
                 stored = str(trash.parent / stored)
             if os.path.normpath(stored) == os.path.normpath(str(p)):
-                candidates.append((date_line, str(trash / "files" / info.name[: -len(".trashinfo")])))
+                # DeletionDate is to the second: when the same file was trashed twice in one second, the info
+                # written last is the newer.
+                try:
+                    written = info.stat().st_mtime_ns
+                except OSError:
+                    written = 0
+                candidates.append((date_line, written, str(trash / "files" / info.name[: -len(".trashinfo")])))
+
+    # A trashed file keeps its name, or one made from it: GLib (which send2trash uses when it can) calls a second
+    # report.pdf report.2.pdf, send2trash's own way report 1.pdf. Both start with what comes before the first dot,
+    # so only those are read; the trash only grows, and reading all of it for each file got slower and slower.
+    stem = p.name.split(".", 1)[0]
+    for trash in homes:
+        info_dir = trash / "info"
+        if not info_dir.is_dir():
+            continue
+        if stem:
+            look(list(info_dir.glob(glob.escape(stem) + "*.trashinfo")), trash)
+        if not candidates:
+            look([i for i in info_dir.glob("*.trashinfo") if not (stem and i.name.startswith(stem))], trash)
     if not candidates:
         return None
     candidates.sort()
-    return candidates[-1][1]
+    return candidates[-1][2]

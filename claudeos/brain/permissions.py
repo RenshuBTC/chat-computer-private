@@ -23,9 +23,10 @@ import os
 import re
 import shlex
 import time
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+if TYPE_CHECKING:
+    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from ..answers import classify_answer
 from ..config import Paths
@@ -581,6 +582,7 @@ class PermissionGate:
 
     @staticmethod
     def _deny(msg: str) -> PermissionResultDeny:
+        from claude_agent_sdk import PermissionResultDeny
         return PermissionResultDeny(message=msg, interrupt=False)
 
     def _user_said_no(self, said: str) -> PermissionResultDeny:
@@ -616,10 +618,10 @@ class PermissionGate:
             if why:
                 self._note("deny", tool, inp)
                 return self._deny(why)
-            return PermissionResultAllow(updated_input=inp)
+            return _allow(inp)
 
         if tool in ("WebSearch", "WebFetch", "TodoWrite", "ToolSearch"):
-            return PermissionResultAllow(updated_input=inp)
+            return _allow(inp)
 
         if tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             raw = inp.get("file_path") or inp.get("notebook_path") or ""
@@ -639,7 +641,7 @@ class PermissionGate:
             existed = os.path.isfile(path)
             backup = await asyncio.to_thread(self.journal.backup, path) if existed else None
             self.journal.record_overwrite(path, backup, "changed" if existed else "created")
-            return PermissionResultAllow(updated_input=inp)
+            return _allow(inp)
 
         if tool == "Bash":
             cmd = str(inp.get("command", ""))
@@ -651,7 +653,7 @@ class PermissionGate:
                 return self._deny(why)
             if verdict == "allow":
                 self._moved_to(cmd)
-                return PermissionResultAllow(updated_input=inp)
+                return _allow(inp)
             desc = (inp.get("description") or "").strip().rstrip(".")
             question = (f"Can I run a command to {desc[0].lower() + desc[1:]}?" if desc and len(desc) > 3
                         else "Can I run this command: " + _short(cmd) + "?")
@@ -660,7 +662,7 @@ class PermissionGate:
             if ok:
                 self._moved_to(cmd)
                 self.journal.record("command", desc or _short(cmd), command=cmd)
-                return PermissionResultAllow(updated_input=inp)
+                return _allow(inp)
             return self._user_said_no(said)
 
         if tool.startswith("mcp__claudeos__"):
@@ -671,14 +673,21 @@ class PermissionGate:
                 self._note("deny", tool, inp)
                 return self._deny(question[5:].strip())
             if not question:
-                return PermissionResultAllow(updated_input=inp)
+                return _allow(inp)
             ok, said = await self._ask(question, self._key(tool, inp))
             self._note("allow" if ok else "deny", tool, inp)
-            return PermissionResultAllow(updated_input=inp) if ok else self._user_said_no(said)
+            return _allow(inp) if ok else self._user_said_no(said)
 
         # Any other tool (e.g. one added by a future engine version): ask.
         ok, said = await self._ask(f"Can I use {tool}?", self._key(tool, inp))
-        return PermissionResultAllow(updated_input=inp) if ok else self._user_said_no(said)
+        return _allow(inp) if ok else self._user_said_no(said)
+
+
+def _allow(inp: dict[str, Any]) -> PermissionResultAllow:
+    # The Agent SDK is loaded when the engine first asks, not with this module: the window needs is_private from
+    # here, and it comes up without waiting for the SDK (most of a second).
+    from claude_agent_sdk import PermissionResultAllow
+    return PermissionResultAllow(updated_input=inp)
 
 
 def _short(cmd: str, n: int = 80) -> str:

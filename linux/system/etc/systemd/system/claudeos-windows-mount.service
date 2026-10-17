@@ -7,15 +7,19 @@
 # so the unit always "succeeds".
 [Unit]
 Description=ClaudeOS: mount Windows partition at /mnt/windows
-# Needs udev-settled block devices; dislocker/ntfs-3g use FUSE. We keep the
-# default dependencies (clean ordering vs basic.target/shutdown); "best effort"
-# is guaranteed by the '|| true' in ExecStart, not by dropping dependencies.
-After=local-fs.target systemd-udev-settle.service
-Wants=systemd-udev-settle.service
+# We keep the default dependencies (clean ordering vs basic.target/shutdown);
+# "best effort" is guaranteed by the '|| true' in ExecStart, not by dropping
+# dependencies.
+After=local-fs.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# The disks' details (what's on each partition) must be known first. Waited for
+# here, not with systemd-udev-settle.service: that one comes before
+# sysinit.target, so the whole start, ClaudeOS's screen included, would wait for
+# every device. ClaudeOS takes Windows' files in when they arrive.
+ExecStartPre=-/usr/bin/udevadm settle --timeout=30
 # The helper prints JSON to stdout; '|| true' makes a locked/absent Windows a
 # non-fatal condition so the AI session always comes up.
 ExecStart=/bin/sh -c '/usr/local/libexec/claudeos/claudeos-root mount-windows || true'

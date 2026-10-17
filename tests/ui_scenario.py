@@ -120,6 +120,9 @@ class XPlatform(FakePlatform):
     def screenshot_png(self):
         return self.lin.screenshot_png()
 
+    def screenshot_jpeg(self, max_w, max_h):
+        return self.lin.screenshot_jpeg(max_w, max_h)
+
     def click(self, x, y, button="left", clicks=1):
         self.lin.click(x, y, button, clicks)
 

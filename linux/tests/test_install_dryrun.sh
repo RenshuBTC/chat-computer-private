@@ -57,6 +57,10 @@ has   fedora 'sudoers' "the root helper's sudo rule"
 lacks fedora 'apt-get|netplan|ufw|update-grub|07_claudeos|Xwrapper|claudeos-windows-mount|\.lua |ubuntu-drivers|unattended-upgrades' \
   "nothing of the PC's"
 
+# In the installer the voice is downloaded then, so ClaudeOS can talk the first time it starts.
+bash "$REPO/install-claudeos.sh" --user testuser --dry-run --from-installer --distro ubuntu > "$W/installer" 2>&1
+has   installer 'download the voice models into /home/testuser/ClaudeOS/models' "the voice, ready for the first start"
+
 # The two package lists don't mention each other's names.
 for p in xserver-xorg-core libspa-0.2-bluetooth network-manager ntfs-3g efibootmgr fonts-noto-core; do
   grep -q "dnf install .*[[:space:]]$p\([[:space:]]\|$\)" "$W/fedora" && fail "fedora: Ubuntu's package $p in the dnf list"

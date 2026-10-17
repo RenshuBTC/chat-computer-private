@@ -141,11 +141,14 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging(paths, verbose=getattr(args, "verbose", False))
         from .platform import get_platform
         platform = get_platform("fake" if getattr(args, "fake", False) else None)
-        from .controller import Controller
         from .ui.gtk_app import run_app
         voice = not getattr(args, "no_voice", False)
-        return run_app(paths, settings, lambda screen: Controller(paths, settings, platform, screen, voice=voice),
-                       windowed=getattr(args, "windowed", False))
+
+        def make_controller(screen):
+            # Loaded once the window shows (run_app): the controller brings in the Agent SDK, most of a second.
+            from .controller import Controller
+            return Controller(paths, settings, platform, screen, voice=voice)
+        return run_app(paths, settings, make_controller, windowed=getattr(args, "windowed", False))
     ap.print_help()
     return 2
 

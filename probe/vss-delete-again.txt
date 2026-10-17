@@ -1,0 +1,6 @@
+﻿> vssadmin delete shadows /for=C: /quiet exit code 1
+vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool
+(C) Copyright 2001-2013 Microsoft Corp.
+
+No items found that satisfy the query.
+

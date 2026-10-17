@@ -1,0 +1,22 @@
+﻿C: size 160467762688, can shrink to 160467762688 (0 GB), free 30850068480
+asked at 2026-10-17T07:14:19.2977899+00:00
+event 259 from Microsoft-Windows-Defrag at 2026-10-17T07:14:31.9079989+00:00
+  [0] Windows (C:)
+  [1] \\?\Volume{6f146b24-4f0e-4ba2-97d1-29ea630e5753}
+  [2] \pagefile.sys::$DATA
+  [3] 0x255c9fa
+  [4] 0x1e2dd0f
+  [5] P---D
+  [6] <analysis>
+  [7] 0 0 0 0 5 1 0 0 241 0 0 0 0 0 0 0 34 54 121 98 83 114 178 185 99 123 113 54 14 0 0 0 0 0 0 0
+  message: A volume shrink analysis was initiated on volume Windows (C:). This event log entry details information about the last unmovable file that could limit the maximum number of reclaimable bytes. |   |  Diagnostic details: |  - The last unmovable file appears to be: \pagefile.sys::$DATA |  - The last cluster of the file is: 0x255c9fa |  - Shrink potential target (LCN address): 0x1e2dd0f |  - The NTFS file flags are: P---D |  - Shrink phase: <analysis> |   |  To find more details about this file please use the "fsutil volume querycluster \\?\Volume{6f146b24-4f0e-4ba2-97d1-29ea630e5753} 0x255c9fa" command.
+event 259 from Microsoft-Windows-Defrag at 2026-10-17T07:14:16.9842115+00:00
+  [0] Windows (C:)
+  [1] \\?\Volume{6f146b24-4f0e-4ba2-97d1-29ea630e5753}
+  [2] \pagefile.sys::$DATA
+  [3] 0x255c9fa
+  [4] 0x1dffee9
+  [5] P---D
+  [6] <analysis>
+  [7] 0 0 0 0 5 1 0 0 241 0 0 0 0 0 0 0 34 54 121 98 83 114 178 185 99 123 113 54 14 0 0 0 0 0 0 0
+  message: A volume shrink analysis was initiated on volume Windows (C:). This event log entry details information about the last unmovable file that could limit the maximum number of reclaimable bytes. |   |  Diagnostic details: |  - The last unmovable file appears to be: \pagefile.sys::$DATA |  - The last cluster of the file is: 0x255c9fa |  - Shrink potential target (LCN address): 0x1dffee9 |  - The NTFS file flags are: P---D |  - Shrink phase: <analysis> |   |  To find more details about this file please use the "fsutil volume querycluster \\?\Volume{6f146b24-4f0e-4ba2-97d1-29ea630e5753} 0x255c9fa" command.

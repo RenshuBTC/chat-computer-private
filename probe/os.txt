@@ -1,0 +1,7 @@
+﻿
+Caption                                  Version    BuildNumber OSLanguage
+-------                                  -------    ----------- ----------
+Microsoft Windows Server 2025 Datacenter 10.0.26100 26100             1033
+
+
+

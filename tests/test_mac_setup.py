@@ -532,12 +532,15 @@ def test_first_start_tries_again_then_falls_back_to_fedora(tmp_path):
     assert (esp / "EFI/fedora/grub.cfg").read_text() == "ClaudeOS first start\n"    # tries again next start
     assert (esp / "claudeos/tries").read_text().strip() == "1"
     assert (root / "etc/reconfigSys").exists()                                       # Fedora's questions still on
+    assert (esp / "claudeos/setup.env").exists() and (esp / "claudeos/secrets/claude_token").exists()  # for the retry
     (esp / "claudeos/tries").write_text("2\n")
     env = dict(os.environ, PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}", CLAUDEOS_ESP=str(esp),
                CLAUDEOS_TARGET=str(root), CLAUDEOS_CONSOLE="/dev/null")
     r = subprocess.run(["sh", str(MAC / "esp/firstboot.sh")], env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 1
     assert (esp / "EFI/fedora/grub.cfg").read_text() == "Fedora's own\n"            # third time: Fedora's start
+    for gone in ("setup.env", "secrets", "settings.json"):                          # and no sign-in left behind
+        assert not (esp / "claudeos" / gone).exists(), gone
 
 
 def test_first_start_refuses_a_bad_account_name(tmp_path):

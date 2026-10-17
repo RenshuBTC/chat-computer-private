@@ -117,8 +117,8 @@ PipeWire/WirePlumber run as systemd user services (dbus-user-session). Logs: `~/
 | `boot-windows-next` | One-time boot into Windows on next reboot: `efibootmgr --bootnext <Windows Boot Manager>`; fallback `grub-reboot "Windows"` |
 | `boot-default windows\|claudeos` | What starts when the PC turns on: that system's UEFI entry first in `BootOrder` (Windows Boot Manager, or `ubuntu` for ClaudeOS), the other entries kept in order; nothing removed |
 | `mount-windows` | (Re)mount the Windows partition at /mnt/windows (rw if clean else ro; never `remove_hiberfile`) |
-| `apt-install PKG...` | `apt-get install -y` validated package names (`^[a-z0-9][a-z0-9+.-]{1,62}$`) |
-| `apt-remove PKG...` | same validation |
+| `apt-install PKG...` | `apt-get install -y --no-remove` (an install never removes anything) of validated package names (`^[a-z0-9][a-z0-9+.-]{0,61}[a-z0-9+]$`), each one apt knows by exactly that name (`apt-cache pkgnames`): apt-get reads `name-` as "remove name", and a name that isn't a package's as a pattern |
+| `apt-remove PKG...` | the same validation, each one installed (`dpkg-query`) and not one of ClaudeOS's own packages (`/etc/claudeos/base-packages`, written by install-claudeos.sh); refused when the removal would also take packages that weren't named (they're listed in the error, from `apt-get -s remove`), so no removal takes ClaudeOS's screen, voice or network with it |
 | `system-update` | `apt-get update && apt-get -y upgrade` |
 | `boot-macos-next` | Mac: macOS for the next start only (`asahi-bless --set-boot-macos --next`; if macOS was renamed, the one start-up volume that isn't ClaudeOS) |
 | `boot-default macos\|claudeos` | Mac: the start-up volume (`asahi-bless --set-boot-macos`, or `--set-boot ClaudeOS`) |
@@ -127,7 +127,8 @@ PipeWire/WirePlumber run as systemd user services (dbus-user-session). Logs: `~/
 | `wipe-install-secrets` | Remove `/claudeos/secrets` from a ClaudeOS installer (FAT32 labelled `CLAUDEOS`) still on the PC or plugged in |
 
 On Fedora (a Mac), `apt-install`, `apt-remove` and `system-update` use `dnf` (`install -y
---setopt=install_weak_deps=False`, `remove -y`, `upgrade -y --refresh`). ClaudeOS asks the user (spoken yes/no) before calling any verb except `status`.
+--setopt=install_weak_deps=False`, `remove -y --setopt=clean_requirements_on_remove=False` after `rpm -q` and
+`rpm -e --test` show the packages are installed and nothing else needs them, `upgrade -y --refresh`). ClaudeOS asks the user (spoken yes/no) before calling any verb except `status`.
 
 ### Boot menu
 

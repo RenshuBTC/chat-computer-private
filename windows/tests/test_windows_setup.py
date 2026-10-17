@@ -317,6 +317,24 @@ def test_launcher_uses_windows_line_endings():
         assert b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b""), name
 
 
+ZONEINFO = Path("/usr/share/zoneinfo")
+
+
+@pytest.mark.skipif(not (ZONEINFO / "tzdata.zi").exists(), reason="no tzdata here")
+def test_time_zones_are_ones_ubuntu_has():
+    # Setup's zone goes to the Ubuntu installer and ClaudeOS's settings. Ubuntu 24.04 keeps old names such as
+    # Asia/Calcutta only in tzdata-legacy, which isn't installed, so every zone must be a current name. (Run
+    # where tzdata-legacy isn't installed either, as on Ubuntu 24.04, this checks exactly that.)
+    import re
+    zones = re.findall(r"= '([^']+)'", (WIN / "lib/Timezones.ps1").read_text())
+    assert len(zones) > 100
+    legacy = {"Asia/Calcutta", "Europe/Kiev", "America/Godthab", "Asia/Rangoon", "Asia/Katmandu",
+              "America/Buenos_Aires", "America/Indianapolis", "Asia/Saigon"}
+    assert not legacy & set(zones)
+    missing = [z for z in zones if not (ZONEINFO / z).is_file()]
+    assert not missing, missing
+
+
 @needs_pwsh
 def test_windows_powershell_5_1_compatible():
     """Syntax, commands and .NET types must exist in Windows PowerShell 5.1 on Windows 10/11."""

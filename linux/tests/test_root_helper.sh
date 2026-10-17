@@ -132,8 +132,49 @@ SH
 shim apt-get <<SH
 #!/bin/bash
 echo "apt-get \$*" >> "$LOG"
+# A simulated removal (-s remove) prints the plan in \$WORK/apt-plan the way apt-get does: "Remv NAME [VERSION]".
+if [ "\$1" = "-s" ]; then cat "$WORK/apt-plan" 2>/dev/null; fi
 exit 0
 SH
+
+# apt-cache pkgnames [--all-names] PREFIX: the names apt knows (\$WORK/apt-names) that start with PREFIX.
+shim apt-cache <<SH
+#!/bin/bash
+echo "apt-cache \$*" >> "$LOG"
+[ "\$1" = pkgnames ] || exit 1
+prefix="\${*: -1}"
+while read -r n; do case "\$n" in "\$prefix"*) echo "\$n" ;; esac; done < "$WORK/apt-names"
+exit 0
+SH
+printf '%s\n' firefox-esr libwebkit2gtk-4.1-0 vlc g++ cowsay cowsay-off xcowsay at-spi2-common > "$WORK/apt-names"
+
+# dpkg-query -W -f=... NAME: "installed" for the names in \$WORK/dpkg-installed.
+shim dpkg-query <<SH
+#!/bin/bash
+name="\${*: -1}"
+if grep -qxF -- "\$name" "$WORK/dpkg-installed" 2>/dev/null; then echo installed; exit 0; fi
+echo "dpkg-query: no packages found matching \$name" >&2
+exit 1
+SH
+printf '%s\n' vlc g++ at-spi2-common > "$WORK/dpkg-installed"
+
+# rpm (Fedora): -q NAME succeeds for the names in \$WORK/rpm-installed; -e --test fails, naming who needs
+# them, when \$WORK/rpm-needed has lines.
+shim rpm <<SH
+#!/bin/bash
+echo "rpm \$*" >> "$LOG"
+case "\$1" in
+  -q) grep -qxF -- "\${*: -1}" "$WORK/rpm-installed" 2>/dev/null; exit ;;
+  -e) if [ -s "$WORK/rpm-needed" ]; then
+        echo "error: Failed dependencies:" >&2
+        while read -r l; do printf '\t%s\n' "\$l" >&2; done < "$WORK/rpm-needed"
+        exit 1
+      fi
+      exit 0 ;;
+esac
+exit 1
+SH
+printf '%s\n' vlc gtk3 > "$WORK/rpm-installed"
 
 shim systemctl <<SH
 #!/bin/bash
@@ -254,11 +295,76 @@ if grep -q 'apt-get install' "$LOG"; then fail "apt-install invoked apt-get for 
 
 : > "$LOG"
 OUT="$(runhelper apt-install firefox-esr libwebkit2gtk-4.1-0 2>/dev/null)"
-if [ "$(jget "$OUT" ok)" = "True" ] && grep -q 'apt-get install -y --no-install-recommends firefox-esr libwebkit2gtk-4.1-0' "$LOG"; then
-  pass "apt-install accepts valid names and calls apt-get"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q 'apt-get install -y --no-install-recommends --no-remove firefox-esr libwebkit2gtk-4.1-0' "$LOG"; then
+  pass "apt-install accepts valid names and calls apt-get (which may not remove anything)"
 else
   fail "apt-install valid-name path failed: $OUT"; cat "$LOG"
 fi
+: > "$LOG"
+OUT="$(runhelper apt-install g++ 2>/dev/null)"
+[ "$(jget "$OUT" ok)" = "True" ] && grep -q 'apt-get install .* g++$' "$LOG" \
+  && pass "apt-install takes a real name ending in + (g++)" || { fail "apt-install g++: $OUT"; cat "$LOG"; }
+
+# apt-get reads "name-" as "remove name", and a name that isn't a package's as a pattern matching many:
+# neither may reach apt-get install.
+for bad in "vlc-" "cowsa.y" "cowsay+"; do
+  : > "$LOG"
+  OUT="$(runhelper apt-install "$bad" 2>/dev/null)"
+  if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q 'apt-get install' "$LOG"; then
+    pass "apt-install refuses [$bad]: $(jget "$OUT" error)"
+  else
+    fail "apt-install let [$bad] through -> $OUT"; cat "$LOG"
+  fi
+done
+
+# ===========================================================================
+# apt-remove: exactly the named, installed packages, and nothing that needs them
+# ===========================================================================
+: > "$LOG"; printf 'Remv vlc [3.0.20-3build6]\n' > "$WORK/apt-plan"
+OUT="$(runhelper apt-remove vlc 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q '^apt-get -s remove vlc$' "$LOG" && grep -q '^apt-get remove -y vlc$' "$LOG"; then
+  pass "apt-remove removes a named, installed package (after checking what else would go)"
+else
+  fail "apt-remove vlc: $OUT"; cat "$LOG"
+fi
+# "cowsay+" given to remove would install cowsay; "at-spi2." would be a pattern: neither is an installed package.
+for bad in "cowsay+" "at-spi2.c" "cowsay"; do
+  : > "$LOG"
+  OUT="$(runhelper apt-remove "$bad" 2>/dev/null)"
+  if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q 'apt-get' "$LOG"; then
+    pass "apt-remove refuses [$bad], which isn't an installed package"
+  else
+    fail "apt-remove let [$bad] through -> $OUT"; cat "$LOG"
+  fi
+done
+# Removing at-spi2-common would also remove GTK and WebKit, which ClaudeOS's screen needs (Ubuntu 24.04's
+# apt-get -s remove at-spi2-common lists them).
+: > "$LOG"
+printf '%s\n' 'Remv at-spi2-common [2.52.0-1build1] [libatk1.0-0t64:amd64 ]' 'Remv libatk1.0-0t64 [2.52.0-1build1]' \
+  'Remv libgtk-3-0t64 [3.24.41-4ubuntu1.3] [obconf:amd64 ]' 'Remv gir1.2-webkit2-4.1 [2.52.6-0ubuntu0.24.04.1]' > "$WORK/apt-plan"
+OUT="$(runhelper apt-remove at-spi2-common 2>/dev/null)"
+err="$(jget "$OUT" error)"
+if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q '^apt-get remove' "$LOG" \
+   && [[ "$err" == *gir1.2-webkit2-4.1* ]] && [[ "$err" == *libgtk-3-0t64* ]] && [[ "$err" != *at-spi2-common* ]]; then
+  pass "apt-remove refuses to take what needs the package with it, and names it: $err"
+else
+  fail "apt-remove cascade: $OUT"; cat "$LOG"
+fi
+rm -f "$WORK/apt-plan"
+# ClaudeOS's own packages (install-claudeos.sh lists them) stay, even when named.
+printf '%s\n' gir1.2-webkit2-4.1 pipewire > "$WORK/base-packages"
+export CLAUDEOS_TEST_BASE_PACKAGES="$WORK/base-packages"
+printf '%s\n' gir1.2-webkit2-4.1 pipewire >> "$WORK/dpkg-installed"
+for pm in apt dnf; do
+  : > "$LOG"
+  OUT="$(CLAUDEOS_TEST_PKG=$pm runhelper apt-remove vlc gir1.2-webkit2-4.1 2>/dev/null)"
+  if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -qE '^(apt-get|dnf|rpm) ' "$LOG" && [[ "$(jget "$OUT" error)" == *"part of ClaudeOS"* ]]; then
+    pass "apt-remove ($pm) keeps ClaudeOS's own packages: $(jget "$OUT" error)"
+  else
+    fail "apt-remove ($pm) of a ClaudeOS package: $OUT"; cat "$LOG"
+  fi
+done
+unset CLAUDEOS_TEST_BASE_PACKAGES
 
 # ===========================================================================
 # set-timezone: reject traversal/unknown, accept a real zone
@@ -502,6 +608,25 @@ if [ "$(jget "$OUT" ok)" = "True" ] && grep -q "dnf install -y --setopt=install_
 else
   fail "apt-install with dnf: $OUT"; cat "$LOG"
 fi
+: > "$LOG"; : > "$WORK/rpm-needed"
+OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper apt-remove vlc 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q "dnf remove -y --setopt=clean_requirements_on_remove=False vlc" "$LOG"; then
+  pass "apt-remove on Fedora: dnf remove of just that package"
+else
+  fail "apt-remove with dnf: $OUT"; cat "$LOG"
+fi
+: > "$LOG"
+echo 'libgtk-3.so.0()(64bit) is needed by (installed) webkit2gtk4.1-2.48.0-1.fc44.aarch64' > "$WORK/rpm-needed"
+OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper apt-remove gtk3 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q "dnf remove" "$LOG" && [[ "$(jget "$OUT" error)" == *webkit2gtk4.1-2.48.0* ]]; then
+  pass "apt-remove on Fedora refuses to take what needs the package with it: $(jget "$OUT" error)"
+else
+  fail "apt-remove with dnf, needed: $OUT"; cat "$LOG"
+fi
+: > "$LOG"; : > "$WORK/rpm-needed"
+OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper apt-remove cowsay 2>/dev/null)"
+[ "$(jget "$OUT" ok)" = "False" ] && ! grep -q "dnf remove" "$LOG" \
+  && pass "apt-remove on Fedora refuses a package that isn't installed" || { fail "apt-remove with dnf, not installed: $OUT"; cat "$LOG"; }
 : > "$LOG"
 OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper system-update 2>/dev/null)"
 grep -q "dnf upgrade -y --refresh" "$LOG" && pass "system-update on Fedora: dnf upgrade" || fail "system-update with dnf: $OUT"

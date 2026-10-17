@@ -21,12 +21,15 @@ class CommandResult:
 def run(cmd: list[str], timeout: float = 20, input: str | None = None, env: dict[str, str] | None = None) -> CommandResult:
     """Run a command without a shell. Never raises for a missing program or a timeout."""
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=input, env=env)
+        # errors="replace": output that isn't valid UTF-8 (a Wi-Fi network's name, say) is still read.
+        p = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout, input=input, env=env)
         return CommandResult(p.returncode, p.stdout, p.stderr)
     except FileNotFoundError:
         return CommandResult(127, "", f"{cmd[0]} is not installed")
     except subprocess.TimeoutExpired:
         return CommandResult(124, "", f"{cmd[0]} took too long")
+    except OSError as exc:
+        return CommandResult(126, "", f"{cmd[0]} couldn't run: {exc}")
 
 
 class Platform:

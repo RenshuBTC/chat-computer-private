@@ -22,7 +22,7 @@ from typing import Any, Awaitable, Callable
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from ..brain.permissions import holds_private, is_private
-from ..config import Paths, Settings
+from ..config import EFFORTS, MODEL_RE, Paths, Settings
 from ..files_index import FileIndex
 from ..journal import Journal, move_to_trash
 from ..memory import Memory
@@ -697,7 +697,17 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         key = a.get("key", "")
         if key not in SETTABLE:
             return _err(f"{key!r} can't be changed. Settable: {', '.join(sorted(SETTABLE))}")
-        ctx.settings.set(key, a.get("value"))
+        # Values that would stop Claude from working (and so couldn't be put back by asking) are refused.
+        value = a.get("value")
+        if key == "effort" and str(value) not in EFFORTS:
+            return _err(f"effort must be one of: {', '.join(EFFORTS)}.")
+        if key == "model" and not MODEL_RE.match(str(value or "")):
+            return _err("That isn't a Claude model name (like claude-sonnet-5-5, or opus).")
+        if key == "stt_model":
+            from ..voice.models import WHISPER_MODELS
+            if str(value) not in WHISPER_MODELS:
+                return _err(f"stt_model must be one of: {', '.join(WHISPER_MODELS)}.")
+        ctx.settings.set(key, value)
         ctx.settings.save(ctx.paths)
         if ctx.on_settings_changed:
             ctx.on_settings_changed([key])

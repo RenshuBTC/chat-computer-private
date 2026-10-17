@@ -346,6 +346,9 @@ Assert-True (-not (Test-ClaudeLogin '')) 'empty sign-in rejected'
 # ------------------------------------------------------------------ time zones and settings
 Assert-Equal 'Asia/Singapore' (Get-IanaTimeZone 'Singapore Standard Time') 'singapore'
 Assert-Equal 'Europe/London' (Get-IanaTimeZone 'GMT Standard Time') 'london'
+# The current names: Ubuntu 24.04 has no Asia/Calcutta or Europe/Kiev (they're in tzdata-legacy, not installed).
+Assert-Equal 'Asia/Kolkata' (Get-IanaTimeZone 'India Standard Time') 'india'
+Assert-Equal 'Europe/Kyiv' (Get-IanaTimeZone 'FLE Standard Time') 'kyiv'
 Assert-Equal 'Etc/UTC' (Get-IanaTimeZone 'Nowhere Standard Time') 'unknown zone'
 $settings = New-SettingsJson -UserName 'Ren "R" Shu' -WindowsUser 'rensh' -TimeZone 'Asia/Singapore'
 $parsed = $settings | ConvertFrom-Json

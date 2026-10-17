@@ -570,8 +570,12 @@ retry apt-get install -y --no-install-recommends "${PACKAGES[@]}" \
 # actually present. AMD (this machine may be AMD) uses the in-kernel amdgpu
 # driver already shipped — nothing to install. Guard so a failure here never
 # aborts the whole install.
-if command -v lspci >/dev/null 2>&1 && lspci -nn 2>/dev/null | grep -iqE 'VGA|3D|Display' ; then
-  if lspci -nn 2>/dev/null | grep -iq 'NVIDIA'; then
+# The graphics cards are read into a variable first: with pipefail, `lspci | grep -q` can fail when grep
+# stops reading early and lspci, still writing, gets SIGPIPE, and the card would go unnoticed.
+gpus=""
+command -v lspci >/dev/null 2>&1 && gpus="$(lspci -nn 2>/dev/null | grep -iE 'VGA|3D|Display' || true)"
+if [ -n "$gpus" ]; then
+  if grep -iq 'NVIDIA' <<<"$gpus"; then
     log "NVIDIA GPU detected; installing recommended drivers via ubuntu-drivers"
     if ! command -v ubuntu-drivers >/dev/null 2>&1; then
       retry apt-get install -y --no-install-recommends ubuntu-drivers-common || warn "could not install ubuntu-drivers-common"
@@ -586,6 +590,16 @@ else
   log "no discrete GPU detected via lspci (or lspci missing); skipping driver install"
 fi
 
+fi
+
+# The packages ClaudeOS is made of. The root helper never removes one (apt-remove), nor anything whose removal
+# would take one along, so no removal asked for by voice can take away ClaudeOS's own screen, voice or network.
+if [ "$DRY_RUN" -eq 0 ]; then
+  install -d -m 0755 /etc/claudeos
+  printf '%s\n' "${PACKAGES[@]}" > /etc/claudeos/base-packages
+  chmod 0644 /etc/claudeos/base-packages
+else
+  log "[dry-run] list ClaudeOS's own packages in /etc/claudeos/base-packages"
 fi
 
 # ===========================================================================
@@ -697,10 +711,14 @@ if [ "$DISTRO" = fedora ]; then
   install_file "$SYSTEM_DIR/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.conf" \
     "/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.conf" 0644
 else
-  install_file "$SYSTEM_DIR/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.lua" \
-    "/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.lua" 0644
-  install_file "$SYSTEM_DIR/etc/wireplumber/wireplumber.conf.d/51-claudeos-policy.lua" \
-    "/etc/wireplumber/wireplumber.conf.d/51-claudeos-policy.lua" 0644
+  # WirePlumber 0.4 runs the Lua files of bluetooth.lua.d and policy.lua.d (in /usr/share/wireplumber and
+  # /etc/wireplumber, in name order: ours after the stock 50-*, before 90-enable-all.lua turns them on).
+  install_file "$SYSTEM_DIR/etc/wireplumber/bluetooth.lua.d/51-claudeos-bluetooth.lua" \
+    "/etc/wireplumber/bluetooth.lua.d/51-claudeos-bluetooth.lua" 0644
+  install_file "$SYSTEM_DIR/etc/wireplumber/policy.lua.d/51-claudeos-policy.lua" \
+    "/etc/wireplumber/policy.lua.d/51-claudeos-policy.lua" 0644
+  # Earlier versions put them in wireplumber.conf.d, which 0.4 doesn't read for Lua.
+  run rm -f /etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.lua /etc/wireplumber/wireplumber.conf.d/51-claudeos-policy.lua
 fi
 
 # BlueZ 5.72 on noble does not read main.conf.d, so apply our settings directly
@@ -841,10 +859,12 @@ install_file "$SYSTEM_DIR/etc/apt/apt.conf.d/52claudeos-unattended-upgrades" \
 sctl_enable "unattended-upgrades.service"
 
 # Explicitly make sure there is NO SSH server (contract: no SSH). We do not
-# install openssh-server; if something pulled it in, disable it.
+# install openssh-server; if something pulled it in, disable it. Ubuntu 24.04's openssh-server enables
+# ssh.socket (sshd starts when a connection comes in), so the socket is turned off too.
 if dpkg -s openssh-server >/dev/null 2>&1; then
   warn "openssh-server is installed; disabling it (contract: no SSH server)"
-  run systemctl disable --now ssh.service 2>/dev/null || run systemctl disable ssh.service 2>/dev/null || true
+  run systemctl disable --now ssh.service ssh.socket 2>/dev/null || run systemctl disable ssh.service ssh.socket 2>/dev/null || true
+  [ "$DRY_RUN" -eq 1 ] || find /etc/systemd/system -path '*.wants/*' \( -name ssh.service -o -name ssh.socket \) -delete
 fi
 fi
 

@@ -197,8 +197,10 @@ class FileIndex:
                 if not os.path.isdir(root):
                     continue
                 batch = 0
+                complete = True
                 for e in self._walk(root):
                     if count >= MAX_FILES:
+                        complete = False
                         break
                     try:
                         st = e.stat(follow_symlinks=False)
@@ -230,6 +232,8 @@ class FileIndex:
                         batch = 0
                         time.sleep(0.01)
                 db.commit()
+                if not complete or self._stop.is_set():
+                    continue      # cut short: files not reached yet aren't gone
                 # Files that disappeared since the last scan of this root.
                 gone = [r["id"] for r in db.execute("SELECT id FROM files WHERE root=? AND seen<?", (label, start))]
                 for fid in gone:

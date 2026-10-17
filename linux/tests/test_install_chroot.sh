@@ -98,8 +98,8 @@ for f in \
   "/etc/systemd/system/getty@tty1.service.d/10-claudeos-autologin.conf" \
   "/home/testuser/.bash_profile" "/home/testuser/.xinitrc" \
   "/etc/X11/Xwrapper.config" \
-  "/etc/wireplumber/wireplumber.conf.d/51-claudeos-bluetooth.lua" \
-  "/etc/wireplumber/wireplumber.conf.d/51-claudeos-policy.lua" \
+  "/etc/wireplumber/bluetooth.lua.d/51-claudeos-bluetooth.lua" \
+  "/etc/wireplumber/policy.lua.d/51-claudeos-policy.lua" \
   "/etc/NetworkManager/conf.d/10-claudeos-manage-all.conf" \
   "/etc/netplan/99-claudeos-nm.yaml" \
   "/etc/systemd/system/claudeos-windows-mount.service" \
@@ -110,6 +110,15 @@ for f in \
   "/etc/sudoers.d/claudeos" \
   "/var/lib/claudeos/base-installed"; do
   [ -e "$C$f" ] && pass "file present: $f" || fail "file MISSING: $f"
+done
+# The list of ClaudeOS's own packages, which the root helper never removes.
+grep -qx 'gir1.2-webkit2-4.1' "$C/etc/claudeos/base-packages" 2>/dev/null && grep -qx 'pipewire' "$C/etc/claudeos/base-packages" \
+  && pass "ClaudeOS's own packages are listed for the root helper" || fail "/etc/claudeos/base-packages missing or incomplete"
+# WirePlumber 0.4 runs the Lua files of the X.lua.d folders its own package has (and the same names in /etc);
+# a Lua file anywhere else is never read.
+for d in bluetooth.lua.d policy.lua.d; do
+  [ -d "$C/usr/share/wireplumber/$d" ] && pass "WirePlumber's package reads $d, where ClaudeOS's settings are" \
+    || fail "the installed WirePlumber has no $d: ClaudeOS's settings there are ignored"
 done
 [ ! -e "$C/etc/systemd/system/multi-user.target.wants/claudeos-finish-install.service" ] \
   && pass "first-start safety net turned off after a complete install" \
@@ -217,6 +226,9 @@ else
 fi
 
 # --- Idempotency: run #2, assert no warnings + stable files ----------------
+# As an earlier version left them: Lua settings in wireplumber.conf.d, which WirePlumber 0.4 doesn't read.
+mkdir -p "$C/etc/wireplumber/wireplumber.conf.d"
+for f in 51-claudeos-bluetooth.lua 51-claudeos-policy.lua; do : > "$C/etc/wireplumber/wireplumber.conf.d/$f"; done
 pre="$(sha256sum "$C/etc/bluetooth/main.conf" "$C/etc/sudoers.d/claudeos" "$C/home/testuser/.bash_profile" 2>/dev/null)"
 echo "=== installer run #2 (idempotency) ===" >&2
 runin 'bash /opt/claudeos/app/linux/install-claudeos.sh --user testuser --from-installer --skip-models' >/tmp/ci_install2.log 2>&1
@@ -234,6 +246,8 @@ else
 fi
 post="$(sha256sum "$C/etc/bluetooth/main.conf" "$C/etc/sudoers.d/claudeos" "$C/home/testuser/.bash_profile" 2>/dev/null)"
 [ "$pre" = "$post" ] && pass "idempotent: managed files unchanged on re-run" || fail "files changed on re-run"
+ls "$C"/etc/wireplumber/wireplumber.conf.d/*.lua >/dev/null 2>&1 \
+  && fail "Lua files left in wireplumber.conf.d" || pass "an earlier version's unread Lua files are gone"
 # BlueZ managed block appears exactly once.
 n="$(grep -c 'ClaudeOS managed block >>>' "$C/etc/bluetooth/main.conf" 2>/dev/null || echo 0)"
 [ "$n" = "1" ] && pass "BlueZ managed block present exactly once" || fail "BlueZ managed block duplicated ($n)"

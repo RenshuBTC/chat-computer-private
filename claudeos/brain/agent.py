@@ -27,7 +27,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
                               ToolUseBlock, UserMessage)
 from claude_agent_sdk.types import RateLimitEvent, StreamEvent
 
-from ..config import Paths, Settings, State, has_login, token_kind
+from ..config import EFFORTS, MODEL_RE, Paths, Settings, State, has_login, token_kind
 
 log = logging.getLogger("claudeos.brain")
 
@@ -252,8 +252,9 @@ class Brain:
             permission_mode="default",
             include_partial_messages=True,
             setting_sources=[],
-            model=self.settings.model or None,
-            effort=self.settings.effort or None,
+            # A hand-edited settings file can hold anything: a value the engine can't take is left out.
+            model=self.settings.model if MODEL_RE.match(self.settings.model or "") else None,
+            effort=self.settings.effort if self.settings.effort in EFFORTS else None,
             cwd=self.cwd,
             add_dirs=self.add_dirs,
             env=self._env(),
@@ -534,6 +535,8 @@ class Brain:
                     res.error_kind = "auth"
                 elif status == 429 or res.error_kind == "rate_limit":
                     res.error_kind = "rate_limit"
+                elif status == 404 and "model" in "; ".join(m.errors or [m.result or ""]).lower():
+                    res.error_kind = "model"
                 elif status in (500, 502, 503, 529) or res.error_kind == "overloaded":
                     res.error_kind = "overloaded"
                 elif m.subtype == "error_during_execution" and not status:
@@ -558,6 +561,8 @@ def friendly_error(res: TurnResult, rate: dict[str, Any] | None = None) -> str:
         return "You've reached your Claude usage limit for now." + when
     if k == "overloaded":
         return "Claude is very busy right now. Try again in a minute."
+    if k == "model":
+        return "The Claude model in my settings isn't available."
     if k == "network":
         return "I can't reach Claude. Check the internet connection."
     return "Something went wrong on my side. Please say that again."

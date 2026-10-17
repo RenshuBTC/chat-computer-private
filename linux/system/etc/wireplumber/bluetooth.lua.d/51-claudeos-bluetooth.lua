@@ -1,8 +1,10 @@
 -- ClaudeOS WirePlumber tuning for AirPods (and similar HFP headsets).
 --
--- Target: WirePlumber 0.4.x on Ubuntu 24.04 (Lua config). Files in
--- /etc/wireplumber/<subdir>.conf.d/ override the matching stock files in
--- /usr/share/wireplumber/. We touch two things:
+-- Target: WirePlumber 0.4.x on Ubuntu 24.04 (Lua config). It runs the files of
+-- bluetooth.lua.d in /usr/share/wireplumber and /etc/wireplumber together, in
+-- name order: this one after the stock 50-bluez-config.lua (so its settings
+-- win) and before 90-enable-all.lua (which starts the monitor with them).
+-- We touch two things:
 --
 --   1. bluez monitor properties: force-enable wideband speech (mSBC) and the
 --      SBC-XQ / hardware-volume features so the AirPods mic sounds usable and

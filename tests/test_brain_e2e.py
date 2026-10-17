@@ -184,3 +184,18 @@ def test_speaking_over_claude_interrupts_the_running_task(clean_env):
             await rig.brain.close()
             rig.mock.stop()
     asyncio.run(go())
+
+
+@pytest.mark.timeout(180)
+def test_a_model_the_api_doesnt_know_is_reported_as_such(clean_env):
+    async def go():
+        rig = Rig(clean_env, [])
+        rig.settings.model = "claude-no-such-model-9"
+        rig.mock.unknown_models.add("claude-no-such-model-9")
+        try:
+            res = await rig.say("hello", timeout=150)
+            assert not res.ok and res.error_kind == "model", (res.error_kind, res.error_text)
+        finally:
+            await rig.brain.close()
+            rig.mock.stop()
+    asyncio.run(go())

@@ -258,3 +258,73 @@ def test_undo_never_deletes_what_was_there_before(tmp_path, monkeypatch):
     text, _ = call(server, "undo_last_change", {})
     assert not created.exists() and "trash" in text
     assert (bin_ / "note.txt").read_text() == "changed later"
+
+
+def test_settings_that_would_stop_claude_are_refused(tmp_path):
+    ctx, server, *_ = make(tmp_path)
+    for key, value in (("effort", "extreme"), ("model", "Claude 5 please"), ("stt_model", "../../x")):
+        text, err = call(server, "claudeos_settings", {"action": "set", "key": key, "value": value})
+        assert err, (key, text)
+    assert ctx.settings.effort == Settings().effort and ctx.settings.model == Settings().model
+    text, err = call(server, "claudeos_settings", {"action": "set", "key": "effort", "value": "high"})
+    assert not err and ctx.settings.effort == "high"
+    text, err = call(server, "claudeos_settings", {"action": "set", "key": "model", "value": "opus"})
+    assert not err and ctx.settings.model == "opus"
+
+
+def test_command_output_that_isnt_utf8_is_still_read(tmp_path):
+    from claudeos.platform.base import run
+    r = run(["printf", "caf\\351 Wi-Fi\\n"])                # Latin-1 bytes
+    assert r.ok and r.out.startswith("caf") and "Wi-Fi" in r.out
+    d = tmp_path / "not-a-program"
+    d.mkdir()
+    assert run([str(d)]).code == 126                        # can't be run: reported, not raised
+
+
+def test_a_package_name_cant_turn_an_install_into_a_removal(monkeypatch):
+    # apt-get reads "name-" as "remove name" (and a final "." is a pattern): such names never reach the root helper.
+    from claudeos.platform import linux as L
+    from claudeos.platform.base import CommandResult
+    calls = []
+    monkeypatch.setattr(L, "run", lambda cmd, **kw: calls.append(cmd) or CommandResult(0, '{"ok": true}', ""))
+    p = L.LinuxPlatform()
+    assert "don't look like package names" in p.install(["network-manager-"])
+    assert "don't look like package names" in p.remove(["vlc."])
+    assert calls == []
+    assert p.install(["g++", "vlc"]).startswith("Installed")      # a real name may end in "+"
+    assert calls == [["sudo", "-n", L.ROOT_HELPER, "apt-install", "g++", "vlc"]]
+
+
+def test_copying_pairings_from_windows_says_what_was_copied(monkeypatch):
+    # The root helper passes the importer's report on under "result"; nothing copied must not sound like success.
+    from claudeos.platform import linux as L
+    from claudeos.platform.base import CommandResult
+    reports = {
+        "two": {"ok": True, "count": 2, "imported": [{"device": "A4:BF:C6:D0:E5:FF", "action": "created"},
+                                                     {"device": "C2:9E:1D:E2:3D:A5", "action": "updated"}],
+                "skipped_no_adapter_dir": [], "errors": []},
+        "other adapter": {"ok": True, "count": 0, "imported": [], "errors": [],
+                          "skipped_no_adapter_dir": [{"adapter": "D4:6D:6D:97:62:9B", "device": "A4:BF:C6:D0:E5:FF"}]},
+        "none": {"ok": True, "controlset": "\\ControlSet001", "imported": [], "note": "no BTHPORT\\Parameters\\Keys"},
+    }
+    said = {}
+    for name, report in reports.items():
+        out = json.dumps({"ok": True, "result": report})
+        monkeypatch.setattr(L, "run", lambda cmd, out=out, **kw: CommandResult(0, out + "\n", ""))
+        said[name] = L.LinuxPlatform().bt_import_windows_keys()
+    assert said["two"] == "Copied 2 Bluetooth pairings from Windows."
+    assert "different Bluetooth adapter" in said["other adapter"] and "Copied" not in said["other adapter"]
+    assert said["none"].startswith("Windows has no Bluetooth pairings")
+
+
+def test_an_interrupted_scan_keeps_what_it_didnt_reach(tmp_path, monkeypatch):
+    from claudeos import files_index as FI
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for i in range(5):
+        (docs / f"f{i}.txt").write_text("x")
+    idx = FileIndex(tmp_path / "files.db", [("home", str(docs))])
+    assert idx.crawl_once() == 5
+    monkeypatch.setattr(FI, "MAX_FILES", 2)                  # the next scan is cut short
+    idx.crawl_once()
+    assert idx.count() == 5

@@ -160,4 +160,24 @@ else
   echo "SKIP Xvfb X-setup smoke test (Xvfb/xset not installed)" >&2
 fi
 
+# --- Test 7 (optional): Ctrl+Alt+Backspace (claudeos-restart) ends the X server ---------------------
+# The program startx waits on is claudeos-session, so only ending X restarts ClaudeOS (xinit then ends the
+# session, and the tty1 login starts it again); asking openbox to exit would leave ClaudeOS running.
+alive() { local s; s="$(ps -o stat= -p "$1" 2>/dev/null)"; [ -n "$s" ] && [ "${s#Z}" = "$s" ]; }
+if command -v Xvfb >/dev/null 2>&1 && [ ! -e /tmp/.X98-lock ]; then
+  Xvfb :98 -nolisten tcp -screen 0 640x480x16 >/dev/null 2>&1 &
+  XVFB=$!
+  for _ in $(seq 25); do [ -s /tmp/.X98-lock ] && break; sleep 0.2; done
+  DISPLAY=:98 sh "$REPO/session/claudeos-restart"
+  for _ in $(seq 25); do alive "$XVFB" || break; sleep 0.2; done
+  if alive "$XVFB"; then
+    fail "claudeos-restart left the X server running"; kill "$XVFB" 2>/dev/null
+  else
+    pass "claudeos-restart ends the X server of its display"
+  fi
+  wait "$XVFB" 2>/dev/null
+else
+  echo "SKIP claudeos-restart test (no Xvfb, or display :98 is taken)" >&2
+fi
+
 exit "$FAILED"

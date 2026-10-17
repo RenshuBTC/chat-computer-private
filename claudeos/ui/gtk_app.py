@@ -45,6 +45,8 @@ def private_file_uri(paths: Paths, uri: str) -> bool:
     if not (uri or "").lower().startswith("file:"):
         return False
     return is_private(paths, urllib.parse.unquote(urllib.parse.urlparse(uri).path) or "/")
+
+
 MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86AudioMedia", "XF86AudioNext",
               "XF86AudioPrev", "XF86AudioStop"}
 # The captions over websites look like the conversation (theme.css): black on white in Atkinson Hyperlegible

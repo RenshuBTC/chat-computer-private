@@ -156,7 +156,7 @@ class TTS:
             except Exception:
                 log.exception("Kokoro failed on %r", text[:60])
         if self.espeak:
-            r = subprocess.run([self.espeak, "--stdout", "-s", str(int(175 * float(self.speed))), text],
+            r = subprocess.run([self.espeak, "--stdout", "-s", str(int(175 * float(self.speed))), "--", text],
                                capture_output=True, timeout=30)
             if r.returncode == 0 and r.stdout:
                 return _wav_to_float(r.stdout)

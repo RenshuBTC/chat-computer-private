@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 TOKEN_RE = re.compile(r"^sk-ant-(oat01|api03)-[A-Za-z0-9_\-]{20,}$")
+# What Claude Code accepts for --effort (the Agent SDK's EffortLevel), and what a model name looks like (a full id
+# like claude-sonnet-5-5, or an alias like opus). Anything else would stop the engine or fail every request.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODEL_RE = re.compile(r"^[a-z][a-z0-9.\-]{1,62}(\[1m\])?$")
 
 
 class Paths:

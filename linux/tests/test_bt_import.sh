@@ -86,6 +86,9 @@ if [ -f "$F1" ]; then
   grep -q "^Key=$KEY1$" "$F1" && pass "$DEV1: Key correct (uppercase, same byte order)" || { fail "$DEV1: wrong Key"; cat "$F1"; }
   grep -q "^Type=4$" "$F1" && pass "$DEV1: Type=4" || fail "$DEV1: Type!=4"
   grep -q "^PINLength=0$" "$F1" && pass "$DEV1: PINLength=0" || fail "$DEV1: PINLength!=0"
+  # The link key is readable by root only, as bluetoothd keeps it.
+  [ "$(stat -c %a "$F1")" = 600 ] && [ "$(stat -c %a "$(dirname "$F1")")" = 700 ] \
+    && pass "$DEV1: info file 0600 in a 0700 folder" || fail "$DEV1: modes $(stat -c %a "$F1") / $(stat -c %a "$(dirname "$F1")")"
 else
   fail "no info file for $DEV1"
 fi
@@ -120,6 +123,7 @@ else
   fail "import clobbered [General] section"; cat "$F1"
 fi
 if grep -q "^Key=$KEY1$" "$F1"; then pass "import refreshed the LinkKey (DEADBEEF -> real key)"; else fail "LinkKey not refreshed"; cat "$F1"; fi
+[ "$(stat -c %a "$F1")" = 600 ] && pass "a refreshed info file is 0600 too" || fail "refreshed info file mode $(stat -c %a "$F1")"
 
 # --- Idempotency -----------------------------------------------------------
 "$PY" -I "$IMPORTER" --hive "$HIVE" --bluetooth-dir "$BT" >/dev/null 2>&1

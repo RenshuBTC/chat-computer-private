@@ -44,6 +44,9 @@ DT_COMPATIBLE="${CLAUDEOS_TEST_DT_COMPATIBLE:-/proc/device-tree/compatible}"
 MAC_CLAUDEOS_VOLUME=ClaudeOS
 VENV_PYTHON=/opt/claudeos/venv/bin/python
 BT_IMPORT_PY=/usr/local/libexec/claudeos/bt-import-windows-keys.py
+# The packages ClaudeOS is made of (install-claudeos.sh writes the list): never removed. (Test only override,
+# dropped by sudo like the others.)
+BASE_PACKAGES="${CLAUDEOS_TEST_BASE_PACKAGES:-/etc/claudeos/base-packages}"
 
 # ---------------------------------------------------------------------------
 # JSON helpers (no jq dependency; we emit small, controlled objects).
@@ -283,7 +286,8 @@ verb_boot_windows_next() {
 }
 
 # An Apple silicon Mac (its device tree says "apple,...")?
-on_apple_silicon() { tr '\0' '\n' < "$DT_COMPATIBLE" 2>/dev/null | grep -q '^apple,'; }
+# (2>/dev/null comes first: on a PC there is no device tree, and the redirection from it fails before tr runs.)
+on_apple_silicon() { tr '\0' '\n' 2>/dev/null < "$DT_COMPATIBLE" | grep -q '^apple,'; }
 
 # bless_macos [--next] — make macOS the Mac's start-up volume (for the next start only, with --next).
 # asahi-bless finds macOS by its usual name ("Macintosh HD"); if it was renamed, the one start-up volume
@@ -345,14 +349,23 @@ verb_boot_default() {
 
 verb_mount_windows() { do_mount_windows; }
 
-# Package-name validation shared by apt-install / apt-remove.
-valid_pkg() { [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]{1,62}$ ]]; }
+# Package-name validation shared by apt-install / apt-remove: the characters of Debian's and Fedora's
+# package names. The last one is a letter, digit or "+": apt-get reads "name-" as "remove name".
+valid_pkg() { [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]{0,61}[a-z0-9+]$ ]]; }
 
 # Ubuntu (a PC) has apt-get; Fedora (a Mac) has dnf. (CLAUDEOS_TEST_PKG: test only, dropped by sudo.)
 have_dnf() {
   case "${CLAUDEOS_TEST_PKG:-}" in dnf) return 0 ;; apt) return 1 ;; esac
   ! command -v apt-get >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1
 }
+
+# apt-get reads more into a name than a name: "name+" given to remove installs it, and a name that isn't
+# a package's is taken as a pattern ("." matches any letter) and acts on every package whose name
+# contains a match. So each name must be exactly a package's: one apt knows, to install (pkgnames
+# matches the start of names, not patterns); an installed one, to remove (no wildcard characters
+# get past valid_pkg, so dpkg-query looks up exactly that name).
+apt_known()     { apt-cache pkgnames --all-names "$1" 2>/dev/null | grep -qxF -- "$1"; }
+apt_installed() { dpkg-query -W -f='${db:Status-Status}\n' "$1" 2>/dev/null | grep -qx installed; }
 
 verb_apt_install() {
   [ "$#" -ge 1 ] || die "apt-install needs at least one package"
@@ -364,7 +377,11 @@ verb_apt_install() {
     return 0
   fi
   export DEBIAN_FRONTEND=noninteractive
-  if apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends "$@" >/dev/null 2>&1; then
+  apt-get update >/dev/null 2>&1 || die "apt-get update failed (is the internet connected?)"
+  for p in "$@"; do apt_known "$p" || die "no package is called $p"; done
+  # --no-remove: installing never removes anything (apt-get would remove a program that conflicts with
+  # the new one); the person agreed to an install.
+  if apt-get install -y --no-install-recommends --no-remove "$@" >/dev/null 2>&1; then
     emit_json ok=true action=install @packages="$(json_array "$@")"
   else
     die "apt-get install failed"
@@ -373,14 +390,31 @@ verb_apt_install() {
 
 verb_apt_remove() {
   [ "$#" -ge 1 ] || die "apt-remove needs at least one package"
-  local p
+  local p extra
   for p in "$@"; do valid_pkg "$p" || die "invalid package name: $p"; done
+  # ClaudeOS's own packages stay: without them there'd be no screen, voice or network to put them back with.
+  for p in "$@"; do
+    if [ -r "$BASE_PACKAGES" ] && grep -qxF -- "$p" "$BASE_PACKAGES"; then die "$p is part of ClaudeOS itself, so it stays"; fi
+  done
+  # Removing a package also removes every installed program that needs it (ClaudeOS's own, too, behind an
+  # innocent-looking name). Only what was named may go: anything more is refused, and named, so the
+  # person can be asked about those as well (ClaudeOS's own packages among them stay, above).
   if have_dnf; then
-    dnf remove -y "$@" >/dev/null 2>&1 || die "dnf remove failed"
+    for p in "$@"; do rpm -q --quiet "$p" 2>/dev/null || die "$p is not installed"; done
+    if ! rpm -e --test "$@" >/dev/null 2>&1; then
+      extra=$(rpm -e --test "$@" 2>&1 | sed -n 's/.* is needed by (installed) \([^ ]*\).*/\1/p' | sort -u | paste -sd' ' -)
+      die "removing that would also remove: ${extra:-other programs that need it}"
+    fi
+    # And nothing it pulled in once, either (clean_requirements_on_remove): apt-get remove leaves those too.
+    dnf remove -y --setopt=clean_requirements_on_remove=False "$@" >/dev/null 2>&1 || die "dnf remove failed"
     emit_json ok=true action=remove @packages="$(json_array "$@")"
     return 0
   fi
   export DEBIAN_FRONTEND=noninteractive
+  for p in "$@"; do apt_installed "$p" || die "$p is not installed"; done
+  extra=$(apt-get -s remove "$@" 2>/dev/null | sed -n 's/^Remv \([^ :]*\).*/\1/p' \
+          | grep -vxF -f <(printf '%s\n' "$@") | sort -u | paste -sd' ' -)
+  [ -z "$extra" ] || die "removing that would also remove: $extra"
   if apt-get remove -y "$@" >/dev/null 2>&1; then
     emit_json ok=true action=remove @packages="$(json_array "$@")"
   else

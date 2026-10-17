@@ -4,13 +4,28 @@ from __future__ import annotations
 
 import collections
 import logging
+import os
 import threading
 import time
-from typing import Callable
+from typing import Callable, MutableMapping
 
 import numpy as np
 
 log = logging.getLogger("claudeos.audio")
+# On Linux PortAudio reaches PipeWire through PipeWire's ALSA plugin, which names a stream "PipeWire ALSA
+# [python3.12]" and gives it no role. WirePlumber 0.4 (Ubuntu) switches AirPods to the profile with their
+# microphone only for a stream in the Communication role or from an application it lists ("ClaudeOS", in
+# linux/system/etc/wireplumber/policy.lua.d), so ClaudeOS's streams say who they are. The plugin reads this when
+# a stream opens. (WirePlumber 0.5, on a Mac, switches for any stream that reads from the AirPods.)
+PIPEWIRE_ALSA = '{ "application.name": "ClaudeOS", "media.role": "Communication" }'
+
+
+def name_streams_for_pipewire(env: MutableMapping[str, str] = os.environ) -> None:
+    env.setdefault("PIPEWIRE_ALSA", PIPEWIRE_ALSA)   # kept if someone set it already
+
+
+name_streams_for_pipewire()
+
 # Held while any stream is opened or closed, and while PortAudio restarts (it isn't safe to use from several
 # threads at once, and a restart closes every stream it has open).
 PORTAUDIO_LOCK = threading.RLock()

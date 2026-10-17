@@ -25,7 +25,8 @@ say() {
 }
 
 # Gives up after a few tries, so a Mac never goes round in circles: Fedora's usual start comes back, and with
-# it Fedora's own first-start questions on the screen.
+# it Fedora's own first-start questions on the screen. Nothing will use the sign-in and settings then, so
+# they go too (forget_setup).
 fail() {
   say "Couldn't finish setting up: $*"
   n=$(cat "$P/tries" 2>/dev/null || echo 0)
@@ -34,6 +35,7 @@ fail() {
   if [ "$n" -ge "$TRIES" ]; then
     say "Giving up after $n tries. The Mac now starts Fedora Linux; the details are in claudeos/firstboot.log on ClaudeOS's EFI partition."
     put_fedora_back
+    forget_setup
   else
     say "Trying again after a restart ($n of $TRIES)."
   fi

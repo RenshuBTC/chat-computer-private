@@ -26,6 +26,23 @@ def test_speakable_cleans_markdown_for_the_ear():
     assert "the chart" in s and "coingecko.com" in s and "Bitcoin is at $67,000." in s
 
 
+def test_claudeos_streams_tell_pipewire_who_they_are():
+    # WirePlumber 0.4 switches AirPods to their microphone only for a Communication stream or a listed app
+    # (linux/system/etc/wireplumber/policy.lua.d lists "ClaudeOS"); PipeWire's ALSA plugin takes both from
+    # PIPEWIRE_ALSA, unless someone set it already.
+    import json
+    from claudeos.voice import audio
+    assert "PIPEWIRE_ALSA" in os.environ                  # set as soon as the audio code loads
+    env: dict[str, str] = {}
+    audio.name_streams_for_pipewire(env)
+    assert json.loads(env["PIPEWIRE_ALSA"]) == {"application.name": "ClaudeOS", "media.role": "Communication"}
+    policy = (Path(__file__).resolve().parents[1] / "linux/system/etc/wireplumber/policy.lua.d/51-claudeos-policy.lua").read_text()
+    assert '"ClaudeOS"' in policy
+    env = {"PIPEWIRE_ALSA": '{ "node.latency": "512/16000" }'}
+    audio.name_streams_for_pipewire(env)
+    assert env["PIPEWIRE_ALSA"] == '{ "node.latency": "512/16000" }'
+
+
 def test_sentence_splitter_streams_sentences():
     sp = SentenceSplitter()
     out = []

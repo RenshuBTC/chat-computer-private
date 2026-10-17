@@ -1,6 +1,9 @@
 # Windows time zone name -> IANA zone, generated from the Unicode CLDR windowsZones.xml
 # (mapTimezones otherVersion=7e11800 typeVersion=2021a; territory 001 entries).
-# Do not edit by hand; regenerate from CLDR if a zone is missing.
+# Do not edit by hand; regenerate from CLDR if a zone is missing. One step after generating: CLDR keeps some
+# old names (Asia/Calcutta, Europe/Kiev, America/Godthab, Asia/Rangoon, Asia/Katmandu, America/Buenos_Aires,
+# America/Indianapolis) that Ubuntu 24.04 only has in tzdata-legacy, which isn't installed: they are replaced by
+# their current names (Asia/Kolkata, Europe/Kyiv, ...), or the installer and ClaudeOS wouldn't know the zone.
 $Script:WindowsToIana = @{
     'AUS Central Standard Time' = 'Australia/Darwin'
     'AUS Eastern Standard Time' = 'Australia/Sydney'
@@ -12,7 +15,7 @@ $Script:WindowsToIana = @{
     'Arab Standard Time' = 'Asia/Riyadh'
     'Arabian Standard Time' = 'Asia/Dubai'
     'Arabic Standard Time' = 'Asia/Baghdad'
-    'Argentina Standard Time' = 'America/Buenos_Aires'
+    'Argentina Standard Time' = 'America/Argentina/Buenos_Aires'
     'Astrakhan Standard Time' = 'Europe/Astrakhan'
     'Atlantic Standard Time' = 'America/Halifax'
     'Aus Central W. Standard Time' = 'Australia/Eucla'
@@ -48,16 +51,16 @@ $Script:WindowsToIana = @{
     'Eastern Standard Time (Mexico)' = 'America/Cancun'
     'Egypt Standard Time' = 'Africa/Cairo'
     'Ekaterinburg Standard Time' = 'Asia/Yekaterinburg'
-    'FLE Standard Time' = 'Europe/Kiev'
+    'FLE Standard Time' = 'Europe/Kyiv'
     'Fiji Standard Time' = 'Pacific/Fiji'
     'GMT Standard Time' = 'Europe/London'
     'GTB Standard Time' = 'Europe/Bucharest'
     'Georgian Standard Time' = 'Asia/Tbilisi'
-    'Greenland Standard Time' = 'America/Godthab'
+    'Greenland Standard Time' = 'America/Nuuk'
     'Greenwich Standard Time' = 'Atlantic/Reykjavik'
     'Haiti Standard Time' = 'America/Port-au-Prince'
     'Hawaiian Standard Time' = 'Pacific/Honolulu'
-    'India Standard Time' = 'Asia/Calcutta'
+    'India Standard Time' = 'Asia/Kolkata'
     'Iran Standard Time' = 'Asia/Tehran'
     'Israel Standard Time' = 'Asia/Jerusalem'
     'Jordan Standard Time' = 'Asia/Amman'
@@ -76,10 +79,10 @@ $Script:WindowsToIana = @{
     'Morocco Standard Time' = 'Africa/Casablanca'
     'Mountain Standard Time' = 'America/Denver'
     'Mountain Standard Time (Mexico)' = 'America/Mazatlan'
-    'Myanmar Standard Time' = 'Asia/Rangoon'
+    'Myanmar Standard Time' = 'Asia/Yangon'
     'N. Central Asia Standard Time' = 'Asia/Novosibirsk'
     'Namibia Standard Time' = 'Africa/Windhoek'
-    'Nepal Standard Time' = 'Asia/Katmandu'
+    'Nepal Standard Time' = 'Asia/Kathmandu'
     'New Zealand Standard Time' = 'Pacific/Auckland'
     'Newfoundland Standard Time' = 'America/St_Johns'
     'Norfolk Standard Time' = 'Pacific/Norfolk'
@@ -122,7 +125,7 @@ $Script:WindowsToIana = @{
     'Transbaikal Standard Time' = 'Asia/Chita'
     'Turkey Standard Time' = 'Europe/Istanbul'
     'Turks And Caicos Standard Time' = 'America/Grand_Turk'
-    'US Eastern Standard Time' = 'America/Indianapolis'
+    'US Eastern Standard Time' = 'America/Indiana/Indianapolis'
     'US Mountain Standard Time' = 'America/Phoenix'
     'UTC' = 'Etc/UTC'
     'UTC+12' = 'Etc/GMT-12'

@@ -78,6 +78,7 @@ class MockAnthropic:
     requests: list[dict[str, Any]] = field(default_factory=list)
     paths: list[str] = field(default_factory=list)
     chunk_delay: float = 0.0
+    unknown_models: set[str] = field(default_factory=set)   # answered like the real API: 404, "model: ..."
     _runner: web.AppRunner | None = None
     _loop: asyncio.AbstractEventLoop | None = None
     _thread: threading.Thread | None = None
@@ -96,6 +97,9 @@ class MockAnthropic:
         req = await request.json()
         self.requests.append(req)
         self.paths.append(request.path)
+        if req.get("model") in self.unknown_models:
+            return web.json_response({"type": "error", "error": {"type": "not_found_error",
+                                                                 "message": f"model: {req.get('model')}"}}, status=404)
         blocks = self.respond(req)
         stop_reason = "tool_use" if any(b["type"] == "tool_use" for b in blocks) else "end_turn"
         msg_id = "msg_" + uuid.uuid4().hex[:24]

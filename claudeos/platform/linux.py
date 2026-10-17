@@ -32,7 +32,8 @@ def is_apple_silicon(compatible: str = "/proc/device-tree/compatible") -> bool:
     except OSError:
         return False
 MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
-PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]{1,62}$")
+# A package name, as the root helper takes it: never ending in "-" (apt-get reads "name-" as "remove name").
+PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]{0,61}[a-z0-9+]$")
 
 KEY_ALIASES = {
     "enter": "Return", "return": "Return", "esc": "Escape", "escape": "Escape",
@@ -256,10 +257,19 @@ class LinuxPlatform(Platform):
 
     def bt_import_windows_keys(self) -> str:
         d = self._root("bt-import-windows-keys", timeout=60)
-        if d.get("ok"):
-            n = d.get("imported", d.get("count"))
-            return f"Copied {n} Bluetooth pairing(s) from Windows." if n is not None else "Copied the Bluetooth pairings from Windows."
-        return "Couldn't copy the pairings from Windows: " + str(d.get("error", "unknown error"))
+        if not d.get("ok"):
+            return "Couldn't copy the pairings from Windows: " + str(d.get("error", "unknown error"))
+        # What was copied is in the importer's own report, under "result" (root-helper/bt-import-windows-keys.py).
+        res = d.get("result") if isinstance(d.get("result"), dict) else {}
+        n = len(res.get("imported") or [])
+        if n:
+            return f"Copied {n} Bluetooth pairing{'' if n == 1 else 's'} from Windows."
+        if res.get("errors"):
+            return "Couldn't copy the pairings from Windows: " + str(res["errors"][0])
+        if res.get("skipped_no_adapter_dir"):
+            return ("Windows' Bluetooth pairings are for a different Bluetooth adapter than the one ClaudeOS uses, so "
+                    "none could be copied. Pair the device again here.")
+        return "Windows has no Bluetooth pairings to copy. Pair the device here instead."
 
     # ------------------------------------------------------------------ sound
     def audio_status(self) -> dict[str, Any]:

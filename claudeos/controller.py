@@ -542,6 +542,17 @@ class Controller:
             if tid == self.current_turn:
                 self.current_turn = None
             return
+        default_model = Settings().model
+        if not res.ok and res.error_kind == "model" and self.brain and self.settings.model != default_model:
+            # The model chosen in the settings isn't available: every request would fail, and asking Claude to
+            # change it back would fail too. Go back to the usual model and ask again.
+            bad, self.settings.model = self.settings.model, default_model
+            self.settings.save(self.paths)
+            self.screen.notice(f"The Claude model “{bad}” isn't available, so I went back to the usual one.", "warn")
+            self._spawn(self._ask_again_after_switch(tid))
+            if tid == self.current_turn:
+                self.current_turn = None
+            return
         if not res.ok and not res.interrupted:
             msg = friendly_error(res, self.ctx.rate_limit)
             self.screen.notice(msg, "warn")

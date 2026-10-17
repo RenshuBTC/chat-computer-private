@@ -170,10 +170,14 @@ def update_info_file(info_path: str, key_hex: str) -> str:
     if existed and before == after:
         return "unchanged"
 
-    os.makedirs(os.path.dirname(info_path), exist_ok=True)
+    # Readable by root only, as bluetoothd keeps them (folders 0700, info files 0600): the link key lets
+    # anything pose as the paired device.
+    os.makedirs(os.path.dirname(info_path), mode=0o700, exist_ok=True)
     # Write atomically-ish: temp then rename.
     tmp = info_path + ".claudeos.tmp"
-    with io.open(tmp, "w", encoding="utf-8") as fh:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)  # also when an earlier run left the temp file behind
+    with io.open(fd, "w", encoding="utf-8") as fh:
         cp.write(fh, space_around_delimiters=False)
     os.replace(tmp, info_path)
     return "created" if not existed else "updated"

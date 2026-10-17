@@ -480,3 +480,34 @@ def test_typing_while_asleep_shows_the_conversation_but_the_microphone_stays_asl
     assert states == ["thinking", "resting"] and c.asleep          # shown, but still waiting for "Claude"
     lines = [json.loads(l) for l in paths.transcript.read_text().splitlines()]
     assert lines[0] == {**lines[0], "role": "user", "text": "what's the weather?", "via": "phone"}
+
+
+def test_an_unavailable_model_goes_back_to_the_usual_one_and_asks_again(tmp_path, monkeypatch):
+    c, screen, paths = _controller(tmp_path, monkeypatch)
+    c.settings.model = "claude-no-such-model-9"
+    asked = []
+
+    async def close():
+        asked.append("closed")
+
+    async def ask(text):
+        asked.append(text)
+    c.brain = SimpleNamespace(origin_of=lambda tid: "here", current_origin="here", use_token_instead=lambda: False,
+                              close=close, ask=ask, last_activity=0.0)
+    c.gate = SimpleNamespace(phone_reply=lambda t: None)
+    c.ctx = SimpleNamespace(rate_limit={})
+    c.last_asked = "what's the time?"
+
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        c._on_turn_start("t1")
+        c._on_turn_end("t1", SimpleNamespace(ok=False, interrupted=False, error_kind="model"))
+        for _ in range(50):
+            if len(asked) >= 2:
+                break
+            await asyncio.sleep(0.02)
+    asyncio.run(run())
+    assert c.settings.model == Settings().model
+    assert Settings.load(paths).model == Settings().model                 # kept for the next start
+    assert asked[0] == "closed" and asked[1].endswith("what's the time?")   # asked again, on the usual model
+    assert any("isn't available" in e[1][0] for e in screen.events if e[0] == "notice")

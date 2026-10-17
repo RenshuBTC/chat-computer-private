@@ -15,6 +15,8 @@ can't analyse with certainty (substitutions, unusual redirections, several lines
 from __future__ import annotations
 
 import asyncio
+import glob
+import itertools
 import json
 import logging
 import os
@@ -432,6 +434,73 @@ def holds_private(paths: Paths, path: str) -> bool:
     return any(_inside(d, r) for d in private_dirs(paths))
 
 
+def _shell_expand(arg: str, cwd: str) -> list[str]:
+    """What the shell makes of one word: ~ and $HOME expanded, relative to `cwd`, wildcards matched."""
+    home = os.path.expanduser("~")
+    a = home + arg[1:] if arg == "~" or arg.startswith("~/") else arg
+    a = a.replace("${HOME}", home).replace("$HOME", home)
+    if not os.path.isabs(a):
+        a = os.path.join(cwd, a)
+    if any(c in a for c in "*?["):
+        return glob.glob(a) or [a]
+    return [a]
+
+
+_GREP_VALUES = {"-e", "--regexp", "-f", "--file", "-m", "--max-count", "-A", "--after-context", "-B",
+                "--before-context", "-C", "--context", "-d", "--directories", "-D", "--devices", "--label"}
+_RG_VALUES = {"-e", "--regexp", "-f", "--file", "-g", "--glob", "--iglob", "-t", "--type", "-T", "--type-not",
+              "-m", "--max-count", "-A", "-B", "-C", "-j", "--threads", "-M", "--max-columns", "--max-depth", "-d",
+              "--type-add", "-E", "--encoding", "--sort", "--sortr", "-r", "--replace", "--max-filesize"}
+
+
+def _cd_targets(command: str, starts: list[str]) -> set[str]:
+    """The folders a command's cd moves to (the engine keeps that folder for its next commands)."""
+    out: set[str] = set()
+    for start in starts:
+        cwd = start
+        for seg in _split_segments(command) or []:
+            if os.path.basename(seg[0]) in ("cd", "pushd"):
+                cwd = _shell_expand(seg[1] if len(seg) > 1 else "~", cwd)[0]
+                out.add(os.path.normpath(cwd))
+    return out
+
+
+def _reaches_private(paths: Paths, command: str, cwds: set[str] | frozenset[str] = frozenset()) -> bool:
+    """Whether a command names, matches with wildcards, or searches through ClaudeOS's private files, run from the
+    home folder, ClaudeOS's own folder, or any folder an earlier command moved to (`cwds`)."""
+    segs = _split_segments(command)
+    if not segs:
+        return False
+    for start in (os.path.expanduser("~"), str(paths.root), *sorted(cwds)):
+        cwd = start
+        for seg in segs:
+            name, args = os.path.basename(seg[0]), seg[1:]
+            if name in ("cd", "pushd"):
+                targets = _shell_expand(args[0] if args else "~", cwd)
+                if any(is_private(paths, t) for t in targets):
+                    return True
+                cwd = targets[0]
+                continue
+            grep = name in ("grep", "egrep", "fgrep", "rg")
+            words = _positional(args, (_RG_VALUES if name == "rg" else _GREP_VALUES) if grep else set())
+            if any(is_private(paths, p) for w in words for p in _shell_expand(w, cwd)):
+                return True
+            if not grep:
+                continue
+            recursive = name == "rg" or any(
+                a in ("--recursive", "--dereference-recursive") or a.startswith("--directories=recurse")
+                or (a.startswith("-") and not a.startswith("--") and set(a[1:]) & set("rR")) for a in args) \
+                or any(a == "-d" and b == "recurse" for a, b in itertools.pairwise(args))
+            if recursive:
+                patterned = any(a in ("-e", "--regexp", "-f", "--file") or a.startswith(("--regexp=", "--file="))
+                                for a in args)
+                roots = words if patterned else words[1:]
+                dirs = [p for w in roots for p in _shell_expand(w, cwd) if os.path.isdir(p)] if roots else [cwd]
+                if any(holds_private(paths, d) for d in dirs):
+                    return True
+    return False
+
+
 def _runs_code(path: str) -> bool:
     home = os.path.realpath(os.path.expanduser("~"))
     if not path.startswith(home + "/"):
@@ -452,6 +521,7 @@ class PermissionGate:
         self._lock = asyncio.Lock()
         self._phone_question: dict[str, Any] | None = None   # asked in the chat, waiting for an answer
         self._phone_ok: dict[str, float] = {}                 # action key -> allowed until
+        self._cwds: set[str] = set()                          # folders shell commands have moved to
 
     # ------------------------------------------------------------------ helpers
     def _path_denied(self, path: str | None) -> str | None:
@@ -524,6 +594,12 @@ class PermissionGate:
                               f"follow what they said or ask what they'd like instead.")
         return self._deny("The user did not answer, so this was not done. Mention it briefly and move on.")
 
+    def _moved_to(self, command: str) -> None:
+        starts = [os.path.expanduser("~"), str(self.paths.root), *sorted(self._cwds)]
+        self._cwds |= _cd_targets(command, starts)
+        if len(self._cwds) > 50:
+            self._cwds = set(sorted(self._cwds)[-50:])
+
     # ------------------------------------------------------------------ the gate
     async def __call__(self, tool: str, inp: dict[str, Any], ctx: Any = None):
         try:
@@ -568,10 +644,13 @@ class PermissionGate:
         if tool == "Bash":
             cmd = str(inp.get("command", ""))
             verdict, why = classify_bash(cmd)
+            if verdict != "deny" and _reaches_private(self.paths, cmd, self._cwds):
+                verdict, why = "deny", "That would read ClaudeOS's private sign-in files, so ClaudeOS blocks it."
             if verdict == "deny":
                 self._note("deny", tool, inp)
                 return self._deny(why)
             if verdict == "allow":
+                self._moved_to(cmd)
                 return PermissionResultAllow(updated_input=inp)
             desc = (inp.get("description") or "").strip().rstrip(".")
             question = (f"Can I run a command to {desc[0].lower() + desc[1:]}?" if desc and len(desc) > 3
@@ -579,6 +658,7 @@ class PermissionGate:
             ok, said = await self._ask(question, self._key(tool, inp))
             self._note("allow" if ok else "deny", tool, inp)
             if ok:
+                self._moved_to(cmd)
                 self.journal.record("command", desc or _short(cmd), command=cmd)
                 return PermissionResultAllow(updated_input=inp)
             return self._user_said_no(said)

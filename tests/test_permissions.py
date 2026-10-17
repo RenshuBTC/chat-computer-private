@@ -270,3 +270,32 @@ def test_sign_in_files_cant_be_read_with_tools(tmp_path):
               tmp_path / "Users/rensh/ClaudeOS/claude_token"):
         res = asyncio.run(gate("Read", {"file_path": str(f)}))
         assert res.behavior == "deny", f
+
+
+def test_commands_cant_reach_the_private_files_by_wildcard_or_search(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    gate, asked, paths = make_gate(tmp_path, [])
+    paths.token_file.write_text("sk-ant-oat01-" + "x" * 40 + "\n")
+    (tmp_path / "Documents").mkdir()
+    (tmp_path / "Documents" / "tax.txt").write_text("tax")
+    for cmd in ("grep -r sk-ant ~", "grep -ri token .", "rg sk-ant", "rg -e sk-ant ~/ClaudeOS",
+                "cat ~/ClaudeOS/s*/*", "head -c 99 $HOME/ClaudeOS/secrets/*", "cd ~/ClaudeOS && cat secrets/*",
+                "cd ~/ClaudeOS/secrets", "grep -r -e sk-ant ClaudeOS", "ls ~/ClaudeOS/secrets",
+                "rm -rf ~/ClaudeOS/secrets"):
+        assert run(gate("Bash", {"command": cmd})).behavior == "deny", cmd
+    for cmd in ("grep -r tax ~/Documents", "rg tax ~/Documents", "cat ~/Documents/*", "ls -la ~/ClaudeOS",
+                "cd ~/Documents && grep -ri tax ."):
+        assert run(gate("Bash", {"command": cmd})).behavior == "allow", cmd
+    assert asked == []
+
+
+def test_a_cd_in_one_command_cant_set_up_the_next(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    gate, asked, paths = make_gate(tmp_path, [])
+    paths.token_file.write_text("sk-ant-oat01-" + "x" * 40 + "\n")
+    (tmp_path / "Documents").mkdir()
+    assert run(gate("Bash", {"command": "cd ~/Documents"})).behavior == "allow"
+    assert run(gate("Bash", {"command": "cat ../ClaudeOS/secrets/*"})).behavior == "deny"
+    assert run(gate("Bash", {"command": "grep -r sk-ant .."})).behavior == "deny"
+    assert run(gate("Bash", {"command": "ls"})).behavior == "allow"
+    assert asked == []

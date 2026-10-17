@@ -297,11 +297,16 @@ retrying with backoff, then starts listening.
   redirections, options that write files or run programs, like `sed`'s `w`/`e` or `sort -o`) is asked about.
   `git` is always asked about: a folder's own git settings can make even `git status` run a program.
 * ClaudeOS's private folders (`secrets/`, the engine's `.engine/` with the full sign-in, the browser's `web/`
-  with its logins) can't be read, searched inside, copied, moved, trashed or shown on screen by any tool, nor can
-  other programs' settings (`/proc/*/environ`). Changing a file the computer runs commands from (dotfiles in the
-  home folder, `~/.config/autostart`, `~/.local/bin` and the like) is asked about. The content layer doesn't let
-  pages opened from files read other files with scripts (WebKit's file-access setting stays off), so a downloaded
-  `.html` file can't read the sign-in.
+  with its logins) can't be read, searched inside, copied, moved, trashed or shown on screen by ClaudeOS's tools
+  or Claude Code's file tools, nor can other programs' settings (`/proc/*/environ`). Shell commands that name
+  them, reach them with wildcards or `cd`, or search through a folder holding them (`grep -r`, `rg`) are
+  blocked, even ones that would otherwise be asked about. The limit: a command the gate can't analyse is asked
+  about, and once the person says yes it runs with their rights, which include reading those folders. Closing
+  that too would need commands to run in a sandbox that hides the folders.
+* Changing a file the computer runs commands from (dotfiles in the home folder, `~/.config/autostart`,
+  `~/.local/bin` and the like) is asked about. The content layer doesn't let pages opened from files read other
+  files with scripts (WebKit's file-access setting stays off), so a downloaded `.html` file can't read the
+  sign-in.
 * Screen: one full-screen GTK 3 window (`claudeos/ui/gtk_app.py`) with two WebKitGTK 4.1 views in a stack:
   the conversation (`ui/assets/chat.html`: only the user's words and Claude's words) and the content layer (a
   real browser with a persistent profile in `~/ClaudeOS/web`, plus a GTK caption strip over it). No buttons.

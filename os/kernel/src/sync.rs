@@ -34,6 +34,10 @@ impl<T> SpinLock<T> {
         Guard { lock: self, interrupts_were_on: on }
     }
 
+    pub fn is_locked(&self) -> bool {
+        self.locked.load(Ordering::Relaxed)
+    }
+
     pub fn try_lock(&self) -> Option<Guard<'_, T>> {
         let on = cpu::interrupts_enabled();
         cpu::disable_interrupts();

@@ -306,14 +306,15 @@ def _ps_files():
 
 def test_powershell_sources_are_plain_ascii():
     # Windows PowerShell 5.1 reads BOM-less files as ANSI: curly quotes or dashes would break parsing.
-    for f in [*_ps_files(), WIN / "ClaudeOS Setup.cmd"]:
+    for f in [*_ps_files(), WIN / "ClaudeOS Setup.cmd", WIN / "ClaudeOS Own System.cmd"]:
         data = f.read_bytes()
         assert all(b < 128 for b in data), f
 
 
 def test_launcher_uses_windows_line_endings():
-    data = (WIN / "ClaudeOS Setup.cmd").read_bytes()
-    assert b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b"")
+    for name in ("ClaudeOS Setup.cmd", "ClaudeOS Own System.cmd"):
+        data = (WIN / name).read_bytes()
+        assert b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b""), name
 
 
 @needs_pwsh
@@ -333,7 +334,10 @@ def test_windows_powershell_5_1_compatible():
         f"$r = foreach ($f in @({files})) {{ Invoke-ScriptAnalyzer -Path $f -Settings $s; "
         "Invoke-ScriptAnalyzer -Path $f -Severity Error }; "
         # Loaded with Add-Type before use (inside try/catch), so 'not available by default' is expected.
-        "$r = @($r | Where-Object { $_.Message -notlike '*AccountManagement.UserPrincipal*' }); "
+        # -DeleteKey belongs to the certificate drive (Cert:), which adds it to Remove-Item in Windows PowerShell
+        # 3.0 and later; the analyzer's list only has Remove-Item's own parameters.
+        "$r = @($r | Where-Object { $_.Message -notlike '*AccountManagement.UserPrincipal*' -and "
+        "  $_.Message -notlike \"*parameter 'DeleteKey' is not available for command 'Remove-Item'*\" }); "
         "$r | ForEach-Object { $_.ScriptName + ':' + $_.Line + ' ' + $_.RuleName + ' ' + $_.Message }; "
         "exit $r.Count"
     )

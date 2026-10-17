@@ -42,6 +42,14 @@ pub extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     gdt::init();
     idt::init();
     log!("ClaudeOS kernel: own segment and interrupt tables loaded");
+    log!(
+        "ClaudeOS kernel: Secure Boot {}",
+        match info.secure_boot {
+            bootinfo::SECURE_BOOT_ON => "on",
+            bootinfo::SECURE_BOOT_OFF => "off",
+            _ => "unknown",
+        }
+    );
 
     memory::init(info);
     paging::init(info);
@@ -76,7 +84,7 @@ pub extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     match screen::Screen::new(&info.framebuffer) {
         Some(screen) => {
             let (w, h) = (screen.width, screen.height);
-            let layout = welcome::Welcome::show(screen, size_mm, &cpu_name);
+            let layout = welcome::Welcome::show(screen, size_mm, &cpu_name, info.secure_boot);
             log!(
                 "ClaudeOS kernel: screen {w}x{h}, monitor size {:?} mm, viewed from about {} cm{}: drawn at {}%, text {}.{} px",
                 size_mm,
@@ -111,6 +119,7 @@ pub extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     cpu::disable_interrupts();
     serial::write_anyway(format_args!("\nClaudeOS kernel stopped: {info}\n"));
-    welcome::show_stop("an internal error");
+    let place = info.location().map_or(("?", 0), |l| (l.file(), l.line()));
+    welcome::show_stop("an internal error", format_args!("{} ({}, line {}).", info.message(), place.0, place.1));
     cpu::stop()
 }

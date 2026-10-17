@@ -7,7 +7,7 @@ pub mod edid;
 /// "ClaudeOS" in ASCII: the first field of [`BootInfo`], so the kernel can tell it got the real thing.
 pub const MAGIC: u64 = u64::from_le_bytes(*b"ClaudeOS");
 /// Raised whenever [`BootInfo`] changes shape.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// All of physical memory is visible to the kernel at this virtual address: physical address `p` is at
 /// `PHYS_OFFSET + p`. It is the start of the upper half of the address space (page-map slot 256).
@@ -130,7 +130,15 @@ pub struct BootInfo {
     pub stack_size: u64,
     /// The firmware maker's name as UEFI gives it (UCS-2, zero-terminated).
     pub firmware_vendor: [u16; 64],
+    /// Whether the firmware checked this start-up stage's signature before running it: one of the
+    /// `SECURE_BOOT_` values.
+    pub secure_boot: u32,
+    pub _reserved: u32,
 }
+
+pub const SECURE_BOOT_OFF: u32 = 0;
+pub const SECURE_BOOT_ON: u32 = 1;
+pub const SECURE_BOOT_UNKNOWN: u32 = 2;
 
 impl BootInfo {
     /// # Safety

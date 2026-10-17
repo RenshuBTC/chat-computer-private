@@ -51,13 +51,19 @@ function Get-SetupBootEntries {
 }
 
 function New-SetupBootEntry {
-    # Adds "ClaudeOS setup" to the PC's power-on menu: a copy of Windows Boot Manager's entry, so it points at
-    # the same EFI partition, that starts \EFI\claudeos-setup\shimx64.efi instead. Returns its {id}.
+    # Adds "ClaudeOS setup" to the PC's power-on menu, starting \EFI\claudeos-setup\shimx64.efi. Returns its {id}.
+    return (New-FirmwareBootEntry -Name $Script:SetupEntryName -Path ('\EFI\' + $Script:SetupLoaderDir + '\shimx64.efi'))
+}
+
+function New-FirmwareBootEntry {
+    # Adds an entry called $Name to the end of the PC's power-on menu: a copy of Windows Boot Manager's entry, so
+    # it points at the same EFI partition, that starts $Path (\EFI\...) instead. Returns its {id}.
     # The new entry is found by comparing the menu before and after, so nothing in Windows' language is read.
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Path)
     $before = @(Get-FirmwareBootEntries | ForEach-Object { $_.Id })
-    Write-SetupLog ('bcdedit /copy {bootmgr} /d "' + $Script:SetupEntryName + '"')
-    $out = & bcdedit.exe /copy '{bootmgr}' /d $Script:SetupEntryName 2>&1
-    if ($LASTEXITCODE -ne 0) { throw ('Windows could not add the installer to the power-on menu: ' + (($out | Out-String).Trim())) }
+    Write-SetupLog ('bcdedit /copy {bootmgr} /d "' + $Name + '"')
+    $out = & bcdedit.exe /copy '{bootmgr}' /d $Name 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ('Windows could not add "' + $Name + '" to the power-on menu: ' + (($out | Out-String).Trim())) }
     $after = @(Get-FirmwareBootEntries | ForEach-Object { $_.Id })
     $new = @($after | Where-Object { $before -notcontains $_ })
     $id = $null
@@ -69,8 +75,8 @@ function New-SetupBootEntry {
     }
     if (-not $id) { throw 'Windows added an entry to the power-on menu, but setup could not tell which one it is.' }
     try {
-        Invoke-Bcdedit @('/set', $id, 'path', ('\EFI\' + $Script:SetupLoaderDir + '\shimx64.efi'))
-        # Last in the menu (it's only used once, through bootsequence), but there for the boot-menu key.
+        Invoke-Bcdedit @('/set', $id, 'path', $Path)
+        # Last in the menu (it's started once, through bootsequence), but there for the boot-menu key.
         Invoke-Bcdedit @('/set', '{fwbootmgr}', 'displayorder', $id, '/addlast')
     } catch {
         # Don't leave a half-made entry behind (until its path is set, it's a second Windows Boot Manager).

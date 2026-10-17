@@ -46,7 +46,7 @@ pub struct SystemTable {
     pub con_out: *mut SimpleTextOutput,
     pub standard_error_handle: Handle,
     pub std_err: *mut SimpleTextOutput,
-    pub runtime_services: *mut c_void,
+    pub runtime_services: *mut RuntimeServices,
     pub boot_services: *mut BootServices,
     pub number_of_table_entries: usize,
     pub configuration_table: *const ConfigurationTable,
@@ -128,6 +128,24 @@ const _: () = {
     assert!(offset_of!(SystemTable, configuration_table) == 112);
     assert!(core::mem::size_of::<ConfigurationTable>() == 24);
 };
+
+/// EFI_RUNTIME_SERVICES: only GetVariable is used, and only before ExitBootServices.
+#[repr(C)]
+pub struct RuntimeServices {
+    pub hdr: TableHeader,
+    get_time: usize,
+    set_time: usize,
+    get_wakeup_time: usize,
+    set_wakeup_time: usize,
+    set_virtual_address_map: usize,
+    convert_pointer: usize,
+    pub get_variable: unsafe extern "efiapi" fn(*const u16, *const Guid, *mut u32, *mut usize, *mut c_void) -> Status,
+}
+
+const _: () = assert!(offset_of!(RuntimeServices, get_variable) == 72);
+
+/// The UEFI global variables' owner (EFI_GLOBAL_VARIABLE), e.g. "SecureBoot".
+pub const GLOBAL_VARIABLE: Guid = Guid(0x8be4df61, 0x93ca, 0x11d2, [0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c]);
 
 #[repr(C)]
 pub struct GraphicsOutput {

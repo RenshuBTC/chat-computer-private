@@ -47,6 +47,30 @@ The screen follows ClaudeOS's look:
 * text sized by the same 0.3° x-height rule as `claudeos/ui/layout.py`, from the monitor's real size;
 * a column at most 30 em wide.
 
+## Starting it on a PC
+
+On a Windows PC, double-click `windows\ClaudeOS Own System.cmd` (`windows/own-os.ps1`). No USB stick is
+needed.
+
+1. It checks the PC (read-only) and saves a list of its parts in `%LOCALAPPDATA%\ClaudeOS\own-os\pc.txt`, so
+   drivers can be written for exactly those chips.
+2. It signs `release/claudeos.efi` with a key that Windows makes on that PC and won't let be copied off.
+3. After you confirm, it puts the signed file in `\EFI\claudeos-own` on the partition the PC starts from,
+   next to Windows' own files.
+4. It adds "ClaudeOS (own system)" to the end of the power-on menu and starts it once, at the next restart.
+   The restart after that starts Windows.
+
+With Secure Boot on, the PC first has to trust ClaudeOS's key. That takes one approval in the PC's setup
+screen: Secure Boot, then Key Management, then Authorized Signatures (db), then Append `ClaudeOS.cer`. You
+can turn Secure Boot off there instead. The script shows the steps and restarts into the setup screen.
+
+To go back to Windows, hold the power button until the PC turns off. ClaudeOS doesn't write to any disk yet.
+Running the script again with `-Remove` (or choosing Remove) takes the file and the entry off again, and
+deletes the key.
+
+`release/claudeos.efi` is committed because Windows has no Rust compiler. The build is reproducible, and CI
+rebuilds it and checks that it's the same file, byte for byte. `./release.sh` updates it.
+
 ## Building and trying it
 
 You need Rust (`rustup`). The exact compiler version is pinned in `rust-toolchain.toml`, and rustup
@@ -60,7 +84,12 @@ cargo test -p font               # the font engine's tests
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
 ./check.py --crash page-fault    # a kernel that faults on purpose: checks it stops cleanly
 ./check.py --crash panic
+./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
+                                 # enforced; and the same build unsigned must be refused
+./release.sh                     # updates release/claudeos.efi
 ```
+
+For `--secure-boot` you also need `sbsigntool` and `virt-firmware` (`pipx install virt-firmware`).
 
 `check.py` leaves pictures of the screen and the kernel's log in `out/`. To watch it in a window:
 
@@ -115,8 +144,8 @@ The steps come in the order ClaudeOS needs them. Each is tested in a virtual PC 
 PC.
 
 1. ✓ The start-up stage, the kernel's core, interrupts and timer, the font engine and the first screen.
-2. The real PC: start from a USB stick and show the first screen on its monitor. Secure Boot with
-   ClaudeOS's own key.
+2. The real PC: start from its own start-up partition (no USB stick) and show the first screen on its
+   monitor, with Secure Boot on and ClaudeOS's own key approved. Ready to try: see "Starting it on a PC".
 3. Keyboard: the USB host controller (xHCI) and USB keyboards.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
 5. Storage: NVMe, and ClaudeOS's own file system for settings, memory and logs.

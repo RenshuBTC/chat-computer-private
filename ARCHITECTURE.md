@@ -37,7 +37,13 @@ ClaudeOS/
     boot/                   UEFI start-up stage (BOOTX64.EFI) that carries the kernel
     kernel/                 The kernel
     font/                   Own TrueType reader and rasterizer
-    build.sh, check.py      Build; start in QEMU/OVMF and check the screen
+    build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced)
+    release/claudeos.efi    The reproducible build Windows uses (CI checks it matches the source)
+  windows/own-os.ps1        "ClaudeOS Own System.cmd": signs os/release with a key Windows makes on the PC
+                            (CurrentUser\My, not exportable), copies it to \EFI\claudeos-own on Windows' EFI
+                            partition with ClaudeOS.cer, adds "ClaudeOS (own system)" last in the power-on
+                            menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
+                            guides approving it (db Append) or turning Secure Boot off, then shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime
   tests/                    Python tests for the runtime (+ mock Claude API)
 ```

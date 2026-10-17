@@ -34,6 +34,11 @@ pub fn init() -> usize {
     bytes
 }
 
+/// Whether the heap is in use right now (for the crash path, which must not wait for it).
+pub fn busy() -> bool {
+    HEAP.is_locked()
+}
+
 fn round(n: usize) -> usize {
     n.max(UNIT).div_ceil(UNIT) * UNIT
 }

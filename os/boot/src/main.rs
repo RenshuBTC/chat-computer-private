@@ -180,6 +180,7 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
             }
         }
         info.uefi_revision = (*st).hdr.revision;
+        info.secure_boot = secure_boot(st);
     }
 
     // Last call: the final memory map, then ExitBootServices. If something changed the map in between,
@@ -385,6 +386,26 @@ unsafe fn screen(bs: &BootServices, st: *mut SystemTable) -> Result<(Framebuffer
         reserved_mask: info.reserved_mask,
     };
     Ok((fb, edid, edid_len))
+}
+
+/// Whether Secure Boot is on: the firmware's "SecureBoot" variable (1 = on), read while it can still be.
+unsafe fn secure_boot(st: *mut SystemTable) -> u32 {
+    let rt = unsafe { (*st).runtime_services };
+    if rt.is_null() {
+        return bootinfo::SECURE_BOOT_UNKNOWN;
+    }
+    let name: [u16; 11] = [b'S' as u16, b'e' as u16, b'c' as u16, b'u' as u16, b'r' as u16, b'e' as u16,
+                           b'B' as u16, b'o' as u16, b'o' as u16, b't' as u16, 0];
+    let mut value = 0u8;
+    let mut size = 1usize;
+    let status = unsafe {
+        ((*rt).get_variable)(name.as_ptr(), &GLOBAL_VARIABLE, null_mut(), &mut size, &mut value as *mut u8 as *mut c_void)
+    };
+    match (status, value) {
+        (SUCCESS, 1) => bootinfo::SECURE_BOOT_ON,
+        (SUCCESS, 0) => bootinfo::SECURE_BOOT_OFF,
+        _ => bootinfo::SECURE_BOOT_UNKNOWN,
+    }
 }
 
 /// Where the ACPI tables start (ACPI 2.0 or later preferred), or 0.

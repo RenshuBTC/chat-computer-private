@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $Here = $PSScriptRoot
 $Win = Split-Path -Parent $Here
-foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Checks', 'Startup')) {
+foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'OwnOs')) {
     . (Join-Path $Win ('lib/' + $lib + '.ps1'))
 }
 
@@ -613,6 +613,72 @@ Assert-True ($Script:BlCalls -contains 'DeleteKeyProtector') 'BitLocker key: the
 Remove-Item -LiteralPath $tmpState -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item Function:\Get-CimInstance, Function:\Invoke-CimMethod
 $env:CLAUDEOS_STATE_DIR = $null
+
+# ------------------------------------------------------------------ ClaudeOS's own system
+$repo = Split-Path -Parent $Win
+$ownRelease = [IO.Path]::Combine($repo, 'os', 'release', 'claudeos.efi')
+Assert-Equal $ownRelease (Get-OwnRelease -RepoRoot $repo) 'own system: the release file, with the right checksum'
+Assert-True (-not (Test-PeSigned $ownRelease)) 'own system: the release file is not signed yet'
+$ownTmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), 'claudeos-own-test-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $ownTmp | Out-Null
+try {
+    # A copy whose signature directory points at bytes at its end, as signing leaves it.
+    $b = [IO.File]::ReadAllBytes($ownRelease)
+    $dir = [BitConverter]::ToInt32($b, 0x3C) + 24 + 112 + 32
+    $withSig = New-Object byte[] ($b.Length + 16)
+    [Array]::Copy($b, $withSig, $b.Length)
+    [Array]::Copy([BitConverter]::GetBytes([uint32]$b.Length), 0, $withSig, $dir, 4)
+    [Array]::Copy([BitConverter]::GetBytes([uint32]16), 0, $withSig, $dir + 4, 4)
+    $fake = Join-Path $ownTmp 'signed.efi'
+    [IO.File]::WriteAllBytes($fake, $withSig)
+    Assert-True (Test-PeSigned $fake) 'own system: a file with a signature counts as signed'
+    [Array]::Copy([BitConverter]::GetBytes([uint32]1000), 0, $withSig, $dir + 4, 4)
+    [IO.File]::WriteAllBytes($fake, $withSig)
+    Assert-True (-not (Test-PeSigned $fake)) 'own system: a signature reaching past the end of the file does not'
+    [IO.File]::WriteAllBytes($fake, [byte[]](1, 2, 3))
+    Assert-True (-not (Test-PeSigned $fake)) 'own system: a file that is not a program is not signed'
+    # A damaged or missing file is refused.
+    $fakeRepo = Join-Path $ownTmp 'repo'
+    $fakeRelease = [IO.Path]::Combine($fakeRepo, 'os', 'release')
+    New-Item -ItemType Directory -Path $fakeRelease -Force | Out-Null
+    Copy-Item -LiteralPath $ownRelease -Destination (Join-Path $fakeRelease 'claudeos.efi')
+    [IO.File]::WriteAllText((Join-Path $fakeRelease 'claudeos.efi.sha256'), ('0' * 64) + '  claudeos.efi')
+    Assert-Throws { Get-OwnRelease -RepoRoot $fakeRepo } 'own system: a file that does not match its checksum is refused'
+    Assert-Throws { Get-OwnRelease -RepoRoot (Join-Path $ownTmp 'nothing') } 'own system: a missing file is refused'
+} finally {
+    Remove-Item -LiteralPath $ownTmp -Recurse -Force
+}
+# Finding the key's certificate in the firmware's list of allowed signers.
+Assert-True (Test-BytesContain ([byte[]](0, 1, 2, 3, 4)) ([byte[]](2, 3))) 'own system: bytes found'
+Assert-True (-not (Test-BytesContain ([byte[]](0, 1, 2, 3, 4)) ([byte[]](3, 2)))) 'own system: the same bytes in another order are not'
+Assert-True (-not (Test-BytesContain ([byte[]](0x12, 0x34)) ([byte[]](0x23)))) 'own system: half of one byte and half of the next are not a byte'
+Assert-True (-not (Test-BytesContain $null ([byte[]](1)))) 'own system: nothing to look in'
+Assert-True (-not (Test-BytesContain ([byte[]](1)) ([byte[]](1, 2)))) 'own system: longer than what it is looked for in'
+# Its power-on entry (with the bcdedit stand-in from above).
+$Script:BcdCalls = New-Object System.Collections.ArrayList
+$Script:BcdFail = ''
+function bcdedit.exe {
+    $a = @($args)
+    $global:LASTEXITCODE = 0
+    if ($a[0] -eq '/enum') { return ($Script:Bcd -split "`n") }
+    [void]$Script:BcdCalls.Add($a -join ' ')
+    if ($a[0] -eq '/copy') {
+        $Script:Bcd += (New-BcdBlock $Script:BcdNewId '\EFI\Microsoft\Boot\bootmgfw.efi')
+        return ('The entry was successfully copied to ' + $Script:BcdNewId + '.')
+    }
+}
+$Script:Bcd = $bcdEnglish
+Assert-Equal $Script:BcdNewId (Get-OwnBootEntry) 'own entry: made when it is not there'
+Assert-Equal '/copy {bootmgr} /d ClaudeOS (own system)' $Script:BcdCalls[0] 'own entry: a copy of Windows Boot Manager''s'
+Assert-Equal ('/set ' + $Script:BcdNewId + ' path \EFI\claudeos-own\claudeos.efi') $Script:BcdCalls[1] 'own entry: starts ClaudeOS''s own system'
+Assert-Equal ('/set {fwbootmgr} displayorder ' + $Script:BcdNewId + ' /addlast') $Script:BcdCalls[2] 'own entry: last in the menu'
+$Script:Bcd = $bcdEnglish + (New-BcdBlock '{bbbbbbbb-0000-4000-8000-000000000001}' '\EFI\ClaudeOS-Own\claudeos.efi')
+$Script:BcdCalls.Clear()
+Assert-Equal '{bbbbbbbb-0000-4000-8000-000000000001}' (Get-OwnBootEntry) 'own entry: the one already there'
+Assert-Equal 0 $Script:BcdCalls.Count 'own entry: nothing added when it is there'
+Assert-Equal 0 (Get-SetupBootEntries).Count 'own entry: not the installer''s entry'
+Assert-Equal 1 (Get-ClaudeOSBootEntries).Count 'own entry: not Linux ClaudeOS''s entry'
+Remove-Item Function:\bcdedit.exe
 
 if ($OutDir) {
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null

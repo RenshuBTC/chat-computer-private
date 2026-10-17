@@ -63,10 +63,16 @@ class Listener:
         self.utt_id = 0
         self.speaking_until = 0.0
         self.leftover = np.zeros(0, dtype=np.float32)
+        self._tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------ input
     def attach(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
+
+    def _keep(self, task: asyncio.Task) -> None:
+        """Holds a transcription task until it's done (the event loop keeps only a weak reference)."""
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def push_threadsafe(self, frame: np.ndarray) -> None:
         """Called from the audio thread."""
@@ -152,7 +158,7 @@ class Listener:
                 log.exception("partial transcription failed")
             finally:
                 self.partial_busy = False
-        self.loop.create_task(run())
+        self._keep(self.loop.create_task(run()))
 
     def _finish(self, uid: int, audio: np.ndarray) -> None:
         if self.loop is None:
@@ -173,4 +179,4 @@ class Listener:
             except Exception:
                 log.exception("transcription failed")
                 self.ev.on_discard()
-        self.loop.create_task(run())
+        self._keep(self.loop.create_task(run()))

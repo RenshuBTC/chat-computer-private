@@ -22,13 +22,14 @@ class Speaker:
         self.splitter = SentenceSplitter()
         self.pending = 0
         self._worker: asyncio.Task | None = None
+        self._watcher: asyncio.Task | None = None
         self._was = False
         self.muted = False
 
     def start(self) -> None:
         if self._worker is None:
             self._worker = asyncio.get_running_loop().create_task(self._run())
-            asyncio.get_running_loop().create_task(self._watch())
+            self._watcher = asyncio.get_running_loop().create_task(self._watch())
 
     # ------------------------------------------------------------------ streaming
     def begin(self) -> None:

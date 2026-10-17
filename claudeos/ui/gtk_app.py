@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 import time
+import urllib.parse
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
@@ -28,6 +29,7 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import Gdk, GLib, Gtk, WebKit2  # noqa: E402
 
+from ..brain.permissions import is_private  # noqa: E402
 from ..config import Paths, Settings  # noqa: E402
 from ..screen import Screen  # noqa: E402
 from .layout import Layout, compute, css_vars, screen_from_monitor  # noqa: E402
@@ -35,6 +37,14 @@ from .render import ASSETS, FONTS, NATIVE, asset  # noqa: E402
 
 log = logging.getLogger("claudeos.ui")
 WORLD = "claudeos"
+
+
+def private_file_uri(paths: Paths, uri: str) -> bool:
+    """Whether `uri` is one of ClaudeOS's private files (sign-ins, the engine's settings, the browser's logins), which
+    must never be shown on screen: from there, read_screen would hand it to Claude."""
+    if not (uri or "").lower().startswith("file:"):
+        return False
+    return is_private(paths, urllib.parse.unquote(urllib.parse.urlparse(uri).path) or "/")
 MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86AudioMedia", "XF86AudioNext",
               "XF86AudioPrev", "XF86AudioStop"}
 # The captions over websites look like the conversation (theme.css): black on white in Atkinson Hyperlegible
@@ -176,7 +186,8 @@ class GtkScreen(Screen):
         if os.environ.get("CLAUDEOS_GPU", "1") != "1":
             self.chat.get_settings().set_hardware_acceleration_policy(WebKit2.HardwareAccelerationPolicy.NEVER)
         self.chat.connect("web-process-terminated", self._on_renderer_stopped)
-        self.chat.get_settings().set_allow_file_access_from_file_urls(True)
+        # Not set_allow_file_access_from_file_urls: pages opened from files can still show other files (fonts,
+        # pictures), but scripts can't read them, so a page can't read ClaudeOS's sign-in.
         self.chat.load_uri((ASSETS / "chat.html").as_uri())
         self.stack.add_named(self.chat, "chat")
 
@@ -207,7 +218,8 @@ class GtkScreen(Screen):
         s.set_enable_developer_extras(False)
         s.set_hardware_acceleration_policy(WebKit2.HardwareAccelerationPolicy.ALWAYS
                                            if os.environ.get("CLAUDEOS_GPU", "1") == "1" else WebKit2.HardwareAccelerationPolicy.NEVER)
-        s.set_allow_file_access_from_file_urls(True)
+        # Not set_allow_file_access_from_file_urls (see the conversation layer): a downloaded .html file shown with
+        # show_file runs in this view.
         self._quiet_view(self.content)
         self.content.connect("load-changed", self._on_load_changed)
         self.content.connect("load-failed", self._on_load_failed)
@@ -479,6 +491,12 @@ class GtkScreen(Screen):
         return None
 
     def _on_decide_policy(self, view: WebKit2.WebView, decision: Any, kind: Any) -> bool:
+        if kind in (WebKit2.PolicyDecisionType.NAVIGATION_ACTION, WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION):
+            uri = decision.get_navigation_action().get_request().get_uri() or ""
+            if private_file_uri(self.paths, uri):
+                log.warning("not showing a private file on screen")
+                decision.ignore()
+                return True
         if kind == WebKit2.PolicyDecisionType.RESPONSE and not decision.is_mime_type_supported():
             decision.download()
             return True
@@ -757,7 +775,7 @@ def run_app(paths: Paths, settings: Settings, controller_factory: Callable[[GtkS
     t.start()
     controller = controller_factory(screen)
     screen.bind(loop, on_media_key=controller.media_key, on_media_state=controller.media_state,
-                on_typed=lambda text: loop.create_task(controller.handle(text)))
+                on_typed=lambda text: controller._spawn(controller.handle(text)))
 
     def started(f: Any) -> None:
         exc = f.exception()

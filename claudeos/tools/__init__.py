@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from ..brain.permissions import holds_private, is_private
 from ..config import Paths, Settings
 from ..files_index import FileIndex
 from ..journal import Journal, move_to_trash
@@ -138,6 +139,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          obj({"url": S}, ["url"]))
     async def show_website(a):
         url = normalize_url(a.get("url", ""))
+        if url.lower().startswith("file:"):
+            return _err("To show a file from this computer, use show_file.")
         r = await ctx.screen.show_url(url)
         if not r.get("ok"):
             return _err(f"Couldn't open {url}: {r.get('error', 'unknown error')}")
@@ -331,8 +334,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          obj({"path": S}, ["path"]))
     async def show_file(a):
         path = ctx.resolve(a["path"])
-        if ctx.paths.is_secret(path):
-            return _err("That file is private.")
+        if is_private(ctx.paths, path):
+            return _err("That file holds passwords or sign-in keys, so ClaudeOS keeps it private.")
         if not os.path.exists(path):
             return _err(f"There's no file at {path}. Try search_files.")
         kind, payload = await asyncio.to_thread(render.file_view, path, ctx.settings, ctx.paths)
@@ -379,6 +382,12 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
     def _move_policy(a: dict[str, Any]) -> str | None:
         items = a.get("items") or []
         srcs = [ctx.resolve(i.get("from", "")) for i in items]
+        dsts = [ctx.resolve(i.get("to", "")) for i in items]
+        # A copy of a private file would be an ordinary file anyone could read; so would a copy of a folder
+        # that holds one (like the home folder).
+        if any(is_private(ctx.paths, s) or holds_private(ctx.paths, s) for s in srcs) or \
+                any(is_private(ctx.paths, d) for d in dsts):
+            return "DENY: That includes ClaudeOS's private sign-in files, so ClaudeOS keeps them where they are."
         if any(WINDOWS_SYSTEM.search(s[len(ctx.settings.windows_mount):]) for s in srcs if s.startswith(ctx.settings.windows_mount)):
             return "DENY: Those are Windows system files; moving them could stop Windows from starting."
         replaced = []
@@ -406,11 +415,12 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
             backup = ctx.journal.backup(dst) if os.path.isfile(dst) else None
             if copy:
+                merged = os.path.isdir(src) and os.path.isdir(dst)
                 if os.path.isdir(src):
                     shutil.copytree(src, dst, dirs_exist_ok=True)
                 else:
                     shutil.copy2(src, dst)
-                ctx.journal.record_copy(dst, backup)
+                ctx.journal.record_copy(dst, backup, merged)
             else:
                 shutil.move(src, dst)
                 ctx.journal.record_move(src, dst, backup)
@@ -431,8 +441,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
 
     def _trash_policy(a: dict[str, Any]) -> str | None:
         paths = [ctx.resolve(p) for p in a.get("paths") or []]
-        if any(ctx.paths.is_secret(p) for p in paths):
-            return "DENY: That's ClaudeOS's private sign-in folder."
+        if any(is_private(ctx.paths, p) or holds_private(ctx.paths, p) for p in paths):
+            return "DENY: That includes ClaudeOS's private sign-in files, so ClaudeOS keeps them where they are."
         if any(WINDOWS_SYSTEM.search(p[len(ctx.settings.windows_mount):]) for p in paths if p.startswith(ctx.settings.windows_mount)):
             return "DENY: Those are Windows system files."
         if not paths:

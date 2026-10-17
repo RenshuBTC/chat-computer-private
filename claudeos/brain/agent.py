@@ -161,6 +161,7 @@ class Brain:
         self.client: Any | None = None
         self.session_id: str | None = None
         self._reader: asyncio.Task | None = None
+        self._background: set[asyncio.Task] = set()
         self._cur: _Turn | None = None
         self.origins: dict[str, str] = {}
         self._ids = itertools.count(1)
@@ -280,9 +281,16 @@ class Brain:
                 self._reader = asyncio.create_task(self._read_loop(client))
                 log.info("Claude session %s (%s sign-in)", "resumed " + attempt if attempt else "started", self.auth_mode)
                 if self.auth_mode == "login" and self.settings.phone_access:
-                    asyncio.create_task(self._enable_remote(client))
+                    self._spawn(self._enable_remote(client))
                 return
             raise RuntimeError("couldn't start the Claude engine")
+
+    def _spawn(self, coro: Any) -> None:
+        """Runs `coro` in the background. The event loop keeps only a weak reference to a task, so one
+        nothing else holds can be destroyed before it finishes; this set holds each until it's done."""
+        task = asyncio.create_task(coro)
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
 
     async def _enable_remote(self, client: Any) -> None:
         """Make this session reachable from the Claude app on the phone (Remote Control). Claude Code's
@@ -443,7 +451,7 @@ class Brain:
         if self.client is client:
             self.client = None
             self._reader = None
-            asyncio.create_task(self._dispose(client))
+            self._spawn(self._dispose(client))
         t = self._cur
         if t is not None and not t.done.is_set():
             if error is not None:

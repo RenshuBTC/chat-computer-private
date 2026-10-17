@@ -198,3 +198,63 @@ def test_render_files(tmp_path):
     d.save(tmp_path / "plan.docx")
     kind, html = render.file_view(str(tmp_path / "plan.docx"), s, Paths(tmp_path / "c"))
     assert "Quarterly plan" in html and "Ship ClaudeOS." in html
+
+
+def test_private_sign_in_files_stay_private(tmp_path):
+    ctx, server, policies, _ = make(tmp_path)
+    token = ctx.paths.token_file
+    token.write_text("sk-ant-oat01-" + "x" * 40 + "\n")
+    desk = tmp_path / "home" / "Desktop"
+    desk.mkdir()
+    # A copy of the sign-in (or of a folder holding it) would be an ordinary file anyone could read.
+    for src in (token, ctx.paths.login_file, ctx.paths.root, tmp_path / "home"):
+        q = policies["copy_files"]({"items": [{"from": str(src), "to": str(desk)}]})
+        assert q and q.startswith("DENY:"), src
+        assert policies["move_files"]({"items": [{"from": str(src), "to": str(desk)}]}).startswith("DENY:"), src
+        assert policies["trash_files"]({"paths": [str(src)]}).startswith("DENY:"), src
+    assert policies["copy_files"]({"items": [{"from": str(desk), "to": str(ctx.paths.secrets)}]}).startswith("DENY:")
+    # Nor shown on screen, where read_screen would hand it to Claude.
+    text, err = call(server, "show_file", {"path": str(ctx.paths.engine / ".credentials.json")})
+    assert err and "private" in text
+    text, err = call(server, "show_website", {"url": token.as_uri()})
+    assert err and "show_file" in text
+    assert not [e for e in ctx.screen.events if e[0] in ("show_url", "show_html")]
+
+
+def test_the_screen_never_opens_a_private_file(tmp_path):
+    gtk_app = pytest.importorskip("claudeos.ui.gtk_app")
+    ctx, *_ = make(tmp_path)
+    assert gtk_app.private_file_uri(ctx.paths, ctx.paths.token_file.as_uri())
+    assert gtk_app.private_file_uri(ctx.paths, (ctx.paths.web / "cookies.sqlite").as_uri())
+    assert gtk_app.private_file_uri(ctx.paths, "file:///proc/self/environ")
+    assert not gtk_app.private_file_uri(ctx.paths, (ctx.paths.pages / "chart.html").as_uri())
+    assert not gtk_app.private_file_uri(ctx.paths, "https://example.com/claude_token")
+
+
+def test_undo_never_deletes_what_was_there_before(tmp_path, monkeypatch):
+    import shutil as sh
+    from claudeos import journal
+    bin_ = tmp_path / "trash-bin"
+    bin_.mkdir()
+    # (send2trash picks its trash folder once, when first used, so look at what undo hands it instead.)
+    monkeypatch.setattr(journal, "move_to_trash", lambda p: sh.move(p, bin_ / os.path.basename(p)))
+    ctx, server, policies, _ = make(tmp_path)
+    docs = tmp_path / "windows" / "Users" / "rensh" / "Documents"
+    (docs / "Photos").mkdir()
+    (docs / "Photos" / "mine.jpg").write_text("the person's own photo")
+    new = tmp_path / "home" / "Photos"
+    new.mkdir()
+    (new / "trip.jpg").write_text("copied photo")
+    # Copying a folder into one of the same name merges them: undo must leave the folder alone.
+    call(server, "copy_files", {"items": [{"from": str(new), "to": str(docs)}]})
+    assert (docs / "Photos" / "trip.jpg").exists()
+    text, _ = call(server, "undo_last_change", {})
+    assert (docs / "Photos" / "mine.jpg").read_text() == "the person's own photo", text
+    assert "already there" in text
+    # A file Claude created goes to the trash on undo, where it can still be found.
+    created = tmp_path / "home" / "note.txt"
+    ctx.journal.record_overwrite(str(created), None, "created")
+    created.write_text("changed later")
+    text, _ = call(server, "undo_last_change", {})
+    assert not created.exists() and "trash" in text
+    assert (bin_ / "note.txt").read_text() == "changed later"

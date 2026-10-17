@@ -51,6 +51,7 @@ class Controller:
         self.journal = Journal(self.paths)
         self.memory = Memory(self.paths)
         self.loop: asyncio.AbstractEventLoop | None = None
+        self._tasks: set[asyncio.Task] = set()
         self.stt_exec = ThreadPoolExecutor(1, thread_name_prefix="stt")
         self.tts_exec = ThreadPoolExecutor(1, thread_name_prefix="tts")
 
@@ -111,15 +112,15 @@ class Controller:
                                BrainEvents(self._on_turn_start, self._on_text, self._on_activity, self._on_turn_end,
                                            self._on_rate_limit, self._on_user_text, self._on_remote),
                                extra_env=self.extra_env, add_dirs=[d for d in (other_files,) if d])
-            self.loop.create_task(self._warm_up())
+            self._spawn(self._warm_up())
 
         if self.voice_enabled:
             if self._voice_models_missing():
                 # First start: the voice is downloaded once, in the background.
-                self.loop.create_task(self._fetch_voice_then_start())
+                self._spawn(self._fetch_voice_then_start())
             else:
                 await self._start_voice()
-        self.loop.create_task(self._housekeeping())
+        self._spawn(self._housekeeping())
         self.screen.state("listening")
         self.ready.set()
 
@@ -131,6 +132,20 @@ class Controller:
         elif self.greet and self.voice_enabled:
             first = (s.user_name or "").split(" ")[0]
             self._say(f"Hi{' ' + first if first else ''}. I'm listening.")
+
+    def _spawn(self, coro: Any) -> asyncio.Task:
+        """Runs `coro` in the background. The event loop keeps only a weak reference to a task, so one that
+        nothing else holds can be destroyed before it finishes: this keeps each until it's done, and logs it if
+        it fails (otherwise that would only show when it's destroyed, if ever)."""
+        task = self.loop.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._task_done)
+        return task
+
+    def _task_done(self, task: asyncio.Task) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("a background task failed", exc_info=task.exception())
 
     async def _warm_up(self) -> None:
         try:
@@ -219,7 +234,7 @@ class Controller:
             self.mic = self.mic_factory(self.listener.push_threadsafe)
         if not self.mic.open():
             self.screen.notice("I can't hear a microphone. Connect your AirPods, or say nothing and check Bluetooth.", "warn")
-            self.loop.create_task(self._retry_mic())
+            self._spawn(self._retry_mic())
 
     async def _retry_mic(self) -> None:
         while self.mic and not self.mic.is_open:
@@ -377,7 +392,7 @@ class Controller:
             self.speaker.stop()
 
     def _on_utterance(self, text: str, seconds: float) -> None:
-        self.loop.create_task(self.handle(text))
+        self._spawn(self.handle(text))
 
     async def handle(self, text: str) -> None:
         """Everything the user says arrives here (also used by tests and the keyboard fallback)."""
@@ -523,7 +538,7 @@ class Controller:
             # The full sign-in (for the phone) stopped working; the one-year sign-in still does.
             self.screen.notice("My sign-in for the Claude app on your phone has expired, so the phone can't reach "
                                f"me until you sign in again ({self.platform.setup_place}). Everything else works.", "warn")
-            self.loop.create_task(self._ask_again_after_switch(tid))
+            self._spawn(self._ask_again_after_switch(tid))
             if tid == self.current_turn:
                 self.current_turn = None
             return
@@ -536,7 +551,7 @@ class Controller:
             self.current_turn = None
         if self._sleep_after_turn:
             self._sleep_after_turn = False
-            self.loop.create_task(self._sleep_when_quiet())
+            self._spawn(self._sleep_when_quiet())
         elif self.asleep and self._typed(tid):
             self.mode = "resting"
             self.screen.state("resting")     # the typed conversation stays visible; the microphone sleeps
@@ -569,10 +584,10 @@ class Controller:
             if self.mode != "thinking":
                 self._set_mode("speaking")
             if self.media_playing:
-                self.loop.create_task(self._duck(True))
+                self._spawn(self._duck(True))
         else:
             if self.media_playing:
-                self.loop.create_task(self._duck(False))
+                self._spawn(self._duck(False))
             if not (self.brain and self.brain.busy):
                 self._set_mode("listening")
 
@@ -669,7 +684,7 @@ class Controller:
     # ================================================================ hardware events (from the UI)
     def media_key(self, key: str) -> None:
         """An AirPods stem press or a keyboard media key."""
-        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(self._media_key(key)))
+        self.loop.call_soon_threadsafe(lambda: self._spawn(self._media_key(key)))
 
     async def _media_key(self, key: str) -> None:
         log.info("media key %s", key)
@@ -717,7 +732,7 @@ class Controller:
             self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0])
         if "phone_access" in keys and self.brain:
             self.remote_told = False
-            self.loop.create_task(self._restart_brain_when_idle())
+            self._spawn(self._restart_brain_when_idle())
         if self.speaker and self.speaker.tts is not None:
             if "voice" in keys:
                 self.speaker.tts.voice = s.voice

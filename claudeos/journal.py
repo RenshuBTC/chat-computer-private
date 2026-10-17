@@ -116,8 +116,10 @@ class Journal:
         self.record("file_change", f"moved {src} to {dst}",
                     undo={"type": "move_back", "src": src, "dst": dst, "backup": backup_of_dst})
 
-    def record_copy(self, dst: str, backup_of_dst: str | None = None) -> None:
-        self.record("file_change", f"copied to {dst}", undo={"type": "remove_copy", "dst": dst, "backup": backup_of_dst})
+    def record_copy(self, dst: str, backup_of_dst: str | None = None, merged: bool = False) -> None:
+        """`merged`: a folder was copied into a folder of the same name that was already there."""
+        self.record("file_change", f"copied to {dst}",
+                    undo={"type": "remove_copy", "dst": dst, "backup": backup_of_dst, "merged": merged})
 
     def record_trash(self, original: str, trashed: str | None) -> None:
         self.record("file_change", f"moved {original} to the trash",
@@ -149,8 +151,9 @@ class Journal:
                 shutil.copy2(backup, path)
                 return f"restored the earlier version of {path}"
             if os.path.exists(path):
-                os.remove(path)  # it was a new file: undo = remove it (it's backed up below first)
-                return f"removed {path}, which didn't exist before"
+                # It was a new file. To the trash rather than deleted: it may have changed since.
+                move_to_trash(path)
+                return f"moved {path}, which didn't exist before, to the trash"
             return f"nothing to restore for {path}"
         if t == "move_back":
             src, dst = u["src"], u["dst"]
@@ -168,11 +171,12 @@ class Journal:
             if u.get("backup") and os.path.exists(u["backup"]):
                 shutil.copy2(u["backup"], dst)
                 return f"restored the earlier {dst}"
-            if os.path.isdir(dst):
-                shutil.rmtree(dst)
-            elif os.path.exists(dst):
-                os.remove(dst)
-            return f"removed the copy at {dst}"
+            if u.get("merged"):
+                # What was in that folder before can't be told apart from the copy: deleting it would lose both.
+                return f"the copy went into the folder {dst}, which was already there, so I left it as it is"
+            if os.path.lexists(dst):
+                move_to_trash(dst)     # not deleted: it may have changed since
+            return f"moved the copy at {dst} to the trash"
         if t == "untrash":
             return untrash(u["original"], u.get("trashed"))
         if t == "rmdir":

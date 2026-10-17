@@ -288,6 +288,8 @@ class LinuxPlatform(Platform):
 
     def set_output(self, name_or_id: str) -> str:
         st = parse_wpctl_status(run(["wpctl", "status"], timeout=8).out)
+        if not (name_or_id or "").strip():      # "" is part of every name: it would pick the first output
+            return "Which output? Available: " + ", ".join(o["name"] for o in st["outputs"])
         target = None
         for o in st["outputs"]:
             if str(o["id"]) == str(name_or_id) or name_or_id.lower() in o["name"].lower():

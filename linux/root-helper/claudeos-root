@@ -213,12 +213,13 @@ do_mount_windows() {
   target_dev="$dev"
   [ "$bitlocker" = true ] && target_dev="$MAPPER_DIR/$WINDOWS_MAPPER"
 
-  # Decide rw vs ro by cleanliness. NEVER pass remove_hiberfile.
+  # Decide rw vs ro by cleanliness. NEVER pass remove_hiberfile. Nothing on Windows' drive can act as a device
+  # or gain root's rights here (nodev, nosuid).
   local opts rw=false
   if ntfs_is_clean "$target_dev"; then
-    opts="rw,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"; rw=true
+    opts="rw,nosuid,nodev,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"; rw=true
   else
-    opts="ro,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"
+    opts="ro,nosuid,nodev,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"
   fi
 
   if mount -t ntfs-3g -o "$opts" "$target_dev" "$WINDOWS_MOUNT" 2>/dev/null \
@@ -465,7 +466,9 @@ verb_wipe_install_secrets() {
   # Confirm it is a block device we just resolved (not user input).
   [ -b "$dev" ] || die "CLAUDEOS label did not resolve to a block device"
   tmp=$(mktemp -d /run/claudeos/usb.XXXXXX 2>/dev/null || mktemp -d)
-  if ! mount -o rw,noexec,nodev,nosuid "$dev" "$tmp" 2>/dev/null; then
+  # Only as FAT (what ClaudeOS's installer is): FAT has no symbolic links, so nothing on the device can point
+  # the deletion below somewhere else.
+  if ! mount -t vfat -o rw,noexec,nodev,nosuid "$dev" "$tmp" 2>/dev/null; then
     rmdir "$tmp" 2>/dev/null || true
     die "could not mount CLAUDEOS USB"
   fi

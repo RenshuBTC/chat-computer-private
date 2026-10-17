@@ -11,10 +11,13 @@ import io
 import json
 import os
 import re
+import secrets
+import select
 import shutil
 import socket
+import subprocess
 import time
-from typing import Any
+from typing import Any, Callable
 
 from .base import CommandResult, Platform, run
 
@@ -22,6 +25,97 @@ ROOT_HELPER = "/usr/local/libexec/claudeos/claudeos-root"
 # On a Mac: the drive both macOS and ClaudeOS open (exFAT, "ClaudeOS" in macOS's Finder), with the folders
 # ClaudeOS Setup sent over from macOS. Mounted here (linux/system/etc/fstab line written at the first start).
 MAC_FILES = "~/Mac"
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[\x01\x02\r]")
+_AGENT = [  # what bluetoothctl's own agent says while pairing, and what it means
+    ("confirm", re.compile(r"Confirm passkey (\d+)[^\n]*?\(yes/no\)", re.I)),
+    ("ask", re.compile(r"(?:Authorize|Accept|Allow)[^\n]*?\(yes/no\)", re.I)),
+    ("enter", re.compile(r"Enter (?:PIN code|passkey)[^\n:]*:", re.I)),
+    ("show", re.compile(r"(?:Passkey|PIN code):\s*(\d{4,8})\b", re.I)),
+    ("ok", re.compile(r"Pairing successful", re.I)),
+    ("failed", re.compile(r"Failed to pair:?\s*([^\n]*)", re.I)),
+    ("failed", re.compile(r"Device [0-9A-F:]{17} not available", re.I)),
+]
+
+
+def pair_with_agent(address: str, on_code: Callable[[str], None] | None, timeout: float = 60.0,
+                    cmd: tuple[str, ...] = ("bluetoothctl",)) -> tuple[bool, str]:
+    """Pair through bluetoothctl's own agent as a keyboard-and-screen, answering what it asks: a code to show
+    (the person types it on the keyboard: on_code gets it), a code to confirm, a PIN to make up (shown, then
+    typed on the keyboard). Keyboards that want a code typed on them pair this way; NoInputNoOutput can't.
+    Returns (paired, why not)."""
+    proc = subprocess.Popen(list(cmd), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    def send(line: str) -> None:
+        try:
+            proc.stdin.write((line + "\n").encode())
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+
+    def show(code: str) -> None:
+        if code not in shown and on_code:
+            shown.add(code)
+            try:
+                on_code(code)
+            except Exception:
+                pass
+
+    shown: set[str] = set()
+    send("agent KeyboardDisplay")
+    send("default-agent")
+    send(f"pair {address}")
+    buf, pos, result = "", 0, (False, "it didn't answer in time")
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([proc.stdout], [], [], 0.2)
+            if not ready:
+                if proc.poll() is not None:
+                    result = (False, "bluetoothctl stopped")
+                    break
+                continue
+            chunk = os.read(proc.stdout.fileno(), 4096)
+            if not chunk:
+                result = (False, "bluetoothctl stopped")
+                break
+            buf += _ANSI.sub("", chunk.decode("utf-8", "replace"))
+            done = False
+            while True:
+                found = [(m.start(), kind, m) for kind, rx in _AGENT for m in [rx.search(buf, pos)] if m]
+                if not found:
+                    break
+                _start, kind, m = min(found, key=lambda f: (f[0], -len(f[2].group(0))))
+                pos = m.end()
+                if kind == "confirm":
+                    show(m.group(1))
+                    send("yes")
+                elif kind == "ask":
+                    send("yes")
+                elif kind == "enter":
+                    pin = f"{secrets.randbelow(1000000):06d}"
+                    show(pin)
+                    send(pin)
+                elif kind == "show":
+                    show(m.group(1))
+                elif kind == "ok":
+                    result, done = (True, ""), True
+                    break
+                else:
+                    reason = (m.group(1) if m.groups() else m.group(0)).strip()
+                    result, done = (False, reason or "it refused"), True
+                    break
+            if done:
+                break
+    finally:
+        send("quit")
+        try:
+            proc.wait(3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(3)
+    return result
 
 
 def is_apple_silicon(compatible: str = "/proc/device-tree/compatible") -> bool:
@@ -258,13 +352,25 @@ class LinuxPlatform(Platform):
             raise ValueError("That isn't a Bluetooth address like AA:BB:CC:DD:EE:FF.")
         return address.upper()
 
-    def bt_pair(self, address: str) -> str:
+    def bt_is_keyboard(self, address: str) -> bool:
+        """Whether a (found) Bluetooth device says it's a keyboard."""
+        info = run(["bluetoothctl", "info", self._check_mac(address)], timeout=8).out
+        return bool(re.search(r"^\s*Icon:\s*input-keyboard", info, re.M))
+
+    def bt_pair(self, address: str, on_code: Callable[[str], None] | None = None) -> str:
+        """Pair, trust and connect. Headphones and mice pair without a code. A keyboard may want one typed on
+        it: on_code is given the code to show the person (a keyboard pairs with bluetoothctl's own agent)."""
         a = self._check_mac(address)
         self._need_bluetooth()
         run(["bluetoothctl", "power", "on"], timeout=8)
-        r = run(["bluetoothctl", "--agent", "NoInputNoOutput", "--timeout", "25", "pair", a], timeout=40)
-        if not r.ok and "AlreadyExists" not in (r.out + r.err):
-            return self._say(r, "")
+        if self.bt_is_keyboard(a):
+            ok, why = pair_with_agent(a, on_code)
+            if not ok and "AlreadyExists" not in why:
+                return "Failed: " + (why or "it didn't pair")[:300]
+        else:
+            r = run(["bluetoothctl", "--agent", "NoInputNoOutput", "--timeout", "25", "pair", a], timeout=40)
+            if not r.ok and "AlreadyExists" not in (r.out + r.err):
+                return self._say(r, "")
         run(["bluetoothctl", "trust", a], timeout=10)
         return self._say(run(["bluetoothctl", "--timeout", "15", "connect", a], timeout=25), "Paired and connected.")
 

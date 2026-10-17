@@ -29,6 +29,11 @@ from .screen import Screen
 from . import tools as T
 
 HEADPHONES_RECHECK_S = 5.0
+AIRTOUCH_DELAY_S = 3.0              # AirTouch starts this long after the rest (the voice and the engine first)
+AIRTOUCH_HINT = ("AirTouch is on: a dot follows each index finger. Pinch thumb and finger to tap, pinch and move to "
+                 "scroll, hold up an open hand to stop me. Beckon with your palm up for the keyboard, and with your "
+                 "palm down to put it away.")
+DICTATE_S = 15.0                    # after the keyboard's microphone key, what's said within this long is typed
 HISTORY_TAIL_BYTES = 256 * 1024     # the end of the transcript, where the last messages are
 
 log = logging.getLogger("claudeos.controller")
@@ -38,7 +43,7 @@ class Controller:
     def __init__(self, paths: Paths, settings: Settings, platform: Platform, screen: Screen, *,
                  voice: bool = True, mic_factory: Callable | None = None, player: Any = None,
                  stt: Any = None, tts: Any = None, index: bool = True, extra_env: dict[str, str] | None = None,
-                 greet: bool = True) -> None:
+                 greet: bool = True, airtouch: bool = False) -> None:
         self.paths = paths.ensure()
         self.settings = settings
         self.platform = platform
@@ -50,6 +55,12 @@ class Controller:
         self.use_index = index
         self.extra_env = extra_env or {}
         self.greet = greet
+        self.airtouch_enabled = airtouch      # the hand as pointer (claudeos/airtouch); off in tests
+        self.airtouch: Any = None
+        self.airtouch_status: dict[str, Any] = {}
+        self.keyboard_up = False              # AirTouch's on-screen keyboard
+        self._typing: asyncio.Lock | None = None
+        self.dictate_until = 0.0              # the keyboard's microphone key: words said until then are typed
 
         self.state = State(self.paths)
         self.journal = Journal(self.paths)
@@ -119,7 +130,9 @@ class Controller:
         # Tools + permission gate + brain.
         self.ctx = T.ToolContext(self.paths, s, self.platform, self.journal, self.screen, self.memory, self.index,
                                  confirm=self.confirm, on_sleep=self._request_sleep,
-                                 on_settings_changed=self._settings_changed)
+                                 on_settings_changed=self._settings_changed, airtouch_status=self._airtouch_info,
+                                 keyboard=self.set_keyboard,
+                                 announce=lambda text: self.loop.call_soon_threadsafe(self._announce, text))
         server, policies, self.tool_names = T.build(self.ctx)
         self.gate = PermissionGate(self.paths, self.journal, self.confirm, policies)
         self.token = read_token(self.paths)
@@ -137,6 +150,8 @@ class Controller:
             else:
                 await self._start_voice()
         self._spawn(self._housekeeping())
+        if self.airtouch_enabled and s.airtouch:
+            self._spawn(self._start_airtouch(delay=AIRTOUCH_DELAY_S))
         self.screen.state("listening")
         self.ready.set()
 
@@ -207,6 +222,9 @@ class Controller:
                 self._spawn(self._restart_brain_when_idle())
 
     async def stop(self) -> None:
+        if self.airtouch is not None:
+            at, self.airtouch = self.airtouch, None
+            await self.loop.run_in_executor(None, at.stop)
         if self.index:
             self.index.stop()
         if self.mic:
@@ -428,6 +446,11 @@ class Controller:
         if self.speaker:
             self.speaker.say(text)
 
+    def _announce(self, text: str) -> None:
+        """Shown and said right away, in the middle of a tool: the code to type on a keyboard being paired."""
+        self.screen.notice(text)
+        self._say(text)
+
     def _transcript(self, role: str, text: str, via: str | None = None) -> None:
         if not text.strip():
             return
@@ -522,7 +545,19 @@ class Controller:
             self.speaker.stop()
 
     def _on_utterance(self, text: str, seconds: float) -> None:
+        if time.time() < self.dictate_until and text.strip():
+            self.dictate_until = 0.0
+            self._spawn(self._dictate(text.strip()))
+            return
         self._spawn(self.handle(text))
+
+    async def _dictate(self, text: str) -> None:
+        """The keyboard's microphone key was pressed: what was said is typed where the keyboard types."""
+        self.screen.partial("")
+        try:
+            await asyncio.to_thread(self.platform.type_text, text)
+        except Exception as exc:
+            log.warning("dictation couldn't be typed: %s", exc)
 
     async def handle(self, text: str) -> None:
         """Everything the user says arrives here (also used by tests and the keyboard fallback)."""
@@ -738,6 +773,144 @@ class Controller:
         except Exception:
             pass
 
+    # ================================================================ AirTouch
+    async def _start_airtouch(self, delay: float = 0.0) -> None:
+        """AirTouch's process, after the voice and the engine (`delay`); its two small models are downloaded
+        first if they aren't there yet (a ClaudeOS updated from before AirTouch)."""
+        if delay:
+            await asyncio.sleep(delay)
+        if self.airtouch is not None or not self.settings.airtouch:
+            return
+        from .voice import models as M
+        palm, landmarks = M.airtouch_files(self.paths)
+        if not (palm.exists() and landmarks.exists()):
+            try:
+                await self.loop.run_in_executor(None, lambda: M.download(self.paths, self.settings,
+                                                                         progress=lambda m: log.info("models: %s", m)))
+            except Exception as exc:
+                log.warning("AirTouch's models couldn't be downloaded: %s", exc)
+                self.airtouch_status = {"state": "error", "error": f"its models couldn't be downloaded: {exc}"}
+                return
+            if self.airtouch is not None or not self.settings.airtouch:
+                return
+        from .airtouch import AirTouch
+        bounds = self.screen.screen_bounds() if hasattr(self.screen, "screen_bounds") else None
+        self.airtouch = AirTouch(str(palm), str(landmarks),
+                                 lambda ev: self.loop.call_soon_threadsafe(self._on_airtouch, ev),
+                                 camera=self.settings.airtouch_camera, bounds=bounds)
+        self.airtouch.start()
+        if hasattr(self.screen, "on_bounds"):       # the screen moved or changed size: the pointer follows
+            self.screen.on_bounds = lambda b: self.airtouch.set_bounds(b) if self.airtouch else None
+        if hasattr(self.screen, "on_keyboard"):     # ...and the keyboard
+            self.screen.on_keyboard = lambda spec: self.airtouch.set_keyboard(spec) if self.airtouch else None
+
+    async def _stop_airtouch(self) -> None:
+        at, self.airtouch = self.airtouch, None
+        if at is not None:
+            await self.loop.run_in_executor(None, at.stop)
+        self.airtouch_status = {"state": "off"}
+        self.screen.dots([])
+        if self.keyboard_up:
+            self.keyboard_up = False
+            await self.screen.show_keyboard(False)
+
+    async def set_keyboard(self, show: bool) -> str:
+        """AirTouch's keyboard up or down: a beckon, its own hide key, or asked for out loud."""
+        if show and self.airtouch is None:
+            return "AirTouch is off, so there are no fingers to type with: turn it on first."
+        spec = await self.screen.show_keyboard(show)
+        self.keyboard_up = bool(show and spec)
+        if self.airtouch is not None:
+            self.airtouch.set_keyboard(spec if self.keyboard_up else None)
+        if self.keyboard_up:
+            return "The keyboard is up: type with your fingers in the air, a dot on each."
+        return "The keyboard is away." if not show else "The keyboard couldn't be shown on this screen."
+
+    async def _air_key(self, x: float, y: float) -> None:
+        """A finger typed on AirTouch's keyboard: the key goes where the keyboard's keys go (the conversation, or
+        the page's box being typed in), in the order they were typed."""
+        if self._typing is None:
+            self._typing = asyncio.Lock()
+        async with self._typing:
+            action = await self.screen.keyboard_press(x, y)
+            if not action:
+                return
+            if action[0] == "hide":
+                await self.set_keyboard(False)
+                return
+            if action[0] == "dictate":                  # the microphone key: say it, and it's typed
+                if self.asleep:
+                    self.wake()
+                self.dictate_until = time.time() + DICTATE_S
+                self.screen.notice("Say what to type.")
+                return
+            try:
+                if action[0] == "text":
+                    await asyncio.to_thread(self.platform.type_text, action[1])
+                elif action[0] == "key":
+                    await asyncio.to_thread(self.platform.key, action[1])
+                elif action[0] == "replace":            # Space twice: the first space becomes a full stop
+                    await asyncio.to_thread(self.platform.key, "BackSpace")
+                    await asyncio.to_thread(self.platform.type_text, action[1])
+            except Exception as exc:
+                log.warning("AirTouch keyboard: %s couldn't be typed: %s", action, exc)
+
+    def _on_airtouch(self, ev: tuple) -> None:
+        kind = ev[0]
+        if kind == "dots":
+            self.screen.dots(ev[1])
+        elif kind == "key":
+            self.last_heard = time.time()
+            self._spawn(self._air_key(ev[1], ev[2]))
+        elif kind == "hand":
+            if ev[1]:
+                self.last_heard = time.time()        # a hand in use is someone here: no going to sleep
+                if not self.state.get("airtouch_told"):
+                    self.state.set(airtouch_told=True)
+                    self.screen.notice(AIRTOUCH_HINT)
+        elif kind == "gesture":
+            self.last_heard = time.time()
+            self._spawn(self._gesture(ev[1]))
+        elif kind == "status":
+            if ev[1].get("state") != self.airtouch_status.get("state"):
+                log.info("AirTouch: %s", ev[1])
+            self.airtouch_status = dict(ev[1])
+
+    async def _gesture(self, name: str) -> None:
+        """A hand gesture: thumbs up or down answers a question; an open hand stops (or wakes) ClaudeOS; a
+        beckon up brings the keyboard up, a beckon down takes it away."""
+        log.info("AirTouch gesture: %s", name)
+        if name in ("keyboard up", "keyboard down"):
+            if (name == "keyboard up") != self.keyboard_up:
+                await self.set_keyboard(name == "keyboard up")
+            return
+        if name in ("yes", "no"):
+            if self.pending_confirm is not None and not self.pending_confirm.done():
+                answer = "Yes" if name == "yes" else "No"
+                self.screen.user_text("u" + uuid.uuid4().hex[:8], f"{answer} (thumbs {'up' if name == 'yes' else 'down'})", True)
+                self._transcript("user", answer)
+                self.pending_confirm.set_result(answer.lower())
+            return
+        if self.asleep:
+            self.wake()
+            self._say("Yes?")
+            return
+        if self.speaker and self.speaker.speaking:
+            self.speaker.stop()
+        if self.media_playing:
+            try:
+                await self.screen.eval_js("(window.__CO && __CO.media('pause'))")
+            except Exception:
+                pass
+            self._set_media(False)
+        if self.brain and self.brain.busy:
+            await self.brain.interrupt()
+
+    def _airtouch_info(self) -> dict[str, Any]:
+        if not self.settings.airtouch:
+            return {"state": "off (turned off in the settings)"}
+        return dict(self.airtouch_status) or {"state": "starting"}
+
     # ================================================================ yes / no
     async def confirm(self, question: str) -> tuple[str, str]:
         """Ask out loud; returns ('yes'|'no'|'unclear'|'timeout', what they said). During a typed turn (the
@@ -871,6 +1044,8 @@ class Controller:
         if {"text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "user_name"} & set(keys):
             self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0])
+        if "airtouch" in keys and self.airtouch_enabled:
+            self._spawn(self._start_airtouch() if s.airtouch else self._stop_airtouch())
         if "phone_access" in keys and self.brain:
             self.remote_told = False
             self._spawn(self._restart_brain_when_idle())

@@ -32,6 +32,7 @@ from gi.repository import Gdk, GLib, Gtk, WebKit2  # noqa: E402
 from ..brain.permissions import is_private  # noqa: E402
 from ..config import Paths, Settings  # noqa: E402
 from ..screen import Screen  # noqa: E402
+from .airtouch_layer import AirLayer  # noqa: E402
 from .layout import Layout, compute, css_vars, screen_from_monitor  # noqa: E402
 from .render import ASSETS, FONTS, NATIVE, asset  # noqa: E402
 
@@ -139,6 +140,9 @@ class GtkScreen(Screen):
         self._replay_last: dict[str, str] = {}
         self._reloading = False
         self._renderer_stops: list[float] = []
+        self._bounds: tuple[int, int, int, int] | None = None
+        self.on_bounds: Callable[[tuple[int, int, int, int]], None] | None = None
+        self.on_keyboard: Callable[[tuple | None], None] | None = None      # the keyboard moved (AirTouch)
         self._build(windowed)
 
     def bind(self, loop: asyncio.AbstractEventLoop, *, on_media_key: Callable[[str], None],
@@ -171,12 +175,19 @@ class GtkScreen(Screen):
             self.win.fullscreen()
         self.win.connect("destroy", lambda *_: Gtk.main_quit())
         self.win.connect("key-press-event", self._on_key)
-        self.win.connect("realize", self._hide_cursor)
 
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.stack.set_transition_duration(220)
-        self.win.add(self.stack)
+        # AirTouch's dots and keyboard, drawn over everything (it lets clicks through to what's under it).
+        self.root = Gtk.Overlay()
+        self.root.add(self.stack)
+        self.pointer_area = Gtk.DrawingArea()
+        self.air = AirLayer(self.pointer_area, lambda: self.layout.font_px if self.layout else 24.0)
+        self.pointer_area.connect("draw", self.air.draw)
+        self.root.add_overlay(self.pointer_area)
+        self.root.set_overlay_pass_through(self.pointer_area, True)
+        self.win.add(self.root)
 
         # --- conversation layer
         chat_ucm = WebKit2.UserContentManager()
@@ -286,6 +297,8 @@ class GtkScreen(Screen):
                        text_scale=s.text_scale, web_zoom=s.web_zoom)
 
     def _apply_layout(self) -> None:
+        self._note_bounds()
+        self._replace_keyboard()
         lay = self._compute_layout()
         first = self.layout is None
         changed = first or lay.to_dict() != self.layout.to_dict()
@@ -334,6 +347,85 @@ class GtkScreen(Screen):
             return False
         self._relayout_id = GLib.timeout_add(150, run)
 
+    # ================================================================ AirTouch: the dots and the keyboard
+    def _note_bounds(self) -> None:
+        """Where this screen is on the display, in its pixels (for AirTouch, which moves the display's pointer)."""
+        try:
+            mon = self._monitor()
+            g, f = mon.get_geometry(), mon.get_scale_factor() or 1
+            bounds = (g.x * f, g.y * f, g.width * f, g.height * f)
+        except Exception:
+            return
+        if bounds != self._bounds:
+            self._bounds = bounds
+            if self.on_bounds:
+                try:
+                    self.on_bounds(bounds)
+                except Exception:
+                    log.exception("on_bounds")
+
+    def screen_bounds(self) -> tuple[int, int, int, int] | None:
+        return self._bounds
+
+    def _to_window(self, x: float, y: float) -> tuple[float, float]:
+        """Display pixels (AirTouch's) to this window's."""
+        gw = self.win.get_window()
+        if gw is None:
+            return x, y
+        origin = gw.get_origin()
+        f = gw.get_scale_factor() or 1
+        return x / f - origin[-2], y / f - origin[-1]
+
+    def _to_display(self, x: float, y: float) -> tuple[float, float]:
+        gw = self.win.get_window()
+        if gw is None:
+            return x, y
+        origin = gw.get_origin()
+        f = gw.get_scale_factor() or 1
+        return (x + origin[-2]) * f, (y + origin[-1]) * f
+
+    def dots(self, dots: list[tuple[float, float, str]]) -> None:
+        self._ui(self._dots_now, list(dots))
+
+    def _dots_now(self, dots: list[tuple[float, float, str]]) -> None:
+        self.air.set_dots([self._to_window(x, y) + (kind,) for x, y, kind in dots])
+
+    async def show_keyboard(self, show: bool) -> tuple | None:
+        return await self._ui_call(self._show_keyboard_now, show)
+
+    def _show_keyboard_now(self, show: bool) -> tuple | None:
+        if not show:
+            if self.air.up:
+                self.air.hide_keyboard()
+                self.stack.set_margin_bottom(0)
+            return None
+        w, h = self.win.get_allocated_width(), self.win.get_allocated_height()
+        if w <= 1 or h <= 1:
+            w, h = self.win.get_default_size()
+        x, y, aw, ah = self.air.show_keyboard(w, h)
+        # Pages get the room above it, the way a tablet's do, so what's being typed into stays in view (the
+        # conversation keeps its newest words at the bottom).
+        self.stack.set_margin_bottom(int(self.air.panel[3]))
+        f = (self.win.get_window().get_scale_factor() if self.win.get_window() else 1) or 1
+        dx, dy = self._to_display(x, y)
+        return self.air.spec((dx, dy, aw * f, ah * f))
+
+    async def keyboard_press(self, x: float, y: float) -> tuple | None:
+        return await self._ui_call(self._keyboard_press_now, x, y)
+
+    def _keyboard_press_now(self, x: float, y: float) -> tuple | None:
+        return self.air.press(*self._to_window(x, y))
+
+    def _replace_keyboard(self) -> None:
+        """The window changed size with the keyboard up: put it along the new bottom, and tell AirTouch."""
+        if self.air.up:
+            spec = self._show_keyboard_now(True)
+            if self.on_keyboard:
+                try:
+                    self.on_keyboard(spec)
+                except Exception:
+                    log.exception("on_keyboard")
+
     def layout_info(self) -> dict[str, Any]:
         lay = self.layout
         if lay is None:
@@ -345,13 +437,6 @@ class GtkScreen(Screen):
     @staticmethod
     def _quiet_view(view: WebKit2.WebView) -> None:
         view.connect("context-menu", lambda *a: True)
-
-    def _hide_cursor(self, w: Gtk.Widget) -> None:
-        try:
-            d = w.get_display()
-            w.get_window().set_cursor(Gdk.Cursor.new_for_display(d, Gdk.CursorType.BLANK_CURSOR))
-        except Exception:
-            pass
 
     # ================================================================ thread helpers
     def _ui(self, fn: Callable, *args: Any) -> None:

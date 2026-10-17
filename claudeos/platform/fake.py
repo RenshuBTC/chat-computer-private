@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import io
-from typing import Any
+from typing import Any, Callable
 
 from .base import Platform
 
 
 class FakePlatform(Platform):
     name = "fake"
+    KEYBOARD = "AA:BB:CC:DD:EE:03"
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
@@ -60,10 +61,13 @@ class FakePlatform(Platform):
     def bt_scan(self, seconds: int = 10) -> list[dict[str, Any]]:
         self._c("bt_scan", seconds)
         return [{"address": "AA:BB:CC:DD:EE:01", "name": "AirPods Pro", "paired": True},
-                {"address": "AA:BB:CC:DD:EE:02", "name": "Speaker", "paired": False}]
+                {"address": "AA:BB:CC:DD:EE:02", "name": "Speaker", "paired": False},
+                {"address": self.KEYBOARD, "name": "Magic Keyboard", "paired": False}]
 
-    def bt_pair(self, address: str) -> str:
+    def bt_pair(self, address: str, on_code: Callable[[str], None] | None = None) -> str:
         self._c("bt_pair", address)
+        if on_code and address == self.KEYBOARD:
+            on_code("482916")                 # a keyboard that wants a code typed on it
         return "Paired and connected."
 
     def bt_connect(self, address: str) -> str:

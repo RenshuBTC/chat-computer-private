@@ -91,11 +91,12 @@ setup_screen() {
   xset -dpms >/dev/null 2>&1 || true
   # Black root window so there is never a grey X stipple flash.
   xsetroot -solid black >/dev/null 2>&1 || true
-  # Hide the pointer when idle (voice-first; no mouse expected).
+  # Hide the mouse's arrow when the mouse is still (voice first: a mouse is optional, and AirTouch draws
+  # its own dots and hides the arrow while it moves the pointer).
   if command -v unclutter >/dev/null 2>&1; then
-    unclutter --timeout 1 >/dev/null 2>&1 &
+    unclutter --timeout 3 >/dev/null 2>&1 &
   elif command -v unclutter-xfixes >/dev/null 2>&1; then
-    unclutter-xfixes --timeout 1 >/dev/null 2>&1 &
+    unclutter-xfixes --timeout 3 >/dev/null 2>&1 &
   fi
   # Minimal WM: borderless, maximized windows, no root menu.
   if command -v openbox >/dev/null 2>&1; then

@@ -13,6 +13,8 @@ of Ubuntu, chosen with the Mac's own start-up volume instead of a boot menu (see
 ```
 ClaudeOS/
   claudeos/                 Python package: the ClaudeOS runtime (brain, tools, voice, screen)
+    airtouch/               Hands seen by the screen's camera: camera, model reader + numpy engine, hand
+                            tracking, gestures, keyboard layout, pointer (its own process)
   linux/                    The thin Linux base (installed into the target system)
     install-claudeos.sh     Runs INSIDE the target (curtin in-target) or later by hand; idempotent
     system/                 Files copied into the target root (/etc, /usr/local/...)
@@ -331,6 +333,53 @@ retrying with backoff, then starts listening.
   Everything is recomputed when the window, monitor or settings change. Settings: `text_size` (0 = auto), `text_scale`, `viewing_distance_cm`, `screen_inches`
   (0 = reported), `web_zoom` (0 = auto).
 * Voice: PipeWire/AirPods, Silero VAD, faster-whisper (local), Kokoro TTS (local), barge-in.
+* AirTouch (`claudeos/airtouch`): the hands, seen by the screen's camera, in a process of its own at nice 5
+  (`worker.py`). All of it is ClaudeOS's own code except the two networks: Google MediaPipe's palm detector
+  and hand landmark model ("lite", Apache 2.0), downloaded with the voice models and checked against the
+  SHA-256 that MediaPipe's own build pins.
+  * Camera (`camera.py`): Video4Linux2 through ioctl, with mmap buffers. YUYV when the camera gives it at
+    15 fps or more, otherwise MJPEG (the Huffman tables are added when a camera leaves them out). The Apple
+    Studio Display's camera is chosen first; a camera plugged in later is found within 5 s.
+  * Networks: `tflite.py` reads the model files (FlatBuffers); `nn.py` runs them in numpy (NHWC float32),
+    within about 1e-6 of LiteRT. Tracking (`hands.py`) is MediaPipe's published method: palm detection on
+    the letterboxed picture, landmarks on a rotated crop, then the joints place the next crop. Up to two
+    hands, each keeping its number; a palm detected inside a hand already followed is that hand. With the
+    same models the joints are within 0.5 px of MediaPipe's.
+  * Pacing: with no hand, palm detection runs only when the picture changed (at most 4 times a second) and
+    every 2 s; hands are followed with half a processor core (0.8 with the keyboard up), at 8 pictures a
+    second when they rest; with one hand followed, palm detection looks for the other twice a second.
+  * Gestures (`gestures.py`), from the joints in 3D: a hand's size is wrist to middle knuckle; which way the
+    palm faces comes from the knuckles seen from the wrist and which hand it is (the landmark network says).
+    Positions are absolute: the working space is 5 hand sizes across the screen, placed so the first dot
+    starts where the pointer was, and moved along when a hand passes its edge; dots are smoothed with the
+    1-euro filter. A dot per index finger; a pinch (two pictures running) taps where the dot was held while
+    the fingers met; pinching and moving scrolls; an open palm towards the camera held 0.6 s is "stop"; a
+    thumb held up or down is yes or no. Open fingers, then all four curled within 0.8 s with the hand still,
+    is a beckon: palm up, the keyboard comes up; palm down, it goes away. With the keyboard up the working
+    space is the keyboard, a row per 0.2 hand sizes and a key per 0.21 (a real keyboard's 19 mm), or, when
+    both hands are in view as it comes up, whatever puts each index finger on its home key (F, J), within
+    0.15 to 0.35. A hand's four fingers are on four keys side by side along its knuckles (which don't move
+    when a finger taps); only the index finger's is drawn. A finger bending 18 degrees past where it rests,
+    6 more than the hand's other fingers, types the key it was on a tenth of a second before.
+  * Keyboard (`airtouch/keyboard.py`): the iPad's (iPadOS, 11-inch iPads), every key's edges and every row's
+    measured from the three pictures of it in Apple's iPad User Guide ("Type with the onscreen keyboard on
+    iPad" and two more pages; 587 by 180 pixels of keys, the pictures agreeing within 1.4 px). It's scaled as
+    a whole, as big as fits 42% of the screen's height, in the middle. As in the guide: a double tap on
+    Shift is Caps Lock, a double tap on Space a full stop and a space. The .?123 page has the letter keys'
+    second characters in their places (not in Apple's pictures, so not measured); the microphone key types
+    the next thing said (`Controller.dictate_until`), and the emoji key has a page of emoji.
+  * Screen: the dots and the keyboard (`ui/airtouch_layer.py`) are drawn with cairo on a layer over
+    everything that lets clicks through, black on white; the keys' symbols are drawn there, not taken from
+    fonts. The keyboard is drawn once into a picture of its own, so dots moving over it redraw only their
+    squares; pages get the room above it. Keys are typed with xdotool, so they go wherever typing goes: the
+    conversation, or a page's box.
+  * Pointer: moved with XTEST. Its arrow is hidden with XFIXES while AirTouch moves it, and comes back when
+    something else moves the pointer (a mouse, or a click Claude made); AirTouch then leaves the pointer
+    alone until it has been still for 3 s.
+* Keyboard and mouse: USB ones just work. The arrow shows when the mouse moves (unclutter hides it after 3 s
+  still). A Bluetooth keyboard (`bluetoothctl info`: Icon input-keyboard) pairs through bluetoothctl's own
+  agent as KeyboardDisplay, answering its questions: the passkey to type on the keyboard (or a PIN made up
+  for an older one) is shown and spoken. Other devices pair as NoInputNoOutput.
 * Speed (`tests/test_speed.py`, and the listener tests in `tests/test_voice.py`):
   * Start: the window comes first. `run_app` shows it, then makes the controller on the asyncio thread, since
     loading the Agent SDK takes most of a second (the permission gate imports the SDK only when the engine

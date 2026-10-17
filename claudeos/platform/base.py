@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -48,7 +48,7 @@ class Platform:
     # --- bluetooth
     def bt_status(self) -> dict[str, Any]: raise NotImplementedError
     def bt_scan(self, seconds: int = 10) -> list[dict[str, Any]]: raise NotImplementedError
-    def bt_pair(self, address: str) -> str: raise NotImplementedError
+    def bt_pair(self, address: str, on_code: Callable[[str], None] | None = None) -> str: raise NotImplementedError
     def bt_connect(self, address: str) -> str: raise NotImplementedError
     def bt_disconnect(self, address: str) -> str: raise NotImplementedError
     def bt_forget(self, address: str) -> str: raise NotImplementedError

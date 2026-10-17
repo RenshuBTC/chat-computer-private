@@ -22,13 +22,16 @@ body:not(.has-log) #column { justify-content: center; }
   background: var(--ink); animation: pulse 1.2s ease-in-out infinite;
 }
 
-/* What you're saying right now, and a small dot that shows ClaudeOS is listening. */
+/* What you're saying right now, and a small dot that shows ClaudeOS is listening. It pulses only while it hears
+   you: a dot that pulsed all the time it listened (nearly always) had the page redrawn 60 times a second, which
+   without a graphics chip cost a steady few percent of a processor core. */
 #live { margin-top: 1.25rem; min-height: 1.5em; font-style: italic; white-space: pre-wrap; visibility: hidden; }
 body.listening #live, body.hearing #live { visibility: visible; }
 #caret {
   display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%; margin-left: 0.35em; vertical-align: middle;
-  background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
+  background: var(--ink);
 }
+body.hearing #caret { animation: pulse 1.6s ease-in-out infinite; }
 body:not(.listening):not(.hearing) #caret { visibility: hidden; }
 
 /* Empty screen: a greeting and one line saying how to talk or type. */

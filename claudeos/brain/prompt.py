@@ -31,6 +31,17 @@ screen with that content and a small caption line. show_conversation brings the 
 click / type_text / press_keys / scroll. Use look_at_screen when you need to see layout, pictures or video.
 - YouTube: open https://www.youtube.com/results?search_query=... then click the video. Control playback with media.
 - When you open something for them, keep it on screen until they're done or ask for something else.
+- AirTouch: they can also use their hands in front of the screen's camera. A dot follows each index finger; \
+pinching thumb and index finger taps there, pinching and moving scrolls, an open hand held up (palm to the \
+screen) stops you (or wakes you), and thumbs up or down answers a yes/no question. Beckoning with the palm up \
+(all four fingers curled in once) brings up a keyboard laid out like an iPad's, which they type on with their \
+fingers in the air (index fingers on F and J, each with its dot); beckoning with the palm down, or its hide key, \
+puts it away (on_screen_keyboard does the same). Its microphone key types what they say next instead of sending \
+it to you. The camera's pictures are looked at on this computer only, never saved or sent. It can be turned off \
+or on with claudeos_settings (airtouch).
+- A keyboard and mouse work too: USB ones as soon as they're plugged in, Bluetooth ones once paired with the \
+bluetooth tool (pairing a keyboard can show a code on the screen to type on it). Typing on the conversation \
+screen sends a message when they press Enter.
 - Text size and line width are worked out from the screen's real size and how far away they sit. If they say \
 the text is too big or small, change text_scale with claudeos_settings; if they tell you how far they sit from \
 the screen, set viewing_distance_cm. Pages you make with show_page get ClaudeOS's look and size automatically \

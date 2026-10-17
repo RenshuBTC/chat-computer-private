@@ -1,7 +1,8 @@
 # ClaudeOS
 
 ClaudeOS turns your computer into one you have a conversation with. You talk through your AirPods, or
-type in the Claude app on your phone (the phone is the keyboard). It's one conversation either way. The
+type in the Claude app on your phone (the phone is the keyboard), and point with your hands in the air in
+front of the screen ([AirTouch](#airtouch-your-hands-in-the-air)). It's one conversation either way. The
 screen shows only your words and Claude's, plus whatever Claude puts there for you: websites, YouTube,
 documents and your files.
 
@@ -101,6 +102,43 @@ so it works the same at your desk or away from home. You can also attach photos 
 * Stopped working? Run ClaudeOS Setup (in Windows, or in macOS on a Mac) and choose **Sign ClaudeOS in
   to Claude again**. ClaudeOS picks up the new sign-in when it next starts. (On a Mac, say yes to typing
   from your phone.)
+
+## AirTouch: your hands in the air
+
+If your screen has a camera (an Apple Studio Display's, a laptop's, or any webcam), you can use ClaudeOS
+with your hands, without touching anything:
+
+* **A dot follows each index finger.** Point at the screen with one hand or both.
+* **Tap:** pinch your thumb and index finger together and let go. **Scroll:** pinch and move your hand
+  up or down, as if dragging the page.
+* **Stop:** hold up an open hand, palm to the screen, for a moment. ClaudeOS stops talking and a video
+  pauses. When ClaudeOS is asleep, this wakes it.
+* **Yes or no:** a thumbs up or thumbs down, held a moment, answers a question ClaudeOS asked.
+* **Keyboard:** hold a hand out palm up and curl all four fingers towards you once, as if beckoning
+  someone: the keyboard comes up along the bottom of the screen. Do the same with your palm facing down to
+  put it away (or tap its hide key, or say "hide the keyboard"; "show the keyboard" brings it up too).
+* **Typing in the air:** the keyboard is laid out exactly like an iPad's, every key in the same place and
+  the same size. Your hands arrive on it the way they rest on a keyboard: index fingers on F and J, the
+  other fingers on the keys beside them. Each index finger keeps its dot; move a hand to move its fingers
+  across the keys, and tap any finger down to type the key it's on. As on an iPad, tap Shift twice for
+  Caps Lock, and Space twice for a full stop. The microphone key types what you say next instead of
+  sending it to Claude, and the smiley key has emoji.
+* The camera's pictures are looked at on the computer only, never kept or sent anywhere. Say "turn off
+  AirTouch" to switch it off.
+
+An Apple Studio Display's camera works with ClaudeOS on a PC connected with a Thunderbolt or USB-C cable.
+Center Stage is part of macOS, so the picture doesn't follow you around. On a Mac, ClaudeOS can't use a
+Studio Display yet (see [ClaudeOS on a Mac](#claudeos-on-a-mac)).
+
+## A keyboard and a mouse
+
+A USB keyboard and mouse work as soon as they're plugged in. For Bluetooth ones, put them in pairing mode
+and say "pair my keyboard" (or "my mouse"). A keyboard may want a code typed on it: ClaudeOS shows the code
+and says it. Type it on the keyboard, then press Enter.
+
+* On the conversation screen, typing writes a message and Enter sends it. On a website, typing goes into
+  the box you're in.
+* The mouse's arrow shows when you move the mouse and hides once it has been still for 3 seconds.
 
 ## Going back to Windows
 

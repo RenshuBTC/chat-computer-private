@@ -37,7 +37,7 @@ ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
 
 SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
-            "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "phone_access"}
+            "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "phone_access", "airtouch"}
 # Windows' own folders, at the top of its drive (a folder of the person's own called Recovery or Boot is theirs).
 WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
 
@@ -55,6 +55,9 @@ class ToolContext:
     on_sleep: Callable[[], None] | None = None
     on_settings_changed: Callable[[list[str]], None] | None = None
     rate_limit: dict[str, Any] = field(default_factory=dict)
+    airtouch_status: Callable[[], dict[str, Any]] | None = None
+    keyboard: Callable[[bool], Awaitable[str]] | None = None       # AirTouch's on-screen keyboard up or down
+    announce: Callable[[str], None] | None = None     # show and say something now, mid-tool (any thread)
     shot_scale: float = 1.0
     power_delay_s: float = 4.0
 
@@ -230,6 +233,14 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         await asyncio.to_thread(ctx.platform.key, str(a["keys"]), int(a.get("repeat") or 1))
         await asyncio.sleep(0.3)
         return _text(f"Pressed {a['keys']}.")
+
+    @reg("on_screen_keyboard", "Put AirTouch's on-screen keyboard (laid out like an iPad's) up (show true) or away "
+         "(false): the user types on it with their fingers in the air. They can also beckon with the palm up to "
+         "bring it up, and with the palm down to put it away.", obj({"show": B}, ["show"]))
+    async def on_screen_keyboard(a):
+        if ctx.keyboard is None:
+            return _err("There's no on-screen keyboard here.")
+        return _text(await ctx.keyboard(bool(a.get("show"))))
 
     @reg("scroll", "Scroll the page up or down (amount = screens, default 1), or bring element [ref] into view.",
          obj({"direction": {"type": "string", "enum": ["up", "down", "top", "bottom"]}, "amount": {"type": "number"}, "ref": I}))
@@ -529,6 +540,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         st: dict[str, Any] = dict(zip(parts, await asyncio.gather(*(one(fn) for fn in parts.values()))))
         if ctx.index:
             st["file_index"] = {**ctx.index.status, "files": ctx.index.status.get("files")}
+        if ctx.airtouch_status:
+            st["airtouch"] = ctx.airtouch_status()
         if ctx.rate_limit:
             st["claude_usage"] = ctx.rate_limit
         return _text(_json(st))
@@ -582,8 +595,9 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
 
     bt_actions = ["status", "scan", "pair", "connect", "disconnect", "forget"] + ([] if on_mac else ["import_from_windows"])
 
-    @reg("bluetooth", "Bluetooth (AirPods, speakers, keyboards): status, scan, pair (put the device in pairing "
-         "mode first; for AirPods hold the button on the case), connect, disconnect, forget" +
+    @reg("bluetooth", "Bluetooth (AirPods, speakers, keyboards, mice): status, scan, pair (put the device in "
+         "pairing mode first; for AirPods hold the button on the case; a keyboard may need a code typed on it, which "
+         "ClaudeOS shows and says), connect, disconnect, forget" +
          ("." if on_mac else ", import_from_windows."),
          obj({"action": {"type": "string", "enum": bt_actions}, "device": S}, ["action"]), _bt_policy)
     async def bluetooth(a):
@@ -597,7 +611,12 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         addr = await _bt_address(a.get("device", ""))
         if not addr:
             return _err(f"I can't find a Bluetooth device called {a.get('device')!r}. Is it in pairing mode?")
-        fn = {"pair": p.bt_pair, "connect": p.bt_connect, "disconnect": p.bt_disconnect, "forget": p.bt_forget}[act]
+        if act == "pair":
+            def code(digits: str) -> None:            # from the pairing thread, while it waits for the keyboard
+                if ctx.announce:
+                    ctx.announce(f"Type {' '.join(digits)} on the keyboard, then press Enter.")
+            return _text(await asyncio.to_thread(p.bt_pair, addr, code))
+        fn = {"connect": p.bt_connect, "disconnect": p.bt_disconnect, "forget": p.bt_forget}[act]
         return _text(await asyncio.to_thread(fn, addr))
 
     def _amount(v: Any, default: int) -> int:
@@ -731,7 +750,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          "If the screen's size is wrong (some TVs don't report it), set screen_inches (the diagonal). web_zoom "
          "zooms websites (0 = automatic). text_size forces a fixed pixel size (0 = automatic). phone_access "
          "(true/false) lets them message you from the Claude app on their phone (needs the full sign-in from "
-         "ClaudeOS Setup).",
+         "ClaudeOS Setup). airtouch (true/false) turns AirTouch, the hand gestures seen by the screen's camera, on or "
+         "off.",
          obj({"action": {"type": "string", "enum": ["get", "set"]}, "key": S, "value": {}}, ["action"]))
     async def claudeos_settings(a):
         if a["action"] == "get":

@@ -27,6 +27,20 @@ class Screen:
     def state(self, name: str) -> None: ...
     def history(self, items: list[dict[str, Any]]) -> None: ...
     def apply_settings(self, text_size: int, user_name: str) -> None: ...
+    def dots(self, dots: list[tuple[float, float, str]]) -> None:
+        """AirTouch's dots, one per finger it follows (x, y in the display's pixels, and what the finger is
+        doing: "point", "pinch", "scroll"; with the keyboard up "key", "press"). None left: none drawn."""
+    async def show_keyboard(self, show: bool) -> tuple | None:
+        """Put AirTouch's keyboard up: returns where its keys are (x, y, width, height in the display's pixels,
+        and how many keys across and rows down); or take it down (None)."""
+        return None
+    async def keyboard_press(self, x: float, y: float) -> tuple | None:
+        """A finger pressed the keyboard at x, y (the display's pixels): what to type (("text", "a") or
+        ("key", "Return")), ("hide",), or None (shift, another page of keys, or no key there)."""
+        return None
+    def screen_bounds(self) -> tuple[int, int, int, int] | None:
+        """Where ClaudeOS's screen is (x, y, width, height in the display's pixels), for AirTouch's pointer."""
+        return None
     def layout_info(self) -> dict[str, Any]:
         """The screen's size, the estimated viewing distance and the text size worked out from them."""
         return {}
@@ -104,6 +118,36 @@ class RecordingScreen(Screen):
 
     def apply_settings(self, text_size: int, user_name: str) -> None:
         self.events.append(("settings", (text_size, user_name)))
+
+    def dots(self, dots: list[tuple[float, float, str]]) -> None:
+        self.events.append(("dots", [(round(x), round(y), kind) for x, y, kind in dots]))
+
+    # A 1920x1080 screen with the keyboard along its bottom 432 pixels.
+    KEYBOARD_TOP, KEYBOARD_SIZE = 648, (1920, 432)
+
+    async def show_keyboard(self, show: bool) -> tuple | None:
+        from .airtouch.keyboard import ROWS, UNITS, Keyboard
+        self.events.append(("keyboard", show))
+        if not show:
+            self.keyboard = None
+            return None
+        self.keyboard = Keyboard()
+        self.keyboard.layout(*self.KEYBOARD_SIZE)
+        x, y, w, h = self.keyboard.area()
+        return (x, self.KEYBOARD_TOP + y, w, h, UNITS, ROWS)
+
+    async def keyboard_press(self, x: float, y: float) -> tuple | None:
+        import time
+        kb = getattr(self, "keyboard", None)
+        key = kb.hit(x, y - self.KEYBOARD_TOP) if kb else None
+        if key is None:
+            return None
+        state = (kb.page, kb.shift)
+        action = kb.press(key, time.monotonic())
+        if (kb.page, kb.shift) != state:
+            kb.layout(*self.KEYBOARD_SIZE)
+        self.events.append(("key", key.label))
+        return action
 
     # test helpers
     def ai_text(self) -> str:

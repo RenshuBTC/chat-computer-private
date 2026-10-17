@@ -24,7 +24,7 @@ NATIVE = 'data-claudeos="native"'   # marks pages laid out by ClaudeOS (the scre
 
 # Black on white like the conversation, except that a video plays on black, as in any video player.
 DOC_CSS = """
-body { overflow-y: auto; cursor: none; }
+body { overflow-y: auto; }
 article { width: var(--co-column, min(30rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto; padding: 2rem 0 4rem; }
 article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; margin: 0 0 1rem; }
 .pages img { display: block; width: 100%; margin: 0 0 1rem; border: 1px solid var(--ink); }

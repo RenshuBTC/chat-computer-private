@@ -395,6 +395,108 @@ def test_copying_pairings_from_windows_says_what_was_copied(monkeypatch):
     assert said["none"].startswith("Windows has no Bluetooth pairings")
 
 
+FAKE_BLUETOOTHCTL = r"""
+import sys, time
+mode = sys.argv[1]
+def say(text):
+    sys.stdout.write(text)
+    sys.stdout.flush()
+for line in sys.stdin:
+    cmd = line.strip()
+    if cmd == "agent KeyboardDisplay":
+        say("Agent registered\n")
+    elif cmd == "default-agent":
+        say("Default agent request successful\n")
+    elif cmd.startswith("pair "):
+        say("Attempting to pair with " + cmd[5:] + "\n")
+        if mode == "show":       # the passkey, its digits coloured by how many are typed (as bluetoothctl does)
+            say("\x1b[0;94m[agent]\x1b[0m Passkey: \x1b[1;30m12\x1b[1;37m3456\n\x1b[0m")
+            time.sleep(0.2)
+            say("\x1b[0;94m[agent]\x1b[0m Passkey: \x1b[1;30m1234\x1b[1;37m56\n\x1b[0m")
+            say("[CHG] Device " + cmd[5:] + " Paired: yes\nPairing successful\n")
+        elif mode == "confirm":
+            say("[agent] Confirm passkey 654321 (yes/no): ")
+        elif mode == "pin":
+            say("[agent] Enter PIN code: ")
+        else:
+            say("Failed to pair: org.bluez.Error.AuthenticationFailed\n")
+    elif cmd == "yes" and mode == "confirm":
+        say("Pairing successful\n")
+    elif cmd.isdigit() and mode == "pin":
+        open(sys.argv[2], "w").write(cmd)
+        say("Pairing successful\n")
+    elif cmd == "quit":
+        break
+"""
+
+
+@pytest.mark.parametrize("mode,paired,code", [("show", True, "123456"), ("confirm", True, "654321"),
+                                              ("pin", True, None), ("refuse", False, None)])
+def test_a_keyboard_pairs_with_a_code_shown_to_type_on_it(tmp_path, mode, paired, code):
+    import sys
+    from claudeos.platform import linux as L
+    script = tmp_path / "bluetoothctl.py"
+    script.write_text(FAKE_BLUETOOTHCTL)
+    pin_file = tmp_path / "pin"
+    codes = []
+    ok, why = L.pair_with_agent("AA:BB:CC:DD:EE:03", codes.append, timeout=10,
+                                cmd=(sys.executable, str(script), mode, str(pin_file)))
+    assert ok is paired
+    if mode == "pin":                          # a PIN made up here, shown, and given to the keyboard's pairing
+        assert len(codes) == 1 and len(codes[0]) == 6 and pin_file.read_text() == codes[0]
+    elif paired:
+        assert codes == [code]                 # once, however often bluetoothctl repeats it
+    else:
+        assert codes == [] and "AuthenticationFailed" in why
+
+
+def test_only_keyboards_pair_with_a_code(monkeypatch):
+    from claudeos.platform import linux as L
+    from claudeos.platform.base import CommandResult
+    calls, agent = [], []
+    icons = {"AA:BB:CC:DD:EE:03": "input-keyboard", "AA:BB:CC:DD:EE:04": "input-mouse"}
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[1] == "info":
+            return CommandResult(0, f"Device {cmd[2]}\n\tName: Thing\n\tIcon: {icons[cmd[2]]}\n", "")
+        return CommandResult(0, "", "")
+    monkeypatch.setattr(L, "run", run)
+    monkeypatch.setattr(L, "pair_with_agent", lambda a, on_code, **kw: agent.append(a) or (True, ""))
+    p = L.LinuxPlatform()
+    monkeypatch.setattr(p, "has_bluetooth", lambda *a: True)
+    assert p.bt_pair("AA:BB:CC:DD:EE:03", print) == "Paired and connected."
+    assert agent == ["AA:BB:CC:DD:EE:03"] and not any("NoInputNoOutput" in c for c in calls)
+    assert p.bt_pair("AA:BB:CC:DD:EE:04") == "Paired and connected."
+    assert agent == ["AA:BB:CC:DD:EE:03"] and any("NoInputNoOutput" in c for c in calls)
+    monkeypatch.setattr(L, "pair_with_agent", lambda a, on_code, **kw: (False, "org.bluez.Error.AuthenticationFailed"))
+    assert p.bt_pair("AA:BB:CC:DD:EE:03").startswith("Failed: org.bluez.Error.AuthenticationFailed")
+
+
+def test_pairing_a_keyboard_shows_and_says_its_code(tmp_path):
+    ctx, server, *_ = make(tmp_path)
+    said = []
+    ctx.announce = said.append
+    text, err = call(server, "bluetooth", {"action": "pair", "device": "Magic Keyboard"})
+    assert not err and "Paired" in text
+    assert said == ["Type 4 8 2 9 1 6 on the keyboard, then press Enter."]
+
+
+def test_the_on_screen_keyboard_tool(tmp_path):
+    ctx, server, *_ = make(tmp_path)
+    text, err = call(server, "on_screen_keyboard", {"show": True})
+    assert err and "no on-screen keyboard" in text
+    asked = []
+
+    async def keyboard(show):
+        asked.append(show)
+        return "The keyboard is up." if show else "The keyboard is away."
+    ctx.keyboard = keyboard
+    assert call(server, "on_screen_keyboard", {"show": True}) == ("The keyboard is up.", False)
+    assert call(server, "on_screen_keyboard", {"show": False}) == ("The keyboard is away.", False)
+    assert asked == [True, False]
+
+
 def test_the_index_skips_claudeos_own_folders_not_the_persons_of_the_same_name(tmp_path):
     home = tmp_path / "home"
     paths = Paths(home / "ClaudeOS").ensure()

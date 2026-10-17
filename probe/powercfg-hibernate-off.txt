@@ -1,0 +1,2 @@
+﻿> powercfg /hibernate off exit code 0
+

@@ -87,6 +87,7 @@ def register_fonts(folder: Path = FONTS) -> bool:
 # machine, graphics the kernel can't drive yet) that crashes and leaves a blank screen; these make it
 # draw with the processor instead. Renderer processes read them when they start.
 CPU_RENDERING = {"WEBKIT_SKIA_ENABLE_CPU_RENDERING": "1", "WEBKIT_DISABLE_DMABUF_RENDERER": "1", "CLAUDEOS_GPU": "0"}
+SPEED_TICK_S = 0.25          # how often the window's thread checks it isn't kept busy (see _watch_speed)
 
 
 def use_cpu_rendering(environ: Any = os.environ) -> bool:
@@ -105,6 +106,39 @@ def choose_rendering(environ: Any = os.environ, dri: str = "/dev/dri", nvidia: s
         # NVIDIA's own driver can show WebKit's newer (DMA-BUF) way of passing pictures as a blank window.
         environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
     return "gpu"
+
+
+def graphics_report(drm: str = "/sys/class/drm") -> str:
+    """The graphics chips and their drivers, for the log: "card1: amdgpu (1002:164e)"."""
+    out = []
+    for card in sorted(Path(drm).glob("card[0-9]*")):
+        if "-" in card.name:
+            continue
+        dev = card / "device"
+        try:
+            driver = os.path.basename(os.readlink(dev / "driver"))
+        except OSError:
+            driver = "no driver"
+        try:
+            ids = (dev / "vendor").read_text().strip()[2:] + ":" + (dev / "device").read_text().strip()[2:]
+        except OSError:
+            ids = "?"
+        out.append(f"{card.name}: {driver} ({ids})")
+    return ", ".join(out) or "no graphics chips found"
+
+
+def displays_report(drm: str = "/sys/class/drm") -> str:
+    """The connected screens and their largest mode, for the log: "card1-DP-1 5120x2880"."""
+    out = []
+    for conn in sorted(Path(drm).glob("card[0-9]*-*")):
+        try:
+            if (conn / "status").read_text().strip() != "connected":
+                continue
+            modes = (conn / "modes").read_text().split()
+        except OSError:
+            continue
+        out.append(f"{conn.name} {modes[0] if modes else '?'}")
+    return ", ".join(out) or "none found"
 
 
 class GtkScreen(Screen):
@@ -143,7 +177,10 @@ class GtkScreen(Screen):
         self._bounds: tuple[int, int, int, int] | None = None
         self.on_bounds: Callable[[tuple[int, int, int, int]], None] | None = None
         self.on_keyboard: Callable[[tuple | None], None] | None = None      # the keyboard moved (AirTouch)
+        now = time.monotonic()
+        self._speed: dict[str, Any] = {"keys": [], "late": 0, "worst": 0.0, "since": now, "tick": now}
         self._build(windowed)
+        GLib.timeout_add(int(SPEED_TICK_S * 1000), self._watch_speed)
 
     def bind(self, loop: asyncio.AbstractEventLoop, *, on_media_key: Callable[[str], None],
              on_media_state: Callable[[bool], None], on_typed: Callable[[str], None]) -> None:
@@ -434,6 +471,9 @@ class GtkScreen(Screen):
         d["summary"] = lay.describe()
         return d
 
+    def quit(self) -> None:
+        GLib.idle_add(lambda: Gtk.main_quit() and False)
+
     @staticmethod
     def _quiet_view(view: WebKit2.WebView) -> None:
         view.connect("context-menu", lambda *a: True)
@@ -479,6 +519,14 @@ class GtkScreen(Screen):
             self.chat_backlog.append(script)
 
     def _on_chat_message(self, ucm: Any, result: Any) -> None:
+        try:
+            val = result.get_js_value() if hasattr(result, "get_js_value") else result
+            msg = json.loads(val.to_string())
+        except Exception:
+            msg = {}
+        if isinstance(msg, dict) and msg.get("type") == "painted":
+            self._key_painted(msg.get("t"))
+            return
         self.chat_ready = True
         if self._reloading:
             # The page was loaded again after its renderer stopped: put back what it showed.
@@ -828,7 +876,7 @@ class GtkScreen(Screen):
         # A keyboard is optional: typing on the conversation screen sends a message.
         if name in ("Return", "KP_Enter"):
             text, self.typed = self.typed.strip(), ""
-            self._chat_js("CO.partial('')", "transient")
+            self._chat_js("CO.typing('')", "transient")
             if text and self.loop:
                 self.loop.call_soon_threadsafe(self.on_typed, text)
             return True
@@ -842,7 +890,38 @@ class GtkScreen(Screen):
                 self.typed += chr(ch)
             else:
                 return False
-        self._chat_js(f"CO.partial({json.dumps(self.typed)})", "transient")
+        # Stamped, so the page can say when the letter was on the screen (see _key_painted).
+        self._chat_js(f"CO.typing({json.dumps(self.typed)},{self._stamp()})", "transient")
+        return True
+
+    # ================================================================ how quick it feels
+    # Typing on a real PC once felt slow, with nothing in the log to say why. So the log now says, once a minute
+    # while it happens: how long typed letters took to reach the screen, and how often the window's own thread
+    # was busy for more than a tenth of a second (when it is, nothing on the screen moves).
+    def _stamp(self) -> int:
+        return int(time.monotonic() * 1000) % 1_000_000_000
+
+    def _key_painted(self, stamp: Any) -> None:
+        if isinstance(stamp, (int, float)):
+            ms = (self._stamp() - stamp) % 1_000_000_000
+            if ms < 60_000:
+                self._speed["keys"].append(ms)
+
+    def _watch_speed(self) -> bool:
+        now = time.monotonic()
+        late = (now - self._speed["tick"] - SPEED_TICK_S) * 1000
+        self._speed["tick"] = now
+        if late > 100:
+            self._speed["late"] += 1
+            self._speed["worst"] = max(self._speed["worst"], late)
+        if now - self._speed["since"] >= 60:
+            keys = sorted(self._speed["keys"])
+            if keys or self._speed["late"]:
+                median = keys[len(keys) // 2] if keys else 0
+                log.info("speed: %d letters typed took %.0f ms (median) and %.0f ms (slowest) to reach the screen; "
+                         "the window was busy %d times, up to %.0f ms", len(keys), median, keys[-1] if keys else 0,
+                         self._speed["late"], self._speed["worst"])
+            self._speed.update(keys=[], late=0, worst=0.0, since=now)
         return True
 
 
@@ -859,8 +938,11 @@ def run_app(paths: Paths, settings: Settings, controller_factory: Callable[[GtkS
     """Start GTK on this thread and ClaudeOS's logic on a background asyncio loop. The window comes first: the
     controller is made on the loop's thread once GTK is running, because loading its modules (the Agent SDK)
     takes most of a second, and the screen shouldn't stay black meanwhile."""
-    if choose_rendering() == "cpu":
+    how = choose_rendering()
+    if how == "cpu":
         log.info("No graphics chip available for drawing pages; drawing them with the processor")
+    log.info("graphics: pages drawn with the %s; %s; screens: %s", "graphics chip" if how == "gpu" else "processor",
+             graphics_report(), displays_report())
     screen = GtkScreen(paths, settings, windowed=windowed)
     loop = asyncio.new_event_loop()
     t = threading.Thread(target=loop.run_forever, name="claudeos-loop", daemon=True)
@@ -871,7 +953,7 @@ def run_app(paths: Paths, settings: Settings, controller_factory: Callable[[GtkS
     async def boot() -> None:
         controller = holder["controller"] = controller_factory(screen)
         screen.bind(loop, on_media_key=controller.media_key, on_media_state=controller.media_state,
-                    on_typed=lambda text: controller._spawn(controller.handle(text)))
+                    on_typed=lambda text: controller._spawn(controller.handle(text, typed=True)))
         await controller.start()
 
     def started(f: Any) -> None:

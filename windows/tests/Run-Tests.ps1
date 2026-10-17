@@ -770,6 +770,30 @@ Assert-True ($plain -match 'not-there') ('error text names the file: ' + $plain)
 try { throw 'Setup stopped: something.' } catch { $own = Get-ErrorText $_ }
 Assert-Equal 'Setup stopped: something.' $own 'error text: a thrown message as it is'
 
+# ------------------------------------------------------------------ where ClaudeOS updates itself from
+Assert-Equal 'Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS' (ConvertTo-UpdateSource -FullPath 'C:\Users\Ren Shu\Downloads\ClaudeOS\ClaudeOS' -SystemDrive 'C:') 'update folder below C:'
+Assert-Equal 'Users/x/ClaudeOS' (ConvertTo-UpdateSource -FullPath 'c:\Users\x\ClaudeOS\' -SystemDrive 'C:') 'update folder: drive letter case, last backslash'
+Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'D:\ClaudeOS' -SystemDrive 'C:') 'update folder on another drive: none'
+Assert-Equal '' (ConvertTo-UpdateSource -FullPath '\\server\share\ClaudeOS' -SystemDrive 'C:') 'update folder on a network share: none'
+Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'C:\' -SystemDrive 'C:') 'the top of the drive: none'
+Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'C:\Users\..\Windows' -SystemDrive 'C:') 'update folder with ..: none'
+Assert-Equal '' (ConvertTo-UpdateSource -FullPath ('C:\Users\a' + [char]10 + 'b') -SystemDrive 'C:') 'update folder with a line break: none'
+Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'C:\Users\x' -SystemDrive '') 'not Windows: none'
+if ($env:SystemDrive) {
+    # On Windows: the names as the drive stores them, whatever case the path was typed in.
+    $caseRoot = Join-Path ([IO.Path]::GetTempPath()) ('ClaudeOS-Case-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $made = New-Item -ItemType Directory -Path (Join-Path $caseRoot 'MiXeD Folder') -Force
+    try {
+        # (The temporary folder's path can have short 8.3 names in it, which this spells out in full.)
+        $typed = Join-Path $caseRoot.ToLowerInvariant() 'mixed folder'
+        $found = Get-TrueCasePath -Path $typed
+        Assert-Equal (Get-TrueCasePath -Path $made.FullName) $found 'a folder named as the drive stores it, however typed'
+        Assert-True ($found.EndsWith('\' + (Split-Path -Leaf $caseRoot) + '\MiXeD Folder')) ('the names keep their case: ' + $found)
+    } finally {
+        Remove-Item -LiteralPath $caseRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if ($OutDir) {
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
     Write-TextFileLf -Path (Join-Path $OutDir 'autoinstall-wifi.yaml') -Text $yaml

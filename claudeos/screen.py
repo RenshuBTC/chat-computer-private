@@ -44,6 +44,8 @@ class Screen:
     def layout_info(self) -> dict[str, Any]:
         """The screen's size, the estimated viewing distance and the text size worked out from them."""
         return {}
+    def quit(self) -> None:
+        """Close the window, which ends ClaudeOS (the session starts it again)."""
 
 
 class RecordingScreen(Screen):
@@ -121,6 +123,9 @@ class RecordingScreen(Screen):
 
     def dots(self, dots: list[tuple[float, float, str]]) -> None:
         self.events.append(("dots", [(round(x), round(y), kind) for x, y, kind in dots]))
+
+    def quit(self) -> None:
+        self.events.append(("quit", None))
 
     # A 1920x1080 screen with the keyboard along its bottom 432 pixels.
     KEYBOARD_TOP, KEYBOARD_SIZE = 648, (1920, 432)

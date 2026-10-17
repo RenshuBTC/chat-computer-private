@@ -21,7 +21,7 @@ from typing import Any, Awaitable, Callable
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from ..brain.permissions import holds_private, is_private
+from ..brain.permissions import PROGRAM_DENIED, holds_private, holds_program, is_private, is_program
 from ..config import EFFORTS, MODEL_RE, Paths, Settings
 from ..files_index import FileIndex
 from ..journal import Journal, move_to_trash
@@ -58,6 +58,7 @@ class ToolContext:
     airtouch_status: Callable[[], dict[str, Any]] | None = None
     keyboard: Callable[[bool], Awaitable[str]] | None = None       # AirTouch's on-screen keyboard up or down
     announce: Callable[[str], None] | None = None     # show and say something now, mid-tool (any thread)
+    before_power: Callable[[], Awaitable[None]] | None = None   # just before the computer restarts or turns off
     shot_scale: float = 1.0
     power_delay_s: float = 4.0
 
@@ -419,6 +420,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             if any(is_private(ctx.paths, s) or holds_private(ctx.paths, s) for s in srcs) or \
                     any(is_private(ctx.paths, d) for d in dsts):
                 return "DENY: That includes ClaudeOS's private sign-in files, so ClaudeOS keeps them where they are."
+            if any(is_program(d) for d in dsts) or (not copy and any(is_program(s) or holds_program(s) for s in srcs)):
+                return "DENY: " + PROGRAM_DENIED
             if any(WINDOWS_SYSTEM.search(s[len(ctx.settings.windows_mount):]) for s in srcs if s.startswith(ctx.settings.windows_mount)):
                 return "DENY: Those are Windows system files; moving them could stop Windows from starting."
             replaced = []
@@ -475,6 +478,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         paths = [ctx.resolve(p) for p in a.get("paths") or []]
         if any(is_private(ctx.paths, p) or holds_private(ctx.paths, p) for p in paths):
             return "DENY: That includes ClaudeOS's private sign-in files, so ClaudeOS keeps them where they are."
+        if any(is_program(p) or holds_program(p) for p in paths):
+            return "DENY: " + PROGRAM_DENIED
         if any(WINDOWS_SYSTEM.search(p[len(ctx.settings.windows_mount):]) for p in paths if p.startswith(ctx.settings.windows_mount)):
             return "DENY: Those are Windows system files."
         if not paths:
@@ -682,6 +687,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         if problem:
             return _err(problem)
         ctx.journal.record("power", act)
+        if ctx.before_power is not None:
+            await ctx.before_power()
         loop = asyncio.get_running_loop()
 
         def report(fut: asyncio.Future) -> None:

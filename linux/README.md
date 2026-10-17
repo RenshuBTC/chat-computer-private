@@ -104,10 +104,11 @@ Escape hatch: **Ctrl+Alt+Backspace** restarts ClaudeOS (ends X → getty respawn
 `sudo -n /usr/local/libexec/claudeos/claudeos-root <verb>` →
 `status`, `boot-windows-next`, `boot-default windows|claudeos`, `mount-windows`, `apt-install PKG…`,
 `apt-remove PKG…`, `system-update`, `bt-import-windows-keys`,
-`set-timezone ZONE`, `wipe-install-secrets`; on a Mac also `boot-macos-next` and
-`boot-default macos|claudeos` (asahi-bless), and the package verbs use dnf. Every verb validates its arguments,
-emits one JSON object on stdout, and never interpolates caller input into a
-shell. ClaudeOS asks the user (spoken yes/no) before any verb except `status`.
+`set-timezone ZONE`, `wipe-install-secrets`, `update-app`, `update-done`, `update-undo`; on a Mac also
+`boot-macos-next` and `boot-default macos|claudeos` (asahi-bless), and the package verbs use dnf. Every verb
+validates its arguments, emits one JSON object on stdout, and never interpolates caller input into a
+shell. ClaudeOS asks the user (yes/no) before any verb except `status`, `update-done` and `update-undo` (see
+"Updating ClaudeOS" in ARCHITECTURE.md).
 
 ## Re-running / repair
 

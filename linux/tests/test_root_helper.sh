@@ -636,6 +636,108 @@ OUT="$(CLAUDEOS_TEST_DT_COMPATIBLE="$DT" runhelper boot-macos-next 2>/dev/null)"
 [ "$(jget "$OUT" ok)" = "False" ] && pass "boot-macos-next refused on a PC" || fail "boot-macos-next on a PC: $OUT"
 
 # ===========================================================================
+# update-app / update-undo / update-done: ClaudeOS from the folder ClaudeOS Setup ran from
+# ===========================================================================
+UPD="$WORK/upd"
+SRC_REL="Users/Ren Shu/Downloads/ClaudeOS"
+mk_app() {   # mk_app DIR VERSION: a pretend ClaudeOS
+  mkdir -p "$1/claudeos/brain" "$1/linux/session" "$1/linux/root-helper"
+  printf '__version__ = "%s"\n' "$2" > "$1/claudeos/__init__.py"
+  printf 'x = "%s"\n' "$2" > "$1/claudeos/brain/agent.py"
+  printf '#!/bin/bash\necho %s\n' "$2" > "$1/linux/session/claudeos-session"
+  printf 'exec something %s\n' "$2" > "$1/linux/session/xinitrc"
+  printf '#!/bin/bash\necho root %s\n' "$2" > "$1/linux/root-helper/claudeos-root"
+  printf 'claude-agent-sdk==1\n' > "$1/requirements-linux.txt"
+}
+reset_update() {
+  rm -rf "$UPD"; mkdir -p "$UPD/opt" "$UPD/win/$SRC_REL" "$UPD/etc" "$UPD/var"
+  mk_app "$UPD/opt/app" 1
+  mk_app "$UPD/win/$SRC_REL" 2
+  mkdir -p "$UPD/win/$SRC_REL/claudeos/__pycache__"; : > "$UPD/win/$SRC_REL/claudeos/__pycache__/x.cpython-312.pyc"
+  chmod -R 0777 "$UPD/win"          # Windows' drive: whatever it says
+  printf '%s\n' "$SRC_REL" > "$UPD/etc/update-source"
+  : > "$UPD/var/base-installed"
+  touch "$WORK/mounted"
+}
+runupdate() {
+  CLAUDEOS_TEST_APP_ROOT="$UPD/opt" CLAUDEOS_TEST_UPDATE_SOURCE="$UPD/etc/update-source" \
+  CLAUDEOS_TEST_UPDATE_PENDING="$UPD/var/update-pending" CLAUDEOS_TEST_WINDOWS_MOUNT="$UPD/win" \
+  CLAUDEOS_TEST_BASE_INSTALLED="$UPD/var/base-installed" runhelper "$@" 2>/dev/null
+}
+app_version() { sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$UPD/opt/${1:-app}/claudeos/__init__.py" 2>/dev/null; }
+mode_of() { stat -c '%a' "$1"; }
+
+if [ "$(id -u)" -eq 0 ]; then
+  reset_update
+  OUT="$(runupdate update-app)"
+  if is_json "$OUT" && [ "$(jget "$OUT" ok)" = "True" ] && [ "$(jget "$OUT" changed)" = "4" ] && [ "$(app_version)" = 2 ] \
+     && grep -q 'echo 2' "$UPD/opt/app/linux/session/claudeos-session" && [ "$(app_version app.prev)" = 1 ] \
+     && [ -f "$UPD/var/update-pending" ]; then
+    pass "update-app: puts the new version in place, the old one aside, and marks it new ($OUT)"
+  else
+    fail "update-app: $OUT"; find "$UPD/opt" | sort >&2
+  fi
+  grep -q 'root 1' "$UPD/opt/app/linux/root-helper/claudeos-root" \
+    && pass "update-app: leaves what root runs as installed" || fail "update-app changed the root helper"
+  [ ! -e "$UPD/opt/app/claudeos/__pycache__" ] && pass "update-app: no compiled files from Windows' drive" \
+    || fail "update-app copied __pycache__"
+  if [ "$(mode_of "$UPD/opt/app/claudeos/brain")" = 755 ] && [ "$(mode_of "$UPD/opt/app/claudeos/brain/agent.py")" = 644 ] \
+     && [ "$(mode_of "$UPD/opt/app/linux/session/claudeos-session")" = 755 ] \
+     && [ "$(mode_of "$UPD/opt/app/linux/session/xinitrc")" = 644 ] \
+     && [ "$(stat -c '%u' "$UPD/opt/app/claudeos/brain/agent.py")" = 0 ]; then
+    pass "update-app: root's files, read-only to everyone else; programs executable"
+  else
+    fail "update-app modes: $(stat -c '%a %u %n' "$UPD/opt/app/claudeos/brain" "$UPD/opt/app/claudeos/brain/agent.py" "$UPD/opt/app/linux/session/claudeos-session" "$UPD/opt/app/linux/session/xinitrc")"
+  fi
+  OUT="$(runupdate update-app)"
+  [ "$(jget "$OUT" ok)" = "True" ] && [ "$(jget "$OUT" changed)" = "0" ] && [ "$(app_version app.prev)" = 1 ] \
+    && pass "update-app again: already up to date, the version before kept" || fail "update-app again: $OUT"
+  OUT="$(runupdate update-undo)"
+  if [ "$(jget "$OUT" ok)" = "True" ] && [ "$(app_version)" = 1 ] && [ ! -e "$UPD/var/update-pending" ] \
+     && [ "$(app_version app.failed)" = 2 ]; then
+    pass "update-undo: the version before is back"
+  else
+    fail "update-undo: $OUT"
+  fi
+  OUT="$(runupdate update-undo)"
+  [ "$(jget "$OUT" ok)" = "False" ] && [ "$(app_version)" = 1 ] \
+    && pass "update-undo with nothing to go back to: refused" || fail "update-undo again: $OUT"
+  date +%s > "$UPD/var/update-pending"
+  OUT="$(runupdate update-done)"
+  [ "$(jget "$OUT" ok)" = "True" ] && [ ! -e "$UPD/var/update-pending" ] && pass "update-done: the update is kept" \
+    || fail "update-done: $OUT"
+
+  # What update-app refuses, leaving the installed version as it is.
+  refused() {   # refused WHAT: update-app must fail and change nothing
+    local out
+    out="$(runupdate update-app)"
+    if is_json "$out" && [ "$(jget "$out" ok)" = "False" ] && [ "$(app_version)" = 1 ] && [ ! -e "$UPD/opt/app.next" ] \
+       && [ ! -e "$UPD/var/update-pending" ]; then
+      pass "update-app refuses $1: $(jget "$out" error)"
+    else
+      fail "update-app with $1: $out"
+    fi
+  }
+  reset_update; rm "$UPD/var/base-installed";                     refused "before ClaudeOS has finished installing"
+  reset_update; echo 'claude-agent-sdk==2' > "$UPD/win/$SRC_REL/requirements-linux.txt"; refused "other Python packages"
+  reset_update; ln -s /etc "$UPD/win/$SRC_REL/claudeos/etc";       refused "a link out of the folder"
+  reset_update; rm -rf "$UPD/win/$SRC_REL/linux/session"; ln -s /etc "$UPD/win/$SRC_REL/linux/session"; refused "a part that is a link"
+  reset_update; : > "$UPD/win/$SRC_REL/claudeos/sitecustomize.py"; refused "a Python start-up hook"
+  reset_update; : > "$UPD/win/$SRC_REL/claudeos/brain/x.pth";      refused "a .pth file"
+  reset_update; mkfifo "$UPD/win/$SRC_REL/claudeos/pipe";           refused "a special file"
+  reset_update; printf 'Users/../../opt\n' > "$UPD/etc/update-source"; refused "a recorded folder with .."
+  reset_update; printf '%s\n' "$UPD/opt" > "$UPD/etc/update-source"; refused "a recorded folder that isn't on Windows' drive"
+  reset_update; ln -s "$UPD/opt" "$UPD/win/elsewhere"; printf 'elsewhere\n' > "$UPD/etc/update-source"; refused "a recorded folder that leads off Windows' drive"
+  reset_update; rm "$UPD/etc/update-source";                       refused "without a recorded folder"
+  reset_update; rm -rf "$UPD/win/$SRC_REL/claudeos";               refused "a folder without ClaudeOS"
+  reset_update; printf 'Users/Nobody\n' > "$UPD/etc/update-source"; refused "a recorded folder that isn't there"
+  OUT="$(runupdate update-app now 2>/dev/null)"; [ "$(jget "$OUT" ok)" = "False" ] && pass "update-app takes no arguments" || fail "update-app with an argument: $OUT"
+  rm -f "$WORK/mounted"
+else
+  echo "SKIP update-app tests (they need root, for the files' owner)" >&2
+fi
+
+# ===========================================================================
 # Rejections: unknown verb, bad arg counts, no verb
 # ===========================================================================
 OUT="$(runhelper 2>/dev/null)";            [ "$(jget "$OUT" ok)" = "False" ] && pass "no verb rejected" || fail "no verb not rejected: $OUT"

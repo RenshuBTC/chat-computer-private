@@ -12,7 +12,8 @@
 #         3      -> restart requested (e.g. after update), restart immediately
 #         other  -> crash; restart with backoff 1,2,5s
 #      3 crashes within 120s -> show the recovery screen (last log lines +
-#      `claudeos doctor`), Enter retries.
+#      `claudeos doctor`), Enter retries. Unless that version came with an update
+#      that hasn't started well yet: then the version before it is put back first.
 #   4. Log to ~/ClaudeOS/logs/session.log with simple size-based rotation.
 #
 # Test hooks (env vars, all optional — production uses defaults):
@@ -29,6 +30,8 @@
 #                             Enter (tests)
 #   CLAUDEOS_RECOVERY_PAUSE   seconds to wait when the recovery screen can't be
 #                             shown or answered                      [60]
+#   CLAUDEOS_UPDATE_PENDING   the file saying the version is a new update
+#   CLAUDEOS_ROOT_CMD         override how the root helper is run
 
 set -u
 
@@ -46,6 +49,8 @@ RESTART_DELAY=${CLAUDEOS_RESTART_DELAY:-1}
 BACKOFF=${CLAUDEOS_BACKOFF:-1 2 5}
 CRASH_WINDOW=${CLAUDEOS_CRASH_WINDOW:-120}
 MAX_CRASHES=${CLAUDEOS_MAX_CRASHES:-3}
+UPDATE_PENDING=${CLAUDEOS_UPDATE_PENDING:-/var/lib/claudeos/update-pending}
+ROOT_CMD=${CLAUDEOS_ROOT_CMD:-sudo -n /usr/local/libexec/claudeos/claudeos-root}
 
 # Default production commands (per ARCHITECTURE.md).
 if [ -z "$START_CMD" ]; then
@@ -149,6 +154,19 @@ show_recovery() {
   rm -f "$tmp"
 }
 
+# ---- An update that won't start ------------------------------------------
+# After an update (claudeos/update.py), UPDATE_PENDING says the version is new until it has run for a while.
+# If it keeps failing to start before then, the version before it is put back (claudeos-root update-undo).
+undo_update() {
+  log "the updated ClaudeOS keeps failing to start; going back to the version before it"
+  if $ROOT_CMD update-undo >> "$LOG_FILE" 2>&1; then
+    log "back on the version before the update"
+    return 0
+  fi
+  log "couldn't go back to the version before the update"
+  return 1
+}
+
 # ---- Supervisor loop ------------------------------------------------------
 supervise() {
   local crash_times=() now code delay backoff_arr idx=0
@@ -193,7 +211,11 @@ supervise() {
         log "crash #${#crash_times[@]} within ${CRASH_WINDOW}s window"
 
         if [ "${#crash_times[@]}" -ge "$MAX_CRASHES" ]; then
-          show_recovery
+          if [ -f "$UPDATE_PENDING" ] && undo_update; then
+            :   # straight back to the version that worked
+          else
+            show_recovery
+          fi
           # After the user acknowledges, reset and try again.
           idx=0
           crash_times=()

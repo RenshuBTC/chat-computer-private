@@ -509,6 +509,13 @@ class LinuxPlatform(Platform):
         d = self._root("set-timezone", zone, timeout=30)
         return f"Time zone set to {zone}." if d.get("ok") else "Couldn't set the time zone: " + str(d.get("error"))
 
+    # ------------------------------------------------------------------ ClaudeOS itself
+    def update_app(self) -> dict[str, Any]:
+        return self._root("update-app", timeout=600)
+
+    def update_done(self) -> None:
+        self._root("update-done", timeout=30)
+
     # ------------------------------------------------------------------ machine info
     def system_info(self) -> dict[str, Any]:
         import psutil

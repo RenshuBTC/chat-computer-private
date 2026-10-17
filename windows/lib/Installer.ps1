@@ -198,6 +198,50 @@ function Copy-IsoToInstaller {
     if (-not (Test-Path -LiteralPath $info)) { throw 'The installer files did not copy correctly.' }
 }
 
+function ConvertTo-UpdateSource {
+    # Where a folder is on Windows' own drive, the way ClaudeOS finds it there: the path below the top of the
+    # drive, with forward slashes ("Users/Ren/Downloads/ClaudeOS"). Empty for a folder on another drive, or with
+    # a part ClaudeOS won't follow.
+    param([Parameter(Mandatory = $true)][string]$FullPath, [AllowEmptyString()][string]$SystemDrive = '')
+    if (-not $SystemDrive) { return '' }
+    $prefix = $SystemDrive.TrimEnd('\') + '\'
+    $path = $FullPath.TrimEnd('\')
+    if (-not $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return '' }
+    $parts = @($path.Substring($prefix.Length).Split('\') | Where-Object { $_ -ne '' })
+    if ($parts.Count -eq 0) { return '' }
+    foreach ($p in $parts) {
+        if ($p -eq '.' -or $p -eq '..' -or $p -match '[\x00-\x1f\x7f/]') { return '' }
+    }
+    return ($parts -join '/')
+}
+
+function Get-TrueCasePath {
+    # A folder's full path with each name written as the drive stores it. Windows doesn't mind the case of a
+    # name; Linux, which reads the same drive for ClaudeOS's updates, does. The path as given when a part
+    # can't be looked up.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $root = [IO.Path]::GetPathRoot($full)
+    if (-not $root -or -not [IO.Directory]::Exists($full)) { return $full }
+    $out = $root.ToUpperInvariant()
+    foreach ($part in $full.Substring($root.Length).Split('\')) {
+        if (-not $part) { continue }
+        $match = @([IO.Directory]::GetFileSystemEntries($out, $part))
+        if ($match.Count -ne 1) { return $full }
+        $out = [IO.Path]::Combine($out, [IO.Path]::GetFileName($match[0]))
+    }
+    return $out
+}
+
+function Get-UpdateSource {
+    # Where this setup runs from, on Windows' drive (ConvertTo-UpdateSource): a newer ClaudeOS put there updates
+    # ClaudeOS (claudeos/update.py). Empty when setup isn't on Windows' own drive.
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+    if (-not $env:SystemDrive) { return '' }
+    try { $full = Get-TrueCasePath -Path $RepoRoot } catch { return '' }
+    return ConvertTo-UpdateSource -FullPath $full -SystemDrive $env:SystemDrive
+}
+
 function Write-InstallerPayload {
     # ClaudeOS itself, the sign-in (a full one, or a sign-in code), the settings, the answers file and the boot
     # menu change.
@@ -242,6 +286,11 @@ function Write-InstallerPayload {
         Write-TextFileLf -Path (Join-Path $secrets 'bitlocker-key') -Text ([string]$BitLockerKey.Password + "`n")
     }
     Write-TextFileLf -Path (Join-Path $payload 'settings.json') -Text $SettingsJson
+    # Where this setup runs from: a newer ClaudeOS put in this folder updates ClaudeOS (finish.sh).
+    $updateSource = Get-UpdateSource -RepoRoot $RepoRoot
+    $updateFile = Join-Path $payload 'update-source'
+    if ($updateSource) { Write-TextFileLf -Path $updateFile -Text ($updateSource + "`n") }
+    elseif (Test-Path -LiteralPath $updateFile) { Remove-Item -LiteralPath $updateFile -Force }
     Write-TextFileLf -Path (Join-Path $root 'autoinstall.yaml') -Text $AutoinstallYaml
     $grub = [IO.Path]::Combine($root, 'boot', 'grub', 'grub.cfg')
     $patched = Update-GrubConfig -Text ([IO.File]::ReadAllText($grub)) -InstallId $InstallId

@@ -74,6 +74,13 @@ class Platform:
     def remove(self, packages: list[str]) -> str: raise NotImplementedError
     def update_system(self) -> str: raise NotImplementedError
     def set_timezone(self, zone: str) -> str: raise NotImplementedError
+    # --- ClaudeOS itself (claudeos/update.py)
+    def update_app(self) -> dict[str, Any]:
+        """Puts the other version of ClaudeOS, in the folder ClaudeOS Setup ran from, in place of this one; ClaudeOS
+        then starts again. {"ok": ..., "changed": how many files changed, "error": why not}."""
+        return {"ok": False, "error": "ClaudeOS can't update itself on this computer."}
+    def update_done(self) -> None:
+        """The updated version started well: it's kept (the session no longer goes back to the one before)."""
     # --- machine info
     def just_started(self) -> bool:
         """Whether the computer started moments ago (the other system's drive may still be mounting)."""

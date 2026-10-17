@@ -135,6 +135,41 @@ def test_power_always_asks_and_runs_later(tmp_path, loop):
     assert ("power", ("restart",)) in ctx.platform.calls
 
 
+def test_the_logs_are_copied_before_the_computer_restarts(tmp_path, loop):
+    # ClaudeOS is ended at once by a restart: the copy on Windows' drive is made first (logcopy.py).
+    ctx, server, policies, _ = make(tmp_path)
+    order = []
+
+    async def before():
+        order.append("logs copied")
+    ctx.before_power = before
+    real = ctx.platform.power
+    ctx.platform.power = lambda act: order.append("power") or real(act)
+    call(server, "power", {"action": "switch_to_windows"})
+    loop.run_until_complete(asyncio.sleep(0.3))
+    assert order == ["logs copied", "power"]
+
+
+def test_claudeos_own_files_cant_be_moved_or_trashed(tmp_path, monkeypatch):
+    from claudeos import update
+    ctx, server, policies, _ = make(tmp_path)
+    src = Path(ctx.settings.windows_mount) / "Users/rensh/Downloads/ClaudeOS"
+    (src / "claudeos").mkdir(parents=True)
+    note = tmp_path / "update-source"
+    note.write_text("Users/rensh/Downloads/ClaudeOS\n")
+    monkeypatch.setattr(update, "UPDATE_SOURCE", note)
+    monkeypatch.setattr(update, "WINDOWS_MOUNT", Path(ctx.settings.windows_mount))
+    evil = tmp_path / "evil.py"
+    evil.write_text("")
+    for name, args in (("copy_files", {"items": [{"from": str(evil), "to": str(src / "claudeos/evil.py")}]}),
+                       ("move_files", {"items": [{"from": str(src), "to": str(tmp_path / "elsewhere")}]}),
+                       ("trash_files", {"paths": [str(src / "claudeos")]}),
+                       ("trash_files", {"paths": [str(src.parent)]})):
+        assert policies[name](args).startswith("DENY: Those are ClaudeOS's own program files"), (name, args)
+    # Copying them somewhere else is fine.
+    assert not str(policies["copy_files"]({"items": [{"from": str(src), "to": str(tmp_path / "copy")}]})).startswith("DENY")
+
+
 def test_a_switch_that_cant_be_set_up_is_reported_before_the_goodbye(tmp_path, loop):
     ctx, server, policies, _ = make(tmp_path)
     ctx.platform.prepare_power = lambda act: "I couldn't set Windows for the next start: no Windows Boot Manager"

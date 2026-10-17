@@ -10,6 +10,7 @@
 #   * exit 0  -> loop restarts after the (compressed) normal delay
 #   * exit 3  -> loop restarts immediately (no crash backoff)
 #   * exit !=0,3 repeated 3x within the window -> recovery screen shown
+#   * ...unless the version is a new update: then it's undone (claudeos-root update-undo) and restarted
 #   * crash backoff sequence is applied
 #   * logs are written to $HOME/ClaudeOS/logs/session.log and rotate
 set -u
@@ -54,6 +55,19 @@ exit 0
 FD
 chmod +x "$FAKE_DOCTOR"
 
+# A fake root helper: records its arguments, and for update-undo removes the update's marker like the real one.
+# Exits with the code in $WORK/root-exit (0 if there's none).
+FAKE_ROOT="$WORK/fake-root"
+cat > "$FAKE_ROOT" <<FR
+#!/bin/bash
+echo "\$*" >> "$WORK/root-calls"
+code=\$(cat "$WORK/root-exit" 2>/dev/null || echo 0)
+[ "\$code" = 0 ] && rm -f "$WORK/update-pending"
+echo '{"ok":true}'
+exit "\$code"
+FR
+chmod +x "$FAKE_ROOT"
+
 # Common env for the supervisor: time-compressed, one-shot-friendly via a hard
 # run cap enforced by us (we run the session in the background and kill it once
 # the expected number of runs happened).
@@ -74,6 +88,8 @@ run_supervisor() {
     CLAUDEOS_BACKOFF="0 0 0" \
     CLAUDEOS_CRASH_WINDOW=120 \
     CLAUDEOS_MAX_CRASHES=3 \
+    CLAUDEOS_UPDATE_PENDING="$WORK/update-pending" \
+    CLAUDEOS_ROOT_CMD="$FAKE_ROOT" \
     bash "$SESSION" > "$WORK/session.out" 2>&1 &
   local pid=$!
   # Wait until we see maxruns runs or timeout.
@@ -115,6 +131,36 @@ if grep -q "fake doctor" "$WORK/session.out" 2>/dev/null || grep -q "claudeos do
 else
   fail "recovery: doctor output not shown"; sed -n '1,30p' "$WORK/session.out" >&2
 fi
+
+# --- Test 3b: a new update that keeps crashing is undone, not sent to recovery -----
+printf '1\n1\n1\n0\n0\n' > "$WORK/seq"; : > "$LOGDIR/session.log"; : > "$WORK/root-calls"; rm -f "$WORK/root-exit"
+date +%s > "$WORK/update-pending"
+run_supervisor 4
+if grep -q "going back to the version before it" "$LOGDIR/session.log" && grep -q "back on the version before the update" "$LOGDIR/session.log" \
+   && [ "$(cat "$WORK/root-calls")" = "update-undo" ]; then
+  pass "update that won't start: the version before is put back"
+else
+  fail "update that won't start: not undone"; cat "$WORK/root-calls" >&2; sed -n '1,40p' "$LOGDIR/session.log" >&2
+fi
+if grep -q "RECOVERY: entering recovery screen" "$LOGDIR/session.log"; then
+  fail "update that won't start: recovery shown instead of going back"
+else
+  pass "update that won't start: no recovery screen"
+fi
+runs=$(wc -l < "$WORK/runs")
+if [ "$runs" -ge 4 ]; then pass "update that won't start: started again ($runs runs)"; else fail "update undone: expected >=4 runs, saw $runs"; fi
+
+# --- Test 3c: if going back fails, the recovery screen ----------------------------
+printf '1\n1\n1\n0\n0\n' > "$WORK/seq"; : > "$LOGDIR/session.log"; : > "$WORK/root-calls"; echo 1 > "$WORK/root-exit"
+date +%s > "$WORK/update-pending"
+run_supervisor 3
+if grep -q "couldn't go back to the version before the update" "$LOGDIR/session.log" \
+   && grep -q "RECOVERY: entering recovery screen" "$LOGDIR/session.log"; then
+  pass "update that won't start, and can't be undone: recovery screen"
+else
+  fail "failed undo: no recovery"; sed -n '1,40p' "$LOGDIR/session.log" >&2
+fi
+rm -f "$WORK/update-pending" "$WORK/root-exit"
 
 # --- Test 4: crash backoff sequence is applied -----------------------------
 # Use distinguishable non-zero backoff logging. We check the log mentions

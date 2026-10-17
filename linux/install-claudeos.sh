@@ -642,7 +642,9 @@ if [ "$DRY_RUN" -eq 0 ]; then
   SITE_DIR="$("$VENV_DIR/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" \
     || needed "could not find the package folder of $VENV_DIR"
   printf '%s\n' "$OPT_APP" > "$SITE_DIR/claudeos-app.pth"
-  (cd / && "$VENV_DIR/bin/python" -c 'import claudeos.config') \
+  # Found, not run: this is root, and ClaudeOS's own code is only ever run as the person (an update can change
+  # it: claudeos-root update-app).
+  (cd / && "$VENV_DIR/bin/python" -I -c 'import importlib.util, sys; sys.exit(importlib.util.find_spec("claudeos") is None)') \
     || needed "the Python environment can't load ClaudeOS from $OPT_APP"
   log "ClaudeOS loads from $OPT_APP"
 else

@@ -12,11 +12,13 @@ doesn't speak it.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import itertools
 import json
 import logging
 import os
+import re
 import socket
 import time
 from dataclasses import dataclass, field
@@ -36,6 +38,10 @@ HERE, PHONE = "here", "phone"
 # Turns injected by the engine itself (a finished background task and the like) belong to the person here.
 ENGINE_ORIGINS = {"task-notification", "auto-continuation", "peer", "coordinator", "unclassified", "channel"}
 PHONE_TURN_IDLE_S = 15 * 60   # a phone turn that has gone silent this long is considered over
+# When Remote Control doesn't start, it's tried again after these many seconds. On the engine's first start it
+# looks up the account in the background, and refuses Remote Control until it has ("Unable to determine your
+# organization"); a moment later the same request works.
+REMOTE_RETRY_S = (20.0, 60.0)
 
 
 @dataclass
@@ -164,6 +170,10 @@ class Brain:
         self._background: set[asyncio.Task] = set()
         self._cur: _Turn | None = None
         self.origins: dict[str, str] = {}
+        self.typed: set[str] = set()      # turns asked by typing on this PC's keyboard (answered in text only)
+        # What the engine last wrote to its error output: logged when something fails (the reason the phone
+        # can't connect, say, is often only there).
+        self.engine_said: collections.deque[str] = collections.deque(maxlen=200)
         self._ids = itertools.count(1)
         self._connect_lock = asyncio.Lock()
         self.last_activity = float(state.get("last_activity", 0) or 0)
@@ -204,6 +214,15 @@ class Brain:
 
     def origin_of(self, tid: str) -> str:
         return self.origins.get(tid, HERE)
+
+    def typed_here(self, tid: str) -> bool:
+        """Asked by typing on this PC's keyboard (not said, and not from the phone)."""
+        return tid in self.typed
+
+    def engine_tail(self, n: int = 40) -> str:
+        """The engine's last lines of error output, without anything that looks like a sign-in."""
+        lines = list(self.engine_said)[-n:]
+        return re.sub(r"sk-ant-[A-Za-z0-9_\-]+", "sk-ant-(hidden)", "\n".join(lines))
 
     def _env(self) -> dict[str, str]:
         env = {
@@ -266,7 +285,7 @@ class Brain:
             env=self._env(),
             resume=resume,
             max_buffer_size=32 * 1024 * 1024,
-            stderr=lambda line: log.debug("engine: %s", line.rstrip()),
+            stderr=self._engine_stderr,
         )
 
     async def connect(self) -> None:
@@ -312,25 +331,27 @@ class Brain:
         if previous:
             req["reattach_session_id"] = previous
         self.remote = "connecting"
-        try:
-            query = getattr(client, "_query", None)
-            if query is None:
-                raise RuntimeError("the engine connection isn't ready")
+        tries = len(REMOTE_RETRY_S) + 1
+        for attempt in range(tries):
             try:
-                resp = await query._send_control_request(req, timeout=90)
-            except Exception:
-                if "reattach_session_id" not in req:
-                    raise
-                req.pop("reattach_session_id")          # that session is gone: start a new one
-                resp = await query._send_control_request(req, timeout=90)
-        except Exception as exc:
-            if client is not self.client:
+                resp = await self._remote_request(client, req)
+                break
+            except Exception as exc:
+                if client is not self.client:
+                    return
+                detail = str(exc)[:300] or type(exc).__name__
+                log.warning("Remote Control (the Claude app on the phone) didn't start (try %d of %d): %s (%s)",
+                            attempt + 1, tries, detail, type(exc).__name__)
+                log.warning("the engine's last words before that:\n%s", self.engine_tail())
+                if attempt + 1 < tries:
+                    await asyncio.sleep(REMOTE_RETRY_S[attempt])
+                    if client is not self.client:
+                        return
+                    continue
+                self.remote = "failed"
+                self.remote_detail = detail
+                self.ev.on_remote("failed", self.remote_detail)
                 return
-            self.remote = "failed"
-            self.remote_detail = str(exc)[:300]
-            log.warning("Remote Control (the Claude app on the phone) is off: %s", self.remote_detail)
-            self.ev.on_remote("failed", self.remote_detail)
-            return
         if client is not self.client:
             return
         self.remote = "on"
@@ -345,6 +366,19 @@ class Brain:
         if sid:
             self.state.set(remote_session_id=sid)
         self.ev.on_remote("on", resp or {})
+
+    @staticmethod
+    async def _remote_request(client: Any, req: dict[str, Any]) -> Any:
+        query = getattr(client, "_query", None)
+        if query is None:
+            raise RuntimeError("the engine connection isn't ready")
+        try:
+            return await query._send_control_request(req, timeout=90)
+        except Exception:
+            if "reattach_session_id" not in req:
+                raise
+            req.pop("reattach_session_id")          # that session is gone: start a new one
+            return await query._send_control_request(req, timeout=90)
 
     async def new_conversation(self) -> None:
         """Forget the current conversation (memory facts stay)."""
@@ -383,11 +417,20 @@ class Brain:
             log.warning("the engine didn't stop; starting clean next time")
             await self.close()   # the engine is stuck
 
-    async def ask(self, text: str) -> str:
-        """Send what the user said here. Interrupts anything still running. Returns the turn id."""
+    def _engine_stderr(self, line: str) -> None:
+        line = line.rstrip()
+        log.debug("engine: %s", line)
+        if line:
+            self.engine_said.append(line[:500])
+
+    async def ask(self, text: str, typed: bool = False) -> str:
+        """Send what the user said here (or typed on this PC's keyboard: `typed`). Interrupts anything still
+        running. Returns the turn id."""
         if self.busy:
             await self.interrupt()
         t = self._new_turn(HERE)
+        if typed:
+            self.typed.add(t.tid)
         self._cur = t
         self.ev.on_turn_start(t.tid)
         try:
@@ -417,6 +460,7 @@ class Brain:
         if len(self.origins) > 500:
             for k in list(self.origins)[:250]:
                 self.origins.pop(k, None)
+                self.typed.discard(k)
         return t
 
     def _start_unasked(self, origin: str) -> _Turn:

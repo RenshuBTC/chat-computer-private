@@ -79,3 +79,21 @@ def test_the_conversation_comes_back_after_its_renderer_stops():
     assert "Sunny, 31 degrees." in res["before"]
     assert res["after"] == res["before"]
     assert res["ready_again"] and res["drawing_with_processor"]
+
+
+@pytest.mark.skipif(not __import__("shutil").which("xvfb-run"), reason="xvfb-run not available")
+def test_typed_letters_show_at_once_and_enter_sends_them():
+    # Typing on a real PC felt slow: the dot that pulses while ClaudeOS hears you also pulsed while typing, and
+    # had the whole page drawn again many times a second. Typing has no animation, and each letter reports when
+    # it was on the screen (logged once a minute, see GtkScreen._watch_speed).
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).with_name("screen_typing_check.py")
+    r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable, str(script)],
+                       capture_output=True, text=True, timeout=120)
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    assert res["typed"] == {"live": "hi there", "typing": True, "hearing": False, "caret": "none"}
+    assert len(res["painted_ms"]) == 8 and all(0 <= ms < 2000 for ms in res["painted_ms"])
+    assert res["sent_text"] == ["hi there"] and res["sent"]["live"] == "" and not res["sent"]["typing"]

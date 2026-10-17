@@ -16,7 +16,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
-from . import answers
+from . import __version__, answers, logcopy, update
 from .brain.agent import Brain, BrainEvents, TurnResult, friendly_error
 from .brain.permissions import PermissionGate
 from .brain.prompt import build_system_prompt, turn_prefix
@@ -35,6 +35,11 @@ AIRTOUCH_HINT = ("AirTouch is on: a dot follows each index finger. Pinch thumb a
                  "palm down to put it away.")
 DICTATE_S = 15.0                    # after the keyboard's microphone key, what's said within this long is typed
 HISTORY_TAIL_BYTES = 256 * 1024     # the end of the transcript, where the last messages are
+START_QUESTIONS_DELAY_S = 4.0       # questions at the start (an update, AirPods) come this long after it
+UPDATE_DRIVE_WAIT_S = 60.0          # just after the computer started: how long to wait for Windows' drive, for updates
+AIRPODS_PAIR_S = 60.0               # how long ClaudeOS looks for AirPods in pairing mode
+LOG_COPY_FIRST_S = 60.0             # the logs are copied to Windows' drive this long after the start...
+LOG_COPY_EVERY_S = 600.0            # ...and then this often (see logcopy.py)
 
 log = logging.getLogger("claudeos.controller")
 
@@ -43,7 +48,8 @@ class Controller:
     def __init__(self, paths: Paths, settings: Settings, platform: Platform, screen: Screen, *,
                  voice: bool = True, mic_factory: Callable | None = None, player: Any = None,
                  stt: Any = None, tts: Any = None, index: bool = True, extra_env: dict[str, str] | None = None,
-                 greet: bool = True, airtouch: bool = False) -> None:
+                 greet: bool = True, airtouch: bool = False, offer_headphones: bool = False,
+                 offer_updates: bool = False) -> None:
         self.paths = paths.ensure()
         self.settings = settings
         self.platform = platform
@@ -55,6 +61,9 @@ class Controller:
         self.use_index = index
         self.extra_env = extra_env or {}
         self.greet = greet
+        self.offer_headphones = offer_headphones   # ask about AirPods at the start (off in tests)
+        self.offer_updates = offer_updates         # offer a newer ClaudeOS at the start (update.py; off in tests)
+        self._answer_typed = False                 # the last answer to a question was typed, not said
         self.airtouch_enabled = airtouch      # the hand as pointer (claudeos/airtouch); off in tests
         self.airtouch: Any = None
         self.airtouch_status: dict[str, Any] = {}
@@ -131,7 +140,7 @@ class Controller:
         self.ctx = T.ToolContext(self.paths, s, self.platform, self.journal, self.screen, self.memory, self.index,
                                  confirm=self.confirm, on_sleep=self._request_sleep,
                                  on_settings_changed=self._settings_changed, airtouch_status=self._airtouch_info,
-                                 keyboard=self.set_keyboard,
+                                 keyboard=self.set_keyboard, before_power=self._before_power,
                                  announce=lambda text: self.loop.call_soon_threadsafe(self._announce, text))
         server, policies, self.tool_names = T.build(self.ctx)
         self.gate = PermissionGate(self.paths, self.journal, self.confirm, policies)
@@ -159,10 +168,12 @@ class Controller:
             msg = (f"I'm not signed in to Claude yet. Sign in with {self.platform.setup_place}, then start me again. "
                    f"Until then I can only do simple things like Wi-Fi, volume and switching to {self.platform.other_os}.")
             self.screen.notice(msg, "warn")
-            self._say(msg)
+            self._spawn(self._say_on_headphones(msg))
         elif self.greet and self.voice_enabled:
             first = (s.user_name or "").split(" ")[0]
-            self._say(f"Hi{' ' + first if first else ''}. I'm listening.")
+            self._spawn(self._say_on_headphones(f"Hi{' ' + first if first else ''}. I'm listening."))
+        if self.offer_headphones or self.offer_updates:
+            self._spawn(self._start_questions())
 
     def _spawn(self, coro: Any) -> asyncio.Task:
         """Runs `coro` in the background. The event loop keeps only a weak reference to a task, so one that
@@ -222,6 +233,8 @@ class Controller:
                 self._spawn(self._restart_brain_when_idle())
 
     async def stop(self) -> None:
+        with contextlib.suppress(Exception):
+            await self._copy_logs()
         if self.airtouch is not None:
             at, self.airtouch = self.airtouch, None
             await self.loop.run_in_executor(None, at.stop)
@@ -259,7 +272,9 @@ class Controller:
                 delay = min(delay * 2, 600.0)
         await self._start_voice()
         first = (self.settings.user_name or "").split(" ")[0]
-        self._say(f"Hi{' ' + first if first else ''}. My voice is ready. Just talk to me.")
+        msg = f"Hi{' ' + first if first else ''}. My voice is ready. Just talk to me."
+        self.screen.notice(msg)
+        await self._say_on_headphones(msg)
 
     async def _start_voice(self) -> None:
         from .voice.listener import Listener, ListenerEvents
@@ -447,9 +462,23 @@ class Controller:
             self.speaker.say(text)
 
     def _announce(self, text: str) -> None:
-        """Shown and said right away, in the middle of a tool: the code to type on a keyboard being paired."""
+        """Shown, and said unless the request was typed, right away in the middle of a tool: the code to type on a
+        keyboard being paired."""
         self.screen.notice(text)
-        self._say(text)
+        if not self._typing_now():
+            self._say(text)
+
+    async def _say_on_headphones(self, text: str) -> None:
+        """Something ClaudeOS says without being asked (a greeting): out loud only on headphones, like AirPods.
+        Through the PC's or the monitor's speakers it is only shown."""
+        if not self.speaker:
+            return
+        try:
+            private = await self.loop.run_in_executor(None, self.platform.output_is_headset)
+        except Exception:
+            private = False
+        if private:
+            self._say(text)
 
     def _transcript(self, role: str, text: str, via: str | None = None) -> None:
         if not text.strip():
@@ -559,8 +588,9 @@ class Controller:
         except Exception as exc:
             log.warning("dictation couldn't be typed: %s", exc)
 
-    async def handle(self, text: str) -> None:
-        """Everything the user says arrives here (also used by tests and the keyboard fallback)."""
+    async def handle(self, text: str, typed: bool = False) -> None:
+        """Everything the user says arrives here, and everything typed on this PC's keyboard (`typed`): that is
+        answered in writing only, never out loud."""
         text = text.strip()
         if not text:
             return
@@ -569,19 +599,23 @@ class Controller:
         self.screen.partial("")
 
         if self.asleep:
-            woke, rest = answers.strip_wake_word(text, self.settings.wake_words)
-            if not woke:
-                return
-            self.wake()
-            if not rest:
-                self._say("Yes?")
-                return
-            text = rest
+            if typed:
+                self.wake()          # typing wakes ClaudeOS by itself: no wake word to type
+            else:
+                woke, rest = answers.strip_wake_word(text, self.settings.wake_words)
+                if not woke:
+                    return
+                self.wake()
+                if not rest:
+                    self._say("Yes?")
+                    return
+                text = rest
 
         if self.pending_confirm is not None and not self.pending_confirm.done():
             uid = "u" + uuid.uuid4().hex[:8]
             self.screen.user_text(uid, text, True)
             self._transcript("user", text)
+            self._answer_typed = typed
             self.pending_confirm.set_result(text)
             return
 
@@ -598,17 +632,20 @@ class Controller:
             self.screen.user_text(uid, text, True)
             if self.speaker:
                 self.speaker.stop()
-            self._say("Okay. Say Claude when you need me.")
+            if typed:
+                self.screen.notice("Okay. Type, or say “Claude”, when you need me.")
+            else:
+                self._say("Okay. Say Claude when you need me.")
             await self._sleep_when_quiet()
             return
 
         if self.brain is None:
             self.screen.user_text(uid, text, True)
-            await self._offline_command(text, signed_out=True)
+            await self._offline_command(text, signed_out=True, typed=typed)
             return
         if not await self._online_now():
             self.screen.user_text(uid, text, True)
-            await self._offline_command(text, signed_out=False)
+            await self._offline_command(text, signed_out=False, typed=typed)
             return
 
         if self.speaker:
@@ -617,7 +654,7 @@ class Controller:
         self._transcript("user", text)
         self.last_asked = text
         info = await self._screen_info()
-        await self.brain.ask(turn_prefix(info, self.brain.last_activity) + text)
+        await self.brain.ask(turn_prefix(info, self.brain.last_activity) + text, typed=typed)
 
     async def _screen_info(self) -> dict[str, Any]:
         try:
@@ -629,8 +666,15 @@ class Controller:
 
     # ================================================================ brain events
     def _spoken(self, tid: str) -> bool:
-        """Replies to the phone (the Claude app) are shown here but not spoken."""
-        return bool(self.speaker) and not (self.brain and self.brain.origin_of(tid) == "phone")
+        """Replies to what was typed (on this PC's keyboard, or in the Claude app on the phone) are shown, not
+        spoken. Only what was said out loud gets a spoken answer."""
+        if not self.speaker or not self.brain:
+            return bool(self.speaker)
+        return self.brain.origin_of(tid) != "phone" and not self.brain.typed_here(tid)
+
+    def _typing_now(self) -> bool:
+        """The turn under way was typed on this PC's keyboard."""
+        return bool(self.brain and self.current_turn and self.brain.typed_here(self.current_turn))
 
     def _typed(self, tid: str) -> bool:
         """Typed in the Claude app on the phone (the phone is the keyboard), rather than spoken here."""
@@ -673,11 +717,12 @@ class Controller:
             self.screen.notice("To type to me, use the Claude app on your phone: tap Code, then ClaudeOS.")
         elif state == "failed" and not self.remote_told:
             self.remote_told = True
-            reason = str(info or "")
+            reason = str(info or "") or "no reason given"
             if "full-scope" in reason or "setup-token" in reason or "subscription" in reason:
                 reason = f"it needs a new sign-in. In {self.platform.setup_place}, choose to sign in again."
             self.screen.notice("Typing from the Claude app on your phone can't reach me right now: " + reason[:200],
                                "warn")
+            self._spawn(self._copy_logs())      # so the reason can be read from Windows too
 
     def _on_activity(self, tid: str, text: str) -> None:
         if self.settings.show_activity:
@@ -912,38 +957,46 @@ class Controller:
         return dict(self.airtouch_status) or {"state": "starting"}
 
     # ================================================================ yes / no
-    async def confirm(self, question: str) -> tuple[str, str]:
-        """Ask out loud; returns ('yes'|'no'|'unclear'|'timeout', what they said). During a typed turn (the
-        Claude app on the phone) the answer is typed too: returns ('phone', '') so the question goes in the chat."""
+    async def confirm(self, question: str, typed: bool | None = None) -> tuple[str, str]:
+        """Ask; returns ('yes'|'no'|'unclear'|'timeout', the answer). The question is shown, and said out loud
+        unless it belongs to something typed (`typed`, or by default the turn under way). The answer can be said
+        or typed on this PC's keyboard. During a turn from the phone (the Claude app) the answer is typed there:
+        returns ('phone', '') so the question goes in the chat."""
         if self.brain and self.brain.current_origin == "phone":
             self.screen.notice("Waiting for your answer in the Claude app: " + question)
             return "phone", ""
-        if not self.listener or not self.mic or not self.mic.is_open:
-            self.screen.notice(question + " (I can't hear you, so I didn't do it.)", "warn")
-            return "timeout", ""
+        if typed is None:
+            typed = self._typing_now()
+        hearing = bool(self.listener and self.mic and self.mic.is_open)
+        speak = not typed and hearing
         assert self.confirm_lock is not None
         async with self.confirm_lock:
             said_all = []
             for attempt in range(2):
                 q = question if attempt == 0 else "Sorry, was that a yes or a no?"
-                if self.speaker:
+                if not hearing or typed:
+                    q += " (Type yes or no.)"
+                if self.speaker and speak:
                     await self.speaker.until_quiet(15)
                 qid = "q" + uuid.uuid4().hex[:8]
                 self.screen.ai_delta(qid, q)
                 self.screen.ai_done(qid)
-                self._say(q)
+                if speak:
+                    self._say(q)
                 self.pending_confirm = self.loop.create_future()
-                self.listener.mode = "confirm"
+                if self.listener:
+                    self.listener.mode = "confirm"
                 if self.asleep:
                     self.wake()
                 try:
-                    said = await asyncio.wait_for(self.pending_confirm, 40)
+                    said = await asyncio.wait_for(self.pending_confirm, 40 if speak else 120)
                 except asyncio.TimeoutError:
                     self.screen.notice("No answer, so I didn't do it.")
                     return "timeout", ""
                 finally:
                     self.pending_confirm = None
-                    self.listener.mode = "normal"
+                    if self.listener:
+                        self.listener.mode = "normal"
                 said_all.append(said)
                 verdict = answers.classify_answer(said)
                 if verdict != "unclear":
@@ -951,6 +1004,141 @@ class Controller:
                 if len(said.split()) > 3:  # a real instruction, not a mumble: hand it to Claude
                     return "unclear", said
             return "unclear", " / ".join(said_all)
+
+    # ================================================================ questions at the start
+    async def _start_questions(self) -> None:
+        """A newer ClaudeOS to update to, and AirPods, one question at a time. The update comes first when Windows'
+        drive is already there: yes restarts ClaudeOS, which would otherwise ask about the AirPods twice. While
+        the drive is still on its way (the computer has just started), the AirPods come first."""
+        await asyncio.sleep(START_QUESTIONS_DELAY_S)
+        there = lambda: self.loop.run_in_executor(None, update.source_there)  # noqa: E731
+        looked = False
+        if self.offer_updates and await there():
+            looked = True
+            if await self._offer_update():
+                return
+        if self.offer_headphones:
+            await self._offer_airpods()
+        if self.offer_updates and not looked:
+            end = time.monotonic() + UPDATE_DRIVE_WAIT_S
+            while self.platform.just_started() and time.monotonic() < end and not await there():
+                await asyncio.sleep(2)
+            await self._offer_update()
+
+    async def _offer_update(self) -> bool:
+        """Offers the other version of ClaudeOS in the folder ClaudeOS Setup ran from, if there is one (update.py),
+        on the screen. True when ClaudeOS is restarting into it."""
+        offer = await self.loop.run_in_executor(None, update.check)
+        if offer is None:
+            return False
+        log.info("another version of ClaudeOS is in %s (%s; %d files differ%s)", offer.source,
+                 offer.version or "no version number", offer.changed,
+                 "; it needs other Python packages" if offer.needs_setup else "")
+        if offer.needs_setup:
+            self.screen.notice("There's a new version of ClaudeOS in the folder you ran ClaudeOS Setup from. It needs "
+                               f"ClaudeOS Setup to install it: start {self.platform.other_os} and run ClaudeOS Setup "
+                               "again.")
+            return False
+        named = f" ({offer.version})" if offer.version and offer.version != __version__ else ""
+        verdict, said = await self.confirm(f"There's a new version of ClaudeOS{named} in the folder you ran ClaudeOS "
+                                           "Setup from. Update now? ClaudeOS restarts, which takes a few seconds.",
+                                           typed=True)
+        if verdict != "yes":
+            if verdict == "unclear" and len(said.split()) > 3:
+                self._spawn(self.handle(said, typed=self._answer_typed))   # a request, not an answer
+            elif verdict != "timeout":
+                self.screen.notice("Okay. I'll ask again the next time ClaudeOS starts.")
+            return False
+        self.screen.notice("Updating ClaudeOS…")
+        res = await self.loop.run_in_executor(None, self.platform.update_app)
+        if not res.get("ok"):
+            log.warning("the update didn't work: %s", res)
+            self.screen.notice("The update didn't work: " + str(res.get("error") or "no reason given"), "warn")
+            return False
+        if not res.get("changed"):
+            self.screen.notice("This ClaudeOS is already that version.")
+            return False
+        log.info("ClaudeOS updated (%s files changed); starting again", res.get("changed"))
+        self.screen.notice("Updated. ClaudeOS is starting again…")
+        await asyncio.sleep(1.5)
+        self.restart()
+        return True
+
+    def restart(self) -> None:
+        """Ends ClaudeOS so that the session starts it again at once (exit code 3)."""
+        self.exit_code = 3
+        self.screen.quit()
+
+    async def _offer_airpods(self) -> None:
+        """At the start, unless sound already plays on headphones: AirPods ClaudeOS already knows are connected
+        if they're out of their case; otherwise ClaudeOS asks, on the screen, whether to connect them (answered
+        by typing or saying yes or no). Yes: the pairing Windows has is copied over, and if that doesn't connect
+        them, ClaudeOS pairs them itself while the button on their case is held."""
+        p = self.platform
+        run = lambda fn, *a: self.loop.run_in_executor(None, fn, *a)
+
+        async def airpods(which: str) -> list[dict[str, Any]]:
+            st = await run(p.bt_status)
+            return [d for d in st.get(which, []) if "airpods" in str(d.get("name", "")).lower()]
+
+        async def connect_known() -> str | None:
+            for d in await airpods("paired"):
+                await run(p.bt_connect, d["address"])
+                if any(c["address"] == d["address"] for c in await airpods("connected")):
+                    return str(d.get("name") or "AirPods")
+            return None
+
+        try:
+            if await run(p.output_is_headset) or await airpods("connected"):
+                return
+            st = await run(p.bt_status)
+            if not st.get("adapter", True):
+                return
+            name = await connect_known()          # known here, and out of their case
+        except Exception:
+            log.info("no Bluetooth to offer AirPods with", exc_info=True)
+            return
+        if name:
+            self.screen.notice(f"Your {name} are connected.")
+            return
+        verdict, said = await self.confirm("Connect your AirPods? Take them out of their case first.", typed=True)
+        if verdict != "yes":
+            if verdict == "unclear" and len(said.split()) > 3:
+                self._spawn(self.handle(said, typed=self._answer_typed))   # a request, not an answer
+            elif verdict != "timeout":
+                self.screen.notice("Okay. Type or say “connect my AirPods” whenever you want them.")
+            return
+        try:
+            if p.name != "mac":
+                self.screen.notice("Copying your AirPods' pairing from Windows…")
+                log.info("AirPods: %s", await run(p.bt_import_windows_keys))
+                name = await connect_known()
+            if not name:
+                self.screen.notice("Put the AirPods in their case with the lid open, then hold the button on the back of "
+                                   "the case until the light flashes white.")
+                name = await self._pair_airpods(run)
+        except Exception as exc:
+            log.warning("connecting the AirPods failed", exc_info=True)
+            self.screen.notice(f"I couldn't connect the AirPods: {exc}", "warn")
+            return
+        if name:
+            self.screen.notice(f"Your {name} are connected.")
+        else:
+            self.screen.notice("I couldn't find the AirPods. Type or say “connect my AirPods” to try again.", "warn")
+
+    async def _pair_airpods(self, run: Callable) -> str | None:
+        """Looks for AirPods in pairing mode for up to a minute and pairs the first found. Their name, or None."""
+        p = self.platform
+        end = time.monotonic() + AIRPODS_PAIR_S
+        while time.monotonic() < end:
+            for d in await run(p.bt_scan, 8):
+                if "airpods" in str(d.get("name", "")).lower():
+                    result = str(await run(p.bt_pair, d["address"]))
+                    log.info("AirPods pairing: %s", result)
+                    st = await run(p.bt_status)
+                    if any(c["address"] == d["address"] for c in st.get("connected", [])):
+                        return str(d.get("name") or "AirPods")
+        return None
 
     # ================================================================ sleep / wake
     def _request_sleep(self) -> None:
@@ -981,9 +1169,53 @@ class Controller:
         self._phone_retry_at = time.time()
         await self._warm_up()
 
+    async def _copy_logs(self) -> None:
+        """A copy of the logs on Windows' drive, for reading from Windows when something goes wrong (logcopy.py)."""
+        if self.platform.name == "mac" or self.loop is None:
+            return
+        b = self.brain
+        info = {
+            "phone": {"link": b.remote if b else "no sign-in", "detail": b.remote_detail if b else "",
+                      "sign_in": b.auth_mode if b else "none", "phone_access": self.settings.phone_access},
+            "voice": bool(self.speaker), "microphone": bool(self.mic and self.mic.is_open),
+            "airtouch": self.airtouch_status,
+        }
+        where = await self.loop.run_in_executor(None, logcopy.copy_logs, self.paths.logs, self._windows_home(), info)
+        if where:
+            log.info("logs copied to Windows' drive: %s", where)
+
+    async def _keep_update(self) -> None:
+        """An update that has run this long is kept: the session no longer goes back to the version before."""
+        if await self.loop.run_in_executor(None, update.pending):
+            await self.loop.run_in_executor(None, self.platform.update_done)
+            log.info("the updated ClaudeOS started well; keeping it")
+
+    async def _before_power(self) -> None:
+        """Just before the computer restarts or turns off: the logs to Windows' drive, as they are now (ClaudeOS is
+        ended without time to do it then)."""
+        try:
+            await asyncio.wait_for(self._copy_logs(), 10)
+        except Exception:
+            log.info("couldn't copy the logs before the restart", exc_info=True)
+
     async def _housekeeping(self) -> None:
+        started = time.monotonic()
+        next_copy = started + LOG_COPY_FIRST_S
+        kept = not self.offer_updates
         while True:
             await asyncio.sleep(15)
+            if not kept and time.monotonic() - started >= update.HEALTHY_AFTER_S:
+                kept = True
+                try:
+                    await self._keep_update()
+                except Exception:
+                    log.exception("keeping the update")
+            if time.monotonic() >= next_copy:
+                next_copy = time.monotonic() + LOG_COPY_EVERY_S
+                try:
+                    await self._copy_logs()
+                except Exception:
+                    log.exception("copying the logs to Windows' drive")
             try:
                 await self._keep_phone_reachable()
             except Exception:
@@ -1063,10 +1295,11 @@ class Controller:
         await self._warm_up()
 
     # ================================================================ without Claude
-    async def _offline_command(self, text: str, signed_out: bool) -> None:
-        """A few things that must work without Claude: Wi-Fi, volume, power."""
+    async def _offline_command(self, text: str, signed_out: bool, typed: bool = False) -> None:
+        """A few things that must work without Claude: Wi-Fi, volume, power. Typed requests get written answers."""
         t = answers.normalize(text)
         p = self.platform
+        say = (lambda _text: None) if typed else self._say
         run = lambda fn, *a: self.loop.run_in_executor(None, fn, *a)
         reply = None
         if any(w in t for w in ("wifi", "wi fi", "internet", "network", "connected")):
@@ -1093,24 +1326,24 @@ class Controller:
         elif (any(w in t for w in (("macos", "mac os") if p.name == "mac" else ("windows",)))
               and any(w in t for w in ("switch", "go", "restart", "open", "boot", "back"))):
             other = p.other_os
-            verdict, _ = await self.confirm(f"Restart into {other}?")
+            verdict, _ = await self.confirm(f"Restart into {other}?", typed=typed)
             if verdict == "yes":
-                self._say(f"Restarting into {other}.")
-                await asyncio.sleep(3)
+                say(f"Restarting into {other}.")
+                await asyncio.gather(asyncio.sleep(3), self._before_power())
                 reply = await run(p.power, "switch_to_macos" if p.name == "mac" else "switch_to_windows")
             else:
                 reply = "Okay, staying here."
         elif any(w in t for w in ("shut down", "shutdown", "turn off", "power off")):
-            verdict, _ = await self.confirm("Shut down the computer?")
+            verdict, _ = await self.confirm("Shut down the computer?", typed=typed)
             if verdict == "yes":
-                self._say("Shutting down.")
-                await asyncio.sleep(3)
+                say("Shutting down.")
+                await asyncio.gather(asyncio.sleep(3), self._before_power())
                 reply = await run(p.power, "shutdown")
         elif "restart" in t or "reboot" in t:
-            verdict, _ = await self.confirm("Restart the computer?")
+            verdict, _ = await self.confirm("Restart the computer?", typed=typed)
             if verdict == "yes":
-                self._say("Restarting.")
-                await asyncio.sleep(3)
+                say("Restarting.")
+                await asyncio.gather(asyncio.sleep(3), self._before_power())
                 reply = await run(p.power, "restart")
         if reply is None:
             other = self.platform.other_os
@@ -1121,5 +1354,5 @@ class Controller:
         qid = "o" + uuid.uuid4().hex[:8]
         self.screen.ai_delta(qid, reply)
         self.screen.ai_done(qid)
-        self._say(reply)
+        say(reply)
         self._online_cache = (0.0, False)     # checked again before the next request: they may be back online

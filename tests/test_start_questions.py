@@ -1,0 +1,396 @@
+"""What ClaudeOS asks when it starts (a new version of itself, then AirPods), and answers given in writing only
+when the question was typed on this PC's keyboard."""
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from claudeos import controller as C
+from claudeos import update
+from claudeos.config import Paths, Settings
+from claudeos.controller import Controller
+from claudeos.platform.fake import FakePlatform
+from claudeos.screen import RecordingScreen
+
+AIRPODS = {"address": "AA:BB:CC:DD:EE:01", "name": "AirPods Pro"}
+
+
+class Bluetooth(FakePlatform):
+    """A PC whose Bluetooth knows `paired` devices; `windows_has` are paired in Windows (copied over by
+    bt_import_windows_keys); `pairable` are in pairing mode nearby. Devices in their case don't connect."""
+
+    def __init__(self, paired=(), windows_has=(), pairable=(), in_case=False):
+        super().__init__()
+        self.headset = False
+        self.bt = {"powered": True, "adapter": True, "connected": [], "paired": [dict(d) for d in paired]}
+        self.windows_has, self.pairable, self.in_case = list(windows_has), list(pairable), in_case
+
+    def bt_status(self):
+        return {k: (list(v) if isinstance(v, list) else v) for k, v in self.bt.items()}
+
+    def bt_connect(self, address):
+        self._c("bt_connect", address)
+        for d in self.bt["paired"]:
+            if d["address"] == address and not self.in_case and d not in self.bt["connected"]:
+                self.bt["connected"].append(d)
+        return "Connected."
+
+    def bt_import_windows_keys(self):
+        self._c("bt_import_windows_keys")
+        self.bt["paired"] += [dict(d) for d in self.windows_has]
+        return f"Copied {len(self.windows_has)} Bluetooth pairing(s) from Windows."
+
+    def bt_scan(self, seconds=10):
+        self._c("bt_scan", seconds)
+        return [dict(d, paired=False) for d in self.pairable]
+
+    def bt_pair(self, address, on_code=None):
+        self._c("bt_pair", address)
+        for d in self.pairable:
+            if d["address"] == address:
+                self.bt["paired"].append(dict(d))
+                self.bt["connected"].append(dict(d))
+        return "Paired and connected."
+
+
+def _controller(tmp_path, monkeypatch, platform=None, **kw):
+    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "ClaudeOS"))
+    screen = RecordingScreen()
+    c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), platform or FakePlatform(), screen, voice=False,
+                   index=False, **kw)
+    return c, screen
+
+
+def _answering(c, *answers):
+    """Questions get these answers, typed, in order. Returns what was asked: (question, typed)."""
+    asked, left = [], list(answers)
+
+    async def confirm(question, typed=None):
+        asked.append((question, typed))
+        a = left.pop(0) if left else "timeout"
+        c._answer_typed = True
+        if a in ("yes", "no"):
+            return a, a
+        return ("timeout", "") if a == "timeout" else ("unclear", a)
+    c.confirm = confirm
+    return asked
+
+
+def _notices(screen):
+    return [e[1][0] for e in screen.events if e[0] == "notice"]
+
+
+def _calls(platform, name):
+    return [a for n, a in platform.calls if n == name]
+
+
+@pytest.fixture
+def fast(monkeypatch):
+    real_sleep = asyncio.sleep
+
+    async def sleep(s, *a, **k):
+        await real_sleep(0)
+    monkeypatch.setattr(C.asyncio, "sleep", sleep)
+
+
+def _run(c, coro_fn):
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        return await coro_fn()
+    return asyncio.run(run())
+
+
+def _offer(**kw):
+    return update.Offer(**{"source": Path("/mnt/windows/Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS"), "changed": 3,
+                           "version": "0.2.0", "needs_setup": False, **kw})
+
+
+# ------------------------------------------------------------------ a new version of ClaudeOS
+def test_a_new_version_is_offered_on_screen_and_installed(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch)
+    monkeypatch.setattr(update, "check", lambda: _offer())
+    asked = _answering(c, "yes")
+    assert _run(c, c._offer_update) is True
+    question, typed = asked[0]
+    assert "new version of ClaudeOS (0.2.0)" in question and typed is True       # shown, not said
+    assert _calls(c.platform, "update_app") == [()]
+    assert c.exit_code == 3 and ("quit", None) in screen.events                # the session starts it again at once
+    assert any("Updated" in n for n in _notices(screen))
+
+
+def test_declining_the_new_version(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch)
+    monkeypatch.setattr(update, "check", lambda: _offer())
+    _answering(c, "no")
+    assert _run(c, c._offer_update) is False
+    assert not _calls(c.platform, "update_app") and c.exit_code is None
+    assert "Okay. I'll ask again the next time ClaudeOS starts." in _notices(screen)
+
+
+def test_a_request_instead_of_an_answer_is_handled(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch)
+    monkeypatch.setattr(update, "check", lambda: _offer())
+    _answering(c, "what is the weather like today")
+    handled = []
+
+    async def handle(text, typed=False):
+        handled.append((text, typed))
+    c.handle = handle
+
+    async def go():
+        r = await c._offer_update()
+        await asyncio.sleep(0)
+        return r
+    assert _run(c, go) is False
+    assert handled == [("what is the weather like today", True)] and not _calls(c.platform, "update_app")
+
+
+def test_a_version_that_needs_setup_is_only_mentioned(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch)
+    monkeypatch.setattr(update, "check", lambda: _offer(needs_setup=True))
+    asked = _answering(c)
+    assert _run(c, c._offer_update) is False
+    assert asked == [] and any("run ClaudeOS Setup again" in n for n in _notices(screen))
+
+
+def test_an_update_that_fails_says_why_and_ClaudeOS_carries_on(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch)
+    c.platform.update_result = {"ok": False, "error": "the new version has something an update can't bring: x.pth"}
+    monkeypatch.setattr(update, "check", lambda: _offer())
+    _answering(c, "yes")
+    assert _run(c, c._offer_update) is False
+    assert c.exit_code is None and ("quit", None) not in screen.events
+    assert any("x.pth" in str(e) and "warn" in str(e) for e in screen.events if e[0] == "notice")
+
+
+def test_nothing_asked_without_another_version(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch)
+    monkeypatch.setattr(update, "check", lambda: None)
+    asked = _answering(c)
+    assert _run(c, c._offer_update) is False and asked == []
+
+
+def test_an_update_that_started_well_is_kept(tmp_path, monkeypatch):
+    c, screen = _controller(tmp_path, monkeypatch, offer_updates=True)
+    marker = tmp_path / "update-pending"
+    monkeypatch.setattr(update, "UPDATE_PENDING", marker)
+    _run(c, c._keep_update)
+    assert not _calls(c.platform, "update_done")           # nothing new to keep
+    marker.write_text("1\n")
+    _run(c, c._keep_update)
+    assert _calls(c.platform, "update_done") == [()]
+
+
+# ------------------------------------------------------------------ the questions at the start, in order
+def test_the_update_comes_first_and_yes_skips_the_airpods(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch, platform=Bluetooth(), offer_updates=True, offer_headphones=True)
+    monkeypatch.setattr(update, "source_there", lambda: True)
+    monkeypatch.setattr(update, "check", lambda: _offer())
+    asked = _answering(c, "yes")
+    _run(c, c._start_questions)
+    assert len(asked) == 1 and "new version" in asked[0][0] and c.exit_code == 3
+
+
+def test_airpods_first_while_windows_drive_is_still_coming(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch, platform=Bluetooth(), offer_updates=True, offer_headphones=True)
+    drive = {"there": False}
+    monkeypatch.setattr(update, "source_there", lambda: drive["there"])
+    order = []
+
+    def check():
+        order.append("looked for an update")
+        return None
+    monkeypatch.setattr(update, "check", check)
+    asked = _answering(c, "no")
+    real = c.confirm
+
+    async def confirm(question, typed=None):
+        order.append(question)
+        drive["there"] = True
+        return await real(question, typed)
+    c.confirm = confirm
+    _run(c, c._start_questions)
+    assert order[0].startswith("Connect your AirPods?") and order[-1] == "looked for an update"
+    assert len(asked) == 1
+
+
+# ------------------------------------------------------------------ AirPods at the start
+def test_no_question_when_sound_already_plays_on_headphones(tmp_path, monkeypatch, fast):
+    p = Bluetooth()
+    p.headset = True
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    asked = _answering(c)
+    _run(c, c._offer_airpods)
+    assert asked == [] and not _calls(p, "bt_connect")
+
+
+def test_known_airpods_out_of_their_case_just_connect(tmp_path, monkeypatch, fast):
+    p = Bluetooth(paired=[AIRPODS])
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    asked = _answering(c)
+    _run(c, c._offer_airpods)
+    assert asked == [] and "Your AirPods Pro are connected." in _notices(screen)
+
+
+def test_asked_then_the_pairing_from_windows_is_used(tmp_path, monkeypatch, fast):
+    p = Bluetooth(windows_has=[AIRPODS])
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    asked = _answering(c, "yes")
+    _run(c, c._offer_airpods)
+    assert asked == [("Connect your AirPods? Take them out of their case first.", True)]
+    assert _calls(p, "bt_import_windows_keys") == [()] and not _calls(p, "bt_pair")
+    assert "Your AirPods Pro are connected." in _notices(screen)
+
+
+def test_asked_then_paired_here_when_windows_has_none(tmp_path, monkeypatch, fast):
+    p = Bluetooth(pairable=[AIRPODS])
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    _answering(c, "yes")
+    _run(c, c._offer_airpods)
+    assert any("hold the button on the back of the case" in n for n in _notices(screen))
+    assert _calls(p, "bt_pair") == [(AIRPODS["address"],)]
+    assert "Your AirPods Pro are connected." in _notices(screen)
+
+
+def test_airpods_not_found(tmp_path, monkeypatch, fast):
+    monkeypatch.setattr(C, "AIRPODS_PAIR_S", 0.05)
+    p = Bluetooth()
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    _answering(c, "yes")
+    _run(c, c._offer_airpods)
+    assert any("couldn't find the AirPods" in n for n in _notices(screen))
+
+
+def test_airpods_declined(tmp_path, monkeypatch, fast):
+    p = Bluetooth()
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    _answering(c, "no")
+    _run(c, c._offer_airpods)
+    assert not _calls(p, "bt_import_windows_keys")
+    assert any("connect my AirPods" in n for n in _notices(screen))
+
+
+def test_no_question_without_bluetooth(tmp_path, monkeypatch, fast):
+    p = Bluetooth()
+    p.bt["adapter"] = False
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    asked = _answering(c)
+    _run(c, c._offer_airpods)
+    assert asked == []
+
+
+# ------------------------------------------------------------------ typed here: answered in writing
+class FakeSpeaker:
+    def __init__(self):
+        self.calls = []
+        self.speaking = False
+
+    def __getattr__(self, name):
+        if name == "until_quiet":
+            async def quiet(*a):
+                return None
+            return quiet
+        return lambda *a, **k: self.calls.append((name, a))
+
+
+def test_replies_to_typed_questions_are_shown_not_spoken(tmp_path, monkeypatch):
+    c, screen = _controller(tmp_path, monkeypatch)
+    sp = c.speaker = FakeSpeaker()
+    typed = {"t1"}
+    c.brain = SimpleNamespace(origin_of=lambda tid: "here", typed_here=lambda tid: tid in typed,
+                              current_origin="here", use_token_instead=lambda: False)
+
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        c._on_turn_start("t1")
+        c._on_text("t1", "Here's the weather.")
+        assert sp.calls == [] and ("ai", ("t1", "Here's the weather.")) in screen.events
+        assert c._typing_now()
+        c._announce("Type 482916 on the keyboard.")       # mid-tool news: shown only, too
+        assert sp.calls == []
+        c._on_turn_start("t2")                                # said out loud: spoken back
+        c._on_text("t2", "Sunny.")
+        assert ("feed", ("Sunny.",)) in sp.calls
+    asyncio.run(run())
+
+
+def test_typed_text_reaches_claude_as_typed(tmp_path, monkeypatch):
+    c, screen = _controller(tmp_path, monkeypatch)
+    asks = []
+
+    async def ask(text, typed=False):
+        asks.append((text, typed))
+    c.brain = SimpleNamespace(busy=False, last_activity=0.0, ask=ask, current_origin="here")
+
+    async def online():
+        return True
+    c._online_now = online
+
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        c.asleep = True                       # typing wakes ClaudeOS by itself: no wake word to type
+        await c.handle("what's on today", typed=True)
+    asyncio.run(run())
+    assert asks and asks[-1][0].endswith("what's on today") and asks[-1][1] is True and not c.asleep
+
+
+def test_questions_about_typed_requests_are_shown_not_said(tmp_path, monkeypatch):
+    c, screen = _controller(tmp_path, monkeypatch)
+    said = []
+    c._say = said.append
+    c.speaker = FakeSpeaker()
+    c.listener = SimpleNamespace(mode="normal")
+    c.mic = SimpleNamespace(is_open=True)                # the microphone hears, but the request was typed
+
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        c.confirm_lock = asyncio.Lock()
+        task = asyncio.create_task(c.confirm("Delete the file?", typed=True))
+        while c.pending_confirm is None:
+            await asyncio.sleep(0)
+        await c.handle("yes", typed=True)
+        verdict = await task
+        assert verdict == ("yes", "yes") and said == []
+        shown = "".join(t for k, v in screen.events if k == "ai" for _, t in [v])
+        assert "Delete the file? (Type yes or no.)" in shown
+        # Asked about something said out loud: said out loud too.
+        task = asyncio.create_task(c.confirm("Restart now?", typed=False))
+        while c.pending_confirm is None:
+            await asyncio.sleep(0)
+        await c.handle("no")
+        assert await task == ("no", "no") and said == ["Restart now?"]
+    asyncio.run(run())
+
+
+def test_without_a_microphone_questions_say_to_type(tmp_path, monkeypatch):
+    c, screen = _controller(tmp_path, monkeypatch)
+
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        c.confirm_lock = asyncio.Lock()
+        task = asyncio.create_task(c.confirm("Restart now?"))
+        while c.pending_confirm is None:
+            await asyncio.sleep(0)
+        await c.handle("no", typed=True)
+        assert await task == ("no", "no")
+    asyncio.run(run())
+    shown = "".join(t for k, v in screen.events if k == "ai" for _, t in [v])
+    assert "Restart now? (Type yes or no.)" in shown
+
+
+# ------------------------------------------------------------------ the logs, before the computer restarts
+def test_logs_are_copied_before_a_restart(tmp_path, monkeypatch, fast):
+    c, screen = _controller(tmp_path, monkeypatch)
+    copied = []
+
+    async def copy():
+        copied.append(True)
+    c._copy_logs = copy
+    _answering(c, "yes")
+
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        await c._offline_command("switch to windows", signed_out=True, typed=True)
+    asyncio.run(run())
+    assert copied == [True] and _calls(c.platform, "power") == [("switch_to_windows",)]

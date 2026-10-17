@@ -80,6 +80,9 @@ ClaudeOS/
 | Voice models | `/home/<user>/ClaudeOS/models/` (layout owned by `claudeos.voice.models`) |
 | Windows partition | `/mnt/windows` (rw when NTFS is clean, else ro). A BitLocker drive is opened with ClaudeOS's own recovery password (`/etc/claudeos/bitlocker-recovery-key`, from setup) as `/dev/mapper/claudeos-windows` |
 | Root helper | `/usr/local/libexec/claudeos/claudeos-root`, sudoers: `<user> ALL=(root) NOPASSWD: /usr/local/libexec/claudeos/claudeos-root` |
+| Where updates come from | `/etc/claudeos/update-source` (root, 0644): the folder ClaudeOS Setup ran from, as a path below the top of Windows' drive (`Users/<you>/Downloads/ClaudeOS`); see "Updating ClaudeOS" |
+| The version before an update | `/opt/claudeos/app.prev` (`app.failed` after an undo); `/var/lib/claudeos/update-pending` while a new version hasn't yet run 45 s |
+| Logs, readable from Windows | `C:\Users\<you>\AppData\Local\ClaudeOS\from-claudeos\` (`claudeos.log.txt`, `session.log.txt`, `info.json`), see "Runtime" |
 
 `settings.json` keys written by the Windows setup (all optional): `user_name` (display name), `windows_user`
 (Windows profile folder name, e.g. `rensh`), `timezone` (IANA), `locale`.
@@ -87,10 +90,12 @@ ClaudeOS/
 ### ClaudeOS exit codes (session supervisor contract)
 
 * `0` normal exit → session script restarts ClaudeOS after 1 s.
-* `3` restart requested (e.g. after an update) → restart immediately.
-* other → crash; restart with backoff (1, 2, 5 s). 3 crashes within 120 s → show a recovery screen
-  (full-screen `xterm` with the last log lines and `claudeos doctor` output; Enter retries). If it can't be
-  shown, the session waits a minute before trying again rather than restarting in a tight loop.
+* `3` restart requested (after an update) → restart immediately.
+* other → crash; restart with backoff (1, 2, 5 s). 3 crashes within 120 s → if the version is a new update
+  (`/var/lib/claudeos/update-pending` exists), `sudo -n claudeos-root update-undo` puts the version before back
+  and ClaudeOS starts again at once; otherwise a recovery screen (full-screen `xterm` with the last log lines
+  and `claudeos doctor` output; Enter retries). If it can't be shown, the session waits a minute before trying
+  again rather than restarting in a tight loop.
 
 ### Drawing pages
 
@@ -129,10 +134,47 @@ PipeWire/WirePlumber run as systemd user services (dbus-user-session). Logs: `~/
 | `bt-import-windows-keys` | Copy Bluetooth Classic link keys (e.g. AirPods) from the Windows SYSTEM registry hive into BlueZ, restart bluetooth |
 | `set-timezone ZONE` | validated against /usr/share/zoneinfo |
 | `wipe-install-secrets` | Remove `/claudeos/secrets` from a ClaudeOS installer (FAT32 labelled `CLAUDEOS`) still on the PC or plugged in |
+| `update-app` | Update ClaudeOS from the folder in `/etc/claudeos/update-source` (see "Updating ClaudeOS"). `{"ok":true,"changed":N}` |
+| `update-done` | The new version started well: remove `/var/lib/claudeos/update-pending` |
+| `update-undo` | Put `/opt/claudeos/app.prev` back (the new version goes to `app.failed`) and remove the marker |
 
 On Fedora (a Mac), `apt-install`, `apt-remove` and `system-update` use `dnf` (`install -y
 --setopt=install_weak_deps=False`, `remove -y --setopt=clean_requirements_on_remove=False` after `rpm -q` and
-`rpm -e --test` show the packages are installed and nothing else needs them, `upgrade -y --refresh`). ClaudeOS asks the user (spoken yes/no) before calling any verb except `status`.
+`rpm -e --test` show the packages are installed and nothing else needs them, `upgrade -y --refresh`). ClaudeOS asks the user (spoken yes/no) before calling any verb except `status`, `update-done`
+(called after a new version has run 45 s) and `update-undo` (called by the session); `update-app` is asked on the
+screen.
+
+### Updating ClaudeOS
+
+ClaudeOS Setup writes `/claudeos/update-source` on the installer: the folder it runs from, as a path below the
+top of Windows' drive with each name spelled as the drive stores it (only when that folder is on Windows' own
+drive). `finish.sh` copies it to `/etc/claudeos/update-source`, root's, so nothing ClaudeOS runs can point updates
+elsewhere. A newer ClaudeOS put in that folder (downloaded again over the old one) is noticed when ClaudeOS
+starts (`claudeos/update.py`: the files of `claudeos/` and `linux/session/` compared with the installed ones) and
+offered on the screen, answered by typing or saying yes or no. Yes runs `claudeos-root update-app`:
+
+1. refused until ClaudeOS has finished installing (`/var/lib/claudeos/base-installed`): until then the first
+   start's finisher runs `install-claudeos.sh` as root, and that runs ClaudeOS's own code;
+2. the recorded path must be relative, without `.` or `..` parts or control characters, and lead (after
+   `realpath`) into Windows' drive, to a folder with `claudeos/__init__.py` and `requirements-linux.txt`;
+3. `requirements-linux.txt` must be the installed one: a version that needs other Python packages is
+   installed with ClaudeOS Setup;
+4. only `claudeos/` and `linux/session/` are taken, the parts that run as the person. Nothing root runs (this
+   helper, the Bluetooth importer, `linux/firstboot`, the system's settings) changes in an update, and root
+   never runs ClaudeOS's own code once installed (`install-claudeos.sh` checks the import path with
+   `importlib.util.find_spec`, which finds the package without running it);
+5. refused when those parts hold anything but plain files and folders (links could lead out of the folder) or
+   a Python start-up hook (`sitecustomize.py`, `usercustomize.py`, `.pth`), checked before the copy and again
+   on the copy;
+6. `/opt/claudeos/app.next` is a copy of the installed app with those two parts replaced (compiled files left
+   out), made root's, folders 0755, files 0644, `#!` files 0755; then the installed version becomes `app.prev`,
+   `app.next` becomes `app`, and `/var/lib/claudeos/update-pending` is written.
+
+ClaudeOS then exits with code 3 and the session starts the new version. After it has run 45 s, ClaudeOS calls
+`update-done`; if it keeps crashing before that, the session calls `update-undo`. Claude can read the update
+folder but not change it: the permission gate denies edits there and in `/opt/claudeos`, shell commands that
+change something and name it or `cd` into it, and moving, copying into or trashing it with ClaudeOS's own file
+tools.
 
 ### Boot menu
 
@@ -174,6 +216,7 @@ No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Instal
     `.credentials.json`), which setup picks up by itself; or, when the person pasted a code instead,
     `/claudeos/secrets/claude_token`, a one-year token from `claude setup-token`;
   * `/claudeos/settings.json`: initial settings (keys above);
+  * `/claudeos/update-source`: where setup runs from, for updates (see "Updating ClaudeOS");
   * `/claudeos/guard.sh`, `network.sh`, `finish.sh`: copied from `windows/installer/`, with LF line endings.
 * **How the PC starts it.** The ISO's signed boot loader goes to `\EFI\claudeos-setup\` on the EFI partition
   Windows starts from: `EFI/boot/bootx64.efi` (shim, signed by Microsoft's third-party UEFI CA) as
@@ -235,8 +278,9 @@ disk holding the partition mounted at `/cdrom`.)
   3. writes the marker `/EFI/claudeos/installed-<install-id>` to the ESP: `id=<install-id>` and
      `root=<PARTUUID>` (ClaudeOS's root partition, from `findmnt` + `blkid`), which "Remove ClaudeOS" in
      ClaudeOS Setup uses to delete exactly that partition;
-  4. sets up the first start: `/etc/claudeos/install-user`, `/etc/claudeos/install-id`, and two services from
-     `linux/firstboot`, enabled by their `multi-user.target.wants` links:
+  4. sets up the first start: `/etc/claudeos/install-user`, `/etc/claudeos/install-id`, `/etc/claudeos/update-source`
+     (when setup wrote one; root's, 0644), and two services from `linux/firstboot`, enabled by their
+     `multi-user.target.wants` links:
      * `claudeos-finish-install.service`, the safety net: until `/var/lib/claudeos/base-installed` exists, it
        runs before `getty@tty1`, retries `install-claudeos.sh` with growing waits (30 s doubling to 5 min,
        `dpkg --configure -a` before each try), then reboots;
@@ -281,13 +325,18 @@ retrying with backoff, then starts listening.
   * the full sign-in from `claude auth login` (`.engine/.credentials.json`, refreshed by Claude Code itself),
     used when present and `phone_access` is on, because Remote Control needs it. In this mode the token
     variables are blanked and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is not set (Remote Control needs
-    Claude Code's feature flags); telemetry and error reporting stay off. If it fails with an auth error,
-    the brain switches to the token for the rest of the run and asks the last question again.
+    Claude Code's feature flags); telemetry and error reporting stay off, which Claude Code allows Remote
+    Control with on a paid plan (Pro, Max, Team, Enterprise) once it knows the account's organization. If it
+    fails with an auth error, the brain switches to the token for the rest of the run and asks the last
+    question again.
 * Phone (the Claude app, Claude Code's Remote Control): after connecting with the full sign-in, the brain sends
   the SDK control request `{"subtype": "remote_control", "enabled": true, "name": "ClaudeOS (<host>)"}`, the
   same request Claude Code's own hosts send for `/remote-control`. The Python SDK has no public call for it,
   so it goes through `client._query._send_control_request`. The bridge session id from the response is
-  kept and offered as `reattach_session_id` next time; a failure becomes a one-time notice on screen.
+  kept and offered as `reattach_session_id` next time. A refused request is tried again after 20 s and 60 s:
+  on the engine's first start it looks the account up in the background and refuses Remote Control until it
+  has ("Unable to determine your organization"). Each refusal is logged with the engine's last lines of error
+  output (kept by the brain, sign-ins blanked); the last one becomes a one-time notice on screen.
   One reader task consumes everything the engine emits. A turn that starts without a local question (a
   user message with a human or missing origin, or output with no turn open) is a phone turn: shown as
   the user's words like anything said here, the reply is not spoken, and voice questions are not asked. Turns the engine injects itself
@@ -295,6 +344,25 @@ retrying with backoff, then starts listening.
   turn silent for 15 minutes is closed. Local questions carry the "[time · screen: ...]" prefix; the system
   prompt tells Claude that a message without it came from the phone.
 * ClaudeOS tools are in-process MCP tools (screen, files, computer control, apps, system, memory, self-made tools).
+* Typed or said: what's typed on this PC's keyboard is answered in writing only (`Brain.ask(typed=True)`, and the
+  controller doesn't speak that turn), like what's typed on the phone; only what's said out loud gets a spoken
+  answer. Questions about a typed request are shown, not said, and end with "(Type yes or no.)", as they do
+  whenever the microphone isn't listening. Things ClaudeOS says unasked (the greeting, "not signed in") are said
+  only when sound plays on headphones; on the PC's or the monitor's speakers they are only shown.
+* At the start (not in tests or `--fake`): a new version of ClaudeOS to update to, then AirPods, one question at
+  a time. AirPods: nothing when sound already plays on headphones; AirPods already paired here are connected if
+  they're out of their case; otherwise "Connect your AirPods?" on the screen. Yes copies Windows' pairing
+  (`bt-import-windows-keys`) and connects, or else looks for AirPods in pairing mode for a minute and pairs
+  them. The update comes first when Windows' drive is already mounted (yes restarts ClaudeOS); while it is still
+  on its way, the AirPods come first.
+* Logs on Windows' drive (`claudeos/logcopy.py`): ClaudeOS's own drive can't be opened from Windows, so the end
+  of `claudeos.log` and `session.log` (1.5 MB each, CRLF line endings, anything like a sign-in, password or key
+  blanked) and `info.json` (the phone link's state and why, voice, microphone, AirTouch) are copied to
+  `C:\Users\<you>\AppData\Local\ClaudeOS\from-claudeos\`, only when ClaudeOS Setup's folder is there: a
+  minute after the start, every 10 minutes, just before a restart or shutdown, and when ClaudeOS stops. The log
+  also says, at the start, which graphics chips and drivers there are and the screens' sizes, and once a minute
+  while typing, how long typed letters took to reach the screen and how often the window was busy for more
+  than a tenth of a second.
 * Every risky action goes through the permission gate → spoken confirmation ("Should I go ahead?"). During a
   phone turn the confirm callback returns "phone": the action is denied with a message telling Claude to ask
   in its reply. A "yes" typed on the phone (`classify_answer`) then allows exactly that action (keyed by tool

@@ -169,22 +169,68 @@ def test_remote_control_is_switched_on_after_connecting(tmp_path):
     asyncio.run(run())
 
 
-def test_remote_control_retries_without_an_old_session_and_reports_failure(tmp_path):
+def test_remote_control_retries_without_an_old_session_and_reports_failure(tmp_path, monkeypatch):
+    from claudeos.brain import agent
+    monkeypatch.setattr(agent, "REMOTE_RETRY_S", (0.0, 0.0))
+
     async def run():
         r = Rig(tmp_path)
         r.brain.state.set(remote_session_id="gone")
+        scoped = Exception("Remote Control requires a full-scope login token")
 
         def factory(options):
             e = FakeEngine(options)
-            e.control_results = [Exception("session not found"), Exception("Remote Control requires a full-scope login token")]
+            e.control_results = [Exception("session not found"), scoped, scoped, scoped]
             r.engines.append(e)
             return e
         r.brain.client_factory = factory
         await r.brain.connect()
-        await settle()
-        assert [c.get("reattach_session_id") for c in r.engine.controls] == ["gone", None]
+        await settle(200)
+        # The old session first, then a new one; tried three times in all before giving up.
+        assert [c.get("reattach_session_id") for c in r.engine.controls] == ["gone", None, None, None]
         assert r.brain.remote == "failed" and "full-scope" in r.brain.remote_detail
         assert r.events[-1][:2] == ("remote", "failed")
+        assert [e for e in r.events if e[0] == "remote"] == [r.events[-1]]      # one report, at the end
+        await r.brain.close()
+    asyncio.run(run())
+
+
+def test_remote_control_started_again_when_the_engine_didnt_know_the_account_yet(tmp_path, monkeypatch):
+    # On the engine's first start it looks up the account in the background, and refuses Remote Control until it
+    # has: a little later the same request works.
+    from claudeos.brain import agent
+    monkeypatch.setattr(agent, "REMOTE_RETRY_S", (0.0, 0.0))
+
+    async def run():
+        r = Rig(tmp_path)
+
+        def factory(options):
+            e = FakeEngine(options)
+            e.control_results = [Exception("Unable to determine your organization for Remote Control eligibility."),
+                                 {"session_id": "rc_9"}]
+            r.engines.append(e)
+            return e
+        r.brain.client_factory = factory
+        r.brain._engine_stderr("[bridge] eligibility: no_organization for sk-ant-oat01-abcdefgh\n")
+        await r.brain.connect()
+        await settle(200)
+        assert len(r.engine.controls) == 2 and r.brain.remote == "on"
+        assert r.brain.state.get("remote_session_id") == "rc_9"
+        assert [e[:2] for e in r.events if e[0] == "remote"] == [("remote", "on")]
+        assert r.brain.engine_tail() == "[bridge] eligibility: no_organization for sk-ant-(hidden)"
+        await r.brain.close()
+    asyncio.run(run())
+
+
+def test_a_turn_typed_here_is_marked_as_typed(tmp_path):
+    async def run():
+        r = Rig(tmp_path, login=False)
+        typed = await r.brain.ask("what's on today", typed=True)
+        await r.brain.wait_idle()
+        said = await r.brain.ask("and tomorrow?")
+        await r.brain.wait_idle()
+        assert r.brain.typed_here(typed) and r.brain.origin_of(typed) == "here"
+        assert not r.brain.typed_here(said)
         await r.brain.close()
     asyncio.run(run())
 
@@ -377,7 +423,7 @@ def test_phone_turns_are_shown_but_not_spoken(tmp_path, monkeypatch):
     sp = FakeSpeaker()
     c.speaker = sp
     c.brain = SimpleNamespace(origin_of=lambda tid: "phone" if tid.startswith("p") else "here",
-                              current_origin="here", use_token_instead=lambda: False)
+                              typed_here=lambda tid: False, current_origin="here", use_token_instead=lambda: False)
     c.gate = SimpleNamespace(phone_reply=lambda t: None)
     c.ctx = SimpleNamespace(rate_limit={})
 

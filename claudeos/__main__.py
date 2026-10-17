@@ -160,7 +160,9 @@ def main(argv: list[str] | None = None) -> int:
             # Loaded once the window shows (run_app): the controller brings in the Agent SDK, most of a second.
             from .controller import Controller
             return Controller(paths, settings, platform, screen, voice=voice,
-                              airtouch=not (getattr(args, "no_airtouch", False) or getattr(args, "fake", False)))
+                              airtouch=not (getattr(args, "no_airtouch", False) or getattr(args, "fake", False)),
+                              offer_headphones=not getattr(args, "fake", False),
+                              offer_updates=not getattr(args, "fake", False))
         return run_app(paths, settings, make_controller, windowed=getattr(args, "windowed", False))
     ap.print_help()
     return 2

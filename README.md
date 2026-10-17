@@ -67,8 +67,12 @@ Setup saves a **recovery password** in your Windows Documents folder, in
 
 ## Using ClaudeOS
 
-* **Talk or type.** Just speak, or type in the Claude app on your phone (see below). To wake ClaudeOS
-  after it has gone to sleep, say "Claude" or press an AirPod stem.
+* **Talk or type.** Just speak, or type on a keyboard or in the Claude app on your phone (see below). What
+  you type is answered in writing only; what you say gets a spoken answer. To wake ClaudeOS after it has
+  gone to sleep, say "Claude", press an AirPod stem, or just type.
+* **AirPods.** When ClaudeOS starts, it connects AirPods it already knows, or asks on the screen whether to
+  connect yours. Say or type yes: it uses the pairing Windows has, or else pairs them while you hold the
+  button on the back of the case. Through the PC's own speakers ClaudeOS doesn't greet you out loud.
 * **Interrupt.** You can talk over Claude to stop it or change your mind.
 * **Ask for anything.** For example:
   * "Play some calm piano music on YouTube"
@@ -136,7 +140,8 @@ A USB keyboard and mouse work as soon as they're plugged in. For Bluetooth ones,
 and say "pair my keyboard" (or "my mouse"). A keyboard may want a code typed on it: ClaudeOS shows the code
 and says it. Type it on the keyboard, then press Enter.
 
-* On the conversation screen, typing writes a message and Enter sends it. On a website, typing goes into
+* On the conversation screen, typing writes a message and Enter sends it. The answer is written, not
+  spoken, and questions like "Go ahead?" are answered by typing yes or no. On a website, typing goes into
   the box you're in.
 * The mouse's arrow shows when you move the mouse and hides once it has been still for 3 seconds.
 
@@ -161,6 +166,13 @@ You can go back for one restart, for every day, or for good.
 If Windows uses BitLocker, Windows may ask for its recovery key once after ClaudeOS is installed.
 Setup showed you this key and asked you to save it.
 
+## Updating ClaudeOS on a PC
+
+Put the new version of ClaudeOS in the folder you ran ClaudeOS Setup from (download it again over the old
+one), then start ClaudeOS. It asks on the screen whether to update: say or type yes, and it starts again
+on the new version a few seconds later. If the new version won't start, ClaudeOS goes back to the one
+before by itself. A version that needs new parts of Linux says so instead: install it with ClaudeOS Setup.
+
 ## If something goes wrong on a PC
 
 * **Windows starts instead of the installer.** Restart, press the boot-menu key while the PC starts
@@ -184,6 +196,10 @@ Setup showed you this key and asked you to save it.
   trying and restarts into ClaudeOS when it's done. If it keeps saying it didn't work, check that
   your Wi-Fi router is on and connected to the internet.
 * **ClaudeOS shows a recovery screen.** Press Enter to try again. The screen lists what went wrong.
+* **You want to see what ClaudeOS did.** It copies the end of its logs to Windows' drive, a minute after
+  it starts, every 10 minutes and before it restarts. In Windows they're in
+  `C:\Users\<you>\AppData\Local\ClaudeOS\from-claudeos`. Sign-ins and passwords are blanked out, and the
+  conversation isn't in them.
 * **The PC starts Windows instead of ClaudeOS.** A big Windows update can put Windows first in the
   power-on menu again. Run ClaudeOS Setup and choose **Choose what starts when the PC turns on**.
 * **The Claude app doesn't show ClaudeOS.** Check that the PC is on and in ClaudeOS, and that the app

@@ -87,6 +87,13 @@ fi
 mkdir -p "$T/etc/claudeos" "$T/etc/systemd/system/multi-user.target.wants"
 printf '%s\n' "$USER_NAME" > "$T/etc/claudeos/install-user"
 printf '%s\n' "$INSTALL_ID" > "$T/etc/claudeos/install-id"
+# Where ClaudeOS Setup ran from on Windows' drive: a newer ClaudeOS put there updates this one (claudeos-root
+# update-app). Root's, so nothing ClaudeOS runs can point updates anywhere else.
+if [ -f "$SRC/update-source" ]; then
+  cp "$SRC/update-source" "$T/etc/claudeos/update-source"
+  chown 0:0 "$T/etc/claudeos/update-source"
+  chmod 0644 "$T/etc/claudeos/update-source"
+fi
 for unit in claudeos-finish-install.service claudeos-reclaim-installer.service; do
   cp "$T/opt/claudeos/app/linux/firstboot/$unit" "$T/etc/systemd/system/"
   # Enabling a unit is this one link; made directly, because systemctl can silently do nothing here.

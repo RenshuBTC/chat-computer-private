@@ -152,7 +152,7 @@ def test_installer_scripts_shellcheck():
     assert r.returncode == 0, r.stdout
 
 
-def _run_finish(tmp_path, installer_works=True, bitlocker_key=None):
+def _run_finish(tmp_path, installer_works=True, bitlocker_key=None, update_source=None):
     """finish.sh against a fake installer partition and a fake new system; curtin is a stand-in that records its calls."""
     src = tmp_path / "cdrom/claudeos"
     target = tmp_path / "target"
@@ -171,6 +171,8 @@ def _run_finish(tmp_path, installer_works=True, bitlocker_key=None):
     (src / "settings.json").write_text("{}\n")
     if bitlocker_key:
         (src / "secrets/bitlocker-key").write_text(bitlocker_key + "\n")
+    if update_source:
+        (src / "update-source").write_text(update_source + "\n", encoding="utf-8")
     for p in src.rglob("*"):
         if p.is_file():
             p.chmod(0o777)        # FAT32 shows every file as executable
@@ -232,6 +234,18 @@ def test_finish_script_gives_claudeos_its_bitlocker_key(tmp_path):
     # Without one (Windows' drive isn't encrypted), there's no key file.
     r, target, _ = _run_finish(tmp_path / "plain")
     assert not (target / "etc/claudeos/bitlocker-recovery-key").exists()
+
+
+def test_finish_script_notes_where_updates_come_from(tmp_path):
+    # The folder ClaudeOS Setup ran from, on Windows' drive: newer versions put there update ClaudeOS. Root's file.
+    r, target, _ = _run_finish(tmp_path, update_source="Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS")
+    assert r.returncode == 0, r.stdout + r.stderr
+    f = target / "etc/claudeos/update-source"
+    assert f.read_text(encoding="utf-8") == "Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS\n"
+    assert stat.S_IMODE(f.stat().st_mode) == 0o644 and f.stat().st_uid == 0
+    # Setup not on Windows' own drive: no updates from there.
+    r, target, _ = _run_finish(tmp_path / "elsewhere")
+    assert r.returncode == 0 and not (target / "etc/claudeos/update-source").exists()
 
 
 def test_finish_script_names_the_claudeos_partition(tmp_path):
@@ -476,6 +490,9 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     _in_order(calls, "Invoke-ClaudeBrowserSignIn", go)
     assert (inst / "claudeos/app/claudeos/__init__.py").exists()
     assert not (inst / "claudeos/app/windows").exists() and not (inst / "claudeos/app/.venv").exists()
+    # Updates come from the folder setup runs from only when it's on Windows' own drive (C:); this pretend PC's
+    # setup isn't (Get-UpdateSource, finish.sh).
+    assert not (inst / "claudeos/update-source").exists()
     for script in ("guard.sh", "network.sh", "finish.sh"):
         assert b"\r" not in (inst / "claudeos" / script).read_bytes()
     grub = (inst / "boot/grub/grub.cfg").read_text()

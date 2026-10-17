@@ -22,6 +22,7 @@ class FakePlatform(Platform):
                    "paired": [{"address": "AA:BB:CC:DD:EE:01", "name": "AirPods Pro"}]}
         self.headset = True
         self.size = (1920, 1080)
+        self.update_result: dict[str, Any] = {"ok": True, "changed": 3}
 
     def _c(self, name: str, *a: Any) -> None:
         self.calls.append((name, a))
@@ -138,6 +139,13 @@ class FakePlatform(Platform):
     def set_timezone(self, zone: str) -> str:
         self._c("set_timezone", zone)
         return f"Time zone set to {zone}."
+
+    def update_app(self) -> dict[str, Any]:
+        self._c("update_app")
+        return dict(self.update_result)
+
+    def update_done(self) -> None:
+        self._c("update_done")
 
     def system_info(self) -> dict[str, Any]:
         return {"time": "Friday 16 October 2026, 09:00", "timezone": "Asia/Singapore", "uptime_hours": 1.0,

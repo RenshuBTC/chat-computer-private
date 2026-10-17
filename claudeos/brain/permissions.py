@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 if TYPE_CHECKING:
     from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
+from .. import update
 from ..answers import classify_answer
 from ..config import Paths
 from ..journal import Journal
@@ -391,6 +392,10 @@ def classify_bash(command: str) -> tuple[str, str]:
     return "ask", "changes something"
 
 
+PROGRAM_DENIED = ("Those are ClaudeOS's own program files, so they can't be changed from here. To update ClaudeOS, "
+                  "the person puts a new version in the folder they ran ClaudeOS Setup from, on Windows; ClaudeOS "
+                  "offers it when it starts.")
+
 SENSITIVE_READ = [re.compile(p) for p in (
     r"/\.ssh(/|$)", r"/\.gnupg(/|$)", r"/\.engine/\.credentials\.json$", r"/etc/shadow", r"/etc/sudoers",
     r"/\.local/share/keyrings(/|$)", r"/\.mozilla/.*/(logins|key\d)\.", r"/\.config/(google-chrome|chromium)/.*/Login Data",
@@ -433,6 +438,29 @@ def holds_private(paths: Paths, path: str) -> bool:
     """Whether the folder `path` contains one of ClaudeOS's private folders (the home folder does)."""
     r = _resolve(path)
     return any(_inside(d, r) for d in private_dirs(paths))
+
+
+def program_dirs() -> list[str]:
+    """ClaudeOS's own program: where it's installed, and the folder on Windows' drive it updates itself from
+    (update.py). Claude can read them but not change them: what's in them is ClaudeOS, this gate included."""
+    out = [os.path.realpath(update.APP.parent)]
+    src = update.source_dir()
+    if src is not None:
+        out.append(os.path.realpath(src))
+    return out
+
+
+def is_program(path: str) -> bool:
+    """Whether `path` is part of ClaudeOS's own program (program_dirs). Windows' drive doesn't mind the case of
+    names, so neither does this."""
+    p = _resolve(path).casefold()
+    return any(_inside(p, d.casefold()) for d in program_dirs())
+
+
+def holds_program(path: str) -> bool:
+    """Whether the folder `path` contains ClaudeOS's own program."""
+    r = _resolve(path).casefold()
+    return any(_inside(d.casefold(), r) for d in program_dirs())
 
 
 def _shell_expand(arg: str, cwd: str) -> list[str]:
@@ -499,6 +527,39 @@ def _reaches_private(paths: Paths, command: str, cwds: set[str] | frozenset[str]
                 dirs = [p for w in roots for p in _shell_expand(w, cwd) if os.path.isdir(p)] if roots else [cwd]
                 if any(holds_private(paths, d) for d in dirs):
                     return True
+    return False
+
+
+def _changes_update_source(paths: Paths, command: str) -> bool:
+    """Whether a command (one that changes something) names the folder ClaudeOS updates itself from, or a file
+    in it, or moves into it. ClaudeOS's installed program is root's, so commands can't change it anyway; this
+    folder is on Windows' drive, which commands can write to."""
+    src = update.source_dir()
+    if src is None:
+        return False
+    real = os.path.realpath(src).casefold()
+    low = command.casefold()
+    # Named in the command as it's written (also inside quotes, or with its spaces escaped), as itself or a path
+    # in it: not a folder whose name only starts the same.
+    for form in {str(src).casefold(), real, real.replace(" ", "\\ ")}:
+        if re.search(re.escape(form) + r"""(?=$|[/\s'"\\;|&)<>])""", low):
+            return True
+    segs = _split_segments(command)
+    if not segs:
+        return False
+    inside = lambda p: _inside(_resolve(p).casefold(), real)  # noqa: E731
+    for start in (os.path.expanduser("~"), str(paths.root)):
+        cwd = start
+        for seg in segs:
+            name, args = os.path.basename(seg[0]), seg[1:]
+            if name in ("cd", "pushd"):
+                targets = _shell_expand(args[0] if args else "~", cwd)
+                if any(inside(t) for t in targets):
+                    return True
+                cwd = targets[0]
+                continue
+            if any(inside(p) for w in _positional(args, set()) for p in _shell_expand(w, cwd)):
+                return True
     return False
 
 
@@ -629,9 +690,9 @@ class PermissionGate:
                 return self._deny("No file was named.")
             path = _resolve(raw)
             why = self._path_denied(path)
-            if why or _inside(path, "/opt/claudeos"):
+            if why or is_program(path):
                 self._note("deny", tool, inp)
-                return self._deny(why or "ClaudeOS's own program files can't be edited from here.")
+                return self._deny(why or PROGRAM_DENIED)
             if _runs_code(path):
                 ok, said = await self._ask(f"Can I change {os.path.basename(path)}? Your computer runs what's in it.",
                                            self._key(tool, inp))
@@ -648,6 +709,8 @@ class PermissionGate:
             verdict, why = classify_bash(cmd)
             if verdict != "deny" and _reaches_private(self.paths, cmd, self._cwds):
                 verdict, why = "deny", "That would read ClaudeOS's private sign-in files, so ClaudeOS blocks it."
+            if verdict == "ask" and _changes_update_source(self.paths, cmd):
+                verdict, why = "deny", PROGRAM_DENIED
             if verdict == "deny":
                 self._note("deny", tool, inp)
                 return self._deny(why)

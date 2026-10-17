@@ -17,7 +17,7 @@
 #
 # Verbs (per ARCHITECTURE.md): status, boot-windows-next, boot-macos-next, boot-default, mount-windows,
 # apt-install, apt-remove, system-update, bt-import-windows-keys,
-# set-timezone, wipe-install-secrets.
+# set-timezone, wipe-install-secrets, update-app, update-done, update-undo.
 # On a PC ClaudeOS runs on Ubuntu next to Windows; on an Apple silicon Mac on Fedora Asahi Remix next to
 # macOS, where the start-up volume is chosen with asahi-bless and packages come from dnf.
 
@@ -31,7 +31,16 @@ export LC_ALL=C
 # The test harness invokes the helper directly and sets it to a shim dir.
 export PATH="${CLAUDEOS_ROOT_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
 
-WINDOWS_MOUNT=/mnt/windows
+# Where Windows' drive is mounted. (CLAUDEOS_TEST_WINDOWS_MOUNT: test only, dropped by sudo like the others.)
+WINDOWS_MOUNT="${CLAUDEOS_TEST_WINDOWS_MOUNT:-/mnt/windows}"
+# Updating ClaudeOS from the folder on Windows' drive ClaudeOS Setup ran from (see "Updating ClaudeOS" below).
+# (CLAUDEOS_TEST_*: test only.)
+APP_ROOT="${CLAUDEOS_TEST_APP_ROOT:-/opt/claudeos}"
+UPDATE_SOURCE_FILE="${CLAUDEOS_TEST_UPDATE_SOURCE:-/etc/claudeos/update-source}"
+UPDATE_PENDING="${CLAUDEOS_TEST_UPDATE_PENDING:-/var/lib/claudeos/update-pending}"
+# Written by install-claudeos.sh once ClaudeOS is fully installed. Until then the first start's finisher runs
+# the install again as root, and that runs ClaudeOS's own code: so no update before.
+BASE_INSTALLED="${CLAUDEOS_TEST_BASE_INSTALLED:-/var/lib/claudeos/base-installed}"
 # ClaudeOS's own BitLocker recovery password for Windows' drive, from ClaudeOS Setup (root, 0600).
 # CLAUDEOS_TEST_BITLOCKER_KEY is a TEST-ONLY override, dropped by sudo like CLAUDEOS_ROOT_PATH.
 BITLOCKER_KEY_FILE="${CLAUDEOS_TEST_BITLOCKER_KEY:-/etc/claudeos/bitlocker-recovery-key}"
@@ -517,6 +526,111 @@ verb_wipe_install_secrets() {
 }
 
 # ---------------------------------------------------------------------------
+# Updating ClaudeOS.
+#
+# ClaudeOS Setup records at install time which folder on Windows' drive it ran from (UPDATE_SOURCE_FILE,
+# written by finish.sh: root's, so ClaudeOS can't point updates anywhere else). A newer ClaudeOS put in that
+# folder replaces only what runs as the person: the claudeos/ package and linux/session/. Never anything root
+# runs (this helper, the Bluetooth importer, the system's settings): those change only when ClaudeOS is
+# installed again. Before anything is replaced the new files are checked: plain files and folders only (no
+# links that could lead elsewhere), no Python start-up hooks (sitecustomize, usercustomize, .pth files), and
+# the same Python packages as now (requirements-linux.txt). The version before stays in app.prev:
+# update-undo puts it back (the session does that by itself when a new version keeps failing to start while
+# UPDATE_PENDING says it is new), and update-done marks a new version as good.
+# ---------------------------------------------------------------------------
+
+UPDATE_PARTS=(claudeos linux/session)
+
+# update_source — the recorded folder, checked, as a real path on Windows' drive. Prints an error JSON (and
+# fails) if there is none or it isn't ClaudeOS.
+update_source() {
+  local rel="" real mnt
+  [ -r "$UPDATE_SOURCE_FILE" ] || die "ClaudeOS Setup recorded no folder on Windows' drive to update from"
+  IFS= read -r rel < "$UPDATE_SOURCE_FILE" || true
+  rel=${rel%$'\r'}
+  if [ -z "$rel" ] || [[ "$rel" == /* ]] || [[ "/$rel/" == */../* ]] || [[ "/$rel/" == */./* ]] \
+     || [[ "$rel" =~ [[:cntrl:]] ]]; then
+    die "the folder recorded for updates isn't usable"
+  fi
+  if ! mountpoint -q "$WINDOWS_MOUNT"; then do_mount_windows >/dev/null; fi
+  mnt=$(realpath -e -- "$WINDOWS_MOUNT" 2>/dev/null) || die "Windows' drive isn't there"
+  real=$(realpath -e -- "$mnt/$rel" 2>/dev/null) || die "the ClaudeOS folder on Windows' drive isn't there"
+  case "$real" in "$mnt"/*) ;; *) die "the folder recorded for updates isn't on Windows' drive" ;; esac
+  if [ ! -f "$real/claudeos/__init__.py" ] || [ ! -f "$real/requirements-linux.txt" ]; then
+    die "the folder recorded for updates doesn't hold ClaudeOS"
+  fi
+  printf '%s' "$real"
+}
+
+# not_plain DIR — the first thing under DIR that mustn't be in an update (a link or other special file, or a
+# Python start-up hook), if any.
+not_plain() {
+  find "$1" \( ! -type f ! -type d \) -o -name sitecustomize.py -o -name usercustomize.py -o -name '*.pth' 2>/dev/null \
+    | head -n1
+}
+
+verb_update_app() {
+  local src app="$APP_ROOT/app" next="$APP_ROOT/app.next" prev="$APP_ROOT/app.prev" part bad changed=0 f
+  [ -f "$BASE_INSTALLED" ] || die "ClaudeOS hasn't finished installing yet"
+  src=$(update_source) || { printf '%s\n' "$src"; exit 1; }
+  [ -d "$app/claudeos" ] || die "ClaudeOS isn't installed where it should be"
+  if ! cmp -s -- "$src/requirements-linux.txt" "$app/requirements-linux.txt"; then
+    die "this version needs other Python packages, so it has to be installed with ClaudeOS Setup"
+  fi
+  for part in "${UPDATE_PARTS[@]}"; do
+    [ -d "$src/$part" ] || die "the new version has no $part"
+    bad=$(not_plain "$src/$part")
+    [ -z "$bad" ] || die "the new version has something an update can't bring: ${bad#"$src"/}"
+  done
+  rm -rf -- "$next"
+  cp -a -- "$app" "$next" || { rm -rf -- "$next"; die "couldn't copy the installed version"; }
+  for part in "${UPDATE_PARTS[@]}"; do
+    rm -rf -- "${next:?}/$part"
+    mkdir -p -- "$(dirname -- "$next/$part")"
+    if ! tar -C "$src" --exclude=__pycache__ --exclude='*.pyc' -cf - -- "$part" \
+         | tar -C "$next" --no-same-owner --no-same-permissions -xf -; then
+      rm -rf -- "$next"; die "couldn't copy the new version"
+    fi
+    # Checked again where it landed: the folder on Windows' drive could have changed in between.
+    bad=$(not_plain "$next/$part")
+    if [ -n "$bad" ]; then rm -rf -- "$next"; die "the new version changed while it was copied"; fi
+    chown -R 0:0 -- "$next/$part" || { rm -rf -- "$next"; die "couldn't make the new version root's"; }
+    find "$next/$part" -type d -exec chmod 0755 {} +
+    find "$next/$part" -type f -exec chmod 0644 {} +
+    while IFS= read -r -d '' f; do
+      [ "$(head -c2 -- "$f")" = '#!' ] && chmod 0755 -- "$f"
+    done < <(find "$next/$part" -type f -print0)
+    changed=$(( changed + $(diff -rq -x __pycache__ -- "$app/$part" "$next/$part" 2>/dev/null | wc -l) ))
+  done
+  if [ "$changed" -eq 0 ]; then
+    rm -rf -- "$next"
+    emit_json ok=true changed=0 note="already up to date"
+    return 0
+  fi
+  rm -rf -- "$prev"
+  if ! mv -- "$app" "$prev"; then rm -rf -- "$next"; die "couldn't set the installed version aside"; fi
+  if ! mv -- "$next" "$app"; then mv -- "$prev" "$app"; die "couldn't put the new version in place"; fi
+  mkdir -p -- "$(dirname -- "$UPDATE_PENDING")"
+  date +%s > "$UPDATE_PENDING"
+  emit_json ok=true changed="$changed"
+}
+
+verb_update_done() {
+  rm -f -- "$UPDATE_PENDING"
+  emit_json ok=true
+}
+
+verb_update_undo() {
+  local app="$APP_ROOT/app" prev="$APP_ROOT/app.prev" failed="$APP_ROOT/app.failed"
+  [ -d "$prev/claudeos" ] || die "there is no earlier version to go back to"
+  rm -rf -- "$failed"
+  mv -- "$app" "$failed" || die "couldn't set this version aside"
+  if ! mv -- "$prev" "$app"; then mv -- "$failed" "$app"; die "couldn't put the earlier version back"; fi
+  rm -f -- "$UPDATE_PENDING"
+  emit_json ok=true
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch.
 # ---------------------------------------------------------------------------
 
@@ -542,5 +656,8 @@ case "$verb" in
   bt-import-windows-keys) [ "$#" -eq 0 ] || die "bt-import-windows-keys takes no args"; verb_bt_import_windows_keys ;;
   set-timezone)           verb_set_timezone "$@" ;;
   wipe-install-secrets)   [ "$#" -eq 0 ] || die "wipe-install-secrets takes no args"; verb_wipe_install_secrets ;;
+  update-app)             [ "$#" -eq 0 ] || die "update-app takes no args"; verb_update_app ;;
+  update-done)            [ "$#" -eq 0 ] || die "update-done takes no args"; verb_update_done ;;
+  update-undo)            [ "$#" -eq 0 ] || die "update-undo takes no args"; verb_update_undo ;;
   *)                      die "unknown verb: $verb" ;;
 esac

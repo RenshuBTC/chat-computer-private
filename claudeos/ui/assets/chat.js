@@ -64,6 +64,7 @@
     user: function (id, text, final) {
       liveText.textContent = "";
       body.classList.remove("hearing");
+      body.classList.remove("typing");
       var u = users[id];
       if (!u) { u = users[id] = el("you", text); log.appendChild(u); trim(); scheduleFit(); }
       else { u.textContent = text; refitAll(); }
@@ -73,6 +74,23 @@
       liveText.textContent = text || "";
       body.classList.toggle("hearing", !!text);
       if (shorter) refitAll(); else scheduleFit();
+    },
+    // What's being typed on the keyboard. Unlike what's heard, no pulsing dot: an animation has the whole page
+    // redrawn many times a second, which made typing slow on a big screen drawn by the processor. `stamp`
+    // comes back once the letters are on the screen (two frames later), so ClaudeOS can log how long that took.
+    typing: function (text, stamp) {
+      var shorter = (text || "").length < liveText.textContent.length;
+      liveText.textContent = text || "";
+      body.classList.remove("hearing");
+      body.classList.toggle("typing", !!text);
+      if (shorter) refitAll(); else scheduleFit();
+      if (stamp != null) {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            try { window.webkit.messageHandlers.claudeos.postMessage(JSON.stringify({ type: "painted", t: stamp })); } catch (e) {}
+          });
+        });
+      }
     },
     ai: function (id, delta) {
       var m = ensureAI(id);

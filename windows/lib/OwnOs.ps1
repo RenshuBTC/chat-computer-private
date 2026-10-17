@@ -216,10 +216,18 @@ function Save-PcParts {
 
 # ------------------------------------------------------------------ what the person reads
 function Write-ApproveKeySteps {
+    param([string]$Maker)
     Write-Line 'In the PC''s setup screen (names differ a little between makers; these are the usual ones):'
-    Write-Line '  1. If there is an "Advanced Mode" (often the F7 key), switch to it.'
-    Write-Line '  2. Find "Secure Boot". It is usually under Boot, or under Security.'
-    Write-Line '  3. If there is a "Secure Boot Mode" setting, set it to Custom. Then open "Key Management".'
+    Write-Line '  1. If it opens in a simple view, switch to the advanced one (click "Advanced Mode"). Don''t press'
+    Write-Line '     keys you don''t know there: on some boards a single key loads the default settings.'
+    if ($Maker -match '(?i)gigabyte') {
+        Write-Line '  2. Open the Boot tab, then "Secure Boot".'
+        Write-Line '  3. Set "Secure Boot Mode" to Custom. Then open "Expert Key Management".'
+    } else {
+        Write-Line '  2. Find "Secure Boot". It is usually under Boot, or under Security.'
+        Write-Line '  3. If there is a "Secure Boot Mode" setting, set it to Custom. Then open "Key Management"'
+        Write-Line '     (on some boards "Expert Key Management").'
+    }
     Write-Line '  4. Choose "Authorized Signatures (db)", then "Append".'
     Write-Line '     Only Append: "Update", "Set", "Delete" or "Clear" would replace or remove Microsoft''s keys, which'
     Write-Line '     Windows needs.'
@@ -227,6 +235,7 @@ function Write-ApproveKeySteps {
     Write-Line '     answer No). Pick the drive it lists, then the folders EFI and claudeos-own, then ClaudeOS.cer.'
     Write-Line '  6. If it asks what kind of file it is, choose "Public Key Certificate". Confirm with Yes.'
     Write-Line '  7. Choose Save & Exit (Save Changes and Reset). The PC restarts into ClaudeOS''s own system.'
+    Write-Line 'Leave "Secure Boot Mode" on Custom afterwards: switching back to Standard puts only the factory keys back.'
     Write-Line 'If a step isn''t there, leave without saving: Windows starts as before, and you can choose to turn'
     Write-Line 'Secure Boot off instead. If Windows starts instead of ClaudeOS after step 7, double-click'
     Write-Line '"ClaudeOS Own System" again: it sees the key is approved and restarts straight into ClaudeOS.'
@@ -235,9 +244,15 @@ function Write-ApproveKeySteps {
 }
 
 function Write-SecureBootOffSteps {
+    param([string]$Maker)
     Write-Line 'In the PC''s setup screen (names differ a little between makers; these are the usual ones):'
-    Write-Line '  1. If there is an "Advanced Mode" (often the F7 key), switch to it.'
-    Write-Line '  2. Find "Secure Boot". It is usually under Boot, or under Security.'
+    Write-Line '  1. If it opens in a simple view, switch to the advanced one (click "Advanced Mode"). Don''t press'
+    Write-Line '     keys you don''t know there: on some boards a single key loads the default settings.'
+    if ($Maker -match '(?i)gigabyte') {
+        Write-Line '  2. Open the Boot tab, then "Secure Boot".'
+    } else {
+        Write-Line '  2. Find "Secure Boot". It is usually under Boot, or under Security.'
+    }
     Write-Line '  3. Set Secure Boot to Disabled. (On ASUS boards: set "OS Type" to "Other OS".)'
     Write-Line '  4. Choose Save & Exit (Save Changes and Reset). The PC restarts into ClaudeOS''s own system.'
     Write-Line 'To turn Secure Boot on again later, change the same setting back. If Windows starts instead of'
@@ -350,8 +365,10 @@ function Start-OwnSystem {
             Write-Warn 'BitLocker could not be paused, so Windows may ask for its recovery key once after the change.'
         }
     }
+    $maker = ''
+    try { $maker = [string](Get-Prop (Get-CimInstance -ClassName Win32_BaseBoard -ErrorAction Stop | Select-Object -First 1) 'Manufacturer') } catch { $null = $_ }
     Write-Line ''
-    if ($pick -eq 0) { Write-ApproveKeySteps } else { Write-SecureBootOffSteps }
+    if ($pick -eq 0) { Write-ApproveKeySteps -Maker $maker } else { Write-SecureBootOffSteps -Maker $maker }
     Write-Line ''
     Write-Line 'Take a photo of these steps: the setup screen comes next, and this window won''t be there.'
     if ($NoRestart) { return }

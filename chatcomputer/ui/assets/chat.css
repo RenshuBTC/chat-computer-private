@@ -50,20 +50,17 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* Empty screen: the word logo in the middle and, under it, what a first program prints: hello, world, in lower case
-   with its comma, as in Kernighan's C tutorial and his book with Ritchie, and in the mono font, as a program
-   prints it. */
+/* Empty screen: just the word logo, in the middle. */
 #welcome { margin: 0; text-align: center; }
 #wordmark {
   font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0;
 }
-#hello { font-family: var(--mono); margin: 0.75em 0 0; }
 body.has-log #welcome { display: none; }
 
-/* Something open (body.content): the conversation shrinks to two lines just above the message box (your latest
-   message and Chat Computer's latest), and
-   the page Claude opened is laid over the space above it, in a rounded frame like the sidebars' (the window places
-   it inside #frame: chat.js reports where). Older messages are still there, above, cut off. */
+/* Something open (body.content): the conversation shrinks to just your latest message and Chat Computer's latest,
+   in full, above the message box, and the page Claude opened is laid over the space above them, in a rounded frame
+   like the sidebars' (the window places it inside #frame: chat.js reports where). Older messages are still there,
+   above, cut off. */
 #frame { display: none; position: fixed; border: 2px solid var(--bubble); border-radius: 1.1rem; }
 body.content #frame { display: block; }
 body.content #welcome { display: none; }
@@ -79,36 +76,20 @@ body.panel.content #column {
   --side-gap: max(2.85rem, (100vw - var(--left, 0px) - var(--panel, 0px) - var(--co-column, 30rem)) / 2);
 }
 body.panel.content #box, body.panel.content #wake { width: min(var(--co-column, 30rem), 100% - 5.7rem); }
-/* There, each message takes one line, so the page gets the room: "… more" shows the rest of one (and the page
-   makes room for it), "less" puts it back. */
+/* There, the two messages are closer together, each in full, however many lines it takes (the page above makes
+   room; past six-tenths of the screen they scroll, showing the end). What you're saying shows the same way. */
 body.content #log { gap: 0.4rem; }
 body.content #log > .off-strip { display: none; }
 body.content .you { padding: 0.1rem 0.75rem; }
-body.content #log > * { position: relative; }
-body.content #log > :not(.open) {
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden;
-}
-body.content #log > .cut:not(.open) { cursor: pointer; }
-body.content #log > .open { padding-right: 3.5rem; }
-body.content .you.open { padding-right: 4.25rem; }
-.more {
-  display: none; position: absolute; top: 0; right: 0; margin: 0; padding: 0 0 0 0.6em; border: 0;
-  background: var(--ground); font: inherit; color: var(--ink); cursor: pointer;
-}
-.more .w { text-decoration: underline; }
-body.content .cut > .more, body.content .open > .more { display: block; }
-body.content .you > .more { top: 0.1rem; right: 0.75rem; background: var(--bubble); }
-/* What you're saying while something is open: its last line. */
-body.content.hearing #live { display: flex; flex-direction: column; justify-content: flex-end; max-height: calc(1.5em + 0.2rem); overflow: hidden; }
-#live-in { flex: none; }
 body.content #live { padding: 0.1rem 0.75rem; margin-top: 0.4rem; }
 
 /* The message box, as in the Claude app: a rounded box the width of the conversation at the bottom of the
    screen; it grows with what's typed (up to a few lines, then scrolls). Enter sends, Shift+Enter starts a new
-   line; the return arrow shows once there's something to send. Nothing else: Chat Computer is the conversation (and
-   "/" to search this computer). Asleep, a line above it says how to wake Chat Computer. */
+   line; so does the round button at its right, as ChatGPT's: an arrow up, grey while there's nothing to send,
+   black once there is. Nothing else: Chat Computer is the conversation (and "/" to search this computer).
+   Asleep, a line above it says how to wake Chat Computer. */
 #composer {
-  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); bottom: 0;
+  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); bottom: 0; z-index: 6;
   padding: 0.5rem 0 0.75rem; background: var(--ground);
 }
 #box, #wake { width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto; }
@@ -116,24 +97,32 @@ body.content #live { padding: 0.1rem 0.75rem; margin-top: 0.4rem; }
   position: relative; border: 2px solid var(--bubble); border-radius: 1.1rem; background: var(--ground);
   padding: 0.6rem 0.7rem 0.6rem 1rem;
 }
-#row { display: flex; align-items: flex-end; gap: 0.5rem; }
+#row { position: relative; display: flex; align-items: flex-end; gap: 0.5rem; }
+/* The empty box's hint, where typing starts: "Chat Computer anything", dimmed (the one grey text on the screen).
+   It goes with the first thing typed, and while "/" searches. */
+#hint {
+  position: absolute; left: 0; top: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  line-height: 1.5; color: #9A9A9A; pointer-events: none;
+}
+body.typed #hint, body.searching #hint { display: none; }
 #input {
+  position: relative; z-index: 1;                 /* over the hint, so the cursor shows in front of it */
   flex: 1; min-width: 0; height: 1.5em; max-height: 40vh; margin: 0; padding: 0;
   border: 0; outline: 0; resize: none; overflow-y: auto; scrollbar-width: none;
   font: inherit; line-height: 1.5; color: var(--ink); background: transparent; caret-color: var(--ink);
 }
 #send {
-  flex: none; width: 1.5em; height: 1.5em; margin: 0; padding: 0; border: 0; background: none; color: var(--ink);
-  visibility: hidden;
+  flex: none; display: flex; align-items: center; justify-content: center; width: 1.5em; height: 1.5em;
+  margin: 0; padding: 0; border: 0; border-radius: 50%; background: #9A9A9A; color: var(--ground); cursor: default;
 }
-body.drafting #send { visibility: visible; }
+body.drafting #send { background: var(--ink); cursor: pointer; }
 svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-#send svg { display: block; width: 100%; height: 100%; }
+#send svg { display: block; width: 62%; height: 62%; stroke-width: 2.6; }
 #wake { display: none; margin-bottom: 0.5rem; text-align: center; font-size: 0.8rem; line-height: 1.4; }
 body.sleeping #wake, body.resting #wake { display: block; }
 /* "/" first in the message box: it searches this computer. What matches shows in a list above the box (as a
-   search box's suggestions): the arrow keys choose, Enter or a click opens it between the sidebars, and the last
-   line asks Claude instead. */
+   search box's suggestions), in front of everything, even what's open: the arrow keys choose, Enter or a click
+   opens it between the sidebars, and the last line asks Claude instead. */
 #search-icon { display: none; flex: none; width: 1.2em; height: 1.5em; }
 body.searching #search-icon { display: block; }
 #results {
@@ -264,7 +253,7 @@ body.sheet-busy #sheet-ok { visibility: hidden; }
    leave a narrow margin with just their switch; the conversation's leaves the page room down to its switch. Only
    where the sidebars fit (body.panel). */
 .toggle {
-  position: fixed; z-index: 5; display: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.15rem;
+  position: fixed; z-index: 7; display: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.15rem;
   border: 0; border-radius: 0.4rem; background: none; color: var(--ink); cursor: pointer;
 }
 .toggle svg { display: block; width: 100%; height: 100%; }

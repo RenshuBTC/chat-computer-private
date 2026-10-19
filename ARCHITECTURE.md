@@ -409,16 +409,18 @@ retrying with backoff, then starts listening.
   `~/ChatComputer/web`) is laid over the space the page leaves for it ("hole", reported by chat.js): between the two
   sidebar cards, above the latest exchange and the message box, inset in a rounded frame. F1 makes it fill the
   window and back (`toggle_expand`); Escape closes it (`close_content`) unless the message box has text. While
-  it's open the conversation shrinks to a strip (`--strip-h`) of two lines: your latest message and Chat
-  Computer's latest (while you speak: its latest and what you're saying), a line each (`-webkit-line-clamp`); notes
-  and older messages between them don't show there (`.off-strip`). "… more" shows one in full (the strip grows to
-  60% and the frame shrinks) and "less" puts it back; with nothing said yet the strip is empty and the frame
-  reaches the message box. The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
+  it's open the conversation shrinks to a strip (`--strip-h`) of two messages: your latest and Chat Computer's
+  latest (while you speak: its latest and what you're saying), each in full, however many lines (up to 60% of
+  the screen; past that the strip scrolls, showing the end); notes and older messages between them don't show
+  there (`.off-strip`). With nothing said yet the strip is empty and the frame reaches the message box. While "/"
+  searches, its list (`#results`) is in front: the frame ends above it, since the window lays the content layer
+  over the page (in the browser demo, which draws what's open in the page itself, `CO.openInPage`, the list just
+  overlaps it). The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
   moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
-  through) is on top. With nothing said yet the page shows the word logo (`#wordmark`: Atkinson Hyperlegible Next
-  at 800) and, in the mono font, `hello, world`, lower case with its comma as in Kernighan's C tutorial and
-  K&R. No buttons beyond the sidebars' items and the panels' switches: settings, the microphone (sound tool,
-  `input`) and the model are changed by asking.
+  through) is on top. With nothing said yet the page shows just the word logo (`#wordmark`: Atkinson Hyperlegible
+  Next at 800); the empty message box shows `#hint`, "Chat Computer anything", dimmed (gone once something is
+  typed, `body.typed`), and the cursor is in the box from the start. No buttons beyond the sidebars' items and
+  the panels' switches: settings, the microphone (sound tool, `input`) and the model are changed by asking.
 * The panels' switches (`.toggle` in chat.html): Messages' at the top left, What's done's at the top right, the
   conversation's at the bottom right while something is open; each icon is the screen with its panel marked,
   filled while it shows. Off, a sidebar leaves a 3.45 rem margin (`--rail`) with its switch; the conversation's

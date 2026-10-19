@@ -1,7 +1,8 @@
 """The screen's layout with both sidebars: Messages at the left (newest first, pins, opening one) and What's done at
-the right, as rounded cards; something opened (a website) between them, in a frame above the latest exchange and
-the message box; the panels' switches (the sidebars off and on, the conversation under the page off, and typing
-bringing it back); F1 makes it fill the screen and back; Escape closes it.
+the right, as rounded cards; something opened (a website) between them, in a frame above the latest exchange (both
+messages in full) and the message box; "/" searching, its list in front (the page ends above it); the panels'
+switches (the sidebars off and on, the conversation under the page off, and typing bringing it back); F1 makes it
+fill the screen and back; Escape closes it.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, clicks and presses keys with xdotool, prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1920x1080x24" python tests/screen_layout_check.py [shot-prefix]
@@ -83,8 +84,7 @@ STATE_JS = """(function () {
   }); }
   var yous = document.querySelectorAll('#log .you'), lastYou = yous[yous.length - 1].getBoundingClientRect();
   var youEl = yous[yous.length - 1], aiEl = document.querySelector('#log > .ai:last-child');
-  function more(e) { var b = e && e.querySelector(':scope > .more'); if (!b) return null; var r = b.getBoundingClientRect();
-    return {text: b.textContent, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), shown: getComputedStyle(b).display !== 'none'}; }
+  var res = document.getElementById('results').getBoundingClientRect();
   var line = parseFloat(getComputedStyle(document.body).lineHeight);
   function toggle(k) { var e = document.getElementById('toggle-' + k), r = e.getBoundingClientRect();
     return {x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), pressed: e.getAttribute('aria-pressed'),
@@ -100,7 +100,9 @@ STATE_JS = """(function () {
     radius: getComputedStyle(document.getElementById('messages')).borderTopLeftRadius,
     pinned: items('messages-pinned'), list: items('messages-list'), view: [innerWidth, innerHeight],
     line: line, you_h: youEl.getBoundingClientRect().height, ai_h: aiEl.getBoundingClientRect().height,
-    you_more: more(youEl), ai_more: more(aiEl), ai_open: aiEl.classList.contains('open'),
+    ai_bottom: aiEl.getBoundingClientRect().bottom, more: document.querySelectorAll('.more').length,
+    searching: document.body.classList.contains('searching'), results: [res.left, res.top, res.right, res.bottom],
+    hint: getComputedStyle(document.getElementById('hint')).display !== 'none' ? document.getElementById('hint').textContent : null,
     strip_h: document.getElementById('column').getBoundingClientRect().height});
 })()"""
 
@@ -170,19 +172,23 @@ def step_open() -> None:
 def step_content() -> None:
     out["events"] = [e for e in events]
     asyncio.run_coroutine_threadsafe(screen.show_url(site.as_uri()), loop)
-    later(2500, lambda: (shot("content"), read("content", step_more)))
+    later(2500, lambda: (shot("content"), read("content", step_slash)))
 
 
-def step_more() -> None:
-    m = out["content"]["ai_more"]
-    act([["mousemove", "--window", wid(), str(m["x"]), str(m["y"])], ["click", "1"]],
-        lambda: (shot("more"), read("more", step_less)))
+def step_slash() -> None:
+    """ "/" with the page open: two files found (as the controller would send them), listed in front."""
+    found = json.dumps([{"name": "notes.txt", "path": "/home/notes.txt", "kind": "document", "where": "~/Documents",
+                         "when": "Today"}, {"name": "Budget.xlsx", "path": "/home/Budget.xlsx", "kind": "spreadsheet",
+                                            "where": "~/Documents", "when": "Oct 2"}])
+
+    def results() -> None:
+        screen.chat.evaluate_javascript(f"CO.searchResults(1, '', {found}, '')", -1, None, None, None, None, None)
+        later(600, lambda: (shot("slash"), read("slash", step_unslash)))
+    act([["windowfocus", "--sync", wid()], ["type", "/"]], results, wait_ms=700)
 
 
-def step_less() -> None:
-    m = out["more"]["ai_more"]
-    act([["mousemove", "--window", wid(), str(m["x"]), str(m["y"])], ["click", "1"]],
-        lambda: read("less", step_sides_off))
+def step_unslash() -> None:
+    act([["key", "Escape"]], lambda: read("unslashed", step_sides_off))
 
 
 def click(name: str, then_name: str, then, *toggles: str) -> None:
@@ -195,7 +201,7 @@ def click(name: str, then_name: str, then, *toggles: str) -> None:
 
 
 def step_sides_off() -> None:
-    click("less", "sides_off", step_bottom_off, "left", "right")
+    click("unslashed", "sides_off", step_bottom_off, "left", "right")
 
 
 def step_bottom_off() -> None:

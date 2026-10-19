@@ -144,10 +144,11 @@ def test_the_message_box_works_like_the_claude_apps():
     res = json.loads(r.stdout.strip().splitlines()[-1])
     assert "timeout" not in res, res
     empty, typed, two, sent = res["empty"], res["typed"], res["two_lines"], res["sent"]
-    assert empty["focused"] and empty["value"] == "" and empty["send"] == "hidden"
-    # Nothing under the box (or above it while awake): its menu, from a right-click, has the rest.
-    assert empty["words"] == "" and empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
-    assert typed["value"] == "hi there" and typed["drafting"] and typed["send"] == "visible"
+    # The cursor in the box from the start; the round send button grey until there's something to send, then black.
+    assert empty["focused"] and empty["value"] == "" and empty["send"] == "rgb(154, 154, 154)"
+    # Nothing under the box (or above it while awake), and in it just the dimmed hint.
+    assert empty["words"] == "Chat Computer anything" and empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
+    assert typed["value"] == "hi there" and typed["drafting"] and typed["send"] == "rgb(0, 0, 0)"
     assert two["value"] == "hi there\nsecond line" and two["box_h"] > typed["box_h"] + 20
     assert res["sent_text"] == ["hi there\nsecond line"]
     assert sent["value"] == "" and sent["box_h"] == typed["box_h"] and not sent["drafting"]
@@ -196,15 +197,16 @@ def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
     assert abs(f[0] - (start["messages"][2] + gap)) <= 1 and abs(f[2] - (start["done"][0] - gap)) <= 1
     assert abs(f[1] - gap) <= 1 and f[0] < v[0] and f[1] < v[1] and v[2] < f[2] and v[3] < f[3]
     assert f[3] < content["column"][1] <= content["last_you"][1] and content["last_you"][3] <= content["column"][3]
-    # There, your latest message and Claude's latest reply take a line each, with "… more" for the rest...
-    for state in (content, res["less"]):
-        assert state["you_h"] < 2 * state["line"] and state["ai_h"] < 1.5 * state["line"] and not state["ai_open"]
-        assert state["you_more"]["text"] == state["ai_more"]["text"] == "\u2026 more" and state["ai_more"]["shown"]
-    # ...which shows all of it: the page above makes room (its frame ends higher), and "less" puts it back.
-    more = res["more"]
-    assert more["ai_open"] and more["ai_h"] > 5 * more["line"] and more["ai_more"]["text"] == "less"
-    assert more["frame"][3] < content["frame"][3] - 4 * more["line"] and more["strip_h"] > content["strip_h"]
-    assert res["less"]["frame"] == content["frame"] and res["less"]["content_view"] == v
+    # There, your latest message and Claude's latest reply both show in full (no "\u2026 more"): the page above leaves
+    # them the room. The empty box says, dimmed, "Chat Computer anything".
+    assert content["more"] == 0 and content["ai_h"] > 5 * content["line"] and content["ai_bottom"] <= content["column"][3] + 1
+    assert content["hint"] == "Chat Computer anything"
+    # "/": its list shows in front. The window lays the page over this one, so the page ends above the list; it
+    # comes back down when the search ends.
+    sl = res["slash"]
+    assert sl["searching"] and sl["results"][3] - sl["results"][1] > 2 * sl["line"] and sl["hint"] is None
+    assert sl["content_view"][3] <= sl["results"][1] and sl["content_view"][1] == v[1]
+    assert not res["unslashed"]["searching"] and res["unslashed"]["content_view"] == v
     # The panels' switches, each in its corner (the conversation's only while something is open), filled in while
     # their panel shows. Both sidebars off: the page spreads into their room, leaving a narrow margin with each switch.
     tl, tr, tb = (content["toggles"][k] for k in ("left", "right", "bottom"))

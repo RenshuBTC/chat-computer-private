@@ -7,6 +7,7 @@
 <meta name="description" content="Chat Computer is Claude running a whole computer: you talk, type or touch, and it does things for you. Try its screen here, in your browser.">
 <link rel="stylesheet" href="demo/theme.css">
 <link rel="stylesheet" href="demo/chat.css">
+<link rel="stylesheet" href="demo/demo.css">
 </head>
 <body>
 <aside id="messages" class="side" aria-label="Messages">
@@ -24,7 +25,6 @@
 <main id="column" aria-live="polite">
   <section id="welcome">
     <h1 id="wordmark">Chat Computer</h1>
-    <p id="hello">hello, world</p>
   </section>
   <section id="log"></section>
   <div id="live" class="you live"><div id="live-in"><span id="live-text"></span><span id="caret"></span></div></div>
@@ -52,9 +52,10 @@
     <div id="results" role="listbox" aria-label="On this computer"></div>
     <div id="row">
       <svg id="search-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg>
+      <span id="hint" aria-hidden="true">Chat Computer anything</span>
       <textarea id="input" rows="1" aria-label="Message"></textarea>
       <button id="send" type="button" tabindex="-1" aria-label="Send">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5v6a3 3 0 0 1-3 3H6"/><path d="M10 10l-4 4 4 4"/></svg>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg>
       </button>
     </div>
   </div>

@@ -118,10 +118,10 @@
   // message and Claude's latest words) just above the message box, and the window lays the page over the space
   // above: this says where that space is ("hole"), whenever it changes.
   var lastHole = "";
-  // Above the message box, two lines: your latest message and Chat Computer's latest, in the order they came (while
-  // you're speaking: Chat Computer's latest, then what you're saying). Nothing else shows there: notes and older
-  // messages between or after them are left out (.off-strip), and the earlier conversation is above, scrolled out
-  // of sight. One cut short gets "… more", which shows all of it (the page above makes room), and then "less".
+  // Above the message box, your latest message and Chat Computer's latest, each in full, in the order they came
+  // (while you're speaking: Chat Computer's latest, then what you're saying). Nothing else shows there: notes and
+  // older messages between or after them are left out (.off-strip), and the earlier conversation is above,
+  // scrolled out of sight.
   function latest() {
     var yous = log.querySelectorAll(":scope > .you"), ais = log.querySelectorAll(":scope > .ai");
     var you = yous.length ? yous[yous.length - 1] : null, a = ais.length ? ais[ais.length - 1] : null;
@@ -134,41 +134,19 @@
     });
     return rows;
   }
-  function markMore(items) {
-    items.forEach(function (n) {
-      var b = n.querySelector(":scope > .more"), open = n.classList.contains("open");
-      if (b) b.remove();                     // not counted when measuring
-      var cut = !open && n.scrollHeight > n.clientHeight + 1;
-      n.classList.toggle("cut", cut);
-      if (!cut && !open) return;
-      if (!b) { b = document.createElement("button"); b.type = "button"; b.className = "more"; b.tabIndex = -1; }
-      b.innerHTML = open ? '<span class="w">less</span>' : '\u2026 <span class="w">more</span>';
-      n.appendChild(b);
-    });
-  }
   function fitStrip() {
     if (mode !== "content") return;
-    var rem = remPx(), items = latest();
-    markMore(items);
-    var first = items[0], open = items.some(function (n) { return n.classList.contains("open"); });
-    var h = first || body.classList.contains("hearing") ? 2.5 * rem : 0;     // nothing said yet: the page reaches down
+    var rem = remPx(), items = latest(), hearing = body.classList.contains("hearing");
+    var first = items[0], h = first || hearing ? 2.5 * rem : 0;     // nothing said yet: the page reaches down
     if (first) {
-      var end = body.classList.contains("hearing") ? live : items[items.length - 1];
+      var end = hearing ? live : items[items.length - 1];
       h = Math.max(h, end.getBoundingClientRect().bottom - first.getBoundingClientRect().top + 0.25 * rem);
     }
-    rootStyle.setProperty("--strip-h", Math.round(Math.min(h, window.innerHeight * (open ? 0.6 : 0.3))) + "px");
+    // Both in full, however many lines; past six-tenths of the screen they scroll, showing the end.
+    rootStyle.setProperty("--strip-h", Math.round(Math.min(h, window.innerHeight * 0.6)) + "px");
     column.scrollTop = column.scrollHeight;
-    if (open && first && h > window.innerHeight * 0.6)          // all of it doesn't fit: from its start
-      column.scrollTop += first.getBoundingClientRect().top - column.getBoundingClientRect().top;
     reportHole();
   }
-  log.addEventListener("click", function (e) {
-    if (mode !== "content" || !e.target.closest) return;
-    var n = e.target.closest("#log > *");
-    if (!n || (!e.target.closest(".more") && (!n.classList.contains("cut") || e.target.closest("a")))) return;
-    n.classList.toggle("open");
-    fitStrip();
-  });
   // The frame: between the sidebars' cards (with the same space as around them), from their top down to the
   // latest exchange. The page goes inside it, clear of its rounded corners.
   function reportHole() {
@@ -181,6 +159,10 @@
     var right = panels ? window.innerWidth - Math.round(parseFloat(cs.paddingRight) || 0) - half : window.innerWidth - gap;
     var bottom = panels && !shown.bottom ? Math.round($("toggle-bottom").getBoundingClientRect().top) - gap
       : Math.round(column.getBoundingClientRect().top - 0.6 * rem);
+    // "/" searching: its list goes in front of what's open. Where the window lays what's open over this page (on
+    // a Chat Computer), nothing of the page can show over it, so it ends above the list instead.
+    var list = $("results").getBoundingClientRect();
+    if (searching && !openInPage && list.height) bottom = Math.min(bottom, Math.round(list.top) - gap);
     var f = $("frame").style;
     f.left = left + "px"; f.top = gap + "px";
     f.width = Math.max(0, right - left) + "px"; f.height = Math.max(0, bottom - gap) + "px";
@@ -195,12 +177,15 @@
     if (m === "content") fitStrip();
     else {
       lastHole = "";
-      Array.prototype.forEach.call(log.querySelectorAll(":scope > .open, :scope > .cut, :scope > .off-strip"), function (n) {
-        n.classList.remove("open", "cut", "off-strip");
+      Array.prototype.forEach.call(log.querySelectorAll(":scope > .off-strip"), function (n) {
+        n.classList.remove("off-strip");
       });
       jumpDown();
     }
   }
+  // Whether what's open is drawn in this same page (the browser demo's frame), so the page's own "/" list can go
+  // over it; on a Chat Computer the window lays it over the page.
+  var openInPage = false;
 
   // ------------------------------------------------------------------ the message box
   // A real text box, like the Claude app's: the cursor, arrow keys, selecting, pasting and input methods all work as
@@ -211,6 +196,7 @@
     input.style.height = "auto";
     input.style.height = input.scrollHeight + "px";
     body.classList.toggle("drafting", input.value.trim() !== "");
+    body.classList.toggle("typed", input.value !== "");          // the hint goes
     checkSearch();
     keysToPage();
   }
@@ -572,6 +558,7 @@
       searching = on;
       body.classList.toggle("searching", on);
       if (!on) { results = []; $("results").textContent = ""; clearTimeout(searchTimer); }
+      reportHole();
     }
     if (!on) return;
     var q = input.value.slice(1).trim();
@@ -628,6 +615,7 @@
     list.appendChild(ask);
     markResult(0);
   }
+  new ResizeObserver(function () { reportHole(); }).observe($("results"));    // the list grows: what's open makes room
   function markResult(i) {
     var rows = $("results").querySelectorAll(".res");
     resSel = Math.max(0, Math.min(i, rows.length - 1));
@@ -699,8 +687,6 @@
   function selectNode(n) {
     var sel = window.getSelection(), r = document.createRange();
     r.selectNodeContents(n);
-    var more = n.querySelector ? n.querySelector(":scope > .more") : null;      // not "… more" with it
-    if (more) r.setEndBefore(more);
     sel.removeAllRanges();
     sel.addRange(r);
   }
@@ -875,6 +861,8 @@
     searchResults: function (n, q, items, note) { if (searching && n === searchN) drawResults(q || "", items, note); },
     // "content" while something Claude opened is showing between the sidebars, "chat" otherwise.
     mode: function (m) { setMode(m === "content" ? "content" : "chat"); },
+    // What's open is drawn in this page (the browser demo), not laid over it by the window.
+    openInPage: function (on) { openInPage = !!on; lastHole = ""; reportHole(); },
     history: function (items) {
       log.innerHTML = "";
       (items || []).forEach(function (it) { log.appendChild(message(it)); });
@@ -927,8 +915,7 @@
       drawMessages();
     },
     accountForm: function (f) { showForm(f || null); },
-    // The person's name and the model: nothing on this page shows them (the empty screen is the word logo and
-    // "hello, world").
+    // The person's name and the model: nothing on this page shows them (the empty screen is just the word logo).
     settings: function () {},
     // Which panels show: {left, right, bottom} (Chat Computer keeps the choice; see "the panels' switches").
     panels: function (s) {

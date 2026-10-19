@@ -80,12 +80,14 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
   PC's own speakers Chat Computer doesn't greet you out loud.
 * **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, and
-  a message box at the bottom. Before anything is said, it shows just its name, **Chat Computer**, and under
-  it the classic `hello, world`. There are no menus: everything is done by asking. Scroll up (a finger, the
-  mouse wheel, Page Up) to read back.
+  a message box at the bottom. Before anything is said, it shows just its name, **Chat Computer**, and the
+  empty message box says, dimmed, "Chat Computer anything", with the cursor already blinking in it. The round
+  button at its right sends: grey while there's nothing to send, black once there is. There are no menus:
+  everything is done by asking. Scroll up (a finger, the mouse wheel, Page Up) to read back.
 * **What Claude opens** (a website, a video, a document) goes between the two panels, in a rounded frame,
-  above your latest message and Claude's latest reply (a line each; tap "… more" for the rest). F1 makes it
-  fill the screen and F1 again puts it back; Escape, or a swipe up from the bottom edge, closes it.
+  above your latest message and Claude's latest reply, both in full. F1 makes it fill the screen and F1 again
+  puts it back; Escape, or a swipe up from the bottom edge, closes it. Typing "/" to search shows its list in
+  front of it.
 * **Messages.** On a wide screen, a panel at the left gathers what's sent to you from every account you
   connect, newest first: Gmail, Outlook and Hotmail, iCloud Mail, other email, Telegram, WhatsApp, X,
   Instagram, Facebook, TikTok and LinkedIn. Tap one to read it between the panels (an email shows as the
@@ -420,13 +422,30 @@ You won't need it day to day; it's only for repairs.
 ## The demo
 
 **https://chatcomputer.ai** is Chat Computer's screen in a browser, for trying it before
-installing it. It opens playing Louie Zong's "hello world" from YouTube between the panels, the way a website
-shows on Chat Computer; pause it in the player. It is the same page and code as on a Chat Computer
-(`docs/index.html`: `scripts/build_demo.py` copies them, and `tests/test_demo.py` checks the copy is current),
-with `docs/demo/host.js` standing in for the computer: Claude's answers to a few things are written in advance,
-the messages and files are made up, and nothing typed there leaves the browser (from elsewhere come only
-YouTube's player and, when asked for, a map from OpenStreetMap). Chat Computer is an independent project, not
-made by Anthropic.
+installing it. It opens playing Louie Zong's "hello world" from YouTube between the panels (from 0:03, where
+its sound starts), the way a website shows on Chat Computer, and What's done lists it; pause it in the player,
+and when it ends the conversation has the middle again. Browsers let a page play sound by itself only after a
+click, tap or key on the site (or, in Chrome, once you've often played its videos with sound), so the video
+starts with sound where the browser allows it and otherwise without, and the first click, tap or key turns the
+sound on. It is the same page and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py`
+copies them, and `tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the
+computer: Claude's answers to a few things are written in advance, the messages and files are made up, and
+nothing typed there leaves the browser (from elsewhere come only YouTube's player and, when asked for, a map
+from OpenStreetMap), unless you use one of the two buttons at the right of the message box
+(`docs/demo/demo.css`):
+
+* **Connect Claude**: paste an API key from Claude Console, and Claude (Sonnet 5.5, as on a Chat Computer)
+  answers for real and does things on the screen: plays YouTube videos, shows maps and pages it writes, opens
+  the made-up messages and files, makes timers, searches the web. Requests go from the browser straight to
+  Anthropic's API; the key stays in that browser, and what's used is billed to it. A Claude Pro or Max plan
+  can't be used: Anthropic doesn't allow other developers' apps to sign in with one. (Sign in with ChatGPT
+  would let visitors use a ChatGPT plan, but OpenAI offers it to hosted sites only after approval.)
+* **Connect AirPods**: you talk and the answers are read out. The browser listens through whatever microphone
+  the device uses (your AirPods, once they're paired in its Bluetooth settings: a website can't pair them) and
+  turns speech into text itself (Chrome does it on Google's servers). Chrome, Edge and Safari can; Firefox
+  can't.
+
+Chat Computer is an independent project, not made by Anthropic.
 
 GitHub Pages serves it from the `docs` folder (Settings, Pages, branch `main`, folder `/docs`; a private
 repository needs GitHub Pro) at chatcomputer.ai: `docs/CNAME` names the domain, and its DNS points at GitHub

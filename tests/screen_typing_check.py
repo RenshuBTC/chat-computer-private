@@ -42,7 +42,7 @@ PAGE_JS = """(function(){var i=document.getElementById('input'), b=document.getE
   var c=document.getElementById('composer').getBoundingClientRect(), r=b.getBoundingClientRect();
   return JSON.stringify({value: i.value, focused: document.activeElement === i,
     drafting: document.body.classList.contains('drafting'),
-    send: getComputedStyle(document.getElementById('send')).visibility,
+    send: getComputedStyle(document.getElementById('send')).backgroundColor,
     box_h: r.height, box_bottom: window.innerHeight - r.bottom,
     below_box: c.bottom - r.bottom, above_box: r.top - c.top,
     wake: getComputedStyle(document.getElementById('wake')).display,

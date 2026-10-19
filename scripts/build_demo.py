@@ -1,5 +1,6 @@
 """Builds the browser demo in docs/ (for GitHub Pages): Chat Computer's own conversation screen, the same page and code
-as on a Chat Computer (chatcomputer/ui/assets), with docs/demo/host.js standing in for the computer behind it.
+as on a Chat Computer (chatcomputer/ui/assets), with docs/demo/host.js standing in for the computer behind it (and
+docs/demo/demo.css for the demo's own two buttons, Connect Claude and Connect AirPods).
 
 Run it after changing the screen:  python scripts/build_demo.py
 tests/test_demo.py checks that docs/ is what this makes, so the demo is always Chat Computer's real screen.
@@ -34,7 +35,8 @@ def index_html() -> str:
         ("<title>Chat Computer</title>",
          f'<title>{TITLE}</title>\n<meta name="description" content="{DESCRIPTION}">'),
         ('<link rel="stylesheet" href="theme.css">', '<link rel="stylesheet" href="demo/theme.css">'),
-        ('<link rel="stylesheet" href="chat.css">', '<link rel="stylesheet" href="demo/chat.css">'),
+        ('<link rel="stylesheet" href="chat.css">',
+         '<link rel="stylesheet" href="demo/chat.css">\n<link rel="stylesheet" href="demo/demo.css">'),
         ('<script src="md.js"></script>', '<script src="demo/host.js"></script>\n<script src="demo/md.js"></script>'),
         ('<script src="chat.js"></script>', '<script src="demo/chat.js"></script>'),
     ]
@@ -46,7 +48,7 @@ def index_html() -> str:
 
 
 def files() -> dict[Path, bytes]:
-    """Everything this makes in docs/ (host.js is written by hand, not made here)."""
+    """Everything this makes in docs/ (host.js and demo.css are written by hand, not made here)."""
     out: dict[Path, bytes] = {DOCS / "index.html": index_html().encode("utf-8"),
                               DEMO / "doc.css": DOC_CSS.lstrip().encode("utf-8")}
     for name in COPIED:
@@ -64,8 +66,9 @@ def main() -> None:
         if not path.exists() or path.read_bytes() != data:
             path.write_bytes(data)
             print("wrote", path.relative_to(ROOT))
-    if not (DEMO / "host.js").exists():
-        raise SystemExit("docs/demo/host.js is missing")
+    for name in ("host.js", "demo.css"):
+        if not (DEMO / name).exists():
+            raise SystemExit(f"docs/demo/{name} is missing")
 
 
 if __name__ == "__main__":

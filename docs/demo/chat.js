@@ -33,7 +33,12 @@
   // read back through earlier ones).
   function trim() {
     if (stick) while (log.children.length > MAX_ITEMS) log.removeChild(log.firstChild);
+    marks();
+  }
+  // Whether anything is said, and whether you've said anything (the word logo shows until you have).
+  function marks() {
     body.classList.toggle("has-log", log.children.length > 0);
+    body.classList.toggle("has-you", !!log.querySelector(":scope > .you"));
   }
   function el(cls, text) {
     var d = document.createElement("div");
@@ -901,7 +906,7 @@
       var first = firstTs();
       if (day && first && new Date(first * 1000).toDateString() !== day) frag.appendChild(el("day", dayLabel(first)));
       log.insertBefore(frag, log.firstChild);
-      body.classList.toggle("has-log", log.children.length > 0);
+      marks();
       var target = findMessage(id, ts);
       if (target) reveal(target);
     },
@@ -935,8 +940,8 @@
       drawMessages();
     },
     accountForm: function (f) { showForm(f || null); },
-    // The person's name and the model: nothing on this page shows them (before anything is said, the conversation
-    // is Chat Computer's "hello, world").
+    // The person's name and the model: nothing on this page shows them (before anything is said, the word logo and
+    // Chat Computer's "hello, world").
     settings: function () {},
     // Which panels show: {left, right, bottom} (Chat Computer keeps the choice; see "the panels' switches").
     panels: function (s) {

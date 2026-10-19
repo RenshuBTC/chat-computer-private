@@ -64,11 +64,11 @@ def test_the_demo_works_in_a_browser():
     res = json.loads(lines[-1])
     assert "failed" not in res, res["failed"]
     assert res["errors"] == []
-    # It opens with Chat Computer's first words, hello, world (nothing open, no sheet, no button to press), the
-    # cursor in the box under the dimmed hint, and the two buttons at the box's right.
+    # It opens on the word logo and Chat Computer's first words, hello, world (nothing open, no sheet, no button to
+    # press), the cursor in the box under the dimmed hint, and the two buttons at the box's right.
     first = res["opening"]
     assert not first["content"] and not first["sheet"] and first["view"] is None and first["toggles"] == ["true", "true", False]
-    assert first["first_ai"] == first["last"] == "hello, world" and first["said"] == 1
+    assert first["first_ai"] == first["last"] == "hello, world" and first["said"] == 1 and first["logo"] == "Chat Computer"
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
     assert first["typing_in"] == "input" and first["hint"] == "Chat computer anything or type \u201c/\u201d to search"
     assert first["hint_weight"] == "400" and first["tools"] == ["Connect Claude", "Connect AirPods"] and first["tools_at"] == "box"
@@ -76,9 +76,12 @@ def test_the_demo_works_in_a_browser():
     assert res["sides_off"]["sides"] == [False, False] and res["sides_off"]["toggles"][:2] == ["false", "false"]
     assert json.loads(res["kept"]) == {"left": False, "right": False, "bottom": True}
     assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["first_ai"] == "hello, world"
+    assert res["sides_on"]["logo"] == "Chat Computer"
     # Asked for music: soft piano made by the browser, between the sidebars, and What's done says so.
     music = res["music"]
     assert music["content"] and music["last"] == "Playing some calm piano." and music["done"][-1] == "Played some calm piano"
+    # The first thing said took the word logo away; hello, world is still the conversation's first message.
+    assert music["logo"] is None and music["first_ai"] == "hello, world"
     # Above the message box: what was asked and Chat Computer's answer, in full.
     assert music["strip"] == ["play some piano music", "Playing some calm piano."]
     f, v = music["frame"], music["view"]
@@ -127,6 +130,6 @@ def test_the_demo_works_in_a_browser():
     assert res["talk_sheet"]["sheet"] and res["talk_sheet"]["sheet_title"] == "Talk through your AirPods"
     # A phone: no sidebars and no switches; the buttons are inside the box, and it works.
     phone = res["phone_opening"]
-    assert phone["first_ai"] == "hello, world" and phone["toggles"] == [False, False, False]
+    assert phone["first_ai"] == "hello, world" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False, False]
     assert phone["tools_at"] == "row"
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")

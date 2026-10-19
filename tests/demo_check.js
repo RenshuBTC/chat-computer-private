@@ -1,5 +1,6 @@
 // The browser demo (docs/index.html: Chat Computer's own screen, with docs/demo/host.js standing in for the computer),
-// tried in Chromium with Playwright: it opens with Chat Computer saying hello, world, the cursor in the box; the
+// tried in Chromium with Playwright: it opens on the word logo, Chat Computer saying hello, world, the cursor in
+// the box (the logo goes with the first message sent); the
 // panels' switches; music (made by the browser); "/" lists the files in front of what's open; F1 and Escape; a
 // message opened; Connect Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
 // when it ends, with a stand-in for YouTube's player; answers streamed); Connect AirPods' sheet; a phone.
@@ -68,6 +69,7 @@ async function state(page) {
       results: Array.from(document.querySelectorAll("#results .res-text")).map((e) => e.textContent),
       panel: document.body.classList.contains("panel"),
       first_ai: ((document.querySelector("#log > .ai") || {}).textContent || "").trim(),
+      logo: shown("welcome") ? document.getElementById("wordmark").textContent : null,
       said: document.querySelectorAll("#log > .you, #log > .ai").length,
       sides: [shown("messages"), shown("done")],
       composer: shown("composer"),
@@ -133,7 +135,7 @@ async function ask(page, text) {
     return route.fulfill({ status: 200, contentType: "text/event-stream", body: turn });
   });
   await page.goto(page_url);
-  // It opens with Chat Computer's first words, hello, world; the cursor in the box under the dimmed hint.
+  // It opens on the word logo and Chat Computer's first words, hello, world; the cursor in the box, under the hint.
   await page.waitForFunction(() => document.getElementById("demo-tools"));
   await page.waitForTimeout(500);
   out.opening = await state(page);

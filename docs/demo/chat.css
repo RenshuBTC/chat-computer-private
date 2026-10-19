@@ -49,6 +49,17 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
+/* Before you've said anything: the word logo in the middle of the screen, with Chat Computer's first words,
+   hello, world, as its message above the box. The logo goes with the first thing you say. */
+#welcome {
+  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); top: 0; bottom: var(--composer-h, 5rem);
+  display: flex; align-items: center; justify-content: center; margin: 0; pointer-events: none;
+}
+#wordmark {
+  font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0;
+}
+body.has-you #welcome, body.content #welcome { display: none; }
+
 /* Something open (body.content): the conversation shrinks to just your latest message and Chat Computer's latest,
    in full, above the message box, and the page Claude opened is laid over the space above them, in a rounded frame
    like the sidebars' (the window places it inside #frame: chat.js reports where). Older messages are still there,

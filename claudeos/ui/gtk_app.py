@@ -40,6 +40,9 @@ from .render import ASSETS, FONTS, NATIVE, asset  # noqa: E402
 
 log = logging.getLogger("claudeos.ui")
 WORLD = "claudeos"
+SOURCE_WORLD = "claudeos-sources"   # where sources.js reads WhatsApp's and the social sites' pages
+SAFARI_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+             "Version/18.5 Safari/605.1.15")
 
 
 def private_file_uri(paths: Paths, uri: str) -> bool:
@@ -52,14 +55,12 @@ def private_file_uri(paths: Paths, uri: str) -> bool:
 
 MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86AudioMedia", "XF86AudioNext",
               "XF86AudioPrev", "XF86AudioStop"}
-# The captions over websites look like the conversation (theme.css): black on white in Atkinson Hyperlegible
-# Next, your words on the right. register_fonts() makes ClaudeOS's own copy of the font known to GTK.
+# The window behind the pages is white, as the conversation is (theme.css). register_fonts() makes ClaudeOS's own copy
+# of its font known to GTK, for AirTouch's keyboard.
 COLORS = {"bg": "#FFFFFF", "ink": "#000000"}
 
 CSS_TEMPLATE = """
-window, stack {{ background-color: {bg}; }}
-.captions {{ background-color: {bg}; border: 1px solid {ink}; padding: {pad_v}px {pad_h}px; }}
-.cap-you, .cap-ai {{ color: {ink}; font-family: "Atkinson Hyperlegible Next", sans-serif; font-size: {size}px; }}
+window {{ background-color: {bg}; }}
 """
 SET_VARS_JS = ("(function(){{var r=document.documentElement.style;r.setProperty('--co-size','{size}px');"
                "r.setProperty('--co-column','{column}px');}})()")
@@ -67,8 +68,8 @@ _fonts_registered: bool | None = None
 
 
 def register_fonts(folder: Path = FONTS) -> bool:
-    """Make ClaudeOS's fonts (assets/fonts) known to GTK in this process, for the captions. Pages load them
-    themselves (theme.css). Without them the captions use the system's standard font. Call it before the
+    """Make ClaudeOS's fonts (assets/fonts) known to GTK in this process, for AirTouch's keyboard. Pages load them
+    themselves (theme.css). Without them the keyboard uses the system's standard font. Call it before the
     window is built."""
     global _fonts_registered
     if _fonts_registered is None:
@@ -79,7 +80,8 @@ def register_fonts(folder: Path = FONTS) -> bool:
             fc.FcConfigAppFontAddDir.restype = ctypes.c_int
             _fonts_registered = bool(fc.FcConfigAppFontAddDir(None, os.fsencode(folder)))
         except Exception:
-            log.warning("ClaudeOS's fonts couldn't be given to GTK; captions use the standard font", exc_info=True)
+            log.warning("ClaudeOS's fonts couldn't be given to GTK; AirTouch's keyboard uses the standard font",
+                        exc_info=True)
             _fonts_registered = False
     return _fonts_registered
 
@@ -90,6 +92,10 @@ def register_fonts(folder: Path = FONTS) -> bool:
 CPU_RENDERING = {"WEBKIT_SKIA_ENABLE_CPU_RENDERING": "1", "WEBKIT_DISABLE_DMABUF_RENDERER": "1", "CLAUDEOS_GPU": "0"}
 SPEED_TICK_S = 0.25          # how often the window's thread checks it isn't kept busy (see _watch_speed)
 DONE_SHOWN = 300             # What's done: how many the page holds (the rest are in done.jsonl)
+MESSAGES_SHOWN = 400         # Messages: how many the page holds (the rest are in messages.db)
+# What the conversation page tells the controller (Controller.page_event).
+PAGE_EVENTS = {"pin", "open_message", "add_account", "account", "account_cancel",
+               "search", "open_file"}           # "/" in the message box: searching this computer, opening a file
 
 
 def use_cpu_rendering(environ: Any = os.environ) -> bool:
@@ -161,9 +167,24 @@ class GtkScreen(Screen):
         self.load_error: str | None = None
         self.view_seq = 0
         self._done_entries: list[dict[str, Any]] = []     # What's done, as the page shows it (to rebuild the page)
-        self.cap_ai_text = ""
-        self.cap_tid: str | None = None
-        self.cap_hide_id = 0
+        self._msg_items: dict[str, dict[str, Any]] = {}   # Messages, likewise
+        self._msg_accounts: list[dict[str, Any]] = []
+        # Where the page leaves room for what Claude opens (x, y, width, height in the window), as the conversation
+        # page last said; whether a video is full screen; whether there's something typed in the message box.
+        self._hole: tuple[int, int, int, int] | None = None
+        self._fullscreen = False
+        self._expanded = False          # F1: what's open fills the whole screen
+        self._drafting = False
+        # WhatsApp and the social sites Messages reads, each in a browser view of its own (claudeos/messages/web.py),
+        # kept in a window that's never on the screen until one is shown between the sidebars.
+        self.sources: dict[str, Any] = {}
+        self._src_windows: dict[str, Any] = {}
+        self._src_ctx: Any = None
+        self.shown: Any = None          # the view between the sidebars (the content view, or a source's)
+        self.on_source: Callable[[str, dict[str, Any]], None] = lambda provider, msg: None
+        self._redirects: dict[str, Callable[[str], None]] = {}   # address prefix -> what to do instead of loading
+        self.on_closed: Callable[[], None] = lambda: None     # what was open was closed (Escape, or Close)
+        self.on_page_event: Callable[[dict[str, Any]], None] = lambda msg: None   # see PAGE_EVENTS
         self.windowed = windowed
         self.layout: Layout | None = None
         self._view_w = 0
@@ -215,21 +236,11 @@ class GtkScreen(Screen):
         self.win.connect("destroy", lambda *_: Gtk.main_quit())
         self.win.connect("key-press-event", self._on_key)
 
-        self.stack = Gtk.Stack()
-        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self.stack.set_transition_duration(220)
-        # AirTouch's dots and keyboard, drawn over everything (it lets clicks through to what's under it).
+        # The conversation page fills the window: the sidebars, the conversation and the message box. A page Claude
+        # opens (a website, a video, a document) is a second view laid over it, in the space between the sidebars and
+        # above the message box that the page leaves for it (see _place). AirTouch's dots and keyboard are drawn over
+        # everything.
         self.root = Gtk.Overlay()
-        self.root.add(self.stack)
-        self.pointer_area = Gtk.DrawingArea()
-        self.air = AirLayer(self.pointer_area, lambda: self.layout.font_px if self.layout else 24.0)
-        self.pointer_area.connect("draw", self.air.draw)
-        self.root.add_overlay(self.pointer_area)
-        self.root.set_overlay_pass_through(self.pointer_area, True)
-        # "Pass through" alone isn't enough: the layer has a window of its own, which took every click (a mouse's,
-        # and AirTouch's taps) before the conversation or the website under it saw it (GTK 3.24). With no area
-        # that takes input, they all go through.
-        self.pointer_area.connect("realize", lambda w: w.input_shape_combine_region(cairo.Region()))
         self.win.add(self.root)
 
         # --- conversation layer
@@ -245,7 +256,7 @@ class GtkScreen(Screen):
         # Not set_allow_file_access_from_file_urls: pages opened from files can still show other files (fonts,
         # pictures), but scripts can't read them, so a page can't read ClaudeOS's sign-in.
         self.chat.load_uri((ASSETS / "chat.html").as_uri())
-        self.stack.add_named(self.chat, "chat")
+        self.root.add(self.chat)
 
         # --- content layer: a real browser with a persistent profile
         web = self.paths.web
@@ -284,42 +295,30 @@ class GtkScreen(Screen):
         self.content.connect("permission-request", lambda v, req: (req.deny(), True)[1])
         self.content.connect("close", lambda v: self._show_chat())
         self.content.connect("web-process-terminated", self._on_renderer_stopped)
+        # A video made full screen covers everything, as in any browser; Escape brings it back between the sidebars.
+        self.content.connect("enter-fullscreen", lambda v: self._fullscreen_changed(True))
+        self.content.connect("leave-fullscreen", lambda v: self._fullscreen_changed(False))
+        self._add_in_hole(self.content)
 
-        overlay = Gtk.Overlay()
-        overlay.add(self.content)
-        self.cap_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self.cap_box.get_style_context().add_class("captions")
-        self.cap_box.set_halign(Gtk.Align.FILL)      # width set by side margins (see _apply_layout)
-        self.cap_box.set_valign(Gtk.Align.END)
-        self.cap_you = Gtk.Label()
-        self.cap_ai = Gtk.Label()
-        for lbl, cls in ((self.cap_you, "cap-you"), (self.cap_ai, "cap-ai")):
-            lbl.set_line_wrap(True)
-            lbl.set_max_width_chars(1)
-            lbl.get_style_context().add_class(cls)
-            self.cap_box.pack_start(lbl, False, False, 0)
-        # Your words on the right, Claude's on the left, as in the conversation.
-        self.cap_you.set_xalign(1.0)
-        self.cap_you.set_justify(Gtk.Justification.RIGHT)
-        self.cap_ai.set_xalign(0.0)
-        overlay.add_overlay(self.cap_box)
-        overlay.set_overlay_pass_through(self.cap_box, True)
-        self.stack.add_named(overlay, "content")
-        self.overlay = overlay
+        self.pointer_area = Gtk.DrawingArea()
+        self.air = AirLayer(self.pointer_area, lambda: self.layout.font_px if self.layout else 24.0)
+        self.pointer_area.connect("draw", self.air.draw)
+        self.root.add_overlay(self.pointer_area)
+        self.root.set_overlay_pass_through(self.pointer_area, True)
+        # "Pass through" alone isn't enough: the layer has a window of its own, which took every click (a mouse's,
+        # and AirTouch's taps) before the conversation or the website under it saw it (GTK 3.24). With no area
+        # that takes input, they all go through.
+        self.pointer_area.connect("realize", lambda w: w.input_shape_combine_region(cairo.Region()))
 
         self._apply_layout()
         self.win.show_all()
-        self.cap_box.hide()
-        self.stack.set_visible_child_name("chat")
         self.chat.grab_focus()          # typing goes into the conversation's message box
         # Work the layout out again whenever the window or the monitor changes.
         self.win.connect("size-allocate", self._on_size_allocate)
         Gdk.Screen.get_default().connect("monitors-changed", lambda *_: self._schedule_relayout())
 
     def _load_css(self) -> None:
-        rem = self.layout.font_px if self.layout else 16
-        self.css.load_from_data(CSS_TEMPLATE.format(
-            size=round(rem, 1), pad_v=round(rem * 0.5), pad_h=round(rem * 0.75), **COLORS).encode())
+        self.css.load_from_data(CSS_TEMPLATE.format(**COLORS).encode())
 
     # ================================================================ text size and line width
     def _monitor(self) -> Any:
@@ -353,11 +352,6 @@ class GtkScreen(Screen):
             return          # the same sizes: loading the style again would only make GTK restyle the window
         self._load_css()
         self._chat_run(f"CO.layout({lay.font_px},{lay.column_px})", "layout")
-        # Captions over websites and videos: the same column, the same size.
-        side = max(0, round((self._view_w - lay.column_px) / 2))
-        self.cap_box.set_margin_start(side)
-        self.cap_box.set_margin_end(side)
-        self.cap_box.set_margin_bottom(round(lay.font_px * 1.5))
         self._apply_content_layout()
         log.info("Layout: %s", lay.describe())
 
@@ -443,7 +437,7 @@ class GtkScreen(Screen):
         if not show:
             if self.air.up:
                 self.air.hide_keyboard()
-                self.stack.set_margin_bottom(0)
+                self.chat.set_margin_bottom(0)
             return None
         w, h = self.win.get_allocated_width(), self.win.get_allocated_height()
         if w <= 1 or h <= 1:
@@ -451,7 +445,7 @@ class GtkScreen(Screen):
         x, y, aw, ah = self.air.show_keyboard(w, h)
         # Pages get the room above it, the way a tablet's do, so what's being typed into stays in view (the
         # conversation keeps its newest words at the bottom).
-        self.stack.set_margin_bottom(int(self.air.panel[3]))
+        self.chat.set_margin_bottom(int(self.air.panel[3]))
         f = (self.win.get_window().get_scale_factor() if self.win.get_window() else 1) or 1
         dx, dy = self._to_display(x, y)
         return self.air.spec((dx, dy, aw * f, ah * f))
@@ -553,13 +547,41 @@ class GtkScreen(Screen):
         if kind == "keys":
             self._speed["keys"] += [ms for ms in msg.get("ms") or [] if isinstance(ms, (int, float)) and 0 <= ms < 60_000]
             return
+        if kind == "hole":
+            # Where the conversation page leaves room for what Claude opened.
+            try:
+                self._hole = tuple(max(0, int(msg[k])) for k in ("x", "y", "w", "h"))      # type: ignore[assignment]
+            except (KeyError, TypeError, ValueError):
+                return
+            if self.mode == "content" and self.shown is not None:
+                self._place(self.shown, full=self._fullscreen or self._expanded)
+            return
+        if kind == "close_content":
+            # Close (or a tap on What's done) on the conversation page.
+            self.close_content(pause=bool(msg.get("pause", True)))
+            return
+        if kind == "expand":
+            self.toggle_expand()
+            return
+        if kind == "drafting":
+            self._drafting = bool(msg.get("on"))
+            return
+        if kind in PAGE_EVENTS:
+            # Pins, a message opened, a sign-in form filled in, "/" searching: the controller's (on its thread).
+            # A form's passwords go straight there, never to Claude, and are never logged.
+            if self.loop:
+                self.loop.call_soon_threadsafe(self.on_page_event, msg)
+            return
+        if kind != "ready":
+            return
         self.chat_ready = True
         if self._reloading:
             # The page was loaded again after its renderer stopped: put back what it showed.
             self._reloading = False
             self.chat_backlog.clear()
             last = self._replay_last
-            scripts = [last[k] for k in ("settings", "layout", "mic", "done") if k in last] + list(self._replay)
+            scripts = [last[k] for k in ("settings", "layout", "mic", "done", "messages", "mode") if k in last]
+            scripts += list(self._replay)
             scripts += [last["state"]] if "state" in last else []
         else:
             scripts, self.chat_backlog = self.chat_backlog, []
@@ -591,18 +613,235 @@ class GtkScreen(Screen):
             GLib.timeout_add(300, lambda: self.content.reload() and False)
 
     # ================================================================ content layer
-    def _show_content(self) -> None:
+    # What Claude opens (a website, a video, a document, a page it made) is shown between the two sidebars, above
+    # the latest of the conversation and the message box: the conversation page says where (a "hole" message),
+    # and the view is laid over the page there.
+    def _add_in_hole(self, view: Gtk.Widget) -> None:
+        view.set_halign(Gtk.Align.FILL)
+        view.set_valign(Gtk.Align.FILL)
+        view.set_no_show_all(True)        # shown only while it's what's open
+        self.root.add_overlay(view)
+
+    def _default_hole(self) -> tuple[int, int, int, int]:
+        """Before the page has said where: the whole width, above the message box and the latest messages."""
+        w, h = self.root.get_allocated_width(), self.root.get_allocated_height()
+        if w <= 1 or h <= 1:
+            w, h = self.win.get_default_size()
+        rem = self.layout.font_px if self.layout else 24.0
+        return 0, 0, w, max(0, int(h - 13 * rem))
+
+    def _place(self, view: Gtk.Widget, full: bool = False) -> None:
+        w, h = self.root.get_allocated_width(), self.root.get_allocated_height()
+        if w <= 1 or h <= 1:
+            w, h = self.win.get_default_size()
+        x, y, hw, hh = (0, 0, w, h) if full else (self._hole or self._default_hole())
+        view.set_margin_start(x)
+        view.set_margin_top(y)
+        view.set_margin_end(max(0, w - x - hw))
+        view.set_margin_bottom(max(0, h - y - hh))
+
+    def _fullscreen_changed(self, full: bool) -> bool:
+        self._fullscreen = full
+        self._place(self.content, full=full or self._expanded)
+        return False                      # WebKit goes on to make the video fill the view
+
+    def toggle_expand(self) -> None:
+        """F1: what's open fills the whole screen, or goes back between the sidebars."""
+        if self.mode != "content" or self.shown is None:
+            return
+        self._expanded = not self._expanded
+        self._place(self.shown, full=self._expanded or self._fullscreen)
+
+    def _show_view(self, view: Any) -> None:
+        """Puts a view between the sidebars (or over everything, after F1), in place of what was there."""
+        if self.shown is not None and self.shown is not view:
+            self._put_away(self.shown)
         self.mode = "content"
-        self.stack.set_visible_child_name("content")
-        self.content.grab_focus()
+        self.shown = view
+        self._chat_run('CO.mode("content")', "mode")
+        self._place(view, full=self._expanded or (self._fullscreen and view is self.content))
+        view.show()
+        view.grab_focus()
+
+    def _put_away(self, view: Any) -> None:
+        if view is self.content:
+            view.hide()
+        else:
+            self._source_offscreen(view)
+
+    def _show_content(self) -> None:
+        self._show_view(self.content)
 
     def _show_chat(self) -> None:
+        if self.shown is not None:
+            self._put_away(self.shown)
+        self.shown = None
         self.mode = "chat"
-        self.stack.set_visible_child_name("chat")
-        self.cap_box.hide()
+        self._expanded = False
+        self._chat_run('CO.mode("chat")', "mode")
         self.chat.grab_focus()
 
+    def close_content(self, pause: bool = True) -> None:
+        """Escape, or Close under the message box: what was open goes away (a video stops), and the conversation
+        is back. (show_conversation, Claude's, leaves music playing.)"""
+        if self.mode != "content":
+            return
+        if pause and self.shown is self.content:
+            self.content.evaluate_javascript(
+                "document.querySelectorAll('video,audio').forEach(function(m){try{m.pause()}catch(e){}}); 1",
+                -1, None, None, None, None, None)
+        self._show_chat()
+        if self.loop:
+            self.loop.call_soon_threadsafe(self.on_closed)
+
+    # ---------------------------------------------------------------- WhatsApp and social sites (Messages)
+    def _source_context(self) -> Any:
+        if self._src_ctx is None:
+            base = self.paths.sources
+            mgr = WebKit2.WebsiteDataManager(base_data_directory=str(base / "data"),
+                                             base_cache_directory=str(base / "cache"))
+            self._src_ctx = WebKit2.WebContext.new_with_website_data_manager(mgr)
+            cm = self._src_ctx.get_cookie_manager()
+            cm.set_persistent_storage(str(base / "cookies.sqlite"), WebKit2.CookiePersistentStorage.SQLITE)
+            cm.set_accept_policy(WebKit2.CookieAcceptPolicy.NO_THIRD_PARTY)
+        return self._src_ctx
+
+    def _source_view(self, provider: str) -> Any:
+        view = self.sources.get(provider)
+        if view is not None:
+            return view
+        ucm = WebKit2.UserContentManager()
+        ucm.add_script(WebKit2.UserScript.new_for_world(
+            asset("sources.js"), WebKit2.UserContentInjectedFrames.TOP_FRAME,
+            WebKit2.UserScriptInjectionTime.END, SOURCE_WORLD, None, None))
+        ucm.connect("script-message-received::claudeosSource", lambda u, r, p=provider: self._on_source_message(p, r))
+        ucm.register_script_message_handler_in_world("claudeosSource", SOURCE_WORLD)
+        view = WebKit2.WebView(web_context=self._source_context(), user_content_manager=ucm)
+        st = view.get_settings()
+        st.set_enable_javascript(True)
+        st.set_javascript_can_open_windows_automatically(False)
+        st.set_enable_developer_extras(False)
+        st.set_media_playback_requires_user_gesture(True)
+        # As Safari on a Mac: the engine is the same (WebKit), and some of these sites turn away a browser they
+        # don't know.
+        st.set_user_agent(SAFARI_UA)
+        if os.environ.get("CLAUDEOS_GPU", "1") != "1":
+            st.set_hardware_acceleration_policy(WebKit2.HardwareAccelerationPolicy.NEVER)
+        self._quiet_view(view)
+        view.connect("decide-policy", self._on_decide_policy)
+        view.connect("create", lambda v, action: None)          # no pop-up windows
+        view.connect("permission-request", lambda v, req: (req.deny(), True)[1])
+        view.set_halign(Gtk.Align.FILL)
+        view.set_valign(Gtk.Align.FILL)
+        self.sources[provider] = view
+        self._source_offscreen(view)
+        return view
+
+    def _source_offscreen(self, view: Any) -> None:
+        """Into a window that's never on the screen, the size of a laptop's, where its page goes on (WhatsApp keeps
+        its connection) and can be read."""
+        parent = view.get_parent()
+        if parent is self.root:
+            self.root.remove(view)
+        provider = next((p for p, v in self.sources.items() if v is view), "")
+        win = self._src_windows.get(provider)
+        if win is None:
+            win = self._src_windows[provider] = Gtk.OffscreenWindow()
+            win.set_default_size(1280, 900)
+            view.set_size_request(1280, 900)
+        if view.get_parent() is None:
+            win.add(view)
+        win.show_all()
+
+    def _source_to_hole(self, view: Any) -> None:
+        parent = view.get_parent()
+        if parent is not None and parent is not self.root:
+            parent.remove(view)
+        view.set_size_request(-1, -1)
+        if view.get_parent() is None:
+            self.root.add_overlay(view)
+            self.root.reorder_overlay(view, 1)       # under AirTouch's dots, which stay on top
+        view.set_no_show_all(False)
+
+    def source_open(self, provider: str, url: str, reload: bool = False) -> None:
+        """Loads a site's page in its own view (off the screen), unless it's already there."""
+        def run() -> None:
+            view = self._source_view(provider)
+            if reload or not (view.get_uri() or "").startswith(url.split("#")[0][:30]):
+                view.load_uri(url)
+        self._ui(run)
+
+    def source_show(self, provider: str, url: str | None = None, chat: str | None = None) -> None:
+        """A site's page between the sidebars: to sign in, or to read a conversation (by its address, or for
+        WhatsApp by its name)."""
+        def run() -> None:
+            view = self._source_view(provider)
+            if url and (view.get_uri() or "") != url:
+                view.load_uri(url)
+            self._source_to_hole(view)
+            self._show_view(view)
+            if chat:
+                view.evaluate_javascript(f"window.__CS && __CS.open({json.dumps(chat)})", -1, SOURCE_WORLD,
+                                         None, None, None, None)
+        self._ui(run)
+
+    def source_unload(self, provider: str) -> None:
+        """A social site read for now: its page goes (it's loaded again for the next look), unless it's showing."""
+        def run() -> None:
+            view = self.sources.get(provider)
+            if view is not None and self.shown is not view:
+                view.load_uri("about:blank")
+        self._ui(run)
+
+    def source_close(self, provider: str) -> None:
+        def run() -> None:
+            view = self.sources.get(provider)
+            if view is not None and self.shown is view:
+                self._show_chat()
+        self._ui(run)
+
+    def source_forget(self, provider: str) -> None:
+        """Signed out (the account was removed here): the site's page goes, and its sign-in with the others'
+        site data (cookies are kept per site by WebKit; the whole folder goes when no site is left)."""
+        def run() -> None:
+            view = self.sources.pop(provider, None)
+            if view is None:
+                return
+            if self.shown is view:
+                self._show_chat()
+            parent = view.get_parent()
+            if parent is not None:
+                parent.remove(view)
+            win = self._src_windows.pop(provider, None)
+            if win is not None:
+                win.destroy()
+            view.try_close()
+        self._ui(run)
+
+    def _on_source_message(self, provider: str, result: Any) -> None:
+        try:
+            val = result.get_js_value() if hasattr(result, "get_js_value") else result
+            msg = json.loads(val.to_string())
+        except Exception:
+            return
+        if isinstance(msg, dict) and self.loop:
+            self.loop.call_soon_threadsafe(self.on_source, provider, msg)
+
+    def watch_redirect(self, prefix: str, then: Callable[[str], None] | None) -> None:
+        """When a page in the content view goes to an address starting with `prefix`, it isn't loaded: `then` gets
+        the address (a sign-in's answer, like Microsoft's for Outlook). None stops watching."""
+        def run() -> None:
+            if then is None:
+                self._redirects.pop(prefix, None)
+            else:
+                self._redirects[prefix] = then
+        self._ui(run)
+
     def _info(self) -> dict[str, Any]:
+        if self.mode == "content" and self.shown is not None and self.shown is not self.content:
+            # A site Messages reads (WhatsApp, Instagram...): shown to the person, not for Claude to use.
+            provider = next((p for p, v in self.sources.items() if v is self.shown), "")
+            return {"mode": "source", "source": provider, "url": self.shown.get_uri(), "title": self.shown.get_title()}
         return {"mode": self.mode, "url": self.content.get_uri(), "title": self.content.get_title()}
 
     def _resolve_loads(self, ok: bool, error: str | None = None) -> None:
@@ -655,6 +894,13 @@ class GtkScreen(Screen):
     def _on_decide_policy(self, view: WebKit2.WebView, decision: Any, kind: Any) -> bool:
         if kind in (WebKit2.PolicyDecisionType.NAVIGATION_ACTION, WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION):
             uri = decision.get_navigation_action().get_request().get_uri() or ""
+            for prefix, then in list(self._redirects.items()):
+                if uri.startswith(prefix):
+                    decision.ignore()
+                    del self._redirects[prefix]
+                    if self.loop:
+                        self.loop.call_soon_threadsafe(then, uri)
+                    return True
             if private_file_uri(self.paths, uri):
                 log.warning("not showing a private file on screen")
                 decision.ignore()
@@ -822,34 +1068,24 @@ class GtkScreen(Screen):
     # ================================================================ conversation layer
     def user_text(self, msg_id: str, text: str, final: bool) -> None:
         self._chat_js(f"CO.user({json.dumps(msg_id)},{json.dumps(text)},{json.dumps(final)})")
-        self._caption(you=text, ai="")
 
     def partial(self, text: str) -> None:
         self._chat_js(f"CO.partial({json.dumps(text)})", "transient")
-        if text:
-            self._caption(you=text)
 
     def ai_delta(self, msg_id: str, text: str) -> None:
         def add() -> None:
             self.pending_ai[msg_id] = self.pending_ai.get(msg_id, "") + text
-            if self.cap_tid != msg_id:
-                self.cap_tid = msg_id
-                self.cap_ai_text = ""
-            self.cap_ai_text += text
             if not self.flush_scheduled:
                 self.flush_scheduled = True
                 GLib.timeout_add(40, self._flush_ai)
         self._ui(add)
 
     def _flush_ai(self) -> bool:
-        """The words that streamed in during the last 40 ms, onto the page in one go; and the captions over a
-        website, which only show there (once per flush, not once for every few letters)."""
+        """The words that streamed in during the last 40 ms, onto the page in one go."""
         self.flush_scheduled = False
         pending, self.pending_ai = self.pending_ai, {}
         for mid, txt in pending.items():
             self._chat_run(f"CO.ai({json.dumps(mid)},{json.dumps(txt)})" if txt else f"CO.aiStart({json.dumps(mid)})")
-        if self.mode == "content" and any(pending.values()) and self.cap_ai_text:
-            self._caption_now(ai=_tail(self.cap_ai_text))
         return False
 
     def ai_done(self, msg_id: str) -> None:
@@ -866,20 +1102,9 @@ class GtkScreen(Screen):
 
     def notice(self, text: str, kind: str = "info") -> None:
         self._chat_js(f"CO.notice({json.dumps(text)},{json.dumps(kind)})")
-        self._caption(ai=text)
 
     def state(self, name: str) -> None:
         self._chat_js(f"CO.state({json.dumps(name)})", "state")
-        if name == "sleeping":
-            self._caption(you="", ai="Sleeping. Say “Claude” or press an AirPod.")
-        elif name in ("listening", "resting"):
-            # Claude has finished: let the captions go soon, so they cover the page as
-            # little as possible (the words stay in the conversation).
-            def soon() -> None:
-                if self.cap_hide_id:
-                    GLib.source_remove(self.cap_hide_id)
-                self.cap_hide_id = GLib.timeout_add(2500, self._hide_captions)
-            self._ui(soon)
 
     def history(self, items: list[dict[str, Any]]) -> None:
         self._chat_js(f"CO.history({json.dumps(items)})")
@@ -887,14 +1112,19 @@ class GtkScreen(Screen):
     def mic(self, on: bool) -> None:
         self._chat_js(f"CO.mic({json.dumps(bool(on))})", "mic")
 
+    # "/" in the message box: what on this computer matches.
+    def search_results(self, n: int, query: str, items: list[dict[str, Any]], note: str = "") -> None:
+        self._chat_js(f"CO.searchResults({int(n)},{json.dumps(query)},{json.dumps(items)},{json.dumps(note)})",
+                      "transient")
+
     def apply_settings(self, text_size: int, user_name: str, model: str = "") -> None:
         # Size settings (text_size, text_scale, viewing_distance_cm, screen_inches, web_zoom) are
         # read from self.settings, the same object the controller changes.
         self._chat_js(f"CO.settings({json.dumps(user_name)},{json.dumps(model)})", "settings")
         self._ui(self._apply_layout)
 
-    # What's done, at the right of the conversation. The page is sent each new one; the whole list is kept here
-    # too, so the page can be rebuilt after its renderer stops.
+    # What's done (at the right) and Messages (at the left). The page is sent each new one; the whole lists are
+    # kept here too, so the page can be rebuilt after its renderer stops.
     def done_list(self, entries: list[dict[str, Any]]) -> None:
         def run() -> None:
             self._done_entries = list(entries)[-DONE_SHOWN:]
@@ -910,31 +1140,47 @@ class GtkScreen(Screen):
             self._chat_run(f"CO.done({json.dumps(entry)})", "transient")
         self._ui(run)
 
+    def messages_list(self, items: list[dict[str, Any]], accounts: list[dict[str, Any]] | None = None) -> None:
+        def run() -> None:
+            self._msg_items = {m["id"]: m for m in items}
+            if accounts is not None:
+                self._msg_accounts = list(accounts)
+            script = f"CO.messagesList({json.dumps(list(self._msg_items.values()))},{json.dumps(self._msg_accounts)})"
+            self._replay_last["messages"] = script
+            self._chat_run(script, "transient")
+        self._ui(run)
+
+    def message(self, item: dict[str, Any]) -> None:
+        def run() -> None:
+            self._msg_items[item["id"]] = item
+            if len(self._msg_items) > MESSAGES_SHOWN:
+                keep = sorted(self._msg_items.values(), key=lambda m: (bool(m.get("pinned")), m.get("ts", 0)))
+                self._msg_items = {m["id"]: m for m in keep[-MESSAGES_SHOWN:]}
+            self._replay_last["messages"] = (f"CO.messagesList({json.dumps(list(self._msg_items.values()))},"
+                                             f"{json.dumps(self._msg_accounts)})")
+            self._chat_run(f"CO.message({json.dumps(item)})", "transient")
+        self._ui(run)
+
+    def set_pinned(self, kind: str, item_id: str, pinned: float | None) -> None:
+        """Keeps the copy here in step with a pin made or taken off on the page (the page already shows it)."""
+        def run() -> None:
+            src = self._msg_items.get(item_id) if kind == "messages" else next(
+                (e for e in self._done_entries if e.get("id") == item_id), None)
+            if src is not None:
+                if pinned:
+                    src["pinned"] = pinned
+                else:
+                    src.pop("pinned", None)
+        self._ui(run)
+
     def earlier(self, items: list[dict[str, Any]], target_id: str | None, target_ts: float) -> None:
         self._chat_js(f"CO.earlier({json.dumps(items)},{json.dumps(target_id)},{json.dumps(target_ts)})",
                       "transient")
 
-    # captions over content
-    def _caption(self, you: str | None = None, ai: str | None = None) -> None:
-        self._ui(self._caption_now, you, ai)
-
-    def _caption_now(self, you: str | None = None, ai: str | None = None) -> None:
-        if you is not None:
-            self.cap_you.set_text(you)
-            self.cap_you.set_visible(bool(you))
-        if ai is not None:
-            self.cap_ai.set_text(ai)
-            self.cap_ai.set_visible(bool(ai))
-        show = self.mode == "content" and (self.cap_you.get_text() or self.cap_ai.get_text())
-        self.cap_box.set_visible(bool(show))
-        if self.cap_hide_id:
-            GLib.source_remove(self.cap_hide_id)
-        self.cap_hide_id = GLib.timeout_add_seconds(8, self._hide_captions)
-
-    def _hide_captions(self) -> bool:
-        self.cap_hide_id = 0
-        self.cap_box.hide()
-        return False
+    def account_form(self, form: dict[str, Any] | None) -> None:
+        """A sign-in form for a mail or Telegram account on the conversation page (None closes it). What's typed
+        in it comes back to on_account, never through Claude."""
+        self._chat_js(f"CO.accountForm({json.dumps(form)})", "transient")
 
     # ================================================================ keys
     def _on_key(self, w: Gtk.Widget, ev: Gdk.EventKey) -> bool:
@@ -947,6 +1193,15 @@ class GtkScreen(Screen):
         if ctrl and (ev.state & Gdk.ModifierType.SHIFT_MASK) and name in ("Q", "q"):
             Gtk.main_quit()
             return True
+        if name == "F1" and self.mode == "content":
+            self.toggle_expand()             # what's open fills the screen, or goes back between the sidebars
+            return True
+        if name == "Escape" and self.mode == "content" and not self._fullscreen:
+            # Escape takes away what's open. (Typed words in the message box go first; a full-screen video
+            # leaves full screen first, as anywhere.)
+            if not (self.chat.has_focus() and self._drafting):
+                self.close_content()
+                return True
         if self.mode == "chat" and not self.chat.has_focus():
             self.chat.grab_focus()      # typing goes into the conversation's message box (chat.js), whatever has focus
         # Everything else goes to the page that's showing: the conversation's message box (a real text box, so the
@@ -974,15 +1229,6 @@ class GtkScreen(Screen):
                          self._speed["late"], self._speed["worst"])
             self._speed.update(keys=[], late=0, worst=0.0, since=now)
         return True
-
-
-def _tail(text: str, n: int = 170) -> str:
-    t = " ".join(text.split())
-    if len(t) <= n:
-        return t
-    cut = t[-n:]
-    sp = cut.find(" ")
-    return "…" + (cut[sp + 1:] if 0 <= sp < 30 else cut)
 
 
 def run_app(paths: Paths, settings: Settings, controller_factory: Callable[[GtkScreen], Any], windowed: bool = False) -> int:

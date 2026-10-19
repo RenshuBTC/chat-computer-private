@@ -51,6 +51,7 @@ class Paths:
         self.done = self.root / "done.jsonl"      # What's done: what ClaudeOS did for the person (done.py)
         self.index = self.root / "index"
         self.web = self.root / "web"              # the built-in browser's logins and cache
+        self.sources = self.root / "sources"      # WhatsApp's and the social sites' sign-ins, for Messages
         self.engine = self.root / ".engine"       # Claude Code's own config for this session
         # A full Claude sign-in (from `claude auth login`), kept where Claude Code looks for it. Needed for
         # the Claude app on the phone (Remote Control); the one-year token can't do that.
@@ -113,6 +114,11 @@ class Settings:
     # Files
     windows_mount: str = "/mnt/windows"
     extra_search_roots: list[str] = field(default_factory=list)
+    # Messages (claudeos/messages): how often email is checked, and the Microsoft sign-in app for Outlook.com
+    # (its application id, from registering an app in Microsoft Entra; see README). Social sites are read from their
+    # own pages in ClaudeOS's browser, read-only.
+    mail_check_minutes: float = 2.0
+    outlook_client_id: str = ""
     # Anything else found in the file is preserved here.
     extra: dict[str, Any] = field(default_factory=dict)
 

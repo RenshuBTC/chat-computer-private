@@ -58,6 +58,7 @@ class Platform:
     def set_volume(self, percent: int | None = None, delta: int | None = None) -> str: raise NotImplementedError
     def set_mute(self, mute: bool | None) -> str: raise NotImplementedError
     def set_output(self, name_or_id: str) -> str: raise NotImplementedError
+    def set_input(self, name_or_id: str) -> str: raise NotImplementedError
     def output_is_headset(self) -> bool: raise NotImplementedError
     def input_is_bluetooth(self) -> bool: raise NotImplementedError
     # --- power

@@ -23,6 +23,7 @@ dependencies = [
   "python-pptx>=0.6.23",
   "send2trash>=1.8",
   "regipy>=4.0",
+  "telethon>=1.40",
 ]
 
 [project.scripts]

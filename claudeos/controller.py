@@ -16,14 +16,16 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
-from . import __version__, answers, logcopy, update
+from . import __version__, answers, logcopy, slash_search, update
 from .brain.agent import Brain, BrainEvents, TurnResult, friendly_error
-from .brain.permissions import PermissionGate
+from .brain.permissions import PermissionGate, is_private
 from .brain.prompt import build_system_prompt, turn_prefix
 from .config import (Paths, Settings, State, has_login, login_valid, model_label, read_token, save_login, save_token,
                      token_kind)
 from .done import History, describe as describe_done
 from .files_index import FileIndex
+from .messages import Inbox
+from .pins import Pins
 from .journal import Journal
 from .memory import Memory
 from .platform import Platform
@@ -80,6 +82,8 @@ class Controller:
         self.journal = Journal(self.paths)
         self.memory = Memory(self.paths)
         self.history = History(self.paths)          # What's done (claudeos/done.py)
+        self.pins = Pins(self.paths.root / "pins.json")     # pinned in What's done and in Messages
+        self.inbox: Inbox | None = None                 # Messages (claudeos/messages)
         # The message that asked for each turn, for What's done: turn id -> (its id on the screen, words, time).
         self.prompt_of: dict[str, tuple[str, str, float]] = {}
         self._last_prompt: tuple[str, str, float] | None = None
@@ -128,7 +132,11 @@ class Controller:
                                    model_label(s.model))
         self._show_history()
         self.screen.on_goto = lambda target, ts, before: self._spawn(self.go_back_to(target, ts, before))
+        self.screen.on_page_event = self.page_event
         self._spawn(self._show_done())
+        self.inbox = Inbox(self.paths, s, self.screen, self.pins, lambda text, kind="info": self.screen.notice(text, kind))
+        self.screen.on_source = self.inbox.web_snapshot
+        self._spawn(self.inbox.start())
 
         # Files: index Linux home + the other system's files (Windows' user folder, or on a Mac the drive
         # with the files sent from macOS) in the background.
@@ -144,8 +152,8 @@ class Controller:
             if other_files:
                 roots.append(("mac" if self.platform.name == "mac" else "windows", other_files))
             roots += [(f"extra{i}", os.path.expanduser(p)) for i, p in enumerate(s.extra_search_roots)]
-            own = (self.paths.secrets, self.paths.engine, self.paths.web, self.paths.index, self.paths.models,
-                   self.paths.logs, self.paths.undo)
+            own = (self.paths.secrets, self.paths.engine, self.paths.web, self.paths.sources, self.paths.index,
+                   self.paths.models, self.paths.logs, self.paths.undo)
             self.index = FileIndex(self.paths.index / "files.db", roots, windows_root=s.windows_mount, skip=own)
             self.index.start(first_delay_s=10)      # after the voice and the engine have started
 
@@ -153,8 +161,9 @@ class Controller:
         self.ctx = T.ToolContext(self.paths, s, self.platform, self.journal, self.screen, self.memory, self.index,
                                  confirm=self.confirm, on_sleep=self._request_sleep,
                                  on_settings_changed=self._settings_changed, airtouch_status=self._airtouch_info,
+                                 on_mic_changed=lambda: self.loop.call_soon_threadsafe(self._spawn, self._reopen_mic()),
                                  keyboard=self.set_keyboard, before_power=self._before_power,
-                                 airpods=self.connect_airpods, history=self.history,
+                                 airpods=self.connect_airpods, history=self.history, inbox=self.inbox,
                                  announce=lambda text: self.loop.call_soon_threadsafe(self._announce, text))
         server, policies, self.tool_names = T.build(self.ctx)
         self.gate = PermissionGate(self.paths, self.journal, self.confirm, policies)
@@ -258,6 +267,9 @@ class Controller:
             self.index.stop()
         if self.mic:
             self.mic.close()
+        if self.inbox is not None:
+            with contextlib.suppress(Exception):
+                await self.inbox.stop()
         if self.brain:
             await self.brain.interrupt()
             await self.brain.close()
@@ -710,8 +722,70 @@ class Controller:
             self.screen.done({k: entry[k] for k in ("id", "ts", "text", "prompt_id", "prompt_ts") if k in entry})
 
     async def _show_done(self) -> None:
-        entries = await self.loop.run_in_executor(None, self.history.recent)
+        pinned = self.pins.of("done")
+        entries = await self.loop.run_in_executor(None, lambda: self.history.recent(150, pinned))
         self.screen.done_list(entries)
+
+    def page_event(self, msg: dict[str, Any]) -> None:
+        """What the conversation page says was done on it (GtkScreen.PAGE_EVENTS): a pin, a message opened, an
+        account to connect, a sign-in form filled in or cancelled."""
+        kind = msg.get("type")
+        if self._search_event(msg):
+            return
+        if kind == "pin":
+            which, item = str(msg.get("list") or ""), str(msg.get("id") or "")
+            self.screen.set_pinned(which, item, self.pins.set(which, item, bool(msg.get("on"))))
+        elif self.inbox is None:
+            return
+        elif kind == "open_message":
+            self._spawn(self.inbox.open(str(msg.get("id") or "")))
+        elif kind == "add_account":
+            self._spawn(self.inbox.connect(msg.get("provider")))
+        elif kind == "account":
+            values = msg.get("values") if isinstance(msg.get("values"), dict) else {}
+            self._spawn(self.inbox.form_submit(str(msg.get("form") or ""), values))
+        elif kind == "account_cancel":
+            self.inbox.form_cancel(str(msg.get("form") or ""))
+
+    def _search_event(self, msg: dict[str, Any]) -> bool:
+        """ "/" in the message box (page_event): searching this computer, or opening what was found."""
+        kind = msg.get("type")
+        if kind == "search":
+            try:
+                n = int(msg.get("n") or 0)
+            except (TypeError, ValueError):
+                n = 0
+            self._spawn(self._search(str(msg.get("q") or "")[:200], n))
+        elif kind == "open_file":
+            self._spawn(self._open_file(str(msg.get("path") or "")))
+        else:
+            return False
+        return True
+
+    # ================================================================ "/" in the message box
+    async def _search(self, query: str, n: int) -> None:
+        """What on this computer matches what's typed after "/"."""
+        items, note = await self.loop.run_in_executor(None, slash_search.search, self.index, query, self.paths)
+        self.screen.search_results(n, query, items, note)
+
+    async def _open_file(self, path: str) -> None:
+        """A file chosen from "/": shown between the sidebars, as show_file would."""
+        from .ui import render
+        if not path:
+            return
+        if is_private(self.paths, path):
+            self.screen.notice("That file holds ClaudeOS's sign-ins, so it stays private.", "warn")
+            return
+        if not os.path.exists(path):
+            self.screen.notice("That file isn't there any more.", "warn")
+            return
+        kind, payload = await self.loop.run_in_executor(None, render.file_view, path, self.settings, self.paths)
+        r = await (self.screen.show_url(payload) if kind == "url" else
+                   self.screen.show_html(payload, os.path.basename(path)))
+        if not r.get("ok"):
+            self.screen.notice(f"Couldn't show {os.path.basename(path)}: {r.get('error') or 'unknown error'}", "warn")
+            return
+        self.journal.record("screen", f"showed {path}")
 
     async def go_back_to(self, target_id: str | None, target_ts: float, before_ts: float | None) -> None:
         """What's done: an item was tapped whose message isn't on the screen any more. The conversation from that
@@ -821,7 +895,7 @@ class Controller:
             # change it back would fail too. Go back to the usual model and ask again.
             bad, self.settings.model = self.settings.model, default_model
             self.settings.save(self.paths)
-            self._settings_changed(["model"])
+            self._settings_changed(["model"], restart=False)       # asked again below, with the usual one
             self.screen.notice(f"The Claude model “{bad}” isn't available, so I went back to the usual one.", "warn")
             self._spawn(self._ask_again_after_switch(tid))
             if tid == self.current_turn:
@@ -1445,8 +1519,15 @@ class Controller:
         self.screen.mic(False)
         self.screen.notice("Enjoy. Press an AirPod to talk to me.")
 
+    async def _reopen_mic(self) -> None:
+        """Another microphone was chosen (the sound system's default input): the stream follows the default when
+        it opens, so it's opened again."""
+        if self.mic and self.mic.is_open:
+            await self.loop.run_in_executor(None, self.mic.close)
+            self._mic_open()
+
     def _mic_open(self) -> bool:
-        """Open the microphone; the line under the message box says whether ClaudeOS is listening."""
+        """Open the microphone, and say on the screen whether ClaudeOS can hear."""
         ok = bool(self.mic and self.mic.open())
         self.screen.mic(ok)
         return ok
@@ -1457,7 +1538,9 @@ class Controller:
         except Exception:
             return False
 
-    def _settings_changed(self, keys: list[str]) -> None:
+    def _settings_changed(self, keys: list[str], restart: bool = True) -> None:
+        """Settings changed (by Claude's claudeos_settings, or here). `restart`: a new model or effort makes the
+        engine start again with it once it's idle (not when that's already being done)."""
         s = self.settings
         if {"text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "user_name", "model"} & set(keys):
@@ -1467,6 +1550,8 @@ class Controller:
         if "phone_access" in keys and self.brain:
             self.remote_told = False
             self._spawn(self._restart_brain_when_idle())
+        elif {"model", "effort"} & set(keys) and self.brain and restart:
+            self._spawn(self._restart_brain_when_idle())    # the engine starts with the new one, once it's idle
         if self.speaker and self.speaker.tts is not None:
             if "voice" in keys:
                 self.speaker.tts.voice = s.voice
@@ -1474,7 +1559,8 @@ class Controller:
                 self.speaker.tts.speed = s.speech_speed
 
     async def _restart_brain_when_idle(self) -> None:
-        """Apply a sign-in change (phone access on or off): start the engine again once this turn is over."""
+        """Apply what the engine reads when it starts (phone access on or off, the model, effort): start it again
+        once this turn is over. The conversation carries on (the session is resumed)."""
         assert self.brain is not None
         await self.brain.wait_idle()
         await self.brain.close()

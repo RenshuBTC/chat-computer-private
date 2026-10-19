@@ -32,7 +32,10 @@ class Screen:
     def history(self, items: list[dict[str, Any]]) -> None: ...
     def apply_settings(self, text_size: int, user_name: str, model: str = "") -> None: ...
     def mic(self, on: bool) -> None:
-        """Whether the microphone is on: the line under the message box says "Listening" only then."""
+        """Whether the microphone is on."""
+    # --- "/" in the message box: searching this computer
+    def search_results(self, n: int, query: str, items: list[dict[str, Any]], note: str = "") -> None:
+        """What on this computer matches the words after "/" (search number n): [{name, path, where, kind, when}]."""
     # --- What's done (claudeos/done.py), in a panel at the right of the conversation
     def done_list(self, entries: list[dict[str, Any]]) -> None:
         """The whole list (at the start), oldest first. Each: id, ts, text, and the message that asked for it
@@ -45,6 +48,32 @@ class Screen:
     # Set by the controller: an item in What's done was tapped whose message isn't on the screen any more
     # (its id, its time, and the time of the first message the screen still has, or None).
     on_goto: Any = None
+    # --- Messages (claudeos/messages), at the left of the conversation
+    def messages_list(self, items: list[dict[str, Any]], accounts: list[dict[str, Any]] | None = None) -> None:
+        """All the messages shown (newest first), and the accounts they come from (without their sign-ins)."""
+    def message(self, item: dict[str, Any]) -> None:
+        """A new or changed message."""
+    def set_pinned(self, kind: str, item_id: str, pinned: float | None) -> None:
+        """A pin made or taken off on the page ("done" or "messages")."""
+    def account_form(self, form: dict[str, Any] | None) -> None:
+        """A sign-in form for an account, on the conversation page (None closes it); see chat.js showForm."""
+    def source_open(self, provider: str, url: str, reload: bool = False) -> None:
+        """Loads a site Messages reads (WhatsApp, Instagram...) in its own browser, off the screen."""
+    def source_show(self, provider: str, url: str | None = None, chat: str | None = None) -> None:
+        """Shows that site between the sidebars: to sign in, or to read a conversation."""
+    def source_unload(self, provider: str) -> None:
+        """Lets a site's page go until it's looked at again."""
+    def source_close(self, provider: str) -> None:
+        """Takes the site away from between the sidebars, if it's there."""
+    def source_forget(self, provider: str) -> None:
+        """The site's account was removed here: its page goes."""
+    def watch_redirect(self, prefix: str, then: Any) -> None:
+        """When the content view goes to an address starting with `prefix`, it isn't loaded: then(address)."""
+    # Set by the controller: what the conversation page tells it (pins, a message opened, a form filled in), what a
+    # site Messages reads says it shows, and that what was open was closed.
+    on_page_event: Any = None
+    on_source: Any = None
+    on_closed: Any = None
     def dots(self, dots: list[tuple[float, float, str]]) -> None:
         """AirTouch's dots, one per finger it follows (x, y in the display's pixels, and what the finger is
         doing: "point", "pinch", "scroll"; with the keyboard up "key", "press"). None left: none drawn."""
@@ -142,6 +171,9 @@ class RecordingScreen(Screen):
     def mic(self, on: bool) -> None:
         self.events.append(("mic", on))
 
+    def search_results(self, n: int, query: str, items: list[dict[str, Any]], note: str = "") -> None:
+        self.events.append(("search", (n, query, items, note)))
+
     def done_list(self, entries: list[dict[str, Any]]) -> None:
         self.events.append(("done_list", [e["text"] for e in entries]))
 
@@ -150,6 +182,40 @@ class RecordingScreen(Screen):
 
     def earlier(self, items: list[dict[str, Any]], target_id: str | None, target_ts: float) -> None:
         self.events.append(("earlier", ([(i["role"], i["text"]) for i in items], target_id)))
+
+    def messages_list(self, items: list[dict[str, Any]], accounts: list[dict[str, Any]] | None = None) -> None:
+        self.events.append(("messages_list", ([m["id"] for m in items], [a.get("label") for a in accounts or []])))
+
+    def message(self, item: dict[str, Any]) -> None:
+        self.events.append(("message", dict(item)))
+
+    def set_pinned(self, kind: str, item_id: str, pinned: float | None) -> None:
+        self.events.append(("pinned", (kind, item_id, bool(pinned))))
+
+    def account_form(self, form: dict[str, Any] | None) -> None:
+        self.events.append(("form", dict(form) if form else None))
+
+    def source_open(self, provider: str, url: str, reload: bool = False) -> None:
+        self.events.append(("source_open", (provider, url)))
+
+    def source_show(self, provider: str, url: str | None = None, chat: str | None = None) -> None:
+        self.events.append(("source_show", (provider, url, chat)))
+
+    def source_unload(self, provider: str) -> None:
+        self.events.append(("source_unload", provider))
+
+    def source_close(self, provider: str) -> None:
+        self.events.append(("source_close", provider))
+
+    def source_forget(self, provider: str) -> None:
+        self.events.append(("source_forget", provider))
+
+    def watch_redirect(self, prefix: str, then: Any) -> None:
+        self.redirects = getattr(self, "redirects", {})
+        if then is None:
+            self.redirects.pop(prefix, None)
+        else:
+            self.redirects[prefix] = then
 
     def dots(self, dots: list[tuple[float, float, str]]) -> None:
         self.events.append(("dots", [(round(x), round(y), kind) for x, y, kind in dots]))

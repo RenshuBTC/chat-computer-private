@@ -109,6 +109,10 @@ class FakePlatform(Platform):
         self._c("set_output", name_or_id)
         return f"Sound now plays on {name_or_id}."
 
+    def set_input(self, name_or_id: str) -> str:
+        self._c("set_input", name_or_id)
+        return f"Listening with {name_or_id} now."
+
     def output_is_headset(self) -> bool:
         return self.headset
 

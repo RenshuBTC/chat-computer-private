@@ -105,11 +105,15 @@ def download(paths: Paths, settings: Settings, progress: Callable[[str], None] =
     adir = airtouch_files(paths)[0].parent
     for name, (where, sha) in AIRTOUCH_FILES.items():
         _fetch(AIRTOUCH_BASE + where, adir / name, sha, progress)
-    name = settings.stt_model
+    download_stt(paths, settings.stt_model, progress)
+    progress("voice models ready")
+
+
+def download_stt(paths: Paths, name: str, progress: Callable[[str], None] = print) -> None:
+    """One speech recognition model (faster-whisper's, from Hugging Face), unless it's here already."""
     wdir = whisper_dir(paths, name)
     if not (wdir / "model.bin").exists():
         progress(f"downloading speech recognition ({name})…")
         from huggingface_hub import snapshot_download
         repo = f"Systran/faster-whisper-{name}" if not name.startswith("distil") else f"Systran/faster-{name}"
         snapshot_download(repo, local_dir=str(wdir))
-    progress("voice models ready")

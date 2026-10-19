@@ -33,7 +33,7 @@ def test_only_black_text_on_white():
     assert COLOR.findall(theme.replace(root, "")) == []
     assert COLOR.findall(chat) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
-    sizes = {"--co-size", "--co-column", "--panel", "--composer-h"}
+    sizes = {"--co-size", "--co-column", "--panel", "--left", "--composer-h", "--strip-h", "--side-gap"}
     assert used - sizes == {"--ground", "--ink", "--bubble", "--sans", "--mono"}
     # No dark mode.
     for text in (theme, chat, _asset("chat.html"), _asset("chat.js"), render.DOC_CSS):

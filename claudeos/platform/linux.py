@@ -449,6 +449,16 @@ class LinuxPlatform(Platform):
             return "I couldn't find that sound output. Available: " + ", ".join(o["name"] for o in st["outputs"])
         return self._say(run(["wpctl", "set-default", str(target["id"])], timeout=8), f"Sound now plays on {target['name']}.")
 
+    def set_input(self, name_or_id: str) -> str:
+        """The microphone ClaudeOS (and everything else) listens with: the sound system's default input."""
+        st = parse_wpctl_status(run(["wpctl", "status"], timeout=8).out)
+        target = next((i for i in st["inputs"] if str(i["id"]) == str(name_or_id)), None)
+        if target is None and (name_or_id or "").strip():
+            target = next((i for i in st["inputs"] if name_or_id.lower() in i["name"].lower()), None)
+        if not target:
+            return "I couldn't find that microphone. Available: " + (", ".join(i["name"] for i in st["inputs"]) or "none")
+        return self._say(run(["wpctl", "set-default", str(target["id"])], timeout=8), f"Listening with {target['name']} now.")
+
     def _inspect_default(self, which: str) -> str:
         return run(["wpctl", "inspect", which], timeout=8).out
 

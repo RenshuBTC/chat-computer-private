@@ -136,6 +136,8 @@ def describe(name: str, inp: dict[str, Any], result: str = "") -> tuple[str, boo
             return f"Set the volume to {g('value').rstrip('%')}%", False
         if act == "output":
             return "Played the sound on " + g("value")[:40], False
+        if act == "input":
+            return "Listened with the microphone " + g("value")[:40], False
         return {"volume_up": ("Turned the volume up", False), "volume_down": ("Turned the volume down", False),
                 "mute": ("Muted the sound", False), "unmute": ("Unmuted the sound", False)}.get(act)
     if short == "power":
@@ -170,6 +172,8 @@ def describe(name: str, inp: dict[str, Any], result: str = "") -> tuple[str, boo
         return "Read " + _base(g("file_path") or g("notebook_path")), True
     if short in ("Glob", "Grep", "LS"):
         return "Looked through files", True
+    if short == "messages":
+        return ("Disconnected an account from Messages", False) if act == "disconnect" else None
     if ours or short in ("TodoWrite", "ToolSearch", "Task", "Agent", "advisor"):
         return None             # looking (read_screen, system_status...), asking, going to sleep
     return short.replace("_", " ").capitalize(), True
@@ -258,9 +262,21 @@ class History:
     def _all(self) -> list[dict[str, Any]]:
         return _records(_tail_lines(self.file, DONE_TAIL_BYTES))
 
-    def recent(self, n: int = 150) -> list[dict[str, Any]]:
-        """The newest things done, for the panel (not the minor steps), oldest first."""
-        return [_for_screen(d) for d in self._all() if not d.get("minor")][-n:]
+    def recent(self, n: int = 150, pinned: dict[str, float] | None = None) -> list[dict[str, Any]]:
+        """The newest things done, for the panel (not the minor steps), oldest first; and the pinned ones (with when
+        they were pinned), however old."""
+        pinned = pinned or {}
+        listed = [d for d in self._all() if not d.get("minor") or d.get("id") in pinned]
+        out = listed[-n:]
+        have = {d["id"] for d in out}
+        out = [d for d in listed if d.get("id") in pinned and d["id"] not in have] + out
+        shown = []
+        for d in out:
+            e = _for_screen(d)
+            if d.get("id") in pinned:
+                e["pinned"] = pinned[d["id"]]
+            shown.append(e)
+        return shown
 
     def find(self, query: str = "", days: float = 7, limit: int = 40) -> list[str]:
         """For recent_actions: what was done in the last `days` days, newest last, one line each with the message

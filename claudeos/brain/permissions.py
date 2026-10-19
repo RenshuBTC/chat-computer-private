@@ -422,8 +422,9 @@ def _resolve(path: str) -> str:
 
 
 def private_dirs(paths: Paths) -> list[str]:
-    """ClaudeOS's own private folders: the sign-ins, the engine's settings, the built-in browser's logins."""
-    return [os.path.realpath(p) for p in (paths.secrets, paths.engine, paths.web)]
+    """ClaudeOS's own private folders: the sign-ins, the engine's settings, the built-in browser's logins, and the
+    sign-ins of the sites Messages reads."""
+    return [os.path.realpath(p) for p in (paths.secrets, paths.engine, paths.web, paths.sources)]
 
 
 def is_private(paths: Paths, path: str) -> bool:

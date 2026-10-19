@@ -87,7 +87,10 @@ STATE_JS = """(function () {
   var found = document.querySelector('#log .found'), fr = found && found.getBoundingClientRect();
   var items = Array.prototype.map.call(document.querySelectorAll('#done-list > li'), function (li) {
     var b = li.getBoundingClientRect();
-    return {cls: li.className, text: li.textContent, x: Math.round(b.left + 20), y: Math.round(b.top + b.height / 2)};
+    var what = li.querySelector('.done-what'), when = li.querySelector('.done-when');
+    return {cls: li.className.replace(' item', '').replace('item ', ''), text: (what || li).textContent,
+            when: when ? when.textContent : '', x: Math.round(b.left + 40), y: Math.round(b.top + b.height / 2),
+            stacked: !!(what && when) && when.getBoundingClientRect().bottom <= what.getBoundingClientRect().top + 1};
   });
   return JSON.stringify({panel: document.body.classList.contains('panel'), display: getComputedStyle(d).display,
     left: r.left, width: r.width, view: window.innerWidth, title: document.getElementById('done-title').textContent,
@@ -95,7 +98,9 @@ STATE_JS = """(function () {
     found: found ? {id: found.dataset.id, top: fr.top} : null, scroll: p.scrollTop,
     messages: document.querySelectorAll('#log > .you').length, events: (window.__ev || []).slice(-4),
     days: Array.prototype.map.call(document.querySelectorAll('#log > .day'), function (e) { return e.textContent; }),
-    focused: document.activeElement === document.getElementById('input')});
+    focused: document.activeElement === document.getElementById('input'),
+    radius: getComputedStyle(d).borderTopLeftRadius, line: getComputedStyle(document.getElementById('done-list')).borderLeftStyle,
+    clock: [document.getElementById('clock-date').textContent, document.getElementById('clock-time').textContent]});
 })()"""
 
 

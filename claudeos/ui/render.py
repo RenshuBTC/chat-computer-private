@@ -33,6 +33,14 @@ article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; mar
 .sound { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; }
 .image { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--ground); }
 .image img { max-width: 100vw; max-height: 100vh; object-fit: contain; }
+.meta { margin: 0 0 1.25rem; }
+.meta div { overflow-wrap: anywhere; }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+.said { margin: 0 0 1rem; }
+.said .who { font-weight: bold; }
+.said.mail { padding: 0 0 1rem; margin: 0 0 1.25rem; border-bottom: 2px solid var(--bubble); }
+.said.mail:last-child { border-bottom: 0; }
+.said.mail .meta { margin: 0.25rem 0 0.5rem; }
 """
 
 
@@ -58,6 +66,40 @@ def document_html(title: str, markdown: str, settings: Any) -> str:
     script = (f"<script>{asset('md.js')}</script><script>document.getElementById('doc').innerHTML="
               f"window.renderMarkdown({text});</script>")
     return _shell(title, body, settings, script)
+
+
+def message_html(title: str, meta: list[tuple[str, str]], text: str, settings: Any) -> str:
+    """An email (or another message) on the screen: its subject, who and when, then its words as written.
+    Everything is escaped: an email's HTML is never run, and its pictures aren't fetched."""
+    rows = "".join(f"<div><b>{htmllib.escape(k)}:</b> {htmllib.escape(v)}</div>" for k, v in meta if v)
+    body = (f'<article><h1 class="title">{htmllib.escape(title)}</h1><div class="meta">{rows}</div>'
+            f'<div class="plain">{htmllib.escape(text)}</div></article>')
+    return _shell(title, body, settings)
+
+
+def thread_html(title: str, meta: list[tuple[str, str]], mails: list[dict[str, Any]], settings: Any) -> str:
+    """Emails with one person, oldest first, as a conversation: each one's subject and when, then its words (as
+    much as is known: all of the ones read just now). The page starts at the one that was opened ("open")."""
+    rows = "".join(f"<div><b>{htmllib.escape(k)}:</b> {htmllib.escape(v)}</div>" for k, v in meta if v)
+    blocks = []
+    for m in mails:
+        att = (f'<div class="meta">Attachments: {htmllib.escape(", ".join(m["attachments"]))}</div>'
+               if m.get("attachments") else "")
+        blocks.append(f'<section class="said mail"{" id=open" if m.get("open") else ""}>'
+                      f'<div><span class="who">{htmllib.escape(m.get("subject") or "(no subject)")}</span> '
+                      f'{htmllib.escape(m.get("when") or "")}</div>{att}'
+                      f'<div class="plain">{htmllib.escape(m.get("text") or "")}</div></section>')
+    body = (f'<article><h1 class="title">{htmllib.escape(title)}</h1><div class="meta">{rows}</div>'
+            f'{"".join(blocks)}</article>')
+    script = "<script>var o=document.getElementById('open');if(o)o.scrollIntoView({block:'start'});</script>"
+    return _shell(title, body, settings, script)
+
+
+def chat_html(title: str, lines: list[tuple[str, str, str]], settings: Any) -> str:
+    """A chat's latest messages (who, when, words), oldest first."""
+    body = "".join(f'<div class="said"><span class="who">{htmllib.escape(who)}</span> {htmllib.escape(when)}'
+                   f'<div class="plain">{htmllib.escape(text)}</div></div>' for who, when, text in lines)
+    return _shell(title, f'<article><h1 class="title">{htmllib.escape(title)}</h1>{body}</article>', settings)
 
 
 def wrap_page(html: str, title: str, settings: Any) -> str:

@@ -39,11 +39,14 @@ screen.bind(loop, on_media_key=lambda k: None, on_media_state=lambda p: None, on
 out: dict = {}
 
 PAGE_JS = """(function(){var i=document.getElementById('input'), b=document.getElementById('box');
+  var c=document.getElementById('composer').getBoundingClientRect(), r=b.getBoundingClientRect();
   return JSON.stringify({value: i.value, focused: document.activeElement === i,
     drafting: document.body.classList.contains('drafting'),
     send: getComputedStyle(document.getElementById('send')).visibility,
-    box_h: b.getBoundingClientRect().height, box_bottom: window.innerHeight - b.getBoundingClientRect().bottom,
-    status: document.getElementById('status').textContent.replace(/\\s+/g, ' ').trim()});})()"""
+    box_h: r.height, box_bottom: window.innerHeight - r.bottom,
+    below_box: c.bottom - r.bottom, above_box: r.top - c.top,
+    wake: getComputedStyle(document.getElementById('wake')).display,
+    words: document.getElementById('composer').innerText.replace(/\\s+/g, ' ').trim()});})()"""
 
 
 def xdo(*args: str) -> None:

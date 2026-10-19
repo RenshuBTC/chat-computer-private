@@ -1,12 +1,13 @@
 /* The conversation, laid out like the Claude app: Claude's words on the left in one column, upright and black;
    yours on the right, in a light grey bubble; newest at the bottom, above the message box. Scrolling up (the mouse
    wheel, Page Up, the arrow keys while the box is empty, or pinching and moving with AirTouch) shows earlier
-   messages; new words bring it back down. On a wide screen, What's done runs down the right: a sixth of the
-   screen, as the Claude app's side panel takes. */
+   messages; new words bring it back down. On a wide screen, Messages runs down the left and What's done down the
+   right: a sixth of the screen each, as the Claude app's side panels take. What Claude opens (a website, a video, a
+   document) goes between them, above your latest message, Claude's latest reply and the message box. */
 html { scrollbar-width: none; }
 ::-webkit-scrollbar { display: none; }
-body.panel { --panel: 17vw; }
-body { padding-right: var(--panel, 0px); }
+body.panel { --panel: 17vw; --left: 17vw; }
+body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
 #column {
   display: flex; flex-direction: column; justify-content: flex-end;
   min-height: 100vh;
@@ -52,20 +53,55 @@ body.hearing #live { display: block; }
 #hint { margin: 0; }
 body.has-log #welcome { display: none; }
 
+/* Something open (body.content): the conversation shrinks to its latest exchange just above the message box, and
+   the page Claude opened is laid over the space above it, in a rounded frame like the sidebars' (the window places
+   it inside #frame: chat.js reports where). Older messages are still there, above, cut off. */
+#frame { display: none; position: fixed; border: 2px solid var(--bubble); border-radius: 1.1rem; }
+body.content #frame { display: block; }
+body.content #welcome { display: none; }
+body.content #column {
+  position: fixed; bottom: var(--composer-h, 5rem); min-height: 0; height: var(--strip-h, 4rem);
+  left: calc(var(--left, 0px) + var(--side-gap)); right: calc(var(--panel, 0px) + var(--side-gap));
+  display: block; width: auto; margin: 0; padding: 0; overflow-y: auto;
+  --side-gap: max(1.5rem, (100vw - var(--left, 0px) - var(--panel, 0px) - var(--co-column, 30rem)) / 2);
+}
+/* There, each message takes one line, so the page gets the room: "… more" shows the rest of one (and the page
+   makes room for it), "less" puts it back. */
+body.content #log { gap: 0.4rem; }
+body.content .you { padding: 0.1rem 0.75rem; }
+body.content #log > * { position: relative; }
+body.content #log > :not(.open) {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden;
+}
+body.content #log > .cut:not(.open) { cursor: pointer; }
+body.content #log > .open { padding-right: 3.5rem; }
+body.content .you.open { padding-right: 4.25rem; }
+.more {
+  display: none; position: absolute; top: 0; right: 0; margin: 0; padding: 0 0 0 0.6em; border: 0;
+  background: var(--ground); font: inherit; color: var(--ink); cursor: pointer;
+}
+.more .w { text-decoration: underline; }
+body.content .cut > .more, body.content .open > .more { display: block; }
+body.content .you > .more { top: 0.1rem; right: 0.75rem; background: var(--bubble); }
+/* What you're saying while something is open: its last line. */
+body.content.hearing #live { display: flex; flex-direction: column; justify-content: flex-end; max-height: calc(1.5em + 0.2rem); overflow: hidden; }
+#live-in { flex: none; }
+body.content #live { padding: 0.1rem 0.75rem; margin-top: 0.4rem; }
+
 /* The message box, as in the Claude app: a rounded box the width of the conversation at the bottom of the
    screen; it grows with what's typed (up to a few lines, then scrolls). Enter sends, Shift+Enter starts a new
-   line; the return arrow shows once there's something to send. Under it, whether ClaudeOS is listening, and
-   which Claude model answers. */
+   line; the return arrow shows once there's something to send. Nothing else: ClaudeOS is the conversation (and
+   "/" to search this computer). Asleep, a line above it says how to wake ClaudeOS. */
 #composer {
-  position: fixed; left: 0; right: var(--panel, 0px); bottom: 0;
-  padding: 0.75rem 0; background: var(--ground);
+  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); bottom: 0;
+  padding: 0.5rem 0 0.75rem; background: var(--ground);
 }
-#box, #status { width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto; }
+#box, #wake { width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto; }
 #box {
-  display: flex; align-items: flex-end; gap: 0.5rem;
-  border: 2px solid var(--bubble); border-radius: 1.1rem; background: var(--ground);
+  position: relative; border: 2px solid var(--bubble); border-radius: 1.1rem; background: var(--ground);
   padding: 0.6rem 0.7rem 0.6rem 1rem;
 }
+#row { display: flex; align-items: flex-end; gap: 0.5rem; }
 #input {
   flex: 1; min-width: 0; height: 1.5em; max-height: 40vh; margin: 0; padding: 0;
   border: 0; outline: 0; resize: none; overflow-y: auto; scrollbar-width: none;
@@ -76,39 +112,126 @@ body.has-log #welcome { display: none; }
   visibility: hidden;
 }
 body.drafting #send { visibility: visible; }
-#send svg, #mic svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2;
-  stroke-linecap: round; stroke-linejoin: round; }
-#status {
-  display: flex; justify-content: space-between; align-items: center; gap: 1rem;
-  min-height: 1.4em; padding: 0.35rem 0.5rem 0; font-size: 0.8rem; line-height: 1.4;
-}
-#mic { display: inline-flex; align-items: center; gap: 0.4em; }
-#mic svg { width: 1.15em; height: 1.15em; flex: none; }
-#mic:not(.on) { visibility: hidden; }
-
-/* What's done: everything done for you, oldest at the top, grouped by day. Tapping one scrolls the conversation
-   back to the message that asked for it. */
-#done {
-  position: fixed; top: 0; right: 0; bottom: 0; width: var(--panel, 0px);
-  display: none; flex-direction: column;
-  padding: 1.5rem 1rem 1rem 1.25rem; border-left: 2px solid var(--bubble);
+svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#send svg { display: block; width: 100%; height: 100%; }
+#wake { display: none; margin-bottom: 0.5rem; text-align: center; font-size: 0.8rem; line-height: 1.4; }
+body.sleeping #wake, body.resting #wake { display: block; }
+/* "/" first in the message box: it searches this computer. What matches shows in a list above the box (as a
+   search box's suggestions): the arrow keys choose, Enter or a click opens it between the sidebars, and the last
+   line asks Claude instead. */
+#search-icon { display: none; flex: none; width: 1.2em; height: 1.5em; }
+body.searching #search-icon { display: block; }
+#results {
+  position: absolute; left: -2px; right: -2px; bottom: calc(100% + 0.5rem); display: none;
+  max-height: 60vh; overflow-y: auto; scrollbar-width: none;
+  padding: 0.35rem; border: 2px solid var(--bubble); border-radius: 0.9rem; background: var(--ground);
   font-size: 0.8rem; line-height: 1.4;
 }
-body.panel #done { display: flex; }
-#done-title { font-size: 1em; font-weight: bold; line-height: 1.3; margin: 0 0 0.75rem; }
-#done-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; list-style: none; margin: 0; padding: 0; }
-.done-day { font-weight: bold; margin: 1em 0 0.35em; }
-.done-day:first-child { margin-top: 0; }
-.done-item { position: relative; padding: 0.3em 0.4em 0.3em 1.15em; border-radius: 0.5em; overflow-wrap: break-word; }
-.done-item::before {
-  content: ""; position: absolute; left: 0.25em; top: 0.85em; width: 0.4em; height: 0.4em; border-radius: 50%;
-  background: var(--ink);
-}
-.done-item:hover { background: var(--bubble); }
-#done-empty { margin: 0; }
-body.has-done #done-empty { display: none; }
+body.searching #results { display: block; }
+.res { display: flex; align-items: center; gap: 0.7em; padding: 0.4em 0.6em; border-radius: 0.5em; cursor: pointer; }
+.res > svg { flex: none; width: 1.3em; height: 1.3em; }
+.res-text { flex: 1; min-width: 0; }
+.res-name, .res-where { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.res-name b { font-weight: bold; }
+.res-when { flex: none; }
+.res:hover, .res.sel { background: var(--bubble); }
+.res-note { margin: 0; padding: 0.4em 0.6em; }
 
-/* Sleeping: the conversation and What's done go away; the line under the message box says how to wake ClaudeOS. */
-body.sleeping #column, body.sleeping #done { visibility: hidden; }
+/* Buttons: words underlined, or a small outlined icon; the one main button of a form, white on black. */
+button { font: inherit; color: var(--ink); }
+.text-button { margin: 0; padding: 0; border: 0; background: none; text-decoration: underline; cursor: pointer; }
+.icon-button {
+  flex: none; width: 1.6em; height: 1.6em; margin: 0; padding: 0.2em; border: 0; border-radius: 0.4em;
+  background: none; cursor: pointer;
+}
+.icon-button svg { display: block; width: 100%; height: 100%; }
+.icon-button:hover { background: var(--bubble); }
+.primary {
+  margin: 0; padding: 0.45em 1.2em; border: 2px solid var(--ink); border-radius: 0.6em;
+  background: var(--ink); color: var(--ground); cursor: pointer;
+}
+
+/* The two sidebars: Messages at the left (newest first), What's done at the right (oldest at the top, grouped by
+   day). Each item can be pinned: pinned ones stay at the top, under the title. Tapping a message opens it between
+   the sidebars; tapping something done scrolls the conversation back to the message that asked for it. */
+.side {
+  position: fixed; top: 0.75rem; bottom: 0.75rem; width: calc(var(--panel, 0px) - 1rem);
+  display: none; flex-direction: column;
+  padding: 1.1rem 0.75rem 0.75rem 1rem;
+  border: 2px solid var(--bubble); border-radius: 1.1rem; background: var(--ground);
+  font-size: 0.8rem; line-height: 1.4;
+}
+body.panel .side { display: flex; }
+#messages { left: 0.75rem; }
+#done { right: 0.75rem; }
+/* Words in a sidebar line up with the items' words; an item's grey (under the pointer) reaches a little past them. */
+.side-head, .side-day, .side-empty, #clock { padding-left: 0.4em; }
+.side-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin: 0 0 0.75rem; }
+.side-title { font-size: 1em; font-weight: bold; line-height: 1.3; margin: 0; }
+.side-empty { margin: 0; }
+body.has-done #done-empty, body.has-messages #messages-empty { display: none; }
+.side-empty .text-button { display: block; margin-top: 0.6em; }
+.side-list, .side-pinned { list-style: none; margin: 0; padding: 0; }
+.side-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.side-pinned { flex: none; max-height: 40%; overflow-y: auto; scrollbar-width: none; }
+.side-pinned:not(:empty) { padding-bottom: 0.6em; margin-bottom: 0.6em; border-bottom: 2px solid var(--bubble); }
+.side-day { font-weight: bold; margin: 1em 0 0.35em; }
+.side-day:first-child { margin-top: 0; }
+.item { position: relative; padding: 0.35em 0.4em; border-radius: 0.5em; overflow-wrap: break-word; cursor: pointer; }
+.item:hover { background: var(--bubble); }
+/* The pin: shown on a pinned item, and on any item under the pointer, to pin it. It sits at the end of an item's
+   first line, which leaves room for it. */
+.pin {
+  position: absolute; top: 0.3em; right: 0.25em; width: 1.5em; height: 1.5em; margin: 0; padding: 0.2em;
+  border: 0; border-radius: 0.4em; background: none; visibility: hidden; cursor: pointer;
+}
+.pin svg { display: block; width: 100%; height: 100%; }
+.item:hover .pin, .item.pinned .pin { visibility: visible; }
+.item.pinned .pin svg { fill: currentColor; }
+.msg-top, .done-when { padding-right: 1.6em; }
+/* Something done: when, and under it what. Above the list, today's date and the time now. */
+#clock { margin: -0.4rem 0 0.9rem; }
+#clock span { display: block; }
+.done-when { display: block; font-variant-numeric: tabular-nums; }
+.done-what { display: block; }
+/* A message: where it came from (a small icon), who, when; then the words, two lines at most. Unread: who in bold. */
+.msg-top { display: flex; align-items: center; gap: 0.4em; }
+.msg-top svg { flex: none; width: 1.1em; height: 1.1em; }
+.msg-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg.unread .msg-who { font-weight: bold; }
+.msg-when { flex: none; }
+.msg-text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 0.1em;
+}
+.msg-src { font-weight: bold; }
+
+/* Connecting an account: a form over the whole screen. What's typed in it goes to ClaudeOS's own sign-in store,
+   not to Claude. */
+#sheet {
+  position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
+  background: var(--ground); padding: 2rem;
+}
+body.sheet #sheet { display: flex; }
+#sheet-form { width: min(28rem, 100%); }
+#sheet-title { font-size: 1.25rem; line-height: 1.3; margin: 0 0 0.5em; }
+#sheet-text p { margin: 0 0 0.75em; }
+#sheet-fields label { display: block; margin: 0.9em 0 0.25em; }
+#sheet-fields input, #sheet-fields select {
+  display: block; width: 100%; margin: 0; padding: 0.45em 0.7em; font: inherit; color: var(--ink);
+  background: var(--ground); border: 2px solid var(--bubble); border-radius: 0.6em; outline: 0;
+}
+#sheet-fields input:focus { border-color: var(--ink); }
+#sheet-fields .choices { display: flex; flex-wrap: wrap; gap: 0.6em; margin-top: 0.9em; }
+#sheet-fields .choices button {
+  padding: 0.45em 1em; border: 2px solid var(--bubble); border-radius: 0.6em; background: var(--ground); cursor: pointer;
+}
+#sheet-fields .choices button:hover { border-color: var(--ink); }
+#sheet-error { margin: 0.9em 0 0; font-weight: bold; }
+#sheet-error:empty { display: none; }
+#sheet-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 1.25em; margin-top: 1.5em; }
+body.sheet-busy #sheet-ok { visibility: hidden; }
+
+/* Sleeping: the conversation and the sidebars go away; the line under the message box says how to wake ClaudeOS. */
+body.sleeping #column, body.sleeping .side { visibility: hidden; }
 
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }

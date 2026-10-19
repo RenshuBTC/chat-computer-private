@@ -8,7 +8,6 @@ answers it got in $FAKE_INSTALLER_LOG, one JSON object per line.
 With --pretend-mac it also changes the pretend Mac's disk the way the real one would (tests/mac_pretend.py,
 $PRETEND_MAC_STATE), and writes installer.log naming the partitions it made, as the real one does.
 """
-import getpass
 import json
 import os
 import sys

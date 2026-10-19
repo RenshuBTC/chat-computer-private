@@ -110,6 +110,10 @@ def describe_tool(name: str, inp: dict[str, Any]) -> str:
         "memory": lambda: {"remember": "Remembering", "forget": "Forgetting"}.get(g("action"), "Checking my memory"),
         "claudeos_settings": lambda: "Changing a setting" if g("action") == "set" else "Checking settings",
         "stop_listening": lambda: "Going to sleep",
+        "messages": lambda: {"recent": "Checking your messages", "search": "Searching your messages",
+                             "read": "Reading a message", "open": "Opening a message", "accounts": "Checking accounts",
+                             "connect": "Connecting an account", "disconnect": "Disconnecting an account"}.get(
+            g("action"), "Messages"),
         "Bash": lambda: (g("description") or "Running a command")[:70],
         "Read": lambda: "Reading " + base(g("file_path")),
         "Write": lambda: "Writing " + base(g("file_path")),

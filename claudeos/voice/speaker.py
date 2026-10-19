@@ -6,7 +6,7 @@ import logging
 from concurrent.futures import Executor
 from typing import Callable
 
-from .tts import SentenceSplitter, speakable
+from .tts import SentenceSplitter
 
 log = logging.getLogger("claudeos.speaker")
 

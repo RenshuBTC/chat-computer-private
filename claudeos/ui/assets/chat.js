@@ -1,27 +1,31 @@
 /* The conversation screen: the messages (yours on the right, Claude's on the left), the message box at the bottom,
-   and What's done at the right. Python calls window.CO.*; the page tells Python (postMessage) what was typed and
-   which item of What's done was tapped. */
+   Messages at the left and What's done at the right. Python calls window.CO.*; the page tells Python
+   (postMessage) what was typed, what was tapped, and where it leaves room for what Claude opens. */
 (function () {
   "use strict";
   function $(id) { return document.getElementById(id); }
-  var log = $("log"), liveText = $("live-text"), body = document.body;
-  var input = $("input"), composer = $("composer"), doneList = $("done-list");
+  var log = $("log"), live = $("live"), liveText = $("live-text"), body = document.body;
+  var input = $("input"), composer = $("composer"), column = $("column");
+  var doneList = $("done-list"), donePinned = $("done-pinned");
+  var msgList = $("messages-list"), msgPinned = $("messages-pinned");
   var page = document.scrollingElement || document.documentElement;
   var rootStyle = document.documentElement.style;
   var MAX_ITEMS = 200;
   var ai = {};          // id -> {el, md, text, raf, cut, tail}
+  var mode = "chat";    // "content" while something Claude opened is showing between the sidebars
   function post(msg) {
     try { window.webkit.messageHandlers.claudeos.postMessage(JSON.stringify(msg)); } catch (e) {}
   }
   function now() { return Date.now() / 1000; }
+  function remPx() { return parseFloat(getComputedStyle(document.documentElement).fontSize) || 24; }
 
   // Newest at the bottom, like a chat: while you're at the bottom, new words keep it there. Scrolled up to read
   // something earlier, it stays where you are until you scroll back down, say something or type.
   var stick = true;
   function atBottom() { return page.scrollHeight - page.scrollTop - page.clientHeight < 4; }
-  window.addEventListener("scroll", function () { stick = atBottom(); }, { passive: true });
-  window.addEventListener("resize", function () { fitPanel(); follow(); });
-  function follow() { if (stick) page.scrollTop = page.scrollHeight; }
+  window.addEventListener("scroll", function () { if (mode === "chat") stick = atBottom(); }, { passive: true });
+  window.addEventListener("resize", function () { fitPanel(); follow(); fitStrip(); });
+  function follow() { if (stick && mode === "chat") page.scrollTop = page.scrollHeight; }
   function jumpDown() { stick = true; follow(); }
 
   // At most MAX_ITEMS messages on the page; the oldest go, but only while you're at the bottom (not while you
@@ -99,22 +103,111 @@
     if (rest) m.tail = add(m.md, window.renderMarkdown(rest));
     if (m.text) m.el.classList.remove("thinking");
     follow();
+    if (mode === "content") fitStrip();
   }
   function showLive(text) {
+    var was = body.classList.contains("hearing");
     liveText.textContent = text || "";
     body.classList.toggle("hearing", !!text);
+    if (was !== !!text) fitStrip();
+  }
+
+  // ------------------------------------------------------------------ something open between the sidebars
+  // While a website, a video or a document is open, the conversation shrinks to its latest exchange (your latest
+  // message and Claude's latest words) just above the message box, and the window lays the page over the space
+  // above: this says where that space is ("hole"), whenever it changes.
+  var lastHole = "";
+  // The latest exchange: your latest message and what came after it (Claude's words, ClaudeOS's notes). There,
+  // each takes one line; one cut short gets "… more", which shows all of it (the page above makes room), and
+  // then "less".
+  function latest() {
+    var yous = log.querySelectorAll(".you"), n = yous.length ? yous[yous.length - 1] : log.lastElementChild, out = [];
+    for (; n; n = n.nextElementSibling) out.push(n);
+    return out;
+  }
+  function markMore(items) {
+    items.forEach(function (n) {
+      var b = n.querySelector(":scope > .more"), open = n.classList.contains("open");
+      if (b) b.remove();                     // not counted when measuring
+      var cut = !open && n.scrollHeight > n.clientHeight + 1;
+      n.classList.toggle("cut", cut);
+      if (!cut && !open) return;
+      if (!b) { b = document.createElement("button"); b.type = "button"; b.className = "more"; b.tabIndex = -1; }
+      b.innerHTML = open ? '<span class="w">less</span>' : '\u2026 <span class="w">more</span>';
+      n.appendChild(b);
+    });
+  }
+  function fitStrip() {
+    if (mode !== "content") return;
+    var rem = remPx(), items = latest();
+    markMore(items);
+    var first = items[0], h = 2.5 * rem, open = items.some(function (n) { return n.classList.contains("open"); });
+    if (first) {
+      var end = body.classList.contains("hearing") ? live : items[items.length - 1];
+      h = Math.max(h, end.getBoundingClientRect().bottom - first.getBoundingClientRect().top + 0.25 * rem);
+    }
+    rootStyle.setProperty("--strip-h", Math.round(Math.min(h, window.innerHeight * (open ? 0.6 : 0.3))) + "px");
+    column.scrollTop = column.scrollHeight;
+    if (open && first && h > window.innerHeight * 0.6)          // all of it doesn't fit: from its start
+      column.scrollTop += first.getBoundingClientRect().top - column.getBoundingClientRect().top;
+    reportHole();
+  }
+  log.addEventListener("click", function (e) {
+    if (mode !== "content" || !e.target.closest) return;
+    var n = e.target.closest("#log > *");
+    if (!n || (!e.target.closest(".more") && (!n.classList.contains("cut") || e.target.closest("a")))) return;
+    n.classList.toggle("open");
+    fitStrip();
+  });
+  // The frame: between the sidebars' cards (with the same space as around them), from their top down to the
+  // latest exchange. The page goes inside it, clear of its rounded corners.
+  function reportHole() {
+    if (mode !== "content") return;
+    var rem = remPx(), gap = Math.round(0.75 * rem), panels = body.classList.contains("panel");
+    var left = panels ? Math.round($("messages").getBoundingClientRect().right) + gap : gap;
+    var right = panels ? Math.round($("done").getBoundingClientRect().left) - gap : window.innerWidth - gap;
+    var bottom = Math.round(column.getBoundingClientRect().top - 0.6 * rem);
+    var f = $("frame").style;
+    f.left = left + "px"; f.top = gap + "px";
+    f.width = Math.max(0, right - left) + "px"; f.height = Math.max(0, bottom - gap) + "px";
+    var inset = 2 + Math.round(0.4 * rem);              // the border, and room for the corners' curve
+    var r = { x: left + inset, y: gap + inset, w: Math.max(0, right - left - 2 * inset), h: Math.max(0, bottom - gap - 2 * inset) };
+    var key = r.x + "," + r.y + "," + r.w + "," + r.h;
+    if (key !== lastHole) { lastHole = key; post({ type: "hole", x: r.x, y: r.y, w: r.w, h: r.h }); }
+  }
+  function setMode(m) {
+    mode = m;
+    body.classList.toggle("content", m === "content");
+    if (m === "content") fitStrip();
+    else {
+      lastHole = "";
+      Array.prototype.forEach.call(log.querySelectorAll(":scope > .open, :scope > .cut"), function (n) {
+        n.classList.remove("open", "cut");
+      });
+      jumpDown();
+    }
   }
 
   // ------------------------------------------------------------------ the message box
   // A real text box, like the Claude app's: the cursor, arrow keys, selecting, pasting and input methods all work as
   // anywhere else. Enter sends; Shift+Enter starts a new line; Escape clears it. Page Up and Down scroll the
   // conversation, and so do the arrow keys, Home and End while the box is empty. It grows with what's typed.
+  var drafting = false;
   function fitInput() {
     input.style.height = "auto";
     input.style.height = input.scrollHeight + "px";
     body.classList.toggle("drafting", input.value.trim() !== "");
+    checkSearch();
+    keysToPage();
+  }
+  // Whether Escape is the page's (to clear the box, or a sign-in form), rather than the window's (to close
+  // what's open).
+  function keysToPage() {
+    var d = input.value.trim() !== "" || body.classList.contains("sheet");
+    if (d !== drafting) { drafting = d; post({ type: "drafting", on: d }); }
   }
   function sendNow() {
+    if (searching) { openResult(); return; }        // "/": Enter opens what's chosen
     var text = input.value.trim();
     if (!text) return;
     input.value = "";
@@ -128,6 +221,7 @@
   input.addEventListener("keydown", function (e) {
     if (e.isComposing || e.keyCode === 229) return;        // an input method is still putting a character together
     var k = e.key;
+    if (searchKeys(e)) return;
     if (k === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); sendNow(); return; }
     if (k === "Escape" && input.value) { e.preventDefault(); input.value = ""; fitInput(); return; }
     var how = SCROLL_ALWAYS[k] || (input.value === "" ? SCROLL_EMPTY[k] : null);
@@ -135,10 +229,13 @@
     if (k.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) measure(e.timeStamp);
   });
   $("send").addEventListener("click", sendNow);
-  // Typing always goes into the box, even after a click elsewhere on the page or selecting words to copy them.
-  function focusBox() { if (document.activeElement !== input) input.focus({ preventScroll: true }); }
+  // Typing always goes into the box, even after a click elsewhere on the page or selecting words to copy them (but
+  // not while a sign-in form is open: that has boxes of its own).
+  function focusBox() {
+    if (!body.classList.contains("sheet") && document.activeElement !== input) input.focus({ preventScroll: true });
+  }
   document.addEventListener("keydown", function (e) {
-    if (e.target === input) return;
+    if (e.target === input || body.classList.contains("sheet")) return;
     var paste = (e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V");
     if (paste || (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter"))) focusBox();
   }, true);
@@ -151,6 +248,7 @@
   new ResizeObserver(function () {
     rootStyle.setProperty("--composer-h", composer.offsetHeight + "px");
     follow();
+    fitStrip();
   }).observe(composer);
 
   // How long typed letters take to reach the screen (two frames after the key), sent every few seconds and logged
@@ -165,62 +263,106 @@
     });
   }
 
-  // ------------------------------------------------------------------ the line under the box
-  var STATUS = { sleeping: "Sleeping. Say “Claude”, press an AirPod or type to wake me.",
-                 resting: "Sleeping. Say “Claude”, press an AirPod or type to wake me." };
-  var micState = false;
-  function status() {
-    var s = "";
-    for (var k in STATUS) if (body.classList.contains(k)) s = STATUS[k];
-    if (!s && micState) s = "Listening";
-    $("mic-text").textContent = s;
-    $("mic").classList.toggle("on", !!s);
-  }
 
-  // ------------------------------------------------------------------ What's done
-  var dones = [], lastDay = "", labelsFor = "", DONE_MAX = 300;
+  // ------------------------------------------------------------------ the sidebars
+  // Shown when there's room for them beside the conversation, and for their words (most screens; not a narrow
+  // window).
+  function fitPanel() {
+    var rem = remPx();
+    var col = parseFloat(rootStyle.getPropertyValue("--co-column")) || 30 * rem;
+    var w = window.innerWidth;
+    body.classList.toggle("panel", w * 0.17 >= 11 * rem && w * 0.66 - 3 * rem >= 0.8 * col);
+  }
   function dayLabel(ts) {
     var d = new Date(ts * 1000), t = new Date(), y = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
     if (d.toDateString() === t.toDateString()) return "Today";
     if (d.toDateString() === y.toDateString()) return "Yesterday";
     return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
   }
-  function addDone(e) {
-    var day = new Date(e.ts * 1000).toDateString();
-    if (day !== lastDay) {
-      var h = document.createElement("li");
-      h.className = "done-day";
-      h.textContent = dayLabel(e.ts);
-      doneList.appendChild(h);
-      lastDay = day;
-    }
+  function clock(ts) { return new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+  function dayItem(ts) {
+    var h = document.createElement("li");
+    h.className = "side-day";
+    h.textContent = dayLabel(ts);
+    return h;
+  }
+  function pinButton(pinned) {
+    var b = document.createElement("button");
+    b.className = "pin";
+    b.type = "button";
+    b.tabIndex = -1;
+    b.title = pinned ? "Unpin" : "Pin to the top";
+    b.setAttribute("aria-label", b.title);
+    b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-pin"/></svg>';
+    return b;
+  }
+  // Pins: a pinned item stays at the top of its list, newest pin first, until it's unpinned. The page shows it at
+  // once; ClaudeOS keeps it (pins.json) for next time.
+  function togglePin(kind, items, id) {
+    var it = items[id];
+    if (!it) return;
+    if (it.pinned) delete it.pinned; else it.pinned = now();
+    post({ type: "pin", list: kind, id: id, on: !!it.pinned });
+  }
+  function onSide(listEls, handler) {
+    listEls.forEach(function (ul) {
+      ul.addEventListener("mousedown", function (e) { e.preventDefault(); });     // typing stays in the box
+      ul.addEventListener("click", function (e) {
+        var li = e.target.closest ? e.target.closest(".item") : null;
+        if (li) handler(li, !!(e.target.closest && e.target.closest(".pin")));
+      });
+    });
+  }
+
+  // What's done: oldest at the top, grouped by day; pinned ones above.
+  var dones = [], doneById = {}, lastDay = "", labelsFor = "", DONE_MAX = 300;
+  function doneItem(e) {
     var li = document.createElement("li");
-    li.className = "done-item";
-    li.textContent = e.text;
+    li.className = "item done-item" + (e.pinned ? " pinned" : "");
+    li.dataset.id = e.id;
     li.dataset.prompt = e.prompt_id || "";
     li.dataset.ts = String(e.prompt_ts || e.ts);
-    li.title = new Date(e.ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    doneList.appendChild(li);
+    var pinnedDay = e.pinned && new Date(e.ts * 1000).toDateString() !== new Date().toDateString();
+    li.appendChild(el("done-when", (pinnedDay ? dayLabel(e.ts) + " " : "") + clock(e.ts)));
+    li.appendChild(el("done-what", e.text));
+    li.appendChild(pinButton(e.pinned));
+    return li;
+  }
+  function addDone(e) {
+    if (e.pinned) return;
+    var day = new Date(e.ts * 1000).toDateString();
+    if (day !== lastDay) { doneList.appendChild(dayItem(e.ts)); lastDay = day; }
+    doneList.appendChild(doneItem(e));
   }
   function drawDone() {
     doneList.textContent = "";
+    donePinned.textContent = "";
     lastDay = "";
+    doneById = {};
+    dones.forEach(function (e) { doneById[e.id] = e; });
+    dones.filter(function (e) { return e.pinned; }).sort(function (a, b) { return b.pinned - a.pinned; })
+      .forEach(function (e) { donePinned.appendChild(doneItem(e)); });
     dones.forEach(addDone);
     labelsFor = new Date().toDateString();
     body.classList.toggle("has-done", dones.length > 0);
     doneList.scrollTop = doneList.scrollHeight;
   }
-  // Shown when there's room for it beside the conversation, and for its words (most screens; not a narrow window).
-  function fitPanel() {
-    var rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 24;
-    var col = parseFloat(rootStyle.getPropertyValue("--co-column")) || 30 * rem;
-    var w = window.innerWidth;
-    body.classList.toggle("panel", w * 0.17 >= 11 * rem && w * 0.83 - 3 * rem >= 0.8 * col);
+  // Today's date and the time, above What's done: changed on the minute (and the days' names at midnight).
+  function tick() {
+    var d = new Date();
+    $("clock-date").textContent = d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    $("clock-time").textContent = clock(d.getTime() / 1000);
+    if (labelsFor && labelsFor !== d.toDateString()) { drawDone(); drawMessages(); }
+    setTimeout(tick, 60000 - (d.getSeconds() * 1000 + d.getMilliseconds()) + 50);
   }
-  doneList.addEventListener("mousedown", function (e) { e.preventDefault(); });     // typing stays in the box
-  doneList.addEventListener("click", function (e) {
-    var li = e.target.closest ? e.target.closest(".done-item") : null;
-    if (li) goTo(li.dataset.prompt, parseFloat(li.dataset.ts) || 0);
+  onSide([doneList, donePinned], function (li, pin) {
+    if (pin) { togglePin("done", doneById, li.dataset.id); drawDone(); return; }
+    var ts = parseFloat(li.dataset.ts) || 0, id = li.dataset.prompt;
+    if (mode === "content") {
+      post({ type: "close_content", pause: false });     // back to the conversation, to show where it was asked
+      setMode("chat");
+      requestAnimationFrame(function () { goTo(id, ts); });
+    } else goTo(id, ts);
   });
   // The message a done thing was asked in: by its id, else the last message you sent by then.
   function findMessage(id, ts) {
@@ -253,10 +395,224 @@
     else post({ type: "goto", id: id || null, ts: ts, before: firstTs() });     // an earlier day: CO.earlier
   }
 
+  // Messages: everything sent to you (email, Telegram, WhatsApp, social media), newest first, grouped by day;
+  // pinned ones above. Unread: who in bold. Tapping one opens it between the sidebars.
+  var msgs = {}, accounts = [], MSG_MAX = 400;
+  var ICON = { email: "i-email", telegram: "i-telegram", whatsapp: "i-chat" };
+  function msgItem(m) {
+    var li = document.createElement("li");
+    li.className = "item msg" + (m.unread ? " unread" : "") + (m.pinned ? " pinned" : "");
+    li.dataset.id = m.id;
+    var top = el("msg-top");
+    top.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#' + (ICON[m.source] || "i-social") + '"/></svg>';
+    top.appendChild(el("msg-who", m.who || ""));
+    top.appendChild(el("msg-when", clock(m.ts)));
+    var text = el("msg-text");
+    var src = document.createElement("span");
+    src.className = "msg-src";
+    src.textContent = (m.label || m.source) + ": ";
+    text.appendChild(src);
+    text.appendChild(document.createTextNode(m.text || ""));
+    li.appendChild(top);
+    li.appendChild(text);
+    li.appendChild(pinButton(m.pinned));
+    return li;
+  }
+  function drawMessages() {
+    var atTop = msgList.scrollTop < 4;
+    msgList.textContent = "";
+    msgPinned.textContent = "";
+    var all = Object.keys(msgs).map(function (k) { return msgs[k]; });
+    all.filter(function (m) { return m.pinned; }).sort(function (a, b) { return b.pinned - a.pinned; })
+      .forEach(function (m) { msgPinned.appendChild(msgItem(m)); });
+    var day = "";
+    all.filter(function (m) { return !m.pinned; }).sort(function (a, b) { return b.ts - a.ts; }).forEach(function (m) {
+      var d = new Date(m.ts * 1000).toDateString();
+      if (d !== day) { msgList.appendChild(dayItem(m.ts)); day = d; }
+      msgList.appendChild(msgItem(m));
+    });
+    body.classList.toggle("has-messages", all.length > 0 || accounts.length > 0);
+    if (atTop) msgList.scrollTop = 0;
+  }
+  function trimMessages() {
+    var all = Object.keys(msgs).map(function (k) { return msgs[k]; });
+    if (all.length <= MSG_MAX) return;
+    all.filter(function (m) { return !m.pinned; }).sort(function (a, b) { return a.ts - b.ts; })
+      .slice(0, all.length - MSG_MAX).forEach(function (m) { delete msgs[m.id]; });
+  }
+  onSide([msgList, msgPinned], function (li, pin) {
+    var m = msgs[li.dataset.id];
+    if (!m) return;
+    if (pin) togglePin("messages", msgs, m.id);
+    else { m.unread = false; post({ type: "open_message", id: m.id }); }
+    drawMessages();
+  });
+  $("add-account").addEventListener("click", function () { post({ type: "add_account" }); });
+  $("connect-first").addEventListener("click", function () { post({ type: "add_account" }); });
+
+  // ------------------------------------------------------------------ connecting an account
+  // A form ClaudeOS shows (CO.accountForm): what's typed in it goes back to ClaudeOS's own sign-in store, never to
+  // Claude. Choices (which kind of account) are buttons.
+  var form = null;
+  function showForm(f) {
+    form = f;
+    body.classList.toggle("sheet", !!f);
+    body.classList.remove("sheet-busy");
+    if (!f) { keysToPage(); focusBox(); return; }
+    $("sheet-title").textContent = f.title || "";
+    var text = $("sheet-text");
+    text.textContent = "";
+    (f.text || []).forEach(function (p) { var e = document.createElement("p"); e.textContent = p; text.appendChild(e); });
+    var fields = $("sheet-fields");
+    fields.textContent = "";
+    var firstInput = null;
+    (f.fields || []).forEach(function (fd) {
+      var label = document.createElement("label");
+      label.textContent = fd.label || fd.name;
+      var inp = document.createElement("input");
+      inp.name = fd.name;
+      inp.type = fd.type || "text";
+      inp.value = fd.value || "";
+      inp.autocomplete = "off";
+      inp.spellcheck = false;
+      if (fd.placeholder) inp.setAttribute("aria-describedby", "sheet-text");
+      label.appendChild(inp);
+      fields.appendChild(label);
+      if (!firstInput && !fd.value) firstInput = inp;
+    });
+    if (f.choices && f.choices.length) {
+      var row = el("choices");
+      f.choices.forEach(function (c) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = c.label;
+        b.addEventListener("click", function () { post({ type: "add_account", provider: c.value }); });
+        row.appendChild(b);
+      });
+      fields.appendChild(row);
+    }
+    $("sheet-error").textContent = f.error || "";
+    $("sheet-ok").textContent = f.ok || "Connect";
+    $("sheet-ok").style.display = f.ok === "" ? "none" : "";
+    if (f.busy) body.classList.add("sheet-busy");
+    keysToPage();
+    var focusOn = firstInput || fields.querySelector("input");
+    if (focusOn) focusOn.focus({ preventScroll: true });
+  }
+  $("sheet-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (!form || body.classList.contains("sheet-busy")) return;
+    var values = {};
+    Array.prototype.forEach.call($("sheet-fields").querySelectorAll("input"), function (i) { values[i.name] = i.value; });
+    body.classList.add("sheet-busy");
+    $("sheet-error").textContent = "";
+    post({ type: "account", form: form.id, values: values });
+  });
+  function cancelForm() {
+    if (form) post({ type: "account_cancel", form: form.id });
+    showForm(null);
+  }
+  $("sheet-cancel").addEventListener("click", cancelForm);
+  $("sheet").addEventListener("keydown", function (e) { if (e.key === "Escape") { e.preventDefault(); cancelForm(); } });
+
+  // ------------------------------------------------------------------ "/": searching this computer
+  // A "/" first in the box makes it search this computer's files (ClaudeOS's index of them) for the words after
+  // it, as they're typed: the best matches in a list above the box. The arrow keys choose, Enter or a click opens
+  // one between the sidebars; the last line asks Claude to look instead. Escape (clearing the box) ends it.
+  var searching = false, searchN = 0, searchQ = "", results = [], resSel = 0, searchTimer = 0;
+  function useIcon(id) { return '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#' + id + '"/></svg>'; }
+  function checkSearch() {
+    var on = input.value.charAt(0) === "/" && input.value.indexOf("\n") < 0;
+    if (on !== searching) {
+      searching = on;
+      body.classList.toggle("searching", on);
+      if (!on) { results = []; $("results").textContent = ""; clearTimeout(searchTimer); }
+    }
+    if (!on) return;
+    var q = input.value.slice(1).trim();
+    if (q === searchQ && results.length) return;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () { searchN++; post({ type: "search", q: q, n: searchN }); }, 120);
+  }
+  function bold(target, text, q) {
+    var words = q.toLowerCase().split(/\s+/).filter(Boolean), low = text.toLowerCase(), marks = [];
+    words.forEach(function (w) {
+      for (var i = low.indexOf(w); i >= 0; i = low.indexOf(w, i + w.length)) marks.push([i, i + w.length]);
+    });
+    marks.sort(function (a, b) { return a[0] - b[0]; });
+    var at = 0;
+    marks.forEach(function (m) {
+      if (m[0] < at) return;
+      target.appendChild(document.createTextNode(text.slice(at, m[0])));
+      var b = document.createElement("b");
+      b.textContent = text.slice(m[0], m[1]);
+      target.appendChild(b);
+      at = m[1];
+    });
+    target.appendChild(document.createTextNode(text.slice(at)));
+  }
+  function drawResults(q, items, note) {
+    var list = $("results");
+    list.textContent = "";
+    results = items || [];
+    searchQ = q;
+    results.forEach(function (r, i) {
+      var row = el("res");
+      row.setAttribute("role", "option");
+      row.innerHTML = useIcon("i-file");
+      var t = el("res-text"), name = document.createElement("span"), where = document.createElement("span");
+      name.className = "res-name";
+      bold(name, r.name || "", q);
+      where.className = "res-where";
+      where.textContent = r.where || "";
+      t.appendChild(name);
+      t.appendChild(where);
+      row.appendChild(t);
+      if (r.when) row.appendChild(el("res-when", r.when));
+      row.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      row.addEventListener("click", function () { resSel = i; openResult(); });
+      list.appendChild(row);
+    });
+    if (!results.length && note) list.appendChild(el("res-note", note));
+    var ask = el("res ask");
+    ask.setAttribute("role", "option");
+    ask.innerHTML = useIcon("i-chat");
+    ask.appendChild(el("res-text", q ? "Ask Claude to find “" + q + "”" : "Ask Claude to find something"));
+    ask.addEventListener("mousedown", function (e) { e.preventDefault(); });
+    ask.addEventListener("click", function () { resSel = results.length; openResult(); });
+    list.appendChild(ask);
+    markResult(0);
+  }
+  function markResult(i) {
+    var rows = $("results").querySelectorAll(".res");
+    resSel = Math.max(0, Math.min(i, rows.length - 1));
+    Array.prototype.forEach.call(rows, function (r, j) { r.classList.toggle("sel", j === resSel); });
+    if (rows[resSel]) rows[resSel].scrollIntoView({ block: "nearest" });
+  }
+  function openResult() {
+    var q = input.value.slice(1).trim(), r = results[resSel];
+    if (!r && !q) return;
+    input.value = "";
+    fitInput();
+    if (r) post({ type: "open_file", path: r.path });
+    else post({ type: "send", text: "Find “" + q + "” on my computer." });
+    jumpDown();
+  }
+  function searchKeys(e) {
+    if (!searching) return false;
+    var n = $("results").querySelectorAll(".res").length;
+    if (e.key === "ArrowDown") markResult((resSel + 1) % Math.max(1, n));
+    else if (e.key === "ArrowUp") markResult((resSel - 1 + n) % Math.max(1, n));
+    else return false;
+    e.preventDefault();
+    return true;
+  }
+
   var users = {};
   window.CO = {
     user: function (id, text, final) {
       showLive("");
+      stick = true;
       var u = users[id];
       if (!u) {
         u = users[id] = el("you", text);
@@ -266,6 +622,7 @@
         trim();
       } else u.textContent = text;
       jumpDown();
+      fitStrip();
     },
     // What's being heard, as it's heard.
     partial: function (text) {
@@ -287,6 +644,7 @@
       if (!m.text && !m.el.querySelector(".activity") && !m.md.firstChild) { m.el.remove(); trim(); }
       delete ai[id];
       follow();
+      fitStrip();
     },
     activity: function (id, text) {
       var m = ensureAI(id);
@@ -306,20 +664,26 @@
       log.appendChild(n);
       trim();
       follow();
+      fitStrip();
     },
     state: function (name) {
       ["listening", "sleeping", "offline", "thinking", "speaking", "muted", "resting"].forEach(function (s) {
         body.classList.toggle(s, s === name);
       });
-      status();
     },
-    // Whether the microphone is on (ClaudeOS can hear you).
-    mic: function (on) { micState = !!on; status(); },
+    // Whether the microphone is on. (Not shown: the screen is the conversation; ClaudeOS says so when it can't
+    // hear.)
+    mic: function (on) {},
+    // "/": what on this computer matches (n says which search it answers: older answers are ignored).
+    searchResults: function (n, q, items, note) { if (searching && n === searchN) drawResults(q || "", items, note); },
+    // "content" while something Claude opened is showing between the sidebars, "chat" otherwise.
+    mode: function (m) { setMode(m === "content" ? "content" : "chat"); },
     history: function (items) {
       log.innerHTML = "";
       (items || []).forEach(function (it) { log.appendChild(message(it)); });
       trim();
       jumpDown();
+      fitStrip();
     },
     // Earlier messages put back above the conversation (from the transcript), then scrolled to the one asked for.
     earlier: function (items, id, ts) {
@@ -340,6 +704,7 @@
     done: function (e) {
       var bottom = doneList.scrollHeight - doneList.scrollTop - doneList.clientHeight < 4;
       dones.push(e);
+      doneById[e.id] = e;
       if (dones.length > DONE_MAX || labelsFor !== new Date().toDateString()) {
         dones = dones.slice(-DONE_MAX);
         drawDone();                 // the oldest goes, or a new day began ("Today" is yesterday now)
@@ -349,11 +714,26 @@
       }
       if (bottom) doneList.scrollTop = doneList.scrollHeight;
     },
+    // Messages: all of them at once (with the connected accounts), or one new or changed.
+    messagesList: function (items, accts) {
+      msgs = {};
+      (items || []).forEach(function (m) { msgs[m.id] = m; });
+      accounts = accts || [];
+      trimMessages();
+      drawMessages();
+    },
+    message: function (m) {
+      var old = msgs[m.id];
+      if (old && old.pinned && !("pinned" in m)) m.pinned = old.pinned;
+      msgs[m.id] = m;
+      trimMessages();
+      drawMessages();
+    },
+    accountForm: function (f) { showForm(f || null); },
     settings: function (name, model) {
       var h = new Date().getHours();
       var part = h < 5 ? "Hello" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
       $("greeting").textContent = part + (name ? ", " + name : "") + ".";
-      $("model").textContent = model || "";
     },
     // Text size (1 rem) and column width for this screen (claudeos/ui/layout.py).
     layout: function (sizePx, columnPx) {
@@ -362,6 +742,7 @@
       fitPanel();
       fitInput();
       follow();
+      fitStrip();
     },
     // Page Up and Down, and the arrow keys, Home and End while the box is empty: reading back through the
     // conversation.
@@ -375,9 +756,9 @@
     clear: function () { log.innerHTML = ""; ai = {}; users = {}; trim(); jumpDown(); }
   };
   showLive("");
-  status();
   fitPanel();
   fitInput();
+  tick();
   window.CO.settings("", "");
   focusBox();
   post({ type: "ready" });

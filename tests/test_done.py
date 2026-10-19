@@ -10,7 +10,7 @@ from claude_agent_sdk import (AssistantMessage, ServerToolResultBlock, ServerToo
 
 from claudeos import tools as T
 from claudeos.brain.agent import Brain, BrainEvents
-from claudeos.config import Paths, Settings, State, model_label
+from claudeos.config import Paths, Settings, model_label
 from claudeos.controller import Controller
 from claudeos.done import History, describe
 from claudeos.journal import Journal

@@ -71,6 +71,7 @@ def test_the_conversation_reads_and_scrolls_like_a_chat():
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
                     reason="xvfb-run or xdotool not available")
 def test_whats_done_takes_you_back_to_where_it_was_asked():
+    import re
     # A panel at the right, a sixth of the screen as in the Claude app, grouped by day. Clicking an item (a real
     # click: the AirTouch layer over everything used to take every click) scrolls back to the message that asked
     # for it; one from yesterday puts yesterday's messages back first. Typing stays in the message box.
@@ -85,12 +86,21 @@ def test_whats_done_takes_you_back_to_where_it_was_asked():
     assert "timeout" not in res, res
     start, today, earlier = res["start"], res["today"], res["earlier"]
     assert start["panel"] and start["display"] == "flex" and start["title"] == "What’s done"
-    assert abs(start["width"] - 0.17 * start["view"]) < 2 and abs(start["left"] + start["width"] - start["view"]) < 1
+    # A rounded card, inset from the screen's edge, in the right sixth of the screen.
+    rem = (start["view"] - start["left"] - start["width"]) / 0.75           # the card stands 0.75 rem from the edge
+    assert 14 < rem < 40 and abs(start["width"] - (0.17 * start["view"] - rem)) < 2 and start["radius"].endswith("px")
+    assert float(start["radius"][:-2]) > 10
     assert start["column_right"] <= start["left"] and start["box"][1] <= start["left"]
     assert [(i["cls"], i["text"]) for i in start["items"]] == [
-        ("done-day", "Yesterday"), ("done-item", "Opened youtube.com"), ("done-day", "Today"),
+        ("side-day", "Yesterday"), ("done-item", "Opened youtube.com"), ("side-day", "Today"),
         ("done-item", "Searched the web for “trains on Sunday”"), ("done-item", "Saved notes.txt"),
         ("done-item", "Set the volume to 40%")]
+    # Each thing done says when, and under it what (the words get the panel's width); the date and the time now
+    # are above them. No line down the side.
+    done = [i for i in start["items"] if i["cls"] == "done-item"]
+    assert all(re.fullmatch(r"[1-9]\d?:\d{2}( [AP]M)?", i["when"]) and i["stacked"] for i in done)
+    assert re.search(r"\d{4}$", start["clock"][0]) and re.fullmatch(r"[1-9]\d?:\d{2}( [AP]M)?", start["clock"][1])
+    assert start["line"] == "none"
     assert start["found"] is None and start["focused"]
     # Today's: scrolled up to it, and it's marked for a moment.
     assert today["found"]["id"] == "u5" and 0 <= today["found"]["top"] < 100 and today["scroll"] < start["scroll"]
@@ -135,7 +145,8 @@ def test_the_message_box_works_like_the_claude_apps():
     assert "timeout" not in res, res
     empty, typed, two, sent = res["empty"], res["typed"], res["two_lines"], res["sent"]
     assert empty["focused"] and empty["value"] == "" and empty["send"] == "hidden"
-    assert empty["status"] == "Listening Sonnet 5.5"
+    # Nothing under the box (or above it while awake): its menu, from a right-click, has the rest.
+    assert empty["words"] == "" and empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
     assert typed["value"] == "hi there" and typed["drafting"] and typed["send"] == "visible"
     assert two["value"] == "hi there\nsecond line" and two["box_h"] > typed["box_h"] + 20
     assert res["sent_text"] == ["hi there\nsecond line"]
@@ -144,6 +155,94 @@ def test_the_message_box_works_like_the_claude_apps():
     assert res["escaped"]["value"] == ""
     assert len(res["typed_ms"]) >= 15 and all(0 <= ms < 2000 for ms in res["typed_ms"])
 
+
+
+@pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
+                    reason="xvfb-run or xdotool not available")
+def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
+    # Messages at the left and What's done at the right, as rounded cards inset from the screen's edges. Something
+    # opened (a website) goes in a rounded frame between them, the same space apart, above your latest message,
+    # Claude's latest reply and the message box. F1 makes it fill the screen and F1 again puts it back; Escape
+    # closes it. A message can be pinned (it goes to the top) and opened, with real clicks.
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).with_name("screen_layout_check.py")
+    r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24", sys.executable, str(script)],
+                       capture_output=True, text=True, timeout=150)
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
+    assert "timeout" not in res, res
+    start, pinned, content, expanded, framed, closed = (res[k] for k in ("start", "pinned", "content", "expanded",
+                                                                         "framed", "closed"))
+    w, h = start["view"]
+    gap = start["messages"][0]                                  # the cards' space from the screen's edges
+    assert 10 < gap < 30 and start["messages"][1] == gap and h - start["messages"][3] == gap
+    assert w - start["done"][2] == gap and float(start["radius"][:-2]) > 10
+    # Newest first; pinned ones above, without being cut off; each with its kind's icon.
+    assert [i["who"] for i in start["list"] if "msg" in i["cls"]] == ["Mum", "Jane from the bank", "Alex"]
+    assert [i["who"] for i in start["pinned"]] == ["sam.k"]
+    assert [i["who"] for i in pinned["pinned"]] == ["Mum", "sam.k"] and [i["icon"] for i in pinned["pinned"]] == [
+        "#i-chat", "#i-social"]
+    assert not any(i["clipped"] or i["title"] for i in pinned["pinned"] + pinned["list"])
+    assert res["events"] == [{"type": "pin", "list": "messages", "id": "m2", "on": True},
+                             {"type": "open_message", "id": "m1"}]
+    # Open: the page is inside the frame, which is between the cards (the same space apart) and above the latest
+    # exchange; your latest message shows just above the message box.
+    assert content["mode"] == "content" and content["content"]
+    f, v = content["frame"], content["content_view"]
+    assert abs(f[0] - (start["messages"][2] + gap)) <= 1 and abs(f[2] - (start["done"][0] - gap)) <= 1
+    assert abs(f[1] - gap) <= 1 and f[0] < v[0] and f[1] < v[1] and v[2] < f[2] and v[3] < f[3]
+    assert f[3] < content["column"][1] <= content["last_you"][1] and content["last_you"][3] <= content["column"][3]
+    # There, your latest message and Claude's latest reply take a line each, with "… more" for the rest...
+    for state in (content, res["less"]):
+        assert state["you_h"] < 2 * state["line"] and state["ai_h"] < 1.5 * state["line"] and not state["ai_open"]
+        assert state["you_more"]["text"] == state["ai_more"]["text"] == "\u2026 more" and state["ai_more"]["shown"]
+    # ...which shows all of it: the page above makes room (its frame ends higher), and "less" puts it back.
+    more = res["more"]
+    assert more["ai_open"] and more["ai_h"] > 5 * more["line"] and more["ai_more"]["text"] == "less"
+    assert more["frame"][3] < content["frame"][3] - 4 * more["line"] and more["strip_h"] > content["strip_h"]
+    assert res["less"]["frame"] == content["frame"] and res["less"]["content_view"] == v
+    # F1: the whole screen; F1 again: back in the frame. Escape: closed, back to the conversation.
+    assert expanded["content_view"] == [0, 0, w, h]
+    assert framed["content_view"] == v and framed["mode"] == "content"
+    assert closed["mode"] == "chat" and closed["content_view"] == [] and not closed["content"] and res["closed_called"]
+
+
+
+@pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
+                    reason="xvfb-run or xdotool not available")
+def test_slash_in_the_message_box_searches_this_computer():
+    # ClaudeOS is the conversation: the box has no menu (a right-click opens nothing). A "/" first turns it into a
+    # search of this computer's files: the matches in a list above the box (the matching letters bold), the arrow
+    # keys choose, Enter opens one; nothing found leaves the line that asks Claude; Escape clears it. Anything
+    # else typed is a message. Real keys and clicks; the results come from the test, as the controller sends them.
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).with_name("screen_search_check.py")
+    r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1600x900x24", sys.executable, str(script)],
+                       capture_output=True, text=True, timeout=150)
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
+    assert "timeout" not in res, res
+    assert res["right_click"]["menus"] == 0 and not res["right_click"]["searching"]
+    s = res["search"]
+    assert s["searching"] and s["icon"] == "block" and s["value"] == "/rep"
+    assert [r["text"] for r in s["results"]] == ["report.pdf~/Documents", "Ask Claude to find \u201crep\u201d"]
+    assert s["bold"] == ["rep"] and "sel" in s["results"][0]["cls"] and s["results_box"][3] <= s["box"][1]
+    assert "sel" in res["search_down"]["results"][1]["cls"] and "sel" in res["search_up"]["results"][0]["cls"]
+    assert not res["opened"]["searching"] and res["opened"]["value"] == ""
+    assert res["events"][:2] == [{"type": "search", "q": "rep"}, {"type": "open_file", "path": "/home/ren/Documents/report.pdf"}]
+    nothing = res["nothing"]
+    assert [r["text"] for r in nothing["results"]] == ["Ask Claude to find \u201czzq\u201d"]
+    assert nothing["note"] == "Nothing on this computer matches \u201czzq\u201d."
+    assert not res["cleared"]["searching"] and res["cleared"]["value"] == "" and res["cleared"]["icon"] == "none"
+    assert res["typed"] == ["hello there"] and res["message"]["focused"]
 
 def _node():
     import shutil

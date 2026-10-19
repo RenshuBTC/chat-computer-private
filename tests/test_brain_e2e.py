@@ -1,7 +1,6 @@
 """End to end: the real Claude Code engine (bundled with the Agent SDK) talking to a mock
 Claude API, driving the real ClaudeOS tools and permission gate."""
 import asyncio
-import os
 import time
 from pathlib import Path
 
@@ -126,7 +125,7 @@ def test_saying_no_stops_a_risky_command_and_claude_hears_why(clean_env):
         rig = Rig(clean_env, [("no", "no don't, I still need it")])
         script(rig.mock, {"clean": [tool_use_block("Bash", {"command": "rm -r ~/Downloads/stuff", "description": "Delete the stuff folder"})]})
         try:
-            res = await rig.say("clean my downloads")
+            await rig.say("clean my downloads")
             assert rig.asked == ["Can I run a command to delete the stuff folder?"]
             results = tool_results(rig.mock.requests[-1])
             assert results and "I still need it" in str(results[0])

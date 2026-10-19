@@ -244,6 +244,47 @@ def test_slash_in_the_message_box_searches_this_computer():
     assert not res["cleared"]["searching"] and res["cleared"]["value"] == "" and res["cleared"]["icon"] == "none"
     assert res["typed"] == ["hello there"] and res["message"]["focused"]
 
+
+@pytest.mark.skipif(not __import__("shutil").which("xvfb-run"), reason="xvfb-run not available")
+def test_the_touchscreen_works_as_an_ipad_s():
+    # The window's side (stand-ins for GTK's touch events: a virtual display has no touchscreen) and the
+    # conversation page's (touch events made in the page).
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).with_name("screen_touch_check.py")
+    r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1600x900x24", sys.executable, str(script)],
+                       capture_output=True, text=True, timeout=120)
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
+    assert "timeout" not in res, res
+    # A tap in the middle is the page's; one at the very edge is held back a moment (a swipe in?), then the page's.
+    assert res["tap"] == [False, False] and res["tap_delivered"] == []
+    assert res["edge_tap"] == [True, False] and res["edge_tap_delivered"] == [[2, "touch-begin"]]
+    # A third finger: the first two are cancelled on the page; three fingers pinched closed copy.
+    assert res["third"] and res["cancelled"] == [[10, "touch-cancel"], [11, "touch-cancel"]] and res["edits"] == ["Copy"]
+    # Swiping up from the bottom edge closes what's open (Home); the page never sees that swipe.
+    assert res["before_home"] == "content" and res["after_home"] == "chat" and all(res["home"]) and res["closed"]
+    # The onscreen keyboard: keys typed where the finger lifts (slid from w to e: e), its hide key, a real
+    # keyboard's key puts it away (not one ClaudeOS typed), and while a real keyboard is in use it doesn't come.
+    assert res["keyboard_up"] and res["keyboard_spec"] and res["key_q"] == [True, True] and res["still_up"]
+    assert res["keys"] == [["text", "q"], ["text", "e"]] and res["hidden_by_key"]
+    assert res["up_after_xtest"] and not res["up_after_real_key"] and res["refused_with_real_keyboard"]
+    # The page: a finger on the message box brings the keyboard, one elsewhere puts it away.
+    assert res["box_touch_keyboard"] and not res["keyboard_after_touch_elsewhere"]
+    # Two fingers pinched: the text grows as they move (not WebKit's zoom), and the new size is kept.
+    p = res["pinch"]
+    assert p["zoomBlocked"] and abs(float(p["size1"][:-2]) / float(p["size0"][:-2]) - 1.5) < 0.02
+    assert res["page_events"] == [{"type": "text_scale", "factor": 1.5}]
+    # A sidebar item swiped left shows Pin; holding a message selects it; a double tap selects a word.
+    assert res["swipe"] == {**res["swipe"], "swiped": True, "label": '"Pin"', "visible": "visible"}
+    assert res["hold"]["selected"].strip() == "Hi Ren. The weather is lovely today." and res["hold"]["tapPrevented"]
+    assert res["double_tap"] == "weather"
+    # Messages pulled down from the top on a narrow screen, and gone with a touch elsewhere.
+    assert res["messages"] == {"shown": "flex", "hiddenAfter": True}
+
 def _node():
     import shutil
     return shutil.which("node") or next((p for p in ("/opt/node22/bin/node",) if __import__("os").path.exists(p)), None)

@@ -36,6 +36,7 @@ from ..config import Paths, Settings  # noqa: E402
 from ..screen import Screen  # noqa: E402
 from .airtouch_layer import AirLayer  # noqa: E402
 from .layout import Layout, compute, css_vars, screen_from_monitor  # noqa: E402
+from .touch import HOLD, KEY, PASS, RELEASE, TouchGestures  # noqa: E402
 from .render import ASSETS, FONTS, NATIVE, asset  # noqa: E402
 
 log = logging.getLogger("claudeos.ui")
@@ -91,11 +92,21 @@ def register_fonts(folder: Path = FONTS) -> bool:
 # draw with the processor instead. Renderer processes read them when they start.
 CPU_RENDERING = {"WEBKIT_SKIA_ENABLE_CPU_RENDERING": "1", "WEBKIT_DISABLE_DMABUF_RENDERER": "1", "CLAUDEOS_GPU": "0"}
 SPEED_TICK_S = 0.25          # how often the window's thread checks it isn't kept busy (see _watch_speed)
+# The touchscreen (ui/touch.py): the iPad's editing gestures, as WebKit's editing commands; and how long after a
+# key typed on a real keyboard a touch on a box to type in doesn't bring up the onscreen one (as on an iPad with a
+# keyboard attached).
+EDIT_COMMANDS = {"copy": WebKit2.EDITING_COMMAND_COPY, "cut": WebKit2.EDITING_COMMAND_CUT,
+                 "paste": WebKit2.EDITING_COMMAND_PASTE, "undo": WebKit2.EDITING_COMMAND_UNDO,
+                 "redo": WebKit2.EDITING_COMMAND_REDO}
+REAL_KEYBOARD_S = 5 * 60
+TOUCH_EVENTS = {Gdk.EventType.TOUCH_BEGIN, Gdk.EventType.TOUCH_UPDATE, Gdk.EventType.TOUCH_END,
+                Gdk.EventType.TOUCH_CANCEL}
 DONE_SHOWN = 300             # What's done: how many the page holds (the rest are in done.jsonl)
 MESSAGES_SHOWN = 400         # Messages: how many the page holds (the rest are in messages.db)
 # What the conversation page tells the controller (Controller.page_event).
 PAGE_EVENTS = {"pin", "open_message", "add_account", "account", "account_cancel",
-               "search", "open_file"}           # "/" in the message box: searching this computer, opening a file
+               "search", "open_file",           # "/" in the message box: searching this computer, opening a file
+               "text_scale"}                    # two fingers pinched on the conversation: its text bigger or smaller
 
 
 def use_cpu_rendering(environ: Any = os.environ) -> bool:
@@ -199,7 +210,14 @@ class GtkScreen(Screen):
         self._renderer_stops: list[float] = []
         self._bounds: tuple[int, int, int, int] | None = None
         self.on_bounds: Callable[[tuple[int, int, int, int]], None] | None = None
-        self.on_keyboard: Callable[[tuple | None], None] | None = None      # the keyboard moved (AirTouch)
+        self.on_keyboard: Callable[[tuple | None], None] | None = None      # the keyboard moved, came or went
+        # The touchscreen: the system's gestures (ui/touch.py) and the onscreen keyboard for a finger.
+        self.touch = TouchGestures(self._touch_gesture)
+        self._held: dict[Any, list[Any]] = {}      # touches held back (maybe the system's): their events so far
+        self._given: dict[Any, Any] = {}           # each touch's last event the page had (to cancel it there)
+        self._real_key_at = -1e9                   # when a key on a real keyboard was last typed
+        self._deliver: Callable[[Any], None] = Gtk.main_do_event   # gives GTK (and so the pages) an event
+        self.on_keyboard_action: Callable[[tuple], None] | None = None   # a key tapped on it: type it (the controller)
         now = time.monotonic()
         self._speed: dict[str, Any] = {"keys": [], "late": 0, "worst": 0.0, "since": now, "tick": now}
         self._build(windowed)
@@ -235,6 +253,8 @@ class GtkScreen(Screen):
             self.win.fullscreen()
         self.win.connect("destroy", lambda *_: Gtk.main_quit())
         self.win.connect("key-press-event", self._on_key)
+        # Touches where no page is (the onscreen keyboard's place) come as touches too, not as a mouse's clicks.
+        self.win.add_events(Gdk.EventMask.TOUCH_MASK)
 
         # The conversation page fills the window: the sidebars, the conversation and the message box. A page Claude
         # opens (a website, a video, a document) is a second view laid over it, in the space between the sidebars and
@@ -313,6 +333,9 @@ class GtkScreen(Screen):
         self._apply_layout()
         self.win.show_all()
         self.chat.grab_focus()          # typing goes into the conversation's message box
+        # Every event passes here first (and then on to GTK): the touchscreen's system gestures, and which keys come
+        # from a real keyboard.
+        Gdk.event_handler_set(self._gdk_event)
         # Work the layout out again whenever the window or the monitor changes.
         self.win.connect("size-allocate", self._on_size_allocate)
         Gdk.Screen.get_default().connect("monitors-changed", lambda *_: self._schedule_relayout())
@@ -438,11 +461,13 @@ class GtkScreen(Screen):
             if self.air.up:
                 self.air.hide_keyboard()
                 self.chat.set_margin_bottom(0)
+            self.touch.keyboard = None
             return None
         w, h = self.win.get_allocated_width(), self.win.get_allocated_height()
         if w <= 1 or h <= 1:
             w, h = self.win.get_default_size()
         x, y, aw, ah = self.air.show_keyboard(w, h)
+        self.touch.keyboard = self.air.panel
         # Pages get the room above it, the way a tablet's do, so what's being typed into stays in view (the
         # conversation keeps its newest words at the bottom).
         self.chat.set_margin_bottom(int(self.air.panel[3]))
@@ -565,6 +590,10 @@ class GtkScreen(Screen):
             return
         if kind == "drafting":
             self._drafting = bool(msg.get("on"))
+            return
+        if kind == "keyboard":
+            # A finger on the message box (the onscreen keyboard comes up), or somewhere else (it goes).
+            self.touch_keyboard(bool(msg.get("show")))
             return
         if kind in PAGE_EVENTS:
             # Pins, a message opened, a sign-in form filled in, "/" searching: the controller's (on its thread).
@@ -937,6 +966,9 @@ class GtkScreen(Screen):
             self.media_playing = playing
             if self.loop:
                 self.loop.call_soon_threadsafe(self.on_media_state, playing)
+        elif msg.get("type") == "keyboard":
+            # A finger on a website's box to type in (the onscreen keyboard comes up), or it left it.
+            self.touch_keyboard(bool(msg.get("show")))
 
     async def show_url(self, url: str) -> dict[str, Any]:
         assert self.loop is not None
@@ -1181,6 +1213,143 @@ class GtkScreen(Screen):
         """A sign-in form for a mail or Telegram account on the conversation page (None closes it). What's typed
         in it comes back to on_account, never through Claude."""
         self._chat_js(f"CO.accountForm({json.dumps(form)})", "transient")
+
+    # ================================================================ the touchscreen
+    def _gdk_event(self, ev: Any, *_data: Any) -> None:
+        """Every event, before GTK has it: touches go through the iPad's system gestures (ui/touch.py), and a key
+        typed on a real keyboard is noted (it puts the onscreen keyboard away, as on an iPad)."""
+        kind = ev.get_event_type()
+        try:
+            if kind in TOUCH_EVENTS:
+                if self._touch_event(ev, kind):
+                    return                   # the screen's (a system gesture, the onscreen keyboard): not the page's
+            elif kind == Gdk.EventType.KEY_PRESS:
+                self._note_key(ev)
+        except Exception:
+            log.exception("touch")
+        self._deliver(ev)
+
+    def _touch_event(self, ev: Any, kind: Any) -> bool:
+        """A touch's event: True when the page under it mustn't have it."""
+        seq = ev.get_event_sequence()
+        _ok, rx, ry = ev.get_root_coords()
+        gw = self.win.get_window()
+        ox, oy = gw.get_origin()[-2:] if gw is not None else (0, 0)
+        x, y, now, tg = rx - ox, ry - oy, time.monotonic(), self.touch
+        tg.size = (float(self.win.get_allocated_width()), float(self.win.get_allocated_height()))
+        if kind == Gdk.EventType.TOUCH_BEGIN:
+            verdict, cancel = tg.begin(seq, x, y, now)
+            for s in cancel:
+                self._cancel_on_page(s)
+            if verdict == RELEASE:
+                for s in list(self._held):
+                    self._release(s)
+                verdict = PASS
+            return self._route(seq, verdict, ev, x, y, begin=True)
+        if kind == Gdk.EventType.TOUCH_UPDATE:
+            verdict = tg.move(seq, x, y, now)
+            if verdict == RELEASE:
+                self._release(seq)
+                verdict = PASS
+            return self._route(seq, verdict, ev, x, y)
+        if kind == Gdk.EventType.TOUCH_END:
+            verdict, _gesture = tg.end(seq, x, y, now)
+            if verdict == RELEASE:
+                self._release(seq)
+                verdict = PASS
+            taken = self._route(seq, verdict, ev, x, y, end=True)
+            self._given.pop(seq, None)
+            self._held.pop(seq, None)
+            return taken
+        verdict = tg.cancel(seq)                     # cancelled (the window lost it)
+        self._held.pop(seq, None)
+        self._given.pop(seq, None)
+        if verdict == KEY:
+            self.air.touch_key(None)
+        return verdict != PASS
+
+    def _route(self, seq: Any, verdict: str, ev: Any, x: float, y: float, begin: bool = False,
+               end: bool = False) -> bool:
+        if verdict == PASS:
+            self._given[seq] = ev.copy()
+            return False
+        if verdict == HOLD:
+            self._held.setdefault(seq, []).append(ev.copy())
+            return True
+        if verdict == KEY:
+            self._touch_key(x, y, end)
+        return True
+
+    def _release(self, seq: Any) -> None:
+        """A touch held back wasn't the system's: the page gets what it missed."""
+        for e in self._held.pop(seq, []):
+            self._deliver(e)
+            self._given[seq] = e
+
+    def _cancel_on_page(self, seq: Any) -> None:
+        """A touch the page had became part of the screen's gesture (a third finger came): cancelled there."""
+        last = self._given.pop(seq, None)
+        if last is not None:
+            c = last.copy()
+            c.touch.type = Gdk.EventType.TOUCH_CANCEL
+            self._deliver(c)
+
+    def _touch_key(self, x: float, y: float, end: bool) -> None:
+        """A finger on the onscreen keyboard: the key under it shows pressed; lifted, it's typed (as on an iPad,
+        sliding to another key before lifting types that one)."""
+        if not end:
+            self.air.touch_key((x, y))
+            return
+        self.air.touch_key(None)
+        action = self.air.press(x, y)
+        if not action:
+            return
+        if action[0] == "hide":
+            self.touch_keyboard(False)
+        elif self.loop and self.on_keyboard_action:
+            self.loop.call_soon_threadsafe(self.on_keyboard_action, action)
+
+    def _touch_gesture(self, name: str) -> None:
+        """One of the iPad's system gestures (ui/touch.py) was made."""
+        log.info("touch: %s", name)
+        if name == "home":
+            if self.mode == "content":
+                self.close_content()
+            elif self.air.up:
+                self.touch_keyboard(False)
+        elif name in ("back", "forward"):
+            v = self.shown if self.mode == "content" else None
+            if v is not None and (v.can_go_back() if name == "back" else v.can_go_forward()):
+                v.go_back() if name == "back" else v.go_forward()
+        elif name == "messages":
+            self._chat_js("CO.showMessages()", "transient")
+        elif name in EDIT_COMMANDS:
+            view = self.shown if self.mode == "content" and self.shown is not None and self.shown.has_focus() \
+                else self.chat
+            view.execute_editing_command(EDIT_COMMANDS[name])
+
+    def touch_keyboard(self, show: bool) -> None:
+        """The onscreen keyboard for a finger on a box to type in, or away (its hide key, a key typed on a real
+        keyboard, Home, or a touch somewhere else). Not while a real keyboard is in use, as on an iPad."""
+        if show == self.air.up or (show and time.monotonic() - self._real_key_at < REAL_KEYBOARD_S):
+            return
+        spec = self._show_keyboard_now(show)
+        if self.on_keyboard:
+            try:
+                self.on_keyboard(spec)
+            except Exception:
+                log.exception("on_keyboard")
+
+    def _note_key(self, ev: Any) -> None:
+        """A key: from a real keyboard (not one ClaudeOS typed itself, for the onscreen keyboard or AirTouch's), it
+        puts the onscreen keyboard away."""
+        dev = ev.get_source_device()
+        name = (dev.get_name() if dev is not None else "") or ""
+        if "XTEST" in name.upper():
+            return
+        self._real_key_at = time.monotonic()
+        if self.air.up:
+            self.touch_keyboard(False)
 
     # ================================================================ keys
     def _on_key(self, w: Gtk.Widget, ev: Gdk.EventKey) -> bool:

@@ -189,6 +189,18 @@ body.has-done #done-empty, body.has-messages #messages-empty { display: none; }
 .item:hover .pin, .item.pinned .pin { visibility: visible; }
 .item.pinned .pin svg { fill: currentColor; }
 .msg-top, .done-when { padding-right: 1.6em; }
+/* On a touchscreen, as in the iPad's Mail: an item swiped left shows its Pin (or Unpin) along its right side; a
+   touch elsewhere puts it back. Up and down still scroll the list. Fingers get a little more room on each item. */
+.item { touch-action: pan-y; }
+.item.swiped .pin {
+  visibility: visible; top: 0; right: 0; bottom: 0; width: auto; height: auto; padding: 0 1em;
+  border-radius: 0 0.5em 0.5em 0; background: var(--ink); color: var(--ground);
+}
+.item.swiped .pin svg { display: none; }
+.item.swiped .pin::after { content: attr(data-label); font-weight: bold; }
+@media (any-pointer: coarse) { .item { padding-top: 0.55em; padding-bottom: 0.55em; } }
+/* Messages pulled down from the top of a screen too narrow for the sidebars (the iPad's Notification Center). */
+body.show-messages:not(.panel) #messages { display: flex; z-index: 30; width: min(24rem, 100vw - 1.5rem); }
 /* Something done: when, and under it what. Above the list, today's date and the time now. */
 #clock { margin: -0.4rem 0 0.9rem; }
 #clock span { display: block; }

@@ -108,8 +108,9 @@ class Settings:
     web_zoom: float = 0.0           # 0 = automatic zoom for websites
     # Typing: the Claude app on the phone is the keyboard (Remote Control); needs the full sign-in
     phone_access: bool = True
-    # AirTouch: the hand, through the screen's camera, as the pointer (claudeos/airtouch)
-    airtouch: bool = True
+    # AirTouch: the hand, through the screen's camera, as the pointer (claudeos/airtouch). Off unless asked for: the
+    # touchscreen, a keyboard, the phone and the AirPods come first.
+    airtouch: bool = False
     airtouch_camera: str = ""       # part of the camera's name, or its /dev/video path; "" = the best one
     # Files
     windows_mount: str = "/mnt/windows"

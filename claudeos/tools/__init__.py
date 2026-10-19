@@ -243,9 +243,9 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         await ctx.screen.settle(max_s=1.0)
         return _text(f"Pressed {a['keys']}.")
 
-    @reg("on_screen_keyboard", "Put AirTouch's on-screen keyboard (laid out like an iPad's) up (show true) or away "
-         "(false): the user types on it with their fingers in the air. They can also beckon with the palm up to "
-         "bring it up, and with the palm down to put it away.", obj({"show": B}, ["show"]))
+    @reg("on_screen_keyboard", "Put the on-screen keyboard (laid out like an iPad's) up (show true) or away "
+         "(false): the user taps its keys on the touchscreen (or, with AirTouch on, types in the air). It also comes "
+         "up by itself when they touch a box to type in.", obj({"show": B}, ["show"]))
     async def on_screen_keyboard(a):
         if ctx.keyboard is None:
             return _err("There's no on-screen keyboard here.")

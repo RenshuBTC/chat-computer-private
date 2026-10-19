@@ -453,7 +453,8 @@ PACKAGES=(
   xset xsetroot              # disable DPMS, set black root
   openbox                    # tiny WM: borderless, maximized windows, no menu
   xdotool wmctrl             # screen/window control for the runtime
-  unclutter-xfixes           # hide the idle mouse cursor (voice-first)
+  unclutter-xfixes           # hide the idle mouse cursor, and while a finger is on the touchscreen
+  xinput                     # the touchscreen mapped to the screen ClaudeOS fills (claudeos-session)
   xterm                      # the recovery screen, shown if ClaudeOS keeps failing to start
 
   # --- ClaudeOS's own screen: GTK 3 + WebKitGTK via python3-gobject. ---
@@ -500,7 +501,8 @@ PACKAGES=(
   openbox                    # tiny WM: borderless, maximized windows, no menu
   xdotool                    # screen/window control for the runtime
   wmctrl                     # window management for the runtime
-  unclutter-xfixes           # hide the idle mouse cursor (voice-first)
+  unclutter-xfixes           # hide the idle mouse cursor, and while a finger is on the touchscreen
+  xinput                     # the touchscreen mapped to the screen ClaudeOS fills (claudeos-session)
   xterm                      # the recovery screen, shown if ClaudeOS keeps failing to start
 
   # --- ClaudeOS's own screen: GTK 3 + WebKitGTK via python3-gi. ---

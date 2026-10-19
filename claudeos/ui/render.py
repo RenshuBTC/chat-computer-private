@@ -33,6 +33,8 @@ article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; mar
 .sound { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; }
 .image { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--ground); }
 .image img { max-width: 100vw; max-height: 100vh; object-fit: contain; }
+.image img { transition: transform 0.2s; }
+.image.zoomed img { transform: scale(2.5); }
 .meta { margin: 0 0 1.25rem; }
 .meta div { overflow-wrap: anywhere; }
 .plain { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -42,6 +44,23 @@ article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; mar
 .said.mail:last-child { border-bottom: 0; }
 .said.mail .meta { margin: 0.25rem 0 0.5rem; }
 """
+
+
+# A photo: a double tap (or a double click) zooms in where it was, and another zooms out, as on an iPad.
+IMAGE_ZOOM = """<script>(function () {
+  var box = document.querySelector(".image"), img = box.querySelector("img"), last = 0;
+  function toggle(x, y) {
+    var r = img.getBoundingClientRect();
+    img.style.transformOrigin = (x - r.left) + "px " + (y - r.top) + "px";
+    box.classList.toggle("zoomed");
+  }
+  box.addEventListener("dblclick", function (e) { toggle(e.clientX, e.clientY); });
+  box.addEventListener("touchend", function (e) {
+    if (e.touches.length || e.changedTouches.length !== 1) return;
+    var t = e.changedTouches[0], now = Date.now();
+    if (now - last < 350) { e.preventDefault(); toggle(t.clientX, t.clientY); last = 0; } else last = now;
+  });
+})();</script>"""
 
 
 def _theme_css() -> str:
@@ -270,7 +289,8 @@ def file_view(path: str, settings: Any, paths: Any) -> tuple[str, str]:
         md = "\n".join(f"- {e}{'/' if os.path.isdir(os.path.join(path, e)) else ''}" for e in entries)
         return "html", document_html(name or path, md or "(empty folder)", settings)
     if ext in IMAGES:
-        return "html", _shell(name, f'<div class="image"><img src="{uri}" alt="{htmllib.escape(name)}"></div>', settings)
+        return "html", _shell(name, f'<div class="image"><img src="{uri}" alt="{htmllib.escape(name)}"></div>', settings,
+                              IMAGE_ZOOM)
     if ext in VIDEO:
         return "html", _shell(name, f'<div class="media"><video src="{uri}" autoplay playsinline></video></div>', settings)
     if ext in AUDIO:

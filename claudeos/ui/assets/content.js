@@ -285,4 +285,21 @@
     document.addEventListener(t, report, true);
   });
   window.addEventListener("pagehide", function () { if (last) post({ type: "media", playing: false }); });
+
+  // The touchscreen: a finger on a box to type in brings up ClaudeOS's onscreen keyboard, as on an iPad; when
+  // typing leaves the boxes, it goes away.
+  var touchedAt = 0;
+  document.addEventListener("touchstart", function () { touchedAt = Date.now(); }, { capture: true, passive: true });
+  function typesIn(el) {
+    if (!el) return false;
+    if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+    return el.tagName === "INPUT" && !/^(button|checkbox|radio|range|color|file|image|reset|submit|hidden)$/i.test(el.type);
+  }
+  document.addEventListener("focusin", function (e) {
+    if (typesIn(e.target) && Date.now() - touchedAt < 1500) post({ type: "keyboard", show: true });
+  }, true);
+  document.addEventListener("focusout", function (e) {
+    if (!typesIn(e.target)) return;
+    setTimeout(function () { if (!typesIn(document.activeElement)) post({ type: "keyboard", show: false }); }, 0);
+  }, true);
 })();

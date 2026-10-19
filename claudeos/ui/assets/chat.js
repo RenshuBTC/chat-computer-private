@@ -223,6 +223,7 @@
     var k = e.key;
     if (searchKeys(e)) return;
     if (k === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); sendNow(); return; }
+    if (k === "Escape" && body.classList.contains("show-messages")) { e.preventDefault(); hideMessages(); return; }
     if (k === "Escape" && input.value) { e.preventDefault(); input.value = ""; fitInput(); return; }
     var how = SCROLL_ALWAYS[k] || (input.value === "" ? SCROLL_EMPTY[k] : null);
     if (how) { e.preventDefault(); window.CO.scroll(how); return; }
@@ -292,6 +293,7 @@
     b.type = "button";
     b.tabIndex = -1;
     b.title = pinned ? "Unpin" : "Pin to the top";
+    b.dataset.label = pinned ? "Unpin" : "Pin";          // what it says when an item is swiped (touchscreen)
     b.setAttribute("aria-label", b.title);
     b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-pin"/></svg>';
     return b;
@@ -444,7 +446,7 @@
     var m = msgs[li.dataset.id];
     if (!m) return;
     if (pin) togglePin("messages", msgs, m.id);
-    else { m.unread = false; post({ type: "open_message", id: m.id }); }
+    else { m.unread = false; hideMessages(); post({ type: "open_message", id: m.id }); }
     drawMessages();
   });
   $("add-account").addEventListener("click", function () { post({ type: "add_account" }); });
@@ -608,6 +610,156 @@
     return true;
   }
 
+  // ------------------------------------------------------------------ the touchscreen
+  // As on an iPad. The window takes the system's gestures (ui/touch.py: Home from the bottom edge, back and
+  // forward, three fingers to copy and paste...). Here, the conversation's own: a finger on the message box brings
+  // up the onscreen keyboard and a finger anywhere else puts it away; two fingers pinched make the text bigger or
+  // smaller; holding a message selects it; a double tap selects a word and a triple tap a paragraph; holding the
+  // message box and moving moves where typing goes; a sidebar item swiped left shows Pin, as Mail shows its buttons.
+  var HOLD_MS = 500, MOVE_PX = 10, TAP_MS = 350;
+  var touch = null, pinch = null, taps = { n: 0, t: 0, x: 0, y: 0 }, holdTimer = 0;
+  function spread(ts) { return Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY) || 1; }
+  function typeBox(el) { return el && el.closest ? el.closest("#box, #sheet input") : null; }
+  function unswipe(except) {
+    Array.prototype.forEach.call(document.querySelectorAll(".item.swiped"), function (li) {
+      if (li !== except) li.classList.remove("swiped");
+    });
+  }
+  document.addEventListener("touchstart", function (e) {
+    clearTimeout(holdTimer);
+    if (e.touches.length === 2 && !pinch) {
+      touch = null;
+      pinch = { d: spread(e.touches), size: remPx(), f: 1 };
+      return;
+    }
+    if (e.touches.length !== 1) { if (pinch) endPinch(false); touch = null; return; }
+    var t = e.touches[0], target = e.target;
+    touch = { x: t.clientX, y: t.clientY, target: target, moved: false, held: false, horiz: null,
+              item: target.closest ? target.closest(".side-list .item, .side-pinned .item") : null,
+              msg: target.closest ? target.closest("#log > .you, #log > .ai") : null, caret: null };
+    var inBox = typeBox(target);
+    post({ type: "keyboard", show: !!inBox });
+    if (!touch.item || !touch.item.classList.contains("swiped")) unswipe(null);
+    if (body.classList.contains("show-messages") && !(target.closest && target.closest("#messages"))) hideMessages();
+    holdTimer = setTimeout(function () { held(touch); }, HOLD_MS);
+  }, { passive: true, capture: true });
+  function held(tc) {
+    if (!tc || tc.moved) return;
+    tc.held = true;
+    if (tc.target === input) {                    // holding the box: moving now moves where typing goes
+      tc.caret = { pos: input.selectionStart, line: parseFloat(getComputedStyle(input).lineHeight) || 36,
+                   ch: (parseFloat(getComputedStyle(input).fontSize) || 24) * 0.55 };
+    } else if (tc.msg) {                          // holding a message: all of it selected (three fingers copy it)
+      selectContents(tc.msg);
+    }
+  }
+  function selectNode(n) {
+    var sel = window.getSelection(), r = document.createRange();
+    r.selectNodeContents(n);
+    var more = n.querySelector ? n.querySelector(":scope > .more") : null;      // not "… more" with it
+    if (more) r.setEndBefore(more);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  function selectContents(m) { selectNode(m.querySelector(".md") || m); }
+  document.addEventListener("touchmove", function (e) {
+    if (pinch && e.touches.length === 2) {
+      e.preventDefault();                          // the text's size, not WebKit's zoom of the whole page
+      pinch.f = Math.max(0.5, Math.min(2.5, spread(e.touches) / pinch.d));
+      rootStyle.setProperty("--co-size", (pinch.size * pinch.f).toFixed(1) + "px");
+      return;
+    }
+    if (!touch || e.touches.length !== 1) return;
+    var t = e.touches[0], dx = t.clientX - touch.x, dy = t.clientY - touch.y;
+    if (!touch.moved && Math.abs(dx) + Math.abs(dy) > MOVE_PX) {
+      touch.moved = true;
+      if (!touch.held) clearTimeout(holdTimer);
+      touch.horiz = Math.abs(dx) > Math.abs(dy);
+    }
+    if (touch.caret) {                             // moving the insertion point, a character or a line at a time
+      e.preventDefault();
+      var lines = input.value.split("\n"), pos = touch.caret.pos, before = input.value.slice(0, pos);
+      var row = before.split("\n").length - 1, col = pos - before.lastIndexOf("\n") - 1;
+      row = Math.max(0, Math.min(lines.length - 1, row + Math.round(dy / touch.caret.line)));
+      col = Math.max(0, Math.min(lines[row].length, col + Math.round(dx / touch.caret.ch)));
+      var at = 0;
+      for (var i = 0; i < row; i++) at += lines[i].length + 1;
+      input.setSelectionRange(at + col, at + col);
+      return;
+    }
+    if (touch.item && touch.horiz) {
+      e.preventDefault();
+      touch.item.classList.toggle("swiped", dx < -40 || (touch.item.classList.contains("swiped") && dx < 40));
+    }
+  }, { passive: false, capture: true });
+  document.addEventListener("touchend", function (e) {
+    clearTimeout(holdTimer);
+    if (pinch) { if (e.touches.length < 2) endPinch(true); return; }
+    var tc = touch;
+    touch = null;
+    if (!tc || e.touches.length) return;
+    if (tc.held && (tc.caret || tc.msg)) { e.preventDefault(); return; }       // not a tap as well
+    if (tc.moved) { taps.n = 0; return; }
+    var t = e.changedTouches[0], now = Date.now();
+    var again = now - taps.t < TAP_MS && Math.hypot(t.clientX - taps.x, t.clientY - taps.y) < 24;
+    taps = { n: again ? taps.n + 1 : 1, t: now, x: t.clientX, y: t.clientY };
+    if (taps.n === 2 || taps.n === 3) {
+      var x = t.clientX, y = t.clientY, n = taps.n, target = tc.target;
+      setTimeout(function () { selectAt(target, x, y, n === 3); }, 0);        // after the tap has put the cursor
+    }
+  }, { passive: false, capture: true });
+  document.addEventListener("touchcancel", function () {
+    clearTimeout(holdTimer);
+    touch = null;
+    if (pinch) endPinch(false);
+  }, { passive: true, capture: true });
+  function endPinch(keep) {
+    var p = pinch;
+    pinch = null;
+    if (keep && Math.abs(p.f - 1) > 0.05) post({ type: "text_scale", factor: Math.round(p.f * 100) / 100 });
+    else rootStyle.setProperty("--co-size", p.size + "px");      // ClaudeOS sends the new size (CO.layout)
+  }
+  // A double tap selects the word there, a triple tap the paragraph (in the message box: the line).
+  function selectAt(target, x, y, paragraph) {
+    if (target === input) {
+      var v = input.value, at = input.selectionStart, a = at, b = at;
+      if (paragraph) {
+        a = v.lastIndexOf("\n", at - 1) + 1;
+        b = v.indexOf("\n", at);
+        if (b < 0) b = v.length;
+      } else {
+        while (a > 0 && /[\wÀ-￿'-]/.test(v.charAt(a - 1))) a--;
+        while (b < v.length && /[\wÀ-￿'-]/.test(v.charAt(b))) b++;
+      }
+      input.setSelectionRange(a, b);
+      return;
+    }
+    var msg = target.closest ? target.closest("#log > .you, #log > .ai") : null;
+    if (!msg) return;
+    var sel = window.getSelection();
+    if (paragraph) {
+      selectNode(target.closest("p, li, pre, blockquote, td") || msg.querySelector(".md") || msg);
+      return;
+    }
+    var r = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+    if (!r || r.startContainer.nodeType !== 3) return;
+    var text = r.startContainer.textContent, s0 = r.startOffset, e0 = r.startOffset;
+    while (s0 > 0 && /[\wÀ-￿'-]/.test(text.charAt(s0 - 1))) s0--;
+    while (e0 < text.length && /[\wÀ-￿'-]/.test(text.charAt(e0))) e0++;
+    if (s0 === e0) return;
+    r.setStart(r.startContainer, s0);
+    r.setEnd(r.startContainer, e0);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  // Messages from the top of the screen (the iPad's Notification Center): on a screen too narrow for the sidebars
+  // it comes over the conversation until a touch elsewhere; with them showing, it goes back to its newest.
+  function hideMessages() { body.classList.remove("show-messages"); }
+  function showMessages() {
+    if (body.classList.contains("panel")) msgList.scrollTop = 0;
+    else body.classList.add("show-messages");
+  }
+
   var users = {};
   window.CO = {
     user: function (id, text, final) {
@@ -674,6 +826,8 @@
     // Whether the microphone is on. (Not shown: the screen is the conversation; ClaudeOS says so when it can't
     // hear.)
     mic: function (on) {},
+    // Messages pulled down from the top of the screen (the touchscreen's Notification Center).
+    showMessages: showMessages,
     // "/": what on this computer matches (n says which search it answers: older answers are ignored).
     searchResults: function (n, q, items, note) { if (searching && n === searchN) drawResults(q || "", items, note); },
     // "content" while something Claude opened is showing between the sidebars, "chat" otherwise.

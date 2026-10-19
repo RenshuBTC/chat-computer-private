@@ -133,6 +133,10 @@ class Controller:
         self._show_history()
         self.screen.on_goto = lambda target, ts, before: self._spawn(self.go_back_to(target, ts, before))
         self.screen.on_page_event = self.page_event
+        # The onscreen keyboard (for a finger on the touchscreen, or AirTouch's): where it is, and its keys typed.
+        self.screen.on_keyboard = self._keyboard_moved
+        self.screen.on_keyboard_action = lambda action: self._spawn(self._keyboard_action(action))
+        self._settings_moved_on()
         self._spawn(self._show_done())
         self.inbox = Inbox(self.paths, s, self.screen, self.pins, lambda text, kind="info": self.screen.notice(text, kind))
         self.screen.on_source = self.inbox.web_snapshot
@@ -732,6 +736,19 @@ class Controller:
         kind = msg.get("type")
         if self._search_event(msg):
             return
+        if kind == "text_scale":
+            # Two fingers pinched on the conversation: its text that much bigger or smaller (as zooming does on an
+            # iPad), and kept.
+            try:
+                factor = float(msg.get("factor") or 1)
+            except (TypeError, ValueError):
+                return
+            new = min(3.0, max(0.5, round(self.settings.text_scale * min(4.0, max(0.25, factor)), 2)))
+            if new != self.settings.text_scale:
+                self.settings.text_scale = new
+                self.settings.save(self.paths)
+                self._settings_changed(["text_scale"])
+            return
         if kind == "pin":
             which, item = str(msg.get("list") or ""), str(msg.get("id") or "")
             self.screen.set_pinned(which, item, self.pins.set(which, item, bool(msg.get("on"))))
@@ -960,6 +977,16 @@ class Controller:
             pass
 
     # ================================================================ AirTouch
+    def _settings_moved_on(self) -> None:
+        """Settings whose meaning changed in a newer ClaudeOS, changed once for those who had the old one."""
+        if not self.state.get("airtouch_asked_for"):
+            # 2026-10: the touchscreen, then a keyboard, the phone and the AirPods are how ClaudeOS is used, and
+            # AirTouch (the hands in the air, through the camera) is off until asked for.
+            self.state.set(airtouch_asked_for=True)
+            if self.settings.airtouch:
+                self.settings.airtouch = False
+                self.settings.save(self.paths)
+
     async def _start_airtouch(self, delay: float = 0.0) -> None:
         """AirTouch's process, after the voice and the engine (`delay`); its two small models are downloaded
         first if they aren't there yet (a ClaudeOS updated from before AirTouch)."""
@@ -987,8 +1014,6 @@ class Controller:
         self.airtouch.start()
         if hasattr(self.screen, "on_bounds"):       # the screen moved or changed size: the pointer follows
             self.screen.on_bounds = lambda b: self.airtouch.set_bounds(b) if self.airtouch else None
-        if hasattr(self.screen, "on_keyboard"):     # ...and the keyboard
-            self.screen.on_keyboard = lambda spec: self.airtouch.set_keyboard(spec) if self.airtouch else None
 
     async def _stop_airtouch(self) -> None:
         at, self.airtouch = self.airtouch, None
@@ -1001,26 +1026,33 @@ class Controller:
             await self.screen.show_keyboard(False)
 
     async def set_keyboard(self, show: bool) -> str:
-        """AirTouch's keyboard up or down: a beckon, its own hide key, or asked for out loud."""
-        if show and self.airtouch is None:
-            return "AirTouch is off, so there are no fingers to type with: turn it on first."
+        """The onscreen keyboard up or down: asked for, AirTouch's beckon, or its own hide key. Its keys are tapped
+        on the touchscreen, or typed in the air with AirTouch."""
         spec = await self.screen.show_keyboard(show)
-        self.keyboard_up = bool(show and spec)
-        if self.airtouch is not None:
-            self.airtouch.set_keyboard(spec if self.keyboard_up else None)
+        self._keyboard_moved(spec if show else None)
         if self.keyboard_up:
-            return "The keyboard is up: type with your fingers in the air, a dot on each."
+            return ("The keyboard is up: type with your fingers in the air, a dot on each." if self.airtouch
+                    else "The keyboard is up: tap its keys on the screen.")
         return "The keyboard is away." if not show else "The keyboard couldn't be shown on this screen."
 
+    def _keyboard_moved(self, spec: tuple | None) -> None:
+        """The onscreen keyboard came up, moved or went (from the window's thread too): AirTouch types on it."""
+        self.keyboard_up = spec is not None
+        if self.airtouch is not None:
+            self.airtouch.set_keyboard(spec)
+
     async def _air_key(self, x: float, y: float) -> None:
-        """A finger typed on AirTouch's keyboard: the key goes where the keyboard's keys go (the conversation, or
-        the page's box being typed in), in the order they were typed."""
+        """A finger typed on AirTouch's keyboard: what that key types."""
+        action = await self.screen.keyboard_press(x, y)
+        if action:
+            await self._keyboard_action(action)
+
+    async def _keyboard_action(self, action: tuple) -> None:
+        """A key of the onscreen keyboard (tapped on the touchscreen, or with AirTouch): typed where keys go (the
+        conversation's box, or the page's box being typed in), in the order they were typed."""
         if self._typing is None:
             self._typing = asyncio.Lock()
         async with self._typing:
-            action = await self.screen.keyboard_press(x, y)
-            if not action:
-                return
             if action[0] == "hide":
                 await self.set_keyboard(False)
                 return
@@ -1039,7 +1071,7 @@ class Controller:
                     await asyncio.to_thread(self.platform.key, "BackSpace")
                     await asyncio.to_thread(self.platform.type_text, action[1])
             except Exception as exc:
-                log.warning("AirTouch keyboard: %s couldn't be typed: %s", action, exc)
+                log.warning("onscreen keyboard: %s couldn't be typed: %s", action, exc)
 
     def _on_airtouch(self, ev: tuple) -> None:
         kind = ev[0]

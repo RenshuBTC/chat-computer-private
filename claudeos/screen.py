@@ -74,6 +74,9 @@ class Screen:
     on_page_event: Any = None
     on_source: Any = None
     on_closed: Any = None
+    # The onscreen keyboard: it came up, moved or went (where its keys are, or None); a key tapped on it.
+    on_keyboard: Any = None
+    on_keyboard_action: Any = None
     def dots(self, dots: list[tuple[float, float, str]]) -> None:
         """AirTouch's dots, one per finger it follows (x, y in the display's pixels, and what the finger is
         doing: "point", "pinch", "scroll"; with the keyboard up "key", "press"). None left: none drawn."""

@@ -40,6 +40,7 @@ class AirLayer:
         self.up = False
         self.panel = (0.0, 0.0, 0.0, 0.0)     # the keyboard: x, y, width, height (window pixels)
         self.hover: set[int] = set()           # keys with a finger's dot on them
+        self.touched: set[int] = set()         # the key a finger is on, on a touchscreen
         self.flash: int | None = None          # the key just pressed
         self._flash_id = 0
         self._cache: Any = None
@@ -53,15 +54,27 @@ class AirLayer:
         ph = round(Keyboard.size_for(width, 0.42 * height)[1])
         self.panel = (0.0, float(height - ph), float(width), float(ph))
         self.kb.layout(width, ph)
-        self.up, self.hover, self.flash = True, set(), None
+        self.up, self.hover, self.flash, self.touched = True, set(), None, set()
         self._cache = None
         self.area.queue_draw()
         ax, ay, aw, ah = self.kb.area()
         return (ax, self.panel[1] + ay, aw, ah)
 
     def hide_keyboard(self) -> None:
-        self.up, self.hover, self.flash, self._cache = False, set(), None, None
+        self.up, self.hover, self.flash, self._cache, self.touched = False, set(), None, None, set()
         self.area.queue_draw()
+
+    def touch_key(self, at: tuple[float, float] | None) -> None:
+        """A finger on the keyboard, on a touchscreen (window pixels): the key under it shows pressed, as an iPad's
+        does. None: no finger on it now."""
+        touched: set[int] = set()
+        if at is not None and self.up:
+            k = self.kb.hit(at[0] - self.panel[0], at[1] - self.panel[1])
+            if k is not None:
+                touched.add(self.kb.keys.index(k))
+        for i in touched ^ self.touched:
+            self._redraw_key(i)
+        self.touched = touched
 
     @staticmethod
     def spec(area: tuple[float, float, float, float]) -> tuple[float, ...]:
@@ -190,11 +203,11 @@ class AirLayer:
             cr.rectangle(px, py, pw, ph)
             cr.fill()
             cr.restore()
-        for i in sorted(self.hover | ({self.flash} if self.flash is not None else set())):
+        for i in sorted(self.hover | self.touched | ({self.flash} if self.flash is not None else set())):
             if 0 <= i < len(self.kb.keys):
                 cr.save()
                 cr.translate(px, py)
-                self._draw_key(cr, self.kb.keys[i], hover=i in self.hover, pressed=i == self.flash)
+                self._draw_key(cr, self.kb.keys[i], hover=i in self.hover, pressed=i == self.flash or i in self.touched)
                 cr.restore()
 
     def render_panel(self, cr: Any) -> None:

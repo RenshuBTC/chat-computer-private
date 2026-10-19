@@ -1054,8 +1054,9 @@ def _controller(tmp_path, monkeypatch):
     from claudeos.screen import RecordingScreen
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "home" / "ClaudeOS"))
-    return Controller(Paths().ensure(), Settings(user_name="Ren"), FakePlatform(), RecordingScreen(), voice=False,
-                      index=False)
+    # AirTouch is off unless asked for: these are about it once it's on.
+    return Controller(Paths().ensure(), Settings(user_name="Ren", airtouch=True), FakePlatform(), RecordingScreen(),
+                      voice=False, index=False)
 
 
 class _AirTouch:
@@ -1172,15 +1173,16 @@ def test_the_keyboards_own_keys_hide_it_and_dictate(tmp_path, monkeypatch):
     assert not c.keyboard_up and at.keyboards[-1] is None
 
 
-def test_the_keyboard_needs_airtouch_and_can_be_asked_for(tmp_path, monkeypatch):
+def test_the_keyboard_can_be_asked_for_with_or_without_airtouch(tmp_path, monkeypatch):
     c = _controller(tmp_path, monkeypatch)
 
     async def run():
         c.loop = asyncio.get_running_loop()
-        said = await c.set_keyboard(True)
-        assert "AirTouch is off" in said and not c.keyboard_up
+        # Without AirTouch, it's tapped on the touchscreen.
+        assert await c.set_keyboard(True) == "The keyboard is up: tap its keys on the screen." and c.keyboard_up
+        await c.set_keyboard(False)
         c.airtouch = _AirTouch()
-        assert "keyboard is up" in await c.set_keyboard(True)
+        assert "fingers in the air" in await c.set_keyboard(True)
         c.airtouch.status = "x"
         await c._stop_airtouch()
     asyncio.run(run())

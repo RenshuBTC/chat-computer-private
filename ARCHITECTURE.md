@@ -1,8 +1,9 @@
 # ClaudeOS architecture (internal contract)
 
-Goal: **hardware → thin Linux drivers (invisible) → Claude (user's subscription, over the internet) → the user (AirPods +
-screen + phone)**. ClaudeOS is a conversational shell: you talk (AirPods) or type (the Claude app on the phone is the
-keyboard), and both are one conversation.
+Goal: **hardware → thin Linux drivers (invisible) → Claude (user's subscription, over the internet) → the user
+(touchscreen + keyboard + phone + AirPods)**. ClaudeOS is a conversational shell: you touch the screen as an iPad's,
+type (on a keyboard, or in the Claude app on the phone, which is then the keyboard) or talk (AirPods), and it's all
+one conversation.
 Power on → boot menu ("ClaudeOS" default, "Windows") → straight into the full-screen ClaudeOS conversation.
 No login screen, no desktop environment, no display manager, no browser UI. Windows stays installed untouched.
 On an Apple silicon Mac (M1, M2, M3) it is the same: a second system next to macOS, on Fedora Asahi Remix instead
@@ -50,6 +51,8 @@ ClaudeOS/
                             guides approving it (db Append) or turning Secure Boot off, then shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime
   tests/                    Python tests for the runtime (+ mock Claude API)
+  docs/                     The browser demo (GitHub Pages): ClaudeOS's own screen with docs/demo/host.js standing
+                            in for the computer; scripts/build_demo.py copies the screen, tests/test_demo.py checks
 ```
 
 ## Base system
@@ -401,23 +404,65 @@ retrying with backoff, then starts listening.
   `~/.local/bin` and the like) is asked about. The content layer doesn't let pages opened from files read other
   files with scripts (WebKit's file-access setting stays off), so a downloaded `.html` file can't read the
   sign-in.
-* Screen: one full-screen GTK 3 window (`claudeos/ui/gtk_app.py`) with two WebKitGTK 4.1 views in a stack:
-  the conversation (`ui/assets/chat.html`: only the user's words and Claude's words) and the content layer (a
-  real browser with a persistent profile in `~/ClaudeOS/web`, plus a GTK caption strip over it). No buttons.
+* Screen: one full-screen GTK 3 window (`claudeos/ui/gtk_app.py`), a `Gtk.Overlay`: the conversation page
+  (`ui/assets/chat.html`) fills it, and the content layer (a real browser with a persistent profile in
+  `~/ClaudeOS/web`) is laid over the space the page leaves for it ("hole", reported by chat.js): between the two
+  sidebar cards, above the latest exchange and the message box, inset in a rounded frame. F1 makes it fill the
+  window and back (`toggle_expand`); Escape closes it (`close_content`) unless the message box has text. While
+  it's open the conversation shrinks to a strip (`--strip-h`): your latest message and Claude's latest reply, a
+  line each (`-webkit-line-clamp`), "… more" showing one in full (the strip grows to 60% and the frame shrinks)
+  and "less" putting it back. The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
+  moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
+  through) is on top. No buttons beyond the sidebars' items: settings, the microphone (sound tool, `input`) and
+  the model are changed by asking.
+* Sidebars: Messages at the left (`claudeos/messages`), What's done at the right (`done.py`), each a card
+  (2 px `--bubble` border, 1.1 rem corners, 0.75 rem from the screen's edges and from the frame), each item
+  pressable, and pinnable (`pins.py`, `~/ClaudeOS/pins.json`: pinned items first, newest pin first). What's done
+  shows the date and time (`#clock`, each minute) and each item's time above its words.
+* Messages (`claudeos/messages`): every account's messages in one list, newest first, kept in
+  `~/ClaudeOS/messages.db` (SQLite: `store.py`); accounts and their sign-ins in `secrets/accounts.json` (0600,
+  Claude's tools can't read it; `accounts.public()` is what the screen and Claude get). Email over IMAP
+  (`mail.py`: app passwords; Outlook.com through Microsoft's sign-in, OAuth 2 code + PKCE as a public client,
+  XOAUTH2, `msauth.py`, which needs `settings.outlook_client_id` from an Entra app registration): read-only
+  (`SELECT` read-only, `BODY.PEEK`), Gmail's Primary tab only (`X-GM-RAW "category:primary"`), new mail every
+  `mail_check_minutes`. Telegram with Telethon (`telegram.py`: the person's own api_id and api_hash, phone, code,
+  2FA password; chats and groups, not channels). WhatsApp and social sites (`web.py`, `assets/sources.js`): their
+  own inbox pages in views with their own profile in `~/ClaudeOS/sources`, read in an isolated script world
+  (WhatsApp stays open; the others are looked at every 10 minutes). Sign-in forms (`CO.accountForm`) send what's
+  typed straight to the Inbox, never to Claude, and come back with what went wrong and what was typed (passwords
+  aside). An email opened shows as the conversation with its sender (`render.thread_html`: the opened one and the
+  latest few read in full over one connection, `Mailbox.read_many`).
+* "/" in the message box (`slash_search.py`): the words after it search the file index (`files_index.py`) as
+  they're typed; matches show in a list above the box (matching letters bold), the arrow keys choose and Enter
+  opens one between the sidebars (`render.file_view`); the last line asks Claude to look instead.
+* Touchscreen (`ui/touch.py`, `Gdk.event_handler_set`): every touch passes through `TouchGestures` before GTK
+  delivers it. The iPad's system gestures (Apple's iPad User Guide): up from the bottom edge is Home
+  (`close_content`); along the bottom or in from the sides, back and forward in the open view; down from the top
+  centre, Messages (`CO.showMessages`); three fingers pinched closed copy (twice: cut), open paste, swiped left and
+  right undo and redo (WebKit's editing commands on the focused view); four or five fingers pinched or swiped up
+  are Home, swiped sideways back and forward. A touch starting at an edge is held back (its events copied) until
+  it's clearly a swipe or not, then taken or replayed to GTK; a third finger cancels the first two on the page
+  (a copy of each one's last event, as TOUCH_CANCEL). The onscreen keyboard (AirTouch's, the iPad's layout) comes
+  up for a finger on a box to type in (chat.js and content.js post `keyboard`), unless a key on a real keyboard
+  (not XTEST, which is ClaudeOS typing) was pressed in the last 5 minutes; such a key puts it away. Its touches
+  never reach the page: the key under the finger shows pressed and is typed on lift (`on_keyboard_action`, the
+  controller types it with xdotool). In the conversation page (chat.js): pinch for the text size (`text_scale`,
+  kept), hold a message to select it, double and triple taps for a word and a paragraph, hold the box and move to
+  move the cursor, swipe a sidebar item left for Pin. The session maps each touchscreen (XI2 DirectTouch) to the
+  primary output (`xinput map-to-output`) and hides the arrow on touch.
 * Look: plain. Black text (#000000) on white (#FFFFFF) and nothing else: no dark mode, no grey text. Full
   black on full white is the most contrast a screen can show (21:1). Dimming belongs to the screen's
   brightness, because a grey background would cost contrast. The font is Atkinson Hyperlegible Next, with
   Atkinson Hyperlegible Mono for code. They ship in `ui/assets/fonts` (SIL OFL 1.1, from google/fonts; see
   its README), and `theme.css` loads them with `@font-face`. Pages written elsewhere get the fonts' file
   address (`render._theme_css`). `gtk_app.register_fonts` hands the folder to fontconfig (FcConfigAppFontAddDir)
-  for the GTK captions. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
+  for the onscreen keyboard. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
   (Noto). Laid out like the Claude app, as the user asked: their words on the right in a light grey bubble
   (`--bubble: #EDEDED`, the one colour besides black and white; black on it is 18:1), Claude's flush left in one
   column, newest at the bottom, above a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
-  for a new line; no placeholder, since that would be grey text) with a line under it: "Listening" while the
-  microphone is on (`CO.mic`), how to wake it while asleep, and the model ("Sonnet 5.5", `config.model_label`).
-  On a wide screen What's done takes the right 17% (the Claude app's side panel's share); the column and the
-  box centre in the rest.
+  for a new line; no placeholder, since that would be grey text) with nothing under it; while asleep, a line
+  above it says how to wake ClaudeOS. On a wide screen Messages and What's done take the left and right 17%
+  each (the Claude app's side panel's share); the column and the box centre in the rest.
 * Size and width: text is sized so that the x-height covers 0.3 degrees of view. That is the top of the
   normal range of critical print size (0.15-0.3 degrees; Legge & Bigelow 2011), above which reading gets no
   faster until about 2 degrees. With Atkinson's x-height (0.496 em), that is 23.9 px at 100%. The column is
@@ -427,6 +472,9 @@ retrying with backoff, then starts listening.
   Everything is recomputed when the window, monitor or settings change. Settings: `text_size` (0 = auto), `text_scale`, `viewing_distance_cm`, `screen_inches`
   (0 = reported), `web_zoom` (0 = auto).
 * Voice: PipeWire/AirPods, Silero VAD, faster-whisper (local), Kokoro TTS (local), barge-in.
+* Input, in the order the person uses it: the touchscreen, a keyboard, the Claude app on the phone, the
+  AirPods. AirTouch is off unless asked for (`airtouch: false`; `Controller._settings_moved_on` turned it off once
+  for those who had it on).
 * AirTouch (`claudeos/airtouch`): the hands, seen by the screen's camera, in a process of its own at nice 5
   (`worker.py`). All of it is ClaudeOS's own code except the two networks: Google MediaPipe's palm detector
   and hand landmark model ("lite", Apache 2.0), downloaded with the voice models and checked against the

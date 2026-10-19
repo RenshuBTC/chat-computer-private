@@ -1,10 +1,13 @@
 # ClaudeOS
 
-ClaudeOS turns your computer into one you have a conversation with. You talk through your AirPods, or
-type in the Claude app on your phone (the phone is the keyboard), and point with your hands in the air in
-front of the screen ([AirTouch](#airtouch-your-hands-in-the-air)). It's one conversation either way. The
-screen shows only your words and Claude's, plus whatever Claude puts there for you: websites, YouTube,
-documents and your files.
+ClaudeOS turns your computer into one you have a conversation with. You touch the screen as you would an
+iPad's, type on a keyboard or in the Claude app on your phone (the phone is the keyboard), or talk through
+your AirPods. It's one conversation either way. The screen shows your words and Claude's, your messages from
+every account at the left, what's been done for you at the right, and whatever Claude puts there for you:
+websites, YouTube, documents and your files.
+
+**[Try it in your browser](docs/index.html)**: ClaudeOS's own screen, with Claude's answers to a few things
+written in advance (see [The demo](#the-demo)).
 
 * **On a Windows PC** it sits next to Windows. When you press the power button, ClaudeOS starts by
   itself. Windows stays installed, and you can go back to it whenever you like.
@@ -67,25 +70,39 @@ Setup saves a **recovery password** in your Windows Documents folder, in
 
 ## Using ClaudeOS
 
-* **Talk or type.** Just speak, or type on a keyboard or in the Claude app on your phone (see below). What
-  you type is answered in writing only; what you say gets a spoken answer. To wake ClaudeOS after it has
-  gone to sleep, say "Claude", press an AirPod stem, or just type.
+* **Touch, type or talk.** Touch the screen (see [The touchscreen](#the-touchscreen)), type on a keyboard
+  or in the Claude app on your phone (see below), or just speak. What you type is answered in writing only;
+  what you say gets a spoken answer. To wake ClaudeOS after it has gone to sleep, say "Claude", press an
+  AirPod stem, or just type.
 * **AirPods.** When ClaudeOS starts, it connects your AirPods by itself: the ones it already knows, or the
   pairing Windows has, copied over without asking. If they're in their case, take them out and they connect
   within two minutes. Only when there are no AirPods anywhere does it ask "Connect your AirPods?"; say or type
   yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
   PC's own speakers ClaudeOS doesn't greet you out loud.
-* **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, a
-  message box at the bottom, and which Claude model answers. Scroll up (mouse wheel, Page Up) to read back.
-* **What's done.** On a wide screen, a panel at the right lists everything done for you, by day: sites
-  opened, web searches, files changed, settings, programs. Click one to scroll back to the message that asked
-  for it, even from an earlier day. Ask "what did I change yesterday?" and Claude reads the same list.
+* **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, and
+  a message box at the bottom, with nothing else around it: everything is done by asking. Scroll up (a
+  finger, the mouse wheel, Page Up) to read back.
+* **What Claude opens** (a website, a video, a document) goes between the two panels, in a rounded frame,
+  above your latest message and Claude's latest reply (a line each; tap "… more" for the rest). F1 makes it
+  fill the screen and F1 again puts it back; Escape, or a swipe up from the bottom edge, closes it.
+* **Messages.** On a wide screen, a panel at the left gathers what's sent to you from every account you
+  connect, newest first: Gmail, Outlook and Hotmail, iCloud Mail, other email, Telegram, WhatsApp, X,
+  Instagram, Facebook, TikTok and LinkedIn. Tap one to read it between the panels (an email shows as the
+  conversation with whoever sent it). Tap + to connect an account: see [Connecting accounts](#connecting-accounts).
+* **What's done.** A panel at the right shows today's date and the time, and lists everything done for you,
+  by day, each with its time: sites opened, web searches, files changed, settings, programs. Tap one to
+  scroll back to the message that asked for it, even from an earlier day. Ask "what did I change yesterday?"
+  and Claude reads the same list.
+* **Pins.** Pin an item in either panel (the pin by it, or swipe it left on a touchscreen) to keep it at the top.
+* **"/" searches this computer.** Type / first in the message box and what you type after it searches your
+  files by name, in a list above the box; the arrow keys choose and Enter opens it.
 * **Interrupt.** You can talk over Claude to stop it or change your mind.
 * **Ask for anything.** For example:
   * "Play some calm piano music on YouTube"
   * "Find the tax letter I got in March"
   * "Connect to my phone's hotspot"
   * "Make the text bigger"
+  * "Use my webcam's microphone" or "switch to Opus"
   * "I sit about two metres from the screen"
   * "Go to sleep"
 * **Risky things need a yes.** Before anything risky, like deleting, buying, sending, installing
@@ -96,6 +113,48 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   Windows' drive is encrypted with BitLocker, setup gives ClaudeOS a key of its own for it. On a Mac,
   setup copies the folders you choose onto a drive called ClaudeOS, which macOS opens too; in ClaudeOS
   they're in your Mac folder.
+
+## The touchscreen
+
+ClaudeOS is made to be touched first, as an iPad is (the gestures are the iPad's, from Apple's iPad User Guide):
+
+* **Tap** to tap, **move a finger** to scroll (a quick swipe keeps it going; a touch stops it), **pinch** to
+  zoom a website or to make the conversation's text bigger or smaller (it stays that size), and **double-tap**
+  a photo to zoom in.
+* **Swipe up from the bottom edge** for Home: what's open closes and the conversation is back.
+* **Swipe in from the left edge** (or right along the bottom edge) to go back; from the right edge (or left
+  along the bottom) to go forward.
+* **Swipe down from the top centre** for Messages, when the screen is too narrow to show it.
+* **Three fingers:** pinch closed to copy, twice to cut, pinch open to paste; swipe left to undo, right to
+  redo. **Four or five fingers:** pinch closed for Home, swipe to go back or forward.
+* **Text:** double-tap a word to select it, triple-tap for its paragraph, and hold a message to select all
+  of it. Hold the message box and move your finger to move the cursor.
+* **The keyboard:** touch the message box, or a box on a website, and a keyboard laid out like an iPad's
+  comes up along the bottom. Its hide key puts it away, and so does typing on a real keyboard: while one is
+  in use, it doesn't come up. As on an iPad, tap Shift twice for Caps Lock and Space twice for a full stop;
+  the microphone key types what you say next.
+* With a second monitor, the touchscreen's touches still land on the screen ClaudeOS fills.
+
+## Connecting accounts
+
+Tap + at the top of Messages (or ask "connect my Gmail"). Sign-ins are typed into ClaudeOS's own form and
+kept on the computer (in a folder Claude's tools can't open); Claude never sees them. ClaudeOS only reads:
+it never sends or deletes anything, and email stays unread in your account until you read it there. (A
+WhatsApp or social media conversation opens on the site's own page, which may mark it read, as the site does.)
+
+* **Gmail, iCloud Mail, Yahoo:** with an app password made in your account's security settings (Gmail's
+  needs 2-Step Verification on). Gmail shows the Primary tab only.
+* **Outlook and Hotmail:** Microsoft's own sign-in page. It needs a free sign-in app registered once in
+  Microsoft Entra (personal accounts, a "Mobile and desktop" redirect of
+  `https://login.microsoftonline.com/common/oauth2/nativeclient`, public client flows on, and the
+  IMAP.AccessAsUser.All permission); ClaudeOS shows the steps and asks for its Application (client) ID.
+* **Other email:** any provider with IMAP: its server, your address and password.
+* **Telegram:** an api_id and api_hash of your own (from my.telegram.org, "API development tools"), your phone
+  number, and the code Telegram sends. Channels aren't shown, only chats and groups.
+* **WhatsApp, X, Instagram, Facebook, TikTok, LinkedIn:** you sign in on the site's own page (WhatsApp: scan
+  its code with your phone), and ClaudeOS reads the list of conversations from it. These sites don't allow
+  automated reading, so they could restrict an account that's read this way. (X's own API, which allows it,
+  charges per message read.)
 
 ## Typing: your phone is the keyboard
 
@@ -116,8 +175,9 @@ so it works the same at your desk or away from home. You can also attach photos 
 
 ## AirTouch: your hands in the air
 
-If your screen has a camera (an Apple Studio Display's, a laptop's, or any webcam), you can use ClaudeOS
-with your hands, without touching anything:
+AirTouch is off unless you ask for it: say or type "turn on AirTouch". If your screen has a camera (an Apple
+Studio Display's, a laptop's, or any webcam), you can then use ClaudeOS with your hands, without touching
+anything:
 
 * **A dot follows each index finger.** Point at the screen with one hand or both.
 * **Tap:** pinch your thumb and index finger together and let go. **Scroll:** pinch and move your hand
@@ -135,7 +195,7 @@ with your hands, without touching anything:
   Caps Lock, and Space twice for a full stop. The microphone key types what you say next instead of
   sending it to Claude, and the smiley key has emoji.
 * The camera's pictures are looked at on the computer only, never kept or sent anywhere. Say "turn off
-  AirTouch" to switch it off.
+  AirTouch" to switch it off again.
 
 An Apple Studio Display's camera works with ClaudeOS on a PC connected with a Thunderbolt or USB-C cable.
 Center Stage is part of macOS, so the picture doesn't follow you around. On a Mac, ClaudeOS can't use a
@@ -351,6 +411,16 @@ You won't need it day to day; it's only for repairs.
   ClaudeOS and install it again.
 * **Claude says it isn't signed in.** Say "switch to macOS", run setup and choose **Sign ClaudeOS in to
   Claude again**, then restart into ClaudeOS.
+
+## The demo
+
+[docs/index.html](docs/index.html) is ClaudeOS's screen in a browser, for trying it without installing it. It
+is the same page and code as on a ClaudeOS computer (`scripts/build_demo.py` copies them, and
+`tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the computer:
+Claude's answers to a few things are written in advance, the messages and files are made up, and nothing
+typed there leaves the browser (only a map, when asked for, comes from OpenStreetMap). GitHub Pages can
+serve it from the `docs` folder (Settings, Pages, branch `main`, folder `/docs`); for a private repository,
+GitHub Pages needs GitHub Pro or a paid organization plan.
 
 ## For the curious
 

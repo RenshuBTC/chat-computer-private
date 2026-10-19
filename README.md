@@ -6,7 +6,7 @@ your AirPods. It's one conversation either way. The screen shows your words and 
 every account at the left, what's been done for you at the right, and whatever Claude puts there for you:
 websites, YouTube, documents and your files.
 
-**[Try it in your browser](https://renshubtc.github.io/chat-computer/)**: Chat Computer's own screen, playing a
+**[Try it in your browser](https://chatcomputer.ai)**: Chat Computer's own screen, playing a
 song as it opens (see [The demo](#the-demo)).
 
 * **On a Windows PC** it sits next to Windows. When you press the power button, Chat Computer starts by
@@ -419,7 +419,7 @@ You won't need it day to day; it's only for repairs.
 
 ## The demo
 
-**https://renshubtc.github.io/chat-computer/** is Chat Computer's screen in a browser, for trying it before
+**https://chatcomputer.ai** is Chat Computer's screen in a browser, for trying it before
 installing it. It opens playing Louie Zong's "hello world" from YouTube between the panels, the way a website
 shows on Chat Computer; pause it in the player. It is the same page and code as on a Chat Computer
 (`docs/index.html`: `scripts/build_demo.py` copies them, and `tests/test_demo.py` checks the copy is current),
@@ -428,8 +428,9 @@ the messages and files are made up, and nothing typed there leaves the browser (
 YouTube's player and, when asked for, a map from OpenStreetMap). Chat Computer is an independent project, not
 made by Anthropic.
 
-GitHub Pages serves it from the `docs` folder: Settings, Pages, branch `main`, folder `/docs`. That needs the
-repository to be public (or GitHub Pro for a private one).
+GitHub Pages serves it from the `docs` folder (Settings, Pages, branch `main`, folder `/docs`; a private
+repository needs GitHub Pro) at chatcomputer.ai: `docs/CNAME` names the domain, and its DNS points at GitHub
+Pages (A records for the domain itself, a CNAME record for `www`).
 
 ## For the curious
 

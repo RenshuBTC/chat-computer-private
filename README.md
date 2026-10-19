@@ -6,8 +6,8 @@ your AirPods. It's one conversation either way. The screen shows your words and 
 every account at the left, what's been done for you at the right, and whatever Claude puts there for you:
 websites, YouTube, documents and your files.
 
-**[Try it in your browser](https://chatcomputer.ai)**: Chat Computer's own screen, playing a
-song as it opens (see [The demo](#the-demo)).
+**[Try it in your browser](https://chatcomputer.ai)**: Chat Computer's own screen (see
+[The demo](#the-demo)).
 
 * **On a Windows PC** it sits next to Windows. When you press the power button, Chat Computer starts by
   itself. Windows stays installed, and you can go back to it whenever you like.
@@ -80,11 +80,11 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
   PC's own speakers Chat Computer doesn't greet you out loud.
 * **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, and
-  a message box at the bottom. Before anything is said, it shows just its name, **Chat Computer**, and the
-  empty message box says, dimmed, "Chat computer anything or type “/” to search", with the cursor already
-  blinking in it. The round button at its right sends: grey while there's nothing to send, black once there
-  is. There are no menus: everything is done by asking. Scroll up (a finger, the mouse wheel, Page Up) to read
-  back.
+  a message box at the bottom. Before anything is said, it shows just its name, **Chat Computer**, and under
+  it the classic `hello, world`; the empty message box says, dimmed, "Chat computer anything or type “/” to
+  search", with the cursor already blinking in it. The round button at its right sends: grey while there's
+  nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
+  the mouse wheel, Page Up) to read back.
 * **What Claude opens** (a website, a video, a document) goes between the two panels, in a rounded frame,
   above your latest message and Claude's latest reply, both in full. F1 makes it fill the screen and F1 again
   puts it back; Escape, or a swipe up from the bottom edge, closes it. Typing "/" to search shows its list in
@@ -423,21 +423,20 @@ You won't need it day to day; it's only for repairs.
 ## The demo
 
 **https://chatcomputer.ai** is Chat Computer's screen in a browser, for trying it before
-installing it. It opens playing Louie Zong's "hello world" from YouTube between the panels (from 0:03, where
-its sound starts), the way a website shows on Chat Computer, and What's done lists it; pause it in the player,
-and when it ends the conversation has the middle again. Browsers let a page play sound by itself only after a
-click, tap or key on the site (or, in Chrome, once you've often played its videos with sound), so the video
-starts with sound where the browser allows it and otherwise without, and the first click, tap or key anywhere
-(on the video too) turns the sound on. It is the same page and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py`
-copies them, and `tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the
-computer: Claude's answers to a few things are written in advance, the messages and files are made up, and
-nothing typed there leaves the browser (from elsewhere come only YouTube's player and, when asked for, a map
-from OpenStreetMap), unless you use one of the two buttons at the right of the message box
+installing it: the word logo and `hello, world`, and the message box with the cursor in it. It is the same page
+and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py` copies them, and
+`tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the computer:
+Claude's answers to a few things are written in advance (music is a few soft chords the browser makes), the
+messages and files are made up, and nothing typed there leaves the browser (from elsewhere comes only, when
+asked for, a map from OpenStreetMap), unless you use one of the two buttons at the right of the message box
 (`docs/demo/demo.css`):
 
 * **Connect Claude**: paste an API key from Claude Console, and Claude (Sonnet 5.5, as on a Chat Computer)
-  answers for real and does things on the screen: plays YouTube videos, shows maps and pages it writes, opens
-  the made-up messages and files, makes timers, searches the web. Requests go from the browser straight to
+  answers for real and does things on the screen: plays YouTube videos (YouTube's player between the panels;
+  when the video ends, the conversation has the middle again), shows maps and pages it writes, opens the
+  made-up messages and files, makes timers, searches the web. Browsers let a page play sound by itself only
+  after a click, tap or key on the site, so a video starts without sound if there hasn't been one yet, and the
+  first click, tap or key (on the video too) turns it on. Requests go from the browser straight to
   Anthropic's API; the key stays in that browser, and what's used is billed to it. A Claude Pro or Max plan
   can't be used: Anthropic doesn't allow other developers' apps to sign in with one. (Sign in with ChatGPT
   would let visitors use a ChatGPT plan, but OpenAI offers it to hosted sites only after approval.)

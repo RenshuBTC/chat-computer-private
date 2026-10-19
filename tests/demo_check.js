@@ -1,8 +1,8 @@
 // The browser demo (docs/index.html: Chat Computer's own screen, with docs/demo/host.js standing in for the computer),
-// tried in Chromium with Playwright: it opens playing YouTube (from 0:03; the sound on at the first key) with the
-// cursor in the box; "/" lists the files in front of the video; when the video ends, the conversation comes back;
-// the panels' switches; a few things asked; F1 and Escape; a message opened; Connect Claude, with a stand-in for
-// Anthropic (a tool used, an answer streamed); Connect AirPods' sheet; a phone-sized window.
+// tried in Chromium with Playwright: it opens on the word logo and hello, world, with the cursor in the box; the
+// panels' switches; music (made by the browser); "/" lists the files in front of what's open; F1 and Escape; a
+// message opened; Connect Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
+// when it ends, with a stand-in for YouTube's player; answers streamed); Connect AirPods' sheet; a phone.
 // Prints JSON.  Run: node tests/demo_check.js [shot-prefix]
 const path = require("path");
 const { chromium } = require("playwright");
@@ -23,24 +23,31 @@ addEventListener("message", function (e) {
 window.end = function () { send({ event: "onStateChange", info: 0 }); };
 </script>`;
 
-// Anthropic's API, standing in: the key check, then a map of Tokyo asked for (show_map), then the answer.
+// Anthropic's API, standing in: the key check; a map of Tokyo asked for (show_map), or a video (play_youtube); then
+// the answer, once the tool's result is back.
 function sse(events) { return events.map((e) => "event: " + e.type + "\ndata: " + JSON.stringify(e) + "\n\n").join(""); }
 const START = { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", content: [], model: "claude-sonnet-5-5",
   stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } };
-const TOOL_TURN = sse([START,
-  { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "show_map", input: {} } },
-  { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"place": "Tokyo", "west": 139.55, ' } },
-  { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '"south": 35.55, "east": 139.95, "north": 35.8}' } },
-  { type: "content_block_stop", index: 0 },
-  { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 30 } },
-  { type: "message_stop" }]);
-const TEXT_TURN = sse([START,
-  { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-  { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Here's " } },
-  { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Tokyo." } },
-  { type: "content_block_stop", index: 0 },
-  { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
-  { type: "message_stop" }]);
+function toolTurn(id, name, json) {
+  const half = Math.floor(json.length / 2);
+  return sse([START,
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: id, name: name, input: {} } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: json.slice(0, half) } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: json.slice(half) } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 30 } },
+    { type: "message_stop" }]);
+}
+function textTurn(words) {
+  return sse([START,
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }]
+    .concat(words.map((w) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: w } })))
+    .concat([{ type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+      { type: "message_stop" }]));
+}
+const MAP_TURN = toolTurn("toolu_1", "show_map", '{"place": "Tokyo", "west": 139.55, "south": 35.55, "east": 139.95, "north": 35.8}');
+const VIDEO_TURN = toolTurn("toolu_2", "play_youtube", '{"video_id": "aBcDeFgHiJk", "title": "A test video"}');
 
 async function state(page) {
   return page.evaluate(() => {
@@ -119,41 +126,17 @@ async function ask(page, text) {
                tools: (body.tools || []).map((t) => t.name), last: JSON.stringify((body.messages || []).slice(-1)) });
     if (!body.stream) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "msg_0", type: "message",
       role: "assistant", content: [{ type: "text", text: "Hi" }], stop_reason: "max_tokens", usage: { input_tokens: 8, output_tokens: 1 } }) });
-    const answered = /tool_result/.test(JSON.stringify(body.messages.slice(-1)));
-    return route.fulfill({ status: 200, contentType: "text/event-stream", body: answered ? TEXT_TURN : TOOL_TURN });
+    const last = JSON.stringify(body.messages.slice(-1));
+    const turn = /toolu_1/.test(last) ? textTurn(["Here's ", "Tokyo."]) : /toolu_2/.test(last) ? textTurn(["Playing ", "it."])
+      : /video/.test(last) ? VIDEO_TURN : MAP_TURN;
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body: turn });
   });
   await page.goto(page_url);
-  // It opens playing: YouTube's player between the sidebars, from 0:03, without asking; the cursor in the box.
-  await page.waitForFunction(() => document.body.classList.contains("content"));
-  await page.waitForTimeout(600);
+  // It opens on the word logo and hello, world, the cursor in the box under the dimmed hint.
+  await page.waitForFunction(() => document.getElementById("demo-tools"));
+  await page.waitForTimeout(500);
   out.opening = await state(page);
   if (shot) await page.screenshot({ path: shot + "-opening.png" });
-  // A click on the video itself turns the sound on too (the player is told); the pointer off it again, typing goes
-  // back to the box.
-  const v0 = out.opening.view;
-  await page.mouse.click(v0[0] + v0[2] / 2, v0[1] + v0[3] / 2);
-  await page.waitForTimeout(400);
-  out.clicked_commands = await player(page).evaluate(() => window.commands);
-  out.clicked_in = await page.evaluate(() => document.activeElement && document.activeElement.id);
-  await page.mouse.move(v0[0] + v0[2] / 2, v0[1] + v0[3] + 30);
-  await page.waitForTimeout(200);
-  out.keys_back = await page.evaluate(() => document.activeElement && document.activeElement.id);
-  // "/": the files, in a list in front of the video (what's at its middle is the list, not the video).
-  await page.keyboard.type("/");
-  await page.waitForSelector("#results .res");
-  out.over = await page.evaluate(() => {
-    const r = document.querySelector("#results .res").getBoundingClientRect();
-    const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return !!(at && at.closest("#results"));
-  });
-  out.over_view = (await state(page)).view;
-  // The first key turned the sound on.
-  out.player_commands = await player(page).evaluate(() => window.commands);
-  await page.keyboard.press("Escape");                     // clears the box
-  // The video ends: the conversation's screen again, the word logo in the middle.
-  await player(page).evaluate(() => window.end());
-  await page.waitForFunction(() => !document.body.classList.contains("content"));
-  out.ended = await state(page);
   // The sidebars' switches: off, and on again (and the choice kept).
   await page.click("#toggle-left");
   await page.click("#toggle-right");
@@ -163,9 +146,19 @@ async function ask(page, text) {
   await page.click("#toggle-left");
   await page.click("#toggle-right");
   out.sides_on = await state(page);
-  await ask(page, "play hello world");
+  await ask(page, "play some piano music");
   out.music = await state(page);
   if (shot) await page.screenshot({ path: shot + "-music.png" });
+  // "/": the files, in a list in front of what's open (what's at its middle is the list, not the page).
+  await page.keyboard.type("/");
+  await page.waitForSelector("#results .res");
+  out.over = await page.evaluate(() => {
+    const r = document.querySelector("#results .res").getBoundingClientRect();
+    const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!(at && at.closest("#results"));
+  });
+  out.over_view = (await state(page)).view;
+  await page.keyboard.press("Escape");                     // clears the box
   await page.keyboard.press("F1");
   out.f1 = await state(page);
   await page.keyboard.press("F1");
@@ -212,8 +205,15 @@ async function ask(page, text) {
   out.stored = await page.evaluate(() => localStorage.getItem("chatcomputer-demo-claude-key"));
   await ask(page, "show me Tokyo");
   out.claude_map = await state(page);
-  out.api = api;
   if (shot) await page.screenshot({ path: shot + "-claude.png" });
+  // A video, played by Claude: YouTube's player (a stand-in) between the sidebars; when it ends, the conversation.
+  await ask(page, "play a video");
+  out.claude_video = await state(page);
+  await page.waitForTimeout(300);
+  await player(page).evaluate(() => window.end());
+  await page.waitForFunction(() => !document.body.classList.contains("content"));
+  out.video_ended = await state(page);
+  out.api = api;
   await page.click("#demo-claude");                        // disconnecting
   out.claude_off_sheet = await state(page);
   await page.click("#sheet-ok");
@@ -230,7 +230,7 @@ async function ask(page, text) {
   phone.on("pageerror", (e) => errors.push(String(e)));
   await phone.route(/youtube/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: PLAYER }));
   await phone.goto(page_url);
-  await phone.waitForFunction(() => document.body.classList.contains("content"));
+  await phone.waitForFunction(() => document.getElementById("demo-tools"));
   await phone.waitForTimeout(400);
   out.phone_opening = await state(phone);
   await phone.click("#input");

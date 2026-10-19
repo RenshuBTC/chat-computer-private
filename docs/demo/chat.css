@@ -50,11 +50,14 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* Empty screen: just the word logo, in the middle. */
+/* Empty screen: the word logo in the middle and, under it, what a first program prints: hello, world, in lower case
+   with its comma, as in Kernighan's C tutorial and his book with Ritchie, and in the mono font, as a program
+   prints it. */
 #welcome { margin: 0; text-align: center; }
 #wordmark {
   font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0;
 }
+#hello { font-family: var(--mono); margin: 0.75em 0 0; }
 body.has-log #welcome { display: none; }
 
 /* Something open (body.content): the conversation shrinks to just your latest message and Chat Computer's latest,

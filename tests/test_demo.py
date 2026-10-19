@@ -17,8 +17,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_demo  # noqa: E402
 
-SONG_DONE = "Played “hello world” by Louie Zong on YouTube"
-
 
 def test_the_demo_is_chatcomputer_s_real_screen_as_it_is_now():
     stale = [str(p.relative_to(ROOT)) for p, data in build_demo.files().items()
@@ -34,8 +32,8 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     host = (ROOT / "docs" / "demo" / "host.js").read_text()
     for call in ("XMLHttpRequest", "sendBeacon", "WebSocket", "EventSource", "navigator.geolocation"):
         assert call not in host, call
-    # From elsewhere: YouTube's player (Louie Zong's "hello world", playing as the demo opens), a map when asked, and
-    # Anthropic's API, only with the visitor's own key (Connect Claude): every request goes there, nowhere else.
+    # From elsewhere: a map when asked, and with the visitor's own key (Connect Claude) Anthropic's API, where every
+    # request goes, and YouTube's player for a video Claude plays.
     assert set(re.findall(r"https?://[^/\"' ]+", host)) == {
         "https://www.youtube-nocookie.com", "https://www.openstreetmap.org", "https://api.anthropic.com"}
     fetches = re.findall(r"fetch\(([^,)]+)", host)
@@ -66,36 +64,27 @@ def test_the_demo_works_in_a_browser():
     res = json.loads(lines[-1])
     assert "failed" not in res, res["failed"]
     assert res["errors"] == []
-    # It opens playing YouTube between the sidebars, from 0:03 (no sheet, no button to press, nothing above the
-    # message box), and What's done says so; the cursor is in the box, under the dimmed hint.
+    # It opens on the word logo and hello, world (nothing open, no sheet, no button to press), the cursor in the
+    # box under the dimmed hint, and the two buttons at the box's right.
     first = res["opening"]
-    assert first["content"] and not first["sheet"] and first["toggles"] == ["true", "true", "true"]
-    assert "youtube-nocookie.com/embed/Yw6u6YkTgQ4?autoplay=1" in first["src"] and "&start=3" in first["src"]
-    assert first["strip"] == [] and first["last"] == ""
-    assert first["messages"] == 7 and first["panel"] and first["done"][-1] == SONG_DONE and len(first["done"]) == 5
-    assert first["typing_in"] == "input" and first["hint"] == "Chat computer anything or type \u201c/\u201d to search" and first["hint_weight"] == "400"
-    # The two buttons at the right of the box.
-    assert first["tools"] == ["Connect Claude", "Connect AirPods"] and first["tools_at"] == "box"
-    # A click on the video turned the sound on (the player was told), and with the pointer off the video the keys
-    # are the box's again.
-    assert res["clicked_in"] == "demo-view" and res["clicked_commands"][:2] == ["unMute", "setVolume"]
-    assert res["keys_back"] == "input"
-    # "/": the list is in front of the video (the sound already on: nothing more told to the player).
-    assert res["over"] and res["over_view"] == first["view"] and res["player_commands"] == res["clicked_commands"]
-    # The video ended: the conversation's screen again, just the word logo.
-    assert not res["ended"]["content"] and res["ended"]["view"] is None and res["ended"]["welcome"] == ["Chat Computer"]
+    assert not first["content"] and not first["sheet"] and first["view"] is None and first["toggles"] == ["true", "true", False]
+    assert first["welcome"] == ["Chat Computer", "hello, world"] and first["last"] == ""
+    assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
+    assert first["typing_in"] == "input" and first["hint"] == "Chat computer anything or type \u201c/\u201d to search"
+    assert first["hint_weight"] == "400" and first["tools"] == ["Connect Claude", "Connect AirPods"] and first["tools_at"] == "box"
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
     assert res["sides_off"]["sides"] == [False, False] and res["sides_off"]["toggles"][:2] == ["false", "false"]
     assert json.loads(res["kept"]) == {"left": False, "right": False, "bottom": True}
-    assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["welcome"] == ["Chat Computer"]
-    # Asked for music: YouTube again, inside the frame, and What's done says so.
+    assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["welcome"] == ["Chat Computer", "hello, world"]
+    # Asked for music: soft piano made by the browser, between the sidebars, and What's done says so.
     music = res["music"]
-    assert music["content"] and music["last"] == "Playing “hello world” by Louie Zong."
-    assert music["done"][-1] == SONG_DONE and "youtube-nocookie.com" in music["src"]
+    assert music["content"] and music["last"] == "Playing some calm piano." and music["done"][-1] == "Played some calm piano"
     # Above the message box: what was asked and Chat Computer's answer, in full.
-    assert music["strip"] == ["play hello world", "Playing “hello world” by Louie Zong."]
+    assert music["strip"] == ["play some piano music", "Playing some calm piano."]
     f, v = music["frame"], music["view"]
     assert f[0] < v[0] and f[1] < v[1] and v[0] + v[2] < f[0] + f[2] and v[1] + v[3] < f[1] + f[3]
+    # "/": the list is in front of what's open.
+    assert res["over"] and res["over_view"] == v
     # F1: the whole window, and back.
     assert res["f1"]["view"] == [0, 0, 1600, 900] and res["f1_back"]["view"] == v
     # The conversation's switch: the page reaches down to it; typing brings the conversation back.
@@ -120,8 +109,14 @@ def test_the_demo_works_in_a_browser():
     m = res["claude_map"]
     assert m["last"] == "Here's Tokyo." and "openstreetmap.org/export/embed.html?bbox=139.55%2C35.55%2C139.95%2C35.8" in m["src"]
     assert m["done"][-1] == "Opened openstreetmap.org" and m["strip"] == ["show me Tokyo", "Here's Tokyo."]
+    # A video Claude plays: YouTube's player between the sidebars, What's done says so, and when it ends the
+    # conversation has the middle again.
+    cv = res["claude_video"]
+    assert cv["content"] and "youtube-nocookie.com/embed/aBcDeFgHiJk?autoplay=1" in cv["src"] and cv["last"] == "Playing it."
+    assert cv["done"][-1] == "Played \u201cA test video\u201d on YouTube"
+    assert not res["video_ended"]["content"] and res["video_ended"]["view"] is None
     api = res["api"]
-    assert len(api) == 3 and all(a["url"] == "https://api.anthropic.com/v1/messages" for a in api)
+    assert len(api) == 5 and all(a["url"] == "https://api.anthropic.com/v1/messages" for a in api)
     assert all(a["key"] == "sk-ant-api03-demo-test-key" and a["direct"] == "true" and a["model"] == "claude-sonnet-5-5" for a in api)
     assert not api[0]["stream"] and api[1]["stream"] and "show_map" in api[1]["tools"] and "web_search" in api[1]["tools"]
     assert "tool_result" in api[2]["last"] and "toolu_1" in api[2]["last"]
@@ -130,7 +125,8 @@ def test_the_demo_works_in_a_browser():
     assert res["claude_off"]["tools"][0] == "Connect Claude" and res["stored_after"] is None
     # Connect AirPods says what it does before the microphone is asked for.
     assert res["talk_sheet"]["sheet"] and res["talk_sheet"]["sheet_title"] == "Talk through your AirPods"
-    # A phone: no sidebars and no switches; it opens playing too, the buttons are inside the box, and it works.
+    # A phone: no sidebars and no switches; the buttons are inside the box, and it works.
     phone = res["phone_opening"]
-    assert phone["content"] and phone["toggles"] == [False, False, False] and phone["tools_at"] == "row"
+    assert phone["welcome"] == ["Chat Computer", "hello, world"] and phone["toggles"] == [False, False, False]
+    assert phone["tools_at"] == "row"
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")

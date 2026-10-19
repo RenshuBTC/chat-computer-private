@@ -924,7 +924,8 @@
       drawMessages();
     },
     accountForm: function (f) { showForm(f || null); },
-    // The person's name and the model: nothing on this page shows them (the empty screen is just the word logo).
+    // The person's name and the model: nothing on this page shows them (the empty screen is the word logo and
+    // "hello, world").
     settings: function () {},
     // Which panels show: {left, right, bottom} (Chat Computer keeps the choice; see "the panels' switches").
     panels: function (s) {

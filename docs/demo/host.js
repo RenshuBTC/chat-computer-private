@@ -10,8 +10,8 @@
      type goes from your browser straight to Anthropic; the key stays in this browser.
    - Connect AirPods: you talk, and the answers are read out. Your browser turns what you say into text (Chrome
      does it on Google's servers).
-   Fetched from elsewhere: YouTube's player, playing Louie Zong's "hello world" as the demo opens, and a map from
-   OpenStreetMap when you ask for one. */
+   Fetched from elsewhere: a map from OpenStreetMap when you ask for one, and YouTube's player when connected
+   Claude plays a video. */
 (function () {
   "use strict";
   var START = Date.now() / 1000;
@@ -79,9 +79,6 @@
     m6: { title: "Priya", note: "On Chat Computer this is X's own page.", lines: [["Priya", START - 96000, "Are you coming to the meetup on Saturday?"]] },
     m7: { title: "Daniel Tan", note: "On Chat Computer this is LinkedIn's own page.", lines: [["Daniel Tan", START - 260000, "Thanks for connecting!"]] }
   };
-  // The music playing as the demo opens: Louie Zong's "hello world", from 0:03 (before that it's silent).
-  var VIDEO = "Yw6u6YkTgQ4", VIDEO_START = 3;
-  var SONG = "\u201chello world\u201d by Louie Zong", SONG_DONE = "Played " + SONG + " on YouTube";
   // Earlier conversations, put back when something in What's done is tapped (the screen starts empty: the word logo).
   var EARLIER = [
     { role: "user", id: "y1", ts: START - 86400 - 3010, text: "Play some calm piano music" },
@@ -89,16 +86,13 @@
     { role: "user", id: "y2", ts: START - 86400 - 2910, text: "A bit quieter please" },
     { role: "assistant", id: "ya2", ts: START - 86400 - 2900, text: "Volume is 40%." },
     { role: "user", id: "h1", ts: START - 5410, text: "How do I get to the airport on Sunday with two big suitcases?" },
-    { role: "assistant", id: "ha1", ts: START - 5380, text: "The train means two changes, and one of them has stairs and no lift, so a taxi is easier: about 25 minutes. I put a packing list in your Documents too." },
-    { role: "user", id: "v1", ts: START - 2, text: "Play hello world" },
-    { role: "assistant", id: "va1", ts: START - 1, text: "Playing " + SONG + "." }
+    { role: "assistant", id: "ha1", ts: START - 5380, text: "The train means two changes, and one of them has stairs and no lift, so a taxi is easier: about 25 minutes. I put a packing list in your Documents too." }
   ];
   var DONE = [
     { id: "d1", ts: START - 86400 - 2995, text: "Opened youtube.com", prompt_id: "y1", prompt_ts: START - 86400 - 3010 },
     { id: "d2", ts: START - 86400 - 2905, text: "Set the volume to 40%", prompt_id: "y2", prompt_ts: START - 86400 - 2910 },
     { id: "d3", ts: START - 5400, text: "Searched the web for \u201ctrains to the airport on Sunday\u201d", prompt_id: "h1", prompt_ts: START - 5410 },
-    { id: "d4", ts: START - 5390, text: "Saved Packing list.md", prompt_id: "h1", prompt_ts: START - 5410 },
-    { id: "d5", ts: START - 1, text: SONG_DONE, prompt_id: "v1", prompt_ts: START - 2 }
+    { id: "d4", ts: START - 5390, text: "Saved Packing list.md", prompt_id: "h1", prompt_ts: START - 5410 }
   ];
   var FILES = [
     { name: "Packing list.md", where: "~/Documents", kind: "document", ts: START - 5390, page: "packing" },
@@ -280,17 +274,39 @@
     }
   };
 
-  // ------------------------------------------------------------------ music: YouTube, playing
-  // On Chat Computer, music is YouTube's own page between the sidebars. Here it's YouTube's player in the same
-  // place, playing "hello world" as soon as the demo opens, and the conversation comes back when a video ends.
-  // Browsers let a page play sound by itself only after you've clicked, tapped or typed on the site (or, in
-  // Chrome, played its videos with sound often enough): so the video starts with sound when the browser allows it
-  // and otherwise without, and then the sound comes on with the first click, tap or key anywhere here. The
+  // ------------------------------------------------------------------ music, made by the browser
+  // On Chat Computer, "play some piano music" opens YouTube and plays it. Here, the page that opens plays soft
+  // chords made by the browser itself (or, where a browser waits for a tap first, its Play button does).
+  var MUSIC = "var ctx=null,timer=0,btn=document.getElementById('play');" +
+    "function play(){var C=window.AudioContext||window.webkitAudioContext;if(!C)return;ctx=new C();var out=ctx.createGain();" +
+    "out.gain.value=0.18;out.connect(ctx.destination);var chords=[[60,64,67,71],[57,60,64,67],[53,57,60,64],[55,59,62,65]]," +
+    "beat=0.42,t0=ctx.currentTime+0.1,bar=0;function note(m,at,len){var o=ctx.createOscillator(),g=ctx.createGain();" +
+    "o.type='triangle';o.frequency.value=440*Math.pow(2,(m-69)/12);g.gain.setValueAtTime(0,at);" +
+    "g.gain.linearRampToValueAtTime(0.5,at+0.02);g.gain.exponentialRampToValueAtTime(0.001,at+len);o.connect(g);g.connect(out);" +
+    "o.start(at);o.stop(at+len+0.05);}function sched(){var c=chords[bar%4],at=t0+bar*8*beat;" +
+    "[0,1,2,3,2,1,2,3].forEach(function(k,i){note(c[k]+(i?0:-12),at+i*beat,1.6);});bar++;}sched();sched();" +
+    "timer=setInterval(sched,8*beat*1000);btn.textContent='Pause';}" +
+    "function stop(){clearInterval(timer);if(ctx)ctx.close();ctx=null;btn.textContent='Play';}" +
+    "btn.onclick=function(){if(ctx)stop();else play();};play();" +
+    "setTimeout(function(){if(ctx&&ctx.state!=='running')stop();},400);";
+  function piano() {
+    show({ html: page("Now playing", '<article><h1 class="title">Calm piano</h1><p>On Chat Computer this is YouTube, playing ' +
+      "what you asked for. Here, your browser plays a few soft chords.</p><p><button id=\"play\" class=\"b\">Play</button></p>" +
+      "<p>Escape, or a swipe up from the bottom edge, closes it; F1 makes it fill the screen.</p></article>",
+      ".b{font:inherit;padding:0.4em 1.2em;border:2px solid var(--ink);border-radius:0.6em;background:var(--ground);color:var(--ink);cursor:pointer}",
+      MUSIC) });
+  }
+
+  // ------------------------------------------------------------------ YouTube, when Claude plays a video
+  // On Chat Computer, a video is YouTube's own page between the sidebars. Here, when connected Claude plays one,
+  // it's YouTube's player in the same place, and the conversation comes back when the video ends. Browsers let a
+  // page play sound by itself only after you've clicked, tapped or typed on the site (or, in Chrome, played its
+  // videos with sound often enough): so a video starts with sound when the browser allows it and otherwise
+  // without, and then the sound comes on with the first click, tap or key anywhere here, the video included. The
   // player's own controls pause it. (The player and this page talk with YouTube's player messages.)
   var player = { token: {}, id: "", heard: false, state: -2, armed: false, volume: 100 };
   function youtube(id, start) {
-    id = id || VIDEO;
-    start = start == null ? (id === VIDEO ? VIDEO_START : 0) : start;
+    start = start || 0;
     var token = player.token = {};
     soundAllowed().then(function (sound) {
       if (player.token !== token) return;               // something else was opened meanwhile
@@ -403,13 +419,13 @@
   // ------------------------------------------------------------------ Claude's answers, written in advance
   var CITIES = { singapore: [103.6, 1.2, 104.1, 1.47], london: [-0.35, 51.38, 0.15, 51.62], "new york": [-74.1, 40.6, -73.8, 40.85],
                  tokyo: [139.55, 35.55, 139.95, 35.8], paris: [2.22, 48.8, 2.47, 48.92], sydney: [151.0, -33.98, 151.35, -33.78] };
-  var TRY = "Try \u201cshow me a map of Tokyo\u201d, \u201cmake me a timer\u201d, \u201cwhat did Jane say?\u201d, " +
-            "\u201copen my packing list\u201d or \u201cplay hello world\u201d. Type / to search the files.";
+  var TRY = "Try \u201cplay some piano music\u201d, \u201cshow me a map of Tokyo\u201d, \u201cmake me a timer\u201d, " +
+            "\u201cwhat did Jane say?\u201d or \u201copen my packing list\u201d. Type / to search the files.";
   var REAL = "Connect Claude, at the right of the message box, and Claude answers for real, with your own API key.";
   function map(b) { show({ src: "https://www.openstreetmap.org/export/embed.html?bbox=" + b.join("%2C") + "&layer=mapnik" }); }
   var INTENTS = [
-    [/\bhello,? world\b|\b(music|song|songs|piano|play|playing|spotify|youtube|lofi|jazz|video)\b/i, function () {
-      return { text: "Playing " + SONG + ".", done: [SONG_DONE], act: function () { youtube(); } };
+    [/\b(music|song|songs|piano|play|playing|spotify|youtube|lofi|jazz)\b/i, function () {
+      return { text: "Playing some calm piano.", done: ["Played some calm piano"], act: piano };
     }],
     [/\b(close|stop|hide) (it|that|this|the (music|video|page|song))\b|^(close|stop)\b/i, function () {
       return { text: open ? "Closed it." : "Nothing's open.", act: close };
@@ -590,8 +606,7 @@
   function obj(props, required) { return { type: "object", properties: props, required: required || [] }; }
   var TOOLS = [
     { name: "play_youtube", description: "Play a YouTube video between the sidebars. The demo can't search YouTube itself: find the " +
-      "video's address with web_search unless you know its ID for certain. Louie Zong's \"hello world\" is Yw6u6YkTgQ4 (start it at 3: " +
-      "the first seconds are silent).", input_schema: obj({ video_id: { type: "string", description: "The 11-character ID, as in youtube.com/watch?v=ID" },
+      "video's address with web_search unless you know its ID for certain.", input_schema: obj({ video_id: { type: "string", description: "The 11-character ID, as in youtube.com/watch?v=ID" },
       title: { type: "string", description: "The video's title, for What's done" }, start: { type: "integer", description: "Seconds in to start at" } }, ["video_id", "title"]) },
     { name: "show_map", description: "Show a map (OpenStreetMap) between the sidebars, of the area in the box given in degrees.",
       input_schema: obj({ place: { type: "string" }, west: { type: "number" }, south: { type: "number" }, east: { type: "number" },
@@ -618,9 +633,9 @@
     if (n === "play_youtube") {
       var vid = String(a.video_id || "").trim();
       if (!/^[A-Za-z0-9_-]{11}$/.test(vid)) return "That isn't a YouTube video ID (11 letters, digits, - or _).";
-      var start = Math.max(0, parseInt(a.start, 10) || (vid === VIDEO ? VIDEO_START : 0));
+      var start = Math.max(0, parseInt(a.start, 10) || 0);
       youtube(vid, start);
-      did(vid === VIDEO ? SONG_DONE : "Played \u201c" + clip(a.title || "a video", 60) + "\u201d on YouTube", you, uts);
+      did("Played \u201c" + clip(a.title || "a video", 60) + "\u201d on YouTube", you, uts);
       return "Playing between the sidebars. (If its owner doesn't allow it to play on other sites, YouTube says so there.)";
     }
     if (n === "show_map") {
@@ -998,7 +1013,6 @@
         }));
         call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
         drawTools();
-        youtube();
         break;
       case "send": ask(String(msg.text || "")); break;
       case "drafting": drafting = !!msg.on; break;

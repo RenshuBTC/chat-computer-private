@@ -1,0 +1,13 @@
+
+[1;36mRemove Chat Computer from this Mac[0m
+This deletes Chat Computer and gives its space back to macOS:
+  * its start-up volume (disk5s3)
+  * its EFI partition and its two Linux partitions (disk5s4 disk5s5 disk5s6)
+  * the Chat Computer drive (disk5s7), with 3 MB of files
+macOS, your apps and the files in your macOS folders stay as they are.
+Copy what's on the Chat Computer drive into a folder "Chat Computer files" in your home folder first? [Y/n] Copying...
+[32mCopied to "Chat Computer files" in your home folder.[0m
+Type REMOVE to remove Chat Computer (anything else keeps it): Your Mac's password, to make macOS the start-up disk again (it stays hidden): 
+[33mmacOS didn't take the password; after this, choose macOS in System Settings, General, Startup Disk.[0m
+[32mChat Computer is deleted.[0m
+[32mmacOS has its space back. This Mac is back to just macOS.[0m

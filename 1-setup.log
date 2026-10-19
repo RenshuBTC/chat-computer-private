@@ -1,0 +1,18 @@
+08:58:14  Chat Computer is its own system, started instead of macOS. macOS, your apps and your files stay, one restart away.
+08:58:14  WARNING Plan only: nothing will be changed.
+08:58:14  Q: What would you like to do? -> 1
+08:58:14  == Checking this Mac
+08:58:14  macOS 15.7.9 on an Apple M2 Pro (Virtual).
+08:58:15  == Your files
+08:58:15  Chat Computer can't open macOS's own files: on this Mac they're always encrypted, with keys only macOS can use
+08:58:15  (FileVault or not). So setup copies the folders you choose onto a drive called ChatComp that both systems open;
+08:58:15  macOS keeps its own copies. What you save on that drive in Chat Computer is in macOS too, and you can send more
+08:58:15  later (run setup again).
+08:58:15  macOS may ask whether Terminal can open your Desktop, Documents and Downloads folders: choose OK.
+08:58:15  
+08:58:15  Q: Bring all of these to Chat Computer (3 MB)? -> y
+08:58:15  folders: Desktop Documents Pictures (3006464 bytes)
+08:58:15  == Where Chat Computer goes
+08:58:15  disk: container=disk2 store=disk0s2 total=343073095680 free=44569899008 preferred-min=329816578457 available=5569899008
+08:58:15  macOS can give Chat Computer 5.6 GB and still keep 38 GB free for its updates.
+08:58:15  STOPPED Chat Computer needs 40.0 GB. Free up space in macOS, then run setup again.

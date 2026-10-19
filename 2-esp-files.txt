@@ -1,0 +1,42 @@
+total 32
+drwx------@ 1 runner  staff     0 Oct 19 08:59 .
+drwxr-xr-x  6 root    wheel   192 Oct 19 08:59 ..
+drwx------  1 runner  staff  4096 Oct 19 08:59 .fseventsd
+drwx------  1 runner  staff  4096 Oct 19 08:59 chatcomputer
+drwx------  1 runner  staff  4096 Oct 19 08:58 EFI
+
+/Volumes/EFI - CHAT/.fseventsd:
+total 24
+drwx------  1 runner  staff  4096 Oct 19 08:59 .
+drwx------@ 1 runner  staff     0 Oct 19 08:59 ..
+-rwx------  1 runner  staff    36 Oct 19 08:59 fseventsd-uuid
+
+/Volumes/EFI - CHAT/chatcomputer:
+total 1168
+drwx------  1 runner  staff    4096 Oct 19 08:59 .
+drwx------@ 1 runner  staff       0 Oct 19 08:59 ..
+-rwx------  1 runner  staff  557198 Oct 19 08:59 app.tar.gz
+-rwx------  1 runner  staff     124 Oct 19 08:59 fedora-grub.cfg
+-rwx------  1 runner  staff    8225 Oct 19 08:59 firstboot.sh
+drwx------  1 runner  staff    4096 Oct 19 08:59 secrets
+-rwx------  1 runner  staff      92 Oct 19 08:59 settings.json
+-rwx------  1 runner  staff     284 Oct 19 08:59 setup.env
+
+/Volumes/EFI - CHAT/chatcomputer/secrets:
+total 32
+drwx------  1 runner  staff  4096 Oct 19 08:59 .
+drwx------  1 runner  staff  4096 Oct 19 08:59 ..
+-rwx------  1 runner  staff    39 Oct 19 08:59 claude_login.json
+-rwx------  1 runner  staff   104 Oct 19 08:59 claude_token
+
+/Volumes/EFI - CHAT/EFI:
+total 24
+drwx------  1 runner  staff  4096 Oct 19 08:58 .
+drwx------@ 1 runner  staff     0 Oct 19 08:59 ..
+drwx------  1 runner  staff  4096 Oct 19 08:58 fedora
+
+/Volumes/EFI - CHAT/EFI/fedora:
+total 24
+drwx------  1 runner  staff  4096 Oct 19 08:58 .
+drwx------  1 runner  staff  4096 Oct 19 08:58 ..
+-rwx------  1 runner  staff  1380 Oct 19 08:59 grub.cfg

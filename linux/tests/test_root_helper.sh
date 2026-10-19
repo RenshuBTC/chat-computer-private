@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test root-helper/claudeos-root with faked system tools on PATH.
+# Test root-helper/chatcomputer-root with faked system tools on PATH.
 #
 # We never touch the real system: a shim bin dir provides efibootmgr, lsblk,
 # blkid, mount, umount, findmnt, mountpoint, apt-get, systemctl, timedatectl,
@@ -11,14 +11,14 @@
 #   * apt-install       -> rejects malicious/invalid package names, accepts good
 #   * set-timezone      -> rejects traversal/unknown, accepts a real zone
 #   * mount-windows     -> finds NTFS w/ Windows/System32, mounts rw when clean
-#   * wipe-install-secrets -> only touches the CLAUDEOS-labelled device
+#   * wipe-install-secrets -> only touches the CHATCOMP-labelled device
 #   * unknown verb / arg-count rejections
 #   * every stdout is valid JSON
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-HELPER="$REPO/root-helper/claudeos-root"
-PY="${CLAUDEOS_TEST_PY:-python3}"
+HELPER="$REPO/root-helper/chatcomputer-root"
+PY="${CHATCOMPUTER_TEST_PY:-python3}"
 FAILED=0
 pass() { printf 'PASS %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; FAILED=1; }
@@ -80,8 +80,8 @@ SH
 shim blkid <<SH
 #!/bin/bash
 echo "blkid \$*" >> "$LOG"
-# -L CLAUDEOS -> device; -o value -s TYPE DEV -> fstype
-if [ "\$1" = "-L" ] && [ "\$2" = "CLAUDEOS" ]; then
+# -L CHATCOMP -> device; -o value -s TYPE DEV -> fstype
+if [ "\$1" = "-L" ] && [ "\$2" = "CHATCOMP" ]; then
   echo "$WORK/usb.img"; exit 0
 fi
 # TYPE probe: say sda3/sda4 are plain ntfs (not BitLocker)
@@ -101,9 +101,9 @@ case "\$dev" in
   */sda3) mkdir -p "\$mp/Windows/System32" ;;   # the Windows partition
   *) : ;;
 esac
-# Simulate the CLAUDEOS usb containing a secrets dir on first mount.
+# Simulate the CHATCOMP usb containing a secrets dir on first mount.
 case "\$dev" in
-  *usb.img) mkdir -p "\$mp/claudeos/secrets"; echo secret > "\$mp/claudeos/secrets/claude_token" ;;
+  *usb.img) mkdir -p "\$mp/chatcomputer/secrets"; echo secret > "\$mp/chatcomputer/secrets/claude_token" ;;
 esac
 exit 0
 SH
@@ -221,11 +221,11 @@ SH
 fi
 
 runhelper() {
-  # CLAUDEOS_ROOT_PATH is the helper's test-only PATH seam (stripped by sudo in
+  # CHATCOMPUTER_ROOT_PATH is the helper's test-only PATH seam (stripped by sudo in
   # production). PATH here also lets our 'id' shim (uid 0) win for the root check.
   env PATH="$BIN:/usr/sbin:/usr/bin:/sbin:/bin" \
-      CLAUDEOS_ROOT_PATH="$BIN:/usr/sbin:/usr/bin:/sbin:/bin" \
-      CLAUDEOS_FORCE_EFI="${CLAUDEOS_FORCE_EFI:-1}" \
+      CHATCOMPUTER_ROOT_PATH="$BIN:/usr/sbin:/usr/bin:/sbin:/bin" \
+      CHATCOMPUTER_FORCE_EFI="${CHATCOMPUTER_FORCE_EFI:-1}" \
       SUDO_UID=1000 SUDO_GID=1000 \
       bash "$HELPER" "$@"
 }
@@ -261,9 +261,9 @@ if grep -q 'efibootmgr --bootnext 0001' "$LOG"; then pass "boot-windows-next: se
 # boot-default -> the chosen system first in BootOrder, the rest kept in order
 # ===========================================================================
 : > "$LOG"
-OUT="$(runhelper boot-default claudeos)"
-if grep -q 'efibootmgr --bootorder 0000,0001,0003' "$LOG"; then pass "boot-default claudeos: ubuntu entry first, others kept"; else fail "boot-default claudeos: wrong order"; cat "$LOG"; fi
-[ "$(jget "$OUT" default)" = "claudeos" ] && pass "boot-default claudeos: reports default" || fail "boot-default claudeos: $OUT"
+OUT="$(runhelper boot-default chatcomputer)"
+if grep -q 'efibootmgr --bootorder 0000,0001,0003' "$LOG"; then pass "boot-default chatcomputer: ubuntu entry first, others kept"; else fail "boot-default chatcomputer: wrong order"; cat "$LOG"; fi
+[ "$(jget "$OUT" default)" = "chatcomputer" ] && pass "boot-default chatcomputer: reports default" || fail "boot-default chatcomputer: $OUT"
 : > "$LOG"
 OUT="$(runhelper boot-default windows)"
 if grep -q 'efibootmgr --bootorder 0001,0003,0000' "$LOG"; then pass "boot-default windows: Windows Boot Manager first"; else fail "boot-default windows: wrong order"; cat "$LOG"; fi
@@ -337,7 +337,7 @@ for bad in "cowsay+" "at-spi2.c" "cowsay"; do
     fail "apt-remove let [$bad] through -> $OUT"; cat "$LOG"
   fi
 done
-# Removing at-spi2-common would also remove GTK and WebKit, which ClaudeOS's screen needs (Ubuntu 24.04's
+# Removing at-spi2-common would also remove GTK and WebKit, which Chat Computer's screen needs (Ubuntu 24.04's
 # apt-get -s remove at-spi2-common lists them).
 : > "$LOG"
 printf '%s\n' 'Remv at-spi2-common [2.52.0-1build1] [libatk1.0-0t64:amd64 ]' 'Remv libatk1.0-0t64 [2.52.0-1build1]' \
@@ -351,20 +351,20 @@ else
   fail "apt-remove cascade: $OUT"; cat "$LOG"
 fi
 rm -f "$WORK/apt-plan"
-# ClaudeOS's own packages (install-claudeos.sh lists them) stay, even when named.
+# Chat Computer's own packages (install-chatcomputer.sh lists them) stay, even when named.
 printf '%s\n' gir1.2-webkit2-4.1 pipewire > "$WORK/base-packages"
-export CLAUDEOS_TEST_BASE_PACKAGES="$WORK/base-packages"
+export CHATCOMPUTER_TEST_BASE_PACKAGES="$WORK/base-packages"
 printf '%s\n' gir1.2-webkit2-4.1 pipewire >> "$WORK/dpkg-installed"
 for pm in apt dnf; do
   : > "$LOG"
-  OUT="$(CLAUDEOS_TEST_PKG=$pm runhelper apt-remove vlc gir1.2-webkit2-4.1 2>/dev/null)"
-  if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -qE '^(apt-get|dnf|rpm) ' "$LOG" && [[ "$(jget "$OUT" error)" == *"part of ClaudeOS"* ]]; then
-    pass "apt-remove ($pm) keeps ClaudeOS's own packages: $(jget "$OUT" error)"
+  OUT="$(CHATCOMPUTER_TEST_PKG=$pm runhelper apt-remove vlc gir1.2-webkit2-4.1 2>/dev/null)"
+  if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -qE '^(apt-get|dnf|rpm) ' "$LOG" && [[ "$(jget "$OUT" error)" == *"part of Chat Computer"* ]]; then
+    pass "apt-remove ($pm) keeps Chat Computer's own packages: $(jget "$OUT" error)"
   else
-    fail "apt-remove ($pm) of a ClaudeOS package: $OUT"; cat "$LOG"
+    fail "apt-remove ($pm) of a Chat Computer package: $OUT"; cat "$LOG"
   fi
 done
-unset CLAUDEOS_TEST_BASE_PACKAGES
+unset CHATCOMPUTER_TEST_BASE_PACKAGES
 
 # ===========================================================================
 # set-timezone: reject traversal/unknown, accept a real zone
@@ -413,7 +413,7 @@ fi
 rm -f "$WORK/dirty"
 
 # ===========================================================================
-# mount-windows with BitLocker: opened with ClaudeOS's key (on stdin), then mounted
+# mount-windows with BitLocker: opened with Chat Computer's key (on stdin), then mounted
 # ===========================================================================
 # Windows' partition sda3 is BitLocker now; sda4 a BitLocker data drive the key doesn't open.
 BLK="$WORK/bitlocker-recovery-key"
@@ -434,11 +434,11 @@ if [ "\$1" = "open" ]; then
   key=\$(cat)
   printf '%s' "\$key" > "$WORK/key-seen"
   # The key opens sda3 (Windows' drive) only.
-  case "\$*" in *"/dev/sda3 claudeos-windows"*) ;; *) exit 2 ;; esac
+  case "\$*" in *"/dev/sda3 chatcomputer-windows"*) ;; *) exit 2 ;; esac
   [ "\$key" = "111111-222222-333333-444444-555555-666666-777777-888888" ] || exit 2
-  : > "$MAPDIR/claudeos-windows"; exit 0
+  : > "$MAPDIR/chatcomputer-windows"; exit 0
 fi
-if [ "\$1" = "close" ]; then rm -f "$MAPDIR/claudeos-windows"; exit 0; fi
+if [ "\$1" = "close" ]; then rm -f "$MAPDIR/chatcomputer-windows"; exit 0; fi
 exit 1
 SH
 shim mount <<SH
@@ -446,34 +446,34 @@ shim mount <<SH
 echo "mount \$*" >> "$LOG"
 mp="\${@: -1}"; dev="\${@: -2:1}"
 mkdir -p "\$mp"
-case "\$dev" in */claudeos-windows) mkdir -p "\$mp/Windows/System32" ;; esac
+case "\$dev" in */chatcomputer-windows) mkdir -p "\$mp/Windows/System32" ;; esac
 exit 0
 SH
-export CLAUDEOS_TEST_BITLOCKER_KEY="$BLK" CLAUDEOS_TEST_MAPPER_DIR="$MAPDIR"
-: > "$LOG"; rm -f "$WORK/mounted" "$MAPDIR/claudeos-windows" "$WORK/key-seen"
+export CHATCOMPUTER_TEST_BITLOCKER_KEY="$BLK" CHATCOMPUTER_TEST_MAPPER_DIR="$MAPDIR"
+: > "$LOG"; rm -f "$WORK/mounted" "$MAPDIR/chatcomputer-windows" "$WORK/key-seen"
 OUT="$(runhelper mount-windows 2>/dev/null)"
 if [ "$(jget "$OUT" windows_mounted)" = "True" ] && [ "$(jget "$OUT" windows_bitlocker)" = "True" ] && [ "$(jget "$OUT" device)" = "/dev/sda3" ]; then
-  pass "mount-windows: opened the BitLocker drive with ClaudeOS's key and mounted it"
+  pass "mount-windows: opened the BitLocker drive with Chat Computer's key and mounted it"
 else
   fail "mount-windows (BitLocker): expected mounted; got $OUT"; cat "$LOG"
 fi
-if grep -q "cryptsetup open --type bitlk --key-file=- /dev/sda3 claudeos-windows" "$LOG" \
+if grep -q "cryptsetup open --type bitlk --key-file=- /dev/sda3 chatcomputer-windows" "$LOG" \
    && [ "$(cat "$WORK/key-seen" 2>/dev/null)" = "111111-222222-333333-444444-555555-666666-777777-888888" ]; then
   pass "mount-windows: the key went to cryptsetup on stdin, without the newline"
 else
   fail "mount-windows: cryptsetup not called as expected"; cat "$LOG"
 fi
 if grep -q "111111-222222" "$LOG"; then fail "mount-windows: the key appeared on a command line"; else pass "mount-windows: the key never appeared on a command line"; fi
-if grep -q "mount -t ntfs-3g -o rw,.* $MAPDIR/claudeos-windows /mnt/windows" "$LOG"; then
+if grep -q "mount -t ntfs-3g -o rw,.* $MAPDIR/chatcomputer-windows /mnt/windows" "$LOG"; then
   pass "mount-windows: mounted the opened drive (rw when clean)"
 else
   fail "mount-windows: did not mount the opened drive"; cat "$LOG"
 fi
 # No key: reported, nothing opened.
-: > "$LOG"; rm -f "$MAPDIR/claudeos-windows"
-export CLAUDEOS_TEST_BITLOCKER_KEY="$WORK/no-such-key"
+: > "$LOG"; rm -f "$MAPDIR/chatcomputer-windows"
+export CHATCOMPUTER_TEST_BITLOCKER_KEY="$WORK/no-such-key"
 OUT="$(runhelper mount-windows 2>/dev/null)"
-unset CLAUDEOS_TEST_BITLOCKER_KEY CLAUDEOS_TEST_MAPPER_DIR
+unset CHATCOMPUTER_TEST_BITLOCKER_KEY CHATCOMPUTER_TEST_MAPPER_DIR
 if [ "$(jget "$OUT" windows_mounted)" = "False" ] && [ "$(jget "$OUT" windows_bitlocker)" = "True" ] && ! grep -q "cryptsetup open" "$LOG"; then
   pass "mount-windows: without a key, says the drive is encrypted and opens nothing"
 else
@@ -489,7 +489,7 @@ fi
 SH
 
 # ===========================================================================
-# wipe-install-secrets: only CLAUDEOS device, removes secrets
+# wipe-install-secrets: only CHATCOMP device, removes secrets
 # ===========================================================================
 : > "$LOG"
 # Make blkid -L resolve to a real block-like path by creating usb.img and
@@ -506,10 +506,10 @@ if [ -n "$BDEV" ] && [ -b "$BDEV" ]; then
   shim blkid <<SH
 #!/bin/bash
 echo "blkid \$*" >> "$LOG"
-if [ "\$1" = "-L" ] && [ "\$2" = "CLAUDEOS" ]; then echo "$BDEV"; exit 0; fi
+if [ "\$1" = "-L" ] && [ "\$2" = "CHATCOMP" ]; then echo "$BDEV"; exit 0; fi
 echo "ntfs"
 SH
-  # Mount shim must create the secrets dir when the CLAUDEOS block device is
+  # Mount shim must create the secrets dir when the CHATCOMP block device is
   # mounted (so the removal path is exercised).
   shim mount <<SH
 #!/bin/bash
@@ -517,24 +517,24 @@ echo "mount \$*" >> "$LOG"
 mp="\${@: -1}"; dev="\${@: -2:1}"
 mkdir -p "\$mp"
 case "\$dev" in
-  $BDEV) mkdir -p "\$mp/claudeos/secrets"; echo secret > "\$mp/claudeos/secrets/claude_token" ;;
+  $BDEV) mkdir -p "\$mp/chatcomputer/secrets"; echo secret > "\$mp/chatcomputer/secrets/claude_token" ;;
   */sda3) mkdir -p "\$mp/Windows/System32" ;;
 esac
 exit 0
 SH
   OUT="$(runhelper wipe-install-secrets 2>/dev/null)"
   if is_json "$OUT" && [ "$(jget "$OUT" ok)" = "True" ]; then
-    pass "wipe-install-secrets: ran against CLAUDEOS block device"
+    pass "wipe-install-secrets: ran against CHATCOMP block device"
     [ "$(jget "$OUT" secrets_removed)" = "True" ] && pass "wipe-install-secrets: removed secrets dir" || echo "NOTE wipe-install-secrets: secrets_removed=$(jget "$OUT" secrets_removed)" >&2
   else
     fail "wipe-install-secrets: unexpected result: $OUT"
   fi
-  # Confirm it only mounted the CLAUDEOS device.
+  # Confirm it only mounted the CHATCOMP device.
   if grep -E 'mount .*'"$BDEV" "$LOG" >/dev/null; then pass "wipe-install-secrets: mounted only the labelled device"; else fail "wipe-install-secrets: did not mount the labelled device"; fi
 else
   # No block device available: assert the helper rejects a non-block result.
   OUT="$(runhelper wipe-install-secrets 2>/dev/null)"
-  if [ "$(jget "$OUT" ok)" = "False" ]; then pass "wipe-install-secrets: rejects non-block CLAUDEOS target (no loop dev to test happy path)"; else fail "wipe-install-secrets: should reject non-block device"; fi
+  if [ "$(jget "$OUT" ok)" = "False" ]; then pass "wipe-install-secrets: rejects non-block CHATCOMP target (no loop dev to test happy path)"; else fail "wipe-install-secrets: should reject non-block device"; fi
 fi
 
 # ===========================================================================
@@ -558,7 +558,7 @@ shim dnf <<SH
 echo "dnf \$*" >> "$LOG"
 exit 0
 SH
-export CLAUDEOS_TEST_DT_COMPATIBLE="$DT"
+export CHATCOMPUTER_TEST_DT_COMPATIBLE="$DT"
 : > "$LOG"; rm -f "$WORK/macos-renamed"
 OUT="$(runhelper boot-macos-next 2>/dev/null)"
 if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot-macos --next --yes" "$LOG"; then
@@ -566,9 +566,9 @@ if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot-macos 
 else
   fail "boot-macos-next: $OUT"; cat "$LOG"
 fi
-# macOS renamed (not "Macintosh ..."): the one start-up volume that isn't ClaudeOS's.
+# macOS renamed (not "Macintosh ..."): the one start-up volume that isn't Chat Computer's.
 touch "$WORK/macos-renamed"
-printf '*1) ClaudeOS\n 2) Ren'"'"'s Mac\n' > "$VOLS"
+printf '*1) Chat Computer\n 2) Ren'"'"'s Mac\n' > "$VOLS"
 : > "$LOG"
 OUT="$(runhelper boot-macos-next 2>/dev/null)"
 if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot 2 --next --yes" "$LOG" && [ "$(jget "$OUT" volume)" = "Ren's Mac" ]; then
@@ -576,7 +576,7 @@ if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot 2 --ne
 else
   fail "boot-macos-next (renamed): $OUT"; cat "$LOG"
 fi
-printf '*1) ClaudeOS\n 2) Ren'"'"'s Mac\n 3) Fedora Linux\n' > "$VOLS"
+printf '*1) Chat Computer\n 2) Ren'"'"'s Mac\n 3) Fedora Linux\n' > "$VOLS"
 : > "$LOG"
 OUT="$(runhelper boot-macos-next 2>/dev/null)"
 if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q -- "--set-boot [0-9]" "$LOG"; then
@@ -593,23 +593,23 @@ else
   fail "boot-default macos: $OUT"; cat "$LOG"
 fi
 : > "$LOG"
-OUT="$(runhelper boot-default claudeos 2>/dev/null)"
-if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot ClaudeOS --yes" "$LOG" && ! grep -q efibootmgr "$LOG"; then
-  pass "boot-default claudeos on a Mac: ClaudeOS's start-up volume, no UEFI entries"
+OUT="$(runhelper boot-default chatcomputer 2>/dev/null)"
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot Chat Computer --yes" "$LOG" && ! grep -q efibootmgr "$LOG"; then
+  pass "boot-default chatcomputer on a Mac: Chat Computer's start-up volume, no UEFI entries"
 else
-  fail "boot-default claudeos (Mac): $OUT"; cat "$LOG"
+  fail "boot-default chatcomputer (Mac): $OUT"; cat "$LOG"
 fi
 OUT="$(runhelper boot-default windows 2>/dev/null)"
 [ "$(jget "$OUT" ok)" = "False" ] && pass "boot-default windows refused on a Mac" || fail "boot-default windows on a Mac: $OUT"
 : > "$LOG"
-OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper apt-install vlc 2>/dev/null)"
+OUT="$(CHATCOMPUTER_TEST_PKG=dnf runhelper apt-install vlc 2>/dev/null)"
 if [ "$(jget "$OUT" ok)" = "True" ] && grep -q "dnf install -y --setopt=install_weak_deps=False vlc" "$LOG" && ! grep -q apt-get "$LOG"; then
   pass "apt-install on Fedora: dnf install"
 else
   fail "apt-install with dnf: $OUT"; cat "$LOG"
 fi
 : > "$LOG"; : > "$WORK/rpm-needed"
-OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper apt-remove vlc 2>/dev/null)"
+OUT="$(CHATCOMPUTER_TEST_PKG=dnf runhelper apt-remove vlc 2>/dev/null)"
 if [ "$(jget "$OUT" ok)" = "True" ] && grep -q "dnf remove -y --setopt=clean_requirements_on_remove=False vlc" "$LOG"; then
   pass "apt-remove on Fedora: dnf remove of just that package"
 else
@@ -617,77 +617,77 @@ else
 fi
 : > "$LOG"
 echo 'libgtk-3.so.0()(64bit) is needed by (installed) webkit2gtk4.1-2.48.0-1.fc44.aarch64' > "$WORK/rpm-needed"
-OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper apt-remove gtk3 2>/dev/null)"
+OUT="$(CHATCOMPUTER_TEST_PKG=dnf runhelper apt-remove gtk3 2>/dev/null)"
 if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q "dnf remove" "$LOG" && [[ "$(jget "$OUT" error)" == *webkit2gtk4.1-2.48.0* ]]; then
   pass "apt-remove on Fedora refuses to take what needs the package with it: $(jget "$OUT" error)"
 else
   fail "apt-remove with dnf, needed: $OUT"; cat "$LOG"
 fi
 : > "$LOG"; : > "$WORK/rpm-needed"
-OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper apt-remove cowsay 2>/dev/null)"
+OUT="$(CHATCOMPUTER_TEST_PKG=dnf runhelper apt-remove cowsay 2>/dev/null)"
 [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q "dnf remove" "$LOG" \
   && pass "apt-remove on Fedora refuses a package that isn't installed" || { fail "apt-remove with dnf, not installed: $OUT"; cat "$LOG"; }
 : > "$LOG"
-OUT="$(CLAUDEOS_TEST_PKG=dnf runhelper system-update 2>/dev/null)"
+OUT="$(CHATCOMPUTER_TEST_PKG=dnf runhelper system-update 2>/dev/null)"
 grep -q "dnf upgrade -y --refresh" "$LOG" && pass "system-update on Fedora: dnf upgrade" || fail "system-update with dnf: $OUT"
-unset CLAUDEOS_TEST_DT_COMPATIBLE
+unset CHATCOMPUTER_TEST_DT_COMPATIBLE
 printf 'qemu,virt\0' > "$DT"
-OUT="$(CLAUDEOS_TEST_DT_COMPATIBLE="$DT" runhelper boot-macos-next 2>/dev/null)"
+OUT="$(CHATCOMPUTER_TEST_DT_COMPATIBLE="$DT" runhelper boot-macos-next 2>/dev/null)"
 [ "$(jget "$OUT" ok)" = "False" ] && pass "boot-macos-next refused on a PC" || fail "boot-macos-next on a PC: $OUT"
 
 # ===========================================================================
-# update-app / update-undo / update-done: ClaudeOS from the folder ClaudeOS Setup ran from
+# update-app / update-undo / update-done: Chat Computer from the folder Chat Computer Setup ran from
 # ===========================================================================
 UPD="$WORK/upd"
-SRC_REL="Users/Ren Shu/Downloads/ClaudeOS"
-mk_app() {   # mk_app DIR VERSION: a pretend ClaudeOS
-  mkdir -p "$1/claudeos/brain" "$1/linux/session" "$1/linux/root-helper"
-  printf '__version__ = "%s"\n' "$2" > "$1/claudeos/__init__.py"
-  printf 'x = "%s"\n' "$2" > "$1/claudeos/brain/agent.py"
-  printf '#!/bin/bash\necho %s\n' "$2" > "$1/linux/session/claudeos-session"
+SRC_REL="Users/Ren Shu/Downloads/ChatComputer"
+mk_app() {   # mk_app DIR VERSION: a pretend Chat Computer
+  mkdir -p "$1/chatcomputer/brain" "$1/linux/session" "$1/linux/root-helper"
+  printf '__version__ = "%s"\n' "$2" > "$1/chatcomputer/__init__.py"
+  printf 'x = "%s"\n' "$2" > "$1/chatcomputer/brain/agent.py"
+  printf '#!/bin/bash\necho %s\n' "$2" > "$1/linux/session/chatcomputer-session"
   printf 'exec something %s\n' "$2" > "$1/linux/session/xinitrc"
-  printf '#!/bin/bash\necho root %s\n' "$2" > "$1/linux/root-helper/claudeos-root"
+  printf '#!/bin/bash\necho root %s\n' "$2" > "$1/linux/root-helper/chatcomputer-root"
   printf 'claude-agent-sdk==1\n' > "$1/requirements-linux.txt"
 }
 reset_update() {
   rm -rf "$UPD"; mkdir -p "$UPD/opt" "$UPD/win/$SRC_REL" "$UPD/etc" "$UPD/var"
   mk_app "$UPD/opt/app" 1
   mk_app "$UPD/win/$SRC_REL" 2
-  mkdir -p "$UPD/win/$SRC_REL/claudeos/__pycache__"; : > "$UPD/win/$SRC_REL/claudeos/__pycache__/x.cpython-312.pyc"
+  mkdir -p "$UPD/win/$SRC_REL/chatcomputer/__pycache__"; : > "$UPD/win/$SRC_REL/chatcomputer/__pycache__/x.cpython-312.pyc"
   chmod -R 0777 "$UPD/win"          # Windows' drive: whatever it says
   printf '%s\n' "$SRC_REL" > "$UPD/etc/update-source"
   : > "$UPD/var/base-installed"
   touch "$WORK/mounted"
 }
 runupdate() {
-  CLAUDEOS_TEST_APP_ROOT="$UPD/opt" CLAUDEOS_TEST_UPDATE_SOURCE="$UPD/etc/update-source" \
-  CLAUDEOS_TEST_UPDATE_PENDING="$UPD/var/update-pending" CLAUDEOS_TEST_WINDOWS_MOUNT="$UPD/win" \
-  CLAUDEOS_TEST_BASE_INSTALLED="$UPD/var/base-installed" runhelper "$@" 2>/dev/null
+  CHATCOMPUTER_TEST_APP_ROOT="$UPD/opt" CHATCOMPUTER_TEST_UPDATE_SOURCE="$UPD/etc/update-source" \
+  CHATCOMPUTER_TEST_UPDATE_PENDING="$UPD/var/update-pending" CHATCOMPUTER_TEST_WINDOWS_MOUNT="$UPD/win" \
+  CHATCOMPUTER_TEST_BASE_INSTALLED="$UPD/var/base-installed" runhelper "$@" 2>/dev/null
 }
-app_version() { sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$UPD/opt/${1:-app}/claudeos/__init__.py" 2>/dev/null; }
+app_version() { sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$UPD/opt/${1:-app}/chatcomputer/__init__.py" 2>/dev/null; }
 mode_of() { stat -c '%a' "$1"; }
 
 if [ "$(id -u)" -eq 0 ]; then
   reset_update
   OUT="$(runupdate update-app)"
   if is_json "$OUT" && [ "$(jget "$OUT" ok)" = "True" ] && [ "$(jget "$OUT" changed)" = "4" ] && [ "$(app_version)" = 2 ] \
-     && grep -q 'echo 2' "$UPD/opt/app/linux/session/claudeos-session" && [ "$(app_version app.prev)" = 1 ] \
+     && grep -q 'echo 2' "$UPD/opt/app/linux/session/chatcomputer-session" && [ "$(app_version app.prev)" = 1 ] \
      && [ -f "$UPD/var/update-pending" ]; then
     pass "update-app: puts the new version in place, the old one aside, and marks it new ($OUT)"
   else
     fail "update-app: $OUT"; find "$UPD/opt" | sort >&2
   fi
-  grep -q 'root 1' "$UPD/opt/app/linux/root-helper/claudeos-root" \
+  grep -q 'root 1' "$UPD/opt/app/linux/root-helper/chatcomputer-root" \
     && pass "update-app: leaves what root runs as installed" || fail "update-app changed the root helper"
-  [ ! -e "$UPD/opt/app/claudeos/__pycache__" ] && pass "update-app: no compiled files from Windows' drive" \
+  [ ! -e "$UPD/opt/app/chatcomputer/__pycache__" ] && pass "update-app: no compiled files from Windows' drive" \
     || fail "update-app copied __pycache__"
-  if [ "$(mode_of "$UPD/opt/app/claudeos/brain")" = 755 ] && [ "$(mode_of "$UPD/opt/app/claudeos/brain/agent.py")" = 644 ] \
-     && [ "$(mode_of "$UPD/opt/app/linux/session/claudeos-session")" = 755 ] \
+  if [ "$(mode_of "$UPD/opt/app/chatcomputer/brain")" = 755 ] && [ "$(mode_of "$UPD/opt/app/chatcomputer/brain/agent.py")" = 644 ] \
+     && [ "$(mode_of "$UPD/opt/app/linux/session/chatcomputer-session")" = 755 ] \
      && [ "$(mode_of "$UPD/opt/app/linux/session/xinitrc")" = 644 ] \
-     && [ "$(stat -c '%u' "$UPD/opt/app/claudeos/brain/agent.py")" = 0 ]; then
+     && [ "$(stat -c '%u' "$UPD/opt/app/chatcomputer/brain/agent.py")" = 0 ]; then
     pass "update-app: root's files, read-only to everyone else; programs executable"
   else
-    fail "update-app modes: $(stat -c '%a %u %n' "$UPD/opt/app/claudeos/brain" "$UPD/opt/app/claudeos/brain/agent.py" "$UPD/opt/app/linux/session/claudeos-session" "$UPD/opt/app/linux/session/xinitrc")"
+    fail "update-app modes: $(stat -c '%a %u %n' "$UPD/opt/app/chatcomputer/brain" "$UPD/opt/app/chatcomputer/brain/agent.py" "$UPD/opt/app/linux/session/chatcomputer-session" "$UPD/opt/app/linux/session/xinitrc")"
   fi
   OUT="$(runupdate update-app)"
   [ "$(jget "$OUT" ok)" = "True" ] && [ "$(jget "$OUT" changed)" = "0" ] && [ "$(app_version app.prev)" = 1 ] \
@@ -718,18 +718,18 @@ if [ "$(id -u)" -eq 0 ]; then
       fail "update-app with $1: $out"
     fi
   }
-  reset_update; rm "$UPD/var/base-installed";                     refused "before ClaudeOS has finished installing"
+  reset_update; rm "$UPD/var/base-installed";                     refused "before Chat Computer has finished installing"
   reset_update; echo 'claude-agent-sdk==2' > "$UPD/win/$SRC_REL/requirements-linux.txt"; refused "other Python packages"
-  reset_update; ln -s /etc "$UPD/win/$SRC_REL/claudeos/etc";       refused "a link out of the folder"
+  reset_update; ln -s /etc "$UPD/win/$SRC_REL/chatcomputer/etc";       refused "a link out of the folder"
   reset_update; rm -rf "$UPD/win/$SRC_REL/linux/session"; ln -s /etc "$UPD/win/$SRC_REL/linux/session"; refused "a part that is a link"
-  reset_update; : > "$UPD/win/$SRC_REL/claudeos/sitecustomize.py"; refused "a Python start-up hook"
-  reset_update; : > "$UPD/win/$SRC_REL/claudeos/brain/x.pth";      refused "a .pth file"
-  reset_update; mkfifo "$UPD/win/$SRC_REL/claudeos/pipe";           refused "a special file"
+  reset_update; : > "$UPD/win/$SRC_REL/chatcomputer/sitecustomize.py"; refused "a Python start-up hook"
+  reset_update; : > "$UPD/win/$SRC_REL/chatcomputer/brain/x.pth";      refused "a .pth file"
+  reset_update; mkfifo "$UPD/win/$SRC_REL/chatcomputer/pipe";           refused "a special file"
   reset_update; printf 'Users/../../opt\n' > "$UPD/etc/update-source"; refused "a recorded folder with .."
   reset_update; printf '%s\n' "$UPD/opt" > "$UPD/etc/update-source"; refused "a recorded folder that isn't on Windows' drive"
   reset_update; ln -s "$UPD/opt" "$UPD/win/elsewhere"; printf 'elsewhere\n' > "$UPD/etc/update-source"; refused "a recorded folder that leads off Windows' drive"
   reset_update; rm "$UPD/etc/update-source";                       refused "without a recorded folder"
-  reset_update; rm -rf "$UPD/win/$SRC_REL/claudeos";               refused "a folder without ClaudeOS"
+  reset_update; rm -rf "$UPD/win/$SRC_REL/chatcomputer";               refused "a folder without Chat Computer"
   reset_update; printf 'Users/Nobody\n' > "$UPD/etc/update-source"; refused "a recorded folder that isn't there"
   OUT="$(runupdate update-app now 2>/dev/null)"; [ "$(jget "$OUT" ok)" = "False" ] && pass "update-app takes no arguments" || fail "update-app with an argument: $OUT"
   rm -f "$WORK/mounted"

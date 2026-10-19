@@ -1,0 +1,54 @@
+#!/bin/bash
+# chatcomputer-refresh — each screen at the fastest refresh rate it offers, at the size it's at.
+#
+# X starts each screen at the mode the screen says it prefers, which for most fast screens is 60 Hz, while
+# Windows remembers the 120 or 144 Hz chosen there. At 60 Hz the arrow moves in coarser steps, and the mouse
+# feels slow next to Windows. Only rates that the screen and the graphics driver both list (xrandr) are used,
+# at the size already set. Run by chatcomputer-session when X starts; it prints one line per screen for the log.
+#
+# Left as they are when ~/ChatComputer/keep-refresh-rate exists or CHATCOMPUTER_KEEP_REFRESH=1 (a screen that lists a
+# rate it can't really show).
+set -u
+
+command -v xrandr >/dev/null 2>&1 || exit 0
+if [ "${CHATCOMPUTER_KEEP_REFRESH:-0}" = "1" ] || [ -e "${HOME}/ChatComputer/keep-refresh-rate" ]; then
+  echo "refresh rates left as they are"
+  exit 0
+fi
+query=$(xrandr --query 2>/dev/null) || exit 0
+
+# Each connected screen whose current size is offered at a faster rate: "OUTPUT MODE FASTEST CURRENT".
+# xrandr lists a screen's modes under it, one size per line with its rates ("2560x1440  59.95*+ 143.97"):
+# * marks the current one, + the preferred one. The same size can be on more than one line.
+plan=$(printf '%s\n' "$query" | awk '
+  function flush(   i, j, n, f, r, best, fastest) {
+    if (out == "" || mode == "") return
+    best = now + 0; fastest = ""
+    for (i = 1; i <= count; i++) {
+      n = split(lines[i], f, " ")
+      if (f[1] != mode) continue
+      for (j = 2; j <= n; j++) {
+        r = f[j]; gsub(/[*+]/, "", r)
+        if (r ~ /^[0-9]+(\.[0-9]+)?$/ && r + 0 > best + 0.5) { best = r + 0; fastest = r }
+      }
+    }
+    if (fastest != "") print out, mode, fastest, now
+  }
+  /^[^ \t]/ { flush(); out = ($2 == "connected") ? $1 : ""; mode = ""; now = ""; count = 0; next }
+  out != "" && /^[ \t]+[0-9]+x[0-9]+/ {
+    lines[++count] = $0
+    if ($0 ~ /\*/) {
+      mode = $1
+      for (j = 2; j <= NF; j++) if ($j ~ /\*/) { now = $j; gsub(/[*+]/, "", now) }
+    }
+  }
+  END { flush() }')
+
+[ -n "$plan" ] || { echo "refresh rates: each screen is already at its fastest"; exit 0; }
+while read -r output mode rate now; do
+  if xrandr --output "$output" --mode "$mode" --rate "$rate" >/dev/null 2>&1; then
+    echo "screen $output: $mode at $rate Hz (was $now Hz)"
+  else
+    echo "screen $output: $mode stays at $now Hz ($rate Hz didn't work)"
+  fi
+done <<< "$plan"

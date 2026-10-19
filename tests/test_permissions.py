@@ -2,10 +2,10 @@ import asyncio
 
 import pytest
 
-from claudeos.answers import classify_answer, is_sleep, is_stop, strip_wake_word
-from claudeos.brain.permissions import PermissionGate, classify_bash
-from claudeos.config import Paths
-from claudeos.journal import Journal
+from chatcomputer.answers import classify_answer, is_sleep, is_stop, strip_wake_word
+from chatcomputer.brain.permissions import PermissionGate, classify_bash
+from chatcomputer.config import Paths
+from chatcomputer.journal import Journal
 
 
 @pytest.mark.parametrize("cmd", [
@@ -106,9 +106,9 @@ def test_changing_commands_need_a_yes(cmd):
 
 
 @pytest.mark.parametrize("cmd", [
-    "cat ~/ClaudeOS/secrets/claude_token",
-    "cat ~/ClaudeOS/.engine/.credentials.json",
-    "cat /mnt/windows/Users/rensh/ClaudeOS/claude_login.json",
+    "cat ~/ChatComputer/secrets/claude_token",
+    "cat ~/ChatComputer/.engine/.credentials.json",
+    "cat /mnt/windows/Users/rensh/ChatComputer/claude_login.json",
     "echo $CLAUDE_CODE_OAUTH_TOKEN",
     "env",
     "printenv",
@@ -132,15 +132,15 @@ def test_changing_commands_need_a_yes(cmd):
     "cd /proc/self && cat environ",
     "python3 -c 'import os; print(os.environ)'",
     "awk 'BEGIN{for(k in ENVIRON) print k}'",
-    "cat ~/ClaudeOS/.engine/projects/x.jsonl",
-    "ls ~/ClaudeOS/web",
+    "cat ~/ChatComputer/.engine/projects/x.jsonl",
+    "ls ~/ChatComputer/web",
 ])
 def test_dangerous_commands_are_blocked(cmd):
     assert classify_bash(cmd)[0] == "deny", cmd
 
 
 def test_root_helper_via_sudo_is_not_blocked():
-    assert classify_bash("sudo -n /usr/local/libexec/claudeos/claudeos-root apt-install vlc")[0] == "ask"
+    assert classify_bash("sudo -n /usr/local/libexec/chatcomputer/chatcomputer-root apt-install vlc")[0] == "ask"
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -180,7 +180,7 @@ def run(coro):
 
 
 def make_gate(tmp_path, answers):
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     asked = []
 
     async def confirm(q):
@@ -227,10 +227,10 @@ def test_gate_asks_for_risky_bash_and_respects_no(tmp_path):
 
 def test_gate_tool_policies(tmp_path):
     gate, asked, _ = make_gate(tmp_path, [("yes", "yes")])
-    assert run(gate("mcp__claudeos__show_website", {"url": "https://x"})).behavior == "allow"
-    assert run(gate("mcp__claudeos__trash_files", {"paths": ["a", "b"]})).behavior == "allow"
+    assert run(gate("mcp__chatcomputer__show_website", {"url": "https://x"})).behavior == "allow"
+    assert run(gate("mcp__chatcomputer__trash_files", {"paths": ["a", "b"]})).behavior == "allow"
     assert asked == ["Move 2 files to the trash?"]
-    assert run(gate("mcp__claudeos__wipe", {})).behavior == "deny"
+    assert run(gate("mcp__chatcomputer__wipe", {})).behavior == "deny"
 
 
 def test_gate_denies_when_nobody_answers(tmp_path):
@@ -243,7 +243,7 @@ def test_private_files_cant_be_read_or_searched(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     gate, asked, paths = make_gate(tmp_path, [])
     for f in ("/proc/self/environ", str(paths.engine / "projects" / "x.jsonl"), str(paths.web / "cookies.sqlite"),
-              "ClaudeOS/secrets/claude_token"):          # a relative path is read from the home folder
+              "ChatComputer/secrets/claude_token"):      # a relative path is read from the home folder
         assert run(gate("Read", {"file_path": f})).behavior == "deny", f
     # Searching inside every file of a folder that holds the private ones would read them too.
     for root in (str(tmp_path), str(paths.root), None, "/", "/proc/1"):
@@ -265,13 +265,13 @@ def test_changing_a_file_the_computer_runs_asks_first(tmp_path, monkeypatch):
 
 def test_sign_in_files_cant_be_read_with_tools(tmp_path):
     import asyncio
-    from claudeos.brain.permissions import PermissionGate
-    from claudeos.config import Paths
-    from claudeos.journal import Journal
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    from chatcomputer.brain.permissions import PermissionGate
+    from chatcomputer.config import Paths
+    from chatcomputer.journal import Journal
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     gate = PermissionGate(paths, Journal(paths), None, {})
-    for f in (paths.login_file, tmp_path / "Users/rensh/ClaudeOS/claude_login.json",
-              tmp_path / "Users/rensh/ClaudeOS/claude_token"):
+    for f in (paths.login_file, tmp_path / "Users/rensh/ChatComputer/claude_login.json",
+              tmp_path / "Users/rensh/ChatComputer/claude_token"):
         res = asyncio.run(gate("Read", {"file_path": str(f)}))
         assert res.behavior == "deny", f
 
@@ -282,12 +282,12 @@ def test_commands_cant_reach_the_private_files_by_wildcard_or_search(tmp_path, m
     paths.token_file.write_text("sk-ant-oat01-" + "x" * 40 + "\n")
     (tmp_path / "Documents").mkdir()
     (tmp_path / "Documents" / "tax.txt").write_text("tax")
-    for cmd in ("grep -r sk-ant ~", "grep -ri token .", "rg sk-ant", "rg -e sk-ant ~/ClaudeOS",
-                "cat ~/ClaudeOS/s*/*", "head -c 99 $HOME/ClaudeOS/secrets/*", "cd ~/ClaudeOS && cat secrets/*",
-                "cd ~/ClaudeOS/secrets", "grep -r -e sk-ant ClaudeOS", "ls ~/ClaudeOS/secrets",
-                "rm -rf ~/ClaudeOS/secrets"):
+    for cmd in ("grep -r sk-ant ~", "grep -ri token .", "rg sk-ant", "rg -e sk-ant ~/ChatComputer",
+                "cat ~/ChatComputer/s*/*", "head -c 99 $HOME/ChatComputer/secrets/*", "cd ~/ChatComputer && cat secrets/*",
+                "cd ~/ChatComputer/secrets", "grep -r -e sk-ant ChatComputer", "ls ~/ChatComputer/secrets",
+                "rm -rf ~/ChatComputer/secrets"):
         assert run(gate("Bash", {"command": cmd})).behavior == "deny", cmd
-    for cmd in ("grep -r tax ~/Documents", "rg tax ~/Documents", "cat ~/Documents/*", "ls -la ~/ClaudeOS",
+    for cmd in ("grep -r tax ~/Documents", "rg tax ~/Documents", "cat ~/Documents/*", "ls -la ~/ChatComputer",
                 "cd ~/Documents && grep -ri tax ."):
         assert run(gate("Bash", {"command": cmd})).behavior == "allow", cmd
     assert asked == []
@@ -299,7 +299,7 @@ def test_a_cd_in_one_command_cant_set_up_the_next(tmp_path, monkeypatch):
     paths.token_file.write_text("sk-ant-oat01-" + "x" * 40 + "\n")
     (tmp_path / "Documents").mkdir()
     assert run(gate("Bash", {"command": "cd ~/Documents"})).behavior == "allow"
-    assert run(gate("Bash", {"command": "cat ../ClaudeOS/secrets/*"})).behavior == "deny"
+    assert run(gate("Bash", {"command": "cat ../ChatComputer/secrets/*"})).behavior == "deny"
     assert run(gate("Bash", {"command": "grep -r sk-ant .."})).behavior == "deny"
     assert run(gate("Bash", {"command": "ls"})).behavior == "allow"
     assert asked == []

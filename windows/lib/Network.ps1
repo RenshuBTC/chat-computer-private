@@ -1,4 +1,4 @@
-# The installer needs the internet (to download ClaudeOS's parts). This finds out whether a cable is
+# The installer needs the internet (to download Chat Computer's parts). This finds out whether a cable is
 # plugged in and which Wi-Fi network Windows is using, so the installer can join the same one.
 # ASCII-only file (see Common.ps1).
 
@@ -46,7 +46,7 @@ function Get-WifiForInstaller {
     # reads its password, and deletes the export. Returns $null if there's no usable Wi-Fi.
     $ssid = Get-ConnectedSsid
     if (-not $ssid) { return $null }
-    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-wifi-' + [guid]::NewGuid().ToString('N'))
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-wifi-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
     try {
         & netsh.exe wlan export profile key=clear folder="$tmp" 2>$null | Out-Null

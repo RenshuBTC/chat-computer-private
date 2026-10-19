@@ -1,11 +1,11 @@
-//! What ClaudeOS's start-up stage hands to the kernel. Both sides use this crate, so the layout is
+//! What Chat Computer's start-up stage hands to the kernel. Both sides use this crate, so the layout is
 //! written down once.
 #![no_std]
 
 pub mod edid;
 
-/// "ClaudeOS" in ASCII: the first field of [`BootInfo`], so the kernel can tell it got the real thing.
-pub const MAGIC: u64 = u64::from_le_bytes(*b"ClaudeOS");
+/// "ChatComp" in ASCII: the first field of [`BootInfo`], so the kernel can tell it got the real thing.
+pub const MAGIC: u64 = u64::from_le_bytes(*b"ChatComp");
 /// Raised whenever [`BootInfo`] changes shape.
 pub const VERSION: u32 = 2;
 

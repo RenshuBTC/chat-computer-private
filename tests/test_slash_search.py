@@ -1,18 +1,18 @@
-""" "/" in the message box searches this computer's files (claudeos/slash_search.py and the controller's side), and
-the rest is done by asking: another microphone (the sound tool) or another model (claudeos_settings), applied
+""" "/" in the message box searches this computer's files (chatcomputer/slash_search.py and the controller's side), and
+the rest is done by asking: another microphone (the sound tool) or another model (chatcomputer_settings), applied
 straight away."""
 import asyncio
 import json
 import time
 from types import SimpleNamespace
 
-from claudeos import slash_search, tools as T
-from claudeos.config import Paths, Settings
-from claudeos.controller import Controller
-from claudeos.journal import Journal
-from claudeos.memory import Memory
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
+from chatcomputer import slash_search, tools as T
+from chatcomputer.config import Paths, Settings
+from chatcomputer.controller import Controller
+from chatcomputer.journal import Journal
+from chatcomputer.memory import Memory
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
 
 
 class FakeIndex:
@@ -35,7 +35,7 @@ def _files(tmp_path):
     (home / "Documents").mkdir(parents=True)
     (home / "Documents" / "report.pdf").write_bytes(b"%PDF")
     (home / "Documents" / "notes.txt").write_text("hello")
-    paths = Paths(home / "ClaudeOS").ensure()
+    paths = Paths(home / "ChatComputer").ensure()
     (paths.secrets / "accounts.json").write_text("{}")
     return home, paths
 
@@ -48,7 +48,7 @@ def test_slash_finds_files_on_this_computer(tmp_path):
                      {"path": str(home / "gone.txt"), "kind": "document"}])
     idx.home = home
     items, note = slash_search.search(idx, "rep", paths)
-    # ClaudeOS's private files, and ones gone since the index looked, are left out.
+    # Chat Computer's private files, and ones gone since the index looked, are left out.
     assert [(i["name"], i["where"], i["kind"]) for i in items] == [("report.pdf", "~/Documents", "document")]
     assert note == "" and idx.asked == [("rep", 16)]
     assert slash_search.search(FakeIndex([]), "zzq", paths) == ([], "Nothing on this computer matches “zzq”.")
@@ -64,7 +64,7 @@ def test_a_file_s_time_as_a_person_says_it():
 
 
 def _controller(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
     c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), FakePlatform(), screen, voice=False, index=False)
     return c, screen
@@ -92,7 +92,7 @@ def test_the_page_s_search_and_opening_what_it_found(tmp_path, monkeypatch):
 
 
 def test_another_microphone_by_asking(tmp_path):
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     reopened = []
     platform = FakePlatform()
     ctx = T.ToolContext(paths, Settings(), platform, Journal(paths), RecordingScreen(), Memory(paths),
@@ -101,8 +101,8 @@ def test_another_microphone_by_asking(tmp_path):
     said = call(server, "sound", {"action": "input", "value": "webcam"})
     assert said == "Listening with webcam now." and reopened == [True] and ("set_input", ("webcam",)) in platform.calls
     assert call(server, "sound", {"action": "input"}) == "Which microphone? Available: AirPods Pro"
-    from claudeos.done import describe
-    assert describe("mcp__claudeos__sound", {"action": "input", "value": "webcam"}, said) == \
+    from chatcomputer.done import describe
+    assert describe("mcp__chatcomputer__sound", {"action": "input", "value": "webcam"}, said) == \
         ("Listened with the microphone webcam", False)
 
 

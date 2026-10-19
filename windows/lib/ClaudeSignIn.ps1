@@ -1,16 +1,16 @@
 # Signing in to Claude with the person's subscription.
 #
 # Uses the official Claude Code program, taken from Anthropic's claude-agent-sdk package on PyPI
-# (the same version ClaudeOS runs on Linux). The download is checked against a fixed SHA-256.
+# (the same version Chat Computer runs on Linux). The download is checked against a fixed SHA-256.
 #
 # The sign-in is one approval in the browser, with nothing to copy: "claude auth login" runs in a window of
 # its own and saves a full sign-in (.credentials.json) in a throwaway settings folder, which setup picks up.
 # That window is opened as the person, without administrator rights: run from setup's administrator window,
 # the program can hang without showing anything (seen on a real PC, where the same program worked in an
 # ordinary window). The full sign-in is also what the Claude app on the phone needs (Remote Control), and
-# ClaudeOS uses it for everything. If it doesn't come through, a one-year sign-in code made with "claude
+# Chat Computer uses it for everything. If it doesn't come through, a one-year sign-in code made with "claude
 # setup-token" can be pasted instead. Sign-ins are never shown, logged or sent anywhere except onto the
-# installer partition (or, for "Sign in again", the person's own ClaudeOS folder).
+# installer partition (or, for "Sign in again", the person's own Chat Computer folder).
 # ASCII-only file (see Common.ps1).
 
 $Script:ClaudeWheel = [pscustomobject]@{
@@ -139,7 +139,7 @@ function New-SignInWindowScript {
     param([Parameter(Mandatory = $true)][string]$ClaudeExe, [Parameter(Mandatory = $true)][string]$ConfigDir)
     $lines = @(
         '@echo off',
-        'rem ClaudeOS Setup''s sign-in window (opened without administrator rights).',
+        'rem Chat Computer Setup''s sign-in window (opened without administrator rights).',
         'title Sign in to Claude',
         'if not "%~1"=="here" (',
         '  where wt.exe >nul 2>nul && (',
@@ -150,7 +150,7 @@ function New-SignInWindowScript {
         'cd /d "%USERPROFILE%"',
         ('set "CLAUDE_CONFIG_DIR=' + $ConfigDir + '"'),
         'echo Your browser opens on Claude''s sign-in page. Sign in with the account that has your Claude',
-        'echo subscription, and approve. ClaudeOS Setup carries on by itself.',
+        'echo subscription, and approve. Chat Computer Setup carries on by itself.',
         'echo If the browser shows a code instead, paste it here: Ctrl+V or a right-click.',
         'echo.',
         ('"' + $ClaudeExe + '" auth login --claudeai'),
@@ -160,7 +160,7 @@ function New-SignInWindowScript {
         '  timeout /t 4 >nul',
         ') else (',
         '  echo.',
-        '  echo The sign-in did not finish. Close this window: ClaudeOS Setup offers to try again.',
+        '  echo The sign-in did not finish. Close this window: Chat Computer Setup offers to try again.',
         '  pause',
         ')'
     )
@@ -217,7 +217,7 @@ function Read-SignInCode {
         if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
         $token = ConvertTo-CleanToken $raw
         if (Test-ClaudeToken $token) {
-            Write-Good 'Got it. Claude is signed in for ClaudeOS.'
+            Write-Good 'Got it. Claude is signed in for Chat Computer.'
             return $token
         }
         Write-Warn 'That does not look like a sign-in code (it starts with sk-ant- and is about 100 characters long).'
@@ -231,7 +231,7 @@ function Remove-OldSignInFolders {
     param([string]$Root = $env:TEMP)
     try {
         if (-not $Root -or -not [IO.Directory]::Exists($Root)) { return }
-        foreach ($dir in [IO.Directory]::GetDirectories($Root, 'claudeos-signin-*')) { Remove-Folder $dir }
+        foreach ($dir in [IO.Directory]::GetDirectories($Root, 'chatcomputer-signin-*')) { Remove-Folder $dir }
     } catch {
         Write-SetupLog ('Old sign-in folders: ' + $_.Exception.Message)
     }
@@ -245,7 +245,7 @@ function Invoke-ClaudeBrowserSignIn {
     param([Parameter(Mandatory = $true)][string]$ClaudeExe, [int]$WaitSeconds = 900)
     Remove-OldSignInFolders
     while ($true) {
-        $folder = Join-Path $env:TEMP ('claudeos-signin-' + [guid]::NewGuid().ToString('N'))
+        $folder = Join-Path $env:TEMP ('chatcomputer-signin-' + [guid]::NewGuid().ToString('N'))
         $config = Join-Path $folder 'config'
         New-Item -ItemType Directory -Path $config -Force | Out-Null
         $login = $null
@@ -260,7 +260,7 @@ function Invoke-ClaudeBrowserSignIn {
                 Write-Warn 'Setup could not open the sign-in window.'
             }
             if ($login) {
-                Write-Good 'Signed in to Claude. You can also type to ClaudeOS from the Claude app on your phone.'
+                Write-Good 'Signed in to Claude. You can also type to Chat Computer from the Claude app on your phone.'
                 return [pscustomobject]@{ Login = $login; Token = $null }
             }
         } finally {

@@ -1,4 +1,4 @@
-/* A small, safe Markdown renderer for ClaudeOS (no HTML passthrough, no clickable links). */
+/* A small, safe Markdown renderer for Chat Computer (no HTML passthrough, no clickable links). */
 (function () {
   "use strict";
   function esc(s) {

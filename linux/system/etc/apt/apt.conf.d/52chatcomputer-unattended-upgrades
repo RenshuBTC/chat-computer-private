@@ -1,0 +1,16 @@
+// Chat Computer: enable unattended security upgrades, nothing else.
+//
+// The user is not an admin and never sees a terminal, so security patches must
+// apply themselves. We intentionally keep this narrow: security origins only,
+// no automatic reboot (a crash-loop from an auto-reboot during a kernel upgrade
+// would strand a non-technical user), and no package removal.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+
+// Restrict to the security pocket. (Origins-Pattern lives in the stock
+// 50unattended-upgrades; we only assert the knobs we care about here.)
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "false";

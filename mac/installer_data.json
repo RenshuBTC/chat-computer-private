@@ -1,12 +1,12 @@
 {
   "os_list": [
     {
-      "name": "ClaudeOS",
-      "default_os_name": "ClaudeOS",
+      "name": "Chat Computer",
+      "default_os_name": "Chat Computer",
       "boot_object": "m1n1.bin",
       "next_object": "m1n1/boot.bin",
       "package": "fedora-44-minimal-202609041600.zip",
-      "icon": "claudeos.icns",
+      "icon": "chatcomputer.icns",
       "supported_fw": ["12.3", "12.3.1", "13.5", "14.8.3"],
       "extras": {},
       "partitions": [

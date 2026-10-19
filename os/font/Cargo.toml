@@ -1,6 +1,6 @@
 [package]
 name = "font"
-description = "ClaudeOS's own TrueType reader and anti-aliased rasterizer"
+description = "Chat Computer's own TrueType reader and anti-aliased rasterizer"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

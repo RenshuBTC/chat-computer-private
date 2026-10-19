@@ -1,4 +1,4 @@
-# "ClaudeOS Own System" on real Windows (GitHub's Windows machines). Signs ClaudeOS's start-up file the way it
+# "Chat Computer Own System" on real Windows (GitHub's Windows machines). Signs Chat Computer's start-up file the way it
 # is signed on a PC (a key made by Windows, Windows' own signing), and leaves the signed file and the key's
 # certificate in -Out, where the Linux job starts it in a virtual PC with Secure Boot enforced. On a machine
 # that starts in UEFI mode it then runs the whole thing unattended (without restarting): the start-up partition
@@ -43,7 +43,7 @@ if ($fw -eq 'UEFI') {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $own -Unattended -NoRestart
     Check ($LASTEXITCODE -eq 0) 'own-os.ps1 ran'
     $entries = Get-OwnBootEntries
-    Check ($entries.Count -eq 1) 'one "ClaudeOS (own system)" entry in the power-on menu'
+    Check ($entries.Count -eq 1) 'one "Chat Computer (own system)" entry in the power-on menu'
     (& bcdedit.exe /enum firmware) | Out-File -FilePath (Join-Path $Out 'bcdedit-after.txt') -Encoding utf8
     $esp = Get-WindowsEsp
     $m = Mount-EspPartition $esp
@@ -66,7 +66,7 @@ if ($fw -eq 'UEFI') {
     } finally {
         Dismount-EspPartition $m
     }
-    $log = Join-Path $env:LOCALAPPDATA 'ClaudeOS\own-os\own-os.log'
+    $log = Join-Path $env:LOCALAPPDATA 'ChatComputer\own-os\own-os.log'
     if (Test-Path -LiteralPath $log) { Copy-Item -LiteralPath $log -Destination $Out }
 } else {
     Write-Host 'This machine does not start in UEFI mode: the start-up partition and power-on menu parts are skipped.'

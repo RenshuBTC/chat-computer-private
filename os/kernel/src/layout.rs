@@ -1,5 +1,5 @@
-//! How big ClaudeOS draws text on this screen. The same rules as ClaudeOS's current screen
-//! (claudeos/ui/layout.py, where the reasons are written down): the x-height of the letters aims at
+//! How big Chat Computer draws text on this screen. The same rules as Chat Computer's current screen
+//! (chatcomputer/ui/layout.py, where the reasons are written down): the x-height of the letters aims at
 //! 0.3 degrees of the reader's view, so nearly everyone reads at full speed; lines are at most 30 em
 //! wide (about 70 characters). The screen's real size comes from the monitor (EDID); the viewing
 //! distance is estimated from it.

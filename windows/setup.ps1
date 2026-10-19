@@ -1,14 +1,14 @@
 <#
-ClaudeOS Setup (run on Windows; double-click "ClaudeOS Setup.cmd").
+Chat Computer Setup (run on Windows; double-click "Chat Computer Setup.cmd").
 
-Installs ClaudeOS next to Windows, without a USB stick:
+Installs Chat Computer next to Windows, without a USB stick:
   1. checks this PC (read-only),
-  2. asks where ClaudeOS should go and makes room there (only after you confirm),
+  2. asks where Chat Computer should go and makes room there (only after you confirm),
   3. signs in to Claude with your subscription,
   4. downloads the official Ubuntu Server 24.04 installer and checks it,
-  5. writes the installer, ClaudeOS and your settings to a temporary partition at the end of that room,
-     and adds "ClaudeOS setup" to the power-on menu for the next restart.
-Then the PC restarts into the installer; ClaudeOS installs itself, becomes the first choice on the
+  5. writes the installer, Chat Computer and your settings to a temporary partition at the end of that room,
+     and adds "Chat Computer setup" to the power-on menu for the next restart.
+Then the PC restarts into the installer; Chat Computer installs itself, becomes the first choice on the
 power-on menu, with Windows as the second, and takes over the installer's space when it first starts.
 
   -PlanOnly   go through every question and check, show what would happen, change nothing.
@@ -42,14 +42,14 @@ if (-not (Test-IsAdministrator)) {
         Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -ErrorAction Stop
     } catch {
         # The person said no to Windows' question (or it couldn't be asked).
-        Write-Host ('Windows didn''t give ClaudeOS Setup permission to make changes, so nothing was changed. (' +
+        Write-Host ('Windows didn''t give Chat Computer Setup permission to make changes, so nothing was changed. (' +
                     $_.Exception.Message + ')')
         exit 1
     }
     exit 0
 }
 
-$WorkDir = Join-Path $env:LOCALAPPDATA 'ClaudeOS\setup'
+$WorkDir = Join-Path $env:LOCALAPPDATA 'ChatComputer\setup'
 New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 $LogPath = Join-Path $WorkDir 'setup.log'
 Initialize-SetupLog $LogPath
@@ -59,7 +59,7 @@ Unblock-SetupFiles -Root $RepoRoot   # no "publisher could not be verified" warn
 
 $exitCode = 0
 try {
-    Invoke-ClaudeOSSetup -Here $Here -RepoRoot $RepoRoot -WorkDir $WorkDir -IsoPath $IsoPath -PlanOnly:$PlanOnly
+    Invoke-ChatComputerSetup -Here $Here -RepoRoot $RepoRoot -WorkDir $WorkDir -IsoPath $IsoPath -PlanOnly:$PlanOnly
 } catch {
     Write-SetupLog ('FAILED: ' + $_.Exception.ToString())
     Write-Host ''

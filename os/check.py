@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Starts ClaudeOS in a virtual PC (QEMU with OVMF, the open-source UEFI firmware) without a window,
+"""Starts Chat Computer in a virtual PC (QEMU with OVMF, the open-source UEFI firmware) without a window,
 waits until the kernel says it is ready, takes two pictures of the screen a few seconds apart, and
 checks them: the screen is black text on white, and the "Up for" line moved on (so the kernel's own
 timer interrupts work). Pictures and the kernel's log go to out/.
@@ -12,7 +12,7 @@ timer interrupts work). Pictures and the kernel's log go to out/.
                                      in later, then unplugged; a hub unplugged
     ./check.py --crash page-fault    a kernel that faults on purpose once ready: it must stop cleanly,
                                      with the fault in its log and a message on the screen (also: panic)
-    ./check.py --secure-boot         Secure Boot, as on a PC that has approved ClaudeOS's key: signs the
+    ./check.py --secure-boot         Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
                                      checks the firmware refuses the same build unsigned
@@ -42,14 +42,14 @@ CODE = OVMF / "OVMF_CODE_4M.fd"
 VARS = OVMF / "OVMF_VARS_4M.fd"
 CODE_SECURE = OVMF / "OVMF_CODE_4M.secboot.fd"
 VARS_MICROSOFT = OVMF / "OVMF_VARS_4M.ms.fd"  # Microsoft's keys enrolled, Secure Boot on: like a PC from a shop
-CLAUDEOS_KEY_OWNER = "1dd7d236-3557-417b-b0ab-6cf839b24829"  # who added the key, as recorded in db
+CHATCOMPUTER_KEY_OWNER = "1dd7d236-3557-417b-b0ab-6cf839b24829"  # who added the key, as recorded in db
 
 
 def build(test: str | None = None) -> None:
     env = dict(os.environ)
-    env.pop("CLAUDEOS_TEST", None)
+    env.pop("CHATCOMPUTER_TEST", None)
     if test:
-        env["CLAUDEOS_TEST"] = test
+        env["CHATCOMPUTER_TEST"] = test
     subprocess.run([str(HERE / "build.sh")], check=True, env=env, stdout=subprocess.DEVNULL)
 
 
@@ -181,8 +181,8 @@ def check_screen(a, b, size: str) -> list[str]:
 def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None = None, expect_secure: bool = False) -> list[str]:
     pc = VirtualPC(efi, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=secure_vars)
     try:
-        got = wait_for(pc.log, ("ClaudeOS: ready", "stopped", "couldn't start", "Access Denied"), args.timeout)
-        if got != "ClaudeOS: ready":
+        got = wait_for(pc.log, ("Chat Computer: ready", "stopped", "couldn't start", "Access Denied"), args.timeout)
+        if got != "Chat Computer: ready":
             time.sleep(1)
             pc.picture(f"{name}-failed")
             print(pc.text())
@@ -196,18 +196,18 @@ def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None
     text = pc.text()
     print(text)
     problems = check_screen(a, b, args.size)
-    if expect_secure and "ClaudeOS kernel: Secure Boot on" not in text:
+    if expect_secure and "Chat Computer kernel: Secure Boot on" not in text:
         problems.append("the kernel didn't see Secure Boot on")
     return problems
 
 
 def crash(kind: str, args) -> list[str]:
-    expected = {"page-fault": "ClaudeOS kernel stopped: Page fault", "panic": "ClaudeOS kernel stopped: panicked"}[kind]
+    expected = {"page-fault": "Chat Computer kernel stopped: Page fault", "panic": "Chat Computer kernel stopped: panicked"}[kind]
     build(kind)
     try:
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu)
         try:
-            got = wait_for(pc.log, ("ClaudeOS kernel stopped",), args.timeout)
+            got = wait_for(pc.log, ("Chat Computer kernel stopped",), args.timeout)
             time.sleep(1.5)
             pc.picture(f"screen-{kind}")
         finally:
@@ -228,7 +228,7 @@ TYPED = "Hi! claude OK"
 
 def keyboard_run(label: str, controller: str, args, plug: bool) -> list[str]:
     """One start with a USB controller (`controller`: QEMU's device and options), a keyboard on one of
-    its ports, a hub with a keyboard behind it, and a tablet (which ClaudeOS doesn't use yet and must
+    its ports, a hub with a keyboard behind it, and a tablet (which Chat Computer doesn't use yet and must
     leave alone). QEMU types on the keyboard made last: the one behind the hub."""
     print(f"--- USB keyboards, interrupts: {label}")
     extra = ("-device", f"{controller},id=xhci",
@@ -240,8 +240,8 @@ def keyboard_run(label: str, controller: str, args, plug: bool) -> list[str]:
     problems = []
     name = "keyboard-" + label.lower().replace(" ", "-")
     try:
-        got = wait_for(pc.log, ("ClaudeOS: ready", "stopped"), args.timeout)
-        if got != "ClaudeOS: ready":
+        got = wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout)
+        if got != "Chat Computer: ready":
             print(pc.text())
             return [f"{label}: the kernel didn't say it was ready"]
         text = pc.text()
@@ -294,7 +294,7 @@ def keyboard_ps2(args) -> list[str]:
     pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu)
     problems = []
     try:
-        if wait_for(pc.log, ("ClaudeOS: ready", "stopped"), args.timeout) != "ClaudeOS: ready":
+        if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
             print(pc.text())
             return ["PS/2: the kernel didn't say it was ready"]
         if "PS/2 keyboard found" not in pc.text():
@@ -317,7 +317,7 @@ def keyboard_iommu(model: str, args) -> list[str]:
     pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
     problems = []
     try:
-        if wait_for(pc.log, ("ClaudeOS: ready", "stopped"), args.timeout) != "ClaudeOS: ready":
+        if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
             print(pc.text())
             return [f"{model}: the kernel didn't say it was ready"]
         if "1 IOMMU (not used yet)" not in pc.text():
@@ -356,8 +356,8 @@ def secure_vars_with(cert: Path, where: Path) -> Path:
         pem.write_bytes(data)
     else:
         subprocess.run(["openssl", "x509", "-inform", "DER", "-in", str(cert), "-out", str(pem)], check=True)
-    out = where / "vars-claudeos.fd"
-    subprocess.run(["virt-fw-vars", "-i", str(VARS_MICROSOFT), "-o", str(out), "--add-db", CLAUDEOS_KEY_OWNER, str(pem)],
+    out = where / "vars-chatcomputer.fd"
+    subprocess.run(["virt-fw-vars", "-i", str(VARS_MICROSOFT), "-o", str(out), "--add-db", CHATCOMPUTER_KEY_OWNER, str(pem)],
                    check=True, stdout=subprocess.DEVNULL)
     return out
 
@@ -366,10 +366,10 @@ def refused(efi: Path, secure_vars: Path, args) -> list[str]:
     """The firmware must not start `efi` (unsigned, or signed with a key it doesn't trust)."""
     pc = VirtualPC(efi, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=secure_vars)
     try:
-        got = wait_for(pc.log, ("ClaudeOS kernel: started", "Access Denied", "Security Violation"), args.timeout)
+        got = wait_for(pc.log, ("Chat Computer kernel: started", "Access Denied", "Security Violation"), args.timeout)
     finally:
         pc.stop()
-    if got == "ClaudeOS kernel: started":
+    if got == "Chat Computer kernel: started":
         return ["the firmware started a build it shouldn't trust"]
     if not got:
         return ["the firmware neither refused nor started it in time"]
@@ -383,7 +383,7 @@ def secure_boot(args) -> list[str]:
     key, cert = keys / "test.key", keys / "test.crt"
     if not key.exists():
         subprocess.run(["openssl", "req", "-new", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "3650",
-                        "-subj", "/CN=ClaudeOS test key (not for real PCs)/", "-keyout", str(key), "-out", str(cert)],
+                        "-subj", "/CN=Chat Computer test key (not for real PCs)/", "-keyout", str(key), "-out", str(cert)],
                        check=True, stderr=subprocess.DEVNULL)
     signed = OUT / "signed-test.efi"
     subprocess.run(["sbsign", "--key", str(key), "--cert", str(cert), "--output", str(signed), str(BUILT)],

@@ -2,7 +2,7 @@
 scrolls back to the message that asked for it, and for one from an earlier day, puts that day's messages back
 first (from the transcript). Typing stays in the message box.
 
-Runs a real ClaudeOS window (GTK + WebKit) on a virtual display, clicks with xdotool, and prints JSON.
+Runs a real Chat Computer window (GTK + WebKit) on a virtual display, clicks with xdotool, and prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1600x900x24" python tests/screen_done_check.py [screenshot.png]
 """
 import asyncio
@@ -17,8 +17,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["CLAUDEOS_HOME"] = tempfile.mkdtemp(prefix="claudeos-done-")
-os.environ["CLAUDEOS_W"], os.environ["CLAUDEOS_H"] = "1600", "900"
+os.environ["CHATCOMPUTER_HOME"] = tempfile.mkdtemp(prefix="chatcomputer-done-")
+os.environ["CHATCOMPUTER_W"], os.environ["CHATCOMPUTER_H"] = "1600", "900"
 
 import gi  # noqa: E402
 
@@ -27,9 +27,9 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkX11", "3.0")
 from gi.repository import Gdk, GdkX11, GLib, Gtk  # noqa: E402,F401
 
-from claudeos.config import Paths, Settings  # noqa: E402
-from claudeos.done import History  # noqa: E402
-from claudeos.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
+from chatcomputer.config import Paths, Settings  # noqa: E402
+from chatcomputer.done import History  # noqa: E402
+from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 SHOT = sys.argv[1] if len(sys.argv) > 1 else None
 paths = Paths().ensure()

@@ -1,8 +1,9 @@
 """The screen's layout with both sidebars: Messages at the left (newest first, pins, opening one) and What's done at
 the right, as rounded cards; something opened (a website) between them, in a frame above the latest exchange and
-the message box; F1 makes it fill the screen and back; Escape closes it.
+the message box; the panels' switches (the sidebars off and on, the conversation under the page off, and typing
+bringing it back); F1 makes it fill the screen and back; Escape closes it.
 
-Runs a real ClaudeOS window (GTK + WebKit) on a virtual display, clicks and presses keys with xdotool, prints JSON.
+Runs a real Chat Computer window (GTK + WebKit) on a virtual display, clicks and presses keys with xdotool, prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1920x1080x24" python tests/screen_layout_check.py [shot-prefix]
 """
 import asyncio
@@ -17,8 +18,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["CLAUDEOS_HOME"] = tempfile.mkdtemp(prefix="claudeos-layout-")
-os.environ["CLAUDEOS_W"], os.environ["CLAUDEOS_H"] = "1920", "1080"
+os.environ["CHATCOMPUTER_HOME"] = tempfile.mkdtemp(prefix="chatcomputer-layout-")
+os.environ["CHATCOMPUTER_W"], os.environ["CHATCOMPUTER_H"] = "1920", "1080"
 
 import gi  # noqa: E402
 
@@ -27,8 +28,8 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkX11", "3.0")
 from gi.repository import Gdk, GdkX11, GLib, Gtk  # noqa: E402,F401
 
-from claudeos.config import Paths, Settings  # noqa: E402
-from claudeos.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
+from chatcomputer.config import Paths, Settings  # noqa: E402
+from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 SHOT = sys.argv[1] if len(sys.argv) > 1 else None
 paths = Paths().ensure()
@@ -85,7 +86,14 @@ STATE_JS = """(function () {
   function more(e) { var b = e && e.querySelector(':scope > .more'); if (!b) return null; var r = b.getBoundingClientRect();
     return {text: b.textContent, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), shown: getComputedStyle(b).display !== 'none'}; }
   var line = parseFloat(getComputedStyle(document.body).lineHeight);
+  function toggle(k) { var e = document.getElementById('toggle-' + k), r = e.getBoundingClientRect();
+    return {x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), pressed: e.getAttribute('aria-pressed'),
+            shown: getComputedStyle(e).display !== 'none'}; }
+  function shown(id) { return getComputedStyle(document.getElementById(id)).display !== 'none'; }
   return JSON.stringify({content: document.body.classList.contains('content'),
+    toggles: {left: toggle('left'), right: toggle('right'), bottom: toggle('bottom')},
+    sides: [shown('messages'), shown('done')], composer: shown('composer'),
+    welcome: shown('welcome') ? document.getElementById('wordmark').textContent : null,
     messages: [m.left, m.top, m.right, m.bottom], done: [d.left, d.top, d.right, d.bottom],
     frame: [f.left, f.top, f.right, f.bottom], column: [col.left, col.top, col.right, col.bottom],
     last_you: [lastYou.left, lastYou.top, lastYou.right, lastYou.bottom],
@@ -174,7 +182,33 @@ def step_more() -> None:
 def step_less() -> None:
     m = out["more"]["ai_more"]
     act([["mousemove", "--window", wid(), str(m["x"]), str(m["y"])], ["click", "1"]],
-        lambda: read("less", step_f1))
+        lambda: read("less", step_sides_off))
+
+
+def click(name: str, then_name: str, then, *toggles: str) -> None:
+    """Click the panels' switches named (positions from the state called `name`), then read `then_name`."""
+    cmds = []
+    for k in toggles:
+        t = out[name]["toggles"][k]
+        cmds += [["mousemove", "--window", wid(), str(t["x"]), str(t["y"])], ["click", "1"], ["sleep", "0.3"]]
+    act(cmds, lambda: read(then_name, then))
+
+
+def step_sides_off() -> None:
+    click("less", "sides_off", step_bottom_off, "left", "right")
+
+
+def step_bottom_off() -> None:
+    click("sides_off", "bottom_off", step_typed_back, "bottom")
+
+
+def step_typed_back() -> None:
+    act([["windowfocus", "--sync", wid()], ["type", "a"]], lambda: read("typed_back", step_sides_on))
+
+
+def step_sides_on() -> None:
+    out["panel_events"] = [e for e in events if e.get("type") == "panels"]
+    act([["key", "BackSpace"]], lambda: click("typed_back", "sides_on", step_f1, "left", "right"))
 
 
 def step_f1() -> None:

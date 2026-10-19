@@ -1,7 +1,7 @@
 // Claude's words stream in, and the conversation page (chat.js) draws the finished part of a message once and
 // only the part still being written again. That must give exactly what drawing the whole message at once gives,
 // at every moment of the stream. Prints JSON: how many moments were checked and how many differed.
-// Run:  node tests/md_stream_check.js claudeos/ui/assets/md.js claudeos/ui/assets/chat.js
+// Run:  node tests/md_stream_check.js chatcomputer/ui/assets/md.js chatcomputer/ui/assets/chat.js
 const fs = require("fs");
 global.window = {};
 eval(fs.readFileSync(process.argv[2], "utf8"));          // md.js -> window.renderMarkdown

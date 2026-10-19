@@ -1,10 +1,10 @@
 #!/bin/bash
-# claudeos-refresh: each connected screen goes to the fastest refresh rate xrandr lists for the size it's at
+# chatcomputer-refresh: each connected screen goes to the fastest refresh rate xrandr lists for the size it's at
 # (X starts most fast screens at 60 Hz, where Windows has them at 120 or 144 Hz, and the mouse's arrow feels slow).
 # xrandr is a stand-in that prints a real-looking listing and records what it's asked to do.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SCRIPT="$HERE/../session/claudeos-refresh"
+SCRIPT="$HERE/../session/chatcomputer-refresh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail=0
@@ -64,13 +64,13 @@ t "nothing to change: said so" has "$out" "already at its fastest"
 # Kept as they are when asked to.
 printf '%s\n' "Screen 0: minimum 8 x 8" "DP-1 connected 2560x1440+0+0 (normal) 597mm x 336mm" \
   "   2560x1440     59.95*+ 143.97" > "$TMP/listing"
-mkdir -p "$TMP/home/ClaudeOS" && touch "$TMP/home/ClaudeOS/keep-refresh-rate"
+mkdir -p "$TMP/home/ChatComputer" && touch "$TMP/home/ChatComputer/keep-refresh-rate"
 out=$(run)
 t "keep-refresh-rate leaves the rates alone" none
 t "and says so" has "$out" "left as they are"
-rm -f "$TMP/home/ClaudeOS/keep-refresh-rate"
-CLAUDEOS_KEEP_REFRESH=1 run >/dev/null
-t "CLAUDEOS_KEEP_REFRESH=1 too" none
+rm -f "$TMP/home/ChatComputer/keep-refresh-rate"
+CHATCOMPUTER_KEEP_REFRESH=1 run >/dev/null
+t "CHATCOMPUTER_KEEP_REFRESH=1 too" none
 
 # Without xrandr: nothing happens, and that's fine.
 mkdir -p "$TMP/empty"

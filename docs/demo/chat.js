@@ -13,8 +13,9 @@
   var MAX_ITEMS = 200;
   var ai = {};          // id -> {el, md, text, raf, cut, tail}
   var mode = "chat";    // "content" while something Claude opened is showing between the sidebars
+  var shown = { left: true, right: true, bottom: true };    // the panels (see "the panels' switches")
   function post(msg) {
-    try { window.webkit.messageHandlers.claudeos.postMessage(JSON.stringify(msg)); } catch (e) {}
+    try { window.webkit.messageHandlers.chatcomputer.postMessage(JSON.stringify(msg)); } catch (e) {}
   }
   function now() { return Date.now() / 1000; }
   function remPx() { return parseFloat(getComputedStyle(document.documentElement).fontSize) || 24; }
@@ -117,13 +118,21 @@
   // message and Claude's latest words) just above the message box, and the window lays the page over the space
   // above: this says where that space is ("hole"), whenever it changes.
   var lastHole = "";
-  // The latest exchange: your latest message and what came after it (Claude's words, ClaudeOS's notes). There,
-  // each takes one line; one cut short gets "… more", which shows all of it (the page above makes room), and
-  // then "less".
+  // Above the message box, two lines: your latest message and Chat Computer's latest, in the order they came (while
+  // you're speaking: Chat Computer's latest, then what you're saying). Nothing else shows there: notes and older
+  // messages between or after them are left out (.off-strip), and the earlier conversation is above, scrolled out
+  // of sight. One cut short gets "… more", which shows all of it (the page above makes room), and then "less".
   function latest() {
-    var yous = log.querySelectorAll(".you"), n = yous.length ? yous[yous.length - 1] : log.lastElementChild, out = [];
-    for (; n; n = n.nextElementSibling) out.push(n);
-    return out;
+    var yous = log.querySelectorAll(":scope > .you"), ais = log.querySelectorAll(":scope > .ai");
+    var you = yous.length ? yous[yous.length - 1] : null, a = ais.length ? ais[ais.length - 1] : null;
+    var rows = (body.classList.contains("hearing") ? [a] : [you, a]).filter(Boolean);
+    rows.sort(function (x, y) { return x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1; });
+    var after = false;
+    Array.prototype.forEach.call(log.children, function (n) {
+      if (n === rows[0]) after = true;
+      n.classList.toggle("off-strip", after && rows.indexOf(n) < 0);
+    });
+    return rows;
   }
   function markMore(items) {
     items.forEach(function (n) {
@@ -141,7 +150,8 @@
     if (mode !== "content") return;
     var rem = remPx(), items = latest();
     markMore(items);
-    var first = items[0], h = 2.5 * rem, open = items.some(function (n) { return n.classList.contains("open"); });
+    var first = items[0], open = items.some(function (n) { return n.classList.contains("open"); });
+    var h = first || body.classList.contains("hearing") ? 2.5 * rem : 0;     // nothing said yet: the page reaches down
     if (first) {
       var end = body.classList.contains("hearing") ? live : items[items.length - 1];
       h = Math.max(h, end.getBoundingClientRect().bottom - first.getBoundingClientRect().top + 0.25 * rem);
@@ -164,9 +174,13 @@
   function reportHole() {
     if (mode !== "content") return;
     var rem = remPx(), gap = Math.round(0.75 * rem), panels = body.classList.contains("panel");
-    var left = panels ? Math.round($("messages").getBoundingClientRect().right) + gap : gap;
-    var right = panels ? Math.round($("done").getBoundingClientRect().left) - gap : window.innerWidth - gap;
-    var bottom = Math.round(column.getBoundingClientRect().top - 0.6 * rem);
+    // With the sidebars: from half a line inside where each one's space ends (its card, or the narrow margin with
+    // its switch when it's switched off), which is the same space as around the cards.
+    var cs = getComputedStyle(body), half = Math.round(0.5 * rem);
+    var left = panels ? Math.round(parseFloat(cs.paddingLeft) || 0) + half : gap;
+    var right = panels ? window.innerWidth - Math.round(parseFloat(cs.paddingRight) || 0) - half : window.innerWidth - gap;
+    var bottom = panels && !shown.bottom ? Math.round($("toggle-bottom").getBoundingClientRect().top) - gap
+      : Math.round(column.getBoundingClientRect().top - 0.6 * rem);
     var f = $("frame").style;
     f.left = left + "px"; f.top = gap + "px";
     f.width = Math.max(0, right - left) + "px"; f.height = Math.max(0, bottom - gap) + "px";
@@ -181,8 +195,8 @@
     if (m === "content") fitStrip();
     else {
       lastHole = "";
-      Array.prototype.forEach.call(log.querySelectorAll(":scope > .open, :scope > .cut"), function (n) {
-        n.classList.remove("open", "cut");
+      Array.prototype.forEach.call(log.querySelectorAll(":scope > .open, :scope > .cut, :scope > .off-strip"), function (n) {
+        n.classList.remove("open", "cut", "off-strip");
       });
       jumpDown();
     }
@@ -236,9 +250,11 @@
     if (!body.classList.contains("sheet") && document.activeElement !== input) input.focus({ preventScroll: true });
   }
   document.addEventListener("keydown", function (e) {
-    if (e.target === input || body.classList.contains("sheet")) return;
+    if (body.classList.contains("sheet")) return;
     var paste = (e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V");
-    if (paste || (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter"))) focusBox();
+    if (!(paste || (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter")))) return;
+    if (hiddenBottom()) setPanel("bottom", true);     // typing with the conversation switched off: it comes back
+    if (e.target !== input) focusBox();
   }, true);
   document.addEventListener("mouseup", function () {
     var sel = window.getSelection();
@@ -274,6 +290,33 @@
     var w = window.innerWidth;
     body.classList.toggle("panel", w * 0.17 >= 11 * rem && w * 0.66 - 3 * rem >= 0.8 * col);
   }
+  // The panels' switches: Messages (left), What's done (right) and, while something is open, the conversation under
+  // it (bottom), each switched off and on again with its switch, or by asking Claude (the settings left_panel,
+  // right_panel and bottom_panel). Chat Computer keeps the choice: the page tells it, and it tells the page at the
+  // start.
+  var PANEL_NAMES = { left: "Messages", right: "What\u2019s done", bottom: "the conversation" };
+  function hiddenBottom() { return mode === "content" && !shown.bottom && body.classList.contains("panel"); }
+  function applyPanels() {
+    ["left", "right", "bottom"].forEach(function (k) {
+      body.classList.toggle("hide-" + k, !shown[k]);
+      var b = $("toggle-" + k), label = (shown[k] ? "Hide " : "Show ") + PANEL_NAMES[k];
+      b.setAttribute("aria-pressed", String(shown[k]));
+      b.setAttribute("aria-label", label);
+      b.title = label;
+    });
+    follow();
+    fitStrip();
+  }
+  function setPanel(k, on) {
+    if (shown[k] === on) return;
+    shown[k] = on;
+    applyPanels();
+    post({ type: "panels", left: shown.left, right: shown.right, bottom: shown.bottom });
+    if (k === "bottom" && on) focusBox();
+  }
+  ["left", "right", "bottom"].forEach(function (k) {
+    $("toggle-" + k).addEventListener("click", function () { setPanel(k, !shown[k]); });
+  });
   function dayLabel(ts) {
     var d = new Date(ts * 1000), t = new Date(), y = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
     if (d.toDateString() === t.toDateString()) return "Today";
@@ -299,7 +342,7 @@
     return b;
   }
   // Pins: a pinned item stays at the top of its list, newest pin first, until it's unpinned. The page shows it at
-  // once; ClaudeOS keeps it (pins.json) for next time.
+  // once; Chat Computer keeps it (pins.json) for next time.
   function togglePin(kind, items, id) {
     var it = items[id];
     if (!it) return;
@@ -453,7 +496,7 @@
   $("connect-first").addEventListener("click", function () { post({ type: "add_account" }); });
 
   // ------------------------------------------------------------------ connecting an account
-  // A form ClaudeOS shows (CO.accountForm): what's typed in it goes back to ClaudeOS's own sign-in store, never to
+  // A form Chat Computer shows (CO.accountForm): what's typed in it goes back to Chat Computer's own sign-in store, never to
   // Claude. Choices (which kind of account) are buttons.
   var form = null;
   function showForm(f) {
@@ -518,7 +561,7 @@
   $("sheet").addEventListener("keydown", function (e) { if (e.key === "Escape") { e.preventDefault(); cancelForm(); } });
 
   // ------------------------------------------------------------------ "/": searching this computer
-  // A "/" first in the box makes it search this computer's files (ClaudeOS's index of them) for the words after
+  // A "/" first in the box makes it search this computer's files (Chat Computer's index of them) for the words after
   // it, as they're typed: the best matches in a list above the box. The arrow keys choose, Enter or a click opens
   // one between the sidebars; the last line asks Claude to look instead. Escape (clearing the box) ends it.
   var searching = false, searchN = 0, searchQ = "", results = [], resSel = 0, searchTimer = 0;
@@ -717,7 +760,7 @@
     var p = pinch;
     pinch = null;
     if (keep && Math.abs(p.f - 1) > 0.05) post({ type: "text_scale", factor: Math.round(p.f * 100) / 100 });
-    else rootStyle.setProperty("--co-size", p.size + "px");      // ClaudeOS sends the new size (CO.layout)
+    else rootStyle.setProperty("--co-size", p.size + "px");      // Chat Computer sends the new size (CO.layout)
   }
   // A double tap selects the word there, a triple tap the paragraph (in the message box: the line).
   function selectAt(target, x, y, paragraph) {
@@ -823,7 +866,7 @@
         body.classList.toggle(s, s === name);
       });
     },
-    // Whether the microphone is on. (Not shown: the screen is the conversation; ClaudeOS says so when it can't
+    // Whether the microphone is on. (Not shown: the screen is the conversation; Chat Computer says so when it can't
     // hear.)
     mic: function (on) {},
     // Messages pulled down from the top of the screen (the touchscreen's Notification Center).
@@ -884,12 +927,15 @@
       drawMessages();
     },
     accountForm: function (f) { showForm(f || null); },
-    settings: function (name, model) {
-      var h = new Date().getHours();
-      var part = h < 5 ? "Hello" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-      $("greeting").textContent = part + (name ? ", " + name : "") + ".";
+    // The person's name and the model: nothing on this page shows them (the empty screen is the word logo and
+    // "hello, world").
+    settings: function () {},
+    // Which panels show: {left, right, bottom} (Chat Computer keeps the choice; see "the panels' switches").
+    panels: function (s) {
+      ["left", "right", "bottom"].forEach(function (k) { if (s && k in s) shown[k] = !!s[k]; });
+      applyPanels();
     },
-    // Text size (1 rem) and column width for this screen (claudeos/ui/layout.py).
+    // Text size (1 rem) and column width for this screen (chatcomputer/ui/layout.py).
     layout: function (sizePx, columnPx) {
       rootStyle.setProperty("--co-size", sizePx + "px");
       rootStyle.setProperty("--co-column", columnPx + "px");

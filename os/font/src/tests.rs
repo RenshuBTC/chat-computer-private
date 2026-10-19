@@ -4,7 +4,7 @@ use super::raster::{Pen, Raster, ONE};
 use super::*;
 
 fn atkinson() -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../claudeos/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf");
     std::fs::read(path).expect("the font file")
 }
 

@@ -7,14 +7,14 @@ name = "bootinfo"
 version = "0.1.0"
 
 [[package]]
-name = "claudeos-boot"
+name = "chatcomputer-boot"
 version = "0.1.0"
 dependencies = [
  "bootinfo",
 ]
 
 [[package]]
-name = "claudeos-kernel"
+name = "chatcomputer-kernel"
 version = "0.1.0"
 dependencies = [
  "bootinfo",

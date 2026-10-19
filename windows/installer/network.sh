@@ -1,5 +1,5 @@
 #!/bin/sh
-# ClaudeOS: name the Wi-Fi card for the installer. Runs in the Ubuntu installer as an early command;
+# Chat Computer: name the Wi-Fi card for the installer. Runs in the Ubuntu installer as an early command;
 # the installer re-reads /autoinstall.yaml afterwards.
 #
 # Setup on Windows can't know what Linux will call the Wi-Fi card, so it writes the Wi-Fi network
@@ -7,8 +7,8 @@
 # accepts Wi-Fi by interface name, so this puts the real name in (e.g. wlp2s0), or removes the Wi-Fi
 # part when the PC has no Wi-Fi (a cable is used instead).
 set -u
-CFG="${CLAUDEOS_AUTOINSTALL:-/autoinstall.yaml}"
-NET="${CLAUDEOS_NET_SYS:-/sys/class/net}"
+CFG="${CHATCOMPUTER_AUTOINSTALL:-/autoinstall.yaml}"
+NET="${CHATCOMPUTER_NET_SYS:-/sys/class/net}"
 [ -f "$CFG" ] || exit 0
 grep -q '^    wifis:$' "$CFG" || exit 0
 
@@ -23,7 +23,7 @@ find_wifi() {
 # Wi-Fi drivers can take a few seconds to appear.
 iface=""
 tries=0
-while [ "$tries" -lt "${CLAUDEOS_NET_WAIT:-15}" ]; do
+while [ "$tries" -lt "${CHATCOMPUTER_NET_WAIT:-15}" ]; do
   iface=$(find_wifi) && break
   iface=""
   tries=$((tries + 1))
@@ -34,7 +34,7 @@ case "$iface" in
   *[!A-Za-z0-9_.-]*) iface="" ;;
 esac
 
-tmp="$CFG.claudeos.tmp"
+tmp="$CFG.chatcomputer.tmp"
 awk -v iface="$iface" '
   /^    wifis:$/ { if (iface == "") { skipping = 1; next } }
   skipping == 1 { if ($0 ~ /^      /) next; skipping = 0 }
@@ -44,12 +44,12 @@ awk -v iface="$iface" '
 ' "$CFG" > "$tmp" && mv "$tmp" "$CFG"
 
 if [ -n "$iface" ]; then
-  echo "claudeos-network: Wi-Fi card is $iface"
+  echo "chatcomputer-network: Wi-Fi card is $iface"
   # The installer normally adds Wi-Fi support itself when it sees the card; make sure it's there.
   if ! command -v wpa_supplicant >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y wpasupplicant >/dev/null 2>&1 || true
   fi
 else
-  echo "claudeos-network: no Wi-Fi card found; using a network cable"
+  echo "chatcomputer-network: no Wi-Fi card found; using a network cable"
 fi
 exit 0

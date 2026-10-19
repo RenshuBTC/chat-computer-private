@@ -1,4 +1,4 @@
-# ClaudeOS Setup's own tests on a real Windows machine, under Windows PowerShell 5.1 (the PowerShell every
+# Chat Computer Setup's own tests on a real Windows machine, under Windows PowerShell 5.1 (the PowerShell every
 # Windows PC has, and the one setup runs in): the unit tests, setup's copy of the installer from a real
 # mounted disc image (iso.ps1), then the whole setup conversation on the pretend PC
 # (windows/tests/Flow-Test.ps1) through the Python checks. Saves the output into -Out.
@@ -23,8 +23,8 @@ $iso | ForEach-Object { Write-Host ('  ' + $_) }
 if ($code -ne 0) { $failed = $true }
 
 & python -m pip install --quiet --disable-pip-version-check pytest pyyaml jsonschema 2>&1 | Out-Null
-$env:CLAUDEOS_PWSH = $ps
-$flow = & python -m pytest -q -p no:cacheprovider (Join-Path $repo 'windows\tests\test_windows_setup.py') -k 'flow or removing or windows_can or claudeos_can' 2>&1
+$env:CHATCOMPUTER_PWSH = $ps
+$flow = & python -m pytest -q -p no:cacheprovider (Join-Path $repo 'windows\tests\test_windows_setup.py') -k 'flow or removing or windows_can or chatcomputer_can' 2>&1
 $code = $LASTEXITCODE
 $flow | Out-File -FilePath (Join-Path $Out 'flow.txt') -Encoding utf8
 Write-Host ('Setup conversation on the pretend PC: exit ' + $code + '; ' + ($flow | Select-Object -Last 1))

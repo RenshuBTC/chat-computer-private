@@ -1,4 +1,4 @@
-# Shared helpers for ClaudeOS Setup: talking to the person, asking questions, and a log that
+# Shared helpers for Chat Computer Setup: talking to the person, asking questions, and a log that
 # never contains secrets. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Keep this file ASCII-only: Windows PowerShell 5.1 reads files without a BOM as ANSI.
 
@@ -9,7 +9,7 @@ function Initialize-SetupLog {
     $dir = Split-Path -Parent $Path
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $Script:SetupLogFile = $Path
-    Write-SetupLog ('ClaudeOS Setup started ' + (Get-Date -Format 's'))
+    Write-SetupLog ('Chat Computer Setup started ' + (Get-Date -Format 's'))
 }
 
 function Protect-SetupText {
@@ -234,19 +234,19 @@ function Disable-ConsoleQuickEdit {
     # and pauses whatever runs in it (the title then begins with "Select") until a key is pressed. People click
     # into the window without knowing that. A right-click still pastes. Windows only; harmless elsewhere.
     try {
-        if (-not ('ClaudeOSConsoleMode' -as [type])) {
-            Add-Type -Namespace '' -Name 'ClaudeOSConsoleMode' -MemberDefinition @'
+        if (-not ('ChatComputerConsoleMode' -as [type])) {
+            Add-Type -Namespace '' -Name 'ChatComputerConsoleMode' -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError = true)] public static extern System.IntPtr GetStdHandle(int nStdHandle);
 [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(System.IntPtr h, out uint mode);
 [DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleMode(System.IntPtr h, uint mode);
 '@ -ErrorAction Stop
         }
-        $h = [ClaudeOSConsoleMode]::GetStdHandle(-10)        # the console's input
+        $h = [ChatComputerConsoleMode]::GetStdHandle(-10)    # the console's input
         $mode = [uint32]0
-        if (-not [ClaudeOSConsoleMode]::GetConsoleMode($h, [ref]$mode)) { return $false }
+        if (-not [ChatComputerConsoleMode]::GetConsoleMode($h, [ref]$mode)) { return $false }
         # ENABLE_EXTENDED_FLAGS (0x80) on, so the change sticks; ENABLE_QUICK_EDIT_MODE (0x40) off.
         $new = ($mode -bor 0x80) -band (-bnot [uint32]0x40)
-        return [ClaudeOSConsoleMode]::SetConsoleMode($h, [uint32]$new)
+        return [ChatComputerConsoleMode]::SetConsoleMode($h, [uint32]$new)
     } catch {
         Write-SetupLog ('QuickEdit: ' + $_.Exception.Message)
         return $false
@@ -261,14 +261,14 @@ function Get-LongPath {
     param([AllowNull()][AllowEmptyString()][string]$Path)
     if ([string]::IsNullOrEmpty($Path) -or $Path.IndexOf('~') -lt 0) { return $Path }
     try {
-        if (-not ('ClaudeOSLongPath' -as [type])) {
-            Add-Type -Namespace '' -Name 'ClaudeOSLongPath' -MemberDefinition @'
+        if (-not ('ChatComputerLongPath' -as [type])) {
+            Add-Type -Namespace '' -Name 'ChatComputerLongPath' -MemberDefinition @'
 [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 public static extern uint GetLongPathName(string shortPath, System.Text.StringBuilder longPath, uint size);
 '@ -ErrorAction Stop
         }
         $sb = New-Object System.Text.StringBuilder 32768
-        $n = [ClaudeOSLongPath]::GetLongPathName($Path, $sb, [uint32]$sb.Capacity)
+        $n = [ChatComputerLongPath]::GetLongPathName($Path, $sb, [uint32]$sb.Capacity)
         if ($n -gt 0 -and $n -lt $sb.Capacity) { return $sb.ToString() }
     } catch {
         Write-SetupLog ('Full name of ' + $Path + ': ' + $_.Exception.Message)

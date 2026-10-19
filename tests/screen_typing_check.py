@@ -2,7 +2,7 @@
 key presses), Shift+Enter starts a new line and the box grows, Enter sends, Escape clears it, typing after a click
 elsewhere still goes into it, and the page reports how long letters took to reach the screen.
 
-Runs a real ClaudeOS window (GTK + WebKit) on a virtual display, types with xdotool, and prints JSON.
+Runs a real Chat Computer window (GTK + WebKit) on a virtual display, types with xdotool, and prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1280x800x24" python tests/screen_typing_check.py
 """
 import asyncio
@@ -16,7 +16,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["CLAUDEOS_HOME"] = tempfile.mkdtemp(prefix="claudeos-typing-")
+os.environ["CHATCOMPUTER_HOME"] = tempfile.mkdtemp(prefix="chatcomputer-typing-")
 
 import gi  # noqa: E402
 
@@ -25,8 +25,8 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkX11", "3.0")
 from gi.repository import GdkX11, GLib, Gtk  # noqa: E402,F401
 
-from claudeos.config import Paths, Settings  # noqa: E402
-from claudeos.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
+from chatcomputer.config import Paths, Settings  # noqa: E402
+from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 choose_rendering()
 screen = GtkScreen(Paths().ensure(), Settings(), windowed=True)

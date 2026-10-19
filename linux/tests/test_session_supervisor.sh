@@ -1,22 +1,22 @@
 #!/bin/bash
-# Test session/claudeos-session's exit-code supervisor.
+# Test session/chatcomputer-session's exit-code supervisor.
 #
-# We drive it with a FAKE ClaudeOS command whose exit code we control, and with
-# all delays time-compressed via the documented CLAUDEOS_* env vars. We run with
-# CLAUDEOS_NO_X_SETUP=1 to skip xset/openbox (no real X needed for the loop
+# We drive it with a FAKE Chat Computer command whose exit code we control, and with
+# all delays time-compressed via the documented CHATCOMPUTER_* env vars. We run with
+# CHATCOMPUTER_NO_X_SETUP=1 to skip xset/openbox (no real X needed for the loop
 # logic), and separately smoke-test the X setup path under Xvfb if available.
 #
 # Assertions:
 #   * exit 0  -> loop restarts after the (compressed) normal delay
 #   * exit 3  -> loop restarts immediately (no crash backoff)
 #   * exit !=0,3 repeated 3x within the window -> recovery screen shown
-#   * ...unless the version is a new update: then it's undone (claudeos-root update-undo) and restarted
+#   * ...unless the version is a new update: then it's undone (chatcomputer-root update-undo) and restarted
 #   * crash backoff sequence is applied
-#   * logs are written to $HOME/ClaudeOS/logs/session.log and rotate
+#   * logs are written to $HOME/ChatComputer/logs/session.log and rotate
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-SESSION="$REPO/session/claudeos-session"
+SESSION="$REPO/session/chatcomputer-session"
 FAILED=0
 pass() { printf 'PASS %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; FAILED=1; }
@@ -25,11 +25,11 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK/home"
 mkdir -p "$HOME"
-LOGDIR="$HOME/ClaudeOS/logs"
+LOGDIR="$HOME/ChatComputer/logs"
 
-# A fake ClaudeOS: exits with the code in $WORK/exitcode, and appends a line to
+# A fake Chat Computer: exits with the code in $WORK/exitcode, and appends a line to
 # a run-counter each time it starts. Supports a "sequence" file to vary codes.
-FAKE="$WORK/fake-claudeos"
+FAKE="$WORK/fake-chatcomputer"
 cat > "$FAKE" <<'FK'
 #!/bin/bash
 runs="$FAKE_RUNS"
@@ -42,7 +42,7 @@ if [ -f "$seq_file" ]; then
 else
   code=$(cat "$FAKE_EXITCODE" 2>/dev/null || echo 0)
 fi
-echo "fake claudeos run #$n exiting $code"
+echo "fake chatcomputer run #$n exiting $code"
 exit "$code"
 FK
 chmod +x "$FAKE"
@@ -80,16 +80,16 @@ run_supervisor() {
     FAKE_RUNS="$WORK/runs" \
     FAKE_EXITCODE="$WORK/exitcode" \
     FAKE_SEQ="$WORK/seq" \
-    CLAUDEOS_START_CMD="$FAKE" \
-    CLAUDEOS_DOCTOR_CMD="$FAKE_DOCTOR" \
-    CLAUDEOS_NO_X_SETUP=1 \
-    CLAUDEOS_RECOVERY_NOWAIT=1 \
-    CLAUDEOS_RESTART_DELAY=0 \
-    CLAUDEOS_BACKOFF="0 0 0" \
-    CLAUDEOS_CRASH_WINDOW=120 \
-    CLAUDEOS_MAX_CRASHES=3 \
-    CLAUDEOS_UPDATE_PENDING="$WORK/update-pending" \
-    CLAUDEOS_ROOT_CMD="$FAKE_ROOT" \
+    CHATCOMPUTER_START_CMD="$FAKE" \
+    CHATCOMPUTER_DOCTOR_CMD="$FAKE_DOCTOR" \
+    CHATCOMPUTER_NO_X_SETUP=1 \
+    CHATCOMPUTER_RECOVERY_NOWAIT=1 \
+    CHATCOMPUTER_RESTART_DELAY=0 \
+    CHATCOMPUTER_BACKOFF="0 0 0" \
+    CHATCOMPUTER_CRASH_WINDOW=120 \
+    CHATCOMPUTER_MAX_CRASHES=3 \
+    CHATCOMPUTER_UPDATE_PENDING="$WORK/update-pending" \
+    CHATCOMPUTER_ROOT_CMD="$FAKE_ROOT" \
     bash "$SESSION" > "$WORK/session.out" 2>&1 &
   local pid=$!
   # Wait until we see maxruns runs or timeout.
@@ -126,7 +126,7 @@ if grep -q "RECOVERY: entering recovery screen" "$LOGDIR/session.log" 2>/dev/nul
 else
   fail "3 crashes: recovery not triggered"; sed -n '1,40p' "$LOGDIR/session.log" 2>/dev/null >&2
 fi
-if grep -q "fake doctor" "$WORK/session.out" 2>/dev/null || grep -q "claudeos doctor" "$WORK/session.out" 2>/dev/null; then
+if grep -q "fake doctor" "$WORK/session.out" 2>/dev/null || grep -q "chatcomputer doctor" "$WORK/session.out" 2>/dev/null; then
   pass "recovery: shows doctor output"
 else
   fail "recovery: doctor output not shown"; sed -n '1,30p' "$WORK/session.out" >&2
@@ -175,9 +175,9 @@ if grep -q "crash #1 within" "$LOGDIR/session.log" 2>/dev/null; then pass "crash
 # Force a tiny rotation threshold and generate output.
 echo 0 > "$WORK/exitcode"; rm -f "$WORK/seq"
 env HOME="$HOME" FAKE_RUNS="$WORK/runs" FAKE_EXITCODE="$WORK/exitcode" FAKE_SEQ="$WORK/seq" \
-    CLAUDEOS_START_CMD="$FAKE" CLAUDEOS_DOCTOR_CMD="$FAKE_DOCTOR" \
-    CLAUDEOS_NO_X_SETUP=1 CLAUDEOS_RECOVERY_NOWAIT=1 CLAUDEOS_RESTART_DELAY=0 \
-    CLAUDEOS_BACKOFF="0 0 0" CLAUDEOS_LOG_MAX_BYTES=256 CLAUDEOS_LOG_KEEP=2 \
+    CHATCOMPUTER_START_CMD="$FAKE" CHATCOMPUTER_DOCTOR_CMD="$FAKE_DOCTOR" \
+    CHATCOMPUTER_NO_X_SETUP=1 CHATCOMPUTER_RECOVERY_NOWAIT=1 CHATCOMPUTER_RESTART_DELAY=0 \
+    CHATCOMPUTER_BACKOFF="0 0 0" CHATCOMPUTER_LOG_MAX_BYTES=256 CHATCOMPUTER_LOG_KEEP=2 \
     bash "$SESSION" > "$WORK/session.out" 2>&1 &
 pid=$!
 # Up to 10 s: on a busy machine the first restarts can take longer than the second this usually takes.
@@ -195,8 +195,8 @@ if command -v Xvfb >/dev/null 2>&1 && command -v xset >/dev/null 2>&1; then
   # we only check that setup_screen's xset calls do not crash the script.
   echo 0 > "$WORK/exitcode"; rm -f "$WORK/seq"; : > "$LOGDIR/session.log"
   env HOME="$HOME" DISPLAY=:99 FAKE_RUNS="$WORK/runs" FAKE_EXITCODE="$WORK/exitcode" \
-      FAKE_SEQ="$WORK/seq" CLAUDEOS_START_CMD="$FAKE" CLAUDEOS_DOCTOR_CMD="$FAKE_DOCTOR" \
-      CLAUDEOS_RECOVERY_NOWAIT=1 CLAUDEOS_RESTART_DELAY=0 CLAUDEOS_BACKOFF="0 0 0" \
+      FAKE_SEQ="$WORK/seq" CHATCOMPUTER_START_CMD="$FAKE" CHATCOMPUTER_DOCTOR_CMD="$FAKE_DOCTOR" \
+      CHATCOMPUTER_RECOVERY_NOWAIT=1 CHATCOMPUTER_RESTART_DELAY=0 CHATCOMPUTER_BACKOFF="0 0 0" \
       bash "$SESSION" >/dev/null 2>&1 &
   pid=$!
   sleep 1
@@ -207,24 +207,24 @@ else
   echo "SKIP Xvfb X-setup smoke test (Xvfb/xset not installed)" >&2
 fi
 
-# --- Test 7 (optional): Ctrl+Alt+Backspace (claudeos-restart) ends the X server ---------------------
-# The program startx waits on is claudeos-session, so only ending X restarts ClaudeOS (xinit then ends the
-# session, and the tty1 login starts it again); asking openbox to exit would leave ClaudeOS running.
+# --- Test 7 (optional): Ctrl+Alt+Backspace (chatcomputer-restart) ends the X server ---------------------
+# The program startx waits on is chatcomputer-session, so only ending X restarts Chat Computer (xinit then ends the
+# session, and the tty1 login starts it again); asking openbox to exit would leave Chat Computer running.
 alive() { local s; s="$(ps -o stat= -p "$1" 2>/dev/null)"; [ -n "$s" ] && [ "${s#Z}" = "$s" ]; }
 if command -v Xvfb >/dev/null 2>&1 && [ ! -e /tmp/.X98-lock ]; then
   Xvfb :98 -nolisten tcp -screen 0 640x480x16 >/dev/null 2>&1 &
   XVFB=$!
   for _ in $(seq 25); do [ -s /tmp/.X98-lock ] && break; sleep 0.2; done
-  DISPLAY=:98 sh "$REPO/session/claudeos-restart"
+  DISPLAY=:98 sh "$REPO/session/chatcomputer-restart"
   for _ in $(seq 25); do alive "$XVFB" || break; sleep 0.2; done
   if alive "$XVFB"; then
-    fail "claudeos-restart left the X server running"; kill "$XVFB" 2>/dev/null
+    fail "chatcomputer-restart left the X server running"; kill "$XVFB" 2>/dev/null
   else
-    pass "claudeos-restart ends the X server of its display"
+    pass "chatcomputer-restart ends the X server of its display"
   fi
   wait "$XVFB" 2>/dev/null
 else
-  echo "SKIP claudeos-restart test (no Xvfb, or display :98 is taken)" >&2
+  echo "SKIP chatcomputer-restart test (no Xvfb, or display :98 is taken)" >&2
 fi
 
 exit "$FAILED"

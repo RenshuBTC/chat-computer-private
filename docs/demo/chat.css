@@ -6,7 +6,10 @@
    document) goes between them, above your latest message, Claude's latest reply and the message box. */
 html { scrollbar-width: none; }
 ::-webkit-scrollbar { display: none; }
-body.panel { --panel: 17vw; --left: 17vw; }
+body.panel { --left: 17vw; --panel: 17vw; --rail: calc(3.45rem + 2px); }
+/* A sidebar switched off leaves a narrow margin with just its switch (see "The panels' switches" below). */
+body.panel.hide-left { --left: var(--rail); }
+body.panel.hide-right { --panel: var(--rail); }
 body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
 #column {
   display: flex; flex-direction: column; justify-content: flex-end;
@@ -47,13 +50,18 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* Empty screen: a greeting and one line saying how to talk or type. */
-#welcome { margin: 0; }
-#greeting { font-size: 1.5rem; font-weight: normal; line-height: 1.3; margin: 0 0 0.25em; }
-#hint { margin: 0; }
+/* Empty screen: the word logo in the middle and, under it, what a first program prints: hello, world, in lower case
+   with its comma, as in Kernighan's C tutorial and his book with Ritchie, and in the mono font, as a program
+   prints it. */
+#welcome { margin: 0; text-align: center; }
+#wordmark {
+  font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0;
+}
+#hello { font-family: var(--mono); margin: 0.75em 0 0; }
 body.has-log #welcome { display: none; }
 
-/* Something open (body.content): the conversation shrinks to its latest exchange just above the message box, and
+/* Something open (body.content): the conversation shrinks to two lines just above the message box (your latest
+   message and Chat Computer's latest), and
    the page Claude opened is laid over the space above it, in a rounded frame like the sidebars' (the window places
    it inside #frame: chat.js reports where). Older messages are still there, above, cut off. */
 #frame { display: none; position: fixed; border: 2px solid var(--bubble); border-radius: 1.1rem; }
@@ -65,9 +73,16 @@ body.content #column {
   display: block; width: auto; margin: 0; padding: 0; overflow-y: auto;
   --side-gap: max(1.5rem, (100vw - var(--left, 0px) - var(--panel, 0px) - var(--co-column, 30rem)) / 2);
 }
+/* With the switches at the sides, the latest exchange and the message box leave room at their right for the
+   conversation's own switch. */
+body.panel.content #column {
+  --side-gap: max(2.85rem, (100vw - var(--left, 0px) - var(--panel, 0px) - var(--co-column, 30rem)) / 2);
+}
+body.panel.content #box, body.panel.content #wake { width: min(var(--co-column, 30rem), 100% - 5.7rem); }
 /* There, each message takes one line, so the page gets the room: "… more" shows the rest of one (and the page
    makes room for it), "less" puts it back. */
 body.content #log { gap: 0.4rem; }
+body.content #log > .off-strip { display: none; }
 body.content .you { padding: 0.1rem 0.75rem; }
 body.content #log > * { position: relative; }
 body.content #log > :not(.open) {
@@ -90,8 +105,8 @@ body.content #live { padding: 0.1rem 0.75rem; margin-top: 0.4rem; }
 
 /* The message box, as in the Claude app: a rounded box the width of the conversation at the bottom of the
    screen; it grows with what's typed (up to a few lines, then scrolls). Enter sends, Shift+Enter starts a new
-   line; the return arrow shows once there's something to send. Nothing else: ClaudeOS is the conversation (and
-   "/" to search this computer). Asleep, a line above it says how to wake ClaudeOS. */
+   line; the return arrow shows once there's something to send. Nothing else: Chat Computer is the conversation (and
+   "/" to search this computer). Asleep, a line above it says how to wake Chat Computer. */
 #composer {
   position: fixed; left: var(--left, 0px); right: var(--panel, 0px); bottom: 0;
   padding: 0.5rem 0 0.75rem; background: var(--ground);
@@ -162,7 +177,7 @@ button { font: inherit; color: var(--ink); }
   font-size: 0.8rem; line-height: 1.4;
 }
 body.panel .side { display: flex; }
-#messages { left: 0.75rem; }
+#messages { left: 0.75rem; width: calc(var(--left, 0px) - 1rem); }
 #done { right: 0.75rem; }
 /* Words in a sidebar line up with the items' words; an item's grey (under the pointer) reaches a little past them. */
 .side-head, .side-day, .side-empty, #clock { padding-left: 0.4em; }
@@ -217,7 +232,7 @@ body.show-messages:not(.panel) #messages { display: flex; z-index: 30; width: mi
 }
 .msg-src { font-weight: bold; }
 
-/* Connecting an account: a form over the whole screen. What's typed in it goes to ClaudeOS's own sign-in store,
+/* Connecting an account: a form over the whole screen. What's typed in it goes to Chat Computer's own sign-in store,
    not to Claude. */
 #sheet {
   position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
@@ -243,7 +258,30 @@ body.sheet #sheet { display: flex; }
 #sheet-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 1.25em; margin-top: 1.5em; }
 body.sheet-busy #sheet-ok { visibility: hidden; }
 
-/* Sleeping: the conversation and the sidebars go away; the line under the message box says how to wake ClaudeOS. */
-body.sleeping #column, body.sleeping .side { visibility: hidden; }
+/* The panels' switches, like the Claude app's sidebar button: Messages' at the top left, What's done's at the top
+   right, and the conversation's (while something is open) at the bottom right, beside the message box. Each icon
+   is the screen with its panel marked, filled in while the panel shows. Switched off, Messages and What's done
+   leave a narrow margin with just their switch; the conversation's leaves the page room down to its switch. Only
+   where the sidebars fit (body.panel). */
+.toggle {
+  position: fixed; z-index: 5; display: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.15rem;
+  border: 0; border-radius: 0.4rem; background: none; color: var(--ink); cursor: pointer;
+}
+.toggle svg { display: block; width: 100%; height: 100%; }
+.toggle .fill { fill: currentColor; stroke: none; }
+.toggle[aria-pressed="false"] .fill { display: none; }
+.toggle:hover { background: var(--bubble); }
+body.panel #toggle-left, body.panel #toggle-right, body.panel.content #toggle-bottom { display: block; }
+#toggle-left, #toggle-right { top: calc(1.69rem + 2px); }
+#toggle-left { left: calc(1.25rem + 2px); }
+#toggle-right { right: calc(1.25rem + 2px); }
+#toggle-bottom { right: calc(var(--panel, 0px) + 0.5rem); bottom: 0.75rem; }
+body.panel.hide-left #messages, body.panel.hide-right #done { display: none; }
+body.panel #messages .side-head { padding-left: 1.55rem; }
+body.panel #done .side-head { padding-right: 1.65rem; }
+body.panel.content.hide-bottom #column, body.panel.content.hide-bottom #composer { display: none; }
+
+/* Sleeping: the conversation and the sidebars go away; the line under the message box says how to wake Chat Computer. */
+body.sleeping #column, body.sleeping .side, body.sleeping .toggle, body.sheet .toggle { visibility: hidden; }
 
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }

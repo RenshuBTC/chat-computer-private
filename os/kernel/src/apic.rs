@@ -75,7 +75,7 @@ fn retire_legacy_pics() {
 }
 
 /// Masks every input of the I/O APICs, whatever the firmware left there: no device interrupt arrives
-/// until a ClaudeOS driver asks for it.
+/// until a Chat Computer driver asks for it.
 fn mask_io_apics(acpi: &Acpi) {
     for io in &acpi.io_apics[..acpi.io_apic_count] {
         let base = paging::map_device(io.address, 0x20, Cache::Uncached);
@@ -94,7 +94,7 @@ fn mask_io_apics(acpi: &Acpi) {
 }
 
 /// Sets up this core's interrupt controller, in the mode the firmware left it in (x2APIC is only
-/// needed past 255 cores; switching modes waits until ClaudeOS starts its other cores). Returns the
+/// needed past 255 cores; switching modes waits until Chat Computer starts its other cores). Returns the
 /// core's APIC id and whether x2APIC is on.
 pub fn init(acpi: &Acpi) -> (u32, bool) {
     retire_legacy_pics();

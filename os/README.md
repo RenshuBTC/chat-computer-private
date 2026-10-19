@@ -1,14 +1,14 @@
-# ClaudeOS's own operating system
+# Chat Computer's own operating system
 
-This folder is ClaudeOS's own operating system, written from scratch. It covers every piece of software
+This folder is Chat Computer's own operating system, written from scratch. It covers every piece of software
 from the moment the PC's firmware hands over to the screen. There is no Linux, no GRUB and no code from
-other projects. It will replace the thin Linux base in `linux/` (today's ClaudeOS runs on Ubuntu or
+other projects. It will replace the thin Linux base in `linux/` (today's Chat Computer runs on Ubuntu or
 Fedora). Until it can do everything that base does, the two live side by side.
 
-The aim: ClaudeOS as deep as it can go while still working on everybody's PC or laptop, installed with a
-download. The firmware stays the PC maker's on every PC (see "What ClaudeOS owns" below). From the first
-program the firmware starts, everything is ClaudeOS's own. On a PC whose parts the own kernel can't drive
-yet, ClaudeOS's start-up program will start the Linux-based ClaudeOS instead, so the same download works
+The aim: Chat Computer as deep as it can go while still working on everybody's PC or laptop, installed with a
+download. The firmware stays the PC maker's on every PC (see "What Chat Computer owns" below). From the first
+program the firmware starts, everything is Chat Computer's own. On a PC whose parts the own kernel can't drive
+yet, Chat Computer's start-up program will start the Linux-based Chat Computer instead, so the same download works
 everywhere, and PCs move to the own kernel as its drivers grow (see "Reaching everybody's PC").
 
 ## What it does today
@@ -23,7 +23,7 @@ open-source UEFI firmware.
   * It copies the kernel into memory and builds the kernel's first page tables.
   * It ends the firmware's services (ExitBootServices) and jumps to the kernel. Nothing in the firmware is
     called after that.
-  * Its UEFI definitions are ClaudeOS's own, written from the specification.
+  * Its UEFI definitions are Chat Computer's own, written from the specification.
 * `kernel/` is the kernel. It sets itself up in this order:
   * its log, on the serial port;
   * its own segment table and task state segment, with separate stacks for double faults, NMIs and
@@ -44,8 +44,8 @@ open-source UEFI firmware.
     else the HPET, else the old PIT. Every wait gives up after a few seconds, and a measurement that
     makes no sense is thrown away. The processor's time-stamp counter is measured at the same time; it
     gives drivers short waits that work with interrupts off;
-  * IOMMUs (Intel VT-d, AMD-Vi) the firmware left on are switched off. ClaudeOS doesn't use them yet, and
-    a firmware that protects itself from devices this way would otherwise keep them from ClaudeOS's
+  * IOMMUs (Intel VT-d, AMD-Vi) the firmware left on are switched off. Chat Computer doesn't use them yet, and
+    a firmware that protects itself from devices this way would otherwise keep them from Chat Computer's
     memory, and drop their interrupts;
   * the PCI devices, through the PCI Express window (ACPI's MCFG table), else the old ports. Drivers
     have devices interrupt by message: MSI-X, else MSI;
@@ -66,43 +66,43 @@ open-source UEFI firmware.
   Then it keeps the screen's clock current, and shows what is typed on the line under it, with the
   keyboards found by name. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat work,
   in the US layout. Typed lines go nowhere yet; Claude comes at step 8.
-* `font/` is ClaudeOS's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
+* `font/` is Chat Computer's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It's tested against fontTools' reading of the same font.
 * `bootinfo/` defines what the start-up stage hands the kernel, once for both.
-* `shared/mem.rs` holds ClaudeOS's own `memcpy`, `memmove`, `memset` and `memcmp`.
+* `shared/mem.rs` holds Chat Computer's own `memcpy`, `memmove`, `memset` and `memcmp`.
 
-The screen follows ClaudeOS's look:
+The screen follows Chat Computer's look:
 * black text on white;
 * Atkinson Hyperlegible Next;
-* text sized by the same 0.3° x-height rule as `claudeos/ui/layout.py`, from the monitor's real size;
+* text sized by the same 0.3° x-height rule as `chatcomputer/ui/layout.py`, from the monitor's real size;
 * a column at most 30 em wide.
 
 ## Starting it on a PC
 
-On a Windows PC, double-click `windows\ClaudeOS Own System.cmd` (`windows/own-os.ps1`). No USB stick is
+On a Windows PC, double-click `windows\Chat Computer Own System.cmd` (`windows/own-os.ps1`). No USB stick is
 needed.
 
-1. It checks the PC (read-only) and saves a list of its parts in `%LOCALAPPDATA%\ClaudeOS\own-os\pc.txt`, so
+1. It checks the PC (read-only) and saves a list of its parts in `%LOCALAPPDATA%\ChatComputer\own-os\pc.txt`, so
    drivers can be written for exactly those chips.
-2. It signs `release/claudeos.efi` with a key that Windows makes on that PC and won't let be copied off.
-3. After you confirm, it puts the signed file in `\EFI\claudeos-own` on the partition the PC starts from,
+2. It signs `release/chatcomputer.efi` with a key that Windows makes on that PC and won't let be copied off.
+3. After you confirm, it puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
    next to Windows' own files.
-4. It adds "ClaudeOS (own system)" to the end of the power-on menu and starts it once, at the next restart.
+4. It adds "Chat Computer (own system)" to the end of the power-on menu and starts it once, at the next restart.
    The restart after that starts Windows.
 
-With Secure Boot on, the PC first has to trust ClaudeOS's key. That takes one approval in the PC's setup
-screen: Secure Boot, then Key Management, then Authorized Signatures (db), then Append `ClaudeOS.cer`. You
+With Secure Boot on, the PC first has to trust Chat Computer's key. That takes one approval in the PC's setup
+screen: Secure Boot, then Key Management, then Authorized Signatures (db), then Append `ChatComputer.cer`. You
 can turn Secure Boot off there instead. The script shows the steps and restarts into the setup screen.
 
 Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock's), and so do most
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
 Bluetooth comes at step 10.
 
-To go back to Windows, hold the power button until the PC turns off. ClaudeOS doesn't write to any disk yet.
+To go back to Windows, hold the power button until the PC turns off. Chat Computer doesn't write to any disk yet.
 Running the script again with `-Remove` (or choosing Remove) takes the file and the entry off again, and
 deletes the key.
 
-`release/claudeos.efi` is committed because Windows has no Rust compiler. The build is reproducible, and CI
+`release/chatcomputer.efi` is committed because Windows has no Rust compiler. The build is reproducible, and CI
 rebuilds it and checks that it's the same file, byte for byte. `./release.sh` updates it.
 
 ## Building and trying it
@@ -123,7 +123,7 @@ cargo test -p font               # the font engine's tests
                                  # present, plugged in and out
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
-./release.sh                     # updates release/claudeos.efi
+./release.sh                     # updates release/chatcomputer.efi
 ```
 
 For `--secure-boot` you also need `sbsigntool` and `virt-firmware` (`pipx install virt-firmware`).
@@ -138,9 +138,9 @@ qemu-system-x86_64 -machine q35 -m 512 -serial stdio \
   -drive format=raw,file=fat:rw:out/esp
 ```
 
-## What ClaudeOS owns, and what no operating system can own on a PC
+## What Chat Computer owns, and what no operating system can own on a PC
 
-ClaudeOS writes every piece of software that runs on the processor's main cores after the firmware hands
+Chat Computer writes every piece of software that runs on the processor's main cores after the firmware hands
 over. On any standard PC, some software stays outside. The PC this is first aimed at has an AMD Ryzen 7
 7800X3D; on it, that software is:
 
@@ -149,18 +149,18 @@ over. On any standard PC, some software stays outside. The PC this is first aime
   starts first, and the main cores are never activated without it
   ([Wikipedia](https://en.wikipedia.org/wiki/AMD_Platform_Security_Processor)).
 * **The motherboard's firmware (UEFI).**
-  * It starts ClaudeOS.
+  * It starts Chat Computer.
   * It leaves System Management Mode code behind, which can pause any operating system and which the OS
     cannot disable ([Wikipedia](https://en.wikipedia.org/wiki/System_Management_Mode)).
   * Its ACPI tables include small power-management programs (AML) that an OS has to run for things like
-    sleep. ClaudeOS reads the tables but doesn't run those programs yet.
+    sleep. Chat Computer reads the tables but doesn't run those programs yet.
 * **CPU microcode**, from the processor's maker.
 * **Firmware inside devices**: the SSD, graphics, network and Bluetooth chips, and the AirPods. Some chips
   need the OS to load their maker's firmware into them each time they power on
-  ([Wikipedia](https://en.wikipedia.org/wiki/Binary_blob)). ClaudeOS would carry and load that firmware,
+  ([Wikipedia](https://en.wikipedia.org/wiki/Binary_blob)). Chat Computer would carry and load that firmware,
   not write it.
 
-The firmware can't be replaced on everybody's PC, so ClaudeOS doesn't try:
+The firmware can't be replaced on everybody's PC, so Chat Computer doesn't try:
 
 * Many PCs, most laptops among them, refuse firmware their maker didn't sign. Intel's Boot Guard has the
   maker fuse its key into the chipset ([Phoronix](https://www.phoronix.com/news/Intel-Boot-Guard-Kills-Coreboot)).
@@ -171,35 +171,35 @@ The firmware can't be replaced on everybody's PC, so ClaudeOS doesn't try:
 * Replacing firmware can leave a PC unable to start, and often needs a clip on the chip. That can't be
   a download.
 
-Secure Boot, today, adds no one else's code to the chain. Either ClaudeOS's own key is approved once in
+Secure Boot, today, adds no one else's code to the chain. Either Chat Computer's own key is approved once in
 the motherboard's settings (added to the firmware's allowed list, db), or Secure Boot is off. That is
 too hard for most people, so the plan for everybody's PC is the first step Linux distributions use (see
-"Reaching everybody's PC"). It puts one small program that isn't ClaudeOS's own, shim, at the start of
+"Reaching everybody's PC"). It puts one small program that isn't Chat Computer's own, shim, at the start of
 the chain. The approved-key way stays, for anyone who wants none.
 
-Some things are made by others but are not software between the hardware and ClaudeOS:
+Some things are made by others but are not software between the hardware and Chat Computer:
 
-* **The Rust compiler** runs where ClaudeOS is built, not on the PC. It does build a small part of Rust's
-  own library into ClaudeOS (`core` and `alloc`, for things like formatting numbers and collections on
-  the heap). ClaudeOS replaces pieces of it with its own where that matters; `memcpy` and its relatives
-  are already ClaudeOS's own.
+* **The Rust compiler** runs where Chat Computer is built, not on the PC. It does build a small part of Rust's
+  own library into Chat Computer (`core` and `alloc`, for things like formatting numbers and collections on
+  the heap). Chat Computer replaces pieces of it with its own where that matters; `memcpy` and its relatives
+  are already Chat Computer's own.
 * **Data**, such as the font (Atkinson Hyperlegible Next, by the Braille Institute, under the SIL Open
-  Font License). ClaudeOS ignores the hinting programs inside the font. Later, speech models' weights
+  Font License). Chat Computer ignores the hinting programs inside the font. Later, speech models' weights
   will be data of this kind too.
 * **Claude itself**, which runs in Anthropic's cloud.
 
 ## Roadmap
 
-The steps come in the order ClaudeOS needs them. Each is tested in a virtual PC first, then on the real
+The steps come in the order Chat Computer needs them. Each is tested in a virtual PC first, then on the real
 PC.
 
 1. ✓ The start-up stage, the kernel's core, interrupts and timer, the font engine and the first screen.
 2. The real PC: start from its own start-up partition (no USB stick) and show the first screen on its
-   monitor, with Secure Boot on and ClaudeOS's own key approved. Ready to try: see "Starting it on a PC".
+   monitor, with Secure Boot on and Chat Computer's own key approved. Ready to try: see "Starting it on a PC".
 3. ✓ Keyboard: USB (the xHCI controllers, hubs and keyboards) and PS/2 (laptops' built-in keyboards).
    Checked in virtual PCs; on the real PC with step 2.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
-5. Storage: NVMe and SATA, and ClaudeOS's own file system for settings, memory and logs.
+5. Storage: NVMe and SATA, and Chat Computer's own file system for settings, memory and logs.
 6. Network: the internet over a USB cable (a phone's tethering, USB Ethernet adapters: standard, so one
    driver covers most), then the common wired chips (Realtek's and Intel's), then IPv4 and IPv6, DHCP,
    DNS and TCP.
@@ -207,12 +207,12 @@ PC.
    TLS 1.3.
 8. Claude: HTTPS and the conversation itself, streamed. There's a decision to make at this step.
    Anthropic says subscription sign-in is for Claude Code and its own apps
-   ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)). So either ClaudeOS
+   ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)). So either Chat Computer
    runs the unmodified Claude Code program, which means it must run Linux programs, or it uses an API
    key, billed per use.
 9. The conversation screen: kerning, scrolling, and the formatting Claude's answers use.
 10. Sound and AirPods: Bluetooth (HCI over USB, L2CAP, A2DP and HFP, SBC and mSBC).
-11. Speech: ClaudeOS's own speech recognition and voice, running the models itself.
+11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
 12. Power: shut down, restart and sleep; on laptops the battery and the lid. These need an AML
     interpreter.
 13. Updates: signed, with a way back.
@@ -224,16 +224,16 @@ PC.
 Three things stand between the steps above and a download that works on any PC or laptop:
 
 1. **Secure Boot with one confirmation.** PCs ship with Secure Boot on, and their firmware then only
-   starts programs signed with a key it trusts, which ClaudeOS's own key isn't. The plan is the route
-   Linux distributions take. Shim, a small program Microsoft signs, starts ClaudeOS's own start-up
-   program once the person has confirmed ClaudeOS's key, once, on a blue screen at the next restart.
+   starts programs signed with a key it trusts, which Chat Computer's own key isn't. The plan is the route
+   Linux distributions take. Shim, a small program Microsoft signs, starts Chat Computer's own start-up
+   program once the person has confirmed Chat Computer's key, once, on a blue screen at the next restart.
    Setup on Windows asks for that confirmation, so there is nothing to find in the PC's settings.
-   (Microsoft could later sign ClaudeOS's own start-up program directly. That needs a registered
+   (Microsoft could later sign Chat Computer's own start-up program directly. That needs a registered
    organization with an EV code-signing certificate, and Microsoft may still require the shim route:
    [Microsoft's requirements](https://learn.microsoft.com/windows-hardware/drivers/dashboard/file-signing-reqs).)
-2. **One download installs both.** ClaudeOS's start-up program starts the own kernel when the kernel
+2. **One download installs both.** Chat Computer's start-up program starts the own kernel when the kernel
    can drive everything the PC needs (screen, keyboard, storage and the internet), and the Linux-based
-   ClaudeOS otherwise. Both look and work the same to the person.
+   Chat Computer otherwise. Both look and work the same to the person.
 3. **Drivers, in order of how many PCs each one covers.** Standard interfaces first, where one driver
    covers nearly every PC: USB (done), PS/2 keyboards (done), NVMe and SATA, the internet over USB, HD
    Audio and USB audio, and laptops' power (ACPI). Then the most common chips: Realtek's and Intel's

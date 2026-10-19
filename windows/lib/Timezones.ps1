@@ -3,7 +3,7 @@
 # Do not edit by hand; regenerate from CLDR if a zone is missing. One step after generating: CLDR keeps some
 # old names (Asia/Calcutta, Europe/Kiev, America/Godthab, Asia/Rangoon, Asia/Katmandu, America/Buenos_Aires,
 # America/Indianapolis) that Ubuntu 24.04 only has in tzdata-legacy, which isn't installed: they are replaced by
-# their current names (Asia/Kolkata, Europe/Kyiv, ...), or the installer and ClaudeOS wouldn't know the zone.
+# their current names (Asia/Kolkata, Europe/Kyiv, ...), or the installer and Chat Computer wouldn't know the zone.
 $Script:WindowsToIana = @{
     'AUS Central Standard Time' = 'Australia/Darwin'
     'AUS Eastern Standard Time' = 'Australia/Sydney'

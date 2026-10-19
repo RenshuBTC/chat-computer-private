@@ -10,12 +10,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from claudeos.voice.tts import SentenceSplitter, TTS, speakable, _resample
+from chatcomputer.voice.tts import SentenceSplitter, TTS, speakable, _resample
 
-MODELS = Path(os.environ.get("CLAUDEOS_TEST_MODELS", "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/models"))
+MODELS = Path(os.environ.get("CHATCOMPUTER_TEST_MODELS", "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/models"))
 KOKORO = MODELS / "kokoro-v1.0.int8.onnx"
 VOICES = MODELS / "voices-v1.0.bin"
-WHISPER = MODELS / "whisper" / f"faster-whisper-{os.environ.get('CLAUDEOS_TEST_STT', 'small.en')}"
+WHISPER = MODELS / "whisper" / f"faster-whisper-{os.environ.get('CHATCOMPUTER_TEST_STT', 'small.en')}"
 have_models = KOKORO.exists() and (WHISPER / "model.bin").exists()
 
 
@@ -26,18 +26,18 @@ def test_speakable_cleans_markdown_for_the_ear():
     assert "the chart" in s and "coingecko.com" in s and "Bitcoin is at $67,000." in s
 
 
-def test_claudeos_streams_tell_pipewire_who_they_are():
+def test_chatcomputer_streams_tell_pipewire_who_they_are():
     # WirePlumber 0.4 switches AirPods to their microphone only for a Communication stream or a listed app
-    # (linux/system/etc/wireplumber/policy.lua.d lists "ClaudeOS"); PipeWire's ALSA plugin takes both from
+    # (linux/system/etc/wireplumber/policy.lua.d lists "Chat Computer"); PipeWire's ALSA plugin takes both from
     # PIPEWIRE_ALSA, unless someone set it already.
     import json
-    from claudeos.voice import audio
+    from chatcomputer.voice import audio
     assert "PIPEWIRE_ALSA" in os.environ                  # set as soon as the audio code loads
     env: dict[str, str] = {}
     audio.name_streams_for_pipewire(env)
-    assert json.loads(env["PIPEWIRE_ALSA"]) == {"application.name": "ClaudeOS", "media.role": "Communication"}
-    policy = (Path(__file__).resolve().parents[1] / "linux/system/etc/wireplumber/policy.lua.d/51-claudeos-policy.lua").read_text()
-    assert '"ClaudeOS"' in policy
+    assert json.loads(env["PIPEWIRE_ALSA"]) == {"application.name": "Chat Computer", "media.role": "Communication"}
+    policy = (Path(__file__).resolve().parents[1] / "linux/system/etc/wireplumber/policy.lua.d/51-chatcomputer-policy.lua").read_text()
+    assert '"Chat Computer"' in policy
     env = {"PIPEWIRE_ALSA": '{ "node.latency": "512/16000" }'}
     audio.name_streams_for_pipewire(env)
     assert env["PIPEWIRE_ALSA"] == '{ "node.latency": "512/16000" }'
@@ -87,7 +87,7 @@ class _RecordingSTT:
 def _drive(listener_frames, stt, partial_every=None):
     """Pushes (kind, n) frame runs through a Listener with a level VAD, letting the loop run between frames.
     Returns (utterances, partials, calls made by the time the first utterance's end was reached)."""
-    from claudeos.voice.listener import Listener, ListenerEvents
+    from chatcomputer.voice.listener import Listener, ListenerEvents
     got = {"utt": [], "partials": [], "calls_at": []}
 
     async def go():
@@ -138,7 +138,7 @@ def test_live_words_are_not_transcribed_from_silence():
 
 
 def test_partials_wait_longer_when_transcribing_is_slow():
-    from claudeos.voice.listener import Listener, ListenerEvents
+    from chatcomputer.voice.listener import Listener, ListenerEvents
     lis = Listener(_LevelVAD(), _RecordingSTT(), ThreadPoolExecutor(1), ListenerEvents())
     assert lis.partial_every == Listener.PARTIAL_EVERY
     lis.stt_seconds = 2.0
@@ -177,7 +177,7 @@ def tts():
 def stt():
     if not (WHISPER / "model.bin").exists():
         pytest.skip("Whisper model not downloaded")
-    from claudeos.voice.stt import STT
+    from chatcomputer.voice.stt import STT
     return STT(str(WHISPER), "en", hint="Claude, Ren Shu, YouTube")
 
 
@@ -201,9 +201,9 @@ def test_kokoro_speaks(tts):
 
 
 def run_listener(stt, audio, speaking=lambda: False, barge=lambda: True):
-    from claudeos.voice.listener import Listener, ListenerEvents
-    from claudeos.voice.models import vad_model
-    from claudeos.voice.vad import StreamingVAD
+    from chatcomputer.voice.listener import Listener, ListenerEvents
+    from chatcomputer.voice.models import vad_model
+    from chatcomputer.voice.vad import StreamingVAD
     got = {"utt": [], "partials": [], "barge": 0, "discards": 0}
 
     async def go():
@@ -264,6 +264,6 @@ def test_talking_over_claude_interrupts_with_headphones(tts, stt):
 
 def test_loudspeakers_dont_hear_themselves(tts, stt):
     sil = lambda s: np.zeros(int(16000 * s), dtype=np.float32)
-    a = speech16k(tts, "This is ClaudeOS talking through the speakers.")
+    a = speech16k(tts, "This is Chat Computer talking through the speakers.")
     got = run_listener(stt, np.concatenate([sil(0.3), a, sil(1.0)]), speaking=lambda: True, barge=lambda: False)
     assert got["barge"] == 0 and got["utt"] == []

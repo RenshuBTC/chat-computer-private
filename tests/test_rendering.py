@@ -1,15 +1,15 @@
-"""How ClaudeOS's window draws pages: with the graphics chip when the system offers one for drawing,
+"""How Chat Computer's window draws pages: with the graphics chip when the system offers one for drawing,
 otherwise with the processor (WebKit's GPU drawing crashes there and leaves a blank screen)."""
 import pytest
 
-gtk_app = pytest.importorskip("claudeos.ui.gtk_app")
+gtk_app = pytest.importorskip("chatcomputer.ui.gtk_app")
 
 
 def test_draws_with_the_processor_without_a_render_device(tmp_path):
     (tmp_path / "card0").touch()            # a display, but nothing to draw with (a virtual machine)
     env = {}
     assert gtk_app.choose_rendering(env, str(tmp_path)) == "cpu"
-    assert env == {"WEBKIT_SKIA_ENABLE_CPU_RENDERING": "1", "WEBKIT_DISABLE_DMABUF_RENDERER": "1", "CLAUDEOS_GPU": "0"}
+    assert env == {"WEBKIT_SKIA_ENABLE_CPU_RENDERING": "1", "WEBKIT_DISABLE_DMABUF_RENDERER": "1", "CHATCOMPUTER_GPU": "0"}
 
 
 def test_uses_the_graphics_chip_when_there_is_one(tmp_path):
@@ -30,16 +30,16 @@ def test_nvidia_driver_uses_the_older_way_of_passing_pictures(tmp_path):
 
 def test_the_graphics_chip_can_be_turned_off(tmp_path):
     (tmp_path / "renderD128").touch()
-    env = {"CLAUDEOS_GPU": "0"}
+    env = {"CHATCOMPUTER_GPU": "0"}
     assert gtk_app.choose_rendering(env, str(tmp_path), nvidia=str(tmp_path / "no-nvidia")) == "cpu"
     assert env["WEBKIT_SKIA_ENABLE_CPU_RENDERING"] == "1"
 
 
 def test_switching_to_the_processor_reports_a_change_once():
-    env = {"CLAUDEOS_GPU": "1"}
+    env = {"CHATCOMPUTER_GPU": "1"}
     assert gtk_app.use_cpu_rendering(env) is True
     assert gtk_app.use_cpu_rendering(env) is False
-    assert env["CLAUDEOS_GPU"] == "0"
+    assert env["CHATCOMPUTER_GPU"] == "0"
 
 
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run"), reason="xvfb-run not available")
@@ -205,6 +205,23 @@ def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
     assert more["ai_open"] and more["ai_h"] > 5 * more["line"] and more["ai_more"]["text"] == "less"
     assert more["frame"][3] < content["frame"][3] - 4 * more["line"] and more["strip_h"] > content["strip_h"]
     assert res["less"]["frame"] == content["frame"] and res["less"]["content_view"] == v
+    # The panels' switches, each in its corner (the conversation's only while something is open), filled in while
+    # their panel shows. Both sidebars off: the page spreads into their room, leaving a narrow margin with each switch.
+    tl, tr, tb = (content["toggles"][k] for k in ("left", "right", "bottom"))
+    assert all(x["shown"] and x["pressed"] == "true" for x in (tl, tr, tb)) and not start["toggles"]["bottom"]["shown"]
+    assert tl["x"] < start["messages"][0] + 60 and tr["x"] > start["done"][2] - 60 and tb["y"] > h - 60
+    off = res["sides_off"]
+    assert off["sides"] == [False, False] and off["toggles"]["left"]["pressed"] == "false"
+    ov = off["content_view"]
+    assert ov[0] < v[0] - 100 and ov[2] > v[2] + 100 and ov[0] > tl["x"] and ov[2] < tr["x"]
+    # The conversation off: the page reaches down to its switch; typing brings the conversation back.
+    bo = res["bottom_off"]
+    assert not bo["composer"] and bo["content_view"][3] > ov[3] + 50 and bo["content_view"][3] < tb["y"]
+    tb2 = res["typed_back"]
+    assert tb2["composer"] and tb2["toggles"]["bottom"]["pressed"] == "true" and tb2["content_view"] == ov
+    assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["content_view"] == v
+    assert [(e["left"], e["right"], e["bottom"]) for e in res["panel_events"]] == [
+        (False, True, True), (False, False, True), (False, False, False), (False, False, True)]
     # F1: the whole screen; F1 again: back in the frame. Escape: closed, back to the conversation.
     assert expanded["content_view"] == [0, 0, w, h]
     assert framed["content_view"] == v and framed["mode"] == "content"
@@ -215,7 +232,7 @@ def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
                     reason="xvfb-run or xdotool not available")
 def test_slash_in_the_message_box_searches_this_computer():
-    # ClaudeOS is the conversation: the box has no menu (a right-click opens nothing). A "/" first turns it into a
+    # Chat Computer is the conversation: the box has no menu (a right-click opens nothing). A "/" first turns it into a
     # search of this computer's files: the matches in a list above the box (the matching letters bold), the arrow
     # keys choose, Enter opens one; nothing found leaves the line that asks Claude; Escape clears it. Anything
     # else typed is a message. Real keys and clicks; the results come from the test, as the controller sends them.
@@ -268,7 +285,7 @@ def test_the_touchscreen_works_as_an_ipad_s():
     # Swiping up from the bottom edge closes what's open (Home); the page never sees that swipe.
     assert res["before_home"] == "content" and res["after_home"] == "chat" and all(res["home"]) and res["closed"]
     # The onscreen keyboard: keys typed where the finger lifts (slid from w to e: e), its hide key, a real
-    # keyboard's key puts it away (not one ClaudeOS typed), and while a real keyboard is in use it doesn't come.
+    # keyboard's key puts it away (not one Chat Computer typed), and while a real keyboard is in use it doesn't come.
     assert res["keyboard_up"] and res["keyboard_spec"] and res["key_q"] == [True, True] and res["still_up"]
     assert res["keys"] == [["text", "q"], ["text", "e"]] and res["hidden_by_key"]
     assert res["up_after_xtest"] and not res["up_after_real_key"] and res["refused_with_real_keyboard"]
@@ -298,7 +315,7 @@ def test_streamed_words_are_drawn_as_the_whole_message_would_be():
     import subprocess
     from pathlib import Path
     here = Path(__file__).parent
-    assets = here.parent / "claudeos" / "ui" / "assets"
+    assets = here.parent / "chatcomputer" / "ui" / "assets"
     r = subprocess.run([_node(), str(here / "md_stream_check.js"), str(assets / "md.js"), str(assets / "chat.js")],
                        capture_output=True, text=True, timeout=60)
     res = json.loads(r.stdout.strip().splitlines()[-1])

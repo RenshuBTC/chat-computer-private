@@ -1,26 +1,26 @@
 #!/bin/sh
-# ClaudeOS's first start on a Mac (runs on the Mac, under Linux, as root).
+# Chat Computer's first start on a Mac (runs on the Mac, under Linux, as root).
 #
-# The Asahi installer has just put Fedora Asahi Remix (its Minimal edition) next to macOS, driven by ClaudeOS
-# Setup in macOS, which left this program and the person's settings on ClaudeOS's EFI partition
-# (/boot/efi/claudeos) and started this once in place of Fedora's usual first start (grub-firststart.cfg). It
-# makes the person's account, joins their Wi-Fi, puts ClaudeOS in place and leaves the rest, which needs the
-# internet, to the next start: claudeos-finish-install.service, the same safety net a PC uses. Last, it puts
+# The Asahi installer has just put Fedora Asahi Remix (its Minimal edition) next to macOS, driven by Chat Computer
+# Setup in macOS, which left this program and the person's settings on Chat Computer's EFI partition
+# (/boot/efi/chatcomputer) and started this once in place of Fedora's usual first start (grub-firststart.cfg). It
+# makes the person's account, joins their Wi-Fi, puts Chat Computer in place and leaves the rest, which needs the
+# internet, to the next start: chatcomputer-finish-install.service, the same safety net a PC uses. Last, it puts
 # Fedora's usual start back, deletes the sign-in copies from the EFI partition, and restarts.
 #
 # setup.env holds one KEY=value per line, each value base64 (so no name, password or Wi-Fi name can break it):
 # USER_NAME, REAL_NAME, RECOVERY_PASSWORD, TIMEZONE, INSTALL_ID, MAC_FILES_PARTUUID, WIFI_SSID, WIFI_PSK.
 set -u
-ESP="${CLAUDEOS_ESP:-/boot/efi}"          # tests point these at a pretend Mac
-T="${CLAUDEOS_TARGET:-}"                  # the system's root: "" on the Mac
-CONSOLE="${CLAUDEOS_CONSOLE:-/dev/console}"
-P="$ESP/claudeos"
+ESP="${CHATCOMPUTER_ESP:-/boot/efi}"      # tests point these at a pretend Mac
+T="${CHATCOMPUTER_TARGET:-}"              # the system's root: "" on the Mac
+CONSOLE="${CHATCOMPUTER_CONSOLE:-/dev/console}"
+P="$ESP/chatcomputer"
 LOG="$P/firstboot.log"
 TRIES=3
 
 say() {
   printf '%s  %s\n' "$(date '+%H:%M:%S' 2>/dev/null)" "$*" >> "$LOG" 2>/dev/null
-  printf '\nClaudeOS: %s\n' "$*" > "$CONSOLE" 2>/dev/null
+  printf '\nChat Computer: %s\n' "$*" > "$CONSOLE" 2>/dev/null
   return 0
 }
 
@@ -33,7 +33,7 @@ fail() {
   n=$((n + 1))
   echo "$n" > "$P/tries"
   if [ "$n" -ge "$TRIES" ]; then
-    say "Giving up after $n tries. The Mac now starts Fedora Linux; the details are in claudeos/firstboot.log on ClaudeOS's EFI partition."
+    say "Giving up after $n tries. The Mac now starts Fedora Linux; the details are in chatcomputer/firstboot.log on Chat Computer's EFI partition."
     put_fedora_back
     forget_setup
   else
@@ -62,10 +62,10 @@ forget_setup() {
 
 command -v plymouth >/dev/null 2>&1 && plymouth quit >/dev/null 2>&1
 mkdir -p "$P" 2>/dev/null
-say "Setting up ClaudeOS on this Mac."
+say "Setting up Chat Computer on this Mac."
 
-[ -f "$P/setup.env" ] || fail "its settings (claudeos/setup.env) are missing"
-[ -f "$P/app.tar.gz" ] || fail "ClaudeOS itself (claudeos/app.tar.gz) is missing"
+[ -f "$P/setup.env" ] || fail "its settings (chatcomputer/setup.env) are missing"
+[ -f "$P/app.tar.gz" ] || fail "Chat Computer itself (chatcomputer/app.tar.gz) is missing"
 
 USER_NAME=$(val USER_NAME)
 REAL_NAME=$(val REAL_NAME)
@@ -92,10 +92,10 @@ esac
 case "$REAL_NAME" in *:*|*"
 "*) REAL_NAME="$USER_NAME" ;; esac
 
-echo claudeos > "$T/etc/hostname"
+echo chatcomputer > "$T/etc/hostname"
 
-# 1. The person's account. Its password is the recovery password ClaudeOS Setup showed (for repairs only:
-#    ClaudeOS starts without one), and it can use sudo with it (wheel), like the account on a PC.
+# 1. The person's account. Its password is the recovery password Chat Computer Setup showed (for repairs only:
+#    Chat Computer starts without one), and it can use sudo with it (wheel), like the account on a PC.
 if ! id -u "$USER_NAME" >/dev/null 2>&1; then
   useradd --create-home --comment "$REAL_NAME" --groups wheel "$USER_NAME" || fail "couldn't make the account $USER_NAME"
 fi
@@ -116,11 +116,11 @@ fi
 if [ -n "$WIFI_SSID" ]; then
   case "$WIFI_SSID$WIFI_PSK" in
     *"
-"*) say "The Wi-Fi name or password has a line break; skipping it (ClaudeOS asks for Wi-Fi when it starts)." ;;
+"*) say "The Wi-Fi name or password has a line break; skipping it (Chat Computer asks for Wi-Fi when it starts)." ;;
     *)
       d="$T/etc/NetworkManager/system-connections"
       mkdir -p "$d"
-      f="$d/claudeos-wifi.nmconnection"
+      f="$d/chatcomputer-wifi.nmconnection"
       ssid=$(printf '%s' "$WIFI_SSID" | sed 's/\\/\\\\/g')
       ( umask 077
         printf '[connection]\nid=%s\ntype=wifi\nautoconnect=true\n\n[wifi]\nmode=infrastructure\nssid=%s\n\n' "$ssid" "$ssid"
@@ -134,18 +134,18 @@ if [ -n "$WIFI_SSID" ]; then
   esac
 fi
 
-# 4. ClaudeOS itself, owned by root and read-only to the person.
-mkdir -p "$T/opt/claudeos"
-rm -rf "$T/opt/claudeos/app.new"
-mkdir -p "$T/opt/claudeos/app.new"
-tar -xzf "$P/app.tar.gz" -C "$T/opt/claudeos/app.new" || fail "couldn't unpack ClaudeOS"
-chown -R 0:0 "$T/opt/claudeos/app.new"
-chmod -R u=rwX,go=rX "$T/opt/claudeos/app.new"
-rm -rf "$T/opt/claudeos/app"
-mv "$T/opt/claudeos/app.new" "$T/opt/claudeos/app"
+# 4. Chat Computer itself, owned by root and read-only to the person.
+mkdir -p "$T/opt/chatcomputer"
+rm -rf "$T/opt/chatcomputer/app.new"
+mkdir -p "$T/opt/chatcomputer/app.new"
+tar -xzf "$P/app.tar.gz" -C "$T/opt/chatcomputer/app.new" || fail "couldn't unpack Chat Computer"
+chown -R 0:0 "$T/opt/chatcomputer/app.new"
+chmod -R u=rwX,go=rX "$T/opt/chatcomputer/app.new"
+rm -rf "$T/opt/chatcomputer/app"
+mv "$T/opt/chatcomputer/app.new" "$T/opt/chatcomputer/app"
 
 # 5. The person's sign-in and settings, owned by them (as finish.sh does on a PC).
-H="$HOME_DIR/ClaudeOS"
+H="$HOME_DIR/ChatComputer"
 mkdir -p "$H/secrets"
 chmod 700 "$H/secrets"
 if [ -f "$P/secrets/claude_token" ]; then
@@ -164,23 +164,23 @@ mkdir -p "$HOME_DIR/Mac"
 chown -R "$uid:$gid" "$H" "$HOME_DIR/Mac"
 
 # 6. What the rest of the install needs to know, and the safety net that finishes it on the next start.
-mkdir -p "$T/etc/claudeos" "$T/etc/systemd/system/multi-user.target.wants"
-printf '%s\n' "$USER_NAME" > "$T/etc/claudeos/install-user"
-printf '%s\n' "$INSTALL_ID" > "$T/etc/claudeos/install-id"
+mkdir -p "$T/etc/chatcomputer" "$T/etc/systemd/system/multi-user.target.wants"
+printf '%s\n' "$USER_NAME" > "$T/etc/chatcomputer/install-user"
+printf '%s\n' "$INSTALL_ID" > "$T/etc/chatcomputer/install-id"
 if [ -n "$MAC_FILES" ]; then
-  printf '%s\n' "$MAC_FILES" | tr 'A-F' 'a-f' > "$T/etc/claudeos/mac-files-partuuid"
+  printf '%s\n' "$MAC_FILES" | tr 'A-F' 'a-f' > "$T/etc/chatcomputer/mac-files-partuuid"
 fi
-unit=claudeos-finish-install.service
-cp "$T/opt/claudeos/app/linux/firstboot/$unit" "$T/etc/systemd/system/$unit" || fail "couldn't set up the rest of the install"
+unit=chatcomputer-finish-install.service
+cp "$T/opt/chatcomputer/app/linux/firstboot/$unit" "$T/etc/systemd/system/$unit" || fail "couldn't set up the rest of the install"
 ln -sf "/etc/systemd/system/$unit" "$T/etc/systemd/system/multi-user.target.wants/$unit"
 
 # 7. SELinux labels for everything written here (Fedora checks them).
 if command -v restorecon >/dev/null 2>&1; then
-  restorecon -RF "$T/etc/systemd/system" "$T/etc/NetworkManager/system-connections" "$T/etc/claudeos" \
-    "$T/opt/claudeos" "$HOME_DIR" "$T/etc/hostname" "$T/etc/locale.conf" "$T/etc/localtime" >/dev/null 2>&1
+  restorecon -RF "$T/etc/systemd/system" "$T/etc/NetworkManager/system-connections" "$T/etc/chatcomputer" \
+    "$T/opt/chatcomputer" "$HOME_DIR" "$T/etc/hostname" "$T/etc/locale.conf" "$T/etc/localtime" >/dev/null 2>&1
 fi
 
-# 8. No Fedora first-start questions (ClaudeOS has done what they would), Fedora's usual start from now on,
+# 8. No Fedora first-start questions (Chat Computer has done what they would), Fedora's usual start from now on,
 #    and no sign-in copies left on the EFI partition. Only now: if anything above failed, the Mac tries again,
 #    and in the end falls back to Fedora's own first start.
 rm -f "$T/etc/reconfigSys" "$T/.unconfigured"
@@ -188,6 +188,6 @@ find "$T/etc/systemd/system" -path '*.wants/initial-setup.service' -delete 2>/de
 put_fedora_back || fail "couldn't put Fedora's start back"
 forget_setup
 rm -f "$P/tries"
-say "Done. Restarting to finish installing ClaudeOS; that needs the internet and takes a while."
+say "Done. Restarting to finish installing Chat Computer; that needs the internet and takes a while."
 sleep 3
 exit 0

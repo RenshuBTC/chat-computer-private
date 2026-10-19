@@ -1,18 +1,18 @@
-"""ClaudeOS on an Apple silicon Mac: Linux (Fedora Asahi Remix) started instead of macOS. What differs from a PC:
-going back to macOS is a restart, and macOS's files come from the drive ClaudeOS Setup sends them to."""
+"""Chat Computer on an Apple silicon Mac: Linux (Fedora Asahi Remix) started instead of macOS. What differs from a PC:
+going back to macOS is a restart, and macOS's files come from the drive Chat Computer Setup sends them to."""
 import asyncio
 import os
 
-from claudeos import tools as T
-from claudeos.brain.prompt import build_system_prompt
-from claudeos.config import Paths, Settings
-from claudeos.controller import Controller
-from claudeos.journal import Journal
-from claudeos.memory import Memory
-from claudeos.platform import linux as L
-from claudeos.platform.base import CommandResult
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
+from chatcomputer import tools as T
+from chatcomputer.brain.prompt import build_system_prompt
+from chatcomputer.config import Paths, Settings
+from chatcomputer.controller import Controller
+from chatcomputer.journal import Journal
+from chatcomputer.memory import Memory
+from chatcomputer.platform import linux as L
+from chatcomputer.platform.base import CommandResult
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
 
 LOGIN = '{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": 1}}'
 
@@ -20,7 +20,7 @@ LOGIN = '{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt"
 class FakeMac(FakePlatform):
     name = "mac"
     other_os = "macOS"
-    setup_place = "ClaudeOS Setup in macOS"
+    setup_place = "Chat Computer Setup in macOS"
 
 
 def test_apple_silicon_is_recognised_from_the_device_tree(tmp_path):
@@ -48,8 +48,8 @@ def test_switching_to_macos_sets_the_next_start_then_restarts(monkeypatch):
     assert "macOS now starts" in p.set_default_os("other")
     assert calls == [["sudo", "-n", L.ROOT_HELPER, "boot-default", "macos"]]
     calls.clear()
-    assert p.set_default_os("claudeos") == "Done: ClaudeOS starts when the Mac turns on."
-    assert calls == [["sudo", "-n", L.ROOT_HELPER, "boot-default", "claudeos"]]
+    assert p.set_default_os("chatcomputer") == "Done: Chat Computer starts when the Mac turns on."
+    assert calls == [["sudo", "-n", L.ROOT_HELPER, "boot-default", "chatcomputer"]]
     assert "no Windows" in p.power("switch_to_windows")
 
 
@@ -69,7 +69,7 @@ def _mac_controller(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / "Mac").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("CLAUDEOS_HOME", str(home / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(home / "ChatComputer"))
     paths = Paths().ensure()
     screen = RecordingScreen()
     c = Controller(paths, Settings(user_name="Ren Shu"), FakeMac(), screen, voice=False, index=False)
@@ -79,16 +79,16 @@ def _mac_controller(tmp_path, monkeypatch):
 def test_on_a_mac_the_files_from_macos_are_the_other_systems_files(tmp_path, monkeypatch):
     c, _, _, home = _mac_controller(tmp_path, monkeypatch)
     assert c._other_os_files() == str(home / "Mac")
-    # A new sign-in left by ClaudeOS Setup in macOS waits in a hidden folder on that drive.
-    assert c._signin_drop() == str(home / "Mac" / ".claudeos")
+    # A new sign-in left by Chat Computer Setup in macOS waits in a hidden folder on that drive.
+    assert c._signin_drop() == str(home / "Mac" / ".chatcomputer")
     prompt = c._system_prompt()
-    assert str(home / "Mac") in prompt and "drive called ClaudeOS" in prompt
+    assert str(home / "Mac") in prompt and "drive called ChatComp" in prompt
     assert "switch_to_macos" in prompt and "Fedora" in prompt and "Windows" not in prompt
 
 
 def test_on_a_mac_a_new_sign_in_from_macos_is_taken_and_removed(tmp_path, monkeypatch):
     c, screen, paths, home = _mac_controller(tmp_path, monkeypatch)
-    drop = home / "Mac" / ".claudeos"
+    drop = home / "Mac" / ".chatcomputer"
     drop.mkdir()
     tok = "sk-ant-oat01-" + "B" * 90
     (drop / "claude_token").write_text(tok + "\n")
@@ -103,7 +103,7 @@ def test_mac_without_the_drive_has_no_other_files(tmp_path, monkeypatch):
     c, _, _, home = _mac_controller(tmp_path, monkeypatch)
     os.rmdir(home / "Mac")
     assert c._other_os_files() is None and c._signin_drop() is None
-    assert "drive called ClaudeOS" not in c._system_prompt()
+    assert "drive called ChatComp" not in c._system_prompt()
 
 
 def test_offline_switch_to_macos_asks_then_restarts(tmp_path, monkeypatch):
@@ -131,7 +131,7 @@ def test_tools_on_a_mac(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
-    paths = Paths(home / "ClaudeOS").ensure()
+    paths = Paths(home / "ChatComputer").ensure()
     ctx = T.ToolContext(paths, Settings(), FakeMac(), Journal(paths), RecordingScreen(), Memory(paths), power_delay_s=0.05)
     server, policies, names = T.build(ctx)
     tools = {t.name: t for t in _list(server)}
@@ -159,5 +159,5 @@ def test_mac_prompt_tells_claude_where_files_are_and_how_to_go_back():
     p = build_system_prompt(S(), "", "/home/rensh", "/home/rensh/Mac", platform="mac")
     assert "The folders they brought over from macOS are at /home/rensh/Mac" in p
     assert "can't be opened from here" in p
-    assert "restarts into it" in p and "Remove ClaudeOS" in p
-    assert "Apple silicon Mac running ClaudeOS (Fedora Asahi Remix underneath)" in p
+    assert "restarts into it" in p and "Remove Chat Computer" in p
+    assert "Apple silicon Mac running Chat Computer (Fedora Asahi Remix underneath)" in p

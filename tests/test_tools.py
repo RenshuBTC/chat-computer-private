@@ -1,4 +1,4 @@
-"""ClaudeOS tools called directly (no Claude), against a recording screen and fake machine."""
+"""Chat Computer tools called directly (no Claude), against a recording screen and fake machine."""
 import asyncio
 import json
 import os
@@ -7,21 +7,21 @@ from pathlib import Path
 
 import pytest
 
-from claudeos import tools as T
-from claudeos.config import Paths, Settings
-from claudeos.files_index import FileIndex, parse_date, words_of
-from claudeos.journal import Journal
-from claudeos.memory import Memory
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
-from claudeos.ui import render
+from chatcomputer import tools as T
+from chatcomputer.config import Paths, Settings
+from chatcomputer.files_index import FileIndex, parse_date, words_of
+from chatcomputer.journal import Journal
+from chatcomputer.memory import Memory
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
+from chatcomputer.ui import render
 
 
 def make(tmp_path, clean=True):
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
-    paths = Paths(home / "ClaudeOS").ensure()
+    paths = Paths(home / "ChatComputer").ensure()
     win = tmp_path / "windows"
     (win / "Users" / "rensh" / "Documents").mkdir(parents=True)
     settings = Settings(windows_user="rensh", windows_mount=str(win))
@@ -136,7 +136,7 @@ def test_power_always_asks_and_runs_later(tmp_path, loop):
 
 
 def test_the_logs_are_copied_before_the_computer_restarts(tmp_path, loop):
-    # ClaudeOS is ended at once by a restart: the copy on Windows' drive is made first (logcopy.py).
+    # Chat Computer is ended at once by a restart: the copy on Windows' drive is made first (logcopy.py).
     ctx, server, policies, _ = make(tmp_path)
     order = []
 
@@ -150,22 +150,22 @@ def test_the_logs_are_copied_before_the_computer_restarts(tmp_path, loop):
     assert order == ["logs copied", "power"]
 
 
-def test_claudeos_own_files_cant_be_moved_or_trashed(tmp_path, monkeypatch):
-    from claudeos import update
+def test_chatcomputer_own_files_cant_be_moved_or_trashed(tmp_path, monkeypatch):
+    from chatcomputer import update
     ctx, server, policies, _ = make(tmp_path)
-    src = Path(ctx.settings.windows_mount) / "Users/rensh/Downloads/ClaudeOS"
-    (src / "claudeos").mkdir(parents=True)
+    src = Path(ctx.settings.windows_mount) / "Users/rensh/Downloads/ChatComputer"
+    (src / "chatcomputer").mkdir(parents=True)
     note = tmp_path / "update-source"
-    note.write_text("Users/rensh/Downloads/ClaudeOS\n")
+    note.write_text("Users/rensh/Downloads/ChatComputer\n")
     monkeypatch.setattr(update, "UPDATE_SOURCE", note)
     monkeypatch.setattr(update, "WINDOWS_MOUNT", Path(ctx.settings.windows_mount))
     evil = tmp_path / "evil.py"
     evil.write_text("")
-    for name, args in (("copy_files", {"items": [{"from": str(evil), "to": str(src / "claudeos/evil.py")}]}),
+    for name, args in (("copy_files", {"items": [{"from": str(evil), "to": str(src / "chatcomputer/evil.py")}]}),
                        ("move_files", {"items": [{"from": str(src), "to": str(tmp_path / "elsewhere")}]}),
-                       ("trash_files", {"paths": [str(src / "claudeos")]}),
+                       ("trash_files", {"paths": [str(src / "chatcomputer")]}),
                        ("trash_files", {"paths": [str(src.parent)]})):
-        assert policies[name](args).startswith("DENY: Those are ClaudeOS's own program files"), (name, args)
+        assert policies[name](args).startswith("DENY: Those are Chat Computer's own program files"), (name, args)
     # Copying them somewhere else is fine.
     assert not str(policies["copy_files"]({"items": [{"from": str(src), "to": str(tmp_path / "copy")}]})).startswith("DENY")
 
@@ -189,25 +189,25 @@ def test_windows_can_start_by_default_and_back(tmp_path):
     ctx, server, policies, names = make(tmp_path)
     assert "start_by_default" in names
     assert policies["start_by_default"]({"system": "other"}) == (
-        "Start Windows when the computer turns on instead of ClaudeOS? ClaudeOS stays installed.")
-    assert policies["start_by_default"]({"system": "claudeos"}) == "Start ClaudeOS when the computer turns on?"
+        "Start Windows when the computer turns on instead of Chat Computer? Chat Computer stays installed.")
+    assert policies["start_by_default"]({"system": "chatcomputer"}) == "Start Chat Computer when the computer turns on?"
     text, err = call(server, "start_by_default", {"system": "other"})
     assert not err and ("set_default_os", ("other",)) in ctx.platform.calls
-    call(server, "start_by_default", {"system": "claudeos"})
-    assert ctx.platform.default_os == "claudeos"
+    call(server, "start_by_default", {"system": "chatcomputer"})
+    assert ctx.platform.default_os == "chatcomputer"
 
 
 def test_settings_and_memory(tmp_path):
     ctx, server, *_ = make(tmp_path)
     changed = []
     ctx.on_settings_changed = changed.append
-    text, err = call(server, "claudeos_settings", {"action": "set", "key": "speech_speed", "value": "1.2"})
+    text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "speech_speed", "value": "1.2"})
     assert not err and ctx.settings.speech_speed == 1.2 and changed == [["speech_speed"]]
     assert json.loads(ctx.paths.settings_file.read_text())["speech_speed"] == 1.2
-    text, err = call(server, "claudeos_settings", {"action": "set", "key": "windows_mount", "value": "/"})
+    text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "windows_mount", "value": "/"})
     assert err
     # The screen is black on white only: there is no theme to change.
-    text, err = call(server, "claudeos_settings", {"action": "set", "key": "theme", "value": "dark"})
+    text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "theme", "value": "dark"})
     assert err and not hasattr(ctx.settings, "theme")
     call(server, "memory", {"action": "remember", "text": "Prefers Bitcoin charts in SGD"})
     assert "Bitcoin charts" in ctx.memory.for_prompt()
@@ -271,10 +271,10 @@ def test_render_files(tmp_path):
     import docx
     d = docx.Document()
     d.add_heading("Quarterly plan", 1)
-    d.add_paragraph("Ship ClaudeOS.")
+    d.add_paragraph("Ship Chat Computer.")
     d.save(tmp_path / "plan.docx")
     kind, html = render.file_view(str(tmp_path / "plan.docx"), s, Paths(tmp_path / "c"))
-    assert "Quarterly plan" in html and "Ship ClaudeOS." in html
+    assert "Quarterly plan" in html and "Ship Chat Computer." in html
 
 
 def test_private_sign_in_files_stay_private(tmp_path):
@@ -299,7 +299,7 @@ def test_private_sign_in_files_stay_private(tmp_path):
 
 
 def test_the_screen_never_opens_a_private_file(tmp_path):
-    gtk_app = pytest.importorskip("claudeos.ui.gtk_app")
+    gtk_app = pytest.importorskip("chatcomputer.ui.gtk_app")
     ctx, *_ = make(tmp_path)
     assert gtk_app.private_file_uri(ctx.paths, ctx.paths.token_file.as_uri())
     assert gtk_app.private_file_uri(ctx.paths, (ctx.paths.web / "cookies.sqlite").as_uri())
@@ -310,7 +310,7 @@ def test_the_screen_never_opens_a_private_file(tmp_path):
 
 def test_undo_never_deletes_what_was_there_before(tmp_path, monkeypatch):
     import shutil as sh
-    from claudeos import journal
+    from chatcomputer import journal
     bin_ = tmp_path / "trash-bin"
     bin_.mkdir()
     # (send2trash picks its trash folder once, when first used, so look at what undo hands it instead.)
@@ -340,26 +340,26 @@ def test_undo_never_deletes_what_was_there_before(tmp_path, monkeypatch):
 def test_settings_that_would_stop_claude_are_refused(tmp_path):
     ctx, server, *_ = make(tmp_path)
     for key, value in (("effort", "extreme"), ("model", "Claude 5 please"), ("stt_model", "../../x")):
-        text, err = call(server, "claudeos_settings", {"action": "set", "key": key, "value": value})
+        text, err = call(server, "chatcomputer_settings", {"action": "set", "key": key, "value": value})
         assert err, (key, text)
     assert ctx.settings.effort == Settings().effort and ctx.settings.model == Settings().model
-    text, err = call(server, "claudeos_settings", {"action": "set", "key": "effort", "value": "high"})
+    text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "effort", "value": "high"})
     assert not err and ctx.settings.effort == "high"
-    text, err = call(server, "claudeos_settings", {"action": "set", "key": "model", "value": "opus"})
+    text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "model", "value": "opus"})
     assert not err and ctx.settings.model == "opus"
-    # Numbers that would break the voice, put ClaudeOS back to sleep at once, or forget every conversation.
+    # Numbers that would break the voice, put Chat Computer back to sleep at once, or forget every conversation.
     for key, value in (("speech_speed", 3), ("speech_speed", "fast"), ("auto_sleep_minutes", -1),
                        ("fresh_session_after_idle_hours", 0)):
-        text, err = call(server, "claudeos_settings", {"action": "set", "key": key, "value": value})
+        text, err = call(server, "chatcomputer_settings", {"action": "set", "key": key, "value": value})
         assert err, (key, value, text)
     assert ctx.settings.speech_speed == Settings().speech_speed and ctx.settings.auto_sleep_minutes == 10
-    text, err = call(server, "claudeos_settings", {"action": "set", "key": "speech_speed", "value": 1.5})
+    text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "speech_speed", "value": 1.5})
     assert not err and ctx.settings.speech_speed == 1.5
 
 
 def test_a_settings_file_that_isnt_an_object_gives_the_defaults(tmp_path):
-    from claudeos.config import State
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    from chatcomputer.config import State
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     paths.settings_file.write_text("[1, 2]")
     paths.state_file.write_text('"x"')
     assert Settings.load(paths) == Settings()
@@ -368,8 +368,8 @@ def test_a_settings_file_that_isnt_an_object_gives_the_defaults(tmp_path):
 
 def test_history_still_shows_when_a_line_was_cut_short(tmp_path):
     # One damaged line (the power went off mid-write) used to hide the whole history.
-    from claudeos.controller import Controller
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    from chatcomputer.controller import Controller
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     now = time.time()
     paths.transcript.write_text("\n".join([json.dumps({"ts": now, "role": "user", "text": "hello"}), '{"ts": 17',
                                            "5", json.dumps({"ts": now, "role": "assistant", "text": "hi"})]) + "\n")
@@ -379,14 +379,14 @@ def test_history_still_shows_when_a_line_was_cut_short(tmp_path):
 
 
 def test_friendly_errors_point_to_this_computers_setup():
-    from claudeos.brain.agent import TurnResult, friendly_error
+    from chatcomputer.brain.agent import TurnResult, friendly_error
     res = TurnResult(ok=False, error_kind="auth")
-    assert "ClaudeOS Setup on Windows" in friendly_error(res)
-    assert "ClaudeOS Setup in macOS" in friendly_error(res, None, "ClaudeOS Setup in macOS")
+    assert "Chat Computer Setup on Windows" in friendly_error(res)
+    assert "Chat Computer Setup in macOS" in friendly_error(res, None, "Chat Computer Setup in macOS")
 
 
 def test_command_output_that_isnt_utf8_is_still_read(tmp_path):
-    from claudeos.platform.base import run
+    from chatcomputer.platform.base import run
     r = run(["printf", "caf\\351 Wi-Fi\\n"])                # Latin-1 bytes
     assert r.ok and r.out.startswith("caf") and "Wi-Fi" in r.out
     d = tmp_path / "not-a-program"
@@ -396,8 +396,8 @@ def test_command_output_that_isnt_utf8_is_still_read(tmp_path):
 
 def test_a_package_name_cant_turn_an_install_into_a_removal(monkeypatch):
     # apt-get reads "name-" as "remove name" (and a final "." is a pattern): such names never reach the root helper.
-    from claudeos.platform import linux as L
-    from claudeos.platform.base import CommandResult
+    from chatcomputer.platform import linux as L
+    from chatcomputer.platform.base import CommandResult
     calls = []
     monkeypatch.setattr(L, "run", lambda cmd, **kw: calls.append(cmd) or CommandResult(0, '{"ok": true}', ""))
     p = L.LinuxPlatform()
@@ -410,8 +410,8 @@ def test_a_package_name_cant_turn_an_install_into_a_removal(monkeypatch):
 
 def test_copying_pairings_from_windows_says_what_was_copied(monkeypatch):
     # The root helper passes the importer's report on under "result"; nothing copied must not sound like success.
-    from claudeos.platform import linux as L
-    from claudeos.platform.base import CommandResult
+    from chatcomputer.platform import linux as L
+    from chatcomputer.platform.base import CommandResult
     reports = {
         "two": {"ok": True, "count": 2, "imported": [{"device": "A4:BF:C6:D0:E5:FF", "action": "created"},
                                                      {"device": "C2:9E:1D:E2:3D:A5", "action": "updated"}],
@@ -469,7 +469,7 @@ for line in sys.stdin:
                                               ("pin", True, None), ("refuse", False, None)])
 def test_a_keyboard_pairs_with_a_code_shown_to_type_on_it(tmp_path, mode, paired, code):
     import sys
-    from claudeos.platform import linux as L
+    from chatcomputer.platform import linux as L
     script = tmp_path / "bluetoothctl.py"
     script.write_text(FAKE_BLUETOOTHCTL)
     pin_file = tmp_path / "pin"
@@ -486,8 +486,8 @@ def test_a_keyboard_pairs_with_a_code_shown_to_type_on_it(tmp_path, mode, paired
 
 
 def test_only_keyboards_pair_with_a_code(monkeypatch):
-    from claudeos.platform import linux as L
-    from claudeos.platform.base import CommandResult
+    from chatcomputer.platform import linux as L
+    from chatcomputer.platform.base import CommandResult
     calls, agent = [], []
     icons = {"AA:BB:CC:DD:EE:03": "input-keyboard", "AA:BB:CC:DD:EE:04": "input-mouse"}
 
@@ -532,9 +532,9 @@ def test_the_on_screen_keyboard_tool(tmp_path):
     assert asked == [True, False]
 
 
-def test_the_index_skips_claudeos_own_folders_not_the_persons_of_the_same_name(tmp_path):
+def test_the_index_skips_chatcomputer_own_folders_not_the_persons_of_the_same_name(tmp_path):
     home = tmp_path / "home"
-    paths = Paths(home / "ClaudeOS").ensure()
+    paths = Paths(home / "ChatComputer").ensure()
     (paths.web / "Cookies").write_text("x")
     (paths.models / "voice.onnx").write_text("x")
     for d in ("web", "models", "index"):
@@ -561,7 +561,7 @@ def test_the_index_skips_claudeos_own_folders_not_the_persons_of_the_same_name(t
 
 
 def test_an_interrupted_scan_keeps_what_it_didnt_reach(tmp_path, monkeypatch):
-    from claudeos import files_index as FI
+    from chatcomputer import files_index as FI
     docs = tmp_path / "docs"
     docs.mkdir()
     for i in range(5):
@@ -578,11 +578,11 @@ def test_screen_settings_stay_readable(tmp_path):
     ctx, server, *_ = make(tmp_path)
     for key, bad in (("text_size", 3), ("text_size", 5000), ("text_scale", 10), ("viewing_distance_cm", 5),
                      ("screen_inches", -2), ("web_zoom", 9), ("text_scale", "big")):
-        text, err = call(server, "claudeos_settings", {"action": "set", "key": key, "value": bad})
+        text, err = call(server, "chatcomputer_settings", {"action": "set", "key": key, "value": bad})
         assert err, (key, bad)
     for key, good in (("text_size", 32), ("text_size", 0), ("text_scale", 1.15), ("viewing_distance_cm", 250),
                       ("screen_inches", 0), ("screen_inches", 55), ("web_zoom", 1.5)):
-        text, err = call(server, "claudeos_settings", {"action": "set", "key": key, "value": good})
+        text, err = call(server, "chatcomputer_settings", {"action": "set", "key": key, "value": good})
         assert not err, (key, good, text)
     s = ctx.settings
     assert (s.text_size, s.text_scale, s.viewing_distance_cm, s.screen_inches, s.web_zoom) == (0, 1.15, 250, 55.0, 1.5)

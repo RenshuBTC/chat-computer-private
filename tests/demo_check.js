@@ -1,6 +1,7 @@
-// The browser demo (docs/index.html: ClaudeOS's own screen, with docs/demo/host.js standing in for the computer),
-// tried in Chromium with Playwright: the intro, a few things asked, F1 and Escape, "/" search, a message opened, a
-// phone-sized window. Prints JSON.  Run: node tests/demo_check.js [shot-prefix]
+// The browser demo (docs/index.html: Chat Computer's own screen, with docs/demo/host.js standing in for the computer),
+// tried in Chromium with Playwright: it opens playing YouTube, Escape shows the empty screen (the word logo), the
+// panels' switches, a few things asked, F1 and Escape, "/" search, a message opened, a phone-sized window.
+// Prints JSON.  Run: node tests/demo_check.js [shot-prefix]
 const path = require("path");
 const { chromium } = require("playwright");
 
@@ -12,16 +13,30 @@ async function state(page) {
     const v = document.getElementById("demo-view");
     const r = v && v.style.display !== "none" ? v.getBoundingClientRect() : null;
     const frame = document.getElementById("frame").getBoundingClientRect();
+    const shown = (id) => getComputedStyle(document.getElementById(id)).display !== "none";
     return {
       sheet: document.body.classList.contains("sheet"), content: document.body.classList.contains("content"),
       view: r ? [r.left, r.top, r.width, r.height].map(Math.round) : null,
+      src: v ? v.getAttribute("src") || "" : "",
       frame: [frame.left, frame.top, frame.width, frame.height].map(Math.round),
       messages: document.querySelectorAll("#messages .msg").length,
       done: Array.from(document.querySelectorAll("#done .done-what")).map((e) => e.textContent),
       last: (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || "",
-      notices: Array.from(document.querySelectorAll("#log > .notice")).map((e) => e.textContent),
       results: Array.from(document.querySelectorAll("#results .res-text")).map((e) => e.textContent),
       panel: document.body.classList.contains("panel"),
+      welcome: shown("welcome") ? [document.getElementById("wordmark").textContent, document.getElementById("hello").textContent] : null,
+      sides: [shown("messages"), shown("done")],
+      composer: shown("composer"),
+      toggles: ["left", "right", "bottom"].map((k) => shown("toggle-" + k) && document.getElementById("toggle-" + k).getAttribute("aria-pressed")),
+      line: (document.getElementById("demo-line") || {}).textContent || "",
+      // What shows above the message box while something is open (the lines inside the strip's own area).
+      strip: (() => {
+        const c = document.getElementById("column").getBoundingClientRect();
+        return Array.from(document.querySelectorAll("#log > *")).filter((n) => {
+          const r = n.getBoundingClientRect();
+          return getComputedStyle(n).display !== "none" && r.height > 0 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1;
+        }).map((n) => n.textContent.replace(/\u2026 more$|less$/, "").trim());
+      })(),
     };
   });
 }
@@ -46,21 +61,41 @@ async function ask(page, text) {
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
+  await page.route(/youtube/, (route) => route.fulfill({ status: 200, contentType: "text/html",
+    body: "<!doctype html><title>YouTube</title><p>A YouTube player</p>" }));      // no network needed
   await page.goto(page_url);
-  await page.waitForSelector("body.sheet");
-  out.intro = await page.locator("#sheet-title").innerText();
-  await page.click("#sheet-ok");
-  await page.waitForFunction(() => !document.body.classList.contains("sheet"));
-  out.start = await state(page);
-  await ask(page, "play some piano music");
+  // It opens playing: YouTube's player between the sidebars, without asking.
+  await page.waitForFunction(() => document.body.classList.contains("content"));
+  out.opening = await state(page);
+  if (shot) await page.screenshot({ path: shot + "-opening.png" });
+  // Escape: the empty screen, the word logo and hello, world.
+  await page.keyboard.press("Escape");
+  out.empty = await state(page);
+  // The sidebars' switches: off, and on again (and the choice kept).
+  await page.click("#toggle-left");
+  await page.click("#toggle-right");
+  await page.waitForTimeout(200);
+  out.sides_off = await state(page);
+  out.kept = await page.evaluate(() => localStorage.getItem("chatcomputer-demo-panels"));
+  await page.click("#toggle-left");
+  await page.click("#toggle-right");
+  out.sides_on = await state(page);
+  await ask(page, "play hello world");
   out.music = await state(page);
-  out.music_view = await viewText(page);
   if (shot) await page.screenshot({ path: shot + "-music.png" });
   await page.keyboard.press("F1");
   out.f1 = await state(page);
   await page.keyboard.press("F1");
   out.f1_back = await state(page);
-  await page.keyboard.press("Escape");
+  // The conversation's switch: the page takes its room; typing brings it back.
+  await page.click("#toggle-bottom");
+  await page.waitForTimeout(200);
+  out.bottom_off = await state(page);
+  await page.keyboard.type("x");
+  await page.waitForTimeout(200);
+  out.bottom_back = await state(page);
+  await page.keyboard.press("Escape");                     // clears the box
+  await page.keyboard.press("Escape");                     // closes what's open
   out.escaped = await state(page);
   await page.keyboard.type("/pack", { delay: 40 });
   await page.waitForSelector("#results .res");
@@ -83,13 +118,13 @@ async function ask(page, text) {
   out.fallback = (await state(page)).last;
   if (shot) await page.screenshot({ path: shot + "-chat.png" });
 
-  // A phone: no sidebars; the conversation and the box still work.
+  // A phone: no sidebars and no switches; the conversation and the box still work.
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   phone.on("pageerror", (e) => errors.push(String(e)));
+  await phone.route(/youtube/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<p>A YouTube player</p>" }));
   await phone.goto(page_url);
-  await phone.waitForSelector("body.sheet");
-  await phone.click("#sheet-ok");
-  await phone.waitForFunction(() => !document.body.classList.contains("sheet"));
+  await phone.waitForFunction(() => document.body.classList.contains("content"));
+  out.phone_opening = await state(phone);
   await phone.click("#input");
   await ask(phone, "hello");
   out.phone = await state(phone);

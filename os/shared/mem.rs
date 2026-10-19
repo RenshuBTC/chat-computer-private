@@ -1,4 +1,4 @@
-// ClaudeOS's own memcpy, memmove, memset, memcmp and bcmp, which the compiler calls for copying and
+// Chat Computer's own memcpy, memmove, memset, memcmp and bcmp, which the compiler calls for copying and
 // comparing memory. Used by both the start-up stage and the kernel (each includes this file).
 //
 // They use the processor's string instructions, so the compiler can't turn them back into calls to

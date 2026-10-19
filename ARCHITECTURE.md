@@ -1,10 +1,10 @@
-# ClaudeOS architecture (internal contract)
+# Chat Computer architecture (internal contract)
 
 Goal: **hardware → thin Linux drivers (invisible) → Claude (user's subscription, over the internet) → the user
-(touchscreen + keyboard + phone + AirPods)**. ClaudeOS is a conversational shell: you touch the screen as an iPad's,
+(touchscreen + keyboard + phone + AirPods)**. Chat Computer is a conversational shell: you touch the screen as an iPad's,
 type (on a keyboard, or in the Claude app on the phone, which is then the keyboard) or talk (AirPods), and it's all
 one conversation.
-Power on → boot menu ("ClaudeOS" default, "Windows") → straight into the full-screen ClaudeOS conversation.
+Power on → boot menu ("Chat Computer" default, "Windows") → straight into the full-screen Chat Computer conversation.
 No login screen, no desktop environment, no display manager, no browser UI. Windows stays installed untouched.
 On an Apple silicon Mac (M1, M2, M3) it is the same: a second system next to macOS, on Fedora Asahi Remix instead
 of Ubuntu, chosen with the Mac's own start-up volume instead of a boot menu (see "Mac" at the end).
@@ -12,46 +12,46 @@ of Ubuntu, chosen with the Mac's own start-up volume instead of a boot menu (see
 ## Repository layout
 
 ```
-ClaudeOS/
-  claudeos/                 Python package: the ClaudeOS runtime (brain, tools, voice, screen)
+chat-computer/
+  chatcomputer/             Python package: the Chat Computer runtime (brain, tools, voice, screen)
     airtouch/               Hands seen by the screen's camera: camera, model reader + numpy engine, hand
                             tracking, gestures, keyboard layout, pointer (its own process)
   linux/                    The thin Linux base (installed into the target system)
-    install-claudeos.sh     Runs INSIDE the target (curtin in-target) or later by hand; idempotent
+    install-chatcomputer.sh  Runs INSIDE the target (curtin in-target) or later by hand; idempotent
     system/                 Files copied into the target root (/etc, /usr/local/...)
-    session/                tty1 autologin -> startx -> session script -> ClaudeOS
-    grub/                   /etc/grub.d/07_claudeos (boot menu entries)
-    root-helper/claudeos-root   The only privileged entry point ClaudeOS may use (via sudo -n)
+    session/                tty1 autologin -> startx -> session script -> Chat Computer
+    grub/                   /etc/grub.d/07_chatcomputer (boot menu entries)
+    root-helper/chatcomputer-root  The only privileged entry point Chat Computer may use (via sudo -n)
     tests/
   windows/                  One-time setup tool run on Windows (PowerShell)
-    "ClaudeOS Setup.cmd"    Double-click entry point (self-elevates)
+    "Chat Computer Setup.cmd"  Double-click entry point (self-elevates)
     setup.ps1, lib/*.ps1
     autoinstall.template.yaml
     tests/
   mac/                      One-time setup run in macOS (bash 3.2, in Terminal)
     setup.sh                Install, send files, sign in again, choose what starts, remove
     manifest.sh             What setup downloads, pinned with SHA-256: Asahi installer, Fedora's image
-    installer_data.json     The Asahi installer's OS list: ClaudeOS (Fedora Asahi Remix 44 Minimal)
+    installer_data.json     The Asahi installer's OS list: Chat Computer (Fedora Asahi Remix 44 Minimal)
     drive-installer.exp     Answers the Asahi installer's questions (expect)
-    esp/                    ClaudeOS's first start on the Mac: grub-firststart.cfg, firstboot.sh
-    claudeos.icns           Icon in the Mac's startup options (make_icon.py)
-  "ClaudeOS Setup.command"  Double-click entry point for Mac setup (runs mac/setup.sh)
-  os/                       ClaudeOS's own operating system, from scratch (Rust, no outside code); see os/README.md
+    esp/                    Chat Computer's first start on the Mac: grub-firststart.cfg, firstboot.sh
+    chatcomputer.icns       Icon in the Mac's startup options (make_icon.py)
+  "Chat Computer Setup.command"  Double-click entry point for Mac setup (runs mac/setup.sh)
+  os/                       Chat Computer's own operating system, from scratch (Rust, no outside code); see os/README.md
     boot/                   UEFI start-up stage (BOOTX64.EFI) that carries the kernel
     kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards), PS/2
                             keyboards, the first screen with a line to type on
     font/                   Own TrueType reader and rasterizer
     build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced,
                             and typing on PS/2 and USB keyboards)
-    release/claudeos.efi    The reproducible build Windows uses (CI checks it matches the source)
-  windows/own-os.ps1        "ClaudeOS Own System.cmd": signs os/release with a key Windows makes on the PC
-                            (CurrentUser\My, not exportable), copies it to \EFI\claudeos-own on Windows' EFI
-                            partition with ClaudeOS.cer, adds "ClaudeOS (own system)" last in the power-on
+    release/chatcomputer.efi  The reproducible build Windows uses (CI checks it matches the source)
+  windows/own-os.ps1        "Chat Computer Own System.cmd": signs os/release with a key Windows makes on the PC
+                            (CurrentUser\My, not exportable), copies it to \EFI\chatcomputer-own on Windows' EFI
+                            partition with ChatComputer.cer, adds "Chat Computer (own system)" last in the power-on
                             menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
                             guides approving it (db Append) or turning Secure Boot off, then shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime
   tests/                    Python tests for the runtime (+ mock Claude API)
-  docs/                     The browser demo (GitHub Pages): ClaudeOS's own screen with docs/demo/host.js standing
+  docs/                     The browser demo (GitHub Pages): Chat Computer's own screen with docs/demo/host.js standing
                             in for the computer; scripts/build_demo.py copies the screen, tests/test_demo.py checks
 ```
 
@@ -61,65 +61,65 @@ ClaudeOS/
 * Installed **alongside Windows** in free disk space (`storage.layout.mode: use_gap`) or on a separate whole disk
   the user picked (matched by serial). Never touches existing partitions. Reuses the existing EFI System Partition.
 * Packages are the minimum for: display (Xorg, no desktop), Wi-Fi/Ethernet (NetworkManager), Bluetooth + audio
-  (BlueZ, PipeWire, WirePlumber, libspa-0.2-bluetooth), web rendering for ClaudeOS's own screen (WebKitGTK 4.1 via
+  (BlueZ, PipeWire, WirePlumber, libspa-0.2-bluetooth), web rendering for Chat Computer's own screen (WebKitGTK 4.1 via
   python3-gi + gir1.2-webkit2-4.1, GStreamer codecs), screen control (xdotool, wmctrl), Windows files (ntfs-3g,
   cryptsetup-bin for BitLocker), boot control (efibootmgr), fonts, Python 3.12 venv.
 * On a Mac: Fedora Asahi Remix 44 Minimal (aarch64, 16K pages), installed by the official Asahi installer, and the
-  same set by Fedora's names (`install-claudeos.sh --distro fedora`, chosen from `/etc/os-release`), plus
+  same set by Fedora's names (`install-chatcomputer.sh --distro fedora`, chosen from `/etc/os-release`), plus
   `asahi-bless` (start-up volume) and `exfatprogs` (the drive macOS shares). See "Mac".
 
 ## Installed paths and users
 
 | What | Path / value |
 |---|---|
-| Runtime code (root-owned, read-only to the user) | `/opt/claudeos/app` (copy of this repo) |
-| Python venv (`--system-site-packages`, for python3-gi) | `/opt/claudeos/venv`; `claudeos-app.pth` in its site-packages puts `/opt/claudeos/app` on the import path |
-| Start command | `/opt/claudeos/venv/bin/python -m claudeos run` with `CLAUDEOS_ENGINE=linux` |
-| Model download command (run as the user) | `/opt/claudeos/venv/bin/python -m claudeos models --download` |
-| Health check command | `/opt/claudeos/venv/bin/python -m claudeos doctor` (prints JSON, exit 0 if usable) |
-| User data (owned by the user) | `/home/<user>/ClaudeOS/` |
-| Claude subscription token | `/home/<user>/ClaudeOS/secrets/claude_token` (mode 0600, single line `sk-ant-oat01-...`) |
-| Initial settings from Windows setup | `/home/<user>/ClaudeOS/settings.json` (JSON; keys below) |
-| Voice models | `/home/<user>/ClaudeOS/models/` (layout owned by `claudeos.voice.models`) |
-| Windows partition | `/mnt/windows` (rw when NTFS is clean, else ro). A BitLocker drive is opened with ClaudeOS's own recovery password (`/etc/claudeos/bitlocker-recovery-key`, from setup) as `/dev/mapper/claudeos-windows` |
-| Root helper | `/usr/local/libexec/claudeos/claudeos-root`, sudoers: `<user> ALL=(root) NOPASSWD: /usr/local/libexec/claudeos/claudeos-root` |
-| Where updates come from | `/etc/claudeos/update-source` (root, 0644): the folder ClaudeOS Setup ran from, as a path below the top of Windows' drive (`Users/<you>/Downloads/ClaudeOS`); see "Updating ClaudeOS" |
-| The version before an update | `/opt/claudeos/app.prev` (`app.failed` after an undo); `/var/lib/claudeos/update-pending` while a new version hasn't yet run 45 s |
-| Logs, readable from Windows | `C:\Users\<you>\AppData\Local\ClaudeOS\from-claudeos\` (`claudeos.log.txt`, `session.log.txt`, `info.json`), see "Runtime" |
+| Runtime code (root-owned, read-only to the user) | `/opt/chatcomputer/app` (copy of this repo) |
+| Python venv (`--system-site-packages`, for python3-gi) | `/opt/chatcomputer/venv`; `chatcomputer-app.pth` in its site-packages puts `/opt/chatcomputer/app` on the import path |
+| Start command | `/opt/chatcomputer/venv/bin/python -m chatcomputer run` with `CHATCOMPUTER_ENGINE=linux` |
+| Model download command (run as the user) | `/opt/chatcomputer/venv/bin/python -m chatcomputer models --download` |
+| Health check command | `/opt/chatcomputer/venv/bin/python -m chatcomputer doctor` (prints JSON, exit 0 if usable) |
+| User data (owned by the user) | `/home/<user>/ChatComputer/` |
+| Claude subscription token | `/home/<user>/ChatComputer/secrets/claude_token` (mode 0600, single line `sk-ant-oat01-...`) |
+| Initial settings from Windows setup | `/home/<user>/ChatComputer/settings.json` (JSON; keys below) |
+| Voice models | `/home/<user>/ChatComputer/models/` (layout owned by `chatcomputer.voice.models`) |
+| Windows partition | `/mnt/windows` (rw when NTFS is clean, else ro). A BitLocker drive is opened with Chat Computer's own recovery password (`/etc/chatcomputer/bitlocker-recovery-key`, from setup) as `/dev/mapper/chatcomputer-windows` |
+| Root helper | `/usr/local/libexec/chatcomputer/chatcomputer-root`, sudoers: `<user> ALL=(root) NOPASSWD: /usr/local/libexec/chatcomputer/chatcomputer-root` |
+| Where updates come from | `/etc/chatcomputer/update-source` (root, 0644): the folder Chat Computer Setup ran from, as a path below the top of Windows' drive (`Users/<you>/Downloads/ChatComputer`); see "Updating Chat Computer" |
+| The version before an update | `/opt/chatcomputer/app.prev` (`app.failed` after an undo); `/var/lib/chatcomputer/update-pending` while a new version hasn't yet run 45 s |
+| Logs, readable from Windows | `C:\Users\<you>\AppData\Local\ChatComputer\from-chatcomputer\` (`chatcomputer.log.txt`, `session.log.txt`, `info.json`), see "Runtime" |
 
 `settings.json` keys written by the Windows setup (all optional): `user_name` (display name), `windows_user`
 (Windows profile folder name, e.g. `rensh`), `timezone` (IANA), `locale`.
 
-### ClaudeOS exit codes (session supervisor contract)
+### Chat Computer exit codes (session supervisor contract)
 
-* `0` normal exit → session script restarts ClaudeOS after 1 s.
+* `0` normal exit → session script restarts Chat Computer after 1 s.
 * `3` restart requested (after an update) → restart immediately.
 * other → crash; restart with backoff (1, 2, 5 s). 3 crashes within 120 s → if the version is a new update
-  (`/var/lib/claudeos/update-pending` exists), `sudo -n claudeos-root update-undo` puts the version before back
-  and ClaudeOS starts again at once; otherwise a recovery screen (full-screen `xterm` with the last log lines
-  and `claudeos doctor` output; Enter retries). If it can't be shown, the session waits a minute before trying
+  (`/var/lib/chatcomputer/update-pending` exists), `sudo -n chatcomputer-root update-undo` puts the version before back
+  and Chat Computer starts again at once; otherwise a recovery screen (full-screen `xterm` with the last log lines
+  and `chatcomputer doctor` output; Enter retries). If it can't be shown, the session waits a minute before trying
   again rather than restarting in a tight loop.
 
 ### Drawing pages
 
 WebKit draws with the graphics chip when the system offers one for drawing (a `/dev/dri/renderD*` device).
 Without one (a virtual machine, or graphics the kernel can't drive yet) its GPU drawing crashes and leaves a
-blank screen, so ClaudeOS sets `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` and `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+blank screen, so Chat Computer sets `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` and `WEBKIT_DISABLE_DMABUF_RENDERER=1`
 before the window opens and draws with the processor. With NVIDIA's own driver it keeps the graphics chip but
 sets `WEBKIT_DISABLE_DMABUF_RENDERER=1`, a common workaround for blank WebKit windows on that driver. If a page's
-renderer process stops anyway, ClaudeOS switches to the processor, loads the page again and puts the
+renderer process stops anyway, Chat Computer switches to the processor, loads the page again and puts the
 conversation back as it was.
 
 ### Session
 
 tty1 autologin (systemd getty override) → `~/.bash_profile` execs `startx` only on tty1 with no DISPLAY →
-`~/.xinitrc` execs `/opt/claudeos/app/linux/session/claudeos-session` which: disables screen blanking/DPMS,
+`~/.xinitrc` execs `/opt/chatcomputer/app/linux/session/chatcomputer-session` which: disables screen blanking/DPMS,
 sets a black root window, starts `openbox` (no decorations, all windows maximized/fullscreen),
-`unclutter-xfixes` (hide idle cursor), then supervises ClaudeOS per the exit-code contract
-(`python -P -m claudeos run`: `-P` keeps the home folder off the import path, so a `~/json.py` can't replace
+`unclutter-xfixes` (hide idle cursor), then supervises Chat Computer per the exit-code contract
+(`python -P -m chatcomputer run`: `-P` keeps the home folder off the import path, so a `~/json.py` can't replace
 part of Python). agetty runs with `--noissue` and the user has an empty `~/.hushlogin`, so no Ubuntu banner or
-welcome text shows between the splash and ClaudeOS.
-PipeWire/WirePlumber run as systemd user services (dbus-user-session). Logs: `~/ClaudeOS/logs/`.
+welcome text shows between the splash and Chat Computer.
+PipeWire/WirePlumber run as systemd user services (dbus-user-session). Logs: `~/ChatComputer/logs/`.
 
 ### Root helper verbs (stdout = one JSON object, exit code 0 = success)
 
@@ -127,70 +127,70 @@ PipeWire/WirePlumber run as systemd user services (dbus-user-session). Logs: `~/
 |---|---|
 | `status` | `{"windows_mounted":bool,"windows_rw":bool,"windows_bitlocker":bool,"windows_boot_entry":bool,"efi":bool}` |
 | `boot-windows-next` | One-time boot into Windows on next reboot: `efibootmgr --bootnext <Windows Boot Manager>`; fallback `grub-reboot "Windows"` |
-| `boot-default windows\|claudeos` | What starts when the PC turns on: that system's UEFI entry first in `BootOrder` (Windows Boot Manager, or `ubuntu` for ClaudeOS), the other entries kept in order; nothing removed |
+| `boot-default windows\|chatcomputer` | What starts when the PC turns on: that system's UEFI entry first in `BootOrder` (Windows Boot Manager, or `ubuntu` for Chat Computer), the other entries kept in order; nothing removed |
 | `mount-windows` | (Re)mount the Windows partition at /mnt/windows (rw if clean else ro; never `remove_hiberfile`) |
 | `apt-install PKG...` | `apt-get install -y --no-remove` (an install never removes anything) of validated package names (`^[a-z0-9][a-z0-9+.-]{0,61}[a-z0-9+]$`), each one apt knows by exactly that name (`apt-cache pkgnames`): apt-get reads `name-` as "remove name", and a name that isn't a package's as a pattern |
-| `apt-remove PKG...` | the same validation, each one installed (`dpkg-query`) and not one of ClaudeOS's own packages (`/etc/claudeos/base-packages`, written by install-claudeos.sh); refused when the removal would also take packages that weren't named (they're listed in the error, from `apt-get -s remove`), so no removal takes ClaudeOS's screen, voice or network with it |
+| `apt-remove PKG...` | the same validation, each one installed (`dpkg-query`) and not one of Chat Computer's own packages (`/etc/chatcomputer/base-packages`, written by install-chatcomputer.sh); refused when the removal would also take packages that weren't named (they're listed in the error, from `apt-get -s remove`), so no removal takes Chat Computer's screen, voice or network with it |
 | `system-update` | `apt-get update && apt-get -y upgrade` |
-| `boot-macos-next` | Mac: macOS for the next start only (`asahi-bless --set-boot-macos --next`; if macOS was renamed, the one start-up volume that isn't ClaudeOS) |
-| `boot-default macos\|claudeos` | Mac: the start-up volume (`asahi-bless --set-boot-macos`, or `--set-boot ClaudeOS`) |
+| `boot-macos-next` | Mac: macOS for the next start only (`asahi-bless --set-boot-macos --next`; if macOS was renamed, the one start-up volume that isn't Chat Computer) |
+| `boot-default macos\|chatcomputer` | Mac: the start-up volume (`asahi-bless --set-boot-macos`, or `--set-boot Chat Computer`) |
 | `bt-import-windows-keys` | Copy Bluetooth Classic link keys (e.g. AirPods) from the Windows SYSTEM registry hive into BlueZ, restart bluetooth |
 | `set-timezone ZONE` | validated against /usr/share/zoneinfo |
-| `wipe-install-secrets` | Remove `/claudeos/secrets` from a ClaudeOS installer (FAT32 labelled `CLAUDEOS`) still on the PC or plugged in |
-| `update-app` | Update ClaudeOS from the folder in `/etc/claudeos/update-source` (see "Updating ClaudeOS"). `{"ok":true,"changed":N}` |
-| `update-done` | The new version started well: remove `/var/lib/claudeos/update-pending` |
-| `update-undo` | Put `/opt/claudeos/app.prev` back (the new version goes to `app.failed`) and remove the marker |
+| `wipe-install-secrets` | Remove `/chatcomputer/secrets` from a Chat Computer installer (FAT32 labelled `CHATCOMP`) still on the PC or plugged in |
+| `update-app` | Update Chat Computer from the folder in `/etc/chatcomputer/update-source` (see "Updating Chat Computer"). `{"ok":true,"changed":N}` |
+| `update-done` | The new version started well: remove `/var/lib/chatcomputer/update-pending` |
+| `update-undo` | Put `/opt/chatcomputer/app.prev` back (the new version goes to `app.failed`) and remove the marker |
 
 On Fedora (a Mac), `apt-install`, `apt-remove` and `system-update` use `dnf` (`install -y
 --setopt=install_weak_deps=False`, `remove -y --setopt=clean_requirements_on_remove=False` after `rpm -q` and
-`rpm -e --test` show the packages are installed and nothing else needs them, `upgrade -y --refresh`). ClaudeOS asks the user (spoken yes/no) before calling any verb except `status`, `update-done`
+`rpm -e --test` show the packages are installed and nothing else needs them, `upgrade -y --refresh`). Chat Computer asks the user (spoken yes/no) before calling any verb except `status`, `update-done`
 (called after a new version has run 45 s) and `update-undo` (called by the session); `update-app` is asked on the
 screen.
 
-### Updating ClaudeOS
+### Updating Chat Computer
 
-ClaudeOS Setup writes `/claudeos/update-source` on the installer: the folder it runs from, as a path below the
+Chat Computer Setup writes `/chatcomputer/update-source` on the installer: the folder it runs from, as a path below the
 top of Windows' drive with each name spelled as the drive stores it (only when that folder is on Windows' own
-drive). `finish.sh` copies it to `/etc/claudeos/update-source`, root's, so nothing ClaudeOS runs can point updates
-elsewhere. A newer ClaudeOS put in that folder (downloaded again over the old one) is noticed when ClaudeOS
-starts (`claudeos/update.py`: the files of `claudeos/` and `linux/session/` compared with the installed ones) and
-offered on the screen, answered by typing or saying yes or no. Yes runs `claudeos-root update-app`:
+drive). `finish.sh` copies it to `/etc/chatcomputer/update-source`, root's, so nothing Chat Computer runs can point updates
+elsewhere. A newer Chat Computer put in that folder (downloaded again over the old one) is noticed when Chat Computer
+starts (`chatcomputer/update.py`: the files of `chatcomputer/` and `linux/session/` compared with the installed ones) and
+offered on the screen, answered by typing or saying yes or no. Yes runs `chatcomputer-root update-app`:
 
-1. refused until ClaudeOS has finished installing (`/var/lib/claudeos/base-installed`): until then the first
-   start's finisher runs `install-claudeos.sh` as root, and that runs ClaudeOS's own code;
+1. refused until Chat Computer has finished installing (`/var/lib/chatcomputer/base-installed`): until then the first
+   start's finisher runs `install-chatcomputer.sh` as root, and that runs Chat Computer's own code;
 2. the recorded path must be relative, without `.` or `..` parts or control characters, and lead (after
-   `realpath`) into Windows' drive, to a folder with `claudeos/__init__.py` and `requirements-linux.txt`;
+   `realpath`) into Windows' drive, to a folder with `chatcomputer/__init__.py` and `requirements-linux.txt`;
 3. `requirements-linux.txt` must be the installed one: a version that needs other Python packages is
-   installed with ClaudeOS Setup;
-4. only `claudeos/` and `linux/session/` are taken, the parts that run as the person. Nothing root runs (this
+   installed with Chat Computer Setup;
+4. only `chatcomputer/` and `linux/session/` are taken, the parts that run as the person. Nothing root runs (this
    helper, the Bluetooth importer, `linux/firstboot`, the system's settings) changes in an update, and root
-   never runs ClaudeOS's own code once installed (`install-claudeos.sh` checks the import path with
+   never runs Chat Computer's own code once installed (`install-chatcomputer.sh` checks the import path with
    `importlib.util.find_spec`, which finds the package without running it);
 5. refused when those parts hold anything but plain files and folders (links could lead out of the folder) or
    a Python start-up hook (`sitecustomize.py`, `usercustomize.py`, `.pth`), checked before the copy and again
    on the copy;
-6. `/opt/claudeos/app.next` is a copy of the installed app with those two parts replaced (compiled files left
+6. `/opt/chatcomputer/app.next` is a copy of the installed app with those two parts replaced (compiled files left
    out), made root's, folders 0755, files 0644, `#!` files 0755; then the installed version becomes `app.prev`,
-   `app.next` becomes `app`, and `/var/lib/claudeos/update-pending` is written.
+   `app.next` becomes `app`, and `/var/lib/chatcomputer/update-pending` is written.
 
-ClaudeOS then exits with code 3 and the session starts the new version. After it has run 45 s, ClaudeOS calls
+Chat Computer then exits with code 3 and the session starts the new version. After it has run 45 s, Chat Computer calls
 `update-done`; if it keeps crashing before that, the session calls `update-undo`. Claude can read the update
-folder but not change it: the permission gate denies edits there and in `/opt/claudeos`, shell commands that
-change something and name it or `cd` into it, and moving, copying into or trashing it with ClaudeOS's own file
+folder but not change it: the permission gate denies edits there and in `/opt/chatcomputer`, shell commands that
+change something and name it or `cd` into it, and moving, copying into or trashing it with Chat Computer's own file
 tools.
 
 ### Boot menu
 
-`/etc/grub.d/07_claudeos` generates, before the stock entries: `ClaudeOS` (default) and `Windows`
-(chainload `/EFI/Microsoft/Boot/bootmgfw.efi`). `GRUB_DEFAULT=saved`, saved default = `ClaudeOS`, timeout 3 s,
+`/etc/grub.d/07_chatcomputer` generates, before the stock entries: `Chat Computer` (default) and `Windows`
+(chainload `/EFI/Microsoft/Boot/bootmgfw.efi`). `GRUB_DEFAULT=saved`, saved default = `Chat Computer`, timeout 3 s,
 menu visible. Stock Ubuntu entries remain under "Advanced options" for recovery. os-prober disabled (our entry
-replaces it). "Switch to Windows" from ClaudeOS uses UEFI BootNext (BitLocker-friendly), not the GRUB chainload.
-The ClaudeOS entry boots `/boot/vmlinuz` and `/boot/initrd.img` (the links Ubuntu 24.04 keeps up to date; older
+replaces it). "Switch to Windows" from Chat Computer uses UEFI BootNext (BitLocker-friendly), not the GRUB chainload.
+The Chat Computer entry boots `/boot/vmlinuz` and `/boot/initrd.img` (the links Ubuntu 24.04 keeps up to date; older
 setups' `/vmlinuz` links at the root also work). Without a kernel link it adds neither entry, so GRUB's
 fallback, the first entry, is Ubuntu's own (this same system), never Windows.
 
-The boot splash is a Plymouth script theme (`/usr/share/plymouth/themes/claudeos`, chosen with the
-`default.plymouth` alternative): a white screen with "ClaudeOS" in black. `systemd-networkd` and its
+The boot splash is a Plymouth script theme (`/usr/share/plymouth/themes/chatcomputer`, chosen with the
+`default.plymouth` alternative): a white screen with "Chat Computer" in black. `systemd-networkd` and its
 wait-online service are turned off, since NetworkManager owns the network; otherwise every start would wait
 two minutes for a network networkd doesn't manage.
 
@@ -198,35 +198,35 @@ two minutes for a network networkd doesn't manage.
 
 No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Installer.ps1`).
 
-* **Where.** The space ClaudeOS gets (shrunk from C:, a free area, or a separate disk the person erased) also
-  holds its installer at first: a FAT32 partition labelled `CLAUDEOS`, 6 GiB (`InstallerBytes`), GPT basic
+* **Where.** The space Chat Computer gets (shrunk from C:, a free area, or a separate disk the person erased) also
+  holds its installer at first: a FAT32 partition labelled `CHATCOMP`, 6 GiB (`InstallerBytes`), GPT basic
   data type, without a drive letter, at the *end* of the largest free area on that disk (`Get-FreeExtents`,
-  `Get-InstallerPlacement`: whole MiBs, the first and last MiB of the disk left alone). ClaudeOS installs into
+  `Get-InstallerPlacement`: whole MiBs, the first and last MiB of the disk left alone). Chat Computer installs into
   the rest, right before it. Setup refuses ISOs bigger than 5 GiB.
 * **What's on it.** The official Ubuntu Server 24.04.x ISO's files, 24.04.4 or newer (`MinPointRelease`: from
   there on its installer makes the account before `late-commands`, which `finish.sh` needs; up to 24.04.3 that
   was left to cloud-init at the first start) (copied from the ISO as Windows mounts it;
   its links, like `ubuntu -> .`, aren't folders there and aren't copied), plus:
-  * `/claudeos/installer-<install-id>` (`id=<install-id>`): the mark, written first, so even a half-made
-    installer can be found by "Remove ClaudeOS" and, later, by ClaudeOS;
+  * `/chatcomputer/installer-<install-id>` (`id=<install-id>`): the mark, written first, so even a half-made
+    installer can be found by "Remove Chat Computer" and, later, by Chat Computer;
   * `/autoinstall.yaml` (generated from `windows/autoinstall.template.yaml`). The installer's GRUB menu
-    becomes "Install ClaudeOS" (HWE kernel, default, 5 s) and "Install ClaudeOS (older kernel)", both with
+    becomes "Install Chat Computer" (HWE kernel, default, 5 s) and "Install Chat Computer (older kernel)", both with
     `autoinstall subiquity-storage-version=2` on the kernel command line: unattended, and able to see free
     space next to existing partitions (the installer's default storage version 1 sees none on a disk with
     partitions);
-  * `/claudeos/app/`: a copy of this repo, without `windows/`, `mac/`, `.venv` or caches;
-  * `/claudeos/secrets/claude_login.json`: the full sign-in from `claude auth login --claudeai` (Claude Code's
+  * `/chatcomputer/app/`: a copy of this repo, without `windows/`, `mac/`, `.venv` or caches;
+  * `/chatcomputer/secrets/claude_login.json`: the full sign-in from `claude auth login --claudeai` (Claude Code's
     `.credentials.json`), which setup picks up by itself; or, when the person pasted a code instead,
-    `/claudeos/secrets/claude_token`, a one-year token from `claude setup-token`;
-  * `/claudeos/settings.json`: initial settings (keys above);
-  * `/claudeos/update-source`: where setup runs from, for updates (see "Updating ClaudeOS");
-  * `/claudeos/guard.sh`, `network.sh`, `finish.sh`: copied from `windows/installer/`, with LF line endings.
-* **How the PC starts it.** The ISO's signed boot loader goes to `\EFI\claudeos-setup\` on the EFI partition
+    `/chatcomputer/secrets/claude_token`, a one-year token from `claude setup-token`;
+  * `/chatcomputer/settings.json`: initial settings (keys above);
+  * `/chatcomputer/update-source`: where setup runs from, for updates (see "Updating Chat Computer");
+  * `/chatcomputer/guard.sh`, `network.sh`, `finish.sh`: copied from `windows/installer/`, with LF line endings.
+* **How the PC starts it.** The ISO's signed boot loader goes to `\EFI\chatcomputer-setup\` on the EFI partition
   Windows starts from: `EFI/boot/bootx64.efi` (shim, signed by Microsoft's third-party UEFI CA) as
-  `shimx64.efi`, with `grubx64.efi` (signed by Canonical) and `mmx64.efi`. A power-on entry "ClaudeOS setup"
-  starts it: `bcdedit /copy {bootmgr} /d "ClaudeOS setup"` (so it points at the same EFI partition; the new
+  `shimx64.efi`, with `grubx64.efi` (signed by Canonical) and `mmx64.efi`. A power-on entry "Chat Computer setup"
+  starts it: `bcdedit /copy {bootmgr} /d "Chat Computer setup"` (so it points at the same EFI partition; the new
   `{id}` is found by comparing `bcdedit /enum firmware` before and after, never by reading Windows' language),
-  `/set {id} path \EFI\claudeos-setup\shimx64.efi`, `/set {fwbootmgr} displayorder {id} /addlast`; and,
+  `/set {id} path \EFI\chatcomputer-setup\shimx64.efi`, `/set {fwbootmgr} displayorder {id} /addlast`; and,
   once everything is ready, `/set {fwbootmgr} bootsequence {id}` (UEFI `BootNext`: the next start only). That
   GRUB's built-in configuration finds no `/boot/grub` on the EFI partition, so it looks for the partition with
   `/.disk/info`, the installer partition, and reads its menu from there. casper finds the live system on that
@@ -236,8 +236,8 @@ No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Instal
   fails, setup takes back what it did (`Undo-InstallSteps`): the entry, the boot loader, the installer partition
   (only if it's still the one it made, same offset and size), and C:'s space (back to the size C: had); it says
   what it couldn't. Fast Startup is turned off last, just before the PC is told to start the installer.
-* **Making room on C:** (`Invoke-MakeRoom`, after "Go ahead"). ClaudeOS's space is the empty space right after
-  C:, grown by shrinking C:: 70 GiB wanted (64 for ClaudeOS, 6 for the installer), 46 at least. Windows can
+* **Making room on C:** (`Invoke-MakeRoom`, after "Go ahead"). Chat Computer's space is the empty space right after
+  C:, grown by shrinking C:: 70 GiB wanted (64 for Chat Computer, 6 for the installer), 46 at least. Windows can
   only shrink a volume up to the last file it can't move while it runs, and `Get-PartitionSupportedSize`
   names that file in Application event 259 (Microsoft-Windows-Defrag; field 2 is the file, the same in every
   language; checked on Windows Server 2025). Setup shrinks as far as Windows allows, never leaving C: less
@@ -258,72 +258,72 @@ No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Instal
   into setup with a right-click.
 
 Storage is always `layout: {name: direct, mode: use_gap, match: {install-media: true}}`: the largest free
-area on the disk the installer is on, which is ClaudeOS's space right before the installer partition. The
+area on the disk the installer is on, which is Chat Computer's space right before the installer partition. The
 installer never reformats a disk. Shrinking C: or erasing a separate disk happens on Windows, after "Go
 ahead". (subiquity only leaves out disks in use when a match names `size` or `ssd`; `install-media` picks the
 disk holding the partition mounted at `/cdrom`.)
 
-* The installer's boot menu checks first: if `/EFI/claudeos/installed-<install-id>` exists on any partition
-  (GRUB `search --file`), this installer already installed ClaudeOS here, and the menu offers only
-  "Start ClaudeOS (already installed)", which reads the installed system's boot menu
+* The installer's boot menu checks first: if `/EFI/chatcomputer/installed-<install-id>` exists on any partition
+  (GRUB `search --file`), this installer already installed Chat Computer here, and the menu offers only
+  "Start Chat Computer (already installed)", which reads the installed system's boot menu
   (`configfile /EFI/ubuntu/grub.cfg` on the EFI partition). It doesn't chainload the installed shim: with
   Secure Boot on, GRUB 2.12 starts it without a file system and it can't find the rest of the boot loader
   (tested). Otherwise the menu offers the two install entries.
-* `early-commands`: `sh /cdrom/claudeos/guard.sh <install-id>`, the second check for the same marker, in
+* `early-commands`: `sh /cdrom/chatcomputer/guard.sh <install-id>`, the second check for the same marker, in
   case the installer starts anyway. The installer has no `efibootmgr`, so the guard writes UEFI `BootNext`
   through efivarfs (the entry described `ubuntu`) and restarts; if it can't, it stops the installer with a
   message, and nothing is written.
-* `late-commands`: `sh /cdrom/claudeos/finish.sh <user> <install-id>`. It:
-  1. copies the app to `/target/opt/claudeos/app` (root-owned, files 0644, `#!` files 0755);
-  2. copies the token (0600) and settings into `/target/home/<user>/ClaudeOS/`, owned by the user, and the
+* `late-commands`: `sh /cdrom/chatcomputer/finish.sh <user> <install-id>`. It:
+  1. copies the app to `/target/opt/chatcomputer/app` (root-owned, files 0644, `#!` files 0755);
+  2. copies the token (0600) and settings into `/target/home/<user>/ChatComputer/`, owned by the user, and the
      full sign-in for the phone, if setup made one (`secrets/claude_login.json`), to
-     `~/ClaudeOS/.engine/.credentials.json` (0600; `.engine` 0700), where Claude Code reads and refreshes it;
-  3. writes the marker `/EFI/claudeos/installed-<install-id>` to the ESP: `id=<install-id>` and
-     `root=<PARTUUID>` (ClaudeOS's root partition, from `findmnt` + `blkid`), which "Remove ClaudeOS" in
-     ClaudeOS Setup uses to delete exactly that partition;
-  4. sets up the first start: `/etc/claudeos/install-user`, `/etc/claudeos/install-id`, `/etc/claudeos/update-source`
+     `~/ChatComputer/.engine/.credentials.json` (0600; `.engine` 0700), where Claude Code reads and refreshes it;
+  3. writes the marker `/EFI/chatcomputer/installed-<install-id>` to the ESP: `id=<install-id>` and
+     `root=<PARTUUID>` (Chat Computer's root partition, from `findmnt` + `blkid`), which "Remove Chat Computer" in
+     Chat Computer Setup uses to delete exactly that partition;
+  4. sets up the first start: `/etc/chatcomputer/install-user`, `/etc/chatcomputer/install-id`, `/etc/chatcomputer/update-source`
      (when setup wrote one; root's, 0644), and two services from `linux/firstboot`, enabled by their
      `multi-user.target.wants` links:
-     * `claudeos-finish-install.service`, the safety net: until `/var/lib/claudeos/base-installed` exists, it
-       runs before `getty@tty1`, retries `install-claudeos.sh` with growing waits (30 s doubling to 5 min,
+     * `chatcomputer-finish-install.service`, the safety net: until `/var/lib/chatcomputer/base-installed` exists, it
+       runs before `getty@tty1`, retries `install-chatcomputer.sh` with growing waits (30 s doubling to 5 min,
        `dpkg --configure -a` before each try), then reboots;
-     * `claudeos-reclaim-installer.service`, once (`/var/lib/claudeos/installer-reclaimed`): finds the
-       installer partition (vfat, label `CLAUDEOS`, `claudeos/installer-<this install's id>`, neither the root
+     * `chatcomputer-reclaim-installer.service`, once (`/var/lib/chatcomputer/installer-reclaimed`): finds the
+       installer partition (vfat, label `CHATCOMP`, `chatcomputer/installer-<this install's id>`, neither the root
        partition nor an EFI partition), overwrites the sign-in it carried in place, deletes it (`sfdisk
-       --delete`), grows ClaudeOS's partition and file system into the space when it sits right after it
+       --delete`), grows Chat Computer's partition and file system into the space when it sits right after it
        (`growpart`, `resize2fs`; up to 2 MiB between them counts as right after), deletes
-       `\EFI\claudeos-setup` from every EFI partition and the power-on entries that start it
+       `\EFI\chatcomputer-setup` from every EFI partition and the power-on entries that start it
        (`efibootmgr -B`). If deleting fails it tries again at the next start;
-  5. runs `curtin in-target -- bash /opt/claudeos/app/linux/install-claudeos.sh --user <user> --from-installer`,
+  5. runs `curtin in-target -- bash /opt/chatcomputer/app/linux/install-chatcomputer.sh --user <user> --from-installer`,
      up to three tries. If all fail (usually no internet), it still exits 0, so the Ubuntu install ends
      normally and the safety net finishes the job on the first start.
 
-"Remove ClaudeOS from this PC" (Windows) also deletes installer partitions with a mark, the "ClaudeOS setup"
-entries and `\EFI\claudeos-setup`, so it cleans up an install that never finished too. Right after the typed
+"Remove Chat Computer from this PC" (Windows) also deletes installer partitions with a mark, the "Chat Computer setup"
+entries and `\EFI\chatcomputer-setup`, so it cleans up an install that never finished too. Right after the typed
 REMOVE it asks whether to keep the downloads (the Ubuntu ISO and the Agent SDK wheel, about 4 GB; default no):
 kept, installing again finds them by their SHA-256 and doesn't download them again.
 
 Tested end to end in QEMU (OVMF with Secure Boot and Microsoft's keys, an NVMe disk laid out as setup leaves a
-PC): the "ClaudeOS setup" entry starts the installer from its partition, the install finishes, ClaudeOS starts,
-and its first start deletes the installer partition, grows ClaudeOS's partition into it, and removes
-`\EFI\claudeos-setup` and the entry; Windows' partition is untouched.
+PC): the "Chat Computer setup" entry starts the installer from its partition, the install finishes, Chat Computer starts,
+and its first start deletes the installer partition, grows Chat Computer's partition into it, and removes
+`\EFI\chatcomputer-setup` and the entry; Windows' partition is untouched.
 
-`install-claudeos.sh` stops with exit status 1 at the first essential failure (apt packages, the venv,
+`install-chatcomputer.sh` stops with exit status 1 at the first essential failure (apt packages, the venv,
 pip), before later steps depend on it (for example handing networking to NetworkManager). On success it
-writes `/var/lib/claudeos/base-installed` and removes the safety net's link.
+writes `/var/lib/chatcomputer/base-installed` and removes the safety net's link.
 
-Re-signing in later: ClaudeOS Setup's "Sign ClaudeOS in to Claude again" writes
-`C:\Users\<you>\ClaudeOS\claude_token` and, for the phone, `claude_login.json`. ClaudeOS imports them at
+Re-signing in later: Chat Computer Setup's "Sign Chat Computer in to Claude again" writes
+`C:\Users\<you>\ChatComputer\claude_token` and, for the phone, `claude_login.json`. Chat Computer imports them at
 start, before the file index runs, and deletes the Windows copies. Any file named `claude_token`, and the
 engine's `.credentials.json`, are unreadable to Claude's tools.
 
-First start: if the voice models are missing, ClaudeOS downloads them in the background (about 600 MB),
+First start: if the voice models are missing, Chat Computer downloads them in the background (about 600 MB),
 retrying with backoff, then starts listening.
 
-## Runtime (claudeos package)
+## Runtime (chatcomputer package)
 
 * Brain: Claude Agent SDK (`claude-agent-sdk`, bundles the official Claude Code binary) with the user's
-  subscription and an isolated `CLAUDE_CONFIG_DIR` (`~/ClaudeOS/.engine`). Two sign-ins (Windows setup gives
+  subscription and an isolated `CLAUDE_CONFIG_DIR` (`~/ChatComputer/.engine`). Two sign-ins (Windows setup gives
   the full one; a pasted code gives the token):
   * the one-year token from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`. It can only make model
     requests;
@@ -335,7 +335,7 @@ retrying with backoff, then starts listening.
     fails with an auth error, the brain switches to the token for the rest of the run and asks the last
     question again.
 * Phone (the Claude app, Claude Code's Remote Control): after connecting with the full sign-in, the brain sends
-  the SDK control request `{"subtype": "remote_control", "enabled": true, "name": "ClaudeOS (<host>)"}`, the
+  the SDK control request `{"subtype": "remote_control", "enabled": true, "name": "Chat Computer (<host>)"}`, the
   same request Claude Code's own hosts send for `/remote-control`. The Python SDK has no public call for it,
   so it goes through `client._query._send_control_request`. The bridge session id from the response is
   kept and offered as `reattach_session_id` next time. A refused request is tried again after 20 s and 60 s:
@@ -348,14 +348,14 @@ retrying with backoff, then starts listening.
   (task notifications and the like) belong to the PC. Speaking at the PC interrupts a phone turn. A phone
   turn silent for 15 minutes is closed. Local questions carry the "[time · screen: ...]" prefix; the system
   prompt tells Claude that a message without it came from the phone.
-* ClaudeOS tools are in-process MCP tools (screen, files, computer control, apps, system, memory, self-made tools).
+* Chat Computer tools are in-process MCP tools (screen, files, computer control, apps, system, memory, self-made tools).
 * Typed or said: what's typed on this PC's keyboard is answered in writing only (`Brain.ask(typed=True)`, and the
   controller doesn't speak that turn), like what's typed on the phone; only what's said out loud gets a spoken
   answer. Its note ends with "typed" (`[time · screen: ... · typed]`), and the system prompt tells Claude to
   answer that like a chat message, without an account of what it's about to do. Questions about a typed request are shown, not said, and end with "(Type yes or no.)", as they do
-  whenever the microphone isn't listening. Things ClaudeOS says unasked (the greeting, "not signed in") are said
+  whenever the microphone isn't listening. Things Chat Computer says unasked (the greeting, "not signed in") are said
   only when sound plays on headphones; on the PC's or the monitor's speakers they are only shown.
-* At the start (not in tests or `--fake`): a new version of ClaudeOS to update to, then AirPods. AirPods are
+* At the start (not in tests or `--fake`): a new version of Chat Computer to update to, then AirPods. AirPods are
   connected without a question (`Controller._airpods_quietly`, started first): nothing when sound already plays
   on headphones; else AirPods paired here, or else Windows' pairing copied over silently (`bt-import-windows-keys`,
   which also brings Windows' name for each device from `BTHPORT\Parameters\Devices\<mac>\Name` and marks it
@@ -363,12 +363,12 @@ retrying with backoff, then starts listening.
   says to take them out, and they're tried every 3 s for 2 minutes. Only when no AirPods are known anywhere is
   "Connect your AirPods?" asked; yes looks for AirPods in pairing mode for a minute and pairs them. Claude's
   `bluetooth` tool has `airpods`, the same in one step ("connect my AirPods"). The update comes first when
-  Windows' drive is already mounted (yes restarts ClaudeOS); while it is still on its way, the AirPods come
+  Windows' drive is already mounted (yes restarts Chat Computer); while it is still on its way, the AirPods come
   first.
-* What's done (`claudeos/done.py`, `~/ClaudeOS/done.jsonl`): the brain reports each tool call when its result
+* What's done (`chatcomputer/done.py`, `~/ChatComputer/done.jsonl`): the brain reports each tool call when its result
   comes back (`BrainEvents.on_tool`, from `ToolResultBlock`/`ServerToolResultBlock`, matched to the call by its
   id); one that worked becomes a past-tense line ("Searched youtube.com for “lofi”", "Saved notes.txt"), unless
-  it only looked at something (read_screen, status) or ClaudeOS's own tool said in words that it failed
+  it only looked at something (read_screen, status) or Chat Computer's own tool said in words that it failed
   ("Failed: ...", "I couldn't ..."). Reading and looking steps are kept but not listed. Each line keeps the
   message that asked for it: its id on the screen and in `transcript.jsonl` (written with the same id and
   time), its words and time. The conversation page lists them at the right (`CO.doneList`, `CO.done`); a click
@@ -376,11 +376,11 @@ retrying with backoff, then starts listening.
   `Controller.go_back_to` → `History.earlier`: the transcript from that message to where the page starts, at
   most 300 messages) and scrolls there (`CO.earlier`). `recent_actions` reads the same list (words to look for,
   days back) for Claude.
-* Logs on Windows' drive (`claudeos/logcopy.py`): ClaudeOS's own drive can't be opened from Windows, so the end
-  of `claudeos.log` and `session.log` (1.5 MB each, CRLF line endings, anything like a sign-in, password or key
+* Logs on Windows' drive (`chatcomputer/logcopy.py`): Chat Computer's own drive can't be opened from Windows, so the end
+  of `chatcomputer.log` and `session.log` (1.5 MB each, CRLF line endings, anything like a sign-in, password or key
   blanked) and `info.json` (the phone link's state and why, voice, microphone, AirTouch) are copied to
-  `C:\Users\<you>\AppData\Local\ClaudeOS\from-claudeos\`, only when ClaudeOS Setup's folder is there: a
-  minute after the start, every 10 minutes, just before a restart or shutdown, and when ClaudeOS stops. The log
+  `C:\Users\<you>\AppData\Local\ChatComputer\from-chatcomputer\`, only when Chat Computer Setup's folder is there: a
+  minute after the start, every 10 minutes, just before a restart or shutdown, and when Chat Computer stops. The log
   also says, at the start, which graphics chips and drivers there are and the screens' sizes, and once a minute
   while typing, how long typed letters took to reach the screen (measured by the page: key to two frames later)
   and how often the window was busy for more than a tenth of a second. `session.log` says each screen's refresh
@@ -393,8 +393,8 @@ retrying with backoff, then starts listening.
   (`classify_bash`): anything the gate can't analyse with certainty (several lines, substitutions, unusual
   redirections, options that write files or run programs, like `sed`'s `w`/`e` or `sort -o`) is asked about.
   `git` is always asked about: a folder's own git settings can make even `git status` run a program.
-* ClaudeOS's private folders (`secrets/`, the engine's `.engine/` with the full sign-in, the browser's `web/`
-  with its logins) can't be read, searched inside, copied, moved, trashed or shown on screen by ClaudeOS's tools
+* Chat Computer's private folders (`secrets/`, the engine's `.engine/` with the full sign-in, the browser's `web/`
+  with its logins) can't be read, searched inside, copied, moved, trashed or shown on screen by Chat Computer's tools
   or Claude Code's file tools, nor can other programs' settings (`/proc/*/environ`). Shell commands that name
   them, reach them with wildcards or `cd`, or search through a folder holding them (`grep -r`, `rg`) are
   blocked, even ones that would otherwise be asked about. The limit: a command the gate can't analyse is asked
@@ -404,30 +404,40 @@ retrying with backoff, then starts listening.
   `~/.local/bin` and the like) is asked about. The content layer doesn't let pages opened from files read other
   files with scripts (WebKit's file-access setting stays off), so a downloaded `.html` file can't read the
   sign-in.
-* Screen: one full-screen GTK 3 window (`claudeos/ui/gtk_app.py`), a `Gtk.Overlay`: the conversation page
+* Screen: one full-screen GTK 3 window (`chatcomputer/ui/gtk_app.py`), a `Gtk.Overlay`: the conversation page
   (`ui/assets/chat.html`) fills it, and the content layer (a real browser with a persistent profile in
-  `~/ClaudeOS/web`) is laid over the space the page leaves for it ("hole", reported by chat.js): between the two
+  `~/ChatComputer/web`) is laid over the space the page leaves for it ("hole", reported by chat.js): between the two
   sidebar cards, above the latest exchange and the message box, inset in a rounded frame. F1 makes it fill the
   window and back (`toggle_expand`); Escape closes it (`close_content`) unless the message box has text. While
-  it's open the conversation shrinks to a strip (`--strip-h`): your latest message and Claude's latest reply, a
-  line each (`-webkit-line-clamp`), "… more" showing one in full (the strip grows to 60% and the frame shrinks)
-  and "less" putting it back. The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
+  it's open the conversation shrinks to a strip (`--strip-h`) of two lines: your latest message and Chat
+  Computer's latest (while you speak: its latest and what you're saying), a line each (`-webkit-line-clamp`); notes
+  and older messages between them don't show there (`.off-strip`). "… more" shows one in full (the strip grows to
+  60% and the frame shrinks) and "less" puts it back; with nothing said yet the strip is empty and the frame
+  reaches the message box. The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
   moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
-  through) is on top. No buttons beyond the sidebars' items: settings, the microphone (sound tool, `input`) and
-  the model are changed by asking.
-* Sidebars: Messages at the left (`claudeos/messages`), What's done at the right (`done.py`), each a card
+  through) is on top. With nothing said yet the page shows the word logo (`#wordmark`: Atkinson Hyperlegible Next
+  at 800) and, in the mono font, `hello, world`, lower case with its comma as in Kernighan's C tutorial and
+  K&R. No buttons beyond the sidebars' items and the panels' switches: settings, the microphone (sound tool,
+  `input`) and the model are changed by asking.
+* The panels' switches (`.toggle` in chat.html): Messages' at the top left, What's done's at the top right, the
+  conversation's at the bottom right while something is open; each icon is the screen with its panel marked,
+  filled while it shows. Off, a sidebar leaves a 3.45 rem margin (`--rail`) with its switch; the conversation's
+  frees the strip and the message box (typing brings them back). The page posts `panels`; the controller keeps
+  them in `settings.left_panel`, `right_panel`, `bottom_panel` (also set by asking) and sends them back at the
+  start (`CO.panels`). Only where the sidebars fit (`body.panel`).
+* Sidebars: Messages at the left (`chatcomputer/messages`), What's done at the right (`done.py`), each a card
   (2 px `--bubble` border, 1.1 rem corners, 0.75 rem from the screen's edges and from the frame), each item
-  pressable, and pinnable (`pins.py`, `~/ClaudeOS/pins.json`: pinned items first, newest pin first). What's done
+  pressable, and pinnable (`pins.py`, `~/ChatComputer/pins.json`: pinned items first, newest pin first). What's done
   shows the date and time (`#clock`, each minute) and each item's time above its words.
-* Messages (`claudeos/messages`): every account's messages in one list, newest first, kept in
-  `~/ClaudeOS/messages.db` (SQLite: `store.py`); accounts and their sign-ins in `secrets/accounts.json` (0600,
+* Messages (`chatcomputer/messages`): every account's messages in one list, newest first, kept in
+  `~/ChatComputer/messages.db` (SQLite: `store.py`); accounts and their sign-ins in `secrets/accounts.json` (0600,
   Claude's tools can't read it; `accounts.public()` is what the screen and Claude get). Email over IMAP
   (`mail.py`: app passwords; Outlook.com through Microsoft's sign-in, OAuth 2 code + PKCE as a public client,
   XOAUTH2, `msauth.py`, which needs `settings.outlook_client_id` from an Entra app registration): read-only
   (`SELECT` read-only, `BODY.PEEK`), Gmail's Primary tab only (`X-GM-RAW "category:primary"`), new mail every
   `mail_check_minutes`. Telegram with Telethon (`telegram.py`: the person's own api_id and api_hash, phone, code,
   2FA password; chats and groups, not channels). WhatsApp and social sites (`web.py`, `assets/sources.js`): their
-  own inbox pages in views with their own profile in `~/ClaudeOS/sources`, read in an isolated script world
+  own inbox pages in views with their own profile in `~/ChatComputer/sources`, read in an isolated script world
   (WhatsApp stays open; the others are looked at every 10 minutes). Sign-in forms (`CO.accountForm`) send what's
   typed straight to the Inbox, never to Claude, and come back with what went wrong and what was typed (passwords
   aside). An email opened shows as the conversation with its sender (`render.thread_html`: the opened one and the
@@ -444,7 +454,7 @@ retrying with backoff, then starts listening.
   it's clearly a swipe or not, then taken or replayed to GTK; a third finger cancels the first two on the page
   (a copy of each one's last event, as TOUCH_CANCEL). The onscreen keyboard (AirTouch's, the iPad's layout) comes
   up for a finger on a box to type in (chat.js and content.js post `keyboard`), unless a key on a real keyboard
-  (not XTEST, which is ClaudeOS typing) was pressed in the last 5 minutes; such a key puts it away. Its touches
+  (not XTEST, which is Chat Computer typing) was pressed in the last 5 minutes; such a key puts it away. Its touches
   never reach the page: the key under the finger shows pressed and is typed on lift (`on_keyboard_action`, the
   controller types it with xdotool). In the conversation page (chat.js): pinch for the text size (`text_scale`,
   kept), hold a message to select it, double and triple taps for a word and a paragraph, hold the box and move to
@@ -461,7 +471,7 @@ retrying with backoff, then starts listening.
   (`--bubble: #EDEDED`, the one colour besides black and white; black on it is 18:1), Claude's flush left in one
   column, newest at the bottom, above a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
   for a new line; no placeholder, since that would be grey text) with nothing under it; while asleep, a line
-  above it says how to wake ClaudeOS. On a wide screen Messages and What's done take the left and right 17%
+  above it says how to wake Chat Computer. On a wide screen Messages and What's done take the left and right 17%
   each (the Claude app's side panel's share); the column and the box centre in the rest.
 * Size and width: text is sized so that the x-height covers 0.3 degrees of view. That is the top of the
   normal range of critical print size (0.15-0.3 degrees; Legge & Bigelow 2011), above which reading gets no
@@ -475,8 +485,8 @@ retrying with backoff, then starts listening.
 * Input, in the order the person uses it: the touchscreen, a keyboard, the Claude app on the phone, the
   AirPods. AirTouch is off unless asked for (`airtouch: false`; `Controller._settings_moved_on` turned it off once
   for those who had it on).
-* AirTouch (`claudeos/airtouch`): the hands, seen by the screen's camera, in a process of its own at nice 5
-  (`worker.py`). All of it is ClaudeOS's own code except the two networks: Google MediaPipe's palm detector
+* AirTouch (`chatcomputer/airtouch`): the hands, seen by the screen's camera, in a process of its own at nice 5
+  (`worker.py`). All of it is Chat Computer's own code except the two networks: Google MediaPipe's palm detector
   and hand landmark model ("lite", Apache 2.0), downloaded with the voice models and checked against the
   SHA-256 that MediaPipe's own build pins.
   * Camera (`camera.py`): Video4Linux2 through ioctl, with mmap buffers. YUYV when the camera gives it at
@@ -522,9 +532,9 @@ retrying with backoff, then starts listening.
   still). Clicks reach the page: AirTouch's layer over the window (a GtkDrawingArea in a GtkOverlay) took them
   all, pass-through or not (GTK 3.24), until it was given an empty input shape. Keys go to the page too: on the
   conversation, into the message box (the page puts the focus back there after a click elsewhere); GTK keeps
-  only the media keys and Ctrl+Shift+Q. `linux/session/claudeos-refresh` sets each connected screen to the
+  only the media keys and Ctrl+Shift+Q. `linux/session/chatcomputer-refresh` sets each connected screen to the
   fastest rate xrandr lists at its current size when X starts (X picks the screen's preferred mode, usually
-  60 Hz; Windows keeps the 120/144 Hz chosen there), unless `~/ClaudeOS/keep-refresh-rate` exists. A Bluetooth keyboard (`bluetoothctl info`: Icon input-keyboard) pairs through bluetoothctl's own
+  60 Hz; Windows keeps the 120/144 Hz chosen there), unless `~/ChatComputer/keep-refresh-rate` exists. A Bluetooth keyboard (`bluetoothctl info`: Icon input-keyboard) pairs through bluetoothctl's own
   agent as KeyboardDisplay, answering its questions: the passkey to type on the keyboard (or a PIN made up
   for an older one) is shown and spoken. Other devices pair as NoInputNoOutput.
 * Speed (`tests/test_speed.py`, and the listener tests in `tests/test_voice.py`):
@@ -539,12 +549,12 @@ retrying with backoff, then starts listening.
     recognizer is free when the utterance ends.
   * Speaking: Kokoro uses one thread per core (onnxruntime's choice); a long first sentence is spoken from its
     first comma, `;` or `:` after 20 characters, once 50 have arrived. Whether sound plays on headphones (for
-    barge-in) is asked on every 32 ms frame while ClaudeOS talks: it's answered from a check (wpctl, about a
+    barge-in) is asked on every 32 ms frame while Chat Computer talks: it's answered from a check (wpctl, about a
     quarter of a frame) made in the background every 5 s, not by running wpctl on the event loop each frame.
   * The file index reads documents' text (pypdf, python-docx, openpyxl, python-pptx: pure Python) in a process
-    of its own, `TextReader`, at nice 10. In ClaudeOS's own process they held the interpreter long enough for
+    of its own, `TextReader`, at nice 10. In Chat Computer's own process they held the interpreter long enough for
     speech to skip (6 to 11 underflows in 6 s of speech under PipeWire; none since, and none from walking
-    folders). A document a reader hangs on is given up after 60 s, and stopping ClaudeOS doesn't wait for one.
+    folders). A document a reader hangs on is given up after 60 s, and stopping Chat Computer doesn't wait for one.
   * Tools: `system_status` asks its six parts side by side. Without a Bluetooth adapter (`/sys/class/bluetooth`
     empty or missing) bluetoothd may not run, and each bluetoothctl command waited 8 s for it: the Bluetooth
     calls now say so at once. `look_at_screen` makes the JPEG straight from the grab (a 4K screen: 0.65 s with a
@@ -567,19 +577,19 @@ retrying with backoff, then starts listening.
     A fixed pause was too short for a new page (Claude read the old one and had to look again) and too long
     for a menu.
   * Typing on the conversation is the page's own text box: no trip through Python per key.
-  * Boot: `claudeos-windows-mount.service` waits for the disks itself (`udevadm settle` in `ExecStartPre`)
+  * Boot: `chatcomputer-windows-mount.service` waits for the disks itself (`udevadm settle` in `ExecStartPre`)
     instead of pulling in `systemd-udev-settle.service`, which comes before `sysinit.target` and so held up the
-    whole start. If Windows' drive (or a Mac's shared drive) arrives after ClaudeOS has started, ClaudeOS takes
+    whole start. If Windows' drive (or a Mac's shared drive) arrives after Chat Computer has started, Chat Computer takes
     it in then: a sign-in left there, its files in the search, and the engine starts again when idle to learn
     where they are (at the start the engine waits up to 10 s for the drive).
 
 ## Mac
 
-On a Mac with Apple silicon, ClaudeOS is a second system next to macOS, as on a PC. Only Asahi Linux can start
-another system on these Macs, so ClaudeOS's Linux base there is Fedora Asahi Remix (the Asahi project's
+On a Mac with Apple silicon, Chat Computer is a second system next to macOS, as on a PC. Only Asahi Linux can start
+another system on these Macs, so Chat Computer's Linux base there is Fedora Asahi Remix (the Asahi project's
 flagship distribution), installed by the Asahi installer. That sets the Macs it works on: M1, M2, and M3, M3 Pro,
 M3 Max (not M3 Ultra, M4, M5; on M3 for now without graphics acceleration, brightness or other screens, per
-Asahi's feature tables). The runtime (`claudeos/`) is the same as on a PC; `claudeos/platform/linux.py` has
+Asahi's feature tables). The runtime (`chatcomputer/`) is the same as on a PC; `chatcomputer/platform/linux.py` has
 `MacPlatform` (chosen when `/proc/device-tree/compatible` starts with `apple,`).
 
 macOS's own files can't be read from Linux, unlike Windows' on a PC: Apple silicon encrypts every internal APFS
@@ -592,75 +602,75 @@ drive both systems open.
 | What | Path / value |
 |---|---|
 | Image | Fedora Asahi Remix 44 Minimal, unmodified (`mac/manifest.sh`: the package's URL, SHA-256, kernel, file system ids) |
-| Installer | Asahi installer v0.9.2 (`cdn.asahilinux.org`, SHA-256 pinned), run locally: `REPO_BASE` is setup's work folder (`os/<package>`), `installer_data.json` is ClaudeOS's (one OS, Fedora's partitions exactly: EFI 500 MiB FAT32 with Fedora's volume id, Boot 1 GiB, Root expanding), `DISTRO=ClaudeOS` |
-| Partitions | macOS's container (shrunk), the start-up volume's container (`ClaudeOS`, 2.5 GB, made by the installer), EFI (`EFI - CLAUD`), Boot, Root, then the ClaudeOS drive (exFAT, `ClaudeOS`) in the space left |
-| The drive macOS shares | `~/Mac` in ClaudeOS: fstab `PARTUUID=<id> exfat uid,gid,umask=077,nofail`; the id (GPT partition GUID, diskutil's `DiskUUID`) is in `/etc/claudeos/mac-files-partuuid` |
-| Sign-in left by "Sign in again" | `.claudeos/` on the ClaudeOS drive; imported at start and deleted, like `C:\Users\<you>\ClaudeOS` on a PC |
+| Installer | Asahi installer v0.9.2 (`cdn.asahilinux.org`, SHA-256 pinned), run locally: `REPO_BASE` is setup's work folder (`os/<package>`), `installer_data.json` is Chat Computer's (one OS, Fedora's partitions exactly: EFI 500 MiB FAT32 with Fedora's volume id, Boot 1 GiB, Root expanding), `DISTRO=Chat Computer` |
+| Partitions | macOS's container (shrunk), the start-up volume's container (`Chat Computer`, 2.5 GB, made by the installer), EFI (`EFI - CHAT`), Boot, Root, then the Chat Computer drive (exFAT, `Chat Computer`) in the space left |
+| The drive macOS shares | `~/Mac` in Chat Computer: fstab `PARTUUID=<id> exfat uid,gid,umask=077,nofail`; the id (GPT partition GUID, diskutil's `DiskUUID`) is in `/etc/chatcomputer/mac-files-partuuid` |
+| Sign-in left by "Sign in again" | `.chatcomputer/` on the Chat Computer drive; imported at start and deleted, like `C:\Users\<you>\ChatComputer` on a PC |
 
 ### Setup (`mac/setup.sh`, in macOS)
 
-Menu: Install ClaudeOS on this Mac, Send more files to ClaudeOS, Sign ClaudeOS in to Claude again, Choose
-what starts when the Mac turns on, Remove ClaudeOS from this Mac. Written for macOS's bash 3.2.
+Menu: Install Chat Computer on this Mac, Send more files to Chat Computer, Sign Chat Computer in to Claude again, Choose
+what starts when the Mac turns on, Remove Chat Computer from this Mac. Written for macOS's bash 3.2.
 
 Install:
 
 1. Checks: Apple silicon (`sysctl hw.optional.arm64`, so a Rosetta Terminal counts), the chip
    (`machdep.cpu.brand_string`: M1, M2, M3; M3 Ultra, M4, M5 refused with the reason), not a virtual Mac
-   (`kern.hv_vmm_present`, allowed with `CLAUDEOS_PLAN_ONLY=1`), macOS 13.5 or newer, an admin account, no
-   ClaudeOS already on the disk (`find_install`), and the internet. On a Mac mini, Studio or Pro it says screens
+   (`kern.hv_vmm_present`, allowed with `CHATCOMPUTER_PLAN_ONLY=1`), macOS 13.5 or newer, an admin account, no
+   Chat Computer already on the disk (`find_install`), and the internet. On a Mac mini, Studio or Pro it says screens
    must use the HDMI port.
 2. The folders to bring (Desktop, Documents, Downloads, Pictures, Movies, Music; sizes from `du -A`, so files
    kept only in iCloud count).
 3. The space, as the installer works it out: macOS keeps what it uses plus 38 GB, never less than diskutil's
-   `MinimumSizePreferred`, plus 1 GB. ClaudeOS gets 60 GB when there's room (at least 30 GB); the ClaudeOS
+   `MinimumSizePreferred`, plus 1 GB. Chat Computer gets 60 GB when there's room (at least 30 GB); the Chat Computer
    drive gets the folders plus 10 % plus 10 GB. Plan-only stops after this.
 4. Sign-in: the official Claude program from the `claude-agent-sdk` macOS wheel (pinned), `claude setup-token`
    in a throwaway config dir, the pasted token read with bracketed paste (it can span lines); optionally
    `claude auth login --claudeai` for the phone.
 5. Wi-Fi: the network in use (`networksetup`, `ipconfig getsummary`), its password typed or taken from the
    keychain (`security find-generic-password -D 'AirPort network password'`).
-6. "Go ahead?", then: download and check the installer and the image; add `claudeos.icns` to the image's zip
+6. "Go ahead?", then: download and check the installer and the image; add `chatcomputer.icns` to the image's zip
    with the installer's own Python (its new SHA-256 is noted next to it, so a second run doesn't download it
    again; if the icon can't be added, the copy of `installer_data.json` loses its `icon` line); run the
    installer under `expect` (`mac/drive-installer.exp`), which answers each question a second after it
    appears (the installer clears typed-ahead input before each one) and lets the person type their password
    to it. Exit codes: 2 resize failed, 3 not enough space, 4 a question it can't answer, 5 macOS too old, 6
    failed. The partitions it made come from its `installer.log`.
-7. The ClaudeOS drive: `diskutil addPartition <Root> ExFAT ClaudeOS 0` (the space left), Spotlight off; the
+7. The Chat Computer drive: `diskutil addPartition <Root> ExFAT Chat Computer 0` (the space left), Spotlight off; the
    folders copied with `rsync -rt` and `COPYFILE_DISABLE=1`, without `.DS_Store`, `*.photoslibrary` or
    extended attributes (no `._` files).
-8. The first start, on ClaudeOS's EFI partition (`claudeos/`): `app.tar.gz` (`claudeos/`, `linux/`, the
+8. The first start, on Chat Computer's EFI partition (`chatcomputer/`): `app.tar.gz` (`chatcomputer/`, `linux/`, the
    requirements and docs; `--no-xattrs`), `firstboot.sh`, `setup.env` (base64 values: account, name,
    recovery password, time zone, install id, the drive's id, Wi-Fi name and password), `secrets/` (token,
-   phone sign-in), `settings.json`; Fedora's `EFI/fedora/grub.cfg` kept as `claudeos/fedora-grub.cfg` and
+   phone sign-in), `settings.json`; Fedora's `EFI/fedora/grub.cfg` kept as `chatcomputer/fedora-grub.cfg` and
    replaced by `esp/grub-firststart.cfg` with the kernel and ids filled in.
-9. The recovery password to `~/Documents/ClaudeOS recovery password.txt`; the downloads deleted; the one step
-   Apple requires (choosing ClaudeOS in the startup options and finishing the installer's second step in
+9. The recovery password to `~/Documents/Chat Computer recovery password.txt`; the downloads deleted; the one step
+   Apple requires (choosing Chat Computer in the startup options and finishing the installer's second step in
    1TR), shown to be photographed; shutdown.
 
-Remove: copies the drive's files to `~/ClaudeOS files` first if asked, typed REMOVE, `bless --setBoot` on
+Remove: copies the drive's files to `~/Chat Computer files` first if asked, typed REMOVE, `bless --setBoot` on
 macOS's volume (`--stdinpass`), `diskutil apfs deleteContainer` on the start-up volume's container, `diskutil
 eraseVolume free free` on the EFI, Boot, Root and drive partitions, then `diskutil apfs resizeContainer <macOS's>
-0`. Choose what starts: `bless --setBoot --device` on ClaudeOS's or macOS's volume. Sign in again: the token
-and phone sign-in to the drive's `.claudeos/`.
+0`. Choose what starts: `bless --setBoot --device` on Chat Computer's or macOS's volume. Sign in again: the token
+and phone sign-in to the drive's `.chatcomputer/`.
 
 ### First start (`mac/esp/firstboot.sh`)
 
-GRUB starts Fedora's kernel with `"systemd.run=/bin/sh /boot/efi/claudeos/firstboot.sh"`,
+GRUB starts Fedora's kernel with `"systemd.run=/bin/sh /boot/efi/chatcomputer/firstboot.sh"`,
 `systemd.unit=kernel-command-line.target`, `systemd.run_success_action=reboot` and
 `systemd.run_failure_action=reboot`, instead of Fedora's first-start questions. Two details matter, both found
 in an emulated Mac: the whole argument is in double quotes (GRUB passes it on in double quotes, which systemd
 removes; quotes inside it would reach systemd as `\"`, which it doesn't read as quotes), and `systemd.unit` names
-the target outright (systemd-run-generator's own `default.target` loses to the one Fedora's image has in /etc). firstboot.sh (POSIX sh, as root, SELinux enforcing): hostname `claudeos`;
+the target outright (systemd-run-generator's own `default.target` loses to the one Fedora's image has in /etc). firstboot.sh (POSIX sh, as root, SELinux enforcing): hostname `chatcomputer`;
 the account (`useradd --groups wheel`, its password the recovery password, through `chpasswd`); time zone and
-`LANG`; a NetworkManager keyfile for the Wi-Fi (0600); ClaudeOS to `/opt/claudeos/app` (root-owned); the token,
-phone sign-in and settings into `~/ClaudeOS`; `/etc/claudeos/install-user`, `install-id`,
-`mac-files-partuuid`; `claudeos-finish-install.service` enabled; `restorecon` on all of it. Only then: Fedora's
+`LANG`; a NetworkManager keyfile for the Wi-Fi (0600); Chat Computer to `/opt/chatcomputer/app` (root-owned); the token,
+phone sign-in and settings into `~/ChatComputer`; `/etc/chatcomputer/install-user`, `install-id`,
+`mac-files-partuuid`; `chatcomputer-finish-install.service` enabled; `restorecon` on all of it. Only then: Fedora's
 first-start questions off (`/etc/reconfigSys`, `initial-setup.service`), Fedora's `grub.cfg` back, and the
 sign-in copies deleted from the EFI partition (FAT: readable by anyone who starts the Mac). On failure it counts
-tries in `claudeos/tries`; at the third it puts Fedora's start back, so the Mac never loops.
+tries in `chatcomputer/tries`; at the third it puts Fedora's start back, so the Mac never loops.
 
-The next start is Fedora's usual one: `claudeos-finish-install.service` runs `install-claudeos.sh --user <user>
+The next start is Fedora's usual one: `chatcomputer-finish-install.service` runs `install-chatcomputer.sh --user <user>
 --from-installer` with the internet until it works (as on a PC), then restarts. On Fedora that script installs
 with `dnf --setopt=install_weak_deps=False`, WirePlumber 0.5 settings (SPA-JSON), firewalld without the ssh and
 cockpit services, `dnf5-automatic` for security updates, no SSH server, the Plymouth theme
@@ -670,8 +680,8 @@ and `restorecon` at the end.
 ### Switching
 
 * "Switch to macOS": `power(switch_to_macos)` → root helper `boot-macos-next`, then `systemctl reboot`. The
-  next start after that is ClaudeOS again.
-* `start_by_default` (claudeos | other): root helper `boot-default claudeos|macos`.
+  next start after that is Chat Computer again.
+* `start_by_default` (chatcomputer | other): root helper `boot-default chatcomputer|macos`.
 * From macOS: setup's "Choose what starts", or the startup options (hold the power button).
 
 ### Tests
@@ -679,7 +689,7 @@ and `restorecon` at the end.
 * `tests/test_mac_setup.py`: setup on a pretend Mac (stand-ins for `diskutil`, `plutil` and the rest in
   `tests/mac_pretend.py`), the real `drive-installer.exp` against `tests/mac_fake_installer.py` (the v0.9.2
   installer's questions, colours and terminal handling), first start against a pretend Fedora, and the pinned
-  values agreeing with each other. Run with macOS's bash 3.2 (`CLAUDEOS_TEST_BASH`).
+  values agreeing with each other. Run with macOS's bash 3.2 (`CHATCOMPUTER_TEST_BASH`).
 * `tests/mac_ci/run.sh` on GitHub's Macs (`.github/workflows/mac.yml`): plan-only on the real disk; a disk
   image laid out with the installer's own commands for finding, the drive, copying, the first start and
   removing; the real downloads; the real installer until it turns down a virtual Mac.
@@ -687,7 +697,7 @@ and `restorecon` at the end.
   install steps.
 * An emulated Mac (QEMU `virt`, `-cpu neoverse-n1` for 16K pages, UEFI), its disk built from the real Fedora
   package with setup's own `write_first_start`: Fedora's 16K kernel starts, the first start runs and restarts,
-  `claudeos-finish-install` installs everything (dnf, then pip on Python 3.14) and restarts, and ClaudeOS's
+  `chatcomputer-finish-install` installs everything (dnf, then pip on Python 3.14) and restarts, and Chat Computer's
   screen comes up, with SELinux enforcing and no denials. On 16K pages the Claude program runs and GTK,
   WebKit, numpy, onnxruntime, CTranslate2 and the voice packages load. It also found what the pretend tests
   couldn't: the first-start quoting, the default target, Fedora Asahi Remix's os-release ID, kokoro-onnx's
@@ -695,5 +705,5 @@ and `restorecon` at the end.
   `-cpu max` crashes this kernel early: an emulator problem, not a Mac one.)
 
 Not yet tried on a real Mac. Unknowns: AirPods' microphone (Bluetooth HFP) under Asahi; AirPods paired in
-ClaudeOS may need pairing again in macOS (the same Mac, a new key); the Mac's own graphics (the emulated Mac
+Chat Computer may need pairing again in macOS (the same Mac, a new key); the Mac's own graphics (the emulated Mac
 used a virtual one).

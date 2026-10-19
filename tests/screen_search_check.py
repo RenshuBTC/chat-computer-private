@@ -1,7 +1,7 @@
-""" "/" in the message box, in a real ClaudeOS window: typing "/" first makes the box search this computer (results
+""" "/" in the message box, in a real Chat Computer window: typing "/" first makes the box search this computer (results
 in a list above it, matching letters bold); the arrow keys choose, Enter opens one; with nothing found, the only
 line asks Claude; Escape clears it. Anything else typed is a message, as always, and right-clicking the box opens
-no menu: ClaudeOS is the conversation. Real key presses and clicks (xdotool) on a virtual display; ClaudeOS's
+no menu: Chat Computer is the conversation. Real key presses and clicks (xdotool) on a virtual display; Chat Computer's
 answers (the search results) come from here, as the controller would send them. Prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1600x900x24" python tests/screen_search_check.py [shot-prefix]
 """
@@ -17,8 +17,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["CLAUDEOS_HOME"] = tempfile.mkdtemp(prefix="claudeos-search-")
-os.environ["CLAUDEOS_W"], os.environ["CLAUDEOS_H"] = "1600", "900"
+os.environ["CHATCOMPUTER_HOME"] = tempfile.mkdtemp(prefix="chatcomputer-search-")
+os.environ["CHATCOMPUTER_W"], os.environ["CHATCOMPUTER_H"] = "1600", "900"
 
 import gi  # noqa: E402
 
@@ -27,8 +27,8 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkX11", "3.0")
 from gi.repository import Gdk, GdkX11, GLib, Gtk  # noqa: E402,F401
 
-from claudeos.config import Paths, Settings  # noqa: E402
-from claudeos.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
+from chatcomputer.config import Paths, Settings  # noqa: E402
+from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 SHOT = sys.argv[1] if len(sys.argv) > 1 else None
 paths = Paths().ensure()

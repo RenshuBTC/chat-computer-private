@@ -1,15 +1,15 @@
 """First start on a new install: the voice downloads itself, with no terminal needed."""
 import asyncio
 
-from claudeos.config import Paths, Settings
-from claudeos.controller import Controller
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
-from claudeos.voice import models as M
+from chatcomputer.config import Paths, Settings
+from chatcomputer.controller import Controller
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
+from chatcomputer.voice import models as M
 
 
 def _controller(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     paths = Paths().ensure()
     screen = RecordingScreen()
     c = Controller(paths, Settings(user_name="Ren Shu"), FakePlatform(), screen, voice=True)
@@ -60,21 +60,21 @@ def test_missing_voice_models_are_downloaded_then_voice_starts(tmp_path, monkeyp
 def test_new_signin_left_on_windows_is_taken_and_removed(tmp_path, monkeypatch):
     c, screen, paths = _controller(tmp_path, monkeypatch)
     win_home = tmp_path / "windows/Users/rensh"
-    (win_home / "ClaudeOS").mkdir(parents=True)
+    (win_home / "ChatComputer").mkdir(parents=True)
     tok = "sk-ant-oat01-" + "A" * 90
-    (win_home / "ClaudeOS/claude_token").write_text("﻿" + tok + "\r\n", encoding="utf-8")
-    c._import_signin(str(win_home / "ClaudeOS"))
-    from claudeos.config import read_token
+    (win_home / "ChatComputer/claude_token").write_text("﻿" + tok + "\r\n", encoding="utf-8")
+    c._import_signin(str(win_home / "ChatComputer"))
+    from chatcomputer.config import read_token
     assert read_token(paths) == tok
-    assert not (win_home / "ClaudeOS/claude_token").exists()
+    assert not (win_home / "ChatComputer/claude_token").exists()
     assert any("new sign-in" in str(e[1]) for e in screen.events if e[0] == "notice")
 
 
 def test_junk_left_on_windows_is_ignored(tmp_path, monkeypatch):
     c, screen, paths = _controller(tmp_path, monkeypatch)
     win_home = tmp_path / "windows/Users/rensh"
-    (win_home / "ClaudeOS").mkdir(parents=True)
-    (win_home / "ClaudeOS/claude_token").write_text("hello", encoding="utf-8")
-    c._import_signin(str(win_home / "ClaudeOS"))
-    from claudeos.config import read_token
+    (win_home / "ChatComputer").mkdir(parents=True)
+    (win_home / "ChatComputer/claude_token").write_text("hello", encoding="utf-8")
+    c._import_signin(str(win_home / "ChatComputer"))
+    from chatcomputer.config import read_token
     assert read_token(paths) is None

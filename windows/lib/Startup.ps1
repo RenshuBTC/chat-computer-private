@@ -1,9 +1,9 @@
-# The PC's power-on menu: the installer's one-time entry, what starts when the PC turns on (ClaudeOS or
-# Windows), starting ClaudeOS once, and removing ClaudeOS completely. ASCII-only file (see Common.ps1).
+# The PC's power-on menu: the installer's one-time entry, what starts when the PC turns on (Chat Computer or
+# Windows), starting Chat Computer once, and removing Chat Computer completely. ASCII-only file (see Common.ps1).
 #
 # The PC's power-on menu is its UEFI boot entries; bcdedit reads and changes them. Its output is in
 # Windows' language, so only values that are never translated are read from it: {identifiers} and
-# \EFI\ paths. ClaudeOS's entry is the one that starts \EFI\ubuntu\ (Ubuntu's boot loader).
+# \EFI\ paths. Chat Computer's entry is the one that starts \EFI\ubuntu\ (Ubuntu's boot loader).
 
 $Script:GptEsp = '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
 $Script:GptLinuxData = '{0fc63daf-8483-4772-8e79-3d69d8477de4}'
@@ -27,7 +27,7 @@ function Get-FirmwareBootEntries {
     return (ConvertFrom-BcdFirmware (($out | ForEach-Object { [string]$_ }) -join "`n"))
 }
 
-function Get-ClaudeOSBootEntries {
+function Get-ChatComputerBootEntries {
     return , @(Get-FirmwareBootEntries | Where-Object { $_.Path -match '(?i)^\\EFI\\ubuntu\\' -and $_.Id -ne '{fwbootmgr}' })
 }
 
@@ -46,12 +46,12 @@ function Set-StartsFirst {
 
 # ------------------------------------------------------------------ the installer's power-on entry
 function Get-SetupBootEntries {
-    # "ClaudeOS setup": the entries that start \EFI\claudeos-setup\ (the installer's boot loader).
+    # "Chat Computer setup": the entries that start \EFI\chatcomputer-setup\ (the installer's boot loader).
     return , @(Get-FirmwareBootEntries | Where-Object { $_.Path -match ('(?i)^\\EFI\\' + $Script:SetupLoaderDir + '\\') -and $_.Id -ne '{fwbootmgr}' })
 }
 
 function New-SetupBootEntry {
-    # Adds "ClaudeOS setup" to the PC's power-on menu, starting \EFI\claudeos-setup\shimx64.efi. Returns its {id}.
+    # Adds "Chat Computer setup" to the PC's power-on menu, starting \EFI\chatcomputer-setup\shimx64.efi. Returns its {id}.
     return (New-FirmwareBootEntry -Name $Script:SetupEntryName -Path ('\EFI\' + $Script:SetupLoaderDir + '\shimx64.efi'))
 }
 
@@ -96,33 +96,33 @@ function Remove-SetupBootEntries {
 function Invoke-StartupChoice {
     param([switch]$PlanOnly)
     Write-Step 'What starts when the PC turns on'
-    $entries = Get-ClaudeOSBootEntries
+    $entries = Get-ChatComputerBootEntries
     if ($entries.Count -eq 0) {
-        Write-Warn 'ClaudeOS is not in this PC''s power-on menu, so Windows starts. Nothing was changed.'
+        Write-Warn 'Chat Computer is not in this PC''s power-on menu, so Windows starts. Nothing was changed.'
         return
     }
     $claude = $entries[0].Id
     $pick = Read-Choice 'What should start when the PC turns on?' @(
-        'ClaudeOS (Windows stays one restart away: in ClaudeOS, say "switch to Windows")',
-        'Windows (ClaudeOS stays installed; run this again to start it)',
-        'Restart into ClaudeOS now, just this once') 0
+        'Chat Computer (Windows stays one restart away: in Chat Computer, say "switch to Windows")',
+        'Windows (Chat Computer stays installed; run this again to start it)',
+        'Restart into Chat Computer now, just this once') 0
     if ($PlanOnly) { Write-Line '(Plan only: nothing was changed.)'; return }
     if ($pick -eq 0) {
         Set-StartsFirst $claude
-        Write-Good 'ClaudeOS now starts when the PC turns on.'
+        Write-Good 'Chat Computer now starts when the PC turns on.'
     } elseif ($pick -eq 1) {
         Set-StartsFirst '{bootmgr}'
-        Write-Good 'Windows now starts when the PC turns on. ClaudeOS is still installed.'
-        Write-Line 'To use ClaudeOS, run ClaudeOS Setup again and choose to restart into it, or pick it in the PC''s boot menu.'
-        Write-Line 'To delete it completely, run ClaudeOS Setup again and choose "Remove ClaudeOS from this PC".'
+        Write-Good 'Windows now starts when the PC turns on. Chat Computer is still installed.'
+        Write-Line 'To use Chat Computer, run Chat Computer Setup again and choose to restart into it, or pick it in the PC''s boot menu.'
+        Write-Line 'To delete it completely, run Chat Computer Setup again and choose "Remove Chat Computer from this PC".'
     } else {
         Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $claude)
-        Write-Good 'The PC starts ClaudeOS next time, once. After that, it starts what it started before.'
+        Write-Good 'The PC starts Chat Computer next time, once. After that, it starts what it started before.'
         if (Read-YesNo 'Restart now?' $true) { & shutdown.exe /r /t 5 }
     }
 }
 
-# ------------------------------------------------------------------ removing ClaudeOS
+# ------------------------------------------------------------------ removing Chat Computer
 function Get-FreeDriveLetter {
     $used = @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.Name })
     foreach ($l in @('S', 'R', 'Q', 'P', 'O', 'N', 'M', 'L', 'T', 'U', 'V', 'W', 'Y', 'Z')) {
@@ -177,15 +177,15 @@ function Read-InstallMarker {
     return [pscustomobject]$info
 }
 
-function Find-ClaudeOSInstall {
-    # Looks on every EFI partition for ClaudeOS's marker, then finds ClaudeOS's own partition.
+function Find-ChatComputerInstall {
+    # Looks on every EFI partition for Chat Computer's marker, then finds Chat Computer's own partition.
     $all = @(Get-Partition -ErrorAction Stop)
     foreach ($esp in @($all | Where-Object { (Format-Guid (Get-Prop $_ 'GptType')) -eq (Format-Guid $Script:GptEsp) })) {
         $m = Mount-EspPartition $esp
         $marker = $null
         $hasWindows = $false
         try {
-            $dir = [IO.Path]::Combine($m.Root, 'EFI', 'claudeos')
+            $dir = [IO.Path]::Combine($m.Root, 'EFI', 'chatcomputer')
             if (Test-Path -LiteralPath $dir) {
                 $marker = Get-ChildItem -LiteralPath $dir -Filter 'installed-*' -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($marker) { $marker = Read-InstallMarker $marker.FullName }
@@ -208,8 +208,8 @@ function Find-ClaudeOSInstall {
     return $null
 }
 
-function Clear-ClaudeOSBootFiles {
-    # Deletes ClaudeOS's boot files from an EFI partition Windows shares. If Ubuntu's boot loader had
+function Clear-ChatComputerBootFiles {
+    # Deletes Chat Computer's boot files from an EFI partition Windows shares. If Ubuntu's boot loader had
     # taken the PC's fallback slot (\EFI\BOOT\BOOTX64.EFI), Windows' boot manager goes back there.
     param([Parameter(Mandatory = $true)][string]$Root)
     $efi = [IO.Path]::Combine($Root, 'EFI')
@@ -228,7 +228,7 @@ function Clear-ClaudeOSBootFiles {
             if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }
         }
     }
-    foreach ($d in @('ubuntu', 'claudeos', $Script:SetupLoaderDir)) {
+    foreach ($d in @('ubuntu', 'chatcomputer', $Script:SetupLoaderDir)) {
         $p = [IO.Path]::Combine($efi, $d)
         if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
     }
@@ -240,7 +240,7 @@ function Get-WindowsEsp {
 }
 
 function Clear-SetupLoader {
-    # Deletes \EFI\claudeos-setup (the installer's boot loader) from Windows' EFI partition, if it's there.
+    # Deletes \EFI\chatcomputer-setup (the installer's boot loader) from Windows' EFI partition, if it's there.
     $esp = Get-WindowsEsp
     if (-not $esp) { return }
     $m = Mount-EspPartition $esp
@@ -260,59 +260,59 @@ function Read-ConfirmWord {
     return $match
 }
 
-function Remove-ClaudeOS {
+function Remove-ChatComputer {
     param([Parameter(Mandatory = $true)][string]$WorkDir, [string]$DocumentsDir, [switch]$PlanOnly)
-    Write-Step 'Remove ClaudeOS from this PC'
-    $found = Find-ClaudeOSInstall
-    # An installer that hasn't finished (or that ClaudeOS hasn't cleaned up yet) goes too.
+    Write-Step 'Remove Chat Computer from this PC'
+    $found = Find-ChatComputerInstall
+    # An installer that hasn't finished (or that Chat Computer hasn't cleaned up yet) goes too.
     $installers = Find-InstallerPartitions
     $setupEntries = Get-SetupBootEntries
     if (-not $found -and $installers.Count -eq 0 -and $setupEntries.Count -eq 0) {
-        Write-Line 'ClaudeOS is not installed on this PC (no EFI partition has its mark). Nothing was changed.'
+        Write-Line 'Chat Computer is not installed on this PC (no EFI partition has its mark). Nothing was changed.'
         return
     }
     $root = $null
     if ($found) {
         $root = $found.Root
         if (-not $root) {
-            throw 'ClaudeOS''s mark is here, but setup could not tell which partition is ClaudeOS''s. Nothing was changed.'
+            throw 'Chat Computer''s mark is here, but setup could not tell which partition is Chat Computer''s. Nothing was changed.'
         }
         if ((Format-Guid (Get-Prop $root 'GptType')) -ne (Format-Guid $Script:GptLinuxData) -or [bool](Get-Prop $root 'IsSystem') -or
             [bool](Get-Prop $root 'IsBoot') -or ([string](Get-Prop $root 'DriveLetter')) -match '^[A-Za-z]$') {
-            throw 'The partition ClaudeOS''s mark names does not look like ClaudeOS''s. Nothing was changed.'
+            throw 'The partition Chat Computer''s mark names does not look like Chat Computer''s. Nothing was changed.'
         }
     }
     foreach ($i in $installers) {
         if ([bool](Get-Prop $i 'IsSystem') -or [bool](Get-Prop $i 'IsBoot')) {
-            throw 'A partition that looks like ClaudeOS''s installer is one Windows needs. Nothing was changed.'
+            throw 'A partition that looks like Chat Computer''s installer is one Windows needs. Nothing was changed.'
         }
     }
     $espToo = $found -and (-not $found.EspHasWindows) -and $found.Esp.DiskNumber -eq $root.DiskNumber
     $freed = [int64]0
     if ($root) {
-        Write-Line ('This deletes ClaudeOS and everything saved in it: its partition on disk ' + $root.DiskNumber + ' (' +
+        Write-Line ('This deletes Chat Computer and everything saved in it: its partition on disk ' + $root.DiskNumber + ' (' +
                     (Format-Size $root.Size) + ').')
         $freed += [int64]$root.Size
     }
-    $lead = 'This deletes ClaudeOS''s installer, left from an install that didn''t finish'
-    if ($root) { $lead = 'It also deletes ClaudeOS''s installer' }
+    $lead = 'This deletes Chat Computer''s installer, left from an install that didn''t finish'
+    if ($root) { $lead = 'It also deletes Chat Computer''s installer' }
     foreach ($i in $installers) {
         Write-Line ($lead + ': its partition on disk ' + $i.DiskNumber + ' (' + (Format-Size $i.Size) + ').')
         $freed += [int64]$i.Size
     }
     if (-not $root -and $installers.Count -eq 0) {
-        Write-Line 'It takes "ClaudeOS setup" out of the power-on menu (left from an install that didn''t finish).'
+        Write-Line 'It takes "Chat Computer setup" out of the power-on menu (left from an install that didn''t finish).'
     }
-    $hasKey = Test-Path -LiteralPath (Join-Path (Get-ClaudeOSStateDir) 'bitlocker-key-id')
-    if ($hasKey) { Write-Line 'It deletes the BitLocker key setup made for ClaudeOS. Your own keys stay.' }
+    $hasKey = Test-Path -LiteralPath (Join-Path (Get-ChatComputerStateDir) 'bitlocker-key-id')
+    if ($hasKey) { Write-Line 'It deletes the BitLocker key setup made for Chat Computer. Your own keys stay.' }
     Write-Line 'Windows, your apps and your files stay as they are. Windows starts when the PC turns on.'
-    if ($root) { Write-Line 'Anything you saved only inside ClaudeOS is lost. Files you kept in your Windows folders stay.' }
-    if (-not (Read-ConfirmWord 'Type REMOVE to remove ClaudeOS (anything else keeps it)' 'REMOVE')) {
-        Write-Line 'Kept ClaudeOS. Nothing was changed.'
+    if ($root) { Write-Line 'Anything you saved only inside Chat Computer is lost. Files you kept in your Windows folders stay.' }
+    if (-not (Read-ConfirmWord 'Type REMOVE to remove Chat Computer (anything else keeps it)' 'REMOVE')) {
+        Write-Line 'Kept Chat Computer. Nothing was changed.'
         return
     }
     if ($PlanOnly) { Write-Line '(Plan only: nothing was changed.)'; return }
-    # The downloads (the Ubuntu installer and Claude's engine, about 4 GB) can stay, to install ClaudeOS again
+    # The downloads (the Ubuntu installer and Claude's engine, about 4 GB) can stay, to install Chat Computer again
     # without downloading them again.
     $keepDownloads = @()
     $downloads = @()
@@ -322,12 +322,12 @@ function Remove-ClaudeOS {
     }
     if ($downloads.Count -gt 0) {
         $size = [double](($downloads | Measure-Object -Property Length -Sum).Sum)
-        if (Read-YesNo ('Keep the downloads (' + (Format-Size $size) + ') to install ClaudeOS again without downloading them again?') $false) {
+        if (Read-YesNo ('Keep the downloads (' + (Format-Size $size) + ') to install Chat Computer again without downloading them again?') $false) {
             $keepDownloads = @($downloads | ForEach-Object { $_.Name })
         }
     }
 
-    # 1. Windows first in the power-on menu, and ClaudeOS's entries (and the installer's) out of it.
+    # 1. Windows first in the power-on menu, and Chat Computer's entries (and the installer's) out of it.
     try {
         $bl = Get-BitLockerVolume -MountPoint 'C:' -ErrorAction Stop
         if ([string](Get-Prop $bl 'ProtectionStatus') -eq 'On') {
@@ -339,13 +339,13 @@ function Remove-ClaudeOS {
         Write-SetupLog ('BitLocker check: ' + $_.Exception.Message)
     }
     Set-StartsFirst '{bootmgr}'
-    $claudeEntries = Get-ClaudeOSBootEntries
+    $claudeEntries = Get-ChatComputerBootEntries
     foreach ($e in $claudeEntries) { Invoke-Bcdedit @('/delete', $e.Id) }
     Remove-SetupBootEntries
-    Write-Good 'Windows starts when the PC turns on; ClaudeOS is out of the power-on menu.'
+    Write-Good 'Windows starts when the PC turns on; Chat Computer is out of the power-on menu.'
 
-    # 2. ClaudeOS's boot files on the EFI partition Windows uses (or that whole partition, if it was ClaudeOS's
-    #    own) and the installer's, then ClaudeOS's partitions. Windows already starts by itself from here on.
+    # 2. Chat Computer's boot files on the EFI partition Windows uses (or that whole partition, if it was Chat Computer's
+    #    own) and the installer's, then Chat Computer's partitions. Windows already starts by itself from here on.
     $diskNumbers = @()
     try {
         if ($found) {
@@ -353,7 +353,7 @@ function Remove-ClaudeOS {
                 Remove-Partition -DiskNumber $found.Esp.DiskNumber -PartitionNumber $found.Esp.PartitionNumber -Confirm:$false -ErrorAction Stop
             } else {
                 $m = Mount-EspPartition $found.Esp
-                try { Clear-ClaudeOSBootFiles -Root $m.Root } finally { Dismount-EspPartition $m }
+                try { Clear-ChatComputerBootFiles -Root $m.Root } finally { Dismount-EspPartition $m }
             }
         }
         Clear-SetupLoader
@@ -366,18 +366,18 @@ function Remove-ClaudeOS {
             $diskNumbers += $i.DiskNumber
         }
     } catch {
-        throw ('Windows starts normally, but ClaudeOS''s files could not all be deleted (' + $_.Exception.Message +
+        throw ('Windows starts normally, but Chat Computer''s files could not all be deleted (' + $_.Exception.Message +
                '). Run setup again to finish, or delete the partition in Disk Management.')
     }
-    if ($root) { Write-Good 'ClaudeOS is deleted.' } else { Write-Good 'The installer is deleted.' }
+    if ($root) { Write-Good 'Chat Computer is deleted.' } else { Write-Good 'The installer is deleted.' }
 
-    # ClaudeOS's BitLocker key: nothing can use it now.
+    # Chat Computer's BitLocker key: nothing can use it now.
     if ($hasKey) {
         try {
-            if (Remove-ClaudeOSBitLockerKey) { Write-Good 'ClaudeOS''s BitLocker key is deleted.' }
+            if (Remove-ChatComputerBitLockerKey) { Write-Good 'Chat Computer''s BitLocker key is deleted.' }
         } catch {
             Write-SetupLog ('BitLocker key: ' + $_.Exception.Message)
-            Write-Warn ('Setup could not delete the BitLocker key it made for ClaudeOS (' + $_.Exception.Message + '). ' +
+            Write-Warn ('Setup could not delete the BitLocker key it made for Chat Computer (' + $_.Exception.Message + '). ' +
                         'Run setup again to try once more.')
         }
     }
@@ -409,9 +409,9 @@ function Remove-ClaudeOS {
         Get-ChildItem -LiteralPath $WorkDir -Force | Where-Object { $_.Name -ne 'setup.log' -and $keepDownloads -notcontains $_.Name } |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
-    # C:\Users\<you>\ClaudeOS: the sign-in copies, and the folder only when nothing else is in it (a folder of that
-    # name may hold something of the person's own, or this very ClaudeOS folder).
-    $signin = Join-Path $env:USERPROFILE 'ClaudeOS'
+    # C:\Users\<you>\ChatComputer: the sign-in copies, and the folder only when nothing else is in it (a folder of that
+    # name may hold something of the person's own, or this very Chat Computer folder).
+    $signin = Join-Path $env:USERPROFILE 'ChatComputer'
     if ([IO.Directory]::Exists($signin)) {
         try {
             foreach ($f in @('claude_login.json', 'claude_token')) { [IO.File]::Delete((Join-Path $signin $f)) }
@@ -423,7 +423,7 @@ function Remove-ClaudeOS {
     Remove-OldSignInFolders
     $docs = $DocumentsDir
     if (-not $docs) { $docs = [Environment]::GetFolderPath('MyDocuments') }
-    $note = Join-Path $docs 'ClaudeOS recovery password.txt'
+    $note = Join-Path $docs 'Chat Computer recovery password.txt'
     if (Test-Path -LiteralPath $note) { Remove-Item -LiteralPath $note -Force }
-    Write-Good 'Done. ClaudeOS is removed and this PC is back to just Windows.'
+    Write-Good 'Done. Chat Computer is removed and this PC is back to just Windows.'
 }

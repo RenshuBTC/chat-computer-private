@@ -1,8 +1,8 @@
-"""AirTouch: the network engine, hand tracking, gestures, the camera's interface, the pointer, and what ClaudeOS
+"""AirTouch: the network engine, hand tracking, gestures, the camera's interface, the pointer, and what Chat Computer
 does with the gestures.
 
 Most tests need nothing else. A few use Google's two hand models and MediaPipe's test pictures from
-$CLAUDEOS_TEST_MODELS/airtouch and .../airtouch-pictures (skipped without them). tests/data/airtouch_reference.json
+$CHATCOMPUTER_TEST_MODELS/airtouch and .../airtouch-pictures (skipped without them). tests/data/airtouch_reference.json
 holds MediaPipe's own results for those pictures (its HandLandmarker, full models), to check ours against.
 """
 import asyncio
@@ -20,12 +20,12 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from claudeos.airtouch import camera, gestures, hands, keyboard, nn, tflite
-from claudeos.airtouch.gestures import Engine, pose_of
+from chatcomputer.airtouch import camera, gestures, hands, keyboard, nn, tflite
+from chatcomputer.airtouch.gestures import Engine, pose_of
 
 HERE = Path(__file__).resolve().parent
 REFERENCE = json.loads((HERE / "data" / "airtouch_reference.json").read_text())["pictures"]
-MODELS = Path(os.environ.get("CLAUDEOS_TEST_MODELS",
+MODELS = Path(os.environ.get("CHATCOMPUTER_TEST_MODELS",
                              "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/models"))
 PALM, LANDMARKS = MODELS / "airtouch" / "palm_detection_lite.tflite", MODELS / "airtouch" / "hand_landmark_lite.tflite"
 PICTURES = MODELS / "airtouch-pictures"
@@ -774,7 +774,7 @@ class _Area:
 
 def _layer():
     pytest.importorskip("cairo")
-    from claudeos.ui.airtouch_layer import AirLayer
+    from chatcomputer.ui.airtouch_layer import AirLayer
     return AirLayer(_Area(), lambda: 24.0)
 
 
@@ -899,7 +899,7 @@ def test_no_cameras_means_none():
 # ================================================================== the pointer
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="no X display")
 def test_the_pointer_moves_through_xtest():
-    from claudeos.airtouch.xinput import XInput
+    from chatcomputer.airtouch.xinput import XInput
     try:
         x = XInput()
     except OSError:
@@ -938,7 +938,7 @@ class _Mouse:
 
 
 def test_the_arrow_hides_while_hands_move_the_pointer_and_a_mouse_gets_it_back():
-    from claudeos.airtouch.xinput import MOUSE_YIELD_S, SharedPointer
+    from chatcomputer.airtouch.xinput import MOUSE_YIELD_S, SharedPointer
     m = _Mouse()
     p = SharedPointer(m)
     p.move(0.0, 100, 100)
@@ -988,7 +988,7 @@ def _frame(name: str, dx: int, dy: int) -> bytes:
 
 @need_models
 def test_the_airtouch_process_follows_the_finger_and_sees_a_thumbs_up(monkeypatch):
-    from claudeos.airtouch import worker, xinput
+    from chatcomputer.airtouch import worker, xinput
     sent = []
     mouse = _Mouse()
     frames = ([_frame("pointing_up.jpg", 6 * i, 3 * i) for i in range(20)] +
@@ -1030,7 +1030,7 @@ def test_the_airtouch_process_follows_the_finger_and_sees_a_thumbs_up(monkeypatc
 
         def once(idle_s=3.0):
             yield from real()
-            conn.waiting.append(("stop",))          # then ClaudeOS says stop
+            conn.waiting.append(("stop",))          # then Chat Computer says stop
         cam.frames = once
         return cam
     monkeypatch.setattr(camera, "Camera", fake_camera)
@@ -1046,14 +1046,14 @@ def test_the_airtouch_process_follows_the_finger_and_sees_a_thumbs_up(monkeypatc
     assert mouse.arrow[0] is False and mouse.arrow[-1] is True      # hidden while it moved; shown when it stopped
 
 
-# ================================================================== what ClaudeOS does with it
+# ================================================================== what Chat Computer does with it
 def _controller(tmp_path, monkeypatch):
-    from claudeos.config import Paths, Settings
-    from claudeos.controller import Controller
-    from claudeos.platform.fake import FakePlatform
-    from claudeos.screen import RecordingScreen
+    from chatcomputer.config import Paths, Settings
+    from chatcomputer.controller import Controller
+    from chatcomputer.platform.fake import FakePlatform
+    from chatcomputer.screen import RecordingScreen
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "home" / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "home" / "ChatComputer"))
     # AirTouch is off unless asked for: these are about it once it's on.
     return Controller(Paths().ensure(), Settings(user_name="Ren", airtouch=True), FakePlatform(), RecordingScreen(),
                       voice=False, index=False)
@@ -1072,7 +1072,7 @@ class _AirTouch:
         self.stopped = True
 
 
-def test_an_open_hand_stops_claudeos_talking_and_wakes_it(tmp_path, monkeypatch):
+def test_an_open_hand_stops_chatcomputer_talking_and_wakes_it(tmp_path, monkeypatch):
     c = _controller(tmp_path, monkeypatch)
     stopped = []
 

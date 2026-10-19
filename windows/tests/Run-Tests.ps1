@@ -1,4 +1,4 @@
-# Unit tests for ClaudeOS Setup's plain functions. Runs on any PowerShell (Windows 5.1, or pwsh on Linux).
+# Unit tests for Chat Computer Setup's plain functions. Runs on any PowerShell (Windows 5.1, or pwsh on Linux).
 #   pwsh -NoProfile -File windows/tests/Run-Tests.ps1 [-OutDir DIR]
 # With -OutDir, also writes sample generated files there for the Python tests to validate.
 param([string]$OutDir)
@@ -83,7 +83,7 @@ Assert-Equal (86 * $GiB) $ext[0].Size 'free space: its size'
 $place = Get-InstallerPlacement -Extent $ext[0]
 Assert-Equal (277 * $MiB + 944 * $GiB) $place.Offset 'installer: at the end of the free space'
 Assert-Equal (6 * $GiB) $place.Size 'installer: 6 GB'
-Assert-Equal (80 * $GiB) $place.ClaudeOSBytes 'installer: ClaudeOS gets the rest, right before it'
+Assert-Equal (80 * $GiB) $place.ChatComputerBytes 'installer: Chat Computer gets the rest, right before it'
 # Partitions that don't start or end on a whole MiB: the free space is rounded inward.
 $ext = Get-FreeExtents -Partitions @([pscustomobject]@{ Offset = 1 * $MiB; Size = 100 * $MiB + 512 }) -DiskSize (10 * $GiB + 4096)
 Assert-Equal (102 * $MiB) $ext[0].Offset 'free space starts on a whole MiB'
@@ -170,12 +170,12 @@ Assert-Equal 0 $Script:Pasted.Count 'code: every answer used'
 
 # The sign-in window's .cmd: Windows Terminal when it's there, the person's home folder, a throwaway
 # settings folder, "claude auth login"; ASCII with Windows line endings.
-$cmd = New-SignInWindowScript -ClaudeExe '%LOCALAPPDATA%\ClaudeOS\setup\claude\claude.exe' -ConfigDir '%TEMP%\claudeos-signin-1\config'
+$cmd = New-SignInWindowScript -ClaudeExe '%LOCALAPPDATA%\ChatComputer\setup\claude\claude.exe' -ConfigDir '%TEMP%\chatcomputer-signin-1\config'
 Assert-True ($cmd.Contains('start "" wt.exe -d "%~dp0." cmd /c signin.cmd here')) 'window: reopens in Windows Terminal'
 Assert-True ($cmd.Contains("cd /d `"%USERPROFILE%`"`r`n")) 'window: runs from the home folder'
-Assert-True ($cmd.Contains('set "CLAUDE_CONFIG_DIR=%TEMP%\claudeos-signin-1\config"')) 'window: throwaway settings folder'
-Assert-True ($cmd.Contains('"%LOCALAPPDATA%\ClaudeOS\setup\claude\claude.exe" auth login --claudeai')) 'window: claude auth login'
-Assert-True ($cmd.Contains('if exist "%TEMP%\claudeos-signin-1\config\.credentials.json" (')) 'window: says whether it worked'
+Assert-True ($cmd.Contains('set "CLAUDE_CONFIG_DIR=%TEMP%\chatcomputer-signin-1\config"')) 'window: throwaway settings folder'
+Assert-True ($cmd.Contains('"%LOCALAPPDATA%\ChatComputer\setup\claude\claude.exe" auth login --claudeai')) 'window: claude auth login'
+Assert-True ($cmd.Contains('if exist "%TEMP%\chatcomputer-signin-1\config\.credentials.json" (')) 'window: says whether it worked'
 Assert-True (-not ($cmd -replace "`r`n", '').Contains("`n") -and $cmd -notmatch '[^\x00-\x7F]') 'window: ASCII, Windows line endings'
 # Paths in it go through the variables, so a user folder with other letters works.
 $saved = @{}
@@ -183,8 +183,8 @@ foreach ($v in 'TEMP', 'LOCALAPPDATA', 'USERPROFILE') { $saved[$v] = [Environmen
 [Environment]::SetEnvironmentVariable('TEMP', 'C:\Users\Ren Shu\AppData\Local\Temp')
 [Environment]::SetEnvironmentVariable('LOCALAPPDATA', 'C:\Users\Ren Shu\AppData\Local')
 [Environment]::SetEnvironmentVariable('USERPROFILE', 'C:\Users\Ren Shu')
-Assert-Equal '%TEMP%\claudeos-signin-1\config' (ConvertTo-CmdPath 'C:\Users\Ren Shu\AppData\Local\Temp\claudeos-signin-1\config') 'cmd path: temp'
-Assert-Equal '%LOCALAPPDATA%\ClaudeOS\setup\claude\claude.exe' (ConvertTo-CmdPath 'c:\users\ren shu\appdata\local\ClaudeOS\setup\claude\claude.exe') 'cmd path: local app data, any case'
+Assert-Equal '%TEMP%\chatcomputer-signin-1\config' (ConvertTo-CmdPath 'C:\Users\Ren Shu\AppData\Local\Temp\chatcomputer-signin-1\config') 'cmd path: temp'
+Assert-Equal '%LOCALAPPDATA%\ChatComputer\setup\claude\claude.exe' (ConvertTo-CmdPath 'c:\users\ren shu\appdata\local\ChatComputer\setup\claude\claude.exe') 'cmd path: local app data, any case'
 Assert-Equal 'D:\Tools\claude.exe' (ConvertTo-CmdPath 'D:\Tools\claude.exe') 'cmd path: elsewhere unchanged'
 Assert-Equal '%USERPROFILE%\TempX\a' (ConvertTo-CmdPath 'C:\Users\Ren Shu\TempX\a') 'cmd path: only whole folder names'
 foreach ($v in @($saved.Keys)) { [Environment]::SetEnvironmentVariable($v, $saved[$v]) }
@@ -232,7 +232,7 @@ $env:TEMP = $savedTemp
 
 # The Claude program comes out of the checked download into a folder of that download's own: an earlier setup's
 # program (another version) is neither run nor kept.
-$cp = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-cp-' + [guid]::NewGuid().ToString('N'))
+$cp = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-cp-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $cp 'claude') -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $cp 'claude/claude.exe'), 'an older version')
 Add-Type -AssemblyName System.IO.Compression
@@ -257,7 +257,7 @@ Remove-Folder $cp
 
 # ------------------------------------------------------------------ folders, and short (8.3) folder names
 # Remove-Folder deletes a folder with everything in it, quietly; a missing folder is fine.
-$rf = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-rf-' + [guid]::NewGuid().ToString('N'))
+$rf = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-rf-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $rf 'a/b') -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $rf 'a/b/x.json'), '{}')
 $out = @(Remove-Folder $rf)
@@ -265,11 +265,11 @@ Assert-True (-not (Test-Path -LiteralPath $rf) -and $out.Count -eq 0) 'remove fo
 Remove-Folder $rf
 Assert-True (-not (Test-Path -LiteralPath $rf)) 'remove folder: a missing folder is fine'
 # Sign-in folders an earlier, stopped run left behind are deleted; other folders stay.
-$tr = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-tr-' + [guid]::NewGuid().ToString('N'))
-foreach ($d in 'claudeos-signin-1/config', 'claudeos-signin-2', 'keep-me') { New-Item -ItemType Directory -Path (Join-Path $tr $d) -Force | Out-Null }
-[IO.File]::WriteAllText((Join-Path $tr 'claudeos-signin-1/config/.credentials.json'), '{}')
+$tr = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-tr-' + [guid]::NewGuid().ToString('N'))
+foreach ($d in 'chatcomputer-signin-1/config', 'chatcomputer-signin-2', 'keep-me') { New-Item -ItemType Directory -Path (Join-Path $tr $d) -Force | Out-Null }
+[IO.File]::WriteAllText((Join-Path $tr 'chatcomputer-signin-1/config/.credentials.json'), '{}')
 Remove-OldSignInFolders -Root $tr
-Assert-True (-not (Test-Path -LiteralPath (Join-Path $tr 'claudeos-signin-1')) -and -not (Test-Path -LiteralPath (Join-Path $tr 'claudeos-signin-2')) -and
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $tr 'chatcomputer-signin-1')) -and -not (Test-Path -LiteralPath (Join-Path $tr 'chatcomputer-signin-2')) -and
              (Test-Path -LiteralPath (Join-Path $tr 'keep-me'))) 'old sign-in folders: deleted, others kept'
 Remove-Folder $tr
 Assert-Equal 'C:\Users\Ren Shu\x' (Get-LongPath 'C:\Users\Ren Shu\x') 'long path: no short names, unchanged'
@@ -278,7 +278,7 @@ if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
     # The PC that needed this: user folder "Ren Shu", so %TEMP% is C:\Users\RENSHU~1\AppData\Local\Temp, and setup
     # runs in a folder on C:. A folder with a space gets a short name like that (where the drive makes them).
     $base = Get-LongPath ([Environment]::GetFolderPath('LocalApplicationData'))    # on C:, like the user folder
-    $long = Join-Path $base ('ClaudeOS short ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $long = Join-Path $base ('Chat Computer short ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Path $long -Force | Out-Null
     $short = $null
     try { $short = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($long).ShortPath } catch { $short = $null }
@@ -398,7 +398,7 @@ $bad['ubuntu-24.04.5-live-server-amd64.iso'] = ('0' * 64)
 Assert-Throws { Select-ServerIso $bad } 'changed fingerprint is refused'
 Assert-Equal 6 (Get-PointRelease 'ubuntu-24.04.6-live-server-amd64.iso') 'future point release recognised'
 Assert-Equal -1 (Get-PointRelease 'ubuntu-24.04.5-desktop-amd64.iso') 'desktop image ignored'
-# Up to 24.04.3 the installer made the account only at the first start, too late for ClaudeOS's last install
+# Up to 24.04.3 the installer made the account only at the first start, too late for Chat Computer's last install
 # step: such an installer is refused, from the download site and with -IsoPath.
 $old = @{ 'ubuntu-24.04.3-live-server-amd64.iso' = $sums['ubuntu-24.04.3-live-server-amd64.iso'] }
 Assert-Throws { Select-ServerIso $old } 'an installer older than 24.04.4 is refused'
@@ -416,18 +416,18 @@ $grubOut = Update-GrubConfig -Text $grubIn -InstallId '0123456789abcdef01234567'
 Assert-True ($grubOut -match '(?m)^set timeout=5$') 'timeout 5'
 Assert-Equal 2 ([regex]::Matches($grubOut, ' autoinstall ')).Count 'two install entries'
 $installEntry = [regex]::Match($grubOut, '(?s)menuentry "(Install[^"]+)" \{(.*?)\n\}')
-Assert-Equal 'Install ClaudeOS' $installEntry.Groups[1].Value 'first install entry name'
+Assert-Equal 'Install Chat Computer' $installEntry.Groups[1].Value 'first install entry name'
 Assert-True ($installEntry.Groups[2].Value -match 'hwe-vmlinuz autoinstall subiquity-storage-version=2\s+---') 'first install entry: newer kernel, autoinstall and storage v2 before ---'
-Assert-True ($grubOut.Contains('menuentry "Install ClaudeOS (older kernel)"')) 'second entry'
+Assert-True ($grubOut.Contains('menuentry "Install Chat Computer (older kernel)"')) 'second entry'
 Assert-True ($grubOut.Contains("fwsetup")) 'firmware entry kept'
 Assert-True (-not $grubOut.Contains('Try or Install Ubuntu Server')) 'old entry replaced'
-# If the installer starts again after installing, it starts the installed ClaudeOS instead of installing again.
-Assert-True ($grubOut.Contains('if search --no-floppy --file --set=claudeos_esp /EFI/claudeos/installed-0123456789abcdef01234567; then')) 'checks for its own install'
-$startAt = $grubOut.IndexOf('menuentry "Start ClaudeOS')
-Assert-True ($startAt -ge 0 -and $startAt -lt $grubOut.IndexOf('menuentry "Install ClaudeOS"')) 'start entry comes first'
+# If the installer starts again after installing, it starts the installed Chat Computer instead of installing again.
+Assert-True ($grubOut.Contains('if search --no-floppy --file --set=chatcomputer_esp /EFI/chatcomputer/installed-0123456789abcdef01234567; then')) 'checks for its own install'
+$startAt = $grubOut.IndexOf('menuentry "Start Chat Computer')
+Assert-True ($startAt -ge 0 -and $startAt -lt $grubOut.IndexOf('menuentry "Install Chat Computer"')) 'start entry comes first'
 Assert-True ($grubOut.Contains("`tconfigfile /EFI/ubuntu/grub.cfg`n}")) 'reads the installed boot menu'
 Assert-True (-not $grubOut.Contains('chainloader /EFI/ubuntu')) 'no chainloading (fails under Secure Boot)'
-Assert-True ($grubOut -match '(?s)set default=claudeos-start\nelse\nmenuentry "Install ClaudeOS" \{.*\n\}\nfi\n') 'install entries only when not installed'
+Assert-True ($grubOut -match '(?s)set default=chatcomputer-start\nelse\nmenuentry "Install Chat Computer" \{.*\n\}\nfi\n') 'install entries only when not installed'
 Assert-Throws { Update-GrubConfig -Text 'set timeout=30' -InstallId '0123456789abcdef' } 'unexpected menu refused'
 Assert-Throws { Update-GrubConfig -Text $grubIn -InstallId 'x; reboot' } 'bad install id refused'
 
@@ -464,7 +464,7 @@ description             UEFI: PXE IPv4 Intel(R) Ethernet
 $entries = ConvertFrom-BcdFirmware $bcdEnglish
 Assert-Equal 4 $entries.Count 'bcdedit: four blocks'
 $ub = @($entries | Where-Object { $_.Path -match '(?i)^\\EFI\\ubuntu\\' })
-Assert-Equal 1 $ub.Count 'bcdedit: one ClaudeOS entry'
+Assert-Equal 1 $ub.Count 'bcdedit: one Chat Computer entry'
 Assert-Equal '{9f62d3e2-5c1a-11ef-a1b2-806e6f6e6963}' $ub[0].Id 'bcdedit: its identifier'
 Assert-Equal '\EFI\Microsoft\Boot\bootmgfw.efi' ($entries | Where-Object { $_.Id -eq '{bootmgr}' }).Path 'bcdedit: Windows Boot Manager path'
 # German Windows: the labels are translated, the values are not.
@@ -474,7 +474,7 @@ $deUb = @($de | Where-Object { $_.Path -match '(?i)^\\EFI\\ubuntu\\' })
 Assert-Equal '{9f62d3e2-5c1a-11ef-a1b2-806e6f6e6963}' $deUb[0].Id 'bcdedit: German output'
 Assert-Equal 0 (ConvertFrom-BcdFirmware '').Count 'bcdedit: empty output'
 
-$markerDir = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-marker-' + [guid]::NewGuid())
+$markerDir = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-marker-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $markerDir | Out-Null
 [IO.File]::WriteAllText((Join-Path $markerDir 'new'), "id=0123456789abcdef01234567`nroot=3F2A9C1E-5B7D-4E8F-9A0B-1C2D3E4F5A6B`n")
 [IO.File]::WriteAllText((Join-Path $markerDir 'old'), "0123456789abcdef01234567`n")
@@ -536,8 +536,8 @@ $Script:Bcd = $bcdEnglish
 $Script:BcdCopyText = 'The entry was successfully copied to ' + $Script:BcdNewId + '.'
 $id = New-SetupBootEntry
 Assert-Equal $Script:BcdNewId $id 'setup entry: the new one'
-Assert-Equal '/copy {bootmgr} /d ClaudeOS setup' $Script:BcdCalls[0] 'setup entry: a copy of Windows Boot Manager''s'
-Assert-Equal ('/set ' + $Script:BcdNewId + ' path \EFI\claudeos-setup\shimx64.efi') $Script:BcdCalls[1] 'setup entry: starts the installer''s boot loader'
+Assert-Equal '/copy {bootmgr} /d Chat Computer setup' $Script:BcdCalls[0] 'setup entry: a copy of Windows Boot Manager''s'
+Assert-Equal ('/set ' + $Script:BcdNewId + ' path \EFI\chatcomputer-setup\shimx64.efi') $Script:BcdCalls[1] 'setup entry: starts the installer''s boot loader'
 Assert-Equal ('/set {fwbootmgr} displayorder ' + $Script:BcdNewId + ' /addlast') $Script:BcdCalls[2] 'setup entry: last in the menu'
 # In another language, and with a message that names no entry: found by comparing the menu before and after.
 $Script:Bcd = $bcdGerman
@@ -556,16 +556,16 @@ $Script:BcdCalls.Clear()
 Assert-Throws { New-SetupBootEntry } 'setup entry: a PC that won''t take one is an error'
 Assert-Equal 1 $Script:BcdCalls.Count 'setup entry: nothing else is tried'
 $Script:BcdFail = ''
-# Removing: every entry that starts \EFI\claudeos-setup\, and nothing when there is none.
+# Removing: every entry that starts \EFI\chatcomputer-setup\, and nothing when there is none.
 $Script:Bcd = $bcdEnglish
 $Script:BcdCalls.Clear()
 Remove-SetupBootEntries
 Assert-Equal 0 $Script:BcdCalls.Count 'no setup entry: nothing deleted'
-$Script:Bcd = $bcdEnglish + (New-BcdBlock '{aaaaaaaa-0000-4000-8000-000000000001}' '\EFI\claudeos-setup\shimx64.efi') +
-    (New-BcdBlock '{aaaaaaaa-0000-4000-8000-000000000002}' '\EFI\CLAUDEOS-SETUP\shimx64.efi')
+$Script:Bcd = $bcdEnglish + (New-BcdBlock '{aaaaaaaa-0000-4000-8000-000000000001}' '\EFI\chatcomputer-setup\shimx64.efi') +
+    (New-BcdBlock '{aaaaaaaa-0000-4000-8000-000000000002}' '\EFI\CHATCOMPUTER-SETUP\shimx64.efi')
 Remove-SetupBootEntries
 Assert-Equal '/delete {aaaaaaaa-0000-4000-8000-000000000001}|/delete {aaaaaaaa-0000-4000-8000-000000000002}' ($Script:BcdCalls -join '|') 'two setup entries: both deleted, one at a time'
-Assert-Equal 1 (Get-ClaudeOSBootEntries).Count 'ClaudeOS''s own entry is not a setup entry'
+Assert-Equal 1 (Get-ChatComputerBootEntries).Count 'Chat Computer''s own entry is not a setup entry'
 Remove-Item Function:\bcdedit.exe
 
 # ------------------------------------------------------------------ the installer partition
@@ -595,7 +595,7 @@ function Remove-Partition { param([int]$DiskNumber, [int]$PartitionNumber) [void
 $inst = New-InstallerPartition -DiskNumber 0 -Offset (966933 * $MiB) -Size (6 * $GiB)
 Assert-Equal 'T:\' $inst.Root 'installer partition: opened at a drive letter'
 Assert-Equal 5 $inst.PartitionNumber 'installer partition: its number'
-Assert-True ($Script:PartCalls -contains 'Format-Volume FAT32 CLAUDEOS') 'installer partition: FAT32, labelled CLAUDEOS'
+Assert-True ($Script:PartCalls -contains 'Format-Volume FAT32 CHATCOMP') 'installer partition: FAT32, labelled CHATCOMP'
 Assert-True (@($Script:PartCalls | Where-Object { $_ -like 'Set-Partition*NoDefaultDriveLetter*' }).Count -eq 1) 'installer partition: kept out of File Explorer'
 $Script:PartCalls.Clear()
 $Script:FormatFails = $true
@@ -616,23 +616,23 @@ foreach ($f in @('New-Partition', 'Set-Partition', 'Format-Volume', 'Get-FreeDri
 . (Join-Path $Win 'lib/Startup.ps1')    # Get-FreeDriveLetter again
 
 # Its mark, and the boot loader it puts on the EFI partition.
-$tmpInst = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-installer-' + [guid]::NewGuid().ToString('N'))
+$tmpInst = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-installer-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $tmpInst 'inst/EFI/boot'), (Join-Path $tmpInst 'esp/EFI/Microsoft') -Force | Out-Null
 foreach ($f in @('bootx64.efi', 'grubx64.efi', 'mmx64.efi')) { [IO.File]::WriteAllText((Join-Path $tmpInst ('inst/EFI/boot/' + $f)), $f) }
 Write-InstallerMark -Root (Join-Path $tmpInst 'inst') -InstallId '0123456789abcdef01234567'
-Assert-Equal "id=0123456789abcdef01234567`n" ([IO.File]::ReadAllText((Join-Path $tmpInst 'inst/claudeos/installer-0123456789abcdef01234567'))) 'installer mark'
+Assert-Equal "id=0123456789abcdef01234567`n" ([IO.File]::ReadAllText((Join-Path $tmpInst 'inst/chatcomputer/installer-0123456789abcdef01234567'))) 'installer mark'
 Assert-Throws { Write-InstallerMark -Root (Join-Path $tmpInst 'inst') -InstallId '../../x' } 'installer mark: bad id refused'
 Install-SetupLoader -InstallerRoot (Join-Path $tmpInst 'inst') -EspRoot (Join-Path $tmpInst 'esp')
-Assert-Equal 'bootx64.efi' ([IO.File]::ReadAllText((Join-Path $tmpInst 'esp/EFI/claudeos-setup/shimx64.efi'))) 'boot loader: shim, under the name its GRUB expects'
-Assert-Equal 'grubx64.efi' ([IO.File]::ReadAllText((Join-Path $tmpInst 'esp/EFI/claudeos-setup/grubx64.efi'))) 'boot loader: GRUB next to it'
-Assert-True (Test-Path -LiteralPath (Join-Path $tmpInst 'esp/EFI/claudeos-setup/mmx64.efi')) 'boot loader: MokManager too'
+Assert-Equal 'bootx64.efi' ([IO.File]::ReadAllText((Join-Path $tmpInst 'esp/EFI/chatcomputer-setup/shimx64.efi'))) 'boot loader: shim, under the name its GRUB expects'
+Assert-Equal 'grubx64.efi' ([IO.File]::ReadAllText((Join-Path $tmpInst 'esp/EFI/chatcomputer-setup/grubx64.efi'))) 'boot loader: GRUB next to it'
+Assert-True (Test-Path -LiteralPath (Join-Path $tmpInst 'esp/EFI/chatcomputer-setup/mmx64.efi')) 'boot loader: MokManager too'
 Remove-Item -LiteralPath (Join-Path $tmpInst 'inst/EFI/boot/grubx64.efi')
 Assert-Throws { Install-SetupLoader -InstallerRoot (Join-Path $tmpInst 'inst') -EspRoot (Join-Path $tmpInst 'esp') } 'boot loader: missing files are an error'
 Remove-Item -LiteralPath $tmpInst -Recurse -Force
 
-# ------------------------------------------------------------------ ClaudeOS's own BitLocker key
-$tmpState = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-state-' + [guid]::NewGuid().ToString('N'))
-$env:CLAUDEOS_STATE_DIR = $tmpState
+# ------------------------------------------------------------------ Chat Computer's own BitLocker key
+$tmpState = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-state-' + [guid]::NewGuid().ToString('N'))
+$env:CHATCOMPUTER_STATE_DIR = $tmpState
 $Script:BlCalls = New-Object System.Collections.ArrayList
 $Script:BlType = 3
 $Script:BlPassword = '123456-234567-345678-456789-567890-678901-789012-890123'
@@ -647,34 +647,34 @@ function Invoke-CimMethod {
         'DeleteKeyProtector' { return [pscustomobject]@{ ReturnValue = 0 } }
     }
 }
-$k = New-ClaudeOSBitLockerKey
+$k = New-ChatComputerBitLockerKey
 Assert-Equal '{2b000000-0000-4000-8000-0000000000c1}' $k.Id 'BitLocker key: its id'
 Assert-Equal $Script:BlPassword $k.Password 'BitLocker key: its recovery password'
 Assert-Equal "{2b000000-0000-4000-8000-0000000000c1}`n" ([IO.File]::ReadAllText((Join-Path $tmpState 'bitlocker-key-id'))) 'BitLocker key: id recorded'
 # Only ever deletes a recovery password: if the recorded id names another kind of key, nothing is deleted.
 $Script:BlType = 1
 [void]$Script:BlCalls.Clear()
-Assert-Throws { Remove-ClaudeOSBitLockerKey } 'BitLocker key: refuses to delete a key that is not a recovery password'
+Assert-Throws { Remove-ChatComputerBitLockerKey } 'BitLocker key: refuses to delete a key that is not a recovery password'
 Assert-True ($Script:BlCalls -notcontains 'DeleteKeyProtector') 'BitLocker key: nothing deleted then'
 $Script:BlType = 3
-Assert-True (Remove-ClaudeOSBitLockerKey) 'BitLocker key: deleted'
+Assert-True (Remove-ChatComputerBitLockerKey) 'BitLocker key: deleted'
 Assert-True (-not (Test-Path -LiteralPath (Join-Path $tmpState 'bitlocker-key-id'))) 'BitLocker key: record gone'
-Assert-True (-not (Remove-ClaudeOSBitLockerKey)) 'BitLocker key: nothing to delete without a record'
+Assert-True (-not (Remove-ChatComputerBitLockerKey)) 'BitLocker key: nothing to delete without a record'
 # A key BitLocker shows in an unexpected form is not kept: it's deleted again and setup says so.
 $Script:BlPassword = 'not-a-key'
 [void]$Script:BlCalls.Clear()
-Assert-Throws { New-ClaudeOSBitLockerKey } 'BitLocker key: an unexpected form is an error'
+Assert-Throws { New-ChatComputerBitLockerKey } 'BitLocker key: an unexpected form is an error'
 Assert-True ($Script:BlCalls -contains 'DeleteKeyProtector') 'BitLocker key: the half-made key is deleted'
 Remove-Item -LiteralPath $tmpState -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item Function:\Get-CimInstance, Function:\Invoke-CimMethod
-$env:CLAUDEOS_STATE_DIR = $null
+$env:CHATCOMPUTER_STATE_DIR = $null
 
-# ------------------------------------------------------------------ ClaudeOS's own system
+# ------------------------------------------------------------------ Chat Computer's own system
 $repo = Split-Path -Parent $Win
-$ownRelease = [IO.Path]::Combine($repo, 'os', 'release', 'claudeos.efi')
+$ownRelease = [IO.Path]::Combine($repo, 'os', 'release', 'chatcomputer.efi')
 Assert-Equal $ownRelease (Get-OwnRelease -RepoRoot $repo) 'own system: the release file, with the right checksum'
 Assert-True (-not (Test-PeSigned $ownRelease)) 'own system: the release file is not signed yet'
-$ownTmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), 'claudeos-own-test-' + [guid]::NewGuid().ToString('N'))
+$ownTmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), 'chatcomputer-own-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $ownTmp | Out-Null
 try {
     # A copy whose signature directory points at bytes at its end, as signing leaves it.
@@ -696,8 +696,8 @@ try {
     $fakeRepo = Join-Path $ownTmp 'repo'
     $fakeRelease = [IO.Path]::Combine($fakeRepo, 'os', 'release')
     New-Item -ItemType Directory -Path $fakeRelease -Force | Out-Null
-    Copy-Item -LiteralPath $ownRelease -Destination (Join-Path $fakeRelease 'claudeos.efi')
-    [IO.File]::WriteAllText((Join-Path $fakeRelease 'claudeos.efi.sha256'), ('0' * 64) + '  claudeos.efi')
+    Copy-Item -LiteralPath $ownRelease -Destination (Join-Path $fakeRelease 'chatcomputer.efi')
+    [IO.File]::WriteAllText((Join-Path $fakeRelease 'chatcomputer.efi.sha256'), ('0' * 64) + '  chatcomputer.efi')
     Assert-Throws { Get-OwnRelease -RepoRoot $fakeRepo } 'own system: a file that does not match its checksum is refused'
     Assert-Throws { Get-OwnRelease -RepoRoot (Join-Path $ownTmp 'nothing') } 'own system: a missing file is refused'
 } finally {
@@ -724,22 +724,22 @@ function bcdedit.exe {
 }
 $Script:Bcd = $bcdEnglish
 Assert-Equal $Script:BcdNewId (Get-OwnBootEntry) 'own entry: made when it is not there'
-Assert-Equal '/copy {bootmgr} /d ClaudeOS (own system)' $Script:BcdCalls[0] 'own entry: a copy of Windows Boot Manager''s'
-Assert-Equal ('/set ' + $Script:BcdNewId + ' path \EFI\claudeos-own\claudeos.efi') $Script:BcdCalls[1] 'own entry: starts ClaudeOS''s own system'
+Assert-Equal '/copy {bootmgr} /d Chat Computer (own system)' $Script:BcdCalls[0] 'own entry: a copy of Windows Boot Manager''s'
+Assert-Equal ('/set ' + $Script:BcdNewId + ' path \EFI\chatcomputer-own\chatcomputer.efi') $Script:BcdCalls[1] 'own entry: starts Chat Computer''s own system'
 Assert-Equal ('/set {fwbootmgr} displayorder ' + $Script:BcdNewId + ' /addlast') $Script:BcdCalls[2] 'own entry: last in the menu'
-$Script:Bcd = $bcdEnglish + (New-BcdBlock '{bbbbbbbb-0000-4000-8000-000000000001}' '\EFI\ClaudeOS-Own\claudeos.efi')
+$Script:Bcd = $bcdEnglish + (New-BcdBlock '{bbbbbbbb-0000-4000-8000-000000000001}' '\EFI\ChatComputer-Own\chatcomputer.efi')
 $Script:BcdCalls.Clear()
 Assert-Equal '{bbbbbbbb-0000-4000-8000-000000000001}' (Get-OwnBootEntry) 'own entry: the one already there'
 Assert-Equal 0 $Script:BcdCalls.Count 'own entry: nothing added when it is there'
 Assert-Equal 0 (Get-SetupBootEntries).Count 'own entry: not the installer''s entry'
-Assert-Equal 1 (Get-ClaudeOSBootEntries).Count 'own entry: not Linux ClaudeOS''s entry'
+Assert-Equal 1 (Get-ChatComputerBootEntries).Count 'own entry: not Linux Chat Computer''s entry'
 Remove-Item Function:\bcdedit.exe
 
 # ------------------------------------------------------------------ files from a disc image
 # On a real PC, grub.cfg copied from the mounted Ubuntu image kept the image's read-only mark, and setup
 # couldn't patch it ("Access to the path 'S:\boot\grub\grub.cfg' is denied"). tests/win_ci/iso.ps1 checks
 # the real thing on Windows; these check the parts.
-$roDir = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-ro-' + [guid]::NewGuid().ToString('N'))
+$roDir = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-ro-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $roDir -Force | Out-Null
 try {
     $roFile = Join-Path $roDir 'grub.cfg'
@@ -770,18 +770,18 @@ Assert-True ($plain -match 'not-there') ('error text names the file: ' + $plain)
 try { throw 'Setup stopped: something.' } catch { $own = Get-ErrorText $_ }
 Assert-Equal 'Setup stopped: something.' $own 'error text: a thrown message as it is'
 
-# ------------------------------------------------------------------ where ClaudeOS updates itself from
-Assert-Equal 'Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS' (ConvertTo-UpdateSource -FullPath 'C:\Users\Ren Shu\Downloads\ClaudeOS\ClaudeOS' -SystemDrive 'C:') 'update folder below C:'
-Assert-Equal 'Users/x/ClaudeOS' (ConvertTo-UpdateSource -FullPath 'c:\Users\x\ClaudeOS\' -SystemDrive 'C:') 'update folder: drive letter case, last backslash'
-Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'D:\ClaudeOS' -SystemDrive 'C:') 'update folder on another drive: none'
-Assert-Equal '' (ConvertTo-UpdateSource -FullPath '\\server\share\ClaudeOS' -SystemDrive 'C:') 'update folder on a network share: none'
+# ------------------------------------------------------------------ where Chat Computer updates itself from
+Assert-Equal 'Users/Ren Shu/Downloads/ChatComputer/ChatComputer' (ConvertTo-UpdateSource -FullPath 'C:\Users\Ren Shu\Downloads\ChatComputer\ChatComputer' -SystemDrive 'C:') 'update folder below C:'
+Assert-Equal 'Users/x/ChatComputer' (ConvertTo-UpdateSource -FullPath 'c:\Users\x\ChatComputer\' -SystemDrive 'C:') 'update folder: drive letter case, last backslash'
+Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'D:\ChatComputer' -SystemDrive 'C:') 'update folder on another drive: none'
+Assert-Equal '' (ConvertTo-UpdateSource -FullPath '\\server\share\ChatComputer' -SystemDrive 'C:') 'update folder on a network share: none'
 Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'C:\' -SystemDrive 'C:') 'the top of the drive: none'
 Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'C:\Users\..\Windows' -SystemDrive 'C:') 'update folder with ..: none'
 Assert-Equal '' (ConvertTo-UpdateSource -FullPath ('C:\Users\a' + [char]10 + 'b') -SystemDrive 'C:') 'update folder with a line break: none'
 Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'C:\Users\x' -SystemDrive '') 'not Windows: none'
 if ($env:SystemDrive) {
     # On Windows: the names as the drive stores them, whatever case the path was typed in.
-    $caseRoot = Join-Path ([IO.Path]::GetTempPath()) ('ClaudeOS-Case-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $caseRoot = Join-Path ([IO.Path]::GetTempPath()) ('ChatComputer-Case-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $made = New-Item -ItemType Directory -Path (Join-Path $caseRoot 'MiXeD Folder') -Force
     try {
         # (The temporary folder's path can have short 8.3 names in it, which this spells out in full.)

@@ -1,9 +1,9 @@
-# ClaudeOS's fonts
+# Chat Computer's fonts
 
-ClaudeOS shows everything in Atkinson Hyperlegible Next, and code in Atkinson Hyperlegible Mono. The
+Chat Computer shows everything in Atkinson Hyperlegible Next, and code in Atkinson Hyperlegible Mono. The
 Braille Institute made them so that letters that are easy to confuse look different from each other.
 `theme.css` loads them, and the screen gives them to the captions it draws over websites
-(`claudeos/ui/gtk_app.py`). Characters these fonts don't have, such as Chinese, Japanese, Korean, Greek,
+(`chatcomputer/ui/gtk_app.py`). Characters these fonts don't have, such as Chinese, Japanese, Korean, Greek,
 Cyrillic and emoji, come from the system's fonts.
 
 | File | Font | Source in google/fonts |

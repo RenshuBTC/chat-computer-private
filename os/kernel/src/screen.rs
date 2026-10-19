@@ -1,4 +1,4 @@
-//! The screen: the framebuffer the firmware set up, drawn on directly. ClaudeOS draws black, white,
+//! The screen: the framebuffer the firmware set up, drawn on directly. Chat Computer draws black, white,
 //! and the greys between them that smooth the edges of letters. Nothing else.
 
 use crate::paging::{self, Cache};

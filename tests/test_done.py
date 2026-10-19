@@ -1,4 +1,4 @@
-"""What's done (claudeos/done.py): what ClaudeOS did for the person, in plain words, each linked to the message
+"""What's done (chatcomputer/done.py): what Chat Computer did for the person, in plain words, each linked to the message
 that asked for it; shown in a panel at the right of the conversation and read by recent_actions."""
 import asyncio
 import json
@@ -8,17 +8,17 @@ from types import SimpleNamespace
 from claude_agent_sdk import (AssistantMessage, ServerToolResultBlock, ServerToolUseBlock, ToolResultBlock, ToolUseBlock,
                               UserMessage)
 
-from claudeos import tools as T
-from claudeos.brain.agent import Brain, BrainEvents
-from claudeos.config import Paths, Settings, model_label
-from claudeos.controller import Controller
-from claudeos.done import History, describe
-from claudeos.journal import Journal
-from claudeos.memory import Memory
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
+from chatcomputer import tools as T
+from chatcomputer.brain.agent import Brain, BrainEvents
+from chatcomputer.config import Paths, Settings, model_label
+from chatcomputer.controller import Controller
+from chatcomputer.done import History, describe
+from chatcomputer.journal import Journal
+from chatcomputer.memory import Memory
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
 
-OURS = "mcp__claudeos__"
+OURS = "mcp__chatcomputer__"
 
 
 def test_what_was_done_is_said_in_plain_words():
@@ -53,14 +53,14 @@ def test_what_was_done_is_said_in_plain_words():
 
 
 def test_failures_and_looking_arent_kept():
-    # ClaudeOS's own tools say in words when something didn't work.
+    # Chat Computer's own tools say in words when something didn't work.
     assert describe(OURS + "wifi", {"action": "connect", "network": "Home"}, "Failed: Secrets were required") is None
     assert describe(OURS + "sound", {"action": "output", "value": "TV"}, "I couldn't find that sound output.") is None
     assert describe(OURS + "software", {"action": "install", "packages": ["x"]}, "Install failed: no such package") is None
     assert describe(OURS + "bluetooth", {"action": "airpods"}, "Your AirPods are already connected.") is None
     for name, inp in (("read_screen", {}), ("system_status", {}), ("wifi", {"action": "status"}),
                       ("memory", {"action": "list"}), ("confirm_with_user", {"question": "Go?"}),
-                      ("stop_listening", {}), ("claudeos_settings", {"action": "get"}), ("recent_actions", {})):
+                      ("stop_listening", {}), ("chatcomputer_settings", {"action": "get"}), ("recent_actions", {})):
         assert describe(OURS + name, inp, "fine") is None, name
 
 
@@ -113,7 +113,7 @@ def test_the_brain_reports_tool_calls_when_they_finish():
     tid = brain._cur.tid
     brain._route(AssistantMessage(content=[
         ToolUseBlock(id="t1", name="WebSearch", input={"query": "trains"}),
-        ToolUseBlock(id="t2", name="mcp__claudeos__wifi", input={"action": "connect", "network": "Home"}),
+        ToolUseBlock(id="t2", name="mcp__chatcomputer__wifi", input={"action": "connect", "network": "Home"}),
         ServerToolUseBlock(id="s1", name="web_search", input={"query": "laksa"})], model="m"))
     assert got == []                            # nothing finished yet
     brain._route(UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="results", is_error=False),
@@ -123,14 +123,14 @@ def test_the_brain_reports_tool_calls_when_they_finish():
     brain._route(AssistantMessage(content=[ServerToolResultBlock(tool_use_id="s1", content={"type": "web_search_result"})],
                                   model="m"))
     assert got == [(tid, "WebSearch", {"query": "trains"}, True, "results"),
-                   (tid, "mcp__claudeos__wifi", {"action": "connect", "network": "Home"}, False, "Failed: no"),
+                   (tid, "mcp__chatcomputer__wifi", {"action": "connect", "network": "Home"}, False, "Failed: no"),
                    (tid, "web_search", {"query": "laksa"}, True, "")]
     brain._route(UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="again")], tool_use_result={}))
     assert len(got) == 3                        # each once
 
 
 def _controller(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
     c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), FakePlatform(), screen, voice=False, index=False)
     return c, screen
@@ -192,7 +192,7 @@ def test_the_screen_gets_whats_done_and_can_go_back(tmp_path, monkeypatch):
 
 
 def test_recent_actions_reads_whats_done(tmp_path):
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     h = History(paths)
     h.add("Installed vlc", OURS + "software", {"action": "install", "packages": ["vlc"]},
           prompt=("u1", "install vlc", 1.0))

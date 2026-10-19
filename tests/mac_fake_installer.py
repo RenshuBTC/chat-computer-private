@@ -90,7 +90,7 @@ def menu(actions, default):
     return act
 
 
-p_style("Welcome to the ClaudeOS installer!", color=(1,))
+p_style("Welcome to the Chat Computer installer!", color=(1,))
 enter("Press enter to continue.")
 time.sleep(0.05)
 if "--crash" in ARGS:
@@ -130,7 +130,7 @@ while True:
         resized = True
         continue
     p_style("Choose an OS to install:", color=(1, 36))
-    os_idx = choice("OS", {"1": "ClaudeOS"})
+    os_idx = choice("OS", {"1": "Chat Computer"})
     record(q="os", a=os_idx)
     p_style("Minimum required space for this OS: 14.13 GB", color=(1,))
     if "--small" in ARGS:
@@ -146,7 +146,7 @@ while True:
     record(q="os size", a=size)
     p_style("Enter a name for your OS", color=(1, 36))
     flush()
-    name = input_prompt("OS name (ClaudeOS): ").strip() or "ClaudeOS"
+    name = input_prompt("OS name (Chat Computer): ").strip() or "Chat Computer"
     record(q="name", a=name)
     p_style("Using macOS 14.8.3 for OS firmware", color=(1,))
     if PRETEND:
@@ -157,7 +157,7 @@ while True:
             for part, ptype in (("EFI", "EFI"), ("Boot", "Linux"), ("Root", "Linux")):
                 f.write(f"10-16 21:00 root         INFO     Installing partition {{'name': '{part}', 'type': '{ptype}'}} "
                         f"-> {made[part]}\n")
-    p_style("Installing stub macOS into disk0s3 (ClaudeOS)", color=(1, 35))
+    p_style("Installing stub macOS into disk0s3 (Chat Computer)", color=(1, 35))
     tries = 0
     while True:
         p_style("To continue the installation, you will need to enter your macOS", color=(1,))

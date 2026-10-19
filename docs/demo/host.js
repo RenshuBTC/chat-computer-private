@@ -1,11 +1,12 @@
-/* ClaudeOS in a browser: the demo on ClaudeOS's GitHub page.
+/* Chat Computer in a browser: the demo on Chat Computer's GitHub page.
 
-   The screen here is ClaudeOS's own, the same page and code as on a ClaudeOS computer (chat.html, chat.js,
-   chat.css: copied here by scripts/build_demo.py). This file stands in for the computer behind it. On ClaudeOS,
+   The screen here is Chat Computer's own, the same page and code as on a Chat Computer (chat.html, chat.js,
+   chat.css: copied here by scripts/build_demo.py). This file stands in for the computer behind it. On Chat Computer,
    what you type (or say, or type in the Claude app on your phone) goes to Claude, which opens websites, plays
    music, reads your messages and looks after your files. Here, Claude's answers to a few things are written in
    advance, the messages and files are made up, and everything stays in your browser: nothing typed here is sent
-   anywhere. (The one thing fetched from elsewhere is the map, from OpenStreetMap, when you ask for one.) */
+   anywhere. (Fetched from elsewhere: YouTube's player, playing as the demo opens, and a map from OpenStreetMap when
+   you ask for one.) */
 (function () {
   "use strict";
   var START = Date.now() / 1000;
@@ -27,8 +28,8 @@
     return null;
   }
 
-  // What chat.js says to ClaudeOS goes here (on a ClaudeOS computer, to its Python side).
-  window.webkit = { messageHandlers: { claudeos: { postMessage: function (s) {
+  // What chat.js says to Chat Computer goes here (on a Chat Computer, to its Python side).
+  window.webkit = { messageHandlers: { chatcomputer: { postMessage: function (s) {
     var msg;
     try { msg = JSON.parse(s); } catch (e) { return; }
     setTimeout(function () { handle(msg); }, 0);
@@ -54,7 +55,7 @@
     return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) + ", " + t;
   }
   var THREADS = {
-    m1: { title: "Mum", note: "On ClaudeOS this is WhatsApp's own page, between the sidebars.", lines: [
+    m1: { title: "Mum", note: "On Chat Computer this is WhatsApp's own page, between the sidebars.", lines: [
       ["Mum", START - 90000, "How was the trip?"], ["You", START - 89000, "Amazing! So many photos."],
       ["Mum", START - 240, "Dinner at 7 tonight? Bring the photos from the trip!"]] },
     m2: { title: "Jane Lim", mail: "Jane Lim <jane@example.com>", mails: [
@@ -62,21 +63,20 @@
       ["Re: Lunch on Friday?", START - 3100, "12:30 at the usual place works for me. See you then!\n\nJane", true]] },
     m3: { title: "Alex", lines: [["Alex", START - 7500, "Do you have the slides?"], ["You", START - 7450, "Not yet"],
       ["Alex", START - 7400, "Sent you the slides for Monday."]] },
-    m4: { title: "sam.k", note: "On ClaudeOS this is Instagram's own page.", lines: [["sam.k", START - 11000, "Liked your photo"]] },
+    m4: { title: "sam.k", note: "On Chat Computer this is Instagram's own page.", lines: [["sam.k", START - 11000, "Liked your photo"]] },
     m5: { title: "City Library", mail: "City Library <noreply@library.example>", mails: [
       ["Your books are due soon", START - 90000, "Your books are due back on Thursday:\n\n- The Overstory\n- A Field Guide to Getting Lost\n\nRenew them online or at any branch.", true]] },
-    m6: { title: "Priya", note: "On ClaudeOS this is X's own page.", lines: [["Priya", START - 96000, "Are you coming to the meetup on Saturday?"]] },
-    m7: { title: "Daniel Tan", note: "On ClaudeOS this is LinkedIn's own page.", lines: [["Daniel Tan", START - 260000, "Thanks for connecting!"]] }
+    m6: { title: "Priya", note: "On Chat Computer this is X's own page.", lines: [["Priya", START - 96000, "Are you coming to the meetup on Saturday?"]] },
+    m7: { title: "Daniel Tan", note: "On Chat Computer this is LinkedIn's own page.", lines: [["Daniel Tan", START - 260000, "Thanks for connecting!"]] }
   };
-  var HISTORY = [
-    { role: "user", id: "h1", ts: START - 5410, text: "How do I get to the airport on Sunday with two big suitcases?" },
-    { role: "assistant", id: "ha1", ts: START - 5380, text: "The train means two changes, and one of them has stairs and no lift, so a taxi is easier: about 25 minutes. I put a packing list in your Documents too." }
-  ];
+  // Earlier conversations, put back when something in What's done is tapped (the screen starts empty: the word logo).
   var EARLIER = [
     { role: "user", id: "y1", ts: START - 86400 - 3010, text: "Play some calm piano music" },
     { role: "assistant", id: "ya1", ts: START - 86400 - 3000, text: "Playing a calm piano mix on YouTube." },
     { role: "user", id: "y2", ts: START - 86400 - 2910, text: "A bit quieter please" },
-    { role: "assistant", id: "ya2", ts: START - 86400 - 2900, text: "Volume is 40%." }
+    { role: "assistant", id: "ya2", ts: START - 86400 - 2900, text: "Volume is 40%." },
+    { role: "user", id: "h1", ts: START - 5410, text: "How do I get to the airport on Sunday with two big suitcases?" },
+    { role: "assistant", id: "ha1", ts: START - 5380, text: "The train means two changes, and one of them has stairs and no lift, so a taxi is easier: about 25 minutes. I put a packing list in your Documents too." }
   ];
   var DONE = [
     { id: "d1", ts: START - 86400 - 2995, text: "Opened youtube.com", prompt_id: "y1", prompt_ts: START - 86400 - 3010 },
@@ -94,9 +94,9 @@
   ];
 
   // ------------------------------------------------------------------ the screen's size
-  // On ClaudeOS the text size comes from the screen's real size and how far away you sit (ui/layout.py); here,
+  // On Chat Computer the text size comes from the screen's real size and how far away you sit (ui/layout.py); here,
   // from the window's size. Pinching the conversation (a touchscreen) changes it, as it does there.
-  var size = 20, column = 600, scale = store("claudeos-demo-scale") || 1;
+  var size = 20, column = 600, scale = store("chatcomputer-demo-scale") || 1;
   function layout() {
     var w = window.innerWidth, h = window.innerHeight;
     size = Math.max(15, Math.min(26, Math.min(w * 0.0125, h * 0.022))) * scale;
@@ -107,7 +107,7 @@
   window.addEventListener("resize", layout);
 
   // ------------------------------------------------------------------ what's open between the sidebars
-  // On ClaudeOS a second browser view, laid over the space the conversation page leaves for it ("hole"); here a
+  // On Chat Computer a second browser view, laid over the space the conversation page leaves for it ("hole"); here a
   // frame. F1 makes it fill the window, F1 again puts it back; Escape closes it.
   var view = null, open = false, expanded = false, hole = null, drafting = false;
   function frame() {
@@ -115,7 +115,7 @@
     view = document.createElement("iframe");
     view.id = "demo-view";
     view.title = "What's open";
-    view.setAttribute("allow", "fullscreen; autoplay");
+    view.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
     view.style.cssText = "position:fixed;border:0;background:#fff;display:none;z-index:5";
     // F1 and Escape work while a page of the demo's own has the keys too (a map's page keeps them to itself).
     view.addEventListener("load", function () {
@@ -162,7 +162,7 @@
   }
   document.addEventListener("keydown", keys, true);
   // A touchscreen, as an iPad's: swipe up from the bottom edge to close what's open (Home), down from the top for
-  // Messages. (On ClaudeOS the window does these, and more: three fingers copy and paste, the sides go back.)
+  // Messages. (On Chat Computer the window does these, and more: three fingers copy and paste, the sides go back.)
   var swipe = null;
   document.addEventListener("touchstart", function (e) {
     var t = e.touches[0];
@@ -177,7 +177,7 @@
     swipe = null;
   }, { passive: true, capture: true });
 
-  // Pages shown there: ClaudeOS's look (theme.css, and the pages' own doc.css from ui/render.py).
+  // Pages shown there: Chat Computer's look (theme.css, and the pages' own doc.css from ui/render.py).
   function page(title, body, css, script) {
     return '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + esc(title) + "</title>" +
       '<link rel="stylesheet" href="demo/theme.css"><link rel="stylesheet" href="demo/doc.css"><style>:root{--co-size:' +
@@ -226,11 +226,11 @@
     budget: function () {
       return doc("Budget 2026.xlsx", "| Month | Income | Spent | Saved |\n|---|---|---|---|\n| July | 5,200 | 3,900 | 1,300 |\n" +
         "| August | 5,200 | 4,450 | 750 |\n| September | 5,400 | 3,700 | 1,700 |\n\nSaved so far this year: **11,850**.",
-        "A made-up spreadsheet. On ClaudeOS, files on Windows' drive open too.");
+        "A made-up spreadsheet. On Chat Computer, files on Windows' drive open too.");
     },
     taxes: function () {
       return doc("Taxes 2025.pdf", "## Notice of assessment, 2025\n\nThe pages of a PDF show here as they are.",
-        "A made-up document. On ClaudeOS, a PDF shows as its real pages.");
+        "A made-up document. On Chat Computer, a PDF shows as its real pages.");
     },
     recipes: function () {
       return doc("Recipes.txt", "## Laksa for four\n\n1. Fry the laksa paste in a little oil for two minutes.\n" +
@@ -239,44 +239,52 @@
     },
     resume: function () {
       return doc("Resume.docx", "## Experience\n\n- **Product designer**, 2022 to now\n- **Designer**, 2019 to 2022\n\n" +
-        "## Skills\n\nResearch, prototyping, writing.", "A made-up document. On ClaudeOS, Word files show as written.");
+        "## Skills\n\nResearch, prototyping, writing.", "A made-up document. On Chat Computer, Word files show as written.");
     }
   };
 
-  // ------------------------------------------------------------------ music, made by the browser
-  // On ClaudeOS, "play some piano music" opens YouTube and plays it. Here, the page that opens plays soft chords
-  // made by the browser itself (or, where a browser waits for a tap first, its Play button does).
-  var MUSIC = "var ctx=null,timer=0,btn=document.getElementById('play');" +
-    "function play(){var C=window.AudioContext||window.webkitAudioContext;if(!C)return;ctx=new C();var out=ctx.createGain();" +
-    "out.gain.value=0.18;out.connect(ctx.destination);var chords=[[60,64,67,71],[57,60,64,67],[53,57,60,64],[55,59,62,65]]," +
-    "beat=0.42,t0=ctx.currentTime+0.1,bar=0;function note(m,at,len){var o=ctx.createOscillator(),g=ctx.createGain();" +
-    "o.type='triangle';o.frequency.value=440*Math.pow(2,(m-69)/12);g.gain.setValueAtTime(0,at);" +
-    "g.gain.linearRampToValueAtTime(0.5,at+0.02);g.gain.exponentialRampToValueAtTime(0.001,at+len);o.connect(g);g.connect(out);" +
-    "o.start(at);o.stop(at+len+0.05);}function sched(){var c=chords[bar%4],at=t0+bar*8*beat;" +
-    "[0,1,2,3,2,1,2,3].forEach(function(k,i){note(c[k]+(i?0:-12),at+i*beat,1.6);});bar++;}sched();sched();" +
-    "timer=setInterval(sched,8*beat*1000);btn.textContent='Pause';}" +
-    "function stop(){clearInterval(timer);if(ctx)ctx.close();ctx=null;btn.textContent='Play';}" +
-    "btn.onclick=function(){if(ctx)stop();else play();};play();" +
-    "setTimeout(function(){if(ctx&&ctx.state!=='running')stop();},400);";
+  // ------------------------------------------------------------------ music: YouTube, playing
+  // On Chat Computer, music is YouTube's own page between the sidebars. Here it's YouTube's player in the same place,
+  // playing Louie Zong's "hello world" as soon as the demo opens. Browsers let a page start a video on its own only
+  // without sound, so the sound comes on at the first click, tap or key anywhere here; the player's own controls
+  // pause it.
+  var VIDEO = "Yw6u6YkTgQ4";
+  function youtube() {
+    var origin = /^https?:$/.test(location.protocol) ? "&origin=" + encodeURIComponent(location.origin) : "";
+    show({ src: "https://www.youtube-nocookie.com/embed/" + VIDEO + "?autoplay=1&mute=1&playsinline=1&rel=0&enablejsapi=1" + origin });
+    soundOnFirstTouch();
+  }
+  var sound = false;
+  function soundOnFirstTouch() {
+    if (sound) return;
+    function on() {
+      if (sound) return;
+      sound = true;
+      ["pointerdown", "keydown", "touchstart"].forEach(function (k) { document.removeEventListener(k, on, true); });
+      try {
+        view.contentWindow.postMessage(JSON.stringify({ event: "command", func: "unMute", args: [] }), "*");
+        view.contentWindow.postMessage(JSON.stringify({ event: "command", func: "setVolume", args: [100] }), "*");
+      } catch (e) {}
+    }
+    ["pointerdown", "keydown", "touchstart"].forEach(function (k) { document.addEventListener(k, on, true); });
+  }
 
   // ------------------------------------------------------------------ Claude's answers, written in advance
   var CITIES = { singapore: [103.6, 1.2, 104.1, 1.47], london: [-0.35, 51.38, 0.15, 51.62], "new york": [-74.1, 40.6, -73.8, 40.85],
                  tokyo: [139.55, 35.55, 139.95, 35.8], paris: [2.22, 48.8, 2.47, 48.92], sydney: [151.0, -33.98, 151.35, -33.78] };
-  var TRY = "Try \u201cplay some piano music\u201d, \u201cshow me a map of Tokyo\u201d, \u201cmake me a timer\u201d, " +
-            "\u201cwhat did Jane say?\u201d or \u201copen my packing list\u201d. Type / to search the files.";
+  var TRY = "Try \u201cshow me a map of Tokyo\u201d, \u201cmake me a timer\u201d, \u201cwhat did Jane say?\u201d, " +
+            "\u201copen my packing list\u201d or \u201cplay hello world\u201d. Type / to search the files.";
   var INTENTS = [
-    [/\b(hi|hello|hey|good (morning|afternoon|evening))\b|^help\b|what can you do|how does (this|it) work|what is (this|claudeos)/i, function () {
-      return { text: "Hi! I'm ClaudeOS: Claude, running the whole computer. You talk, type or touch, and I do it: open websites, " +
-        "play music, read your messages, look after your files and settings.\n\nIn this demo my answers are written in advance. " + TRY };
+    [/\bhello,? world\b|\b(music|song|songs|piano|play|playing|spotify|youtube|lofi|jazz|video)\b/i, function () {
+      return { text: "Playing \u201chello world\u201d by Louie Zong.", done: ["Opened youtube.com"], act: youtube };
     }],
-    [/\b(music|song|songs|piano|play|playing|spotify|youtube|lofi|jazz)\b/i, function () {
-      return { text: "Playing some calm piano.", done: ["Played some calm piano"], act: function () {
-        show({ html: page("Now playing", '<article><h1 class="title">Calm piano</h1><p>On ClaudeOS this is YouTube, playing ' +
-          "what you asked for. Here, your browser plays a few soft chords.</p><p><button id=\"play\" class=\"b\">Play</button></p>" +
-          "<p>Escape, or a swipe up from the bottom edge, closes it; F1 makes it fill the screen.</p></article>",
-          ".b{font:inherit;padding:0.4em 1.2em;border:2px solid var(--ink);border-radius:0.6em;background:var(--ground);color:var(--ink);cursor:pointer}",
-          MUSIC) });
-      } };
+    [/\b(close|stop|hide) (it|that|this|the (music|video|page|song))\b|^(close|stop)\b/i, function () {
+      return { text: open ? "Closed it." : "Nothing's open.", act: close };
+    }],
+    [/\b(hi|hello|hey|good (morning|afternoon|evening))\b|^help\b|what can you do|how does (this|it) work|what is (this|chatcomputer)/i, function () {
+      return { text: "Hi! I'm Chat Computer: Claude, running the whole computer. You talk, type or touch, and I do it: open websites, " +
+        "play music, read your messages, look after your files and settings.\n\nIn this demo my answers are written in advance, " +
+        "and what you type stays in your browser. Chat Computer is an independent project, not made by Anthropic. " + TRY };
     }],
     [/\b(map|maps|where is|directions|how far)\b/i, function (t) {
       var name = Object.keys(CITIES).filter(function (c) { return t.toLowerCase().indexOf(c) >= 0; })[0] || "singapore", b = CITIES[name];
@@ -287,7 +295,7 @@
     }],
     [/\b(timer|countdown|stopwatch)\b/i, function (t) {
       var m = /(\d+)\s*(min|minute)/i.exec(t), mins = m ? Math.min(180, +m[1]) : 10;
-      return { text: "A " + mins + "-minute timer, on the screen. I made it just now: on ClaudeOS I can make any little page " +
+      return { text: "A " + mins + "-minute timer, on the screen. I made it just now: on Chat Computer I can make any little page " +
         "or app like this.", done: ["Made a timer"], act: function () {
         show({ html: page("Timer", '<article style="text-align:center"><h1 class="title">Timer</h1><p id="left" style="font-size:4rem;' +
           'font-variant-numeric:tabular-nums;margin:1rem 0">' + mins + ':00</p><p><button id="go" class="b">Start</button> ' +
@@ -304,7 +312,7 @@
       return { text: "I can't look things up in this demo, so here's a made-up forecast to show where it goes: a short answer here, " +
         "the details on the screen.", act: function () {
         show({ html: doc("Weather", "| | Morning | Afternoon | Evening |\n|---|---|---|---|\n| Today | 27\u00b0, cloudy | 31\u00b0, showers | 28\u00b0, clear |\n" +
-          "| Tomorrow | 26\u00b0, clear | 32\u00b0, sunny | 28\u00b0, clear |", "Made up for the demo. On ClaudeOS this is today's real forecast.") });
+          "| Tomorrow | 26\u00b0, clear | 32\u00b0, sunny | 28\u00b0, clear |", "Made up for the demo. On Chat Computer this is today's real forecast.") });
       } };
     }],
     [/\b(jane|lunch|email|emails|e-mail|mail|inbox|gmail|outlook)\b/i, function () {
@@ -341,7 +349,7 @@
     }],
     [/\b(thanks|thank you|cool|great|nice|awesome)\b/i, function () { return { text: "Any time." }; }],
     [/./, function () {
-      return { text: "In this demo I only know a few things; on ClaudeOS, Claude answers anything, and does it. " + TRY };
+      return { text: "In this demo I only know a few things; on Chat Computer, Claude answers anything, and does it. " + TRY };
     }]
   ];
   function answer(text) {
@@ -350,7 +358,7 @@
   }
   function setScale(s) {
     scale = Math.max(0.6, Math.min(2.2, s));
-    store("claudeos-demo-scale", scale);
+    store("chatcomputer-demo-scale", scale);
     layout();
   }
 
@@ -387,7 +395,7 @@
     if (html) show({ html: html });
   }
   function withPin(m) {
-    var pins = (store("claudeos-demo-pins") || {}).messages || {}, out = {};
+    var pins = (store("chatcomputer-demo-pins") || {}).messages || {}, out = {};
     for (var k in m) out[k] = m[k];
     if (pins[m.id]) out.pinned = pins[m.id];
     return out;
@@ -405,31 +413,21 @@
       return { name: f.name, path: f.page, kind: f.kind, where: f.where, when: w };
     });
   }
-  function intro() {
-    try { if (window.sessionStorage.getItem("claudeos-demo-seen")) return; } catch (e) {}
-    call("accountForm", { id: "intro", title: "ClaudeOS, in your browser", ok: "Try it", text: [
-      "This is ClaudeOS's screen. ClaudeOS is Claude running a whole computer: you talk, type or touch, and it does " +
-      "things for you. Messages from all your accounts are on the left, what it has done for you on the right.",
-      "Here, Claude's answers are written in advance, and the messages and files are made up. " + TRY,
-      "Nothing you type here leaves your browser. ClaudeOS is an independent project, not made by Anthropic."] });
-  }
-
   // ------------------------------------------------------------------ what the page says
   function handle(msg) {
     switch (msg.type) {
       case "ready":
         layout();
         call("settings", "", "");
-        call("history", HISTORY);
-        call("notice", "A demo: Claude's answers here are written in advance, and nothing you type leaves your browser.");
+        if (store("chatcomputer-demo-panels")) call("panels", store("chatcomputer-demo-panels"));
         call("doneList", DONE.map(function (e) {
-          var pins = (store("claudeos-demo-pins") || {}).done || {}, o = {};
+          var pins = (store("chatcomputer-demo-pins") || {}).done || {}, o = {};
           for (var k in e) o[k] = e[k];
           if (pins[e.id]) o.pinned = pins[e.id];
           return o;
         }));
         call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
-        intro();
+        youtube();
         break;
       case "send": ask(String(msg.text || "")); break;
       case "drafting": drafting = !!msg.on; break;
@@ -438,10 +436,10 @@
       case "expand": expanded = !expanded; place(); break;
       case "open_message": openMessage(msg.id); break;
       case "pin": {
-        var pins = store("claudeos-demo-pins") || {};
+        var pins = store("chatcomputer-demo-pins") || {};
         pins[msg.list] = pins[msg.list] || {};
         if (msg.on) pins[msg.list][msg.id] = now(); else delete pins[msg.list][msg.id];
-        store("claudeos-demo-pins", pins);
+        store("chatcomputer-demo-pins", pins);
         break;
       }
       case "goto": call("earlier", EARLIER, msg.id, msg.ts); break;
@@ -450,15 +448,15 @@
         break;
       case "open_file": if (PAGES[msg.path]) show({ html: PAGES[msg.path]() }); break;
       case "text_scale": setScale(scale * (+msg.factor || 1)); break;
+      case "panels": store("chatcomputer-demo-panels", { left: !!msg.left, right: !!msg.right, bottom: !!msg.bottom }); break;
       case "add_account":
         call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
-          "On ClaudeOS, Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, X, Instagram, Facebook, TikTok and LinkedIn " +
+          "On Chat Computer, Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, X, Instagram, Facebook, TikTok and LinkedIn " +
           "connect here, and their messages come into Messages, newest first. Sign-ins stay on your computer.",
           "The demo can't connect accounts."] });
         break;
       case "account":
       case "account_cancel":
-        if (msg.form === "intro") { try { window.sessionStorage.setItem("claudeos-demo-seen", "1"); } catch (e) {} }
         call("accountForm", null);
         break;
       default: break;            // keys, keyboard: nothing to do in a browser

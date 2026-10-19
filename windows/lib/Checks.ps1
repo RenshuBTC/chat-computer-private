@@ -8,7 +8,7 @@ function Test-IsAdministrator {
 }
 
 function Get-FirmwareType {
-    # 'UEFI' or 'Legacy'. ClaudeOS needs UEFI (every PC sold since about 2012 has it).
+    # 'UEFI' or 'Legacy'. Chat Computer needs UEFI (every PC sold since about 2012 has it).
     if ($env:firmware_type) { return $env:firmware_type }
     try {
         $v = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name PEFirmwareType -ErrorAction Stop).PEFirmwareType
@@ -52,15 +52,15 @@ function Get-BitLockerState {
     return $state
 }
 
-# ------------------------------------------------------------------ ClaudeOS's own BitLocker key
-# When C: is encrypted, ClaudeOS gets a recovery password of its own for it (a second key; the person's own keys
+# ------------------------------------------------------------------ Chat Computer's own BitLocker key
+# When C: is encrypted, Chat Computer gets a recovery password of its own for it (a second key; the person's own keys
 # stay as they are), so it can open the Windows files. Linux can open BitLocker with a recovery password, not
-# through the PC's security chip. Its id is kept in ProgramData\ClaudeOS, so "Remove ClaudeOS" can delete exactly
+# through the PC's security chip. Its id is kept in ProgramData\ChatComputer, so "Remove Chat Computer" can delete exactly
 # this key again. These use BitLocker's WMI class, which Windows Home (device encryption) has too.
 
-function Get-ClaudeOSStateDir {
-    if ($env:CLAUDEOS_STATE_DIR) { return $env:CLAUDEOS_STATE_DIR }     # tests
-    return (Join-Path $env:ProgramData 'ClaudeOS')
+function Get-ChatComputerStateDir {
+    if ($env:CHATCOMPUTER_STATE_DIR) { return $env:CHATCOMPUTER_STATE_DIR }  # tests
+    return (Join-Path $env:ProgramData 'ChatComputer')
 }
 
 function Get-SystemEncryptableVolume {
@@ -78,12 +78,12 @@ function Assert-BitLockerResult {
     if ($code -ne 0) { throw ($What + ' (BitLocker error 0x' + ('{0:X8}' -f $code) + ').') }
 }
 
-function New-ClaudeOSBitLockerKey {
+function New-ChatComputerBitLockerKey {
     # Adds the key and records its id. Returns @{ Id = '{guid}'; Password = '000000-...-000000' }.
     $vol = Get-SystemEncryptableVolume
     $r = Invoke-CimMethod -InputObject $vol -MethodName ProtectKeyWithNumericalPassword `
-        -Arguments @{ FriendlyName = 'ClaudeOS' } -ErrorAction Stop
-    Assert-BitLockerResult $r 'BitLocker would not add a key for ClaudeOS'
+        -Arguments @{ FriendlyName = 'Chat Computer' } -ErrorAction Stop
+    Assert-BitLockerResult $r 'BitLocker would not add a key for Chat Computer'
     $id = [string](Get-Prop $r 'VolumeKeyProtectorID')
     if ($id -notmatch '^\{[0-9A-Fa-f-]{36}\}$') { throw 'BitLocker added a key but did not say which.' }
     try {
@@ -92,21 +92,21 @@ function New-ClaudeOSBitLockerKey {
         Assert-BitLockerResult $p 'BitLocker would not show the new key'
         $password = [string](Get-Prop $p 'NumericalPassword')
         if ($password -notmatch '^\d{6}(-\d{6}){7}$') { throw 'BitLocker showed the new key in an unexpected form.' }
-        $dir = Get-ClaudeOSStateDir
+        $dir = Get-ChatComputerStateDir
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         Write-TextFileLf -Path (Join-Path $dir 'bitlocker-key-id') -Text ($id + "`n")
     } catch {
         $null = Invoke-CimMethod -InputObject $vol -MethodName DeleteKeyProtector -Arguments @{ VolumeKeyProtectorID = $id } -ErrorAction SilentlyContinue
         throw
     }
-    Write-SetupLog ('Added ClaudeOS''s BitLocker key ' + $id)
+    Write-SetupLog ('Added Chat Computer''s BitLocker key ' + $id)
     return [pscustomobject]@{ Id = $id; Password = $password }
 }
 
-function Remove-ClaudeOSBitLockerKey {
-    # Deletes the key setup made for ClaudeOS, if there is one. Returns $true if a key was deleted. Only ever a
+function Remove-ChatComputerBitLockerKey {
+    # Deletes the key setup made for Chat Computer, if there is one. Returns $true if a key was deleted. Only ever a
     # recovery password with the recorded id: never one of the person's own keys.
-    $record = Join-Path (Get-ClaudeOSStateDir) 'bitlocker-key-id'
+    $record = Join-Path (Get-ChatComputerStateDir) 'bitlocker-key-id'
     if (-not (Test-Path -LiteralPath $record)) { return $false }
     $id = ([IO.File]::ReadAllText($record)).Trim()
     if ($id -notmatch '^\{[0-9A-Fa-f-]{36}\}$') {
@@ -118,13 +118,13 @@ function Remove-ClaudeOSBitLockerKey {
     $deleted = $false
     if ([int64](Get-Prop $t 'ReturnValue') -eq 0) {
         # 3 = a recovery password ("numerical password").
-        if ([int](Get-Prop $t 'KeyProtectorType') -ne 3) { throw 'The key setup recorded for ClaudeOS is not a recovery password.' }
+        if ([int](Get-Prop $t 'KeyProtectorType') -ne 3) { throw 'The key setup recorded for Chat Computer is not a recovery password.' }
         $r = Invoke-CimMethod -InputObject $vol -MethodName DeleteKeyProtector -Arguments @{ VolumeKeyProtectorID = $id } -ErrorAction Stop
-        Assert-BitLockerResult $r 'BitLocker would not delete ClaudeOS''s key'
+        Assert-BitLockerResult $r 'BitLocker would not delete Chat Computer''s key'
         $deleted = $true
-        Write-SetupLog ('Deleted ClaudeOS''s BitLocker key ' + $id)
+        Write-SetupLog ('Deleted Chat Computer''s BitLocker key ' + $id)
     } else {
-        Write-SetupLog ('ClaudeOS''s BitLocker key ' + $id + ' was already gone')
+        Write-SetupLog ('Chat Computer''s BitLocker key ' + $id + ' was already gone')
     }
     Remove-Item -LiteralPath $record -Force
     return $deleted
@@ -140,7 +140,7 @@ function Get-FastStartupEnabled {
 }
 
 function Disable-FastStartup {
-    # Fast Startup leaves the Windows drive half-closed, so ClaudeOS could only read it, never save to it.
+    # Fast Startup leaves the Windows drive half-closed, so Chat Computer could only read it, never save to it.
     [Microsoft.Win32.Registry]::SetValue('HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Power',
         'HiberbootEnabled', 0, [Microsoft.Win32.RegistryValueKind]::DWord)
 }

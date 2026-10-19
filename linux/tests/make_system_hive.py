@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build a synthetic Windows SYSTEM registry (regf) hive for testing the
-ClaudeOS Bluetooth key importer, WITHOUT any external tooling.
+Chat Computer Bluetooth key importer, WITHOUT any external tooling.
 
 The hive is written to be parseable by regipy (the library the importer uses),
 which models a hive as:

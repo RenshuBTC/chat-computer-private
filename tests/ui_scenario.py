@@ -1,4 +1,4 @@
-"""Full ClaudeOS run on a virtual display: real window, real WebKit, real Claude Code engine
+"""Full Chat Computer run on a virtual display: real window, real WebKit, real Claude Code engine
 (against the mock Claude API), real tools, real speech models with a fake microphone.
 
 Run:  xvfb-run -s "-screen 0 1920x1080x24" dbus-run-session python tests/ui_scenario.py OUTDIR
@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 
-OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/claudeos-ui")
+OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/chatcomputer-ui")
 OUT.mkdir(parents=True, exist_ok=True)
 for k in list(os.environ):
     if k.startswith(("CLAUDE", "ANTHROPIC")) or k.lower() in ("https_proxy", "http_proxy"):
@@ -27,8 +27,8 @@ for k in list(os.environ):
 HOME = OUT / "home"
 HOME.mkdir(exist_ok=True)
 os.environ["HOME"] = str(HOME)
-os.environ["CLAUDEOS_HOME"] = str(HOME / "ClaudeOS")
-os.environ.setdefault("CLAUDEOS_GPU", "0")
+os.environ["CHATCOMPUTER_HOME"] = str(HOME / "ChatComputer")
+os.environ.setdefault("CHATCOMPUTER_GPU", "0")
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 
 from mock_anthropic import (MockAnthropic, last_message_is_tool_result, last_user_text, text_block,  # noqa: E402
@@ -72,7 +72,7 @@ def rule(req):
         if "elements" in said or "[1]" in res:
             pass
         if "Showing: Test Video Site" in res:
-            return [tool_use_block("mcp__claudeos__click", {"text": "Calm piano music"})]
+            return [tool_use_block("mcp__chatcomputer__click", {"text": "Calm piano music"})]
         if "Back to the conversation" in res:
             return [text_block("Here we are. The piano video is still loaded, so just say play whenever you want "
                                "it back. Or tell me what else you'd like to do this evening: I can find a recipe, "
@@ -82,35 +82,35 @@ def rule(req):
         return [text_block("Done.")]
     if "piano" in said.lower():
         return [text_block("Sure, opening the video site."),
-                tool_use_block("mcp__claudeos__show_website", {"url": SITE_URL})]
+                tool_use_block("mcp__chatcomputer__show_website", {"url": SITE_URL})]
     if "chat" in said.lower() or "conversation" in said.lower():
-        return [tool_use_block("mcp__claudeos__show_conversation", {})]
+        return [tool_use_block("mcp__chatcomputer__show_conversation", {})]
     if "plan" in said.lower():
-        return [tool_use_block("mcp__claudeos__show_document", {"title": "Plan for Saturday", "markdown":
+        return [tool_use_block("mcp__chatcomputer__show_document", {"title": "Plan for Saturday", "markdown":
                 "## Morning\n- Run at **7am** by the river\n- Breakfast at Tiong Bahru\n\n## Afternoon\n"
                 "| Time | What |\n|---|---|\n| 2pm | Library |\n| 5pm | Groceries |\n\nRemember to bring the *library card*."})]
-    return [text_block("Hello! I'm ClaudeOS. Tell me what you'd like to do, and I'll handle it.")]
+    return [text_block("Hello! I'm Chat Computer. Tell me what you'd like to do, and I'll handle it.")]
 
 
 mock.rules.append(rule)
 
-# ------------------------------------------------------------------ ClaudeOS
-from claudeos.config import Paths, Settings, save_token  # noqa: E402
-from claudeos.controller import Controller  # noqa: E402
-from claudeos.platform.fake import FakePlatform  # noqa: E402
-from claudeos.platform.linux import LinuxPlatform  # noqa: E402
-from claudeos.ui.gtk_app import run_app  # noqa: E402
-from claudeos.voice.audio import FakeMic, FakePlayer  # noqa: E402
+# ------------------------------------------------------------------ Chat Computer
+from chatcomputer.config import Paths, Settings, save_token  # noqa: E402
+from chatcomputer.controller import Controller  # noqa: E402
+from chatcomputer.platform.fake import FakePlatform  # noqa: E402
+from chatcomputer.platform.linux import LinuxPlatform  # noqa: E402
+from chatcomputer.ui.gtk_app import run_app  # noqa: E402
+from chatcomputer.voice.audio import FakeMic, FakePlayer  # noqa: E402
 
 paths = Paths().ensure()
-from claudeos.journal import setup_logging  # noqa: E402
+from chatcomputer.journal import setup_logging  # noqa: E402
 setup_logging(paths, verbose=True)
 save_token(paths, "sk-ant-api03-" + "t" * 40)
-settings = Settings(user_name="Ren Shu", windows_user="rensh", stt_model=os.environ.get("CLAUDEOS_TEST_STT", "base.en"))
+settings = Settings(user_name="Ren Shu", windows_user="rensh", stt_model=os.environ.get("CHATCOMPUTER_TEST_STT", "base.en"))
 # Pretend-monitor size and viewing distance (the virtual display always reports 96 dpi).
 settings.screen_inches = float(os.environ.get("UITEST_INCHES", "0") or 0)
 settings.viewing_distance_cm = int(os.environ.get("UITEST_DISTANCE_CM", "0") or 0)
-MODELS = Path(os.environ.get("CLAUDEOS_TEST_MODELS", "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/models"))
+MODELS = Path(os.environ.get("CHATCOMPUTER_TEST_MODELS", "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/models"))
 
 
 class XPlatform(FakePlatform):
@@ -141,11 +141,11 @@ mics = []
 player = FakePlayer()
 stt = tts = None
 if (MODELS / "kokoro-v1.0.int8.onnx").exists():
-    from claudeos.voice.tts import TTS
+    from chatcomputer.voice.tts import TTS
     tts = TTS(str(MODELS / "kokoro-v1.0.int8.onnx"), str(MODELS / "voices-v1.0.bin"))
 wd = MODELS / "whisper" / f"faster-whisper-{settings.stt_model}"
 if (wd / "model.bin").exists():
-    from claudeos.voice.stt import STT
+    from chatcomputer.voice.stt import STT
     stt = STT(str(wd), "en", hint="Claude, Ren Shu, YouTube")
 
 result = {"steps": [], "ok": False}
@@ -182,7 +182,7 @@ def chat_log_text(screen):
 
 
 def speak_into_mic(text):
-    from claudeos.voice.tts import _resample
+    from chatcomputer.voice.tts import _resample
     import numpy as np
     a = _resample(tts.synth(text), 24000, 16000)
     audio = np.concatenate([np.zeros(8000, np.float32), a, np.zeros(16000, np.float32)])

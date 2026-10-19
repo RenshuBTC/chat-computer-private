@@ -1,4 +1,4 @@
-# What real Windows says about the things ClaudeOS Setup relies on when it makes room and signs in.
+# What real Windows says about the things Chat Computer Setup relies on when it makes room and signs in.
 # Run by .github/workflows/windows.yml on GitHub's Windows machines (Windows PowerShell 5.1, as an
 # administrator). Saves what it saw into -Out; prints a short summary. Changes only that throwaway machine.
 # ASCII-only file (Windows PowerShell 5.1 reads files without a BOM as ANSI).
@@ -93,7 +93,7 @@ $child = "Set-StrictMode -Version 2.0; . '" + (Join-Path $repo 'windows\lib\Comm
 Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', $child) -Wait -WindowStyle Minimized
 if (-not (Test-Path -LiteralPath $qe)) { Save 'quickedit.txt' 'the console window did not run' }
 # The sign-in window's .cmd, run as setup would have it run, with a stand-in for Claude that saves a sign-in.
-$signDir = Join-Path $env:TEMP ('claudeos-signin-probe')
+$signDir = Join-Path $env:TEMP ('chatcomputer-signin-probe')
 New-Item -ItemType Directory -Path (Join-Path $signDir 'config') -Force | Out-Null
 $fake = Join-Path $signDir 'fake claude.cmd'
 Set-Content -LiteralPath $fake -Encoding ASCII -Value @('@echo off', 'echo args: %*',

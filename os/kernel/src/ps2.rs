@@ -4,7 +4,7 @@
 //! numbers USB keyboards use, so `keyboard` treats both alike.
 //!
 //! On a PC whose firmware made a USB keyboard look like a PS/2 one, the controller here was the
-//! firmware's imitation; it stopped when ClaudeOS took the USB controllers over, so this runs after.
+//! firmware's imitation; it stopped when Chat Computer took the USB controllers over, so this runs after.
 
 use crate::cpu::{inb, outb};
 use crate::keyboard;
@@ -90,7 +90,7 @@ pub fn init() -> bool {
         return false;
     }
     let Some(config) = read_data(20) else { return false };
-    // Keyboard clock on, translation to set 1 on, no interrupts (ClaudeOS looks for bytes instead),
+    // Keyboard clock on, translation to set 1 on, no interrupts (Chat Computer looks for bytes instead),
     // the mouse socket left off.
     let config = (config | 1 << 6 | 1 << 5) & !(1 << 0 | 1 << 1 | 1 << 4);
     if !send_command(0x60) || !send_data(config) || !send_command(0xAE) {

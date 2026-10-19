@@ -82,12 +82,12 @@ impl Acpi {
     pub fn read(rsdp_phys: u64) -> Acpi {
         let mut acpi = Acpi::default();
         if rsdp_phys == 0 {
-            crate::log!("ClaudeOS kernel: the firmware gave no ACPI tables");
+            crate::log!("Chat Computer kernel: the firmware gave no ACPI tables");
             return acpi;
         }
         let rsdp = unsafe { core::slice::from_raw_parts(paging::map_firmware_table(rsdp_phys, 36) as *const u8, 36) };
         if &rsdp[..8] != b"RSD PTR " || sum(&rsdp[..20]) != 0 {
-            crate::log!("ClaudeOS kernel: the ACPI tables' starting point is damaged");
+            crate::log!("Chat Computer kernel: the ACPI tables' starting point is damaged");
             return acpi;
         }
         acpi.revision = rsdp[15];
@@ -99,7 +99,7 @@ impl Acpi {
             (table(u32_at(rsdp, 16) as u64), false)
         };
         let Some(root) = root else {
-            crate::log!("ClaudeOS kernel: the ACPI root table is missing");
+            crate::log!("Chat Computer kernel: the ACPI root table is missing");
             return acpi;
         };
         let step = if wide { 8 } else { 4 };
@@ -109,7 +109,7 @@ impl Acpi {
             at += step;
             let Some(t) = table(phys) else { continue };
             if sum(t) != 0 {
-                crate::log!("ClaudeOS kernel: ACPI table {} has a bad checksum; using it anyway",
+                crate::log!("Chat Computer kernel: ACPI table {} has a bad checksum; using it anyway",
                             core::str::from_utf8(&t[..4]).unwrap_or("????"));
             }
             match &t[..4] {

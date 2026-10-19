@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ClaudeOS openbox configuration.
+  Chat Computer openbox configuration.
 
   Goal: openbox is invisible plumbing. Every window is undecorated, maximized
   and focused; there is no root menu, no desktop switching, and the only
   keyboard shortcut is the safe escape hatch Ctrl+Alt+Backspace, which kills the
   X server. startx exits, the tty1 getty respawns, ~/.bash_profile re-execs
-  startx, and ClaudeOS comes back — i.e. "restart ClaudeOS".
+  startx, and Chat Computer comes back — i.e. "restart Chat Computer".
 -->
 <openbox_config xmlns="http://openbox.org/3.4/rc">
   <resistance>
@@ -37,16 +37,16 @@
     <!-- Exactly one desktop: nowhere to switch to. -->
     <number>1</number>
     <firstdesk>1</firstdesk>
-    <names><name>ClaudeOS</name></names>
+    <names><name>Chat Computer</name></names>
     <popupTime>0</popupTime>
   </desktops>
 
   <!-- No window title/resize decorations at all. -->
   <keyboard>
-    <!-- The ONLY binding: restart ClaudeOS by terminating X. -->
+    <!-- The ONLY binding: restart Chat Computer by terminating X. -->
     <keybind key="C-A-BackSpace">
       <action name="Execute">
-        <command>/opt/claudeos/app/linux/session/claudeos-restart</command>
+        <command>/opt/chatcomputer/app/linux/session/chatcomputer-restart</command>
       </action>
     </keybind>
   </keyboard>
@@ -76,7 +76,7 @@
   <menu>
     <!-- Absolute path so it resolves regardless of openbox's config dir.
          The menu itself is empty (no root menu). -->
-    <file>/opt/claudeos/app/linux/session/openbox-menu.xml</file>
+    <file>/opt/chatcomputer/app/linux/session/openbox-menu.xml</file>
     <hideDelay>0</hideDelay>
     <submenuShowDelay>0</submenuShowDelay>
     <showIcons>no</showIcons>

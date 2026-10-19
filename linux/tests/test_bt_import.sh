@@ -8,21 +8,21 @@
 # checks that existing [General] sections are preserved and that re-running is
 # idempotent.
 #
-# Requires regipy in the test Python. CLAUDEOS_TEST_PY must point at a venv/py
+# Requires regipy in the test Python. CHATCOMPUTER_TEST_PY must point at a venv/py
 # with regipy installed (run.sh arranges this).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 IMPORTER="$REPO/root-helper/bt-import-windows-keys.py"
 MAKER="$HERE/make_system_hive.py"
-PY="${CLAUDEOS_TEST_PY:-python3}"
+PY="${CHATCOMPUTER_TEST_PY:-python3}"
 FAILED=0
 pass() { printf 'PASS %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; FAILED=1; }
 
 # Guard: need regipy.
 if ! "$PY" -c 'import regipy' 2>/dev/null; then
-  echo "SKIP bt-import tests: regipy not available in \$CLAUDEOS_TEST_PY ($PY)" >&2
+  echo "SKIP bt-import tests: regipy not available in \$CHATCOMPUTER_TEST_PY ($PY)" >&2
   exit 0
 fi
 
@@ -100,7 +100,7 @@ if [ -f "$F1" ]; then
   grep -q "^Key=$KEY1$" "$F1" && pass "$DEV1: Key correct (uppercase, same byte order)" || { fail "$DEV1: wrong Key"; cat "$F1"; }
   grep -q "^Type=4$" "$F1" && pass "$DEV1: Type=4" || fail "$DEV1: Type!=4"
   grep -q "^PINLength=0$" "$F1" && pass "$DEV1: PINLength=0" || fail "$DEV1: PINLength!=0"
-  # Windows' name for it, so ClaudeOS knows them for AirPods, and trusted so they connect by themselves.
+  # Windows' name for it, so Chat Computer knows them for AirPods, and trusted so they connect by themselves.
   grep -q "^Name=Ren’s AirPods Pro$" "$F1" && pass "$DEV1: Name from Windows" || { fail "$DEV1: no Name"; cat "$F1"; }
   grep -q "^Trusted=true$" "$F1" && grep -q "^Blocked=false$" "$F1" && grep -q "^SupportedTechnologies=BR/EDR;$" "$F1" \
     && pass "$DEV1: trusted, not blocked, classic Bluetooth" || { fail "$DEV1: [General] incomplete"; cat "$F1"; }

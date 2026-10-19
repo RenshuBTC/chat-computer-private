@@ -1,10 +1,10 @@
-# ClaudeOS's own operating system (os/).
+# Chat Computer's own operating system (os/).
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
 #   engine's tests; starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a
 #   crash stops it cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts),
 #   checking the firmware refuses it unsigned; and types on PS/2 and USB keyboards (on ports, behind a hub,
 #   plugged in and out), checking what comes out.
-# - windows: signs the release file on real Windows, the way "ClaudeOS Own System" does on a PC, and (when the
+# - windows: signs the release file on real Windows, the way "Chat Computer Own System" does on a PC, and (when the
 #   machine starts in UEFI mode) puts it on the start-up partition and in the power-on menu and takes it off again.
 # - secure-boot-windows: starts the file Windows signed in a virtual PC whose firmware trusts only Microsoft's
 #   keys and that key, with Secure Boot enforced.
@@ -13,7 +13,7 @@ name: Own OS test
 on:
   push:
     branches: [main]
-    paths: ['os/**', 'claudeos/ui/assets/fonts/**', 'windows/own-os.ps1', 'windows/lib/OwnOs.ps1',
+    paths: ['os/**', 'chatcomputer/ui/assets/fonts/**', 'windows/own-os.ps1', 'windows/lib/OwnOs.ps1',
             'windows/lib/Startup.ps1', 'tests/win_ci/own-os.ps1', '.github/workflows/os.yml']
   workflow_dispatch:
 permissions:
@@ -41,8 +41,8 @@ jobs:
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh
-          cmp out/esp/EFI/BOOT/BOOTX64.EFI release/claudeos.efi
-          (cd release && sha256sum -c claudeos.efi.sha256)
+          cmp out/esp/EFI/BOOT/BOOTX64.EFI release/chatcomputer.efi
+          (cd release && sha256sum -c chatcomputer.efi.sha256)
       - name: Start in virtual PCs
         run: |
           ./check.py --no-build
@@ -101,8 +101,8 @@ jobs:
       - name: Start the file Windows signed, with Secure Boot enforced
         run: |
           mkdir -p out/esp/EFI/BOOT
-          cp release/claudeos.efi out/esp/EFI/BOOT/BOOTX64.EFI   # the unsigned one, which must be refused
-          ./check.py --no-build --signed signed/claudeos.efi --cert signed/ClaudeOS.cer
+          cp release/chatcomputer.efi out/esp/EFI/BOOT/BOOTX64.EFI  # the unsigned one, which must be refused
+          ./check.py --no-build --signed signed/chatcomputer.efi --cert signed/ChatComputer.cer
       - name: Keep the pictures and the log
         if: always()
         uses: actions/upload-artifact@v6

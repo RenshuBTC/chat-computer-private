@@ -10,7 +10,7 @@ $Script:ReservedLinuxNames = @(
     'qmailr', 'qmailq', 'qmaill', 'qmailp', 'asterisk', 'vpopmail', 'vchkpw', 'slurm', 'hacluster', 'haclient',
     'ceph', 'opensrf', 'libvirt-qemu', 'admin', 'bind', 'crontab', 'cupsys', 'dhcp', 'dnsmasq', 'ftp', 'fuse',
     'gdm', 'input', 'kvm', 'lpadmin', 'messagebus', 'netdev', 'render', 'scanner', 'sgx', 'ssh', 'sshd',
-    'ssl-cert', 'syslog', 'bluetooth', 'pulse', 'pipewire', 'claudeos', 'systemd-network', 'systemd-resolve',
+    'ssl-cert', 'syslog', 'bluetooth', 'pulse', 'pipewire', 'chatcomputer', 'systemd-network', 'systemd-resolve',
     'systemd-timesync', 'polkitd', 'tcpdump', 'tss', 'uuidd', 'usbmux', 'rtkit', 'avahi', 'colord', 'geoclue')
 
 function ConvertTo-LinuxUserName {
@@ -254,7 +254,7 @@ function Get-IanaTimeZone {
 }
 
 function New-SettingsJson {
-    # ~/ClaudeOS/settings.json on the new system (keys in ARCHITECTURE.md).
+    # ~/ChatComputer/settings.json on the new system (keys in ARCHITECTURE.md).
     param([string]$UserName, [string]$WindowsUser, [string]$TimeZone, [string]$Locale = 'en_US.UTF-8')
     $pairs = @(
         ('  "user_name": ' + (ConvertTo-YamlString $UserName)),

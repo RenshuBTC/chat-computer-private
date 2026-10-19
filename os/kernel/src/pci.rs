@@ -3,8 +3,8 @@
 //!
 //! Configuration is read through the memory window the ACPI MCFG table describes (PCI Express), else
 //! through the old ports 0xCF8 and 0xCFC (which reach each device's first 256 bytes; that is all
-//! ClaudeOS needs). The firmware has already numbered the buses, set up the bridges and placed every
-//! device's registers; ClaudeOS keeps all of that. Devices are found by trying every bus, device and
+//! Chat Computer needs). The firmware has already numbered the buses, set up the bridges and placed every
+//! device's registers; Chat Computer keeps all of that. Devices are found by trying every bus, device and
 //! function number in the window, so a device behind a host bridge that isn't bus 0's is found too.
 
 use crate::acpi::Acpi;
@@ -199,7 +199,7 @@ impl Address {
     }
 
     /// Lets the device answer at its memory registers and (if `dma`) read and write memory itself. Its
-    /// old-style interrupt line is switched off: ClaudeOS only takes interrupts by message.
+    /// old-style interrupt line is switched off: Chat Computer only takes interrupts by message.
     pub fn enable(self, dma: bool) {
         let command = self.read16(COMMAND);
         let mut wanted = command | COMMAND_MEMORY | COMMAND_NO_INTX;

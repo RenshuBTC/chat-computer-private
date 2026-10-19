@@ -1,6 +1,6 @@
-//! The first screen ClaudeOS's own kernel shows: that it is running, what it found, how long it has
+//! The first screen Chat Computer's own kernel shows: that it is running, what it found, how long it has
 //! been up (counted by its own timer interrupts), a line to type on with whatever keyboard is plugged
-//! in, and how to get back to Windows. Laid out like ClaudeOS's welcome screen: a larger first line,
+//! in, and how to get back to Windows. Laid out like Chat Computer's welcome screen: a larger first line,
 //! then text, in one column in the middle, black on white. If the kernel ever stops, the same place
 //! says so, with details to pass on.
 
@@ -18,7 +18,7 @@ use core::fmt;
 use font::raster::ONE;
 
 const BACK_TO_WINDOWS: &str = "To go back to Windows, hold the power button until the PC turns off, then turn it on \
-                               again. ClaudeOS doesn't write to your disks, so this is safe.";
+                               again. Chat Computer doesn't write to your disks, so this is safe.";
 
 /// The longest line that can be typed.
 const TYPED_MAX: usize = 1000;
@@ -96,10 +96,10 @@ impl Welcome {
         };
         let facts = format!("This PC has {article} {cpu}, {memory} of memory and a {size} screen.{secure}");
 
-        let title = ty.wrap("ClaudeOS is running on its own kernel.", greeting.size, column * ONE);
+        let title = ty.wrap("Chat Computer is running on its own kernel.", greeting.size, column * ONE);
         let lines: Vec<&str> = ty.wrap(&facts, body.size, column * ONE);
         let back = ty.wrap(BACK_TO_WINDOWS, body.size, column * ONE);
-        // Heights, as on ClaudeOS's welcome screen: the greeting (1.5 rem, line height 1.3) with 0.25 em
+        // Heights, as on Chat Computer's welcome screen: the greeting (1.5 rem, line height 1.3) with 0.25 em
         // below it, then paragraphs (line height 1.5) 1 em apart.
         let gap_small = fx(rem * 1.5 * 0.25);
         let gap = fx(rem);
@@ -192,7 +192,7 @@ impl Welcome {
         let named: Vec<String> =
             names.iter().map(|(n, count)| if *count > 1 { format!("{n} ({count})") } else { String::from(*n) }).collect();
         let long = match all.as_slice() {
-            [] if status.controllers == 0 => String::from("No keyboard ClaudeOS can use was found, so typing doesn't work yet."),
+            [] if status.controllers == 0 => String::from("No keyboard Chat Computer can use was found, so typing doesn't work yet."),
             [] if status.running == 0 => String::from("The USB controllers didn't start, so typing doesn't work yet."),
             [] => String::from("Plug in a USB keyboard to type here."),
             [one] => format!("Type here with the {one}."),
@@ -258,8 +258,8 @@ impl Welcome {
             Key::Enter => {
                 // Typed lines go nowhere yet. A test build writes them in the log, so a test can check
                 // what reached the screen; a normal build never logs what is typed.
-                if option_env!("CLAUDEOS_TEST") == Some("keyboard") {
-                    crate::log!("ClaudeOS kernel: test: typed {:?}", self.typed);
+                if option_env!("CHATCOMPUTER_TEST") == Some("keyboard") {
+                    crate::log!("Chat Computer kernel: test: typed {:?}", self.typed);
                 }
                 self.typed.clear();
                 self.cursor = 0;
@@ -299,7 +299,7 @@ impl Welcome {
         let rows = (self.screen.height as i32 * ONE - self.live_top) / self.body.line_height;
         self.clear(self.live_top, rows.max(0) as usize);
         let mut top = self.live_top;
-        let message = format!("ClaudeOS stopped: {what}.");
+        let message = format!("Chat Computer stopped: {what}.");
         let note = format!("Details: {details}");
         for (i, paragraph) in [message.as_str(), note.as_str(), BACK_TO_WINDOWS].iter().enumerate() {
             if i > 0 {

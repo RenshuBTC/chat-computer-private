@@ -1,4 +1,4 @@
-# ClaudeOS runtime, installed into /opt/claudeos/venv (created with --system-site-packages so the
+# Chat Computer runtime, installed into /opt/chatcomputer/venv (created with --system-site-packages so the
 # distro's python3-gi / WebKitGTK are importable). Versions tested together on Ubuntu 24.04.
 claude-agent-sdk==0.2.167      # Anthropic's official Agent SDK; bundles the official Claude Code engine
 numpy==2.5.4

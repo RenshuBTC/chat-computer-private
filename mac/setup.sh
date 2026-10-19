@@ -1,49 +1,49 @@
 #!/bin/bash
-# ClaudeOS Setup for Mac. Run it in Terminal:
-#     bash ~/Downloads/ClaudeOS/mac/setup.sh
-# (or double-click "ClaudeOS Setup.command" next to this folder).
+# Chat Computer Setup for Mac. Run it in Terminal:
+#     bash ~/Downloads/ChatComputer/mac/setup.sh
+# (or double-click "Chat Computer Setup.command" next to this folder).
 #
-# ClaudeOS on a Mac is its own system, started instead of macOS (like on a PC, where it is started instead of
+# Chat Computer on a Mac is its own system, started instead of macOS (like on a PC, where it is started instead of
 # Windows). macOS stays, with your apps and files, one restart away. It works on Macs with Apple silicon M1,
-# M2 and M3 (not M3 Ultra): ClaudeOS is built on Fedora Asahi Remix, and Asahi Linux doesn't support newer
+# M2 and M3 (not M3 Ultra): Chat Computer is built on Fedora Asahi Remix, and Asahi Linux doesn't support newer
 # chips yet.
 #
 # Installing it:
 #   1. checks this Mac, signs in to Claude (the official Claude program from Anthropic's Agent SDK), notes
-#      the Wi-Fi, and asks which folders to bring over: ClaudeOS can't open macOS's own files (on Apple silicon
+#      the Wi-Fi, and asks which folders to bring over: Chat Computer can't open macOS's own files (on Apple silicon
 #      they're always encrypted, FileVault or not, with keys in the Secure Enclave that Linux can't use yet),
-#      so setup copies them now, onto a drive called ClaudeOS that both open;
+#      so setup copies them now, onto a drive called ChatComp that both open;
 #   2. downloads the Asahi installer and Fedora Asahi Remix's Minimal image (mac/manifest.sh: pinned, checked
 #      against SHA-256 fingerprints) and runs the installer, answering its questions (mac/drive-installer.exp):
 #      it makes room next to macOS and installs Fedora there; you type your Mac's password once;
-#   3. makes the ClaudeOS drive in the space left over and copies your folders onto it;
-#   4. leaves ClaudeOS's first start on ClaudeOS's EFI partition (mac/esp): your account, Wi-Fi and sign-in;
+#   3. makes the Chat Computer drive in the space left over and copies your folders onto it;
+#   4. leaves Chat Computer's first start on Chat Computer's EFI partition (mac/esp): your account, Wi-Fi and sign-in;
 #   5. shows the one step Apple requires in the Mac's startup options, and shuts the Mac down.
-# On its first start ClaudeOS sets itself up from there and installs the rest with the internet.
+# On its first start Chat Computer sets itself up from there and installs the rest with the internet.
 #
-# It can also send more folders to ClaudeOS, sign ClaudeOS in again, choose what starts when the Mac turns on,
-# and remove ClaudeOS completely. Written for the bash that comes with macOS (3.2).
+# It can also send more folders to Chat Computer, sign Chat Computer in again, choose what starts when the Mac turns on,
+# and remove Chat Computer completely. Written for the bash that comes with macOS (3.2).
 # Messages and logs go to the person's own log on purpose, also from commands run with sudo; a failed check
 # stops setup (stop exits), so "A && B || stop" can't fall through.
 # shellcheck disable=SC2015,SC2024,SC1091
 set -u
 
-ROOT="${CLAUDEOS_MAC_ROOT:-$HOME}"             # tests point these at a pretend Mac
-WORK="${CLAUDEOS_SETUP_WORK:-$ROOT/.claudeos-setup}"
-PLAN_ONLY="${CLAUDEOS_PLAN_ONLY:-0}"           # 1: check and plan, change nothing
+ROOT="${CHATCOMPUTER_MAC_ROOT:-$HOME}"         # tests point these at a pretend Mac
+WORK="${CHATCOMPUTER_SETUP_WORK:-$ROOT/.chatcomputer-setup}"
+PLAN_ONLY="${CHATCOMPUTER_PLAN_ONLY:-0}"       # 1: check and plan, change nothing
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC="$(cd "$HERE/.." && pwd)"                  # the folder you downloaded (it has claudeos/, linux/ and mac/)
+SRC="$(cd "$HERE/.." && pwd)"                  # the folder you downloaded (it has chatcomputer/, linux/ and mac/)
 LOG="$WORK/setup.log"
 # shellcheck source=manifest.sh
-. "${CLAUDEOS_MANIFEST:-$HERE/manifest.sh}"
+. "${CHATCOMPUTER_MANIFEST:-$HERE/manifest.sh}"
 
 GB=1000000000
 MIN_MACOS_FREE=$((38 * GB))      # the Asahi installer always leaves macOS this much free space, for its updates
-CLAUDEOS_MIN=$((30 * GB))        # ClaudeOS's own space: Fedora, ClaudeOS, its voice, and room to work
-CLAUDEOS_WANT=$((60 * GB))
-DRIVE_ROOM=$((10 * GB))          # room on the ClaudeOS drive beyond what's copied there now
-OS_NAME="ClaudeOS"               # the name in the Mac's startup options (asahi-bless in ClaudeOS uses it too)
-DRIVE_NAME="ClaudeOS"            # the drive both systems open
+CHATCOMPUTER_MIN=$((30 * GB))    # Chat Computer's own space: Fedora, Chat Computer, its voice, and room to work
+CHATCOMPUTER_WANT=$((60 * GB))
+DRIVE_ROOM=$((10 * GB))          # room on the Chat Computer drive beyond what's copied there now
+OS_NAME="Chat Computer"          # the name in the Mac's startup options (asahi-bless in Chat Computer uses it too)
+DRIVE_NAME="ChatComp"            # the drive both systems open
 FOLDERS="Desktop Documents Downloads Pictures Movies Music"
 
 # ------------------------------------------------------------------ talking to the person
@@ -205,23 +205,23 @@ check_mac() {
   [ "$(uname -s)" = Darwin ] || stop "Run this on the Mac, in macOS."
   # A Terminal running under Rosetta says x86_64 on Apple silicon too; ask the hardware.
   if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" != 1 ]; then
-    stop "ClaudeOS starts on its own only on Macs with Apple silicon (M1, M2 or M3). This Mac has an Intel processor."
+    stop "Chat Computer starts on its own only on Macs with Apple silicon (M1, M2 or M3). This Mac has an Intel processor."
   fi
   CHIP="$(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
   case "$CHIP" in
     "Apple M1"*|"Apple M2"*) ;;
     "Apple M3 Ultra"*)
-      stop "This Mac has an $CHIP. ClaudeOS works on M1, M2 and M3 Macs, but not yet on the Mac Studio with M3 Ultra: Asahi Linux, which it's built on, doesn't support it yet." ;;
+      stop "This Mac has an $CHIP. Chat Computer works on M1, M2 and M3 Macs, but not yet on the Mac Studio with M3 Ultra: Asahi Linux, which it's built on, doesn't support it yet." ;;
     "Apple M3"*)
-      say "This Mac has an $CHIP. Asahi Linux, which ClaudeOS is built on, supports M3 Macs only in part so far:"
+      say "This Mac has an $CHIP. Asahi Linux, which Chat Computer is built on, supports M3 Macs only in part so far:"
       say "no graphics acceleration (pages and videos are slower), no brightness control and no other screens."
       say "On the iMac with M3, its speakers and microphones don't work yet either; AirPods do." ;;
     *)
       [ -n "$CHIP" ] || CHIP="Apple chip setup doesn't know"
-      stop "This Mac has an $CHIP. ClaudeOS can start on its own only on Macs with M1, M2 or M3: Asahi Linux, which it's built on, doesn't support newer chips yet." ;;
+      stop "This Mac has an $CHIP. Chat Computer can start on its own only on Macs with M1, M2 or M3: Asahi Linux, which it's built on, doesn't support newer chips yet." ;;
   esac
   if [ "$(sysctl -n kern.hv_vmm_present 2>/dev/null)" = 1 ] && [ "$PLAN_ONLY" != 1 ]; then
-    stop "This is a virtual Mac. ClaudeOS installs on a real Mac's own disk."
+    stop "This is a virtual Mac. Chat Computer installs on a real Mac's own disk."
   fi
   MACOS="$(sw_vers -productVersion 2>/dev/null)"
   local major minor
@@ -229,7 +229,7 @@ check_mac() {
   minor="${MACOS#*.}"; minor="${minor%%.*}"
   case "$major$minor" in ''|*[!0-9]*) stop "This doesn't look like a Mac (no macOS version found)." ;; esac
   if [ "$major" -lt 13 ] || { [ "$major" -eq 13 ] && [ "$minor" -lt 5 ]; }; then
-    stop "ClaudeOS needs macOS 13.5 or newer to install; this Mac has macOS $MACOS. Update it in System Settings, then run setup again."
+    stop "Chat Computer needs macOS 13.5 or newer to install; this Mac has macOS $MACOS. Update it in System Settings, then run setup again."
   fi
   if ! id -Gn 2>/dev/null | tr ' ' '\n' | grep -qx admin; then
     stop "Your account on this Mac isn't an administrator. Log in as one, then run setup again."
@@ -238,7 +238,7 @@ check_mac() {
   # Asahi Linux can't use screens connected over USB-C or Thunderbolt yet, only the HDMI port.
   case "$(system_profiler SPHardwareDataType 2>/dev/null | sed -n 's/^ *Model Name: //p')" in
     "Mac mini"*|"Mac Studio"*|"Mac Pro"*)
-      say "In ClaudeOS, the screen must be connected to this Mac's HDMI port: screens on USB-C or Thunderbolt"
+      say "In Chat Computer, the screen must be connected to this Mac's HDMI port: screens on USB-C or Thunderbolt"
       say "don't work in Asahi Linux yet." ;;
   esac
 }
@@ -282,9 +282,9 @@ macos_volume() {   # macOS's system volume, like disk3s1 (/ is mounted from a sn
   system_volume "$c"
 }
 
-# ClaudeOS's pieces on this Mac, from diskutil: its start-up volume's container (with a volume "ClaudeOS"), its
-# EFI partition ("EFI - CLAUD", the Asahi installer's name for it), the two Linux partitions after it, and the
-# ClaudeOS drive.
+# Chat Computer's pieces on this Mac, from diskutil: its start-up volume's container (with a volume "Chat Computer"), its
+# EFI partition ("EFI - CHAT", the Asahi installer's name for it), the two Linux partitions after it, and the
+# Chat Computer drive.
 find_install() {
   FOUND_STUB="" FOUND_STUB_VOLUME="" FOUND_ESP="" FOUND_BOOT="" FOUND_LINUX="" FOUND_DRIVE=""
   local d="$1" i=0 id content name after="" c
@@ -301,7 +301,7 @@ find_install() {
         fi
         after="" ;;
       EFI)
-        case "$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')" in "EFI - CLAUD"*) FOUND_ESP="$id"; after=esp ;; *) after="" ;; esac ;;
+        case "$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')" in "EFI - CHAT"*) FOUND_ESP="$id"; after=esp ;; *) after="" ;; esac ;;
       "Linux Filesystem"|"0FC63DAF-8483-4772-8E79-3D69D8477DE4")
         if [ "$after" = esp ]; then FOUND_BOOT="$id"; after=boot
         elif [ "$after" = boot ]; then FOUND_LINUX="$id"; after=linux
@@ -349,9 +349,9 @@ folder_bytes() {   # the size of a folder, as macOS reports file sizes (files ke
 
 choose_folders() {
   step "Your files"
-  say "ClaudeOS can't open macOS's own files: on this Mac they're always encrypted, with keys only macOS can use"
-  say "(FileVault or not). So setup copies the folders you choose onto a drive called ClaudeOS that both systems open;"
-  say "macOS keeps its own copies. What you save on that drive in ClaudeOS is in macOS too, and you can send more"
+  say "Chat Computer can't open macOS's own files: on this Mac they're always encrypted, with keys only macOS can use"
+  say "(FileVault or not). So setup copies the folders you choose onto a drive called ChatComp that both systems open;"
+  say "macOS keeps its own copies. What you save on that drive in Chat Computer is in macOS too, and you can send more"
   say "later (run setup again)."
   say "macOS may ask whether Terminal can open your Desktop, Documents and Downloads folders: choose OK."
   say ""
@@ -367,7 +367,7 @@ choose_folders() {
   done
   CHOSEN=""
   CHOSEN_BYTES=0
-  if ask_yes "Bring all of these to ClaudeOS ($(size_text "$total"))?" y; then
+  if ask_yes "Bring all of these to Chat Computer ($(size_text "$total"))?" y; then
     CHOSEN="$names"
     CHOSEN_BYTES="$total"
   else
@@ -386,7 +386,7 @@ choose_folders() {
 
 # ------------------------------------------------------------------ signing in to Claude
 claude_program() {   # the official Claude program, from Anthropic's Agent SDK
-  if [ -n "${CLAUDEOS_ENGINE_CLI:-}" ]; then CLAUDE="$CLAUDEOS_ENGINE_CLI"; return 0; fi
+  if [ -n "${CHATCOMPUTER_ENGINE_CLI:-}" ]; then CLAUDE="$CHATCOMPUTER_ENGINE_CLI"; return 0; fi
   CLAUDE="$WORK/claude/claude_agent_sdk/_bundled/claude"
   [ -x "$CLAUDE" ] && return 0
   mkdir -p "$WORK/claude"
@@ -419,21 +419,21 @@ sign_in() {   # sets TOKEN, and LOGIN (the full sign-in for the phone) or ""
   [ -n "$TOKEN" ] || stop "No valid Claude sign-in code was entered."
   good "Got it."
   say ""
-  say "Besides talking, you can type to ClaudeOS in the Claude app on your phone: the phone is its keyboard."
+  say "Besides talking, you can type to Chat Computer in the Claude app on your phone: the phone is its keyboard."
   if ask_yes "Set up typing from your phone? (your browser opens once more)" y; then
     tmp="$(mktemp -d)"
     CLAUDE_CONFIG_DIR="$tmp" "$CLAUDE" auth login --claudeai
     if [ -f "$tmp/.credentials.json" ]; then
       LOGIN="$(cat "$tmp/.credentials.json")"
-      good "Done. In the Claude app on your phone, tap Code, then ClaudeOS."
+      good "Done. In the Claude app on your phone, tap Code, then Chat Computer."
     else
-      warn "That sign-in didn't finish. ClaudeOS works without it; run setup again and choose to sign in again to add it."
+      warn "That sign-in didn't finish. Chat Computer works without it; run setup again and choose to sign in again to add it."
     fi
     rm -rf "$tmp"
   fi
 }
 
-# ------------------------------------------------------------------ Wi-Fi for ClaudeOS's first start
+# ------------------------------------------------------------------ Wi-Fi for Chat Computer's first start
 wifi_device() {
   networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: (Wi-Fi|AirPort)/ { getline; print $2; exit }'
 }
@@ -451,8 +451,8 @@ current_wifi() {
 }
 
 ask_wifi() {   # sets WIFI_SSID and WIFI_PSK
-  step "Wi-Fi for ClaudeOS"
-  say "ClaudeOS finishes installing itself the first time it starts, from the internet, so it needs your Wi-Fi."
+  step "Wi-Fi for Chat Computer"
+  say "Chat Computer finishes installing itself the first time it starts, from the internet, so it needs your Wi-Fi."
   local seen a
   seen="$(current_wifi)"
   WIFI_SSID=""
@@ -464,7 +464,7 @@ ask_wifi() {   # sets WIFI_SSID and WIFI_PSK
   read -r a || a=""
   [ -z "$a" ] && a="$seen"
   WIFI_SSID="$a"
-  [ -n "$WIFI_SSID" ] || stop "ClaudeOS needs a Wi-Fi network for its first start."
+  [ -n "$WIFI_SSID" ] || stop "Chat Computer needs a Wi-Fi network for its first start."
   log "Wi-Fi: $WIFI_SSID"
   read_secret "Password for \"$WIFI_SSID\" (it stays hidden; Enter = look it up in this Mac's keychain, which may ask for your Mac's password):"
   WIFI_PSK="$SECRET"
@@ -474,31 +474,31 @@ ask_wifi() {   # sets WIFI_SSID and WIFI_PSK
     if [ -n "$WIFI_PSK" ]; then
       good "Found it in the keychain."
     elif ! ask_yes "No password found. Is \"$WIFI_SSID\" an open network (no password)?" n; then
-      stop "ClaudeOS needs the Wi-Fi password for its first start. Run setup again and type it."
+      stop "Chat Computer needs the Wi-Fi password for its first start. Run setup again and type it."
     fi
   fi
 }
 
 # ------------------------------------------------------------------ the space
 plan_space() {
-  step "Where ClaudeOS goes"
+  step "Where Chat Computer goes"
   read_disk
   DRIVE_BYTES=$((CHOSEN_BYTES + CHOSEN_BYTES / 10 + DRIVE_ROOM))
-  CLAUDEOS_BYTES="$CLAUDEOS_WANT"
-  if [ $((CLAUDEOS_BYTES + DRIVE_BYTES)) -gt "$AVAIL" ]; then
-    CLAUDEOS_BYTES=$((AVAIL - DRIVE_BYTES))
+  CHATCOMPUTER_BYTES="$CHATCOMPUTER_WANT"
+  if [ $((CHATCOMPUTER_BYTES + DRIVE_BYTES)) -gt "$AVAIL" ]; then
+    CHATCOMPUTER_BYTES=$((AVAIL - DRIVE_BYTES))
   fi
-  if [ "$CLAUDEOS_BYTES" -lt "$CLAUDEOS_MIN" ]; then
-    say "macOS can give ClaudeOS $(size_text "$AVAIL") and still keep 38 GB free for its updates."
-    if [ "$AVAIL" -ge $((CLAUDEOS_MIN + DRIVE_ROOM)) ] && [ "$CHOSEN_BYTES" -gt 0 ]; then
-      stop "That's not enough for ClaudeOS ($(size_text "$CLAUDEOS_MIN")) and the $(size_text "$CHOSEN_BYTES") of folders. Run setup again and bring fewer folders, or free up space in macOS."
+  if [ "$CHATCOMPUTER_BYTES" -lt "$CHATCOMPUTER_MIN" ]; then
+    say "macOS can give Chat Computer $(size_text "$AVAIL") and still keep 38 GB free for its updates."
+    if [ "$AVAIL" -ge $((CHATCOMPUTER_MIN + DRIVE_ROOM)) ] && [ "$CHOSEN_BYTES" -gt 0 ]; then
+      stop "That's not enough for Chat Computer ($(size_text "$CHATCOMPUTER_MIN")) and the $(size_text "$CHOSEN_BYTES") of folders. Run setup again and bring fewer folders, or free up space in macOS."
     fi
-    stop "ClaudeOS needs $(size_text $((CLAUDEOS_MIN + DRIVE_ROOM))). Free up space in macOS, then run setup again."
+    stop "Chat Computer needs $(size_text $((CHATCOMPUTER_MIN + DRIVE_ROOM))). Free up space in macOS, then run setup again."
   fi
-  NEED=$((CLAUDEOS_BYTES + DRIVE_BYTES))
+  NEED=$((CHATCOMPUTER_BYTES + DRIVE_BYTES))
   MACOS_NEW=$((TOTAL - NEED))
   say "macOS's partition is $(size_text "$TOTAL") with $(size_text "$FREE") free."
-  say "ClaudeOS gets $(size_text "$CLAUDEOS_BYTES"), and the ClaudeOS drive $(size_text "$DRIVE_BYTES")."
+  say "Chat Computer gets $(size_text "$CHATCOMPUTER_BYTES"), and the Chat Computer drive $(size_text "$DRIVE_BYTES")."
 }
 
 # ------------------------------------------------------------------ the installer
@@ -511,7 +511,7 @@ prepare_installer() {
   mkdir -p "$INST"
   tar -xzf "$WORK/asahi-installer.tar.gz" -C "$INST" || stop "Couldn't unpack the Asahi installer."
   cp "$HERE/installer_data.json" "$INST/installer_data.json"
-  # Fedora's image. ClaudeOS's icon for the Mac's startup options goes into its package (the installer takes it
+  # Fedora's image. Chat Computer's icon for the Mac's startup options goes into its package (the installer takes it
   # from there) once the package is checked, with the Python that comes with the installer. That changes the
   # package's fingerprint, so the new one is noted next to it: running setup again after a stop doesn't download
   # it again.
@@ -524,11 +524,11 @@ prepare_installer() {
   rm -f "$pkg.with-icon"
   fetch "$FEDORA_PACKAGE_URL" "$pkg" "$FEDORA_PACKAGE_SHA256" "Fedora Asahi Remix (about 1.1 GB)"
   if DYLD_LIBRARY_PATH="$INST/Frameworks/Python.framework/Versions/Current/lib" DYLD_FRAMEWORK_PATH="$INST/Frameworks" \
-       "$py" - "$pkg" "$HERE/claudeos.icns" <<'EOF'
+       "$py" - "$pkg" "$HERE/chatcomputer.icns" <<'EOF'
 import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], "a") as z:
-    if "claudeos.icns" not in z.namelist():
-        z.write(sys.argv[2], "claudeos.icns")
+    if "chatcomputer.icns" not in z.namelist():
+        z.write(sys.argv[2], "chatcomputer.icns")
 EOF
   then
     shasum -a 256 "$pkg" | awk '{print $1}' > "$pkg.with-icon"
@@ -536,28 +536,28 @@ EOF
     # Without it in the package, the installer must not look for it: it shows its own icon instead.
     if [ "$(shasum -a 256 "$pkg" | awk '{print $1}')" != "$FEDORA_PACKAGE_SHA256" ]; then
       rm -f "$pkg"
-      stop "Fedora's package was damaged while ClaudeOS's icon was added to it. Run setup again (it downloads it again)."
+      stop "Fedora's package was damaged while Chat Computer's icon was added to it. Run setup again (it downloads it again)."
     fi
-    warn "ClaudeOS's icon couldn't be added; the startup options show the installer's own."
+    warn "Chat Computer's icon couldn't be added; the startup options show the installer's own."
     sed '/"icon":/d' "$HERE/installer_data.json" > "$INST/installer_data.json"
   fi
 }
 
 run_installer() {
-  step "Installing ClaudeOS next to macOS"
-  say "The Asahi installer makes room next to macOS and installs ClaudeOS's base (Fedora Linux) there. Setup"
+  step "Installing Chat Computer next to macOS"
+  say "The Asahi installer makes room next to macOS and installs Chat Computer's base (Fedora Linux) there. Setup"
   say "answers its questions. When it asks for your Mac's password, type it (it stays hidden) and press Enter."
   say "It takes about 10 to 20 minutes; your Mac may seem to freeze while macOS's partition shrinks. That's normal."
   say "First, your Mac's password for setup itself:"
-  sudo -v || stop "Setup needs your Mac's password to install ClaudeOS."
+  sudo -v || stop "Setup needs your Mac's password to install Chat Computer."
   local code=0
   (
     cd "$INST" || exit 6
-    export REPO_BASE="$WORK" DISTRO="ClaudeOS" DISTRO_DOCS="https://docs.fedoraproject.org/en-US/fedora-asahi-remix/"
+    export REPO_BASE="$WORK" DISTRO="Chat Computer" DISTRO_DOCS="https://docs.fedoraproject.org/en-US/fedora-asahi-remix/"
     unset REPORT REPORT_TAG EXPERT
     # shellcheck disable=SC2086
-    CLAUDEOS_MACOS_SIZE="${MACOS_NEW}B" CLAUDEOS_OS_SIZE="${CLAUDEOS_BYTES}B" \
-      ${CLAUDEOS_EXPECT:-expect} -f "$HERE/drive-installer.exp" -- ${CLAUDEOS_INSTALLER_CMD:-caffeinate -dis sudo -E ./install.sh}
+    CHATCOMPUTER_MACOS_SIZE="${MACOS_NEW}B" CHATCOMPUTER_OS_SIZE="${CHATCOMPUTER_BYTES}B" \
+      ${CHATCOMPUTER_EXPECT:-expect} -f "$HERE/drive-installer.exp" -- ${CHATCOMPUTER_INSTALLER_CMD:-caffeinate -dis sudo -E ./install.sh}
   ) || code=$?
   [ -f "$INST/installer.log" ] && cp "$INST/installer.log" "$WORK/asahi-installer.log"
   case "$code" in
@@ -565,22 +565,22 @@ run_installer() {
     2) stop "macOS's partition couldn't be made smaller. If Time Machine keeps local snapshots, see https://alx.sh/tmcleanup; then run setup again." ;;
     3) stop "There wasn't enough free space after all. Free up space in macOS, then run setup again." ;;
     5) stop "macOS needs updating first. Update it in System Settings, then run setup again." ;;
-    *) stop "The Asahi installer didn't finish (see above; its log is $WORK/asahi-installer.log). If it made room or partitions, run setup again and choose \"Remove ClaudeOS from this Mac\" to clean up." ;;
+    *) stop "The Asahi installer didn't finish (see above; its log is $WORK/asahi-installer.log). If it made room or partitions, run setup again and choose \"Remove Chat Computer from this Mac\" to clean up." ;;
   esac
   # Which partitions it made, from its log: "Installing partition {'name': 'EFI', ...} -> disk0s4".
   EFI_DEV="$(sed -n "s/.*Installing partition {'name': 'EFI'.* -> \(disk[0-9]*s[0-9]*\)\$/\1/p" "$WORK/asahi-installer.log" | tail -n 1)"
   ROOT_DEV="$(sed -n "s/.*Installing partition {'name': 'Root'.* -> \(disk[0-9]*s[0-9]*\)\$/\1/p" "$WORK/asahi-installer.log" | tail -n 1)"
   [ -n "$EFI_DEV" ] && [ -n "$ROOT_DEV" ] || stop "Setup couldn't find the partitions the installer made (its log: $WORK/asahi-installer.log)."
-  good "ClaudeOS's base is installed."
+  good "Chat Computer's base is installed."
 }
 
-# ------------------------------------------------------------------ the ClaudeOS drive
+# ------------------------------------------------------------------ the Chat Computer drive
 make_drive() {
-  step "The ClaudeOS drive"
+  step "The Chat Computer drive"
   sudo diskutil addPartition "$ROOT_DEV" ExFAT "$DRIVE_NAME" 0 >> "$LOG" 2>&1 \
-    || stop "Couldn't make the ClaudeOS drive in the space left over (details: $LOG)."
+    || stop "Couldn't make the Chat Computer drive in the space left over (details: $LOG)."
   find_install "$DISK" || true
-  [ -n "$FOUND_DRIVE" ] || stop "Setup made the ClaudeOS drive but can't find it now."
+  [ -n "$FOUND_DRIVE" ] || stop "Setup made the Chat Computer drive but can't find it now."
   diskutil info -plist "$FOUND_DRIVE" > "$WORK/drive.plist" 2>/dev/null
   DRIVE_PARTUUID="$(plist "$WORK/drive.plist" DiskUUID)"
   DRIVE_MOUNT="$(plist "$WORK/drive.plist" MountPoint)"
@@ -589,12 +589,12 @@ make_drive() {
     diskutil info -plist "$FOUND_DRIVE" > "$WORK/drive.plist" 2>/dev/null
     DRIVE_MOUNT="$(plist "$WORK/drive.plist" MountPoint)"
   fi
-  [ -n "$DRIVE_MOUNT" ] && [ -d "$DRIVE_MOUNT" ] || stop "Couldn't open the ClaudeOS drive."
+  [ -n "$DRIVE_MOUNT" ] && [ -d "$DRIVE_MOUNT" ] || stop "Couldn't open the Chat Computer drive."
   # Spotlight and Finder's own files would only clutter it.
   sudo mdutil -i off "$DRIVE_MOUNT" >> "$LOG" 2>&1 || true
   touch "$DRIVE_MOUNT/.metadata_never_index" 2>/dev/null
-  mkdir -p "$DRIVE_MOUNT/.claudeos"
-  good "The ClaudeOS drive is ready ($(size_text "$DRIVE_BYTES"))."
+  mkdir -p "$DRIVE_MOUNT/.chatcomputer"
+  good "The Chat Computer drive is ready ($(size_text "$DRIVE_BYTES"))."
 }
 
 copy_folders() {   # copy_folders DEST FOLDER...: copies, without macOS's extra file data (no ._ files)
@@ -613,23 +613,23 @@ copy_folders() {   # copy_folders DEST FOLDER...: copies, without macOS's extra 
   done
 }
 
-# ------------------------------------------------------------------ ClaudeOS's first start
+# ------------------------------------------------------------------ Chat Computer's first start
 write_first_start() {
-  step "Preparing ClaudeOS's first start"
+  step "Preparing Chat Computer's first start"
   local esp_mount p
   diskutil mount "$EFI_DEV" >> "$LOG" 2>&1
   diskutil info -plist "$EFI_DEV" > "$WORK/esp.plist" 2>/dev/null
   esp_mount="$(plist "$WORK/esp.plist" MountPoint)"
-  [ -n "$esp_mount" ] && [ -f "$esp_mount/EFI/fedora/grub.cfg" ] || stop "Couldn't open ClaudeOS's EFI partition ($EFI_DEV)."
-  p="$WORK/payload/claudeos"
+  [ -n "$esp_mount" ] && [ -f "$esp_mount/EFI/fedora/grub.cfg" ] || stop "Couldn't open Chat Computer's EFI partition ($EFI_DEV)."
+  p="$WORK/payload/chatcomputer"
   rm -rf "$WORK/payload"
   mkdir -p "$p/secrets"
   chmod 700 "$WORK/payload" "$p/secrets"
-  # ClaudeOS itself: what runs on Linux (no setup tools for Windows or macOS).
+  # Chat Computer itself: what runs on Linux (no setup tools for Windows or macOS).
   # (No extended attributes: macOS adds its own to files, which Fedora's tar would only warn about.)
   COPYFILE_DISABLE=1 tar --no-xattrs --exclude '__pycache__' --exclude '.DS_Store' -czf "$p/app.tar.gz" -C "$SRC" \
-    claudeos linux requirements-linux.txt pyproject.toml README.md ARCHITECTURE.md 2>> "$LOG" \
-    || stop "Couldn't pack ClaudeOS."
+    chatcomputer linux requirements-linux.txt pyproject.toml README.md ARCHITECTURE.md 2>> "$LOG" \
+    || stop "Couldn't pack Chat Computer."
   # Written afresh, not copied: a copy would carry the download's quarantine mark, which FAT keeps as a ._ file.
   cat "$HERE/esp/firstboot.sh" > "$p/firstboot.sh"
   ( umask 077
@@ -648,23 +648,23 @@ write_first_start() {
   )
   printf '{\n  "user_name": "%s",\n  "timezone": "%s",\n  "locale": "en_US.UTF-8"\n}\n' \
     "$(printf '%s' "$REAL_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')" "$TZONE" > "$p/settings.json"
-  sudo mkdir -p "$esp_mount/claudeos" || stop "Couldn't write to ClaudeOS's EFI partition."
-  sudo cp "$esp_mount/EFI/fedora/grub.cfg" "$esp_mount/claudeos/fedora-grub.cfg"
-  sudo cp -R "$p/." "$esp_mount/claudeos/" || stop "Couldn't write to ClaudeOS's EFI partition."
+  sudo mkdir -p "$esp_mount/chatcomputer" || stop "Couldn't write to Chat Computer's EFI partition."
+  sudo cp "$esp_mount/EFI/fedora/grub.cfg" "$esp_mount/chatcomputer/fedora-grub.cfg"
+  sudo cp -R "$p/." "$esp_mount/chatcomputer/" || stop "Couldn't write to Chat Computer's EFI partition."
   sed -e "s/@KERNEL@/$FEDORA_KERNEL/g" -e "s/@BOOT_UUID@/$FEDORA_BOOT_UUID/g" -e "s/@ROOT_UUID@/$FEDORA_ROOT_UUID/g" \
     "$HERE/esp/grub-firststart.cfg" > "$WORK/grub-firststart.cfg"
-  sudo cp "$WORK/grub-firststart.cfg" "$esp_mount/EFI/fedora/grub.cfg" || stop "Couldn't write to ClaudeOS's EFI partition."
+  sudo cp "$WORK/grub-firststart.cfg" "$esp_mount/EFI/fedora/grub.cfg" || stop "Couldn't write to Chat Computer's EFI partition."
   sync
   rm -rf "$WORK/payload"
   diskutil unmount "$EFI_DEV" >> "$LOG" 2>&1
-  good "ClaudeOS will set itself up when it first starts."
+  good "Chat Computer will set itself up when it first starts."
 }
 
 # ------------------------------------------------------------------ the four things setup does
 install() {
   check_mac
   if find_install "$(system_disk)"; then
-    stop "ClaudeOS is already on this Mac. To install it again, run setup and choose \"Remove ClaudeOS from this Mac\" first."
+    stop "Chat Computer is already on this Mac. To install it again, run setup and choose \"Remove Chat Computer from this Mac\" first."
   fi
   if ! curl -sSfI --max-time 20 "https://fedora-asahi-remix.org/" -o /dev/null 2>/dev/null; then
     stop "This Mac can't reach the internet (fedora-asahi-remix.org). Connect to Wi-Fi, then run setup again."
@@ -674,15 +674,15 @@ install() {
   REAL_NAME="$(id -F 2>/dev/null)"
   [ -n "$REAL_NAME" ] || REAL_NAME="$(id -un)"
   ACCOUNT="$(id -un | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '-' | sed 's/^[^a-z_]*//; s/-*$//' | cut -c1-30)"
-  [ -n "$ACCOUNT" ] || ACCOUNT="claudeos"
+  [ -n "$ACCOUNT" ] || ACCOUNT="chatcomputer"
   TZONE="$(readlink /etc/localtime 2>/dev/null | sed -n 's|.*zoneinfo/||p')"
   [ -n "$TZONE" ] || TZONE="UTC"
   say "Name: $REAL_NAME   Account: $ACCOUNT   Time zone: $TZONE"
   if [ "$PLAN_ONLY" = 1 ]; then
     step "Plan only"
     say "Nothing was changed. setup would shrink macOS's partition ($STORE) to $(size_text "$MACOS_NEW"),"
-    say "give ClaudeOS $(size_text "$CLAUDEOS_BYTES") and the ClaudeOS drive $(size_text "$DRIVE_BYTES"), and copy:${CHOSEN:- nothing}."
-    printf 'PLAN store=%s macos_new=%s claudeos=%s drive=%s folders=%s\n' "$STORE" "$MACOS_NEW" "$CLAUDEOS_BYTES" "$DRIVE_BYTES" "$CHOSEN" >> "$LOG"
+    say "give Chat Computer $(size_text "$CHATCOMPUTER_BYTES") and the Chat Computer drive $(size_text "$DRIVE_BYTES"), and copy:${CHOSEN:- nothing}."
+    printf 'PLAN store=%s macos_new=%s chatcomputer=%s drive=%s folders=%s\n' "$STORE" "$MACOS_NEW" "$CHATCOMPUTER_BYTES" "$DRIVE_BYTES" "$CHOSEN" >> "$LOG"
     return 0
   fi
   sign_in
@@ -693,10 +693,10 @@ install() {
   step "Ready"
   say "This is what happens now:"
   say "  1. macOS's partition shrinks to $(size_text "$MACOS_NEW"). Your apps and files stay."
-  say "  2. ClaudeOS gets $(size_text "$CLAUDEOS_BYTES") next to macOS (its base is Fedora Linux, downloaded now: 1.2 GB)."
-  say "  3. The ClaudeOS drive gets $(size_text "$DRIVE_BYTES"), with copies of:${CHOSEN:- (nothing yet)}."
+  say "  2. Chat Computer gets $(size_text "$CHATCOMPUTER_BYTES") next to macOS (its base is Fedora Linux, downloaded now: 1.2 GB)."
+  say "  3. The Chat Computer drive gets $(size_text "$DRIVE_BYTES"), with copies of:${CHOSEN:- (nothing yet)}."
   say "  4. Then the Mac shuts down, and you do one short step in its startup options. Setup shows you how."
-  say "ClaudeOS then starts instead of macOS. macOS stays one restart away: in ClaudeOS, say \"switch to macOS\"."
+  say "Chat Computer then starts instead of macOS. macOS stays one restart away: in Chat Computer, say \"switch to macOS\"."
   ask_yes "Go ahead?" n || stop "Stopped at your request. Nothing was changed."
 
   prepare_installer
@@ -706,9 +706,9 @@ install() {
   [ -n "$CHOSEN" ] && copy_folders "$DRIVE_MOUNT" $CHOSEN
   write_first_start
   TOKEN="" LOGIN="" WIFI_PSK=""
-  local note="$ROOT/Documents/ClaudeOS recovery password.txt"
+  local note="$ROOT/Documents/Chat Computer recovery password.txt"
   mkdir -p "$ROOT/Documents"
-  printf 'ClaudeOS recovery password\n\nAccount: %s\nPassword: %s\n\nYou normally never need this: ClaudeOS starts without a password. It is for repairs only.\n' \
+  printf 'Chat Computer recovery password\n\nAccount: %s\nPassword: %s\n\nYou normally never need this: Chat Computer starts without a password. It is for repairs only.\n' \
     "$ACCOUNT" "$RECOVERY" > "$note"
   RECOVERY=""
   rm -rf "$WORK/os" "$WORK/asahi-install" "$WORK/claude"
@@ -724,12 +724,12 @@ finish_instructions() {
   say "  3. Click \"$OS_NAME\", then Continue."
   say "  4. If it asks you to \"Select a volume to recover\", choose your usual macOS (Macintosh HD), click Next"
   say "     and type your Mac's password."
-  say "  5. A window \"ClaudeOS installer (second step)\" opens. Press Enter, then type your Mac's user name and"
-  say "     password when asked (it asks twice). The note about the security level is about ClaudeOS only:"
+  say "  5. A window \"Chat Computer installer (second step)\" opens. Press Enter, then type your Mac's user name and"
+  say "     password when asked (it asks twice). The note about the security level is about Chat Computer only:"
   say "     macOS keeps its own."
   say "  6. At \"Installation complete! Press enter to reboot.\", press Enter."
   say ""
-  say "ClaudeOS then sets itself up from your Wi-Fi (about 20 to 40 minutes), restarts once, and says hello."
+  say "Chat Computer then sets itself up from your Wi-Fi (about 20 to 40 minutes), restarts once, and says hello."
   say "If the Mac starts macOS instead, start again from step 1."
   if ask_yes "Shut the Mac down now?" y; then
     sudo shutdown -h now
@@ -739,51 +739,51 @@ finish_instructions() {
 }
 
 send_files() {
-  step "Send files to ClaudeOS"
+  step "Send files to Chat Computer"
   local mount
   find_install "$(system_disk)" || true
-  [ -n "$FOUND_DRIVE" ] || stop "There's no ClaudeOS drive on this Mac. Install ClaudeOS first."
+  [ -n "$FOUND_DRIVE" ] || stop "There's no Chat Computer drive on this Mac. Install Chat Computer first."
   diskutil mount "$FOUND_DRIVE" >> "$LOG" 2>&1
   diskutil info -plist "$FOUND_DRIVE" > "$WORK/drive.plist" 2>/dev/null
   mount="$(plist "$WORK/drive.plist" MountPoint)"
-  [ -n "$mount" ] || stop "Couldn't open the ClaudeOS drive."
+  [ -n "$mount" ] || stop "Couldn't open the Chat Computer drive."
   choose_folders
   local free
   free="$(plist "$WORK/drive.plist" FreeSpace)"
   case "$free" in ''|*[!0-9]*) free=0 ;; esac
   if [ "$free" -gt 0 ] && [ "$CHOSEN_BYTES" -gt "$free" ]; then
-    stop "The ClaudeOS drive has $(size_text "$free") free; those folders need $(size_text "$CHOSEN_BYTES")."
+    stop "The Chat Computer drive has $(size_text "$free") free; those folders need $(size_text "$CHOSEN_BYTES")."
   fi
   # shellcheck disable=SC2086
   [ -n "$CHOSEN" ] && copy_folders "$mount" $CHOSEN
-  good "Done. ClaudeOS sees them the next time it starts (in Mac, on the ClaudeOS drive)."
+  good "Done. Chat Computer sees them the next time it starts (in Mac, on the Chat Computer drive)."
 }
 
 sign_in_again() {
   local mount
   find_install "$(system_disk)" || true
-  [ -n "$FOUND_DRIVE" ] || stop "There's no ClaudeOS drive on this Mac. Install ClaudeOS first."
+  [ -n "$FOUND_DRIVE" ] || stop "There's no Chat Computer drive on this Mac. Install Chat Computer first."
   diskutil mount "$FOUND_DRIVE" >> "$LOG" 2>&1
   diskutil info -plist "$FOUND_DRIVE" > "$WORK/drive.plist" 2>/dev/null
   mount="$(plist "$WORK/drive.plist" MountPoint)"
-  [ -n "$mount" ] || stop "Couldn't open the ClaudeOS drive."
+  [ -n "$mount" ] || stop "Couldn't open the Chat Computer drive."
   sign_in
-  mkdir -p "$mount/.claudeos"
+  mkdir -p "$mount/.chatcomputer"
   ( umask 077
-    printf '%s\n' "$TOKEN" > "$mount/.claudeos/claude_token"
-    if [ -n "$LOGIN" ]; then printf '%s\n' "$LOGIN" > "$mount/.claudeos/claude_login.json"; fi
+    printf '%s\n' "$TOKEN" > "$mount/.chatcomputer/claude_token"
+    if [ -n "$LOGIN" ]; then printf '%s\n' "$LOGIN" > "$mount/.chatcomputer/claude_login.json"; fi
   )
   TOKEN="" LOGIN=""
-  good "Done. Restart into ClaudeOS; it takes the new sign-in when it starts and deletes this copy."
+  good "Done. Restart into Chat Computer; it takes the new sign-in when it starts and deletes this copy."
 }
 
 choose_start() {
   step "What starts when the Mac turns on"
   find_install "$(system_disk)" || true
-  [ -n "$FOUND_STUB" ] || stop "ClaudeOS isn't installed on this Mac."
+  [ -n "$FOUND_STUB" ] || stop "Chat Computer isn't installed on this Mac."
   ask_choice "What should start when the Mac turns on?" \
-    "ClaudeOS (macOS stays one restart away: in ClaudeOS, say \"switch to macOS\")" \
-    "macOS (ClaudeOS stays installed: hold the power button at start to choose it)"
+    "Chat Computer (macOS stays one restart away: in Chat Computer, say \"switch to macOS\")" \
+    "macOS (Chat Computer stays installed: hold the power button at start to choose it)"
   local target
   if [ "$CHOICE" = 1 ]; then
     target="$FOUND_STUB_VOLUME"
@@ -803,13 +803,13 @@ choose_start() {
 }
 
 remove() {
-  step "Remove ClaudeOS from this Mac"
+  step "Remove Chat Computer from this Mac"
   read_disk
   if ! find_install "$DISK"; then
-    grow_macos || say "ClaudeOS isn't installed on this Mac. Nothing was changed."
+    grow_macos || say "Chat Computer isn't installed on this Mac. Nothing was changed."
     return 0
   fi
-  say "This deletes ClaudeOS and gives its space back to macOS:"
+  say "This deletes Chat Computer and gives its space back to macOS:"
   [ -n "$FOUND_STUB" ] && say "  * its start-up volume ($FOUND_STUB)"
   [ -n "$FOUND_ESP" ] && say "  * its EFI partition and its two Linux partitions ($FOUND_ESP ${FOUND_BOOT:-} ${FOUND_LINUX:-})"
   local mount="" used=0
@@ -818,26 +818,26 @@ remove() {
     diskutil info -plist "$FOUND_DRIVE" > "$WORK/drive.plist" 2>/dev/null
     mount="$(plist "$WORK/drive.plist" MountPoint)"
     [ -n "$mount" ] && used="$(du -sk "$mount" 2>/dev/null | awk '{ printf "%d", $1 * 1024 }')"
-    say "  * the ClaudeOS drive ($FOUND_DRIVE), with $(size_text "${used:-0}") of files"
+    say "  * the Chat Computer drive ($FOUND_DRIVE), with $(size_text "${used:-0}") of files"
   fi
   say "macOS, your apps and the files in your macOS folders stay as they are."
-  if [ -n "$mount" ] && [ -n "$(find "$mount" -type f ! -path '*/.claudeos/*' ! -path '*/.Spotlight-V100/*' \
+  if [ -n "$mount" ] && [ -n "$(find "$mount" -type f ! -path '*/.chatcomputer/*' ! -path '*/.Spotlight-V100/*' \
        ! -path '*/.fseventsd/*' ! -name '.metadata_never_index' ! -name '.DS_Store' 2>/dev/null | head -n 1)" ]; then
-    if ask_yes "Copy what's on the ClaudeOS drive into a folder \"ClaudeOS files\" in your home folder first?" y; then
+    if ask_yes "Copy what's on the Chat Computer drive into a folder \"Chat Computer files\" in your home folder first?" y; then
       local freebytes
       freebytes="$(df -k "$ROOT" | awk 'NR==2 { printf "%d", $4 * 1024 }')"
       if [ "$used" -ge "$freebytes" ]; then
-        stop "macOS has $(size_text "$freebytes") free, not enough for the $(size_text "$used") on the ClaudeOS drive. Nothing was changed."
+        stop "macOS has $(size_text "$freebytes") free, not enough for the $(size_text "$used") on the Chat Computer drive. Nothing was changed."
       fi
       say "Copying..."
-      COPYFILE_DISABLE=1 rsync -rt --exclude '.claudeos' --exclude '.metadata_never_index' --exclude '.Spotlight-V100' \
-        --exclude '.fseventsd' "$mount/" "$ROOT/ClaudeOS files/" >> "$LOG" 2>&1 \
-        || stop "Copying the ClaudeOS drive didn't finish (details: $LOG). Nothing was removed."
-      good "Copied to \"ClaudeOS files\" in your home folder."
+      COPYFILE_DISABLE=1 rsync -rt --exclude '.chatcomputer' --exclude '.metadata_never_index' --exclude '.Spotlight-V100' \
+        --exclude '.fseventsd' "$mount/" "$ROOT/Chat Computer files/" >> "$LOG" 2>&1 \
+        || stop "Copying the Chat Computer drive didn't finish (details: $LOG). Nothing was removed."
+      good "Copied to \"Chat Computer files\" in your home folder."
     fi
   fi
-  ask_word "Type REMOVE to remove ClaudeOS (anything else keeps it):" REMOVE || { say "Kept ClaudeOS. Nothing was changed."; return 0; }
-  sudo -v || stop "Setup needs your Mac's password to remove ClaudeOS."
+  ask_word "Type REMOVE to remove Chat Computer (anything else keeps it):" REMOVE || { say "Kept Chat Computer. Nothing was changed."; return 0; }
+  sudo -v || stop "Setup needs your Mac's password to remove Chat Computer."
   # macOS first in the startup options, so the Mac starts it by itself afterwards.
   local macos_vol
   macos_vol="$(macos_volume)"
@@ -852,19 +852,19 @@ remove() {
   fi
   [ -n "$mount" ] && diskutil unmount force "$FOUND_DRIVE" >> "$LOG" 2>&1
   if [ -n "$FOUND_STUB" ]; then
-    sudo diskutil apfs deleteContainer "$FOUND_STUB" >> "$LOG" 2>&1 || stop "Couldn't delete ClaudeOS's start-up volume (details: $LOG)."
+    sudo diskutil apfs deleteContainer "$FOUND_STUB" >> "$LOG" 2>&1 || stop "Couldn't delete Chat Computer's start-up volume (details: $LOG)."
   fi
   local part
   for part in $FOUND_ESP $FOUND_BOOT $FOUND_LINUX $FOUND_DRIVE; do
     sudo diskutil eraseVolume free free "$part" >> "$LOG" 2>&1 || stop "Couldn't delete $part (details: $LOG). Run setup again to finish."
   done
-  good "ClaudeOS is deleted."
-  rm -f "$ROOT/Documents/ClaudeOS recovery password.txt"
+  good "Chat Computer is deleted."
+  rm -f "$ROOT/Documents/Chat Computer recovery password.txt"
   if sudo diskutil apfs resizeContainer "$STORE" 0 >> "$LOG" 2>&1; then
     good "macOS has its space back. This Mac is back to just macOS."
   else
     warn "macOS's partition couldn't grow into the free space now (details: $LOG). To try again, run setup and"
-    warn "choose \"Remove ClaudeOS from this Mac\" once more."
+    warn "choose \"Remove Chat Computer from this Mac\" once more."
   fi
 }
 
@@ -876,7 +876,7 @@ grow_macos() {
   max="$(plist "$WORK/limits.plist" MaximumSize)"
   case "$cur$max" in ''|*[!0-9]*) return 1 ;; esac
   [ $((max - cur)) -gt "$GB" ] || return 1
-  say "ClaudeOS isn't on this Mac, but $(size_text $((max - cur))) of free space is right after macOS's partition."
+  say "Chat Computer isn't on this Mac, but $(size_text $((max - cur))) of free space is right after macOS's partition."
   ask_yes "Give that space back to macOS?" y || { say "Nothing was changed."; return 0; }
   sudo -v || stop "Setup needs your Mac's password to give macOS its space."
   if sudo diskutil apfs resizeContainer "$STORE" 0 >> "$LOG" 2>&1; then
@@ -889,15 +889,15 @@ grow_macos() {
 main() {
   mkdir -p "$WORK"
   chmod 700 "$WORK"
-  printf '\n\033[1mClaudeOS Setup\033[0m\n'
-  say "ClaudeOS is its own system, started instead of macOS. macOS, your apps and your files stay, one restart away."
+  printf '\n\033[1mChat Computer Setup\033[0m\n'
+  say "Chat Computer is its own system, started instead of macOS. macOS, your apps and your files stay, one restart away."
   [ "$PLAN_ONLY" = 1 ] && warn "Plan only: nothing will be changed."
   ask_choice "What would you like to do?" \
-    "Install ClaudeOS on this Mac" \
-    "Send more files to ClaudeOS" \
-    "Sign ClaudeOS in to Claude again" \
-    "Choose what starts when the Mac turns on: ClaudeOS or macOS" \
-    "Remove ClaudeOS from this Mac"
+    "Install Chat Computer on this Mac" \
+    "Send more files to Chat Computer" \
+    "Sign Chat Computer in to Claude again" \
+    "Choose what starts when the Mac turns on: Chat Computer or macOS" \
+    "Remove Chat Computer from this Mac"
   case "$CHOICE" in
     1) install ;;
     2) send_files ;;

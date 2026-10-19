@@ -1,4 +1,4 @@
-//! Text in Atkinson Hyperlegible Next, set with ClaudeOS's own font engine: measuring, wrapping and
+//! Text in Atkinson Hyperlegible Next, set with Chat Computer's own font engine: measuring, wrapping and
 //! drawing lines. Sizes are in 1/256 of a pixel.
 
 use alloc::vec;
@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use font::raster::{Pen, Raster, ONE};
 use font::Font;
 
-static ATKINSON: &[u8] = include_bytes!("../../../claudeos/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf");
+static ATKINSON: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf");
 
 /// Some letters reach a little past their own width (an italic f, an accent); the drawn line keeps
 /// this much room on each side, in pixels.

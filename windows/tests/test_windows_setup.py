@@ -1,4 +1,4 @@
-"""Checks for ClaudeOS Setup (the Windows tool) that can run on Linux.
+"""Checks for Chat Computer Setup (the Windows tool) that can run on Linux.
 
 * The PowerShell unit tests (windows/tests/Run-Tests.ps1) under pwsh.
 * The generated installer answers against the Ubuntu installer's own schema.
@@ -6,8 +6,8 @@
 * The two scripts that run inside the installer (shellcheck, and finish.sh against a fake system).
 * Windows PowerShell 5.1 compatibility (PSScriptAnalyzer) and plain-ASCII sources.
 
-Tool locations can be given with CLAUDEOS_PWSH, CLAUDEOS_PSSA (folder containing the
-PSScriptAnalyzer module) and CLAUDEOS_SUBIQUITY_SCHEMA; tests that need a missing tool are skipped.
+Tool locations can be given with CHATCOMPUTER_PWSH, CHATCOMPUTER_PSSA (folder containing the
+PSScriptAnalyzer module) and CHATCOMPUTER_SUBIQUITY_SCHEMA; tests that need a missing tool are skipped.
 """
 import json
 import os
@@ -34,9 +34,9 @@ def _find(env, *candidates):
     return None
 
 
-PWSH = _find("CLAUDEOS_PWSH", shutil.which("pwsh"), SCRATCH / "tools/pwsh/pwsh")
-PSSA = _find("CLAUDEOS_PSSA", SCRATCH / "tools/modules")
-SCHEMA = _find("CLAUDEOS_SUBIQUITY_SCHEMA", SCRATCH / "dl/subiquity-noble/autoinstall-schema.json")
+PWSH = _find("CHATCOMPUTER_PWSH", shutil.which("pwsh"), SCRATCH / "tools/pwsh/pwsh")
+PSSA = _find("CHATCOMPUTER_PSSA", SCRATCH / "tools/modules")
+SCHEMA = _find("CHATCOMPUTER_SUBIQUITY_SCHEMA", SCRATCH / "dl/subiquity-noble/autoinstall-schema.json")
 needs_pwsh = pytest.mark.skipif(PWSH is None, reason="pwsh not available")
 
 
@@ -73,13 +73,13 @@ def test_answers_match_the_installer_schema(generated, name):
     jsonschema.validate(ai, schema)
 
 
-def test_answers_only_use_free_space_and_run_claudeos_steps(generated):
+def test_answers_only_use_free_space_and_run_chatcomputer_steps(generated):
     ai = _load(generated / "autoinstall-wifi.yaml")
-    # Free space only, on the disk the installer itself is on (setup put it on the disk ClaudeOS goes on).
+    # Free space only, on the disk the installer itself is on (setup put it on the disk Chat Computer goes on).
     assert ai["storage"]["layout"] == {"name": "direct", "mode": "use_gap", "match": {"install-media": True}}
-    assert ai["early-commands"] == [["sh", "/cdrom/claudeos/guard.sh", "0123456789abcdef01234567"],
-                                    ["sh", "/cdrom/claudeos/network.sh"]]
-    assert ai["late-commands"] == [["sh", "/cdrom/claudeos/finish.sh", "rensh", "0123456789abcdef01234567"]]
+    assert ai["early-commands"] == [["sh", "/cdrom/chatcomputer/guard.sh", "0123456789abcdef01234567"],
+                                    ["sh", "/cdrom/chatcomputer/network.sh"]]
+    assert ai["late-commands"] == [["sh", "/cdrom/chatcomputer/finish.sh", "rensh", "0123456789abcdef01234567"]]
     assert ai["identity"]["username"] == "rensh"
     assert ai["identity"]["realname"] == 'Ren Shu "é"'
     assert ai["kernel"] == {"flavor": "hwe"}
@@ -108,11 +108,11 @@ def test_boot_menu(generated):
     assert text.count(" autoinstall ") == 2
     # Without storage version 2 the installer finds no free space on a disk that has partitions.
     assert text.count(" autoinstall subiquity-storage-version=2 ") == 2
-    assert text.index('menuentry "Install ClaudeOS" {') < text.index('menuentry "Install ClaudeOS (older kernel)" {')
-    # Once installed (finish.sh's marker is on the PC), the installer starts ClaudeOS instead of installing again.
-    marker = "/EFI/claudeos/installed-0123456789abcdef01234567"
-    assert text.index(f"if search --no-floppy --file --set=claudeos_esp {marker}; then") \
-        < text.index('menuentry "Start ClaudeOS') < text.index("\nelse\n") < text.index('menuentry "Install ClaudeOS" {')
+    assert text.index('menuentry "Install Chat Computer" {') < text.index('menuentry "Install Chat Computer (older kernel)" {')
+    # Once installed (finish.sh's marker is on the PC), the installer starts Chat Computer instead of installing again.
+    marker = "/EFI/chatcomputer/installed-0123456789abcdef01234567"
+    assert text.index(f"if search --no-floppy --file --set=chatcomputer_esp {marker}; then") \
+        < text.index('menuentry "Start Chat Computer') < text.index("\nelse\n") < text.index('menuentry "Install Chat Computer" {')
     assert "\r" not in text
 
 
@@ -154,17 +154,17 @@ def test_installer_scripts_shellcheck():
 
 def _run_finish(tmp_path, installer_works=True, bitlocker_key=None, update_source=None):
     """finish.sh against a fake installer partition and a fake new system; curtin is a stand-in that records its calls."""
-    src = tmp_path / "cdrom/claudeos"
+    src = tmp_path / "cdrom/chatcomputer"
     target = tmp_path / "target"
     (src / "app/linux/session").mkdir(parents=True)
     (src / "app/linux/firstboot").mkdir(parents=True)
-    (src / "app/claudeos").mkdir(parents=True)
-    (src / "app/linux/install-claudeos.sh").write_text("#!/bin/bash\necho install\n")
-    for unit in ("claudeos-finish-install.service", "claudeos-reclaim-installer.service"):
+    (src / "app/chatcomputer").mkdir(parents=True)
+    (src / "app/linux/install-chatcomputer.sh").write_text("#!/bin/bash\necho install\n")
+    for unit in ("chatcomputer-finish-install.service", "chatcomputer-reclaim-installer.service"):
         (src / "app/linux/firstboot" / unit).write_text((REPO / "linux/firstboot" / unit).read_text())
-    (src / "app/linux/session/claudeos-session").write_text("#!/bin/bash\n")
+    (src / "app/linux/session/chatcomputer-session").write_text("#!/bin/bash\n")
     (src / "app/linux/session/xinitrc").write_text("exec something\n")
-    (src / "app/claudeos/__init__.py").write_text("")
+    (src / "app/chatcomputer/__init__.py").write_text("")
     (src / "secrets").mkdir()
     (src / "secrets/claude_token").write_text("sk-ant-oat01-test\n")
     (src / "secrets/claude_login.json").write_text('{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}}')
@@ -181,12 +181,12 @@ def _run_finish(tmp_path, installer_works=True, bitlocker_key=None, update_sourc
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "curtin-calls"
-    fail = 'case "$*" in *install-claudeos.sh*) exit 1 ;; esac\n' if not installer_works else ""
+    fail = 'case "$*" in *install-chatcomputer.sh*) exit 1 ;; esac\n' if not installer_works else ""
     fake = bin_dir / "curtin"
     fake.write_text(f'#!/bin/sh\necho "$@" >> "{calls}"\n{fail}exit 0\n')
     fake.chmod(0o755)
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDEOS_FINISH_RETRY_WAIT="0",
-               CLAUDEOS_FINISH_SRC=str(src), CLAUDEOS_FINISH_TARGET=str(target))
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CHATCOMPUTER_FINISH_RETRY_WAIT="0",
+               CHATCOMPUTER_FINISH_SRC=str(src), CHATCOMPUTER_FINISH_TARGET=str(target))
     r = subprocess.run(["sh", str(WIN / "installer/finish.sh"), "rensh", "0123456789abcdef"], env=env,
                        capture_output=True, text=True)
     return r, target, calls.read_text().splitlines()
@@ -195,60 +195,60 @@ def _run_finish(tmp_path, installer_works=True, bitlocker_key=None, update_sourc
 def test_finish_script_against_a_fake_system(tmp_path):
     r, target, lines = _run_finish(tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
-    app = target / "opt/claudeos/app"
-    assert (app / "linux/install-claudeos.sh").exists()
+    app = target / "opt/chatcomputer/app"
+    assert (app / "linux/install-chatcomputer.sh").exists()
     mode = lambda p: stat.S_IMODE(p.stat().st_mode)  # noqa: E731
-    assert mode(app / "linux/session/claudeos-session") == 0o755
+    assert mode(app / "linux/session/chatcomputer-session") == 0o755
     assert mode(app / "linux/session/xinitrc") == 0o644
-    assert mode(app / "claudeos/__init__.py") == 0o644
-    token = target / "home/rensh/ClaudeOS/secrets/claude_token"
+    assert mode(app / "chatcomputer/__init__.py") == 0o644
+    token = target / "home/rensh/ChatComputer/secrets/claude_token"
     assert token.read_text() == "sk-ant-oat01-test\n" and mode(token) == 0o600
-    assert mode(target / "home/rensh/ClaudeOS/secrets") == 0o700
-    login = target / "home/rensh/ClaudeOS/.engine/.credentials.json"
+    assert mode(target / "home/rensh/ChatComputer/secrets") == 0o700
+    login = target / "home/rensh/ChatComputer/.engine/.credentials.json"
     assert "refreshToken" in login.read_text() and mode(login) == 0o600
-    assert mode(target / "home/rensh/ClaudeOS/.engine") == 0o700
-    assert mode(target / "home/rensh/ClaudeOS/settings.json") == 0o644
+    assert mode(target / "home/rensh/ChatComputer/.engine") == 0o700
+    assert mode(target / "home/rensh/ChatComputer/settings.json") == 0o644
     # The installer's boot menu (and guard.sh) look for this file to tell that this installer already installed here.
-    assert (target / "boot/efi/EFI/claudeos/installed-0123456789abcdef").read_text().splitlines()[0] == "id=0123456789abcdef"
-    assert any("chown -R rensh:rensh /home/rensh/ClaudeOS" in ln for ln in lines)
+    assert (target / "boot/efi/EFI/chatcomputer/installed-0123456789abcdef").read_text().splitlines()[0] == "id=0123456789abcdef"
+    assert any("chown -R rensh:rensh /home/rensh/ChatComputer" in ln for ln in lines)
     # The first-start safety net is in place (enabled = the wants link)...
-    assert (target / "etc/claudeos/install-user").read_text() == "rensh\n"
-    assert (target / "etc/systemd/system/claudeos-finish-install.service").exists()
-    link = target / "etc/systemd/system/multi-user.target.wants/claudeos-finish-install.service"
-    assert os.readlink(link) == "/etc/systemd/system/claudeos-finish-install.service"
+    assert (target / "etc/chatcomputer/install-user").read_text() == "rensh\n"
+    assert (target / "etc/systemd/system/chatcomputer-finish-install.service").exists()
+    link = target / "etc/systemd/system/multi-user.target.wants/chatcomputer-finish-install.service"
+    assert os.readlink(link) == "/etc/systemd/system/chatcomputer-finish-install.service"
     # ...and the long step ran once.
-    assert sum("install-claudeos.sh --user rensh --from-installer" in ln for ln in lines) == 1
+    assert sum("install-chatcomputer.sh --user rensh --from-installer" in ln for ln in lines) == 1
     # The first start's clean-up of the installer partition: enabled, and told which installer is this one's.
-    assert (target / "etc/claudeos/install-id").read_text() == "0123456789abcdef\n"
-    assert (target / "etc/systemd/system/claudeos-reclaim-installer.service").exists()
-    link = target / "etc/systemd/system/multi-user.target.wants/claudeos-reclaim-installer.service"
-    assert os.readlink(link) == "/etc/systemd/system/claudeos-reclaim-installer.service"
+    assert (target / "etc/chatcomputer/install-id").read_text() == "0123456789abcdef\n"
+    assert (target / "etc/systemd/system/chatcomputer-reclaim-installer.service").exists()
+    link = target / "etc/systemd/system/multi-user.target.wants/chatcomputer-reclaim-installer.service"
+    assert os.readlink(link) == "/etc/systemd/system/chatcomputer-reclaim-installer.service"
 
 
-def test_finish_script_gives_claudeos_its_bitlocker_key(tmp_path):
+def test_finish_script_gives_chatcomputer_its_bitlocker_key(tmp_path):
     r, target, _ = _run_finish(tmp_path, bitlocker_key="111111-222222-333333-444444-555555-666666-777777-888888")
     assert r.returncode == 0, r.stdout + r.stderr
-    key = target / "etc/claudeos/bitlocker-recovery-key"
+    key = target / "etc/chatcomputer/bitlocker-recovery-key"
     assert key.read_text() == "111111-222222-333333-444444-555555-666666-777777-888888\n"
     assert stat.S_IMODE(key.stat().st_mode) == 0o600 and key.stat().st_uid == 0
     # Without one (Windows' drive isn't encrypted), there's no key file.
     r, target, _ = _run_finish(tmp_path / "plain")
-    assert not (target / "etc/claudeos/bitlocker-recovery-key").exists()
+    assert not (target / "etc/chatcomputer/bitlocker-recovery-key").exists()
 
 
 def test_finish_script_notes_where_updates_come_from(tmp_path):
-    # The folder ClaudeOS Setup ran from, on Windows' drive: newer versions put there update ClaudeOS. Root's file.
-    r, target, _ = _run_finish(tmp_path, update_source="Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS")
+    # The folder Chat Computer Setup ran from, on Windows' drive: newer versions put there update Chat Computer. Root's file.
+    r, target, _ = _run_finish(tmp_path, update_source="Users/Ren Shu/Downloads/ChatComputer/ChatComputer")
     assert r.returncode == 0, r.stdout + r.stderr
-    f = target / "etc/claudeos/update-source"
-    assert f.read_text(encoding="utf-8") == "Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS\n"
+    f = target / "etc/chatcomputer/update-source"
+    assert f.read_text(encoding="utf-8") == "Users/Ren Shu/Downloads/ChatComputer/ChatComputer\n"
     assert stat.S_IMODE(f.stat().st_mode) == 0o644 and f.stat().st_uid == 0
     # Setup not on Windows' own drive: no updates from there.
     r, target, _ = _run_finish(tmp_path / "elsewhere")
-    assert r.returncode == 0 and not (target / "etc/claudeos/update-source").exists()
+    assert r.returncode == 0 and not (target / "etc/chatcomputer/update-source").exists()
 
 
-def test_finish_script_names_the_claudeos_partition(tmp_path):
+def test_finish_script_names_the_chatcomputer_partition(tmp_path):
     bin_dir = tmp_path / "tools"
     bin_dir.mkdir()
     for name, body in (("findmnt", 'echo /dev/nvme0n1p5'), ("blkid", 'echo 3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b')):
@@ -260,21 +260,21 @@ def test_finish_script_names_the_claudeos_partition(tmp_path):
     finally:
         os.environ["PATH"] = os.environ["PATH"].split(":", 1)[1]
     assert r.returncode == 0, r.stdout + r.stderr
-    marker = (target / "boot/efi/EFI/claudeos/installed-0123456789abcdef").read_text()
+    marker = (target / "boot/efi/EFI/chatcomputer/installed-0123456789abcdef").read_text()
     assert marker == "id=0123456789abcdef\nroot=3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b\n"
 
 
 def test_finish_script_leaves_the_rest_to_the_first_start_when_offline(tmp_path):
     r, target, lines = _run_finish(tmp_path, installer_works=False)
     assert r.returncode == 0, r.stdout + r.stderr          # the Ubuntu install still ends normally
-    assert sum("install-claudeos.sh" in ln for ln in lines) == 3
+    assert sum("install-chatcomputer.sh" in ln for ln in lines) == 3
     assert "finish installing when the computer starts" in r.stdout
-    assert (target / "etc/systemd/system/multi-user.target.wants/claudeos-finish-install.service").is_symlink()
-    assert (target / "boot/efi/EFI/claudeos/installed-0123456789abcdef").exists()
+    assert (target / "etc/systemd/system/multi-user.target.wants/chatcomputer-finish-install.service").is_symlink()
+    assert (target / "boot/efi/EFI/chatcomputer/installed-0123456789abcdef").exists()
 
 
 def test_finish_script_refuses_bad_user_names_and_ids(tmp_path):
-    env = dict(os.environ, CLAUDEOS_FINISH_SRC=str(tmp_path), CLAUDEOS_FINISH_TARGET=str(tmp_path))
+    env = dict(os.environ, CHATCOMPUTER_FINISH_SRC=str(tmp_path), CHATCOMPUTER_FINISH_TARGET=str(tmp_path))
     for args in (["rm -rf /", "0123456789abcdef"], ["rensh", "../../x"], ["rensh", ""]):
         r = subprocess.run(["sh", str(WIN / "installer/finish.sh"), *args], env=env, capture_output=True, text=True)
         assert r.returncode == 2, args
@@ -292,10 +292,10 @@ def _boot_entry(name):
 
 def _run_guard(tmp_path, installed=True, entries=(("0000", "UiApp"), ("0003", "ubuntu"))):
     esp = tmp_path / "esp"
-    (esp / "EFI/claudeos").mkdir(parents=True)
+    (esp / "EFI/chatcomputer").mkdir(parents=True)
     if installed:
-        (esp / "EFI/claudeos/installed-0123456789abcdef").write_text("0123456789abcdef\n")
-    (esp / "EFI/claudeos/installed-ffffffffffffffff").write_text("another installer\n")
+        (esp / "EFI/chatcomputer/installed-0123456789abcdef").write_text("0123456789abcdef\n")
+    (esp / "EFI/chatcomputer/installed-ffffffffffffffff").write_text("another installer\n")
     efivars = tmp_path / "efivars"
     efivars.mkdir()
     for num, name in entries:
@@ -304,8 +304,8 @@ def _run_guard(tmp_path, installed=True, entries=(("0000", "UiApp"), ("0003", "u
     restart = tmp_path / "restart"
     restart.write_text(f"#!/bin/sh\ntouch {restarted}\n")
     restart.chmod(0o755)
-    env = dict(os.environ, CLAUDEOS_GUARD_ESPS=f"{tmp_path / 'nothing'} {esp}", CLAUDEOS_EFIVARS=str(efivars),
-               CLAUDEOS_GUARD_REBOOT=str(restart))
+    env = dict(os.environ, CHATCOMPUTER_GUARD_ESPS=f"{tmp_path / 'nothing'} {esp}", CHATCOMPUTER_EFIVARS=str(efivars),
+               CHATCOMPUTER_GUARD_REBOOT=str(restart))
     r = subprocess.run(["sh", str(WIN / "installer/guard.sh"), "0123456789abcdef"], env=env, capture_output=True, text=True)
     return r, efivars / f"BootNext-{GLOBAL}", restarted
 
@@ -336,13 +336,13 @@ def _ps_files():
 
 def test_powershell_sources_are_plain_ascii():
     # Windows PowerShell 5.1 reads BOM-less files as ANSI: curly quotes or dashes would break parsing.
-    for f in [*_ps_files(), WIN / "ClaudeOS Setup.cmd", WIN / "ClaudeOS Own System.cmd"]:
+    for f in [*_ps_files(), WIN / "Chat Computer Setup.cmd", WIN / "Chat Computer Own System.cmd"]:
         data = f.read_bytes()
         assert all(b < 128 for b in data), f
 
 
 def test_launcher_uses_windows_line_endings():
-    for name in ("ClaudeOS Setup.cmd", "ClaudeOS Own System.cmd"):
+    for name in ("Chat Computer Setup.cmd", "Chat Computer Own System.cmd"):
         data = (WIN / name).read_bytes()
         assert b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b""), name
 
@@ -352,7 +352,7 @@ ZONEINFO = Path("/usr/share/zoneinfo")
 
 @pytest.mark.skipif(not (ZONEINFO / "tzdata.zi").exists(), reason="no tzdata here")
 def test_time_zones_are_ones_ubuntu_has():
-    # Setup's zone goes to the Ubuntu installer and ClaudeOS's settings. Ubuntu 24.04 keeps old names such as
+    # Setup's zone goes to the Ubuntu installer and Chat Computer's settings. Ubuntu 24.04 keeps old names such as
     # Asia/Calcutta only in tzdata-legacy, which isn't installed, so every zone must be a current name. (Run
     # where tzdata-legacy isn't installed either, as on Ubuntu 24.04, this checks exactly that.)
     import re
@@ -398,14 +398,14 @@ DESTRUCTIVE = ("Resize-Partition", "Clear-Disk", "Initialize-Disk", "New-Install
                "Disable-FastStartup", "Suspend-BitLocker", "BitLocker add", "BitLocker delete", "bcdedit", "shutdown",
                "vssadmin", "fsutil", "powercfg")
 USER_KEY = "{0b000000-0000-4000-8000-000000000001}"           # the person's own BitLocker recovery password
-CLAUDE_KEY = "{2b000000-0000-4000-8000-0000000000c1}"         # the one setup adds for ClaudeOS
+CLAUDE_KEY = "{2b000000-0000-4000-8000-0000000000c1}"         # the one setup adds for Chat Computer
 CLAUDE_KEY_PASSWORD = "123456-234567-345678-456789-567890-678901-789012-890123"
-SETUP_ID = "{5e7e0a00-0000-4000-8000-00000000000a}"          # the "ClaudeOS setup" entry the pretend bcdedit makes
-CLAUDEOS_ID = "{9f62d3e2-5c1a-11ef-a1b2-806e6f6e6963}"       # ClaudeOS's own entry, once installed
-# The pretend PC's Windows disk before ClaudeOS, in MiB: EFI, reserved, C: (950 GB), Windows' recovery partition.
+SETUP_ID = "{5e7e0a00-0000-4000-8000-00000000000a}"          # the "Chat Computer setup" entry the pretend bcdedit makes
+CHATCOMPUTER_ID = "{9f62d3e2-5c1a-11ef-a1b2-806e6f6e6963}"   # Chat Computer's own entry, once installed
+# The pretend PC's Windows disk before Chat Computer, in MiB: EFI, reserved, C: (950 GB), Windows' recovery partition.
 DISK0 = [(1, 1, 260), (2, 261, 16), (3, 277, 950 * 1024), (4, 277 + 950 * 1024, 1024)]
 RECOVERY = 277 + 950 * 1024
-REMOVE = "Q Type REMOVE to remove ClaudeOS (anything else keeps it) -> REMOVE"
+REMOVE = "Q Type REMOVE to remove Chat Computer (anything else keeps it) -> REMOVE"
 
 
 def _flow(tmp_path, scenario):
@@ -447,8 +447,8 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     out, res = _flow(tmp_path, "shrink")
     assert res["ok"], res
     calls = res["calls"]
-    # C: gives 64 GB for ClaudeOS plus 6 GB for its installer, without a question about the size. The installer
-    # goes at the end of that space, right before Windows' recovery partition; ClaudeOS installs into the 64 GB.
+    # C: gives 64 GB for Chat Computer plus 6 GB for its installer, without a question about the size. The installer
+    # goes at the end of that space, right before Windows' recovery partition; Chat Computer installs into the 64 GB.
     made = f"New-InstallerPartition 0 {RECOVERY - 6144} 6144"
     assert _disk(res, 0) == [*DISK0[:2], (3, 277, 880 * 1024), (5, RECOVERY - 6144, 6144), DISK0[3]]
     # The only questions: where (this pretend PC also has a second disk), "Go ahead?" and "Restart now?".
@@ -458,17 +458,17 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     # changes), and only when all is ready, Fast Startup goes off and the PC is told to start the installer once.
     go = "Q Go ahead? [y/N] -> y"
     assert _changes(calls[:calls.index(go)]) == []
-    _in_order(calls, go, "bcdedit /copy {bootmgr} /d ClaudeOS setup",
-              f"bcdedit /set {SETUP_ID} path \\EFI\\claudeos-setup\\shimx64.efi",
+    _in_order(calls, go, "bcdedit /copy {bootmgr} /d Chat Computer setup",
+              f"bcdedit /set {SETUP_ID} path \\EFI\\chatcomputer-setup\\shimx64.efi",
               f"bcdedit /set {{fwbootmgr}} displayorder {SETUP_ID} /addlast", "Resize-Partition C 880", made,
               "Copy-IsoToInstaller", "Close-InstallerPartition", "Disable-FastStartup",
               f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}", "Q Restart now? [Y/n] -> n")
     # Plenty of room: nothing else had to be cleared out of the way.
     assert not [c for c in calls if c.startswith(("vssadmin", "fsutil", "powercfg"))]
-    assert res["boot_entries"] == {SETUP_ID: "\\EFI\\claudeos-setup\\shimx64.efi"}
+    assert res["boot_entries"] == {SETUP_ID: "\\EFI\\chatcomputer-setup\\shimx64.efi"}
     assert not [c for c in calls if c.startswith(("Clear-Disk", "Remove-Partition", "shutdown"))]
     # The boot loader that entry starts, on Windows' EFI partition: Ubuntu's signed shim, GRUB and MokManager.
-    loader = out / "esp/EFI/claudeos-setup"
+    loader = out / "esp/EFI/chatcomputer-setup"
     assert sorted(f.name for f in loader.iterdir()) == ["grubx64.efi", "mmx64.efi", "shimx64.efi"]
     assert (loader / "shimx64.efi").read_text() == "bootx64.efi"
     inst = out / "installer"
@@ -478,26 +478,26 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
         jsonschema.validate(ai, json.loads(SCHEMA.read_text()))
     assert ai["storage"]["layout"]["match"] == {"install-media": True}
     install_id = ai["early-commands"][0][2]
-    # The mark that tells "Remove ClaudeOS", and ClaudeOS's first start, that this partition is its installer.
-    assert (inst / f"claudeos/installer-{install_id}").read_text() == f"id={install_id}\n"
+    # The mark that tells "Remove Chat Computer", and Chat Computer's first start, that this partition is its installer.
+    assert (inst / f"chatcomputer/installer-{install_id}").read_text() == f"id={install_id}\n"
     assert ai["network"]["wifis"]["any-wifi"]["access-points"] == {"Home 5G": {"password": "correct horse"}}
     assert ai["timezone"] == "Asia/Singapore" and ai["identity"]["realname"] == "Ren Shu"
-    # One sign-in in the browser before "Go ahead?": the full sign-in, which ClaudeOS and the phone both use.
+    # One sign-in in the browser before "Go ahead?": the full sign-in, which Chat Computer and the phone both use.
     # No one-year code to paste.
-    login = json.loads((inst / "claudeos/secrets/claude_login.json").read_text())
+    login = json.loads((inst / "chatcomputer/secrets/claude_login.json").read_text())
     assert login["claudeAiOauth"]["refreshToken"].startswith("r")
-    assert not (inst / "claudeos/secrets/claude_token").exists()
+    assert not (inst / "chatcomputer/secrets/claude_token").exists()
     _in_order(calls, "Invoke-ClaudeBrowserSignIn", go)
-    assert (inst / "claudeos/app/claudeos/__init__.py").exists()
-    assert not (inst / "claudeos/app/windows").exists() and not (inst / "claudeos/app/.venv").exists()
+    assert (inst / "chatcomputer/app/chatcomputer/__init__.py").exists()
+    assert not (inst / "chatcomputer/app/windows").exists() and not (inst / "chatcomputer/app/.venv").exists()
     # Updates come from the folder setup runs from only when it's on Windows' own drive (C:); this pretend PC's
     # setup isn't (Get-UpdateSource, finish.sh).
-    assert not (inst / "claudeos/update-source").exists()
+    assert not (inst / "chatcomputer/update-source").exists()
     for script in ("guard.sh", "network.sh", "finish.sh"):
-        assert b"\r" not in (inst / "claudeos" / script).read_bytes()
+        assert b"\r" not in (inst / "chatcomputer" / script).read_bytes()
     grub = (inst / "boot/grub/grub.cfg").read_text()
-    assert grub.count(" autoinstall ") == 2 and f"/EFI/claudeos/installed-{install_id}" in grub
-    recovery = (out / "Documents/ClaudeOS recovery password.txt").read_text()
+    assert grub.count(" autoinstall ") == 2 and f"/EFI/chatcomputer/installed-{install_id}" in grub
+    recovery = (out / "Documents/Chat Computer recovery password.txt").read_text()
     password = recovery.split("Password: ")[1].split()[0]
     log = (out / "setup.log").read_text()
     for secret in ("sk-ant-oat01-", "correct horse", password, "a" * 40, "r" * 40):
@@ -515,7 +515,7 @@ def test_flow_shows_the_recovery_password_when_documents_cant_take_it(tmp_path):
     shown = re.search(r"Account: rensh   Password: ([a-z2-9]{4}(?:-[a-z2-9]{4}){3})", res["screen"])
     assert shown, res["screen"]
     assert shown.group(1) not in (out / "setup.log").read_text()
-    assert not list(out.rglob("ClaudeOS recovery password.txt"))
+    assert not list(out.rglob("Chat Computer recovery password.txt"))
 
 
 @needs_pwsh
@@ -524,15 +524,15 @@ def test_flow_separate_disk(tmp_path):
     assert res["ok"], res
     calls = res["calls"]
     assert "Clear-Disk 1" in calls and not [c for c in calls if c.startswith("Resize-Partition")]
-    # The erased disk holds just the installer, at its end; ClaudeOS installs in the space before it. The
+    # The erased disk holds just the installer, at its end; Chat Computer installs in the space before it. The
     # Windows disk is untouched, except that the installer's boot loader goes on its EFI partition.
     end = 2000 * 1024 - 1
     assert _disk(res, 1) == [(1, end - 6144, 6144)]
     assert _disk(res, 0) == DISK0
     assert "Mount-EspPartition 0 1" in calls[calls.index("Copy-IsoToInstaller"):]
-    assert (out / "esp/EFI/claudeos-setup/shimx64.efi").exists()
+    assert (out / "esp/EFI/chatcomputer-setup/shimx64.efi").exists()
     assert _load(out / "installer/autoinstall.yaml")["storage"]["layout"]["match"] == {"install-media": True}
-    assert (out / "installer/claudeos/secrets/claude_login.json").exists()
+    assert (out / "installer/chatcomputer/secrets/claude_login.json").exists()
     assert calls[-1] == "shutdown /r /t 5"
 
 
@@ -540,7 +540,7 @@ def test_flow_separate_disk(tmp_path):
 def test_flow_stops_before_changing_anything_when_the_pc_wont_take_the_entry(tmp_path):
     out, res = _flow(tmp_path, "no-entry")
     assert not res["ok"] and res["error"].endswith("No disks were changed."), res
-    assert _changes(res["calls"]) == ["bcdedit /copy {bootmgr} /d ClaudeOS setup"]
+    assert _changes(res["calls"]) == ["bcdedit /copy {bootmgr} /d Chat Computer setup"]
     assert _disk(res, 0) == DISK0
 
 
@@ -554,7 +554,7 @@ def test_flow_takes_back_what_it_did_when_a_step_fails(tmp_path):
               "Remove-Partition 0 5", "Resize-Partition C 950")
     assert not [c for c in calls if "bootsequence" in c]
     assert res["boot_entries"] == {} and _disk(res, 0) == DISK0
-    assert not (out / "esp/EFI/claudeos-setup").exists()
+    assert not (out / "esp/EFI/chatcomputer-setup").exists()
 
 
 @needs_pwsh
@@ -572,7 +572,7 @@ def test_flow_stops_when_bitlocker_key_not_saved(tmp_path):
 
 
 @needs_pwsh
-def test_flow_gives_claudeos_its_own_bitlocker_key(tmp_path):
+def test_flow_gives_chatcomputer_its_own_bitlocker_key(tmp_path):
     out, res = _flow(tmp_path, "bitlocker")
     assert res["ok"], res
     calls = res["calls"]
@@ -580,32 +580,32 @@ def test_flow_gives_claudeos_its_own_bitlocker_key(tmp_path):
     _in_order(calls, "Q Go ahead? [y/N] -> y", "Copy-IsoToInstaller", "BitLocker add key",
               f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}")
     assert res["bitlocker_keys"] == [USER_KEY, CLAUDE_KEY]          # the person's own key stays
-    # ClaudeOS gets the key in the installer's secrets (finish.sh puts it in /etc/claudeos), and setup keeps
-    # its id, so "Remove ClaudeOS" deletes exactly this key.
-    assert (out / "installer/claudeos/secrets/bitlocker-key").read_text() == CLAUDE_KEY_PASSWORD + "\n"
-    assert (out / "ProgramData/ClaudeOS/bitlocker-key-id").read_text() == CLAUDE_KEY + "\n"
+    # Chat Computer gets the key in the installer's secrets (finish.sh puts it in /etc/chatcomputer), and setup keeps
+    # its id, so "Remove Chat Computer" deletes exactly this key.
+    assert (out / "installer/chatcomputer/secrets/bitlocker-key").read_text() == CLAUDE_KEY_PASSWORD + "\n"
+    assert (out / "ProgramData/ChatComputer/bitlocker-key-id").read_text() == CLAUDE_KEY + "\n"
     assert CLAUDE_KEY_PASSWORD not in (out / "setup.log").read_text()
 
 
 @needs_pwsh
-def test_flow_deletes_claudeos_bitlocker_key_when_a_later_step_fails(tmp_path):
+def test_flow_deletes_chatcomputer_bitlocker_key_when_a_later_step_fails(tmp_path):
     out, res = _flow(tmp_path, "bitlocker-fails")
     assert not res["ok"] and "EFI partition" in res["error"], res
     _in_order(res["calls"], "BitLocker add key", f"BitLocker delete key {CLAUDE_KEY}", "Remove-Partition 0 5",
               "Resize-Partition C 950")
     assert res["bitlocker_keys"] == [USER_KEY]
-    assert not (out / "ProgramData/ClaudeOS/bitlocker-key-id").exists()
+    assert not (out / "ProgramData/ChatComputer/bitlocker-key-id").exists()
     assert _disk(res, 0) == DISK0
 
 
 @needs_pwsh
-def test_flow_sign_in_again_leaves_the_sign_in_for_claudeos(tmp_path):
+def test_flow_sign_in_again_leaves_the_sign_in_for_chatcomputer(tmp_path):
     out, res = _flow(tmp_path, "signin")
     assert res["ok"], res
     assert "Invoke-ClaudeBrowserSignIn" in res["calls"]
     assert not _changes(res["calls"])
-    assert json.loads((out / "Users/rensh/ClaudeOS/claude_login.json").read_text())["claudeAiOauth"]
-    assert not (out / "Users/rensh/ClaudeOS/claude_token").exists()
+    assert json.loads((out / "Users/rensh/ChatComputer/claude_login.json").read_text())["claudeAiOauth"]
+    assert not (out / "Users/rensh/ChatComputer/claude_token").exists()
 
 
 @needs_pwsh
@@ -624,7 +624,7 @@ def test_flow_makes_room_like_by_hand_when_windows_files_are_in_the_way(tmp_path
     assert room == ["vssadmin delete shadows /for=C: /quiet", "Resize-Partition C 948", "fsutil usn deletejournal /n C:",
                     "Resize-Partition C 913", "fsutil usn deletejournal /n C:", "Resize-Partition C 887"]
     assert _disk(res, 0) == [*DISK0[:2], (3, 277, 887 * 1024), (5, RECOVERY - 6144, 6144), DISK0[3]]
-    _in_order(calls, go, "bcdedit /copy {bootmgr} /d ClaudeOS setup", "vssadmin delete shadows /for=C: /quiet",
+    _in_order(calls, go, "bcdedit /copy {bootmgr} /d Chat Computer setup", "vssadmin delete shadows /for=C: /quiet",
               f"New-InstallerPartition 0 {RECOVERY - 6144} 6144", f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}")
     # The list before "Go ahead?" said so.
     log = (out / "setup.log").read_text()
@@ -666,7 +666,7 @@ def test_flow_says_how_much_to_free_up(tmp_path):
 def test_flow_with_a_pasted_sign_in_code(tmp_path):
     out, res = _flow(tmp_path, "paste")
     assert res["ok"], res
-    secrets = out / "installer/claudeos/secrets"
+    secrets = out / "installer/chatcomputer/secrets"
     assert (secrets / "claude_token").read_text().startswith("sk-ant-oat01-")
     assert not (secrets / "claude_login.json").exists()
     assert "sk-ant-oat01-" not in (out / "setup.log").read_text()
@@ -680,7 +680,7 @@ def _run_network(tmp_path, cfg_text, wifi_iface):
         (net / name).mkdir(parents=True)
     if wifi_iface:
         (net / wifi_iface / "wireless").mkdir(parents=True)
-    env = dict(os.environ, CLAUDEOS_AUTOINSTALL=str(cfg), CLAUDEOS_NET_SYS=str(net), CLAUDEOS_NET_WAIT="1")
+    env = dict(os.environ, CHATCOMPUTER_AUTOINSTALL=str(cfg), CHATCOMPUTER_NET_SYS=str(net), CHATCOMPUTER_NET_WAIT="1")
     r = subprocess.run(["sh", str(WIN / "installer/network.sh")], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return cfg.read_text(), r.stdout
@@ -705,7 +705,7 @@ def test_installer_without_wifi_card_drops_wifi(generated, tmp_path):
     ai = yaml.safe_load(text)["autoinstall"]
     assert "wifis" not in ai["network"]
     assert ai["identity"]["username"] == "rensh"          # the rest is untouched
-    assert ai["late-commands"][0][1] == "/cdrom/claudeos/finish.sh"
+    assert ai["late-commands"][0][1] == "/cdrom/chatcomputer/finish.sh"
 
 
 def test_installer_network_untouched_without_wifi_section(generated, tmp_path):
@@ -723,69 +723,69 @@ def test_windows_can_start_by_default_again(tmp_path):
 
 
 @needs_pwsh
-def test_claudeos_can_start_once_from_windows(tmp_path):
+def test_chatcomputer_can_start_once_from_windows(tmp_path):
     out, res = _flow(tmp_path, "startup-once")
     assert res["ok"], res
-    assert _changes(res["calls"]) == [f"bcdedit /set {{fwbootmgr}} bootsequence {CLAUDEOS_ID}"]
+    assert _changes(res["calls"]) == [f"bcdedit /set {{fwbootmgr}} bootsequence {CHATCOMPUTER_ID}"]
 
 
 @needs_pwsh
-def test_removing_claudeos_gives_windows_everything_back(tmp_path):
+def test_removing_chatcomputer_gives_windows_everything_back(tmp_path):
     out, res = _flow(tmp_path, "remove")
     assert res["ok"], res
     calls = res["calls"]
-    # Nothing changes before the typed confirmation; then Windows first, ClaudeOS's entry out, its partition
+    # Nothing changes before the typed confirmation; then Windows first, Chat Computer's entry out, its partition
     # (and only that one) deleted, and C: grown back.
     assert not _changes(calls[:calls.index(REMOVE)])
     _in_order(calls, REMOVE, "Suspend-BitLocker C: 1", "bcdedit /set {fwbootmgr} displayorder {bootmgr} /addfirst",
-              f"bcdedit /delete {CLAUDEOS_ID}", "Remove-Partition 0 5", "Resize-Partition C 950")
+              f"bcdedit /delete {CHATCOMPUTER_ID}", "Remove-Partition 0 5", "Resize-Partition C 950")
     assert [c for c in calls if c.startswith("Remove-Partition")] == ["Remove-Partition 0 5"]
     assert _disk(res, 0) == DISK0
-    # ClaudeOS's BitLocker key goes too, and only that one.
+    # Chat Computer's BitLocker key goes too, and only that one.
     _in_order(calls, "Remove-Partition 0 5", f"BitLocker delete key {CLAUDE_KEY}")
     assert res["bitlocker_keys"] == [USER_KEY]
-    assert not (out / "ProgramData/ClaudeOS/bitlocker-key-id").exists()
+    assert not (out / "ProgramData/ChatComputer/bitlocker-key-id").exists()
     esp = out / "esp/EFI"
-    assert not (esp / "ubuntu").exists() and not (esp / "claudeos").exists()
+    assert not (esp / "ubuntu").exists() and not (esp / "chatcomputer").exists()
     assert (esp / "BOOT/BOOTX64.EFI").read_text() == "Windows Boot Manager"     # Windows back in the fallback slot
     assert not (esp / "BOOT/fbx64.efi").exists()
     assert (esp / "Microsoft/Boot/bootmgfw.efi").exists()
-    assert not (out / "Users/rensh/ClaudeOS").exists()                           # sign-in copies
-    assert not (out / "Documents/ClaudeOS recovery password.txt").exists()
+    assert not (out / "Users/rensh/ChatComputer").exists()                       # sign-in copies
+    assert not (out / "Documents/Chat Computer recovery password.txt").exists()
     assert not list((out / "work").iterdir())                                    # downloads
 
 
 @needs_pwsh
-def test_removing_claudeos_can_keep_the_downloads_to_install_again(tmp_path):
-    # Installing again (to get a new version of ClaudeOS) then needn't download Ubuntu's 4 GB again.
+def test_removing_chatcomputer_can_keep_the_downloads_to_install_again(tmp_path):
+    # Installing again (to get a new version of Chat Computer) then needn't download Ubuntu's 4 GB again.
     out, res = _flow(tmp_path, "remove-again")
     assert res["ok"], res
     assert [c for c in res["calls"] if c.startswith("Q Keep the downloads")][0].endswith("[y/N] -> y")
     assert sorted(f.name for f in (out / "work").iterdir()) == [
         "claude_agent_sdk-0.2.167-py3-none-win_amd64.whl", "ubuntu-24.04.5-live-server-amd64.iso"]
-    assert _disk(res, 0) == DISK0 and not (out / "esp/EFI/claudeos").exists()     # ClaudeOS itself is gone
-    assert not (out / "Users/rensh/ClaudeOS").exists()
+    assert _disk(res, 0) == DISK0 and not (out / "esp/EFI/chatcomputer").exists()  # Chat Computer itself is gone
+    assert not (out / "Users/rensh/ChatComputer").exists()
 
 
 @needs_pwsh
-def test_removing_claudeos_needs_the_typed_word(tmp_path):
+def test_removing_chatcomputer_needs_the_typed_word(tmp_path):
     out, res = _flow(tmp_path, "remove-keep")
     assert res["ok"], res
     assert not _changes(res["calls"])
-    assert (out / "esp/EFI/ubuntu/shimx64.efi").exists() and (out / "esp/EFI/claudeos").exists()
+    assert (out / "esp/EFI/ubuntu/shimx64.efi").exists() and (out / "esp/EFI/chatcomputer").exists()
 
 
 @needs_pwsh
-def test_removing_claudeos_before_it_cleaned_up_its_installer(tmp_path):
+def test_removing_chatcomputer_before_it_cleaned_up_its_installer(tmp_path):
     out, res = _flow(tmp_path, "remove-both")
     assert res["ok"], res
     calls = res["calls"]
-    _in_order(calls, REMOVE, "bcdedit /set {fwbootmgr} displayorder {bootmgr} /addfirst", f"bcdedit /delete {CLAUDEOS_ID}",
+    _in_order(calls, REMOVE, "bcdedit /set {fwbootmgr} displayorder {bootmgr} /addfirst", f"bcdedit /delete {CHATCOMPUTER_ID}",
               f"bcdedit /delete {SETUP_ID}", "Remove-Partition 0 5", "Remove-Partition 0 6", "Resize-Partition C 950")
     assert _disk(res, 0) == DISK0 and res["boot_entries"] == {}
     assert sorted(d.name for d in (out / "esp/EFI").iterdir()) == ["BOOT", "Microsoft"]
     # The sign-in copy goes; a file of the person's own in that folder (and so the folder) stays.
-    assert sorted(f.name for f in (out / "Users/rensh/ClaudeOS").iterdir()) == ["notes.txt"]
+    assert sorted(f.name for f in (out / "Users/rensh/ChatComputer").iterdir()) == ["notes.txt"]
 
 
 @needs_pwsh

@@ -1,12 +1,12 @@
-"""The touchscreen's system gestures, as an iPad's (claudeos/ui/touch.py): which touches the page under the finger
+"""The touchscreen's system gestures, as an iPad's (chatcomputer/ui/touch.py): which touches the page under the finger
 gets, which are held back for a moment (an edge swipe?) and which the screen takes; and what each gesture means."""
 import asyncio
 
-from claudeos.config import Paths, Settings, State
-from claudeos.controller import Controller
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
-from claudeos.ui.touch import CUT_WITHIN_S, HOLD, HOLD_S, KEY, PASS, RELEASE, TAKE, TouchGestures
+from chatcomputer.config import Paths, Settings, State
+from chatcomputer.controller import Controller
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
+from chatcomputer.ui.touch import CUT_WITHIN_S, HOLD, HOLD_S, KEY, PASS, RELEASE, TAKE, TouchGestures
 
 W, H = 1920.0, 1080.0
 
@@ -129,7 +129,7 @@ def test_the_onscreen_keyboard_s_touches_are_its_own():
 
 
 def _controller(tmp_path, monkeypatch, **settings):
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
     c = Controller(Paths().ensure(), Settings(**settings), FakePlatform(), screen, voice=False, index=False)
     return c, screen

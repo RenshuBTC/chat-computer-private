@@ -1,10 +1,10 @@
 # shellcheck shell=bash
-# ClaudeOS ~/.bash_profile (installed into the user's home).
+# Chat Computer ~/.bash_profile (installed into the user's home).
 #
-# On tty1, with no X display yet, start the graphical ClaudeOS session via
+# On tty1, with no X display yet, start the graphical Chat Computer session via
 # startx. On any other tty (recovery), do nothing special — the user gets a
 # normal shell. This is the single hook that turns the autologin console into
-# the full-screen ClaudeOS experience.
+# the full-screen Chat Computer experience.
 
 # Only act for an interactive login on the first virtual terminal, and only if
 # X is not already running.

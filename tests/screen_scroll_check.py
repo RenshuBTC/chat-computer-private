@@ -1,7 +1,7 @@
 """The conversation reads like a chat and scrolls like one: your messages on the right in grey bubbles, Claude's on
 the left; new words keep it at the bottom, unless you scrolled up to read something earlier.
 
-Runs a real ClaudeOS window (GTK + WebKit) on a virtual display, fills the conversation, streams a long reply
+Runs a real Chat Computer window (GTK + WebKit) on a virtual display, fills the conversation, streams a long reply
 into it, scrolls up and streams more, then sends a new message; prints JSON: what the page showed at each step.
 Run:  xvfb-run -a -s "-screen 0 1280x800x24" python tests/screen_scroll_check.py
 """
@@ -13,12 +13,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["CLAUDEOS_HOME"] = tempfile.mkdtemp(prefix="claudeos-scroll-")
+os.environ["CHATCOMPUTER_HOME"] = tempfile.mkdtemp(prefix="chatcomputer-scroll-")
 
 from gi.repository import GLib, Gtk  # noqa: E402
 
-from claudeos.config import Paths, Settings  # noqa: E402
-from claudeos.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
+from chatcomputer.config import Paths, Settings  # noqa: E402
+from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 choose_rendering()
 screen = GtkScreen(Paths().ensure(), Settings(), windowed=True)

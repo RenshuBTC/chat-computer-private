@@ -71,7 +71,7 @@ pub const ALLOCATE_ANY_PAGES: u32 = 0;
 pub const LOADER_DATA: u32 = 2;
 pub const BY_PROTOCOL: u32 = 2;
 
-/// EFI_BOOT_SERVICES. Entries ClaudeOS doesn't call are left as plain pointers.
+/// EFI_BOOT_SERVICES. Entries Chat Computer doesn't call are left as plain pointers.
 #[repr(C)]
 pub struct BootServices {
     pub hdr: TableHeader,

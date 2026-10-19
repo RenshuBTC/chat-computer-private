@@ -1,5 +1,5 @@
 """End to end: the real Claude Code engine (bundled with the Agent SDK) talking to a mock
-Claude API, driving the real ClaudeOS tools and permission gate."""
+Claude API, driving the real Chat Computer tools and permission gate."""
 import asyncio
 import time
 from pathlib import Path
@@ -8,14 +8,14 @@ import pytest
 
 from mock_anthropic import MockAnthropic, last_message_is_tool_result, last_user_text, text_block, tool_results, tool_use_block
 
-from claudeos import tools as T
-from claudeos.brain.agent import Brain, BrainEvents
-from claudeos.brain.permissions import PermissionGate
-from claudeos.config import Paths, Settings, State
-from claudeos.journal import Journal
-from claudeos.memory import Memory
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
+from chatcomputer import tools as T
+from chatcomputer.brain.agent import Brain, BrainEvents
+from chatcomputer.brain.permissions import PermissionGate
+from chatcomputer.config import Paths, Settings, State
+from chatcomputer.journal import Journal
+from chatcomputer.memory import Memory
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
 
 TOKEN = "sk-ant-api03-" + "x" * 40
 
@@ -24,7 +24,7 @@ class Rig:
     def __init__(self, home: Path, answers: list[tuple[str, str]]):
         self.mock = MockAnthropic()
         self.mock.start()
-        self.paths = Paths(home / "ClaudeOS").ensure()
+        self.paths = Paths(home / "ChatComputer").ensure()
         self.settings = Settings(user_name="Ren Shu")
         self.state = State(self.paths)
         self.screen = RecordingScreen()
@@ -50,7 +50,7 @@ class Rig:
             on_turn_end=lambda t, r: (self.events.append(("end", r)), self.done.set()),
         )
         self.brain = Brain(self.paths, self.settings, self.state, TOKEN, server, self.gate,
-                           lambda: "You are ClaudeOS (test).", ev,
+                           lambda: "You are Chat Computer (test).", ev,
                            extra_env={"ANTHROPIC_BASE_URL": self.mock.url}, cwd=str(home))
 
     async def say(self, text: str, timeout: float = 60):
@@ -80,7 +80,7 @@ def test_voice_request_opens_a_website_and_streams_words(clean_env):
     async def go():
         rig = Rig(clean_env, [])
         script(rig.mock, {"open youtube": [text_block("Opening YouTube."),
-                                           tool_use_block("mcp__claudeos__show_website", {"url": "youtube.com"})]},
+                                           tool_use_block("mcp__chatcomputer__show_website", {"url": "youtube.com"})]},
                after_tool="It's on screen now.")
         try:
             res = await rig.say("open youtube")
@@ -89,9 +89,9 @@ def test_voice_request_opens_a_website_and_streams_words(clean_env):
             assert ("activity", "Opening youtube.com") in rig.events
             assert "Opening YouTube." in rig.text() and "It's on screen now." in rig.text()
             assert rig.asked == []                     # showing a website needs no permission
-            # Every request carries the ClaudeOS tools up front (no deferred tool search).
+            # Every request carries the Chat Computer tools up front (no deferred tool search).
             names = [t.get("name") for t in rig.mock.requests[0]["tools"]]
-            assert "mcp__claudeos__show_website" in names and "Bash" in names
+            assert "mcp__chatcomputer__show_website" in names and "Bash" in names
             assert not any(n and n.startswith("mcp__claude-in-chrome") for n in names)
         finally:
             await rig.brain.close()
@@ -105,7 +105,7 @@ def test_trash_needs_a_spoken_yes_and_can_be_undone(clean_env):
         rig = Rig(clean_env, [("yes", "yes")])
         f = clean_env / "old.zip"
         f.write_bytes(b"zip")
-        script(rig.mock, {"delete": [tool_use_block("mcp__claudeos__trash_files", {"paths": [str(f)]})]})
+        script(rig.mock, {"delete": [tool_use_block("mcp__chatcomputer__trash_files", {"paths": [str(f)]})]})
         try:
             res = await rig.say("delete old zip")
             assert res.ok

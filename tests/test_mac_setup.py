@@ -1,7 +1,7 @@
-"""ClaudeOS Setup for Mac (mac/setup.sh) on a pretend Mac: macOS's commands are stand-ins that record what they
+"""Chat Computer Setup for Mac (mac/setup.sh) on a pretend Mac: macOS's commands are stand-ins that record what they
 were asked to do, the disk is tests/mac_pretend.py's, the Asahi installer is tests/mac_fake_installer.py (asking
 the real one's questions, answered by the real mac/drive-installer.exp), and the answers are typed in advance.
-Also: ClaudeOS's first start on the Mac (mac/esp/firstboot.sh) on a pretend Fedora, and the pinned values."""
+Also: Chat Computer's first start on the Mac (mac/esp/firstboot.sh) on a pretend Fedora, and the pinned values."""
 import base64
 import hashlib
 import json
@@ -22,8 +22,8 @@ MAC = REPO / "mac"
 TESTS = REPO / "tests"
 TOKEN = "sk-ant-oat01-" + "x" * 90
 GB = 1000 ** 3
-# The shell setup runs in: macOS's is bash 3.2 (CLAUDEOS_TEST_BASH can point at one).
-SHELL = os.environ.get("CLAUDEOS_TEST_BASH") or "bash"
+# The shell setup runs in: macOS's is bash 3.2 (CHATCOMPUTER_TEST_BASH can point at one).
+SHELL = os.environ.get("CHATCOMPUTER_TEST_BASH") or "bash"
 
 needs_tools = pytest.mark.skipif(not all(shutil.which(t) for t in ("expect", "rsync", "shasum")),
                                  reason="needs expect, rsync and shasum")
@@ -109,14 +109,14 @@ case "$1" in
   auth) echo '{{"claudeAiOauth":{{"accessToken":"a","refreshToken":"r"}}}}' > "$CLAUDE_CONFIG_DIR/.credentials.json" ;;
 esac''')
         self._downloads()
-        self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", CLAUDEOS_MAC_ROOT=str(self.home),
-                        CLAUDEOS_SETUP_WORK=str(self.home / ".claudeos-setup"),
-                        CLAUDEOS_ENGINE_CLI=str(self.bin / "fake-claude"), CLAUDEOS_MANIFEST=str(self.manifest),
-                        CLAUDEOS_INSTALLER_CMD=f"{sys.executable} {TESTS}/mac_fake_installer.py --pretend-mac",
+        self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", CHATCOMPUTER_MAC_ROOT=str(self.home),
+                        CHATCOMPUTER_SETUP_WORK=str(self.home / ".chatcomputer-setup"),
+                        CHATCOMPUTER_ENGINE_CLI=str(self.bin / "fake-claude"), CHATCOMPUTER_MANIFEST=str(self.manifest),
+                        CHATCOMPUTER_INSTALLER_CMD=f"{sys.executable} {TESTS}/mac_fake_installer.py --pretend-mac",
                         PRETEND_MAC_STATE=str(self.state), FAKE_INSTALLER_LOG=str(self.answers_log))
 
     def _downloads(self):
-        """The Asahi installer (with the Python it brings, which setup uses to add ClaudeOS's icon) and a small
+        """The Asahi installer (with the Python it brings, which setup uses to add Chat Computer's icon) and a small
         stand-in for Fedora's image, with a manifest that pins them."""
         inst = self.tmp / "inst"
         py = inst / "Frameworks/Python.framework/Versions/3.13/bin/python3.13"
@@ -165,35 +165,35 @@ def test_install_on_a_mac(tmp_path):
     asked = {a["q"]: a["a"] for a in answers}
     # The installer made room (macOS keeps what it uses plus 38 GB, and more), then installed into it.
     assert [a["q"] for a in answers] == ["action", "new size", "continue", "action", "os", "os size", "name", "password"]
-    assert asked["name"] == "ClaudeOS" and asked["password"] == "hunter2" and asked["os"] == "1"
+    assert asked["name"] == "Chat Computer" and asked["password"] == "hunter2" and asked["os"] == "1"
     new_macos = int(asked["new size"][:-1])
     os_size = int(asked["os size"][:-1])
-    assert os_size == 60 * GB                                   # ClaudeOS's own space
+    assert os_size == 60 * GB                                   # Chat Computer's own space
     disk = mac.disk()
     parts = [p for p in disk["parts"] if not p.get("free")]
     kinds = [(p["content"], p.get("name")) for p in parts]
-    assert kinds == [("Apple_APFS_ISC", None), ("Apple_APFS", None), ("Apple_APFS", None), ("EFI", "EFI - CLAUD"),
-                     ("Linux Filesystem", None), ("Linux Filesystem", None), ("Microsoft Basic Data", "ClaudeOS"),
+    assert kinds == [("Apple_APFS_ISC", None), ("Apple_APFS", None), ("Apple_APFS", None), ("EFI", "EFI - CHAT"),
+                     ("Linux Filesystem", None), ("Linux Filesystem", None), ("Microsoft Basic Data", "ChatComp"),
                      ("Apple_APFS_Recovery", None)]
     assert parts[1]["size"] == new_macos
     used = 494 * GB - 300 * GB
     assert new_macos >= used + 38 * GB                          # macOS keeps 38 GB free for its updates
     drive = parts[6]
     assert drive["size"] >= 10 * GB                             # what's copied, plus room
-    # The folders, copied onto the ClaudeOS drive without Finder's files or the Photos library package.
-    d = mac.volumes / "ClaudeOS"
+    # The folders, copied onto the Chat Computer drive without Finder's files or the Photos library package.
+    d = mac.volumes / "ChatComp"
     assert (d / "Desktop/todo.txt").read_text() == "buy milk\n" and not (d / "Desktop/.DS_Store").exists()
     assert (d / "Documents/report.docx").exists() and (d / "Pictures/beach.jpg").exists()
     assert not (d / "Pictures/Photos Library.photoslibrary").exists()
-    assert (d / ".metadata_never_index").exists() and (d / ".claudeos").is_dir()
-    # ClaudeOS's first start, on its EFI partition.
-    esp = mac.volumes / "EFI - CLAUD"
-    p = esp / "claudeos"
+    assert (d / ".metadata_never_index").exists() and (d / ".chatcomputer").is_dir()
+    # Chat Computer's first start, on its EFI partition.
+    esp = mac.volumes / "EFI - CHAT"
+    p = esp / "chatcomputer"
     assert (p / "firstboot.sh").read_text() == (MAC / "esp/firstboot.sh").read_text()
     assert (p / "fedora-grub.cfg").read_text().startswith("search --fs-uuid --set=root 65e9d770")
     grub = (esp / "EFI/fedora/grub.cfg").read_text()
     assert "@" not in grub and "vmlinuz-7.1.6-400.asahi.fc44.aarch64+16k" in grub
-    assert "root=UUID=9db8788b-4718-404e-a6d0-1c9694d398fd" in grub and "/boot/efi/claudeos/firstboot.sh" in grub
+    assert "root=UUID=9db8788b-4718-404e-a6d0-1c9694d398fd" in grub and "/boot/efi/chatcomputer/firstboot.sh" in grub
     v = _env_values((p / "setup.env").read_text())
     assert v["USER_NAME"] == "rensh" and v["REAL_NAME"] == "Ren Shu"
     assert v["WIFI_SSID"] == "Home 5G" and v["WIFI_PSK"] == "correct horse"
@@ -204,12 +204,12 @@ def test_install_on_a_mac(tmp_path):
     assert json.loads((p / "settings.json").read_text())["user_name"] == "Ren Shu"
     with tarfile.open(p / "app.tar.gz") as t:
         names = t.getnames()
-    assert "claudeos/__init__.py" in names and "linux/install-claudeos.sh" in names
+    assert "chatcomputer/__init__.py" in names and "linux/install-chatcomputer.sh" in names
     assert not any(n.startswith(("mac/", "windows/")) or "__pycache__" in n for n in names)
     # The recovery password, for repairs, where the person finds it; nothing secret left in setup's folder.
-    note = (mac.home / "Documents/ClaudeOS recovery password.txt").read_text()
+    note = (mac.home / "Documents/Chat Computer recovery password.txt").read_text()
     assert v["RECOVERY_PASSWORD"] in note and "Account: rensh" in note
-    work = mac.home / ".claudeos-setup"
+    work = mac.home / ".chatcomputer-setup"
     assert not (work / "os").exists() and not (work / "payload").exists()
     log = (work / "setup.log").read_text()
     for secret in (TOKEN, "correct horse", "hunter2", v["RECOVERY_PASSWORD"]):
@@ -223,11 +223,11 @@ def test_install_on_a_mac(tmp_path):
 @needs_tools
 def test_plan_only_changes_nothing(tmp_path):
     mac = PretendMac(tmp_path, vm="1")       # GitHub's Macs are virtual: plan only works there
-    r = mac.run(["1", "y"], CLAUDEOS_PLAN_ONLY="1")
+    r = mac.run(["1", "y"], CHATCOMPUTER_PLAN_ONLY="1")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Nothing was changed" in r.stdout
-    plan = [line for line in (mac.home / ".claudeos-setup/setup.log").read_text().splitlines() if line.startswith("PLAN ")]
-    assert plan and "store=disk0s2" in plan[0] and "claudeos=60000000000" in plan[0]
+    plan = [line for line in (mac.home / ".chatcomputer-setup/setup.log").read_text().splitlines() if line.startswith("PLAN ")]
+    assert plan and "store=disk0s2" in plan[0] and "chatcomputer=60000000000" in plan[0]
     assert mac.disk()["parts"] == mac_pretend.new_mac(tmp_path / "again.json", mac.volumes)["parts"]
     assert "fake-claude" not in mac.log() and "addPartition" not in mac.log()
 
@@ -239,11 +239,11 @@ ANSWERS_TO_THE_INSTALLER = ["1", "y", TOKEN, "y", "", "correct horse", "y"]
 @needs_tools
 def test_running_setup_again_after_a_stop_doesnt_download_fedora_again(tmp_path):
     mac = PretendMac(tmp_path)
-    r = mac.run(ANSWERS_TO_THE_INSTALLER, CLAUDEOS_INSTALLER_CMD=CRASHING_INSTALLER)
+    r = mac.run(ANSWERS_TO_THE_INSTALLER, CHATCOMPUTER_INSTALLER_CMD=CRASHING_INSTALLER)
     assert r.returncode == 1 and "The Asahi installer didn't finish" in r.stdout, r.stdout[-2000:]
-    pkg = mac.home / ".claudeos-setup/os/fedora-44-minimal-202609041600.zip"
+    pkg = mac.home / ".chatcomputer-setup/os/fedora-44-minimal-202609041600.zip"
     with zipfile.ZipFile(pkg) as z:
-        assert "claudeos.icns" in z.namelist()                  # ClaudeOS's icon went in
+        assert "chatcomputer.icns" in z.namelist()              # Chat Computer's icon went in
     assert (pkg.parent / (pkg.name + ".with-icon")).read_text().strip() == _sha(pkg)
     r = mac.run(ANSWERS_TO_THE_INSTALLER + ["hunter2", "y"])
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
@@ -255,9 +255,9 @@ def test_running_setup_again_after_a_stop_doesnt_download_fedora_again(tmp_path)
 @needs_tools
 def test_without_the_icon_the_installer_isnt_asked_for_it(tmp_path):
     mac = PretendMac(tmp_path, icon_python=False)
-    r = mac.run(ANSWERS_TO_THE_INSTALLER, CLAUDEOS_INSTALLER_CMD=CRASHING_INSTALLER)
+    r = mac.run(ANSWERS_TO_THE_INSTALLER, CHATCOMPUTER_INSTALLER_CMD=CRASHING_INSTALLER)
     assert "icon couldn't be added" in r.stdout
-    work = mac.home / ".claudeos-setup"
+    work = mac.home / ".chatcomputer-setup"
     data = json.loads((work / "asahi-install/installer_data.json").read_text())
     assert "icon" not in data["os_list"][0] and data["os_list"][0]["package"].endswith(".zip")
     pkg = work / "os/fedora-44-minimal-202609041600.zip"
@@ -270,7 +270,7 @@ def test_without_the_icon_the_installer_isnt_asked_for_it(tmp_path):
     ("Apple M5", "M1, M2 or M3"),
     ("Apple M3 Ultra", "M3 Ultra"),
 ])
-def test_macs_claudeos_cant_start_on_are_turned_away(tmp_path, chip, words):
+def test_macs_chatcomputer_cant_start_on_are_turned_away(tmp_path, chip, words):
     mac = PretendMac(tmp_path, chip=chip)
     r = mac.run(["1"])
     assert r.returncode == 1 and words in r.stdout
@@ -295,7 +295,7 @@ def test_a_virtual_mac_is_not_installed_on(tmp_path):
 
 @needs_tools
 def test_too_little_space_stops_before_anything_changes(tmp_path):
-    mac = PretendMac(tmp_path, free=60 * GB)       # 38 GB must stay free: 22 GB left, less than ClaudeOS needs
+    mac = PretendMac(tmp_path, free=60 * GB)       # 38 GB must stay free: 22 GB left, less than Chat Computer needs
     r = mac.run(["1", "y"])
     assert r.returncode == 1 and "Free up space in macOS" in r.stdout
     assert "fake-claude" not in mac.log() and "addPartition" not in mac.log()
@@ -319,23 +319,23 @@ def _installed(mac):
     made = mac_pretend.install_os(st, 60 * GB)
     i = [p.get("id") for p in st["parts"]].index(made["Root"]) + 1
     st["parts"][i] = {"id": "disk0s9", "content": "Microsoft Basic Data", "size": st["parts"][i]["size"],
-                      "name": "ClaudeOS", "fs": True, "mounted": True, "uuid": "AB12-CD34"}
+                      "name": "ChatComp", "fs": True, "mounted": True, "uuid": "AB12-CD34"}
     mac.state.write_text(json.dumps(st))
-    d = mac_pretend.folder(st, "ClaudeOS")
+    d = mac_pretend.folder(st, "ChatComp")
     Path(d, "Documents").mkdir()
-    Path(d, "Documents/notes from ClaudeOS.txt").write_text("hello from ClaudeOS\n")
+    Path(d, "Documents/notes from Chat Computer.txt").write_text("hello from Chat Computer\n")
     return made
 
 
 @needs_tools
-def test_removing_claudeos_gives_macos_everything_back(tmp_path):
+def test_removing_chatcomputer_gives_macos_everything_back(tmp_path):
     mac = PretendMac(tmp_path)
     made = _installed(mac)
     # Remove; copy the drive's files to macOS first; REMOVE; the Mac's password for the start-up disk.
     r = mac.run(["5", "y", "REMOVE", "hunter2"])
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
     calls = mac.log()
-    # macOS is the start-up disk again before anything is deleted, then ClaudeOS's pieces go, then macOS grows.
+    # macOS is the start-up disk again before anything is deleted, then Chat Computer's pieces go, then macOS grows.
     order = [calls.index(s) for s in ("bless --setBoot", f"diskutil apfs deleteContainer {made['Stub']}",
                                       f"diskutil eraseVolume free free {made['EFI']}",
                                       "diskutil eraseVolume free free disk0s9", "diskutil apfs resizeContainer disk0s2 0")]
@@ -345,9 +345,9 @@ def test_removing_claudeos_gives_macos_everything_back(tmp_path):
     parts = [p for p in mac.disk()["parts"] if not p.get("free")]
     assert [p["content"] for p in parts] == ["Apple_APFS_ISC", "Apple_APFS", "Apple_APFS_Recovery"]
     assert parts[1]["size"] == 494 * GB                     # macOS has all its space back
-    kept = mac.home / "ClaudeOS files/Documents/notes from ClaudeOS.txt"
-    assert kept.read_text() == "hello from ClaudeOS\n"
-    assert "hunter2" not in (mac.home / ".claudeos-setup/setup.log").read_text()
+    kept = mac.home / "Chat Computer files/Documents/notes from Chat Computer.txt"
+    assert kept.read_text() == "hello from Chat Computer\n"
+    assert "hunter2" not in (mac.home / ".chatcomputer-setup/setup.log").read_text()
 
 
 @needs_tools
@@ -360,7 +360,7 @@ def test_space_left_after_a_removal_goes_back_to_macos_on_the_next_run(tmp_path)
     r = mac.run(["5", "n", "REMOVE", "hunter2"])
     assert r.returncode == 0 and "couldn't grow" in r.stdout, r.stdout[-2000:]
     assert mac.disk()["parts"][1]["size"] == 400 * GB
-    r = mac.run(["5", "y"])                                  # again: ClaudeOS is gone, the space comes back
+    r = mac.run(["5", "y"])                                  # again: Chat Computer is gone, the space comes back
     assert r.returncode == 0 and "free space is right after macOS's partition" in r.stdout, r.stdout[-2000:]
     assert mac.disk()["parts"][1]["size"] == 494 * GB
     r = mac.run(["5"])
@@ -385,17 +385,17 @@ def test_sending_more_files(tmp_path):
     # Send files; not all; then per folder: Desktop no, Documents no, Pictures no, Music yes.
     r = mac.run(["2", "n", "n", "n", "n", "y"])
     assert r.returncode == 0, r.stdout + r.stderr
-    d = mac.volumes / "ClaudeOS"
+    d = mac.volumes / "ChatComp"
     assert (d / "Music/song.m4a").exists() and not (d / "Desktop").exists()
 
 
 @needs_tools
-def test_signing_in_again_leaves_the_sign_in_for_claudeos(tmp_path):
+def test_signing_in_again_leaves_the_sign_in_for_chatcomputer(tmp_path):
     mac = PretendMac(tmp_path)
     _installed(mac)
     r = mac.run(["3", TOKEN, "y"])
     assert r.returncode == 0, r.stdout + r.stderr
-    drop = mac.volumes / "ClaudeOS/.claudeos"
+    drop = mac.volumes / "ChatComp/.chatcomputer"
     assert (drop / "claude_token").read_text().strip() == TOKEN
     assert stat.S_IMODE((drop / "claude_token").stat().st_mode) == 0o600
     assert json.loads((drop / "claude_login.json").read_text())["claudeAiOauth"]
@@ -407,13 +407,13 @@ def test_choosing_what_starts(tmp_path):
     _installed(mac)
     r = mac.run(["4", "1", "hunter2"])
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "bless --setBoot --device /dev/disk5s1" in mac.log()        # ClaudeOS's start-up volume
+    assert "bless --setBoot --device /dev/disk5s1" in mac.log()        # Chat Computer's start-up volume
 
 
 # ------------------------------------------------------------------ the installer's questions
 def _drive(tmp_path, *args, macos="374000000000B", os_size="60000000000B", typed="hunter2\n"):
     log = tmp_path / "answers.log"
-    env = dict(os.environ, FAKE_INSTALLER_LOG=str(log), CLAUDEOS_MACOS_SIZE=macos, CLAUDEOS_OS_SIZE=os_size)
+    env = dict(os.environ, FAKE_INSTALLER_LOG=str(log), CHATCOMPUTER_MACOS_SIZE=macos, CHATCOMPUTER_OS_SIZE=os_size)
     r = subprocess.run(["expect", "-f", str(MAC / "drive-installer.exp"), "--", sys.executable,
                         str(TESTS / "mac_fake_installer.py"), *args], input=typed, env=env, capture_output=True,
                        text=True, timeout=120)
@@ -441,7 +441,7 @@ def test_installer_asks_the_password_again_after_a_typo(tmp_path):
 def test_installer_questions_setup_cant_answer_stop_it(tmp_path, flag, code):
     r, answers = _drive(tmp_path, flag)
     assert r.returncode == code, r.stdout
-    assert "ClaudeOS Setup:" in r.stdout
+    assert "Chat Computer Setup:" in r.stdout
     assert not any(a["q"] == "password" for a in answers)
 
 
@@ -457,10 +457,10 @@ def _first_start(tmp_path, setup_env=None, app=True):
     (root / "etc/reconfigSys").write_text("")
     (root / "etc/systemd/system/multi-user.target.wants/initial-setup.service").symlink_to(
         "/usr/lib/systemd/system/initial-setup.service")
-    p = esp / "claudeos"
+    p = esp / "chatcomputer"
     (p / "secrets").mkdir(parents=True)
     (esp / "EFI/fedora").mkdir(parents=True)
-    (esp / "EFI/fedora/grub.cfg").write_text("ClaudeOS first start\n")
+    (esp / "EFI/fedora/grub.cfg").write_text("Chat Computer first start\n")
     (p / "fedora-grub.cfg").write_text("Fedora's own\n")
     (p / "secrets/claude_token").write_text(TOKEN + "\n")
     (p / "secrets/claude_login.json").write_text('{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}}\n')
@@ -473,12 +473,12 @@ def _first_start(tmp_path, setup_env=None, app=True):
     (p / "setup.env").write_text("".join(f"{k}={base64.b64encode(v.encode()).decode()}\n" for k, v in values.items()))
     if app:
         src = tmp_path / "app"
-        (src / "claudeos").mkdir(parents=True)
-        (src / "claudeos/__init__.py").write_text("")
+        (src / "chatcomputer").mkdir(parents=True)
+        (src / "chatcomputer/__init__.py").write_text("")
         (src / "linux/firstboot").mkdir(parents=True)
-        shutil.copy(REPO / "linux/firstboot/claudeos-finish-install.service", src / "linux/firstboot/")
+        shutil.copy(REPO / "linux/firstboot/chatcomputer-finish-install.service", src / "linux/firstboot/")
         with tarfile.open(p / "app.tar.gz", "w:gz") as t:
-            for name in ("claudeos", "linux"):
+            for name in ("chatcomputer", "linux"):
                 t.add(src / name, arcname=name)
     bin_dir.mkdir()
     rec = f'echo "$(basename "$0") $*" >> "{calls}"'
@@ -488,65 +488,65 @@ def _first_start(tmp_path, setup_env=None, app=True):
     _tool(bin_dir, "chpasswd", rec + f'\ncat >> "{tmp_path}/chpasswd.in"')
     _tool(bin_dir, "restorecon", rec)
     _tool(bin_dir, "sleep", "exit 0")
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDEOS_ESP=str(esp), CLAUDEOS_TARGET=str(root),
-               CLAUDEOS_CONSOLE="/dev/null")
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CHATCOMPUTER_ESP=str(esp), CHATCOMPUTER_TARGET=str(root),
+               CHATCOMPUTER_CONSOLE="/dev/null")
     r = subprocess.run(["sh", str(MAC / "esp/firstboot.sh")], env=env, capture_output=True, text=True, timeout=60)
     return r, root, esp, calls
 
 
 def test_first_start_on_the_mac(tmp_path):
     r, root, esp, calls = _first_start(tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr + (esp / "claudeos/firstboot.log").read_text()
+    assert r.returncode == 0, r.stdout + r.stderr + (esp / "chatcomputer/firstboot.log").read_text()
     log = calls.read_text()
     assert "useradd --create-home --comment Ren Shu --groups wheel rensh" in log
     assert (tmp_path / "chpasswd.in").read_text() == "rensh:abcd-efgh-jkmn-pqrs\n"
-    wifi = root / "etc/NetworkManager/system-connections/claudeos-wifi.nmconnection"
+    wifi = root / "etc/NetworkManager/system-connections/chatcomputer-wifi.nmconnection"
     text = wifi.read_text()
     assert 'ssid=Home "5G"\\\\' in text and "psk=correct horse" in text and "key-mgmt=wpa-psk" in text
     assert stat.S_IMODE(wifi.stat().st_mode) == 0o600
-    assert (root / "opt/claudeos/app/claudeos/__init__.py").exists()
-    h = root / "home/rensh/ClaudeOS"
+    assert (root / "opt/chatcomputer/app/chatcomputer/__init__.py").exists()
+    h = root / "home/rensh/ChatComputer"
     assert (h / "secrets/claude_token").read_text().strip() == TOKEN
     assert stat.S_IMODE((h / "secrets/claude_token").stat().st_mode) == 0o600
     assert "refreshToken" in (h / ".engine/.credentials.json").read_text()
     assert (root / "home/rensh/Mac").is_dir()
-    assert (root / "etc/claudeos/install-user").read_text() == "rensh\n"
-    assert (root / "etc/claudeos/mac-files-partuuid").read_text() == "4b1e2f3a-0000-4000-8000-00000000c0de\n"
-    unit = root / "etc/systemd/system/multi-user.target.wants/claudeos-finish-install.service"
-    assert os.readlink(unit) == "/etc/systemd/system/claudeos-finish-install.service"
+    assert (root / "etc/chatcomputer/install-user").read_text() == "rensh\n"
+    assert (root / "etc/chatcomputer/mac-files-partuuid").read_text() == "4b1e2f3a-0000-4000-8000-00000000c0de\n"
+    unit = root / "etc/systemd/system/multi-user.target.wants/chatcomputer-finish-install.service"
+    assert os.readlink(unit) == "/etc/systemd/system/chatcomputer-finish-install.service"
     assert os.readlink(root / "etc/localtime") == "../usr/share/zoneinfo/Asia/Singapore"
-    assert (root / "etc/hostname").read_text() == "claudeos\n"
+    assert (root / "etc/hostname").read_text() == "chatcomputer\n"
     # Fedora's own first-start questions are off, its usual start is back, and no sign-in copies are left.
     assert not (root / "etc/reconfigSys").exists()
     assert not (root / "etc/systemd/system/multi-user.target.wants/initial-setup.service").is_symlink()
     assert (esp / "EFI/fedora/grub.cfg").read_text() == "Fedora's own\n"
     for gone in ("setup.env", "secrets", "app.tar.gz", "settings.json"):
-        assert not (esp / "claudeos" / gone).exists(), gone
+        assert not (esp / "chatcomputer" / gone).exists(), gone
     assert "restorecon -RF" in log
-    assert "correct horse" not in (esp / "claudeos/firstboot.log").read_text()
+    assert "correct horse" not in (esp / "chatcomputer/firstboot.log").read_text()
 
 
 def test_first_start_tries_again_then_falls_back_to_fedora(tmp_path):
     r, root, esp, _ = _first_start(tmp_path, app=False)
     assert r.returncode == 1
-    assert (esp / "EFI/fedora/grub.cfg").read_text() == "ClaudeOS first start\n"    # tries again next start
-    assert (esp / "claudeos/tries").read_text().strip() == "1"
+    assert (esp / "EFI/fedora/grub.cfg").read_text() == "Chat Computer first start\n"  # tries again next start
+    assert (esp / "chatcomputer/tries").read_text().strip() == "1"
     assert (root / "etc/reconfigSys").exists()                                       # Fedora's questions still on
-    assert (esp / "claudeos/setup.env").exists() and (esp / "claudeos/secrets/claude_token").exists()  # for the retry
-    (esp / "claudeos/tries").write_text("2\n")
-    env = dict(os.environ, PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}", CLAUDEOS_ESP=str(esp),
-               CLAUDEOS_TARGET=str(root), CLAUDEOS_CONSOLE="/dev/null")
+    assert (esp / "chatcomputer/setup.env").exists() and (esp / "chatcomputer/secrets/claude_token").exists()  # for the retry
+    (esp / "chatcomputer/tries").write_text("2\n")
+    env = dict(os.environ, PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}", CHATCOMPUTER_ESP=str(esp),
+               CHATCOMPUTER_TARGET=str(root), CHATCOMPUTER_CONSOLE="/dev/null")
     r = subprocess.run(["sh", str(MAC / "esp/firstboot.sh")], env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 1
     assert (esp / "EFI/fedora/grub.cfg").read_text() == "Fedora's own\n"            # third time: Fedora's start
     for gone in ("setup.env", "secrets", "settings.json"):                          # and no sign-in left behind
-        assert not (esp / "claudeos" / gone).exists(), gone
+        assert not (esp / "chatcomputer" / gone).exists(), gone
 
 
 def test_first_start_refuses_a_bad_account_name(tmp_path):
     r, root, esp, calls = _first_start(tmp_path, {"USER_NAME": "Ren Shu"})
     assert r.returncode == 1 and not calls.exists()
-    assert "account name" in (esp / "claudeos/firstboot.log").read_text()
+    assert "account name" in (esp / "chatcomputer/firstboot.log").read_text()
 
 
 # ------------------------------------------------------------------ the pinned values agree
@@ -563,7 +563,7 @@ def test_manifest_installer_data_and_first_start_agree():
     m = _manifest()
     data = json.loads((MAC / "installer_data.json").read_text())
     (entry,) = data["os_list"]
-    assert entry["name"] == entry["default_os_name"] == "ClaudeOS"
+    assert entry["name"] == entry["default_os_name"] == "Chat Computer"
     assert entry["package"] == m["FEDORA_PACKAGE"] == m["FEDORA_PACKAGE_URL"].rsplit("/", 1)[1]
     assert "14.8.3" in entry["supported_fw"]                     # M3 Macs need it
     # Fedora's own partitions for that build (fedora-44-minimal-202609041600.json), with its ESP serial: the
@@ -573,7 +573,7 @@ def test_manifest_installer_data_and_first_start_agree():
          "copy_firmware": True, "copy_installer_data": True, "source": "esp"},
         {"name": "Boot", "type": "Linux", "size": "1073741824B", "image": "boot.img"},
         {"name": "Root", "type": "Linux", "size": "4216303616B", "expand": True, "image": "root.img"}]
-    assert entry["icon"] == "claudeos.icns" and (MAC / "claudeos.icns").read_bytes()[:4] == b"icns"
+    assert entry["icon"] == "chatcomputer.icns" and (MAC / "chatcomputer.icns").read_bytes()[:4] == b"icns"
     for k in ("ASAHI_INSTALLER_SHA256", "FEDORA_PACKAGE_SHA256", "CLAUDE_WHEEL_SHA256"):
         assert re.fullmatch(r"[0-9a-f]{64}", m[k]), k
     assert m["ASAHI_INSTALLER_URL"].endswith(f"installer-{m['ASAHI_INSTALLER_VERSION']}.tar.gz")
@@ -640,14 +640,14 @@ def test_first_start_command_reaches_systemd_whole():
     line = next(l for l in (MAC / "esp/grub-firststart.cfg").read_text().splitlines() if l.startswith("linux "))
     kernel_cmdline = _grub_cmdline(_grub_words(line)[2:])
     words = _systemd_cmdline(kernel_cmdline)
-    assert "systemd.run=/bin/sh /boot/efi/claudeos/firstboot.sh" in words, words
+    assert "systemd.run=/bin/sh /boot/efi/chatcomputer/firstboot.sh" in words, words
     assert {"systemd.run_success_action=reboot", "systemd.run_failure_action=reboot", "rootflags=subvol=root"} <= set(words)
     # systemd-run-generator writes its default.target where /etc's wins (Fedora's image has one), so the unit
     # to start is named outright.
     assert "systemd.unit=kernel-command-line.target" in words
     # The old way, for the record: GRUB escapes the inner quotes, and systemd keeps the backslashes.
-    old = _systemd_cmdline(_grub_cmdline(_grub_words("""linux x 'systemd.run="/bin/sh /boot/efi/claudeos/firstboot.sh"'""")[2:]))
-    assert "systemd.run=/bin/sh /boot/efi/claudeos/firstboot.sh" not in old
+    old = _systemd_cmdline(_grub_cmdline(_grub_words("""linux x 'systemd.run="/bin/sh /boot/efi/chatcomputer/firstboot.sh"'""")[2:]))
+    assert "systemd.run=/bin/sh /boot/efi/chatcomputer/firstboot.sh" not in old
 
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="needs shellcheck")

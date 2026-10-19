@@ -1,5 +1,5 @@
-//! What is plugged into a USB controller. When something is plugged in, ClaudeOS gives it a slot and
-//! an address, asks it what it is (its descriptors), and sets it up if it is something ClaudeOS uses:
+//! What is plugged into a USB controller. When something is plugged in, Chat Computer gives it a slot and
+//! an address, asks it what it is (its descriptors), and sets it up if it is something Chat Computer uses:
 //! a keyboard, or a hub with more devices behind it. Unplugged devices (and everything behind an
 //! unplugged hub) give their slots back.
 //!
@@ -21,7 +21,7 @@ const CONTROL_MAX: usize = 4096;
 const MAX_DEPTH: u8 = 5;
 
 pub enum Role {
-    /// Something ClaudeOS doesn't use yet.
+    /// Something Chat Computer doesn't use yet.
     Other,
     Keyboard(Keyboard),
     Hub(Hub),
@@ -473,7 +473,7 @@ pub fn root_port(hc: usize, port: u8) {
 
 fn log_port(hc: usize, place: &str, what: &str) {
     let name = with(hc, |c| c.host.name.clone());
-    crate::log!("ClaudeOS kernel: USB {name} {place}: {what}");
+    crate::log!("Chat Computer kernel: USB {name} {place}: {what}");
 }
 
 fn attach(hc: usize, place: Place, speed: Speed) {
@@ -562,7 +562,7 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
         set_up_keyboard(hc, slot, speed, i)?;
         "a keyboard"
     } else {
-        "a device ClaudeOS doesn't use yet"
+        "a device Chat Computer doesn't use yet"
     };
     let name = name.unwrap_or_else(|| match what {
         "a keyboard" => "USB keyboard".to_string(),

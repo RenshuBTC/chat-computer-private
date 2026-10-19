@@ -1,12 +1,12 @@
-"""How big ClaudeOS draws things: letters big enough to read at full speed, scaled for each screen like display
+"""How big Chat Computer draws things: letters big enough to read at full speed, scaled for each screen like display
 scaling does."""
 import math
 import struct
 
 import pytest
 
-from claudeos.ui import layout as L
-from claudeos.ui.render import FONTS
+from chatcomputer.ui import layout as L
+from chatcomputer.ui.render import FONTS
 
 
 def screen(w_px, h_px, inches=0.0, w_mm=None, h_mm=None, view=None):

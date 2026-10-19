@@ -1,11 +1,11 @@
 # Getting the official Ubuntu Server 24.04 LTS installer and checking it is genuine.
-# ClaudeOS runs on top of Ubuntu's drivers for Wi-Fi, Bluetooth, sound and the screen.
+# Chat Computer runs on top of Ubuntu's drivers for Wi-Fi, Bluetooth, sound and the screen.
 # ASCII-only file (see Common.ps1).
 
 $Script:UbuntuMirrors = @('https://releases.ubuntu.com/24.04/', 'https://cdimage.ubuntu.com/releases/24.04/release/')
 
 # 24.04.4 or newer: from there on the installer makes the person's account before its last step, which is
-# ClaudeOS's (finish.sh hands ClaudeOS's folder to that account). Up to 24.04.3 the account was only made at
+# Chat Computer's (finish.sh hands Chat Computer's folder to that account). Up to 24.04.3 the account was only made at
 # the first start, so that step failed and the install stopped half done.
 $Script:MinPointRelease = 4
 
@@ -47,7 +47,7 @@ function Select-ServerIso {
     }
     if (-not $best) { throw 'No Ubuntu 24.04 server installer is listed.' }
     if ($bestN -lt $Script:MinPointRelease) {
-        throw ('Ubuntu''s download site offers ' + $best + ', but ClaudeOS needs 24.04.' + $Script:MinPointRelease + ' or newer.')
+        throw ('Ubuntu''s download site offers ' + $best + ', but Chat Computer needs 24.04.' + $Script:MinPointRelease + ' or newer.')
     }
     $hash = $Sums[$best]
     if ($Script:KnownUbuntuIsos.ContainsKey($best) -and $Script:KnownUbuntuIsos[$best] -ne $hash) {
@@ -65,7 +65,7 @@ function Get-UbuntuIso {
         if ($n -ge 0 -and $n -lt $Script:MinPointRelease) {
             $version = '24.04'
             if ($n -gt 0) { $version += '.' + $n }
-            throw ('That is the Ubuntu ' + $version + ' installer; ClaudeOS needs 24.04.' + $Script:MinPointRelease + ' or newer. ' +
+            throw ('That is the Ubuntu ' + $version + ' installer; Chat Computer needs 24.04.' + $Script:MinPointRelease + ' or newer. ' +
                    'Run setup without -IsoPath and it downloads the current one.')
         }
         Write-Line ('Checking ' + $name + '...')

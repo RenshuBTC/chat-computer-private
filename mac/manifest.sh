@@ -1,6 +1,6 @@
-# What ClaudeOS Setup downloads on a Mac, pinned and checked against SHA-256 fingerprints. Sourced by setup.sh.
+# What Chat Computer Setup downloads on a Mac, pinned and checked against SHA-256 fingerprints. Sourced by setup.sh.
 #
-# ClaudeOS on a Mac is built at its first start on Fedora Asahi Remix's Minimal edition, which the Asahi
+# Chat Computer on a Mac is built at its first start on Fedora Asahi Remix's Minimal edition, which the Asahi
 # installer puts next to macOS. FEDORA_KERNEL and the file system ids below are that image's own (read from
 # its boot.img: loader/entries/*.conf and grub2/grub.cfg); the first start uses them to start that kernel
 # (esp/grub-firststart.cfg), and installer_data.json repeats the image's partitions. Change them together.

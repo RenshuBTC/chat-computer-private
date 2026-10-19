@@ -1,7 +1,7 @@
 """A small mock of the Claude Messages API for end-to-end tests.
 
 The real Claude Code CLI (bundled with the Agent SDK) is pointed at this server with
-ANTHROPIC_BASE_URL, so ClaudeOS can be tested with the real agent loop, the real tool
+ANTHROPIC_BASE_URL, so Chat Computer can be tested with the real agent loop, the real tool
 plumbing and real streaming, without a Claude account.
 
 Behaviour is driven by "rules": each rule inspects the request and returns a scripted

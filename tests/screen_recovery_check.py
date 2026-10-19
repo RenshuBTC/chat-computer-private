@@ -1,6 +1,6 @@
 """The conversation page comes back as it was after its renderer process stops.
 
-Runs a real ClaudeOS window (GTK + WebKit) on a virtual display, puts a short conversation on it, stops the
+Runs a real Chat Computer window (GTK + WebKit) on a virtual display, puts a short conversation on it, stops the
 page's renderer the way a crash would, and prints JSON: the conversation text before and after.
 Run:  xvfb-run -a python tests/screen_recovery_check.py
 """
@@ -12,12 +12,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["CLAUDEOS_HOME"] = tempfile.mkdtemp(prefix="claudeos-recovery-")
+os.environ["CHATCOMPUTER_HOME"] = tempfile.mkdtemp(prefix="chatcomputer-recovery-")
 
 from gi.repository import GLib, Gtk, WebKit2  # noqa: E402
 
-from claudeos.config import Paths, Settings  # noqa: E402
-from claudeos.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
+from chatcomputer.config import Paths, Settings  # noqa: E402
+from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 choose_rendering()
 screen = GtkScreen(Paths().ensure(), Settings(), windowed=True)

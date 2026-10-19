@@ -211,7 +211,7 @@ extern "C" fn interrupt_dispatch(frame: &mut Frame) {
         time::tick();
         apic::end_of_interrupt();
     } else if vector == APIC_ERROR_VECTOR as u64 {
-        crate::log!("ClaudeOS kernel: the interrupt controller reported error {:#x}", apic::error_status());
+        crate::log!("Chat Computer kernel: the interrupt controller reported error {:#x}", apic::error_status());
         apic::end_of_interrupt();
     } else if vector == SPURIOUS_VECTOR as u64 || PIC_SPURIOUS.contains(&vector) {
         // Nothing to do, and nothing to acknowledge.
@@ -223,7 +223,7 @@ extern "C" fn interrupt_dispatch(frame: &mut Frame) {
         }
         apic::end_of_interrupt();
     } else {
-        crate::log!("ClaudeOS kernel: unexpected interrupt {vector:#x}");
+        crate::log!("Chat Computer kernel: unexpected interrupt {vector:#x}");
         apic::end_of_interrupt();
     }
 }
@@ -231,7 +231,7 @@ extern "C" fn interrupt_dispatch(frame: &mut Frame) {
 fn exception(f: &Frame) -> ! {
     let name = EXCEPTIONS[f.vector as usize];
     crate::serial::write_anyway(format_args!(
-        "\nClaudeOS kernel stopped: {name} (vector {}, error {:#x})\n\
+        "\nChat Computer kernel stopped: {name} (vector {}, error {:#x})\n\
          rip {:#018x}  cs {:#x}  rflags {:#x}  rsp {:#018x}  ss {:#x}\n\
          rax {:#018x}  rbx {:#018x}  rcx {:#018x}  rdx {:#018x}\n\
          rsi {:#018x}  rdi {:#018x}  rbp {:#018x}  r8  {:#018x}\n\

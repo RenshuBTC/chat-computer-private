@@ -75,7 +75,7 @@ def folder(st, name):
     return d
 
 
-def install_os(st, os_size, name="ClaudeOS"):
+def install_os(st, os_size, name="Chat Computer"):
     """What the Asahi installer does with 'f': a stub APFS container, then EFI, Boot and Root (Root takes the
     rest of the OS's space) at the start of the free space after macOS. Returns {part name: id}."""
     i = _index(st, st["macos"]["store"]) + 1
@@ -83,7 +83,7 @@ def install_os(st, os_size, name="ClaudeOS"):
     assert gap.get("free") and gap["size"] >= os_size, ("no room", gap, os_size)
     made = []
     for part, content, size, extra in (("Stub", "Apple_APFS", STUB, {"apfs": "stub", "stub_name": name}),
-                                       ("EFI", "EFI", 524288000, {"name": "EFI - CLAUD", "fs": True}),
+                                       ("EFI", "EFI", 524288000, {"name": "EFI - CHAT", "fs": True}),
                                        ("Boot", "Linux Filesystem", 1073741824, {}),
                                        ("Root", "Linux Filesystem", os_size - STUB - 524288000 - 1073741824, {})):
         p = {"id": _new_id(st), "content": content, "size": size, "uuid": str(uuid.uuid4()).upper(), **extra}

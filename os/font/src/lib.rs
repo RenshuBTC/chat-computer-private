@@ -1,7 +1,7 @@
-//! ClaudeOS's own TrueType font reader: which glyph a character uses, how wide it is, and its outline.
+//! Chat Computer's own TrueType font reader: which glyph a character uses, how wide it is, and its outline.
 //!
 //! It reads 'glyf' outlines (made of straight lines and quadratic curves), including glyphs built from
-//! other glyphs (é = e + ´). It ignores the hinting programs fonts carry: ClaudeOS never runs code that
+//! other glyphs (é = e + ´). It ignores the hinting programs fonts carry: Chat Computer never runs code that
 //! comes inside a font. Everything is bounds-checked; a damaged font gives `None`, never a crash.
 #![cfg_attr(not(test), no_std)]
 

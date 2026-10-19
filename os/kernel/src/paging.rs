@@ -147,7 +147,7 @@ fn ram_spans(info: &BootInfo) -> &'static [(u64, u64)] {
 }
 
 /// Sets the page attribute table so that one of its entries means write-combining (entry 1, which
-/// is write-through by default and unused by ClaudeOS).
+/// is write-through by default and unused by Chat Computer).
 fn set_up_pat() {
     const IA32_PAT: u32 = 0x277;
     // Entries 0..7: write-back, write-combining, uncached-minus, uncached, then the same again.

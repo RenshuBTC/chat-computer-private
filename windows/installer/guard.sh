@@ -1,11 +1,11 @@
 #!/bin/sh
-# ClaudeOS install guard. Runs in the Ubuntu installer before anything is written to disk
-# (autoinstall early-commands). If this installer has already installed ClaudeOS on this PC, it
+# Chat Computer install guard. Runs in the Ubuntu installer before anything is written to disk
+# (autoinstall early-commands). If this installer has already installed Chat Computer on this PC, it
 # must not install a second copy.
 #
-# finish.sh leaves /EFI/claudeos/installed-<id> on the PC's EFI partition. If the PC starts the installer
-# again (before ClaudeOS has cleaned it up), the installer's boot menu normally finds that file and starts
-# the installed ClaudeOS, so the installer never runs. This is the second check, for when it does run
+# finish.sh leaves /EFI/chatcomputer/installed-<id> on the PC's EFI partition. If the PC starts the installer
+# again (before Chat Computer has cleaned it up), the installer's boot menu normally finds that file and starts
+# the installed Chat Computer, so the installer never runs. This is the second check, for when it does run
 # anyway: it makes the firmware start the installed system once (BootNext) and restarts; if it can't, it
 # stops before anything changes.
 # Usage: guard.sh INSTALL_ID
@@ -14,7 +14,7 @@ ID="${1:-}"
 case "$ID" in
   ''|*[!0-9a-f]*) exit 0 ;;
 esac
-EFIVARS="${CLAUDEOS_EFIVARS:-/sys/firmware/efi/efivars}"
+EFIVARS="${CHATCOMPUTER_EFIVARS:-/sys/firmware/efi/efivars}"
 GLOBAL=8be4df61-93ca-11d2-aa0d-00e098032b8c   # UEFI's own variables (Boot####, BootNext)
 
 say() {
@@ -23,10 +23,10 @@ say() {
 }
 
 installed_here() {
-  # For tests, CLAUDEOS_GUARD_ESPS names folders to look in instead of the PC's EFI partitions.
-  if [ -n "${CLAUDEOS_GUARD_ESPS:-}" ]; then
-    for d in $CLAUDEOS_GUARD_ESPS; do
-      [ -f "$d/EFI/claudeos/installed-$ID" ] && return 0
+  # For tests, CHATCOMPUTER_GUARD_ESPS names folders to look in instead of the PC's EFI partitions.
+  if [ -n "${CHATCOMPUTER_GUARD_ESPS:-}" ]; then
+    for d in $CHATCOMPUTER_GUARD_ESPS; do
+      [ -f "$d/EFI/chatcomputer/installed-$ID" ] && return 0
     done
     return 1
   fi
@@ -34,7 +34,7 @@ installed_here() {
     mnt=$(mktemp -d) || continue
     hit=1
     if mount -o ro "$dev" "$mnt" 2>/dev/null; then
-      [ -f "$mnt/EFI/claudeos/installed-$ID" ] && hit=0
+      [ -f "$mnt/EFI/chatcomputer/installed-$ID" ] && hit=0
       umount "$mnt" 2>/dev/null
     fi
     rmdir "$mnt" 2>/dev/null
@@ -80,9 +80,9 @@ set_boot_next() {
 installed_here || exit 0
 
 entry=$(ubuntu_entry) && set_boot_next "$entry" && {
-  say "ClaudeOS is already installed on this PC; restarting into ClaudeOS."
-  if [ -n "${CLAUDEOS_GUARD_REBOOT:-}" ]; then   # for tests
-    $CLAUDEOS_GUARD_REBOOT
+  say "Chat Computer is already installed on this PC; restarting into Chat Computer."
+  if [ -n "${CHATCOMPUTER_GUARD_REBOOT:-}" ]; then  # for tests
+    $CHATCOMPUTER_GUARD_REBOOT
     exit 0
   fi
   sleep 8
@@ -90,5 +90,5 @@ entry=$(ubuntu_entry) && set_boot_next "$entry" && {
   sleep 60
 }
 # Could not arrange that: stop the installer here (nothing has been changed).
-say "ClaudeOS is already installed on this PC, so it won't install again. Restart the PC and choose ClaudeOS in its boot menu." >&2
+say "Chat Computer is already installed on this PC, so it won't install again. Restart the PC and choose Chat Computer in its boot menu." >&2
 exit 1

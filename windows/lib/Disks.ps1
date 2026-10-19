@@ -1,4 +1,4 @@
-# Where ClaudeOS goes: free space next to Windows, or a separate internal disk.
+# Where Chat Computer goes: free space next to Windows, or a separate internal disk.
 #
 # Safety rules (also in ARCHITECTURE.md):
 # * The Ubuntu installer is only ever told to use FREE space ("use_gap"). It never reformats a disk.
@@ -6,12 +6,12 @@
 #   shrinking C: (like Disk Management's "Shrink Volume"), or erasing a separate disk they typed
 #   the number of. The disk Windows runs from and USB drives can never be erased.
 # * The installer installs onto the disk it starts from: setup puts the installer partition on the disk
-#   ClaudeOS goes on, at the end of ClaudeOS's free space (Installer.ps1), and the answers file says
+#   Chat Computer goes on, at the end of Chat Computer's free space (Installer.ps1), and the answers file says
 #   "install-media: true". So the installer can't pick another disk.
 # ASCII-only file (see Common.ps1).
 
 $Script:GB = [int64]1073741824
-$Script:MinInstallBytes = 40 * $Script:GB          # smallest gap ClaudeOS will install into
+$Script:MinInstallBytes = 40 * $Script:GB          # smallest gap Chat Computer will install into
 $Script:DefaultInstallBytes = 64 * $Script:GB      # what setup suggests
 $Script:MinWindowsFreeBytes = 25 * $Script:GB      # Windows keeps at least this much free space
 
@@ -209,7 +209,7 @@ function Invoke-MakeRoom {
             $result.JournalResets++
             continue
         }
-        if ($gap -ge $NeedBytes) { break }     # enough for ClaudeOS; the rest isn't worth deleting anything for
+        if ($gap -ge $NeedBytes) { break }     # enough for Chat Computer; the rest isn't worth deleting anything for
         if ($b.Kind -eq 'restorepoints' -and -not $result.ClearedRestorePoints) {
             Write-Line 'Making room: deleting your restore points (Windows makes new ones by itself)...'
             Remove-RestorePoints
@@ -232,8 +232,8 @@ function Invoke-MakeRoom {
 function Get-RoomAdvice {
     # What the person can do when Windows can't make enough room on C:, by what is in the way.
     param($Blocker, [int64]$Made, [int64]$NeedBytes)
-    $have = 'Windows can''t make room for ClaudeOS next to it right now.'
-    if ($Made -ge $Script:GB) { $have = 'Windows could make ' + (Format-Size $Made) + ' of room next to it; ClaudeOS needs ' + (Format-Size $NeedBytes) + '.' }
+    $have = 'Windows can''t make room for Chat Computer next to it right now.'
+    if ($Made -ge $Script:GB) { $have = 'Windows could make ' + (Format-Size $Made) + ' of room next to it; Chat Computer needs ' + (Format-Size $NeedBytes) + '.' }
     $kind = 'unknown'
     $file = ''
     if ($Blocker) { $kind = [string]$Blocker.Kind; $file = [string]$Blocker.File }
@@ -244,7 +244,7 @@ function Get-RoomAdvice {
                              'Performance Settings, Advanced, Virtual memory: Change, untick "Automatically manage", choose "No paging ' +
                              'file", Set, OK. Restart, run setup again, then turn it back on the same way.') }
         'ntfs' { return ($have + ' The file system''s own records (' + $file.TrimStart('\') + ') are in the way, and Windows can''t ' +
-                         'move them while it runs. ClaudeOS can go on a separate disk instead, or a partition tool that works while ' +
+                         'move them while it runs. Chat Computer can go on a separate disk instead, or a partition tool that works while ' +
                          'Windows is off can make the room.') }
         default {
             if ($file) { return ($have + ' A file Windows can''t move while it runs is in the way: ' + $file + '.') }
@@ -254,7 +254,7 @@ function Get-RoomAdvice {
 }
 
 function Get-OtherDiskCandidates {
-    # Internal disks other than the one Windows runs from, big enough for ClaudeOS.
+    # Internal disks other than the one Windows runs from, big enough for Chat Computer.
     $all = @(Get-Disk -ErrorAction Stop)
     return , @($all | Where-Object {
             -not $_.IsBoot -and -not $_.IsSystem -and

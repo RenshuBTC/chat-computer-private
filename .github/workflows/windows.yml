@@ -1,4 +1,4 @@
-# ClaudeOS Setup for Windows on GitHub's Windows machines. They can't install ClaudeOS (that needs a PC that
+# Chat Computer Setup for Windows on GitHub's Windows machines. They can't install Chat Computer (that needs a PC that
 # restarts into the installer), so this runs setup's own tests under Windows PowerShell 5.1, the PowerShell
 # every Windows PC has, and asks real Windows the things setup relies on when it makes room on C: and signs
 # in (tests/win_ci/probe.ps1). What it saw is saved to the branch results/win-<run number>.
@@ -38,5 +38,5 @@ jobs:
           git init -q
           git checkout -q -b "$BRANCH"
           git add -A
-          git -c user.name="ClaudeOS Windows test" -c user.email="noreply@github.com" commit -q -m "Windows setup test results ($STATUS)"
+          git -c user.name="Chat Computer Windows test" -c user.email="noreply@github.com" commit -q -m "Windows setup test results ($STATUS)"
           git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"

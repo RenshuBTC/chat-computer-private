@@ -1,4 +1,4 @@
-"""What ClaudeOS asks when it starts (a new version of itself, then AirPods), and answers given in writing only
+"""What Chat Computer asks when it starts (a new version of itself, then AirPods), and answers given in writing only
 when the question was typed on this PC's keyboard."""
 import asyncio
 from pathlib import Path
@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from claudeos import controller as C
-from claudeos import update
-from claudeos.config import Paths, Settings
-from claudeos.controller import Controller
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
+from chatcomputer import controller as C
+from chatcomputer import update
+from chatcomputer.config import Paths, Settings
+from chatcomputer.controller import Controller
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
 
 AIRPODS = {"address": "AA:BB:CC:DD:EE:01", "name": "AirPods Pro"}
 
@@ -55,7 +55,7 @@ class Bluetooth(FakePlatform):
 
 
 def _controller(tmp_path, monkeypatch, platform=None, **kw):
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
     c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), platform or FakePlatform(), screen, voice=False,
                    index=False, **kw)
@@ -102,18 +102,18 @@ def _run(c, coro_fn):
 
 
 def _offer(**kw):
-    return update.Offer(**{"source": Path("/mnt/windows/Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS"), "changed": 3,
+    return update.Offer(**{"source": Path("/mnt/windows/Users/Ren Shu/Downloads/ChatComputer/ChatComputer"), "changed": 3,
                            "version": "0.2.0", "needs_setup": False, **kw})
 
 
-# ------------------------------------------------------------------ a new version of ClaudeOS
+# ------------------------------------------------------------------ a new version of Chat Computer
 def test_a_new_version_is_offered_on_screen_and_installed(tmp_path, monkeypatch, fast):
     c, screen = _controller(tmp_path, monkeypatch)
     monkeypatch.setattr(update, "check", lambda: _offer())
     asked = _answering(c, "yes")
     assert _run(c, c._offer_update) is True
     question, typed = asked[0]
-    assert "new version of ClaudeOS (0.2.0)" in question and typed is True       # shown, not said
+    assert "new version of Chat Computer (0.2.0)" in question and typed is True  # shown, not said
     assert _calls(c.platform, "update_app") == [()]
     assert c.exit_code == 3 and ("quit", None) in screen.events                # the session starts it again at once
     assert any("Updated" in n for n in _notices(screen))
@@ -125,7 +125,7 @@ def test_declining_the_new_version(tmp_path, monkeypatch, fast):
     _answering(c, "no")
     assert _run(c, c._offer_update) is False
     assert not _calls(c.platform, "update_app") and c.exit_code is None
-    assert "Okay. I'll ask again the next time ClaudeOS starts." in _notices(screen)
+    assert "Okay. I'll ask again the next time Chat Computer starts." in _notices(screen)
 
 
 def test_a_request_instead_of_an_answer_is_handled(tmp_path, monkeypatch, fast):
@@ -151,10 +151,10 @@ def test_a_version_that_needs_setup_is_only_mentioned(tmp_path, monkeypatch, fas
     monkeypatch.setattr(update, "check", lambda: _offer(needs_setup=True))
     asked = _answering(c)
     assert _run(c, c._offer_update) is False
-    assert asked == [] and any("run ClaudeOS Setup again" in n for n in _notices(screen))
+    assert asked == [] and any("run Chat Computer Setup again" in n for n in _notices(screen))
 
 
-def test_an_update_that_fails_says_why_and_ClaudeOS_carries_on(tmp_path, monkeypatch, fast):
+def test_an_update_that_fails_says_why_and_ChatComputer_carries_on(tmp_path, monkeypatch, fast):
     c, screen = _controller(tmp_path, monkeypatch)
     c.platform.update_result = {"ok": False, "error": "the new version has something an update can't bring: x.pth"}
     monkeypatch.setattr(update, "check", lambda: _offer())
@@ -234,7 +234,7 @@ def test_known_airpods_out_of_their_case_just_connect(tmp_path, monkeypatch, fas
 
 
 def test_the_pairing_from_windows_is_used_without_asking(tmp_path, monkeypatch, fast):
-    # ClaudeOS Setup told the person ClaudeOS would take over Windows' pairing: it isn't asked about again.
+    # Chat Computer Setup told the person Chat Computer would take over Windows' pairing: it isn't asked about again.
     p = Bluetooth(windows_has=[AIRPODS])
     c, screen = _controller(tmp_path, monkeypatch, platform=p)
     asked = _answering(c)
@@ -395,7 +395,7 @@ def test_typed_text_reaches_claude_as_typed(tmp_path, monkeypatch):
 
     async def run():
         c.loop = asyncio.get_running_loop()
-        c.asleep = True                       # typing wakes ClaudeOS by itself: no wake word to type
+        c.asleep = True                       # typing wakes Chat Computer by itself: no wake word to type
         await c.handle("what's on today", typed=True)
     asyncio.run(run())
     assert asks and asks[-1][1] is True and not c.asleep
@@ -405,7 +405,7 @@ def test_typed_text_reaches_claude_as_typed(tmp_path, monkeypatch):
 
 
 def test_the_note_says_typed_only_when_it_was():
-    from claudeos.brain.prompt import build_system_prompt, turn_prefix
+    from chatcomputer.brain.prompt import build_system_prompt, turn_prefix
     assert turn_prefix({"mode": "chat"}, None).endswith("screen: conversation]\n")
     assert turn_prefix({"mode": "chat"}, None, typed=True).endswith("screen: conversation · typed]\n")
     assert '· typed]' in build_system_prompt(Settings(), "", "/home/ren", None)

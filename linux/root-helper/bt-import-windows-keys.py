@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Import Bluetooth Classic (BR/EDR) link keys from an offline Windows SYSTEM
 registry hive into BlueZ, so a device paired under Windows (e.g. AirPods)
-reconnects under ClaudeOS without re-pairing.
+reconnects under Chat Computer without re-pairing.
 
 Run by the root helper as:
-    /opt/claudeos/venv/bin/python -I bt-import-windows-keys.py \
+    /opt/chatcomputer/venv/bin/python -I bt-import-windows-keys.py \
         --hive /mnt/windows/Windows/System32/config/SYSTEM \
         --bluetooth-dir /var/lib/bluetooth
 
@@ -51,7 +51,7 @@ Format research (cited so the byte order is auditable):
   Trusted=true and SupportedTechnologies=BR/EDR;, the way bluetoothd writes a
   device it paired itself (bt-dualboot's fixtures, copied from real BlueZ info
   files, have exactly these). Without a name BlueZ lists the device by its
-  address, and ClaudeOS couldn't tell AirPods were among those copied over: it
+  address, and Chat Computer couldn't tell AirPods were among those copied over: it
   asked to pair them again instead of connecting them.
 --------------------------------------------------------------------------
 """
@@ -221,7 +221,7 @@ def update_info_file(info_path: str, key_hex: str, name: str = "") -> str:
     if name and not general.get("Name"):
         general["Name"] = name
     general.setdefault("SupportedTechnologies", "BR/EDR;")
-    general.setdefault("Trusted", "true")        # it may connect to ClaudeOS by itself, as it did to Windows
+    general.setdefault("Trusted", "true")        # it may connect to Chat Computer by itself, as it did to Windows
     general.setdefault("Blocked", "false")
     if not cp.has_section("LinkKey"):
         cp.add_section("LinkKey")
@@ -237,7 +237,7 @@ def update_info_file(info_path: str, key_hex: str, name: str = "") -> str:
     # anything pose as the paired device.
     os.makedirs(os.path.dirname(info_path), mode=0o700, exist_ok=True)
     # Write atomically-ish: temp then rename.
-    tmp = info_path + ".claudeos.tmp"
+    tmp = info_path + ".chatcomputer.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)  # also when an earlier run left the temp file behind
     with io.open(fd, "w", encoding="utf-8") as fh:

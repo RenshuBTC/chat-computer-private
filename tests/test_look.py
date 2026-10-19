@@ -1,12 +1,12 @@
-"""ClaudeOS's look: black text on white only, in Atkinson Hyperlegible, which ClaudeOS brings itself."""
+"""Chat Computer's look: black text on white only, in Atkinson Hyperlegible, which Chat Computer brings itself."""
 import hashlib
 import json
 import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from claudeos.config import Paths, Settings
-from claudeos.ui import render
+from chatcomputer.config import Paths, Settings
+from chatcomputer.ui import render
 
 ASSETS = render.ASSETS
 FONT_FILES = ["AtkinsonHyperlegibleNext.ttf", "AtkinsonHyperlegibleNext-Italic.ttf",
@@ -33,12 +33,12 @@ def test_only_black_text_on_white():
     assert COLOR.findall(theme.replace(root, "")) == []
     assert COLOR.findall(chat) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
-    sizes = {"--co-size", "--co-column", "--panel", "--left", "--composer-h", "--strip-h", "--side-gap"}
+    sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--strip-h", "--side-gap"}
     assert used - sizes == {"--ground", "--ink", "--bubble", "--sans", "--mono"}
     # No dark mode.
     for text in (theme, chat, _asset("chat.html"), _asset("chat.js"), render.DOC_CSS):
         assert "data-theme" not in text and "dark" not in text.lower()
-    # Pages ClaudeOS makes are black on white too; only a playing video sits on black, as in any player.
+    # Pages Chat Computer makes are black on white too; only a playing video sits on black, as in any player.
     assert COLOR.findall(render.DOC_CSS) == ["#000"]
     assert re.search(r"\.media \{[^}]*background: #000;", render.DOC_CSS)
 
@@ -52,7 +52,7 @@ def test_your_words_are_in_a_bubble_not_grey_text():
     assert "placeholder" not in chat     # the message box has none: it would be grey text
 
 
-def test_fonts_come_with_claudeos():
+def test_fonts_come_with_chatcomputer():
     fonts = ASSETS / "fonts"
     for name in FONT_FILES:
         assert (fonts / name).read_bytes()[:4] == b"\x00\x01\x00\x00", name   # TrueType
@@ -97,7 +97,7 @@ def test_a_document_mentioning_script_tags_stays_whole():
 
 def test_there_is_no_theme_setting(tmp_path):
     assert not hasattr(Settings(), "theme")
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     paths.settings_file.write_text(json.dumps({"theme": "dark", "speech_speed": 1.2}))
     s = Settings.load(paths)
     assert s.speech_speed == 1.2 and "theme" not in s.extra

@@ -1,11 +1,11 @@
 //! The USB controller: xHCI, the "eXtensible Host Controller Interface" every PC since about 2015 has
-//! (ClaudeOS follows version 1.2 of Intel's specification).
+//! (Chat Computer follows version 1.2 of Intel's specification).
 //!
-//! The controller works from memory ClaudeOS gives it. Requests go on rings of 16-byte records
+//! The controller works from memory Chat Computer gives it. Requests go on rings of 16-byte records
 //! (TRBs): one ring for commands to the controller, one for each channel to a device (an endpoint).
 //! Ringing a doorbell tells the controller to look at a ring. Its answers come back on the event
 //! ring. Each device gets a slot: the controller's record of its address and endpoints (its device
-//! context), which ClaudeOS changes by handing it an input context with a command.
+//! context), which Chat Computer changes by handing it an input context with a command.
 //!
 //! This file is the controller itself: taking it over from the firmware, resetting it, its rings,
 //! its ports and the commands. What is plugged into it is in `device.rs`.
@@ -333,7 +333,7 @@ fn route_intel_ports(f: &pci::Function) {
     }
     f.at.write32(USB3_ENABLE, f.at.read32(USB3_ALLOWED));
     f.at.write32(USB2_ROUTE, f.at.read32(USB2_ALLOWED));
-    crate::log!("ClaudeOS kernel: USB {}: moved the chipset's sockets to this controller", f.at);
+    crate::log!("Chat Computer kernel: USB {}: moved the chipset's sockets to this controller", f.at);
 }
 
 fn read32(at: u64) -> u32 {
@@ -456,7 +456,7 @@ impl Host {
         if v & FIRMWARE_OWNS != 0 {
             write32(legacy, v | OS_OWNS);
             if !wait_for(1000, || read32(legacy) & FIRMWARE_OWNS == 0) {
-                crate::log!("ClaudeOS kernel: USB {}: the firmware didn't let go of it; taking it anyway", self.name);
+                crate::log!("Chat Computer kernel: USB {}: the firmware didn't let go of it; taking it anyway", self.name);
                 write32(legacy, (read32(legacy) & !FIRMWARE_OWNS) | OS_OWNS);
             }
         }
@@ -480,7 +480,7 @@ impl Host {
         if scratch > 0 {
             let list = page()?;
             if scratch > 512 {
-                return Err("it wants more memory of its own than ClaudeOS can give".into());
+                return Err("it wants more memory of its own than Chat Computer can give".into());
             }
             for i in 0..scratch {
                 let p = page()?;

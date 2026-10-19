@@ -52,7 +52,7 @@ fn tsc_per_us() -> u64 {
     }
 }
 
-/// Microseconds since the processor started counting (some time before ClaudeOS did). Works with
+/// Microseconds since the processor started counting (some time before Chat Computer did). Works with
 /// interrupts off.
 pub fn now_us() -> u64 {
     rdtsc() / tsc_per_us()

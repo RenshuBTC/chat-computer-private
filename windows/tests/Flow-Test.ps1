@@ -14,12 +14,12 @@
 #   nodocs                     install when the recovery password can't be saved in Documents (shown instead)
 #   no-entry, install-fails    install, when the PC won't take the power-on entry / when copying fails
 #   leftover                   install, while the installer of an earlier try is still there
-#   bitlocker, bitlocker-fails install on an encrypted C: (ClaudeOS gets its own key) / when a later step fails
+#   bitlocker, bitlocker-fails install on an encrypted C: (Chat Computer gets its own key) / when a later step fails
 #   bitlocker-stop, signin     stop at the recovery-key question; sign in again
 #   startup-windows, startup-once
-#   remove, remove-keep        remove ClaudeOS (confirmed / not confirmed)
-#   remove-again               remove ClaudeOS, keeping the downloads to install it again
-#   remove-both                remove ClaudeOS before it has cleaned up its installer
+#   remove, remove-keep        remove Chat Computer (confirmed / not confirmed)
+#   remove-again               remove Chat Computer, keeping the downloads to install it again
+#   remove-both                remove Chat Computer before it has cleaned up its installer
 #   remove-unfinished          remove an installer that never installed
 param(
     [Parameter(Mandatory = $true)][ValidateSet('plan', 'shrink', 'disk', 'no-entry', 'install-fails', 'leftover', 'bitlocker', 'bitlocker-fails', 'bitlocker-stop',
@@ -42,16 +42,16 @@ function Add-Call([string]$What) { [void]$Script:Calls.Add($What) }
 $Script:MockGB = [int64]1073741824
 $Script:MockMB = [int64]1048576
 $Script:MockTests = $Here
-$Script:SetupId = '{5e7e0a00-0000-4000-8000-00000000000a}'     # the "ClaudeOS setup" entry bcdedit /copy makes
+$Script:SetupId = '{5e7e0a00-0000-4000-8000-00000000000a}'     # the "Chat Computer setup" entry bcdedit /copy makes
 
 # ------------------------------------------------------------------ the pretend PC
 $env:firmware_type = 'UEFI'
 $env:USERNAME = 'rensh'
 $env:USERPROFILE = (Join-Path $OutDir 'Users/rensh')
 $Script:BitLocker = ($Scenario -in @('bitlocker', 'bitlocker-fails', 'bitlocker-stop'))
-# ClaudeOS installed (and its installer cleaned up, except in remove-both); or only an installer, never used.
+# Chat Computer installed (and its installer cleaned up, except in remove-both); or only an installer, never used.
 $Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-again', 'remove-both', 'startup-windows', 'startup-once', 'signin')
-# A PC with just the one disk, like most laptops (no "Where should ClaudeOS go?" question then).
+# A PC with just the one disk, like most laptops (no "Where should Chat Computer go?" question then).
 $Script:OneDisk = $Scenario -in @('blocked', 'gap63', 'stuck', 'nospace')
 $Script:InstallerLeft = $Scenario -in @('remove-both', 'remove-unfinished', 'leftover')
 $Script:Disk0Size = 277 * $Script:MockMB + 951 * $Script:MockGB + 2 * $Script:MockMB
@@ -62,7 +62,7 @@ $Script:Disks = @(
         Size = 2000 * $Script:MockGB; BusType = 'SATA'; IsBoot = $false; IsSystem = $false; OperationalStatus = 'Online'; PartitionStyle = 'GPT'; LargestFreeExtent = [int64]0 })
 if ($Script:OneDisk) { $Script:Disks = @($Script:Disks[0]) }
 
-# The partitions, in bytes. Disk 0: EFI, reserved, C: (950 GB before ClaudeOS), then ClaudeOS's space, then
+# The partitions, in bytes. Disk 0: EFI, reserved, C: (950 GB before Chat Computer), then Chat Computer's space, then
 # Windows' recovery partition. Disk 1: reserved, D: (data).
 $Script:Parts = New-Object System.Collections.ArrayList
 $Script:TypeEsp = '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
@@ -100,8 +100,8 @@ if ($Script:InstallerLeft) {
     if ($Script:Installed) { $n = 6 }
     $null = Add-MockPartition 0 $n ($cOff + 944 * $Script:MockGB) (6 * $Script:MockGB) 'Basic' $Script:TypeData '{6a000000-0000-0000-0000-000000000006}' `
         $false $false ([char]0) $Script:LeftoverVolume
-    New-Item -ItemType Directory -Path (Join-Path $Script:LeftoverVolume 'claudeos') -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $Script:LeftoverVolume 'claudeos/installer-0123456789abcdef01234567'), "id=0123456789abcdef01234567`n")
+    New-Item -ItemType Directory -Path (Join-Path $Script:LeftoverVolume 'chatcomputer') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $Script:LeftoverVolume 'chatcomputer/installer-0123456789abcdef01234567'), "id=0123456789abcdef01234567`n")
 }
 if (-not $Script:OneDisk) {
     $null = Add-MockPartition 1 1 (1 * $Script:MockMB) (16 * $Script:MockMB) 'Reserved' $Script:TypeMsr '{1a000000-0000-0000-0000-000000000001}'
@@ -122,15 +122,15 @@ function Get-BitLockerVolume {
     return [pscustomobject]@{ VolumeStatus = $status; KeyProtector = $prot; ProtectionStatus = $on }
 }
 # BitLocker's key protectors on C: (id -> type; 3 = recovery password), through its WMI class. In 'remove',
-# ClaudeOS's own key is there, with setup's record of it.
-$env:CLAUDEOS_STATE_DIR = Join-Path $OutDir 'ProgramData/ClaudeOS'
+# Chat Computer's own key is there, with setup's record of it.
+$env:CHATCOMPUTER_STATE_DIR = Join-Path $OutDir 'ProgramData/ChatComputer'
 $Script:Protectors = [ordered]@{ '{0b000000-0000-4000-8000-000000000001}' = 3 }
 $Script:ClaudeKeyId = '{2b000000-0000-4000-8000-0000000000c1}'
 $Script:ClaudeKey = '123456-234567-345678-456789-567890-678901-789012-890123'
 if ($Scenario -eq 'remove') {
     $Script:Protectors[$Script:ClaudeKeyId] = 3
-    New-Item -ItemType Directory -Path $env:CLAUDEOS_STATE_DIR -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $env:CLAUDEOS_STATE_DIR 'bitlocker-key-id'), $Script:ClaudeKeyId + "`n")
+    New-Item -ItemType Directory -Path $env:CHATCOMPUTER_STATE_DIR -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $env:CHATCOMPUTER_STATE_DIR 'bitlocker-key-id'), $Script:ClaudeKeyId + "`n")
 }
 function Get-CimInstance { param([string]$Namespace, [string]$ClassName, [string]$Filter) return [pscustomobject]@{ DriveLetter = 'C:' } }
 function Invoke-CimMethod {
@@ -280,10 +280,10 @@ function Get-Volume {
             if ([string]$InputObject.DriveLetter -notmatch '^[A-Z]$') { return }
             return [pscustomobject]@{ Size = $InputObject.Size; SizeRemaining = [int64]($InputObject.Size / 2); FileSystemLabel = 'Data'; FileSystem = 'NTFS' }
         }
-        # Every volume: Windows, and any CLAUDEOS installer partition.
+        # Every volume: Windows, and any CHATCOMP installer partition.
         $vols = @([pscustomobject]@{ FileSystemLabel = 'Windows'; FileSystem = 'NTFS'; Path = (Join-Path $OutDir 'nothing-here'); DiskNumber = 0; PartitionNumber = 3 })
         foreach ($p in @($Script:Parts | Where-Object { $_.VolumePath })) {
-            $vols += [pscustomobject]@{ FileSystemLabel = 'CLAUDEOS'; FileSystem = 'FAT32'; Path = $p.VolumePath; DiskNumber = $p.DiskNumber; PartitionNumber = $p.PartitionNumber }
+            $vols += [pscustomobject]@{ FileSystemLabel = 'CHATCOMP'; FileSystem = 'FAT32'; Path = $p.VolumePath; DiskNumber = $p.DiskNumber; PartitionNumber = $p.PartitionNumber }
         }
         return $vols
     }
@@ -369,13 +369,13 @@ function Invoke-Robocopy {
 function shutdown.exe { Add-Call ('shutdown ' + ($args -join ' ')) }
 function Suspend-BitLocker { param([string]$MountPoint, [int]$RebootCount) Add-Call ('Suspend-BitLocker ' + $MountPoint + ' ' + $RebootCount) }
 
-# The PC's power-on menu: (ClaudeOS,) Windows, a network boot entry, and what setup adds.
+# The PC's power-on menu: (Chat Computer,) Windows, a network boot entry, and what setup adds.
 $Script:BcdBase = ([IO.File]::ReadAllText((Join-Path $Script:MockTests 'data/bcdedit-firmware.txt')) -replace "`r", '').TrimEnd("`n")
 if (-not $Script:Installed) {
     $Script:BcdBase = $Script:BcdBase -replace '\nFirmware Application \(101fffff\)\n-+\nidentifier\s+\{9f62d3e2[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n', "`n"
 }
 $Script:BcdAdded = [ordered]@{}
-if ($Script:InstallerLeft) { $Script:BcdAdded[$Script:SetupId] = '\EFI\claudeos-setup\shimx64.efi' }
+if ($Script:InstallerLeft) { $Script:BcdAdded[$Script:SetupId] = '\EFI\chatcomputer-setup\shimx64.efi' }
 function bcdedit.exe {
     $a = @($args)
     $global:LASTEXITCODE = 0
@@ -384,7 +384,7 @@ function bcdedit.exe {
         foreach ($id in $Script:BcdAdded.Keys) {
             $text += "`n`nFirmware Application (101fffff)`n-------------------------------`nidentifier              " + $id +
                      "`ndevice                  partition=\Device\HarddiskVolume1`npath                    " + $Script:BcdAdded[$id] +
-                     "`ndescription             ClaudeOS setup"
+                     "`ndescription             Chat Computer setup"
         }
         return ($text -split "`n")
     }
@@ -399,22 +399,22 @@ function bcdedit.exe {
 }
 
 # The EFI partition, as a folder: Windows' boot manager; once installed, Ubuntu's boot loader (also in the
-# fallback slot) and ClaudeOS's mark; while an installer is left, its boot loader.
+# fallback slot) and Chat Computer's mark; while an installer is left, its boot loader.
 $Script:Esp = Join-Path $OutDir 'esp'
 New-Item -ItemType Directory -Path (Join-Path $Script:Esp 'EFI/Microsoft/Boot') -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $Script:Esp 'EFI/Microsoft/Boot/bootmgfw.efi'), 'Windows Boot Manager')
 if ($Script:Installed) {
-    foreach ($d in @('EFI/ubuntu', 'EFI/claudeos', 'EFI/BOOT')) { New-Item -ItemType Directory -Path (Join-Path $Script:Esp $d) -Force | Out-Null }
+    foreach ($d in @('EFI/ubuntu', 'EFI/chatcomputer', 'EFI/BOOT')) { New-Item -ItemType Directory -Path (Join-Path $Script:Esp $d) -Force | Out-Null }
     [IO.File]::WriteAllText((Join-Path $Script:Esp 'EFI/ubuntu/shimx64.efi'), 'shim')
     [IO.File]::WriteAllText((Join-Path $Script:Esp 'EFI/ubuntu/grubx64.efi'), 'grub')
     [IO.File]::WriteAllText((Join-Path $Script:Esp 'EFI/BOOT/BOOTX64.EFI'), 'shim')
     [IO.File]::WriteAllText((Join-Path $Script:Esp 'EFI/BOOT/fbx64.efi'), 'fallback')
-    [IO.File]::WriteAllText((Join-Path $Script:Esp 'EFI/claudeos/installed-0123456789abcdef01234567'),
+    [IO.File]::WriteAllText((Join-Path $Script:Esp 'EFI/chatcomputer/installed-0123456789abcdef01234567'),
         "id=0123456789abcdef01234567`nroot=3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b`n")
 }
 if ($Script:InstallerLeft) {
-    New-Item -ItemType Directory -Path (Join-Path $Script:Esp 'EFI/claudeos-setup') -Force | Out-Null
-    foreach ($f in @('shimx64.efi', 'grubx64.efi', 'mmx64.efi')) { [IO.File]::WriteAllText((Join-Path $Script:Esp ('EFI/claudeos-setup/' + $f)), $f) }
+    New-Item -ItemType Directory -Path (Join-Path $Script:Esp 'EFI/chatcomputer-setup') -Force | Out-Null
+    foreach ($f in @('shimx64.efi', 'grubx64.efi', 'mmx64.efi')) { [IO.File]::WriteAllText((Join-Path $Script:Esp ('EFI/chatcomputer-setup/' + $f)), $f) }
 }
 if ($Script:Installed -or $Script:InstallerLeft) {
     $w = New-Item -ItemType Directory -Path (Join-Path $OutDir 'work') -Force
@@ -422,14 +422,14 @@ if ($Script:Installed -or $Script:InstallerLeft) {
     [IO.File]::WriteAllText((Join-Path $w.FullName 'claude_agent_sdk-0.2.167-py3-none-win_amd64.whl'), 'whl')
     $engine = New-Item -ItemType Directory -Path (Join-Path $w.FullName 'claude-139597261e6d') -Force
     [IO.File]::WriteAllText((Join-Path $engine.FullName 'claude.exe'), 'exe')
-    $u = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Users/rensh/ClaudeOS') -Force
+    $u = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Users/rensh/ChatComputer') -Force
     [IO.File]::WriteAllText((Join-Path $u.FullName 'claude_token'), 'sk-ant-oat01-old')
     # In remove-both, the person also keeps a file of their own in that folder.
     if ($Scenario -eq 'remove-both') { [IO.File]::WriteAllText((Join-Path $u.FullName 'notes.txt'), 'mine') }
     $docs = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Documents') -Force
-    [IO.File]::WriteAllText((Join-Path $docs.FullName 'ClaudeOS recovery password.txt'), 'Password: x')
+    [IO.File]::WriteAllText((Join-Path $docs.FullName 'Chat Computer recovery password.txt'), 'Password: x')
 }
-# In 'bitlocker-fails', opening the EFI partition fails once, after ClaudeOS's BitLocker key was made.
+# In 'bitlocker-fails', opening the EFI partition fails once, after Chat Computer's BitLocker key was made.
 $Script:EspFailed = $false
 function Mount-EspPartition {
     param($Partition)
@@ -444,7 +444,7 @@ function Dismount-EspPartition { param($Mount) Add-Call 'Dismount-EspPartition' 
 
 # The answers, in order. The first picks what to do: 1 install, 2 sign in again, 3 what starts, 4 remove.
 $Script:Answers = New-Object System.Collections.Queue
-# No menu unless ClaudeOS (or an earlier installer) is already there.
+# No menu unless Chat Computer (or an earlier installer) is already there.
 $scripted = switch ($Scenario) {
     'plan' { @('1') }                                       # next to Windows (the pretend PC also has disk 1)
     'shrink' { @('1', 'y', 'n') }                           # next to Windows, go ahead, restart later
@@ -463,7 +463,7 @@ $scripted = switch ($Scenario) {
     'paste' { @('1', 'y', 'n') }
     'nodocs' { @('1', 'y', 'n') }
     'startup-windows' { @('3', '2') }                        # Windows
-    'startup-once' { @('3', '3', 'n') }                      # ClaudeOS once, restart later
+    'startup-once' { @('3', '3', 'n') }                      # Chat Computer once, restart later
     'remove' { @('4', 'REMOVE', 'n') }                       # downloads deleted too
     'remove-keep' { @('4', 'no') }
     'remove-again' { @('4', 'REMOVE', 'y') }                 # downloads kept, to install again
@@ -484,7 +484,7 @@ $result = [ordered]@{ scenario = $Scenario; ok = $false; error = $null }
 $docsDir = (New-Item -ItemType Directory -Path (Join-Path $OutDir 'Documents') -Force).FullName
 if ($Scenario -eq 'nodocs') { $docsDir = Join-Path $docsDir 'not-there' }      # a folder that doesn't exist
 try {
-    Invoke-ClaudeOSSetup -Here $Win -RepoRoot $Repo -WorkDir (Join-Path $OutDir 'work') -PlanOnly:($Scenario -eq 'plan') `
+    Invoke-ChatComputerSetup -Here $Win -RepoRoot $Repo -WorkDir (Join-Path $OutDir 'work') -PlanOnly:($Scenario -eq 'plan') `
         -DocumentsDir $docsDir
     $result.ok = $true
 } catch {

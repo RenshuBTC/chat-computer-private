@@ -1,21 +1,21 @@
-"""Things that make ClaudeOS quicker to start and to answer, kept from coming back slow."""
+"""Things that make Chat Computer quicker to start and to answer, kept from coming back slow."""
 import asyncio
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from claudeos.config import Paths, Settings
-from claudeos.controller import Controller
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
+from chatcomputer.config import Paths, Settings
+from chatcomputer.controller import Controller
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
 
 REPO = Path(__file__).resolve().parents[1]
 
 
 def _controller(tmp_path, monkeypatch, platform=None):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "home" / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "home" / "ChatComputer"))
     paths = Paths().ensure()
     return Controller(paths, Settings(user_name="Ren Shu"), platform or FakePlatform(), RecordingScreen(),
                       voice=False, index=False)
@@ -61,16 +61,16 @@ def test_offline_is_checked_again_before_the_next_request(tmp_path, monkeypatch)
 def test_the_window_doesnt_wait_for_the_agent_sdk():
     # The window module needs is_private from the permission gate; the gate loads the Agent SDK (most of a
     # second) only when the engine first asks.
-    code = "import sys, claudeos.brain.permissions; print('claude_agent_sdk' in sys.modules)"
+    code = "import sys, chatcomputer.brain.permissions; print('claude_agent_sdk' in sys.modules)"
     r = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, timeout=60)
     assert r.stdout.strip() == "False", r.stderr
 
 
 def test_the_gate_still_answers_with_the_sdks_results(tmp_path):
     from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
-    from claudeos.brain.permissions import PermissionGate
-    from claudeos.journal import Journal
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    from chatcomputer.brain.permissions import PermissionGate
+    from chatcomputer.journal import Journal
+    paths = Paths(tmp_path / "ChatComputer").ensure()
 
     async def confirm(q):
         return ("no", "no")
@@ -81,10 +81,10 @@ def test_the_gate_still_answers_with_the_sdks_results(tmp_path):
 
 
 def test_voice_models_load_side_by_side(tmp_path, monkeypatch):
-    import claudeos.voice.stt as stt_mod
-    import claudeos.voice.tts as tts_mod
-    from claudeos.voice import models as M
-    from claudeos.voice.audio import FakePlayer
+    import chatcomputer.voice.stt as stt_mod
+    import chatcomputer.voice.tts as tts_mod
+    from chatcomputer.voice import models as M
+    from chatcomputer.voice.audio import FakePlayer
     c = _controller(tmp_path, monkeypatch)
     c.player = FakePlayer()
     w = M.whisper_dir(c.paths, c.settings.stt_model)
@@ -116,8 +116,8 @@ def test_voice_models_load_side_by_side(tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------------ the other system's drive, after the start
-# The computer mounts Windows' drive alongside ClaudeOS's start (it no longer holds the whole start back for the
-# disks), so ClaudeOS can come up first and must take the drive in when it arrives.
+# The computer mounts Windows' drive alongside Chat Computer's start (it no longer holds the whole start back for the
+# disks), so Chat Computer can come up first and must take the drive in when it arrives.
 class JustStarted(FakePlatform):
     def just_started(self):
         return True
@@ -130,7 +130,7 @@ def _pc_controller(tmp_path, monkeypatch, mounted):
     real = os.path.ismount
     monkeypatch.setattr(os.path, "ismount", lambda p: mounted["now"] if str(p) == str(mnt) else real(p))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "home" / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "home" / "ChatComputer"))
     paths = Paths().ensure()
     s = Settings(user_name="Ren Shu", windows_user="rensh", windows_mount=str(mnt))
     return Controller(paths, s, JustStarted(), RecordingScreen(), voice=False, index=True), mnt
@@ -153,8 +153,8 @@ def test_windows_files_that_arrive_after_the_start_are_taken_in(tmp_path, monkey
         # The engine had started without them.
         c.brain = types.SimpleNamespace(add_dirs=[], client=object())
         tok = "sk-ant-oat01-" + "W" * 90
-        (mnt / "Users" / "rensh" / "ClaudeOS").mkdir(parents=True)
-        (mnt / "Users" / "rensh" / "ClaudeOS" / "claude_token").write_text(tok + "\n")
+        (mnt / "Users" / "rensh" / "ChatComputer").mkdir(parents=True)
+        (mnt / "Users" / "rensh" / "ChatComputer" / "claude_token").write_text(tok + "\n")
         mounted["now"] = True
         await asyncio.wait_for(c._files_settled.wait(), 3)
         await asyncio.sleep(0.2)
@@ -203,7 +203,7 @@ def _files_db(path):
 
 
 def test_a_crawl_where_nothing_changed_writes_nothing(tmp_path):
-    from claudeos.files_index import FileIndex
+    from chatcomputer.files_index import FileIndex
     root = tmp_path / "home"
     (root / "Documents").mkdir(parents=True)
     for i in range(50):
@@ -222,7 +222,7 @@ def test_a_crawl_where_nothing_changed_writes_nothing(tmp_path):
 
 
 def test_a_folder_added_later_is_searched_at_once(tmp_path):
-    from claudeos.files_index import FileIndex
+    from chatcomputer.files_index import FileIndex
     home, win = tmp_path / "home", tmp_path / "win"
     home.mkdir()
     (win / "Documents").mkdir(parents=True)
@@ -239,7 +239,7 @@ def test_a_folder_added_later_is_searched_at_once(tmp_path):
         idx.stop()
 
 
-# ------------------------------------------------------------------ while ClaudeOS talks
+# ------------------------------------------------------------------ while Chat Computer talks
 class CountingHeadset(FakePlatform):
     def __init__(self):
         super().__init__()
@@ -252,7 +252,7 @@ class CountingHeadset(FakePlatform):
 
 
 def test_the_headphones_check_doesnt_run_on_every_frame(tmp_path, monkeypatch):
-    # The listener asks on every 32 ms frame while ClaudeOS talks. It used to run wpctl each time, on the
+    # The listener asks on every 32 ms frame while Chat Computer talks. It used to run wpctl each time, on the
     # thread that also hears and shows everything.
     c = _controller(tmp_path, monkeypatch, CountingHeadset())
 
@@ -279,7 +279,7 @@ def test_barge_in_on_and_off_dont_check_at_all(tmp_path, monkeypatch):
 # ------------------------------------------------------------------ the transcript
 def test_history_reads_only_the_end_of_a_long_transcript(tmp_path, monkeypatch):
     import json
-    import claudeos.controller as C
+    import chatcomputer.controller as C
     c = _controller(tmp_path, monkeypatch)
     now = time.time()
     old = json.dumps({"ts": now, "role": "user", "text": "x" * 500}) + "\n"
@@ -304,13 +304,13 @@ def test_history_reads_only_the_end_of_a_long_transcript(tmp_path, monkeypatch):
 # ------------------------------------------------------------------ tools
 def _tools(tmp_path, platform):
     import os
-    from claudeos import tools as T
-    from claudeos.journal import Journal
-    from claudeos.memory import Memory
+    from chatcomputer import tools as T
+    from chatcomputer.journal import Journal
+    from chatcomputer.memory import Memory
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
-    paths = Paths(home / "ClaudeOS").ensure()
+    paths = Paths(home / "ChatComputer").ensure()
     ctx = T.ToolContext(paths, Settings(windows_mount=str(tmp_path / "win")), platform, Journal(paths), RecordingScreen(),
                         Memory(paths))
     server, _, _ = T.build(ctx)
@@ -392,7 +392,7 @@ def test_the_base_jpeg_is_made_from_the_png(tmp_path):
 # ------------------------------------------------------------------ Bluetooth
 def test_a_computer_without_bluetooth_answers_at_once(tmp_path, monkeypatch):
     # Without an adapter bluetoothd doesn't run, and each bluetoothctl command waited 8 s for it.
-    from claudeos.platform import linux as L
+    from chatcomputer.platform import linux as L
     p = L.LinuxPlatform()
     monkeypatch.setattr(L, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError(f"ran {a[0]}")))
     sysfs = tmp_path / "bluetooth"
@@ -410,7 +410,7 @@ def test_a_computer_without_bluetooth_answers_at_once(tmp_path, monkeypatch):
 
 # ------------------------------------------------------------------ the trash
 def test_the_newest_trashed_copy_is_found_without_reading_the_whole_trash(tmp_path, monkeypatch):
-    from claudeos import journal
+    from chatcomputer import journal
     share = tmp_path / "share"
     trash = share / "Trash"
     (trash / "info").mkdir(parents=True)
@@ -442,14 +442,14 @@ def test_a_pdf_shows_as_pages_and_says_when_there_are_more(tmp_path, monkeypatch
     import shutil
     import pytest
     from PIL import Image
-    from claudeos.ui import render
+    from chatcomputer.ui import render
     if not (shutil.which("pdftoppm") and shutil.which("pdfinfo")):
         pytest.skip("poppler-utils isn't installed")
     monkeypatch.setattr(render, "PDF_PAGES", 3)
     pdf = tmp_path / "Report.pdf"
     pages = [Image.new("RGB", (600, 800), "white") for _ in range(5)]
     pages[0].save(pdf, save_all=True, append_images=pages[1:])
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     root = paths.web / "pdf"
     old = root / "0123456789abcdef"            # pages of a PDF last shown a month ago
     old.mkdir(parents=True)
@@ -466,9 +466,9 @@ def test_a_pdf_shows_as_pages_and_says_when_there_are_more(tmp_path, monkeypatch
 
 # ------------------------------------------------------------------ reading documents for the index
 def test_documents_are_read_in_another_process(tmp_path):
-    # In ClaudeOS's own process the (pure Python) readers made its speech skip.
+    # In Chat Computer's own process the (pure Python) readers made its speech skip.
     import os
-    from claudeos.files_index import TextReader
+    from chatcomputer.files_index import TextReader
     doc = tmp_path / "notes.txt"
     doc.write_text("budget for 2026")
     r = TextReader()
@@ -483,7 +483,7 @@ def test_documents_are_read_in_another_process(tmp_path):
 def test_a_document_that_hangs_the_reader_doesnt_stop_the_index(tmp_path):
     import os
     import threading
-    from claudeos.files_index import TextReader
+    from chatcomputer.files_index import TextReader
     stuck = tmp_path / "stuck.txt"          # reading it never ends (like a file on a drive that stopped answering)
     os.mkfifo(stuck)
     doc = tmp_path / "notes.txt"
@@ -494,7 +494,7 @@ def test_a_document_that_hangs_the_reader_doesnt_stop_the_index(tmp_path):
         assert r.read(str(stuck)) == ""
         assert time.monotonic() - t0 < 6
         assert r.read(str(doc)) == "budget for 2026"            # a new reader for the next one
-        # Stopping ClaudeOS doesn't wait out a document either.
+        # Stopping Chat Computer doesn't wait out a document either.
         cancel = threading.Event()
         r2 = TextReader(timeout_s=60, cancel=cancel)
         threading.Timer(0.5, cancel.set).start()

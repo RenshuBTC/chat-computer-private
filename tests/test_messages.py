@@ -1,4 +1,4 @@
-"""Messages (claudeos/messages): every account's messages in one list at the left of the screen. These run against
+"""Messages (chatcomputer/messages): every account's messages in one list at the left of the screen. These run against
 stand-ins for the services (an IMAP server, Microsoft's sign-in, Telegram, a site's inbox page): what a real
 account does can only be seen on a real PC."""
 import asyncio
@@ -13,14 +13,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from claudeos.config import Paths, Settings
-from claudeos.messages import Inbox, msauth, web
-from claudeos.messages.accounts import Accounts, public
-from claudeos.messages.mail import AuthError, Mailbox, body_text, html_to_text, parse_fetch
-from claudeos.messages.store import Store
-from claudeos.messages.telegram import AuthError as TgAuthError, TelegramSignIn, TelegramSource
-from claudeos.pins import Pins
-from claudeos.screen import RecordingScreen
+from chatcomputer.config import Paths, Settings
+from chatcomputer.messages import Inbox, msauth, web
+from chatcomputer.messages.accounts import Accounts, public
+from chatcomputer.messages.mail import AuthError, Mailbox, body_text, html_to_text, parse_fetch
+from chatcomputer.messages.store import Store
+from chatcomputer.messages.telegram import AuthError as TgAuthError, TelegramSignIn, TelegramSource
+from chatcomputer.pins import Pins
+from chatcomputer.screen import RecordingScreen
 
 
 # ------------------------------------------------------------------ the store and pins
@@ -337,7 +337,7 @@ def test_telegram_brings_in_chats_not_channels_or_your_own():
 
 # ------------------------------------------------------------------ accounts and the Inbox
 def test_sign_ins_stay_in_the_secrets_folder(tmp_path):
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     acc = Accounts(paths.secrets / "accounts.json")
     a = acc.add({"kind": "imap", "provider": "gmail", "label": "Gmail", "address": "Ren@example.com", "password": "pw"})
     b = acc.add({"kind": "imap", "provider": "gmail", "label": "Gmail", "address": "ren@example.com", "password": "pw2"})
@@ -348,7 +348,7 @@ def test_sign_ins_stay_in_the_secrets_folder(tmp_path):
 
 
 def _inbox(tmp_path, server=None):
-    paths = Paths(tmp_path / "ClaudeOS").ensure()
+    paths = Paths(tmp_path / "ChatComputer").ensure()
     screen = RecordingScreen()
     notices = []
     inbox = Inbox(paths, Settings(), screen, Pins(paths.root / "pins.json"),
@@ -412,9 +412,9 @@ def test_a_site_connects_from_its_own_page(tmp_path):
 
 
 def test_pins_from_the_page_are_kept(tmp_path, monkeypatch):
-    from claudeos.controller import Controller
-    from claudeos.platform.fake import FakePlatform
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "ClaudeOS"))
+    from chatcomputer.controller import Controller
+    from chatcomputer.platform.fake import FakePlatform
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
     c = Controller(Paths().ensure(), Settings(), FakePlatform(), screen, voice=False, index=False)
     c.page_event({"type": "pin", "list": "messages", "id": "m1", "on": True})

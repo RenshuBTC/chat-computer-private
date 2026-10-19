@@ -41,7 +41,7 @@ public static class IsoImageFile {
 }
 '@
 
-$work = Join-Path ([IO.Path]::GetTempPath()) ('claudeos-iso-' + [guid]::NewGuid().ToString('N'))
+$work = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-iso-' + [guid]::NewGuid().ToString('N'))
 $src = Join-Path $work 'src'
 $iso = Join-Path $work 'test.iso'
 $dest = Join-Path $work 'installer'
@@ -59,7 +59,7 @@ try {
 
     $fsi = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
     $fsi.FileSystemsToCreate = 3   # ISO 9660 and Joliet, like a downloaded installer image
-    $fsi.VolumeName = 'CLAUDEOS_TEST'
+    $fsi.VolumeName = 'CHATCOMP_TEST'
     $fsi.Root.AddTree($src, $false)
     [IsoImageFile]::Save($fsi.CreateResultImage().ImageStream, $iso)
     Note ('Made a test image: ' + (Get-Item -LiteralPath $iso).Length + ' bytes')

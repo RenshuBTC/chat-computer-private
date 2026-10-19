@@ -1,4 +1,4 @@
-//! USB: ClaudeOS's own drivers for the PC's USB controllers and what is plugged into them. So far:
+//! USB: Chat Computer's own drivers for the PC's USB controllers and what is plugged into them. So far:
 //! keyboards, and the hubs they may be behind (a monitor's, a dock's, or one inside the PC).
 //!
 //! The controllers' events are handled in their interrupt, or, on a controller that can't send
@@ -83,7 +83,7 @@ pub fn take_over() -> usize {
         match Host::take_over(&f) {
             Ok(host) => {
                 crate::log!(
-                    "ClaudeOS kernel: USB {}: xHCI controller {:04x}:{:04x}, {} ports, taken over from the firmware",
+                    "Chat Computer kernel: USB {}: xHCI controller {:04x}:{:04x}, {} ports, taken over from the firmware",
                     f.at,
                     f.vendor,
                     f.device,
@@ -91,7 +91,7 @@ pub fn take_over() -> usize {
                 );
                 controllers.push(Controller { host, pci: f.at, devices: Vec::new() });
             }
-            Err(why) => crate::log!("ClaudeOS kernel: USB {}: couldn't take the controller over: {why}", f.at),
+            Err(why) => crate::log!("Chat Computer kernel: USB {}: couldn't take the controller over: {why}", f.at),
         }
     }
     controllers.len()
@@ -108,7 +108,7 @@ pub fn start() {
                 Ok(()) => {
                     c.devices = (0..=c.host.max_slots as usize).map(|_| None).collect();
                     crate::log!(
-                        "ClaudeOS kernel: USB {}: running; interrupts {}",
+                        "Chat Computer kernel: USB {}: running; interrupts {}",
                         c.host.name,
                         match c.host.signal {
                             pci::Signal::MsiX => "by MSI-X",
@@ -117,7 +117,7 @@ pub fn start() {
                         }
                     );
                 }
-                Err(why) => crate::log!("ClaudeOS kernel: USB {}: couldn't start it: {why}", c.host.name),
+                Err(why) => crate::log!("Chat Computer kernel: USB {}: couldn't start it: {why}", c.host.name),
             }
         }
     }
@@ -156,7 +156,7 @@ fn handle_events(c: &mut Controller) {
                 }
             }
             xhci::EVENT_HOST => {
-                crate::log!("ClaudeOS kernel: USB {}: the controller reported a problem: {}", c.host.name, xhci::code_name(e.code()))
+                crate::log!("Chat Computer kernel: USB {}: the controller reported a problem: {}", c.host.name, xhci::code_name(e.code()))
             }
             _ => {}
         }
@@ -164,7 +164,7 @@ fn handle_events(c: &mut Controller) {
     // Always, even with no new events: until this is written, the controller sends no more interrupts.
     c.host.events_handled();
     if c.host.failed() {
-        crate::log!("ClaudeOS kernel: USB {}: the controller stopped itself after an error", c.host.name);
+        crate::log!("Chat Computer kernel: USB {}: the controller stopped itself after an error", c.host.name);
         c.host.running = false;
         changed();
     }

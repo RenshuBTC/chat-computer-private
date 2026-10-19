@@ -1,7 +1,7 @@
 //! IOMMUs: the parts between devices and memory that can limit which memory each device reaches
-//! (Intel's VT-d, AMD's AMD-Vi). ClaudeOS doesn't use them yet. Some firmware leaves one switched on
+//! (Intel's VT-d, AMD's AMD-Vi). Chat Computer doesn't use them yet. Some firmware leaves one switched on
 //! with its own settings, to keep devices away from memory while it starts the PC ("pre-boot DMA
-//! protection", common on laptops with Thunderbolt). Then devices couldn't reach the memory ClaudeOS
+//! protection", common on laptops with Thunderbolt). Then devices couldn't reach the memory Chat Computer
 //! gives them, and an Intel unit left remapping interrupts would drop their interrupt messages. So
 //! whatever the firmware left on is switched off here, before any driver starts.
 
@@ -57,18 +57,18 @@ pub fn take_over(acpi: &Acpi) -> (usize, usize) {
             was_on = true;
             write32(regs + GCMD, status & !ONE_SHOT & !(TRANSLATION | INTERRUPT_REMAPPING));
             if !wait_until(100, || read32(regs + GSTS) & (TRANSLATION | INTERRUPT_REMAPPING) == 0) {
-                crate::log!("ClaudeOS kernel: IOMMU at {base:#x} didn't switch off");
+                crate::log!("Chat Computer kernel: IOMMU at {base:#x} didn't switch off");
             }
         }
         if pmen & PROTECTED_MEMORY != 0 {
             was_on = true;
             write32(regs + PMEN, 0);
             if !wait_until(100, || read32(regs + PMEN) & PROTECTED_STATUS == 0) {
-                crate::log!("ClaudeOS kernel: IOMMU at {base:#x} kept its protected memory");
+                crate::log!("Chat Computer kernel: IOMMU at {base:#x} kept its protected memory");
             }
         }
         if was_on {
-            crate::log!("ClaudeOS kernel: Intel IOMMU at {base:#x}: the firmware left it on; switched off");
+            crate::log!("Chat Computer kernel: Intel IOMMU at {base:#x}: the firmware left it on; switched off");
             on += 1;
         }
     }
@@ -77,7 +77,7 @@ pub fn take_over(acpi: &Acpi) -> (usize, usize) {
         let control = read32(regs + AMD_CONTROL);
         if control & AMD_ENABLE != 0 {
             write32(regs + AMD_CONTROL, control & !AMD_ENABLE);
-            crate::log!("ClaudeOS kernel: AMD IOMMU at {base:#x}: the firmware left it on; switched off");
+            crate::log!("Chat Computer kernel: AMD IOMMU at {base:#x}: the firmware left it on; switched off");
             on += 1;
         }
     }

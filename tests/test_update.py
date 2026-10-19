@@ -1,33 +1,33 @@
-"""Updating ClaudeOS from the folder ClaudeOS Setup ran from (update.py), the copy of the logs on Windows' drive
-(logcopy.py), and what keeps Claude from changing ClaudeOS's own program files."""
+"""Updating Chat Computer from the folder Chat Computer Setup ran from (update.py), the copy of the logs on Windows' drive
+(logcopy.py), and what keeps Claude from changing Chat Computer's own program files."""
 import asyncio
 import json
 import os
 
 import pytest
 
-from claudeos import logcopy, update
-from claudeos.brain import permissions as P
-from claudeos.config import Paths
-from claudeos.journal import Journal
-from claudeos.ui.gtk_app import displays_report, graphics_report
+from chatcomputer import logcopy, update
+from chatcomputer.brain import permissions as P
+from chatcomputer.config import Paths
+from chatcomputer.journal import Journal
+from chatcomputer.ui.gtk_app import displays_report, graphics_report
 
-SOURCE = "Users/Ren Shu/Downloads/ClaudeOS/ClaudeOS"
+SOURCE = "Users/Ren Shu/Downloads/ChatComputer/ChatComputer"
 
 
 def _app(root, version="1", agent="x = 1\n", requirements="claude-agent-sdk==1\n"):
-    (root / "claudeos/brain").mkdir(parents=True, exist_ok=True)
+    (root / "chatcomputer/brain").mkdir(parents=True, exist_ok=True)
     (root / "linux/session").mkdir(parents=True, exist_ok=True)
-    (root / "claudeos/__init__.py").write_text(f'__version__ = "{version}"\n')
-    (root / "claudeos/brain/agent.py").write_text(agent)
-    (root / "linux/session/claudeos-session").write_text("#!/bin/bash\n")
+    (root / "chatcomputer/__init__.py").write_text(f'__version__ = "{version}"\n')
+    (root / "chatcomputer/brain/agent.py").write_text(agent)
+    (root / "linux/session/chatcomputer-session").write_text("#!/bin/bash\n")
     (root / "requirements-linux.txt").write_text(requirements)
     return root
 
 
 @pytest.fixture
 def setup(tmp_path):
-    """An installed ClaudeOS, Windows' drive with the folder ClaudeOS Setup ran from, and Setup's note of it."""
+    """An installed Chat Computer, Windows' drive with the folder Chat Computer Setup ran from, and Setup's note of it."""
     app = _app(tmp_path / "opt/app")
     mount = tmp_path / "win"
     src = _app(mount / SOURCE)
@@ -50,8 +50,8 @@ def test_the_folder_setup_ran_from(tmp_path, setup):
 
 def test_nothing_offered_when_both_are_the_same(setup):
     app, mount, src, note = setup
-    (src / "claudeos/__pycache__").mkdir()
-    (src / "claudeos/__pycache__/agent.cpython-312.pyc").write_bytes(b"\0")   # compiled files don't count
+    (src / "chatcomputer/__pycache__").mkdir()
+    (src / "chatcomputer/__pycache__/agent.cpython-312.pyc").write_bytes(b"\0")  # compiled files don't count
     assert update.check(note, mount, app) is None
     assert update.source_there(note, mount)
 
@@ -59,7 +59,7 @@ def test_nothing_offered_when_both_are_the_same(setup):
 def test_a_new_version_is_offered(setup):
     app, mount, src, note = setup
     _app(src, version="1.1", agent="x = 2\n")
-    (src / "claudeos/new.py").write_text("")
+    (src / "chatcomputer/new.py").write_text("")
     (app / "linux/session/old").write_text("")
     offer = update.check(note, mount, app)
     assert offer is not None and offer.source == src and offer.version == "1.1"
@@ -75,7 +75,7 @@ def test_a_version_needing_other_python_packages_needs_setup(setup):
 
 def test_no_offer_without_the_folder(tmp_path, setup):
     app, mount, src, note = setup
-    note.write_text("Users/Nobody/ClaudeOS\n")
+    note.write_text("Users/Nobody/ChatComputer\n")
     assert update.check(note, mount, app) is None and not update.source_there(note, mount)
     assert update.check(tmp_path / "missing", mount, app) is None
 
@@ -87,25 +87,25 @@ def test_pending(tmp_path):
     assert update.pending(marker)
 
 
-# ------------------------------------------------------------------ Claude can't change ClaudeOS's own files
+# ------------------------------------------------------------------ Claude can't change Chat Computer's own files
 @pytest.fixture
 def program(tmp_path, setup, monkeypatch):
     app, mount, src, note = setup
     monkeypatch.setattr(update, "UPDATE_SOURCE", note)
     monkeypatch.setattr(update, "WINDOWS_MOUNT", mount)
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "home/ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "home/ChatComputer"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "home").mkdir()
     return src
 
 
-def test_claudeos_own_files_are_program_files(program):
+def test_chatcomputer_own_files_are_program_files(program):
     src = program
-    assert P.is_program("/opt/claudeos/app/claudeos/controller.py")
-    assert P.is_program(str(src / "claudeos/brain/permissions.py"))
-    assert P.is_program(str(src).replace("ClaudeOS/ClaudeOS", "claudeos/CLAUDEOS"))   # Windows ignores case
+    assert P.is_program("/opt/chatcomputer/app/chatcomputer/controller.py")
+    assert P.is_program(str(src / "chatcomputer/brain/permissions.py"))
+    assert P.is_program(str(src).replace("ChatComputer/ChatComputer", "chatcomputer/CHATCOMPUTER"))  # Windows ignores case
     assert not P.is_program(str(src.parent / "notes.txt"))
-    assert P.holds_program(str(src.parent)) and not P.holds_program(str(src / "claudeos"))
+    assert P.holds_program(str(src.parent)) and not P.holds_program(str(src / "chatcomputer"))
 
 
 def test_claude_cant_edit_or_change_them(program, tmp_path):
@@ -116,17 +116,17 @@ def test_claude_cant_edit_or_change_them(program, tmp_path):
         async def no(question):
             raise AssertionError("asked: " + question)
         gate = P.PermissionGate(paths, Journal(paths), no)
-        for tool, inp in (("Write", {"file_path": str(src / "claudeos/brain/permissions.py"), "content": ""}),
-                          ("Edit", {"file_path": "/opt/claudeos/app/claudeos/controller.py"}),
-                          ("Bash", {"command": f'cp ~/x.py "{src}/claudeos/x.py"'}),
+        for tool, inp in (("Write", {"file_path": str(src / "chatcomputer/brain/permissions.py"), "content": ""}),
+                          ("Edit", {"file_path": "/opt/chatcomputer/app/chatcomputer/controller.py"}),
+                          ("Bash", {"command": f'cp ~/x.py "{src}/chatcomputer/x.py"'}),
                           ("Bash", {"command": f"cd {str(src).replace(' ', chr(92) + ' ')} && git pull"}),
-                          ("Bash", {"command": f'cd "{src.parent}" && rm -r ClaudeOS'}),
-                          ("Bash", {"command": f'echo hi > "{src}/claudeos/x.py"'})):
+                          ("Bash", {"command": f'cd "{src.parent}" && rm -r ChatComputer'}),
+                          ("Bash", {"command": f'echo hi > "{src}/chatcomputer/x.py"'})):
             res = await gate(tool, inp)
-            assert res.behavior == "deny" and "ClaudeOS's own program files" in res.message, (tool, inp)
+            assert res.behavior == "deny" and "Chat Computer's own program files" in res.message, (tool, inp)
         # Reading them is fine.
-        for tool, inp in (("Read", {"file_path": str(src / "claudeos/__init__.py")}),
-                          ("Bash", {"command": f'cat "{src}/claudeos/__init__.py"'})):
+        for tool, inp in (("Read", {"file_path": str(src / "chatcomputer/__init__.py")}),
+                          ("Bash", {"command": f'cat "{src}/chatcomputer/__init__.py"'})):
             assert (await gate(tool, inp)).behavior == "allow", (tool, inp)
     asyncio.run(run())
 
@@ -138,7 +138,7 @@ def test_claude_cant_edit_or_change_them(program, tmp_path):
             asked.append(question)
             return "yes", "yes"
         gate = P.PermissionGate(paths, Journal(paths), yes)
-        for cmd in (f'cp ~/x.pdf "{src.parent}/"', f'mkdir "{src}-old"', f'touch "{src.parent}/ClaudeOS-backup/x"'):
+        for cmd in (f'cp ~/x.pdf "{src.parent}/"', f'mkdir "{src}-old"', f'touch "{src.parent}/ChatComputer-backup/x"'):
             assert (await gate("Bash", {"command": cmd})).behavior == "allow", cmd
     asyncio.run(run2())
     assert len(asked) == 3
@@ -148,15 +148,15 @@ def test_claude_cant_edit_or_change_them(program, tmp_path):
 def test_logs_are_copied_to_windows_without_secrets(tmp_path):
     logs = tmp_path / "logs"
     logs.mkdir()
-    (logs / "claudeos.log").write_text("start\nremote control failed: token sk-ant-oat01-abcdef123\n"
+    (logs / "chatcomputer.log").write_text("start\nremote control failed: token sk-ant-oat01-abcdef123\n"
                                        'Authorization: Bearer abcdefghijklmnopqrstuvwxyz\n{"refresh_token": "r123"}\n')
     (logs / "session.log").write_text("session start\n")
     home = tmp_path / "Users/Ren Shu"
-    assert logcopy.copy_logs(logs, str(home), {}) is None        # no ClaudeOS folder from Setup: nothing written
-    (home / "AppData/Local/ClaudeOS").mkdir(parents=True)
+    assert logcopy.copy_logs(logs, str(home), {}) is None        # no Chat Computer folder from Setup: nothing written
+    (home / "AppData/Local/ChatComputer").mkdir(parents=True)
     dest = logcopy.copy_logs(logs, str(home), {"phone": {"link": "failed", "detail": "token sk-ant-oat01-zzz"}})
-    assert dest == home / "AppData/Local/ClaudeOS/from-claudeos"
-    text = (dest / "claudeos.log.txt").read_bytes().decode()
+    assert dest == home / "AppData/Local/ChatComputer/from-chatcomputer"
+    text = (dest / "chatcomputer.log.txt").read_bytes().decode()
     assert "remote control failed" in text and "\r\n" in text
     for secret in ("abcdef123", "abcdefghijklmnopqrstuvwxyz", "r123"):
         assert secret not in text
@@ -170,11 +170,11 @@ def test_only_the_end_of_a_long_log_is_copied(tmp_path, monkeypatch):
     monkeypatch.setattr(logcopy, "TAIL_BYTES", 100)
     logs = tmp_path / "logs"
     logs.mkdir()
-    (logs / "claudeos.log").write_text("".join(f"line {i:04d}\n" for i in range(100)))
+    (logs / "chatcomputer.log").write_text("".join(f"line {i:04d}\n" for i in range(100)))
     home = tmp_path / "home"
-    (home / "AppData/Local/ClaudeOS").mkdir(parents=True)
+    (home / "AppData/Local/ChatComputer").mkdir(parents=True)
     dest = logcopy.copy_logs(logs, str(home))
-    lines = (dest / "claudeos.log.txt").read_text().splitlines()
+    lines = (dest / "chatcomputer.log.txt").read_text().splitlines()
     assert lines[-1] == "line 0099" and len(lines) <= 10 and all(len(ln) == 9 for ln in lines)
 
 

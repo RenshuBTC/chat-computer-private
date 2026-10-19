@@ -1,8 +1,8 @@
-"""Builds the browser demo in docs/ (for GitHub Pages): ClaudeOS's own conversation screen, the same page and code
-as on a ClaudeOS computer (claudeos/ui/assets), with docs/demo/host.js standing in for the computer behind it.
+"""Builds the browser demo in docs/ (for GitHub Pages): Chat Computer's own conversation screen, the same page and code
+as on a Chat Computer (chatcomputer/ui/assets), with docs/demo/host.js standing in for the computer behind it.
 
 Run it after changing the screen:  python scripts/build_demo.py
-tests/test_demo.py checks that docs/ is what this makes, so the demo is always ClaudeOS's real screen.
+tests/test_demo.py checks that docs/ is what this makes, so the demo is always Chat Computer's real screen.
 """
 from __future__ import annotations
 
@@ -12,25 +12,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from claudeos.ui.render import DOC_CSS  # noqa: E402
+from chatcomputer.ui.render import DOC_CSS  # noqa: E402
 
-ASSETS = ROOT / "claudeos" / "ui" / "assets"
+ASSETS = ROOT / "chatcomputer" / "ui" / "assets"
 DOCS = ROOT / "docs"
 DEMO = DOCS / "demo"
 COPIED = ["theme.css", "chat.css", "md.js", "chat.js"]
 FONTS = ["AtkinsonHyperlegibleNext.ttf", "AtkinsonHyperlegibleNext-Italic.ttf", "AtkinsonHyperlegibleMono.ttf",
          "AtkinsonHyperlegibleMono-Italic.ttf", "OFL-AtkinsonHyperlegibleNext.txt", "OFL-AtkinsonHyperlegibleMono.txt",
          "README.md"]
-TITLE = "ClaudeOS: try it in your browser"
-DESCRIPTION = ("ClaudeOS is Claude running a whole computer: you talk, type or touch, and it does things for you. "
+TITLE = "Chat Computer"
+DESCRIPTION = ("Chat Computer is Claude running a whole computer: you talk, type or touch, and it does things for you. "
                "Try its screen here, in your browser.")
 
 
 def index_html() -> str:
-    """chat.html, with its files from demo/ and the demo's host script before ClaudeOS's own."""
+    """chat.html, with its files from demo/ and the demo's host script before Chat Computer's own."""
     page = (ASSETS / "chat.html").read_text(encoding="utf-8")
     swaps = [
-        ("<title>ClaudeOS</title>",
+        ("<title>Chat Computer</title>",
          f'<title>{TITLE}</title>\n<meta name="description" content="{DESCRIPTION}">'),
         ('<link rel="stylesheet" href="theme.css">', '<link rel="stylesheet" href="demo/theme.css">'),
         ('<link rel="stylesheet" href="chat.css">', '<link rel="stylesheet" href="demo/chat.css">'),

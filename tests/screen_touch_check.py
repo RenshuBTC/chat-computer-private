@@ -1,4 +1,4 @@
-"""The touchscreen in a real ClaudeOS window (GTK + WebKit, on a virtual display): the window's side of the iPad's
+"""The touchscreen in a real Chat Computer window (GTK + WebKit, on a virtual display): the window's side of the iPad's
 gestures (ui/touch.py) and the conversation page's (chat.js).
 
 A virtual display has no touchscreen, so the window's touches are made here: stand-ins for GTK's touch events,
@@ -18,8 +18,8 @@ from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["CLAUDEOS_HOME"] = tempfile.mkdtemp(prefix="claudeos-touch-")
-os.environ["CLAUDEOS_W"], os.environ["CLAUDEOS_H"] = "1600", "900"
+os.environ["CHATCOMPUTER_HOME"] = tempfile.mkdtemp(prefix="chatcomputer-touch-")
+os.environ["CHATCOMPUTER_W"], os.environ["CHATCOMPUTER_H"] = "1600", "900"
 
 import gi  # noqa: E402
 
@@ -27,8 +27,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
-from claudeos.config import Paths, Settings  # noqa: E402
-from claudeos.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
+from chatcomputer.config import Paths, Settings  # noqa: E402
+from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 B, U, E, C = (Gdk.EventType.TOUCH_BEGIN, Gdk.EventType.TOUCH_UPDATE, Gdk.EventType.TOUCH_END,
               Gdk.EventType.TOUCH_CANCEL)
@@ -148,7 +148,7 @@ def keyboard_tests(w, h) -> None:
     px, py = screen.air.panel[:2]
     finger(22, [(px + hide.x + hide.w / 2, py + hide.y + hide.h / 2)])
     out["hidden_by_key"] = not screen.air.up
-    # A real keyboard's key puts it away; one ClaudeOS typed (XTEST) doesn't.
+    # A real keyboard's key puts it away; one Chat Computer typed (XTEST) doesn't.
     screen.touch_keyboard(True)
 
     def key_event(name):

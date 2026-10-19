@@ -1,7 +1,7 @@
-"""Messaging ClaudeOS from the Claude app on the phone (Claude Code's Remote Control).
+"""Messaging Chat Computer from the Claude app on the phone (Claude Code's Remote Control).
 
 The engine is replaced by a stand-in that behaves like Claude Code's stream: a turn typed on the
-phone arrives without ClaudeOS asking anything. The real link to Anthropic's servers can only be
+phone arrives without Chat Computer asking anything. The real link to Anthropic's servers can only be
 tried with a real account, so it isn't covered here."""
 import asyncio
 import json
@@ -12,13 +12,13 @@ import pytest
 from claude_agent_sdk import ResultMessage, SystemMessage, UserMessage
 from claude_agent_sdk.types import StreamEvent
 
-from claudeos.brain.agent import Brain, BrainEvents
-from claudeos.brain.permissions import PermissionGate
-from claudeos.config import Paths, Settings, State, has_login, login_valid, save_login
-from claudeos.controller import Controller
-from claudeos.journal import Journal
-from claudeos.platform.fake import FakePlatform
-from claudeos.screen import RecordingScreen
+from chatcomputer.brain.agent import Brain, BrainEvents
+from chatcomputer.brain.permissions import PermissionGate
+from chatcomputer.config import Paths, Settings, State, has_login, login_valid, save_login
+from chatcomputer.controller import Controller
+from chatcomputer.journal import Journal
+from chatcomputer.platform.fake import FakePlatform
+from chatcomputer.screen import RecordingScreen
 
 TOKEN = "sk-ant-oat01-" + "x" * 60
 LOGIN = json.dumps({"claudeAiOauth": {"accessToken": "a" * 20, "refreshToken": "r" * 20, "expiresAt": 1}})
@@ -82,7 +82,7 @@ class FakeEngine:
 
 class Rig:
     def __init__(self, tmp_path, *, login=True, token=TOKEN, phone=True):
-        self.paths = Paths(tmp_path / "ClaudeOS").ensure()
+        self.paths = Paths(tmp_path / "ChatComputer").ensure()
         if login:
             save_login(self.paths, LOGIN)
         self.settings = Settings(phone_access=phone)
@@ -157,7 +157,7 @@ def test_remote_control_is_switched_on_after_connecting(tmp_path):
         await r.brain.connect()
         await settle()
         assert r.engine.controls[0]["subtype"] == "remote_control" and r.engine.controls[0]["enabled"] is True
-        assert r.engine.controls[0]["name"].startswith("ClaudeOS")
+        assert r.engine.controls[0]["name"].startswith("Chat Computer")
         assert r.brain.remote == "on" and ("remote", "on", {"session_id": "rc_123"}) in r.events
         assert r.brain.state.get("remote_session_id") == "rc_123"
         # Next start: ask to keep the same session on the phone.
@@ -170,7 +170,7 @@ def test_remote_control_is_switched_on_after_connecting(tmp_path):
 
 
 def test_remote_control_retries_without_an_old_session_and_reports_failure(tmp_path, monkeypatch):
-    from claudeos.brain import agent
+    from chatcomputer.brain import agent
     monkeypatch.setattr(agent, "REMOTE_RETRY_S", (0.0, 0.0))
 
     async def run():
@@ -198,7 +198,7 @@ def test_remote_control_retries_without_an_old_session_and_reports_failure(tmp_p
 def test_remote_control_started_again_when_the_engine_didnt_know_the_account_yet(tmp_path, monkeypatch):
     # On the engine's first start it looks up the account in the background, and refuses Remote Control until it
     # has: a little later the same request works.
-    from claudeos.brain import agent
+    from chatcomputer.brain import agent
     monkeypatch.setattr(agent, "REMOTE_RETRY_S", (0.0, 0.0))
 
     async def run():
@@ -363,7 +363,7 @@ def test_engine_stopping_ends_the_turn_and_reconnects_next_time(tmp_path):
 # ------------------------------------------------------------------ approvals asked on the phone
 def test_risky_actions_from_the_phone_are_asked_in_the_chat(tmp_path):
     async def run():
-        paths = Paths(tmp_path / "ClaudeOS").ensure()
+        paths = Paths(tmp_path / "ChatComputer").ensure()
         mode = {"origin": "phone"}
         spoken = []
 
@@ -411,7 +411,7 @@ class FakeSpeaker:
 
 
 def _controller(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDEOS_HOME", str(tmp_path / "ClaudeOS"))
+    monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     paths = Paths().ensure()
     screen = RecordingScreen()
     c = Controller(paths, Settings(user_name="Ren Shu"), FakePlatform(), screen, voice=False, index=False)
@@ -457,15 +457,15 @@ def test_confirm_goes_to_the_phone_during_a_phone_turn(tmp_path, monkeypatch):
 def test_full_sign_in_left_on_windows_is_taken_and_removed(tmp_path, monkeypatch):
     c, screen, paths = _controller(tmp_path, monkeypatch)
     win = tmp_path / "Users" / "rensh"
-    (win / "ClaudeOS").mkdir(parents=True)
-    (win / "ClaudeOS" / "claude_login.json").write_text("﻿" + LOGIN, encoding="utf-8")
-    c._import_signin(str(win / "ClaudeOS"))
-    assert has_login(paths) and not (win / "ClaudeOS" / "claude_login.json").exists()
+    (win / "ChatComputer").mkdir(parents=True)
+    (win / "ChatComputer" / "claude_login.json").write_text("﻿" + LOGIN, encoding="utf-8")
+    c._import_signin(str(win / "ChatComputer"))
+    assert has_login(paths) and not (win / "ChatComputer" / "claude_login.json").exists()
     assert any("Claude app on your phone" in str(e) for e in screen.events)
     # Something that isn't a sign-in is ignored (and removed).
-    (win / "ClaudeOS" / "claude_login.json").write_text("{}", encoding="utf-8")
+    (win / "ChatComputer" / "claude_login.json").write_text("{}", encoding="utf-8")
     paths.login_file.unlink()
-    c._import_signin(str(win / "ClaudeOS"))
+    c._import_signin(str(win / "ChatComputer"))
     assert not has_login(paths)
 
 
@@ -497,11 +497,11 @@ def test_engine_is_started_again_so_the_phone_can_reach_it(tmp_path, monkeypatch
 
 
 def test_sign_ins_left_on_windows_are_never_indexed(tmp_path):
-    from claudeos.files_index import FileIndex
+    from chatcomputer.files_index import FileIndex
     win = tmp_path / "Users" / "rensh"
-    (win / "ClaudeOS").mkdir(parents=True)
-    (win / "ClaudeOS" / "claude_login.json").write_text(LOGIN)
-    (win / "ClaudeOS" / "claude_token").write_text(TOKEN)
+    (win / "ChatComputer").mkdir(parents=True)
+    (win / "ChatComputer" / "claude_login.json").write_text(LOGIN)
+    (win / "ChatComputer" / "claude_token").write_text(TOKEN)
     (win / "notes.json").write_text('{"shopping": "milk"}')
     idx = FileIndex(tmp_path / "files.db", [("windows", str(win))])
     names = {os.path.basename(e.path) for e in idx._walk(str(win))}

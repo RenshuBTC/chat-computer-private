@@ -1,4 +1,4 @@
-//! ClaudeOS's start-up stage: the UEFI program the PC's firmware runs (\EFI\BOOT\BOOTX64.EFI).
+//! Chat Computer's start-up stage: the UEFI program the PC's firmware runs (\EFI\BOOT\BOOTX64.EFI).
 //! It carries the kernel inside it.
 //!
 //! It asks the firmware, one last time, for what the kernel needs to know (the screen, the memory map,
@@ -23,7 +23,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 use uefi::*;
 
 /// The kernel, put here by build.sh.
-static KERNEL: &[u8] = include_bytes!(env!("CLAUDEOS_KERNEL_ELF"));
+static KERNEL: &[u8] = include_bytes!(env!("CHATCOMPUTER_KERNEL_ELF"));
 
 /// The firmware's table, while its services may still be used (null after ExitBootServices).
 static SYSTEM_TABLE: AtomicPtr<SystemTable> = AtomicPtr::new(null_mut());
@@ -37,7 +37,7 @@ pub unsafe extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> S
     SYSTEM_TABLE.store(st, Ordering::Release);
     // `start` only comes back if something stopped it.
     let reason = unsafe { start(image, st) };
-    say("\r\nClaudeOS couldn't start: ");
+    say("\r\nChat Computer couldn't start: ");
     say(reason);
     say(".\r\n");
     unsafe { ((*(*st).boot_services).stall)(15_000_000) };
@@ -96,7 +96,7 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
 
     let cpu = paging::Features::detect();
     if cpu.five_level {
-        return Err("the firmware turned on 5-level paging, which ClaudeOS can't use yet");
+        return Err("the firmware turned on 5-level paging, which Chat Computer can't use yet");
     }
 
     let (framebuffer, edid, edid_len) = unsafe { screen(bs, st)? };
@@ -138,7 +138,7 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
 
     let stack = unsafe { pages(bs, STACK_PAGES)? };
 
-    // Room for the memory map, twice: the firmware's form, then ClaudeOS's. Allocating changes the map,
+    // Room for the memory map, twice: the firmware's form, then Chat Computer's. Allocating changes the map,
     // so leave room for more entries than there are now.
     let (raw_size, desc_size) = unsafe { map_size(bs)? };
     let raw_pages = ((raw_size / desc_size + 64) * desc_size).div_ceil(PAGE_SIZE as usize);
@@ -260,7 +260,7 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
             })
         });
     if !ok {
-        halt(); // nothing can be shown any more; this can only be a bug in ClaudeOS
+        halt(); // nothing can be shown any more; this can only be a bug in Chat Computer
     }
 
     if cpu.no_execute {
@@ -397,7 +397,7 @@ unsafe fn screen(bs: &BootServices, st: *mut SystemTable) -> Result<(Framebuffer
     Ok((fb, edid, edid_len))
 }
 
-/// The graphics output on `handle`, if it has a linear framebuffer ClaudeOS can draw into: 32 bits a
+/// The graphics output on `handle`, if it has a linear framebuffer Chat Computer can draw into: 32 bits a
 /// pixel, at a real address, big enough for the picture.
 unsafe fn gop_on(bs: &BootServices, handle: Handle) -> Option<*mut GraphicsOutput> {
     if handle.is_null() {
@@ -434,7 +434,7 @@ unsafe fn edid_on(bs: &BootServices, handle: Handle) -> Option<&'static EdidProt
     None
 }
 
-/// Whether a mode's pixels are in memory in a form ClaudeOS draws: 32 bits each, rows at least as long
+/// Whether a mode's pixels are in memory in a form Chat Computer draws: 32 bits each, rows at least as long
 /// as the picture is wide.
 fn drawable(info: &ModeInfo) -> bool {
     info.width > 0
@@ -486,6 +486,6 @@ unsafe fn find_rsdp(st: *mut SystemTable) -> u64 {
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    say("\r\nClaudeOS's start-up stage hit a bug.\r\n");
+    say("\r\nChat Computer's start-up stage hit a bug.\r\n");
     halt()
 }

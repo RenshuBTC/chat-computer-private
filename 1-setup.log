@@ -1,0 +1,23 @@
+10:50:05  Chat Computer is its own system, started instead of macOS. macOS, your apps and your files stay, one restart away.
+10:50:05  WARNING Plan only: nothing will be changed.
+10:50:05  Q: What would you like to do? -> 1
+10:50:06  == Checking this Mac
+10:50:06  macOS 26.6.2 on an Apple M2 Pro (Virtual).
+10:50:06  == Your files
+10:50:06  Chat Computer can't open macOS's own files: on this Mac they're always encrypted, with keys only macOS can use
+10:50:06  (FileVault or not). So setup copies the folders you choose onto a drive called ChatComp that both systems open;
+10:50:07  macOS keeps its own copies. What you save on that drive in Chat Computer is in macOS too, and you can send more
+10:50:07  later (run setup again).
+10:50:07  macOS may ask whether Terminal can open your Desktop, Documents and Downloads folders: choose OK.
+10:50:07  
+10:50:07  Q: Bring all of these to Chat Computer (3 MB)? -> y
+10:50:07  folders: Desktop Documents Pictures (3006464 bytes)
+10:50:07  == Where Chat Computer goes
+10:50:07  disk: container=disk2 store=disk0s2 total=343073095680 free=102840696832 preferred-min=267667059507 available=63840696832
+10:50:07  macOS's partition is 343.1 GB with 102.8 GB free.
+10:50:07  Chat Computer gets 53.8 GB, and the Chat Computer drive 10.0 GB.
+10:50:07  Name: Anka   Account: runner   Time zone: UTC
+10:50:07  == Plan only
+10:50:07  Nothing was changed. setup would shrink macOS's partition (disk0s2) to 279.2 GB,
+10:50:07  give Chat Computer 53.8 GB and the Chat Computer drive 10.0 GB, and copy: Desktop Documents Pictures.
+PLAN store=disk0s2 macos_new=279232398848 chatcomputer=53837389722 drive=10003307110 folders= Desktop Documents Pictures

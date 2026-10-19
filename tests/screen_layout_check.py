@@ -94,7 +94,7 @@ STATE_JS = """(function () {
   return JSON.stringify({content: document.body.classList.contains('content'),
     toggles: {left: toggle('left'), right: toggle('right'), bottom: toggle('bottom')},
     sides: [shown('messages'), shown('done')], composer: shown('composer'),
-    welcome: shown('welcome') ? document.getElementById('wordmark').textContent : null,
+    hello: document.querySelectorAll('#log > .ai.hello').length,
     messages: [m.left, m.top, m.right, m.bottom], done: [d.left, d.top, d.right, d.bottom],
     frame: [f.left, f.top, f.right, f.bottom], column: [col.left, col.top, col.right, col.bottom],
     last_you: [lastYou.left, lastYou.top, lastYou.right, lastYou.bottom],

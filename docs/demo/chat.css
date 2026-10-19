@@ -17,7 +17,6 @@ body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
   width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto;
   padding: 2rem 0 calc(var(--composer-h, 5rem) + 1.25rem);
 }
-body:not(.has-log) #column { justify-content: center; }
 #log { display: flex; flex-direction: column; gap: 1.25rem; }
 
 /* Your words: on the right, in a bubble no wider than most of the column, the way chat apps show them. */
@@ -50,23 +49,12 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* Empty screen: the word logo in the middle and, under it, what a first program prints: hello, world, in lower case
-   with its comma, as in Kernighan's C tutorial and his book with Ritchie, and in the mono font, as a program
-   prints it. */
-#welcome { margin: 0; text-align: center; }
-#wordmark {
-  font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0;
-}
-#hello { font-family: var(--mono); margin: 0.75em 0 0; }
-body.has-log #welcome { display: none; }
-
 /* Something open (body.content): the conversation shrinks to just your latest message and Chat Computer's latest,
    in full, above the message box, and the page Claude opened is laid over the space above them, in a rounded frame
    like the sidebars' (the window places it inside #frame: chat.js reports where). Older messages are still there,
    above, cut off. */
 #frame { display: none; position: fixed; border: 2px solid var(--bubble); border-radius: 1.1rem; }
 body.content #frame { display: block; }
-body.content #welcome { display: none; }
 body.content #column {
   position: fixed; bottom: var(--composer-h, 5rem); min-height: 0; height: var(--strip-h, 4rem);
   left: calc(var(--left, 0px) + var(--side-gap)); right: calc(var(--panel, 0px) + var(--side-gap));

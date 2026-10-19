@@ -80,9 +80,9 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
   PC's own speakers Chat Computer doesn't greet you out loud.
 * **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, and
-  a message box at the bottom. Before anything is said, it shows just its name, **Chat Computer**, and under
-  it the classic `hello, world`; the empty message box says, dimmed, "Chat computer anything or type “/” to
-  search", with the cursor already blinking in it. The round button at its right sends: grey while there's
+  a message box at the bottom. Before anything is said, the conversation starts with Chat Computer's first
+  words, the classic `hello, world`, and the empty message box says, dimmed, "Chat computer anything or type
+  “/” to search", with the cursor already blinking in it. The round button at its right sends: grey while there's
   nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
   the mouse wheel, Page Up) to read back.
 * **What Claude opens** (a website, a video, a document) goes between the two panels, in a rounded frame,
@@ -423,7 +423,7 @@ You won't need it day to day; it's only for repairs.
 ## The demo
 
 **https://chatcomputer.ai** is Chat Computer's screen in a browser, for trying it before
-installing it: the word logo and `hello, world`, and the message box with the cursor in it. It is the same page
+installing it: Chat Computer saying `hello, world`, and the message box with the cursor in it. It is the same page
 and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py` copies them, and
 `tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the computer:
 Claude's answers to a few things are written in advance (music is a few soft chords the browser makes), the

@@ -417,9 +417,9 @@ retrying with backoff, then starts listening.
   over the page (in the browser demo, which draws what's open in the page itself, `CO.openInPage`, the list just
   overlaps it). The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
   moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
-  through) is on top. With nothing said yet the page shows the word logo (`#wordmark`: Atkinson Hyperlegible Next
-  at 800) and, in the mono font, `hello, world`, lower case with its comma as in Kernighan's C tutorial and
-  K&R; the empty message box shows `#hint`, "Chat computer anything or type “/” to search", dimmed
+  through) is on top. With nothing said yet the conversation starts with Chat Computer's first words (`greet()`
+  in chat.js, an `.ai.hello` message the page adds itself, not part of the transcript): `hello, world`, lower
+  case with its comma as in Kernighan's C tutorial and K&R; the empty message box shows `#hint`, "Chat computer anything or type “/” to search", dimmed
   (`--dim`; its first half where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
   the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items and
   the panels' switches: settings, the microphone (sound tool, `input`) and the model are changed by asking.

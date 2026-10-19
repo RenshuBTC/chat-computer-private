@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
 FONT = sys.argv[1] if len(sys.argv) > 1 else str(HERE.parent / "chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf")
-WEIGHT = 800                                  # as #wordmark in chat.css
+WEIGHT = 800                                  # the word logo's weight
 OUT = HERE / "chatcomputer.icns"
 SIZE, BODY, RADIUS = 1024, 824, 185          # Apple's icon grid: an 824-pixel tile on a 1024 canvas
 WORDS = "Chat\nComputer"

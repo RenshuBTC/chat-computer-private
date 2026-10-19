@@ -61,6 +61,16 @@
     m = ai[id] = { el: wrap, md: md, text: "", raf: 0, cut: 0, tail: [] };
     return m;
   }
+  // Before anything is said, the conversation starts with Chat Computer's first words: what a first program
+  // prints, hello, world (lower case, with its comma, as in Kernighan's C tutorial and his book with Ritchie).
+  var HELLO = "hello, world";
+  function greet() {
+    if (log.children.length) return;
+    var m = message({ role: "assistant", text: HELLO, ts: now() });
+    m.classList.add("hello");
+    log.appendChild(m);
+    body.classList.add("has-log");
+  }
   // A message from the transcript (the start, or an earlier day put back).
   function message(it) {
     var m;
@@ -875,6 +885,7 @@
     history: function (items) {
       log.innerHTML = "";
       (items || []).forEach(function (it) { log.appendChild(message(it)); });
+      greet();                        // nothing said yet: Chat Computer's hello, world
       trim();
       jumpDown();
       fitStrip();
@@ -924,8 +935,8 @@
       drawMessages();
     },
     accountForm: function (f) { showForm(f || null); },
-    // The person's name and the model: nothing on this page shows them (the empty screen is the word logo and
-    // "hello, world").
+    // The person's name and the model: nothing on this page shows them (before anything is said, the conversation
+    // is Chat Computer's "hello, world").
     settings: function () {},
     // Which panels show: {left, right, bottom} (Chat Computer keeps the choice; see "the panels' switches").
     panels: function (s) {
@@ -950,9 +961,10 @@
       else if (how === "bottom") page.scrollTo({ top: page.scrollHeight, behavior: "smooth" });
       else if (by) page.scrollBy({ top: by, behavior: "smooth" });
     },
-    clear: function () { log.innerHTML = ""; ai = {}; users = {}; trim(); jumpDown(); }
+    clear: function () { log.innerHTML = ""; ai = {}; users = {}; greet(); trim(); jumpDown(); }
   };
   showLive("");
+  greet();
   fitPanel();
   fitInput();
   tick();

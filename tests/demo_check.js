@@ -1,5 +1,5 @@
 // The browser demo (docs/index.html: Chat Computer's own screen, with docs/demo/host.js standing in for the computer),
-// tried in Chromium with Playwright: it opens on the word logo and hello, world, with the cursor in the box; the
+// tried in Chromium with Playwright: it opens with Chat Computer saying hello, world, the cursor in the box; the
 // panels' switches; music (made by the browser); "/" lists the files in front of what's open; F1 and Escape; a
 // message opened; Connect Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
 // when it ends, with a stand-in for YouTube's player; answers streamed); Connect AirPods' sheet; a phone.
@@ -67,7 +67,8 @@ async function state(page) {
       last: (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || "",
       results: Array.from(document.querySelectorAll("#results .res-text")).map((e) => e.textContent),
       panel: document.body.classList.contains("panel"),
-      welcome: shown("welcome") ? Array.from(document.getElementById("welcome").children).map((e) => e.textContent) : null,
+      first_ai: ((document.querySelector("#log > .ai") || {}).textContent || "").trim(),
+      said: document.querySelectorAll("#log > .you, #log > .ai").length,
       sides: [shown("messages"), shown("done")],
       composer: shown("composer"),
       toggles: ["left", "right", "bottom"].map((k) => shown("toggle-" + k) && document.getElementById("toggle-" + k).getAttribute("aria-pressed")),
@@ -132,7 +133,7 @@ async function ask(page, text) {
     return route.fulfill({ status: 200, contentType: "text/event-stream", body: turn });
   });
   await page.goto(page_url);
-  // It opens on the word logo and hello, world, the cursor in the box under the dimmed hint.
+  // It opens with Chat Computer's first words, hello, world; the cursor in the box under the dimmed hint.
   await page.waitForFunction(() => document.getElementById("demo-tools"));
   await page.waitForTimeout(500);
   out.opening = await state(page);

@@ -1,0 +1,62 @@
+﻿
+To make a sign-in code: open PowerShell (not as administrator), run the line below and sign in. It shows
+a long code that starts with sk-ant-: copy it, then paste it here with a RIGHT-CLICK (choose Paste if a
+menu opens). It stays hidden; then press Enter.
+  & "C:\x\claude.exe" setup-token
+Got it. Claude is signed in for Chat Computer.
+
+To make a sign-in code: open PowerShell (not as administrator), run the line below and sign in. It shows
+a long code that starts with sk-ant-: copy it, then paste it here with a RIGHT-CLICK (choose Paste if a
+menu opens). It stays hidden; then press Enter.
+  & "C:\x\claude.exe" setup-token
+That does not look like a sign-in code (it starts with sk-ant- and is about 100 characters long).
+Got it. Claude is signed in for Chat Computer.
+
+To make a sign-in code: open PowerShell (not as administrator), run the line below and sign in. It shows
+a long code that starts with sk-ant-: copy it, then paste it here with a RIGHT-CLICK (choose Paste if a
+menu opens). It stays hidden; then press Enter.
+  & "C:\x\claude.exe" setup-token
+
+To make a sign-in code: open PowerShell (not as administrator), run the line below and sign in. It shows
+a long code that starts with sk-ant-: copy it, then paste it here with a RIGHT-CLICK (choose Paste if a
+menu opens). It stays hidden; then press Enter.
+  & "C:\x\claude.exe" setup-token
+That does not look like a sign-in code (it starts with sk-ant- and is about 100 characters long).
+That does not look like a sign-in code (it starts with sk-ant- and is about 100 characters long).
+That does not look like a sign-in code (it starts with sk-ant- and is about 100 characters long).
+
+A window called "Sign in to Claude" opens, and then your browser on Claude's sign-in page.
+Sign in with the account that has your Claude subscription, and approve. Setup carries on by itself.
+If you don't see them, look for them on the taskbar. (Press Enter here to stop waiting.)
+Signed in to Claude. You can also type to Chat Computer from the Claude app on your phone.
+
+A window called "Sign in to Claude" opens, and then your browser on Claude's sign-in page.
+Sign in with the account that has your Claude subscription, and approve. Setup carries on by itself.
+If you don't see them, look for them on the taskbar. (Press Enter here to stop waiting.)
+Setup could not open the sign-in window.
+The sign-in did not come through.
+
+To make a sign-in code: open PowerShell (not as administrator), run the line below and sign in. It shows
+a long code that starts with sk-ant-: copy it, then paste it here with a RIGHT-CLICK (choose Paste if a
+menu opens). It stays hidden; then press Enter.
+  & "C:\x\claude.exe" setup-token
+Got it. Claude is signed in for Chat Computer.
+
+A window called "Sign in to Claude" opens, and then your browser on Claude's sign-in page.
+Sign in with the account that has your Claude subscription, and approve. Setup carries on by itself.
+If you don't see them, look for them on the taskbar. (Press Enter here to stop waiting.)
+Setup could not open the sign-in window.
+The sign-in did not come through.
+short path: Remove-Item -Recurse worked here
+
+A window called "Sign in to Claude" opens, and then your browser on Claude's sign-in page.
+Sign in with the account that has your Claude subscription, and approve. Setup carries on by itself.
+If you don't see them, look for them on the taskbar. (Press Enter here to stop waiting.)
+Signed in to Claude. You can also type to Chat Computer from the Claude app on your phone.
+Please type y for yes or n for no.
+
+What would you like to do?
+  1. One
+  2. Two
+Please type a number from 1 to 2.
+238/238 checks passed

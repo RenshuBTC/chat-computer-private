@@ -1,0 +1,8 @@
+﻿> vssadmin create shadow /for=C: exit code 0
+vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool
+(C) Copyright 2001-2013 Microsoft Corp.
+
+Successfully created shadow copy for 'C:\'
+    Shadow Copy ID: {c2b9b540-0704-49a9-b0c9-5bc3d5ee1382}
+    Shadow Copy Volume Name: \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1
+

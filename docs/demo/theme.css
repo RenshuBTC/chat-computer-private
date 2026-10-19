@@ -4,9 +4,10 @@
    don't have (Chinese, Japanese, Korean, Greek, Cyrillic, emoji) come from the system's fonts.
    Full white and full black give the most contrast a screen can show (21:1). Off-whites from #FAFAFA to
    #F0F0F0 are only 4-13% dimmer, so greying the background would cost contrast without making the screen
-   much less bright; to dim it, turn down the screen's brightness. No dark mode and no grey text. The one
-   other colour is the light grey of your messages' bubbles (black on it is still 18:1), which sets your words
-   apart from Claude's the way chat apps do. Sizes are in rem. The screen sets the root size for this
+   much less bright; to dim it, turn down the screen's brightness. No dark mode, and no grey text but one: the
+   empty message box's hint, dimmed (--dim), with the send button grey in the same shade until there's
+   something to send, as in ChatGPT. The other colour is the light grey of your messages' bubbles (black on it
+   is still 18:1), which sets your words apart from Claude's the way chat apps do. Sizes are in rem. The screen sets the root size for this
    monitor and viewing distance (chatcomputer/ui/layout.py), so the letters' x-height covers 0.3 degrees of
    view and lines hold about 70 characters. */
 @font-face {
@@ -29,6 +30,7 @@
   --ground: #FFFFFF;
   --ink: #000000;
   --bubble: #EDEDED;
+  --dim: #9A9A9A;
   --sans: "Atkinson Hyperlegible Next", sans-serif;
   --mono: "Atkinson Hyperlegible Mono", monospace;
 }

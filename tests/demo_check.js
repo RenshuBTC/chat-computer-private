@@ -128,6 +128,16 @@ async function ask(page, text) {
   await page.waitForTimeout(600);
   out.opening = await state(page);
   if (shot) await page.screenshot({ path: shot + "-opening.png" });
+  // A click on the video itself turns the sound on too (the player is told); the pointer off it again, typing goes
+  // back to the box.
+  const v0 = out.opening.view;
+  await page.mouse.click(v0[0] + v0[2] / 2, v0[1] + v0[3] / 2);
+  await page.waitForTimeout(400);
+  out.clicked_commands = await player(page).evaluate(() => window.commands);
+  out.clicked_in = await page.evaluate(() => document.activeElement && document.activeElement.id);
+  await page.mouse.move(v0[0] + v0[2] / 2, v0[1] + v0[3] + 30);
+  await page.waitForTimeout(200);
+  out.keys_back = await page.evaluate(() => document.activeElement && document.activeElement.id);
   // "/": the files, in a list in front of the video (what's at its middle is the list, not the video).
   await page.keyboard.type("/");
   await page.waitForSelector("#results .res");

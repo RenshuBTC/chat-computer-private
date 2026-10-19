@@ -85,6 +85,7 @@ STATE_JS = """(function () {
   var yous = document.querySelectorAll('#log .you'), lastYou = yous[yous.length - 1].getBoundingClientRect();
   var youEl = yous[yous.length - 1], aiEl = document.querySelector('#log > .ai:last-child');
   var res = document.getElementById('results').getBoundingClientRect();
+  var inp = document.getElementById('input').getBoundingClientRect();
   var line = parseFloat(getComputedStyle(document.body).lineHeight);
   function toggle(k) { var e = document.getElementById('toggle-' + k), r = e.getBoundingClientRect();
     return {x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), pressed: e.getAttribute('aria-pressed'),
@@ -102,6 +103,7 @@ STATE_JS = """(function () {
     line: line, you_h: youEl.getBoundingClientRect().height, ai_h: aiEl.getBoundingClientRect().height,
     ai_bottom: aiEl.getBoundingClientRect().bottom, more: document.querySelectorAll('.more').length,
     searching: document.body.classList.contains('searching'), results: [res.left, res.top, res.right, res.bottom],
+    input: [Math.round(inp.left + 20), Math.round(inp.top + inp.height / 2)],
     hint: getComputedStyle(document.getElementById('hint')).display !== 'none' ? document.getElementById('hint').textContent : null,
     strip_h: document.getElementById('column').getBoundingClientRect().height});
 })()"""
@@ -176,15 +178,16 @@ def step_content() -> None:
 
 
 def step_slash() -> None:
-    """ "/" with the page open: two files found (as the controller would send them), listed in front."""
-    found = json.dumps([{"name": "notes.txt", "path": "/home/notes.txt", "kind": "document", "where": "~/Documents",
-                         "when": "Today"}, {"name": "Budget.xlsx", "path": "/home/Budget.xlsx", "kind": "spreadsheet",
-                                            "where": "~/Documents", "when": "Oct 2"}])
+    """ "/" with the page open: eight files found (as the controller would send them), listed in front."""
+    found = json.dumps([{"name": f"notes {i}.txt", "path": f"/home/notes{i}.txt", "kind": "document",
+                         "where": "~/Documents", "when": "Today"} for i in range(1, 9)])      # taller than the strip
 
     def results() -> None:
         screen.chat.evaluate_javascript(f"CO.searchResults(1, '', {found}, '')", -1, None, None, None, None, None)
         later(600, lambda: (shot("slash"), read("slash", step_unslash)))
-    act([["windowfocus", "--sync", wid()], ["type", "/"]], results, wait_ms=700)
+    box = out["content"]["input"]          # into the message box (a website that's open has the keys after it opens)
+    act([["windowfocus", "--sync", wid()], ["mousemove", "--window", wid(), str(box[0]), str(box[1])], ["click", "1"],
+         ["sleep", "0.3"], ["type", "/"]], results, wait_ms=700)
 
 
 def step_unslash() -> None:

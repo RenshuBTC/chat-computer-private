@@ -253,6 +253,15 @@
     follow();
     fitStrip();
   }).observe(composer);
+  // The empty box's hint: all of it ("Chat computer anything or type “/” to search") where the box is wide enough,
+  // otherwise its first half.
+  var hint = $("hint");
+  function fitHint() {
+    hint.style.maxWidth = input.offsetWidth + "px";
+    hint.classList.remove("short");
+    if (hint.scrollWidth > hint.clientWidth + 1) hint.classList.add("short");
+  }
+  new ResizeObserver(function () { requestAnimationFrame(fitHint); }).observe(input);
 
   // How long typed letters take to reach the screen (two frames after the key), sent every few seconds and logged
   // once a minute (GtkScreen._watch_speed): typing on a real PC once felt slow, with nothing in the log to say why.

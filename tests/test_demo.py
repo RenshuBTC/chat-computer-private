@@ -67,18 +67,21 @@ def test_the_demo_works_in_a_browser():
     assert "failed" not in res, res["failed"]
     assert res["errors"] == []
     # It opens playing YouTube between the sidebars, from 0:03 (no sheet, no button to press, nothing above the
-    # message box), and What's done says so; the cursor is in the box, under "Chat Computer anything", dimmed.
+    # message box), and What's done says so; the cursor is in the box, under the dimmed hint.
     first = res["opening"]
     assert first["content"] and not first["sheet"] and first["toggles"] == ["true", "true", "true"]
     assert "youtube-nocookie.com/embed/Yw6u6YkTgQ4?autoplay=1" in first["src"] and "&start=3" in first["src"]
     assert first["strip"] == [] and first["last"] == ""
     assert first["messages"] == 7 and first["panel"] and first["done"][-1] == SONG_DONE and len(first["done"]) == 5
-    assert first["typing_in"] == "input" and first["hint"] == "Chat Computer anything" and first["hint_weight"] == "400"
+    assert first["typing_in"] == "input" and first["hint"] == "Chat computer anything or type \u201c/\u201d to search" and first["hint_weight"] == "400"
     # The two buttons at the right of the box.
     assert first["tools"] == ["Connect Claude", "Connect AirPods"] and first["tools_at"] == "box"
-    # "/": the list is in front of the video; and the first key turned the sound on.
-    assert res["over"] and res["over_view"] == first["view"]
-    assert "unMute" in res["player_commands"]
+    # A click on the video turned the sound on (the player was told), and with the pointer off the video the keys
+    # are the box's again.
+    assert res["clicked_in"] == "demo-view" and res["clicked_commands"][:2] == ["unMute", "setVolume"]
+    assert res["keys_back"] == "input"
+    # "/": the list is in front of the video (the sound already on: nothing more told to the player).
+    assert res["over"] and res["over_view"] == first["view"] and res["player_commands"] == res["clicked_commands"]
     # The video ended: the conversation's screen again, just the word logo.
     assert not res["ended"]["content"] and res["ended"]["view"] is None and res["ended"]["welcome"] == ["Chat Computer"]
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.

@@ -176,7 +176,8 @@
   }
   function keys(e) {
     if (e.key === "F1" && open) { e.preventDefault(); expanded = !expanded; place(); }
-    else if (e.key === "Escape" && open && !drafting && !document.body.classList.contains("sheet")) {
+    // (Escape is the box's while it has words in it: the box itself says so here, without waiting for "drafting".)
+    else if (e.key === "Escape" && open && !$("input").value.trim() && !document.body.classList.contains("sheet")) {
       e.preventDefault();
       close();
     }
@@ -386,6 +387,18 @@
     if (player.state === -1 || player.state === 5) command("playVideo");       // it never started
     if (!player.heard) disarm();      // no word from the player: it can't say the sound came on, so once is all
   }
+  // A click or tap on the video itself goes to YouTube's player, not to this page, which sees only the player
+  // taking the keys. While the sound is still off, that turns it on as well, and the video goes on playing
+  // (the player takes a click on the video to mean pause).
+  window.addEventListener("blur", function () {
+    setTimeout(function () {
+      if (!player.armed || !player.id || document.activeElement !== view) return;
+      var token = player.token;
+      command("unMute");
+      command("setVolume", [player.volume]);
+      setTimeout(function () { if (player.token === token && player.state === 2) command("playVideo"); }, 500);
+    }, 0);
+  });
 
   // ------------------------------------------------------------------ Claude's answers, written in advance
   var CITIES = { singapore: [103.6, 1.2, 104.1, 1.47], london: [-0.35, 51.38, 0.15, 51.62], "new york": [-74.1, 40.6, -73.8, 40.85],

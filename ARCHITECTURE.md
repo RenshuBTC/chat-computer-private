@@ -418,8 +418,9 @@ retrying with backoff, then starts listening.
   overlaps it). The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
   moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
   through) is on top. With nothing said yet the page shows just the word logo (`#wordmark`: Atkinson Hyperlegible
-  Next at 800); the empty message box shows `#hint`, "Chat Computer anything", dimmed (gone once something is
-  typed, `body.typed`), and the cursor is in the box from the start. No buttons beyond the sidebars' items and
+  Next at 800); the empty message box shows `#hint`, "Chat computer anything or type “/” to search", dimmed
+  (`--dim`; its first half where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
+  the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items and
   the panels' switches: settings, the microphone (sound tool, `input`) and the model are changed by asking.
 * The panels' switches (`.toggle` in chat.html): Messages' at the top left, What's done's at the top right, the
   conversation's at the bottom right while something is open; each icon is the screen with its panel marked,

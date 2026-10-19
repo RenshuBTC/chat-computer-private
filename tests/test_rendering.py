@@ -147,7 +147,7 @@ def test_the_message_box_works_like_the_claude_apps():
     # The cursor in the box from the start; the round send button grey until there's something to send, then black.
     assert empty["focused"] and empty["value"] == "" and empty["send"] == "rgb(154, 154, 154)"
     # Nothing under the box (or above it while awake), and in it just the dimmed hint.
-    assert empty["words"] == "Chat Computer anything" and empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
+    assert empty["words"] == "Chat computer anything or type \u201c/\u201d to search" and empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
     assert typed["value"] == "hi there" and typed["drafting"] and typed["send"] == "rgb(0, 0, 0)"
     assert two["value"] == "hi there\nsecond line" and two["box_h"] > typed["box_h"] + 20
     assert res["sent_text"] == ["hi there\nsecond line"]
@@ -198,9 +198,9 @@ def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
     assert abs(f[1] - gap) <= 1 and f[0] < v[0] and f[1] < v[1] and v[2] < f[2] and v[3] < f[3]
     assert f[3] < content["column"][1] <= content["last_you"][1] and content["last_you"][3] <= content["column"][3]
     # There, your latest message and Claude's latest reply both show in full (no "\u2026 more"): the page above leaves
-    # them the room. The empty box says, dimmed, "Chat Computer anything".
+    # them the room. The empty box says, dimmed, "Chat computer anything or type “/” to search".
     assert content["more"] == 0 and content["ai_h"] > 5 * content["line"] and content["ai_bottom"] <= content["column"][3] + 1
-    assert content["hint"] == "Chat Computer anything"
+    assert content["hint"] == "Chat computer anything or type \u201c/\u201d to search"
     # "/": its list shows in front. The window lays the page over this one, so the page ends above the list; it
     # comes back down when the search ends.
     sl = res["slash"]

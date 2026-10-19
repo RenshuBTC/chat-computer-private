@@ -98,12 +98,14 @@ body.content #live { padding: 0.1rem 0.75rem; margin-top: 0.4rem; }
   padding: 0.6rem 0.7rem 0.6rem 1rem;
 }
 #row { position: relative; display: flex; align-items: flex-end; gap: 0.5rem; }
-/* The empty box's hint, where typing starts: "Chat Computer anything", dimmed (the one grey text on the screen).
-   It goes with the first thing typed, and while "/" searches. */
+/* The empty box's hint, where typing starts: "Chat computer anything or type “/” to search", dimmed (--dim, the
+   one grey text on the screen); in a box too narrow for all of it, just "Chat computer anything" (.short). It goes
+   with the first thing typed. */
 #hint {
   position: absolute; left: 0; top: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  line-height: 1.5; color: #9A9A9A; pointer-events: none;
+  line-height: 1.5; color: var(--dim); pointer-events: none;
 }
+#hint.short #hint-search { display: none; }
 body.typed #hint, body.searching #hint { display: none; }
 #input {
   position: relative; z-index: 1;                 /* over the hint, so the cursor shows in front of it */
@@ -113,7 +115,7 @@ body.typed #hint, body.searching #hint { display: none; }
 }
 #send {
   flex: none; display: flex; align-items: center; justify-content: center; width: 1.5em; height: 1.5em;
-  margin: 0; padding: 0; border: 0; border-radius: 50%; background: #9A9A9A; color: var(--ground); cursor: default;
+  margin: 0; padding: 0; border: 0; border-radius: 50%; background: var(--dim); color: var(--ground); cursor: default;
 }
 body.drafting #send { background: var(--ink); cursor: pointer; }
 svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }

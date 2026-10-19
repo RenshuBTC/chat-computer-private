@@ -81,9 +81,10 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   PC's own speakers Chat Computer doesn't greet you out loud.
 * **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, and
   a message box at the bottom. Before anything is said, it shows just its name, **Chat Computer**, and the
-  empty message box says, dimmed, "Chat Computer anything", with the cursor already blinking in it. The round
-  button at its right sends: grey while there's nothing to send, black once there is. There are no menus:
-  everything is done by asking. Scroll up (a finger, the mouse wheel, Page Up) to read back.
+  empty message box says, dimmed, "Chat computer anything or type “/” to search", with the cursor already
+  blinking in it. The round button at its right sends: grey while there's nothing to send, black once there
+  is. There are no menus: everything is done by asking. Scroll up (a finger, the mouse wheel, Page Up) to read
+  back.
 * **What Claude opens** (a website, a video, a document) goes between the two panels, in a rounded frame,
   above your latest message and Claude's latest reply, both in full. F1 makes it fill the screen and F1 again
   puts it back; Escape, or a swipe up from the bottom edge, closes it. Typing "/" to search shows its list in
@@ -426,8 +427,8 @@ installing it. It opens playing Louie Zong's "hello world" from YouTube between 
 its sound starts), the way a website shows on Chat Computer, and What's done lists it; pause it in the player,
 and when it ends the conversation has the middle again. Browsers let a page play sound by itself only after a
 click, tap or key on the site (or, in Chrome, once you've often played its videos with sound), so the video
-starts with sound where the browser allows it and otherwise without, and the first click, tap or key turns the
-sound on. It is the same page and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py`
+starts with sound where the browser allows it and otherwise without, and the first click, tap or key anywhere
+(on the video too) turns the sound on. It is the same page and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py`
 copies them, and `tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the
 computer: Claude's answers to a few things are written in advance, the messages and files are made up, and
 nothing typed there leaves the browser (from elsewhere come only YouTube's player and, when asked for, a map

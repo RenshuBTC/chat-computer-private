@@ -27,14 +27,17 @@ def test_only_black_text_on_white():
     theme, chat = _code(_asset("theme.css")), _code(_asset("chat.css"))
     root = re.search(r":root\s*\{([^}]*)\}", theme).group(1)
     assert re.search(r"--ground:\s*#FFFFFF;", root) and re.search(r"--ink:\s*#000000;", root)
-    # One more, the light grey of your messages' bubbles (black on it is still 18:1), as the Claude app shows them.
-    assert re.search(r"--bubble:\s*#EDEDED;", root)
+    # One more, the light grey of your messages' bubbles (black on it is still 18:1), as the Claude app shows them;
+    # and one dimmed grey, only for the empty box's hint and the send button with nothing to send (as ChatGPT's).
+    assert re.search(r"--bubble:\s*#EDEDED;", root) and re.search(r"--dim:\s*#9A9A9A;", root)
     # Those are the only colours: everything else uses them.
     assert COLOR.findall(theme.replace(root, "")) == []
     assert COLOR.findall(chat) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
     sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--strip-h", "--side-gap"}
-    assert used - sizes == {"--ground", "--ink", "--bubble", "--sans", "--mono"}
+    assert used - sizes == {"--ground", "--ink", "--bubble", "--dim", "--sans", "--mono"}
+    dims = re.findall(r"([^{}]+)\{[^}]*var\(--dim\)", chat)
+    assert [d.strip() for d in dims] == ["#hint", "#send"]
     # No dark mode.
     for text in (theme, chat, _asset("chat.html"), _asset("chat.js"), render.DOC_CSS):
         assert "data-theme" not in text and "dark" not in text.lower()

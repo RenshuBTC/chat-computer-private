@@ -1,0 +1,13 @@
+ProductName:		macOS
+ProductVersion:		15.7.9
+BuildVersion:		24G830
+arm64
+Apple M2 Pro (Virtual)
+virtual: 1
+GNU bash, version 3.2.57(1)-release (arm64-apple-darwin24)
+openrsync: protocol version 29
+bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3 bz2lib/1.0.8 
+expect version 5.45
+Filesystem        Size    Used   Avail Capacity iused ifree %iused  Mounted on
+/dev/disk2s1s1   320Gi    10Gi    42Gi    20%    427k  441M    0%   /
+uid=501(runner) gid=20(staff) groups=20(staff),12(everyone),61(localaccounts),79(_appserverusr),80(admin),81(_appserveradm),264(_webdeveloper),701(com.apple.sharepoint.group.1),33(_appstore),98(_lpadmin),100(_lpoperator),204(_developer),250(_analyticsusers),395(com.apple.access_ftp),398(com.apple.access_screensharing),399(com.apple.access_ssh),400(com.apple.access_remote_ae)

@@ -1,0 +1,55 @@
+     15.7.9 on Apple M2 Pro (Virtual), GNU bash, version 3.2.57(1)-release (arm64-apple-darwin24)
+
+== 1. Setup, plan only, on this Mac
+PASS checks accept this (virtual) Apple silicon Mac in plan-only mode
+PASS finds no Chat Computer on this Mac's disk
+PASS folder sizes from du -A
+PASS reads macOS's disk with diskutil and plutil
+     disk: container=disk2 store=disk0s2 total=343073095680 free=45145464832 preferred-min=329217631846 available=6145464832
+PASS plan stops for lack of space (GitHub's Macs have little), before changing anything
+
+== 2. On a disk image laid out like a Mac after the Asahi installer
+PASS disk image attached (disk5)
+PASS the image has macOS's container, Chat Computer's start-up volume, EFI (disk5s4), Boot and Root, like the installer makes them
+     found: start-up volume disk5s3 (disk7s1), EFI disk5s4, Boot disk5s5, Linux disk5s6, drive none
+PASS find_install finds each of Chat Computer's pieces in diskutil's real output
+     macOS's system volume: disk2s1 (Macintosh HD); / is on disk2s1s1
+PASS finds macOS's own system volume
+PASS make_drive makes the Chat Computer drive (disk5s7, at /Volumes/ChatComp)
+PASS the drive is exFAT
+PASS diskutil's DiskUUID is the partition's GPT id (what Chat Computer's fstab uses)
+PASS folders copied
+PASS big files copied whole
+PASS no .DS_Store or Photos library copied
+PASS no ._ files on the drive (extended attributes not copied)
+PASS write_first_start finishes
+PASS first start's program on the EFI partition
+PASS Fedora's own start kept, to put back
+PASS GRUB starts the first start once (kernel, root and program filled in)
+PASS settings, sign-in and Chat Computer's package read back as the first start reads them (no ._ or xattr entries)
+PASS no ._ files on the EFI partition
+     the image's macOS: container disk6 on disk5s2, volume disk6s1
+PASS remove finishes
+PASS it says Chat Computer is deleted and macOS has its space back
+PASS it blesses the image's macOS volume
+PASS only macOS's partitions are left
+     macOS's container: 6.2 GB (was 1.5 GB)
+PASS macOS's container grew into the space
+PASS the drive's files were copied to "Chat Computer files" first
+PASS the recovery note is gone
+PASS a later run gives macOS the free space after its partition
+
+== 3. Downloads: the Asahi installer and Fedora's image
+PASS prepare_installer finishes (both fingerprints match)
+PASS Chat Computer's icon is in Fedora's package (added with the installer's Python), and the package still reads
+PASS the installer gets Chat Computer's installer_data.json
+PASS the new fingerprint is noted
+PASS a second run doesn't download Fedora again
+
+== 4. The Asahi installer, answered by drive-installer.exp
+PASS the installer starts as Chat Computer's
+PASS setup's answer reached it (past "Press enter to continue.")
+PASS it turns down the virtual Mac, and setup stops and says so
+
+== Summary
+38 checks passed, 0 failed

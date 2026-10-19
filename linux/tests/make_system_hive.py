@@ -17,6 +17,8 @@ We lay out exactly the keys the importer needs:
     \\ControlSet001\\Services\\BTHPORT\\Parameters\\Keys\\<adapter>
         <device-mac> = REG_BINARY <16-byte link key>   (classic key)
         MasterIRK    = REG_BINARY <17 bytes>            (must be skipped)
+    \\ControlSet001\\Services\\BTHPORT\\Parameters\\Devices\\<device-mac>
+        Name = REG_BINARY <UTF-8 name, NUL-terminated>  (what Windows calls the device)
 
 Usage: make_system_hive.py OUT.hive
 """
@@ -196,15 +198,18 @@ DEFAULT_DEVICES = {
 }
 # A non-16-byte blob the importer must skip.
 SKIP_VALUE = ("MasterIRK", "00112233445566778899aabbccddeeff00")
+# What Windows calls the devices (Devices\\<mac>\\Name). The second device has none.
+DEFAULT_NAMES = {"a4bfc6d0e5ff": "Ren\u2019s AirPods Pro"}
 
 
-def build(out_path, adapter=DEFAULT_ADAPTER, devices=None):
+def build(out_path, adapter=DEFAULT_ADAPTER, devices=None, names=None):
     """Correct single-pass builder: root cell FIRST (regipy requirement), with
     its subkey/value list cells and all descendants allocated AFTER it, and the
     root's subkey-list offset patched in once children exist."""
     REG_DWORD_V = 4
     REG_BINARY_V = 3
     devices = devices or DEFAULT_DEVICES
+    names = DEFAULT_NAMES if names is None else names
 
     w = HiveWriter()
 
@@ -254,7 +259,14 @@ def build(out_path, adapter=DEFAULT_ADAPTER, devices=None):
 
     adapter_off = w.add_nk(adapter, sk, root_off, values=val_pairs)
     keys_off = w.add_nk("Keys", sk, root_off, subkeys=[(adapter, adapter_off)])
-    params_off = w.add_nk("Parameters", sk, root_off, subkeys=[("Keys", keys_off)])
+    device_keys = []
+    for dev_hex, name in sorted(names.items()):
+        name_off = w.add_vk("Name", name.encode("utf-8") + b"\x00", REG_BINARY_V)
+        device_keys.append((dev_hex, w.add_nk(dev_hex, sk, root_off, values=[("Name", name_off)])))
+    params_subkeys = [("Keys", keys_off)]
+    if device_keys:
+        params_subkeys.insert(0, ("Devices", w.add_nk("Devices", sk, root_off, subkeys=device_keys)))
+    params_off = w.add_nk("Parameters", sk, root_off, subkeys=params_subkeys)
     bthport_off = w.add_nk("BTHPORT", sk, root_off, subkeys=[("Parameters", params_off)])
     services_off = w.add_nk("Services", sk, root_off, subkeys=[("BTHPORT", bthport_off)])
     cs1_off = w.add_nk("ControlSet001", sk, root_off, subkeys=[("Services", services_off)])

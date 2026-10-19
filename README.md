@@ -70,9 +70,16 @@ Setup saves a **recovery password** in your Windows Documents folder, in
 * **Talk or type.** Just speak, or type on a keyboard or in the Claude app on your phone (see below). What
   you type is answered in writing only; what you say gets a spoken answer. To wake ClaudeOS after it has
   gone to sleep, say "Claude", press an AirPod stem, or just type.
-* **AirPods.** When ClaudeOS starts, it connects AirPods it already knows, or asks on the screen whether to
-  connect yours. Say or type yes: it uses the pairing Windows has, or else pairs them while you hold the
-  button on the back of the case. Through the PC's own speakers ClaudeOS doesn't greet you out loud.
+* **AirPods.** When ClaudeOS starts, it connects your AirPods by itself: the ones it already knows, or the
+  pairing Windows has, copied over without asking. If they're in their case, take them out and they connect
+  within two minutes. Only when there are no AirPods anywhere does it ask "Connect your AirPods?"; say or type
+  yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
+  PC's own speakers ClaudeOS doesn't greet you out loud.
+* **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, a
+  message box at the bottom, and which Claude model answers. Scroll up (mouse wheel, Page Up) to read back.
+* **What's done.** On a wide screen, a panel at the right lists everything done for you, by day: sites
+  opened, web searches, files changed, settings, programs. Click one to scroll back to the message that asked
+  for it, even from an earlier day. Ask "what did I change yesterday?" and Claude reads the same list.
 * **Interrupt.** You can talk over Claude to stop it or change your mind.
 * **Ask for anything.** For example:
   * "Play some calm piano music on YouTube"
@@ -140,10 +147,14 @@ A USB keyboard and mouse work as soon as they're plugged in. For Bluetooth ones,
 and say "pair my keyboard" (or "my mouse"). A keyboard may want a code typed on it: ClaudeOS shows the code
 and says it. Type it on the keyboard, then press Enter.
 
-* On the conversation screen, typing writes a message and Enter sends it. The answer is written, not
-  spoken, and questions like "Go ahead?" are answered by typing yes or no. On a website, typing goes into
-  the box you're in.
-* The mouse's arrow shows when you move the mouse and hides once it has been still for 3 seconds.
+* On the conversation screen, typing goes into the message box at the bottom: Enter sends, Shift+Enter
+  starts a new line, Escape clears it, and the cursor, selecting and pasting work as anywhere else. The
+  answer is written, not spoken, and questions like "Go ahead?" are answered by typing yes or no. On a
+  website, typing goes into the box you're in.
+* The mouse's arrow shows when you move the mouse and hides once it has been still for 3 seconds. Each screen
+  runs at the fastest refresh rate it offers (as most are set in Windows), so the arrow moves as smoothly as
+  there. If a screen flickers or goes black at that rate, create an empty file `~/ClaudeOS/keep-refresh-rate`
+  (ask Claude to) and restart.
 
 ## Going back to Windows
 

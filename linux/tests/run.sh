@@ -7,6 +7,7 @@
 #      test_grub_07_claudeos.sh    (mocked + real grub lib, both /boot layouts)
 #      test_root_helper.sh         (all verbs, PATH shims, malicious args)
 #      test_session_supervisor.sh  (exit-code contract under Xvfb)
+#      test_refresh_rate.sh        (each screen at its fastest refresh rate, with a stand-in xrandr)
 #      test_bt_import.sh           (synthetic hive -> BlueZ info)
 #      test_reclaim_installer.sh   (first-start clean-up of the installer partition, pretend disk)
 #      test_install_dryrun.sh      (install-claudeos.sh --dry-run for Ubuntu and for Fedora)
@@ -70,6 +71,7 @@ if command -v shellcheck >/dev/null 2>&1; then
       "$REPO/root-helper/claudeos-root" \
       "$REPO/session/claudeos-session" \
       "$REPO/session/claudeos-restart" \
+      "$REPO/session/claudeos-refresh" \
       "$REPO/session/bash_profile" \
       "$REPO/session/xinitrc" \
       "$REPO/grub/07_claudeos" \
@@ -118,6 +120,7 @@ run_test() {
 run_test test_grub_07_claudeos.sh
 run_test test_root_helper.sh
 run_test test_session_supervisor.sh
+run_test test_refresh_rate.sh
 run_test test_bt_import.sh
 run_test test_finish_install.sh
 run_test test_reclaim_installer.sh

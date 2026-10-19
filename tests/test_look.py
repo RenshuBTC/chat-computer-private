@@ -27,11 +27,14 @@ def test_only_black_text_on_white():
     theme, chat = _code(_asset("theme.css")), _code(_asset("chat.css"))
     root = re.search(r":root\s*\{([^}]*)\}", theme).group(1)
     assert re.search(r"--ground:\s*#FFFFFF;", root) and re.search(r"--ink:\s*#000000;", root)
-    # Those two are the only colours: everything else uses them.
+    # One more, the light grey of your messages' bubbles (black on it is still 18:1), as the Claude app shows them.
+    assert re.search(r"--bubble:\s*#EDEDED;", root)
+    # Those are the only colours: everything else uses them.
     assert COLOR.findall(theme.replace(root, "")) == []
     assert COLOR.findall(chat) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
-    assert used - {"--co-size", "--co-column"} == {"--ground", "--ink", "--sans", "--mono"}
+    sizes = {"--co-size", "--co-column", "--panel", "--composer-h"}
+    assert used - sizes == {"--ground", "--ink", "--bubble", "--sans", "--mono"}
     # No dark mode.
     for text in (theme, chat, _asset("chat.html"), _asset("chat.js"), render.DOC_CSS):
         assert "data-theme" not in text and "dark" not in text.lower()
@@ -40,11 +43,13 @@ def test_only_black_text_on_white():
     assert re.search(r"\.media \{[^}]*background: #000;", render.DOC_CSS)
 
 
-def test_your_words_are_told_apart_by_italics_not_grey():
+def test_your_words_are_in_a_bubble_not_grey_text():
+    # Like the Claude app: your messages on the right in a light grey bubble, upright and black; no text is grey.
     chat = _code(_asset("chat.css"))
-    assert re.search(r"\.you \{[^}]*font-style: italic;", chat)
-    assert re.search(r"#live \{[^}]*font-style: italic;", chat)
+    assert re.search(r"\.you \{[^}]*align-self: flex-end;[^}]*background: var\(--bubble\);", chat)
+    assert "italic" not in chat
     assert "opacity" not in chat.replace("@keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }", "")
+    assert "placeholder" not in chat     # the message box has none: it would be grey text
 
 
 def test_fonts_come_with_claudeos():

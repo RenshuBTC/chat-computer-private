@@ -694,7 +694,8 @@ install_file "$LINUX_DIR/session/hushlogin"    "$USER_HOME/.hushlogin"    0644 "
 
 # Make the session scripts executable in the repo copy (they run from there).
 if [ "$DRY_RUN" -eq 0 ]; then
-  chmod 0755 "$LINUX_DIR/session/claudeos-session" "$LINUX_DIR/session/claudeos-restart" 2>/dev/null || true
+  chmod 0755 "$LINUX_DIR/session/claudeos-session" "$LINUX_DIR/session/claudeos-restart" \
+    "$LINUX_DIR/session/claudeos-refresh" 2>/dev/null || true
 fi
 
 # Rootless X for the console user (Ubuntu's Xorg.wrap; Fedora's Xorg gets the devices from logind).

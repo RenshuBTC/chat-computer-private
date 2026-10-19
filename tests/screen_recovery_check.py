@@ -46,7 +46,16 @@ def crash():
     # ...and WebKit reports it the way it reports a crash.
     GLib.timeout_add(500, lambda: screen._on_renderer_stopped(
         screen.chat, WebKit2.WebProcessTerminationReason.CRASHED) and False)
-    GLib.timeout_add(6000, lambda: read_log("after", finish) and False)
+    # Read it again once the page is back (it says so: chat_ready), however long that takes on a busy machine.
+    waited = {"ms": 0}
+
+    def back() -> bool:
+        waited["ms"] += 200
+        if (screen.chat_ready and waited["ms"] >= 1500) or waited["ms"] >= 20000:
+            GLib.timeout_add(500, lambda: read_log("after", finish) and False)
+            return False
+        return True
+    GLib.timeout_add(1000, lambda: GLib.timeout_add(200, back) and False)
 
 
 def finish():

@@ -233,21 +233,74 @@ def test_known_airpods_out_of_their_case_just_connect(tmp_path, monkeypatch, fas
     assert asked == [] and "Your AirPods Pro are connected." in _notices(screen)
 
 
-def test_asked_then_the_pairing_from_windows_is_used(tmp_path, monkeypatch, fast):
+def test_the_pairing_from_windows_is_used_without_asking(tmp_path, monkeypatch, fast):
+    # ClaudeOS Setup told the person ClaudeOS would take over Windows' pairing: it isn't asked about again.
     p = Bluetooth(windows_has=[AIRPODS])
     c, screen = _controller(tmp_path, monkeypatch, platform=p)
-    asked = _answering(c, "yes")
+    asked = _answering(c)
     _run(c, c._offer_airpods)
-    assert asked == [("Connect your AirPods? Take them out of their case first.", True)]
-    assert _calls(p, "bt_import_windows_keys") == [()] and not _calls(p, "bt_pair")
+    assert asked == [] and _calls(p, "bt_import_windows_keys") == [()] and not _calls(p, "bt_pair")
     assert "Your AirPods Pro are connected." in _notices(screen)
+
+
+def test_airpods_in_their_case_connect_when_taken_out(tmp_path, monkeypatch, fast):
+    class InCase(Bluetooth):
+        def bt_connect(self, address):
+            if len(_calls(self, "bt_connect")) >= 2:
+                self.in_case = False                # taken out after a moment
+            return super().bt_connect(address)
+    p = InCase(paired=[AIRPODS], in_case=True)
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    asked = _answering(c)
+
+    async def go():
+        await c._offer_airpods()
+        while "Your AirPods Pro are connected." not in _notices(screen):
+            await asyncio.sleep(0)
+    _run(c, go)
+    assert asked == []
+    notices = _notices(screen)
+    assert notices.index("Take your AirPods out of their case: they'll connect by themselves.") < \
+        notices.index("Your AirPods Pro are connected.")
+
+
+def test_known_airpods_that_never_come_out_are_given_up_on_quietly(tmp_path, monkeypatch, fast):
+    monkeypatch.setattr(C, "AIRPODS_WAIT_S", 0.05)
+    p = Bluetooth(paired=[AIRPODS], in_case=True)
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    asked = _answering(c)
+
+    async def go():
+        await c._offer_airpods()
+        while not any("didn't connect" in n for n in _notices(screen)):
+            await asyncio.sleep(0.01)
+    _run(c, go)
+    assert asked == [] and not _calls(p, "bt_pair")
+
+
+def test_airpods_copied_over_without_a_name_are_found_by_connecting(tmp_path, monkeypatch, fast):
+    # Pairings copied from Windows before names came along: BlueZ lists them by their address until it connects.
+    unnamed = {"address": AIRPODS["address"], "name": AIRPODS["address"].replace(":", "-")}
+
+    class Unnamed(Bluetooth):
+        def bt_connect(self, address):
+            self._c("bt_connect", address)
+            if address == AIRPODS["address"]:
+                self.bt["connected"].append(dict(AIRPODS))     # connected: BlueZ learns the name
+            return "Connected."
+    p = Unnamed(windows_has=[unnamed])
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    asked = _answering(c)
+    _run(c, c._offer_airpods)
+    assert asked == [] and "Your AirPods Pro are connected." in _notices(screen)
 
 
 def test_asked_then_paired_here_when_windows_has_none(tmp_path, monkeypatch, fast):
     p = Bluetooth(pairable=[AIRPODS])
     c, screen = _controller(tmp_path, monkeypatch, platform=p)
-    _answering(c, "yes")
+    asked = _answering(c, "yes")
     _run(c, c._offer_airpods)
+    assert asked == [("Connect your AirPods?", True)]
     assert any("hold the button on the back of the case" in n for n in _notices(screen))
     assert _calls(p, "bt_pair") == [(AIRPODS["address"],)]
     assert "Your AirPods Pro are connected." in _notices(screen)
@@ -267,8 +320,21 @@ def test_airpods_declined(tmp_path, monkeypatch, fast):
     c, screen = _controller(tmp_path, monkeypatch, platform=p)
     _answering(c, "no")
     _run(c, c._offer_airpods)
-    assert not _calls(p, "bt_import_windows_keys")
+    assert not _calls(p, "bt_pair")
     assert any("connect my AirPods" in n for n in _notices(screen))
+
+
+def test_connect_my_airpods_in_one_step(tmp_path, monkeypatch, fast):
+    # Asked for later ("connect my AirPods"): one call does whatever it takes.
+    p = Bluetooth(windows_has=[AIRPODS])
+    c, screen = _controller(tmp_path, monkeypatch, platform=p)
+    assert _run(c, c.connect_airpods) == "Your AirPods Pro are connected."
+    assert _run(c, c.connect_airpods) == "Your AirPods Pro are already connected."
+    p2 = Bluetooth(pairable=[AIRPODS])
+    c2, screen2 = _controller(tmp_path / "2", monkeypatch, platform=p2)
+    c2._say = lambda text: None
+    assert _run(c2, c2.connect_airpods) == "Your AirPods Pro are connected."
+    assert _calls(p2, "bt_pair") == [(AIRPODS["address"],)]
 
 
 def test_no_question_without_bluetooth(tmp_path, monkeypatch, fast):

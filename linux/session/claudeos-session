@@ -103,11 +103,31 @@ setup_screen() {
   elif command -v unclutter-xfixes >/dev/null 2>&1; then
     unclutter-xfixes --timeout 3 >/dev/null 2>&1 &
   fi
+  # Each screen at the fastest refresh rate it offers, as Windows has it: at X's usual 60 Hz the mouse's
+  # arrow moves in coarser steps than in Windows and feels slow (claudeos-refresh).
+  bash "${APP_DIR}/linux/session/claudeos-refresh" 2>&1 | while IFS= read -r line; do log "$line"; done
+  log_display
   # Minimal WM: borderless, maximized windows, no root menu.
   if command -v openbox >/dev/null 2>&1; then
     openbox --config-file "${APP_DIR}/linux/session/openbox-rc.xml" >/dev/null 2>&1 &
     # Give openbox a beat to own the screen before the app maps its window.
     sleep 0.3
+  fi
+}
+
+# What draws the screen and the mouse's arrow, for the log. An arrow X draws itself (no hardware cursor) moves
+# only as often as X gets round to it, and lags while pages are being drawn; the refresh rate sets how often
+# it can move at all.
+log_display() {
+  local xlog
+  for xlog in "${HOME}/.local/share/xorg/Xorg.0.log" /var/log/Xorg.0.log; do
+    [ -r "$xlog" ] || continue
+    grep -E -i 'LoadModule: "(modesetting|amdgpu|intel|i915|nvidia|nouveau|radeon|fbdev|vesa)"|glamor|cursor|Using input driver' \
+      "$xlog" 2>/dev/null | head -n 30 | while IFS= read -r l; do log "xorg: $l"; done
+    break
+  done
+  if command -v xrandr >/dev/null 2>&1; then
+    xrandr --query 2>/dev/null | grep -E ' connected|\*' | while IFS= read -r l; do log "xrandr: $l"; done
   fi
 }
 

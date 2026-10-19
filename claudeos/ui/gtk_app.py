@@ -10,6 +10,7 @@ the window is handed to the main thread with GLib.idle_add.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import ctypes.util
 import json
@@ -22,6 +23,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
+import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -51,14 +53,13 @@ def private_file_uri(paths: Paths, uri: str) -> bool:
 MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86AudioMedia", "XF86AudioNext",
               "XF86AudioPrev", "XF86AudioStop"}
 # The captions over websites look like the conversation (theme.css): black on white in Atkinson Hyperlegible
-# Next, your words in italics. register_fonts() makes ClaudeOS's own copy of the font known to GTK.
+# Next, your words on the right. register_fonts() makes ClaudeOS's own copy of the font known to GTK.
 COLORS = {"bg": "#FFFFFF", "ink": "#000000"}
 
 CSS_TEMPLATE = """
 window, stack {{ background-color: {bg}; }}
 .captions {{ background-color: {bg}; border: 1px solid {ink}; padding: {pad_v}px {pad_h}px; }}
 .cap-you, .cap-ai {{ color: {ink}; font-family: "Atkinson Hyperlegible Next", sans-serif; font-size: {size}px; }}
-.cap-you {{ font-style: italic; }}
 """
 SET_VARS_JS = ("(function(){{var r=document.documentElement.style;r.setProperty('--co-size','{size}px');"
                "r.setProperty('--co-column','{column}px');}})()")
@@ -88,6 +89,7 @@ def register_fonts(folder: Path = FONTS) -> bool:
 # draw with the processor instead. Renderer processes read them when they start.
 CPU_RENDERING = {"WEBKIT_SKIA_ENABLE_CPU_RENDERING": "1", "WEBKIT_DISABLE_DMABUF_RENDERER": "1", "CLAUDEOS_GPU": "0"}
 SPEED_TICK_S = 0.25          # how often the window's thread checks it isn't kept busy (see _watch_speed)
+DONE_SHOWN = 300             # What's done: how many the page holds (the rest are in done.jsonl)
 
 
 def use_cpu_rendering(environ: Any = os.environ) -> bool:
@@ -158,7 +160,7 @@ class GtkScreen(Screen):
         self.load_waiters: list[asyncio.Future] = []
         self.load_error: str | None = None
         self.view_seq = 0
-        self.typed = ""
+        self._done_entries: list[dict[str, Any]] = []     # What's done, as the page shows it (to rebuild the page)
         self.cap_ai_text = ""
         self.cap_tid: str | None = None
         self.cap_hide_id = 0
@@ -224,6 +226,10 @@ class GtkScreen(Screen):
         self.pointer_area.connect("draw", self.air.draw)
         self.root.add_overlay(self.pointer_area)
         self.root.set_overlay_pass_through(self.pointer_area, True)
+        # "Pass through" alone isn't enough: the layer has a window of its own, which took every click (a mouse's,
+        # and AirTouch's taps) before the conversation or the website under it saw it (GTK 3.24). With no area
+        # that takes input, they all go through.
+        self.pointer_area.connect("realize", lambda w: w.input_shape_combine_region(cairo.Region()))
         self.win.add(self.root)
 
         # --- conversation layer
@@ -290,9 +296,12 @@ class GtkScreen(Screen):
         for lbl, cls in ((self.cap_you, "cap-you"), (self.cap_ai, "cap-ai")):
             lbl.set_line_wrap(True)
             lbl.set_max_width_chars(1)
-            lbl.set_xalign(0.0)
             lbl.get_style_context().add_class(cls)
             self.cap_box.pack_start(lbl, False, False, 0)
+        # Your words on the right, Claude's on the left, as in the conversation.
+        self.cap_you.set_xalign(1.0)
+        self.cap_you.set_justify(Gtk.Justification.RIGHT)
+        self.cap_ai.set_xalign(0.0)
         overlay.add_overlay(self.cap_box)
         overlay.set_overlay_pass_through(self.cap_box, True)
         self.stack.add_named(overlay, "content")
@@ -302,6 +311,7 @@ class GtkScreen(Screen):
         self.win.show_all()
         self.cap_box.hide()
         self.stack.set_visible_child_name("chat")
+        self.chat.grab_focus()          # typing goes into the conversation's message box
         # Work the layout out again whenever the window or the monitor changes.
         self.win.connect("size-allocate", self._on_size_allocate)
         Gdk.Screen.get_default().connect("monitors-changed", lambda *_: self._schedule_relayout())
@@ -337,12 +347,11 @@ class GtkScreen(Screen):
         self._note_bounds()
         self._replace_keyboard()
         lay = self._compute_layout()
-        first = self.layout is None
-        changed = first or lay.to_dict() != self.layout.to_dict()
+        changed = self.layout is None or lay.to_dict() != self.layout.to_dict()
         self.layout = lay
-        self._load_css()
         if not changed:
-            return
+            return          # the same sizes: loading the style again would only make GTK restyle the window
+        self._load_css()
         self._chat_run(f"CO.layout({lay.font_px},{lay.column_px})", "layout")
         # Captions over websites and videos: the same column, the same size.
         side = max(0, round((self._view_w - lay.column_px) / 2))
@@ -524,8 +533,25 @@ class GtkScreen(Screen):
             msg = json.loads(val.to_string())
         except Exception:
             msg = {}
-        if isinstance(msg, dict) and msg.get("type") == "painted":
-            self._key_painted(msg.get("t"))
+        kind = msg.get("type") if isinstance(msg, dict) else None
+        if kind == "send":
+            # Enter in the message box.
+            text = str(msg.get("text") or "").strip()
+            if text and self.loop:
+                self.loop.call_soon_threadsafe(self.on_typed, text)
+            return
+        if kind == "goto":
+            # An item of What's done was tapped whose message isn't on the page any more.
+            if self.on_goto is not None and self.loop:
+                try:
+                    ts = float(msg.get("ts") or 0)
+                    before = float(msg["before"]) if msg.get("before") is not None else None
+                except (TypeError, ValueError):
+                    return
+                self.loop.call_soon_threadsafe(self.on_goto, msg.get("id") or None, ts, before)
+            return
+        if kind == "keys":
+            self._speed["keys"] += [ms for ms in msg.get("ms") or [] if isinstance(ms, (int, float)) and 0 <= ms < 60_000]
             return
         self.chat_ready = True
         if self._reloading:
@@ -533,7 +559,7 @@ class GtkScreen(Screen):
             self._reloading = False
             self.chat_backlog.clear()
             last = self._replay_last
-            scripts = [last[k] for k in ("settings", "layout") if k in last] + list(self._replay)
+            scripts = [last[k] for k in ("settings", "layout", "mic", "done") if k in last] + list(self._replay)
             scripts += [last["state"]] if "state" in last else []
         else:
             scripts, self.chat_backlog = self.chat_backlog, []
@@ -574,6 +600,7 @@ class GtkScreen(Screen):
         self.mode = "chat"
         self.stack.set_visible_child_name("chat")
         self.cap_box.hide()
+        self.chat.grab_focus()
 
     def _info(self) -> dict[str, Any]:
         return {"mode": self.mode, "url": self.content.get_uri(), "title": self.content.get_title()}
@@ -701,6 +728,32 @@ class GtkScreen(Screen):
     async def hide_content(self) -> None:
         await self._ui_call(self._show_chat)
 
+    async def settle(self, quiet_s: float = 0.15, max_s: float = 1.5, load_s: float = 10.0) -> dict[str, Any]:
+        """After a click or keys: waits for the page to react, rather than a fixed pause. A page that starts
+        loading is waited for (up to `load_s`), then until nothing on it has changed for `quiet_s` (up to `max_s`).
+        Returns what's showing. A fixed pause was too short for a new page (Claude then read the old one, or a
+        page still loading, and had to look again: another trip to Claude) and too long for a menu that opens
+        at once."""
+        assert self.loop is not None
+        await asyncio.sleep(0.08)               # the click reaches the page; a link starts loading
+        fut = self.loop.create_future()
+
+        def arm() -> bool:
+            if self.mode == "content" and self.content.is_loading():
+                self.load_waiters.append(fut)
+                return True
+            return False
+        if await self._ui_call(arm):
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(fut), load_s)
+        end = time.monotonic() + max_s
+        while time.monotonic() < end and self.mode == "content":
+            quiet = await self.eval_js("(window.__CO && __CO.quietFor ? __CO.quietFor() : 1e9)")
+            if not isinstance(quiet, (int, float)) or quiet >= quiet_s * 1000:
+                break
+            await asyncio.sleep(min(0.05, max(0.0, quiet_s - quiet / 1000)))
+        return await self._ui_call(self._info)
+
     async def content_info(self) -> dict[str, Any]:
         return await self._ui_call(self._info)
 
@@ -769,7 +822,6 @@ class GtkScreen(Screen):
     # ================================================================ conversation layer
     def user_text(self, msg_id: str, text: str, final: bool) -> None:
         self._chat_js(f"CO.user({json.dumps(msg_id)},{json.dumps(text)},{json.dumps(final)})")
-        self.typed = ""
         self._caption(you=text, ai="")
 
     def partial(self, text: str) -> None:
@@ -832,11 +884,35 @@ class GtkScreen(Screen):
     def history(self, items: list[dict[str, Any]]) -> None:
         self._chat_js(f"CO.history({json.dumps(items)})")
 
-    def apply_settings(self, text_size: int, user_name: str) -> None:
+    def mic(self, on: bool) -> None:
+        self._chat_js(f"CO.mic({json.dumps(bool(on))})", "mic")
+
+    def apply_settings(self, text_size: int, user_name: str, model: str = "") -> None:
         # Size settings (text_size, text_scale, viewing_distance_cm, screen_inches, web_zoom) are
         # read from self.settings, the same object the controller changes.
-        self._chat_js(f"CO.settings({json.dumps(user_name)})", "settings")
+        self._chat_js(f"CO.settings({json.dumps(user_name)},{json.dumps(model)})", "settings")
         self._ui(self._apply_layout)
+
+    # What's done, at the right of the conversation. The page is sent each new one; the whole list is kept here
+    # too, so the page can be rebuilt after its renderer stops.
+    def done_list(self, entries: list[dict[str, Any]]) -> None:
+        def run() -> None:
+            self._done_entries = list(entries)[-DONE_SHOWN:]
+            script = f"CO.doneList({json.dumps(self._done_entries)})"
+            self._replay_last["done"] = script
+            self._chat_run(script, "transient")
+        self._ui(run)
+
+    def done(self, entry: dict[str, Any]) -> None:
+        def run() -> None:
+            self._done_entries = (self._done_entries + [entry])[-DONE_SHOWN:]
+            self._replay_last["done"] = f"CO.doneList({json.dumps(self._done_entries)})"
+            self._chat_run(f"CO.done({json.dumps(entry)})", "transient")
+        self._ui(run)
+
+    def earlier(self, items: list[dict[str, Any]], target_id: str | None, target_ts: float) -> None:
+        self._chat_js(f"CO.earlier({json.dumps(items)},{json.dumps(target_id)},{json.dumps(target_ts)})",
+                      "transient")
 
     # captions over content
     def _caption(self, you: str | None = None, ai: str | None = None) -> None:
@@ -871,42 +947,17 @@ class GtkScreen(Screen):
         if ctrl and (ev.state & Gdk.ModifierType.SHIFT_MASK) and name in ("Q", "q"):
             Gtk.main_quit()
             return True
-        if self.mode != "chat":
-            return False  # keys go to the website (forms, sign-ins)
-        # A keyboard is optional: typing on the conversation screen sends a message.
-        if name in ("Return", "KP_Enter"):
-            text, self.typed = self.typed.strip(), ""
-            self._chat_js("CO.typing('')", "transient")
-            if text and self.loop:
-                self.loop.call_soon_threadsafe(self.on_typed, text)
-            return True
-        if name == "BackSpace":
-            self.typed = self.typed[:-1]
-        elif name == "Escape":
-            self.typed = ""
-        else:
-            ch = Gdk.keyval_to_unicode(ev.keyval)
-            if ch and not ctrl and chr(ch).isprintable():
-                self.typed += chr(ch)
-            else:
-                return False
-        # Stamped, so the page can say when the letter was on the screen (see _key_painted).
-        self._chat_js(f"CO.typing({json.dumps(self.typed)},{self._stamp()})", "transient")
-        return True
+        if self.mode == "chat" and not self.chat.has_focus():
+            self.chat.grab_focus()      # typing goes into the conversation's message box (chat.js), whatever has focus
+        # Everything else goes to the page that's showing: the conversation's message box (a real text box, so the
+        # cursor, selecting, pasting and input methods work as anywhere else), or a website's forms and sign-ins.
+        return False
 
     # ================================================================ how quick it feels
     # Typing on a real PC once felt slow, with nothing in the log to say why. So the log now says, once a minute
-    # while it happens: how long typed letters took to reach the screen, and how often the window's own thread
-    # was busy for more than a tenth of a second (when it is, nothing on the screen moves).
-    def _stamp(self) -> int:
-        return int(time.monotonic() * 1000) % 1_000_000_000
-
-    def _key_painted(self, stamp: Any) -> None:
-        if isinstance(stamp, (int, float)):
-            ms = (self._stamp() - stamp) % 1_000_000_000
-            if ms < 60_000:
-                self._speed["keys"].append(ms)
-
+    # while it happens: how long typed letters took to reach the screen (measured by the page, chat.js), and how
+    # often the window's own thread was busy for more than a tenth of a second (when it is, nothing on the screen
+    # moves).
     def _watch_speed(self) -> bool:
         now = time.monotonic()
         late = (now - self._speed["tick"] - SPEED_TICK_S) * 1000
@@ -947,13 +998,20 @@ def run_app(paths: Paths, settings: Settings, controller_factory: Callable[[GtkS
     loop = asyncio.new_event_loop()
     t = threading.Thread(target=loop.run_forever, name="claudeos-loop", daemon=True)
     t.start()
-    screen.bind(loop, on_media_key=lambda k: None, on_media_state=lambda p: None, on_typed=lambda text: None)
+    # What's typed while the controller is still loading (most of a second) is kept and sent once it's there.
+    early: list[str] = []
+    screen.bind(loop, on_media_key=lambda k: None, on_media_state=lambda p: None, on_typed=early.append)
     holder: dict[str, Any] = {}
 
     async def boot() -> None:
         controller = holder["controller"] = controller_factory(screen)
-        screen.bind(loop, on_media_key=controller.media_key, on_media_state=controller.media_state,
-                    on_typed=lambda text: controller._spawn(controller.handle(text, typed=True)))
+        controller.loop = asyncio.get_running_loop()
+
+        def typed(text: str) -> None:
+            controller._spawn(controller.handle(text, typed=True))
+        screen.bind(loop, on_media_key=controller.media_key, on_media_state=controller.media_state, on_typed=typed)
+        for text in early:
+            typed(text)      # handled once start() below has set the controller up (its first pause)
         await controller.start()
 
     def started(f: Any) -> None:

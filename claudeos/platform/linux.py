@@ -396,9 +396,14 @@ class LinuxPlatform(Platform):
             return "Couldn't copy the pairings from Windows: " + str(d.get("error", "unknown error"))
         # What was copied is in the importer's own report, under "result" (root-helper/bt-import-windows-keys.py).
         res = d.get("result") if isinstance(d.get("result"), dict) else {}
-        n = len(res.get("imported") or [])
+        imported = res.get("imported") or []
+        n = res.get("changed", len(imported))
         if n:
-            return f"Copied {n} Bluetooth pairing{'' if n == 1 else 's'} from Windows."
+            names = [i.get("name") for i in imported if i.get("name") and i.get("action") in ("created", "updated")]
+            which = f" ({', '.join(names[:4])})" if names else ""
+            return f"Copied {n} Bluetooth pairing{'' if n == 1 else 's'} from Windows{which}."
+        if imported:
+            return "Windows' Bluetooth pairings are already here."
         if res.get("errors"):
             return "Couldn't copy the pairings from Windows: " + str(res["errors"][0])
         if res.get("skipped_no_adapter_dir"):

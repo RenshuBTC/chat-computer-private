@@ -43,6 +43,16 @@ Format research (cited so the byte order is auditable):
   Windows and BlueZ for classic keys — the 12-hex value-name maps directly to
   AA:BB:CC:DD:EE:FF and the 16 key bytes copy straight across. (bt-dualboot
   copies them verbatim; see hex_string_from_reg + the info writer.)
+
+* What Windows calls each paired device is under
+    SYSTEM\\ControlSet00N\\Services\\BTHPORT\\Parameters\\Devices\\<device>
+  (the same 12-hex form) in a value named Name: REG_BINARY, the name in UTF-8,
+  ending in a NUL. It goes into the info file's [General] section with
+  Trusted=true and SupportedTechnologies=BR/EDR;, the way bluetoothd writes a
+  device it paired itself (bt-dualboot's fixtures, copied from real BlueZ info
+  files, have exactly these). Without a name BlueZ lists the device by its
+  address, and ClaudeOS couldn't tell AirPods were among those copied over: it
+  asked to pair them again instead of connecting them.
 --------------------------------------------------------------------------
 """
 
@@ -97,8 +107,8 @@ def iter_adapter_keys(hive, controlset):
 def extract_value_bytes(value) -> bytes:
     """Normalise a regipy value payload to raw bytes.
 
-    regipy returns REG_BINARY as a `bytes` object; be defensive about other
-    shapes (hex string, list of ints) just in case.
+    regipy 6 returns REG_BINARY as a hex string ("0123ab..."); older versions
+    gave `bytes`. Lists of ints are taken too, just in case.
     """
     v = value.value
     if isinstance(v, bytes):
@@ -139,11 +149,63 @@ def read_adapter_links(adapter_key):
     return out
 
 
-def update_info_file(info_path: str, key_hex: str) -> str:
-    """Write/refresh the [LinkKey] section in a BlueZ device info file,
-    preserving all other sections. Returns 'created', 'updated' or 'unchanged'.
+def name_from_value(value) -> str:
+    """The device name in a Devices\\<mac>\\Name value: UTF-8 up to the first NUL (or a string), printable
+    characters only (it goes on one line of an INI file), at most the 248 bytes Bluetooth names have."""
+    v = value.value
+    kind = str(getattr(value, "value_type", "") or "")
+    if isinstance(v, str) and "BINARY" not in kind:
+        text = v                        # REG_SZ: the name itself
+    elif isinstance(v, (str, bytes, bytearray, list, tuple)):
+        # REG_BINARY, which regipy hands over as hex ("52656e..."), or as bytes.
+        text = extract_value_bytes(value).split(b"\x00", 1)[0].decode("utf-8", "replace")
+    else:
+        return ""
+    text = "".join(ch for ch in text if ch.isprintable()).strip()
+    while len(text.encode("utf-8")) > 248:
+        text = text[:-1]
+    return text
+
+
+def read_device_names(hive, controlset):
+    """{device_mac_hex: name}: what Windows calls each paired device. Devices without a readable name are left
+    out (the import still works; BlueZ shows them by address until it learns their name)."""
+    out = {}
+    try:
+        devices = hive.get_key(controlset + r"\Services\BTHPORT\Parameters\Devices")
+        subkeys = list(devices.iter_subkeys())
+    except Exception:
+        return out
+    for sub in subkeys:
+        if not MAC_VALUE_RE.match(sub.name or ""):
+            continue
+        try:
+            for v in sub.iter_values():
+                if v.name == "Name":
+                    name = name_from_value(v)
+                    if name:
+                        out[sub.name.lower()] = name
+                    break
+        except Exception:
+            continue
+    return out
+
+
+def _fields(cp):
+    """What this importer sets in an info file, to tell whether a write would change anything."""
+    get = lambda sec, key: cp.get(sec, key, fallback=None) if cp.has_section(sec) else None  # noqa: E731
+    return tuple(get(s, k) for s, k in (("LinkKey", "Key"), ("LinkKey", "Type"), ("LinkKey", "PINLength"),
+                                         ("General", "Name"), ("General", "Trusted"),
+                                         ("General", "SupportedTechnologies")))
+
+
+def update_info_file(info_path: str, key_hex: str, name: str = "") -> str:
+    """Write/refresh the [LinkKey] section in a BlueZ device info file, and give the device its name from Windows
+    and BlueZ's trust when it has neither (values already there are kept: the person may have renamed it here),
+    preserving everything else. Returns 'created', 'updated' or 'unchanged'.
     """
-    cp = configparser.ConfigParser()
+    # No interpolation: a "%" in a device's name is just a "%".
+    cp = configparser.ConfigParser(interpolation=None)
     # BlueZ info files are case-sensitive in their keys; preserve case.
     cp.optionxform = str
     existed = os.path.exists(info_path)
@@ -152,22 +214,23 @@ def update_info_file(info_path: str, key_hex: str) -> str:
         with io.open(info_path, "r", encoding="utf-8") as fh:
             cp.read_file(fh)
 
-    before = None
-    if cp.has_section("LinkKey"):
-        before = (
-            cp.get("LinkKey", "Key", fallback=None),
-            cp.get("LinkKey", "Type", fallback=None),
-            cp.get("LinkKey", "PINLength", fallback=None),
-        )
-    else:
+    before = _fields(cp)
+    if not cp.has_section("General"):
+        cp.add_section("General")
+    general = cp["General"]
+    if name and not general.get("Name"):
+        general["Name"] = name
+    general.setdefault("SupportedTechnologies", "BR/EDR;")
+    general.setdefault("Trusted", "true")        # it may connect to ClaudeOS by itself, as it did to Windows
+    general.setdefault("Blocked", "false")
+    if not cp.has_section("LinkKey"):
         cp.add_section("LinkKey")
 
     cp.set("LinkKey", "Key", key_hex)
     cp.set("LinkKey", "Type", "4")
     cp.set("LinkKey", "PINLength", "0")
 
-    after = (key_hex, "4", "0")
-    if existed and before == after:
+    if existed and _fields(cp) == before:
         return "unchanged"
 
     # Readable by root only, as bluetoothd keeps them (folders 0700, info files 0600): the link key lets
@@ -225,6 +288,7 @@ def main(argv=None):
 
     controlset = get_current_controlset(hive)
     result["controlset"] = controlset
+    names = read_device_names(hive, controlset)
 
     try:
         adapters = list(iter_adapter_keys(hive, controlset))
@@ -286,15 +350,19 @@ def main(argv=None):
                 continue
 
             try:
-                action = update_info_file(info_path, key_hex)
+                action = update_info_file(info_path, key_hex, names.get(dev_hex, ""))
                 result["imported"].append(
-                    {"adapter": adapter_mac, "device": dev_mac, "action": action}
+                    {"adapter": adapter_mac, "device": dev_mac, "action": action,
+                     "name": names.get(dev_hex, "")}
                 )
             except Exception as e:
                 result["errors"].append("%s/%s: %s" % (adapter_mac, dev_mac, e))
 
     result["ok"] = True
     result["count"] = len(result["imported"])
+    # How many info files this run wrote: bluetoothd is restarted (dropping what's connected for a moment) only
+    # when it has something new to read.
+    result["changed"] = sum(1 for i in result["imported"] if i.get("action") in ("created", "updated"))
     print(json.dumps(result))
     return 0
 

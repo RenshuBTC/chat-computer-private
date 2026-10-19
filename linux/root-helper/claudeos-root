@@ -490,8 +490,13 @@ verb_bt_import_windows_keys() {
   # BlueZ state dir as arguments (no shell interpolation). -I = isolated mode.
   local json
   if json=$("$VENV_PYTHON" -I "$BT_IMPORT_PY" --hive "$hive" --bluetooth-dir /var/lib/bluetooth 2>/dev/null); then
-    # Restart bluetooth so BlueZ reloads the imported keys.
-    systemctl restart bluetooth >/dev/null 2>&1 || true
+    # Restart bluetooth so BlueZ reloads the imported keys: only when something changed, since a restart drops
+    # every Bluetooth connection for a moment (a keyboard, AirPods already connected). The importer prints its
+    # report with json.dumps, so "changed": 0 is written exactly like that.
+    case "$json" in
+      *'"changed": 0'*) ;;
+      *) systemctl restart bluetooth >/dev/null 2>&1 || true ;;
+    esac
     # Pass the script's JSON through verbatim as the "result" field.
     emit_json ok=true @result="$json"
   else

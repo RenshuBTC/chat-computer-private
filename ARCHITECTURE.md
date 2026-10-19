@@ -352,20 +352,36 @@ retrying with backoff, then starts listening.
   answer that like a chat message, without an account of what it's about to do. Questions about a typed request are shown, not said, and end with "(Type yes or no.)", as they do
   whenever the microphone isn't listening. Things ClaudeOS says unasked (the greeting, "not signed in") are said
   only when sound plays on headphones; on the PC's or the monitor's speakers they are only shown.
-* At the start (not in tests or `--fake`): a new version of ClaudeOS to update to, then AirPods, one question at
-  a time. AirPods: nothing when sound already plays on headphones; AirPods already paired here are connected if
-  they're out of their case; otherwise "Connect your AirPods?" on the screen. Yes copies Windows' pairing
-  (`bt-import-windows-keys`) and connects, or else looks for AirPods in pairing mode for a minute and pairs
-  them. The update comes first when Windows' drive is already mounted (yes restarts ClaudeOS); while it is still
-  on its way, the AirPods come first.
+* At the start (not in tests or `--fake`): a new version of ClaudeOS to update to, then AirPods. AirPods are
+  connected without a question (`Controller._airpods_quietly`, started first): nothing when sound already plays
+  on headphones; else AirPods paired here, or else Windows' pairing copied over silently (`bt-import-windows-keys`,
+  which also brings Windows' name for each device from `BTHPORT\Parameters\Devices\<mac>\Name` and marks it
+  trusted, and restarts bluetoothd only when something changed). If they don't answer (in their case), a notice
+  says to take them out, and they're tried every 3 s for 2 minutes. Only when no AirPods are known anywhere is
+  "Connect your AirPods?" asked; yes looks for AirPods in pairing mode for a minute and pairs them. Claude's
+  `bluetooth` tool has `airpods`, the same in one step ("connect my AirPods"). The update comes first when
+  Windows' drive is already mounted (yes restarts ClaudeOS); while it is still on its way, the AirPods come
+  first.
+* What's done (`claudeos/done.py`, `~/ClaudeOS/done.jsonl`): the brain reports each tool call when its result
+  comes back (`BrainEvents.on_tool`, from `ToolResultBlock`/`ServerToolResultBlock`, matched to the call by its
+  id); one that worked becomes a past-tense line ("Searched youtube.com for “lofi”", "Saved notes.txt"), unless
+  it only looked at something (read_screen, status) or ClaudeOS's own tool said in words that it failed
+  ("Failed: ...", "I couldn't ..."). Reading and looking steps are kept but not listed. Each line keeps the
+  message that asked for it: its id on the screen and in `transcript.jsonl` (written with the same id and
+  time), its words and time. The conversation page lists them at the right (`CO.doneList`, `CO.done`); a click
+  scrolls to that message, or, if it isn't on the page any more, asks for it (`goto` message →
+  `Controller.go_back_to` → `History.earlier`: the transcript from that message to where the page starts, at
+  most 300 messages) and scrolls there (`CO.earlier`). `recent_actions` reads the same list (words to look for,
+  days back) for Claude.
 * Logs on Windows' drive (`claudeos/logcopy.py`): ClaudeOS's own drive can't be opened from Windows, so the end
   of `claudeos.log` and `session.log` (1.5 MB each, CRLF line endings, anything like a sign-in, password or key
   blanked) and `info.json` (the phone link's state and why, voice, microphone, AirTouch) are copied to
   `C:\Users\<you>\AppData\Local\ClaudeOS\from-claudeos\`, only when ClaudeOS Setup's folder is there: a
   minute after the start, every 10 minutes, just before a restart or shutdown, and when ClaudeOS stops. The log
   also says, at the start, which graphics chips and drivers there are and the screens' sizes, and once a minute
-  while typing, how long typed letters took to reach the screen and how often the window was busy for more
-  than a tenth of a second.
+  while typing, how long typed letters took to reach the screen (measured by the page: key to two frames later)
+  and how often the window was busy for more than a tenth of a second. `session.log` says each screen's refresh
+  rate and the X server's driver, cursor and input lines.
 * Every risky action goes through the permission gate → spoken confirmation ("Should I go ahead?"). During a
   phone turn the confirm callback returns "phone": the action is denied with a message telling Claude to ask
   in its reply. A "yes" typed on the phone (`classify_answer`) then allows exactly that action (keyed by tool
@@ -395,8 +411,13 @@ retrying with backoff, then starts listening.
   its README), and `theme.css` loads them with `@font-face`. Pages written elsewhere get the fonts' file
   address (`render._theme_css`). `gtk_app.register_fonts` hands the folder to fontconfig (FcConfigAppFontAddDir)
   for the GTK captions. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
-  (Noto). The user's words are in italics and Claude's are upright, flush left in one column in the middle of
-  the screen, newest at the bottom. No imitation of any app.
+  (Noto). Laid out like the Claude app, as the user asked: their words on the right in a light grey bubble
+  (`--bubble: #EDEDED`, the one colour besides black and white; black on it is 18:1), Claude's flush left in one
+  column, newest at the bottom, above a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
+  for a new line; no placeholder, since that would be grey text) with a line under it: "Listening" while the
+  microphone is on (`CO.mic`), how to wake it while asleep, and the model ("Sonnet 5.5", `config.model_label`).
+  On a wide screen What's done takes the right 17% (the Claude app's side panel's share); the column and the
+  box centre in the rest.
 * Size and width: text is sized so that the x-height covers 0.3 degrees of view. That is the top of the
   normal range of critical print size (0.15-0.3 degrees; Legge & Bigelow 2011), above which reading gets no
   faster until about 2 degrees. With Atkinson's x-height (0.496 em), that is 23.9 px at 100%. The column is
@@ -450,7 +471,12 @@ retrying with backoff, then starts listening.
     something else moves the pointer (a mouse, or a click Claude made); AirTouch then leaves the pointer
     alone until it has been still for 3 s.
 * Keyboard and mouse: USB ones just work. The arrow shows when the mouse moves (unclutter hides it after 3 s
-  still). A Bluetooth keyboard (`bluetoothctl info`: Icon input-keyboard) pairs through bluetoothctl's own
+  still). Clicks reach the page: AirTouch's layer over the window (a GtkDrawingArea in a GtkOverlay) took them
+  all, pass-through or not (GTK 3.24), until it was given an empty input shape. Keys go to the page too: on the
+  conversation, into the message box (the page puts the focus back there after a click elsewhere); GTK keeps
+  only the media keys and Ctrl+Shift+Q. `linux/session/claudeos-refresh` sets each connected screen to the
+  fastest rate xrandr lists at its current size when X starts (X picks the screen's preferred mode, usually
+  60 Hz; Windows keeps the 120/144 Hz chosen there), unless `~/ClaudeOS/keep-refresh-rate` exists. A Bluetooth keyboard (`bluetoothctl info`: Icon input-keyboard) pairs through bluetoothctl's own
   agent as KeyboardDisplay, answering its questions: the passkey to type on the keyboard (or a PIN made up
   for an older one) is shown and spoken. Other devices pair as NoInputNoOutput.
 * Speed (`tests/test_speed.py`, and the listener tests in `tests/test_voice.py`):
@@ -484,9 +510,15 @@ retrying with backoff, then starts listening.
     every conversation).
   * A request doesn't wait for an internet check: a recent result, or an older "yes" (checked again in the
     background), is used; only an older "no" is checked first.
-  * The conversation page hides messages that scrolled off one by one as words stream in (measuring before it
-    changes anything), and looks at all of them again only when there may be room (a new size, a shorter
-    message). Captions over websites change once per 40 ms flush, not per streamed word.
+  * The conversation page scrolls like a chat (newest at the bottom; scrolled up, it stays put until a new
+    message). Claude's words stream in as Markdown drawn incrementally: blocks that ended at a blank line
+    (outside code) are drawn once, and only the block still being written is drawn again each frame. Captions
+    over websites change once per 40 ms flush, not per streamed word.
+  * Website steps wait for the page instead of a fixed pause (`Screen.settle`): a page that starts loading is
+    waited for, then until nothing on it changed for 0.15 s (content.js's MutationObserver), at most 1.5 s.
+    A fixed pause was too short for a new page (Claude read the old one and had to look again) and too long
+    for a menu.
+  * Typing on the conversation is the page's own text box: no trip through Python per key.
   * Boot: `claudeos-windows-mount.service` waits for the disks itself (`udevadm settle` in `ExecStartPre`)
     instead of pulling in `systemd-udev-settle.service`, which comes before `sysinit.target` and so held up the
     whole start. If Windows' drive (or a Mac's shared drive) arrives after ClaudeOS has started, ClaudeOS takes

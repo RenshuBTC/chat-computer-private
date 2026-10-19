@@ -59,6 +59,8 @@ class ToolContext:
     keyboard: Callable[[bool], Awaitable[str]] | None = None       # AirTouch's on-screen keyboard up or down
     announce: Callable[[str], None] | None = None     # show and say something now, mid-tool (any thread)
     before_power: Callable[[], Awaitable[None]] | None = None   # just before the computer restarts or turns off
+    airpods: Callable[[], Awaitable[str]] | None = None   # connect the AirPods in one step (Controller.connect_airpods)
+    history: Any = None           # What's done (claudeos/done.py History), for recent_actions
     shot_scale: float = 1.0
     power_delay_s: float = 4.0
 
@@ -195,7 +197,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             s = ctx.shot_scale
             await asyncio.to_thread(ctx.platform.click, int(a["x"] * s), int(a["y"] * s), a.get("button", "left"),
                                     2 if a.get("double") else 1)
-            await asyncio.sleep(0.5)
+            await ctx.screen.settle()
             return _text(f"Clicked at ({a['x']}, {a['y']}).")
         if a.get("ref") is None and not a.get("text"):
             return _err("Give a ref, some text, or x and y.")
@@ -204,8 +206,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             return _err("I couldn't find that on the page. Use read_screen with mode 'elements' to see what's there.")
         if not await _click_at_element(loc):
             await page_js(f"jsClick({loc['ref']})")
-        await asyncio.sleep(0.6)
-        info = await ctx.screen.content_info()
+        info = await ctx.screen.settle()        # a new page loaded, or this one done changing
         return _text(f"Clicked “{loc.get('name', '')}”. Now showing: {info.get('title', '')} — {info.get('url', '')}")
 
     @reg("type_text", "Type text into the page: into the [ref] input if given (cleared first unless clear is false), "
@@ -224,15 +225,17 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                 await asyncio.to_thread(ctx.platform.key, "Return")
         except Exception:
             await page_js(f"insertText({json.dumps(text)}, {json.dumps(bool(a.get('submit')))})")
-        await asyncio.sleep(0.4)
-        return _text("Typed it" + (" and pressed Enter." if a.get("submit") else "."))
+        info = await ctx.screen.settle(max_s=1.0 if not a.get("submit") else 1.5)
+        if a.get("submit"):
+            return _text(f"Typed it and pressed Enter. Now showing: {info.get('title', '')} — {info.get('url', '')}")
+        return _text("Typed it.")
 
     @reg("press_keys", "Press a key or shortcut, like 'Return', 'Escape', 'ctrl+f', 'space', 'Down', 'k' "
          "(YouTube play/pause), 'f' (YouTube fullscreen).", obj({"keys": S, "repeat": I}, ["keys"]))
     async def press_keys(a):
         await ctx.screen.focus_content()
         await asyncio.to_thread(ctx.platform.key, str(a["keys"]), int(a.get("repeat") or 1))
-        await asyncio.sleep(0.3)
+        await ctx.screen.settle(max_s=1.0)
         return _text(f"Pressed {a['keys']}.")
 
     @reg("on_screen_keyboard", "Put AirTouch's on-screen keyboard (laid out like an iPad's) up (show true) or away "
@@ -519,9 +522,20 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         msgs = await asyncio.to_thread(ctx.journal.undo_last, max(1, min(int(a.get("count") or 1), 20)))
         return _text("\n".join(msgs) if msgs else "There's nothing to undo.")
 
-    @reg("recent_actions", "What ClaudeOS did recently (opened, changed, ran), newest last.", obj({"limit": I}))
+    @reg("recent_actions", "What's been done on this computer, newest last, each with the message that asked for "
+         "it: the What's done list at the right of the conversation (sites opened, web searches, files changed, "
+         "settings, programs...). For questions like what they changed yesterday or which site they opened. "
+         "query: words to look for (also in those messages, and in steps that only looked at something); days: "
+         "how far back (default 7); limit (default 40).",
+         obj({"query": S, "days": {"type": "number"}, "limit": I}))
     async def recent_actions(a):
-        es = ctx.journal.entries(int(a.get("limit") or 15))
+        limit = max(1, min(int(a.get("limit") or 40), 200))
+        if ctx.history is not None:
+            rows = await asyncio.to_thread(ctx.history.find, str(a.get("query") or ""), float(a.get("days") or 7),
+                                           limit)
+            return _text("\n".join(rows) or "Nothing done in that time" + (" with those words." if a.get("query")
+                                                                          else "."))
+        es = ctx.journal.entries(limit)
         return _text("\n".join(time.strftime("%H:%M", time.localtime(e["ts"])) + f" {e['kind']}: {e['summary']}" for e in es)
                      or "Nothing yet.")
 
@@ -598,15 +612,23 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                 return d["address"]
         return None
 
-    bt_actions = ["status", "scan", "pair", "connect", "disconnect", "forget"] + ([] if on_mac else ["import_from_windows"])
+    bt_actions = ["airpods", "status", "scan", "pair", "connect", "disconnect", "forget"] + \
+        ([] if on_mac else ["import_from_windows"])
 
-    @reg("bluetooth", "Bluetooth (AirPods, speakers, keyboards, mice): status, scan, pair (put the device in "
-         "pairing mode first; for AirPods hold the button on the case; a keyboard may need a code typed on it, which "
-         "ClaudeOS shows and says), connect, disconnect, forget" +
+    @reg("bluetooth", "Bluetooth (AirPods, speakers, keyboards, mice). For the person's AirPods always use airpods: it "
+         "connects them in one step, whatever it takes (their pairing, or pairing them with the button on the case). "
+         "Otherwise: status, scan, pair (put the device in pairing mode first; a keyboard may need a code typed on it, "
+         "which ClaudeOS shows and says), connect, disconnect, forget" +
          ("." if on_mac else ", import_from_windows."),
          obj({"action": {"type": "string", "enum": bt_actions}, "device": S}, ["action"]), _bt_policy)
     async def bluetooth(a):
         act, p = a["action"], ctx.platform
+        if act == "airpods":
+            if ctx.airpods is None:
+                return _err("Connecting AirPods in one step isn't available here: use pair or connect.")
+            said = await ctx.airpods()
+            # "Your AirPods Pro are connected." / "... already connected."; anything else is why they aren't.
+            return _text(said) if said.rstrip().endswith("connected.") else _err(said)
         if act == "status":
             return _text(_json(await asyncio.to_thread(p.bt_status)))
         if act == "scan":

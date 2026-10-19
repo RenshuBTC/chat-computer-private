@@ -4,8 +4,9 @@
    don't have (Chinese, Japanese, Korean, Greek, Cyrillic, emoji) come from the system's fonts.
    Full white and full black give the most contrast a screen can show (21:1). Off-whites from #FAFAFA to
    #F0F0F0 are only 4-13% dimmer, so greying the background would cost contrast without making the screen
-   much less bright; to dim it, turn down the screen's brightness. No dark mode and no grey text: your words
-   are told apart from Claude's by italics. Sizes are in rem. The screen sets the root size for this
+   much less bright; to dim it, turn down the screen's brightness. No dark mode and no grey text. The one
+   other colour is the light grey of your messages' bubbles (black on it is still 18:1), which sets your words
+   apart from Claude's the way chat apps do. Sizes are in rem. The screen sets the root size for this
    monitor and viewing distance (claudeos/ui/layout.py), so the letters' x-height covers 0.3 degrees of
    view and lines hold about 70 characters. */
 @font-face {
@@ -27,6 +28,7 @@
 :root {
   --ground: #FFFFFF;
   --ink: #000000;
+  --bubble: #EDEDED;
   --sans: "Atkinson Hyperlegible Next", sans-serif;
   --mono: "Atkinson Hyperlegible Mono", monospace;
 }
@@ -34,7 +36,8 @@
 html { font-size: var(--co-size, 24px); }
 html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink); }
 body { font-family: var(--sans); font-size: 1rem; line-height: 1.5; }
-::selection { background: transparent; }
+/* Selected text (to copy it) is shown the other way round: white on black. */
+::selection { background: var(--ink); color: var(--ground); }
 
 /* Claude's words as written (Markdown), in the same font and size as everything else. */
 .md p { margin: 0 0 1em; }

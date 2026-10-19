@@ -20,7 +20,9 @@ from . import __version__, answers, logcopy, update
 from .brain.agent import Brain, BrainEvents, TurnResult, friendly_error
 from .brain.permissions import PermissionGate
 from .brain.prompt import build_system_prompt, turn_prefix
-from .config import Paths, Settings, State, has_login, login_valid, read_token, save_login, save_token, token_kind
+from .config import (Paths, Settings, State, has_login, login_valid, model_label, read_token, save_login, save_token,
+                     token_kind)
+from .done import History, describe as describe_done
 from .files_index import FileIndex
 from .journal import Journal
 from .memory import Memory
@@ -38,6 +40,9 @@ HISTORY_TAIL_BYTES = 256 * 1024     # the end of the transcript, where the last 
 START_QUESTIONS_DELAY_S = 4.0       # questions at the start (an update, AirPods) come this long after it
 UPDATE_DRIVE_WAIT_S = 60.0          # just after the computer started: how long to wait for Windows' drive, for updates
 AIRPODS_PAIR_S = 60.0               # how long ClaudeOS looks for AirPods in pairing mode
+AIRPODS_WAIT_S = 120.0              # at the start: how long AirPods known here are waited for (out of their case)
+AIRPODS_RETRY_S = 3.0               # ...trying to connect them this often
+AIRPODS_ASKED_S = 20.0              # asked for ("connect my AirPods"): how long to keep trying
 LOG_COPY_FIRST_S = 60.0             # the logs are copied to Windows' drive this long after the start...
 LOG_COPY_EVERY_S = 600.0            # ...and then this often (see logcopy.py)
 
@@ -74,6 +79,10 @@ class Controller:
         self.state = State(self.paths)
         self.journal = Journal(self.paths)
         self.memory = Memory(self.paths)
+        self.history = History(self.paths)          # What's done (claudeos/done.py)
+        # The message that asked for each turn, for What's done: turn id -> (its id on the screen, words, time).
+        self.prompt_of: dict[str, tuple[str, str, float]] = {}
+        self._last_prompt: tuple[str, str, float] | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self._tasks: set[asyncio.Task] = set()
         self.stt_exec = ThreadPoolExecutor(1, thread_name_prefix="stt")
@@ -107,6 +116,7 @@ class Controller:
         self.last_asked = ""                  # the last thing said here, to ask again after a sign-in switch
         self.remote_told = False
         self._phone_retry_at = 0.0
+        self._airpods_start: asyncio.Task | None = None      # the AirPods at the start (_airpods_quietly)
 
     # ================================================================ start / stop
     async def start(self) -> None:
@@ -114,8 +124,11 @@ class Controller:
         self.confirm_lock = asyncio.Lock()
         self.ready = asyncio.Event()
         s = self.settings
-        self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0] if s.user_name else "")
+        self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0] if s.user_name else "",
+                                   model_label(s.model))
         self._show_history()
+        self.screen.on_goto = lambda target, ts, before: self._spawn(self.go_back_to(target, ts, before))
+        self._spawn(self._show_done())
 
         # Files: index Linux home + the other system's files (Windows' user folder, or on a Mac the drive
         # with the files sent from macOS) in the background.
@@ -141,6 +154,7 @@ class Controller:
                                  confirm=self.confirm, on_sleep=self._request_sleep,
                                  on_settings_changed=self._settings_changed, airtouch_status=self._airtouch_info,
                                  keyboard=self.set_keyboard, before_power=self._before_power,
+                                 airpods=self.connect_airpods, history=self.history,
                                  announce=lambda text: self.loop.call_soon_threadsafe(self._announce, text))
         server, policies, self.tool_names = T.build(self.ctx)
         self.gate = PermissionGate(self.paths, self.journal, self.confirm, policies)
@@ -148,10 +162,12 @@ class Controller:
         if token_kind(self.token) != "invalid" or has_login(self.paths):
             self.brain = Brain(self.paths, s, self.state, self.token, server, self.gate, self._system_prompt,
                                BrainEvents(self._on_turn_start, self._on_text, self._on_activity, self._on_turn_end,
-                                           self._on_rate_limit, self._on_user_text, self._on_remote),
+                                           self._on_rate_limit, self._on_user_text, self._on_remote, self._on_tool),
                                extra_env=self.extra_env, add_dirs=[d for d in (other_files,) if d])
             self._spawn(self._warm_up(wait_for_files=True))
 
+        if self.offer_headphones:
+            self._airpods_start = self._spawn(self._airpods_quietly())     # first: no question, and quick
         if self.voice_enabled:
             if self._voice_models_missing():
                 # First start: the voice is downloaded once, in the background.
@@ -338,7 +354,7 @@ class Controller:
             self.mic = Mic(self.listener.push_threadsafe)
         else:
             self.mic = self.mic_factory(self.listener.push_threadsafe)
-        if not self.mic.open():
+        if not self._mic_open():
             self.screen.notice("I can't hear a microphone. Connect your AirPods, or say nothing and check Bluetooth.", "warn")
             self._spawn(self._retry_mic())
 
@@ -354,7 +370,7 @@ class Controller:
     async def _retry_mic(self) -> None:
         while self.mic and not self.mic.is_open:
             await asyncio.sleep(5)
-            if not self.mic_released and self.mic.open():
+            if not self.mic_released and self._mic_open():
                 self.screen.notice("Microphone connected.")
                 return
 
@@ -480,10 +496,14 @@ class Controller:
         if private:
             self._say(text)
 
-    def _transcript(self, role: str, text: str, via: str | None = None) -> None:
+    def _transcript(self, role: str, text: str, via: str | None = None, msg_id: str | None = None,
+                    ts: float | None = None) -> None:
+        """`msg_id`: the message's id on the screen, so What's done can find it again (an earlier day's too)."""
         if not text.strip():
             return
-        item: dict[str, Any] = {"ts": time.time(), "role": role, "text": text}
+        item: dict[str, Any] = {"ts": ts or time.time(), "role": role, "text": text}
+        if msg_id:
+            item["id"] = msg_id
         if via:
             item["via"] = via
         try:
@@ -614,7 +634,7 @@ class Controller:
         if self.pending_confirm is not None and not self.pending_confirm.done():
             uid = "u" + uuid.uuid4().hex[:8]
             self.screen.user_text(uid, text, True)
-            self._transcript("user", text)
+            self._transcript("user", text, msg_id=uid)
             self._answer_typed = typed
             self.pending_confirm.set_result(text)
             return
@@ -650,11 +670,54 @@ class Controller:
 
         if self.speaker:
             self.speaker.stop()
-        self.screen.user_text(uid, text, True)
-        self._transcript("user", text)
+        prompt = self._prompt(uid, text)
         self.last_asked = text
         info = await self._screen_info()
-        await self.brain.ask(turn_prefix(info, self.brain.last_activity, typed=typed) + text, typed=typed)
+        tid = await self.brain.ask(turn_prefix(info, self.brain.last_activity, typed=typed) + text, typed=typed)
+        self._asked(tid, prompt)
+
+    def _prompt(self, uid: str, text: str, via: str | None = None) -> tuple[str, str, float]:
+        """A message that asks Claude for something: on the screen and in the transcript, with the same id and
+        time, so what's done for it can be linked back to it (What's done)."""
+        ts = time.time()
+        self.screen.user_text(uid, text, True)
+        self._transcript("user", text, via=via, msg_id=uid, ts=ts)
+        self._last_prompt = (uid, text, ts)
+        return self._last_prompt
+
+    def _asked(self, tid: str, prompt: tuple[str, str, float] | None) -> None:
+        if prompt is None:
+            return
+        self.prompt_of[tid] = prompt
+        while len(self.prompt_of) > 500:
+            self.prompt_of.pop(next(iter(self.prompt_of)))
+
+    def _on_tool(self, tid: str, name: str, inp: dict[str, Any], ok: bool, result: str) -> None:
+        """A tool call finished: what it did goes into What's done (if it worked and did something)."""
+        if not ok:
+            return
+        try:
+            d = describe_done(name, inp, result)
+        except Exception:
+            log.exception("couldn't describe %s for What's done", name)
+            return
+        if d is None:
+            return
+        text, minor = d
+        entry = self.history.add(text, tool=name, inp=inp, minor=minor,
+                                 prompt=self.prompt_of.get(tid) or self._last_prompt)
+        if not minor:
+            self.screen.done({k: entry[k] for k in ("id", "ts", "text", "prompt_id", "prompt_ts") if k in entry})
+
+    async def _show_done(self) -> None:
+        entries = await self.loop.run_in_executor(None, self.history.recent)
+        self.screen.done_list(entries)
+
+    async def go_back_to(self, target_id: str | None, target_ts: float, before_ts: float | None) -> None:
+        """What's done: an item was tapped whose message isn't on the screen any more. The conversation from that
+        message on is put back, and the screen scrolls to it."""
+        items = await self.loop.run_in_executor(None, self.history.earlier, target_id, target_ts, before_ts)
+        self.screen.earlier(items, target_id, target_ts)
 
     async def _screen_info(self) -> dict[str, Any]:
         try:
@@ -703,8 +766,7 @@ class Controller:
         """Something typed in the Claude app on the phone: shown like anything said here."""
         uid = "u" + uuid.uuid4().hex[:8]
         self.last_heard = time.time()
-        self.screen.user_text(uid, text, True)
-        self._transcript("user", text, via="phone")
+        self._asked(tid, self._prompt(uid, text, via="phone"))
         try:
             self.gate.phone_reply(text)
         except Exception:
@@ -743,7 +805,8 @@ class Controller:
         spoken = self._spoken(tid)
         if spoken:
             self.speaker.end()
-        self._transcript("assistant", self.turn_text.pop(tid, "") or "", via="phone" if self._typed(tid) else None)
+        self._transcript("assistant", self.turn_text.pop(tid, "") or "", via="phone" if self._typed(tid) else None,
+                         msg_id=tid)
         if (not res.ok and res.error_kind == "auth" and self.brain and self.brain.use_token_instead()):
             # The full sign-in (for the phone) stopped working; the one-year sign-in still does.
             self.screen.notice("My sign-in for the Claude app on your phone has expired, so the phone can't reach "
@@ -758,6 +821,7 @@ class Controller:
             # change it back would fail too. Go back to the usual model and ask again.
             bad, self.settings.model = self.settings.model, default_model
             self.settings.save(self.paths)
+            self._settings_changed(["model"])
             self.screen.notice(f"The Claude model “{bad}” isn't available, so I went back to the usual one.", "warn")
             self._spawn(self._ask_again_after_switch(tid))
             if tid == self.current_turn:
@@ -785,7 +849,9 @@ class Controller:
         if self.brain.origin_of(tid) == "here" and self.last_asked:
             typed = self.brain.typed_here(tid)
             info = await self._screen_info()
-            await self.brain.ask(turn_prefix(info, self.brain.last_activity, typed=typed) + self.last_asked, typed=typed)
+            again = await self.brain.ask(turn_prefix(info, self.brain.last_activity, typed=typed) + self.last_asked,
+                                         typed=typed)
+            self._asked(again, self.prompt_of.get(tid) or self._last_prompt)
         else:
             await self._warm_up()
 
@@ -933,8 +999,9 @@ class Controller:
         if name in ("yes", "no"):
             if self.pending_confirm is not None and not self.pending_confirm.done():
                 answer = "Yes" if name == "yes" else "No"
-                self.screen.user_text("u" + uuid.uuid4().hex[:8], f"{answer} (thumbs {'up' if name == 'yes' else 'down'})", True)
-                self._transcript("user", answer)
+                uid = "u" + uuid.uuid4().hex[:8]
+                self.screen.user_text(uid, f"{answer} (thumbs {'up' if name == 'yes' else 'down'})", True)
+                self._transcript("user", answer, msg_id=uid)
                 self.pending_confirm.set_result(answer.lower())
             return
         if self.asleep:
@@ -1070,76 +1137,177 @@ class Controller:
         self.exit_code = 3
         self.screen.quit()
 
-    async def _offer_airpods(self) -> None:
-        """At the start, unless sound already plays on headphones: AirPods ClaudeOS already knows are connected
-        if they're out of their case; otherwise ClaudeOS asks, on the screen, whether to connect them (answered
-        by typing or saying yes or no). Yes: the pairing Windows has is copied over, and if that doesn't connect
-        them, ClaudeOS pairs them itself while the button on their case is held."""
+    # ================================================================ AirPods
+    @staticmethod
+    def _is_airpods(d: dict[str, Any]) -> bool:
+        return "airpods" in str(d.get("name", "")).lower()
+
+    @staticmethod
+    def _unnamed(d: dict[str, Any]) -> bool:
+        """A device BlueZ knows only by its address (no name yet): it lists those by the address itself."""
+        name = str(d.get("name", "")).strip().replace("-", ":").upper()
+        return not name or name == str(d.get("address", "")).upper()
+
+    def _bt(self, fn: Callable, *a: Any) -> Any:
+        return self.loop.run_in_executor(None, fn, *a)
+
+    async def _airpods_candidates(self, copy_from_other: bool = True) -> list[dict[str, Any]]:
+        """AirPods paired here, else the ones paired in Windows, copied over now: ClaudeOS Setup told the person it
+        would take over that pairing, so it isn't asked about. Devices BlueZ has no name for yet (copied over
+        before ClaudeOS brought names along) come last: one of them may be the AirPods."""
         p = self.platform
-        run = lambda fn, *a: self.loop.run_in_executor(None, fn, *a)
+        st = await self._bt(p.bt_status)
+        paired = st.get("paired", [])
+        found = [d for d in paired if self._is_airpods(d)]
+        if not found and copy_from_other and p.name != "mac":
+            try:
+                log.info("AirPods: %s", await self._bt(p.bt_import_windows_keys))
+            except Exception:
+                log.info("couldn't copy the pairings from Windows", exc_info=True)
+            paired = (await self._bt(p.bt_status)).get("paired", [])
+            found = [d for d in paired if self._is_airpods(d)]
+        return found + [d for d in paired if self._unnamed(d) and d not in found]
 
-        async def airpods(which: str) -> list[dict[str, Any]]:
-            st = await run(p.bt_status)
-            return [d for d in st.get(which, []) if "airpods" in str(d.get("name", "")).lower()]
+    async def _connect_one_of(self, devices: list[dict[str, Any]]) -> str | None:
+        """Connects the first of these AirPods that answers (out of their case). Their name, or None."""
+        p = self.platform
+        for d in devices:
+            try:
+                await self._bt(p.bt_connect, d["address"])
+                st = await self._bt(p.bt_status)
+            except Exception:
+                log.info("connecting %s failed", d.get("address"), exc_info=True)
+                continue
+            for c in st.get("connected", []):
+                if c.get("address") == d["address"] and (self._is_airpods(c) or self._is_airpods(d)):
+                    return str(c.get("name") if self._is_airpods(c) else d.get("name")) or "AirPods"
+        return None
 
-        async def connect_known() -> str | None:
-            for d in await airpods("paired"):
-                await run(p.bt_connect, d["address"])
-                if any(c["address"] == d["address"] for c in await airpods("connected")):
-                    return str(d.get("name") or "AirPods")
-            return None
-
+    async def _airpods_connected(self) -> str | None:
         try:
-            if await run(p.output_is_headset) or await airpods("connected"):
-                return
-            st = await run(p.bt_status)
-            if not st.get("adapter", True):
-                return
-            name = await connect_known()          # known here, and out of their case
+            st = await self._bt(self.platform.bt_status)
         except Exception:
-            log.info("no Bluetooth to offer AirPods with", exc_info=True)
-            return
+            return None
+        for c in st.get("connected", []):
+            if self._is_airpods(c):
+                return str(c.get("name") or "AirPods")
+        return None
+
+    async def _airpods_quietly(self) -> str:
+        """At the start: AirPods ClaudeOS knows (paired here or in Windows) are connected without a question, as
+        soon as they're out of their case: right away if they are, otherwise one line says so and ClaudeOS keeps
+        trying for two minutes. Returns 'connected', 'waiting', 'unknown' (AirPods known nowhere: asked about by
+        _start_questions) or 'none' (sound already on headphones, or no Bluetooth)."""
+        p = self.platform
+        try:
+            if await self._bt(p.output_is_headset) or await self._airpods_connected():
+                return "none"
+            if not (await self._bt(p.bt_status)).get("adapter", True):
+                return "none"
+            devices = await self._airpods_candidates()
+        except Exception:
+            log.info("no Bluetooth to connect AirPods with", exc_info=True)
+            return "none"
+        if not devices:
+            return "unknown"
+        name = await self._connect_one_of(devices)
         if name:
             self.screen.notice(f"Your {name} are connected.")
+            return "connected"
+        self.screen.notice("Take your AirPods out of their case: they'll connect by themselves.")
+        self._spawn(self._keep_connecting(devices, AIRPODS_WAIT_S))
+        return "waiting"
+
+    async def _keep_connecting(self, devices: list[dict[str, Any]], wait_s: float) -> str | None:
+        """Tries to connect these AirPods every few seconds until they answer or `wait_s` has passed (only then:
+        trying all the time would take them from the person's phone)."""
+        end = time.monotonic() + wait_s
+        while time.monotonic() < end:
+            await asyncio.sleep(AIRPODS_RETRY_S)
+            try:
+                if await self._bt(self.platform.output_is_headset):
+                    name = await self._airpods_connected()
+                    if name:
+                        self.screen.notice(f"Your {name} are connected.")
+                    return name           # connected some other way (or other headphones): done
+            except Exception:
+                pass
+            name = await self._connect_one_of(devices)
+            if name:
+                self.screen.notice(f"Your {name} are connected.")
+                return name
+        self.screen.notice("Your AirPods didn't connect. Say or type “connect my AirPods” when you want them.")
+        return None
+
+    async def _offer_airpods(self) -> None:
+        """The AirPods question at the start, only when ClaudeOS knows no AirPods (paired neither here nor in
+        Windows): connect them? Yes: they're paired here, with the button on their case."""
+        state = await self._airpods_start if self._airpods_start is not None else await self._airpods_quietly()
+        if state != "unknown":
             return
-        verdict, said = await self.confirm("Connect your AirPods? Take them out of their case first.", typed=True)
+        verdict, said = await self.confirm("Connect your AirPods?", typed=True)
         if verdict != "yes":
             if verdict == "unclear" and len(said.split()) > 3:
                 self._spawn(self.handle(said, typed=self._answer_typed))   # a request, not an answer
             elif verdict != "timeout":
-                self.screen.notice("Okay. Type or say “connect my AirPods” whenever you want them.")
+                self.screen.notice("Okay. Say or type “connect my AirPods” whenever you want them.")
             return
-        try:
-            if p.name != "mac":
-                self.screen.notice("Copying your AirPods' pairing from Windows…")
-                log.info("AirPods: %s", await run(p.bt_import_windows_keys))
-                name = await connect_known()
-            if not name:
-                self.screen.notice("Put the AirPods in their case with the lid open, then hold the button on the back of "
-                                   "the case until the light flashes white.")
-                name = await self._pair_airpods(run)
-        except Exception as exc:
-            log.warning("connecting the AirPods failed", exc_info=True)
-            self.screen.notice(f"I couldn't connect the AirPods: {exc}", "warn")
-            return
+        name = await self._pair_new_airpods()
         if name:
             self.screen.notice(f"Your {name} are connected.")
         else:
-            self.screen.notice("I couldn't find the AirPods. Type or say “connect my AirPods” to try again.", "warn")
+            self.screen.notice("I couldn't find the AirPods. Say or type “connect my AirPods” to try again.", "warn")
 
-    async def _pair_airpods(self, run: Callable) -> str | None:
+    async def _pair_new_airpods(self) -> str | None:
+        self.screen.notice("Put the AirPods in their case with the lid open, then hold the button on the back of the "
+                           "case until the light flashes white.")
+        try:
+            return await self._pair_airpods()
+        except Exception:
+            log.warning("pairing the AirPods failed", exc_info=True)
+            return None
+
+    async def _pair_airpods(self) -> str | None:
         """Looks for AirPods in pairing mode for up to a minute and pairs the first found. Their name, or None."""
         p = self.platform
         end = time.monotonic() + AIRPODS_PAIR_S
         while time.monotonic() < end:
-            for d in await run(p.bt_scan, 8):
-                if "airpods" in str(d.get("name", "")).lower():
-                    result = str(await run(p.bt_pair, d["address"]))
+            for d in await self._bt(p.bt_scan, 8):
+                if self._is_airpods(d):
+                    result = str(await self._bt(p.bt_pair, d["address"]))
                     log.info("AirPods pairing: %s", result)
-                    st = await run(p.bt_status)
+                    st = await self._bt(p.bt_status)
                     if any(c["address"] == d["address"] for c in st.get("connected", [])):
                         return str(d.get("name") or "AirPods")
         return None
+
+    async def connect_airpods(self) -> str:
+        """"Connect my AirPods" (the bluetooth tool's airpods action): in one step, however they can be. Known here
+        or in Windows: connected as they come out of their case (tried for a little while). Known nowhere: paired,
+        with the button on their case."""
+        p = self.platform
+        if not (await self._bt(p.bt_status)).get("adapter", True):
+            return "This computer has no Bluetooth."
+        name = await self._airpods_connected()
+        if name:
+            return f"Your {name} are already connected."
+        devices = await self._airpods_candidates()
+        if devices:
+            name = await self._connect_one_of(devices)
+            if not name:
+                self._announce("Take your AirPods out of their case.")
+                end = time.monotonic() + AIRPODS_ASKED_S
+                while not name and time.monotonic() < end:
+                    await asyncio.sleep(AIRPODS_RETRY_S)
+                    name = await self._connect_one_of(devices)
+            if name:
+                return f"Your {name} are connected."
+            return ("Your AirPods are known here but didn't answer. Take them out of their case near the computer "
+                    "(or put them in it with the lid open) and ask again.")
+        self._announce("Put the AirPods in their case with the lid open, then hold the button on the back of the case "
+                       "until the light flashes white.")
+        name = await self._pair_airpods()
+        return f"Your {name} are connected." if name else "I couldn't find AirPods in pairing mode."
 
     # ================================================================ sleep / wake
     def _request_sleep(self) -> None:
@@ -1256,15 +1424,32 @@ class Controller:
         if not self.mic:
             return
         release = self.settings.release_mic_during_media
-        should = release == "on" or (release == "auto" and self._input_is_bluetooth())
-        if playing and should and self.mic.is_open:
-            # AirPods sound much better when nothing is using their microphone.
-            self.mic.close()
-            self.mic_released = True
-            self.screen.notice("Enjoy. Press an AirPod to talk to me.")
+        if playing and self.mic.is_open and release in ("on", "auto"):
+            if release == "on":
+                self._release_mic()
+            else:
+                self._spawn(self._release_mic_if_bluetooth())
         elif not playing and self.mic_released:
             self.mic_released = False
-            self.mic.open()
+            self._mic_open()
+
+    async def _release_mic_if_bluetooth(self) -> None:
+        # Asking the sound system takes a moment: not on the loop, where it would hold up everything else.
+        if await self.loop.run_in_executor(None, self._input_is_bluetooth) and self.media_playing and self.mic.is_open:
+            self._release_mic()
+
+    def _release_mic(self) -> None:
+        # AirPods sound much better when nothing is using their microphone.
+        self.mic.close()
+        self.mic_released = True
+        self.screen.mic(False)
+        self.screen.notice("Enjoy. Press an AirPod to talk to me.")
+
+    def _mic_open(self) -> bool:
+        """Open the microphone; the line under the message box says whether ClaudeOS is listening."""
+        ok = bool(self.mic and self.mic.open())
+        self.screen.mic(ok)
+        return ok
 
     def _input_is_bluetooth(self) -> bool:
         try:
@@ -1275,8 +1460,8 @@ class Controller:
     def _settings_changed(self, keys: list[str]) -> None:
         s = self.settings
         if {"text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
-            "user_name"} & set(keys):
-            self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0])
+            "user_name", "model"} & set(keys):
+            self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0], model_label(s.model))
         if "airtouch" in keys and self.airtouch_enabled:
             self._spawn(self._start_airtouch() if s.airtouch else self._stop_airtouch())
         if "phone_access" in keys and self.brain:

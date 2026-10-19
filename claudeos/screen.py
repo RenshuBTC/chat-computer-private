@@ -13,6 +13,10 @@ class Screen:
     async def show_html(self, html: str, title: str, base_dir: str | None = None) -> dict[str, Any]: raise NotImplementedError
     async def hide_content(self) -> None: raise NotImplementedError
     async def content_info(self) -> dict[str, Any]: raise NotImplementedError
+    async def settle(self, quiet_s: float = 0.15, max_s: float = 1.5, load_s: float = 10.0) -> dict[str, Any]:
+        """After a click or keys: wait for the page to react (a page loading, then a moment without changes), and
+        return what's showing (content_info)."""
+        return await self.content_info()
     async def eval_js(self, script: str) -> Any: raise NotImplementedError
     async def navigate(self, action: str) -> dict[str, Any]: raise NotImplementedError
     async def focus_content(self) -> None: raise NotImplementedError
@@ -26,7 +30,21 @@ class Screen:
     def notice(self, text: str, kind: str = "info") -> None: ...
     def state(self, name: str) -> None: ...
     def history(self, items: list[dict[str, Any]]) -> None: ...
-    def apply_settings(self, text_size: int, user_name: str) -> None: ...
+    def apply_settings(self, text_size: int, user_name: str, model: str = "") -> None: ...
+    def mic(self, on: bool) -> None:
+        """Whether the microphone is on: the line under the message box says "Listening" only then."""
+    # --- What's done (claudeos/done.py), in a panel at the right of the conversation
+    def done_list(self, entries: list[dict[str, Any]]) -> None:
+        """The whole list (at the start), oldest first. Each: id, ts, text, and the message that asked for it
+        (prompt_id, prompt_ts)."""
+    def done(self, entry: dict[str, Any]) -> None:
+        """Something just done, at the end of the list."""
+    def earlier(self, items: list[dict[str, Any]], target_id: str | None, target_ts: float) -> None:
+        """Earlier messages (from the transcript) put back above the conversation, then scrolled to the one asked
+        for: the answer to on_goto."""
+    # Set by the controller: an item in What's done was tapped whose message isn't on the screen any more
+    # (its id, its time, and the time of the first message the screen still has, or None).
+    on_goto: Any = None
     def dots(self, dots: list[tuple[float, float, str]]) -> None:
         """AirTouch's dots, one per finger it follows (x, y in the display's pixels, and what the finger is
         doing: "point", "pinch", "scroll"; with the keyboard up "key", "press"). None left: none drawn."""
@@ -118,8 +136,20 @@ class RecordingScreen(Screen):
     def history(self, items: list[dict[str, Any]]) -> None:
         self.events.append(("history", len(items)))
 
-    def apply_settings(self, text_size: int, user_name: str) -> None:
-        self.events.append(("settings", (text_size, user_name)))
+    def apply_settings(self, text_size: int, user_name: str, model: str = "") -> None:
+        self.events.append(("settings", (text_size, user_name, model)))
+
+    def mic(self, on: bool) -> None:
+        self.events.append(("mic", on))
+
+    def done_list(self, entries: list[dict[str, Any]]) -> None:
+        self.events.append(("done_list", [e["text"] for e in entries]))
+
+    def done(self, entry: dict[str, Any]) -> None:
+        self.events.append(("done", dict(entry)))
+
+    def earlier(self, items: list[dict[str, Any]], target_id: str | None, target_ts: float) -> None:
+        self.events.append(("earlier", ([(i["role"], i["text"]) for i in items], target_id)))
 
     def dots(self, dots: list[tuple[float, float, str]]) -> None:
         self.events.append(("dots", [(round(x), round(y), kind) for x, y, kind in dots]))

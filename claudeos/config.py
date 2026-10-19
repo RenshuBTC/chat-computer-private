@@ -19,6 +19,15 @@ TOKEN_RE = re.compile(r"^sk-ant-(oat01|api03)-[A-Za-z0-9_\-]{20,}$")
 # like claude-sonnet-5-5, or an alias like opus). Anything else would stop the engine or fail every request.
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MODEL_RE = re.compile(r"^[a-z][a-z0-9.\-]{1,62}(\[1m\])?$")
+_MODEL_NAME = re.compile(r"^(?:claude-)?([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$")
+
+
+def model_label(model: str | None) -> str:
+    """The model's name as the Claude app shows it: claude-sonnet-5-5 is "Sonnet 5.5", opus is "Opus"."""
+    m = _MODEL_NAME.match(model or "")
+    if m:
+        return m.group(1).capitalize() + " " + m.group(2) + ("." + m.group(3) if m.group(3) else "")
+    return (model or "").capitalize() if (model or "").isalpha() else (model or "")
 
 
 class Paths:
@@ -39,6 +48,7 @@ class Paths:
         self.undo = self.root / "undo"            # backups that make file changes undoable
         self.journal = self.root / "journal.jsonl"  # what ClaudeOS did, newest last
         self.transcript = self.root / "transcript.jsonl"
+        self.done = self.root / "done.jsonl"      # What's done: what ClaudeOS did for the person (done.py)
         self.index = self.root / "index"
         self.web = self.root / "web"              # the built-in browser's logins and cache
         self.engine = self.root / ".engine"       # Claude Code's own config for this session

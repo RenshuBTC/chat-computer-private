@@ -136,7 +136,17 @@
     return null;
   }
 
+  // When the page last changed (elements added or removed, text changed): after a click, ClaudeOS waits until it
+  // has been still a moment (GtkScreen.settle) instead of a fixed pause. Changes to attributes (a progress bar's
+  // width, a video's controls fading) don't count: some pages make them all the time.
+  var lastChange = Date.now();
+  try {
+    new MutationObserver(function () { lastChange = Date.now(); })
+      .observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  } catch (e) {}
+
   window.__CO = {
+    quietFor: function () { return Date.now() - lastChange; },
     elements: function (find) {
       var words = clean(find).toLowerCase().split(" ").filter(Boolean);
       var lines = [];

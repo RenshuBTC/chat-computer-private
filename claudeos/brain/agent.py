@@ -25,11 +25,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, SystemMessage,
-                              ToolUseBlock, UserMessage)
+from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, ServerToolResultBlock,
+                              ServerToolUseBlock, SystemMessage, ToolResultBlock, ToolUseBlock, UserMessage)
 from claude_agent_sdk.types import RateLimitEvent, StreamEvent
 
 from ..config import EFFORTS, MODEL_RE, Paths, Settings, State, has_login, token_kind
+from ..done import result_text
 
 log = logging.getLogger("claudeos.brain")
 
@@ -53,6 +54,8 @@ class BrainEvents:
     on_rate_limit: Callable[[dict[str, Any]], None] = lambda info: None
     on_user_text: Callable[[str, str], None] = lambda tid, text: None        # what they typed on the phone
     on_remote: Callable[[str, Any], None] = lambda state, info: None         # the Claude app link: on | failed
+    # A tool call finished: (turn, tool name, its input, whether it worked, the words of its result).
+    on_tool: Callable[[str, str, dict[str, Any], bool, str], None] = lambda tid, name, inp, ok, result: None
 
 
 @dataclass
@@ -98,7 +101,7 @@ def describe_tool(name: str, inp: dict[str, Any]) -> str:
         "recent_actions": lambda: "Checking what I did",
         "system_status": lambda: "Checking the computer",
         "wifi": lambda: "Wi-Fi: " + g("action"),
-        "bluetooth": lambda: "Bluetooth: " + g("action"),
+        "bluetooth": lambda: "Connecting your AirPods" if g("action") == "airpods" else "Bluetooth: " + g("action"),
         "sound": lambda: "Sound: " + g("action").replace("_", " "),
         "power": lambda: g("action").replace("_", " ").capitalize(),
         "start_by_default": lambda: "Changing what starts first",
@@ -171,6 +174,8 @@ class Brain:
         self._cur: _Turn | None = None
         self.origins: dict[str, str] = {}
         self.typed: set[str] = set()      # turns asked by typing on this PC's keyboard (answered in text only)
+        # Tool calls waiting for their result: tool use id -> (turn, name, input). See _tool_done.
+        self._tool_calls: collections.OrderedDict[str, tuple[str, str, dict[str, Any]]] = collections.OrderedDict()
         # What the engine last wrote to its error output: logged when something fails (the reason the phone
         # can't connect, say, is often only there).
         self.engine_said: collections.deque[str] = collections.deque(maxlen=200)
@@ -520,6 +525,17 @@ class Brain:
         with contextlib.suppress(Exception):
             await client.disconnect()
 
+    def _tool_done(self, use_id: str, ok: bool, result: str) -> None:
+        """A tool call's result came back (What's done lists what worked: claudeos/done.py)."""
+        call = self._tool_calls.pop(use_id, None)
+        if call is None:
+            return
+        tid, name, inp = call
+        try:
+            self.ev.on_tool(tid, name, inp, ok, result)
+        except Exception:
+            log.exception("on_tool failed")
+
     def _route(self, m: Any) -> None:
         now = time.time()
         t = self._cur if self._cur is not None and not self._cur.done.is_set() else None
@@ -539,6 +555,10 @@ class Brain:
                                    "utilization": info.utilization, "resets_at": info.resets_at})
             return
         if isinstance(m, UserMessage):
+            if isinstance(m.content, list):
+                for b in m.content:
+                    if isinstance(b, ToolResultBlock):
+                        self._tool_done(b.tool_use_id, not b.is_error, result_text(b.content))
             text = _user_text(m)
             kind = (m.origin or {}).get("kind") if isinstance(m.origin, dict) else None
             if t is None and text:
@@ -570,9 +590,18 @@ class Brain:
                 res.error_kind = {"authentication_failed": "auth", "billing_error": "billing",
                                   "rate_limit": "rate_limit", "server_error": "overloaded"}.get(m.error, "other")
             for b in m.content:
+                if isinstance(b, (ToolUseBlock, ServerToolUseBlock)):
+                    self._tool_calls[b.id] = (t.tid, b.name, b.input or {})
+                    while len(self._tool_calls) > 200:
+                        self._tool_calls.popitem(last=False)
                 if isinstance(b, ToolUseBlock):
                     res.tools.append(b.name)
                     self.ev.on_activity(t.tid, describe_tool(b.name, b.input or {}))
+                elif isinstance(b, ServerToolResultBlock):
+                    # Run by Claude's servers (a web search): an error comes back as the result's content.
+                    c = b.content if isinstance(b.content, dict) else {}
+                    self._tool_done(b.tool_use_id, "error_code" not in c and not str(c.get("type", "")).endswith("_error"),
+                                    "")
         elif isinstance(m, ResultMessage):
             self.session_id = m.session_id or self.session_id
             res.cost_usd = m.total_cost_usd

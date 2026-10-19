@@ -1,19 +1,30 @@
-/* The conversation: your words in italics and Claude's upright, all in black, newest at the bottom, in one
-   column in the middle of the screen. Spoken and typed (from the Claude app on the phone) look the same.
-   Nothing else. */
-body { overflow: hidden; }
+/* The conversation, laid out like the Claude app: Claude's words on the left in one column, upright and black;
+   yours on the right, in a light grey bubble; newest at the bottom, above the message box. Scrolling up (the mouse
+   wheel, Page Up, the arrow keys while the box is empty, or pinching and moving with AirTouch) shows earlier
+   messages; new words bring it back down. On a wide screen, What's done runs down the right: a sixth of the
+   screen, as the Claude app's side panel takes. */
+html { scrollbar-width: none; }
+::-webkit-scrollbar { display: none; }
+body.panel { --panel: 17vw; }
+body { padding-right: var(--panel, 0px); }
 #column {
-  position: fixed; inset: 0;
   display: flex; flex-direction: column; justify-content: flex-end;
-  width: var(--co-column, min(30rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto;
-  padding: 0 0 2.5rem;
-  overflow: hidden;
+  min-height: 100vh;
+  width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto;
+  padding: 2rem 0 calc(var(--composer-h, 5rem) + 1.25rem);
 }
 body:not(.has-log) #column { justify-content: center; }
 #log { display: flex; flex-direction: column; gap: 1.25rem; }
-#log > .gone { display: none; }
 
-.you { font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Your words: on the right, in a bubble no wider than most of the column, the way chat apps show them. */
+.you {
+  align-self: flex-end; max-width: 85%;
+  background: var(--bubble); border-radius: 1.1rem; padding: 0.5rem 0.9rem;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.you, .ai { scroll-margin-top: 1.5rem; }
+/* The message a tapped item of What's done was asked in, for a moment. */
+.you.found { outline: 2px solid var(--ink); outline-offset: 3px; }
 .ai { overflow-wrap: anywhere; }
 /* What Claude is doing (when show_activity is on), in the mono font, above the words it leads to. */
 .ai .activity { display: block; font-family: var(--mono); margin: 0 0 0.5em; }
@@ -21,18 +32,19 @@ body:not(.has-log) #column { justify-content: center; }
   content: ""; display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%;
   background: var(--ink); animation: pulse 1.2s ease-in-out infinite;
 }
+/* Messages from an earlier day, put back to show where something was asked: their day above them. */
+.day, .gap { align-self: center; font-size: 0.8rem; }
+.day { font-weight: bold; }
 
-/* What you're saying right now, and a small dot that shows ClaudeOS is listening. It pulses only while it hears
-   you: a dot that pulsed all the time it listened (nearly always) had the page redrawn 60 times a second, which
-   without a graphics chip cost a steady few percent of a processor core. */
-#live { margin-top: 1.25rem; min-height: 1.5em; font-style: italic; white-space: pre-wrap; visibility: hidden; }
-body.listening #live, body.hearing #live, body.typing #live { visibility: visible; }
+/* What you're saying right now, as it's heard: your next bubble, forming on the right, with a dot that pulses
+   while you speak. (Only then: an animation has the page drawn again 60 times a second, which without a graphics
+   chip costs a steady few percent of a processor core.) */
+#live { margin-top: 1.25rem; display: none; }
+body.hearing #live { display: block; }
 #caret {
   display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%; margin-left: 0.35em; vertical-align: middle;
-  background: var(--ink);
+  background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
-body.hearing #caret { animation: pulse 1.6s ease-in-out infinite; }
-body:not(.listening):not(.hearing):not(.typing) #caret { visibility: hidden; }
 
 /* Empty screen: a greeting and one line saying how to talk or type. */
 #welcome { margin: 0; }
@@ -40,12 +52,63 @@ body:not(.listening):not(.hearing):not(.typing) #caret { visibility: hidden; }
 #hint { margin: 0; }
 body.has-log #welcome { display: none; }
 
-/* Sleeping: the words go away; one line says how to wake ClaudeOS. */
-#sleep-note {
-  position: fixed; left: 0; right: 0; bottom: 2.5rem; text-align: center;
+/* The message box, as in the Claude app: a rounded box the width of the conversation at the bottom of the
+   screen; it grows with what's typed (up to a few lines, then scrolls). Enter sends, Shift+Enter starts a new
+   line; the return arrow shows once there's something to send. Under it, whether ClaudeOS is listening, and
+   which Claude model answers. */
+#composer {
+  position: fixed; left: 0; right: var(--panel, 0px); bottom: 0;
+  padding: 0.75rem 0; background: var(--ground);
+}
+#box, #status { width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto; }
+#box {
+  display: flex; align-items: flex-end; gap: 0.5rem;
+  border: 2px solid var(--bubble); border-radius: 1.1rem; background: var(--ground);
+  padding: 0.6rem 0.7rem 0.6rem 1rem;
+}
+#input {
+  flex: 1; min-width: 0; height: 1.5em; max-height: 40vh; margin: 0; padding: 0;
+  border: 0; outline: 0; resize: none; overflow-y: auto; scrollbar-width: none;
+  font: inherit; line-height: 1.5; color: var(--ink); background: transparent; caret-color: var(--ink);
+}
+#send {
+  flex: none; width: 1.5em; height: 1.5em; margin: 0; padding: 0; border: 0; background: none; color: var(--ink);
   visibility: hidden;
 }
-body.sleeping #column { visibility: hidden; }
-body.sleeping #sleep-note { visibility: visible; }
+body.drafting #send { visibility: visible; }
+#send svg, #mic svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; }
+#status {
+  display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+  min-height: 1.4em; padding: 0.35rem 0.5rem 0; font-size: 0.8rem; line-height: 1.4;
+}
+#mic { display: inline-flex; align-items: center; gap: 0.4em; }
+#mic svg { width: 1.15em; height: 1.15em; flex: none; }
+#mic:not(.on) { visibility: hidden; }
+
+/* What's done: everything done for you, oldest at the top, grouped by day. Tapping one scrolls the conversation
+   back to the message that asked for it. */
+#done {
+  position: fixed; top: 0; right: 0; bottom: 0; width: var(--panel, 0px);
+  display: none; flex-direction: column;
+  padding: 1.5rem 1rem 1rem 1.25rem; border-left: 2px solid var(--bubble);
+  font-size: 0.8rem; line-height: 1.4;
+}
+body.panel #done { display: flex; }
+#done-title { font-size: 1em; font-weight: bold; line-height: 1.3; margin: 0 0 0.75rem; }
+#done-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; list-style: none; margin: 0; padding: 0; }
+.done-day { font-weight: bold; margin: 1em 0 0.35em; }
+.done-day:first-child { margin-top: 0; }
+.done-item { position: relative; padding: 0.3em 0.4em 0.3em 1.15em; border-radius: 0.5em; overflow-wrap: break-word; }
+.done-item::before {
+  content: ""; position: absolute; left: 0.25em; top: 0.85em; width: 0.4em; height: 0.4em; border-radius: 50%;
+  background: var(--ink);
+}
+.done-item:hover { background: var(--bubble); }
+#done-empty { margin: 0; }
+body.has-done #done-empty { display: none; }
+
+/* Sleeping: the conversation and What's done go away; the line under the message box says how to wake ClaudeOS. */
+body.sleeping #column, body.sleeping #done { visibility: hidden; }
 
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }

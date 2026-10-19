@@ -1,0 +1,4 @@
+
+[1;36mThe Chat Computer drive[0m
+[32mThe Chat Computer drive is ready (2.0 GB).[0m
+GPT entry 7 has the id 80E56F75-75DD-4691-B7BD-15CB75D015ED

@@ -40,6 +40,27 @@ NOT_STUCK = r"try|connect claude|you can|say|type"
 NO_AI = r"without an ai|written in advance"     # the page's honest note when only an AI could answer
 
 
+# Saying it can't go on the internet: what the browser's own AI said to every question that needed it, before the
+# page looked things up for it (the visitor's own conversation: "I am not connected to the internet").
+NO_NET = (r"not connected to the internet|no internet|(don't|do not) have (internet|access to (the )?internet|real-time)|"
+          r"(can't|cannot|can not|unable to) (look|search|browse|access|go on)|not able to (look|search|browse)|"
+          r"(can't|cannot) (get|find) (real-time|current|live)|offline")
+
+
+def answers(r: R) -> list[str]:
+    return [a or "" for a in (r.get("answers") or [r.get("answer") or ""])]
+
+
+def online(r: R) -> bool:
+    """None of its answers says it can't go on the internet."""
+    return not any(re.search(NO_NET, a, re.I) for a in answers(r))
+
+
+def turn(r: R, i: int, pattern: str) -> bool:
+    a = answers(r)
+    return -len(a) <= i < len(a) and re.search(pattern, a[i], re.I) is not None
+
+
 def dead_end(r: R) -> bool:
     """The scripted page's old catch-all ("In this demo I only know a few things..."): it answers nothing asked."""
     return said(r, r"only know a few things")
@@ -145,6 +166,19 @@ DONE: dict[str, Callable[[R], bool]] = {
     "rude": lambda r: said(r, r"sorry|try|can") and not said(r, r"only know a few things"),
     "long": lambda r: said(r, r"father|dad|\b(he|him|his)\b") and said(r, r"talk|no menus|no desktop|simple")
                       and said(r, r"set ?up|install"),
+    # Needing the internet: answered from what was looked up, never "I can't go on the internet".
+    "haze-trace": lambda r: online(r) and len(answers(r)) == 5
+                            and turn(r, 2, r"haze|smoke|fires?\b|burning|air quality|\baqi\b|pm2\.?5|pollution"),
+    "haze-now": lambda r: online(r) and said(r, r"air quality|\baqi\b|pm2\.?5|\b(good|moderate|unhealthy|hazardous)\b|\bhaze\b"),
+    "pm": lambda r: online(r) and said(r, r"lawrence wong"),
+    "world-cup": lambda r: online(r) and (said(r, r"\bspain\b") or shown(r, r"\bspain\b")),
+    "look-it-up": lambda r: online(r) and (said(r, r"safdie") or shown(r, r"safdie")),
+    "search-population": lambda r: online(r) and (said(r, r"\b[56]([.,]\d+)? million|\b[56],\d{3},\d{3}\b")
+                                                   or shown(r, r"\b[56]([.,]\d+)? million")),
+    "headlines": lambda r: online(r) and (shown(r, r"in the news") or did(r, r"news")),
+    "news-yesterday": lambda r: online(r) and (shown(r, r"in the news") or did(r, r"news")),
+    "why-no-internet": lambda r: online(r) and said(r, r"\bi can\b|look (things|it) up|wikipedia|\bsearch"),
+    "tell-me-more": lambda r: online(r) and turn(r, 0, r"haze|smoke|fires?\b|pollution") and turn(r, 1, r"1997|2015|2019|2006"),
 }
 
 

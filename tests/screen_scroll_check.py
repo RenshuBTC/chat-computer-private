@@ -1,5 +1,6 @@
-"""The conversation reads like a chat and scrolls like one: your messages on the right in grey bubbles, Claude's on
-the left; new words keep it at the bottom, unless you scrolled up to read something earlier.
+"""The conversation reads like a chat and scrolls like the Claude app: your messages on the right in grey bubbles,
+Claude's on the left; what you send goes to the top of the screen, with the answer under it, and new words keep the
+newest in view, unless you scrolled up to read something earlier.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, fills the conversation, streams a long reply
 into it, scrolls up and streams more, then sends a new message; prints JSON: what the page showed at each step.
@@ -36,6 +37,7 @@ STATE_JS = """(function () {
   var u = you[you.length - 1], a = ai[ai.length - 1], ur = u.getBoundingClientRect(), ar = a.getBoundingClientRect();
   var cs = getComputedStyle(u);
   return JSON.stringify({top: p.scrollTop, bottom: p.scrollHeight - p.scrollTop - p.clientHeight,
+    you_top: ur.top, margin: parseFloat(cs.scrollMarginTop), ai_below: ar.top >= ur.bottom,
     height: p.scrollHeight, view: p.clientHeight, messages: document.getElementById('log').children.length,
     you: {left: ur.left - col.left, right: col.right - ur.right, background: cs.backgroundColor, style: cs.fontStyle},
     ai: {left: ar.left - col.left, background: getComputedStyle(a).backgroundColor}});
@@ -74,7 +76,7 @@ def scroll_up():
 
 def ask():
     screen.user_text("new", "And on Sunday?", True)
-    GLib.timeout_add(400, lambda: read("asked", finish) and False)
+    GLib.timeout_add(1200, lambda: read("asked", finish) and False)
 
 
 def finish():

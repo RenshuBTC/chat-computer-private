@@ -63,7 +63,7 @@ class ToolContext:
     announce: Callable[[str], None] | None = None     # show and say something now, mid-tool (any thread)
     before_power: Callable[[], Awaitable[None]] | None = None   # just before the computer restarts or turns off
     airpods: Callable[[], Awaitable[str]] | None = None   # connect the AirPods in one step (Controller.connect_airpods)
-    history: Any = None           # What's done (chatcomputer/done.py History), for recent_actions
+    history: Any = None           # Actions (chatcomputer/done.py History), for recent_actions
     inbox: Any = None             # Messages (chatcomputer/messages Inbox), for the messages tool
     schedule: Any = None          # timers, reminders and alarms (chatcomputer/schedule.py Schedule)
     on_schedule_changed: Callable[[], None] | None = None   # the controller looks again at what rings next
@@ -588,7 +588,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         return _text("\n".join(msgs) if msgs else "There's nothing to undo.")
 
     @reg("recent_actions", "What's been done on this computer, newest last, each with the message that asked for "
-         "it: the What's done list at the right of the conversation (sites opened, web searches, files changed, "
+         "it: the Actions list at the right of the conversation (sites opened, web searches, files changed, "
          "settings, programs...). For questions like what they changed yesterday or which site they opened. "
          "query: words to look for (also in those messages, and in steps that only looked at something); days: "
          "how far back (default 7); limit (default 40).",
@@ -1431,7 +1431,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          "zooms websites (0 = automatic). text_size forces a fixed pixel size (0 = automatic). phone_access "
          "(true/false) lets them message you from the Claude app on their phone (needs the full sign-in from "
          "Chat Computer Setup). airtouch (true/false) turns AirTouch, the hand gestures seen by the screen's camera, on or "
-         "off. left_panel, right_panel and bottom_panel (true/false) show or hide Messages (left), What's done (right) "
+         "off. left_panel, right_panel and bottom_panel (true/false) show or hide Messages (left), Actions (right) "
          "and, while something is open, the conversation under it (bottom), as their switches on the screen do.",
          obj({"action": {"type": "string", "enum": ["get", "set"]}, "key": S, "value": {}}, ["action"]),
          _settings_policy)

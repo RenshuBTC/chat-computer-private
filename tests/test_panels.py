@@ -1,4 +1,4 @@
-"""The panels' switches: Messages (left), What's done (right) and, while something is open, the conversation under it
+"""The panels' switches: Messages (left), Actions (right) and, while something is open, the conversation under it
 (bottom). The page says when one is switched; Chat Computer keeps the choice and tells the page at the start, and
 Claude switches them when asked."""
 import asyncio

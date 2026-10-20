@@ -1,4 +1,4 @@
-"""Pins: items pinned to the top of the two sidebars (What's done and Messages), kept in ~/ChatComputer/pins.json as
+"""Pins: items pinned to the top of the two sidebars (Actions and Messages), kept in ~/ChatComputer/pins.json as
 {"done": {id: when pinned}, "messages": {id: when pinned}}. Newest pin first."""
 from __future__ import annotations
 

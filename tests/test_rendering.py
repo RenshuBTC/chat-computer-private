@@ -59,13 +59,15 @@ def test_the_conversation_reads_and_scrolls_like_a_chat():
         assert abs(state["you"]["right"]) < 1 and state["you"]["left"] > 20
         assert state["you"]["background"] == "rgb(237, 237, 237)" and state["you"]["style"] == "normal"
         assert abs(state["ai"]["left"]) < 1 and state["ai"]["background"] == "rgba(0, 0, 0, 0)"
-    # More than a screenful: it can be scrolled, and new words keep the newest at the bottom.
+    # More than a screenful: it can be scrolled. Your latest message is at the top of the screen with its answer under
+    # it (as in the Claude app), and an answer longer than the screen is followed down as it comes.
     assert filled["height"] > filled["view"] and filled["bottom"] < 2
+    assert abs(filled["you_top"] - filled["margin"]) < 3 and filled["ai_below"]
     assert streamed["bottom"] < 2 and streamed["height"] > filled["height"]
     # Scrolled up to read: more words don't pull it down...
     assert up["top"] == 0 and up["height"] > streamed["height"]
-    # ...until a new message, which brings it to the bottom.
-    assert asked["bottom"] < 2
+    # ...until a new message, which goes to the top of the screen: nothing of it is below.
+    assert asked["bottom"] < 2 and abs(asked["you_top"] - asked["margin"]) < 3
 
 
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
@@ -85,7 +87,7 @@ def test_whats_done_takes_you_back_to_where_it_was_asked():
     res = json.loads(r.stdout.strip().splitlines()[-1])
     assert "timeout" not in res, res
     start, today, earlier = res["start"], res["today"], res["earlier"]
-    assert start["panel"] and start["display"] == "flex" and start["title"] == "What’s done"
+    assert start["panel"] and start["display"] == "flex" and start["title"] == "Actions"
     # A rounded card, inset from the screen's edge, in the right sixth of the screen.
     rem = (start["view"] - start["left"] - start["width"]) / 0.75           # the card stands 0.75 rem from the edge
     assert 14 < rem < 40 and abs(start["width"] - (0.17 * start["view"] - rem)) < 2 and start["radius"].endswith("px")
@@ -161,7 +163,7 @@ def test_the_message_box_works_like_the_claude_apps():
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
                     reason="xvfb-run or xdotool not available")
 def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
-    # Messages at the left and What's done at the right, as rounded cards inset from the screen's edges. Something
+    # Messages at the left and Actions at the right, as rounded cards inset from the screen's edges. Something
     # opened (a website) goes in a rounded frame between them, the same space apart, above your latest message,
     # Claude's latest reply and the message box. F1 makes it fill the screen and F1 again puts it back; Escape
     # closes it. A message can be pinned (it goes to the top) and opened, with real clicks.

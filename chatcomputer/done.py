@@ -1,8 +1,8 @@
-"""What's done: everything Chat Computer did for the person (opened a site, searched the web, changed a file, joined a
+"""Actions: everything Chat Computer did for the person (opened a site, searched the web, changed a file, joined a
 Wi-Fi network, installed a program...), each linked to the message that asked for it. Kept in
 ~/ChatComputer/done.jsonl, newest last.
 
-The conversation screen lists it in a panel at the right, "What's done". Tapping one scrolls back to the message
+The conversation screen lists it in a panel at the right, "Actions". Tapping one scrolls back to the message
 that asked for it; when that message isn't on the screen any more (an earlier day), the conversation from there on
 is put back from the transcript first. Claude reads the list with recent_actions ("what did I change yesterday?").
 

@@ -79,9 +79,11 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   within two minutes. Only when there are no AirPods anywhere does it ask "Connect your AirPods?"; say or type
   yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
   PC's own speakers Chat Computer doesn't greet you out loud.
-* **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, and
-  a message box at the bottom. Before anything is said, its name, **Chat Computer**, is in the middle, and the
-  conversation starts with its first words, the classic `hello, world`; the name goes once you say something.
+* **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, from
+  the top of the screen down, and a message box at the bottom. What you send moves to the top of the screen with
+  the answer coming in under it, so you never scroll down to read it; scroll up for anything earlier. Before
+  anything is said, its name, **Chat Computer**, is in the middle, and the conversation starts with its first
+  words, the classic `hello, world`; the name goes once you say something.
   The empty message box says, dimmed, "Chat computer anything or type “/” to search", with the cursor already
   blinking in it. The round button at its right sends: grey while there's
   nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
@@ -94,13 +96,13 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   connect, newest first: Gmail, Outlook and Hotmail, iCloud Mail, other email, Telegram, WhatsApp, X,
   Instagram, Facebook, TikTok and LinkedIn. Tap one to read it between the panels (an email shows as the
   conversation with whoever sent it). Tap + to connect an account: see [Connecting accounts](#connecting-accounts).
-* **What's done.** A panel at the right shows today's date and the time, and lists everything done for you,
+* **Actions.** A panel at the right shows today's date and the time, and lists everything done for you,
   by day, each with its time: sites opened, web searches, files changed, settings, programs. Tap one to
   scroll back to the message that asked for it, even from an earlier day. Ask "what did I change yesterday?"
   and Claude reads the same list.
 * **Pins.** Pin an item in either panel (the pin by it, or swipe it left on a touchscreen) to keep it at the top.
 * **The panels' switches.** Each panel has a switch like the Claude app's sidebar button: Messages' at the top
-  left, What's done's at the top right and, while something is open, the conversation's at the bottom right.
+  left, Actions' at the top right and, while something is open, the conversation's at the bottom right.
   Its icon is filled in while the panel shows. Switched off, the panel gives its room to the rest; typing
   brings the conversation back. Asking works too ("hide the sidebars").
 * **"/" searches this computer.** Type / first in the message box and what you type after it searches your
@@ -431,16 +433,22 @@ messages and files there are made up. Everyone gets answers, free:
 
 * **Written answers**, in `host.js`: what Chat Computer is, what it needs and costs (it's free, on a Claude Pro
   or Max plan; the download is coming soon), and what the page can show: music (a few soft chords the browser
-  makes), maps, the weather, timers, sums, the date and time, the made-up messages and files. Asked for something
+  makes), maps, the weather and the air, timers, sums, the date and time, the news (Wikipedia's Current events),
+  Wikipedia's article for a question of fact or "look up …", the made-up messages and files. Asked for something
   only an AI can do (a recipe, a poem, a translation), it says so, and how to get one.
 * **The browser's own AI**, where there is one: Chrome on a computer has Gemini Nano built in, and Edge
-  Phi-4-mini, running on the device itself. The **Free answers** button at the right of the message box shows
-  while the browser can download it; Chrome downloads it once, after that click, and keeps it for every site.
-  Then it answers what the written answers can't, and can put a page it writes, a map or a timer on the screen.
+  Phi-4-mini, running on the device itself. The **Download Gemini** button (in Edge, Download Phi-4-mini) at the
+  right of the message box shows while the browser can download it; Chrome downloads it once, after that click,
+  and keeps it for every site. Then it answers what the written answers can't, and can put a page it writes, a map
+  or a timer on the screen. It can't reach the internet itself, so the page looks things up for it: when a question
+  needs something recent or that it isn't sure of, or they say "look it up", it says what to look up, the page
+  searches Wikipedia, the day's news (Wikipedia's Current events) and, for haze or pollution, the air
+  (Open-Meteo), and it answers from what was found, saying where it's from. The page's own answers go into its
+  conversation too, so a follow-up ("the haze?" after the weather) makes sense to it.
 
-What's typed stays in the browser, except a place's name asked about for a map or the weather, which goes to
-Open-Meteo's free geocoding and forecast (the map itself comes from OpenStreetMap), and except with the two
-other buttons at the right of the message box (`docs/demo/demo.css`):
+What's typed stays in the browser, except a place's name asked about for a map, the weather or the air, which goes
+to Open-Meteo's free geocoding and forecasts (the map itself comes from OpenStreetMap), the words looked up on
+Wikipedia, and with the two other buttons at the right of the message box (`docs/demo/demo.css`):
 
 * **Connect Claude**: paste an API key from Claude Console, and Claude (Opus 5.5, as on a Chat Computer, but at
   the API's own effort, medium, rather than max, for quicker answers) answers for real and does things on the screen: plays YouTube videos (YouTube's player between the panels;

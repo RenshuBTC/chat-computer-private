@@ -1,4 +1,4 @@
-"""The screen's layout with both sidebars: Messages at the left (newest first, pins, opening one) and What's done at
+"""The screen's layout with both sidebars: Messages at the left (newest first, pins, opening one) and Actions at
 the right, as rounded cards; something opened (a website) between them, in a frame above the latest exchange (both
 messages in full) and the message box; "/" searching, its list in front (the page ends above it); the panels'
 switches (the sidebars off and on, the conversation under the page off, and typing bringing it back); F1 makes it

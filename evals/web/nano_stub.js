@@ -1,11 +1,26 @@
 // A stand-in for Chrome's built-in AI (LanguageModel, Chrome's Prompt API), for evals/web/run.js --nano. It answers
 // the cases' open questions the way the page asks Gemini Nano to (JSON, per its NANO_SCHEMA), so the eval tests the
-// page's side: that the answer shows, its action is done, What's done is told, and a failure falls back to the
+// page's side: that the answer shows, its action is done, Actions is told, and a failure falls back to the
 // written answers. It says nothing about how well Gemini Nano itself answers: only real Chrome can show that.
 //
-// What the page sent is kept in window.__nano (the session's options, each prompt and its options).
+// Like Gemini Nano is asked to, it says what to look up for something recent or that it doesn't know (action
+// search), and then answers from what the page found (a prompt that starts "The question:").
+//
+// What the page sent is kept in window.__nano (the session's options, each prompt and its options, what was appended).
 (function () {
-  var seen = window.__nano = { created: [], prompts: [] };
+  var seen = window.__nano = { created: [], prompts: [], appended: [] };
+  var LOOK = [[/prime minister/i, "Prime Minister of Singapore"], [/world cup/i, "2026 World Cup winner"],
+              [/marina bay sands/i, "Marina Bay Sands architect"], [/population/i, "Singapore population"],
+              [/\bhaze\b|\bair quality\b/i, "Singapore haze"], [/headlines|news|yesterday/i, "news"],
+              [/worst one/i, "Southeast Asian haze worst"]];
+  var asked = "";          // what "look it up" is about: the question before it
+  function found(text) {
+    var first = /\n1\. ([^\n]*)/.exec(text);
+    if (!first) return { reply: "I looked, but found nothing on that.", action: "none" };
+    var what = first[1].replace(/^[^:]*: /, "");
+    return { reply: "According to " + (/Wikipedia/.test(first[1]) ? "Wikipedia" : "Open-Meteo") + ": " + what.split(/(?<=\.)\s/)[0] +
+             (/\n2\. /.test(text) ? " " + /\n2\. ([^\n]*)/.exec(text)[1].replace(/^[^:]*: /, "").split(/(?<=\.)\s/)[0] : ""), action: "none" };
+  }
   var CANNED = [
     [/capital of australia/i, { reply: "Canberra is the capital of Australia.", action: "none" }],
     [/recipe|chicken rice/i, { reply: "Here's a recipe for Hainanese chicken rice, on the screen.", action: "show_page",
@@ -29,6 +44,10 @@
       title: "Reverse a string", markdown: "```python\ndef reverse(s):\n    return s[::-1]\n```" }]
   ];
   function answer(text) {
+    if (/^The question:/.test(text)) return found(text);
+    var about = /^look it up\b/i.test(text) ? asked : text;
+    if (!/^look it up\b/i.test(text)) asked = text;
+    for (var j = 0; j < LOOK.length; j++) if (LOOK[j][0].test(about)) return { reply: "Let me look.", action: "search", query: LOOK[j][1] };
     for (var i = 0; i < CANNED.length; i++) if (CANNED[i][0].test(text)) return CANNED[i][1];
     if (/^[\W\d_]*[a-z]{0,8}[\W\d_]*$/i.test(text)) {
       return { reply: "I'm not sure what you mean. Try asking me to play music or show a map.", action: "none" };
@@ -40,6 +59,7 @@
       seen.prompts.push({ text: text, constrained: !!(opts && opts.responseConstraint) });
       return new Promise(function (ok) { setTimeout(function () { ok(JSON.stringify(answer(text))); }, 400); });
     },
+    append: function (messages) { seen.appended.push(messages); return Promise.resolve(); },
     destroy: function () {}
   };
   window.LanguageModel = {

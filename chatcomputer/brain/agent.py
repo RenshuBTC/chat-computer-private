@@ -531,7 +531,7 @@ class Brain:
             await client.disconnect()
 
     def _tool_done(self, use_id: str, ok: bool, result: str) -> None:
-        """A tool call's result came back (What's done lists what worked: chatcomputer/done.py)."""
+        """A tool call's result came back (Actions lists what worked: chatcomputer/done.py)."""
         call = self._tool_calls.pop(use_id, None)
         if call is None:
             return

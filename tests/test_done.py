@@ -1,4 +1,4 @@
-"""What's done (chatcomputer/done.py): what Chat Computer did for the person, in plain words, each linked to the message
+"""Actions (chatcomputer/done.py): what Chat Computer did for the person, in plain words, each linked to the message
 that asked for it; shown in a panel at the right of the conversation and read by recent_actions."""
 import asyncio
 import json

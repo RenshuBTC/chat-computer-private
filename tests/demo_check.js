@@ -4,7 +4,7 @@
 // panels' switches; music (made by the browser); "/" lists the files in front of what's open; F1 and Escape; a
 // message opened; Connect Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
 // when it ends, with a stand-in for YouTube's player; answers streamed; thinking first, as Opus 5.5 always does);
-// Connect AirPods' sheet; Chrome's built-in AI, with a stand-in (Free answers: its sheet, the download, then it
+// Connect AirPods' sheet; Chrome's built-in AI, with a stand-in (Download Gemini: its sheet, the download, then it
 // answers); a phone (music turned down, then stopped).
 // Prints JSON.  Run: node tests/demo_check.js [shot-prefix]
 const path = require("path");
@@ -236,7 +236,7 @@ async function ask(page, text) {
   out.talk_sheet = await state(page);
   await page.keyboard.press("Escape");
 
-  // Chrome's built-in AI, standing in: it can be downloaded; "Free answers", its sheet, the download (its progress on
+  // Chrome's built-in AI, standing in: it can be downloaded; "Download Gemini", its sheet, the download (its progress on
   // the button), then it answers what the written answers can't, with a page on the screen. Written answers still
   // answer what they can (music).
   const ai = await browser.newPage({ viewport: { width: 1600, height: 900 } });

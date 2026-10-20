@@ -1,0 +1,286 @@
+{
+ "about": "Hand labels for the website with the real Gemini Nano (Chrome 155 on the owner's PC), before it could look things up: chatcomputer.ai as deployed at e5559ea, 20 Oct 2026 (run web-nano-real-base: 87 cases, the 10 internet ones first). Read from each answer and what opened, by the same meaning as scripted-baseline.json. Answers the page wrote itself are labelled as in scripted-v2.json (the same answers); Gemini's are labelled here, with a note.",
+ "labels": {
+  "what-is-this": {
+   "pass": true
+  },
+  "how-work": {
+   "pass": true
+  },
+  "what-can-do": {
+   "pass": true
+  },
+  "is-this-an-os": {
+   "pass": true
+  },
+  "hello": {
+   "pass": true
+  },
+  "hi-there": {
+   "pass": true
+  },
+  "how-are-you": {
+   "pass": true
+  },
+  "thanks": {
+   "pass": true
+  },
+  "play-music": {
+   "pass": true
+  },
+  "play-piano": {
+   "pass": true
+  },
+  "play-taylor": {
+   "pass": true
+  },
+  "play-lofi-typo": {
+   "pass": true
+  },
+  "im-bored": {
+   "pass": true
+  },
+  "relax": {
+   "pass": true
+  },
+  "youtube-video": {
+   "pass": true
+  },
+  "map-tokyo": {
+   "pass": true
+  },
+  "map-short": {
+   "pass": true
+  },
+  "where-is-london": {
+   "pass": true
+  },
+  "directions": {
+   "pass": true
+  },
+  "map-other-city": {
+   "pass": true
+  },
+  "timer-5": {
+   "pass": true
+  },
+  "timer-terse": {
+   "pass": true
+  },
+  "eggs": {
+   "pass": true
+  },
+  "weather": {
+   "pass": true
+  },
+  "weather-city": {
+   "pass": true
+  },
+  "umbrella": {
+   "pass": true
+  },
+  "messages": {
+   "pass": true
+  },
+  "jane": {
+   "pass": true
+  },
+  "email": {
+   "pass": true
+  },
+  "reply-mum": {
+   "pass": true
+  },
+  "packing": {
+   "pass": true
+  },
+  "find-photo": {
+   "pass": true
+  },
+  "search-files": {
+   "pass": true
+  },
+  "louder": {
+   "pass": true
+  },
+  "bigger-text": {
+   "pass": true
+  },
+  "close-it": {
+   "pass": true
+  },
+  "wifi": {
+   "pass": true
+  },
+  "open-website": {
+   "pass": true
+  },
+  "open-google": {
+   "pass": true
+  },
+  "news": {
+   "pass": true
+  },
+  "recipe": {
+   "pass": false,
+   "note": "Refuses: can't look up recipes online."
+  },
+  "calc": {
+   "pass": true
+  },
+  "capital": {
+   "pass": false,
+   "note": "Refuses to say Canberra: 'not able to look up information on the internet'."
+  },
+  "explain-quantum": {
+   "pass": true,
+   "note": "A good plain explanation (qubits), in the reply."
+  },
+  "write-email": {
+   "pass": true,
+   "note": "A usable draft, in the reply (the page put on the screen is nearly empty)."
+  },
+  "poem": {
+   "pass": true,
+   "note": "A four-line poem about the sea, in the reply."
+  },
+  "translate": {
+   "pass": true,
+   "note": "Arigatou gozaimasu, though the sentence around it is in Japanese."
+  },
+  "trip-plan": {
+   "pass": false,
+   "note": "'I am Gemma... not able to plan a trip'."
+  },
+  "advice": {
+   "pass": false,
+   "note": "Won't give sleep tips: 'consult a doctor'."
+  },
+  "code": {
+   "pass": false,
+   "note": "'I am Gemma... don't have the capability'; no function."
+  },
+  "date-today": {
+   "pass": true
+  },
+  "time-now": {
+   "pass": true
+  },
+  "joke": {
+   "pass": true
+  },
+  "how-install": {
+   "pass": true
+  },
+  "download": {
+   "pass": true
+  },
+  "price": {
+   "pass": true
+  },
+  "mac": {
+   "pass": true
+  },
+  "windows-safe": {
+   "pass": true
+  },
+  "requirements": {
+   "pass": true
+  },
+  "old-laptop": {
+   "pass": true
+  },
+  "privacy": {
+   "pass": true
+  },
+  "is-it-free": {
+   "pass": true
+  },
+  "airpods": {
+   "pass": true
+  },
+  "are-you-claude": {
+   "pass": true
+  },
+  "who-made": {
+   "pass": true
+  },
+  "anthropic": {
+   "pass": true
+  },
+  "cant-do": {
+   "pass": true
+  },
+  "control-my-pc": {
+   "pass": true
+  },
+  "real-or-fake": {
+   "pass": true
+  },
+  "gibberish": {
+   "pass": false,
+   "note": "Asks what they'd like, without saying what it can do."
+  },
+  "emoji": {
+   "pass": true
+  },
+  "question-mark": {
+   "pass": true
+  },
+  "chinese": {
+   "pass": true
+  },
+  "spanish": {
+   "pass": true
+  },
+  "malay": {
+   "pass": true
+  },
+  "rude": {
+   "pass": true
+  },
+  "long": {
+   "pass": true
+  },
+  "haze-trace": {
+   "pass": false,
+   "note": "Says three times that it isn't connected to the internet; 'the haze?' gets no answer."
+  },
+  "haze-now": {
+   "pass": false,
+   "note": "'I am sorry', and nothing else."
+  },
+  "pm": {
+   "pass": false,
+   "note": "Refuses: it can't look things up, so doesn't know."
+  },
+  "world-cup": {
+   "pass": false,
+   "note": "Refuses: no real-time information."
+  },
+  "look-it-up": {
+   "pass": false,
+   "note": "Refuses twice, though it knows (Moshe Safdie)."
+  },
+  "search-population": {
+   "pass": false,
+   "note": "The written answers searched the demo's files instead."
+  },
+  "headlines": {
+   "pass": false,
+   "note": "No news: a link to BBC News."
+  },
+  "news-yesterday": {
+   "pass": false,
+   "note": "Refuses: not connected to the internet."
+  },
+  "why-no-internet": {
+   "pass": false,
+   "note": "'I am not connected to the internet'."
+  },
+  "tell-me-more": {
+   "pass": false,
+   "note": "'I am Gemma... no information'; the follow-up ('the worst one') taken for rudeness."
+  }
+ }
+}

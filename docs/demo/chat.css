@@ -1,9 +1,11 @@
 /* The conversation, laid out like the Claude app: Claude's words on the left in one column, upright and black;
-   yours on the right, in a light grey bubble; newest at the bottom, above the message box. Scrolling up (the mouse
-   wheel, Page Up, the arrow keys while the box is empty, or pinching and moving with AirTouch) shows earlier
-   messages; new words bring it back down. On a wide screen, Messages runs down the left and What's done down the
-   right: a sixth of the screen each, as the Claude app's side panels take. What Claude opens (a website, a video, a
-   document) goes between them, above your latest message, Claude's latest reply and the message box. */
+   yours on the right, in a light grey bubble; from the top of the screen down. What you send goes to the top of the
+   screen, with the answer coming in under it (chat.js leaves room under the latest exchange for that: #room), so
+   it's never below the screen: scrolling up (the mouse wheel, Page Up, the arrow keys while the box is empty, or
+   pinching and moving with AirTouch) shows earlier messages. On a wide screen, Messages runs down the left and
+   Actions down the right: a sixth of the screen each, as the Claude app's side panels take. What Claude opens (a
+   website, a video, a document) goes between them, above your latest message, Claude's latest reply and the
+   message box. */
 html { scrollbar-width: none; }
 ::-webkit-scrollbar { display: none; }
 body.panel { --left: 17vw; --panel: 17vw; --rail: calc(3.45rem + 2px); }
@@ -12,12 +14,13 @@ body.panel.hide-left { --left: var(--rail); }
 body.panel.hide-right { --panel: var(--rail); }
 body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
 #column {
-  display: flex; flex-direction: column; justify-content: flex-end;
-  min-height: 100vh;
+  display: flex; flex-direction: column;
   width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto;
   padding: 2rem 0 calc(var(--composer-h, 5rem) + 1.25rem);
 }
 #log { display: flex; flex-direction: column; gap: 1.25rem; }
+#room { flex: none; height: 0; }
+body.content #room { display: none; }
 
 /* Your words: on the right, in a bubble no wider than most of the column, the way chat apps show them. */
 .you {
@@ -26,7 +29,7 @@ body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .you, .ai { scroll-margin-top: 1.5rem; }
-/* The message a tapped item of What's done was asked in, for a moment. */
+/* The message a tapped item of Actions was asked in, for a moment. */
 .you.found { outline: 2px solid var(--ink); outline-offset: 3px; }
 .ai { overflow-wrap: anywhere; }
 /* What Claude is doing (when show_activity is on), in the mono font, above the words it leads to. */
@@ -159,7 +162,7 @@ button { font: inherit; color: var(--ink); }
   background: var(--ink); color: var(--ground); cursor: pointer;
 }
 
-/* The two sidebars: Messages at the left (newest first), What's done at the right (oldest at the top, grouped by
+/* The two sidebars: Messages at the left (newest first), Actions at the right (oldest at the top, grouped by
    day). Each item can be pinned: pinned ones stay at the top, under the title. Tapping a message opens it between
    the sidebars; tapping something done scrolls the conversation back to the message that asked for it. */
 .side {
@@ -251,9 +254,9 @@ body.sheet #sheet { display: flex; }
 #sheet-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 1.25em; margin-top: 1.5em; }
 body.sheet-busy #sheet-ok { visibility: hidden; }
 
-/* The panels' switches, like the Claude app's sidebar button: Messages' at the top left, What's done's at the top
+/* The panels' switches, like the Claude app's sidebar button: Messages' at the top left, Actions' at the top
    right, and the conversation's (while something is open) at the bottom right, beside the message box. Each icon
-   is the screen with its panel marked, filled in while the panel shows. Switched off, Messages and What's done
+   is the screen with its panel marked, filled in while the panel shows. Switched off, Messages and Actions
    leave a narrow margin with just their switch; the conversation's leaves the page room down to its switch. Only
    where the sidebars fit (body.panel). */
 .toggle {

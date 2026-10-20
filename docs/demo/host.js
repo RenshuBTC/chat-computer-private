@@ -10,8 +10,9 @@
      type goes from your browser straight to Anthropic; the key stays in this browser.
    - Connect AirPods: you talk, and the answers are read out. Your browser turns what you say into text (Chrome
      does it on Google's servers).
-   Fetched from elsewhere: a map from OpenStreetMap when you ask for one, and YouTube's player when connected
-   Claude plays a video. */
+   Fetched from elsewhere: a map from OpenStreetMap when you ask for one, the weather and the air from Open-Meteo,
+   YouTube's player when connected Claude plays a video, and, when the browser's own AI looks something up for an
+   answer (or you ask for the news), Wikipedia's articles and its Current events: only the words looked up go there. */
 (function () {
   "use strict";
   var START = Date.now() / 1000;
@@ -79,7 +80,7 @@
     m6: { title: "Priya", note: "On Chat Computer this is X's own page.", lines: [["Priya", START - 96000, "Are you coming to the meetup on Saturday?"]] },
     m7: { title: "Daniel Tan", note: "On Chat Computer this is LinkedIn's own page.", lines: [["Daniel Tan", START - 260000, "Thanks for connecting!"]] }
   };
-  // Earlier conversations, put back when something in What's done is tapped (the screen starts empty: the word logo).
+  // Earlier conversations, put back when something in Actions is tapped (the screen starts empty: the word logo).
   var EARLIER = [
     { role: "user", id: "y1", ts: START - 86400 - 3010, text: "Play some calm piano music" },
     { role: "assistant", id: "ya1", ts: START - 86400 - 3000, text: "Playing a calm piano mix on YouTube." },
@@ -424,7 +425,8 @@
   // AI. The facts are README.md's, in one place, for the written answers and for Chrome's AI.
   // The browser's own AI: Chrome's is Gemini Nano, from Google; Edge has the same, with Microsoft's Phi-4-mini.
   var EDGE = /\bEdg\//.test(navigator.userAgent || "");
-  var AI = { browser: EDGE ? "Edge" : "Chrome", model: EDGE ? "Phi-4-mini" : "Gemini Nano", maker: EDGE ? "Microsoft" : "Google" };
+  var AI = { browser: EDGE ? "Edge" : "Chrome", model: EDGE ? "Phi-4-mini" : "Gemini Nano", short: EDGE ? "Phi-4-mini" : "Gemini",
+             maker: EDGE ? "Microsoft" : "Google" };
   var FACTS = {
     what: "Chat Computer is Claude, made by Anthropic, running a whole computer: there's no desktop and no apps to learn. " +
       "You talk, type or touch the screen, and it does what you ask: opens websites, plays music and videos, reads your " +
@@ -549,6 +551,187 @@
     var r = Math.round(v * 100) / 100, exact = Math.round(v * 1e6) / 1e6;
     return { text: shown + " is " + (r === exact ? r : r + " (" + exact + ")") + "." };
   }
+  // ------------------------------------------------------------------ looking things up on the web
+  // The browser's built-in AI runs on the device and can't reach the internet by itself, so this page looks things up
+  // for it, from the browser, in sources that let a page ask them directly and need no key: Wikipedia (the opening of
+  // its articles), Wikipedia's Current events (the day's news, a sentence or two each, with its sources) and Open-Meteo
+  // (the air: haze, pollution). Only the words looked up go to them. The written answers use them too: the news, the
+  // air, "look it up", and a question of fact (Wikipedia's article on it).
+  var WIKI = "https://en.wikipedia.org/w/api.php?format=json&formatversion=2&origin=*&";
+  function getJSON(url, ms) {
+    var ctl = typeof AbortController === "function" ? new AbortController() : null;
+    var late = setTimeout(function () { if (ctl) ctl.abort(); }, ms || 8000);
+    return fetch(url, ctl ? { signal: ctl.signal } : undefined).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (j) { clearTimeout(late); return j; }, function (e) { clearTimeout(late); throw e; });
+  }
+  function plain(s) { return String(s == null ? "" : s).replace(/\s+/g, " ").trim(); }
+  // Wikipedia's articles that match, best first, each with its opening (up to 900 letters).
+  function wikipedia(q, n) {
+    return getJSON(WIKI + "action=query&generator=search&gsrlimit=" + (n || 3) + "&gsrsearch=" + encodeURIComponent(q) +
+      "&prop=extracts%7Cinfo&exintro=1&explaintext=1&exchars=900&inprop=url").then(function (j) {
+      return ((j.query && j.query.pages) || []).filter(function (p) { return p.extract; })
+        .sort(function (a, b) { return a.index - b.index; })
+        .map(function (p) { return { source: "Wikipedia", title: p.title, url: p.fullurl, text: plain(p.extract) }; });
+    });
+  }
+  // The day's news: Wikipedia's Current events, today's and yesterday's (Wikipedia's days are UTC's).
+  var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  function news() {
+    return Promise.all([0, 1].map(function (k) {
+      var d = new Date(Date.now() - k * 86400000);
+      var name = "Portal:Current_events/" + d.getUTCFullYear() + "_" + MONTHS[d.getUTCMonth()] + "_" + d.getUTCDate();
+      return getJSON(WIKI + "action=parse&prop=text&disablelimitreport=1&disableeditsection=1&page=" + encodeURIComponent(name))
+        .then(function (j) { return stories(j.parse && j.parse.text, d, name); }, function () { return []; });
+    })).then(function (two) { return two[0].concat(two[1]); });
+  }
+  // A day's stories, from its page (read here, not shown): each with its topics ("Hurricane Melissa: ...") and sources.
+  function stories(html, d, name) {
+    if (!html || typeof DOMParser === "undefined") return [];
+    var doc = new DOMParser().parseFromString(String(html), "text/html");
+    var root = doc.querySelector(".current-events-content") || doc.body;
+    var day = d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
+    var out = [];
+    Array.prototype.forEach.call(root.querySelectorAll("li"), function (li) {
+      if (li.querySelector("ul, ol")) return;                         // a topic: its stories are below it
+      var topics = [];
+      for (var p = li.parentElement; p && p !== root; p = p.parentElement) if (p.tagName === "LI") topics.unshift(ownWords(p));
+      var links = Array.prototype.filter.call(li.querySelectorAll("a.external, a[rel~=nofollow]"), function (a) {
+        return /^https:\/\//.test(a.getAttribute("href") || "");
+      }).map(function (a) { return { name: plain(a.textContent).replace(/^\(|\)$/g, ""), url: a.getAttribute("href") }; });
+      var text = plain(li.textContent);
+      if (text.length < 30) return;
+      out.push({ source: "Wikipedia's Current events, " + day, title: topics.filter(Boolean).join(": "), text: text,
+                 url: "https://en.wikipedia.org/wiki/" + name, links: links, day: day });
+    });
+    return out;
+  }
+  function ownWords(li) {
+    var s = "";
+    Array.prototype.forEach.call(li.childNodes, function (n) { if (!/^(UL|OL)$/.test(n.nodeName)) s += n.textContent; });
+    return plain(s);
+  }
+  // The air now where they are (or where asked): Open-Meteo's, from the Copernicus forecast; the US air quality index.
+  var AQI = [[50, "good"], [100, "moderate"], [150, "unhealthy for sensitive people"], [200, "unhealthy"], [300, "very unhealthy"],
+             [Infinity, "hazardous"]];
+  function air(where) {
+    return place_(where).then(function (p) {
+      return getJSON("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" + p.lat + "&longitude=" + p.lon +
+        "&current=us_aqi,pm2_5,pm10&timezone=auto").then(function (j) {
+        var c = j.current || {}, n = Math.round(c.us_aqi);
+        if (!isFinite(n)) return [];
+        var band = AQI.filter(function (b) { return n <= b[0]; })[0][1];
+        return [{ source: "Open-Meteo (the Copernicus forecast)", title: "The air in " + p.name + " now", url: "https://open-meteo.com/",
+          air: true, text: "The air in " + p.name + " now is " + band + ": the US air quality index is " + n + ", PM2.5 " +
+          Math.round(c.pm2_5) + " µg/m³, PM10 " + Math.round(c.pm10) + " µg/m³." }];
+      });
+    });
+  }
+  var NEWSY = /\b(news|headlines?|happen(s|ed|ing)?|current events|going on|in the world)\b/i;
+  var AIRY = /\b(haze|hazy|air quality|air pollution|pollution|smog|psi|aqi|pm ?2\.?5)\b/i;
+  // Looks q up (for a question, asked): the air for haze words, the day's news for news words, and Wikipedia's articles
+  // unless it's just the news. What it looked up goes in Actions.
+  function lookup(q, asked) {
+    var all = q + " " + (asked || ""), jobs = [], told = [];
+    var justNews = !q.replace(/\b(the|today'?s|todays|today|latest|top|world|current|news|headlines?|stories|events|this|week|yesterday'?s|yesterday|in|on|what'?s|what|is|are|was|happened|happening|going)\b|[^\w\s]/gi, "").trim();
+    if (AIRY.test(all)) {
+      var where = placeIn(all) || hereName() || "Singapore";
+      jobs.push(air(where));
+      told.push("Looked up the air in " + title(where));
+    }
+    if (NEWSY.test(all)) { jobs.push(news()); told.push("Read the news on Wikipedia"); }
+    if (!justNews) { jobs.push(wikipedia(q)); told.push("Searched Wikipedia for “" + clip(q, 50) + "”"); }
+    return Promise.all(jobs.map(function (j) { return j.catch(function () { return []; }); })).then(function (lists) {
+      return { list: [].concat.apply([], lists), told: told };
+    });
+  }
+  // The first n sentences: each ends at a full stop (or ! ?) before a capital, so "6.11 million" isn't cut.
+  function sentences(s, n) {
+    s = plain(s);
+    var out = [], re = /[.!?]+["”’)]*\s+(?=[A-Z0-9"“‘(])/g, at = 0, m;
+    while (out.length < n && (m = re.exec(s))) { out.push(s.slice(at, m.index + m[0].length).trim()); at = m.index + m[0].length; }
+    if (out.length < n && at < s.length) out.push(s.slice(at).trim());
+    return out.join(" ");
+  }
+  // On the screen: what was found, with links to it.
+  var LIST_CSS = NOTE_CSS + ".found{margin:0 0 1.1rem}.found p{margin:0.2rem 0 0}.found a{color:inherit}";
+  function foundShow(q, list) {
+    var more = "https://en.wikipedia.org/w/index.php?fulltext=1&search=" + encodeURIComponent(q);
+    show({ html: page(q, '<article><h1 class="title">' + esc(clip(q, 80)) + '</h1><p class="demo-note">From Wikipedia, looked up just now ' +
+      '(<a href="' + esc(more) + '" target="_blank" rel="noopener noreferrer">more of what it found</a>).</p>' +
+      list.slice(0, 1).map(function (x) {
+        return '<section class="found"><b><a href="' + esc(x.url) + '" target="_blank" rel="noopener noreferrer">' + esc(x.title) +
+          "</a></b><p>" + esc(x.text) + "</p></section>";
+      }).join("") + "</article>", LIST_CSS) });
+  }
+  function newsShow(list) {
+    var items = list.filter(function (x) { return x.links; }).slice(0, 40);
+    if (!items.length) return false;
+    var body = "", day = "";
+    items.forEach(function (x) {
+      if (x.day !== day) { body += (day ? "</ul>" : "") + "<h2>" + esc(x.day) + "</h2><ul>"; day = x.day; }
+      var words = x.links.length ? x.text.replace(/(\s*\([^()]{1,60}\))+\s*$/, "") : x.text;
+      body += "<li>" + (x.title ? "<b>" + esc(x.title) + ":</b> " : "") + esc(words) + x.links.map(function (l) {
+        return ' <a href="' + esc(l.url) + '" target="_blank" rel="noopener noreferrer">(' + esc(l.name || "source") + ")</a>";
+      }).join("") + "</li>";
+    });
+    show({ html: page("In the news", '<article><h1 class="title">In the news</h1><p class="demo-note">From ' +
+      '<a href="https://en.wikipedia.org/wiki/Portal:Current_events" target="_blank" rel="noopener noreferrer">Wikipedia\'s Current events</a>, ' +
+      "looked up just now.</p>" + body + "</ul></article>", LIST_CSS + "li{margin:0 0 0.6rem}li a{color:inherit}") });
+    return true;
+  }
+  // The written answers that look things up: the news, the air, and Wikipedia's article on something (else: otherwise).
+  function newsAnswer() {
+    return news().then(function (list) {
+      if (!list.length) throw new Error("no news");
+      return { text: "Here's the news, from Wikipedia's Current events, on the screen. The latest: " + clip(list[0].text, 150),
+               done: ["Read the news on Wikipedia"], act: function () { newsShow(list); } };
+    }).catch(function () {
+      return { text: "I couldn't get the news just now. BBC News is a click away, on the screen.",
+               act: function () { show({ html: link("https://www.bbc.com/news", "BBC News", "On Chat Computer, news sites open right here.") }); } };
+    });
+  }
+  function airAnswer(t) {
+    var where = placeIn(t) || hereName() || "Singapore";
+    return air(where).then(function (list) {
+      if (!list.length) throw new Error("no reading");
+      return { text: list[0].text + " (Open-Meteo's estimate, from the Copernicus forecast.)", done: ["Looked up the air in " + title(where)] };
+    }).catch(function () { return { text: "I couldn't get the air quality for " + title(where) + " just now." }; });
+  }
+  function wikiAnswer(q, otherwise) {
+    return wikipedia(q).then(function (list) {
+      if (!list.length) throw new Error("nothing");
+      return { text: "Wikipedia, “" + list[0].title + "”: " + sentences(list[0].text, 2) + (list.length > 1 || list[0].text.length > 300 ? " More is on the screen." : ""),
+               done: ["Searched Wikipedia for “" + clip(q, 50) + "”"], act: function () { foundShow(q, list); } };
+    }).catch(function () {
+      if (otherwise) return otherwise;
+      var url = "https://www.google.com/search?q=" + encodeURIComponent(q);
+      return { text: "Wikipedia has nothing on “" + clip(q, 50) + "”. Google's search for it is a click away, on the screen.",
+               done: ["Showed a link to Google's search for “" + clip(q, 40) + "”"],
+               act: function () { show({ html: link(url, "Google: " + clip(q, 40), "On Chat Computer, Claude searches the whole web for you. Other sites can't show inside this page.") }); } };
+    });
+  }
+  // "Look it up" (what was asked before), "search the web for X", "google X", "look up X": their files aren't the web.
+  function topicOf(t) {
+    return String(t).replace(/^\s*(please\s+)?(tell me about|explain|define|(who|what|when|where|which|whose|why|how)('s|'re| is| are| was| were| did| does| do)?)\s+/i, "")
+      .replace(/\b(simply|please|to me|for me)\b|[?.!]+\s*$/gi, "").replace(/\s+/g, " ").trim() || String(t).trim();
+  }
+  // Questions whose answer changes, or came after any AI's training: looked up first, so it's not guessed (an AI
+  // otherwise answers "who is the prime minister" with the one it remembers).
+  var FRESH = /\b(who('s| is| are| was)? (the )?(current |new )?(president|prime minister|premier|chancellor|ceo|chief executive|chair(man|woman)?|king|queen|monarch|pope|leader|head of|minister|mayor|governor|coach|manager|captain|champion|owner)|who won|winners?|latest|current(ly)?|right now|nowadays|these days|today|tonight|yesterday|this (week|month|year|season)|last (week|month|year|night|season)|20(2[4-9]|3\d)|price of|how much (is|are|does|do)|stock price|exchange rate|scores?|results?|standings|election|released|launch(ed)?)\b/i;
+  // Typing that isn't words ("asdfgh", "qwerty"): not a question for anyone.
+  var MASH = /^\s*([asdfghjkl;']{4,}|[qwertyuiop]{4,}|[zxcvbnm,.]{4,}|(.)\2{3,})\s*[?!.]*\s*$/i;
+  var LOOK_IT_UP = /^\s*(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:look (?:it|that|this|them) up|search (?:for )?(?:it|that|this)|google (?:it|that|this)|search (?:the web|online|the internet)|check (?:online|the web|the internet)|find out)(?:\s+(?:for me|please|online|on the web|on the internet|on wikipedia|now))*\s*[?.!]*\s*$/i;
+  var SEARCH_FOR = /^\s*(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:search (?:the (?:web|internet) |online |wikipedia |google )?for|look up|google|search (?:the web|the internet|online|wikipedia|google)(?: for)?|find out(?: about)?)\s+(?!(?:my|the)?\s*files?\b|my\b)(.+?)\s*[?.!]*\s*$/i;
+  var lastAsked = "";
+  function lookUp(t) {
+    var m = SEARCH_FOR.exec(t), q = m ? m[1] : lastAsked && topicOf(lastAsked);
+    if (m && (/\b(weather|forecast|temperature)\b/i.test(q) || search(q.toLowerCase().replace(/\b(the|my|for|files?)\b/g, " ").replace(/\s+/g, " ").trim()).length)) return null;
+    if (!q) return { text: "What should I look up? Say “look up” and what, like “look up the Southeast Asian haze”." };
+    return { search: q, later: function () { return wikiAnswer(q); } };
+  }
+
   var JOKES = ["I told my computer I needed a break. It said: “No problem, I'll go to sleep.”",
                "Why did the computer go to the doctor? It had a virus, and a terrible case of bytes.",
                "I'd tell you a joke about Wi-Fi, but I'm not sure you'd get the connection."];
@@ -593,10 +776,15 @@
         act: function () { setVolume(up ? 60 : 40); } };
     }],
     // Who's answering, and who made it.
-    [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|ai|real|human|bot|model)\b|^(who are you|are you real)\b/i, function () {
+    [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|ai|real|human|bot|model)\b|^(who are you|are you real)\b|\bwhat('s| is) (running|powering|behind) (you|this)\b|\bwho('s| is) (answering|talking|running this)\b/i, function () {
       return { text: (nano.state === "available" && nano.session ? "Right now " + AI.browser + "'s built-in AI (" + AI.model + ") is answering, on your " +
-        "device, with what's written here about Chat Computer." : "On this page my answers are written in advance.") +
+        "device, with what's written here about Chat Computer, and what it looks up on Wikipedia." : "On this page my answers are written in advance.") +
         " On a real Chat Computer, Claude answers, through your own Claude plan. " + REAL };
+    }],
+    // Whether it can go on the internet ("why can't you look things up?"): it can, through this page.
+    [/^(?!.*\b(files?|photos?|pictures?|documents?)\b).*\b(can|do|could|are|why can'?t|why don'?t|why won'?t)\s+you\b.*\b(internet|online|the web|search|google|look (things|it|stuff|that|this) up|browse)\b/i, function () {
+      return { text: "I can: this page looks things up for me, on Wikipedia and in the day's news, and only the words looked up " +
+        "leave your browser. Ask me something, or say “look it up” after a question." };
     }],
     [/\bwho (made|built|makes|created|is behind)\b|\bwho'?s behind\b|\bmade by\b|\banthropic\b/i, function (t) {
       return { text: (/\banthropic\b/i.test(t) && /\bis (this|it)|made by\b/i.test(t) ? "No. " : "") + FACTS.indie };
@@ -609,8 +797,9 @@
         "Chat Computer opens your own files, from your Windows folders too." };
     }],
     [/\bwhat (can'?t|can not|cannot) you do\b|\byour limits\b|\bwhat don'?t you do\b/i, function () {
-      return { text: "On this page I can only show a few things: music the browser makes, maps, timers, the weather and the made-up " +
-        "messages and files. Real answers need Claude (Connect Claude) or the AI built into Chrome and Edge. On a Chat Computer, Claude does " +
+      return { text: "On this page I can only show a few things: music the browser makes, maps, timers, the weather, the news, " +
+        "Wikipedia's articles and the made-up messages and files. Real answers need Claude (Connect Claude) or the AI built into " +
+        "Chrome and Edge. On a Chat Computer, Claude does " +
         "most of what a computer does, by talking; it doesn't run Windows or Mac apps (it uses websites instead), and " +
         "Windows stays one restart away." };
     }],
@@ -631,8 +820,9 @@
         "M1, M2 or M3; the internet; and a Claude Pro or Max plan. " + FACTS.use + " " + FACTS.soon };
     }],
     [/\b(privacy|private|my data|data|secure|security|safe to use|track|spy|listening to me)\b/i, function () {
-      return { text: "On this page, what you type stays in your browser, unless you connect Claude (then it goes to Anthropic) " +
-        "or ask for a map or the weather (only the place's name goes to Open-Meteo). The AI built into Chrome and Edge runs on your device. " +
+      return { text: "On this page, what you type stays in your browser, unless you connect Claude (then it goes to Anthropic). " +
+        "For a map or the weather only the place's name goes out (to Open-Meteo), and when the AI built into Chrome and Edge, which " +
+        "runs on your device, looks something up or you ask for the news, only the words looked up go out (to Wikipedia). " +
         FACTS.private };
     }],
     [/\b(do i need|need|require|have to have)\b.*\b(airpods|headphones|earbuds|a keyboard|a mouse|a touch ?screen)\b/i, function () {
@@ -662,10 +852,11 @@
         "(or, in Chrome and Edge, come from their built-in AI), and what you type stays in your browser. " + REAL + " " + FACTS.indie + " " + TRY };
     }],
     [/^\s*(how are you|how'?s it going|how do you do)\b/i, function () { return { text: "I'm good, thanks! What would you like to try? " + TRY }; }],
-    [/\b(useless|stupid|dumb|rubbish|sucks?|hate you|terrible|worst)\b/i, function () {
+    [/\b(useless|stupid|dumb|rubbish|sucks?|hate you)\b|\b(you'?re|you are|this is|that'?s|it'?s) (so )?(terrible|awful|the worst)\b/i, function () {
       return { text: "Sorry I'm not much help yet: on this page my answers are written in advance. " + REAL + " " + TRY };
     }],
-    // Things it can show or do here.
+    // Things it can show or do here. The air first ("where is the haze from?" isn't a map).
+    [AIRY, function (t) { return { search: t, later: function () { return airAnswer(t); } }; }],
     [/^(?=.*\b(youtube|videos?)\b)(?=.*\b(cats?|dogs?|funny|of|about|music video)\b)|\bplay\s+(?!(some|me some|music|a song|songs|piano|lofi|jazz|something)\b)([a-z][\w' &-]{2,40})$/i, function (t) {
       var q = t.replace(/^\s*(please\s+)?(show me|play|find|put on)\s+(me\s+)?(a\s+|some\s+)?/i, "").replace(/\s+on youtube\b/i, "").trim();
       return youtubeSearch(q || t);
@@ -689,10 +880,8 @@
         done: ["Made a timer"], act: function () { show({ html: timer(mins) }); } };
     }],
     [/\b(weather|rain|raining|forecast|temperature|umbrella|sunny|hot|cold) ?(today|tomorrow|outside|like|in|now)?\b/i, weather],
-    [/\b(news|headlines)\b/i, function () {
-      return { text: "This page can't look up the news. On a Chat Computer I read today's news for you, from the sites you like. " +
-        "BBC News is a click away, on the screen.", act: function () { show({ html: link("https://www.bbc.com/news", "BBC News", "On Chat Computer, news sites open right here.") }); } };
-    }],
+    // The news: looked up (and, with the browser's AI on, told in its words).
+    [/\b(news|headlines)\b/i, function () { return { search: "news", news: true, later: newsAnswer }; }],
     [/^(open |go to |show me )?(https?:\/\/)?(www\.)?([a-z0-9-]+\.(com|org|net|ai|io|co|sg|uk|de|fr|jp)(\.[a-z]{2})?)\b|^(google|youtube|gmail|facebook|instagram|netflix|wikipedia)[.!?]*$/i, function (t) {
       var host = (/([a-z0-9-]+\.(com|org|net|ai|io|co|sg|uk|de|fr|jp)(\.[a-z]{2})?)/i.exec(t) || [])[1] ||
         { google: "google.com", youtube: "youtube.com", gmail: "mail.google.com", facebook: "facebook.com", instagram: "instagram.com",
@@ -763,27 +952,41 @@
     if (lang) return { text: OTHER[lang] };
     var s = sum(text);
     if (s) return s;
+    if (MASH.test(text)) return { text: "I didn't catch that. " + TRY };
+    if (LOOK_IT_UP.test(text) || SEARCH_FOR.test(text)) { var l = lookUp(text); if (l) return l; }
     if (OPEN_ENDED.test(text)) return { ai: true };
     for (var i = 0; i < INTENTS.length; i++) if (INTENTS[i][0].test(text)) return INTENTS[i][1](text);
-    return { ai: true };
+    return FRESH.test(text) ? { ai: true, search: topicOf(text) } : { ai: true };
   }
-  // A question only an AI can answer, with none here: say so, and how to get one.
+  // A question only an AI can answer, with none here: a question of fact gets Wikipedia's article on it (the news, for
+  // the news); the rest an honest note, and how to get an AI.
+  var FACTUAL = /^\s*(who|what|when|where|which|whose|why|how (many|much|old|tall|big|far|long|does|do|did|is|are|was|were)|tell me about|explain|define)\b/i;
   function fallback(text) {
     if (/^[\W\d_]*[a-z]{0,6}[\W\d_]*$/i.test(text) && !/\b(hi|ok)\b/i.test(text)) {
       return { text: "I didn't catch that. " + TRY };
     }
     var chrome = nano.state === "downloadable" || nano.state === "downloading";
     var want = WANTS.filter(function (w) { return w[0].test(text); })[0];
-    return { text: "I can't " + (want ? want[1] : "answer that") + " on this page without an AI: my answers here are written in advance. " +
-      (chrome ? "Your " + AI.browser + " has a free AI built in that can answer on your device: press “Free answers” at the right of the message box. " : "") +
+    var note = { text: "I can't " + (want ? want[1] : "answer that") + " on this page without an AI: my answers here are written in advance. " +
+      (chrome ? "Your " + AI.browser + " has a free AI built in that can answer on your device: press “Download " + AI.short + "” at the right of the message box. " : "") +
       REAL + " On a Chat Computer, Claude answers anything, and does it. " + TRY };
+    // (Not about this page or the one answering, and not a follow-up: "when was the worst one?" needs what came before.)
+    if ((!want || want[1] === "explain that") && FACTUAL.test(text) && !/\b(you|your|yours|this page|chat ?computer)\b/i.test(text)) {
+      if (NEWSY.test(text)) return { later: newsAnswer };
+      var topic = topicOf(text);
+      if (topic.length > 2 && !/\b(it|that|this|these|those|one|ones|they|them|he|she|him|her|his|its|there)\b/i.test(topic)) {
+        return { later: function () { return wikiAnswer(topic, note); } };
+      }
+    }
+    return note;
   }
 
   // ------------------------------------------------------------------ the browser's built-in AI (Gemini Nano), free
   // Chrome on a computer (Windows, macOS, Linux) has a small AI built in, Gemini Nano, that runs on the device itself:
   // nothing typed leaves it. Where it's there (LanguageModel, Chrome's Prompt API), it answers what the written answers
-  // can't, free, and its answer can also show something on the screen (a page it writes, a map, a timer...). It has to
-  // be downloaded once, which Chrome does only after a click: the "Free answers" button. Edge has the same with Phi-4-mini.
+  // can't, free, and its answer can also show something on the screen (a page it writes, a map, a timer...); it looks
+  // things up on the web through this page (lookup, above). It has to be downloaded once, which Chrome does only after a
+  // click: the "Download Gemini" button. Edge has the same with Phi-4-mini ("Download Phi-4-mini").
   var nano = { state: "none", session: null, creating: null, progress: 0 };
   var NANO_LANG = { expectedInputs: [{ type: "text", languages: ["en"] }], expectedOutputs: [{ type: "text", languages: ["en"] }] };
   function nanoCheck() {
@@ -794,23 +997,57 @@
       drawTools();
     }, function () { nano.state = "unavailable"; });
   }
+  // What it's told: who it is and where; that it can look things up (the page does it for it, see lookup); how to
+  // answer; Chat Computer's facts; and what it can do on the screen.
   function nanoSystem() {
     return "You answer on Chat Computer's website (chatcomputer.ai), a demo of Chat Computer's screen. You are " + AI.model + ", " +
-      AI.browser + "'s built-in AI, running on the visitor's device: you are not Claude. Facts: " + FACTS.what + " " + FACTS.indie + " " +
-      FACTS.free + " " + FACTS.soon + " " + FACTS.pc + " " + FACTS.mac + "\n\n" +
+      AI.browser + "'s built-in AI, running on the visitor's device: you are not Claude. It's " + clock() + ".\n\n" +
+      "You can look things up on the web: the page searches Wikipedia and the day's news for you and gives you what it finds. " +
+      "Look up anything recent or that changes (news, events, sport, prices, who has a job now), anything after your training, " +
+      "and facts you aren't sure of, and always when they ask you to look something up: action search, with a short query. " +
+      "Then answer from what's found, and say where it's from. Never say you can't go on the internet or look things up. " +
+      "Answer what you know well (explanations, writing, advice, maths, history) straight away.\n\n" +
       "Reply in one to three short, plain sentences, in English, without markdown. Anything longer (a recipe, a plan, an email " +
-      "draft, a poem, code, an explanation) goes on the screen: action show_page with a title and markdown, and your reply says " +
-      "in a sentence what it is. You can't look anything up on the internet: say so when asked for news or prices. Never make " +
-      "up facts about Chat Computer beyond those above.\n\nActions: none; show_page (title, markdown); show_map (place); " +
-      "play_music (soft piano the browser plays); youtube_search (query: a link to YouTube's search); open_website (url); " +
-      "open_message (id: m1 Mum on WhatsApp about dinner at 7, m2 Jane about lunch on Friday, m3 Alex with the slides); " +
-      "open_file (name: Packing list.md, Beach.jpg, Budget 2026.xlsx, Taxes 2025.pdf, Recipes.txt, Resume.docx); " +
-      "make_timer (minutes); set_volume (percent); close. Their messages and files are made up for the demo.";
+      "draft, a poem, code, a long explanation) goes on the screen: action show_page with a title and markdown, and your reply " +
+      "says in a sentence what it is.\n\n" +
+      "Facts about Chat Computer: " + FACTS.what + " " + FACTS.indie + " " + FACTS.free + " " + FACTS.soon + " " + FACTS.pc + " " +
+      FACTS.mac + " Never make up facts about Chat Computer beyond these.\n\n" +
+      "Actions: none; search (query); show_page (title, markdown); show_map (place); play_music (soft piano the browser plays); " +
+      "youtube_search (query: a link to YouTube's search); open_website (url); open_message (id: m1 Mum on WhatsApp about dinner " +
+      "at 7, m2 Jane about lunch on Friday, m3 Alex with the slides); open_file (name: Packing list.md, Beach.jpg, Budget " +
+      "2026.xlsx, Taxes 2025.pdf, Recipes.txt, Resume.docx); make_timer (minutes); set_volume (percent); close. Their " +
+      "messages and files are made up for the demo.";
   }
+  // What the page tells it it found, for the question asked (the same words in its examples, below).
+  function nanoFound(asked, q, list) {
+    var lines = [], size = 0;
+    list.forEach(function (x) {
+      var line = (lines.length + 1) + ". " + x.source + (x.title ? ", " + x.title : "") + ": " + clip(x.text, x.air ? 300 : x.links ? 260 : 700);
+      if (size + line.length <= 3600) { lines.push(line); size += line.length; }
+    });
+    return "The question: " + asked + "\nWhat the page found on the web for “" + q + "”, just now:\n" +
+      (lines.length ? lines.join("\n") : "Nothing.") + "\n\nAnswer the question from this, in one to three short sentences, and say " +
+      "where it's from (like “according to Wikipedia”). If it doesn't answer it, say what it does say, or that nothing was " +
+      "found. Something longer goes on the screen (show_page).";
+  }
+  // Examples, for a small model: one it knows, one it looks up and answers from what's found, one for the screen.
+  var NANO_EXAMPLES = [
+    ["What's the capital of Japan?", { reply: "Tokyo.", action: "none" }],
+    ["How tall is Mount Everest now? Didn't it change?", { reply: "Let me look that up.", action: "search", query: "Mount Everest height" }],
+    [nanoFound("How tall is Mount Everest now? Didn't it change?", "Mount Everest height", [{ source: "Wikipedia", title: "Mount Everest",
+      text: "Mount Everest is Earth's highest mountain above sea level. It lies in the Mahalangur Himal sub-range of the Himalayas. Its " +
+      "elevation (snow height) of 8,848.86 m was most recently established in 2020 by the Chinese and Nepali authorities." }]),
+     { reply: "It's 8,849 metres, measured again in 2020 by China and Nepal, according to Wikipedia.", action: "none" }],
+    ["write a haiku about coffee", { reply: "A haiku about coffee is on the screen.", action: "show_page", title: "Coffee",
+      markdown: "Dark cup in my hands,\nsteam curling into morning,\nthe day starts with you." }]
+  ];
   function nanoSession(monitor) {
     if (nano.session) return Promise.resolve(nano.session);
     if (!nano.creating) {
       var opts = { initialPrompts: [{ role: "system", content: nanoSystem() }] };
+      NANO_EXAMPLES.forEach(function (e) {
+        opts.initialPrompts.push({ role: "user", content: e[0] }, { role: "assistant", content: JSON.stringify(e[1]) });
+      });
       for (var k in NANO_LANG) opts[k] = NANO_LANG[k];
       if (monitor) opts.monitor = monitor;
       nano.creating = LanguageModel.create(opts).then(function (s) {
@@ -824,9 +1061,9 @@
   }
   function nanoButton() {
     if (nano.state === "available" || nano.state === "downloading" && nano.creating) return;
-    call("accountForm", { id: "nano", title: "Free answers, from " + AI.browser, ok: "Download it", text: [
-      AI.browser + " has a small AI built in, " + AI.model + ", that can answer here for free. It runs on this computer: what you type " +
-      "doesn't leave it.",
+    call("accountForm", { id: "nano", title: "Download " + AI.short, ok: "Download it", text: [
+      AI.browser + " has a small AI built in, " + AI.model + ", that can answer here for free, and look things up on Wikipedia for " +
+      "you. It runs on this computer: what you type doesn't leave it, only the words it looks up.",
       AI.browser + " downloads it once (a few gigabytes, from " + AI.maker + ") and keeps it for every site that uses it. The written answers " +
       "work meanwhile.",
       "For answers from Claude itself, use Connect Claude instead."] });
@@ -848,11 +1085,14 @@
   }
   var NANO_SCHEMA = { type: "object", properties: {
     reply: { type: "string" },
-    action: { type: "string", enum: ["none", "show_page", "show_map", "play_music", "youtube_search", "open_website", "open_message",
-                                     "open_file", "make_timer", "set_volume", "close"] },
+    action: { type: "string", enum: ["none", "search", "show_page", "show_map", "play_music", "youtube_search", "open_website",
+                                     "open_message", "open_file", "make_timer", "set_volume", "close"] },
     title: { type: "string" }, markdown: { type: "string" }, place: { type: "string" }, query: { type: "string" },
     url: { type: "string" }, id: { type: "string" }, name: { type: "string" }, minutes: { type: "integer" },
     percent: { type: "integer" } }, required: ["reply", "action"] };
+  // Its answer from what was found: in words, or a page on the screen (no looking up again, nothing else done).
+  var NANO_ANSWER = { type: "object", properties: { reply: { type: "string" }, action: { type: "string", enum: ["none", "show_page"] },
+    title: { type: "string" }, markdown: { type: "string" } }, required: ["reply", "action"] };
   // What its answer says to show, done here (the same as the written answers do), and what to add to its words.
   function nanoAct(r, you, uts) {
     var a = r.action;
@@ -880,29 +1120,97 @@
     else if (a === "close") close();
     return Promise.resolve("");
   }
-  function nanoTurn(text, you, uts, id) {
-    call("aiStart", id);
-    nanoSession().then(function (s) {
-      return s.prompt(text, { responseConstraint: NANO_SCHEMA }).catch(function (e) {
+  // The session's turns, one at a time and in order: its own, and the written answers it's told about (nanoNote).
+  function nanoDo(f) {
+    var next = (nano.queue || Promise.resolve()).then(function () { return nanoSession(); }).then(f);
+    nano.queue = next.catch(function () {});
+    return next;
+  }
+  function nanoPrompt(input, schema) {
+    return nanoDo(function (s) {
+      return s.prompt(input, { responseConstraint: schema }).catch(function (e) {
         if (e && /quota|context|too (long|large)/i.test(e.name + " " + e.message)) {       // the conversation's grown too long:
           try { s.destroy(); } catch (x) {}                                                // start it again
           nano.session = null;
           nano.creating = null;
-          return nanoSession().then(function (s2) { return s2.prompt(text, { responseConstraint: NANO_SCHEMA }); });
+          return nanoSession().then(function (s2) { return s2.prompt(input, { responseConstraint: schema }); });
         }
         throw e;
       });
     }).then(function (raw) {
-      var r;
-      try { r = JSON.parse(raw); } catch (e) { r = { reply: String(raw || ""), action: "none" }; }
-      var words = String(r.reply || "").replace(/[*_`#]+/g, "").trim() || "Done.";
+      try { return JSON.parse(raw); } catch (e) { return { reply: String(raw || ""), action: "none" }; }
+    });
+  }
+  // A written answer goes into its conversation as if it had said it, so what's asked next makes sense to it ("the
+  // haze?" after the weather).
+  function nanoNote(asked, said) {
+    if (nano.state !== "available" || !said) return;
+    nanoDo(function (s) {
+      if (typeof s.append !== "function") return null;
+      return s.append([{ role: "user", content: asked }, { role: "assistant", content: JSON.stringify({ reply: said, action: "none" }) }]);
+    }).catch(function () {});
+  }
+  // One turn: it answers, or says what to look up; then the page looks it up (in Actions) and it answers from what
+  // was found. wants: what the written answers know already: that it's a search (query: for what), or the news.
+  function nanoTurn(text, you, uts, id, wants) {
+    wants = wants || {};
+    call("aiStart", id);
+    var looked = null;            // what was found, once looked up
+    (wants.news ? Promise.resolve({ action: "search", query: wants.query }) : nanoPrompt(text, NANO_SCHEMA)).then(function (r) {
+      // Its own words for what to look up know the conversation ("Singapore haze", for "the haze?"); else the page's.
+      var q = r.action === "search" || wants.search ? r.query || wants.query || topicOf(text) : "";
+      if (!q) return r;
+      q = clip(String(q), 100);
+      return lookup(q, text).then(function (got) {
+        looked = got;
+        got.told.forEach(function (d) { did(d, you, uts); });
+        if (wants.news) newsShow(got.list);
+        // Chrome's model sometimes fails on what was found (an "unknown error"): again with less of it, in Latin letters.
+        return nanoPrompt(nanoFound(text, q, got.list), NANO_ANSWER).catch(function () {
+          var less = got.list.slice(0, 3).map(function (x) {
+            return { source: x.source, title: x.title, air: x.air, links: x.links, text: clip(x.text.replace(/[^\u0000-ɏ‘-”…°µ³]+/g, " "), 300) };
+          });
+          return nanoPrompt(nanoFound(text, q, less), NANO_ANSWER);
+        }).catch(function () { return fromFound(got, q); });
+      });
+    }).then(function (r) {
+      if (r.written) { deliver(r.written, id, you, uts); return; }
+      var words = String(r.reply || "").trim();
+      // Something long, or in Markdown (a recipe, code, an email), goes on the screen, as it was asked to.
+      if (r.action !== "show_page" && (words.length > 320 || /\n|```/.test(words))) {
+        var md = words.replace(/```json[\s\S]*?```/g, "").trim();
+        var head = r.title || clip(topicOf(text), 60);
+        r = { action: "show_page", title: head.charAt(0).toUpperCase() + head.slice(1), markdown: md || words };
+        words = "Here it is, on the screen.";
+      }
+      if (looked && wants.news && r.action === "show_page") r.action = "none";       // the news itself stays on the screen
+      // Where it's from, only when it was looked up: from memory, it doesn't say "according to Wikipedia".
+      if (!looked) words = unsourced(words);
+      words = words.replace(/[*_`#]+/g, "").trim() || "Done.";
       return Promise.resolve(nanoAct(r, you, uts)).then(function () {
         stream(id, words, function () { say(words); });
       });
     }).catch(function () {
       var f = fallback(text);
-      stream(id, f.text, function () { say(f.text); });
+      Promise.resolve(f.later ? f.later() : f).then(function (a) { deliver(a, id, you, uts); });
     });
+  }
+  function unsourced(s) {
+    var t = s.replace(/^\s*(according to|from|per) (wikipedia|the news|wikipedia's current events|open-?meteo)[^,]*,\s*/i, "")
+      .replace(/,?\s*(according to|from|per|as reported by) (wikipedia|the news|wikipedia's current events|open-?meteo)[^.!?]*/gi, "");
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+  // Its answer failed: the page says what was found itself (the air, the news, or Wikipedia's article).
+  function fromFound(got, q) {
+    var air_ = got.list.filter(function (x) { return x.air; })[0], news_ = got.list.filter(function (x) { return x.links; }),
+        wiki = got.list.filter(function (x) { return x.source === "Wikipedia"; });
+    var a = air_ ? { text: air_.text + " (Open-Meteo's estimate, from the Copernicus forecast.)" }
+      : news_.length ? { text: "Here's the news, from Wikipedia's Current events, on the screen. The latest: " + clip(news_[0].text, 150),
+                          act: function () { newsShow(news_); } }
+      : wiki.length ? { text: "Wikipedia, “" + wiki[0].title + "”: " + sentences(wiki[0].text, 2), act: function () { foundShow(q, wiki); } }
+      : null;
+    if (!a) throw new Error("nothing found");
+    return { written: a };
   }
   function setScale(s) {
     scale = Math.max(0.6, Math.min(2.2, s));
@@ -924,20 +1232,30 @@
     var you = uid("u"), uts = now(), id = "a" + (++turns);
     call("user", you, text, true);
     if (claude.key) { claudeTurn(text, you, uts, id); return; }
-    var r = answer(text);
-    if (r.ai && nano.state === "available") { setTimeout(function () { nanoTurn(text, you, uts, id); }, 120); return; }
+    var r = answer(text), ai = nano.state === "available";
+    if (!LOOK_IT_UP.test(text)) lastAsked = text;              // what "look it up" means next
+    // The browser's AI answers what only an AI can, and what's looked up (in its words, from what's found).
+    if (ai && (r.ai || r.search)) {
+      setTimeout(function () { nanoTurn(text, you, uts, id, r.search ? { search: true, query: r.search, news: r.news } : null); }, 120);
+      return;
+    }
     if (r.ai) r = fallback(text);
     setTimeout(function () {
       call("aiStart", id);
       var waited = Date.now();
       Promise.resolve(r.later ? r.later() : r).then(function (a) {
         setTimeout(function () {
-          if (a.act) a.act();
-          (a.done || []).forEach(function (d) { did(d, you, uts); });
-          stream(id, a.text || "", function () { say(a.text || ""); });
+          deliver(a, id, you, uts);
+          if (ai) nanoNote(text, a.text);
         }, Math.max(0, 600 - (Date.now() - waited)));
       });
     }, 120);
+  }
+  // A written answer: what it shows, what it did (Actions), and its words.
+  function deliver(a, id, you, uts) {
+    if (a.act) a.act();
+    (a.done || []).forEach(function (d) { did(d, you, uts); });
+    stream(id, a.text || "", function () { say(a.text || ""); });
   }
   function did(text, you, uts) { call("done", { id: uid("d"), ts: now(), text: text, prompt_id: you || "", prompt_ts: uts || now() }); }
   function stream(id, text, then) {
@@ -1012,7 +1330,7 @@
   function systemPrompt() {
     return "You are Chat Computer: Claude, running a whole computer. People talk, type or touch, and you do things for them. " +
       "Right now you're in Chat Computer's demo website (chatcomputer.ai), in the person's web browser, with their own Claude " +
-      "API key. The screen is Chat Computer's: Messages at the left, What's done at the right (each thing you do is listed " +
+      "API key. The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
       "there), and what you open goes between them, above their latest message, your latest reply and the message box.\n\n" +
       "Reply in one to three short, plain sentences, without markdown: replies show just above the message box, and are " +
       "read aloud when they talk to you. Anything longer (a recipe, a plan, a list, a table) goes on the screen with " +
@@ -1033,7 +1351,7 @@
   var TOOLS = [
     { name: "play_youtube", description: "Play a YouTube video between the sidebars. The demo can't search YouTube itself: find the " +
       "video's address with web_search unless you know its ID for certain.", input_schema: obj({ video_id: { type: "string", description: "The 11-character ID, as in youtube.com/watch?v=ID" },
-      title: { type: "string", description: "The video's title, for What's done" }, start: { type: "integer", description: "Seconds in to start at" } }, ["video_id", "title"]) },
+      title: { type: "string", description: "The video's title, for Actions" }, start: { type: "integer", description: "Seconds in to start at" } }, ["video_id", "title"]) },
     { name: "show_map", description: "Show a map (OpenStreetMap) between the sidebars, of the area in the box given in degrees.",
       input_schema: obj({ place: { type: "string" }, west: { type: "number" }, south: { type: "number" }, east: { type: "number" },
       north: { type: "number" } }, ["place", "west", "south", "east", "north"]) },
@@ -1396,8 +1714,9 @@
     var c = $("demo-claude"), p = $("demo-airpods"), g = $("demo-nano");
     // Chrome's AI: offered while it can be downloaded, its progress while it is; once on, it just answers.
     g.hidden = !!claude.key || !(nano.state === "downloadable" || nano.state === "downloading");
-    label(g, nano.state === "downloading" ? ["", "Downloading", nano.progress ? " " + nano.progress + "%" : ""] : ["", "Free answers", ""]);
-    g.title = nano.state === "downloading" ? AI.browser + " is downloading its built-in AI" : "Answers from " + AI.browser + "'s built-in AI, free, on this device";
+    label(g, nano.state === "downloading" ? ["", "Downloading", nano.progress ? " " + nano.progress + "%" : ""] : ["Download ", AI.short, ""]);
+    g.title = nano.state === "downloading" ? AI.browser + " is downloading its built-in AI" : "Download " + AI.model + ", " + AI.browser +
+      "'s built-in AI: free answers, on this device";
     c.classList.toggle("on", !!claude.key);
     label(c, claude.key ? ["", "Claude", " connected"] : ["Connect ", "Claude", ""]);
     c.title = claude.key ? "Claude answers, with your API key. Click to disconnect it." : "Real Claude here, with your own API key";

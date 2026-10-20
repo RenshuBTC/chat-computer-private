@@ -49,7 +49,7 @@ class Paths:
         self.undo = self.root / "undo"            # backups that make file changes undoable
         self.journal = self.root / "journal.jsonl"  # what Chat Computer did, newest last
         self.transcript = self.root / "transcript.jsonl"
-        self.done = self.root / "done.jsonl"      # What's done: what Chat Computer did for the person (done.py)
+        self.done = self.root / "done.jsonl"      # Actions: what Chat Computer did for the person (done.py)
         self.index = self.root / "index"
         self.web = self.root / "web"              # the built-in browser's logins and cache
         self.sources = self.root / "sources"      # WhatsApp's and the social sites' sign-ins, for Messages
@@ -108,7 +108,7 @@ class Settings:
     viewing_distance_cm: int = 0    # 0 = estimated from the screen size
     screen_inches: float = 0.0      # 0 = what the monitor reports (set it if the monitor reports nothing)
     web_zoom: float = 0.0           # 0 = automatic zoom for websites
-    # The panels, each with a switch on the screen: Messages (left), What's done (right), and while something is
+    # The panels, each with a switch on the screen: Messages (left), Actions (right), and while something is
     # open, the conversation under it (bottom).
     left_panel: bool = True
     right_panel: bool = True

@@ -395,7 +395,7 @@ retrying with backoff, then starts listening.
   `bluetooth` tool has `airpods`, the same in one step ("connect my AirPods"). The update comes first when
   Windows' drive is already mounted (yes restarts Chat Computer); while it is still on its way, the AirPods come
   first.
-* What's done (`chatcomputer/done.py`, `~/ChatComputer/done.jsonl`): the brain reports each tool call when its result
+* Actions (`chatcomputer/done.py`, `~/ChatComputer/done.jsonl`): the brain reports each tool call when its result
   comes back (`BrainEvents.on_tool`, from `ToolResultBlock`/`ServerToolResultBlock`, matched to the call by its
   id); one that worked becomes a past-tense line ("Searched youtube.com for “lofi”", "Saved notes.txt"), unless
   it only looked at something (read_screen, status) or Chat Computer's own tool said in words that it failed
@@ -455,15 +455,15 @@ retrying with backoff, then starts listening.
   (`--dim`; its first half where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
   the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items and
   the panels' switches: settings, the microphone (sound tool, `input`) and the model are changed by asking.
-* The panels' switches (`.toggle` in chat.html): Messages' at the top left, What's done's at the top right, the
+* The panels' switches (`.toggle` in chat.html): Messages' at the top left, Actions' at the top right, the
   conversation's at the bottom right while something is open; each icon is the screen with its panel marked,
   filled while it shows. Off, a sidebar leaves a 3.45 rem margin (`--rail`) with its switch; the conversation's
   frees the strip and the message box (typing brings them back). The page posts `panels`; the controller keeps
   them in `settings.left_panel`, `right_panel`, `bottom_panel` (also set by asking) and sends them back at the
   start (`CO.panels`). Only where the sidebars fit (`body.panel`).
-* Sidebars: Messages at the left (`chatcomputer/messages`), What's done at the right (`done.py`), each a card
+* Sidebars: Messages at the left (`chatcomputer/messages`), Actions at the right (`done.py`), each a card
   (2 px `--bubble` border, 1.1 rem corners, 0.75 rem from the screen's edges and from the frame), each item
-  pressable, and pinnable (`pins.py`, `~/ChatComputer/pins.json`: pinned items first, newest pin first). What's done
+  pressable, and pinnable (`pins.py`, `~/ChatComputer/pins.json`: pinned items first, newest pin first). Actions
   shows the date and time (`#clock`, each minute) and each item's time above its words.
 * Messages (`chatcomputer/messages`): every account's messages in one list, newest first, kept in
   `~/ChatComputer/messages.db` (SQLite: `store.py`); accounts and their sign-ins in `secrets/accounts.json` (0600,
@@ -505,9 +505,9 @@ retrying with backoff, then starts listening.
   for the onscreen keyboard. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
   (Noto). Laid out like the Claude app, as the user asked: their words on the right in a light grey bubble
   (`--bubble: #EDEDED`, the one colour besides black and white; black on it is 18:1), Claude's flush left in one
-  column, newest at the bottom, above a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
+  column, from the top of the screen down, above a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
   for a new line; no placeholder, since that would be grey text) with nothing under it; while asleep, a line
-  above it says how to wake Chat Computer. On a wide screen Messages and What's done take the left and right 17%
+  above it says how to wake Chat Computer. On a wide screen Messages and Actions take the left and right 17%
   each (the Claude app's side panel's share); the column and the box centre in the rest.
 * Size and width: text is sized so that the x-height covers 0.3 degrees of view. That is the top of the
   normal range of critical print size (0.15-0.3 degrees; Legge & Bigelow 2011), above which reading gets no
@@ -604,8 +604,11 @@ retrying with backoff, then starts listening.
     every conversation).
   * A request doesn't wait for an internet check: a recent result, or an older "yes" (checked again in the
     background), is used; only an older "no" is checked first.
-  * The conversation page scrolls like a chat (newest at the bottom; scrolled up, it stays put until a new
-    message). Claude's words stream in as Markdown drawn incrementally: blocks that ended at a blank line
+  * The conversation page scrolls like the Claude app's: what you send glides to the top of the screen and the
+    answer comes in under it, so nothing new is ever below the screen (chat.js leaves room under the latest
+    exchange, `#room`: the screen's height less what's under your message); an answer longer than the screen is
+    followed down while you're at the end; scrolled up, it stays put until a new message. Claude's words stream in
+    as Markdown drawn incrementally: blocks that ended at a blank line
     (outside code) are drawn once, and only the block still being written is drawn again each frame. Captions
     over websites change once per 40 ms flush, not per streamed word.
   * Website steps wait for the page instead of a fixed pause (`Screen.settle`): a page that starts loading is

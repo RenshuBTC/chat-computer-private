@@ -1,5 +1,5 @@
 /* The conversation screen: the messages (yours on the right, Claude's on the left), the message box at the bottom,
-   Messages at the left and What's done at the right. Python calls window.CO.*; the page tells Python
+   Messages at the left and Actions at the right. Python calls window.CO.*; the page tells Python
    (postMessage) what was typed, what was tapped, and where it leaves room for what Claude opens. */
 (function () {
   "use strict";
@@ -20,14 +20,40 @@
   function now() { return Date.now() / 1000; }
   function remPx() { return parseFloat(getComputedStyle(document.documentElement).fontSize) || 24; }
 
-  // Newest at the bottom, like a chat: while you're at the bottom, new words keep it there. Scrolled up to read
-  // something earlier, it stays where you are until you scroll back down, say something or type.
-  var stick = true;
+  // As in the Claude app: the conversation starts at the top of the screen, and what you send goes to the top, with
+  // the answer coming in under it, so it's read without scrolling down; earlier messages are above (scroll up).
+  // Under the latest exchange there's room for that (#room: the screen's height less what's under your message), so
+  // the page's end is your message at the top. While you're at the end, new words keep it there: an answer longer
+  // than the screen is followed down as it comes. Scrolled up to read something earlier, it stays where you are
+  // until you scroll back down, say something or type.
+  var stick = true, pinning = 0, room = $("room");
   function atBottom() { return page.scrollHeight - page.scrollTop - page.clientHeight < 4; }
-  window.addEventListener("scroll", function () { if (mode === "chat") stick = atBottom(); }, { passive: true });
+  window.addEventListener("scroll", function () { if (mode === "chat" && Date.now() > pinning) stick = atBottom(); }, { passive: true });
   window.addEventListener("resize", function () { fitPanel(); follow(); fitStrip(); });
-  function follow() { if (stick && mode === "chat") page.scrollTop = page.scrollHeight; }
-  function jumpDown() { stick = true; follow(); }
+  function latestYou() { var y = log.querySelectorAll(":scope > .you"); return y.length ? y[y.length - 1] : null; }
+  function makeRoom() {
+    var you = latestYou(), was = room.offsetHeight, need = 0;
+    if (you && mode === "chat") {
+      var margin = parseFloat(getComputedStyle(you).scrollMarginTop) || 0;
+      var top = you.getBoundingClientRect().top + page.scrollTop - margin;        // the page scrolled to it
+      var end = column.getBoundingClientRect().bottom + page.scrollTop - was;     // where the conversation ends
+      need = Math.max(0, Math.ceil(top + page.clientHeight - end));
+    }
+    if (need !== was) room.style.height = need + "px";
+  }
+  function follow() {
+    makeRoom();
+    if (stick && mode === "chat" && Date.now() > pinning) page.scrollTop = page.scrollHeight;
+  }
+  function jumpDown() { stick = true; pinning = 0; follow(); }
+  // What you've just sent, to the top of the screen (gliding there, unless the system asks for less motion).
+  function pin() {
+    stick = true;
+    makeRoom();
+    var glide = !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    pinning = glide ? Date.now() + 600 : 0;
+    page.scrollTo({ top: page.scrollHeight - page.clientHeight, behavior: glide ? "smooth" : "auto" });
+  }
 
   // At most MAX_ITEMS messages on the page; the oldest go, but only while you're at the bottom (not while you
   // read back through earlier ones).
@@ -228,7 +254,7 @@
     input.value = "";
     fitInput();
     post({ type: "send", text: text });
-    jumpDown();
+    stick = true;                    // it goes to the top of the screen when it's shown (CO.user)
   }
   var SCROLL_ALWAYS = { PageUp: "page_up", PageDown: "page_down" };
   var SCROLL_EMPTY = { ArrowUp: "up", ArrowDown: "down", Home: "top", End: "bottom" };
@@ -302,11 +328,11 @@
     var w = window.innerWidth;
     body.classList.toggle("panel", w * 0.17 >= 11 * rem && w * 0.66 - 3 * rem >= 0.8 * col);
   }
-  // The panels' switches: Messages (left), What's done (right) and, while something is open, the conversation under
+  // The panels' switches: Messages (left), Actions (right) and, while something is open, the conversation under
   // it (bottom), each switched off and on again with its switch, or by asking Claude (the settings left_panel,
   // right_panel and bottom_panel). Chat Computer keeps the choice: the page tells it, and it tells the page at the
   // start.
-  var PANEL_NAMES = { left: "Messages", right: "What\u2019s done", bottom: "the conversation" };
+  var PANEL_NAMES = { left: "Messages", right: "Actions", bottom: "the conversation" };
   function hiddenBottom() { return mode === "content" && !shown.bottom && body.classList.contains("panel"); }
   function applyPanels() {
     ["left", "right", "bottom"].forEach(function (k) {
@@ -371,7 +397,7 @@
     });
   }
 
-  // What's done: oldest at the top, grouped by day; pinned ones above.
+  // Actions: oldest at the top, grouped by day; pinned ones above.
   var dones = [], doneById = {}, lastDay = "", labelsFor = "", DONE_MAX = 300;
   function doneItem(e) {
     var li = document.createElement("li");
@@ -404,7 +430,7 @@
     body.classList.toggle("has-done", dones.length > 0);
     doneList.scrollTop = doneList.scrollHeight;
   }
-  // Today's date and the time, above What's done: changed on the minute (and the days' names at midnight).
+  // Today's date and the time, above Actions: changed on the minute (and the days' names at midnight).
   function tick() {
     var d = new Date();
     $("clock-date").textContent = d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -869,8 +895,8 @@
         u.dataset.ts = String(now());
         log.appendChild(u);
         trim();
-      } else u.textContent = text;
-      jumpDown();
+        if (mode === "chat") pin(); else jumpDown();      // to the top of the screen, the answer to come under it
+      } else { u.textContent = text; follow(); }
       fitStrip();
     },
     // What's being heard, as it's heard.

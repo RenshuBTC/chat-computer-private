@@ -33,17 +33,24 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     for call in ("XMLHttpRequest", "sendBeacon", "WebSocket", "EventSource", "navigator.geolocation"):
         assert call not in host, call
     # From elsewhere: a map when asked, and with the visitor's own key (Connect Claude) Anthropic's API, where every
-    # request goes, and YouTube's player for a video Claude plays. For a place's map or weather, Open-Meteo, sent only
-    # the place's name (then its latitude and longitude). YouTube's search, Google Maps and BBC News are only links,
-    # opened by the visitor in a new tab.
+    # request goes, and YouTube's player for a video Claude plays. For a place's map, weather or air, Open-Meteo, sent
+    # only the place's name (then its latitude and longitude). What's looked up (by the browser's AI, "look it up", a
+    # question of fact, the news) goes to Wikipedia: only the words looked up. YouTube's search, Google's, Google Maps
+    # and BBC News are only links, opened by the visitor in a new tab (open-meteo.com too: the air's source, named).
     assert set(re.findall(r"https?://[^/\"' ]+", host)) == {
         "https://www.youtube-nocookie.com", "https://www.openstreetmap.org", "https://api.anthropic.com",
-        "https://geocoding-api.open-meteo.com", "https://api.open-meteo.com",
+        "https://geocoding-api.open-meteo.com", "https://api.open-meteo.com", "https://air-quality-api.open-meteo.com",
+        "https://en.wikipedia.org", "https://open-meteo.com",
         "https://www.youtube.com", "https://www.google.com", "https://www.bbc.com"}
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("API +")) == [
-        '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search'], fetches
+        '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search', "url"], fetches
     assert [f for f in fetches if "open-meteo" in f][0].endswith("&name=\" + encodeURIComponent(name")
+    # getJSON(url): Wikipedia's API (search, or a day's Current events), and the air where a place is.
+    gets = re.findall(r"getJSON\(([^,)]+)", host)
+    assert gets and all(g.startswith(("WIKI +", '"https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" + p.lat'))
+                        for g in gets if g != "url"), gets
+    assert 'var WIKI = "https://en.wikipedia.org/w/api.php?' in host and "gsrsearch=\" + encodeURIComponent(q)" in host
     for site in ("https://www.youtube.com/", "https://www.google.com/", "https://www.bbc.com/"):
         for at in [m.start() for m in re.finditer(re.escape(site), host)]:
             line = host[host.rfind("\n", 0, at):host.find("\n", at)]
@@ -87,7 +94,7 @@ def test_the_demo_works_in_a_browser():
     assert json.loads(res["kept"]) == {"left": False, "right": False, "bottom": True}
     assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["first_ai"] == "hello, world"
     assert res["sides_on"]["logo"] == "Chat Computer"
-    # Asked for music: soft piano made by the browser, between the sidebars, and What's done says so.
+    # Asked for music: soft piano made by the browser, between the sidebars, and Actions says so.
     music = res["music"]
     assert music["content"] and music["last"] == "Playing some calm piano." and music["done"][-1] == "Played some calm piano"
     # The first thing said took the word logo away; hello, world is still the conversation's first message.
@@ -122,7 +129,7 @@ def test_the_demo_works_in_a_browser():
     m = res["claude_map"]
     assert m["last"] == "Here's Tokyo." and "openstreetmap.org/export/embed.html?bbox=139.55%2C35.55%2C139.95%2C35.8" in m["src"]
     assert m["done"][-1] == "Opened openstreetmap.org" and m["strip"] == ["show me Tokyo", "Here's Tokyo."]
-    # A video Claude plays: YouTube's player between the sidebars, What's done says so, and when it ends the
+    # A video Claude plays: YouTube's player between the sidebars, Actions says so, and when it ends the
     # conversation has the middle again.
     cv = res["claude_video"]
     assert cv["content"] and "youtube-nocookie.com/embed/aBcDeFgHiJk?autoplay=1" in cv["src"] and cv["last"] == "Playing it."
@@ -148,12 +155,12 @@ def test_the_demo_works_in_a_browser():
     assert res["claude_off"]["tools"][0] == "Connect Claude" and res["stored_after"] is None
     # Connect AirPods says what it does before the microphone is asked for.
     assert res["talk_sheet"]["sheet"] and res["talk_sheet"]["sheet_title"] == "Talk through your AirPods"
-    # Chrome's built-in AI, where Chrome has it: "Free answers" first; its sheet says what it is before anything is
+    # Chrome's built-in AI, where Chrome has it: "Download Gemini" first; its sheet says what it is before anything is
     # downloaded; the download's progress on the button; then it answers what the written answers can't (a page on
-    # the screen, said in What's done), from a session told what Chat Computer is, and the written answers still
+    # the screen, said in Actions), from a session told what Chat Computer is, and the written answers still
     # answer what they can.
-    assert res["ai_opening"]["tools"] == ["Free answers", "Connect Claude", "Connect AirPods"]
-    assert res["ai_sheet"]["sheet"] and res["ai_sheet"]["sheet_title"] == "Free answers, from Chrome"
+    assert res["ai_opening"]["tools"] == ["Download Gemini", "Connect Claude", "Connect AirPods"]
+    assert res["ai_sheet"]["sheet"] and res["ai_sheet"]["sheet_title"] == "Download Gemini"
     assert not res["ai_downloading"]["sheet"] and res["ai_downloading"]["tools"][0] == "Downloading 50%"
     on = res["ai_on"]
     assert on["tools"] == ["Connect Claude", "Connect AirPods"] and on["done"][-1] == "Turned on Chrome's built-in AI"

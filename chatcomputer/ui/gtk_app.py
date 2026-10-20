@@ -101,7 +101,7 @@ EDIT_COMMANDS = {"copy": WebKit2.EDITING_COMMAND_COPY, "cut": WebKit2.EDITING_CO
 REAL_KEYBOARD_S = 5 * 60
 TOUCH_EVENTS = {Gdk.EventType.TOUCH_BEGIN, Gdk.EventType.TOUCH_UPDATE, Gdk.EventType.TOUCH_END,
                 Gdk.EventType.TOUCH_CANCEL}
-DONE_SHOWN = 300             # What's done: how many the page holds (the rest are in done.jsonl)
+DONE_SHOWN = 300             # Actions: how many the page holds (the rest are in done.jsonl)
 MESSAGES_SHOWN = 400         # Messages: how many the page holds (the rest are in messages.db)
 # What the conversation page tells the controller (Controller.page_event).
 PAGE_EVENTS = {"pin", "open_message", "add_account", "account", "account_cancel", "panels",
@@ -178,7 +178,7 @@ class GtkScreen(Screen):
         self.load_waiters: list[asyncio.Future] = []
         self.load_error: str | None = None
         self.view_seq = 0
-        self._done_entries: list[dict[str, Any]] = []     # What's done, as the page shows it (to rebuild the page)
+        self._done_entries: list[dict[str, Any]] = []     # Actions, as the page shows it (to rebuild the page)
         self._msg_items: dict[str, dict[str, Any]] = {}   # Messages, likewise
         self._msg_accounts: list[dict[str, Any]] = []
         # Where the page leaves room for what Claude opens (x, y, width, height in the window), as the conversation
@@ -564,7 +564,7 @@ class GtkScreen(Screen):
                 self.loop.call_soon_threadsafe(self.on_typed, text)
             return
         if kind == "goto":
-            # An item of What's done was tapped whose message isn't on the page any more.
+            # An item of Actions was tapped whose message isn't on the page any more.
             if self.on_goto is not None and self.loop:
                 try:
                     ts = float(msg.get("ts") or 0)
@@ -586,7 +586,7 @@ class GtkScreen(Screen):
                 self._place(self.shown, full=self._fullscreen or self._expanded)
             return
         if kind == "close_content":
-            # Close (or a tap on What's done) on the conversation page.
+            # Close (or a tap on Actions) on the conversation page.
             self.close_content(pause=bool(msg.get("pause", True)))
             return
         if kind == "expand":
@@ -1253,7 +1253,7 @@ class GtkScreen(Screen):
     def panels(self, shown: dict[str, bool]) -> None:
         self._chat_js(f"CO.panels({json.dumps(shown)})", "panels")
 
-    # What's done (at the right) and Messages (at the left). The page is sent each new one; the whole lists are
+    # Actions (at the right) and Messages (at the left). The page is sent each new one; the whole lists are
     # kept here too, so the page can be rebuilt after its renderer stops.
     def done_list(self, entries: list[dict[str, Any]]) -> None:
         def run() -> None:

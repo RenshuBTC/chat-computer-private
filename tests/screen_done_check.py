@@ -1,4 +1,4 @@
-"""What's done, at the right of the conversation: a sixth of the screen wide, grouped by day; tapping an item
+"""Actions, at the right of the conversation: a sixth of the screen wide, grouped by day; tapping an item
 scrolls back to the message that asked for it, and for one from an earlier day, puts that day's messages back
 first (from the transcript). Typing stays in the message box.
 

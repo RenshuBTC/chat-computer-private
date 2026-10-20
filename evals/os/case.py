@@ -122,7 +122,7 @@ async def run(case: dict[str, Any]) -> dict[str, Any]:
     try:
         await c.handle(case["query"], typed=case["modality"] == "typed")
         await asyncio.wait_for(done.wait(), TURN_TIMEOUT_S)
-        await asyncio.sleep(1.0)           # What's done, and anything the turn left running, settle
+        await asyncio.sleep(1.0)           # Actions, and anything the turn left running, settle
     except asyncio.TimeoutError:
         trace["errors"].append(f"no answer within {TURN_TIMEOUT_S} s")
     except Exception:

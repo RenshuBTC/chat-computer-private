@@ -39,13 +39,13 @@ class Screen:
     def history(self, items: list[dict[str, Any]]) -> None: ...
     def apply_settings(self, text_size: int, user_name: str, model: str = "") -> None: ...
     def panels(self, shown: dict[str, bool]) -> None:
-        """Which panels show: {"left": Messages, "right": What's done, "bottom": the conversation under what's open}."""
+        """Which panels show: {"left": Messages, "right": Actions, "bottom": the conversation under what's open}."""
     def mic(self, on: bool) -> None:
         """Whether the microphone is on."""
     # --- "/" in the message box: searching this computer
     def search_results(self, n: int, query: str, items: list[dict[str, Any]], note: str = "") -> None:
         """What on this computer matches the words after "/" (search number n): [{name, path, where, kind, when}]."""
-    # --- What's done (chatcomputer/done.py), in a panel at the right of the conversation
+    # --- Actions (chatcomputer/done.py), in a panel at the right of the conversation
     def done_list(self, entries: list[dict[str, Any]]) -> None:
         """The whole list (at the start), oldest first. Each: id, ts, text, and the message that asked for it
         (prompt_id, prompt_ts)."""
@@ -54,7 +54,7 @@ class Screen:
     def earlier(self, items: list[dict[str, Any]], target_id: str | None, target_ts: float) -> None:
         """Earlier messages (from the transcript) put back above the conversation, then scrolled to the one asked
         for: the answer to on_goto."""
-    # Set by the controller: an item in What's done was tapped whose message isn't on the screen any more
+    # Set by the controller: an item in Actions was tapped whose message isn't on the screen any more
     # (its id, its time, and the time of the first message the screen still has, or None).
     on_goto: Any = None
     # --- Messages (chatcomputer/messages), at the left of the conversation

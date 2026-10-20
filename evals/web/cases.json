@@ -1,5 +1,5 @@
 {
- "about": "Website (chatcomputer.ai) eval cases: the first thing a visitor types, each in a fresh visit. Dimensions: intent (finding out what this is; trying something it does; asking anything, as of any AI; getting it on their computer; testing its limits; small talk; odd input), and phrasing (terse, a full sentence, a need rather than a request, typos, another language). 'expect' is what would count as a good answer; it guides the review.",
+ "about": "Website (chatcomputer.ai) eval cases: the first thing a visitor types, each in a fresh visit. Dimensions: intent (finding out what this is; trying something it does; asking anything, as of any AI; getting it on their computer; testing its limits; small talk; odd input; needing the internet: something recent, or looked up), and phrasing (terse, a full sentence, a need rather than a request, typos, another language). 'expect' is what would count as a good answer; it guides the review. A case with 'turns' is a conversation: each turn typed after the answer to the one before (the first from a visitor's own conversation on the site).",
  "dimensions": {
   "intent": [
    "orientation",
@@ -8,14 +8,16 @@
    "get it",
    "limits",
    "small talk",
-   "odd"
+   "odd",
+   "internet"
   ],
   "phrasing": [
    "terse",
    "sentence",
    "indirect",
    "typo",
-   "other language"
+   "other language",
+   "follow-up"
   ]
  },
  "cases": [
@@ -557,6 +559,88 @@
    "phrasing": "sentence",
    "query": "I'm looking for a computer for my elderly father who struggles with Windows, he mostly reads the news, watches YouTube and video calls my sister, would this be a good fit for him and how hard would it be to set up?",
    "expect": "A thoughtful answer about fit (talking instead of menus) and the setup steps."
+  },
+  {
+   "id": "haze-trace",
+   "intent": "internet",
+   "phrasing": "follow-up",
+   "turns": [
+    "what is running you now?",
+    "whats the weather like today?",
+    "the haze?",
+    "look it up",
+    "why can't you?"
+   ],
+   "expect": "A visitor's own conversation: after the weather, 'the haze?' gets an answer about the haze (the air now, or what causes it), 'look it up' looks it up, and nothing says it can't go on the internet."
+  },
+  {
+   "id": "haze-now",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "is there haze in Singapore today?",
+   "expect": "The air in Singapore now (good, moderate...), from a source it names."
+  },
+  {
+   "id": "pm",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "who is the prime minister of Singapore?",
+   "expect": "Lawrence Wong (prime minister since May 2024), looked up rather than guessed."
+  },
+  {
+   "id": "world-cup",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "who won the 2026 World Cup?",
+   "expect": "Spain (1-0 against Argentina, July 2026): after any AI's training, so it has to be looked up."
+  },
+  {
+   "id": "look-it-up",
+   "intent": "internet",
+   "phrasing": "follow-up",
+   "turns": [
+    "who designed Marina Bay Sands?",
+    "look it up"
+   ],
+   "expect": "Moshe Safdie, said by the second answer at the latest, from what was looked up."
+  },
+  {
+   "id": "search-population",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "search the web for Singapore's population",
+   "expect": "About 6 million, from what was looked up (not a search of the demo's files)."
+  },
+  {
+   "id": "headlines",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "what are today's top headlines?",
+   "expect": "The day's news, on the screen or in words, from a source it names."
+  },
+  {
+   "id": "news-yesterday",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "what happened in the world yesterday?",
+   "expect": "Yesterday's news, from a source it names."
+  },
+  {
+   "id": "why-no-internet",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "why can't you look things up?",
+   "expect": "That it can (through the page: Wikipedia and the day's news), and how to ask."
+  },
+  {
+   "id": "tell-me-more",
+   "intent": "internet",
+   "phrasing": "follow-up",
+   "turns": [
+    "what is the Southeast Asian haze?",
+    "when was the worst one?"
+   ],
+   "expect": "What the haze is, then the worst one (1997, or 2015), the follow-up understood from the first answer."
   }
  ]
 }

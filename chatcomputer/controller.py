@@ -87,7 +87,7 @@ class Controller:
         self.state = State(self.paths)
         self.journal = Journal(self.paths)
         self.memory = Memory(self.paths)
-        self.history = History(self.paths)          # What's done (chatcomputer/done.py)
+        self.history = History(self.paths)          # Actions (chatcomputer/done.py)
         self.schedule = sch.Schedule(self.paths.root / "schedule.json")   # timers, reminders, alarms
         self.ringing: dict[str, Any] | None = None   # the timer, reminder or alarm ringing now
         self._time_wake: asyncio.Event | None = None  # what rings next changed: look again
@@ -95,9 +95,9 @@ class Controller:
         self.pinlock = PinLock(self.paths.secrets / "lock_pin")   # the lock screen's PIN (chatcomputer/lock.py)
         self.locked = False
         self._pin_form: dict[str, Any] | None = None   # the PIN form on the screen: {"mode", "then_lock"}
-        self.pins = Pins(self.paths.root / "pins.json")     # pinned in What's done and in Messages
+        self.pins = Pins(self.paths.root / "pins.json")     # pinned in Actions and in Messages
         self.inbox: Inbox | None = None                 # Messages (chatcomputer/messages)
-        # The message that asked for each turn, for What's done: turn id -> (its id on the screen, words, time).
+        # The message that asked for each turn, for Actions: turn id -> (its id on the screen, words, time).
         self.prompt_of: dict[str, tuple[str, str, float]] = {}
         self._last_prompt: tuple[str, str, float] | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -537,7 +537,7 @@ class Controller:
 
     def _transcript(self, role: str, text: str, via: str | None = None, msg_id: str | None = None,
                     ts: float | None = None) -> None:
-        """`msg_id`: the message's id on the screen, so What's done can find it again (an earlier day's too)."""
+        """`msg_id`: the message's id on the screen, so Actions can find it again (an earlier day's too)."""
         if not text.strip():
             return
         item: dict[str, Any] = {"ts": ts or time.time(), "role": role, "text": text}
@@ -736,7 +736,7 @@ class Controller:
 
     def _prompt(self, uid: str, text: str, via: str | None = None) -> tuple[str, str, float]:
         """A message that asks Claude for something: on the screen and in the transcript, with the same id and
-        time, so what's done for it can be linked back to it (What's done)."""
+        time, so what's done for it can be linked back to it (Actions)."""
         ts = time.time()
         self.screen.user_text(uid, text, True)
         self._transcript("user", text, via=via, msg_id=uid, ts=ts)
@@ -751,13 +751,13 @@ class Controller:
             self.prompt_of.pop(next(iter(self.prompt_of)))
 
     def _on_tool(self, tid: str, name: str, inp: dict[str, Any], ok: bool, result: str) -> None:
-        """A tool call finished: what it did goes into What's done (if it worked and did something)."""
+        """A tool call finished: what it did goes into Actions (if it worked and did something)."""
         if not ok:
             return
         try:
             d = describe_done(name, inp, result)
         except Exception:
-            log.exception("couldn't describe %s for What's done", name)
+            log.exception("couldn't describe %s for Actions", name)
             return
         if d is None:
             return
@@ -864,7 +864,7 @@ class Controller:
         self.journal.record("screen", f"showed {path}")
 
     async def go_back_to(self, target_id: str | None, target_ts: float, before_ts: float | None) -> None:
-        """What's done: an item was tapped whose message isn't on the screen any more. The conversation from that
+        """Actions: an item was tapped whose message isn't on the screen any more. The conversation from that
         message on is put back, and the screen scrolls to it."""
         items = await self.loop.run_in_executor(None, self.history.earlier, target_id, target_ts, before_ts)
         self.screen.earlier(items, target_id, target_ts)

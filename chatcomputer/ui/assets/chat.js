@@ -427,7 +427,7 @@
     follow();
     reportHole();
   }).observe(composer);
-  // The empty box's hint: all of it ("Chat anything or type “/”") where the box is wide enough,
+  // The empty box's hint: all of it ("Chat anything or “/”") where the box is wide enough,
   // otherwise its first half.
   var hint = $("hint");
   function fitHint() {

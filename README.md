@@ -87,7 +87,7 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   again; under yours, ask again, edit and copy; with when it was. Before
   anything is said, its name, **Chat Computer**, is in the middle, and the conversation starts with its first
   words, the classic `hello, world`; the name goes once you say something.
-  The empty message box says, dimmed, "Chat anything or type “/”" (a "/" searches your files), with the cursor already
+  The empty message box says, dimmed, "Chat anything or “/”" (a "/" searches your files), with the cursor already
   blinking in it. The round button at its right sends: grey while there's
   nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
   the mouse wheel, Page Up) to read back.

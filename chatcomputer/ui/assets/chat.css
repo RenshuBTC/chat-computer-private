@@ -131,7 +131,7 @@ body.full .side, body.full .toggle { display: none !important; }
   padding: 0.6rem 0.7rem 0.6rem 1rem;
 }
 #row { position: relative; display: flex; align-items: flex-end; gap: 0.5rem; }
-/* The empty box's hint, where typing starts: "Chat anything or type “/”", dimmed (--dim, the one grey text on
+/* The empty box's hint, where typing starts: "Chat anything or “/”", dimmed (--dim, the one grey text on
    the screen); in a box too narrow for all of it, just "Chat anything" (.short). It goes
    with the first thing typed. */
 #hint {

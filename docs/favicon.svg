@@ -1,11 +1,45 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <title>Chat Computer</title>
-  <!-- Chat Computer's icon: a monitor whose screen shows a speech bubble (a computer you chat with), black on the
-       warm off-white of its screen. The off-white screen and the black edge (and the stand's off-white rim, drawn
-       first, under the screen) show on a light tab strip and a dark one alike. Made into docs/favicon.ico and
+  <!-- Chat Computer's icon: an old, bulky computer monitor in beige plastic, turned to the right (its top and its deep
+       back showing at the left), a cursor glowing on its dark screen, waiting for what you'll type. The dark outline
+       holds it together on a light tab strip, the beige on a dark one. Made into docs/favicon.ico and
        docs/apple-touch-icon.png by scripts/make_icons.js; copied to docs/favicon.svg by scripts/build_demo.py. -->
-  <path d="M16 22.75v4.5M10.5 28h11" fill="none" stroke="#F8F5F0" stroke-width="4.1" stroke-linecap="round"/>
-  <rect x="2.25" y="3.25" width="27.5" height="19.5" rx="4" fill="#F8F5F0" stroke="#000" stroke-width="2.5"/>
-  <path d="M11 7.25h10a3 3 0 0 1 3 3v3a3 3 0 0 1-3 3h-5l-4.25 3.25v-3.25a3 3 0 0 1-3-3v-3a3 3 0 0 1 3-3z" fill="#000"/>
-  <path d="M16 22.75v4.5M10.5 28h11" fill="none" stroke="#000" stroke-width="2.6" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F7F2E7"/><stop offset="1" stop-color="#DAD0BA"/>
+    </linearGradient>
+    <linearGradient id="side" x1="1" y1="0" x2="0" y2="0">
+      <stop offset="0" stop-color="#CBBDA2"/><stop offset="1" stop-color="#A6967A"/>
+    </linearGradient>
+    <linearGradient id="top" x1="1" y1="1" x2="0.7" y2="0">
+      <stop offset="0" stop-color="#FFFCF6"/><stop offset="1" stop-color="#E5DAC6"/>
+    </linearGradient>
+    <linearGradient id="stand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D8CDB6"/><stop offset="1" stop-color="#B2A487"/>
+    </linearGradient>
+    <radialGradient id="glass" cx="0.6" cy="0.38" r="0.85">
+      <stop offset="0" stop-color="#3E4943"/><stop offset="0.55" stop-color="#1C2320"/><stop offset="1" stop-color="#0A0D0C"/>
+    </radialGradient>
+    <linearGradient id="shine" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.4"/><stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-100%" y="-50%" width="300%" height="200%">
+      <feGaussianBlur stdDeviation="1.3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- the stand, the deep back (with its vents) and the top, then the front -->
+  <path d="M26 50.5h20l3.5 7h-27z" fill="url(#stand)" stroke="#4A4235" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M21.5 13.5 8.5 8.5 6.5 41 21.5 48.5z" fill="url(#side)" stroke="#4A4235" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M17 25.5l-7-2.6M17 29.5l-7.2-2.6M17 33.5l-7.4-2.6" stroke="#8E7F64" stroke-width="1.1" stroke-linecap="round"/>
+  <path d="M58.5 13.5h-37l-13-5h35z" fill="url(#top)" stroke="#4A4235" stroke-width="1.6" stroke-linejoin="round"/>
+  <rect x="20.5" y="12.5" width="39" height="38" rx="4.5" fill="url(#front)" stroke="#4A4235" stroke-width="1.6"/>
+  <path d="M24 14.6h32" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="1" stroke-linecap="round"/>
+  <!-- the screen: dark glass, the cursor glowing where typing starts, the glass's shine -->
+  <rect x="24.5" y="16.5" width="31" height="24.5" rx="5.5" fill="url(#glass)" stroke="#A0927A" stroke-width="1.3"/>
+  <rect x="31.5" y="22.75" width="3.2" height="12" rx="1.3" fill="#F8F5F0" filter="url(#glow)"/>
+  <path d="M52.5 19.5c-3-1.7-9-2-14-1.6 5.5 1.6 10 4.6 13 9.6 1.4-2.4 1.9-5.6 1-8z" fill="url(#shine)"/>
+  <!-- the slot under the screen and the power light -->
+  <rect x="25.5" y="44.8" width="11" height="1.8" rx="0.9" fill="#B9AC92"/>
+  <circle cx="54.6" cy="45.6" r="1.4" fill="#5FC46E"/>
 </svg>

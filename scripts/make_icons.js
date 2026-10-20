@@ -18,7 +18,7 @@ async function draw(page, size, scale, ground) {
   const inner = Math.round(size * scale);
   const html = `<!doctype html><html><body style="margin:0;background:${ground || "transparent"}">` +
     `<div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center">` +
-    SVG.replace(/width="32" height="32"/, `width="${inner}" height="${inner}"`) + `</div></body></html>`;
+    SVG.replace(/(<svg[^>]*?) width="\d+" height="\d+"/, `$1 width="${inner}" height="${inner}"`) + `</div></body></html>`;
   await page.setViewportSize({ width: size, height: size });
   await page.setContent(html);
   return page.screenshot({ omitBackground: !ground, clip: { x: 0, y: 0, width: size, height: size } });
@@ -52,8 +52,8 @@ function ico(pngs) {
   const pngs = [];
   for (const size of [16, 32, 48]) pngs.push({ size, data: await draw(page, size, 1) });
   fs.writeFileSync(path.join(DOCS, "favicon.ico"), ico(pngs));
-  // A home screen's icon fills its square (the phone rounds its corners): the bubble, smaller, on the off-white.
-  fs.writeFileSync(path.join(DOCS, "apple-touch-icon.png"), await draw(page, 180, 0.72, GROUND));
+  // A home screen's icon fills its square (the phone rounds its corners): the monitor, smaller, on the off-white.
+  fs.writeFileSync(path.join(DOCS, "apple-touch-icon.png"), await draw(page, 180, 0.8, GROUND));
   await browser.close();
   console.log("wrote docs/favicon.ico, docs/apple-touch-icon.png");
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -459,7 +459,7 @@ retrying with backoff, then starts listening.
   Hyperlegible Next at 800; it goes once there's a message of yours, `body.has-you`) and the conversation starts
   with Chat Computer's first words (`greet()` in chat.js, an `.ai.hello` message the page adds itself, not part
   of the transcript): `hello, world`, lower case with its comma as in Kernighan's C tutorial and K&R; the empty
-  message box shows `#hint`, "Chat anything or type “/”", dimmed
+  message box shows `#hint`, "Chat anything or “/”", dimmed
   (`--dim`; its first half where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
   the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items,
   the sidebars' switches and what's open's close button: settings, the microphone (sound tool, `input`) and the

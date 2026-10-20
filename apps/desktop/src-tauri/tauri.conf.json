@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chat Computer",
+  "version": "1.0.0",
+  "identifier": "ai.chatcomputer.desktop",
+  "build": {
+    "frontendDist": "../frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "dmg", "app"],
+    "publisher": "Chat Computer",
+    "category": "Productivity",
+    "shortDescription": "Chat Computer: talk, type or touch, and Claude does the rest.",
+    "longDescription": "Chat Computer's screen in a window of its own: free answers on this computer with Google's Gemma, or Claude with your own API key; any site opens right in the middle; \"/\" finds your files.",
+    "copyright": "Chat Computer is an independent project, not made by Anthropic.",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-loopback",
+  "description": "The same, for the app's own page where it comes from the app's own server on this computer (a Mac: see src/loopback.rs), at one of its three ports.",
+  "webviews": ["main"],
+  "platforms": ["macOS", "linux"],
+  "remote": {
+    "urls": ["http://127.0.0.1:42851", "http://127.0.0.1:42852", "http://127.0.0.1:42853"]
+  },
+  "permissions": [
+    "allow-show-site",
+    "allow-place-site",
+    "allow-hide-site",
+    "allow-unhide-site",
+    "allow-close-site",
+    "allow-site-media",
+    "allow-search-files",
+    "allow-open-file",
+    "allow-about"
+  ]
+}

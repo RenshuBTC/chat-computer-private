@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A site in the middle</title>
+<!-- What the app's tests on GitHub's machines open in the middle (.github/workflows/apps.yml): a site, framed so its
+     edges show where the app put it, saying whether it could ask the app for anything (it shouldn't). -->
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { box-sizing: border-box; border: 6px solid #d00; background: #fffbe6; font: 28px/1.4 sans-serif; padding: 24px; }
+</style>
+<h1>A site in the middle</h1>
+<p id="asked">Asking the app for this computer's files…</p>
+<script>
+  var t = window.__TAURI__ && window.__TAURI__.core, out = document.getElementById("asked");
+  if (!t) out.textContent = "This site can't ask the app for anything (no app here).";
+  else t.invoke("search_files", { query: "" }).then(function () { out.textContent = "WRONG: the app answered this site."; },
+    function () { out.textContent = "This site asked the app for files, and the app said no."; });
+</script>

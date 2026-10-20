@@ -68,7 +68,9 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     for site in ("https://www.youtube.com/", "https://www.bbc.com/"):
         for at in [m.start() for m in re.finditer(re.escape(site), host)]:
             line = host[host.rfind("\n", 0, at):host.find("\n", at)]
-            assert "var url = " in line or "link(" in line, line
+            before = host[host.rfind("\n", 0, host.rfind("\n", 0, at)):host.rfind("\n", 0, at)]
+            # (in the app, a video is YouTube's own page, in the app's own view: never on the website)
+            assert "var url = " in line or "link(" in line or ("watch?v=" in line and "if (APP)" in before), line
     for site in ("https://www.google.com/", "https://maps.google.com/"):
         for at in [m.start() for m in re.finditer(re.escape(site), host)]:
             line = host[host.rfind("\n", 0, at):host.find("\n", at)]

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Chat Computer listens when you talk to it (Connect AirPods in the “/” list).</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Chat Computer turns what you say into text when you talk to it.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Chat Computer finds files on your Desktop when you type “/” and a name.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Chat Computer finds files in Documents when you type “/” and a name.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Chat Computer finds files in Downloads when you type “/” and a name, and saves what you download there.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+    <key>NSAllowsArbitraryLoadsInWebContent</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

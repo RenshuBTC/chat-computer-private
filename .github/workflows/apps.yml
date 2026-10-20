@@ -1,0 +1,106 @@
+# The Chat Computer app for Windows and Mac (apps/desktop), built on GitHub's Windows and Mac machines: for Windows
+# an installer (for the person's own account: no administrator needed; it fetches Microsoft's WebView2 where a PC
+# hasn't got it), for Macs a disk image with one app for Apple silicon and Intel. Neither is signed with a paid
+# certificate, so Windows SmartScreen and macOS ask once before the first start (chatcomputer.ai/get says how).
+# Both are kept as the run's artifacts, to be put on chatcomputer.ai/get (docs/get).
+name: Windows and Mac apps
+on:
+  push:
+    branches: [main]
+    paths: ['apps/desktop/**', 'docs/index.html', 'docs/demo/**', 'scripts/build_apps.py', '.github/workflows/apps.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: apps-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis
+            target: ""
+            out: Chat-Computer-Windows.exe
+          - os: macos-latest
+            bundles: dmg
+            target: universal-apple-darwin
+            out: Chat-Computer-Mac.dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+      - name: The app's page (the website's, with Gemma's code)
+        run: python scripts/build_apps.py desktop
+      - name: The app's own tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+      - name: Build
+        working-directory: apps/desktop
+        shell: bash
+        run: npx --yes @tauri-apps/cli@2.12.3 build --bundles ${{ matrix.bundles }} ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -- --locked
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "${{ matrix.bundles }}" = nsis ]; then
+            cp apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe "out/${{ matrix.out }}"
+          else
+            cp apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg "out/${{ matrix.out }}"
+          fi
+          ls -la out
+          shasum -a 256 out/* || sha256sum out/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: out/${{ matrix.out }}
+          if-no-files-found: error
+      # Tried for real: the app started with a site opened in the middle (apps/desktop/smoke, from this machine), a
+      # picture of the screen taken after a while. The site's frame should sit in the app's middle, saying the app
+      # said no when it asked for files.
+      - name: Try it on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $site = Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1','--directory','apps/desktop/smoke' -PassThru
+          $env:CHATCOMPUTER_OPEN = 'http://127.0.0.1:8765/index.html'
+          $app = Start-Process 'apps/desktop/src-tauri/target/release/chat-computer.exe' -PassThru
+          Start-Sleep -Seconds 25
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          New-Item -ItemType Directory -Force screens | Out-Null
+          $bmp.Save("$PWD/screens/windows.png")
+          Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
+          Stop-Process -Id $site.Id -ErrorAction SilentlyContinue
+      - name: Try it on a Mac
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p screens
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory apps/desktop/smoke & site=$!
+          CHATCOMPUTER_OPEN=http://127.0.0.1:8765/index.html \
+            "apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Chat Computer.app/Contents/MacOS/chat-computer" & app=$!
+          sleep 30
+          screencapture -x screens/mac.png || true
+          kill $app $site || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screens-${{ runner.os }}
+          path: screens/
+          if-no-files-found: ignore

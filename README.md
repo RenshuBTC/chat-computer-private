@@ -530,7 +530,23 @@ for each, the line that says what it is; no video):
   extension, which opens them (only chatcomputer.ai can ask, and only for a web address). It asks for one
   permission, the side panel. Add to Chrome downloads it as a zip (`scripts/build_apps.py` makes it): unzip it, open
   chrome://extensions, turn on Developer mode and choose Load unpacked, until it's in the Chrome Web Store.
-* **Windows, Mac and Android**: coming. **iPhone**: coming to the App Store.
+* **Windows and Mac**: the Chat Computer app (`apps/desktop`, made with Tauri): the website's page, bundled into
+  a window of its own (so nothing that runs with the app's powers comes from elsewhere), with what a website can't
+  do. Any site opens right in the middle, in the app's own browser view laid over the frame the page draws (sites
+  that refuse to show inside another page, most of them, open too, as on a Chat Computer), and the same view is
+  used each time, so sign-ins stay; a link that would open a new window opens there; downloads go to Downloads.
+  "/" finds files on the computer by name (Desktop, Documents, Downloads, Pictures, Music, Videos, OneDrive), and
+  the one chosen opens with its own app; programs, scripts and anything "/" didn't find aren't opened. Connected
+  Claude can do the same (find_files, open_file). The greeting has the name the computer knows you by. Gemma's
+  code comes with the app; only Google's model is downloaded. Only the app's own page can ask the app for these
+  (its capabilities, and each command checks); a site in the middle gets nothing. On a Mac the page comes from
+  the app's own server at 127.0.0.1 (a Mac's web view doesn't count Tauri's own scheme as secure, and then there's
+  no WebGPU for Gemma, no microphone and no browser cache), which answers only to that name. GitHub builds them
+  (`.github/workflows/apps.yml`): an installer for Windows (for your account, no administrator needed), and a disk
+  image for Macs with Apple silicon or Intel. They aren't signed with a paid certificate yet, so the first time,
+  Windows says it protected your PC (choose More info, then Run anyway) and macOS says it can't check the app
+  (System Settings, Privacy & Security, Open Anyway).
+* **Android**: coming. **iPhone**: coming to the App Store.
 
 ## For the curious
 

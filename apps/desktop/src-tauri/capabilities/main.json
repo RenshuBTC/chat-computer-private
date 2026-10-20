@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Chat Computer's own page (bundled with the app), and only it: what it may ask the app for. The sites shown in the middle get nothing.",
+  "webviews": ["main"],
+  "permissions": [
+    "allow-show-site",
+    "allow-place-site",
+    "allow-hide-site",
+    "allow-unhide-site",
+    "allow-close-site",
+    "allow-site-media",
+    "allow-search-files",
+    "allow-open-file",
+    "allow-about"
+  ]
+}

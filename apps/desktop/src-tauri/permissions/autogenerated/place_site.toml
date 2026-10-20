@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-place-site"
+description = "Enables the place_site command without any pre-configured scope."
+commands.allow = ["place_site"]
+
+[[permission]]
+identifier = "deny-place-site"
+description = "Denies the place_site command without any pre-configured scope."
+commands.deny = ["place_site"]

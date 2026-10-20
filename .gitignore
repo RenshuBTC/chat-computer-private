@@ -2,3 +2,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.pyc
+# The desktop app's build: its page (made by scripts/build_apps.py desktop), Rust's output, Tauri's generated schemas.
+apps/desktop/frontend/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/

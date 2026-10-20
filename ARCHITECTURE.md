@@ -56,7 +56,48 @@ chat-computer/
   docs/get/                 chatcomputer.ai/get: the apps to download (as Annotated's page offers its extension)
   apps/chrome/              The Chrome extension: the website in Chrome's side panel (?app=chrome), its sites in
                             real Chrome tabs; scripts/build_apps.py zips it into docs/get, tests/test_apps.py checks
+  apps/desktop/             The Windows and Mac app (Tauri 2): src-tauri/ (Rust: the window, the site's own view
+                            laid over the page's frame, "/" file search, the Mac's 127.0.0.1 page server,
+                            capabilities/ giving only the app's own page its commands), frontend/ (made by
+                            build_apps.py desktop: the website's page, with Gemma's code), smoke/ (a site for
+                            CI's real start-up pictures); .github/workflows/apps.yml builds both on GitHub;
+                            tests/test_desktop.py checks it, driving a Linux build with WebDriver where there is one
 ```
+
+## The Windows and Mac app
+
+The website's page (docs/index.html and docs/demo/, copied by `scripts/build_apps.py desktop`) is bundled into the
+app, so the app's own page (the webview `main`) never runs code from elsewhere: even Gemma's Transformers.js and
+ONNX Runtime's WebAssembly come with it (`demo/lm/`, the website's versions, from npm), and only the model is
+downloaded. host.js sees the app (Tauri's `window.__TAURI__`, `SHELL.kind == "app"`) and then:
+
+* A site goes in the app's own browser view, the webview `site` (`show_site`), laid over the frame chat.js draws,
+  moved with it (`place_site`), put out of sight while the conversation has the middle or a sheet or a held message
+  is over it (`hide_site`, `unhide_site`), and closed with its x (`close_site`). Any site shows there, as on a
+  Chat Computer (`framed()` takes every web address). It's the same view each time, so sign-ins and the way back
+  stay. A link meant for a new window opens there instead; only http(s), about: and blob: are followed; downloads
+  go to Downloads and are listed in Actions; its title and where it is come back to the page (`chatcomputerApp`,
+  which the app runs in the page with `eval`). On a Mac it says it's Safari (it is Safari's engine). A video is
+  YouTube's own page; turning it down, pausing it, and Page Up and Down are fixed scripts the app runs in the
+  site's page (`site_media`), never anything the page sends.
+* "/" finds the computer's files by name (`search_files`: Desktop, Documents, Downloads, Pictures, Music, Videos
+  and OneDrive, skipping hidden folders, programs' own folders and app bundles; at most 8, best first), and the
+  one chosen opens with its own app (`open_file`), only if a search found it and it's a document, picture, music,
+  video, archive or folder, never a program or a script. Connected Claude has the same (`find_files`,
+  `open_file`); the website's made-up messages, files and earlier conversations aren't in the app.
+* The greeting has the first name of the computer's account (`about`), unless one was given ("call me ...").
+* A link clicked in the page opens in the middle; the page sent elsewhere is taken back (on Windows the main
+  frame's navigation is stopped; on a Mac and Linux, where frames ask too, the page is loaded again) and the
+  address opened in the middle.
+
+Only the app's own page can ask for these: `build.rs` makes each command a permission, `capabilities/` give them
+to the webview `main` alone (never to a window, which would include the site's view), and each command checks the
+webview asking is `main`. A site's page gets Tauri's script too, but every command it asks for is refused (the
+CI's start-up picture shows a test site saying so). On Windows and Linux the page comes from Tauri's own scheme;
+on a Mac, whose web view doesn't count that scheme as secure (and so gives it no WebGPU, microphone or cache),
+from the app's own server at 127.0.0.1 (`loopback.rs`: ports 42851 to 42853, the first free one, so the page's
+storage stays put; only GET, only to that name, only the bundled files), with a capability for exactly those
+addresses.
 
 ## Base system
 

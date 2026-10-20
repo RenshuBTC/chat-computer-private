@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-site"
+description = "Enables the show_site command without any pre-configured scope."
+commands.allow = ["show_site"]
+
+[[permission]]
+identifier = "deny-show-site"
+description = "Denies the show_site command without any pre-configured scope."
+commands.deny = ["show_site"]

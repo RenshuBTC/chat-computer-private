@@ -18,12 +18,16 @@
    Google's own pages (its search, Google Maps' directions) and Wikipedia's show in the middle when asked for: of the
    sites that might be asked for, they're the ones that let another page show them.
    In Chrome's side panel (the Chat Computer extension, apps/chrome: this page in its frame, ?app=chrome), sites
-   open in real Chrome tabs instead, which the extension opens: SHELL, below. */
+   open in real Chrome tabs instead, which the extension opens. In the Chat Computer app for Windows and Mac
+   (apps/desktop: this page, bundled into the app), any site opens right here, in the app's own browser view laid
+   over the middle, "/" finds the computer's real files, and nothing here is made up: SHELL, below. */
 (function () {
   "use strict";
   var START = Date.now() / 1000;
   // Inside the Chrome extension's side panel: any site asked for opens in a new Chrome tab (the extension's
   // panel.js opens it, for this page, without a click), and the text is the size of a side panel's.
+  // Inside the app (Tauri's window.__TAURI__ is there, given only to the app's own page): what the app does for it
+  // (apps/desktop/src-tauri/src/lib.rs), asked with app(command, arguments), a promise.
   var SHELL = (function () {
     var app = "";
     try { app = new URLSearchParams(location.search).get("app") || ""; } catch (e) {}
@@ -31,8 +35,16 @@
       return { kind: "chrome", textPx: 16, name: "Chrome's side panel",
                openTab: function (url) { window.parent.postMessage({ chatcomputer: "open_tab", url: url }, "*"); } };
     }
+    var tauri = window.__TAURI__ && window.__TAURI__.core;
+    if (tauri && typeof tauri.invoke === "function") {
+      var mac = /Mac/i.test(navigator.platform || "") || /Macintosh/.test(navigator.userAgent || "");
+      return { kind: "app", computer: mac ? "Mac" : "PC", name: "the Chat Computer app on their " + (mac ? "Mac" : "Windows PC"),
+               app: function (command, args) { return tauri.invoke(command, args || {}); } };
+    }
     return null;
   })();
+  var TABS = !!(SHELL && SHELL.openTab), APP = SHELL && SHELL.kind === "app" ? SHELL : null;
+  function noop() {}
   function now() { return Date.now() / 1000; }
   function call(name) {
     var args = Array.prototype.slice.call(arguments, 1);
@@ -64,7 +76,7 @@
   } } } };
 
   // ------------------------------------------------------------------ made-up messages, things done, files
-  var MESSAGES = [
+  var MESSAGES = APP ? [] : [
     { id: "m1", source: "whatsapp", label: "WhatsApp", who: "Mum", text: "Dinner at 7 tonight? Bring the photos from the trip!", ts: START - 240, unread: true },
     { id: "m2", source: "email", label: "Gmail", who: "Jane Lim", text: "Re: Lunch on Friday? 12:30 at the usual place works for me.", ts: START - 3100, unread: true },
     { id: "m3", source: "telegram", label: "Telegram", who: "Alex", text: "Sent you the slides for Monday.", ts: START - 7400, unread: false },
@@ -73,7 +85,7 @@
     { id: "m6", source: "x", label: "X", who: "Priya", text: "Are you coming to the meetup on Saturday?", ts: START - 96000, unread: false },
     { id: "m7", source: "linkedin", label: "LinkedIn", who: "Daniel Tan", text: "Thanks for connecting!", ts: START - 260000, unread: false }
   ];
-  var ACCOUNTS = [{ id: "a1", label: "Gmail" }, { id: "a2", label: "Outlook" }, { id: "a3", label: "Telegram" },
+  var ACCOUNTS = APP ? [] : [{ id: "a1", label: "Gmail" }, { id: "a2", label: "Outlook" }, { id: "a3", label: "Telegram" },
                   { id: "a4", label: "WhatsApp" }, { id: "a5", label: "Instagram" }, { id: "a6", label: "X" },
                   { id: "a7", label: "LinkedIn" }];
   function when(ts) {
@@ -82,7 +94,7 @@
     if (d.toDateString() === today.toDateString()) return "Today, " + t;
     return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) + ", " + t;
   }
-  var THREADS = {
+  var THREADS = APP ? {} : {
     m1: { title: "Mum", note: "On Chat Computer this is WhatsApp's own page, between the sidebars.", lines: [
       ["Mum", START - 90000, "How was the trip?"], ["You", START - 89000, "Amazing! So many photos."],
       ["Mum", START - 240, "Dinner at 7 tonight? Bring the photos from the trip!"]] },
@@ -98,7 +110,7 @@
     m7: { title: "Daniel Tan", note: "On Chat Computer this is LinkedIn's own page.", lines: [["Daniel Tan", START - 260000, "Thanks for connecting!"]] }
   };
   // Earlier conversations, put back when something in Actions is tapped (the screen starts empty: the word logo).
-  var EARLIER = [
+  var EARLIER = APP ? [] : [
     { role: "user", id: "y1", ts: START - 86400 - 3010, text: "Play some calm piano music" },
     { role: "assistant", id: "ya1", ts: START - 86400 - 3000, text: "Playing a calm piano mix on YouTube." },
     { role: "user", id: "y2", ts: START - 86400 - 2910, text: "A bit quieter please" },
@@ -106,13 +118,13 @@
     { role: "user", id: "h1", ts: START - 5410, text: "How do I get to the airport on Sunday with two big suitcases?" },
     { role: "assistant", id: "ha1", ts: START - 5380, text: "The train means two changes, and one of them has stairs and no lift, so a taxi is easier: about 25 minutes. I put a packing list in your Documents too." }
   ];
-  var DONE = [
+  var DONE = APP ? [] : [
     { id: "d1", ts: START - 86400 - 2995, text: "Opened youtube.com", prompt_id: "y1", prompt_ts: START - 86400 - 3010 },
     { id: "d2", ts: START - 86400 - 2905, text: "Set the volume to 40%", prompt_id: "y2", prompt_ts: START - 86400 - 2910 },
     { id: "d3", ts: START - 5400, text: "Searched the web for \u201ctrains to the airport on Sunday\u201d", prompt_id: "h1", prompt_ts: START - 5410 },
     { id: "d4", ts: START - 5390, text: "Saved Packing list.md", prompt_id: "h1", prompt_ts: START - 5410 }
   ];
-  var FILES = [
+  var FILES = APP ? [] : [
     { name: "Packing list.md", where: "~/Documents", kind: "document", ts: START - 5390, page: "packing" },
     { name: "Beach.jpg", where: "~/Pictures/Bali", kind: "image", ts: START - 40 * 86400, page: "beach" },
     { name: "Budget 2026.xlsx", where: "C:\\Users\\You\\Documents (Windows)", kind: "spreadsheet", ts: START - 17 * 86400, page: "budget" },
@@ -178,6 +190,8 @@
     return v;
   }
   function show(page) {
+    if (APP && page.src && /^https?:/i.test(page.src)) { showSite(page); return; }
+    if (site.on) closeSite();
     var v = frame();
     acted++;
     player.token = {};                       // what was playing is gone
@@ -198,6 +212,7 @@
     return t.value;
   }
   function place() {
+    if (site.on) { if (open && hole) APP.app("place_site", hole).catch(noop); return; }
     if (!view || !open || !hole) return;
     view.style.left = hole.x + "px";
     view.style.top = hole.y + "px";
@@ -206,6 +221,7 @@
   }
   // Closed (its x, "close", a swipe up from the bottom edge): gone, and what played stops.
   function close() {
+    if (site.on) { var on = open; acted++; closeSite(); if (on) call("mode", "chat"); return; }
     if (!view) return;
     var was = open;
     acted++;
@@ -221,8 +237,73 @@
   function putAway() {
     if (!open) return;
     open = false;
-    view.style.display = "none";
+    if (site.on) APP.app("hide_site").catch(noop);
+    else view.style.display = "none";
     call("mode", "chat");
+  }
+  // In the app, a site goes in its own browser view (where every site shows: none can refuse it, as they refuse
+  // being framed in a page), laid over the frame (hole), and moved with it. The same view each time: sign-ins stay.
+  // What it's at and called comes back from the app (chatcomputerApp, below), and a sheet over the screen (Connect
+  // Claude) or a message held puts it out of sight meanwhile: the app's view would be in front of them.
+  var site = { on: false, hidden: false, url: "" };
+  function showSite(page) {
+    if (view) { view.remove(); view = null; }
+    acted++;
+    player.token = {};
+    player.id = page.youtube || "";
+    site.on = true;
+    site.hidden = false;
+    site.url = page.src;
+    open = true;
+    call("mode", "content", page.title || hostOf(page.src));
+    var h = hole || { x: 0, y: 0, w: 1, h: 1 };
+    APP.app("show_site", { url: page.src, x: h.x, y: h.y, w: h.w, h: h.h }).then(function () {
+      place();                                   // where the frame is by now
+      covered();
+    }, function (e) {
+      site.on = false;
+      open = false;
+      call("mode", "chat");
+      call("notice", "That didn't open: " + e, "warn");
+    });
+  }
+  function closeSite() {
+    site.on = false;
+    site.url = "";
+    open = false;
+    player.token = {};
+    player.id = "";
+    APP.app("close_site").catch(noop);
+  }
+  function covered() {
+    if (!site.on || !open) return;
+    var over = document.body.classList.contains("sheet") || document.body.classList.contains("holding");
+    if (over === site.hidden) return;
+    site.hidden = over;
+    APP.app(over ? "hide_site" : "unhide_site").catch(noop);
+  }
+  if (APP && window.MutationObserver) {
+    new MutationObserver(covered).observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ["class"] });
+  }
+  function hostOf(url) { try { return new URL(url).hostname.replace(/^www\./, ""); } catch (e) { return ""; } }
+  // What the app says about the site (window.chatcomputerApp, run by the app, never by the site): its title and where
+  // it is, a download finished, or an address to open here (a link in a page of the demo's own, or one meant for a
+  // new window).
+  window.chatcomputerApp = function (m) {
+    if (!APP || !m || typeof m !== "object") return;
+    if (typeof m.title === "string" && site.on && open && m.title.trim()) call("mode", "content", clip(m.title, 80));
+    if (typeof m.url === "string" && site.on) site.url = m.url;
+    if (typeof m.downloaded === "string") did((m.ok ? "Downloaded " : "Couldn't download ") + clip(m.downloaded, 60) + (m.ok ? " to Downloads" : ""));
+    if (typeof m.open === "string" && /^https?:/i.test(m.open)) show({ src: m.open, title: hostOf(m.open) });
+  };
+  // Links in this page (an answer's, a page of the demo's own): opened here, in the middle, rather than leaving it.
+  if (APP) {
+    document.addEventListener("click", function (e) {
+      var a = e.target && e.target.closest && e.target.closest("a[href]");
+      if (!a || !/^https?:/i.test(a.href)) return;
+      e.preventDefault();
+      show({ src: a.href, title: hostOf(a.href) });
+    }, true);
   }
   // A turn that did nothing to what's open (showed nothing, closed nothing, left the volume) and has words to say:
   // they'd be out of sight, the conversation being put away while something's open, so what's open is put away for
@@ -234,6 +315,7 @@
   // Page Up and Down (and the arrow keys, Home and End while the message box is empty) scroll what's open, when
   // it's a page of the demo's own (another site's page can't be reached from here: a click on it, and it scrolls).
   function scrollOpen(how) {
+    if (site.on) { APP.app("site_media", { action: "scroll_" + how }).catch(noop); return; }
     var w;
     try { w = view && view.contentWindow; w.document; } catch (e) { return; }
     if (!w) return;
@@ -368,6 +450,10 @@
   var player = { token: {}, id: "", heard: false, state: -2, armed: false, volume: 100 };
   function youtube(id, start, title) {
     start = start || 0;
+    if (APP) {                                          // (in the app: YouTube's own page, as on a Chat Computer)
+      show({ youtube: id, src: "https://www.youtube.com/watch?v=" + id + (start ? "&t=" + start + "s" : ""), title: title || "YouTube" });
+      return;
+    }
     acted++;                                            // it's coming: the turn's words don't put anything away
     var token = player.token = {};
     soundAllowed().then(function (sound) {
@@ -413,7 +499,12 @@
     silenceUrl = URL.createObjectURL(new Blob([b], { type: "audio/wav" }));
     return silenceUrl;
   }
+  var MEDIA = { playVideo: "play", pauseVideo: "pause", mute: "mute", unMute: "unmute", setVolume: "volume" };
   function command(func, args) {
+    if (site.on) {
+      if (MEDIA[func]) APP.app("site_media", { action: MEDIA[func], value: args && args.length ? +args[0] : null }).catch(noop);
+      return;
+    }
     if (!view || !player.id) return;
     try { view.contentWindow.postMessage(JSON.stringify({ event: "command", func: func, args: args || [], id: 1, channel: "widget" }), "*"); } catch (e) {}
   }
@@ -505,7 +596,8 @@
   };
   var CITIES = { singapore: [103.6, 1.2, 104.1, 1.47], london: [-0.35, 51.38, 0.15, 51.62], "new york": [-74.1, 40.6, -73.8, 40.85],
                  tokyo: [139.55, 35.55, 139.95, 35.8], paris: [2.22, 48.8, 2.47, 48.92], sydney: [151.0, -33.98, 151.35, -33.78] };
-  var TRY = "Try “play some piano music”, “show me a map of Tokyo”, “weather in London”, " +
+  var TRY = APP ? "Try “play some piano music”, “show me a map of Tokyo”, “weather”, “open bbc.com” or “set a timer for " +
+    "5 minutes”. Type / and a name to find a file on this computer." : "Try “play some piano music”, “show me a map of Tokyo”, “weather in London”, " +
             "“set a timer for 5 minutes” or “what did Jane say?”. Type / to search the files.";
   var REAL = "Type / and choose Connect Claude, and Claude answers for real, with your own API key.";
   function map(b, name) {
@@ -519,9 +611,10 @@
   // The address to show, or null.
   function framed(url) {
     var u;
-    if (SHELL && SHELL.openTab) return null;            // (in the extension, every site in a real tab)
+    if (TABS) return null;                              // (in the extension, every site in a real tab)
     try { u = new URL(url); } catch (e) { return null; }
     if (!/^https?:$/.test(u.protocol)) return null;
+    if (APP) return u.href;                             // (in the app, every site right here, as it is)
     var host = u.hostname.toLowerCase().replace(/^www\./, ""), q = u.searchParams;
     if (/(^|\.)wikipedia\.org$/.test(host)) return "https://" + u.hostname + u.pathname + u.search + u.hash;
     if (!/^(maps\.)?google\.[a-z]{2,3}(\.[a-z]{2})?$/.test(host)) return null;
@@ -608,7 +701,7 @@
                         act: function () { youtube(video.id, video.start, "YouTube"); } };
     if (here) return { text: "Here's " + name + ". Click in it to type, and scroll it as you'd scroll any page.", done: ["Opened " + host],
                        act: function () { show({ src: here, title: name }); } };
-    if (tab) return { text: SHELL ? "Opened " + name + " in a new tab." : "Opened " + name + " in a new tab. Most sites, " + name +
+    if (tab) return { text: TABS ? "Opened " + name + " in a new tab." : "Opened " + name + " in a new tab. Most sites, " + name +
                         " among them, don't let another page show them, so here they open beside this one; on a Chat Computer " +
                         "they open right here.",
                       done: ["Opened " + host + " in a new tab"] };
@@ -950,7 +1043,8 @@
   function cleanName(s) { return String(s || "").replace(/[^\p{L}\p{M}'’ .-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 40); }
   function person() { return cleanName(store(NAME_KEY)); }
   // The name and whether Claude answers, for the next greeting (a visit, or the conversation cleared).
-  function greetWith() { call("settings", person(), claude.key ? MODEL_NAME : ""); }
+  function greetWith() { call("settings", person() || computerName, claude.key ? MODEL_NAME : ""); }
+  var computerName = "";                 // (in the app: the first name of this computer's account, unless one's given)
   function nameOf(t) {
     var m = NAME_IS.exec(t), n = m ? cleanName(m[1]) : "";
     if (!n || NOT_A_NAME.test(n.split(" ")[0])) return "";
@@ -1025,10 +1119,14 @@
       return { text: (/\banthropic\b/i.test(t) && /\bis (this|it)|made by\b/i.test(t) ? "No. " : "") + FACTS.indie };
     }],
     [/\b(real|my real|actual)\b.*\bmessages?\b|\bmessages?\b.*\b(real|fake|made up)\b|\bare these (mine|real)\b/i, function () {
-      return { text: "No, they're made up for this page. On a Chat Computer, Messages shows yours, from the email and chat accounts you connect." };
+      return { text: APP ? "There are none here: the app doesn't connect your accounts yet (open them as sites instead, like “open gmail.com”). " +
+        "On Chat Computer itself, Messages shows yours, from the email and chat accounts you connect." :
+        "No, they're made up for this page. On a Chat Computer, Messages shows yours, from the email and chat accounts you connect." };
     }],
     [/\b(my (actual|real|own) (computer|files|pc)|on my (computer|pc|laptop)|control my (pc|computer))\b/i, function () {
-      return { text: "Not from this page: a website can't reach your computer, and the files here are made up. Installed, " +
+      return { text: APP ? "Your files, yes: type / and a name, and I find it on this computer; chosen, it opens in its own app. " +
+        "Programs, settings and the rest of the computer stay yours to run: this app doesn't control them (Chat Computer itself, " +
+        "installed in place of a desktop, does)." : "Not from this page: a website can't reach your computer, and the files here are made up. Installed, " +
         "Chat Computer opens your own files, from your Windows folders too." };
     }],
     [/\bwhat (can'?t|can not|cannot) you do\b|\byour limits\b|\bwhat don'?t you do\b/i, function () {
@@ -1364,7 +1462,7 @@
     else if (a === "youtube_search" && r.query) { var y = youtubeSearch(r.query); y.act(); y.done.forEach(function (d) { did(d, you, uts); }); }
     else if (a === "open_website" && /^https?:\/\/[^\s]+$/i.test(r.url || "")) {
       var host = r.url.replace(/^https?:\/\/(www\.)?/i, "").split(/[/?#]/)[0];
-      if (!framed(r.url) && SHELL && newTab(r.url)) did("Opened " + host + " in a new tab", you, uts);
+      if (!framed(r.url) && TABS && newTab(r.url)) did("Opened " + host + " in a new tab", you, uts);
       else {
         show(site(r.url, host, "On Chat Computer, " + host + " opens right here. Most sites can't show inside this page."));
         did((framed(r.url) ? "Opened " : "Showed a link to ") + host, you, uts);
@@ -1477,6 +1575,10 @@
   // first time it's needed on a visit ("Starting Gemma…" in the empty box), from the browser's copy, and never
   // downloaded again unasked. "Remove Gemma" in the list frees the room.
   var LM_LIBRARY = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";
+  // In the app, the same version comes with the app, with ONNX Runtime's WebAssembly (demo/lm/, scripts/build_apps.py):
+  // nothing that runs in the app's own page comes from elsewhere. Only Google's model is downloaded, from Hugging Face.
+  var LM_HERE = APP ? new URL("demo/lm/", location.href).href : "";
+  if (APP) LM_LIBRARY = LM_HERE + "transformers.min.js";
   var GEMMA = { model: "onnx-community/gemma-3-1b-it-ONNX", name: "Gemma", full: "Gemma 3, Google's small open AI" };
   // Its files for each precision: half (q4f16) where the graphics chip has it (shader-f16), else full (q4).
   var GEMMA_BYTES = { q4f16: 784e6, q4: 880e6 }, GEMMA_STARTING = "chatcomputer-demo-gemma-starting";
@@ -1542,6 +1644,8 @@
       return import(LM_LIBRARY);
     }).then(function (lm) {
       gemma.lib = lm;
+      if (LM_HERE) lm.env.backends.onnx.wasm.wasmPaths = { mjs: LM_HERE + "ort-wasm-simd-threaded.asyncify.mjs",
+                                                            wasm: LM_HERE + "ort-wasm-simd-threaded.asyncify.wasm" };
       if (download && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
       return lm.pipeline("text-generation", GEMMA.model, { device: "webgpu", dtype: gemma.dtype,
         progress_callback: function (p) {
@@ -1704,7 +1808,19 @@
     if (a.text && since != null) wordsOnly(since);
     stream(id, a.text || "", function () { say(a.text || ""); });
   }
-  function did(text, you, uts) { call("done", { id: uid("d"), ts: now(), text: text, prompt_id: you || "", prompt_ts: uts || now() }); }
+  function did(text, you, uts) {
+    var entry = { id: uid("d"), ts: now(), text: text, prompt_id: you || "", prompt_ts: uts || now() };
+    call("done", entry);
+    if (APP) store(APP_DONE, (store(APP_DONE) || []).concat([entry]).slice(-200));     // (the app keeps its Actions)
+  }
+  var APP_DONE = "chatcomputer-app-done";
+  // When a file last changed, as a person would say it: 2:03 PM today, Oct 3 this year, Oct 3, 2024 before.
+  function whenText(ts) {
+    var d = new Date(ts * 1000), today = new Date();
+    if (d.toDateString() === today.toDateString()) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return d.toLocaleDateString([], d.getFullYear() === today.getFullYear() ? { month: "short", day: "numeric" } :
+      { month: "short", day: "numeric", year: "numeric" });
+  }
   function stream(id, text, then) {
     var at = 0;
     (function step() {
@@ -1731,6 +1847,14 @@
   }
   function search(q) {
     return matching(commands(), q).concat(files(q));
+  }
+  function appSearch(n, q) {
+    var cmds = matching(commands(), q);
+    call("searchResults", n, q, cmds, "");
+    APP.app("search_files", { query: q }).then(function (hits) {
+      var all = cmds.concat(hits.map(function (h) { return { name: h.name, path: h.path, kind: h.kind, where: h.where, when: whenText(h.ts) }; }));
+      call("searchResults", n, q, all, all.length ? "" : q ? "Nothing on this computer matches \u201c" + q + "\u201d." : "No files yet.");
+    }, function (e) { call("searchResults", n, q, cmds, cmds.length ? "" : String(e)); });
   }
   function files(q) {
     var words = q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -1778,32 +1902,44 @@
                                                minute: "2-digit" }) + (zone ? ", " + zone : "");
   }
   function systemPrompt() {
-    return "You are Chat Computer: Claude, running a whole computer. People talk, type or touch, and you do things for them. " +
-      (SHELL ? "Right now you're in the Chat Computer extension, Chat Computer's demo website (chatcomputer.ai) in " + SHELL.name +
+    var where = APP ? "Right now you're in " + APP.name + " (Chat Computer's screen in a window of its own), with the person's own " +
+        "Claude API key." :
+      TABS ? "Right now you're in the Chat Computer extension, Chat Computer's demo website (chatcomputer.ai) in " + SHELL.name +
         ", with the person's own Claude API key." : "Right now you're in Chat Computer's demo website (chatcomputer.ai), in the " +
-        "person's web browser, with their own Claude API key.") + " The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
+        "person's web browser, with their own Claude API key.";
+    var sites = APP ? "any site, right here in the middle, in the app's own browser view, for them to use: you can't see or use " +
+        "it from here), find their files by name and open them with their own apps (find_files, then open_file: " +
+        "documents, pictures, music, videos and folders; never programs or scripts), " :
+      TABS ? "any site, in a new Chrome tab; on a Chat Computer any site opens right here and you use it), open their " +
+        "messages and files (open_message, open_file), " :
+      "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
+        "most other sites can't show inside the demo, so it's a link; on a Chat Computer any site opens right here and you use it), " +
+        "open their messages and files (open_message, open_file), ";
+    return "You are Chat Computer: Claude, running a whole computer. People talk, type or touch, and you do things for them. " +
+      where + " The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
       "there), and in the middle the conversation, or what you open in its place, with the message box under it. While " +
       "something is open the conversation is out of sight: a reply that's only words brings it back, putting what's open " +
       "away (still playing).\n\n" +
       "Answer in the conversation, like a chat: briefly for simple things, in full when they ask for more (a recipe, a " +
-      "plan, code), with a little Markdown where it helps (a list, a table, a code block; links can't be clicked here). " +
+      "plan, code), with a little Markdown where it helps (a list, a table, a code block; " +
+      (APP ? "a link clicked opens in the middle" : "links can't be clicked here") + "). " +
       "When they talk to you (through their AirPods) it's read aloud too, so keep it to a few sentences then. Do things " +
       "rather than describe them, and don't announce a tool before using it.\n\n" +
       "Here you can: play YouTube videos (play_youtube; use web_search to find a video's address when you don't know its " +
       "ID for certain), show maps (show_map), show a page you write when they ask for one on the screen (show_page), open a website (open_website: " +
-      (SHELL ? "any site, in a new Chrome tab; on a Chat Computer any site opens right here and you use it), open their " :
-      "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
-      "most other sites can't show inside the demo, so it's a link; on a Chat Computer any site opens right here and you use it), open their ") +
-      "messages and files (open_message, open_file), make a timer (make_timer), set the volume of what's playing " +
-      "(set_volume), close what's open (close), and search the web. On a real Chat Computer you also use any website, " +
+      sites + "make a timer (make_timer), set the volume of what's playing (set_volume), close what's open (close), and " +
+      "search the web. " + (APP ? "Chat Computer itself, installed in place of a desktop, also reads their messages, " +
+        "changes settings and uses their AirPods; when they ask for something only it can do, say so in a sentence." :
+      "On a real Chat Computer you also use any website, " +
       "their real files, apps and settings, and their AirPods; when they ask for something only a Chat Computer can do, " +
-      "say so in a sentence.\n\n" +
-      (person() ? "They go by " + person() + ". " : "") + (homeName() ? "They live in " + homeName() + ". " : "") +
+      "say so in a sentence.") + "\n\n" +
+      (person() ? "They go by " + person() + ". " : computerName ? "This computer says they're " + computerName + ". " : "") +
+      (homeName() ? "They live in " + homeName() + ". " : "") +
       "When they tell you what to call them, or where they live, keep it (set_name, set_place): the greeting that opens " +
-      "each conversation (under \u201chello, world\u201d) says their name and the weather where they are, as the Claude app's does.\n\n" +
-      "Their messages and files here are made up for the demo:\n" + inbox() + "\n\nFiles:\n" +
-      FILES.map(function (f) { return "- " + f.name + ", in " + f.where; }).join("\n") +
-      "\n\nEach of their messages starts with the date and time it was sent, in brackets.";
+      "each conversation (under “hello, world”) says their name and the weather where they are, as the Claude app's does." +
+      (APP ? "" : "\n\nTheir messages and files here are made up for the demo:\n" + inbox() + "\n\nFiles:\n" +
+        FILES.map(function (f) { return "- " + f.name + ", in " + f.where; }).join("\n") +
+        "\n\nEach of their messages starts with the date and time it was sent, in brackets.");
   }
   function obj(props, required) { return { type: "object", properties: props, required: required || [] }; }
   var TOOLS = [
@@ -1815,7 +1951,8 @@
       north: { type: "number" } }, ["place", "west", "south", "east", "north"]) },
     { name: "show_page", description: "Show a page you write between the sidebars, in Markdown (headings, lists, tables), when " +
       "they ask for something on the screen; answers go in the conversation.", input_schema: obj({ title: { type: "string" }, markdown: { type: "string" } }, ["title", "markdown"]) },
-    { name: "open_website", description: SHELL ? "Open a website, in a new Chrome tab beside the side panel." :
+    { name: "open_website", description: APP ? "Open a website, any site, in the middle of the screen, for them to use." :
+      TABS ? "Open a website, in a new Chrome tab beside the side panel." :
       "Open a website. Google (google.com, its searches, Google Maps' places and directions) and " +
       "Wikipedia open in the middle of the screen, for them to scroll and type in; most other sites can't show inside the demo, so " +
       "this shows a link to them there.",
@@ -1834,8 +1971,17 @@
       "for the weather there: in the greeting, and when they ask for the weather without saying where.",
       input_schema: obj({ place: { type: "string" } }, ["place"]) }
   ];
+  // In the app: their real files instead of the made-up ones and messages.
+  var APP_TOOLS = [
+    { name: "find_files", description: "Find files and folders on this computer by name (the words must all be in the name): " +
+      "Desktop, Documents, Downloads, Pictures, Music, Videos and OneDrive. Up to 8, best first, each with its path.",
+      input_schema: obj({ query: { type: "string", description: "Words in the name, like “taxes 2025”" } }, ["query"]) },
+    { name: "open_file", description: "Open a file or folder find_files found, with its own app (Preview, Word, Photos...; a " +
+      "folder in Finder or File Explorer). Never a program or a script.", input_schema: obj({ path: { type: "string" } }, ["path"]) }
+  ];
   function tools() {
-    return claude.search ? TOOLS.concat([{ type: "web_search_20250305", name: "web_search", max_uses: 3 }]) : TOOLS;
+    var list = APP ? TOOLS.filter(function (t) { return t.name !== "open_message" && t.name !== "open_file"; }).concat(APP_TOOLS) : TOOLS;
+    return claude.search ? list.concat([{ type: "web_search_20250305", name: "web_search", max_uses: 3 }]) : list;
   }
   // What a client tool does here, and what Claude is told about it.
   function run(u, you, uts) {
@@ -1872,7 +2018,7 @@
       }
       if (newTab(url)) {                // only while the click or key that asked still lets a page open a tab
         did("Opened " + host + " in a new tab", you, uts);
-        return SHELL ? host + " opened in a new Chrome tab: they're looking at it there." :
+        return TABS ? host + " opened in a new Chrome tab: they're looking at it there." :
           host + " opened in a new tab beside this page (most sites can't show inside it): they're looking at it there.";
       }
       show({ html: page(host, '<article><h1 class="title">' + esc(a.title || host) + '</h1><p class="demo-note">On Chat Computer, ' + esc(host) +
@@ -1886,6 +2032,18 @@
       if (!m) return "There's no message " + a.id + ".";
       did("Opened the message from " + m.who, you, uts);
       return "It's on the screen.";
+    }
+    if (APP && n === "find_files") {
+      return APP.app("search_files", { query: String(a.query || "") }).then(function (hits) {
+        if (!hits.length) return "Nothing on this computer has “" + clip(a.query, 60) + "” in its name.";
+        return JSON.stringify(hits.map(function (h) { return { name: h.name, where: h.where, kind: h.kind, changed: whenText(h.ts), path: h.path }; }));
+      });
+    }
+    if (APP && n === "open_file") {
+      return APP.app("open_file", { path: String(a.path || "") }).then(function (name) {
+        did("Opened " + name, you, uts);
+        return name + " is open, in its own app (not on this screen).";
+      }, function (e) { return String(e); });
     }
     if (n === "open_file") {
       var f = FILES.filter(function (x) { return x.name.toLowerCase() === String(a.name || "").toLowerCase(); })[0];
@@ -1943,12 +2101,16 @@
         if (msg.stop === "pause_turn") { round(); return; }
         var uses = msg.content.filter(function (b) { return b.type === "tool_use"; });
         if (msg.stop === "tool_use" && uses.length) {
-          claude.talk.push({ role: "user", content: uses.map(function (u) {
+          // Each tool's answer, some later (the app's, a promise), in the order asked.
+          Promise.all(uses.map(function (u) {
             var out;
             try { out = run(u, you, uts); } catch (e) { out = "That didn't work: " + e.message; }
-            return { type: "tool_result", tool_use_id: u.id, content: out };
-          }) });
-          round();
+            return Promise.resolve(out).then(String, function (e) { return "That didn't work: " + (e && e.message || e); })
+              .then(function (text) { return { type: "tool_result", tool_use_id: u.id, content: text }; });
+          })).then(function (results) {
+            claude.talk.push({ role: "user", content: results });
+            round();
+          });
           return;
         }
         finish();
@@ -2392,12 +2554,18 @@
   function handle(msg) {
     switch (msg.type) {
       case "ready":
-        call("openInPage", true);
+        call("openInPage", !APP);              // (in the app, a site is laid over the page, as on a Chat Computer)
         layout();
         greetWith();                           // for the greeting: the name you go by, whether Claude answers,
         sayHere();                             // and where you are, with its weather
+        if (APP) {                             // (in the app, the name this computer knows you by, where you've given none)
+          APP.app("about").then(function (a) {
+            computerName = cleanName(a && a.name).split(" ")[0];
+            if (computerName && !person()) greetWith();
+          }, noop);
+        }
         if (store("chatcomputer-demo-panels")) call("panels", store("chatcomputer-demo-panels"));
-        call("doneList", DONE.map(function (e) {
+        call("doneList", (APP ? store(APP_DONE) || [] : DONE).map(function (e) {
           var pins = (store("chatcomputer-demo-pins") || {}).done || {}, o = {};
           for (var k in e) o[k] = e[k];
           if (pins[e.id]) o.pinned = pins[e.id];
@@ -2433,15 +2601,30 @@
         break;
       }
       case "search": {
+        if (APP) { appSearch(msg.n, String(msg.q || "")); break; }
         var found = search(msg.q || "");
         call("searchResults", msg.n, msg.q || "", found, found.length ? "" : "Nothing here matches \u201c" + (msg.q || "") + "\u201d.");
         break;
       }
-      case "open_file": if (PAGES[msg.path]) show({ html: PAGES[msg.path]() }); break;
+      case "open_file":
+        if (APP) {
+          APP.app("open_file", { path: String(msg.path || "") }).then(function (name) { did("Opened " + name); },
+            function (e) { call("notice", String(e), "warn"); });
+          break;
+        }
+        if (PAGES[msg.path]) show({ html: PAGES[msg.path]() });
+        break;
       case "command": slashCommand(String(msg.id || "")); break;
       case "text_scale": setScale(scale * (+msg.factor || 1)); break;
       case "panels": store("chatcomputer-demo-panels", { left: !!msg.left, right: !!msg.right }); break;
       case "add_account":
+        if (APP) {
+          call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
+            "On Chat Computer itself (installed in place of a desktop), Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, X, " +
+            "Instagram, Facebook, TikTok and LinkedIn connect here, and their messages come into Messages, newest first.",
+            "The app doesn't connect accounts yet: open them as sites, right here (say “open gmail.com”)."] });
+          break;
+        }
         call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
           "On Chat Computer, Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, X, Instagram, Facebook, TikTok and LinkedIn " +
           "connect here, and their messages come into Messages, newest first. Sign-ins stay on your computer.",

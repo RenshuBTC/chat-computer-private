@@ -339,6 +339,7 @@
     t.style.cssText = "position:fixed;left:-9999px;top:0";
     document.body.appendChild(t);
     t.select();
+    try { t.setSelectionRange(0, text.length); } catch (e) {}      // (Safari on an iPhone selects only this way)
     try { document.execCommand("copy"); } catch (e) {}
     t.remove();
     focusBox();
@@ -1018,16 +1019,24 @@
     touch = { x: t.clientX, y: t.clientY, target: target, moved: false, held: false, horiz: null,
               item: target.closest ? target.closest(".side-list .item, .side-pinned .item") : null,
               msg: target.closest ? target.closest("#log > .you, #log > .ai") : null, caret: null };
+    // The keyboard comes up for the box. For anything else it goes down, but only once the finger lifts or moves:
+    // gone at once, the page would move under the finger (the keyboard's room given back) and a tap on a button (one
+    // under a message) land on something else.
     var inBox = typeBox(target);
-    post({ type: "keyboard", show: !!inBox });
-    if (!inBox && touchOnly() && document.activeElement === input) input.blur();      // the keyboard goes down
+    if (inBox) post({ type: "keyboard", show: true });
+    touch.away = !inBox;
     if (!touch.item || !touch.item.classList.contains("swiped")) unswipe(null);
     if (body.classList.contains("show-messages") && !(target.closest && target.closest("#messages"))) hideMessages();
     holdTimer = setTimeout(function () { held(touch); }, HOLD_MS);
   }, { passive: true, capture: true });
+  function keyboardAway() {
+    post({ type: "keyboard", show: false });
+    if (touchOnly() && document.activeElement === input) input.blur();
+  }
   function held(tc) {
     if (!tc || tc.moved || (phone && tc.target === input)) return;
     tc.held = true;
+    if (tc.away && tc.msg) { tc.away = false; keyboardAway(); }
     if (tc.target === input) {                    // holding the box: moving now moves where typing goes
       tc.caret = { pos: input.selectionStart, line: parseFloat(getComputedStyle(input).lineHeight) || 36,
                    ch: (parseFloat(getComputedStyle(input).fontSize) || 24) * 0.55 };
@@ -1057,6 +1066,7 @@
       touch.moved = true;
       if (!touch.held) clearTimeout(holdTimer);
       touch.horiz = Math.abs(dx) > Math.abs(dy);
+      if (touch.away) { touch.away = false; keyboardAway(); }          // scrolling puts the keyboard away
     }
     if (touch.caret) {                             // moving the insertion point, a character or a line at a time
       e.preventDefault();
@@ -1082,6 +1092,7 @@
     if (!tc || e.touches.length) return;
     if (tc.held && (tc.caret || tc.msg)) { e.preventDefault(); return; }       // not a tap as well
     if (tc.moved) { taps.n = 0; return; }
+    if (tc.away) keyboardAway();          // (the tap itself still lands where it was: the page moves only after)
     var t = e.changedTouches[0], now = Date.now();
     var again = now - taps.t < TAP_MS && Math.hypot(t.clientX - taps.x, t.clientY - taps.y) < 24;
     taps = { n: again ? taps.n + 1 : 1, t: now, x: t.clientX, y: t.clientY };

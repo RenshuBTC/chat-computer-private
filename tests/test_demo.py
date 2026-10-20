@@ -281,6 +281,16 @@ def test_the_demo_works_in_a_browser():
         {"kind": "theirs", "last": True, "when": "just now", "acts": ["Copy", "Read aloud", "Good answer", "Bad answer", "Ask again"],
          "shown": "1", "after": "ai"}]
     assert res["rows_hello"] == 0                     # (something said straight away: no first words before it)
+    # The text's size asked for in words goes the way asked: "Increase font size" bigger (it went smaller before);
+    # "font" alone asks which way, changing nothing; "decrease" and "smaller" smaller; what the font is, named; and
+    # back to the usual size.
+    sz = res["sizes"]
+    assert sz["increase"]["last"] == "Made the text bigger." and sz["increase"]["rem"] > sz["start"]
+    assert sz["font"]["last"].startswith("Bigger or smaller?") and sz["font"]["rem"] == sz["increase"]["rem"]
+    assert sz["decrease"]["last"] == "Made the text smaller." and sz["decrease"]["rem"] < sz["font"]["rem"]
+    assert sz["smaller"]["last"] == "Made the text smaller." and sz["smaller"]["rem"] < sz["decrease"]["rem"]
+    assert sz["which"]["last"].startswith("It's Atkinson Hyperlegible Next") and sz["which"]["rem"] == sz["smaller"]["rem"]
+    assert sz["normal"]["last"] == "Put the text back to its usual size." and sz["normal"]["rem"] == sz["start"]
     fb = res["feedback"]
     assert fb["on"] == ["good"] and [(k["good"], k["on"], k["prompt"]) for k in fb["kept"]] == [(True, True, "is it free")]
     assert res["edit"] == {"box": "is it free", "focused": "input"}
@@ -318,6 +328,14 @@ def test_the_demo_works_in_a_browser():
     assert res["phone_select"] == {"reading": True, "text": "Hi! I'm Chat Computer: Claude, running t", "select": "text"}
     assert res["phone_put_away"] is False and res["phone_put_away_too"] is False
     assert res["phone_shade"]["blur"] == "none" and res["phone_shade"]["menu_blur"].startswith("blur(")
+    # The buttons under messages with a finger: with the keyboard up, Read aloud and Good still do what they say (the
+    # keyboard went down at once, before, and the page moved under the finger), and the keyboard goes down after;
+    # an earlier answer's row, shown by a tap and put away by another, isn't left showing.
+    assert res["thumb_keyboard"] is True
+    spoken = res["thumb_speak"]["spoken"]                # (said in pieces of a sentence or so)
+    assert spoken >= 1 and res["thumb_speak"] == {"spoken": spoken, "keyboard": False, "on": []}
+    assert res["thumb_good"] == {"spoken": spoken, "keyboard": False, "on": ["good"]}
+    assert res["thumb_twice"] == {"shown": False, "opacity": "0"}
     # Two fingers pinched: nothing zooms, and the text keeps its size.
     assert res["phone_pinched"] == {"rem": 21.7, "zoom": 1, "scroll_w": 390}
     # Music, and then asked about it ("turn the music down", "stop the music": music words too): turned down (the

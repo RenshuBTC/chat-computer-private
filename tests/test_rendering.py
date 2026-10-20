@@ -51,7 +51,9 @@ def test_the_conversation_reads_and_scrolls_like_a_chat():
     script = Path(__file__).with_name("screen_scroll_check.py")
     r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable, str(script)],
                        capture_output=True, text=True, timeout=120)
-    res = json.loads(r.stdout.strip().splitlines()[-1])
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]     # (the display's warnings can come after it)
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
     assert "timeout" not in res, res
     filled, streamed, up, asked = res["filled"], res["streamed"], res["scrolled_up"], res["asked"]
     # Your messages on the right in a grey bubble, upright; Claude's on the left, on the page's own off-white.
@@ -85,7 +87,9 @@ def test_whats_done_takes_you_back_to_where_it_was_asked():
     script = Path(__file__).with_name("screen_done_check.py")
     r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1600x900x24", sys.executable, str(script)],
                        capture_output=True, text=True, timeout=120)
-    res = json.loads(r.stdout.strip().splitlines()[-1])
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]     # (the display's warnings can come after it)
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
     assert "timeout" not in res, res
     start, today, earlier = res["start"], res["today"], res["earlier"]
     assert res["first"]["full"] and res["first"]["panel"] and res["first"]["display"] == "none"
@@ -146,7 +150,9 @@ def test_the_message_box_works_like_the_claude_apps():
     script = Path(__file__).with_name("screen_typing_check.py")
     r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable, str(script)],
                        capture_output=True, text=True, timeout=120)
-    res = json.loads(r.stdout.strip().splitlines()[-1])
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]     # (the display's warnings can come after it)
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
     assert "timeout" not in res, res
     empty, typed, two, sent = res["empty"], res["typed"], res["two_lines"], res["sent"]
     # The cursor in the box from the start; the round send button grey until there's something to send, then black.
@@ -348,7 +354,9 @@ def test_streamed_words_are_drawn_as_the_whole_message_would_be():
     assets = here.parent / "chatcomputer" / "ui" / "assets"
     r = subprocess.run([_node(), str(here / "md_stream_check.js"), str(assets / "md.js"), str(assets / "chat.js")],
                        capture_output=True, text=True, timeout=60)
-    res = json.loads(r.stdout.strip().splitlines()[-1])
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]     # (the display's warnings can come after it)
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
     assert res["checked"] > 900 and res["bad"] == 0, res["examples"]
     assert res["ol"].startswith('<ol><li>one</li></ol><ol start="2"><li>two</li></ol><ol start="3">')
 

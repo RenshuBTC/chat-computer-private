@@ -535,6 +535,24 @@ export async function pipeline(task, model, opts) {
   out.rows_hello = await rows.evaluate(() => document.querySelectorAll("#log > .ai.hello").length);
   if (shot) await rows.screenshot({ path: shot + "-rows.png" });
 
+  // The text's size, asked for in words: the way asked ("increase the font size" bigger, "decrease" smaller); "font"
+  // alone asks which way; what the font is, named; back to the usual size.
+  const sizes = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+  sizes.on("pageerror", (e) => errors.push(String(e)));
+  await sizes.goto(page_url);
+  await greeted(sizes);
+  const rem = () => sizes.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+  const sized = async (text) => { await ask(sizes, text); return { rem: await rem(), last: (await state(sizes)).last }; };
+  await sizes.click("#input");
+  out.sizes = { start: await rem() };
+  out.sizes.increase = await sized("Increase font size");
+  out.sizes.font = await sized("font");
+  out.sizes.decrease = await sized("decrease the font size");
+  out.sizes.smaller = await sized("smaller text please");
+  out.sizes.which = await sized("what font is this?");
+  out.sizes.normal = await sized("normal text size");
+  await sizes.close();
+
   // A phone: no sidebars and no switches; nothing in the box but the words and the arrow; it works.
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   phone.on("pageerror", (e) => errors.push(String(e)));
@@ -644,6 +662,65 @@ export async function pipeline(task, model, opts) {
   out.phone_down_piano = await piano.evaluate(() => ({ same: window.same === true, vol: window.vol }));
   await ask(phone, "stop the music");
   out.phone_stopped = await state(phone);
+
+  // The buttons under messages, pressed with a finger (held a moment, as fingers are) on a phone: with the keyboard
+  // up (a stand-in: what's on the screen 300px shorter while the box has the keys, given back a moment after), a press
+  // still does what it says, and the keyboard goes down after it; an earlier answer tapped (its row shown) and tapped
+  // again (put away) leaves no row showing whose buttons can't be pressed.
+  const thumbs = await browser.newContext({ ...devices["iPhone 13"] });
+  const th = await thumbs.newPage();
+  th.on("pageerror", (e) => errors.push(String(e)));
+  await th.addInitScript(() => {
+    window.__spoken = [];
+    window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); };
+    window.speechSynthesis.cancel = () => {};
+    document.addEventListener("DOMContentLoaded", () => {
+      const input = document.getElementById("input"), vv = window.visualViewport;
+      const put = (up) => {
+        const H = innerHeight;
+        Object.defineProperty(vv, "height", { configurable: true, get: () => (up ? H - 300 : H) });
+        Object.defineProperty(vv, "offsetTop", { configurable: true, get: () => 0 });
+        setTimeout(() => vv.dispatchEvent(new Event("resize")), 30);
+      };
+      input.addEventListener("focus", () => put(true));
+      input.addEventListener("blur", () => put(false));
+    });
+  });
+  await th.goto(page_url);
+  await greeted(th);
+  await th.tap("#input");
+  await ask(th, "is it free");
+  await th.tap("#input");
+  await ask(th, "what is chat computer");
+  const cdp = await thumbs.newCDPSession(th);
+  const finger = async (sel) => {
+    const bb = await th.locator(sel).boundingBox();
+    const pt = { x: Math.round(bb.x + bb.width / 2), y: Math.round(bb.y + bb.height / 2) };
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [pt] });
+    await th.waitForTimeout(120);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await th.waitForTimeout(300);
+  };
+  const pressed = () => th.evaluate(() => ({ spoken: window.__spoken.length, keyboard: document.body.classList.contains("keyboard"),
+    on: Array.from(document.querySelectorAll("#log > .acts .act.on")).map((b) => b.dataset.act) }));
+  await th.tap("#input");
+  await th.waitForTimeout(200);
+  out.thumb_keyboard = (await pressed()).keyboard;
+  await finger("#log > .acts.theirs.last .act[data-act=speak]");
+  out.thumb_speak = await pressed();
+  await th.tap("#input");
+  await th.waitForTimeout(200);
+  await finger("#log > .acts.theirs.last .act[data-act=good]");
+  out.thumb_good = await pressed();
+  const earlier = th.locator("#log > .ai").nth(1);
+  await earlier.scrollIntoViewIfNeeded();
+  await earlier.tap();
+  await th.waitForTimeout(250);
+  await earlier.tap();
+  await th.waitForTimeout(250);
+  out.thumb_twice = await th.evaluate(() => { const row = document.querySelector("#log > .acts.theirs");
+    return { shown: row.classList.contains("shown"), opacity: getComputedStyle(row).opacity }; });
+  await thumbs.close();
 
   // Connect AirPods on an iPhone, with stand-ins for Safari's listening and speaking, the microphone and the wake lock:
   // one thing heard at a time; what's heard said once it stops changing, though Safari never calls it final; heard

@@ -123,15 +123,18 @@
   }
   function scaleKey() { return onPhone() ? "chatcomputer-demo-phone-scale" : "chatcomputer-demo-scale"; }
   var size = 20, column = 600, scale = store(scaleKey()) || 1;
+  // The text's size before it's made bigger or smaller (scale), from the screen; and what it is at a scale.
+  function baseSize() {
+    var s = window.screen || {}, sw = s.width || window.innerWidth, sh = s.height || window.innerHeight, across = Math.min(sw, sh);
+    if (onPhone()) return Math.max(16, Math.min(24, across / 18));
+    if (touchOnly.matches) return Math.max(16, Math.min(20, across / 46));
+    return Math.max(15, Math.min(26, sw * 0.0125, ((s.availHeight || sh) - 90) * 0.022));
+  }
+  function sizeAt(k) { var v = baseSize() * k; return touchOnly.matches ? Math.max(16, v) : v; }
   function layout() {
-    var w = window.innerWidth, s = window.screen || {}, sw = s.width || w, sh = s.height || window.innerHeight;
-    var across = Math.min(sw, sh), phone = onPhone(), base;
+    var w = window.innerWidth, phone = onPhone();
     scale = store(scaleKey()) || 1;
-    if (phone) base = Math.max(16, Math.min(24, across / 18));
-    else if (touchOnly.matches) base = Math.max(16, Math.min(20, across / 46));
-    else base = Math.max(15, Math.min(26, sw * 0.0125, ((s.availHeight || sh) - 90) * 0.022));
-    size = base * scale;
-    if (touchOnly.matches) size = Math.max(16, size);
+    size = sizeAt(scale);
     column = Math.round(Math.min(30 * size, w - (phone ? 1.54 : 2) * size));
     call("layout", Math.round(size * 10) / 10, column);
     place();
@@ -853,6 +856,8 @@
     return { search: q, later: function () { return wikiAnswer(q); } };
   }
 
+  var TEXT_UP = /\b(bigger|larger|big|large|increase[ds]?|increasing|enlarge|raise|up|zoom in|more|grow|magnify|huge|max(imum)?)\b/i;
+  var TEXT_DOWN = /\b(smaller|small|decrease[ds]?|decreasing|reduce[ds]?|reducing|shrink|lower|down|zoom out|less|tiny|min(imum)?)\b/i;
   var JOKES = ["I told my computer I needed a break. It said: “No problem, I'll go to sleep.”",
                "Why did the computer go to the doctor? It had a virus, and a terrible case of bytes.",
                "I'd tell you a joke about Wi-Fi, but I'm not sure you'd get the connection."];
@@ -1023,11 +1028,24 @@
         openMessage("m2");
       } };
     }],
-    // Before the messages: "make the text bigger" isn't a text message.
-    [/\b(bigger|larger|smaller|text size|font|zoom)\b/i, function (t) {
-      var bigger = /bigger|larger|zoom in/i.test(t);
-      return { text: bigger ? "Made the text bigger." : "Made the text smaller.", done: [bigger ? "Made the text bigger" : "Made the text smaller"],
-        act: function () { setScale(scale * (bigger ? 1.15 : 1 / 1.15)); } };
+    // Before the messages: "make the text bigger" isn't a text message. Which way it's asked: bigger ("increase the
+    // font size", "font size up", "it's too small"), smaller ("decrease", "shrink", "too big"), or back to the usual;
+    // neither said ("font"), it asks which. Asked what the font is, it says. Where the text can't go further, it says so.
+    [/\b(bigger|larger|smaller|text size|font|fonts|zoom|enlarge|shrink|magnify)\b/i, function (t) {
+      if (/\b(what|which)\b[^?]*\bfonts?\b|\bfonts?\b[^?]*\b(called|named|this|that|used)\b\s*\?/i.test(t) && !TEXT_UP.test(t) && !TEXT_DOWN.test(t)) {
+        return { text: "It's Atkinson Hyperlegible Next, made by the Braille Institute to be easy to read. Say “bigger text” " +
+          "or “smaller text” to change its size." };
+      }
+      var way = /\btoo (small|tiny|little)\b|\bcan'?t (read|see)\b/i.test(t) ? 1 : /\btoo (big|large|huge)\b/i.test(t) ? -1
+        : TEXT_UP.test(t) ? 1 : TEXT_DOWN.test(t) ? -1 : /\b(reset|normal|default|original|usual|regular)\b/i.test(t) ? 0 : null;
+      if (way === null) return { text: "Bigger or smaller? Say “bigger text” or “smaller text” (or “normal text size”)." };
+      var now = sizeAt(scale), to = way === 0 ? 1 : Math.max(0.6, Math.min(2.2, now * (way > 0 ? 1.15 : 1 / 1.15) / baseSize()));
+      if (Math.abs(sizeAt(to) - now) < 0.1) {
+        return { text: way > 0 ? "The text is as big as it goes here." : way < 0 ? "The text is as small as it goes here." :
+          "The text is its usual size already." };
+      }
+      var said = way > 0 ? "Made the text bigger" : way < 0 ? "Made the text smaller" : "Put the text back to its usual size";
+      return { text: said + ".", done: [said], act: function () { setScale(to); } };
     }],
     [/\b(mum|mom|whatsapp|telegram|texts?|messages?|alex)\b/i, function (t) {
       var alex = /alex|telegram/i.test(t);
@@ -2123,13 +2141,39 @@
     else { keepAwake(true); hear(); }
   });
   // Read aloud, under a message: the browser says it now (in place of anything it was saying).
+  // Read aloud, under a message: the browser's own voice. Pressed again while it's reading that message, it stops.
+  var reading = "";
   function readAloud(text) {
-    if (!window.speechSynthesis || !text) return;
-    var plain = String(text).replace(/[*_`#>|~]/g, "").replace(/\s+/g, " ").trim();
-    try { window.speechSynthesis.cancel(); } catch (e) {}
-    var u = new SpeechSynthesisUtterance(plain);
-    u.lang = navigator.language || "en-US";
-    window.speechSynthesis.speak(u);
+    var synth = window.speechSynthesis;
+    if (!synth || !text) return;
+    var plain = String(text).replace(/[*_`#>|~]/g, "").replace(/\s+/g, " ").trim(), busy = synth.speaking || synth.pending;
+    if (busy) { try { synth.cancel(); } catch (e) {} }
+    if (busy && reading === plain) { reading = ""; return; }
+    reading = plain;
+    speakPieces(plain, function () { if (reading === plain) reading = ""; });
+  }
+  // Said in pieces of a sentence or so (Chrome's voices stop partway through one long piece), one after another;
+  // done once the last is.
+  function speakPieces(plain, done) {
+    var all = [], cur = "";
+    (plain.match(/[^.!?\u2026]+(?:[.!?\u2026]+["\u201d\u2019)\]]*|$)\s*/g) || [plain]).forEach(function (part) {
+      while (part.length > 220) {                           // one sentence too long: at a comma, or a space
+        var cut = Math.max(part.lastIndexOf(", ", 220), part.lastIndexOf(" ", 220));
+        if (cut < 60) cut = 220;
+        all.push((cur + part.slice(0, cut + 1)).trim());
+        cur = "";
+        part = part.slice(cut + 1);
+      }
+      if (cur && (cur + part).length > 220) { all.push(cur.trim()); cur = ""; }
+      cur += part;
+    });
+    if (cur.trim()) all.push(cur.trim());
+    all.forEach(function (piece, i) {
+      var u = new SpeechSynthesisUtterance(piece);
+      u.lang = navigator.language || "en-US";
+      if (i === all.length - 1) u.onend = u.onerror = done;
+      window.speechSynthesis.speak(u);
+    });
   }
   // An answer, read out while talking (not listening meanwhile, so it doesn't hear itself). Listening again once it's
   // said, or after about as long as it takes to say, where the browser doesn't tell (some don't, for a long one).
@@ -2142,7 +2186,7 @@
     if (!plain || !window.speechSynthesis) { hear(); return; }
     ears.speaking = true;
     if (ears.rec) { try { ears.rec.abort(); } catch (x) {} }
-    var u = new SpeechSynthesisUtterance(plain), mine = ears.said = {};
+    var mine = ears.said = {};
     function after() {
       if (ears.said !== mine) return;
       ears.said = null;
@@ -2151,9 +2195,7 @@
       hear();
     }
     var guard = setTimeout(after, 5000 + plain.length * 100);
-    u.lang = navigator.language || "en-US";
-    u.onend = u.onerror = after;
-    window.speechSynthesis.speak(u);
+    speakPieces(plain, after);
   }
 
   // ------------------------------------------------------------------ "/": connecting things

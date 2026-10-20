@@ -88,6 +88,31 @@ def is_snooze(text: str) -> bool:
     return "snooze" in normalize(text)
 
 
+# A web address typed or said alone, as into a browser's address bar: "youtube.com", "open bbc.co.uk", a whole link.
+# Its last part is a known ending: the common ones, or any two letters (a country's), except those that are more
+# often a file's (notes.md, main.rs, run.sh), which Claude finds on the computer instead. (docs/demo/host.js has the
+# same, for the website.)
+_TLD = ("com|org|net|edu|gov|mil|int|info|biz|io|ai|app|dev|co|me|tv|xyz|site|online|store|shop|tech|blog|news|"
+        "cloud|page|live|art|design|studio|agency|world|today|space|website|fun|club|life|email|link|pro|mobi|name|"
+        "museum|travel|jobs|asia|wiki|games|game|music|video|social|network|digital|media|global|group|one|top|"
+        "health|bank|money|finance|law|school|academy|university|college|press|photo|photos|gallery|"
+        r"(?!(?:md|py|sh|rs|cc|so|ps)\b)[a-z]{2}")
+_ADDRESS = re.compile(
+    r"^\s*(?:(?:please\s+)?(?:open|go to|goto|visit|load|launch|browse to|take me to)\s+)?"
+    r"((?:https?://)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:" + _TLD + r")(?::\d{2,5})?(?:[/?#]\S*)?)"
+    r"(?:,?\s+(?:please|pls|thanks|thank you))?\s*[.!]*\s*$", re.IGNORECASE)
+
+
+def typed_address(text: str) -> str | None:
+    """The site a web address typed or said alone names, as an https:// address ("youtube.com" ->
+    "https://youtube.com"); None for anything else."""
+    m = _ADDRESS.match(text or "")
+    if not m:
+        return None
+    raw = m.group(1).rstrip(".,!")
+    return raw if re.match(r"https?://", raw, re.IGNORECASE) else "https://" + raw
+
+
 def is_sleep(text: str) -> bool:
     t = normalize(text)
     return t in _SLEEP or t.rstrip(".") in _SLEEP

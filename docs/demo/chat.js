@@ -15,6 +15,18 @@
   var mode = "chat";    // "content" while something is open in the middle (a website, a video, a message...)
   var full = false;     // Escape: the middle fills the screen, without the sidebars
   var shown = { left: true, right: true };    // the sidebars (see "the panels' switches")
+  // A touchscreen alone (a phone or a tablet, no mouse): its keyboard comes up only for the box, and goes down after
+  // sending. A phone (a screen under 600px across, either way round) is laid out as the Claude app is there
+  // (chat.css: body.phone): nothing zooms, and holding a message brings up what can be done with it.
+  var touchQuery = window.matchMedia ? window.matchMedia("(hover: none) and (pointer: coarse)") : { matches: false };
+  var phone = false;
+  function touchOnly() { return touchQuery.matches; }
+  function fitPhone() {
+    var s = window.screen || {}, across = Math.min(s.width || window.innerWidth, s.height || window.innerHeight);
+    phone = touchOnly() && across < 600;
+    body.classList.toggle("phone", phone);
+  }
+  fitPhone();
   function post(msg) {
     try { window.webkit.messageHandlers.chatcomputer.postMessage(JSON.stringify(msg)); } catch (e) {}
   }
@@ -30,7 +42,7 @@
   var stick = true, pinning = 0, room = $("room");
   function atBottom() { return page.scrollHeight - page.scrollTop - page.clientHeight < 4; }
   window.addEventListener("scroll", function () { if (mode === "chat" && Date.now() > pinning) stick = atBottom(); }, { passive: true });
-  window.addEventListener("resize", function () { fitPanel(); follow(); reportHole(); });
+  window.addEventListener("resize", function () { fitPhone(); closeHold(); fitPanel(); follow(); reportHole(); });
   function latestYou() { var y = log.querySelectorAll(":scope > .you"); return y.length ? y[y.length - 1] : null; }
   function makeRoom() {
     var you = latestYou(), was = room.offsetHeight, need = 0;
@@ -45,7 +57,8 @@
   }
   function follow() {
     makeRoom();
-    if (stick && mode === "chat" && Date.now() > pinning) page.scrollTop = page.scrollHeight;
+    // (Not while a message is held: it stays where it is, under what can be done with it.)
+    if (stick && mode === "chat" && Date.now() > pinning && !holdMsg) page.scrollTop = page.scrollHeight;
   }
   function jumpDown() { stick = true; pinning = 0; follow(); }
   // What you've just sent, to the top of the screen (gliding there, unless the system asks for less motion).
@@ -259,6 +272,7 @@
       else copyOld(text);
     } catch (e) { copyOld(text); }
     post({ type: "copy", text: text });            // on a Chat Computer the window puts it on the clipboard too
+    if (!b) return;
     b.classList.add("did");
     setTimeout(function () { b.classList.remove("did"); }, 1500);
   }
@@ -287,15 +301,18 @@
     } else if (k === "retry") {
       var again = msg.classList.contains("you") ? text : promptFor(msg);
       if (again) { stick = true; post({ type: "send", text: again }); }
-    } else if (k === "edit") {
-      input.value = text;
-      fitInput();
-      focusBox();
-      try { input.setSelectionRange(text.length, text.length); } catch (e) {}
-    }
+    } else if (k === "edit") editText(text);
+  }
+  // Your words back in the box, to change and send again (a touchscreen's keyboard comes up for them).
+  function editText(text) {
+    input.value = text;
+    fitInput();
+    focusBox(true);
+    try { input.setSelectionRange(text.length, text.length); } catch (e) {}
   }
   var coarse = !!(window.matchMedia && window.matchMedia("(any-pointer: coarse)").matches);
   log.addEventListener("click", function (e) {
+    if (holdMsg) { closeHold(); return; }          // a tap on the held message puts its menu away, as one elsewhere does
     var b = e.target.closest ? e.target.closest(".acts .act") : null;
     if (b) { act(b); return; }
     var msg = coarse && e.target.closest ? e.target.closest("#log > .you, #log > .ai") : null;
@@ -380,6 +397,14 @@
     fitInput();
     post({ type: "send", text: text });
     stick = true;                    // it goes to the top of the screen when it's shown (CO.user)
+    doneTyping();
+  }
+  // Sent: on a touchscreen the keyboard goes down, as in ChatGPT's app, for the answer to be seen; touching the box
+  // brings it back.
+  function doneTyping() {
+    if (!touchOnly()) return;
+    if (document.activeElement === input) input.blur();
+    post({ type: "keyboard", show: false });
   }
   var SCROLL_ALWAYS = { PageUp: "page_up", PageDown: "page_down" };
   var SCROLL_EMPTY = { ArrowUp: "up", ArrowDown: "down", Home: "top", End: "bottom" };
@@ -394,25 +419,35 @@
     if (k.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) measure(e.timeStamp);
   });
   $("send").addEventListener("click", sendNow);
+  // Anywhere in the box (around the words, beside its buttons) is somewhere to type, as in the Claude app.
+  $("box").addEventListener("click", function (e) {
+    if (!(e.target.closest && e.target.closest("button, #results, #input"))) focusBox(true);
+  });
   // Typing always goes into the box, even after a click elsewhere on the page or selecting words to copy them (but
-  // not while a sign-in form is open: that has boxes of its own).
-  function focusBox() {
+  // not while a sign-in form is open: that has boxes of its own). On a touchscreen alone, only when it's asked for
+  // (force: the box touched, Edit, or a key on a real keyboard): there it would bring up the onscreen keyboard.
+  function focusBox(force) {
     if (locked) { lockFocus(); return; }
+    if (touchOnly() && !force) return;
     if (!body.classList.contains("sheet") && document.activeElement !== input) input.focus({ preventScroll: true });
   }
   document.addEventListener("keydown", function (e) {
     if (locked) { if (e.target !== $("lock-pin")) lockFocus(); return; }   // keys are for the PIN, nothing else
-    if (body.classList.contains("sheet")) return;
+    if (body.classList.contains("sheet") || body.classList.contains("reading")) return;
     var paste = (e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V");
     if (!(paste || (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter")))) return;
-    if (e.target !== input) focusBox();
+    if (holdMsg) closeHold();
+    if (e.target !== input) focusBox(true);
   }, true);
-  // Escape: Messages put away (where it comes over the conversation), or the "/" list, or else the middle fills the
-  // screen, and back. (A sign-in form's Escape is its own: Cancel.)
+  // Escape: what can be done with a held message put away, or Select text, or Messages (where it comes over the
+  // conversation), or the "/" list, or else the middle fills the screen, and back. (A sign-in form's Escape is its
+  // own: Cancel.)
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape" || e.isComposing || e.defaultPrevented || locked || body.classList.contains("sheet")) return;
     e.preventDefault();
-    if (body.classList.contains("show-messages")) hideMessages();
+    if (holdMsg) closeHold();
+    else if (body.classList.contains("reading")) closeReader();
+    else if (body.classList.contains("show-messages")) hideMessages();
     else if (searching) { input.value = ""; fitInput(); }
     else toggleFull();
   });
@@ -852,6 +887,7 @@
     if (r) post({ type: "open_file", path: r.path });
     else post({ type: "send", text: "Find “" + q + "” on my computer." });
     jumpDown();
+    doneTyping();
   }
   function searchKeys(e) {
     if (!searching) return false;
@@ -869,6 +905,8 @@
   // up the onscreen keyboard and a finger anywhere else puts it away; two fingers pinched make the text bigger or
   // smaller; holding a message selects it; a double tap selects a word and a triple tap a paragraph; holding the
   // message box and moving moves where typing goes; a sidebar item swiped left shows Pin, as Mail shows its buttons.
+  // On a phone, as in the Claude app there: two fingers do nothing (nothing zooms), holding a message brings up what
+  // can be done with it (see "holding a message"), and in the box the phone's own magnifier and handles work.
   var HOLD_MS = 500, MOVE_PX = 10, TAP_MS = 350;
   var touch = null, pinch = null, taps = { n: 0, t: 0, x: 0, y: 0 }, holdTimer = 0;
   function spread(ts) { return Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY) || 1; }
@@ -882,7 +920,7 @@
     clearTimeout(holdTimer);
     if (e.touches.length === 2 && !pinch) {
       touch = null;
-      pinch = { d: spread(e.touches), size: remPx(), f: 1 };
+      if (!phone) pinch = { d: spread(e.touches), size: remPx(), f: 1 };
       return;
     }
     if (e.touches.length !== 1) { if (pinch) endPinch(false); touch = null; return; }
@@ -892,18 +930,20 @@
               msg: target.closest ? target.closest("#log > .you, #log > .ai") : null, caret: null };
     var inBox = typeBox(target);
     post({ type: "keyboard", show: !!inBox });
+    if (!inBox && touchOnly() && document.activeElement === input) input.blur();      // the keyboard goes down
     if (!touch.item || !touch.item.classList.contains("swiped")) unswipe(null);
     if (body.classList.contains("show-messages") && !(target.closest && target.closest("#messages"))) hideMessages();
     holdTimer = setTimeout(function () { held(touch); }, HOLD_MS);
   }, { passive: true, capture: true });
   function held(tc) {
-    if (!tc || tc.moved) return;
+    if (!tc || tc.moved || (phone && tc.target === input)) return;
     tc.held = true;
     if (tc.target === input) {                    // holding the box: moving now moves where typing goes
       tc.caret = { pos: input.selectionStart, line: parseFloat(getComputedStyle(input).lineHeight) || 36,
                    ch: (parseFloat(getComputedStyle(input).fontSize) || 24) * 0.55 };
     } else if (tc.msg) {                          // holding a message: all of it selected (three fingers copy it)
-      selectContents(tc.msg);
+      if (phone) openHold(tc.msg, tc.y);          // on a phone: what can be done with it
+      else selectContents(tc.msg);
     }
   }
   function selectNode(n) {
@@ -914,6 +954,7 @@
   }
   function selectContents(m) { selectNode(m.querySelector(".md") || m); }
   document.addEventListener("touchmove", function (e) {
+    if (phone && e.touches.length > 1) { e.preventDefault(); return; }            // a phone: nothing zooms
     if (pinch && e.touches.length === 2) {
       e.preventDefault();                          // the text's size, not WebKit's zoom of the whole page
       pinch.f = Math.max(0.5, Math.min(2.5, spread(e.touches) / pinch.d));
@@ -954,7 +995,7 @@
     var t = e.changedTouches[0], now = Date.now();
     var again = now - taps.t < TAP_MS && Math.hypot(t.clientX - taps.x, t.clientY - taps.y) < 24;
     taps = { n: again ? taps.n + 1 : 1, t: now, x: t.clientX, y: t.clientY };
-    if (taps.n === 2 || taps.n === 3) {
+    if (!phone && (taps.n === 2 || taps.n === 3)) {
       var x = t.clientX, y = t.clientY, n = taps.n, target = tc.target;
       setTimeout(function () { selectAt(target, x, y, n === 3); }, 0);        // after the tap has put the cursor
     }
@@ -1003,6 +1044,83 @@
     sel.removeAllRanges();
     sel.addRange(r);
   }
+  // A touchscreen alone: the page itself never zooms (Safari's own pinch, which its page can't switch off otherwise).
+  ["gesturestart", "gesturechange", "gestureend"].forEach(function (name) {
+    document.addEventListener(name, function (e) { if (touchOnly()) e.preventDefault(); }, { passive: false });
+  });
+  // (A phone's own menu for a held word isn't wanted in the conversation: ours comes instead.)
+  document.addEventListener("contextmenu", function (e) {
+    if (phone && e.target.closest && e.target.closest("#log")) e.preventDefault();
+  });
+
+  // ------------------------------------------------------------------ holding a message (a phone)
+  // As in the Claude app: the screen behind dimmed (still seen, not blurred), the message lifted, and under it (over it where
+  // there's no room under it, or by the finger for a message taller than the screen) what can be done with it: Copy,
+  // Send to (another app: the phone's own share sheet), Select text, and Edit for yours or Read aloud for Chat
+  // Computer's. A tap anywhere else puts it away.
+  var holdMsg = null, toastTimer = 0;
+  function openHold(msg, y) {
+    closeHold();
+    var mine = msg.classList.contains("you"), menu = $("hold-menu");
+    menu.querySelector('[data-do="share"]').hidden = !navigator.share;
+    menu.querySelector('[data-do="edit"]').hidden = !mine;
+    menu.querySelector('[data-do="speak"]').hidden = mine;
+    if (document.activeElement === input) input.blur();
+    holdMsg = msg;
+    msg.classList.add("held");
+    body.classList.add("holding");
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) {}
+    var rem = remPx(), r = msg.getBoundingClientRect(), w = menu.offsetWidth, h = menu.offsetHeight;
+    var pad = 0.75 * rem, gap = (mine ? 0.85 : 1.1) * rem, vh = window.innerHeight, top, from = "top";
+    if (r.bottom + gap + h <= vh - pad) top = r.bottom + gap;
+    else if (r.top - gap - h >= pad) { top = r.top - gap - h; from = "bottom"; }
+    else top = Math.max(pad, Math.min(vh - pad - h, y + gap));
+    var left = Math.max(pad, Math.min(window.innerWidth - pad - w, mine ? r.right - w : r.left));
+    menu.style.top = Math.round(top) + "px";
+    menu.style.left = Math.round(left) + "px";
+    menu.style.transformOrigin = from + " " + (mine ? "right" : "left");
+  }
+  function closeHold() {
+    if (!holdMsg) return;
+    holdMsg.classList.remove("held");
+    holdMsg = null;
+    body.classList.remove("holding");
+  }
+  $("hold-shade").addEventListener("click", closeHold);
+  $("hold-menu").addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("button") : null, msg = holdMsg;
+    if (!b || !msg) return;
+    closeHold();
+    var text = saidIn(msg), k = b.dataset.do;
+    if (k === "copy") { copyText(text, null); toast("Copied"); }
+    else if (k === "share") { try { navigator.share({ text: text }).catch(function () {}); } catch (x) {} }
+    else if (k === "select") openReader(msg);
+    else if (k === "edit") editText(text);
+    else if (k === "speak") post({ type: "speak", text: text });
+  });
+  // Select text: the message alone over the whole screen, its words to select as anywhere else on the phone.
+  function openReader(msg) {
+    var t = $("reader-text"), said = saidIn(msg);
+    t.textContent = "";
+    t.className = msg.classList.contains("you") ? "plain" : "";
+    if (t.className) t.textContent = said;
+    else { var md = el("md"); md.innerHTML = window.renderMarkdown(said); t.appendChild(md); }
+    body.classList.add("reading");
+    t.scrollTop = 0;
+  }
+  function closeReader() {
+    body.classList.remove("reading");
+    try { window.getSelection().removeAllRanges(); } catch (e) {}
+  }
+  $("reader-close").addEventListener("click", closeReader);
+  function toast(text) {
+    var t = $("toast");
+    t.textContent = text;
+    t.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("on"); }, 1400);
+  }
+
   // Messages from the top of the screen (the iPad's Notification Center): on a screen too narrow for the sidebars
   // it comes over the conversation until a touch elsewhere; with them showing, it goes back to its newest.
   function hideMessages() { body.classList.remove("show-messages"); }

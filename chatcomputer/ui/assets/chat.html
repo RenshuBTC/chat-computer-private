@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content">
 <title>Chat Computer</title>
 <link rel="stylesheet" href="theme.css">
 <link rel="stylesheet" href="chat.css">
@@ -21,7 +21,7 @@
   <ol id="messages-list" class="side-list"></ol>
 </aside>
 <main id="column" aria-live="polite">
-  <section id="welcome"><h1 id="wordmark"><img id="mark" src="icon.svg" alt="">Chat Computer</h1></section>
+  <section id="welcome"><h1 id="wordmark">Chat Computer</h1></section>
   <section id="log"></section>
   <div id="live" class="you live"><div id="live-in"><span id="live-text"></span><span id="caret"></span></div></div>
   <div id="room" aria-hidden="true"></div>
@@ -47,13 +47,26 @@
     <div id="row">
       <svg id="search-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg>
       <span id="hint" aria-hidden="true">Chat anything<span id="hint-search"> or “/”</span></span>
-      <textarea id="input" rows="1" aria-label="Message"></textarea>
+      <textarea id="input" rows="1" aria-label="Message" enterkeyhint="send"></textarea>
       <button id="send" type="button" tabindex="-1" aria-label="Send">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg>
       </button>
     </div>
   </div>
 </footer>
+<div id="hold-shade" aria-hidden="true"></div>
+<div id="hold-menu" role="menu" aria-label="This message">
+  <button type="button" role="menuitem" data-do="copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.5"/><path d="M15.5 8.5V6.5A2.5 2.5 0 0 0 13 4H6.5A2.5 2.5 0 0 0 4 6.5V13a2.5 2.5 0 0 0 2.5 2.5h2"/></svg>Copy</button>
+  <button type="button" role="menuitem" data-do="share"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19.5v-3a6.5 6.5 0 0 1 6.5-6.5H20"/><path d="M15.5 5.5L20 10l-4.5 4.5"/></svg>Send to</button>
+  <button type="button" role="menuitem" data-do="select"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 6.5v12a1.5 1.5 0 0 0 1.5 1.5h10.5M18.5 17.5v-12A1.5 1.5 0 0 0 17 4H6.5"/><path d="M9 9h6M9 12.5h6M9 16h3.5"/><circle class="dot" cx="5.5" cy="4.5" r="1.6"/><circle class="dot" cx="18.5" cy="19.5" r="1.6"/></svg>Select text</button>
+  <button type="button" role="menuitem" data-do="edit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h3.5L18.7 8.8a2.1 2.1 0 0 0-3-3L5.5 16v3z"/><path d="M14.5 7l2.5 2.5"/></svg>Edit</button>
+  <button type="button" role="menuitem" data-do="speak"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/></svg>Read aloud</button>
+</div>
+<div id="reader" role="dialog" aria-modal="true" aria-labelledby="reader-title">
+  <div id="reader-bar"><span id="reader-title">Select text</span><button id="reader-close" class="icon-button" type="button" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <div id="reader-text"></div>
+</div>
+<p id="toast" role="status" aria-live="polite"></p>
 <div id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
   <form id="sheet-form" autocomplete="off">
     <h2 id="sheet-title"></h2>

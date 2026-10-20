@@ -85,11 +85,11 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   they come, so you never scroll down to read it; scroll up for anything earlier. Under each message, as in the
   Claude app: under Claude's, copy, read aloud, thumbs up or down (kept, to make Chat Computer better) and ask
   again; under yours, ask again, edit and copy; with when it was. Before
-  anything is said, its name, **Chat Computer**, is in the middle, with its icon (an old monitor, facing the name)
-  at the left, and the conversation starts with its first
-  words, the classic `hello, world`; the name goes once you say something.
+  anything is said, its name, **Chat Computer**, is in the middle, and the conversation starts with its first
+  words, the classic `hello, world`; the name fades away once you say something.
   The empty message box says, dimmed, "Chat anything or “/”" (a "/" searches your files), with the cursor already
-  blinking in it. The round button at its right sends: grey while there's
+  blinking in it. A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
+  in the middle, as a browser's address bar would. The round button at its right sends: grey while there's
   nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
   the mouse wheel, Page Up) to read back.
 * **What Claude opens** (a website, a video, a document, a message) takes the conversation's place in the
@@ -445,7 +445,10 @@ messages and files there are made up. Everyone gets answers, free:
   Wikipedia's article for a question of fact or "look up …", the made-up messages and files. Google (its search,
   for what Wikipedia hasn't got too), Google Maps' directions and Wikipedia open for real in the middle, to scroll
   and type in: they're the sites that let another page show them (`framed()` in host.js; Google's own addresses
-  for that, `igu=1` and `output=embed`). Any other site asked for is a link. Asked for something
+  for that, `igu=1` and `output=embed`). A site's address typed (`youtube.com`, `open bbc.co.uk`, a whole link)
+  opens it, as a browser's address bar would, whichever of these answers: Google and Wikipedia in the middle, a
+  YouTube video's address in YouTube's player there, and any other site at once in a new tab beside the page (most
+  sites don't let another page show them; on a Chat Computer every site opens in the middle). Asked for something
   only an AI can do (a recipe, a poem, a translation), it says so, and how to get one.
 * **The browser's own AI**, where there is one: Chrome on a computer has Gemini Nano built in, and Edge
   Phi-4-mini, running on the device itself. The **Download Gemini** button (in Edge, Download Phi-4-mini) at the
@@ -475,13 +478,20 @@ message box (`docs/demo/demo.css`):
 * **Connect AirPods**: you talk and the answers are read out. The browser listens through whatever microphone
   the device uses (your AirPods, once they're paired in its Bluetooth settings: a website can't pair them) and
   turns speech into text itself (Chrome does it on Google's servers). Chrome, Edge and Safari can; Firefox
-  can't.
+  can't. On a phone too: on an iPhone or iPad in Safari (with Siri or Dictation switched on), and on Android in
+  Chrome. There it listens for one thing at a time, again after each
+  answer is read out, since the phones' listening goes wrong when it's left on; the screen stays on while
+  talking.
 
-Chat Computer is an independent project, not made by Anthropic.
+On a phone the page is laid out as the Claude app is there: the text a twentieth of the screen's width (never
+under 16px, so the browser doesn't zoom in on the box and push the page past the screen's edges), the message
+box nearly as wide as the screen, with the words above and the buttons and the send arrow under them, and the
+keyboard going down after sending, as in ChatGPT's app. Nothing zooms, two fingers included. Holding a message
+dims the screen behind it and brings up what can be done with it: Copy, Send to (the phone's share sheet),
+Select text (the message alone, its words to select as anywhere on the phone), and Edit for yours or Read aloud
+for Chat Computer's.
 
-The tab's icon is Chat Computer's: an old, bulky beige CRT monitor, a cursor glowing on its screen
-(`chatcomputer/ui/assets/icon.svg`, as `docs/favicon.svg`; `scripts/make_icons.js` draws `docs/favicon.ico` and
-`docs/apple-touch-icon.png` from it).
+Chat Computer is an independent project, not made by Anthropic. It has no icon: the tab shows the browser's own.
 
 GitHub Pages serves it from the `docs` folder (Settings, Pages, branch `main`, folder `/docs`; a private
 repository needs GitHub Pro) at chatcomputer.ai: `docs/CNAME` names the domain, and its DNS points at GitHub

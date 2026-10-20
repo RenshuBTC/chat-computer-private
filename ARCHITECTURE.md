@@ -456,7 +456,8 @@ retrying with backoff, then starts listening.
   overlaps it). The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
   moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
   through) is on top. With nothing said yet the page shows the word logo in the middle (`#wordmark`: Atkinson
-  Hyperlegible Next at 800; it goes once there's a message of yours, `body.has-you`) and the conversation starts
+  Hyperlegible Next at 800, the words alone: there's no icon anywhere; it fades away over 0.5 s once there's a
+  message of yours, `body.has-you`, and back when the conversation is cleared) and the conversation starts
   with Chat Computer's first words (`greet()` in chat.js, an `.ai.hello` message the page adds itself, not part
   of the transcript): `hello, world`, lower case with its comma as in Kernighan's C tutorial and K&R; the empty
   message box shows `#hint`, "Chat anything or “/”", dimmed
@@ -487,6 +488,11 @@ retrying with backoff, then starts listening.
   typed straight to the Inbox, never to Claude, and come back with what went wrong and what was typed (passwords
   aside). An email opened shows as the conversation with its sender (`render.thread_html`: the opened one and the
   latest few read in full over one connection, `Mailbox.read_many`).
+* A web address typed or said alone (`answers.typed_address`: "youtube.com", "open bbc.co.uk", a whole link;
+  a known ending or a country's two letters, but not those more often a file's, as notes.md) opens its site at
+  once (`Controller._open_address`: `show_url`, Actions), without a turn of Claude's; the next turn's note of the
+  screen says what's open. The website does the same (`address()` in host.js), opening in a new tab the sites
+  that won't show inside another page.
 * "/" in the message box (`slash_search.py`): the words after it search the file index (`files_index.py`) as
   they're typed; matches show in a list above the box (matching letters bold), the arrow keys choose and Enter
   opens one between the sidebars (`render.file_view`); the last line asks Claude to look instead.
@@ -504,7 +510,18 @@ retrying with backoff, then starts listening.
   controller types it with xdotool). In the conversation page (chat.js): pinch for the text size (`text_scale`,
   kept), hold a message to select it, double and triple taps for a word and a paragraph, hold the box and move to
   move the cursor, swipe a sidebar item left for Pin. The session maps each touchscreen (XI2 DirectTouch) to the
-  primary output (`xinput map-to-output`) and hides the arrow on touch.
+  primary output (`xinput map-to-output`) and hides the arrow on touch. On a touchscreen alone (`(hover: none)
+  and (pointer: coarse)`: no mouse) the box takes the focus only when it's touched, Edit is pressed or a real key
+  is typed, and after sending it lets go of it (`doneTyping`, posting `keyboard` `show: false`), so an onscreen
+  keyboard goes down as in ChatGPT's app; what's typed in is at least 16px (phones' browsers zoom in on smaller
+  boxes). A phone (`body.phone`: that, on a screen under 600 CSS px across) is laid out as the Claude app is there
+  (the website's: docs/demo/host.js sizes the text at a twentieth of the screen's width, 16 to 21 px): the box
+  nearly the screen's width in two rows (a grid: the words; then the buttons and the send arrow), nothing zooms
+  (the viewport's `maximum-scale=1, user-scalable=no`, `touch-action: pan-x pan-y`, Safari's `gesture*` events
+  and two-finger moves prevented), the conversation's own selecting and callout off (`user-select: none`), and
+  holding a message opens `#hold-menu` over `#hold-shade` (the screen dimmed by 20% black, not blurred; the menu
+  frosted): Copy, Send to (`navigator.share`, where there is one), Select text (`#reader`: the message alone over
+  the screen, selectable as usual), and Edit for yours or Read aloud for Chat Computer's.
 * Look: plain. Black text (#000000) on a warm off-white (`--ground: #F8F5F0`, white 8% dimmer with a faint warm
   tint) and nothing else: no dark mode, no grey text. Chosen from the research on long screen reading, as the user
   asked (theme.css cites it): dark on light reads best because the screen is bright; full white is rated glarier;

@@ -66,7 +66,8 @@ STATE_JS = """(function () {
     return {text: (b.querySelector('.res-text') || b).textContent, cls: b.className}; }); }
   var b = document.getElementById('box').getBoundingClientRect(), r = document.getElementById('results').getBoundingClientRect();
   return JSON.stringify({searching: document.body.classList.contains('searching'),
-    menus: document.querySelectorAll('[role=menu], #menu, .mi').length,
+    menus: Array.prototype.filter.call(document.querySelectorAll('[role=menu], #menu, .mi'),
+      function (m) { return getComputedStyle(m).display !== 'none'; }).length,     // shown (a phone's held-message menu is hidden)
     box: [Math.round(b.left), Math.round(b.top), Math.round(b.right), Math.round(b.bottom)],
     results_box: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)],
     results: rows('#results .res'), note: (document.querySelector('#results .res-note') || {}).textContent || '',

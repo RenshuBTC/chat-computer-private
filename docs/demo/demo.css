@@ -30,6 +30,13 @@
 #demo-tools.inside button { padding: 0.15em; border-color: transparent; }
 #demo-tools.inside svg { width: 1.3em; height: 1.3em; }
 #demo-tools.inside button.on { border-color: var(--ink); }
+/* On a phone (chat.css's body.phone), as the Claude app's are there: in the box, under the words, at the left of the
+   send arrow; with their names where they fit, or just the names' main word (.short), or just the icons (.compact). */
+body.phone #demo-tools {
+  position: static; grid-area: tools; justify-self: start; gap: 0.4rem; margin-left: -0.3rem; transform: none;
+}
+body.phone #demo-tools button { padding: 0.3em 0.8em; font-size: 0.75rem; }
+body.phone #demo-tools.compact button { padding: 0.35em; }
 /* While listening: a dot that pulses, as the bubble of what's being heard has. */
 #demo-tools .dot {
   display: none; width: 0.5em; height: 0.5em; border-radius: 50%; background: currentColor;

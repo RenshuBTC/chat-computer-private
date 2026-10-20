@@ -108,11 +108,21 @@
 
   // ------------------------------------------------------------------ the screen's size
   // On Chat Computer the text size comes from the screen's real size and how far away you sit (ui/layout.py); here,
-  // from the window's size. Pinching the conversation (a touchscreen) changes it, as it does there.
+  // from the screen's size too, not the window's: a smaller window has the same size of text, in a narrower column.
+  // On a phone, as in the Claude app there: a twentieth of the screen's width (its narrow side), 16 to 21px. On a
+  // tablet, a forty-sixth, 16 to 20px. On a computer, what a full-size browser window on that screen would have.
+  // Never under 16px on a touchscreen: phones zoom in on a box to type in with smaller text. Pinching the
+  // conversation (a tablet's touchscreen) or asking for bigger or smaller text changes it, as on Chat Computer.
   var size = 20, column = 600, scale = store("chatcomputer-demo-scale") || 1;
+  var touchOnly = window.matchMedia ? window.matchMedia("(hover: none) and (pointer: coarse)") : { matches: false };
   function layout() {
-    var w = window.innerWidth, h = window.innerHeight;
-    size = Math.max(15, Math.min(26, Math.min(w * 0.0125, h * 0.022))) * scale;
+    var w = window.innerWidth, s = window.screen || {}, sw = s.width || w, sh = s.height || window.innerHeight;
+    var across = Math.min(sw, sh), base;
+    if (touchOnly.matches && across < 600) base = Math.max(16, Math.min(21, across / 20));     // chat.js's body.phone
+    else if (touchOnly.matches) base = Math.max(16, Math.min(20, across / 46));
+    else base = Math.max(15, Math.min(26, sw * 0.0125, ((s.availHeight || sh) - 90) * 0.022));
+    size = base * scale;
+    if (touchOnly.matches) size = Math.max(16, size);
     column = Math.round(Math.min(30 * size, w - 2 * size));
     call("layout", Math.round(size * 10) / 10, column);
     place();
@@ -510,6 +520,77 @@
   function site(url, name, note) {
     var f = framed(url);
     return f ? { src: f, title: name } : { html: link(url, name, note) };
+  }
+  // A typed address, as in a browser's address bar: a site's address typed alone (or after "open", "go to" or
+  // "visit"; with or without https:// and a path; its ending a known one, or a country's two letters but for those
+  // more often a file's, as notes.md) opens the site, whatever answers here (the written answers, the
+  // browser's AI or Claude), and whatever the site: right here when it lets another page show it (Google, Google
+  // Maps, Wikipedia; a YouTube video, in YouTube's player), and otherwise at once in a new tab beside this page (most
+  // sites forbid being shown inside another page; on a Chat Computer every site opens right here). Where the browser
+  // stops the new tab, the site is a click away on the screen instead.
+  var TLD = "com|org|net|edu|gov|mil|int|info|biz|io|ai|app|dev|co|me|tv|xyz|site|online|store|shop|tech|blog|news|" +
+    "cloud|page|live|art|design|studio|agency|world|today|space|website|fun|club|life|email|link|pro|mobi|name|museum|" +
+    "travel|jobs|asia|wiki|games|game|music|video|social|network|digital|media|global|group|one|top|health|bank|money|" +
+    "finance|law|school|academy|university|college|press|photo|photos|gallery|(?!(?:md|py|sh|rs|cc|so|ps)\\b)[a-z]{2}";
+  var ADDRESS = new RegExp("^\\s*(?:(?:please\\s+)?(?:open|go to|goto|visit|load|launch|browse to|take me to)\\s+)?" +
+    "((?:https?:\\/\\/)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:" + TLD + ")(?::\\d{2,5})?(?:[\\/?#]\\S*)?)" +
+    "(?:,?\\s+(?:please|pls|thanks|thank you))?\\s*[.!]*\\s*$", "i");
+  var BARE = { google: "www.google.com", youtube: "www.youtube.com", gmail: "mail.google.com", facebook: "www.facebook.com",
+               instagram: "www.instagram.com", netflix: "www.netflix.com", wikipedia: "www.wikipedia.org" };
+  function address(text) {
+    var t = String(text || "").trim(), m = ADDRESS.exec(t), raw = m ? m[1].replace(/[.,!]+$/, "") :
+      BARE[t.replace(/^(?:open|go to|visit)\s+/i, "").replace(/[.!?]+$/, "").toLowerCase()];
+    if (!raw) return null;
+    try {
+      var u = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw);
+      return /^https?:$/.test(u.protocol) ? u : null;
+    } catch (e) { return null; }
+  }
+  // A YouTube video's address (youtube.com/watch?v=..., youtu.be/..., a short): its video and where to start, or null.
+  function videoOf(u) {
+    var host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, ""), id = "";
+    if (host === "youtu.be") id = u.pathname.slice(1).split("/")[0];
+    else if (host === "youtube.com" || host === "youtube-nocookie.com") {
+      id = u.searchParams.get("v") || (/^\/(?:embed|shorts|live)\/([^/?#]+)/.exec(u.pathname) || [])[1] || "";
+    }
+    if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+    var t = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/.exec(u.searchParams.get("t") || u.searchParams.get("start") || "");
+    return { id: id, start: t ? (+t[1] || 0) * 3600 + (+t[2] || 0) * 60 + (+t[3] || 0) : 0 };
+  }
+  // A new tab with the site (without a way back to this page), or null where the browser stops it (it lets a page
+  // open one only straight after a click, a tap or a key).
+  function newTab(url) {
+    try {
+      if (navigator.userActivation && !navigator.userActivation.isActive) return null;
+      var tab = window.open("", "_blank");
+      if (!tab) return null;
+      tab.opener = null;
+      tab.location.href = url;
+      return tab;
+    } catch (e) { return null; }
+  }
+  var SITE_NAMES = { "google.com": "Google", "maps.google.com": "Google Maps", "youtube.com": "YouTube", "wikipedia.org": "Wikipedia" };
+  // What's said and done for an address: the site, here or in a new tab (opened now: call this straight away).
+  function siteAnswer(u) {
+    var url = u.href, host = u.hostname.toLowerCase().replace(/^www\./, "");
+    var name = SITE_NAMES[host] || (/(^|\.)wikipedia\.org$/.test(host) ? "Wikipedia" : host);
+    var video = videoOf(u), here = video ? null : framed(url), tab = video || here ? null : newTab(url);
+    if (video) return { text: "Here's the video, in YouTube's player.", done: ["Played a video on YouTube"],
+                        act: function () { youtube(video.id, video.start, "YouTube"); } };
+    if (here) return { text: "Here's " + name + ". Click in it to type, and scroll it as you'd scroll any page.", done: ["Opened " + host],
+                       act: function () { show({ src: here, title: name }); } };
+    if (tab) return { text: "Opened " + name + " in a new tab. Most sites, " + name + " among them, don't let another page show " +
+                        "them, so here they open beside this one; on a Chat Computer they open right here.",
+                      done: ["Opened " + host + " in a new tab"] };
+    return { text: "Your browser stopped the new tab, so " + name + " is a click away, on the screen. (Most sites can't show " +
+               "inside this page; on a Chat Computer they open right here.)", done: ["Showed a link to " + host],
+             act: function () { show({ html: link(url, name, "On Chat Computer, " + name + " opens right here. Most sites can't show inside this page.") }); } };
+  }
+  function visit(text, u) {
+    var a = siteAnswer(u);                    // first, while the key or the tap still lets a new tab open
+    var you = uid("u"), uts = now(), id = "a" + (++turns), since = acted;
+    call("user", you, text, true);
+    setTimeout(function () { deliver(a, id, you, uts, since); }, 250);
   }
   // A page with a link to a site: most sites can't show inside this page (they forbid being framed).
   function link(url, name, note) {
@@ -917,20 +998,11 @@
     [/\b(weather|rain|raining|forecast|temperature|umbrella|sunny|hot|cold) ?(today|tomorrow|outside|like|in|now)?\b/i, weather],
     // The news: looked up (and, with the browser's AI on, told in its words).
     [/\b(news|headlines)\b/i, function () { return { search: "news", news: true, later: newsAnswer }; }],
-    // A website: right here when it lets this page show it (Google, Wikipedia: framed), else a link to it.
-    [/^(open |go to |show me )?(https?:\/\/)?((?:[a-z0-9-]+\.)+(com|org|net|ai|io|co|sg|uk|de|fr|jp)(\.[a-z]{2})?)\b|^(google|youtube|gmail|facebook|instagram|netflix|wikipedia)[.!?]*$/i, function (t) {
-      var m = /((?:[a-z0-9-]+\.)*[a-z0-9-]+\.(?:com|org|net|ai|io|co|sg|uk|de|fr|jp)(?:\.[a-z]{2})?)(\/[^\s]*)?/i.exec(t);
-      var host = m ? m[1].replace(/^www\./i, "").toLowerCase() :
-        { google: "google.com", youtube: "youtube.com", gmail: "mail.google.com", facebook: "facebook.com", instagram: "instagram.com",
-          netflix: "netflix.com", wikipedia: "wikipedia.org" }[t.trim().replace(/[.!?]+$/, "").toLowerCase()];
-      var url = "https://" + (/^(google\.com|wikipedia\.org)$/.test(host) ? "www." : "") + host + (m && m[2] ? m[2].replace(/[.!?,]+$/, "") : "/");
-      var name = { "google.com": "Google", "wikipedia.org": "Wikipedia", "en.wikipedia.org": "Wikipedia" }[host] || host;
-      if (framed(url)) {
-        return { text: "Here's " + name + ". Click in it to type, and scroll it as you'd scroll any page.", done: ["Opened " + host],
-                 act: function () { show(site(url, name)); } };
-      }
-      return { text: "Most sites can't show inside this page, " + host + " included, so it's a click away, on the screen. On a Chat Computer it opens right here, and I use it for you.",
-        done: ["Showed a link to " + host], act: function () { show({ html: link(url, host, "On Chat Computer, " + host + " opens right here. Most sites can't show inside this page.") }); } };
+    // A website named first, with more said after it ("open youtube.com for me"): the site, as a typed address opens
+    // one (an address alone never gets here: visit).
+    [/^(open |go to |visit |show me )?(https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z]{2,})\b/i, function (t) {
+      var m = /((?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?)/i.exec(t), u = m && address(m[1].replace(/[.!?,]+$/, ""));
+      return u ? siteAnswer(u) : null;
     }],
     [/\b(reply|answer|send|write back|text)\b.*\b(mum|mom|jane|alex|her|him|them|message|email)\b/i, function (t) {
       var alex = /alex/i.test(t), jane = /jane/i.test(t);
@@ -998,7 +1070,10 @@
     if (MASH.test(text)) return { text: "I didn't catch that. " + TRY };
     if (LOOK_IT_UP.test(text) || SEARCH_FOR.test(text)) { var l = lookUp(text); if (l) return l; }
     if (OPEN_ENDED.test(text)) return { ai: true };
-    for (var i = 0; i < INTENTS.length; i++) if (INTENTS[i][0].test(text)) return INTENTS[i][1](text);
+    for (var i = 0; i < INTENTS.length; i++) {
+      var r = INTENTS[i][0].test(text) ? INTENTS[i][1](text) : null;
+      if (r) return r;                         // (an intent can find, looking closer, that it isn't one)
+    }
     return FRESH.test(text) ? { ai: true, search: topicOf(text) } : { ai: true };
   }
   // A question only an AI can answer, with none here: a question of fact gets Wikipedia's article on it (the news, for
@@ -1445,6 +1520,10 @@
         did("Opened " + host, you, uts);
         return host + " is on the screen, in the middle: they can scroll it and type in it (you can't see or use it from here).";
       }
+      if (newTab(url)) {                // only while the click or key that asked still lets a page open a tab
+        did("Opened " + host + " in a new tab", you, uts);
+        return host + " opened in a new tab beside this page (most sites can't show inside it): they're looking at it there.";
+      }
       show({ html: page(host, '<article><h1 class="title">' + esc(a.title || host) + '</h1><p class="demo-note">On Chat Computer, ' + esc(host) +
         " opens right here, and Claude uses it for you. Most sites can't show inside this demo, so here's the link.</p><p><a href=\"" + esc(url) +
         '" target="_blank" rel="noopener noreferrer">Open ' + esc(host) + " in a new tab</a></p></article>", NOTE_CSS) });
@@ -1516,6 +1595,7 @@
         if (at >= 0) claude.talk.length = at;                             // the turn didn't happen
         onText((said ? "\n\n" : "") + trouble(err));
         call("aiDone", id);
+        say(said);
       });
     })();
     function finish() { call("aiDone", id); say(said); }
@@ -1661,71 +1741,178 @@
   // listens through them (or the device's own microphone, when they aren't the one it uses), turns what you say into
   // text, and the answers are read out. A website can't pair AirPods: the phone or computer does, in its Bluetooth
   // settings.
+  // On a phone too: on an iPhone or iPad, Safari turns speech into text (with Siri or Dictation switched on; the other
+  // browsers there are Safari underneath, but may not let a page listen). Safari's listening, and Android's, don't do well
+  // listening on and on (Safari can listen without ever saying what it heard, or hear it twice; Android repeats what
+  // was said), so there it listens for one thing at a time, again after each, and what it heard counts as said once it
+  // stops changing, whether or not the browser calls it final. An iPhone speaks for a page only after speaking in
+  // answer to a tap, so the tap that starts talking says nothing, silently, for the answers later; and while talking
+  // the screen stays on (a phone that locks itself stops listening).
   var Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var ears = { on: false, rec: null, speaking: false, device: "", told: false };
+  var UA = navigator.userAgent || "";
+  var IOS = /iP(hone|ad|od)/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+  var SAFARI = IOS ? !/CriOS|FxiOS|EdgiOS|OPiOS|GSA\//.test(UA) : /Safari\//.test(UA) && !/Chrome|Chromium|Edg|OPR|Android/.test(UA);
+  var ONE_AT_A_TIME = IOS || SAFARI || /Android/.test(UA);
+  var QUIET_MS = 1400, DEAD_MS = 20000;
+  var ears = { on: false, starting: false, rec: null, speaking: false, device: "", told: false, lock: null, said: null, waiting: 0 };
   function talkButton() {
     if (ears.on) { stopTalking(); return; }
     if (!Recognition || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      call("accountForm", { id: "talk-no", title: "Talking", ok: "OK", text: [
+      call("accountForm", { id: "talk-no", title: "Talking", ok: "OK", text: [IOS ?
+        "On an iPhone or iPad, Safari turns speech into text: open chatcomputer.ai in Safari." :
         "This browser can't turn speech into text. Chrome, Edge and Safari can."] });
       return;
     }
     if (ears.told) { startTalking(); return; }
     call("accountForm", { id: "talk", title: "Talk through your AirPods", ok: "Start talking", text: [
       "Pair your AirPods with this phone or computer first, in its Bluetooth settings: a website can't pair them.",
-      "Then talk: what you say goes in the message box's place, and the answers are read out. Click the button again to stop.",
+      "Then talk: what you say goes in the message box's place, and the answers are read out. Press the button again to stop.",
       "Your browser turns what you say into text (Chrome does it on Google's servers). It asks to use the microphone."] });
   }
   function startTalking() {
     ears.told = true;
+    ears.starting = true;
+    try { var hush = new SpeechSynthesisUtterance(" "); hush.volume = 0; window.speechSynthesis.speak(hush); } catch (x) {}
+    keepAwake(true);
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
       var track = stream.getAudioTracks()[0], label = track && track.label || "";
       stream.getTracks().forEach(function (t) { t.stop(); });
+      ears.starting = false;
       ears.device = /airpods/i.test(label) ? label : "";
       ears.on = true;
+      keepAwake(true);
       drawTools();
       did(ears.device ? "Connected your AirPods" : "Started listening (" + (clip(label, 40) || "the microphone") + ")");
       hear();
     }, function (err) {
+      ears.starting = false;
+      keepAwake(false);
       call("accountForm", { id: "talk-no", title: "The microphone is off", ok: "OK", text: [
         "Your browser didn't let this page use the microphone (" + (err && err.name || "refused") + ").",
         "Allow it for chatcomputer.ai in the browser's site settings, then press Connect AirPods again."] });
     });
   }
+  // Safari can hear a thing said twice over ("what time is it what time is it"): once. (Only something longer than
+  // a word or two: "bye bye" stays.)
+  function once(t) {
+    t = String(t || "").replace(/\s+/g, " ").trim();
+    if (!SAFARI) return t;
+    var low = t.toLowerCase(), n = t.length, h = Math.floor(n / 2);
+    if (n % 2 && h >= 6 && low.charAt(h) === " " && low.slice(0, h) === low.slice(h + 1)) return t.slice(0, h);
+    if (!(n % 2) && h >= 6 && low.slice(0, h) === low.slice(h)) return t.slice(0, h);
+    return t;
+  }
   function hear() {
-    if (!ears.on || ears.speaking || ears.rec) return;
-    var r = new Recognition();
+    if (!ears.on || ears.speaking || ears.rec || ears.waiting || document.hidden) return;
+    var r = new Recognition(), said = "", sent = false, quiet = 0, alive = Date.now();
     r.lang = navigator.language || "en-US";
-    r.continuous = true;
+    r.continuous = !ONE_AT_A_TIME;
     r.interimResults = true;
+    // What was heard, as said: asked once, and this listening ended. The next starts once the answer has been read
+    // out, so a phone doesn't chime twice for each thing said (or after a minute, should no answer come).
+    function heard(text) {
+      clearTimeout(quiet);
+      text = once(text);
+      if (sent || !text) return;
+      sent = true;
+      call("partial", "");
+      clearTimeout(ears.waiting);
+      ears.waiting = setTimeout(function () { ears.waiting = 0; hear(); }, 60000);
+      var at = address(text);
+      if (at) visit(text, at); else ask(text);
+      try { r.stop(); } catch (x) {}
+    }
+    r.onstart = r.onaudiostart = r.onspeechstart = function () { alive = Date.now(); };
     r.onresult = function (e) {
-      var heard = "", final = "";
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) final += e.results[i][0].transcript; else heard += e.results[i][0].transcript;
+      if (ears.rec !== r) return;
+      alive = Date.now();
+      if (!ONE_AT_A_TIME) {           // Chrome and Edge on a computer: listening on, each thing said final in turn
+        var partial = "", final = "";
+        for (var i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) final += e.results[i][0].transcript; else partial += e.results[i][0].transcript;
+        }
+        if (final.trim()) { call("partial", ""); var addr = address(final); if (addr) visit(final.trim(), addr); else ask(final.trim()); }
+        else call("partial", partial.trim());
+        return;
       }
-      if (final.trim()) { call("partial", ""); ask(final.trim()); }
-      else call("partial", heard.trim());
+      if (sent) return;
+      var all = "", done = e.results.length > 0;
+      for (var j = 0; j < e.results.length; j++) { all += e.results[j][0].transcript; done = done && e.results[j].isFinal; }
+      said = all;
+      if (done && said.trim()) { heard(said); return; }
+      call("partial", once(said));
+      clearTimeout(quiet);
+      quiet = setTimeout(function () { heard(said); }, QUIET_MS);
     };
     r.onerror = function (e) {
+      if (ears.rec !== r) return;
       if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "network") {
         stopTalking();
         call("accountForm", { id: "talk-no", title: "Talking stopped", ok: "OK", text: [e.error === "network" ?
-          "The browser couldn't reach its speech service (it needs the internet)." :
-          "The browser stopped this page from listening. Allow the microphone for chatcomputer.ai in its site settings."] });
+          "The browser couldn't reach its speech service (it needs the internet)." : notListening()] });
       }
     };
-    r.onend = function () { ears.rec = null; call("partial", ""); if (ears.on && !ears.speaking) setTimeout(hear, 250); };
+    r.onend = function () {
+      clearTimeout(quiet);
+      clearInterval(watch);
+      if (ears.rec !== r) return;                  // one given up on (below), already replaced
+      if (ONE_AT_A_TIME && said.trim() && !sent && !ears.speaking) heard(said);
+      ears.rec = null;
+      call("partial", "");
+      if (ears.on && !ears.speaking) setTimeout(hear, 250);
+    };
+    // Listening that has gone quiet for good (Safari's can, after sound has played): given up on, and started anew.
+    var watch = setInterval(function () {
+      if (ears.rec !== r) { clearInterval(watch); return; }
+      if (ears.speaking || Date.now() - alive < DEAD_MS) return;
+      clearInterval(watch);
+      clearTimeout(quiet);
+      try { r.abort(); } catch (x) {}
+      ears.rec = null;
+      call("partial", "");
+      setTimeout(hear, 250);
+    }, 5000);
     ears.rec = r;
-    try { r.start(); } catch (x) { ears.rec = null; }
+    try { r.start(); } catch (x) { ears.rec = null; clearInterval(watch); }
+  }
+  function notListening() {
+    if (IOS && !SAFARI) return "This browser didn't let the page listen. On an iPhone or iPad, Safari can: open chatcomputer.ai in Safari.";
+    if (SAFARI) return "Safari stopped this page from listening. Allow the microphone for chatcomputer.ai, and switch on Siri or " +
+      "Dictation in Settings: Safari needs one of them to turn speech into text.";
+    return "The browser stopped this page from listening. Allow the microphone for chatcomputer.ai in its site settings.";
   }
   function stopTalking() {
     ears.on = false;
+    ears.starting = false;
+    clearTimeout(ears.waiting);
+    ears.waiting = 0;
     if (ears.rec) { try { ears.rec.abort(); } catch (x) {} ears.rec = null; }
     try { window.speechSynthesis.cancel(); } catch (x) {}
     ears.speaking = false;
+    ears.said = null;
+    keepAwake(false);
     call("partial", "");
     drawTools();
   }
+  // While talking, the screen stays on (where the browser can keep it on: most can).
+  function keepAwake(on) {
+    if (!on) {
+      if (ears.lock) { try { ears.lock.release(); } catch (x) {} ears.lock = null; }
+      return;
+    }
+    if (ears.lock || !navigator.wakeLock || document.visibilityState !== "visible") return;
+    navigator.wakeLock.request("screen").then(function (lock) {
+      if (!ears.on && !ears.starting) { lock.release(); return; }
+      ears.lock = lock;
+      lock.addEventListener("release", function () { if (ears.lock === lock) ears.lock = null; });
+    }, function () {});
+  }
+  // Away from the page (another app, the phone locked): not listening; back: listening again.
+  document.addEventListener("visibilitychange", function () {
+    if (!ears.on) return;
+    if (document.hidden) { if (ears.rec) { try { ears.rec.abort(); } catch (x) {} } }
+    else { keepAwake(true); hear(); }
+  });
   // Read aloud, under a message: the browser says it now (in place of anything it was saying).
   function readAloud(text) {
     if (!window.speechSynthesis || !text) return;
@@ -1735,16 +1922,28 @@
     u.lang = navigator.language || "en-US";
     window.speechSynthesis.speak(u);
   }
-  // An answer, read out while talking (not listening meanwhile, so it doesn't hear itself).
+  // An answer, read out while talking (not listening meanwhile, so it doesn't hear itself). Listening again once it's
+  // said, or after about as long as it takes to say, where the browser doesn't tell (some don't, for a long one).
+  // (Every answer ends here, said or not.)
   function say(text) {
-    if (!ears.on || !text || !window.speechSynthesis) return;
-    var plain = String(text).replace(/[*_`#>|~]/g, "").replace(/\s+/g, " ").trim();
-    if (!plain) return;
+    clearTimeout(ears.waiting);
+    ears.waiting = 0;
+    if (!ears.on) return;
+    var plain = String(text || "").replace(/[*_`#>|~]/g, "").replace(/\s+/g, " ").trim();
+    if (!plain || !window.speechSynthesis) { hear(); return; }
     ears.speaking = true;
     if (ears.rec) { try { ears.rec.abort(); } catch (x) {} }
-    var u = new SpeechSynthesisUtterance(plain);
+    var u = new SpeechSynthesisUtterance(plain), mine = ears.said = {};
+    function after() {
+      if (ears.said !== mine) return;
+      ears.said = null;
+      clearTimeout(guard);
+      ears.speaking = false;
+      hear();
+    }
+    var guard = setTimeout(after, 5000 + plain.length * 100);
     u.lang = navigator.language || "en-US";
-    u.onend = u.onerror = function () { ears.speaking = false; hear(); };
+    u.onend = u.onerror = after;
     window.speechSynthesis.speak(u);
   }
 
@@ -1797,11 +1996,22 @@
   }
   function span(cls, text) { var s = document.createElement("span"); s.className = cls; s.textContent = text; return s; }
   // Beside the box when there's room: side by side, or one above the other, or just their icons. Otherwise inside
-  // it, before the arrow.
+  // it, before the arrow. On a phone, as the Claude app's are there: in the box, under the words, at the left of the
+  // send arrow (chat.css lays the box out in two rows), with their names, or just the names' main word, or just
+  // their icons, as they fit.
   function placeTools() {
     if (!tools_) return;
-    var box = $("box"), rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    var box = $("box"), row = $("row"), rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
     tools_.classList.remove("stack", "short", "compact", "inside", "rise");
+    if (document.body.classList.contains("phone")) {
+      if (tools_.parentNode !== row) row.insertBefore(tools_, $("send"));
+      var space = row.clientWidth - $("send").offsetWidth - 0.5 * rem;
+      if (tools_.scrollWidth <= space) return;
+      tools_.classList.add("short");
+      if (tools_.scrollWidth <= space) return;
+      tools_.classList.add("compact");
+      return;
+    }
     if (tools_.parentNode !== box) box.appendChild(tools_);
     var b = box.getBoundingClientRect(), limit = $("composer").getBoundingClientRect().right;
     var room = limit - b.right - 1.25 * rem;
@@ -1837,7 +2047,11 @@
         drawTools();
         nanoCheck();
         break;
-      case "send": ask(String(msg.text || "")); break;
+      case "send": {
+        var said = String(msg.text || ""), typed = address(said);      // an address opens its site, as a browser's would
+        if (typed) visit(said, typed); else ask(said);
+        break;
+      }
       case "hole": hole = { x: msg.x, y: msg.y, w: msg.w, h: msg.h }; place(); break;
       case "close_content": close(); break;
       case "scroll_open": scrollOpen(msg.how); break;

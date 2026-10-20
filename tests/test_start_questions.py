@@ -436,6 +436,38 @@ def test_typed_text_reaches_claude_as_typed(tmp_path, monkeypatch):
     assert note.startswith("[") and note.endswith(" · typed]") and words == "what's on today"
 
 
+def test_a_web_address_typed_alone_opens_its_site_at_once(tmp_path, monkeypatch):
+    # As a browser's address bar: any site's address, alone (or after "open", "go to"...), with or without https://
+    # and a path; a file's name (notes.md) or a question about a site isn't one.
+    from chatcomputer import answers
+    assert answers.typed_address("youtube.com") == "https://youtube.com"
+    assert answers.typed_address("open bbc.co.uk please") == "https://bbc.co.uk"
+    assert answers.typed_address("YouTube.com.") == "https://YouTube.com"
+    assert answers.typed_address("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert answers.typed_address("go to github.com/anthropics") == "https://github.com/anthropics"
+    for other in ("notes.md", "open main.rs", "what is youtube.com", "e.g.", "3.14", "hello", "youtube", "google.com is slow"):
+        assert answers.typed_address(other) is None, other
+    # It opens at once, in the middle, without a turn of Claude's, and Actions says so (linked to the message).
+    c, screen = _controller(tmp_path, monkeypatch)
+    asks = []
+
+    async def ask(text, typed=False):
+        asks.append(text)
+    c.brain = SimpleNamespace(busy=False, last_activity=0.0, ask=ask, current_origin="here")
+
+    async def online():
+        return True
+    c._online_now = online
+
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        await c.handle("youtube.com", typed=True)
+    asyncio.run(run())
+    assert asks == [] and ("show_url", "https://youtube.com") in screen.events
+    done = [e for k, e in screen.events if k == "done"]
+    assert done and done[-1]["text"] == "Opened youtube.com" and done[-1]["prompt_id"].startswith("u")
+
+
 def test_the_note_says_typed_only_when_it_was():
     from chatcomputer.brain.prompt import build_system_prompt, turn_prefix
     assert turn_prefix({"mode": "chat"}, None).endswith("screen: conversation]\n")

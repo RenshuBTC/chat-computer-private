@@ -7,10 +7,12 @@
 // Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
 // when it ends, with a stand-in for YouTube's player; answers streamed; thinking first, as Opus 5.5 always does);
 // Connect AirPods' sheet; Chrome's built-in AI, with a stand-in (Download Gemini: its sheet, the download, then it
-// answers); a phone (music turned down, then stopped).
+// answers); a phone, laid out as the Claude app is there (the keyboard down after sending, a held message's menu,
+// nothing zooming; music turned down, then stopped); and Connect AirPods on an iPhone, with stand-ins for Safari's
+// listening and speaking.
 // Prints JSON.  Run: node tests/demo_check.js [shot-prefix]
 const path = require("path");
-const { chromium } = require("playwright");
+const { chromium, devices } = require("playwright");
 
 const page_url = "file://" + path.resolve(__dirname, "..", "docs", "index.html");
 const shot = process.argv[2];
@@ -81,14 +83,9 @@ async function state(page) {
       results: Array.from(document.querySelectorAll("#results .res-text")).map((e) => e.textContent),
       panel: document.body.classList.contains("panel"),
       first_ai: ((document.querySelector("#log > .ai") || {}).textContent || "").trim(),
-      logo: shown("welcome") ? document.getElementById("wordmark").textContent : null,
-      // The icon at the word logo's left: drawn, how far in from the logo's left edge, and how wide.
-      mark: (() => {
-        const m = document.getElementById("mark");
-        if (!m || !shown("welcome")) return null;
-        const r = m.getBoundingClientRect(), t = document.getElementById("wordmark").getBoundingClientRect();
-        return { loaded: m.complete && m.naturalWidth > 0, left: Math.round(r.left - t.left), w: Math.round(r.width) };
-      })(),
+      // (Faded away: not shown.)
+      logo: shown("welcome") && getComputedStyle(document.getElementById("welcome")).visibility !== "hidden" ?
+        document.getElementById("wordmark").textContent : null,
       said: document.querySelectorAll("#log > .you, #log > .ai").length,
       sides: [shown("messages"), shown("done")],
       composer: shown("composer"),
@@ -114,10 +111,11 @@ async function viewText(page) {
 }
 function player(page) { return page.frames().find((f) => /youtube/.test(f.url())); }
 
-async function ask(page, text) {
+async function ask(page, text, meanwhile) {
   const before = await page.locator("#log > .ai").count();
   await page.keyboard.type(text, { delay: 5 });
   await page.keyboard.press("Enter");
+  if (meanwhile) await meanwhile();          // a look while it's being answered
   await page.waitForFunction((n) => document.querySelectorAll("#log > .ai").length > n &&
     !document.querySelector("#log > .ai.thinking"), before);
   // The words stream in: until the answer stops growing.
@@ -171,7 +169,15 @@ async function ask(page, text) {
   await page.click("#toggle-left");
   await page.click("#toggle-right");
   out.sides_on = await state(page);
-  await ask(page, "play some piano music");
+  // The first thing said: the word logo fades away (still there, going, a moment after; gone once it's done).
+  await ask(page, "play some piano music", async () => {
+    await page.waitForTimeout(120);
+    out.logo_fading = await page.evaluate(() => {
+      const s = getComputedStyle(document.getElementById("welcome"));
+      return { fade: s.transitionDuration.split(",")[0].trim(), seen: s.visibility === "visible" && +s.opacity > 0 && +s.opacity < 1 };
+    });
+  });
+  await page.waitForTimeout(300);
   out.music = await state(page);
   if (shot) await page.screenshot({ path: shot + "-music.png" });
   // "/": the files, in a list in front of what's open (what's at its middle is the list, not the page).
@@ -231,6 +237,25 @@ async function ask(page, text) {
   await page.keyboard.type("cats", { delay: 20 });
   out.google_typed = { frame: await g.evaluate(() => document.getElementById("q").value), box: (await state(page)).box };
   if (shot) await page.screenshot({ path: shot + "-google.png" });
+  await page.click("#frame-close");
+  await page.click("#input");
+  // Any other address typed, as in a browser's address bar: a site that won't show inside another page opens at once
+  // in a new tab (here, a stand-in for it); a YouTube video's address plays in YouTube's player, in the middle.
+  await page.context().route(/^https:\/\/(youtube\.com|bbc\.co\.uk)\//, (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: "<title>a site</title>a site" }));
+  const tabbed = [];
+  for (const typed of ["youtube.com", "open bbc.co.uk please"]) {
+    const popup = page.waitForEvent("popup", { timeout: 8000 }).catch(() => null);
+    await ask(page, typed);
+    const tab = await popup;
+    if (tab) { await tab.waitForLoadState().catch(() => {}); tabbed.push({ url: tab.url(), opener: await tab.evaluate(() => window.opener === null) }); await tab.close(); }
+    else tabbed.push(null);
+    const s = await state(page);
+    tabbed[tabbed.length - 1] = { tab: tabbed[tabbed.length - 1], last: s.last, done: s.done[s.done.length - 1], content: s.content };
+  }
+  out.typed_sites = tabbed;
+  await ask(page, "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1m5s");
+  out.typed_video = await state(page);
   await page.click("#frame-close");
   await page.click("#input");
 
@@ -355,10 +380,72 @@ async function ask(page, text) {
   await phone.waitForFunction(() => document.getElementById("demo-tools"));
   await phone.waitForTimeout(400);
   out.phone_opening = await state(phone);
-  await phone.click("#input");
+  // As in the Claude app: the text a twentieth of the screen's width, never under 16px (no zooming in on the box);
+  // the box nearly the screen's width, the words above, the buttons and the arrow under them; nothing past the edges.
+  out.phone_layout = await phone.evaluate(() => {
+    const r = (id) => document.getElementById(id).getBoundingClientRect();
+    const box = r("box"), input = r("input"), send = r("send"), tools = r("demo-tools");
+    return { phone: document.body.classList.contains("phone"), rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+      input_px: parseFloat(getComputedStyle(document.getElementById("input")).fontSize), box_w: Math.round(box.width), width: innerWidth,
+      tools_under: tools.top >= input.bottom, send_under: send.top >= input.bottom, send_right: Math.round(box.right - send.right),
+      tools_left: Math.round(tools.left - box.left), scroll_w: document.documentElement.scrollWidth,
+      typing_in: document.activeElement && document.activeElement.id };
+  });
+  await phone.tap("#input");
+  out.phone_tapped = await phone.evaluate(() => document.activeElement.id);
   await ask(phone, "hello");
   out.phone = await state(phone);
   if (shot) await phone.screenshot({ path: shot + "-phone.png" });
+  // Holding a message: what can be done with it, over the screen dimmed (fingers, through the browser's own touch
+  // events: Playwright has no holding).
+  const touch = await phone.context().newCDPSession(phone);
+  const fingers = (type, points) => touch.send("Input.dispatchTouchEvent", { type: type, touchPoints: points });
+  async function holdOn(sel) {
+    const at = await phone.evaluate((s) => {
+      const m = Array.from(document.querySelectorAll(s)).pop();
+      m.scrollIntoView({ block: "center" });
+      const r = m.getBoundingClientRect();
+      return { x: Math.round(r.left + Math.min(40, r.width / 2)), y: Math.round(r.top + Math.min(16, r.height / 2)) };
+    }, sel);
+    await fingers("touchStart", [at]);
+    await phone.waitForTimeout(650);
+    const seen = await phone.evaluate(() => ({ holding: document.body.classList.contains("holding"),
+      held: (document.querySelector(".held") || {}).className || "",
+      items: Array.from(document.querySelectorAll("#hold-menu button")).filter((b) => !b.hidden).map((b) => b.textContent.trim()),
+      selected: String(window.getSelection()) }));
+    await fingers("touchEnd", []);
+    return seen;
+  }
+  out.phone_hold_you = await holdOn("#log > .you");
+  if (shot) await phone.screenshot({ path: shot + "-phone-hold.png" });
+  await phone.tap("#hold-menu [data-do=edit]");
+  out.phone_edit = await phone.evaluate(() => ({ holding: document.body.classList.contains("holding"),
+    box: document.getElementById("input").value, typing_in: document.activeElement.id }));
+  await phone.evaluate(() => { const i = document.getElementById("input"); i.value = ""; i.dispatchEvent(new Event("input")); i.blur(); });
+  out.phone_hold_ai = await holdOn("#log > .ai:not(.hello)");
+  await phone.tap("#hold-menu [data-do=select]");
+  out.phone_select = await phone.evaluate(() => ({ reading: document.body.classList.contains("reading"),
+    text: document.getElementById("reader-text").textContent.slice(0, 40), select: getComputedStyle(document.getElementById("reader-text")).userSelect }));
+  await phone.tap("#reader-close");
+  await holdOn("#log > .ai:not(.hello)");
+  await phone.touchscreen.tap(4, 4);                      // the dimmed screen, beside the held message
+  out.phone_put_away = await phone.evaluate(() => document.body.classList.contains("holding") || !!document.querySelector(".held"));
+  await holdOn("#log > .you");
+  await phone.tap("#log > .you.held");                     // the held message itself
+  out.phone_put_away_too = await phone.evaluate(() => document.body.classList.contains("holding") || !!document.querySelector(".held"));
+  out.phone_shade = await phone.evaluate(() => {
+    document.body.classList.add("holding");
+    const s = getComputedStyle(document.getElementById("hold-shade")), m = getComputedStyle(document.getElementById("hold-menu"));
+    document.body.classList.remove("holding");
+    return { blur: s.backdropFilter, menu_blur: m.backdropFilter };
+  });
+  // Two fingers pinched: nothing zooms, and the text stays its size.
+  await fingers("touchStart", [{ x: 150, y: 300, id: 1 }, { x: 240, y: 300, id: 2 }]);
+  for (let i = 1; i <= 8; i++) await fingers("touchMove", [{ x: 150 - 12 * i, y: 300, id: 1 }, { x: 240 + 12 * i, y: 300, id: 2 }]);
+  await fingers("touchEnd", []);
+  await phone.waitForTimeout(150);
+  out.phone_pinched = await phone.evaluate(() => ({ rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+    zoom: window.visualViewport ? visualViewport.scale : 1, scroll_w: document.documentElement.scrollWidth }));
   // Music, and then asked about it: turned down (the same music, quieter: not started again), then stopped.
   await ask(phone, "play some piano music");
   out.phone_music = await state(phone);
@@ -370,6 +457,58 @@ async function ask(page, text) {
   out.phone_down_piano = await piano.evaluate(() => ({ same: window.same === true, vol: window.vol }));
   await ask(phone, "stop the music");
   out.phone_stopped = await state(phone);
+
+  // Connect AirPods on an iPhone, with stand-ins for Safari's listening and speaking, the microphone and the wake lock:
+  // one thing heard at a time; what's heard said once it stops changing, though Safari never calls it final; heard
+  // twice over, asked once; the answer read out (the tap having let it speak), then listening again; the screen kept
+  // on meanwhile; and refused, what to switch on.
+  const iphone = await browser.newContext({ ...devices["iPhone 13"] });
+  await iphone.addInitScript(() => {
+    window.recs = [];
+    function Rec() { window.recs.push(this); }
+    Rec.prototype.start = function () { this.started = true; };
+    Rec.prototype.stop = Rec.prototype.abort = function () { this.ended = true; const r = this; setTimeout(() => r.onend && r.onend(), 5); };
+    Rec.prototype.hear = function (text, final) {
+      this.onresult({ resultIndex: 0, results: [{ 0: { transcript: text }, isFinal: !!final, length: 1 }] });
+    };
+    window.SpeechRecognition = window.webkitSpeechRecognition = Rec;
+    window.spoken = [];
+    window.SpeechSynthesisUtterance = function (t) { this.text = t; this.volume = 1; };
+    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: { cancel() {},
+      speak(u) { window.spoken.push({ text: u.text, volume: u.volume }); setTimeout(() => u.onend && u.onend(), 50); } } });
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: () => Promise.resolve({
+      getAudioTracks: () => [{ label: "AirPods Pro" }], getTracks: () => [{ stop() {} }] }) } });
+    window.awake = 0;
+    Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request() {
+      window.awake++; return Promise.resolve({ release() { window.awake--; }, addEventListener() {} }); } } });
+  });
+  const ip = await iphone.newPage();
+  ip.on("pageerror", (e) => errors.push(String(e)));
+  await ip.goto(page_url);
+  await ip.waitForFunction(() => document.getElementById("demo-tools"));
+  await ip.tap("#demo-airpods");
+  await ip.tap("#sheet-ok");
+  await ip.waitForFunction(() => window.recs.length === 1 && window.recs[0].started);
+  out.talk_phone = await ip.evaluate(() => ({ continuous: window.recs[0].continuous, spoken: window.spoken.slice(), awake: window.awake,
+    button: document.getElementById("demo-airpods").getAttribute("aria-label") }));
+  await ip.evaluate(() => window.recs[0].hear("what time"));
+  await ip.waitForTimeout(300);
+  await ip.evaluate(() => window.recs[0].hear("what time is it"));
+  out.talk_hearing = await ip.evaluate(() => document.getElementById("live-text").textContent);
+  await ip.waitForFunction(() => document.querySelectorAll("#log > .you").length === 1, null, { timeout: 5000 });
+  await ip.waitForFunction(() => window.spoken.length === 2 && window.recs.length === 2 && window.recs[1].started, null, { timeout: 15000 });
+  out.talk_answered = await ip.evaluate(() => ({ asked: document.querySelector("#log > .you").textContent,
+    read_out: window.spoken[1].text, answer: Array.from(document.querySelectorAll("#log > .ai")).pop().textContent,
+    first_ended: !!window.recs[0].ended }));
+  await ip.evaluate(() => window.recs[1].hear("What time is it in Tokyo what time is it in Tokyo", true));
+  await ip.waitForFunction(() => document.querySelectorAll("#log > .you").length === 2, null, { timeout: 5000 });
+  out.talk_twice = await ip.evaluate(() => Array.from(document.querySelectorAll("#log > .you")).pop().textContent);
+  await ip.waitForFunction(() => window.recs.length === 3 && window.recs[2].started, null, { timeout: 15000 });
+  await ip.evaluate(() => window.recs[2].onerror({ error: "service-not-allowed" }));
+  out.talk_refused = await ip.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
+    text: document.getElementById("sheet-text").textContent, button: document.getElementById("demo-airpods").getAttribute("aria-label"),
+    awake: window.awake }));
+  await iphone.close();
   out.errors = errors;
   await browser.close();
   console.log(JSON.stringify(out));

@@ -86,20 +86,17 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* Before you've said anything: the word logo in the middle of the screen, Chat Computer's icon at its left (the old
-   monitor of the browser tab's icon, turned to face the words, about as tall as the letters with their stems),
-   with Chat Computer's first words, hello, world, as its message above the box. The logo goes with the first thing
-   you say. */
+/* Before you've said anything: the word logo in the middle of the screen, with Chat Computer's first words, hello,
+   world, as its message above the box. With the first thing you say it fades away, over half a second (and back
+   when the conversation starts again). */
 #welcome {
   position: fixed; left: var(--left, 0px); right: var(--panel, 0px); top: 0; bottom: var(--composer-h, 5rem);
   display: flex; align-items: center; justify-content: center; margin: 0; pointer-events: none;
+  transition: opacity 500ms ease, visibility 0s linear 0s;
 }
-#wordmark {
-  display: flex; align-items: center; gap: 0.28em;
-  font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0;
-}
-#mark { flex: none; width: 1.3em; height: 1.3em; }
-body.has-you #welcome, body.content #welcome { display: none; }
+#wordmark { font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0; }
+body.has-you #welcome { opacity: 0; visibility: hidden; transition: opacity 500ms ease, visibility 0s linear 500ms; }
+body.content #welcome { display: none; }
 
 /* Something open (body.content): a website, a video, a map, a conversation from Messages, a file. It fills the
    middle, from the top down to the message box, in a rounded frame like the sidebars', with its name and a close
@@ -149,6 +146,12 @@ body.typed #hint, body.searching #hint { display: none; }
   flex: 1; min-width: 0; height: 1.5em; max-height: 40vh; margin: 0; padding: 0;
   border: 0; outline: 0; resize: none; overflow-y: auto; scrollbar-width: none;
   font: inherit; line-height: 1.5; color: var(--ink); background: transparent; caret-color: var(--ink);
+}
+/* A touchscreen alone (a phone, a tablet): what's typed is never under 16px, or the browser zooms in on the box as
+   it's tapped (Safari on an iPhone does), pushing the page past the screen's edges. */
+@media (hover: none) and (pointer: coarse) {
+  #input, #hint, #sheet-fields input, #sheet-fields select { font-size: max(16px, 1em); }
+  body { touch-action: manipulation; }          /* and a double tap doesn't zoom */
 }
 #send {
   flex: none; display: flex; align-items: center; justify-content: center; width: 1.5em; height: 1.5em;
@@ -305,6 +308,83 @@ body.panel #toggle-left, body.panel #toggle-right { display: block; }
 body.panel.hide-left #messages, body.panel.hide-right #done { display: none; }
 body.panel #messages .side-head { padding-left: 1.55rem; }
 body.panel #done .side-head { padding-right: 1.65rem; }
+
+/* A phone (body.phone, chat.js: a touchscreen alone, on a screen under 600px across), as the Claude app is there:
+   the text a twentieth of the screen's width (docs/demo/host.js), the conversation nearly as wide as the screen and
+   the message box wider still, in two rows: what's typed above, and under it its buttons at the left and the send
+   arrow at the right. Nothing zooms (two fingers do nothing), and nothing goes past the screen's edges. Holding a
+   message brings up what can be done with it (below), rather than the phone's own selecting. */
+html:has(> body.phone) { overflow-x: hidden; }
+body.phone { touch-action: manipulation; touch-action: pan-x pan-y; }
+body.phone #column { width: min(var(--co-column, 30rem), 100% - 2rem); padding-top: 1.25rem; }
+body.phone #composer { padding: 0.3rem 0 0.5rem; }
+body.phone #box, body.phone #wake { width: min(var(--co-column, 30rem) + 1rem, 100% - 1rem); }
+body.phone #box { padding: 0.65rem 0.55rem 0.55rem 0.9rem; border-radius: 1.4rem; }
+body.phone #row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "icon input input" "tools tools send";
+  align-items: center; row-gap: 0.5rem;
+}
+body.phone #search-icon { grid-area: icon; margin-right: 0.5rem; }
+body.phone #input { grid-area: input; }
+body.phone #send { grid-area: send; width: 1.8em; height: 1.8em; }
+body.phone #log { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+/* Holding a message on a phone, as in the Claude app: the screen behind it dimmed (still to be seen, not blurred),
+   the message lifted above it, and under it (or over it, where there's no room under it) what can be done with it,
+   on frosted glass: copy it, send it to another app, select some of its words, edit yours or hear Chat Computer's
+   read aloud. A tap anywhere else puts it away. */
+#hold-shade {
+  position: fixed; inset: 0; z-index: 40; display: none; touch-action: none; cursor: pointer;
+  background: color-mix(in srgb, var(--ink) 20%, transparent);
+}
+body.holding #hold-shade { display: block; animation: shade 160ms ease-out both; }
+@keyframes shade { from { opacity: 0; } }
+body.holding .held { position: relative; z-index: 41; touch-action: none; }
+.ai.held {
+  border-radius: 0.5rem; background: var(--ground);
+  box-shadow: 0 0 0 0.6rem var(--ground), 0 0.5rem 1.75rem 0.6rem color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.you.held { box-shadow: 0 0.4rem 1.5rem color-mix(in srgb, var(--ink) 12%, transparent); }
+#hold-menu {
+  position: fixed; z-index: 42; display: none; width: max-content; min-width: 13rem; max-width: calc(100vw - 1.5rem);
+  padding: 0.5rem 0; overflow: hidden; border-radius: 1.3rem; font-size: 0.9rem; line-height: 1.3;
+  background: color-mix(in srgb, var(--ground) 90%, transparent);
+  -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4);
+  box-shadow: 0 0.6rem 2rem color-mix(in srgb, var(--ink) 16%, transparent);
+}
+body.holding #hold-menu { display: block; animation: menu 180ms cubic-bezier(0.32, 0.72, 0, 1) both; }
+@keyframes menu { from { opacity: 0; transform: scale(0.92); } }
+#hold-menu button {
+  display: flex; align-items: center; gap: 0.95rem; width: 100%; margin: 0; padding: 0.62rem 1.6rem 0.62rem 1.45rem;
+  border: 0; background: none; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+#hold-menu button[hidden] { display: none; }
+#hold-menu button:active { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+#hold-menu svg { flex: none; width: 1.2em; height: 1.2em; stroke-width: 1.7; }
+#hold-menu .dot { fill: currentColor; stroke: none; }
+/* Select text: the message alone over the whole screen, where its words are selected as anywhere else on the phone
+   (hold a word, then move its handles), with an x to close it. */
+#reader { position: fixed; inset: 0; z-index: 45; display: none; flex-direction: column; background: var(--ground); }
+body.reading #reader { display: flex; }
+#reader-bar {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  padding: 0.55rem 0.55rem 0.55rem 1rem; border-bottom: 2px solid var(--line);
+}
+#reader-title { font-weight: bold; }
+#reader-close { width: 1.9rem; height: 1.9rem; }
+#reader-text {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 1rem 1rem 2rem; overflow-wrap: anywhere;
+  -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
+}
+#reader-text.plain { white-space: pre-wrap; }
+/* A word of what was done (Copied), for a moment, over the message box. */
+#toast {
+  position: fixed; left: 50%; bottom: calc(var(--composer-h, 5rem) + 0.75rem); z-index: 46; margin: 0;
+  padding: 0.35rem 0.95rem; border-radius: 999px; background: var(--ink); color: var(--ground);
+  font-size: 0.8rem; line-height: 1.4; white-space: nowrap; pointer-events: none;
+  opacity: 0; transform: translate(-50%, 0.4rem); transition: opacity 160ms ease-out, transform 160ms ease-out;
+}
+#toast.on { opacity: 1; transform: translate(-50%, 0); }
 
 /* Locked: one screen over everything, the time and a keypad; nothing of the conversation, the sidebars or what's open
    shows until the PIN is typed (what's open is taken off the screen by the window, gtk_app.py). */

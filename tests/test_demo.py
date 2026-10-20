@@ -26,15 +26,13 @@ def test_the_demo_is_chatcomputer_s_real_screen_as_it_is_now():
     # The demo's host comes before Chat Computer's own scripts, which are the real ones; its own look after theirs.
     assert page.index("demo/host.js") < page.index("demo/md.js") < page.index("demo/chat.js")
     assert page.index("demo/chat.css") < page.index("demo/demo.css")
-    # The tab's icon: Chat Computer's (an old CRT monitor with a cursor on its screen), as an SVG, and drawn for
-    # browsers that don't take one (.ico: 16, 32 and 48 pixels) and for home screens (180) by scripts/make_icons.js.
-    assert '<link rel="icon" href="favicon.svg" type="image/svg+xml">' in page and '<link rel="icon" href="favicon.ico"' in page
-    assert '<link rel="apple-touch-icon" href="apple-touch-icon.png">' in page
-    ico = (ROOT / "docs" / "favicon.ico").read_bytes()
-    assert ico[:4] == b"\0\0\1\0" and int.from_bytes(ico[4:6], "little") == 3
-    assert sorted(ico[6 + 16 * i] for i in range(3)) == [16, 32, 48]
-    png = (ROOT / "docs" / "apple-touch-icon.png").read_bytes()
-    assert png[:8] == b"\x89PNG\r\n\x1a\n" and int.from_bytes(png[16:20], "big") == int.from_bytes(png[20:24], "big") == 180
+    # No icon, anywhere: the tab shows the browser's own, and the word logo is the words alone.
+    assert 'rel="icon"' not in page and "apple-touch-icon" not in page and "<img" not in page
+    assert not any((ROOT / "docs" / n).exists() for n in ("favicon.ico", "favicon.svg", "apple-touch-icon.png"))
+    assert not (ROOT / "chatcomputer" / "ui" / "assets" / "icon.svg").exists()
+    # A phone: nothing zooms (and Safari doesn't zoom in on the box either); its keyboard's return key says Send.
+    assert 'content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no' in page
+    assert 'enterkeyhint="send"' in page
 
 
 def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
@@ -70,8 +68,10 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
         for at in [m.start() for m in re.finditer(re.escape(site), host)]:
             line = host[host.rfind("\n", 0, at):host.find("\n", at)]
             assert "igu" in line or "output=embed" in line, line
-    # Only Google's and Wikipedia's addresses are shown for real (framed); any other site asked for is a link.
+    # Only Google's and Wikipedia's addresses are shown for real (framed); any other site typed opens in a new tab,
+    # with no way back to this page (a link where the browser stops the tab).
     assert "function framed(url)" in host and "wikipedia\\.org$" in host
+    assert 'window.open("", "_blank")' in host and "tab.opener = null" in host
     assert host.count("x-api-key") == 1 and "anthropic-dangerous-direct-browser-access" in host
     assert "not made by Anthropic" in host and "written in advance" in host
     # Claude Pro or Max sign-ins aren't for other apps: a sign-in token is turned away, and the sheet says why.
@@ -104,8 +104,6 @@ def test_the_demo_works_in_a_browser():
     assert not first["content"] and not first["sheet"] and first["view"] is None and first["toggles"] == ["true", "true"]
     assert not first["bottom_toggle"] and not first["full"]
     assert first["first_ai"] == first["last"] == "hello, world" and first["said"] == 1 and first["logo"] == "Chat Computer"
-    # The tab's icon, the old monitor, at the word logo's left, facing it.
-    assert first["mark"]["loaded"] and first["mark"]["left"] == 0 and first["mark"]["w"] > 30
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
     assert first["typing_in"] == "input" and first["hint"] == "Chat anything or \u201c/\u201d"
     assert first["hint_weight"] == "400" and first["tools"] == ["Connect Claude", "Connect AirPods"] and first["tools_at"] == "box"
@@ -119,8 +117,10 @@ def test_the_demo_works_in_a_browser():
     music = res["music"]
     assert music["content"] and music["last"] == "Playing some calm piano." and music["done"][-1] == "Played some calm piano"
     assert not music["column_shown"] and music["frame_title"] == "Now playing" and music["composer"]
-    # The first thing said took the word logo away; hello, world is still the conversation's first message.
+    # The first thing said took the word logo away, fading over half a second; hello, world is still the
+    # conversation's first message.
     assert music["logo"] is None and music["first_ai"] == "hello, world"
+    assert res["logo_fading"] == {"fade": "0.5s", "seen": True}
     f, v = music["frame"], music["view"]
     assert f[0] < v[0] and f[1] + 30 < v[1] and v[0] + v[2] < f[0] + f[2] and v[1] + v[3] < f[1] + f[3]
     # "/": the list is in front of what's open; Escape ends the search (and only that).
@@ -154,6 +154,15 @@ def test_the_demo_works_in_a_browser():
     g = res["google"]
     assert g["content"] and g["src"] == "https://www.google.com/webhp?igu=1" and g["frame_title"] == "Google"
     assert g["done"][-1] == "Opened google.com" and res["google_typed"] == {"frame": "cats", "box": ""}
+    # Any other address typed, as in a browser's address bar: a site that won't show inside another page opens at
+    # once in a new tab, cut off from this page; a YouTube video's address plays in YouTube's player in the middle.
+    yt, bbc = res["typed_sites"]
+    assert yt["tab"] == {"url": "https://youtube.com/", "opener": True} and yt["last"].startswith("Opened YouTube in a new tab.")
+    assert yt["done"] == "Opened youtube.com in a new tab" and not yt["content"]
+    assert bbc["tab"] == {"url": "https://bbc.co.uk/", "opener": True} and bbc["done"] == "Opened bbc.co.uk in a new tab"
+    video = res["typed_video"]
+    assert video["content"] and video["src"].startswith("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?") and "&start=65" in video["src"]
+    assert video["done"][-1] == "Played a video on YouTube"
     # Connect Claude: a key, checked with Anthropic; then Claude answers and does things here (a map, as asked).
     assert res["claude_sheet"]["sheet"] and res["claude_sheet"]["sheet_title"] == "Connect Claude"
     assert not res["claude_on"]["sheet"] and res["claude_on"]["tools"][0] == "Claude connected"
@@ -219,6 +228,27 @@ def test_the_demo_works_in_a_browser():
     assert phone["first_ai"] == "hello, world" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False]
     assert phone["tools_at"] == "row"
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
+    # As the Claude app is on a phone: text a twentieth of the screen's width (390px: 19.5px), never under 16px, so
+    # the browser doesn't zoom in on the box; the box nearly the screen's width, its words above and its buttons and
+    # send arrow under them; nothing past the screen's edges; the keyboard only for a touch on the box.
+    lay = res["phone_layout"]
+    assert lay["phone"] and lay["rem"] == 19.5 and lay["input_px"] >= 16 and lay["width"] - lay["box_w"] <= 24
+    assert lay["tools_under"] and lay["send_under"] and lay["send_right"] < 20 and lay["tools_left"] < 20
+    assert lay["scroll_w"] <= lay["width"] and lay["typing_in"] != "input" and res["phone_tapped"] == "input"
+    # Sent: the keyboard goes down (the box isn't being typed in), as in ChatGPT's app.
+    assert res["phone"]["typing_in"] != "input"
+    # Holding a message: its menu (yours: Copy, Select text, Edit; the answer's: Copy, Select text, Read aloud; Send
+    # to too where the browser can share), over the screen dimmed but not blurred (the menu is frosted glass), and
+    # not the phone's own selecting. Edit puts it in the box, to type in; Select text shows it alone, its words
+    # selectable; a tap beside it or on it puts the menu away.
+    assert res["phone_hold_you"] == {"holding": True, "held": "you enter held", "items": ["Copy", "Select text", "Edit"], "selected": ""}
+    assert res["phone_edit"] == {"holding": False, "box": "hello", "typing_in": "input"}
+    assert res["phone_hold_ai"]["items"] == ["Copy", "Select text", "Read aloud"] and "held" in res["phone_hold_ai"]["held"]
+    assert res["phone_select"] == {"reading": True, "text": "Hi! I'm Chat Computer: Claude, running t", "select": "text"}
+    assert res["phone_put_away"] is False and res["phone_put_away_too"] is False
+    assert res["phone_shade"]["blur"] == "none" and res["phone_shade"]["menu_blur"].startswith("blur(")
+    # Two fingers pinched: nothing zooms, and the text keeps its size.
+    assert res["phone_pinched"] == {"rem": 19.5, "zoom": 1, "scroll_w": 390}
     # Music, and then asked about it ("turn the music down", "stop the music": music words too): turned down (the
     # same music, quieter, not started again), then stopped.
     assert res["phone_music"]["content"] and res["phone_music"]["last"] == "Playing some calm piano."
@@ -227,3 +257,17 @@ def test_the_demo_works_in_a_browser():
     assert res["phone_down_piano"] == {"same": True, "vol": 0.4}
     stopped = res["phone_stopped"]
     assert not stopped["content"] and stopped["view"] is None and stopped["last"] == "Closed it."
+    # Connect AirPods on an iPhone (stand-ins for Safari's listening and speaking): one thing heard at a time (Safari's
+    # listening on and on can go quiet for good), started with the tap, which also lets the page speak (a silent
+    # word); the screen kept on; what's heard, never called final, said once it stops changing; the answer read out,
+    # then listening again; a thing heard twice over asked once; refused, what to switch on, and the screen let go.
+    talk = res["talk_phone"]
+    assert talk == {"continuous": False, "spoken": [{"text": " ", "volume": 0}], "awake": 1, "button": "AirPods on"}
+    assert res["talk_hearing"] == "what time is it"
+    heard = res["talk_answered"]
+    assert heard["asked"] == "what time is it" and heard["read_out"] == heard["answer"] and heard["answer"].startswith("It's ")
+    assert heard["first_ended"]
+    assert res["talk_twice"] == "What time is it in Tokyo"
+    refused = res["talk_refused"]
+    assert refused["title"] == "Talking stopped" and "Siri or Dictation" in refused["text"]
+    assert refused["button"] == "Connect AirPods" and refused["awake"] == 0

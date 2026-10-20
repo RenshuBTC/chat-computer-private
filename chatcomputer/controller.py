@@ -723,6 +723,11 @@ class Controller:
             await self._sleep_when_quiet()
             return
 
+        address = answers.typed_address(text)
+        if address:
+            await self._open_address(uid, text, address)
+            return
+
         if self.brain is None:
             self.screen.user_text(uid, text, True)
             await self._offline_command(text, signed_out=True, typed=typed)
@@ -739,6 +744,23 @@ class Controller:
         info = await self._screen_info()
         tid = await self.brain.ask(turn_prefix(info, self.brain.last_activity, typed=typed) + text, typed=typed)
         self._asked(tid, prompt)
+
+    async def _open_address(self, uid: str, text: str, url: str) -> None:
+        """A web address typed or said alone ("youtube.com", "open bbc.co.uk"): its site in the middle at once, as a
+        browser's address bar would open it, without a turn of Claude's (the next turn's note of the screen says
+        what's open)."""
+        prompt = self._prompt(uid, text)
+        if self.speaker:
+            self.speaker.stop()
+        r = await self.screen.show_url(url)
+        if not r.get("ok"):
+            self.screen.notice(f"Couldn't open {url}: {r.get('error') or 'it didn’t load'}", "warn")
+            return
+        self.journal.record("screen", f"opened {r.get('url') or url}")
+        d = describe_done("mcp__chatcomputer__show_website", {"url": url}, "")
+        if d is not None:
+            entry = self.history.add(d[0], tool="show_website", inp={"url": url}, minor=d[1], prompt=prompt)
+            self.screen.done({k: entry[k] for k in ("id", "ts", "text", "prompt_id", "prompt_ts") if k in entry})
 
     def _prompt(self, uid: str, text: str, via: str | None = None) -> tuple[str, str, float]:
         """A message that asks Claude for something: on the screen and in the transcript, with the same id and

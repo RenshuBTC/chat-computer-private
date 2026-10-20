@@ -1,0 +1,16 @@
+﻿> vssadmin list shadows /for=C: exit code 0
+vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool
+(C) Copyright 2001-2013 Microsoft Corp.
+
+Contents of shadow copy set ID: {a2e99e5c-4cad-47c8-af10-4c03fb7339f2}
+   Contained 1 shadow copies at creation time: 10/20/2026 3:19:24 AM
+      Shadow Copy ID: {55712dcf-578b-4dd0-b345-79b7cb87e62e}
+         Original Volume: (C:)\\?\Volume{6f146b24-4f0e-4ba2-97d1-29ea630e5753}\
+         Shadow Copy Volume: \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1
+         Originating Machine: runnervm0xl3a
+         Service Machine: runnervm0xl3a
+         Provider: 'Microsoft Software Shadow Copy provider 1.0'
+         Type: ClientAccessible
+         Attributes: Persistent, Client-accessible, No auto release, No writers, Differential
+
+

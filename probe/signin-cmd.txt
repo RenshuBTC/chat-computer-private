@@ -1,0 +1,37 @@
+﻿script:
+@echo off
+rem Chat Computer Setup's sign-in window (opened without administrator rights).
+title Sign in to Claude
+if not "%~1"=="here" (
+  where wt.exe >nul 2>nul && (
+    start "" wt.exe -d "%~dp0." cmd /c signin.cmd here
+    exit /b 0
+  )
+)
+cd /d "%USERPROFILE%"
+set "CLAUDE_CONFIG_DIR=%TEMP%\chatcomputer-signin-probe\config"
+echo Your browser opens on Claude's sign-in page. Sign in with the account that has your Claude
+echo subscription, and approve. Chat Computer Setup carries on by itself.
+echo If the browser shows a code instead, paste it here: Ctrl+V or a right-click.
+echo.
+"%TEMP%\chatcomputer-signin-probe\fake claude.cmd" auth login --claudeai
+if exist "%TEMP%\chatcomputer-signin-probe\config\.credentials.json" (
+  echo.
+  echo Signed in. This window closes in a moment.
+  timeout /t 4 >nul
+) else (
+  echo.
+  echo The sign-in did not finish. Close this window: Chat Computer Setup offers to try again.
+  pause
+)
+
+ran:
+Your browser opens on Claude's sign-in page. Sign in with the account that has your Claude
+subscription, and approve. Chat Computer Setup carries on by itself.
+If the browser shows a code instead, paste it here: Ctrl+V or a right-click.
+
+args: auth login --claudeai
+
+saved a sign-in: True
+setup reads it: True
+

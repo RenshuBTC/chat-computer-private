@@ -10,8 +10,10 @@
      type goes from your browser straight to Anthropic; the key stays in this browser.
    - Connect AirPods: you talk, and the answers are read out. Your browser turns what you say into text (Chrome
      does it on Google's servers).
-   Fetched from elsewhere: a map from OpenStreetMap when you ask for one, the weather and the air from Open-Meteo,
-   YouTube's player when connected Claude plays a video, and, when the browser's own AI looks something up for an
+   Fetched from elsewhere: a map from OpenStreetMap when you ask for one, the weather and the air from Open-Meteo
+   (the weather where you are, too, for the greeting: your time zone's city, or where you said you live; its name
+   goes there, then its position, at most once every half hour), YouTube's player when connected Claude plays a
+   video, and, when the browser's own AI looks something up for an
    answer (or you ask for the news), Wikipedia's articles and its Current events: only the words looked up go there.
    Google's own pages (its search, Google Maps' directions) and Wikipedia's show in the middle when asked for: of the
    sites that might be asked for, they're the ones that let another page show them.
@@ -641,6 +643,12 @@
         return { name: p.name, country: p.country || "", lat: +p.latitude, lon: +p.longitude };
       });
   }
+  // The weather at a place, now and today's and tomorrow's, from Open-Meteo's forecast (only the place's position goes).
+  function forecast(p) {
+    return fetch("https://api.open-meteo.com/v1/forecast?latitude=" + p.lat + "&longitude=" + p.lon +
+      "&current=temperature_2m,weather_code,is_day&daily=weather_code,temperature_2m_max,temperature_2m_min," +
+      "precipitation_probability_max&timezone=auto&forecast_days=2").then(function (r) { return r.json(); });
+  }
   // The place a question is about: one of the cities known here, or the name in "show me Rome on a map", "where is
   // Rome?", "weather in Rome"...; else "" (then it's the visitor's own, from their time zone).
   var PLACE_IN = [/\bshow me\s+([A-Za-zÀ-ɏ][\wÀ-ɏ .'-]{1,40}?)\s+on a map\b/i,
@@ -655,6 +663,29 @@
     }
     return "";
   }
+  // Where you live, when you've said ("I live in Penang"): for the weather and the greeting. Else your time zone's
+  // city (hereName), as "Singapore" for Asia/Singapore.
+  var PLACE_KEY = "chatcomputer-demo-place";
+  function homeName() { var h = store(PLACE_KEY); return h && typeof h.place === "string" ? h.place : ""; }
+  // Where you are and the weather there now, for the greeting under "hello, world" (chat.js: CO.here): the place's
+  // name goes to Open-Meteo (then its position, for the weather), at most once every half hour; kept in this browser.
+  var HERE_KEY = "chatcomputer-demo-here";
+  function sayHere() {
+    var place = homeName() || hereName(), kept = store(HERE_KEY) || {};
+    if (!place) { call("here", {}); return; }
+    if (kept.place !== place) kept = { place: place };
+    if (now() - (kept.ts || 0) < 1800) { call("here", kept); return; }
+    call("here", { place: place });                       // the place now, its weather once it's here
+    (typeof kept.lat === "number" ? Promise.resolve(kept) : place_(place)).then(function (p) {
+      return forecast(p).then(function (w) {
+        var c = w && w.current;
+        if (!c || typeof c.weather_code !== "number") return;
+        var info = { place: place, lat: p.lat, lon: p.lon, code: c.weather_code, temp: c.temperature_2m, day: c.is_day === 1, ts: now() };
+        store(HERE_KEY, info);
+        call("here", info);
+      });
+    }).catch(function () {});
+  }
   function hereName() {
     try {
       var z = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
@@ -667,12 +698,11 @@
               82: "heavy showers", 85: "snow showers", 86: "snow showers", 95: "thunderstorms", 96: "thunderstorms with hail",
               99: "thunderstorms with hail" };
   function weather(t) {
-    var asked = placeIn(t), where = asked || hereName() || "Singapore", tomorrow = /\btomorrow\b/i.test(t);
+    var asked = placeIn(t), where = asked || homeName() || hereName() || "Singapore", tomorrow = /\btomorrow\b/i.test(t);
+    var home = !asked && store(PLACE_KEY);           // where you live: found on the map when you said
     return { later: function () {
-      return place_(where).then(function (p) {
-        return fetch("https://api.open-meteo.com/v1/forecast?latitude=" + p.lat + "&longitude=" + p.lon +
-          "&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min," +
-          "precipitation_probability_max&timezone=auto&forecast_days=2").then(function (r) { return r.json(); }).then(function (w) {
+      return (home && typeof home.lat === "number" ? Promise.resolve({ name: home.place, lat: home.lat, lon: home.lon }) : place_(where)).then(function (p) {
+        return forecast(p).then(function (w) {
           var d = w.daily, i = tomorrow ? 1 : 0, rain = d.precipitation_probability_max[i];
           var day = (tomorrow ? "Tomorrow" : "Today") + " in " + p.name + ": " + (SKY[d.weather_code[i]] || "mixed") + ", " +
             Math.round(d.temperature_2m_min[i]) + "° to " + Math.round(d.temperature_2m_max[i]) + "°, " +
@@ -901,7 +931,69 @@
                [/email|letter/i, "write an email"], [/python|javascript|code|function/i, "write code"],
                [/translate|how do you say|in (japanese|french|spanish|german|chinese|korean|italian)/i, "translate"],
                [/explain|summari/i, "explain that"], [/plan|itinerary|trip/i, "plan that"], [/advice|tips/i, "give advice"]];
+  // The name you go by, kept in this browser: the greeting under "hello, world" says it, as the Claude app's says
+  // the name you give it ("What should Claude call you?"). "Call me Ren" or "my name is Ren" sets it (Claude, when
+  // connected, with set_name); "what's my name?" says it; "forget my name" forgets it. "Call me back" isn't a name.
+  var NAME_KEY = "chatcomputer-demo-name";
+  var NAME_IS = /^\s*(?:(?:please|pls|just|you can|you may|from now on,?)\s+)*(?:call me|my name(?:'s| is))\s+([\p{L}][\p{L}\p{M}'’.-]*(?:\s+[\p{L}][\p{L}\p{M}'’.-]*){0,2}?)\s*(?:,?\s*(?:please|pls|thanks|thank you))?\s*[.!]*\s*$/iu;
+  var NOT_A_NAME = /^(back|later|tomorrow|tonight|today|now|soon|again|anytime|whenever|maybe|sometime|sometimes|asap|please|a|an|the|when|if|at|on|in|by|after|before|crazy|that|this|it|him|her|them|you|me|what|anything|whatever|out|up|ok|okay|not|never|no|yes)$/i;
+  var WHO_AM_I = /^\s*(?:what(?:'s| is) my name|who am i|do you know (?:my name|who i am)|what (?:do|will) you call me)\s*[?.!]*\s*$/i;
+  var FORGET_NAME = /^\s*(?:please\s+)?(?:forget|remove|delete|clear|erase)\s+my name\b|^\s*(?:don'?t|do not|stop)\s+(?:call(?:ing)? me by|us(?:e|ing)) my name\b/i;
+  // Where you live: "I live in Penang", "I'm based in Penang", "my city is Penang" (found on the map first).
+  var LIVE_IN = /^\s*(?:i (?:live|stay)|i(?:'m| am) (?:based|living|staying))\s+in\s+(.+?)\s*[.!]*\s*$|^\s*(?:my (?:city|town|location) is|set my (?:city|town|location) to)\s+(.+?)\s*[.!]*\s*$/i;
+  var FORGET_PLACE = /^\s*(?:please\s+)?(?:forget|remove|delete|clear|erase)\s+(?:where i live|my (?:city|town|location|place))\b/i;
+  function setPlace(p) {
+    store(PLACE_KEY, p ? { place: p.name, lat: p.lat, lon: p.lon } : null);
+    store(HERE_KEY, p ? { place: p.name, lat: p.lat, lon: p.lon } : null);
+    sayHere();
+  }
+  function cleanName(s) { return String(s || "").replace(/[^\p{L}\p{M}'’ .-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 40); }
+  function person() { return cleanName(store(NAME_KEY)); }
+  // The name and whether Claude answers, for the next greeting (a visit, or the conversation cleared).
+  function greetWith() { call("settings", person(), claude.key ? MODEL_NAME : ""); }
+  function nameOf(t) {
+    var m = NAME_IS.exec(t), n = m ? cleanName(m[1]) : "";
+    if (!n || NOT_A_NAME.test(n.split(" ")[0])) return "";
+    return n === n.toLowerCase() ? n.replace(/(^|\s)(\p{L})/gu, function (a, s, c) { return s + c.toUpperCase(); }) : n;
+  }
+  function setName(n) { store(NAME_KEY, n || null); greetWith(); }
   var INTENTS = [
+    [NAME_IS, function (t) {
+      var n = nameOf(t);
+      if (!n) return null;
+      setName(n);
+      return { text: "Nice to meet you, " + n + "! I'll greet you by name from now on.", done: ["Set your name to " + n] };
+    }],
+    [WHO_AM_I, function () {
+      var n = person();
+      return { text: n ? "You're " + n + ". (To change it, say “call me” and the name you'd like.)" :
+        "I don't know your name yet. Say “call me” and your name, and I'll greet you with it." };
+    }],
+    [FORGET_NAME, function () {
+      var had = !!person();
+      setName("");
+      return had ? { text: "Done: I've forgotten your name.", done: ["Forgot your name"] } : { text: "I didn't have your name." };
+    }],
+    [LIVE_IN, function (t) {
+      var m = LIVE_IN.exec(t), asked = String(m[1] || m[2] || "").replace(/^(the|a)\s+/i, "").replace(/[^\p{L}\p{M}' .,-]/gu, "").trim().slice(0, 60);
+      if (!asked || /^(a |an )|^(peace|fear|hope|the moment|denial|my head)$/i.test(asked)) return null;
+      return { later: function () {
+        return place_(asked).then(function (p) {
+          // In your words ("Penang", where the map's nearest is George Town), or the map's spelling of them.
+          var shown = p.name.toLowerCase() === asked.toLowerCase() || asked === asked.toLowerCase() && p.name.toLowerCase().indexOf(asked.toLowerCase()) === 0 ?
+            p.name : asked === asked.toLowerCase() ? title(asked) : asked;
+          setPlace({ name: shown, lat: p.lat, lon: p.lon });
+          return { text: "Got it: you live in " + shown + (p.country && p.country !== shown ? ", " + p.country : "") + ". I'll greet you " +
+            "with the weather there, and say “weather” for its forecast.", done: ["Set your place to " + shown] };
+        }, function () { return { text: "I couldn't find " + asked + " on the map. Which city is it in, or near?" }; });
+      } };
+    }],
+    [FORGET_PLACE, function () {
+      var had = !!homeName();
+      setPlace(null);
+      return had ? { text: "Done: I've forgotten where you live. I'll go by your time zone again.", done: ["Forgot your place"] } :
+        { text: "I didn't know where you live: I go by your time zone" + (hereName() ? " (" + hereName() + ")." : ".") };
+    }],
     // Closing, and the volume, before music: "stop the music", "close the song" or "turn the music down" have music
     // words in them too (and would start it again).
     [/^(close|stop|pause)\b|\b(close|stop|pause|hide|turn off|switch off)\s+(the\s+|that\s+|this\s+|my\s+)?(it|that|this|music|videos?|page|songs?|piano|playing|youtube|timer|map)\b|\b(turn|switch)\s+(it|that|this|the\s+(music|video|song|piano))\s+off\b/i, function () {
@@ -1706,6 +1798,9 @@
       "(set_volume), close what's open (close), and search the web. On a real Chat Computer you also use any website, " +
       "their real files, apps and settings, and their AirPods; when they ask for something only a Chat Computer can do, " +
       "say so in a sentence.\n\n" +
+      (person() ? "They go by " + person() + ". " : "") + (homeName() ? "They live in " + homeName() + ". " : "") +
+      "When they tell you what to call them, or where they live, keep it (set_name, set_place): the greeting that opens " +
+      "each conversation (under \u201chello, world\u201d) says their name and the weather where they are, as the Claude app's does.\n\n" +
       "Their messages and files here are made up for the demo:\n" + inbox() + "\n\nFiles:\n" +
       FILES.map(function (f) { return "- " + f.name + ", in " + f.where; }).join("\n") +
       "\n\nEach of their messages starts with the date and time it was sent, in brackets.";
@@ -1732,7 +1827,12 @@
     { name: "make_timer", description: "Put a countdown timer between the sidebars.",
       input_schema: obj({ minutes: { type: "integer", minimum: 1, maximum: 180 } }, ["minutes"]) },
     { name: "set_volume", description: "Set the volume of what's playing, from 0 to 100.", input_schema: obj({ percent: { type: "integer", minimum: 0, maximum: 100 } }, ["percent"]) },
-    { name: "close", description: "Close what's open between the sidebars (a video stops).", input_schema: obj({}) }
+    { name: "close", description: "Close what's open between the sidebars (a video stops).", input_schema: obj({}) },
+    { name: "set_name", description: "Keep the name they want to be called (empty: forget it), for greeting them by it.",
+      input_schema: obj({ name: { type: "string" } }, ["name"]) },
+    { name: "set_place", description: "Keep the town or city they live in (empty: forget it; then their time zone's city is used), " +
+      "for the weather there: in the greeting, and when they ask for the weather without saying where.",
+      input_schema: obj({ place: { type: "string" } }, ["place"]) }
   ];
   function tools() {
     return claude.search ? TOOLS.concat([{ type: "web_search_20250305", name: "web_search", max_uses: 3 }]) : TOOLS;
@@ -1807,6 +1907,18 @@
       return "The volume is " + player.volume + "%.";
     }
     if (n === "close") { var was = !!view; close(); return was ? "Closed." : "Nothing was open."; }
+    if (n === "set_name") {
+      var nm = cleanName(a.name);
+      setName(nm);
+      did(nm ? "Set your name to " + nm : "Forgot your name", you, uts);
+      return nm ? "Kept: the greeting calls them " + nm + " now." : "Forgotten.";
+    }
+    if (n === "set_place") {
+      var pl = String(a.place || "").replace(/[^\p{L}\p{M}' .,-]/gu, "").trim().slice(0, 60);
+      setPlace(pl ? { name: pl } : null);       // found on the map, for its weather, when the greeting needs it
+      did(pl ? "Set your place to " + pl : "Forgot your place", you, uts);
+      return pl ? "Kept: " + pl + "." : "Forgotten: their time zone's city is used.";
+    }
     return "There's no tool called " + n + " here.";
   }
   // One turn: Claude's answer streams in, its tools run here, and it goes on until it's done (at most 8 rounds).
@@ -1974,6 +2086,7 @@
         store(KEY, key);
         call("accountForm", null);
         status();
+        greetWith();
         did("Connected Claude (" + MODEL_NAME + ")");
         return;
       }
@@ -1985,6 +2098,7 @@
     claude.talk = [];
     store(KEY, null);
     status();
+    greetWith();
   }
 
   // ------------------------------------------------------------------ AirPods: talking
@@ -2280,7 +2394,8 @@
       case "ready":
         call("openInPage", true);
         layout();
-        call("settings", "", "");
+        greetWith();                           // for the greeting: the name you go by, whether Claude answers,
+        sayHere();                             // and where you are, with its weather
         if (store("chatcomputer-demo-panels")) call("panels", store("chatcomputer-demo-panels"));
         call("doneList", DONE.map(function (e) {
           var pins = (store("chatcomputer-demo-pins") || {}).done || {}, o = {};

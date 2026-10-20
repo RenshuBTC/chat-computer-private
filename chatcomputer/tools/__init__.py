@@ -39,7 +39,7 @@ ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
 SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
             "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "phone_access", "airtouch",
-            "left_panel", "right_panel", "keyboard_layout"}
+            "left_panel", "right_panel", "keyboard_layout", "home_place"}
 # Windows' own folders, at the top of its drive (a folder of the person's own called Recovery or Boot is theirs).
 WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
 
@@ -1418,8 +1418,9 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
     @reg("chatcomputer_settings", "Read or change Chat Computer settings: voice (af_heart, af_bella, af_nicole, am_michael, "
          "am_fenrir, bf_emma, bm_george...), speech_speed (0.7-1.6), show_activity (true/false), "
          "auto_sleep_minutes (minutes of quiet before Chat Computer stops listening until its wake word; the computer "
-         "stays on, and timers and alarms still ring; 0 = never), barge_in, wake_words, model, effort, user_name, "
-         "keyboard_layout (the "
+         "stays on, and timers and alarms still ring; 0 = never), barge_in, wake_words, model, effort, user_name "
+         "(what to call them: the greeting says its first word), home_place (the town or city they live in, for the "
+         "weather in the greeting; empty: their time zone's city), keyboard_layout (the "
          "keyboard's layout, as us, gb, fr, de, es, it, ch, be, or a kind of one like fr(bepo): set it when the "
          "letters they type come out wrong). The screen is always "
          "black text on a warm off-white in Atkinson Hyperlegible, a font made to be easy to read; there is no dark mode "

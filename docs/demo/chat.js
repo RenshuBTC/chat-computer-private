@@ -112,38 +112,98 @@
   // A conversation starts with the word logo alone in the middle of the screen (body.intro); after a second it fades
   // away, over half a second, and then Chat Computer's first words come in as its answers do, as if just typed: a
   // moment's thinking, then the words, fading in as they come. First, what a first program prints, hello, world
-  // (lower case, with its comma, as in Kernighan's C tutorial and his book with Ritchie); under it, a greeting, a
-  // different one each time (and one for the time of day now and then). With something said first there are none:
+  // (lower case, with its comma, as in Kernighan's C tutorial and his book with Ritchie); under it, a greeting, as
+  // warm and personal as the Claude app's, a different one each time. With something said first there are none:
   // what's said is the conversation.
   var LOGO_MS = 1000, LOGO_FADE_MS = 500, THINK_MS = 600;
   var HELLO = "hello, world";
+  // Under it, a greeting as the Claude app greets you: its own greetings (as claude.ai's code has them), each for a
+  // time of day (from 6 in the morning, 12, 5 in the evening, 9 at night) and some for a day of the week, with the
+  // name you go by (CO.settings: on a Chat Computer the one it was set up with; "call me ..." changes it). Where no
+  // name is known, the same greetings without one ("Good evening"), and "Greetings, whoever you are". "Coffee and
+  // Claude time?" only where Claude is the one answering. [words, from, until (hours), days (0 Sunday) or null, claude]
   var GREETINGS = [
-    "How can I help you today?", "What can I do for you?", "What would you like to do?", "What can I help you with?",
-    "What's on your mind?", "Where shall we start?", "Ask me anything, or tell me what to do.", "What do you need today?",
-    "Ready when you are. What's first?", "Tell me what you need, and I'll get on it.", "I'm all ears. What can I do for you?",
-    "What shall we do first?", "Anything I can help with?", "What are we working on today?", "Good to see you. How can I help?",
-    "What would you like to get done?", "Need a map, some music or an answer?",
-    "Want to look something up, open a site or play some music?", "Ask me a question, or tell me what to open.",
-    "How's your day going? What can I do for you?", "What can I take off your plate?", "Got a question? I'm here to help.",
-    "What's the plan today?", "What can I find for you?", "What would you like to know?", "Where would you like to begin?",
-    "How can I make your day easier?", "What can I get started for you?", "Tell me what's on your list.",
-    "Say what you need, in your own words.", "What can I look up for you?", "Let's get something done. Where do we start?"
+    ["Good morning, {name}", 6, 12], ["Welcome, {name}", 6, 12], ["Hey there, {name}", 6, 12],
+    ["Happy Monday, {name}", 6, 12, [1]], ["Happy Tuesday, {name}", 6, 12, [2]], ["Happy Wednesday, {name}", 6, 12, [3]],
+    ["Happy Thursday, {name}", 6, 12, [4]], ["Happy Friday, {name}", 6, 12, [5]], ["That Friday feeling, {name}", 6, 12, [5]],
+    ["Welcome to the weekend, {name}", 6, 12, [6, 0]], ["Happy Saturday, {name}", 6, 12, [6]],
+    ["What's on your mind, {name}?", 6, 12, [6, 0]], ["Sunday session, {name}?", 6, 12, [0]], ["Happy Sunday, {name}", 6, 12, [0]],
+    ["Coffee and Claude time?", 6, 12, null, true],
+    ["Good afternoon, {name}", 12, 17], ["Hi {name}, how are you?", 12, 17], ["What's new, {name}?", 12, 17],
+    ["Back at it, {name}", 12, 17],
+    ["{name} returns!", 17, 21], ["Good evening, {name}", 17, 21], ["Evening, {name}", 17, 21], ["How was your day, {name}?", 17, 21],
+    ["How's it going, {name}?", 21, 6], ["What's on your mind tonight?", 21, 6], ["Hello, night owl", 21, 6]
   ];
-  var GREETINGS_AT = {
-    morning: ["Good morning! What can I do for you?", "Good morning! What's first today?", "Morning! How can I help?"],
-    afternoon: ["Good afternoon! How can I help?", "Good afternoon! What can I do for you?"],
-    evening: ["Good evening! What can I do for you?", "Good evening! How can I help?"],
-    night: ["Up late? What can I do for you?", "Still up? How can I help?"]
+  var who = "", claudeAnswers = false;            // the name you go by, and whether Claude answers (CO.settings)
+  // Claude's greetings: for this hour and this day, with the name or without it.
+  function greetings(at) {
+    var h = at.getHours(), day = at.getDay(), out = [];
+    GREETINGS.forEach(function (g) {
+      if (!(g[1] < g[2] ? h >= g[1] && h < g[2] : h >= g[1] || h < g[2])) return;
+      if ((g[3] && g[3].indexOf(day) < 0) || (g[4] && !claudeAnswers)) return;
+      out.push(named(g[0]));
+    });
+    if (!who) out.push("Greetings, whoever you are");
+    return out.filter(Boolean);
+  }
+  // A greeting with the name in it, or without it where none is known ("{name} returns!" can't be said without one).
+  function named(text) {
+    if (who) return text.replace("{name}", who);
+    return text.indexOf("{name}") === 0 ? "" : text.replace(/,? ?\{name\}/, "");
+  }
+  // And, as the Claude app's are for the time of day, greetings for where you are and its weather now (CO.here: the
+  // place, your time zone's city or where you said you live; the weather there from Open-Meteo, as a WMO weather
+  // code, °C and whether it's light there). {part}: morning (from 6), afternoon (12), evening (5 pm) or night (9 pm).
+  var here = { place: "", code: null, temp: null, day: null };
+  var AROUND = {
+    morning: ["Morning in {place}, {name}", "How's {place} this morning, {name}?"],
+    afternoon: ["Afternoon in {place}, {name}", "How's {place} today, {name}?"],
+    evening: ["Evening in {place}, {name}", "How's {place} this evening, {name}?"],
+    night: ["Late night in {place}, {name}?", "How's {place} tonight, {name}?"]
   };
-  // One of them, never the one shown last time (kept in this browser, where it can be).
+  // [words, "day" or "night" for only then]: by the weather (weatherOf), and the heat or cold.
+  var WEATHER = {
+    storm: [["Stormy {part} in {place}, {name}"], ["Stay safe in the storm, {name}"]],
+    snow: [["Snowy {part} in {place}, {name}"], ["Stay warm, {name}"]],
+    rain: [["Rainy {part} in {place}, {name}?"], ["Stay dry out there, {name}"]],
+    fog: [["Foggy {part} in {place}, {name}"]],
+    clear: [["Sunny {part} in {place}, {name}", "day"], ["Blue skies over {place}, {name}", "day"],
+            ["Clear skies over {place} tonight, {name}", "night"]],
+    cloud: [["Cloudy {part} in {place}, {name}"], ["Grey skies over {place}, {name}?", "day"]],
+    hot: [["Hot one in {place} today, {name}", "day"], ["Stay cool, {name}"]],
+    warm: [["Warm night in {place}, {name}", "night"]],
+    cold: [["Chilly {part} in {place}, {name}"], ["Bundle up, {name}"]]
+  };
+  function partOf(h) { return h >= 6 && h < 12 ? "morning" : h >= 12 && h < 17 ? "afternoon" : h >= 17 && h < 21 ? "evening" : "night"; }
+  function weatherOf(code) {
+    return code >= 95 ? "storm" : (code >= 71 && code <= 77) || code === 85 || code === 86 ? "snow" :
+      (code >= 51 && code <= 67) || (code >= 80 && code <= 82) ? "rain" : code === 45 || code === 48 ? "fog" :
+      code === 0 || code === 1 ? "clear" : code === 2 || code === 3 ? "cloud" : "";
+  }
+  function hereGreetings(at) {
+    if (!here.place) return [];
+    var part = partOf(at.getHours()), lines = AROUND[part].map(function (t) { return [t]; }), w = here.code;
+    if (typeof w === "number") {
+      var light = here.day !== false, t = here.temp;
+      lines = lines.concat(WEATHER[weatherOf(w)] || []);
+      if (typeof t === "number") lines = lines.concat(t >= 32 ? WEATHER.hot : t <= 5 ? WEATHER.cold : t >= 26 && !light ? WEATHER.warm : []);
+      lines = lines.filter(function (l) { return !l[1] || (l[1] === "day") === light; });
+    }
+    return lines.map(function (l) {
+      return named(l[0].replace("{place}", here.place).replace("{part}", part));
+    }).filter(Boolean);
+  }
+  // One of them, never the one shown last time (kept in this browser, where it can be): half the time one for where
+  // you are, where there's one.
   function greeting() {
-    var h = new Date().getHours();
-    var pool = GREETINGS.concat(GREETINGS_AT[h >= 5 && h < 12 ? "morning" : h >= 12 && h < 18 ? "afternoon" : h >= 18 && h < 23 ? "evening" : "night"]);
-    var i = Math.floor(Math.random() * pool.length), last = "";
+    var at = new Date(), time = greetings(at), local = hereGreetings(at), last = "";
     try { last = localStorage.getItem("chatcomputer-greeting") || ""; } catch (e) {}
-    if (pool[i] === last) i = (i + 1 + Math.floor(Math.random() * (pool.length - 1))) % pool.length;
-    try { localStorage.setItem("chatcomputer-greeting", pool[i]); } catch (e) {}
-    return HELLO + "\n" + pool[i];
+    var from = local.length && Math.random() < 0.5 ? local : time;
+    var fresh = from.filter(function (g) { return g !== last; });
+    if (fresh.length) from = fresh;
+    var pick = from[Math.floor(Math.random() * from.length)];
+    try { localStorage.setItem("chatcomputer-greeting", pick); } catch (e) {}
+    return HELLO + "\n" + pick;
   }
   var intro = [];
   function introLater(ms, f) { intro.push(setTimeout(f, ms)); }
@@ -160,12 +220,14 @@
     introLater(LOGO_MS, function () { body.classList.remove("intro"); });
     introLater(LOGO_MS + LOGO_FADE_MS, function () {
       if (log.children.length) return;                            // something was said first
-      var text = greeting(), at = 0, m = ensureAI("hello");
+      var text = "", at = 0, m = ensureAI("hello");
       m.el.classList.add("hello");
       follow();
-      // In pieces of a few letters, as the demo's written answers come (docs/demo/host.js: stream).
+      // In pieces of a few letters, as the demo's written answers come (docs/demo/host.js: stream). Chosen once the
+      // thinking's over: the weather looked up meanwhile can be in it.
       introLater(THINK_MS, function step() {
         if (ai.hello !== m) return;
+        if (!text) text = greeting();
         var to = Math.min(text.length, at + 3 + Math.floor(Math.random() * 6));
         window.CO.ai("hello", text.slice(at, to));
         at = to;
@@ -1372,9 +1434,21 @@
     },
     accountForm: function (f) { showForm(f || null); },
     lock: function (info) { showLock(info || null); },
-    // The person's name and the model: nothing on this page shows them (before anything is said, the word logo and
-    // Chat Computer's first words, "hello, world" and a greeting).
-    settings: function () {},
+    // The name you go by (the first name) and Claude's model ("" where Claude isn't the one answering): for the
+    // greeting under "hello, world". Only letters, spaces and a name's marks are kept, 40 at most.
+    settings: function (name, model) {
+      who = String(name || "").replace(/[^\p{L}\p{M}'’ .-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 40);
+      claudeAnswers = !!model;
+    },
+    // Where you are, and its weather now when it's been looked up: {place, code, temp, day} (see hereGreetings).
+    here: function (info) {
+      info = info || {};
+      here = { place: String(info.place || "").replace(/[^\p{L}\p{M}\p{N}'’ .,()-]/gu, "").trim().slice(0, 60),
+               code: typeof info.code === "number" ? info.code : null, temp: typeof info.temp === "number" ? info.temp : null,
+               day: typeof info.day === "boolean" ? info.day : null };
+    },
+    // The greetings there are to choose from now: Claude's for the time and day, and those for where you are.
+    greetingsNow: function () { var at = new Date(); return { time: greetings(at), here: hereGreetings(at) }; },
     // Which sidebars show: {left, right} (Chat Computer keeps the choice; see "the sidebars' switches").
     panels: function (s) {
       ["left", "right"].forEach(function (k) { if (s && k in s) shown[k] = !!s[k]; });

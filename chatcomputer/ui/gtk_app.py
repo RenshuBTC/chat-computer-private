@@ -1284,6 +1284,9 @@ class GtkScreen(Screen):
     def panels(self, shown: dict[str, bool]) -> None:
         self._chat_js(f"CO.panels({json.dumps(shown)})", "panels")
 
+    def here(self, info: dict[str, Any]) -> None:
+        self._chat_js(f"CO.here({json.dumps(info)})", "here")
+
     # Actions (at the right) and Messages (at the left). The page is sent each new one; the whole lists are
     # kept here too, so the page can be rebuilt after its renderer stops.
     def done_list(self, entries: list[dict[str, Any]]) -> None:

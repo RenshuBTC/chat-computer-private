@@ -87,7 +87,12 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   again; under yours, ask again, edit and copy; with when it was. A
   conversation starts with its name, **Chat Computer**, alone in the middle; after a second it fades away, and
   Chat Computer's first words come in as if just typed, as its answers do: the classic `hello, world`, and under
-  it a greeting (“How can I help you today?”, “What's on your mind?”...), a different one each time.
+  it a greeting, as warm and personal as the Claude app's, a different one each time: Claude's own greetings for
+  the time of day and the day of the week, with your name (“Good evening, Ren”, “Happy Friday, Ren”, “Hello,
+  night owl”), and ones for where you are and its weather (“Rainy evening in Singapore, Ren?”, “Blue skies over
+  Singapore”). Your name is the one Chat Computer was set up with, or the one you give it (“call me Ren”); where you
+  are is your time zone's city, or where you say you live (“I live in Penang”). For the weather, the place's name
+  goes to Open-Meteo, then its position, at most once every half hour.
   The empty message box, white on the off-white screen as the Claude app's is, says, dimmed, "Type anything or “/”
   or press “Esc”" (a "/" searches your files; Escape brings in Messages and Actions at the sides, which aren't there to
   start with), with the cursor already blinking in it. A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
@@ -476,7 +481,8 @@ messages and files there are made up. Everyone gets answers, free:
   everyday questions and writing, and it can get things wrong.
 
 What's typed stays in the browser, except a place's name asked about for a map, the weather or the air, which goes
-to Open-Meteo's free geocoding and forecasts (the map itself comes from OpenStreetMap), the words looked up on
+to Open-Meteo's free geocoding and forecasts (as does, for the greeting's weather, your time zone's city or where
+you said you live, at most once every half hour; the map itself comes from OpenStreetMap), the words looked up on
 Wikipedia, Google's pages when asked for (as on google.com), and with what else the **/** list connects (there are
 no buttons beside the message box):
 

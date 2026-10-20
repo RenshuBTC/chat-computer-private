@@ -465,9 +465,17 @@ retrying with backoff, then starts listening.
   then Chat Computer's first words come in as its answers do, as if just typed (`greet()` in chat.js: an
   `.ai.hello` message the page adds itself, not part of the transcript, a moment's thinking and then a few
   letters at a time through `CO.ai`, so they fade in; none if something was said first): `hello, world`, lower
-  case with its comma as in Kernighan's C tutorial and K&R, and under it a greeting, one of many (some for the
-  time of day), never the one shown last time (`localStorage`, where there is one); again when the conversation
-  is cleared. The empty
+  case with its comma as in Kernighan's C tutorial and K&R, and under it a greeting as the Claude app's are:
+  Claude's own (as claude.ai's code has them: each for a time of day, from 6, 12, 17 and 21 o'clock, some for a
+  day of the week, "Coffee and Claude time?" only where Claude answers), with the name from `CO.settings` (on a
+  Chat Computer `user_name`'s first word; on the website the name given with "call me ...", or connected Claude's
+  `set_name`), said without it where there's none ("Good evening", and "Greetings, whoever you are"); and, half
+  the time where there's a place, one for the place and its weather now from `CO.here` ({place, code, temp,
+  day}: "Rainy evening in Singapore, Ren?"). The place is where they said they live (`home_place`, or the
+  website's "I live in ..."), else the time zone's city; its weather comes from Open-Meteo (`here.py` on a Chat
+  Computer, every half hour; the website's host, at most once every half hour), and the greeting is chosen once
+  the moment's thinking is over, so a weather looked up meanwhile can be in it. Never the one shown last time
+  (`localStorage`, where there is one); again when the conversation is cleared. The empty
   message box (white, `--paper`, with a soft shadow) shows its placeholder, "Type anything or “/” or press “Esc”",
   dimmed (`--dim`; without "or press “Esc”" where there's no room for the sidebars or no keyboard, and just "Type anything"
   where the box is narrow; gone once something is typed, `body.typed`), the cursor is in

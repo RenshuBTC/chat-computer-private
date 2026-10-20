@@ -44,6 +44,9 @@ class Screen:
         """Which panels show: {"left": Messages, "right": Actions, "bottom": the conversation under what's open}."""
     def mic(self, on: bool) -> None:
         """Whether the microphone is on."""
+    def here(self, info: dict[str, Any]) -> None:
+        """Where they are, and the weather there now when it's known, for the greeting (here.py): {place, code,
+        temp, day}."""
     # --- "/" in the message box: searching this computer
     def search_results(self, n: int, query: str, items: list[dict[str, Any]], note: str = "") -> None:
         """What on this computer matches the words after "/" (search number n): [{name, path, where, kind, when}]."""
@@ -199,6 +202,9 @@ class RecordingScreen(Screen):
 
     def apply_settings(self, text_size: int, user_name: str, model: str = "") -> None:
         self.events.append(("settings", (text_size, user_name, model)))
+
+    def here(self, info: dict[str, Any]) -> None:
+        self.events.append(("here", dict(info)))
 
     def panels(self, shown: dict[str, bool]) -> None:
         self.events.append(("panels", dict(shown)))

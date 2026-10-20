@@ -114,7 +114,8 @@ def test_the_demo_works_in_a_browser():
     assert res["errors"] == []
     # It opens on the word logo alone; after a second it fades away, over half a second, and then Chat Computer's
     # first words come in as its answers do, as if just typed: a moment's thinking (the logo gone), then the words a
-    # few letters at a time, fading in. First hello, world, and under it a greeting, another on another visit.
+    # few letters at a time, fading in. First hello, world, and under it a greeting, as the Claude app's (one of those
+    # for now: no name or place known here), another on another visit.
     intro, first = res["intro"], res["opening"]
     assert intro["logo"] == "Chat Computer" and intro["said"] == 0
     assert res["intro_fading"] == {"fade": "0.5s", "said": 0}
@@ -122,7 +123,9 @@ def test_the_demo_works_in_a_browser():
     typing = res["greeting_typing"]
     assert "hello, world".startswith(typing["words"]) and typing["fading"]
     hello, greeting = res["greeting"].split("\n")
-    assert hello == "hello, world" and re.fullmatch(r"[A-Z][^\n]{5,60}[?.]", greeting), greeting
+    options = res["greeting_options"]
+    assert hello == "hello, world" and greeting in options["time"] + options["here"], (greeting, options)
+    assert "Greetings, whoever you are" in options["time"] and not any("{" in g for g in options["time"])
     one, two = res["visits"]
     assert one.startswith("hello, world\n") and two.startswith("hello, world\n") and one != two
     # Then: nothing open, no sheet, no button to press, the cursor in the box under the dimmed hint, and nothing else
@@ -208,6 +211,37 @@ def test_the_demo_works_in_a_browser():
     assert cv["done"][-1] == "Played \u201cA test video\u201d on YouTube" and cv["frame_title"] == "A test video"
     # Claude turns it down: YouTube's player is told (it once wasn't: a second function of the same name took its
     # messages), and the video stays on the screen.
+    # The greeting, as the Claude app's: Claude's own greetings for the time of day and the day of the week, with the
+    # name you go by; and for where you are (your time zone's city, Singapore) and its weather (Open-Meteo: only the
+    # place's name, then its position, kept half an hour: a second visit asks again for neither).
+    ev = res["greet_evening"]
+    assert ev["now"]["time"] == ["Ren returns!", "Good evening, Ren", "Evening, Ren", "How was your day, Ren?"]
+    assert ev["now"]["here"] == ["Evening in Singapore, Ren", "How's Singapore this evening, Ren?", "Rainy evening in Singapore, Ren?",
+                                 "Stay dry out there, Ren", "Warm night in Singapore, Ren"]
+    hello, greeting = ev["said"].split("\n")
+    assert hello == "hello, world" and greeting in ev["now"]["time"] + ev["now"]["here"]
+    assert ev["meteo"] == ["geocoding-api Singapore", "api"]
+    mo = res["greet_morning"]
+    assert mo["now"]["time"] == ["Good morning", "Welcome", "Hey there", "Happy Friday", "That Friday feeling", "Greetings, whoever you are"]
+    assert mo["now"]["here"] == ["Morning in Singapore", "How's Singapore this morning?", "Sunny morning in Singapore",
+                                 "Blue skies over Singapore"]
+    assert mo["said"].split("\n")[1] in mo["now"]["time"] + mo["now"]["here"]
+    # The name you go by: asked, given ("call me", in your words, capitalised), not taken from "call me back later",
+    # and forgotten; where you live: found on the map (Penang, in your word for it), its weather in the greeting and
+    # when you ask for the weather.
+    assert res["name_asked"] == "You're Ren. (To change it, say \u201ccall me\u201d and the name you'd like.)"
+    assert res["name_given"]["said"] == "Nice to meet you, Ren Shu! I'll greet you by name from now on."
+    assert res["name_given"]["time"][1] == "Good evening, Ren Shu"
+    assert not res["name_not"].startswith("Nice to meet you")
+    assert res["place_given"]["said"].startswith("Got it: you live in Penang, Malaysia.")
+    assert res["place_given"]["here"][:3] == ["Evening in Penang, Ren Shu", "How's Penang this evening, Ren Shu?", "Rainy evening in Penang, Ren Shu?"]
+    assert res["place_weather"].startswith("Today in Penang: light rain, 26\u00b0 to 31\u00b0")
+    forgot = res["name_forgotten"]
+    assert forgot["said"] == "Done: I've forgotten your name." and "Greetings, whoever you are" in forgot["time"]
+    assert forgot["done"][-4:] == ["Set your name to Ren Shu", "Set your place to Penang", "Looked up the weather for Penang",
+                                   "Forgot your name"]
+    # Penang found once; its weather looked up for the greeting, then kept (the forecast asked for itself).
+    assert res["greet_meteo"] == ["geocoding-api Singapore", "api", "geocoding-api penang", "api", "api"]
     q = res["claude_quieter"]
     assert q["content"] and q["last"] == "Quieter now." and q["done"][-1] == "Set the volume to 30%" and "setVolume" in q["player"]
     assert not res["video_ended"]["content"] and res["video_ended"]["view"] is None

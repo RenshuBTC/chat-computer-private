@@ -25,6 +25,7 @@ from .config import (Paths, Settings, State, has_login, login_valid, model_label
                      token_kind)
 from .done import History, describe as describe_done
 from .files_index import FileIndex
+from .here import Here
 from .messages import Inbox
 from .pins import Pins
 from .journal import Journal
@@ -68,7 +69,7 @@ class Controller:
                  voice: bool = True, mic_factory: Callable | None = None, player: Any = None,
                  stt: Any = None, tts: Any = None, index: bool = True, extra_env: dict[str, str] | None = None,
                  greet: bool = True, airtouch: bool = False, offer_headphones: bool = False,
-                 offer_updates: bool = False) -> None:
+                 offer_updates: bool = False, weather: bool = False) -> None:
         self.paths = paths.ensure()
         self.settings = settings
         self.platform = platform
@@ -82,6 +83,10 @@ class Controller:
         self.greet = greet
         self.offer_headphones = offer_headphones   # ask about AirPods at the start (off in tests)
         self.offer_updates = offer_updates         # offer a newer Chat Computer at the start (update.py; off in tests)
+        # Where they are and its weather, for the greeting (here.py: Open-Meteo; looked up only when `weather`, off in
+        # tests: the place alone otherwise).
+        self.here = Here(self.paths.root / "here.json")
+        self.weather = weather
         self._answer_typed = False                 # the last answer to a question was typed, not said
         self.airtouch_enabled = airtouch      # the hand as pointer (chatcomputer/airtouch); off in tests
         self.airtouch: Any = None
@@ -149,6 +154,9 @@ class Controller:
         s = self.settings
         self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0] if s.user_name else "",
                                    model_label(s.model))
+        self._say_here()
+        if self.weather:
+            self._spawn(self._weather_now_and_then())
         self.screen.panels(self._panels())
         if self.pinlock.has_pin():
             self.lock_now()
@@ -1996,6 +2004,26 @@ class Controller:
         except Exception:
             return False
 
+    # ================================================================ where they are, for the greeting
+    def _say_here(self, look: bool = False) -> None:
+        """Tell the screen where they are and the weather there (what's known now); looked up again, when `look` or
+        it's old, where the weather is looked up at all."""
+        s = self.settings
+        place = self.here.place_for(s.home_place, s.timezone)
+        self.screen.here(self.here.known(place))
+        if self.weather and (look or self.here.stale(place)) and self.loop:
+            async def fetch() -> None:
+                info = await self.loop.run_in_executor(None, self.here.look_up, place)
+                if info and place == self.here.place_for(self.settings.home_place, self.settings.timezone):
+                    self.screen.here(info)
+            self._spawn(fetch())
+
+    async def _weather_now_and_then(self) -> None:
+        """Every half hour, so the next conversation's greeting has the weather as it is."""
+        while True:
+            await asyncio.sleep(30 * 60)
+            self._say_here()
+
     def _settings_changed(self, keys: list[str], restart: bool = True) -> None:
         """Settings changed (by Claude's chatcomputer_settings, or here). `restart`: a new model or effort makes the
         engine start again with it once it's idle (not when that's already being done)."""
@@ -2005,6 +2033,8 @@ class Controller:
             self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0], model_label(s.model))
         if {"left_panel", "right_panel"} & set(keys):
             self.screen.panels(self._panels())
+        if {"home_place", "timezone"} & set(keys):
+            self._say_here(look=True)
         if "airtouch" in keys and self.airtouch_enabled:
             self._spawn(self._start_airtouch() if s.airtouch else self._stop_airtouch())
         if "phone_access" in keys and self.brain:

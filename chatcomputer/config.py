@@ -85,6 +85,7 @@ class Settings:
     windows_user: str = ""
     timezone: str = ""
     locale: str = "en_US.UTF-8"
+    home_place: str = ""            # the town or city they live in, for the greeting's weather (else the time zone's)
     # Claude: Opus 5.5 at its most thorough, unless the person picks another (OLD_CLAUDE in load is the one before).
     model: str = "claude-opus-5-5"
     effort: str = "max"

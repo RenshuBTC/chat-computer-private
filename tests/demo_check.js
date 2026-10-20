@@ -151,6 +151,7 @@ async function ask(page, text, meanwhile) {
     if (now === last) break;
     last = now;
   }
+  return last;
 }
 
 (async () => {
@@ -200,6 +201,7 @@ async function ask(page, text, meanwhile) {
     return t && t.length < 12 && { words: t, fading: !!h.querySelector(".fresh") };
   });
   out.greeting = await greeted(page);
+  out.greeting_options = await page.evaluate(() => window.CO.greetingsNow());
   out.opening = await state(page);
   // Two visits in the same browser: a different greeting each time.
   const visits = await browser.newContext({ viewport: { width: 1600, height: 900 } });
@@ -779,6 +781,49 @@ export async function pipeline(task, model, opts) {
     text: document.getElementById("sheet-text").textContent, hint: document.getElementById("input").placeholder,
     awake: window.awake }));
   await iphone.close();
+
+  // The greeting, as the Claude app's: for the time and the day, with the name you go by, and for where you are and
+  // its weather (Open-Meteo standing in: Singapore, your time zone's city; Penang when you say you live there). A
+  // Friday evening, rain, a warm night, called Ren; a Friday morning, sunny, no name. Then "what's my name?",
+  // "call me", "call me back later" (not a name), "I live in", the weather there, and forgetting the name.
+  const sky = { code: 61, temp: 27.4, day: 0 }, meteo = [];
+  async function singapore(at) {
+    const ctx = await browser.newContext({ timezoneId: "Asia/Singapore", viewport: { width: 1280, height: 800 } });
+    await ctx.route(/open-meteo\.com/, (route) => {
+      const u = new URL(route.request().url()), name = u.searchParams.get("name") || "";
+      meteo.push(u.hostname.split(".")[0] + (name ? " " + name : ""));
+      const json = u.hostname.startsWith("geocoding") ? { results: [/penang/i.test(name) ?
+        { name: "George Town", country: "Malaysia", latitude: 5.41, longitude: 100.33 } : { name: "Singapore", country: "Singapore", latitude: 1.29, longitude: 103.85 }] } :
+        { current: { temperature_2m: sky.temp, weather_code: sky.code, is_day: sky.day }, daily: { weather_code: [sky.code, 3],
+          temperature_2m_max: [31, 32], temperature_2m_min: [26, 26], precipitation_probability_max: [80, 40] } };
+      return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(json) });
+    });
+    const p = await ctx.newPage();
+    p.on("pageerror", (e) => errors.push(String(e)));
+    await p.clock.setFixedTime(new Date(at));
+    await p.goto(page_url);
+    await greeted(p);
+    return [ctx, p];
+  }
+  const [eveCtx, eve] = await singapore("2026-10-23T20:30:00+08:00");          // a Friday evening
+  await eve.evaluate(() => localStorage.setItem("chatcomputer-demo-name", JSON.stringify("Ren")));
+  await eve.reload();                                                            // (the weather kept from the first)
+  out.greet_evening = { said: await greeted(eve), now: await eve.evaluate(() => window.CO.greetingsNow()), meteo: meteo.slice() };
+  await eve.click("#input");
+  out.name_asked = await ask(eve, "what's my name?");
+  out.name_given = { said: await ask(eve, "call me ren shu"), time: (await eve.evaluate(() => window.CO.greetingsNow())).time };
+  out.name_not = await ask(eve, "call me back later");
+  out.place_given = { said: await ask(eve, "I live in penang"), here: (await eve.evaluate(() => window.CO.greetingsNow())).here };
+  out.place_weather = await ask(eve, "weather");
+  out.name_forgotten = { said: await ask(eve, "forget my name"), time: (await eve.evaluate(() => window.CO.greetingsNow())).time,
+    done: await eve.evaluate(() => Array.from(document.querySelectorAll("#done .done-what")).map((e) => e.textContent)) };
+  out.greet_meteo = meteo.slice();
+  await eveCtx.close();
+  Object.assign(sky, { code: 0, temp: 29, day: 1 });
+  const [mornCtx, morn] = await singapore("2026-10-23T08:15:00+08:00");         // a Friday morning, sunny, no name
+  out.greet_morning = { said: await greeted(morn), now: await morn.evaluate(() => window.CO.greetingsNow()) };
+  await mornCtx.close();
+
   out.errors = errors;
   await browser.close();
   console.log(JSON.stringify(out));

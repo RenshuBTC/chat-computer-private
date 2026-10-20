@@ -468,8 +468,8 @@ retrying with backoff, then starts listening.
   case with its comma as in Kernighan's C tutorial and K&R, and under it a greeting, one of many (some for the
   time of day), never the one shown last time (`localStorage`, where there is one); again when the conversation
   is cleared. The empty
-  message box (white, `--paper`, with a soft shadow) shows its placeholder, "Chat anything or “/” or “Esc”",
-  dimmed (`--dim`; without "Esc" where there's no room for the sidebars or no keyboard, and just "Chat anything"
+  message box (white, `--paper`, with a soft shadow) shows its placeholder, "Type anything or “/” or press “Esc”",
+  dimmed (`--dim`; without "or press “Esc”" where there's no room for the sidebars or no keyboard, and just "Type anything"
   where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
   the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items,
   the sidebars' switches and what's open's close button: settings, the microphone (sound tool, `input`) and the

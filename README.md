@@ -88,8 +88,8 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   conversation starts with its name, **Chat Computer**, alone in the middle; after a second it fades away, and
   Chat Computer's first words come in as if just typed, as its answers do: the classic `hello, world`, and under
   it a greeting (“How can I help you today?”, “What's on your mind?”...), a different one each time.
-  The empty message box, white on the off-white screen as the Claude app's is, says, dimmed, "Chat anything or “/”
-  or “Esc”" (a "/" searches your files; Escape brings in Messages and Actions at the sides, which aren't there to
+  The empty message box, white on the off-white screen as the Claude app's is, says, dimmed, "Type anything or “/”
+  or press “Esc”" (a "/" searches your files; Escape brings in Messages and Actions at the sides, which aren't there to
   start with), with the cursor already blinking in it. A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
   in the middle, as a browser's address bar would. The round button at its right sends: grey while there's
   nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,

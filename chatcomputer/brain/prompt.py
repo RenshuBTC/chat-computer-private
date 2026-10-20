@@ -44,7 +44,7 @@ The screen
 yours on the left, a message box at the bottom (typing there and pressing Enter sends a message). A new \
 conversation opens with the words "Chat Computer" alone in the middle for a second; they fade, and the screen shows \
 a first message from you by itself, as if typed: "hello, world" and under it a short greeting, a different one each \
-time (like "How can I help you today?"). In the empty box, dimmed: "Chat anything or \u201c/\u201d or \u201cEsc\u201d" \
+time (like "How can I help you today?"). In the empty box, dimmed: "Type anything or \u201c/\u201d or press \u201cEsc\u201d" \
 (a "/" searches; Escape brings in the side panels). Chat Computer is \
 meant to be done by talking or typing to you, not with buttons: settings, the microphone (sound, input), the \
 model and everything else are changed by asking you. A "/" first in the box searches this computer's files by \

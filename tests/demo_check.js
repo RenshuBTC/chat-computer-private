@@ -35,7 +35,8 @@ window.end = function () { send({ event: "onStateChange", info: 0 }); };
 const GOOGLE = `<!doctype html><title>Google</title><body style="margin:0"><input id="q" aria-label="Search"
   style="position:absolute;left:30px;top:40px;width:300px;height:36px"></body>`;
 
-// Anthropic's API, standing in: the key check; a map of Tokyo asked for (show_map), or a video (play_youtube); then
+// Anthropic's API, standing in: the key check; a map of Tokyo asked for (show_map), a video (play_youtube), or
+// it quieter (set_volume); then
 // the answer, once the tool's result is back. A tool's turn starts with thinking, as the real one's do: its text
 // left out (display "omitted"), only its signature.
 function sse(events) { return events.map((e) => "event: " + e.type + "\ndata: " + JSON.stringify(e) + "\n\n").join(""); }
@@ -64,6 +65,7 @@ function textTurn(words) {
 }
 const MAP_TURN = toolTurn("toolu_1", "show_map", '{"place": "Tokyo", "west": 139.55, "south": 35.55, "east": 139.95, "north": 35.8}');
 const VIDEO_TURN = toolTurn("toolu_2", "play_youtube", '{"video_id": "aBcDeFgHiJk", "title": "A test video"}');
+const VOLUME_TURN = toolTurn("toolu_3", "set_volume", '{"percent": 30}');
 
 async function state(page) {
   return page.evaluate(() => {
@@ -174,6 +176,7 @@ async function ask(page, text, meanwhile) {
       role: "assistant", content: [{ type: "text", text: "Hi" }], stop_reason: "max_tokens", usage: { input_tokens: 8, output_tokens: 1 } }) });
     const last = JSON.stringify(body.messages.slice(-1));
     const turn = /toolu_1/.test(last) ? textTurn(["Here's ", "Tokyo."]) : /toolu_2/.test(last) ? textTurn(["Playing ", "it."])
+      : /toolu_3/.test(last) ? textTurn(["Quieter ", "now."]) : /quieter/.test(last) ? VOLUME_TURN
       : /video/.test(last) ? VIDEO_TURN : MAP_TURN;
     return route.fulfill({ status: 200, contentType: "text/event-stream", body: turn });
   });
@@ -325,6 +328,9 @@ async function ask(page, text, meanwhile) {
   await ask(page, "play a video");
   out.claude_video = await state(page);
   await page.waitForTimeout(300);
+  // Turned down by Claude (set_volume): YouTube's player is told, and the video stays.
+  await ask(page, "a bit quieter");
+  out.claude_quieter = { ...(await state(page)), player: await player(page).evaluate(() => window.commands) };
   await player(page).evaluate(() => window.end());
   await page.waitForFunction(() => !document.body.classList.contains("content"));
   out.video_ended = await state(page);

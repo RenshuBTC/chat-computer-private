@@ -140,8 +140,8 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
   padding: 0.6rem 0.7rem 0.6rem 1rem; box-shadow: 0 0.3rem 1.4rem color-mix(in srgb, var(--ink) 9%, transparent);
 }
 #row { position: relative; display: flex; align-items: flex-end; gap: 0.5rem; }
-/* The empty box's hint, where typing starts: "Chat anything or “/”", dimmed (--dim, the one grey text on
-   the screen); in a box too narrow for all of it, just "Chat anything" (chat.js). It's the box's own placeholder,
+/* The empty box's hint, where typing starts: "Type anything or “/” or press “Esc”", dimmed (--dim, the one grey text on
+   the screen); in a box too narrow for all of it, less of it, down to "Type anything" (chat.js). It's the box's own placeholder,
    so the cursor blinks just before its first letter in every browser (a hint laid over the box can't line up with
    it: Safari on an iPhone, for one, sets a text box's words 3px in). It goes with the first thing typed. */
 #input::placeholder { color: var(--dim); opacity: 1; }

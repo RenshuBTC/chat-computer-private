@@ -2258,7 +2258,7 @@
       return words.every(function (w) { return hay.indexOf(w) >= 0; });
     });
   }
-  function command(id) {
+  function slashCommand(id) {
     if (id === "claude") claudeButton();
     else if (id === "airpods") talkButton();
     else if (id === "gemini") nanoButton();
@@ -2323,7 +2323,7 @@
         break;
       }
       case "open_file": if (PAGES[msg.path]) show({ html: PAGES[msg.path]() }); break;
-      case "command": command(String(msg.id || "")); break;
+      case "command": slashCommand(String(msg.id || "")); break;
       case "text_scale": setScale(scale * (+msg.factor || 1)); break;
       case "panels": store("chatcomputer-demo-panels", { left: !!msg.left, right: !!msg.right }); break;
       case "add_account":

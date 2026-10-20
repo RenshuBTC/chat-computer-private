@@ -83,6 +83,15 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     assert "sk-ant-oat" in host and "Anthropic doesn't let other apps sign in with one" in host
 
 
+def test_no_two_functions_share_a_name():
+    """chat.js and host.js are each one big function: a second function of the same name in it silently replaces the
+    first everywhere in it (the "/" list's command() once took the YouTube player's place, so a video turned down
+    stayed as loud)."""
+    for f in (ROOT / "chatcomputer" / "ui" / "assets" / "chat.js", ROOT / "docs" / "demo" / "host.js"):
+        names = re.findall(r"^  function (\w+)\s*\(", f.read_text(), re.M)
+        assert len(names) > 20 and sorted({n for n in names if names.count(n) > 1}) == [], f.name
+
+
 def _node_with_playwright():
     node = shutil.which("node")
     if not node:
@@ -126,7 +135,7 @@ def test_the_demo_works_in_a_browser():
     assert first["first_ai"] == res["greeting"] and first["last"] == res["greeting"].replace("\n", "") and first["said"] == 1
     assert first["logo"] is None
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
-    assert first["typing_in"] == "input" and first["hint"] == "Chat anything or \u201c/\u201d or \u201cEsc\u201d"
+    assert first["typing_in"] == "input" and first["hint"] == "Type anything or \u201c/\u201d or press \u201cEsc\u201d"
     assert first["hint_weight"] == "400" and first["buttons"] == 0
     assert res["slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Packing list.md" in res["slash"][2:]
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
@@ -197,9 +206,13 @@ def test_the_demo_works_in_a_browser():
     cv = res["claude_video"]
     assert cv["content"] and "youtube-nocookie.com/embed/aBcDeFgHiJk?autoplay=1" in cv["src"] and cv["last"] == "Playing it."
     assert cv["done"][-1] == "Played \u201cA test video\u201d on YouTube" and cv["frame_title"] == "A test video"
+    # Claude turns it down: YouTube's player is told (it once wasn't: a second function of the same name took its
+    # messages), and the video stays on the screen.
+    q = res["claude_quieter"]
+    assert q["content"] and q["last"] == "Quieter now." and q["done"][-1] == "Set the volume to 30%" and "setVolume" in q["player"]
     assert not res["video_ended"]["content"] and res["video_ended"]["view"] is None
     api = res["api"]
-    assert len(api) == 5 and all(a["url"] == "https://api.anthropic.com/v1/messages" for a in api)
+    assert len(api) == 7 and all(a["url"] == "https://api.anthropic.com/v1/messages" for a in api)
     assert all(a["key"] == "sk-ant-api03-demo-test-key" and a["direct"] == "true" and a["model"] == "claude-opus-5-5" for a in api)
     assert not api[0]["stream"] and api[1]["stream"] and "show_map" in api[1]["tools"] and "web_search" in api[1]["tools"]
     assert "tool_result" in api[2]["last"] and "toolu_1" in api[2]["last"]
@@ -227,7 +240,7 @@ def test_the_demo_works_in_a_browser():
     assert not res["ai_downloading"]["sheet"] and res["ai_downloading"]["hint"] == "Downloading Gemini (50%)\u2026"
     assert res["ai_downloading_slash"][2] == "Downloading Gemini (50%)"
     on = res["ai_on"]
-    assert on["hint"] == "Chat anything or \u201c/\u201d or \u201cEsc\u201d" and on["done"][-1] == "Turned on Chrome's built-in AI"
+    assert on["hint"] == "Type anything or \u201c/\u201d or press \u201cEsc\u201d" and on["done"][-1] == "Turned on Chrome's built-in AI"
     assert res["ai_on_slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Download Gemini" not in res["ai_on_slash"]
     poem = res["ai_poem"]
     assert poem["content"] and poem["last"] == "Here's a short poem about the sea." and poem["done"][-1] == "Showed \u201cThe sea\u201d"
@@ -248,7 +261,7 @@ def test_the_demo_works_in_a_browser():
     # words streamed in, told who it is; the written answers still answer what they can, and what was said (theirs
     # too) goes with the next question.
     on = res["lm_on"]
-    assert on["hint"] == "Chat anything or “/” or “Esc”" and on["done"][-1] == "Turned on Gemma, on this device"
+    assert on["hint"] == "Type anything or “/” or press “Esc”" and on["done"][-1] == "Turned on Gemma, on this device"
     assert res["lm_on_slash"][:3] == ["Connect Claude", "Connect AirPods", "Remove Gemma"] and "Download Gemma" not in res["lm_on_slash"]
     assert res["lm_haiku"]["last"] == "Dark cup in my hands, the day starts with you." and res["lm_music"] == "Playing some calm piano."
     calls = res["lm_calls"]
@@ -359,4 +372,4 @@ def test_the_demo_works_in_a_browser():
     assert res["talk_twice"] == "What time is it in Tokyo"
     refused = res["talk_refused"]
     assert refused["title"] == "Talking stopped" and "Siri or Dictation" in refused["text"]
-    assert refused["hint"] == "Chat anything or \u201c/\u201d" and refused["awake"] == 0      # (no Escape on a phone)
+    assert refused["hint"] == "Type anything or \u201c/\u201d" and refused["awake"] == 0      # (no Escape on a phone)

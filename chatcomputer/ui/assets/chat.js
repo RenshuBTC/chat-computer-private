@@ -13,7 +13,7 @@
   var MAX_ITEMS = 400;                // messages, and the row under each
   var ai = {};          // id -> {el, md, text, raf, cut, tail}
   var mode = "chat";    // "content" while something is open in the middle (a website, a video, a message...)
-  var full = false;     // Escape: the middle fills the screen, without the sidebars
+  var full = true;      // no sidebars: the middle fills the screen, until Escape brings Messages and Actions in
   var shown = { left: true, right: true };    // the sidebars (see "the panels' switches")
   // A touchscreen alone (a phone or a tablet, no mouse): its keyboard comes up only for the box, and goes down after
   // sending. A phone (a screen under 600px across, either way round) is laid out as the Claude app is there
@@ -108,15 +108,71 @@
     m = ai[id] = { el: wrap, md: md, text: "", raf: 0, cut: 0, tail: [], done: 0, drawn: 0, pieces: [], base: 0 };
     return m;
   }
-  // Before anything is said, the conversation starts with Chat Computer's first words: what a first program
-  // prints, hello, world (lower case, with its comma, as in Kernighan's C tutorial and his book with Ritchie).
+  // ------------------------------------------------------------------ the first words
+  // A conversation starts with the word logo alone in the middle of the screen (body.intro); after a second it fades
+  // away, over half a second, and then Chat Computer's first words come in as its answers do, as if just typed: a
+  // moment's thinking, then the words, fading in as they come. First, what a first program prints, hello, world
+  // (lower case, with its comma, as in Kernighan's C tutorial and his book with Ritchie); under it, a greeting, a
+  // different one each time (and one for the time of day now and then). With something said first there are none:
+  // what's said is the conversation.
+  var LOGO_MS = 1000, LOGO_FADE_MS = 500, THINK_MS = 600;
   var HELLO = "hello, world";
+  var GREETINGS = [
+    "How can I help you today?", "What can I do for you?", "What would you like to do?", "What can I help you with?",
+    "What's on your mind?", "Where shall we start?", "Ask me anything, or tell me what to do.", "What do you need today?",
+    "Ready when you are. What's first?", "Tell me what you need, and I'll get on it.", "I'm all ears. What can I do for you?",
+    "What shall we do first?", "Anything I can help with?", "What are we working on today?", "Good to see you. How can I help?",
+    "What would you like to get done?", "Need a map, some music or an answer?",
+    "Want to look something up, open a site or play some music?", "Ask me a question, or tell me what to open.",
+    "How's your day going? What can I do for you?", "What can I take off your plate?", "Got a question? I'm here to help.",
+    "What's the plan today?", "What can I find for you?", "What would you like to know?", "Where would you like to begin?",
+    "How can I make your day easier?", "What can I get started for you?", "Tell me what's on your list.",
+    "Say what you need, in your own words.", "What can I look up for you?", "Let's get something done. Where do we start?"
+  ];
+  var GREETINGS_AT = {
+    morning: ["Good morning! What can I do for you?", "Good morning! What's first today?", "Morning! How can I help?"],
+    afternoon: ["Good afternoon! How can I help?", "Good afternoon! What can I do for you?"],
+    evening: ["Good evening! What can I do for you?", "Good evening! How can I help?"],
+    night: ["Up late? What can I do for you?", "Still up? How can I help?"]
+  };
+  // One of them, never the one shown last time (kept in this browser, where it can be).
+  function greeting() {
+    var h = new Date().getHours();
+    var pool = GREETINGS.concat(GREETINGS_AT[h >= 5 && h < 12 ? "morning" : h >= 12 && h < 18 ? "afternoon" : h >= 18 && h < 23 ? "evening" : "night"]);
+    var i = Math.floor(Math.random() * pool.length), last = "";
+    try { last = localStorage.getItem("chatcomputer-greeting") || ""; } catch (e) {}
+    if (pool[i] === last) i = (i + 1 + Math.floor(Math.random() * (pool.length - 1))) % pool.length;
+    try { localStorage.setItem("chatcomputer-greeting", pool[i]); } catch (e) {}
+    return HELLO + "\n" + pool[i];
+  }
+  var intro = [];
+  function introLater(ms, f) { intro.push(setTimeout(f, ms)); }
   function greet() {
-    if (log.children.length) return;
-    var m = message({ role: "assistant", text: HELLO, ts: now() });
-    m.classList.add("hello");
-    log.appendChild(m);
-    body.classList.add("has-log");
+    intro.forEach(clearTimeout);
+    intro = [];
+    if (ai.hello) {                                               // (one still coming in, from before)
+      if (ai.hello.raf) cancelAnimationFrame(ai.hello.raf);
+      ai.hello.el.remove();
+      delete ai.hello;
+    }
+    if (log.children.length) { body.classList.remove("intro"); return; }
+    body.classList.add("intro");
+    introLater(LOGO_MS, function () { body.classList.remove("intro"); });
+    introLater(LOGO_MS + LOGO_FADE_MS, function () {
+      if (log.children.length) return;                            // something was said first
+      var text = greeting(), at = 0, m = ensureAI("hello");
+      m.el.classList.add("hello");
+      follow();
+      // In pieces of a few letters, as the demo's written answers come (docs/demo/host.js: stream).
+      introLater(THINK_MS, function step() {
+        if (ai.hello !== m) return;
+        var to = Math.min(text.length, at + 3 + Math.floor(Math.random() * 6));
+        window.CO.ai("hello", text.slice(at, to));
+        at = to;
+        if (at < text.length) introLater(24, step);
+        else introLater(30, function () { if (ai.hello === m) window.CO.aiDone("hello"); });
+      });
+    });
   }
   // A message from the transcript (the start, or an earlier day put back).
   function message(it) {
@@ -366,8 +422,9 @@
     else { lastHole = ""; jumpDown(); }
   }
   $("frame-close").addEventListener("click", function () { post({ type: "close_content", pause: true }); });
-  // Escape: the middle fills the screen (what's open with the message box under it, or the conversation), Messages
-  // and Actions put away; Escape again brings them back.
+  // The middle fills the screen (what's open with the message box under it, or the conversation) to start with:
+  // no sidebars. Escape brings Messages and Actions in at its sides (where there's room for them); Escape again puts
+  // them away.
   function toggleFull(on) {
     full = on == null ? !full : !!on;
     body.classList.toggle("full", full);
@@ -386,7 +443,7 @@
     input.style.height = "auto";
     input.style.height = input.scrollHeight + "px";
     body.classList.toggle("drafting", input.value.trim() !== "");
-    body.classList.toggle("typed", input.value !== "");          // the hint goes
+    body.classList.toggle("typed", input.value !== "");
     checkSearch();
   }
   function sendNow() {
@@ -440,8 +497,8 @@
     if (e.target !== input) focusBox(true);
   }, true);
   // Escape: what can be done with a held message put away, or Select text, or Messages (where it comes over the
-  // conversation), or the "/" list, or else the middle fills the screen, and back. (A sign-in form's Escape is its
-  // own: Cancel.)
+  // conversation), or the "/" list, or else Messages and Actions come in at the sides, and go again. (A sign-in
+  // form's Escape is its own: Cancel.)
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape" || e.isComposing || e.defaultPrevented || locked || body.classList.contains("sheet")) return;
     e.preventDefault();
@@ -462,14 +519,20 @@
     follow();
     reportHole();
   }).observe(composer);
-  // The empty box's hint: all of it ("Chat anything or “/”") where the box is wide enough,
-  // otherwise its first half.
-  var hint = $("hint");
+  // The empty box's hint (its placeholder): "Chat anything or “/” or “Esc”" where Escape brings the sidebars in (a
+  // screen with room for them, and a keyboard), else "Chat anything or “/”"; just "Chat anything" in a box too
+  // narrow for more. Or, for a while, what's going on (CO.hint: "Listening", a download's progress).
+  var HINTS = [input.placeholder, input.placeholder.replace(/ or “Esc”$/, ""), input.placeholder.replace(/ or .*$/, "")];
+  var ruler = document.createElement("canvas").getContext("2d"), hintNow = "";
   function fitHint() {
-    hint.style.maxWidth = input.offsetWidth + "px";
-    hint.classList.remove("short");
-    if (hint.scrollWidth > hint.clientWidth + 1) hint.classList.add("short");
+    var cs = getComputedStyle(input), room = input.clientWidth - 2;
+    ruler.font = cs.fontStyle + " " + cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily;
+    var options = hintNow ? [hintNow] : body.classList.contains("panel") && !touchOnly() ? HINTS : HINTS.slice(1);
+    var want = options[options.length - 1];
+    for (var i = 0; i < options.length; i++) if (ruler.measureText(options[i]).width <= room) { want = options[i]; break; }
+    if (input.placeholder !== want) input.placeholder = want;
   }
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitHint);
   new ResizeObserver(function () { requestAnimationFrame(fitHint); }).observe(input);
 
   // How long typed letters take to reach the screen (two frames after the key), sent every few seconds and logged
@@ -493,6 +556,7 @@
     var col = parseFloat(rootStyle.getPropertyValue("--co-column")) || 30 * rem;
     var w = window.innerWidth;
     body.classList.toggle("panel", w * 0.17 >= 11 * rem && w * 0.66 - 3 * rem >= 0.8 * col);
+    fitHint();                                   // ("Esc" in the hint only where there's room for the sidebars)
   }
   // The sidebars' switches: Messages (left) and Actions (right), each switched off and on again with its switch,
   // or by asking Claude (the settings left_panel and right_panel). Chat Computer keeps the choice: the page tells
@@ -806,7 +870,9 @@
   // ------------------------------------------------------------------ "/": searching this computer
   // A "/" first in the box makes it search this computer's files (Chat Computer's index of them) for the words after
   // it, as they're typed: the best matches in a list above the box. The arrow keys choose, Enter or a click opens
-  // one between the sidebars; the last line asks Claude to look instead. Escape (clearing the box) ends it.
+  // one between the sidebars; the last line asks Claude to look instead. Escape (clearing the box) ends it. The list
+  // can also hold things to connect or turn on (an item with a `command`: the website's Connect Claude, Connect
+  // AirPods...), done with Enter or a click as a file is opened.
   var searching = false, searchN = 0, searchQ = "", results = [], resSel = 0, searchTimer = 0;
   function useIcon(id) { return '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#' + id + '"/></svg>'; }
   function checkSearch() {
@@ -848,7 +914,7 @@
     results.forEach(function (r, i) {
       var row = el("res");
       row.setAttribute("role", "option");
-      row.innerHTML = useIcon("i-file");
+      row.innerHTML = useIcon(r.icon || "i-file");          // a file; or something to connect or turn on (r.command)
       var t = el("res-text"), name = document.createElement("span"), where = document.createElement("span");
       name.className = "res-name";
       bold(name, r.name || "", q);
@@ -884,7 +950,8 @@
     if (!r && !q) return;
     input.value = "";
     fitInput();
-    if (r) post({ type: "open_file", path: r.path });
+    if (r && r.command) post({ type: "command", id: r.command });
+    else if (r) post({ type: "open_file", path: r.path });
     else post({ type: "send", text: "Find “" + q + "” on my computer." });
     jumpDown();
     doneTyping();
@@ -1121,11 +1188,12 @@
     toastTimer = setTimeout(function () { t.classList.remove("on"); }, 1400);
   }
 
-  // Messages from the top of the screen (the iPad's Notification Center): on a screen too narrow for the sidebars
-  // it comes over the conversation until a touch elsewhere; with them showing, it goes back to its newest.
+  // Messages from the top of the screen (the iPad's Notification Center): where the sidebars aren't showing (a
+  // screen too narrow for them, or none brought in yet: the middle filling the screen) it comes over the
+  // conversation until a touch elsewhere; with them showing, it goes back to its newest.
   function hideMessages() { body.classList.remove("show-messages"); }
   function showMessages() {
-    if (body.classList.contains("panel")) msgList.scrollTop = 0;
+    if (body.classList.contains("panel") && !full) msgList.scrollTop = 0;
     else body.classList.add("show-messages");
   }
 
@@ -1200,10 +1268,11 @@
     searchResults: function (n, q, items, note) { if (searching && n === searchN) drawResults(q || "", items, note); },
     // "content" while something is open in the middle (with its name, for the top of its frame), "chat" otherwise.
     mode: function (m, title) { setMode(m === "content" ? "content" : "chat", title); },
+    // What the empty box says for a while ("Listening", "Downloading Gemini… 40%"); nothing: its own hint again.
+    hint: function (text) { hintNow = String(text || ""); fitHint(); },
     // What's open is called something else now (its page's title, once it's loaded).
     title: function (t) { if (mode === "content") $("frame-title").textContent = t || ""; },
-    // Escape pressed where this page doesn't have the keys (what's open has them): the middle fills the screen, or
-    // the sidebars come back.
+    // Escape pressed where this page doesn't have the keys (what's open has them): the sidebars come in, or go.
     toggleFull: function () { toggleFull(); },
     // What's open is drawn in this page (the browser demo), not laid over it by the window.
     openInPage: function (on) { openInPage = !!on; lastHole = ""; reportHole(); },
@@ -1217,7 +1286,7 @@
         if (r && m.classList.contains("ai")) row = r;
       });
       lastActs(row);
-      greet();                        // nothing said yet: Chat Computer's hello, world
+      greet();                        // nothing said yet: the word logo, then Chat Computer's first words
       trim();
       jumpDown();
     },
@@ -1270,7 +1339,7 @@
     accountForm: function (f) { showForm(f || null); },
     lock: function (info) { showLock(info || null); },
     // The person's name and the model: nothing on this page shows them (before anything is said, the word logo and
-    // Chat Computer's "hello, world").
+    // Chat Computer's first words, "hello, world" and a greeting).
     settings: function () {},
     // Which sidebars show: {left, right} (Chat Computer keeps the choice; see "the sidebars' switches").
     panels: function (s) {
@@ -1299,6 +1368,7 @@
     clear: function () { log.innerHTML = ""; ai = {}; users = {}; greet(); trim(); jumpDown(); }
   };
   showLive("");
+  body.classList.toggle("full", full);
   greet();
   fitPanel();
   fitInput();

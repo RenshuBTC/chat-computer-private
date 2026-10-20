@@ -84,11 +84,13 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   bottom. What you send moves to the top of the screen with the answer coming in under it, its words fading in as
   they come, so you never scroll down to read it; scroll up for anything earlier. Under each message, as in the
   Claude app: under Claude's, copy, read aloud, thumbs up or down (kept, to make Chat Computer better) and ask
-  again; under yours, ask again, edit and copy; with when it was. Before
-  anything is said, its name, **Chat Computer**, is in the middle, and the conversation starts with its first
-  words, the classic `hello, world`; the name fades away once you say something.
-  The empty message box says, dimmed, "Chat anything or “/”" (a "/" searches your files), with the cursor already
-  blinking in it. A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
+  again; under yours, ask again, edit and copy; with when it was. A
+  conversation starts with its name, **Chat Computer**, alone in the middle; after a second it fades away, and
+  Chat Computer's first words come in as if just typed, as its answers do: the classic `hello, world`, and under
+  it a greeting (“How can I help you today?”, “What's on your mind?”...), a different one each time.
+  The empty message box, white on the off-white screen as the Claude app's is, says, dimmed, "Chat anything or “/”
+  or “Esc”" (a "/" searches your files; Escape brings in Messages and Actions at the sides, which aren't there to
+  start with), with the cursor already blinking in it. A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
   in the middle, as a browser's address bar would. The round button at its right sends: grey while there's
   nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
   the mouse wheel, Page Up) to read back.
@@ -98,8 +100,8 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   edge, or by asking), and when something you type is answered in words alone (what's open is put away, music
   still playing). It's a page like any other: scroll it, and type in it (a website has the keys until you
   tap the message box; Page Up and Down in the box scroll it too). There are only ever three parts, side by
-  side: Messages, the middle and Actions. **Escape** makes the middle fill the screen, message box and all, and
-  Escape again brings the panels back. Typing "/" to search shows its list in front of it.
+  side: Messages, the middle and Actions. To start with, the middle fills the screen, message box and all;
+  **Escape** brings the panels in at its sides, and Escape again puts them away. Typing "/" to search shows its list in front of it.
 * **Messages.** On a wide screen, a panel at the left gathers what's sent to you from every account you
   connect, newest first: Gmail, Outlook and Hotmail, iCloud Mail, other email, Telegram, WhatsApp, X,
   Instagram, Facebook, TikTok and LinkedIn. Tap one to read it in the middle: the whole conversation with
@@ -143,7 +145,8 @@ Chat Computer is made to be touched first, as an iPad is (the gestures are the i
 * **Swipe up from the bottom edge** for Home: what's open closes and the conversation is back.
 * **Swipe in from the left edge** (or right along the bottom edge) to go back; from the right edge (or left
   along the bottom) to go forward.
-* **Swipe down from the top centre** for Messages, when the screen is too narrow to show it.
+* **Swipe down from the top centre** for Messages, when it isn't showing (a screen too narrow for it, or before
+  Escape has brought the sidebars in).
 * **Three fingers:** pinch closed to copy, twice to cut, pinch open to paste; swipe left to undo, right to
   redo. **Four or five fingers:** pinch closed for Home, swipe to go back or forward.
 * **Text:** double-tap a word to select it, triple-tap for its paragraph, and hold a message to select all
@@ -227,8 +230,8 @@ and say "pair my keyboard" (or "my mouse"). A keyboard may want a code typed on 
 and says it. Type it on the keyboard, then press Enter.
 
 * On the conversation screen, typing goes into the message box at the bottom: Enter sends, Shift+Enter
-  starts a new line, and the cursor, selecting and pasting work as anywhere else; Escape makes the middle fill
-  the screen (and back). The answer is written, not spoken, and questions like "Go ahead?" are answered by
+  starts a new line, and the cursor, selecting and pasting work as anywhere else; Escape brings Messages and
+  Actions in at the sides (and puts them away again). The answer is written, not spoken, and questions like "Go ahead?" are answered by
   typing yes or no. On a website, typing goes into the website, into the box you're in.
 * The mouse's arrow shows when you move the mouse and hides once it has been still for 3 seconds. Each screen
   runs at the fastest refresh rate it offers (as most are set in Windows), so the arrow moves as smoothly as
@@ -434,7 +437,7 @@ You won't need it day to day; it's only for repairs.
 ## The demo
 
 **https://chatcomputer.ai** is Chat Computer's screen in a browser, for trying it before
-installing it: the word logo, Chat Computer saying `hello, world`, and the message box with the cursor in it. It is the same page
+installing it: the word logo for a second, then Chat Computer saying `hello, world` and a greeting, and the message box with the cursor in it. It is the same page
 and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py` copies them, and
 `tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the computer. The
 messages and files there are made up. Everyone gets answers, free:

@@ -86,16 +86,16 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* Before you've said anything: the word logo in the middle of the screen, with Chat Computer's first words, hello,
-   world, as its message above the box. With the first thing you say it fades away, over half a second (and back
-   when the conversation starts again). */
+/* A conversation starts with the word logo alone in the middle of the screen (body.intro, from the first moment);
+   after a second it fades away, over half a second, and Chat Computer's first words come in (chat.js: greet).
+   Something said first fades it away at once. */
 #welcome {
   position: fixed; left: var(--left, 0px); right: var(--panel, 0px); top: 0; bottom: var(--composer-h, 5rem);
   display: flex; align-items: center; justify-content: center; margin: 0; pointer-events: none;
-  transition: opacity 500ms ease, visibility 0s linear 0s;
+  opacity: 0; visibility: hidden; transition: opacity 500ms ease, visibility 0s linear 500ms;
 }
 #wordmark { font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0; }
-body.has-you #welcome { opacity: 0; visibility: hidden; transition: opacity 500ms ease, visibility 0s linear 500ms; }
+body.intro:not(.has-you) #welcome { opacity: 1; visibility: visible; transition: none; }
 body.content #welcome { display: none; }
 
 /* Something open (body.content): a website, a video, a map, a conversation from Messages, a file. It fills the
@@ -112,13 +112,14 @@ body.content #column { display: none; }
 }
 #frame-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
 #frame-close { width: 1.75rem; height: 1.75rem; }
-/* Escape: the middle fills the screen (body.full), whatever is in it, the message box included; the sidebars and
-   their switches go until Escape again. */
+/* No sidebars to start with: the middle fills the screen (body.full), whatever is in it, the message box included.
+   Escape brings the sidebars and their switches in, and puts them away again. */
 body.full { --left: 0px !important; --panel: 0px !important; }
-body.full .side, body.full .toggle { display: none !important; }
+body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.full .toggle { display: none !important; }
 
-/* The message box, as in the Claude app: a rounded box the width of the conversation at the bottom of the
-   screen; it grows with what's typed (up to a few lines, then scrolls). Enter sends, Shift+Enter starts a new
+/* The message box, as in the Claude app: a rounded white box (--paper, on the off-white background, with a soft
+   shadow) the width of the conversation at the bottom of the screen; it grows with what's typed (up to a few
+   lines, then scrolls). Enter sends, Shift+Enter starts a new
    line; so does the round button at its right, as ChatGPT's: an arrow up, grey while there's nothing to send,
    black once there is. Nothing else: Chat Computer is the conversation (and "/" to search this computer).
    Asleep, a line above it says how to wake Chat Computer. */
@@ -128,21 +129,16 @@ body.full .side, body.full .toggle { display: none !important; }
 }
 #box, #wake { width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto; }
 #box {
-  position: relative; border: 2px solid var(--line); border-radius: 1.1rem; background: var(--ground);
-  padding: 0.6rem 0.7rem 0.6rem 1rem;
+  position: relative; border: 2px solid var(--paper); border-radius: 1.1rem; background: var(--paper);
+  padding: 0.6rem 0.7rem 0.6rem 1rem; box-shadow: 0 0.3rem 1.4rem color-mix(in srgb, var(--ink) 9%, transparent);
 }
 #row { position: relative; display: flex; align-items: flex-end; gap: 0.5rem; }
 /* The empty box's hint, where typing starts: "Chat anything or “/”", dimmed (--dim, the one grey text on
-   the screen); in a box too narrow for all of it, just "Chat anything" (.short). It goes
-   with the first thing typed. */
-#hint {
-  position: absolute; left: 0; top: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  line-height: 1.5; color: var(--dim); pointer-events: none;
-}
-#hint.short #hint-search { display: none; }
-body.typed #hint, body.searching #hint { display: none; }
+   the screen); in a box too narrow for all of it, just "Chat anything" (chat.js). It's the box's own placeholder,
+   so the cursor blinks just before its first letter in every browser (a hint laid over the box can't line up with
+   it: Safari on an iPhone, for one, sets a text box's words 3px in). It goes with the first thing typed. */
+#input::placeholder { color: var(--dim); opacity: 1; }
 #input {
-  position: relative; z-index: 1;                 /* over the hint, so the cursor shows in front of it */
   flex: 1; min-width: 0; height: 1.5em; max-height: 40vh; margin: 0; padding: 0;
   border: 0; outline: 0; resize: none; overflow-y: auto; scrollbar-width: none;
   font: inherit; line-height: 1.5; color: var(--ink); background: transparent; caret-color: var(--ink);
@@ -150,7 +146,7 @@ body.typed #hint, body.searching #hint { display: none; }
 /* A touchscreen alone (a phone, a tablet): what's typed is never under 16px, or the browser zooms in on the box as
    it's tapped (Safari on an iPhone does), pushing the page past the screen's edges. */
 @media (hover: none) and (pointer: coarse) {
-  #input, #hint, #sheet-fields input, #sheet-fields select { font-size: max(16px, 1em); }
+  #input, #sheet-fields input, #sheet-fields select { font-size: max(16px, 1em); }
   body { touch-action: manipulation; }          /* and a double tap doesn't zoom */
 }
 #send {
@@ -170,8 +166,8 @@ body.searching #search-icon { display: block; }
 #results {
   position: absolute; left: -2px; right: -2px; bottom: calc(100% + 0.5rem); display: none;
   max-height: 60vh; overflow-y: auto; scrollbar-width: none;
-  padding: 0.35rem; border: 2px solid var(--line); border-radius: 0.9rem; background: var(--ground);
-  font-size: 0.8rem; line-height: 1.4;
+  padding: 0.35rem; border: 2px solid var(--paper); border-radius: 0.9rem; background: var(--paper);
+  box-shadow: 0 0.3rem 1.4rem color-mix(in srgb, var(--ink) 9%, transparent); font-size: 0.8rem; line-height: 1.4;
 }
 body.searching #results { display: block; }
 .res { display: flex; align-items: center; gap: 0.7em; padding: 0.4em 0.6em; border-radius: 0.5em; cursor: pointer; }
@@ -245,8 +241,11 @@ body.has-done #done-empty, body.has-messages #messages-empty { display: none; }
 .item.swiped .pin svg { display: none; }
 .item.swiped .pin::after { content: attr(data-label); font-weight: bold; }
 @media (any-pointer: coarse) { .item { padding-top: 0.55em; padding-bottom: 0.55em; } }
-/* Messages pulled down from the top of a screen too narrow for the sidebars (the iPad's Notification Center). */
-body.show-messages:not(.panel) #messages { display: flex; z-index: 30; width: min(24rem, 100vw - 1.5rem); }
+/* Messages pulled down from the top where the sidebars aren't showing (a screen too narrow for them, or the middle
+   filling the screen, as it does to start with), over the conversation: the iPad's Notification Center. */
+body.show-messages:not(.panel) #messages, body.full.show-messages #messages {
+  display: flex; z-index: 30; width: min(24rem, 100vw - 1.5rem);
+}
 /* Something done: when, and under it what. Above the list, today's date and the time now. */
 #clock { margin: -0.4rem 0 0.9rem; }
 #clock span { display: block; }
@@ -291,8 +290,8 @@ body.sheet-busy #sheet-ok { visibility: hidden; }
 
 /* The sidebars' switches, like the Claude app's sidebar button: Messages' at the top left, Actions' at the top
    right. Each icon is the screen with its sidebar marked, filled in while the sidebar shows. Switched off, a
-   sidebar leaves a narrow margin with just its switch. Only where the sidebars fit (body.panel), and not while
-   the middle fills the screen (body.full). */
+   sidebar leaves a narrow margin with just its switch. Only where the sidebars fit (body.panel), and only once
+   Escape has brought them in (not while the middle fills the screen, body.full, as it does to start with). */
 .toggle {
   position: fixed; z-index: 7; display: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.15rem;
   border: 0; border-radius: 0.4rem; background: none; color: var(--ink); cursor: pointer;
@@ -315,18 +314,23 @@ body.panel #done .side-head { padding-right: 1.65rem; }
    arrow at the right. Nothing zooms (two fingers do nothing), and nothing goes past the screen's edges. Holding a
    message brings up what can be done with it (below), rather than the phone's own selecting. */
 html:has(> body.phone) { overflow-x: hidden; }
-body.phone { touch-action: manipulation; touch-action: pan-x pan-y; }
-body.phone #column { width: min(var(--co-column, 30rem), 100% - 2rem); padding-top: 1.25rem; }
+body.phone { touch-action: manipulation; touch-action: pan-x pan-y; line-height: 1.32; }
+/* Sizes as the Claude app's on an iPhone 375 points wide, measured: there the text is as big as ours at a
+   eighteenth of the screen's width (the rem, docs/demo/host.js), so 1rem is 20.8px; the conversation and the box
+   are 16px (0.77rem) in from the screen's sides; the box is 100px tall: its words' baseline 35px from its top, its
+   buttons 36px (1.73rem) round, 8px (0.29rem past the 2px line) from its sides and bottom, the words 14px in. */
+body.phone #column { width: min(var(--co-column, 30rem), 100% - 1.54rem); padding-top: 1.25rem; }
 body.phone #composer { padding: 0.3rem 0 0.5rem; }
-body.phone #box, body.phone #wake { width: min(var(--co-column, 30rem) + 1rem, 100% - 1rem); }
-body.phone #box { padding: 0.65rem 0.55rem 0.55rem 0.9rem; border-radius: 1.4rem; }
+body.phone #box, body.phone #wake { width: min(var(--co-column, 30rem), 100% - 1.54rem); }
+body.phone #box { padding: 0.49rem 0.29rem 0.27rem 0.58rem; border-radius: 1.25rem; }
 body.phone #row {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "icon input input" "tools tools send";
-  align-items: center; row-gap: 0.5rem;
+  align-items: center; gap: 0.6rem 0;               /* (no gap between the columns: the words start 14px in) */
 }
 body.phone #search-icon { grid-area: icon; margin-right: 0.5rem; }
 body.phone #input { grid-area: input; }
-body.phone #send { grid-area: send; width: 1.8em; height: 1.8em; }
+body.phone #send { grid-area: send; width: 1.73rem; height: 1.73rem; }
+body.phone .you { padding: 0.5rem 0.77rem; }
 body.phone #log { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
 /* Holding a message on a phone, as in the Claude app: the screen behind it dimmed (still to be seen, not blurred),

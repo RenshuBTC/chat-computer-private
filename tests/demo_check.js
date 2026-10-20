@@ -1,8 +1,9 @@
 // The browser demo (docs/index.html: Chat Computer's own screen, with docs/demo/host.js standing in for the computer),
-// tried in Chromium with Playwright: it opens on the word logo, Chat Computer saying hello, world, the cursor in
-// the box (the logo goes with the first message sent); the
+// tried in Chromium with Playwright: it opens on the word logo, which fades away after a second, and then Chat
+// Computer's first words come in as if just typed (hello, world and a greeting, another on another visit; none when
+// something's said first), the cursor in the box; the
 // sidebars' switches; music (made by the browser), in the middle in the conversation's place; "/" lists the files in
-// front of what's open; Escape fills the screen and back; the x closes it; a message opened as its whole
+// front of what's open; no sidebars until Escape brings them in, and Escape puts them away again; the x closes it; a message opened as its whole
 // conversation; an answer in words alone bringing the conversation back; Google, for real, typed into; Connect
 // Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
 // when it ends, with a stand-in for YouTube's player; answers streamed; thinking first, as Opus 5.5 always does);
@@ -70,7 +71,6 @@ async function state(page) {
     const r = v && v.style.display !== "none" ? v.getBoundingClientRect() : null;
     const frame = document.getElementById("frame").getBoundingClientRect();
     const shown = (id) => getComputedStyle(document.getElementById(id)).display !== "none";
-    const tools = document.getElementById("demo-tools");
     return {
       sheet: document.body.classList.contains("sheet"), content: document.body.classList.contains("content"),
       sheet_title: document.getElementById("sheet-title").textContent,
@@ -82,7 +82,7 @@ async function state(page) {
       last: (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || "",
       results: Array.from(document.querySelectorAll("#results .res-text")).map((e) => e.textContent),
       panel: document.body.classList.contains("panel"),
-      first_ai: ((document.querySelector("#log > .ai") || {}).textContent || "").trim(),
+      first_ai: (() => { const a = document.querySelector("#log > .ai"); return a ? String(a._said != null ? a._said : a.textContent).trim() : ""; })(),
       // (Faded away: not shown.)
       logo: shown("welcome") && getComputedStyle(document.getElementById("welcome")).visibility !== "hidden" ?
         document.getElementById("wordmark").textContent : null,
@@ -96,13 +96,29 @@ async function state(page) {
       frame_title: document.getElementById("frame-title").textContent,
       box: document.getElementById("input").value,
       typing_in: document.activeElement && document.activeElement.id,
-      hint: shown("hint") ? document.getElementById("hint").textContent : null,
-      hint_weight: getComputedStyle(document.getElementById("hint")).fontWeight,
-      tools: tools ? Array.from(tools.querySelectorAll("button")).filter((b) => getComputedStyle(b).display !== "none").map((b) => b.getAttribute("aria-label")) : null,
-      tools_at: tools ? tools.parentNode.id : null,
+      hint: document.getElementById("input").value === "" ? document.getElementById("input").placeholder : null,
+      hint_weight: getComputedStyle(document.getElementById("input")).fontWeight,
+      buttons: document.querySelectorAll("#demo-tools, #box button:not(#send)").length,     // none but the arrow
       more: document.querySelectorAll(".more").length,
     };
   });
+}
+
+// "/" in the box: what it lists (closed again with Escape), or, given a name, the one starting with it chosen
+// (clicked; tapped on a touchscreen).
+async function slash(page, name, tap) {
+  await (tap ? page.tap("#input") : page.click("#input"));
+  await page.keyboard.type("/");
+  await page.waitForFunction(() => document.querySelectorAll("#results .res").length > 1);
+  if (!name) {
+    const rows = await page.evaluate(() => Array.from(document.querySelectorAll("#results .res:not(.ask) .res-name")).map((e) => e.textContent));
+    await page.keyboard.press("Escape");
+    return rows;
+  }
+  const row = page.locator("#results .res .res-name", { hasText: new RegExp("^" + name) }).first();
+  await (tap ? row.tap() : row.click());
+  await page.waitForFunction(() => !document.body.classList.contains("searching"));
+  await page.waitForTimeout(150);                  // what it does happens straight after (the page's message to its host)
 }
 
 async function viewText(page) {
@@ -110,6 +126,13 @@ async function viewText(page) {
   return (await f.locator("body").innerText({ timeout: 5000 })).replace(/\s+/g, " ").trim();
 }
 function player(page) { return page.frames().find((f) => /youtube/.test(f.url())); }
+
+// Chat Computer's first words, once they've all come in (after a second of the word logo, its fade, and a moment's
+// thinking).
+async function greeted(page) {
+  await page.waitForFunction(() => { const h = document.querySelector("#log > .ai.hello"); return h && h._said; }, null, { timeout: 8000 });
+  return page.evaluate(() => String(document.querySelector("#log > .ai.hello")._said).trim());
+}
 
 async function ask(page, text, meanwhile) {
   const before = await page.locator("#log > .ai").count();
@@ -155,11 +178,44 @@ async function ask(page, text, meanwhile) {
     return route.fulfill({ status: 200, contentType: "text/event-stream", body: turn });
   });
   await page.goto(page_url);
-  // It opens on the word logo and Chat Computer's first words, hello, world; the cursor in the box, under the hint.
-  await page.waitForFunction(() => document.getElementById("demo-tools"));
-  await page.waitForTimeout(500);
+  // It opens on the word logo alone; after a second it fades away (over half a second), and then Chat Computer's
+  // first words come in as its answers do, as if just typed: a moment's thinking, then the words a few letters at a
+  // time, fading in. The cursor in the box, under the hint.
+  await page.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  out.intro = await state(page);
+  const look = async (f) => (await page.waitForFunction(f, null, { polling: "raf", timeout: 6000 })).jsonValue();
+  out.intro_fading = await look(() => {
+    const s = getComputedStyle(document.getElementById("welcome"));
+    return +s.opacity > 0 && +s.opacity < 1 && { fade: s.transitionDuration.split(",")[0].trim(), said: document.querySelectorAll("#log > .ai").length };
+  });
+  out.greeting_thinking = await look(() => {
+    const h = document.querySelector("#log > .ai.hello.thinking");
+    return h && { logo_gone: +getComputedStyle(document.getElementById("welcome")).opacity < 0.05, words: h.textContent };
+  });
+  out.greeting_typing = await look(() => {
+    const h = document.querySelector("#log > .ai.hello"), t = h && h.textContent;
+    return t && t.length < 12 && { words: t, fading: !!h.querySelector(".fresh") };
+  });
+  out.greeting = await greeted(page);
   out.opening = await state(page);
+  // Two visits in the same browser: a different greeting each time.
+  const visits = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  out.visits = [];
+  for (let i = 0; i < 2; i++) {
+    const v = await visits.newPage();
+    v.on("pageerror", (e) => errors.push(String(e)));
+    await v.goto(page_url);
+    out.visits.push(await greeted(v));
+    await v.close();
+  }
+  await visits.close();
+  // "/": what can be connected here, then the files.
+  out.slash = await slash(page);
   if (shot) await page.screenshot({ path: shot + "-opening.png" });
+  // No sidebars to start with; Escape brings Messages and Actions in.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(200);
+  out.sides_in = await state(page);
   // The sidebars' switches: off, and on again (and the choice kept).
   await page.click("#toggle-left");
   await page.click("#toggle-right");
@@ -169,14 +225,8 @@ async function ask(page, text, meanwhile) {
   await page.click("#toggle-left");
   await page.click("#toggle-right");
   out.sides_on = await state(page);
-  // The first thing said: the word logo fades away (still there, going, a moment after; gone once it's done).
-  await ask(page, "play some piano music", async () => {
-    await page.waitForTimeout(120);
-    out.logo_fading = await page.evaluate(() => {
-      const s = getComputedStyle(document.getElementById("welcome"));
-      return { fade: s.transitionDuration.split(",")[0].trim(), seen: s.visibility === "visible" && +s.opacity > 0 && +s.opacity < 1 };
-    });
-  });
+  // Music asked for.
+  await ask(page, "play some piano music");
   await page.waitForTimeout(300);
   out.music = await state(page);
   if (shot) await page.screenshot({ path: shot + "-music.png" });
@@ -191,7 +241,7 @@ async function ask(page, text, meanwhile) {
   out.over_view = (await state(page)).view;
   await page.keyboard.press("Escape");                     // ends the search
   out.unslashed = await state(page);
-  // Escape: the middle fills the screen (what's open and the message box), and back.
+  // Escape: the sidebars go, the middle filling the screen (what's open and the message box), and come back.
   await page.keyboard.press("Escape");
   await page.waitForTimeout(200);
   out.full = await state(page);
@@ -259,13 +309,14 @@ async function ask(page, text, meanwhile) {
   await page.click("#frame-close");
   await page.click("#input");
 
-  // Connect Claude: its sheet, a key, and then Claude (a stand-in) answers, using a tool of the demo's.
-  await page.click("#demo-claude");
+  // Connect Claude ("/"): its sheet, a key, and then Claude (a stand-in) answers, using a tool of the demo's.
+  await slash(page, "Connect Claude");
   out.claude_sheet = await state(page);
   await page.keyboard.type("sk-ant-api03-demo-test-key");
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => !document.body.classList.contains("sheet"));
   out.claude_on = await state(page);
+  out.claude_on_slash = await slash(page);
   out.stored = await page.evaluate(() => localStorage.getItem("chatcomputer-demo-claude-key"));
   await ask(page, "show me Tokyo");
   out.claude_map = await state(page);
@@ -278,14 +329,15 @@ async function ask(page, text, meanwhile) {
   await page.waitForFunction(() => !document.body.classList.contains("content"));
   out.video_ended = await state(page);
   out.api = api;
-  await page.click("#demo-claude");                        // disconnecting
+  await slash(page, "Disconnect Claude");
   out.claude_off_sheet = await state(page);
   await page.click("#sheet-ok");
   await page.waitForFunction(() => !document.body.classList.contains("sheet"));
   out.claude_off = await state(page);
+  out.claude_off_slash = await slash(page);
   out.stored_after = await page.evaluate(() => localStorage.getItem("chatcomputer-demo-claude-key"));
-  // Connect AirPods: what it does, before the microphone is asked for.
-  await page.click("#demo-airpods");
+  // Connect AirPods ("/"): what it does, before the microphone is asked for.
+  await slash(page, "Connect AirPods");
   out.talk_sheet = await state(page);
   await page.keyboard.press("Escape");
 
@@ -317,16 +369,19 @@ async function ask(page, text, meanwhile) {
     };
   });
   await ai.goto(page_url);
-  await ai.waitForFunction(() => document.getElementById("demo-tools") && !document.getElementById("demo-nano").hidden);
-  out.ai_opening = await state(ai);
-  await ai.click("#demo-nano");
+  await ai.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  await ai.waitForTimeout(400);
+  out.ai_opening = await slash(ai);
+  await slash(ai, "Download Gemini");
   out.ai_sheet = await state(ai);
   await ai.click("#sheet-ok");
-  await ai.waitForFunction(() => /50%/.test(document.getElementById("demo-nano").getAttribute("aria-label")));
+  await ai.waitForFunction(() => /50%/.test(document.getElementById("input").placeholder));
   out.ai_downloading = await state(ai);
+  out.ai_downloading_slash = await slash(ai);
   await ai.evaluate(() => window.__ai.half());
-  await ai.waitForFunction(() => getComputedStyle(document.getElementById("demo-nano")).display === "none");
+  await ai.waitForFunction(() => !/Downloading/.test(document.getElementById("input").placeholder));
   out.ai_on = await state(ai);
+  out.ai_on_slash = await slash(ai);
   await ai.click("#input");
   await ask(ai, "write a short poem about the sea");
   out.ai_poem = await state(ai);
@@ -344,7 +399,7 @@ async function ask(page, text, meanwhile) {
   await rows.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
     headers: { "access-control-allow-origin": "*" }, body: "{}" }));
   await rows.goto(page_url);
-  await rows.waitForFunction(() => document.getElementById("demo-tools"));
+  await rows.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
   await rows.waitForTimeout(300);
   await rows.click("#input");
   await rows.keyboard.type("is it free");
@@ -370,26 +425,28 @@ async function ask(page, text, meanwhile) {
   await rows.waitForFunction(() => document.querySelectorAll("#log > .acts.theirs").length === 2);
   out.retry = await rows.evaluate(() => ({ yous: Array.from(document.querySelectorAll("#log > .you")).map((y) => y.textContent),
     last: Array.from(document.querySelectorAll("#log > .acts")).filter((r) => r.classList.contains("last")).length }));
+  out.rows_hello = await rows.evaluate(() => document.querySelectorAll("#log > .ai.hello").length);
   if (shot) await rows.screenshot({ path: shot + "-rows.png" });
 
-  // A phone: no sidebars and no switches; the buttons inside the box; the conversation and the box still work.
+  // A phone: no sidebars and no switches; nothing in the box but the words and the arrow; it works.
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   phone.on("pageerror", (e) => errors.push(String(e)));
   await phone.route(/youtube/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: PLAYER }));
   await phone.goto(page_url);
-  await phone.waitForFunction(() => document.getElementById("demo-tools"));
-  await phone.waitForTimeout(400);
+  await phone.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  await greeted(phone);
   out.phone_opening = await state(phone);
-  // As in the Claude app: the text a twentieth of the screen's width, never under 16px (no zooming in on the box);
-  // the box nearly the screen's width, the words above, the buttons and the arrow under them; nothing past the edges.
+  // As in the Claude app (measured on an iPhone): the text a eighteenth of the screen's width, never under 16px (no
+  // zooming in on the box); the conversation and the box 0.77rem from the sides; the box 100px tall at 375px across,
+  // the words above and the arrow under them at the right, 8px from the box's edges; nothing past the screen's edges.
   out.phone_layout = await phone.evaluate(() => {
     const r = (id) => document.getElementById(id).getBoundingClientRect();
-    const box = r("box"), input = r("input"), send = r("send"), tools = r("demo-tools");
-    return { phone: document.body.classList.contains("phone"), rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+    const box = r("box"), input = r("input"), send = r("send"), rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { phone: document.body.classList.contains("phone"), rem: rem,
       input_px: parseFloat(getComputedStyle(document.getElementById("input")).fontSize), box_w: Math.round(box.width), width: innerWidth,
-      tools_under: tools.top >= input.bottom, send_under: send.top >= input.bottom, send_right: Math.round(box.right - send.right),
-      tools_left: Math.round(tools.left - box.left), scroll_w: document.documentElement.scrollWidth,
-      typing_in: document.activeElement && document.activeElement.id };
+      box_left: Math.round(box.left), box_h: Math.round(box.height / rem * 100) / 100, send_under: send.top >= input.bottom,
+      send_right: Math.round(box.right - send.right), words_left: Math.round(input.left - box.left),
+      scroll_w: document.documentElement.scrollWidth, typing_in: document.activeElement && document.activeElement.id };
   });
   await phone.tap("#input");
   out.phone_tapped = await phone.evaluate(() => document.activeElement.id);
@@ -485,12 +542,12 @@ async function ask(page, text, meanwhile) {
   const ip = await iphone.newPage();
   ip.on("pageerror", (e) => errors.push(String(e)));
   await ip.goto(page_url);
-  await ip.waitForFunction(() => document.getElementById("demo-tools"));
-  await ip.tap("#demo-airpods");
+  await ip.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  await slash(ip, "Connect AirPods", true);
   await ip.tap("#sheet-ok");
   await ip.waitForFunction(() => window.recs.length === 1 && window.recs[0].started);
   out.talk_phone = await ip.evaluate(() => ({ continuous: window.recs[0].continuous, spoken: window.spoken.slice(), awake: window.awake,
-    button: document.getElementById("demo-airpods").getAttribute("aria-label") }));
+    hint: document.getElementById("input").placeholder }));
   await ip.evaluate(() => window.recs[0].hear("what time"));
   await ip.waitForTimeout(300);
   await ip.evaluate(() => window.recs[0].hear("what time is it"));
@@ -506,7 +563,7 @@ async function ask(page, text, meanwhile) {
   await ip.waitForFunction(() => window.recs.length === 3 && window.recs[2].started, null, { timeout: 15000 });
   await ip.evaluate(() => window.recs[2].onerror({ error: "service-not-allowed" }));
   out.talk_refused = await ip.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
-    text: document.getElementById("sheet-text").textContent, button: document.getElementById("demo-airpods").getAttribute("aria-label"),
+    text: document.getElementById("sheet-text").textContent, hint: document.getElementById("input").placeholder,
     awake: window.awake }));
   await iphone.close();
   out.errors = errors;

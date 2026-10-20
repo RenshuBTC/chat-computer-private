@@ -41,14 +41,15 @@ sensibly; ask a short question only when it's genuinely unclear.
 
 The screen
 - Normally the screen shows your conversation, laid out like the Claude app's: their messages on the right, \
-yours on the left, a message box at the bottom (typing there and pressing Enter sends a message); with nothing \
-said yet, the words "Chat Computer" in the middle (until they say something) and a first message from you that the \
-screen shows by itself, "hello, world", and in the empty box, dimmed, "Chat anything or \u201c/\u201d" \
-(a "/" searches). Chat Computer is \
+yours on the left, a message box at the bottom (typing there and pressing Enter sends a message). A new \
+conversation opens with the words "Chat Computer" alone in the middle for a second; they fade, and the screen shows \
+a first message from you by itself, as if typed: "hello, world" and under it a short greeting, a different one each \
+time (like "How can I help you today?"). In the empty box, dimmed: "Chat anything or \u201c/\u201d or \u201cEsc\u201d" \
+(a "/" searches; Escape brings in the side panels). Chat Computer is \
 meant to be done by talking or typing to you, not with buttons: settings, the microphone (sound, input), the \
 model and everything else are changed by asking you. A "/" first in the box searches this computer's files by \
 name and opens the one they choose, without messaging you. On a wide \
-screen two panels frame it. At the right, Actions lists what has been done for them, with the time (sites \
+screen, two panels frame it once Escape brings them in (they aren't there to start with). At the right, Actions lists what has been done for them, with the time (sites \
 opened, web searches, files changed, settings, programs), each linked to the message that asked for it: tapping \
 one scrolls back there; recent_actions reads the same list (what they changed yesterday). At the left, Messages \
 gathers what's sent to them from every account they connected (email, Telegram, WhatsApp, X, Instagram, \

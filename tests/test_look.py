@@ -34,14 +34,16 @@ def test_only_black_text_on_a_warm_off_white():
     # send (as ChatGPT's).
     assert re.search(r"--bubble:\s*#E7E4DD;", root) and re.search(r"--line:\s*#DDD9D1;", root)
     assert re.search(r"--dim:\s*#918F8A;", root)
+    # The message box: white, set off from the background (with a soft shadow), as the Claude app's is.
+    assert re.search(r"--paper:\s*#FFFFFF;", root)
     # Those are the only colours: everything else uses them.
     assert COLOR.findall(theme.replace(root, "")) == []
     assert COLOR.findall(chat) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
     sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--side-gap"}
-    assert used - sizes == {"--ground", "--ink", "--bubble", "--line", "--dim", "--sans", "--mono"}
+    assert used - sizes == {"--ground", "--ink", "--bubble", "--line", "--dim", "--paper", "--sans", "--mono"}
     dims = re.findall(r"([^{}]+)\{[^}]*var\(--dim\)", chat)
-    assert [d.strip() for d in dims] == ["#hint", "#send"]
+    assert [d.strip() for d in dims] == ["#input::placeholder", "#send"]
     # No dark mode.
     for text in (theme, chat, _asset("chat.html"), _asset("chat.js"), render.DOC_CSS):
         assert "data-theme" not in text and "dark" not in text.lower()
@@ -59,7 +61,9 @@ def test_your_words_are_in_a_bubble_not_grey_text():
     # there or not (opacity only ever 0 or 1, but for the thinking dot's pulse).
     rest = chat.replace("@keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }", "")
     assert set(re.findall(r"opacity:\s*([\d.]+)", rest)) <= {"0", "1"}
-    assert "placeholder" not in chat     # the message box has none: it would be grey text
+    # The empty box's hint is its placeholder: the one grey text (--dim), only there.
+    rules = [r.strip() for r in re.findall(r"([^{}]*::placeholder[^{}]*\{[^}]*\})", chat)]
+    assert rules == ["#input::placeholder { color: var(--dim); opacity: 1; }"]
 
 
 def test_fonts_come_with_chatcomputer():

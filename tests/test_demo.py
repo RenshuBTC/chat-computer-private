@@ -25,7 +25,7 @@ def test_the_demo_is_chatcomputer_s_real_screen_as_it_is_now():
     page = (ROOT / "docs" / "index.html").read_text()
     # The demo's host comes before Chat Computer's own scripts, which are the real ones; its own look after theirs.
     assert page.index("demo/host.js") < page.index("demo/md.js") < page.index("demo/chat.js")
-    assert page.index("demo/chat.css") < page.index("demo/demo.css")
+    assert "demo/demo.css" not in page and not (ROOT / "docs" / "demo" / "demo.css").exists()     # no buttons of its own
     # No icon, anywhere: the tab shows the browser's own, and the word logo is the words alone.
     assert 'rel="icon"' not in page and "apple-touch-icon" not in page and "<img" not in page
     assert not any((ROOT / "docs" / n).exists() for n in ("favicon.ico", "favicon.svg", "apple-touch-icon.png"))
@@ -98,29 +98,44 @@ def test_the_demo_works_in_a_browser():
     res = json.loads(lines[-1])
     assert "failed" not in res, res["failed"]
     assert res["errors"] == []
-    # It opens on the word logo and Chat Computer's first words, hello, world (nothing open, no sheet, no button to
-    # press), the cursor in the box under the dimmed hint, and the two buttons at the box's right.
-    first = res["opening"]
-    assert not first["content"] and not first["sheet"] and first["view"] is None and first["toggles"] == ["true", "true"]
-    assert not first["bottom_toggle"] and not first["full"]
-    assert first["first_ai"] == first["last"] == "hello, world" and first["said"] == 1 and first["logo"] == "Chat Computer"
+    # It opens on the word logo alone; after a second it fades away, over half a second, and then Chat Computer's
+    # first words come in as its answers do, as if just typed: a moment's thinking (the logo gone), then the words a
+    # few letters at a time, fading in. First hello, world, and under it a greeting, another on another visit.
+    intro, first = res["intro"], res["opening"]
+    assert intro["logo"] == "Chat Computer" and intro["said"] == 0
+    assert res["intro_fading"] == {"fade": "0.5s", "said": 0}
+    assert res["greeting_thinking"] == {"logo_gone": True, "words": ""}
+    typing = res["greeting_typing"]
+    assert "hello, world".startswith(typing["words"]) and typing["fading"]
+    hello, greeting = res["greeting"].split("\n")
+    assert hello == "hello, world" and re.fullmatch(r"[A-Z][^\n]{5,60}[?.]", greeting), greeting
+    one, two = res["visits"]
+    assert one.startswith("hello, world\n") and two.startswith("hello, world\n") and one != two
+    # Then: nothing open, no sheet, no button to press, the cursor in the box under the dimmed hint, and nothing else
+    # in or beside the box but its arrow: "/" lists what can be connected (Claude, AirPods), then the files.
+    assert not first["content"] and not first["sheet"] and first["view"] is None
+    # No sidebars to start with (the middle fills the screen), though there's room for them; Escape brings them in.
+    assert first["full"] and first["sides"] == [False, False] and first["toggles"] == [False, False] and not first["bottom_toggle"]
+    ins = res["sides_in"]
+    assert not ins["full"] and ins["sides"] == [True, True] and ins["toggles"] == ["true", "true"]
+    assert first["first_ai"] == res["greeting"] and first["last"] == res["greeting"].replace("\n", "") and first["said"] == 1
+    assert first["logo"] is None
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
-    assert first["typing_in"] == "input" and first["hint"] == "Chat anything or \u201c/\u201d"
-    assert first["hint_weight"] == "400" and first["tools"] == ["Connect Claude", "Connect AirPods"] and first["tools_at"] == "box"
+    assert first["typing_in"] == "input" and first["hint"] == "Chat anything or \u201c/\u201d or \u201cEsc\u201d"
+    assert first["hint_weight"] == "400" and first["buttons"] == 0
+    assert res["slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Packing list.md" in res["slash"][2:]
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
     assert res["sides_off"]["sides"] == [False, False] and res["sides_off"]["toggles"][:2] == ["false", "false"]
     assert json.loads(res["kept"]) == {"left": False, "right": False}
-    assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["first_ai"] == "hello, world"
-    assert res["sides_on"]["logo"] == "Chat Computer"
+    assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["first_ai"] == res["greeting"]
+    assert res["sides_on"]["logo"] is None
     # Asked for music: soft piano made by the browser, in the middle in the conversation's place (named at the top
     # of its frame, with the message box under it), and Actions says so.
     music = res["music"]
     assert music["content"] and music["last"] == "Playing some calm piano." and music["done"][-1] == "Played some calm piano"
     assert not music["column_shown"] and music["frame_title"] == "Now playing" and music["composer"]
-    # The first thing said took the word logo away, fading over half a second; hello, world is still the
-    # conversation's first message.
-    assert music["logo"] is None and music["first_ai"] == "hello, world"
-    assert res["logo_fading"] == {"fade": "0.5s", "seen": True}
+    # The first words are still the conversation's first message.
+    assert music["logo"] is None and music["first_ai"] == res["greeting"]
     f, v = music["frame"], music["view"]
     assert f[0] < v[0] and f[1] + 30 < v[1] and v[0] + v[2] < f[0] + f[2] and v[1] + v[3] < f[1] + f[3]
     # "/": the list is in front of what's open; Escape ends the search (and only that).
@@ -165,7 +180,7 @@ def test_the_demo_works_in_a_browser():
     assert video["done"][-1] == "Played a video on YouTube"
     # Connect Claude: a key, checked with Anthropic; then Claude answers and does things here (a map, as asked).
     assert res["claude_sheet"]["sheet"] and res["claude_sheet"]["sheet_title"] == "Connect Claude"
-    assert not res["claude_on"]["sheet"] and res["claude_on"]["tools"][0] == "Claude connected"
+    assert not res["claude_on"]["sheet"] and res["claude_on_slash"][0] == "Disconnect Claude"
     assert json.loads(res["stored"]) == "sk-ant-api03-demo-test-key"
     m = res["claude_map"]
     assert m["last"] == "Here's Tokyo." and "openstreetmap.org/export/embed.html?bbox=139.55%2C35.55%2C139.95%2C35.8" in m["src"]
@@ -193,18 +208,20 @@ def test_the_demo_works_in_a_browser():
     assert '"signature":"sig-toolu_2"' in api[4]["all"]
     # Disconnecting: the key leaves the browser, and the written answers are back.
     assert res["claude_off_sheet"]["sheet_title"] == "Claude is connected"
-    assert res["claude_off"]["tools"][0] == "Connect Claude" and res["stored_after"] is None
+    assert res["claude_off_slash"][0] == "Connect Claude" and res["stored_after"] is None
     # Connect AirPods says what it does before the microphone is asked for.
     assert res["talk_sheet"]["sheet"] and res["talk_sheet"]["sheet_title"] == "Talk through your AirPods"
-    # Chrome's built-in AI, where Chrome has it: "Download Gemini" first; its sheet says what it is before anything is
-    # downloaded; the download's progress on the button; then it answers what the written answers can't (a page on
-    # the screen, said in Actions), from a session told what Chat Computer is, and the written answers still
-    # answer what they can.
-    assert res["ai_opening"]["tools"] == ["Download Gemini", "Connect Claude", "Connect AirPods"]
+    # Chrome's built-in AI, where Chrome has it: "Download Gemini" in the "/" list; its sheet says what it is before
+    # anything is downloaded; the download's progress in the empty box (and the list); then it answers what the
+    # written answers can't (a page on the screen, said in Actions), from a session told what Chat Computer is, and the
+    # written answers still answer what they can.
+    assert res["ai_opening"][:3] == ["Connect Claude", "Connect AirPods", "Download Gemini"]
     assert res["ai_sheet"]["sheet"] and res["ai_sheet"]["sheet_title"] == "Download Gemini"
-    assert not res["ai_downloading"]["sheet"] and res["ai_downloading"]["tools"][0] == "Downloading 50%"
+    assert not res["ai_downloading"]["sheet"] and res["ai_downloading"]["hint"] == "Downloading Gemini (50%)\u2026"
+    assert res["ai_downloading_slash"][2] == "Downloading Gemini (50%)"
     on = res["ai_on"]
-    assert on["tools"] == ["Connect Claude", "Connect AirPods"] and on["done"][-1] == "Turned on Chrome's built-in AI"
+    assert on["hint"] == "Chat anything or \u201c/\u201d or \u201cEsc\u201d" and on["done"][-1] == "Turned on Chrome's built-in AI"
+    assert res["ai_on_slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Download Gemini" not in res["ai_on_slash"]
     poem = res["ai_poem"]
     assert poem["content"] and poem["last"] == "Here's a short poem about the sea." and poem["done"][-1] == "Showed \u201cThe sea\u201d"
     assert "The tide comes in on silver feet." in res["ai_poem_view"] and "Written by Chrome's built-in AI" in res["ai_poem_view"]
@@ -219,21 +236,24 @@ def test_the_demo_works_in_a_browser():
         {"kind": "mine", "last": False, "when": "just now", "acts": ["Ask again", "Edit", "Copy"], "shown": "0", "after": "you"},
         {"kind": "theirs", "last": True, "when": "just now", "acts": ["Copy", "Read aloud", "Good answer", "Bad answer", "Ask again"],
          "shown": "1", "after": "ai"}]
+    assert res["rows_hello"] == 0                     # (something said straight away: no first words before it)
     fb = res["feedback"]
     assert fb["on"] == ["good"] and [(k["good"], k["on"], k["prompt"]) for k in fb["kept"]] == [(True, True, "is it free")]
     assert res["edit"] == {"box": "is it free", "focused": "input"}
     assert res["retry"] == {"yous": ["is it free", "is it free"], "last": 1}
-    # A phone: no sidebars and no switches; the buttons are inside the box, and it works.
+    # A phone: no sidebars and no switches; nothing in the box but the words and the arrow, and it works.
     phone = res["phone_opening"]
-    assert phone["first_ai"] == "hello, world" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False]
-    assert phone["tools_at"] == "row"
+    assert phone["first_ai"].startswith("hello, world\n") and phone["logo"] is None and phone["toggles"] == [False, False]
+    assert phone["buttons"] == 0
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
-    # As the Claude app is on a phone: text a twentieth of the screen's width (390px: 19.5px), never under 16px, so
-    # the browser doesn't zoom in on the box; the box nearly the screen's width, its words above and its buttons and
-    # send arrow under them; nothing past the screen's edges; the keyboard only for a touch on the box.
+    # As the Claude app is on a phone (measured on an iPhone): text a eighteenth of the screen's width (390px: 21.7px),
+    # never under 16px, so the browser doesn't zoom in on the box; the box 0.77rem from the screen's sides and 4.77rem
+    # tall, its words above, 0.58rem in past its line, and the send arrow under them, 8px from its right; nothing past
+    # the screen's edges; the keyboard only for a touch on the box.
     lay = res["phone_layout"]
-    assert lay["phone"] and lay["rem"] == 19.5 and lay["input_px"] >= 16 and lay["width"] - lay["box_w"] <= 24
-    assert lay["tools_under"] and lay["send_under"] and lay["send_right"] < 20 and lay["tools_left"] < 20
+    assert lay["phone"] and lay["rem"] == 21.7 and lay["input_px"] >= 16
+    assert lay["box_left"] == 17 and abs(lay["width"] - lay["box_w"] - 33.4) <= 1 and abs(lay["box_h"] - 4.77) < 0.1
+    assert lay["send_under"] and lay["send_right"] == 8 and lay["words_left"] == 15
     assert lay["scroll_w"] <= lay["width"] and lay["typing_in"] != "input" and res["phone_tapped"] == "input"
     # Sent: the keyboard goes down (the box isn't being typed in), as in ChatGPT's app.
     assert res["phone"]["typing_in"] != "input"
@@ -248,7 +268,7 @@ def test_the_demo_works_in_a_browser():
     assert res["phone_put_away"] is False and res["phone_put_away_too"] is False
     assert res["phone_shade"]["blur"] == "none" and res["phone_shade"]["menu_blur"].startswith("blur(")
     # Two fingers pinched: nothing zooms, and the text keeps its size.
-    assert res["phone_pinched"] == {"rem": 19.5, "zoom": 1, "scroll_w": 390}
+    assert res["phone_pinched"] == {"rem": 21.7, "zoom": 1, "scroll_w": 390}
     # Music, and then asked about it ("turn the music down", "stop the music": music words too): turned down (the
     # same music, quieter, not started again), then stopped.
     assert res["phone_music"]["content"] and res["phone_music"]["last"] == "Playing some calm piano."
@@ -262,7 +282,7 @@ def test_the_demo_works_in_a_browser():
     # word); the screen kept on; what's heard, never called final, said once it stops changing; the answer read out,
     # then listening again; a thing heard twice over asked once; refused, what to switch on, and the screen let go.
     talk = res["talk_phone"]
-    assert talk == {"continuous": False, "spoken": [{"text": " ", "volume": 0}], "awake": 1, "button": "AirPods on"}
+    assert talk == {"continuous": False, "spoken": [{"text": " ", "volume": 0}], "awake": 1, "hint": "AirPods on: talk, or type"}
     assert res["talk_hearing"] == "what time is it"
     heard = res["talk_answered"]
     assert heard["asked"] == "what time is it" and heard["read_out"] == heard["answer"] and heard["answer"].startswith("It's ")
@@ -270,4 +290,4 @@ def test_the_demo_works_in_a_browser():
     assert res["talk_twice"] == "What time is it in Tokyo"
     refused = res["talk_refused"]
     assert refused["title"] == "Talking stopped" and "Siri or Dictation" in refused["text"]
-    assert refused["button"] == "Connect AirPods" and refused["awake"] == 0
+    assert refused["hint"] == "Chat anything or \u201c/\u201d" and refused["awake"] == 0      # (no Escape on a phone)

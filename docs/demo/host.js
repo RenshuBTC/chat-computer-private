@@ -5,7 +5,7 @@
    what you type (or say, or type in the Claude app on your phone) goes to Claude, which opens websites, plays
    music, reads your messages and looks after your files. Here, Claude's answers to a few things are written in
    advance, the messages and files are made up, and everything stays in your browser: nothing typed here is sent
-   anywhere, unless you choose one of the two buttons at the right of the message box:
+   anywhere, unless you choose one of the two that "/" in the message box lists:
    - Connect Claude: with your own Claude API key, Claude answers for real and does things on this screen. What you
      type goes from your browser straight to Anthropic; the key stays in this browser.
    - Connect AirPods: you talk, and the answers are read out. Your browser turns what you say into text (Chrome
@@ -109,24 +109,32 @@
   // ------------------------------------------------------------------ the screen's size
   // On Chat Computer the text size comes from the screen's real size and how far away you sit (ui/layout.py); here,
   // from the screen's size too, not the window's: a smaller window has the same size of text, in a narrower column.
-  // On a phone, as in the Claude app there: a twentieth of the screen's width (its narrow side), 16 to 21px. On a
-  // tablet, a forty-sixth, 16 to 20px. On a computer, what a full-size browser window on that screen would have.
-  // Never under 16px on a touchscreen: phones zoom in on a box to type in with smaller text. Pinching the
-  // conversation (a tablet's touchscreen) or asking for bigger or smaller text changes it, as on Chat Computer.
-  var size = 20, column = 600, scale = store("chatcomputer-demo-scale") || 1;
+  // On a phone, as in the Claude app there (measured on an iPhone 375 points wide: its words are as big as ours at a
+  // eighteenth of the screen's width), a eighteenth of the screen's width (its narrow side), 16 to 24px, in Safari,
+  // Chrome or any browser alike, with the conversation 0.77rem from the screen's sides (chat.css). On a tablet, a
+  // forty-sixth, 16 to 20px. On a computer, what a full-size browser window on that screen would have. Never under
+  // 16px on a touchscreen: phones zoom in on a box to type in with smaller text. Pinching the conversation (a
+  // tablet's touchscreen) or asking for bigger or smaller text changes it, as on Chat Computer; a phone keeps its own
+  // choice (pinching there once changed it; now nothing zooms on a phone, so that old choice is left behind).
   var touchOnly = window.matchMedia ? window.matchMedia("(hover: none) and (pointer: coarse)") : { matches: false };
+  function onPhone() {
+    var s = window.screen || {};
+    return touchOnly.matches && Math.min(s.width || window.innerWidth, s.height || window.innerHeight) < 600;   // chat.js's body.phone
+  }
+  function scaleKey() { return onPhone() ? "chatcomputer-demo-phone-scale" : "chatcomputer-demo-scale"; }
+  var size = 20, column = 600, scale = store(scaleKey()) || 1;
   function layout() {
     var w = window.innerWidth, s = window.screen || {}, sw = s.width || w, sh = s.height || window.innerHeight;
-    var across = Math.min(sw, sh), base;
-    if (touchOnly.matches && across < 600) base = Math.max(16, Math.min(21, across / 20));     // chat.js's body.phone
+    var across = Math.min(sw, sh), phone = onPhone(), base;
+    scale = store(scaleKey()) || 1;
+    if (phone) base = Math.max(16, Math.min(24, across / 18));
     else if (touchOnly.matches) base = Math.max(16, Math.min(20, across / 46));
     else base = Math.max(15, Math.min(26, sw * 0.0125, ((s.availHeight || sh) - 90) * 0.022));
     size = base * scale;
     if (touchOnly.matches) size = Math.max(16, size);
-    column = Math.round(Math.min(30 * size, w - 2 * size));
+    column = Math.round(Math.min(30 * size, w - (phone ? 1.54 : 2) * size));
     call("layout", Math.round(size * 10) / 10, column);
     place();
-    placeTools();
   }
   window.addEventListener("resize", layout);
 
@@ -480,7 +488,7 @@
                  tokyo: [139.55, 35.55, 139.95, 35.8], paris: [2.22, 48.8, 2.47, 48.92], sydney: [151.0, -33.98, 151.35, -33.78] };
   var TRY = "Try “play some piano music”, “show me a map of Tokyo”, “weather in London”, " +
             "“set a timer for 5 minutes” or “what did Jane say?”. Type / to search the files.";
-  var REAL = "Connect Claude, at the right of the message box, and Claude answers for real, with your own API key.";
+  var REAL = "Type / and choose Connect Claude, and Claude answers for real, with your own API key.";
   function map(b, name) {
     show({ src: "https://www.openstreetmap.org/export/embed.html?bbox=" + b.join("%2C") + "&layer=mapnik",
            title: name ? "Map of " + name : "Map" });
@@ -911,7 +919,7 @@
     }],
     [/\bwhat (can'?t|can not|cannot) you do\b|\byour limits\b|\bwhat don'?t you do\b/i, function () {
       return { text: "On this page I can only show a few things: music the browser makes, maps, timers, the weather, the news, " +
-        "Wikipedia's articles and the made-up messages and files. Real answers need Claude (Connect Claude) or the AI built into " +
+        "Wikipedia's articles and the made-up messages and files. Real answers need Claude (type / for Connect Claude) or the AI built into " +
         "Chrome and Edge. On a Chat Computer, Claude does " +
         "most of what a computer does, by talking; it doesn't run Windows or Mac apps (it uses websites instead), and " +
         "Windows stays one restart away." };
@@ -1034,7 +1042,7 @@
       return { text: "You're on Home Wi-Fi, and the internet's working.", done: [] };
     }],
     [/\b(airpods|bluetooth|headphones|earbuds)\b/i, function () {
-      return { text: "Connect AirPods, at the right of the message box, and you can talk to me through them.", done: [] };
+      return { text: "Type / and choose Connect AirPods, and you can talk to me through them.", done: [] };
     }],
     [/\b(file|files|find|search|photo|photos|pictures?|beach|budget|resume|cv|recipes?|taxes)\b/i, function (t) {
       if (/beach|photo|picture/i.test(t)) return { text: "Here's Beach.jpg, from your Pictures.", act: function () { show({ html: PAGES.beach() }); } };
@@ -1086,7 +1094,7 @@
     var chrome = nano.state === "downloadable" || nano.state === "downloading";
     var want = WANTS.filter(function (w) { return w[0].test(text); })[0];
     var note = { text: "I can't " + (want ? want[1] : "answer that") + " on this page without an AI: my answers here are written in advance. " +
-      (chrome ? "Your " + AI.browser + " has a free AI built in that can answer on your device: press “Download " + AI.short + "” at the right of the message box. " : "") +
+      (chrome ? "Your " + AI.browser + " has a free AI built in that can answer on your device: type / and choose “Download " + AI.short + "”. " : "") +
       REAL + " On a Chat Computer, Claude answers anything, and does it. " + TRY };
     // (Not about this page or the one answering, and not a follow-up: "when was the worst one?" needs what came before.)
     if ((!want || want[1] === "explain that") && FACTUAL.test(text) && !/\b(you|your|yours|this page|chat ?computer)\b/i.test(text)) {
@@ -1112,7 +1120,7 @@
     LanguageModel.availability(NANO_LANG).then(function (a) {
       nano.state = a;
       if (a === "available") nanoSession().catch(function () {});
-      drawTools();
+      status();
     }, function () { nano.state = "unavailable"; });
   }
   // What it's told: who it is and where; that it can look things up (the page does it for it, see lookup); how to
@@ -1170,7 +1178,7 @@
       nano.creating = LanguageModel.create(opts).then(function (s) {
         nano.session = s;
         nano.state = "available";
-        drawTools();
+        status();
         return s;
       }, function (e) { nano.creating = null; throw e; });
     }
@@ -1183,17 +1191,17 @@
       "you. It runs on this computer: what you type doesn't leave it, only the words it looks up.",
       AI.browser + " downloads it once (a few gigabytes, from " + AI.maker + ") and keeps it for every site that uses it. The written answers " +
       "work meanwhile.",
-      "For answers from Claude itself, use Connect Claude instead."] });
+      "For answers from Claude itself, type / and choose Connect Claude instead."] });
   }
   function nanoDownload() {
     call("accountForm", null);
     nano.state = "downloading";
-    drawTools();
+    status();
     nanoSession(function (m) {
-      m.addEventListener("downloadprogress", function (e) { nano.progress = Math.round((e.loaded || 0) * 100); drawTools(); });
+      m.addEventListener("downloadprogress", function (e) { nano.progress = Math.round((e.loaded || 0) * 100); status(); });
     }).then(function () { did("Turned on " + AI.browser + "'s built-in AI"); }, function (e) {
       nano.state = "downloadable";
-      drawTools();
+      status();
       call("accountForm", { id: "nano-no", title: AI.browser + "'s AI didn't start", ok: "OK", text: [
         AI.browser + " said: " + clip(e && e.message || "it couldn't", 160) + ".",
         "It needs " + AI.browser + " on a computer with enough room and memory (see " + AI.browser + "'s built-in AI requirements). " +
@@ -1323,7 +1331,7 @@
   }
   function setScale(s) {
     scale = Math.max(0.6, Math.min(2.2, s));
-    store("chatcomputer-demo-scale", scale);
+    store(scaleKey(), scale);
     layout();
   }
   function setVolume(p) {
@@ -1394,6 +1402,9 @@
     return out;
   }
   function search(q) {
+    return matching(commands(), q).concat(files(q));
+  }
+  function files(q) {
     var words = q.toLowerCase().split(/\s+/).filter(Boolean);
     var found = FILES.filter(function (f) {
       var hay = (f.name + " " + f.where).toLowerCase();
@@ -1408,7 +1419,7 @@
   }
 
   // ------------------------------------------------------------------ real Claude, with your own API key
-  // "Connect Claude", at the right of the message box: with a Claude API key (from Claude Console), what you type
+  // "Connect Claude", in the "/" list: with a Claude API key (from Claude Console), what you type
   // goes to Claude itself, from this browser straight to Anthropic, and Claude answers and does things on this
   // screen: plays YouTube, shows maps and pages, opens the made-up messages and files, searches the web. The key
   // stays in this browser (localStorage), and what's used is billed to it. (Anthropic doesn't let other apps sign
@@ -1610,7 +1621,7 @@
   function trouble(err) {
     if (err.status === 401 || err.status === 403) {
       forget();
-      return "Anthropic didn't accept your Claude API key (" + err.message + "), so I've disconnected it. Connect Claude again with a working key.";
+      return "Anthropic didn't accept your Claude API key (" + err.message + "), so I've disconnected it. Type / and choose Connect Claude to connect a working key.";
     }
     if (err.status === 429) return "Claude's limit for your key was reached for now (" + err.message + "). Try again in a minute.";
     if (err.status === 529 || err.status === 503) return "Claude is busy right now. Try again in a moment.";
@@ -1722,7 +1733,7 @@
         claude.search = true;
         store(KEY, key);
         call("accountForm", null);
-        drawTools();
+        status();
         did("Connected Claude (" + MODEL_NAME + ")");
         return;
       }
@@ -1733,7 +1744,7 @@
     claude.key = "";
     claude.talk = [];
     store(KEY, null);
-    drawTools();
+    status();
   }
 
   // ------------------------------------------------------------------ AirPods: talking
@@ -1766,7 +1777,7 @@
     if (ears.told) { startTalking(); return; }
     call("accountForm", { id: "talk", title: "Talk through your AirPods", ok: "Start talking", text: [
       "Pair your AirPods with this phone or computer first, in its Bluetooth settings: a website can't pair them.",
-      "Then talk: what you say goes in the message box's place, and the answers are read out. Press the button again to stop.",
+      "Then talk: what you say goes in the message box's place, and the answers are read out. To stop, type / and choose Stop talking.",
       "Your browser turns what you say into text (Chrome does it on Google's servers). It asks to use the microphone."] });
   }
   function startTalking() {
@@ -1781,7 +1792,7 @@
       ears.device = /airpods/i.test(label) ? label : "";
       ears.on = true;
       keepAwake(true);
-      drawTools();
+      status();
       did(ears.device ? "Connected your AirPods" : "Started listening (" + (clip(label, 40) || "the microphone") + ")");
       hear();
     }, function (err) {
@@ -1789,7 +1800,7 @@
       keepAwake(false);
       call("accountForm", { id: "talk-no", title: "The microphone is off", ok: "OK", text: [
         "Your browser didn't let this page use the microphone (" + (err && err.name || "refused") + ").",
-        "Allow it for chatcomputer.ai in the browser's site settings, then press Connect AirPods again."] });
+        "Allow it for chatcomputer.ai in the browser's site settings, then type / and choose Connect AirPods again."] });
     });
   }
   // Safari can hear a thing said twice over ("what time is it what time is it"): once. (Only something longer than
@@ -1892,7 +1903,7 @@
     ears.said = null;
     keepAwake(false);
     call("partial", "");
-    drawTools();
+    status();
   }
   // While talking, the screen stays on (where the browser can keep it on: most can).
   function keepAwake(on) {
@@ -1947,86 +1958,43 @@
     window.speechSynthesis.speak(u);
   }
 
-  // ------------------------------------------------------------------ the two buttons at the right of the box
-  var KEY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16.5 6.5l2.5 2.5M14 9l2 2"/></svg>';
-  var PODS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3a4 4 0 0 0-4 4 4 4 0 0 0 3 3.87V19a1.5 1.5 0 0 0 3 0V7a4 4 0 0 0-2-4z"/>' +
-    '<path d="M16 3a4 4 0 0 1 4 4 4 4 0 0 1-3 3.87V19a1.5 1.5 0 0 1-3 0V7a4 4 0 0 1 2-4z"/></svg>';
-  var SPARK_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
-  var tools_ = null;
-  function drawTools() {
-    if (!tools_) {
-      tools_ = document.createElement("div");
-      tools_.id = "demo-tools";
-      tools_.innerHTML = '<button type="button" id="demo-nano" tabindex="-1" hidden>' + SPARK_ICON + '<span class="label"></span></button>' +
-        '<button type="button" id="demo-claude" tabindex="-1">' + KEY_ICON + '<span class="label"></span></button>' +
-        '<button type="button" id="demo-airpods" tabindex="-1">' + PODS_ICON + '<span class="dot"></span><span class="label"></span></button>';
-      $("box").appendChild(tools_);
-      tools_.addEventListener("mousedown", function (e) { e.preventDefault(); });       // typing stays in the box
-      $("demo-claude").addEventListener("click", claudeButton);
-      $("demo-nano").addEventListener("click", nanoButton);
-      $("demo-airpods").addEventListener("click", talkButton);
-      // The box or the room beside it changed (the sidebars switched off, Escape filling the screen): placed again.
-      var ro = new ResizeObserver(function () { requestAnimationFrame(placeTools); });
-      ro.observe($("box"));
-      ro.observe($("composer"));
+  // ------------------------------------------------------------------ "/": connecting things
+  // Nothing beside the message box (it stays clean): "/" typed in it lists, above it, what can be connected or turned
+  // on here, before the files it searches (as "/" does on a Chat Computer): Connect Claude (with an API key), Connect
+  // AirPods (talking), and the free AI on this device where there's one to download (Chrome's Gemini Nano). Words
+  // after the "/" narrow them down. Chosen (Enter, a click or a tap), each does what its button did; the empty box
+  // says meanwhile what's going on (status: listening, a download's progress).
+  function commands() {
+    var list = [claude.key ?
+      { command: "claude", icon: "i-key", name: "Disconnect Claude", where: "Claude (" + MODEL_NAME + ") answers now, with your API key" } :
+      { command: "claude", icon: "i-key", name: "Connect Claude", where: "Real Claude here, with your own API key" }];
+    list.push(ears.on ?
+      { command: "airpods", icon: "i-pods", name: "Stop talking", where: ears.device ? "Your AirPods are on" : "Listening now" } :
+      { command: "airpods", icon: "i-pods", name: "Connect AirPods", where: "Talk through your AirPods, and hear the answers" });
+    if (!claude.key && (nano.state === "downloadable" || nano.state === "downloading")) {
+      list.push({ command: "gemini", icon: "i-spark", name: nano.state === "downloading" ?
+        "Downloading " + AI.short + (nano.progress ? " (" + nano.progress + "%)" : "") : "Download " + AI.short,
+        where: AI.browser + "'s built-in AI: free answers, on this device" });
     }
-    var c = $("demo-claude"), p = $("demo-airpods"), g = $("demo-nano");
-    // Chrome's AI: offered while it can be downloaded, its progress while it is; once on, it just answers.
-    g.hidden = !!claude.key || !(nano.state === "downloadable" || nano.state === "downloading");
-    label(g, nano.state === "downloading" ? ["", "Downloading", nano.progress ? " " + nano.progress + "%" : ""] : ["Download ", AI.short, ""]);
-    g.title = nano.state === "downloading" ? AI.browser + " is downloading its built-in AI" : "Download " + AI.model + ", " + AI.browser +
-      "'s built-in AI: free answers, on this device";
-    c.classList.toggle("on", !!claude.key);
-    label(c, claude.key ? ["", "Claude", " connected"] : ["Connect ", "Claude", ""]);
-    c.title = claude.key ? "Claude answers, with your API key. Click to disconnect it." : "Real Claude here, with your own API key";
-    p.classList.toggle("on", ears.on);
-    p.classList.toggle("listening", ears.on);
-    label(p, ears.on ? (ears.device ? ["", "AirPods", " on"] : ["", "Listening", ""]) : ["Connect ", "AirPods", ""]);
-    p.title = ears.on ? "Listening. Click to stop." : "Talk through your AirPods, and hear the answers";
-    placeTools();
+    return list;
   }
-  // A button's words: [before, the name, after]; with little room only the name shows (.short).
-  function label(b, w) {
-    var l = b.querySelector(".label");
-    l.textContent = "";
-    if (w[0]) l.appendChild(span("long", w[0]));
-    l.appendChild(document.createTextNode(w[1]));
-    if (w[2]) l.appendChild(span("long", w[2]));
-    b.setAttribute("aria-label", w.join(""));
+  function matching(list, q) {
+    var words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    return list.filter(function (c) {
+      var hay = (c.name + " " + c.where + " " + c.command).toLowerCase();
+      return words.every(function (w) { return hay.indexOf(w) >= 0; });
+    });
   }
-  function span(cls, text) { var s = document.createElement("span"); s.className = cls; s.textContent = text; return s; }
-  // Beside the box when there's room: side by side, or one above the other, or just their icons. Otherwise inside
-  // it, before the arrow. On a phone, as the Claude app's are there: in the box, under the words, at the left of the
-  // send arrow (chat.css lays the box out in two rows), with their names, or just the names' main word, or just
-  // their icons, as they fit.
-  function placeTools() {
-    if (!tools_) return;
-    var box = $("box"), row = $("row"), rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    tools_.classList.remove("stack", "short", "compact", "inside", "rise");
-    if (document.body.classList.contains("phone")) {
-      if (tools_.parentNode !== row) row.insertBefore(tools_, $("send"));
-      var space = row.clientWidth - $("send").offsetWidth - 0.5 * rem;
-      if (tools_.scrollWidth <= space) return;
-      tools_.classList.add("short");
-      if (tools_.scrollWidth <= space) return;
-      tools_.classList.add("compact");
-      return;
-    }
-    if (tools_.parentNode !== box) box.appendChild(tools_);
-    var b = box.getBoundingClientRect(), limit = $("composer").getBoundingClientRect().right;
-    var room = limit - b.right - 1.25 * rem;
-    // A stack taller than the box (three buttons) that would reach the window's bottom edge rises from the box's bottom.
-    function rise() { if (tools_.getBoundingClientRect().bottom > innerHeight - 0.25 * rem) tools_.classList.add("rise"); }
-    if (tools_.offsetWidth <= room) return;
-    tools_.classList.add("stack");
-    if (tools_.offsetWidth <= room) { rise(); return; }
-    tools_.classList.add("short");
-    if (tools_.offsetWidth <= room) { rise(); return; }
-    tools_.classList.remove("stack", "short");
-    tools_.classList.add("compact");
-    if (tools_.offsetWidth <= room) return;
-    tools_.classList.add("inside");
-    $("row").insertBefore(tools_, $("send"));
+  function command(id) {
+    if (id === "claude") claudeButton();
+    else if (id === "airpods") talkButton();
+    else if (id === "gemini") nanoButton();
+  }
+  function status() {
+    var h = "";
+    if (ears.on) h = ears.device ? "AirPods on: talk, or type" : "Listening: talk, or type";
+    else if (nano.state === "downloading") h = "Downloading " + AI.short + (nano.progress ? " (" + nano.progress + "%)" : "") + "…";
+    call("hint", h);
   }
 
   // ------------------------------------------------------------------ what the page says
@@ -2044,7 +2012,7 @@
           return o;
         }));
         call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
-        drawTools();
+        status();
         nanoCheck();
         break;
       case "send": {
@@ -2072,10 +2040,13 @@
         store("chatcomputer-demo-feedback", fb.slice(-100));
         break;
       }
-      case "search": call("searchResults", msg.n, msg.q || "", search(msg.q || ""),
-                          search(msg.q || "").length ? "" : "Nothing in the demo's files matches \u201c" + (msg.q || "") + "\u201d.");
+      case "search": {
+        var found = search(msg.q || "");
+        call("searchResults", msg.n, msg.q || "", found, found.length ? "" : "Nothing here matches \u201c" + (msg.q || "") + "\u201d.");
         break;
+      }
       case "open_file": if (PAGES[msg.path]) show({ html: PAGES[msg.path]() }); break;
+      case "command": command(String(msg.id || "")); break;
       case "text_scale": setScale(scale * (+msg.factor || 1)); break;
       case "panels": store("chatcomputer-demo-panels", { left: !!msg.left, right: !!msg.right }); break;
       case "add_account":

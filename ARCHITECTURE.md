@@ -440,9 +440,10 @@ retrying with backoff, then starts listening.
   between the two sidebar cards, from the top down to the message box, inside a rounded frame (`#frame`) under
   its bar (`#frame-bar`: the name, `CO.mode("content", title)` then `CO.title` as the page's title comes, and a
   close button that posts `close_content`). The conversation (`#column`) is hidden while something is open: the
-  screen is only ever three parts side by side, Messages, the middle and Actions. Escape makes the middle fill
+  screen is only ever three parts side by side, Messages, the middle and Actions. To start with, the middle fills
   the screen (`body.full`: no sidebars or switches, `--left`/`--panel` 0, the frame or the conversation and the
-  message box across the width) and back: chat.js has it when the conversation page has the keys, the window
+  message box across the width); Escape brings the sidebars in, and puts them away again: chat.js has it when
+  the conversation page has the keys, the window
   (`_on_key`, calling `CO.toggleFull()`) when what's open has them, except a full-screen video's Escape, which
   leaves full screen. A website gets the keys when it's shown (typing and the keys that scroll are its own) and a
   page of Chat Computer's own (`native_uris`) leaves them in the message box; Page Up and Down there, and the
@@ -455,13 +456,18 @@ retrying with backoff, then starts listening.
   over the page (in the browser demo, which draws what's open in the page itself, `CO.openInPage`, the list just
   overlaps it). The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
   moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
-  through) is on top. With nothing said yet the page shows the word logo in the middle (`#wordmark`: Atkinson
-  Hyperlegible Next at 800, the words alone: there's no icon anywhere; it fades away over 0.5 s once there's a
-  message of yours, `body.has-you`, and back when the conversation is cleared) and the conversation starts
-  with Chat Computer's first words (`greet()` in chat.js, an `.ai.hello` message the page adds itself, not part
-  of the transcript): `hello, world`, lower case with its comma as in Kernighan's C tutorial and K&R; the empty
-  message box shows `#hint`, "Chat anything or “/”", dimmed
-  (`--dim`; its first half where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
+  through) is on top. A conversation starts with the word logo alone in the middle (`#wordmark`: Atkinson
+  Hyperlegible Next at 800, the words alone: there's no icon anywhere; shown while `body.intro`, which the page
+  has from its first moment; after a second it fades away over 0.5 s, at once if something's said first) and
+  then Chat Computer's first words come in as its answers do, as if just typed (`greet()` in chat.js: an
+  `.ai.hello` message the page adds itself, not part of the transcript, a moment's thinking and then a few
+  letters at a time through `CO.ai`, so they fade in; none if something was said first): `hello, world`, lower
+  case with its comma as in Kernighan's C tutorial and K&R, and under it a greeting, one of many (some for the
+  time of day), never the one shown last time (`localStorage`, where there is one); again when the conversation
+  is cleared. The empty
+  message box (white, `--paper`, with a soft shadow) shows its placeholder, "Chat anything or “/” or “Esc”",
+  dimmed (`--dim`; without "Esc" where there's no room for the sidebars or no keyboard, and just "Chat anything"
+  where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
   the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items,
   the sidebars' switches and what's open's close button: settings, the microphone (sound tool, `input`) and the
   model are changed by asking.

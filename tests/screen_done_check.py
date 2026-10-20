@@ -1,6 +1,6 @@
-"""Actions, at the right of the conversation: a sixth of the screen wide, grouped by day; tapping an item
-scrolls back to the message that asked for it, and for one from an earlier day, puts that day's messages back
-first (from the transcript). Typing stays in the message box.
+"""Actions, at the right of the conversation once Escape has brought the sidebars in (there are none to start with):
+a sixth of the screen wide, grouped by day; tapping an item scrolls back to the message that asked for it, and for
+one from an earlier day, puts that day's messages back first (from the transcript). Typing stays in the message box.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, clicks with xdotool, and prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1600x900x24" python tests/screen_done_check.py [screenshot.png]
@@ -93,6 +93,7 @@ STATE_JS = """(function () {
             stacked: !!(what && when) && when.getBoundingClientRect().bottom <= what.getBoundingClientRect().top + 1};
   });
   return JSON.stringify({panel: document.body.classList.contains('panel'), display: getComputedStyle(d).display,
+    full: document.body.classList.contains('full'),
     left: r.left, width: r.width, view: window.innerWidth, title: document.getElementById('done-title').textContent,
     items: items, column_right: col.right, box: [box.left, box.right],
     found: found ? {id: found.dataset.id, top: fr.top} : null, scroll: p.scrollTop,
@@ -130,9 +131,15 @@ EVENTS_JS = """window.__ev = []; ["mousedown", "click"].forEach(function (t) {
 
 
 def start() -> None:
+    """No sidebars to start with; Escape brings them in."""
     screen.chat.evaluate_javascript(EVENTS_JS, -1, None, None, None, None, None)
-    read("start", lambda: click(item("Searched")["x"], item("Searched")["y"],
-                                lambda: read("today", go_earlier)))
+    wid = str(screen.win.get_window().get_xid())
+
+    def escape() -> None:
+        subprocess.run(["xdotool", "windowfocus", "--sync", wid, "key", "Escape"], timeout=20)
+        GLib.timeout_add(800, lambda: read("start", lambda: click(item("Searched")["x"], item("Searched")["y"],
+                                                                  lambda: read("today", go_earlier))) and False)
+    read("first", lambda: threading.Thread(target=escape, daemon=True).start())
 
 
 def go_earlier() -> None:

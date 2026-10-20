@@ -1,5 +1,6 @@
-"""The screen's layout with both sidebars: Messages at the left (newest first, pins, opening one) and Actions at
-the right, as rounded cards; something opened (a website) in the middle between them, in a frame with its name and a
+"""The screen's layout: no sidebars to start with, and Escape brings both in: Messages at the left (newest first,
+pins, opening one) and Actions at the right, as rounded cards; something opened (a website) in the middle between
+them, in a frame with its name and a
 close button, from the top down to the message box, the conversation put away; "/" searching, its list in front (the
 page ends above it); the sidebars' switches; the website has the keys (typing goes into its box), and Page Down in the
 message box scrolls it; Escape makes the middle fill the screen and back (from the page, and from the message box);
@@ -110,7 +111,7 @@ STATE_JS = """(function () {
     ai_bottom: aiEl.getBoundingClientRect().bottom, more: document.querySelectorAll('.more').length,
     searching: document.body.classList.contains('searching'), results: [res.left, res.top, res.right, res.bottom],
     input: [Math.round(inp.left + 20), Math.round(inp.top + inp.height / 2)],
-    hint: getComputedStyle(document.getElementById('hint')).display !== 'none' ? document.getElementById('hint').textContent : null});
+    hint: document.getElementById('input').value === '' ? document.getElementById('input').placeholder : null});
 })()"""
 
 
@@ -169,7 +170,8 @@ def act(cmds: list, then, wait_ms: int = 900) -> None:
 
 
 def step_start() -> None:
-    read("start", step_pin)
+    """No sidebars to start with: the middle fills the screen. Escape brings them in."""
+    read("first", lambda: act([["windowfocus", "--sync", wid()], ["key", "Escape"]], lambda: read("start", step_pin)))
 
 
 def step_pin() -> None:

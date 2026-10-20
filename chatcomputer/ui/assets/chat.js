@@ -496,13 +496,14 @@
     if (holdMsg) closeHold();
     if (e.target !== input) focusBox(true);
   }, true);
-  // Escape: what can be done with a held message put away, or Select text, or Messages (where it comes over the
-  // conversation), or the "/" list, or else Messages and Actions come in at the sides, and go again. (A sign-in
-  // form's Escape is its own: Cancel.)
+  // Escape: a sheet cancelled (one with nothing to type in has no keys of its own; a sign-in form's Escape is its
+  // own: Cancel), or what can be done with a held message put away, or Select text, or Messages (where it comes over
+  // the conversation), or the "/" list, or else Messages and Actions come in at the sides, and go again.
   document.addEventListener("keydown", function (e) {
-    if (e.key !== "Escape" || e.isComposing || e.defaultPrevented || locked || body.classList.contains("sheet")) return;
+    if (e.key !== "Escape" || e.isComposing || e.defaultPrevented || locked) return;
     e.preventDefault();
-    if (holdMsg) closeHold();
+    if (body.classList.contains("sheet")) cancelForm();
+    else if (holdMsg) closeHold();
     else if (body.classList.contains("reading")) closeReader();
     else if (body.classList.contains("show-messages")) hideMessages();
     else if (searching) { input.value = ""; fitInput(); }
@@ -519,6 +520,28 @@
     follow();
     reportHole();
   }).observe(composer);
+  // A phone's keyboard comes up over the bottom of the page, and Safari on an iPhone doesn't make the page smaller
+  // for it (Chrome on Android does: the viewport's interactive-widget=resizes-content), so the box, fixed at the
+  // page's bottom, could be left under the keyboard. Never: what's on the screen (the visual viewport) is watched, and
+  // however far the box's bottom is below it (--kb), the box is lifted, to sit just above the keyboard as in the
+  // Claude app, wherever the browser has scrolled what's on the screen to. The conversation gets that much more room
+  // at its end, so its last words can be read above the box.
+  var onScreen = window.visualViewport, kb = 0;
+  function fitKeyboard() {
+    var bottom = composer.getBoundingClientRect().bottom + kb;       // where the box's bottom would be, not lifted
+    var lift = Math.max(0, Math.round(bottom - (onScreen.offsetTop + onScreen.height)));
+    if (lift < 2 || Math.abs((onScreen.scale || 1) - 1) > 0.01) lift = 0;     // (a part of a pixel; or zoomed in, not a keyboard)
+    if (lift === kb) return;
+    kb = lift;
+    rootStyle.setProperty("--kb", kb + "px");
+    body.classList.toggle("keyboard", kb > 0);
+    follow();
+    reportHole();
+  }
+  if (onScreen) {
+    onScreen.addEventListener("resize", fitKeyboard);
+    onScreen.addEventListener("scroll", fitKeyboard);
+  }
   // The empty box's hint (its placeholder): "Chat anything or “/” or “Esc”" where Escape brings the sidebars in (a
   // screen with room for them, and a keyboard), else "Chat anything or “/”"; just "Chat anything" in a box too
   // narrow for more. Or, for a while, what's going on (CO.hint: "Listening", a download's progress).

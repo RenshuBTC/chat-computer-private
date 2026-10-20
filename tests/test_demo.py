@@ -45,12 +45,17 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     # question of fact, the news) goes to Wikipedia: only the words looked up. Google's own pages show in the middle
     # when asked for (Google, its search for what Wikipedia hasn't got, Google Maps' directions: the addresses Google
     # lets other pages show, igu=1 and output=embed). YouTube's search and BBC News are only links, opened by the
-    # visitor in a new tab (open-meteo.com too: the air's source, named).
+    # visitor in a new tab (open-meteo.com too: the air's source, named). Gemma, when the visitor downloads it:
+    # Transformers.js, a fixed version, from jsDelivr, and Google's model from Hugging Face (where the browser keeps
+    # its copy, by that address); it runs on the device, so nothing typed is sent anywhere.
     assert set(re.findall(r"https?://[^/\"' ]+", host)) == {
         "https://www.youtube-nocookie.com", "https://www.openstreetmap.org", "https://api.anthropic.com",
         "https://geocoding-api.open-meteo.com", "https://api.open-meteo.com", "https://air-quality-api.open-meteo.com",
         "https://en.wikipedia.org", "https://open-meteo.com",
-        "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com"}
+        "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com",
+        "https://cdn.jsdelivr.net", "https://huggingface.co"}
+    assert 'var LM_LIBRARY = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";' in host
+    assert host.count("import(") == 1 and "import(LM_LIBRARY)" in host
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("API +")) == [
         '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search', "url"], fetches
@@ -164,6 +169,8 @@ def test_the_demo_works_in_a_browser():
     long = res["fallback"]
     assert not long["content"] and long["column_shown"] and long["view"] is None and long["more"] == 0
     assert long["last"].startswith("I can't answer that on this page without an AI") and long["last"].endswith("Type / to search the files.")
+    # (Here the browser has no AI of its own and can't run Gemma, no WebGPU: it says so.)
+    assert "This browser can't run a free AI on this device (that needs WebGPU: Safari on iOS 26" in long["last"]
     # Google, for real, in the middle: its own address for being shown in another page; a click on its box, and
     # typing goes there, not into the message box.
     g = res["google"]
@@ -229,6 +236,43 @@ def test_the_demo_works_in_a_browser():
     calls = res["ai_calls"]
     assert len(calls["created"]) == 1 and calls["created"][0]["monitored"] and "Gemini Nano" in calls["created"][0]["system"]
     assert calls["prompts"] == [{"text": "write a short poem about the sea", "schema": True}]
+    # Google's Gemma where the browser has no AI of its own but can use the graphics chip (WebGPU; a stand-in for
+    # Transformers.js): "Download Gemma" in the "/" list, and the written answers say so meanwhile; its sheet says what
+    # it is (and how big) before anything's downloaded; the download's progress in the empty box and the list.
+    assert res["lm_opening"][:3] == ["Connect Claude", "Connect AirPods", "Download Gemma"]
+    assert "type / and choose “Download Gemma”" in res["lm_before"]
+    sheet = res["lm_sheet"]
+    assert sheet["sheet"] and sheet["sheet_title"] == "Download Gemma"
+    assert res["lm_downloading"]["hint"] == "Downloading Gemma (49%)…" and res["lm_downloading_slash"][2] == "Downloading Gemma (49%)"
+    # Then it's on (said in Actions), Remove Gemma in the list, and it answers what the written answers can't, its
+    # words streamed in, told who it is; the written answers still answer what they can, and what was said (theirs
+    # too) goes with the next question.
+    on = res["lm_on"]
+    assert on["hint"] == "Chat anything or “/” or “Esc”" and on["done"][-1] == "Turned on Gemma, on this device"
+    assert res["lm_on_slash"][:3] == ["Connect Claude", "Connect AirPods", "Remove Gemma"] and "Download Gemma" not in res["lm_on_slash"]
+    assert res["lm_haiku"]["last"] == "Dark cup in my hands, the day starts with you." and res["lm_music"] == "Playing some calm piano."
+    calls = res["lm_calls"]
+    assert calls["loads"] == [{"task": "text-generation", "model": "onnx-community/gemma-3-1b-it-ONNX", "device": "webgpu",
+                               "dtype": "q4f16", "kept": False}]
+    first_q, second_q = calls["asked"]
+    assert first_q[0][0] == "system" and first_q[0][1].startswith("You are Gemma, a small AI made by Google")
+    assert first_q[1:] == [["user", "write a haiku about coffee"]]
+    assert second_q[1:] == [["user", "write a haiku about coffee"], ["assistant", "Dark cup in my hands, the day starts with you."],
+                            ["user", "play some piano music"], ["assistant", "Playing some calm piano."], ["user", "make it longer"]]
+    # A later visit: it's here (Remove Gemma; nothing to download), and starts when it's first needed, from the
+    # browser's copy (nothing downloaded).
+    assert res["lm_later_slash"][2] == "Remove Gemma" and "Download Gemma" not in res["lm_later_slash"]
+    assert res["lm_starting"] == "Starting Gemma…"
+    assert res["lm_later"]["last"] == "Dark cup in my hands, the day starts with you." and [x["kept"] for x in res["lm_later"]["loads"]] == [True]
+    # The page stopped while it was starting (a phone out of memory): it isn't started by itself again; it's offered,
+    # saying why, and starts from the browser's copy when chosen. Remove Gemma frees the room: Download Gemma again.
+    assert res["lm_stopped_slash"][2] == "Start Gemma"
+    st = res["lm_stopped_sheet"]
+    assert st["title"] == "Start Gemma" and st["ok"] == "Start it" and "Last time, this page stopped while Gemma was starting" in st["text"]
+    assert [x["kept"] for x in res["lm_restarted"]] == [True]
+    assert res["lm_remove_sheet"]["sheet_title"] == "Remove Gemma"
+    gone = res["lm_removed"]
+    assert gone["slash"][2] == "Download Gemma" and gone["disposed"] and gone["kept"] == 0
     # Under each message, as in the Claude app, and different under each: yours (when, ask again, edit, copy) and the
     # answer's (copy, read aloud, good, bad, ask again, when); the latest answer's row shows. Its words faded in.
     assert res["fading"] and set(res["fading"]) == {"fresh"}
@@ -255,6 +299,13 @@ def test_the_demo_works_in_a_browser():
     assert lay["box_left"] == 17 and abs(lay["width"] - lay["box_w"] - 33.4) <= 1 and abs(lay["box_h"] - 4.77) < 0.1
     assert lay["send_under"] and lay["send_right"] == 8 and lay["words_left"] == 15
     assert lay["scroll_w"] <= lay["width"] and lay["typing_in"] != "input" and res["phone_tapped"] == "input"
+    # The keyboard never covers the box: what it covers lifts the box to sit just above it (Safari on an iPhone
+    # doesn't make the page smaller for it), with that much more room at the conversation's end; where Safari has
+    # scrolled what's on the screen down to the box already, it isn't lifted; with the keyboard down, it's back.
+    kbd = res["phone_keyboard"]
+    assert kbd["up"] == {"box": kbd["up"]["seen"], "seen": kbd["up"]["seen"], "room": 300, "keyboard": True}
+    assert kbd["scrolled"]["box"] == kbd["scrolled"]["seen"]
+    assert kbd["down"] == {"box": kbd["down"]["seen"], "seen": kbd["down"]["seen"], "room": 0, "keyboard": False}
     # Sent: the keyboard goes down (the box isn't being typed in), as in ChatGPT's app.
     assert res["phone"]["typing_in"] != "input"
     # Holding a message: its menu (yours: Copy, Select text, Edit; the answer's: Copy, Select text, Read aloud; Send

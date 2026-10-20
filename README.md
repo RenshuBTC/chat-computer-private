@@ -454,20 +454,31 @@ messages and files there are made up. Everyone gets answers, free:
   sites don't let another page show them; on a Chat Computer every site opens in the middle). Asked for something
   only an AI can do (a recipe, a poem, a translation), it says so, and how to get one.
 * **The browser's own AI**, where there is one: Chrome on a computer has Gemini Nano built in, and Edge
-  Phi-4-mini, running on the device itself. The **Download Gemini** button (in Edge, Download Phi-4-mini) at the
-  right of the message box shows while the browser can download it; Chrome downloads it once, after that click,
-  and keeps it for every site. Then it answers what the written answers can't, and can put a page it writes, a map
+  Phi-4-mini, running on the device itself. Typing **/** lists **Download Gemini** (in Edge, Download Phi-4-mini)
+  while the browser can download it; Chrome downloads it once, after it's chosen, and keeps it for every site.
+  Then it answers what the written answers can't, and can put a page it writes, a map
   or a timer on the screen; its answers, long ones too, are in the conversation. It can't reach the internet
   itself, so the page looks things up for it: when a question
   needs something recent or that it isn't sure of, or they say "look it up", it says what to look up, the page
   searches Wikipedia, the day's news (Wikipedia's Current events) and, for haze or pollution, the air
   (Open-Meteo), and it answers from what was found, saying where it's from. The page's own answers go into its
   conversation too, so a follow-up ("the haze?" after the weather) makes sense to it.
+* **Google's Gemma**, where the browser has no AI of its own (a phone, Safari, Firefox: Gemini Nano is only in
+  Chrome on a computer) but can run one on the device's graphics chip (WebGPU: Safari on iOS 26, iPadOS 26 and
+  macOS 26, Chrome on Android and on computers). Typing **/** lists **Download Gemma**: Gemma 3 with 1 billion
+  parameters, Google's small open model, about 0.8 GB (0.9 GB where the graphics chip can't do half precision),
+  downloaded once from Hugging Face by Transformers.js (a fixed version, from jsDelivr) and kept by the browser. It
+  runs on the device, so what's typed doesn't leave it; it answers what the written answers can't, in words, as
+  they come, and looks things up as Gemini Nano does (only the words looked up go to Wikipedia). On later visits
+  it starts from the browser's copy the first time it's needed ("Starting Gemma…"), and is never downloaded again
+  unasked; if the page stopped while it was starting (a phone short of memory closes the page), it waits to be
+  chosen again (Start Gemma). **Remove Gemma** in the list frees the room. It's far smaller than Claude: fine for
+  everyday questions and writing, and it can get things wrong.
 
 What's typed stays in the browser, except a place's name asked about for a map, the weather or the air, which goes
 to Open-Meteo's free geocoding and forecasts (the map itself comes from OpenStreetMap), the words looked up on
-Wikipedia, Google's pages when asked for (as on google.com), and with the two other buttons at the right of the
-message box (`docs/demo/demo.css`):
+Wikipedia, Google's pages when asked for (as on google.com), and with what else the **/** list connects (there are
+no buttons beside the message box):
 
 * **Connect Claude**: paste an API key from Claude Console, and Claude (Opus 5.5, as on a Chat Computer, but at
   the API's own effort, medium, rather than max, for quicker answers) answers for real and does things on the screen: plays YouTube videos (YouTube's player between the panels;
@@ -486,10 +497,11 @@ message box (`docs/demo/demo.css`):
   answer is read out, since the phones' listening goes wrong when it's left on; the screen stays on while
   talking.
 
-On a phone the page is laid out as the Claude app is there: the text a twentieth of the screen's width (never
-under 16px, so the browser doesn't zoom in on the box and push the page past the screen's edges), the message
-box nearly as wide as the screen, with the words above and the buttons and the send arrow under them, and the
-keyboard going down after sending, as in ChatGPT's app. Nothing zooms, two fingers included. Holding a message
+On a phone the page is laid out as the Claude app is there, in any browser: the text an eighteenth of the screen's
+width (never under 16px, so the browser doesn't zoom in on the box and push the page past the screen's edges), the
+message box white and nearly as wide as the screen, with the words above and the send arrow under them, never
+under the keyboard (Safari on an iPhone doesn't make the page smaller for its keyboard, so the box is lifted to sit
+just above it), and the keyboard going down after sending, as in ChatGPT's app. Nothing zooms, two fingers included. Holding a message
 dims the screen behind it and brings up what can be done with it: Copy, Send to (the phone's share sheet),
 Select text (the message alone, its words to select as anywhere on the phone), and Edit for yours or Read aloud
 for Chat Computer's.

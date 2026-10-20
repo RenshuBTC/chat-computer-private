@@ -520,9 +520,13 @@ retrying with backoff, then starts listening.
   and (pointer: coarse)`: no mouse) the box takes the focus only when it's touched, Edit is pressed or a real key
   is typed, and after sending it lets go of it (`doneTyping`, posting `keyboard` `show: false`), so an onscreen
   keyboard goes down as in ChatGPT's app; what's typed in is at least 16px (phones' browsers zoom in on smaller
-  boxes). A phone (`body.phone`: that, on a screen under 600 CSS px across) is laid out as the Claude app is there
-  (the website's: docs/demo/host.js sizes the text at a twentieth of the screen's width, 16 to 21 px): the box
-  nearly the screen's width in two rows (a grid: the words; then the buttons and the send arrow), nothing zooms
+  boxes). The keyboard never covers the box: Safari on an iPhone lays its keyboard over the page without making
+  the page smaller (Chrome on Android makes it smaller, `interactive-widget=resizes-content`), so `fitKeyboard`
+  watches the visual viewport (what's on the screen) and lifts the box (`--kb`, its `bottom`) by however far its
+  bottom is below it, and gives the conversation that much more room at its end. A phone (`body.phone`: that, on a screen under 600 CSS px across) is laid out as the Claude app is there
+  (the website's: docs/demo/host.js sizes the text at an eighteenth of the screen's width, 16 to 24 px, from
+  `screen.width`, so every browser on a phone gets the same): the box nearly the screen's width in two rows (a
+  grid: the words; then the send arrow), nothing zooms
   (the viewport's `maximum-scale=1, user-scalable=no`, `touch-action: pan-x pan-y`, Safari's `gesture*` events
   and two-finger moves prevented), the conversation's own selecting and callout off (`user-select: none`), and
   holding a message opens `#hold-menu` over `#hold-shade` (the screen dimmed by 20% black, not blurred; the menu

@@ -391,6 +391,113 @@ async function ask(page, text, meanwhile) {
   out.ai_calls = await ai.evaluate(() => window.__ai);
   if (shot) await ai.screenshot({ path: shot + "-ai.png" });
 
+  // Google's Gemma where the browser has no AI of its own but a graphics chip it can use (WebGPU), with a stand-in
+  // for Transformers.js (from jsDelivr): "Download Gemma" in the "/" list, its sheet, the download's progress, then it
+  // answers what the written answers can't, its words streamed, knowing what was said before; the written answers
+  // still answer what they can. On a later visit it's there (kept by the browser: the stand-in keeps its files where
+  // Transformers.js does) and starts when it's first needed, from the browser's copy; a page that stopped while it
+  // was starting doesn't start it again by itself; Remove Gemma frees the room.
+  const LM = `export class TextStreamer { constructor(tokenizer, o) { this.o = o; } }
+export async function pipeline(task, model, opts) {
+  const lm = window.__lm, base = "https://huggingface.co/" + model + "/resolve/main/";
+  const files = [["onnx/model_" + opts.dtype + ".onnx", 461341], ["onnx/model_" + opts.dtype + ".onnx_data", 763067904], ["tokenizer.json", 20323013]];
+  const c0 = await caches.open("transformers-cache"), kept = !!(await c0.match(base + files[1][0]));
+  lm.loads.push({ task, model, device: opts.device, dtype: opts.dtype, kept });
+  if (kept) await new Promise((ok) => setTimeout(ok, 400));       // started from the browser's copy, as Transformers.js does
+  else {
+    files.forEach(([file, total]) => opts.progress_callback({ status: "progress", file, loaded: total / 2, total }));
+    await new Promise((ok) => { lm.finish = ok; });
+    const c = await caches.open("transformers-cache");
+    for (const [file, total] of files) {
+      opts.progress_callback({ status: "progress", file, loaded: total, total });
+      opts.progress_callback({ status: "done", file });
+      await c.put(base + file, new Response("x"));
+    }
+  }
+  const gen = async (messages, o) => {
+    lm.asked.push(messages);
+    for (const w of lm.words) { await new Promise((r) => setTimeout(r, 15)); o.streamer.o.callback_function(w); }
+    return [];
+  };
+  gen.tokenizer = {};
+  gen.dispose = async () => { lm.disposed = true; };
+  return gen;
+}`;
+  const lmCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  await lmCtx.addInitScript(() => {
+    window.__lm = { loads: [], asked: [], words: ["Dark cup ", "in my hands, ", "the day ", "starts with you."] };
+    Object.defineProperty(navigator, "gpu", { value: { requestAdapter: () => Promise.resolve({ features: new Set(["shader-f16"]) }) } });
+  });
+  await lmCtx.route("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1", (route) => route.fulfill({ status: 200,
+    contentType: "text/javascript", headers: { "access-control-allow-origin": "*" }, body: LM }));
+  await lmCtx.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*" }, body: "{}" }));
+  const lm = await lmCtx.newPage();
+  lm.on("pageerror", (e) => errors.push(String(e)));
+  await lm.goto(page_url);
+  await greeted(lm);
+  out.lm_opening = await slash(lm);
+  await lm.click("#input");
+  await ask(lm, "write a haiku about coffee");
+  out.lm_before = (await state(lm)).last;
+  await slash(lm, "Download Gemma");
+  out.lm_sheet = await state(lm);
+  await lm.click("#sheet-ok");
+  await lm.waitForFunction(() => /49%/.test(document.getElementById("input").placeholder));
+  out.lm_downloading = await state(lm);
+  out.lm_downloading_slash = await slash(lm);
+  await lm.evaluate(() => window.__lm.finish());
+  await lm.waitForFunction(() => !/Downloading/.test(document.getElementById("input").placeholder));
+  out.lm_on = await state(lm);
+  out.lm_on_slash = await slash(lm);
+  await lm.click("#input");
+  await ask(lm, "write a haiku about coffee");
+  out.lm_haiku = await state(lm);
+  await ask(lm, "play some piano music");
+  out.lm_music = (await state(lm)).last;
+  await lm.evaluate(() => { window.__lm.words = ["Here's ", "a longer one."]; });
+  await ask(lm, "make it longer");
+  out.lm_calls = await lm.evaluate(() => ({ loads: window.__lm.loads, asked: window.__lm.asked.map((m) => m.map((x) => [x.role, x.content])) }));
+  await lm.close();
+  // A later visit: it's here, started (from the browser's copy) when it's first needed.
+  const lm2 = await lmCtx.newPage();
+  lm2.on("pageerror", (e) => errors.push(String(e)));
+  await lm2.goto(page_url);
+  await greeted(lm2);
+  out.lm_later_slash = await slash(lm2);
+  await lm2.click("#input");
+  await ask(lm2, "write a haiku about tea", async () => {
+    out.lm_starting = await (await lm2.waitForFunction(() => { const h = document.getElementById("input").placeholder;
+      return /Starting/.test(h) && h; }, null, { polling: "raf", timeout: 5000 })).jsonValue();
+  });
+  out.lm_later = await lm2.evaluate(() => ({ last: (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent,
+    loads: window.__lm.loads }));
+  await lm2.close();
+  // The page stopped while it was starting (out of memory): offered again rather than started by itself; removed.
+  const lm3 = await lmCtx.newPage();
+  lm3.on("pageerror", (e) => errors.push(String(e)));
+  await lm3.addInitScript(() => localStorage.setItem("chatcomputer-demo-gemma-starting", "true"));
+  await lm3.goto(page_url);
+  await greeted(lm3);
+  out.lm_stopped_slash = await slash(lm3);
+  await slash(lm3, "Start Gemma");
+  out.lm_stopped_sheet = await lm3.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
+    text: document.getElementById("sheet-text").innerText, ok: document.getElementById("sheet-ok").textContent }));
+  await lm3.keyboard.press("Escape");
+  await lm3.waitForFunction(() => !document.body.classList.contains("sheet"));
+  await slash(lm3, "Start Gemma");
+  await lm3.click("#sheet-ok");
+  await lm3.waitForFunction(() => window.__lm.loads.length === 1);
+  await lm3.waitForFunction(() => !/Starting/.test(document.getElementById("input").placeholder));
+  out.lm_restarted = await lm3.evaluate(() => window.__lm.loads);
+  await slash(lm3, "Remove Gemma");
+  out.lm_remove_sheet = await state(lm3);
+  await lm3.click("#sheet-ok");
+  await lm3.waitForFunction(() => /Removed Gemma/.test(document.getElementById("done").textContent));
+  out.lm_removed = { slash: await slash(lm3), disposed: await lm3.evaluate(() => !!window.__lm.disposed),
+    kept: await lm3.evaluate(() => caches.open("transformers-cache").then((c) => c.keys()).then((k) => k.length)) };
+  await lmCtx.close();
+
   // Under each message, as in the Claude app: yours has when, ask again, edit and copy; the answer's has copy, read
   // aloud, good, bad, ask again and when, and the latest answer's row shows. While an answer comes in, its newest
   // words fade in. Good is kept in this browser; edit puts your words back in the box; ask again asks them again.
@@ -450,6 +557,29 @@ async function ask(page, text, meanwhile) {
   });
   await phone.tap("#input");
   out.phone_tapped = await phone.evaluate(() => document.activeElement.id);
+  // The keyboard (a stand-in: what's on the screen, the visual viewport, made 300px shorter, as Safari's is on an
+  // iPhone, where the page itself isn't made smaller): the box just above it, never under it, whether Safari leaves
+  // what's on the screen at the page's top or scrolls it down to the box; down again, the box back at the bottom.
+  out.phone_keyboard = await phone.evaluate(async () => {
+    const vv = window.visualViewport, H = innerHeight, frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const put = (height, top, kind) => {
+      Object.defineProperty(vv, "height", { configurable: true, get: () => height });
+      Object.defineProperty(vv, "offsetTop", { configurable: true, get: () => top });
+      vv.dispatchEvent(new Event(kind));
+      return frames();
+    };
+    const box = () => Math.round(document.getElementById("composer").getBoundingClientRect().bottom);
+    const room = () => Math.round(parseFloat(getComputedStyle(document.getElementById("column")).paddingBottom));
+    const before = room();
+    await put(H - 300, 0, "resize");
+    const up = { box: box(), seen: H - 300, room: room() - before, keyboard: document.body.classList.contains("keyboard") };
+    await put(H - 300, 300, "scroll");
+    const scrolled = { box: box(), seen: H };
+    await put(H, 0, "resize");
+    const down = { box: box(), seen: H, room: room() - before, keyboard: document.body.classList.contains("keyboard") };
+    delete vv.height; delete vv.offsetTop;
+    return { up, scrolled, down };
+  });
   await ask(phone, "hello");
   out.phone = await state(phone);
   if (shot) await phone.screenshot({ path: shot + "-phone.png" });

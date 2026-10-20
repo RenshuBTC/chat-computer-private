@@ -16,7 +16,7 @@ body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
 #column {
   display: flex; flex-direction: column;
   width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto;
-  padding: 2rem 0 calc(var(--composer-h, 5rem) + 1.25rem);
+  padding: 2rem 0 calc(var(--composer-h, 5rem) + var(--kb, 0px) + 1.25rem);
 }
 #log { display: flex; flex-direction: column; gap: 1.25rem; }
 #room { flex: none; height: 0; }
@@ -90,7 +90,7 @@ body.hearing #live { display: block; }
    after a second it fades away, over half a second, and Chat Computer's first words come in (chat.js: greet).
    Something said first fades it away at once. */
 #welcome {
-  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); top: 0; bottom: var(--composer-h, 5rem);
+  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); top: 0; bottom: calc(var(--composer-h, 5rem) + var(--kb, 0px));
   display: flex; align-items: center; justify-content: center; margin: 0; pointer-events: none;
   opacity: 0; visibility: hidden; transition: opacity 500ms ease, visibility 0s linear 500ms;
 }
@@ -122,9 +122,10 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
    lines, then scrolls). Enter sends, Shift+Enter starts a new
    line; so does the round button at its right, as ChatGPT's: an arrow up, grey while there's nothing to send,
    black once there is. Nothing else: Chat Computer is the conversation (and "/" to search this computer).
-   Asleep, a line above it says how to wake Chat Computer. */
+   Asleep, a line above it says how to wake Chat Computer. A phone's keyboard never covers it: it's lifted to sit
+   just above the keyboard (--kb, chat.js: fitKeyboard). */
 #composer {
-  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); bottom: 0; z-index: 6;
+  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); bottom: var(--kb, 0px); z-index: 6;
   padding: 0.5rem 0 0.75rem; background: var(--ground);
 }
 #box, #wake { width: min(var(--co-column, 30rem), 100% - 3rem); margin: 0 auto; }
@@ -383,7 +384,7 @@ body.reading #reader { display: flex; }
 #reader-text.plain { white-space: pre-wrap; }
 /* A word of what was done (Copied), for a moment, over the message box. */
 #toast {
-  position: fixed; left: 50%; bottom: calc(var(--composer-h, 5rem) + 0.75rem); z-index: 46; margin: 0;
+  position: fixed; left: 50%; bottom: calc(var(--composer-h, 5rem) + var(--kb, 0px) + 0.75rem); z-index: 46; margin: 0;
   padding: 0.35rem 0.95rem; border-radius: 999px; background: var(--ink); color: var(--ground);
   font-size: 0.8rem; line-height: 1.4; white-space: nowrap; pointer-events: none;
   opacity: 0; transform: translate(-50%, 0.4rem); transition: opacity 160ms ease-out, transform 160ms ease-out;

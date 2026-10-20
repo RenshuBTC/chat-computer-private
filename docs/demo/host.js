@@ -1095,6 +1095,12 @@
     var want = WANTS.filter(function (w) { return w[0].test(text); })[0];
     var note = { text: "I can't " + (want ? want[1] : "answer that") + " on this page without an AI: my answers here are written in advance. " +
       (chrome ? "Your " + AI.browser + " has a free AI built in that can answer on your device: type / and choose “Download " + AI.short + "”. " : "") +
+      (gemma.state === "downloadable" ? "A free AI from Google, Gemma, can answer here on your " + deviceWord() + ": type / and choose “" +
+        (gemma.cached ? "Start" : "Download") + " Gemma”. " : "") +
+      (gemma.state === "downloading" ? "Gemma is still downloading" + (gemma.progress ? " (" + gemma.progress + "%)" : "") +
+        ": it answers once it's here. " : "") +
+      (gemma.checked && gemma.state === "none" ? "This browser can't run a free AI on this " + deviceWord() + " (that needs " +
+        "WebGPU: Safari on iOS 26 or later, or Chrome on Android or a computer). " : "") +
       REAL + " On a Chat Computer, Claude answers anything, and does it. " + TRY };
     // (Not about this page or the one answering, and not a follow-up: "when was the worst one?" needs what came before.)
     if ((!want || want[1] === "explain that") && FACTUAL.test(text) && !/\b(you|your|yours|this page|chat ?computer)\b/i.test(text)) {
@@ -1116,8 +1122,8 @@
   var nano = { state: "none", session: null, creating: null, progress: 0 };
   var NANO_LANG = { expectedInputs: [{ type: "text", languages: ["en"] }], expectedOutputs: [{ type: "text", languages: ["en"] }] };
   function nanoCheck() {
-    if (typeof LanguageModel === "undefined" || !LanguageModel.availability) return;
-    LanguageModel.availability(NANO_LANG).then(function (a) {
+    if (typeof LanguageModel === "undefined" || !LanguageModel.availability) return Promise.resolve();
+    return LanguageModel.availability(NANO_LANG).then(function (a) {
       nano.state = a;
       if (a === "available") nanoSession().catch(function () {});
       status();
@@ -1329,6 +1335,194 @@
     if (!a) throw new Error("nothing found");
     return { written: a };
   }
+
+  // ------------------------------------------------------------------ Google's Gemma, on this device, free
+  // Where the browser has no AI of its own (a phone, Safari, Firefox: Chrome's Gemini Nano is only on computers), a
+  // small open AI from Google, Gemma 3 (1 billion parameters), can answer here instead, free. It's offered in the "/"
+  // list ("Download Gemma") where the browser can run it on the device's graphics chip (WebGPU: Safari on iOS 26 and
+  // macOS 26, Chrome on Android and on computers). Transformers.js (a fixed version, from jsDelivr) downloads it once
+  // from Hugging Face, about 0.8 GB, and the browser keeps it; it runs on the device: what's typed doesn't leave it,
+  // only the words it looks up (on Wikipedia, as Gemini Nano does: lookup, above). It answers in words, as they come;
+  // the written answers still do what they do (maps, music, timers, sites). Once it's downloaded, it's started the
+  // first time it's needed on a visit ("Starting Gemma…" in the empty box), from the browser's copy, and never
+  // downloaded again unasked. "Remove Gemma" in the list frees the room.
+  var LM_LIBRARY = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";
+  var GEMMA = { model: "onnx-community/gemma-3-1b-it-ONNX", name: "Gemma", full: "Gemma 3, Google's small open AI" };
+  // Its files for each precision: half (q4f16) where the graphics chip has it (shader-f16), else full (q4).
+  var GEMMA_BYTES = { q4f16: 784e6, q4: 880e6 }, GEMMA_STARTING = "chatcomputer-demo-gemma-starting";
+  var gemma = { state: "none", checked: false, dtype: "", cached: false, stopped: false, gen: null, lib: null, loading: null,
+                progress: 0, talk: [], queue: null };
+  function deviceWord() { return onPhone() ? "phone" : "device"; }         // "on this phone"
+  function gemmaSize() { return (GEMMA_BYTES[gemma.dtype] / 1e9).toFixed(1) + " GB"; }
+  function gemmaFile(ext) { return "https://huggingface.co/" + GEMMA.model + "/resolve/main/onnx/model_" + gemma.dtype + ext; }
+  // Whether this browser has its copy: the model's two files, in Transformers.js' own store (named by their address).
+  function gemmaKept() {
+    return caches.open("transformers-cache").then(function (c) {
+      return Promise.all([c.match(gemmaFile(".onnx")), c.match(gemmaFile(".onnx_data"))]);
+    }).then(function (r) { return !!(r[0] && r[1]); }, function () { return false; });
+  }
+  // Offered where there's no AI in the browser and a graphics chip it can use. If the page stopped while it was
+  // starting last time (a phone out of memory closes the page), it's not started by itself again: it's offered.
+  // (checked: known either way, for the written answers to say when this browser can't run one.)
+  function gemmaCheck() {
+    if (nano.state !== "none" && nano.state !== "unavailable") return Promise.resolve();
+    var gpu = navigator.gpu && navigator.gpu.requestAdapter && window.caches ? navigator.gpu.requestAdapter() : Promise.resolve(null);
+    return gpu.then(function (a) {
+      if (!a || gemma.state !== "none") return;
+      gemma.dtype = a.features && a.features.has("shader-f16") ? "q4f16" : "q4";
+      return gemmaKept().then(function (kept) {
+        gemma.cached = kept;
+        gemma.stopped = !!store(GEMMA_STARTING);
+        store(GEMMA_STARTING, null);
+        gemma.state = kept && !gemma.stopped ? "ready" : "downloadable";
+        status();
+      });
+    }).catch(function () {}).then(function () { gemma.checked = true; });
+  }
+  function gemmaButton() {
+    if (gemma.state !== "downloadable") return;
+    var how = gemma.cached ? "Start" : "Download";
+    call("accountForm", { id: "gemma", title: how + " " + GEMMA.name, ok: gemma.cached ? "Start it" : "Download it", text: [
+      GEMMA.full + ", can answer here for free, and look things up on Wikipedia for you. It runs on this " + deviceWord() +
+      ": what you type doesn't leave it, only the words it looks up.",
+      gemma.stopped ? "Last time, this page stopped while Gemma was starting: this " + deviceWord() + " may not have enough memory " +
+        "free for it. Closing other apps can help." :
+      gemma.cached ? "This browser has it already." :
+      "It's about " + gemmaSize() + ", downloaded once from Hugging Face and kept by this browser (Wi-Fi is best). The written " +
+        "answers work meanwhile.",
+      "It's much smaller than Claude: good for everyday questions, writing and explaining, but it can get things wrong. For " +
+      "Claude itself, type / and choose Connect Claude."] });
+  }
+  // Started: downloaded the first time (its progress in the empty box, and in the list), from this browser's copy after.
+  // asked: chosen in the list (its trouble then gets a sheet; when a question started it, the written answer says).
+  function gemmaStart(asked) {
+    if (gemma.gen) return Promise.resolve(gemma.gen);
+    if (gemma.loading) return gemma.loading;
+    var download = !gemma.cached;
+    gemma.state = download ? "downloading" : "starting";
+    gemma.progress = 0;
+    status();
+    // While it's being put in memory (once downloaded): if the page stops then, it's not started by itself next time.
+    if (!download) store(GEMMA_STARTING, true);
+    var files = {};
+    // From the browser's copy only while it has one (Transformers.js takes what it keeps first): checked again here,
+    // so a copy the browser has since cleared isn't downloaded again unasked.
+    gemma.loading = (download ? Promise.resolve(true) : gemmaKept()).then(function (kept) {
+      if (!kept) throw new Error("this browser no longer has its copy of " + GEMMA.name);
+      return import(LM_LIBRARY);
+    }).then(function (lm) {
+      gemma.lib = lm;
+      if (download && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
+      return lm.pipeline("text-generation", GEMMA.model, { device: "webgpu", dtype: gemma.dtype,
+        progress_callback: function (p) {
+          if (download && p.status === "done" && /\.onnx_data$/.test(p.file || "")) store(GEMMA_STARTING, true);
+          if (!download || p.status !== "progress" || !p.file || !p.total) return;
+          files[p.file] = [p.loaded || 0, p.total];
+          var got = 0, all = 0;
+          for (var f in files) { got += files[f][0]; all += files[f][1]; }
+          var pct = Math.min(99, Math.floor(got / Math.max(all, GEMMA_BYTES[gemma.dtype]) * 100));
+          if (pct !== gemma.progress) { gemma.progress = pct; status(); }
+        } });
+    }).then(function (gen) {
+      gemma.gen = gen;
+      gemma.loading = null;
+      gemma.cached = true;
+      gemma.stopped = false;
+      gemma.state = "available";
+      store(GEMMA_STARTING, null);
+      status();
+      if (download) did("Turned on " + GEMMA.name + ", on this " + deviceWord());
+      return gen;
+    }, function (e) {
+      gemma.loading = null;
+      store(GEMMA_STARTING, null);
+      return gemmaKept().then(function (kept) {
+        gemma.cached = kept;
+        gemma.state = "downloadable";
+        status();
+        if (asked) call("accountForm", { id: "gemma-no", title: GEMMA.name + " didn't start", ok: "OK", text: [
+          "The browser said: " + clip(e && e.message || "it couldn't", 160) + ".",
+          "It needs about " + gemmaSize() + " of room and enough memory; on a phone, closing other apps can help. The written " +
+          "answers still work."] });
+        throw e;
+      });
+    });
+    return gemma.loading;
+  }
+  function gemmaRemoveButton() {
+    call("accountForm", { id: "gemma-remove", title: "Remove " + GEMMA.name, ok: "Remove it", text: [
+      "This frees about " + gemmaSize() + " on this " + deviceWord() + ". You can download " + GEMMA.name + " again any time: type / " +
+      "and choose Download " + GEMMA.name + "."] });
+  }
+  function gemmaRemove() {
+    var gen = gemma.gen;
+    gemma.gen = null;
+    gemma.talk = [];
+    if (gen && gen.dispose) gen.dispose().catch(function () {});
+    return caches.open("transformers-cache").then(function (c) {
+      return c.keys().then(function (keys) {
+        return Promise.all(keys.filter(function (r) { return r.url.indexOf(GEMMA.model) >= 0; }).map(function (r) { return c.delete(r); }));
+      });
+    }).catch(function () {}).then(function () {
+      gemma.cached = false;
+      gemma.state = "downloadable";
+      status();
+      did("Removed " + GEMMA.name + " from this " + deviceWord());
+    });
+  }
+  function gemmaSystem() {
+    return "You are " + GEMMA.name + ", a small AI made by Google, answering on Chat Computer's website (chatcomputer.ai), a demo " +
+      "of Chat Computer's screen, in the visitor's browser: you are not Claude. It's " + clock() + ". Answer in English: in a " +
+      "sentence or two for a simple question, in full when they ask for more (a recipe, an email, a poem, code), with a little " +
+      "Markdown where it helps. Don't add links. If you aren't sure of a fact, say so. Facts about Chat Computer: " + FACTS.what +
+      " " + FACTS.indie + " " + FACTS.free + " " + FACTS.soon + " Never make up facts about Chat Computer beyond these.";
+  }
+  // What was said, for what's asked next to make sense to it (its own answers, and the written ones): the last few.
+  function gemmaNote(asked, said) {
+    if (!said) return;
+    gemma.talk.push({ role: "user", content: clip(asked, 600) }, { role: "assistant", content: clip(said, 800) });
+    gemma.talk = gemma.talk.slice(-6);
+  }
+  // One answer: what's looked up first, where the written answers know it's a question of fact or the news; then its
+  // words, streamed into the conversation as they come. One at a time, in order.
+  function gemmaTurn(text, you, uts, id, wants, since) {
+    wants = wants || {};
+    call("aiStart", id);
+    var q = wants.search ? clip(String(wants.query || topicOf(text)), 100) : "";
+    var run = function () {
+      return gemmaStart(false).then(function () {
+        return q ? lookup(q, text) : null;
+      }).then(function (got) {
+        if (got) got.told.forEach(function (d) { did(d, you, uts); });
+        var said = "", started = false;
+        var messages = [{ role: "system", content: gemmaSystem() }].concat(gemma.talk,
+          [{ role: "user", content: got ? nanoFound(text, q, got.list) : text }]);
+        var streamer = new gemma.lib.TextStreamer(gemma.gen.tokenizer, { skip_prompt: true, skip_special_tokens: true,
+          callback_function: function (piece) {
+            if (!piece) return;
+            if (!started) { started = true; if (since != null) wordsOnly(since); }
+            said += piece;
+            call("ai", id, piece);
+          } });
+        return gemma.gen(messages, { max_new_tokens: 512, do_sample: false, repetition_penalty: 1.1, streamer: streamer })
+          .catch(function (e) { if (!said.trim()) throw e; })                     // cut short: what it said stands
+          .then(function () {
+            said = said.trim();
+            if (!said) throw new Error("no words");
+            gemmaNote(text, said);
+            call("aiDone", id);
+            say(got ? said : unsourced(said));
+          });
+      });
+    };
+    var next = (gemma.queue || Promise.resolve()).then(run);
+    gemma.queue = next.catch(function () {});
+    next.catch(function () {
+      var f = fallback(text);
+      Promise.resolve(f.later ? f.later() : f).then(function (a) { deliver(a, id, you, uts, since); });
+    });
+  }
+
   function setScale(s) {
     scale = Math.max(0.6, Math.min(2.2, s));
     store(scaleKey(), scale);
@@ -1351,10 +1545,13 @@
     call("user", you, text, true);
     if (claude.key) { claudeTurn(text, you, uts, id, since); return; }
     var r = answer(text), ai = nano.state === "available";
+    var lm = !ai && (gemma.state === "ready" || gemma.state === "starting" || gemma.state === "available");
     if (!LOOK_IT_UP.test(text)) lastAsked = text;              // what "look it up" means next
-    // The browser's AI answers what only an AI can, and what's looked up (in its words, from what's found).
-    if (ai && (r.ai || r.search)) {
-      setTimeout(function () { nanoTurn(text, you, uts, id, r.search ? { search: true, query: r.search, news: r.news } : null, since); }, 120);
+    // The browser's AI (or Gemma) answers what only an AI can, and what's looked up (in its words, from what's found).
+    if ((ai || lm) && (r.ai || r.search)) {
+      setTimeout(function () {
+        (ai ? nanoTurn : gemmaTurn)(text, you, uts, id, r.search ? { search: true, query: r.search, news: r.news } : null, since);
+      }, 120);
       return;
     }
     if (r.ai) r = fallback(text);
@@ -1365,6 +1562,7 @@
         setTimeout(function () {
           deliver(a, id, you, uts, since);
           if (ai) nanoNote(text, a.text);
+          else if (lm) gemmaNote(text, a.text);
         }, Math.max(0, 600 - (Date.now() - waited)));
       });
     }, 120);
@@ -1961,9 +2159,10 @@
   // ------------------------------------------------------------------ "/": connecting things
   // Nothing beside the message box (it stays clean): "/" typed in it lists, above it, what can be connected or turned
   // on here, before the files it searches (as "/" does on a Chat Computer): Connect Claude (with an API key), Connect
-  // AirPods (talking), and the free AI on this device where there's one to download (Chrome's Gemini Nano). Words
-  // after the "/" narrow them down. Chosen (Enter, a click or a tap), each does what its button did; the empty box
-  // says meanwhile what's going on (status: listening, a download's progress).
+  // AirPods (talking), and the free AI on this device where there's one to download (Chrome's Gemini Nano, else
+  // Google's Gemma; Remove Gemma once it's here). Words after the "/" narrow them down. Chosen (Enter, a click or a
+  // tap), each does what it says; the empty box says meanwhile what's going on (status: listening, a download's
+  // progress, Gemma starting).
   function commands() {
     var list = [claude.key ?
       { command: "claude", icon: "i-key", name: "Disconnect Claude", where: "Claude (" + MODEL_NAME + ") answers now, with your API key" } :
@@ -1975,6 +2174,14 @@
       list.push({ command: "gemini", icon: "i-spark", name: nano.state === "downloading" ?
         "Downloading " + AI.short + (nano.progress ? " (" + nano.progress + "%)" : "") : "Download " + AI.short,
         where: AI.browser + "'s built-in AI: free answers, on this device" });
+    }
+    if (!claude.key && (gemma.state === "downloadable" || gemma.state === "downloading")) {
+      list.push({ command: "gemma", icon: "i-spark", name: gemma.state === "downloading" ?
+        "Downloading " + GEMMA.name + (gemma.progress ? " (" + gemma.progress + "%)" : "") : (gemma.cached ? "Start " : "Download ") + GEMMA.name,
+        where: "Google's small AI: free answers, on this " + deviceWord() + (gemma.cached ? "" : " (" + gemmaSize() + ")") });
+    }
+    if (gemma.state === "ready" || gemma.state === "available") {
+      list.push({ command: "gemma-remove", icon: "i-spark", name: "Remove " + GEMMA.name, where: "Frees " + gemmaSize() + " on this " + deviceWord() });
     }
     return list;
   }
@@ -1989,11 +2196,15 @@
     if (id === "claude") claudeButton();
     else if (id === "airpods") talkButton();
     else if (id === "gemini") nanoButton();
+    else if (id === "gemma") gemmaButton();
+    else if (id === "gemma-remove") gemmaRemoveButton();
   }
   function status() {
     var h = "";
     if (ears.on) h = ears.device ? "AirPods on: talk, or type" : "Listening: talk, or type";
     else if (nano.state === "downloading") h = "Downloading " + AI.short + (nano.progress ? " (" + nano.progress + "%)" : "") + "…";
+    else if (gemma.state === "downloading") h = "Downloading " + GEMMA.name + (gemma.progress ? " (" + gemma.progress + "%)" : "") + "…";
+    else if (gemma.state === "starting") h = "Starting " + GEMMA.name + "…";
     call("hint", h);
   }
 
@@ -2013,7 +2224,7 @@
         }));
         call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
         status();
-        nanoCheck();
+        nanoCheck().then(gemmaCheck);          // the browser's own AI, else Gemma where it can run
         break;
       case "send": {
         var said = String(msg.text || ""), typed = address(said);      // an address opens its site, as a browser's would
@@ -2061,6 +2272,8 @@
         if (msg.form === "claude-off") { forget(); call("accountForm", null); did("Disconnected Claude"); break; }
         if (msg.form === "talk") { call("accountForm", null); startTalking(); break; }
         if (msg.form === "nano") { nanoDownload(); break; }
+        if (msg.form === "gemma") { call("accountForm", null); gemmaStart(true).catch(function () {}); break; }
+        if (msg.form === "gemma-remove") { call("accountForm", null); gemmaRemove(); break; }
         call("accountForm", null);
         break;
       }

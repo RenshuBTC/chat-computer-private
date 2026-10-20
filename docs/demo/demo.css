@@ -7,7 +7,7 @@
 }
 #demo-tools button {
   display: flex; align-items: center; gap: 0.4em; margin: 0; padding: 0.3em 0.8em;
-  border: 2px solid var(--bubble); border-radius: 999px; background: var(--ground); color: var(--ink);
+  border: 2px solid var(--line); border-radius: 999px; background: var(--ground); color: var(--ink);
   font-size: 0.8rem; line-height: 1.4; white-space: nowrap; cursor: pointer;
 }
 #demo-tools button[hidden] { display: none; }

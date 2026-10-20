@@ -54,10 +54,10 @@ def test_the_conversation_reads_and_scrolls_like_a_chat():
     res = json.loads(r.stdout.strip().splitlines()[-1])
     assert "timeout" not in res, res
     filled, streamed, up, asked = res["filled"], res["streamed"], res["scrolled_up"], res["asked"]
-    # Your messages on the right in a grey bubble, upright; Claude's on the left, on the page's white.
+    # Your messages on the right in a grey bubble, upright; Claude's on the left, on the page's own off-white.
     for state in (filled, asked):
         assert abs(state["you"]["right"]) < 1 and state["you"]["left"] > 20
-        assert state["you"]["background"] == "rgb(237, 237, 237)" and state["you"]["style"] == "normal"
+        assert state["you"]["background"] == "rgb(231, 228, 221)" and state["you"]["style"] == "normal"
         assert abs(state["ai"]["left"]) < 1 and state["ai"]["background"] == "rgba(0, 0, 0, 0)"
     # More than a screenful: it can be scrolled. Your latest message is at the top of the screen with its answer under
     # it (as in the Claude app), and an answer longer than the screen is followed down as it comes.
@@ -147,7 +147,7 @@ def test_the_message_box_works_like_the_claude_apps():
     assert "timeout" not in res, res
     empty, typed, two, sent = res["empty"], res["typed"], res["two_lines"], res["sent"]
     # The cursor in the box from the start; the round send button grey until there's something to send, then black.
-    assert empty["focused"] and empty["value"] == "" and empty["send"] == "rgb(154, 154, 154)"
+    assert empty["focused"] and empty["value"] == "" and empty["send"] == "rgb(145, 143, 138)"
     # Nothing under the box (or above it while awake), and in it just the dimmed hint.
     assert empty["words"] == "Chat computer anything or type \u201c/\u201d to search" and empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
     assert typed["value"] == "hi there" and typed["drafting"] and typed["send"] == "rgb(0, 0, 0)"

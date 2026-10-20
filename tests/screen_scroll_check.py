@@ -65,7 +65,7 @@ def streamer(tid, text, then):
     return step
 
 
-LONG = "The forecast says " + "clear skies and a light breeze from the sea all day long, " * 12
+LONG = "The forecast says " + "clear skies and a light breeze from the sea all day long, " * 40    # past a screenful
 
 
 def scroll_up():

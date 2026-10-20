@@ -56,9 +56,9 @@ def private_file_uri(paths: Paths, uri: str) -> bool:
 
 MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86AudioMedia", "XF86AudioNext",
               "XF86AudioPrev", "XF86AudioStop"}
-# The window behind the pages is white, as the conversation is (theme.css). register_fonts() makes Chat Computer's own copy
+# The window behind the pages is the conversation's warm off-white (theme.css). register_fonts() makes Chat Computer's own copy
 # of its font known to GTK, for AirTouch's keyboard.
-COLORS = {"bg": "#FFFFFF", "ink": "#000000"}
+COLORS = {"bg": "#F8F5F0", "ink": "#000000"}
 
 CSS_TEMPLATE = """
 window {{ background-color: {bg}; }}
@@ -107,7 +107,8 @@ MESSAGES_SHOWN = 400         # Messages: how many the page holds (the rest are i
 PAGE_EVENTS = {"pin", "open_message", "add_account", "account", "account_cancel", "panels",
                "search", "open_file",           # "/" in the message box: searching this computer, opening a file
                "text_scale",                    # two fingers pinched on the conversation: its text bigger or smaller
-               "unlock"}                        # the PIN typed on the lock screen
+               "unlock",                        # the PIN typed on the lock screen
+               "speak", "feedback"}             # under a message: read it aloud; good or bad (feedback.jsonl)
 
 
 def use_cpu_rendering(environ: Any = os.environ) -> bool:
@@ -572,6 +573,14 @@ class GtkScreen(Screen):
                 except (TypeError, ValueError):
                     return
                 self.loop.call_soon_threadsafe(self.on_goto, msg.get("id") or None, ts, before)
+            return
+        if kind == "copy":
+            # Copy, under a message: onto the clipboard (the page tries too, but a WebKitGTK page may not be allowed).
+            text = str(msg.get("text") or "")
+            if text:
+                clip = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                clip.set_text(text, -1)
+                clip.store()
             return
         if kind == "keys":
             self._speed["keys"] += [ms for ms in msg.get("ms") or [] if isinstance(ms, (int, float)) and 0 <= ms < 60_000]

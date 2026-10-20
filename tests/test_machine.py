@@ -943,3 +943,32 @@ def test_the_power_mode_from_the_firmware_or_the_processor(tmp_path):
     (tmp_path / "firmware/acpi").mkdir(parents=True)
     (tmp_path / "firmware/acpi/platform_profile").write_text("low-power\n")
     assert L.power_mode(str(tmp_path)) == "low-power"
+
+
+def test_under_a_message_read_aloud_and_good_or_bad(tmp_path, monkeypatch):
+    # Read aloud, under a message: said now, in place of what was being said, even with speech off; without the
+    # voice yet, the screen says so. Good or bad, under an answer: kept with the question (feedback.jsonl).
+    c, screen = _controller(tmp_path, monkeypatch)
+    said, notices = [], []
+
+    class FakeSpeaker:
+        tts = object()
+        muted = True
+
+        def stop(self):
+            said.append("(stopped)")
+
+        def say(self, text):
+            said.append((text, self.muted))
+    c.speaker = FakeSpeaker()
+    monkeypatch.setattr(screen, "notice", lambda text, kind="info": notices.append(text), raising=False)
+    c.page_event({"type": "speak", "text": "  The air in Singapore is good.  "})
+    assert said == ["(stopped)", ("The air in Singapore is good.", False)] and c.speaker.muted is True
+    c.speaker = None
+    c.page_event({"type": "speak", "text": "Hello"})
+    assert notices and "voice" in notices[-1]
+    c.page_event({"type": "feedback", "id": "a3", "good": False, "on": True, "prompt": "who won?", "text": "Spain."})
+    c.page_event({"type": "feedback", "id": "a3", "good": False, "on": False, "prompt": "who won?", "text": "Spain."})
+    lines = [json.loads(x) for x in (c.paths.root / "feedback.jsonl").read_text().splitlines()]
+    assert [(x["good"], x["on"], x["prompt"], x["answer"], x["id"]) for x in lines] == [
+        (False, True, "who won?", "Spain.", "a3"), (False, False, "who won?", "Spain.", "a3")]

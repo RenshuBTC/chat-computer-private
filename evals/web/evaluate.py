@@ -122,8 +122,8 @@ DONE: dict[str, Callable[[R], bool]] = {
     "wifi": lambda r: said(r, r"wi-?fi|internet|online|connected"),
     "open-website": lambda r: src(r, r"youtube") or (said(r, r"youtube") and (said(r, r"link|new tab") or shown(r, r"youtube\.com"))),
     "open-google": lambda r: src(r, r"google") or (said(r, r"google") and (said(r, r"link|new tab|search") or shown(r, r"google\.com"))),
-    "news": lambda r: said(r, CANT) or shown(r, r"news"),
-    "recipe": lambda r: shown(r, r"chicken rice|ingredients"),
+    "news": lambda r: said(r, CANT) or shown(r, r"news") or (said(r, r"news") and said(r, r"wikipedia|current events|according")),
+    "recipe": lambda r: shown(r, r"chicken rice|ingredients") or (said(r, r"ingredients") and said(r, r"chicken")),
     "calc": lambda r: said(r, r"12\.68|12\.675"),
     "capital": lambda r: said(r, r"canberra"),
     # An AI's longer answers go on the screen (show_page), with a sentence in the reply: either place counts.

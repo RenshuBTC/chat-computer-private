@@ -1422,7 +1422,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          "keyboard_layout (the "
          "keyboard's layout, as us, gb, fr, de, es, it, ch, be, or a kind of one like fr(bepo): set it when the "
          "letters they type come out wrong). The screen is always "
-         "black text on white in Atkinson Hyperlegible, a font made to be easy to read; there is no dark mode "
+         "black text on a warm off-white in Atkinson Hyperlegible, a font made to be easy to read; there is no dark mode "
          "(if it's too bright, turn the brightness down with display, and in the evening the night light helps). "
          "Text size is worked out from the screen's real size and viewing distance; "
          "'get' shows the result. To make all text bigger or smaller set text_scale (1.0 = automatic; e.g. 1.15 "

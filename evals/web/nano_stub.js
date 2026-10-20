@@ -18,30 +18,26 @@
     var first = /\n1\. ([^\n]*)/.exec(text);
     if (!first) return { reply: "I looked, but found nothing on that.", action: "none" };
     var what = first[1].replace(/^[^:]*: /, "");
-    return { reply: "According to " + (/Wikipedia/.test(first[1]) ? "Wikipedia" : "Open-Meteo") + ": " + what.split(/(?<=\.)\s/)[0] +
+    var from = /Current events/.test(first[1]) ? "Wikipedia's Current events, in the news" : /Wikipedia/.test(first[1]) ? "Wikipedia" : "Open-Meteo";
+    return { reply: "According to " + from + ": " + what.split(/(?<=\.)\s/)[0] +
              (/\n2\. /.test(text) ? " " + /\n2\. ([^\n]*)/.exec(text)[1].replace(/^[^:]*: /, "").split(/(?<=\.)\s/)[0] : ""), action: "none" };
   }
   var CANNED = [
     [/capital of australia/i, { reply: "Canberra is the capital of Australia.", action: "none" }],
-    [/recipe|chicken rice/i, { reply: "Here's a recipe for Hainanese chicken rice, on the screen.", action: "show_page",
-      title: "Chicken rice", markdown: "## Ingredients\n- 1 whole chicken\n- 2 cups jasmine rice\n- Ginger, garlic, pandan\n\n" +
-      "## Steps\n1. Poach the chicken with ginger for 40 minutes.\n2. Cook the rice in the stock with garlic.\n3. Serve with chilli sauce." }],
-    [/quantum/i, { reply: "Quantum computers use qubits, which can be 0 and 1 at once; there's more on the screen.", action: "show_page",
-      title: "Quantum computing, simply", markdown: "A normal computer's bits are 0 or 1. A quantum computer's **qubits** can be " +
-      "in a mix of both (superposition), and linked to each other (entanglement), which lets it try many answers at once " +
-      "for some problems." }],
-    [/email.*boss|boss.*friday/i, { reply: "Here's a draft asking your boss for Friday off.", action: "show_page",
-      title: "Asking for Friday off", markdown: "Hi Sam,\n\nCould I take this Friday off? My work is up to date, and Alex " +
-      "can cover anything urgent.\n\nThanks,\n[Your name]" }],
-    [/poem.*sea|sea.*poem/i, { reply: "Here's a short poem about the sea.", action: "show_page", title: "The sea",
-      markdown: "The tide comes in on silver feet,\nthe waves fold over, soft and neat;\nthe shore keeps every word they say,\n" +
-      "and gives it back another day." }],
+    [/recipe|chicken rice/i, { reply: "Hainanese chicken rice:\n\n## Ingredients\n- 1 whole chicken\n- 2 cups jasmine rice\n" +
+      "- Ginger, garlic, pandan\n\n## Steps\n1. Poach the chicken with ginger for 40 minutes.\n2. Cook the rice in the stock " +
+      "with garlic.\n3. Serve with chilli sauce.", action: "none" }],
+    [/quantum/i, { reply: "A normal computer's bits are 0 or 1. A quantum computer's **qubits** can be in a mix of both " +
+      "(superposition), and linked to each other (entanglement), which lets it try many answers at once for some problems.", action: "none" }],
+    [/email.*boss|boss.*friday/i, { reply: "Hi Sam,\n\nCould I take this Friday off? My work is up to date, and Alex can cover " +
+      "anything urgent.\n\nThanks,\n[Your name]", action: "none" }],
+    [/poem.*sea|sea.*poem/i, { reply: "The tide comes in on silver feet,\nthe waves fold over, soft and neat;\nthe shore keeps every " +
+      "word they say,\nand gives it back another day.", action: "none" }],
     [/thank you in japanese/i, { reply: "Thank you in Japanese is arigatou (ありがとう), or arigatou gozaimasu to be polite.", action: "none" }],
-    [/trip to bali/i, { reply: "Here's a 3-day plan for Bali.", action: "show_page", title: "3 days in Bali",
-      markdown: "## Day 1\nUbud: rice terraces and the Monkey Forest.\n\n## Day 2\nTemples: Tanah Lot at sunset.\n\n## Day 3\nThe beach at Seminyak." }],
+    [/trip to bali/i, { reply: "Three days in Bali:\n\n## Day 1\nUbud: rice terraces and the Monkey Forest.\n\n## Day 2\nTemples: Tanah Lot at sunset.\n\n" +
+      "## Day 3\nThe beach at Seminyak.", action: "none" }],
     [/sleep/i, { reply: "Keep to the same bedtime, stop screens an hour before bed, and skip caffeine after lunch.", action: "none" }],
-    [/python.*revers|revers.*python/i, { reply: "Here's the function: it uses a slice to reverse the string.", action: "show_page",
-      title: "Reverse a string", markdown: "```python\ndef reverse(s):\n    return s[::-1]\n```" }]
+    [/python.*revers|revers.*python/i, { reply: "```python\ndef reverse(s):\n    return s[::-1]\n```", action: "none" }]
   ];
   function answer(text) {
     if (/^The question:/.test(text)) return found(text);

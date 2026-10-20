@@ -128,7 +128,7 @@
     view.id = "demo-view";
     view.title = "What's open";
     view.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
-    view.style.cssText = "position:fixed;border:0;background:#fff;display:none;z-index:5";
+    view.style.cssText = "position:fixed;border:0;background:var(--ground);display:none;z-index:5";
     // F1 and Escape work while a page of the demo's own has the keys too (a map's page keeps them to itself).
     view.addEventListener("load", function () {
       try { view.contentDocument.addEventListener("keydown", keys, true); } catch (e) {}
@@ -206,7 +206,7 @@
       size.toFixed(1) + "px;--co-column:" + column + "px}" + (css || "") + "</style></head><body>" + body +
       (script ? "<script>" + script + "<\/script>" : "") + "</body></html>";
   }
-  var NOTE_CSS = ".demo-note{margin:0 0 1.25rem;padding:0.5rem 0.75rem;border:2px solid var(--bubble);border-radius:0.6rem}";
+  var NOTE_CSS = ".demo-note{margin:0 0 1.25rem;padding:0.5rem 0.75rem;border:2px solid var(--line);border-radius:0.6rem}";
   function doc(title, markdown, note) {
     return page(title, '<article><h1 class="title">' + esc(title) + "</h1>" + (note ? '<p class="demo-note">' + esc(note) + "</p>" : "") +
       '<div class="md">' + window.renderMarkdown(markdown) + "</div></article>", NOTE_CSS);
@@ -228,7 +228,7 @@
       }).join("");
     }
     return page(t.title, '<article><h1 class="title">' + esc(t.title) + "</h1>" + note + body + "</article>",
-      NOTE_CSS + ".said.mail{padding:0 0 1rem;margin:0 0 1.25rem;border-bottom:2px solid var(--bubble)}.said.mail:last-child{border-bottom:0}",
+      NOTE_CSS + ".said.mail{padding:0 0 1rem;margin:0 0 1.25rem;border-bottom:2px solid var(--line)}.said.mail:last-child{border-bottom:0}",
       "var o=document.getElementById('open');if(o)o.scrollIntoView({block:'start'});");
   }
   function timer(mins) {
@@ -646,47 +646,21 @@
       return { list: [].concat.apply([], lists), told: told };
     });
   }
-  // The first n sentences: each ends at a full stop (or ! ?) before a capital, so "6.11 million" isn't cut.
-  function sentences(s, n) {
-    s = plain(s);
-    var out = [], re = /[.!?]+["”’)]*\s+(?=[A-Z0-9"“‘(])/g, at = 0, m;
-    while (out.length < n && (m = re.exec(s))) { out.push(s.slice(at, m.index + m[0].length).trim()); at = m.index + m[0].length; }
-    if (out.length < n && at < s.length) out.push(s.slice(at).trim());
-    return out.join(" ");
+  // In the conversation: the latest stories, a line each with its sources, from Wikipedia's Current events.
+  function newsWords(list) {
+    var items = list.filter(function (x) { return x.links; }).slice(0, 8);
+    return "The latest news, from Wikipedia's Current events:\n\n" + items.map(function (x) {
+      var topic = (x.title || "").split(": ").pop();
+      return "- " + (topic ? "**" + topic.replace(/[*_]/g, "") + ":** " : "") + clip(x.text.replace(/[*_]/g, ""), 260);
+    }).join("\n");
   }
-  // On the screen: what was found, with links to it.
-  var LIST_CSS = NOTE_CSS + ".found{margin:0 0 1.1rem}.found p{margin:0.2rem 0 0}.found a{color:inherit}";
-  function foundShow(q, list) {
-    var more = "https://en.wikipedia.org/w/index.php?fulltext=1&search=" + encodeURIComponent(q);
-    show({ html: page(q, '<article><h1 class="title">' + esc(clip(q, 80)) + '</h1><p class="demo-note">From Wikipedia, looked up just now ' +
-      '(<a href="' + esc(more) + '" target="_blank" rel="noopener noreferrer">more of what it found</a>).</p>' +
-      list.slice(0, 1).map(function (x) {
-        return '<section class="found"><b><a href="' + esc(x.url) + '" target="_blank" rel="noopener noreferrer">' + esc(x.title) +
-          "</a></b><p>" + esc(x.text) + "</p></section>";
-      }).join("") + "</article>", LIST_CSS) });
-  }
-  function newsShow(list) {
-    var items = list.filter(function (x) { return x.links; }).slice(0, 40);
-    if (!items.length) return false;
-    var body = "", day = "";
-    items.forEach(function (x) {
-      if (x.day !== day) { body += (day ? "</ul>" : "") + "<h2>" + esc(x.day) + "</h2><ul>"; day = x.day; }
-      var words = x.links.length ? x.text.replace(/(\s*\([^()]{1,60}\))+\s*$/, "") : x.text;
-      body += "<li>" + (x.title ? "<b>" + esc(x.title) + ":</b> " : "") + esc(words) + x.links.map(function (l) {
-        return ' <a href="' + esc(l.url) + '" target="_blank" rel="noopener noreferrer">(' + esc(l.name || "source") + ")</a>";
-      }).join("") + "</li>";
-    });
-    show({ html: page("In the news", '<article><h1 class="title">In the news</h1><p class="demo-note">From ' +
-      '<a href="https://en.wikipedia.org/wiki/Portal:Current_events" target="_blank" rel="noopener noreferrer">Wikipedia\'s Current events</a>, ' +
-      "looked up just now.</p>" + body + "</ul></article>", LIST_CSS + "li{margin:0 0 0.6rem}li a{color:inherit}") });
-    return true;
-  }
+  // Wikipedia's article, in the conversation: its opening, and where it's from.
+  function wikiWords(x) { return "From Wikipedia's article “" + x.title + "”:\n\n" + x.text; }
   // The written answers that look things up: the news, the air, and Wikipedia's article on something (else: otherwise).
   function newsAnswer() {
     return news().then(function (list) {
       if (!list.length) throw new Error("no news");
-      return { text: "Here's the news, from Wikipedia's Current events, on the screen. The latest: " + clip(list[0].text, 150),
-               done: ["Read the news on Wikipedia"], act: function () { newsShow(list); } };
+      return { text: newsWords(list), done: ["Read the news on Wikipedia"] };
     }).catch(function () {
       return { text: "I couldn't get the news just now. BBC News is a click away, on the screen.",
                act: function () { show({ html: link("https://www.bbc.com/news", "BBC News", "On Chat Computer, news sites open right here.") }); } };
@@ -702,8 +676,7 @@
   function wikiAnswer(q, otherwise) {
     return wikipedia(q).then(function (list) {
       if (!list.length) throw new Error("nothing");
-      return { text: "Wikipedia, “" + list[0].title + "”: " + sentences(list[0].text, 2) + (list.length > 1 || list[0].text.length > 300 ? " More is on the screen." : ""),
-               done: ["Searched Wikipedia for “" + clip(q, 50) + "”"], act: function () { foundShow(q, list); } };
+      return { text: wikiWords(list[0]), done: ["Searched Wikipedia for “" + clip(q, 50) + "”"] };
     }).catch(function () {
       if (otherwise) return otherwise;
       var url = "https://www.google.com/search?q=" + encodeURIComponent(q);
@@ -1007,12 +980,12 @@
       "and facts you aren't sure of, and always when they ask you to look something up: action search, with a short query. " +
       "Then answer from what's found, and say where it's from. Never say you can't go on the internet or look things up. " +
       "Answer what you know well (explanations, writing, advice, maths, history) straight away.\n\n" +
-      "Reply in one to three short, plain sentences, in English, without markdown. Anything longer (a recipe, a plan, an email " +
-      "draft, a poem, code, a long explanation) goes on the screen: action show_page with a title and markdown, and your reply " +
-      "says in a sentence what it is.\n\n" +
+      "Answer in the conversation, in English: in a sentence or two for a simple question, and in full when they ask for " +
+      "more (a recipe, a plan, an email, a poem, code, an explanation), with a little Markdown where it helps (a list, a " +
+      "code block). Links can't be clicked here: don't add any.\n\n" +
       "Facts about Chat Computer: " + FACTS.what + " " + FACTS.indie + " " + FACTS.free + " " + FACTS.soon + " " + FACTS.pc + " " +
       FACTS.mac + " Never make up facts about Chat Computer beyond these.\n\n" +
-      "Actions: none; search (query); show_page (title, markdown); show_map (place); play_music (soft piano the browser plays); " +
+      "Actions: none; search (query); show_map (place); play_music (soft piano the browser plays); " +
       "youtube_search (query: a link to YouTube's search); open_website (url); open_message (id: m1 Mum on WhatsApp about dinner " +
       "at 7, m2 Jane about lunch on Friday, m3 Alex with the slides); open_file (name: Packing list.md, Beach.jpg, Budget " +
       "2026.xlsx, Taxes 2025.pdf, Recipes.txt, Resume.docx); make_timer (minutes); set_volume (percent); close. Their " +
@@ -1026,11 +999,11 @@
       if (size + line.length <= 3600) { lines.push(line); size += line.length; }
     });
     return "The question: " + asked + "\nWhat the page found on the web for “" + q + "”, just now:\n" +
-      (lines.length ? lines.join("\n") : "Nothing.") + "\n\nAnswer the question from this, in one to three short sentences, and say " +
-      "where it's from (like “according to Wikipedia”). If it doesn't answer it, say what it does say, or that nothing was " +
-      "found. Something longer goes on the screen (show_page).";
+      (lines.length ? lines.join("\n") : "Nothing.") + "\n\nAnswer the question from this, briefly unless they asked for more, " +
+      "and say where it's from (like “according to Wikipedia”). If it doesn't answer it, say what it does say, or that " +
+      "nothing was found.";
   }
-  // Examples, for a small model: one it knows, one it looks up and answers from what's found, one for the screen.
+  // Examples, for a small model: one it knows, one it looks up and answers from what's found, one it writes.
   var NANO_EXAMPLES = [
     ["What's the capital of Japan?", { reply: "Tokyo.", action: "none" }],
     ["How tall is Mount Everest now? Didn't it change?", { reply: "Let me look that up.", action: "search", query: "Mount Everest height" }],
@@ -1038,8 +1011,7 @@
       text: "Mount Everest is Earth's highest mountain above sea level. It lies in the Mahalangur Himal sub-range of the Himalayas. Its " +
       "elevation (snow height) of 8,848.86 m was most recently established in 2020 by the Chinese and Nepali authorities." }]),
      { reply: "It's 8,849 metres, measured again in 2020 by China and Nepal, according to Wikipedia.", action: "none" }],
-    ["write a haiku about coffee", { reply: "A haiku about coffee is on the screen.", action: "show_page", title: "Coffee",
-      markdown: "Dark cup in my hands,\nsteam curling into morning,\nthe day starts with you." }]
+    ["write a haiku about coffee", { reply: "Dark cup in my hands,\nsteam curling into morning,\nthe day starts with you.", action: "none" }]
   ];
   function nanoSession(monitor) {
     if (nano.session) return Promise.resolve(nano.session);
@@ -1085,14 +1057,14 @@
   }
   var NANO_SCHEMA = { type: "object", properties: {
     reply: { type: "string" },
-    action: { type: "string", enum: ["none", "search", "show_page", "show_map", "play_music", "youtube_search", "open_website",
+    action: { type: "string", enum: ["none", "search", "show_map", "play_music", "youtube_search", "open_website",
                                      "open_message", "open_file", "make_timer", "set_volume", "close"] },
     title: { type: "string" }, markdown: { type: "string" }, place: { type: "string" }, query: { type: "string" },
     url: { type: "string" }, id: { type: "string" }, name: { type: "string" }, minutes: { type: "integer" },
     percent: { type: "integer" } }, required: ["reply", "action"] };
-  // Its answer from what was found: in words, or a page on the screen (no looking up again, nothing else done).
-  var NANO_ANSWER = { type: "object", properties: { reply: { type: "string" }, action: { type: "string", enum: ["none", "show_page"] },
-    title: { type: "string" }, markdown: { type: "string" } }, required: ["reply", "action"] };
+  // Its answer from what was found, in the conversation (no looking up again, nothing else done).
+  var NANO_ANSWER = { type: "object", properties: { reply: { type: "string" }, action: { type: "string", enum: ["none"] } },
+    required: ["reply", "action"] };
   // What its answer says to show, done here (the same as the written answers do), and what to add to its words.
   function nanoAct(r, you, uts) {
     var a = r.action;
@@ -1164,7 +1136,6 @@
       return lookup(q, text).then(function (got) {
         looked = got;
         got.told.forEach(function (d) { did(d, you, uts); });
-        if (wants.news) newsShow(got.list);
         // Chrome's model sometimes fails on what was found (an "unknown error"): again with less of it, in Latin letters.
         return nanoPrompt(nanoFound(text, q, got.list), NANO_ANSWER).catch(function () {
           var less = got.list.slice(0, 3).map(function (x) {
@@ -1175,18 +1146,11 @@
       });
     }).then(function (r) {
       if (r.written) { deliver(r.written, id, you, uts); return; }
-      var words = String(r.reply || "").trim();
-      // Something long, or in Markdown (a recipe, code, an email), goes on the screen, as it was asked to.
-      if (r.action !== "show_page" && (words.length > 320 || /\n|```/.test(words))) {
-        var md = words.replace(/```json[\s\S]*?```/g, "").trim();
-        var head = r.title || clip(topicOf(text), 60);
-        r = { action: "show_page", title: head.charAt(0).toUpperCase() + head.slice(1), markdown: md || words };
-        words = "Here it is, on the screen.";
-      }
-      if (looked && wants.news && r.action === "show_page") r.action = "none";       // the news itself stays on the screen
+      // Its words go in the conversation as they are, Markdown and all (a JSON copy of its answer in them is dropped).
+      var words = String(r.reply || "").replace(/```json[\s\S]*?(```|$)/g, "").trim();
       // Where it's from, only when it was looked up: from memory, it doesn't say "according to Wikipedia".
       if (!looked) words = unsourced(words);
-      words = words.replace(/[*_`#]+/g, "").trim() || "Done.";
+      words = words || "Done.";
       return Promise.resolve(nanoAct(r, you, uts)).then(function () {
         stream(id, words, function () { say(words); });
       });
@@ -1205,9 +1169,8 @@
     var air_ = got.list.filter(function (x) { return x.air; })[0], news_ = got.list.filter(function (x) { return x.links; }),
         wiki = got.list.filter(function (x) { return x.source === "Wikipedia"; });
     var a = air_ ? { text: air_.text + " (Open-Meteo's estimate, from the Copernicus forecast.)" }
-      : news_.length ? { text: "Here's the news, from Wikipedia's Current events, on the screen. The latest: " + clip(news_[0].text, 150),
-                          act: function () { newsShow(news_); } }
-      : wiki.length ? { text: "Wikipedia, “" + wiki[0].title + "”: " + sentences(wiki[0].text, 2), act: function () { foundShow(q, wiki); } }
+      : news_.length ? { text: newsWords(news_) }
+      : wiki.length ? { text: wikiWords(wiki[0]) }
       : null;
     if (!a) throw new Error("nothing found");
     return { written: a };
@@ -1332,12 +1295,12 @@
       "Right now you're in Chat Computer's demo website (chatcomputer.ai), in the person's web browser, with their own Claude " +
       "API key. The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
       "there), and what you open goes between them, above their latest message, your latest reply and the message box.\n\n" +
-      "Reply in one to three short, plain sentences, without markdown: replies show just above the message box, and are " +
-      "read aloud when they talk to you. Anything longer (a recipe, a plan, a list, a table) goes on the screen with " +
-      "show_page, and you say in a sentence what it is. Do things rather than describe them, and don't announce a tool " +
-      "before using it.\n\n" +
+      "Answer in the conversation, like a chat: briefly for simple things, in full when they ask for more (a recipe, a " +
+      "plan, code), with a little Markdown where it helps (a list, a table, a code block; links can't be clicked here). " +
+      "When they talk to you (through their AirPods) it's read aloud too, so keep it to a few sentences then. Do things " +
+      "rather than describe them, and don't announce a tool before using it.\n\n" +
       "Here you can: play YouTube videos (play_youtube; use web_search to find a video's address when you don't know its " +
-      "ID for certain), show maps (show_map), show pages you write (show_page), give a link to a website (open_website: " +
+      "ID for certain), show maps (show_map), show a page you write when they ask for one on the screen (show_page), give a link to a website (open_website: " +
       "other sites can't show inside the demo; on a Chat Computer they open right here and you use them), open their " +
       "messages and files (open_message, open_file), make a timer (make_timer), set the volume of what's playing " +
       "(set_volume), close what's open (close), and search the web. On a real Chat Computer you also use any website, " +
@@ -1355,8 +1318,8 @@
     { name: "show_map", description: "Show a map (OpenStreetMap) between the sidebars, of the area in the box given in degrees.",
       input_schema: obj({ place: { type: "string" }, west: { type: "number" }, south: { type: "number" }, east: { type: "number" },
       north: { type: "number" } }, ["place", "west", "south", "east", "north"]) },
-    { name: "show_page", description: "Show a page you write between the sidebars, in Markdown (headings, lists, tables): anything " +
-      "longer than a sentence or two.", input_schema: obj({ title: { type: "string" }, markdown: { type: "string" } }, ["title", "markdown"]) },
+    { name: "show_page", description: "Show a page you write between the sidebars, in Markdown (headings, lists, tables), when " +
+      "they ask for something on the screen; answers go in the conversation.", input_schema: obj({ title: { type: "string" }, markdown: { type: "string" } }, ["title", "markdown"]) },
     { name: "open_website", description: "Open a website. Other sites can't show inside the demo, so this shows a link to it there.",
       input_schema: obj({ url: { type: "string", description: "The full web address, with https" }, title: { type: "string" } }, ["url"]) },
     { name: "open_message", description: "Open one of their messages between the sidebars (as the conversation it's part of).",
@@ -1678,6 +1641,15 @@
     call("partial", "");
     drawTools();
   }
+  // Read aloud, under a message: the browser says it now (in place of anything it was saying).
+  function readAloud(text) {
+    if (!window.speechSynthesis || !text) return;
+    var plain = String(text).replace(/[*_`#>|~]/g, "").replace(/\s+/g, " ").trim();
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+    var u = new SpeechSynthesisUtterance(plain);
+    u.lang = navigator.language || "en-US";
+    window.speechSynthesis.speak(u);
+  }
   // An answer, read out while talking (not listening meanwhile, so it doesn't hear itself).
   function say(text) {
     if (!ears.on || !text || !window.speechSynthesis) return;
@@ -1793,6 +1765,14 @@
         break;
       }
       case "goto": call("earlier", EARLIER, msg.id, msg.ts); break;
+      // Under a message: read it aloud; good or bad (kept in this browser only: nothing leaves it).
+      case "speak": readAloud(String(msg.text || "")); break;
+      case "feedback": {
+        var fb = store("chatcomputer-demo-feedback") || [];
+        fb.push({ ts: now(), good: !!msg.good, on: !!msg.on, prompt: clip(msg.prompt, 300), answer: clip(msg.text, 600) });
+        store("chatcomputer-demo-feedback", fb.slice(-100));
+        break;
+      }
       case "search": call("searchResults", msg.n, msg.q || "", search(msg.q || ""),
                           search(msg.q || "").length ? "" : "Nothing in the demo's files matches \u201c" + (msg.q || "") + "\u201d.");
         break;

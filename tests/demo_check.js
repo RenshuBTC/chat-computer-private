@@ -127,6 +127,9 @@ async function ask(page, text) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.route(/youtube/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: PLAYER }));      // no network needed
+  // Wikipedia finds nothing here (a question of fact then gets the page's honest note, as with no AI).
+  await page.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*" }, body: "{}" }));
   const api = [];
   await page.route("https://api.anthropic.com/**", (route) => {
     const req = route.request(), body = JSON.parse(req.postData() || "{}");
@@ -282,6 +285,42 @@ async function ask(page, text) {
   out.ai_music = await state(ai);
   out.ai_calls = await ai.evaluate(() => window.__ai);
   if (shot) await ai.screenshot({ path: shot + "-ai.png" });
+
+  // Under each message, as in the Claude app: yours has when, ask again, edit and copy; the answer's has copy, read
+  // aloud, good, bad, ask again and when, and the latest answer's row shows. While an answer comes in, its newest
+  // words fade in. Good is kept in this browser; edit puts your words back in the box; ask again asks them again.
+  const rows = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+  rows.on("pageerror", (e) => errors.push(String(e)));
+  await rows.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*" }, body: "{}" }));
+  await rows.goto(page_url);
+  await rows.waitForFunction(() => document.getElementById("demo-tools"));
+  await rows.waitForTimeout(300);
+  await rows.click("#input");
+  await rows.keyboard.type("is it free");
+  await rows.keyboard.press("Enter");
+  await rows.waitForTimeout(900);
+  out.fading = await rows.evaluate(() => Array.from(document.querySelectorAll("#log > .ai .fresh")).map((s) => getComputedStyle(s).animationName));
+  await rows.waitForFunction(() => document.querySelector("#log > .acts.theirs"));
+  await rows.waitForTimeout(500);
+  out.rows = await rows.evaluate(() => Array.from(document.querySelectorAll("#log > .acts")).map((r) => ({
+    kind: r.classList.contains("mine") ? "mine" : "theirs", last: r.classList.contains("last"), when: (r.querySelector(".when") || {}).textContent,
+    acts: Array.from(r.querySelectorAll(".act")).map((b) => b.getAttribute("aria-label")), shown: getComputedStyle(r).opacity,
+    after: r.previousElementSibling.className.split(" ")[0] })));
+  await rows.click("#log > .acts.theirs .act[data-act=good]");
+  await rows.waitForTimeout(150);                          // the page keeps it a moment later (its host's message)
+  out.feedback = await rows.evaluate(() => ({ kept: JSON.parse(localStorage.getItem("chatcomputer-demo-feedback") || "[]"),
+    on: Array.from(document.querySelectorAll("#log > .acts.theirs .act.on")).map((b) => b.dataset.act) }));
+  await rows.hover("#log > .you");
+  await rows.click("#log > .acts.mine .act[data-act=edit]");
+  out.edit = await rows.evaluate(() => ({ box: document.getElementById("input").value, focused: document.activeElement.id }));
+  await rows.keyboard.press("Escape");
+  await rows.hover("#log > .you");
+  await rows.click("#log > .acts.mine .act[data-act=retry]");
+  await rows.waitForFunction(() => document.querySelectorAll("#log > .acts.theirs").length === 2);
+  out.retry = await rows.evaluate(() => ({ yous: Array.from(document.querySelectorAll("#log > .you")).map((y) => y.textContent),
+    last: Array.from(document.querySelectorAll("#log > .acts")).filter((r) => r.classList.contains("last")).length }));
+  if (shot) await rows.screenshot({ path: shot + "-rows.png" });
 
   // A phone: no sidebars and no switches; the buttons inside the box; the conversation and the box still work.
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });

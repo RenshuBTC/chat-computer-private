@@ -22,7 +22,7 @@ def asset(name: str) -> str:
 
 NATIVE = 'data-chatcomputer="native"'  # marks pages laid out by Chat Computer (the screen fills in the size)
 
-# Black on white like the conversation, except that a video plays on black, as in any video player.
+# Black on the conversation's warm off-white (theme.css), except that a video plays on black, as in any video player.
 DOC_CSS = """
 body { overflow-y: auto; }
 article { width: var(--co-column, min(30rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto; padding: 2rem 0 4rem; }
@@ -40,7 +40,7 @@ article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; mar
 .plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 .said { margin: 0 0 1rem; }
 .said .who { font-weight: bold; }
-.said.mail { padding: 0 0 1rem; margin: 0 0 1.25rem; border-bottom: 2px solid var(--bubble); }
+.said.mail { padding: 0 0 1rem; margin: 0 0 1.25rem; border-bottom: 2px solid var(--line); }
 .said.mail:last-child { border-bottom: 0; }
 .said.mail .meta { margin: 0.25rem 0 0.5rem; }
 /* On paper (a PDF, a printer): the size of a printed page's text, the page's own width, no screen colours. */

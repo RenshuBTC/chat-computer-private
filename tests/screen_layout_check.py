@@ -83,7 +83,7 @@ STATE_JS = """(function () {
             title: li.title};
   }); }
   var yous = document.querySelectorAll('#log .you'), lastYou = yous[yous.length - 1].getBoundingClientRect();
-  var youEl = yous[yous.length - 1], aiEl = document.querySelector('#log > .ai:last-child');
+  var youEl = yous[yous.length - 1], aiEl = Array.prototype.slice.call(document.querySelectorAll('#log > .ai')).pop();
   var res = document.getElementById('results').getBoundingClientRect();
   var inp = document.getElementById('input').getBoundingClientRect();
   var line = parseFloat(getComputedStyle(document.body).lineHeight);

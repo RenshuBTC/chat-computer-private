@@ -784,6 +784,29 @@ class Controller:
             return
         if self.locked:
             return
+        if kind == "speak":
+            # Read aloud, under a message: said now, in place of whatever was being said (even with speech off).
+            text = str(msg.get("text") or "").strip()
+            if text and self.speaker is not None and self.speaker.tts is not None:
+                self.speaker.stop()
+                was, self.speaker.muted = self.speaker.muted, False
+                self.speaker.say(text)
+                self.speaker.muted = was
+            elif text:
+                self.screen.notice("Reading aloud needs Chat Computer's voice, which isn't ready yet.")
+            return
+        if kind == "feedback":
+            # Good or bad, under an answer: kept with the question and the answer (~/ChatComputer/feedback.jsonl),
+            # for finding what to make better.
+            entry = {"ts": round(time.time(), 1), "good": bool(msg.get("good")), "on": bool(msg.get("on")),
+                     "id": str(msg.get("id") or ""), "prompt": str(msg.get("prompt") or "")[:4000],
+                     "answer": str(msg.get("text") or "")[:8000]}
+            try:
+                with open(self.paths.root / "feedback.jsonl", "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            except OSError:
+                log.exception("couldn't keep the feedback")
+            return
         if self._search_event(msg):
             return
         if kind == "text_scale":

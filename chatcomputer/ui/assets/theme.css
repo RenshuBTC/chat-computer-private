@@ -1,15 +1,23 @@
-/* Chat Computer look: black text on a white background and nothing else. The font is Atkinson Hyperlegible Next
+/* Chat Computer look: black text on a warm off-white, and nothing else. The font is Atkinson Hyperlegible Next
    (by the Braille Institute, made so that letters that are easy to confuse look different), and code is in
    Atkinson Hyperlegible Mono. Both come with Chat Computer (fonts/, SIL Open Font License 1.1). Characters they
    don't have (Chinese, Japanese, Korean, Greek, Cyrillic, emoji) come from the system's fonts.
-   Full white and full black give the most contrast a screen can show (21:1). Off-whites from #FAFAFA to
-   #F0F0F0 are only 4-13% dimmer, so greying the background would cost contrast without making the screen
-   much less bright; to dim it, turn down the screen's brightness. No dark mode, and no grey text but one: the
-   empty message box's hint, dimmed (--dim), with the send button grey in the same shade until there's
-   something to send, as in ChatGPT. The other colour is the light grey of your messages' bubbles (black on it
-   is still 18:1), which sets your words apart from Claude's the way chat apps do. Sizes are in rem. The screen sets the root size for this
-   monitor and viewing distance (chatcomputer/ui/layout.py), so the letters' x-height covers 0.3 degrees of
-   view and lines hold about 70 characters. */
+   The background, for a screen looked at for hours: dark text on a light background reads best (proofreading is
+   better in any room light; Buchner & Baumgartner 2007), and that's because the screen is bright (Buchner, Mayr &
+   Brandt 2009), so it stays light; full white is the most glaring of it, though (160 readers rated it glarier), and
+   contrast hardly matters this high (reading slows by under half for ten times less of it; Legge et al. 1987). So
+   --ground is white made 8% dimmer, with a faint warm tint (about 6200 K; not cream or sepia: the warmest screens
+   tired people most, Xie et al. 2025): #F8F5F0, black on it 19.3:1 (white's is 21:1; 7:1 is WCAG's best grade).
+   The screen's own brightness matters far more than any colour here: turned down to the room's light, it eased eye
+   fatigue where tinting didn't (a randomised month-long study of 47 people), so
+   Chat Computer dims the screen itself ("brightness", the night light). No dark mode, and no grey text but one: the
+   empty message box's hint, dimmed (--dim), with the send button grey in the same shade until there's something
+   to send, as in ChatGPT. The other colours are the light grey of your messages' bubbles (black on it is still
+   16.5:1, and it stands off the background as #EDEDED did off white), which sets your words apart from Claude's the
+   way chat apps do, and a little darker grey for lines (--line), as thin lines need more contrast than filled areas
+   to show as well. Sizes are in rem. The screen sets the root size for this monitor and viewing distance
+   (chatcomputer/ui/layout.py), so the letters' x-height covers 0.3 degrees of view and lines hold about 70
+   characters. */
 @font-face {
   font-family: "Atkinson Hyperlegible Next"; font-style: normal; font-weight: 200 800;
   src: url("fonts/AtkinsonHyperlegibleNext.ttf") format("truetype");
@@ -27,10 +35,11 @@
   src: url("fonts/AtkinsonHyperlegibleMono-Italic.ttf") format("truetype");
 }
 :root {
-  --ground: #FFFFFF;
+  --ground: #F8F5F0;
   --ink: #000000;
-  --bubble: #EDEDED;
-  --dim: #9A9A9A;
+  --bubble: #E7E4DD;
+  --line: #DDD9D1;
+  --dim: #918F8A;
   --sans: "Atkinson Hyperlegible Next", sans-serif;
   --mono: "Atkinson Hyperlegible Mono", monospace;
 }

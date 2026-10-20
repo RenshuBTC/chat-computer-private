@@ -10,7 +10,7 @@
   var msgList = $("messages-list"), msgPinned = $("messages-pinned");
   var page = document.scrollingElement || document.documentElement;
   var rootStyle = document.documentElement.style;
-  var MAX_ITEMS = 200;
+  var MAX_ITEMS = 400;                // messages, and the row under each
   var ai = {};          // id -> {el, md, text, raf, cut, tail}
   var mode = "chat";    // "content" while something Claude opened is showing between the sidebars
   var shown = { left: true, right: true, bottom: true };    // the panels (see "the panels' switches")
@@ -34,9 +34,10 @@
   function makeRoom() {
     var you = latestYou(), was = room.offsetHeight, need = 0;
     if (you && mode === "chat") {
-      var margin = parseFloat(getComputedStyle(you).scrollMarginTop) || 0;
-      var top = you.getBoundingClientRect().top + page.scrollTop - margin;        // the page scrolled to it
-      var end = column.getBoundingClientRect().bottom + page.scrollTop - was;     // where the conversation ends
+      // Where things are laid out (offsets: not moved by a message's rising into place).
+      var margin = parseFloat(getComputedStyle(you).scrollMarginTop) || 0, top = -margin;
+      for (var e = you; e; e = e.offsetParent) top += e.offsetTop;              // the page scrolled to it
+      var end = column.offsetTop + column.offsetHeight - was;                    // where the conversation ends
       need = Math.max(0, Math.ceil(top + page.clientHeight - end));
     }
     if (need !== was) room.style.height = need + "px";
@@ -59,6 +60,7 @@
   // read back through earlier ones).
   function trim() {
     if (stick) while (log.children.length > MAX_ITEMS) log.removeChild(log.firstChild);
+    while (log.firstElementChild && log.firstElementChild.classList.contains("acts")) log.removeChild(log.firstElementChild);
     marks();
   }
   // Whether anything is said, and whether you've said anything (the word logo shows until you have).
@@ -82,14 +84,14 @@
   function ensureAI(id) {
     var m = ai[id];
     if (m) return m;
-    var wrap = el("ai thinking");
+    var wrap = el("ai thinking enter");
     wrap.dataset.id = id;
     wrap.dataset.ts = String(now());
     var md = el("md");
     wrap.appendChild(md);
     log.appendChild(wrap);
     trim();
-    m = ai[id] = { el: wrap, md: md, text: "", raf: 0, cut: 0, tail: [] };
+    m = ai[id] = { el: wrap, md: md, text: "", raf: 0, cut: 0, tail: [], done: 0, drawn: 0, pieces: [], base: 0 };
     return m;
   }
   // Before anything is said, the conversation starts with Chat Computer's first words: what a first program
@@ -114,6 +116,7 @@
     } else m = el("gap", it.text);
     if (it.id) m.dataset.id = it.id;
     if (it.ts) m.dataset.ts = String(it.ts);
+    m._said = it.text;
     return m;
   }
 
@@ -135,18 +138,175 @@
     }
     return end;
   }
+  // Words fade in as they come, as in the Claude app (measured there: each new piece of an answer goes from nothing
+  // to black in 400 ms, at an even pace). paint() keeps how much text it had drawn and when each piece came
+  // (m.pieces: [where it ends in the drawn text, when]); what it draws anew (a block just finished, or the part still
+  // being written, drawn again each time) has its young text in spans that fade, carried on from where they were (a
+  // negative delay), so nothing flickers. Not when the system asks for less motion.
+  var FADE = 400, calm = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  function textOf(nodes) { var n = 0; for (var i = 0; i < nodes.length; i++) n += nodes[i].textContent.length; return n; }
+  function fadeIn(m, nodes, start, at) {
+    var young = [], prev = m.base;
+    m.pieces.forEach(function (p) { if (at - p[1] < FADE) young.push([prev, p[0], p[1]]); prev = p[0]; });
+    if (calm || !young.length) return;
+    var pos = start;
+    nodes.forEach(function (n) {
+      var texts = [], w, t;
+      if (n.nodeType === 3) texts.push(n);
+      else { w = document.createTreeWalker(n, NodeFilter.SHOW_TEXT); while ((t = w.nextNode())) texts.push(t); }
+      texts.forEach(function (tn) {
+        var a = pos, b = pos + tn.data.length, cuts = [];
+        pos = b;
+        young.forEach(function (y) { var s0 = Math.max(a, y[0]), e0 = Math.min(b, y[1]); if (s0 < e0) cuts.push([s0 - a, e0 - a, y[2]]); });
+        for (var k = cuts.length - 1; k >= 0; k--) {      // from the end, so tn keeps the text before each cut
+          var c = cuts[k];
+          if (c[1] < tn.data.length) tn.splitText(c[1]);
+          var part = c[0] > 0 ? tn.splitText(c[0]) : tn, span = document.createElement("span");
+          span.className = "fresh";
+          span.style.animationDelay = -Math.round(at - c[2]) + "ms";
+          part.parentNode.insertBefore(span, part);
+          span.appendChild(part);
+        }
+      });
+    });
+  }
   function paint(m) {
     m.raf = 0;
     for (var i = 0; i < m.tail.length; i++) if (m.tail[i].parentNode === m.md) m.md.removeChild(m.tail[i]);
     m.tail = [];
-    var cut = finishedUpTo(m.text, m.cut);
-    if (cut > m.cut) { add(m.md, window.renderMarkdown(m.text.slice(m.cut, cut))); m.cut = cut; }
+    var fin = [], cut = finishedUpTo(m.text, m.cut);
+    if (cut > m.cut) { fin = add(m.md, window.renderMarkdown(m.text.slice(m.cut, cut))); m.cut = cut; }
     var rest = m.text.slice(m.cut);
     if (rest) m.tail = add(m.md, window.renderMarkdown(rest));
+    var at = performance.now(), finLen = textOf(fin), drawn = m.done + finLen + textOf(m.tail);
+    if (drawn > m.drawn) m.pieces.push([drawn, at]);
+    else { m.pieces.forEach(function (p) { p[0] = Math.min(p[0], drawn); }); m.base = Math.min(m.base, drawn); }
+    m.drawn = drawn;
+    while (m.pieces.length && at - m.pieces[0][1] >= FADE) m.base = m.pieces.shift()[0];      // faded in: plain text
+    fadeIn(m, fin, m.done, at);
+    fadeIn(m, m.tail, m.done + finLen, at);
+    m.done += finLen;
     if (m.text) m.el.classList.remove("thinking");
     follow();
     if (mode === "content") fitStrip();
   }
+  // ------------------------------------------------------------------ under each message: what can be done with it
+  // As in the Claude app, and different under each kind: under Chat Computer's words, copy, read them out, good, bad
+  // and ask again, then when (shown under the pointer); under yours, at the right, when, ask again, edit and copy. A
+  // row shows under the pointer, under the latest answer, and under a message tapped on a touchscreen.
+  var ACT_ICON = {
+    copy: '<svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.5"/>' +
+          '<path d="M15.5 8.5V6.5A2.5 2.5 0 0 0 13 4H6.5A2.5 2.5 0 0 0 4 6.5V13a2.5 2.5 0 0 0 2.5 2.5h2"/></svg>' +
+          '<svg class="i-done" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+    speak: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/></svg>',
+    good: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 11v9H4v-9zM7.5 11l3.6-7a2.2 2.2 0 0 1 2.3 2.6L12.8 10h5.4a2 2 0 0 1 2 2.4l-1.3 6A2 2 0 0 1 16.9 20H7.5"/></svg>',
+    bad: '<svg viewBox="0 0 24 24" aria-hidden="true"><g transform="rotate(180 12 12)"><path d="M7.5 11v9H4v-9zM7.5 11l3.6-7a2.2 2.2 0 0 1 2.3 2.6L12.8 10h5.4a2 2 0 0 1 2 2.4l-1.3 6A2 2 0 0 1 16.9 20H7.5"/></g></svg>',
+    retry: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.2h-4.2"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h3.5L18.7 8.8a2.1 2.1 0 0 0-3-3L5.5 16v3z"/><path d="M14.5 7l2.5 2.5"/></svg>'
+  };
+  var ACT_NAME = { copy: "Copy", speak: "Read aloud", good: "Good answer", bad: "Bad answer", retry: "Ask again", edit: "Edit" };
+  function ago(ts) {
+    var s = Math.max(0, now() - ts), m = Math.floor(s / 60), h = Math.floor(m / 60);
+    if (m < 1) return "just now";
+    if (m < 60) return m === 1 ? "1 minute ago" : m + " minutes ago";
+    if (new Date(ts * 1000).toDateString() === new Date().toDateString()) return h === 1 ? "1 hour ago" : h + " hours ago";
+    var day = dayLabel(ts);
+    return day === "Yesterday" ? "yesterday" : day;
+  }
+  function addActs(msg) {
+    if (!msg || !msg.parentNode || msg.classList.contains("hello") || !/\b(you|ai)\b/.test(msg.className)) return null;
+    var next = msg.nextElementSibling;
+    if (next && next.classList.contains("acts")) return next;
+    var mine = msg.classList.contains("you"), row = el("acts " + (mine ? "mine" : "theirs"));
+    row.setAttribute("aria-label", mine ? "Your message" : "The answer");
+    (mine ? ["when", "retry", "edit", "copy"] : ["copy", "speak", "good", "bad", "retry", "when"]).forEach(function (k) {
+      if (k === "when") {
+        var w = el("when");
+        w.dataset.ts = msg.dataset.ts || String(now());
+        w.textContent = ago(+w.dataset.ts);
+        row.appendChild(w);
+        return;
+      }
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "act";
+      b.dataset.act = k;
+      b.tabIndex = -1;
+      b.title = ACT_NAME[k];
+      b.setAttribute("aria-label", ACT_NAME[k]);
+      b.innerHTML = ACT_ICON[k];
+      row.appendChild(b);
+    });
+    msg.parentNode.insertBefore(row, msg.nextSibling);
+    return row;
+  }
+  // The latest answer's row stays shown.
+  function lastActs(row) {
+    Array.prototype.forEach.call(log.querySelectorAll(".acts.last"), function (r) { r.classList.remove("last"); });
+    if (row) row.classList.add("last");
+  }
+  function saidIn(msg) {
+    if (msg._said != null) return String(msg._said).trim();
+    return (msg.classList.contains("you") ? msg.textContent : (msg.querySelector(".md") || msg).innerText).trim();
+  }
+  function promptFor(msg) {
+    for (var p = msg.previousElementSibling; p; p = p.previousElementSibling) if (p.classList.contains("you")) return saidIn(p);
+    return "";
+  }
+  function copyText(text, b) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(function () { copyOld(text); });
+      else copyOld(text);
+    } catch (e) { copyOld(text); }
+    post({ type: "copy", text: text });            // on a Chat Computer the window puts it on the clipboard too
+    b.classList.add("did");
+    setTimeout(function () { b.classList.remove("did"); }, 1500);
+  }
+  function copyOld(text) {
+    var t = document.createElement("textarea");
+    t.value = text;
+    t.setAttribute("readonly", "");
+    t.style.cssText = "position:fixed;left:-9999px;top:0";
+    document.body.appendChild(t);
+    t.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    t.remove();
+    focusBox();
+  }
+  function act(b) {
+    var row = b.parentNode, msg = row.previousElementSibling, k = b.dataset.act;
+    if (!msg) return;
+    var text = saidIn(msg);
+    if (k === "copy") copyText(text, b);
+    else if (k === "speak") post({ type: "speak", text: text });
+    else if (k === "good" || k === "bad") {
+      var on = !b.classList.contains("on");
+      Array.prototype.forEach.call(row.querySelectorAll(".act.on"), function (x) { x.classList.remove("on"); });
+      b.classList.toggle("on", on);
+      post({ type: "feedback", id: msg.dataset.id || "", good: k === "good", on: on, text: text, prompt: promptFor(msg) });
+    } else if (k === "retry") {
+      var again = msg.classList.contains("you") ? text : promptFor(msg);
+      if (again) { stick = true; post({ type: "send", text: again }); }
+    } else if (k === "edit") {
+      input.value = text;
+      fitInput();
+      focusBox();
+      try { input.setSelectionRange(text.length, text.length); } catch (e) {}
+    }
+  }
+  var coarse = !!(window.matchMedia && window.matchMedia("(any-pointer: coarse)").matches);
+  log.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest(".acts .act") : null;
+    if (b) { act(b); return; }
+    var msg = coarse && e.target.closest ? e.target.closest("#log > .you, #log > .ai") : null;
+    var row = msg && msg.nextElementSibling;
+    if (row && row.classList.contains("acts")) {
+      var on = !row.classList.contains("shown");
+      Array.prototype.forEach.call(log.querySelectorAll(".acts.shown"), function (r) { r.classList.remove("shown"); });
+      row.classList.toggle("shown", on);
+    }
+  });
+
   function showLive(text) {
     var was = body.classList.contains("hearing");
     liveText.textContent = text || "";
@@ -436,6 +596,7 @@
     $("clock-date").textContent = d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
     $("clock-time").textContent = clock(d.getTime() / 1000);
     if (labelsFor && labelsFor !== d.toDateString()) { drawDone(); drawMessages(); }
+    Array.prototype.forEach.call(log.querySelectorAll(".acts .when"), function (w) { w.textContent = ago(+w.dataset.ts); });
     setTimeout(tick, 60000 - (d.getSeconds() * 1000 + d.getMilliseconds()) + 50);
   }
   onSide([doneList, donePinned], function (li, pin) {
@@ -890,10 +1051,11 @@
       stick = true;
       var u = users[id];
       if (!u) {
-        u = users[id] = el("you", text);
+        u = users[id] = el("you enter", text);
         u.dataset.id = id;
         u.dataset.ts = String(now());
         log.appendChild(u);
+        addActs(u);
         trim();
         if (mode === "chat") pin(); else jumpDown();      // to the top of the screen, the answer to come under it
       } else { u.textContent = text; follow(); }
@@ -917,6 +1079,7 @@
       paint(m);
       m.el.classList.remove("thinking");
       if (!m.text && !m.el.querySelector(".activity") && !m.md.firstChild) { m.el.remove(); trim(); }
+      else { m.el._said = m.text || saidIn(m.el); lastActs(addActs(m.el)); }
       delete ai[id];
       follow();
       fitStrip();
@@ -930,7 +1093,7 @@
         m.el.appendChild(a);
         var md2 = el("md");
         m.el.appendChild(md2);
-        m.md = md2; m.text = ""; m.cut = 0; m.tail = [];
+        m.md = md2; m.text = ""; m.cut = 0; m.tail = []; m.done = 0; m.drawn = 0; m.pieces = []; m.base = 0;
       } else m.el.insertBefore(a, m.md);
       follow();
     },
@@ -959,7 +1122,14 @@
     openInPage: function (on) { openInPage = !!on; lastHole = ""; reportHole(); },
     history: function (items) {
       log.innerHTML = "";
-      (items || []).forEach(function (it) { log.appendChild(message(it)); });
+      var row = null;
+      (items || []).forEach(function (it) {
+        var m = message(it);
+        log.appendChild(m);
+        var r = addActs(m);
+        if (r && m.classList.contains("ai")) row = r;
+      });
+      lastActs(row);
       greet();                        // nothing said yet: Chat Computer's hello, world
       trim();
       jumpDown();
@@ -971,7 +1141,9 @@
       (items || []).forEach(function (it) {
         var d = new Date(it.ts * 1000).toDateString();
         if (d !== day) { frag.appendChild(el("day", dayLabel(it.ts))); day = d; }
-        frag.appendChild(message(it));
+        var m = message(it);
+        frag.appendChild(m);
+        addActs(m);
       });
       var first = firstTs();
       if (day && first && new Date(first * 1000).toDateString() !== day) frag.appendChild(el("day", dayLabel(first)));

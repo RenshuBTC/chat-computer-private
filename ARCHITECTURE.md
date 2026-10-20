@@ -496,16 +496,22 @@ retrying with backoff, then starts listening.
   kept), hold a message to select it, double and triple taps for a word and a paragraph, hold the box and move to
   move the cursor, swipe a sidebar item left for Pin. The session maps each touchscreen (XI2 DirectTouch) to the
   primary output (`xinput map-to-output`) and hides the arrow on touch.
-* Look: plain. Black text (#000000) on white (#FFFFFF) and nothing else: no dark mode, no grey text. Full
-  black on full white is the most contrast a screen can show (21:1). Dimming belongs to the screen's
-  brightness, because a grey background would cost contrast. The font is Atkinson Hyperlegible Next, with
+* Look: plain. Black text (#000000) on a warm off-white (`--ground: #F8F5F0`, white 8% dimmer with a faint warm
+  tint) and nothing else: no dark mode, no grey text. Chosen from the research on long screen reading, as the user
+  asked (theme.css cites it): dark on light reads best because the screen is bright; full white is rated glarier;
+  19.3:1 instead of 21:1 changes no reading measure; very warm screens tired people most. The screen's own
+  brightness matters far more than the colour, so dimming stays the screen's (`display`, the night light). The font is Atkinson Hyperlegible Next, with
   Atkinson Hyperlegible Mono for code. They ship in `ui/assets/fonts` (SIL OFL 1.1, from google/fonts; see
   its README), and `theme.css` loads them with `@font-face`. Pages written elsewhere get the fonts' file
   address (`render._theme_css`). `gtk_app.register_fonts` hands the folder to fontconfig (FcConfigAppFontAddDir)
   for the onscreen keyboard. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
   (Noto). Laid out like the Claude app, as the user asked: their words on the right in a light grey bubble
-  (`--bubble: #EDEDED`, the one colour besides black and white; black on it is 18:1), Claude's flush left in one
-  column, from the top of the screen down, above a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
+  (`--bubble: #E7E4DD`; black on it is 16.5:1; lines are `--line: #DDD9D1`), Claude's flush left in one
+  column, from the top of the screen down. Claude's words fade in as they come, each new piece from nothing to
+  black in 400 ms at an even pace (the Claude app's timing, measured there), and a new message rises 10px into
+  place. Under each message a row of what can be done with it, as in the Claude app: under Claude's, copy, read
+  aloud (`speak`, through the Speaker), good and bad (kept in `feedback.jsonl` with the question, for finding what
+  to improve) and ask again, with when; under theirs, when, ask again, edit and copy. Below is a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
   for a new line; no placeholder, since that would be grey text) with nothing under it; while asleep, a line
   above it says how to wake Chat Computer. On a wide screen Messages and Actions take the left and right 17%
   each (the Claude app's side panel's share); the column and the box centre in the rest.

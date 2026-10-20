@@ -101,7 +101,7 @@ class Settings:
     release_mic_during_media: str = "auto"  # auto | on | off
     # Screen
     show_activity: bool = False
-    # The screen is always black text on white (ui/assets/theme.css); there is no theme to choose.
+    # The screen is always black text on a warm off-white (ui/assets/theme.css); there is no theme to choose.
     # Text size and line width are worked out from the screen's real size (ui/layout.py).
     text_size: int = 0              # 0 = automatic; otherwise a fixed size in pixels
     text_scale: float = 1.0         # "bigger"/"smaller" on top of the automatic size
@@ -151,7 +151,7 @@ class Settings:
         known = {f.name: f for f in fields(cls) if f.name != "extra"}
         if data.get("text_size") == 28 and "text_scale" not in data:
             data["text_size"] = 0   # 28 px was the fixed default before text was sized from the screen
-        data.pop("theme", None)     # the old light/dark choice: the screen is black on white now
+        data.pop("theme", None)     # the old light/dark choice: the screen is black on off-white now
         if "defaults_version" not in data and (data.get("model"), data.get("effort")) == OLD_CLAUDE:
             data.pop("model")       # the default from before 20 Oct 2026, never changed: today's default instead
             data.pop("effort")

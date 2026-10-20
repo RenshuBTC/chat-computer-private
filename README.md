@@ -80,8 +80,11 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
   PC's own speakers Chat Computer doesn't greet you out loud.
 * **The screen.** Like the Claude app: your messages on the right in grey bubbles, Claude's on the left, from
-  the top of the screen down, and a message box at the bottom. What you send moves to the top of the screen with
-  the answer coming in under it, so you never scroll down to read it; scroll up for anything earlier. Before
+  the top of the screen down, on a warm off-white that's easier on the eyes than white, and a message box at the
+  bottom. What you send moves to the top of the screen with the answer coming in under it, its words fading in as
+  they come, so you never scroll down to read it; scroll up for anything earlier. Under each message, as in the
+  Claude app: under Claude's, copy, read aloud, thumbs up or down (kept, to make Chat Computer better) and ask
+  again; under yours, ask again, edit and copy; with when it was. Before
   anything is said, its name, **Chat Computer**, is in the middle, and the conversation starts with its first
   words, the classic `hello, world`; the name goes once you say something.
   The empty message box says, dimmed, "Chat computer anything or type “/” to search", with the cursor already
@@ -440,7 +443,8 @@ messages and files there are made up. Everyone gets answers, free:
   Phi-4-mini, running on the device itself. The **Download Gemini** button (in Edge, Download Phi-4-mini) at the
   right of the message box shows while the browser can download it; Chrome downloads it once, after that click,
   and keeps it for every site. Then it answers what the written answers can't, and can put a page it writes, a map
-  or a timer on the screen. It can't reach the internet itself, so the page looks things up for it: when a question
+  or a timer on the screen; its answers, long ones too, are in the conversation. It can't reach the internet
+  itself, so the page looks things up for it: when a question
   needs something recent or that it isn't sure of, or they say "look it up", it says what to look up, the page
   searches Wikipedia, the day's news (Wikipedia's Current events) and, for haze or pollution, the air
   (Open-Meteo), and it answers from what was found, saying where it's from. The page's own answers go into its

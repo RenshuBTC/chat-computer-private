@@ -1,0 +1,287 @@
+{
+ "about": "Hand labels for the website with the real Gemini Nano (Chrome 155 on the owner's PC) after the page could look things up for it: chatcomputer.ai at 43018b9, 20 Oct 2026 (run web-nano-real-after). Same meaning as scripted-baseline.json. Five written answers whose capture the runner cut short were completed from the written answer they start (noted in the results); the rest as captured.",
+ "labels": {
+  "what-is-this": {
+   "pass": true
+  },
+  "how-work": {
+   "pass": true
+  },
+  "what-can-do": {
+   "pass": true
+  },
+  "is-this-an-os": {
+   "pass": true
+  },
+  "hello": {
+   "pass": true
+  },
+  "hi-there": {
+   "pass": true
+  },
+  "how-are-you": {
+   "pass": true
+  },
+  "thanks": {
+   "pass": true
+  },
+  "play-music": {
+   "pass": true
+  },
+  "play-piano": {
+   "pass": true
+  },
+  "play-taylor": {
+   "pass": true
+  },
+  "play-lofi-typo": {
+   "pass": true
+  },
+  "im-bored": {
+   "pass": true
+  },
+  "relax": {
+   "pass": true
+  },
+  "youtube-video": {
+   "pass": true
+  },
+  "map-tokyo": {
+   "pass": true
+  },
+  "map-short": {
+   "pass": true
+  },
+  "where-is-london": {
+   "pass": true
+  },
+  "directions": {
+   "pass": true
+  },
+  "map-other-city": {
+   "pass": true
+  },
+  "timer-5": {
+   "pass": true
+  },
+  "timer-terse": {
+   "pass": true
+  },
+  "eggs": {
+   "pass": true
+  },
+  "weather": {
+   "pass": true
+  },
+  "weather-city": {
+   "pass": true
+  },
+  "umbrella": {
+   "pass": true
+  },
+  "messages": {
+   "pass": true
+  },
+  "jane": {
+   "pass": true
+  },
+  "email": {
+   "pass": true
+  },
+  "reply-mum": {
+   "pass": true
+  },
+  "packing": {
+   "pass": true
+  },
+  "find-photo": {
+   "pass": true
+  },
+  "search-files": {
+   "pass": true
+  },
+  "louder": {
+   "pass": true
+  },
+  "bigger-text": {
+   "pass": true
+  },
+  "close-it": {
+   "pass": true
+  },
+  "wifi": {
+   "pass": true
+  },
+  "open-website": {
+   "pass": true
+  },
+  "open-google": {
+   "pass": true
+  },
+  "news": {
+   "pass": true,
+   "note": "Gemini's summary of the day's stories, with their sources, and the list on the screen."
+  },
+  "recipe": {
+   "pass": true,
+   "note": "A recipe on the screen (this version still put long answers there)."
+  },
+  "calc": {
+   "pass": true
+  },
+  "capital": {
+   "pass": true,
+   "note": "Canberra."
+  },
+  "explain-quantum": {
+   "pass": true,
+   "note": "Qubits explained plainly."
+  },
+  "write-email": {
+   "pass": true,
+   "note": "A draft on the screen."
+  },
+  "poem": {
+   "pass": true,
+   "note": "A three-line poem about the sea, on the screen."
+  },
+  "translate": {
+   "pass": true,
+   "note": "Arigato and arigato gozaimasu, in English this time."
+  },
+  "trip-plan": {
+   "pass": true,
+   "note": "A plan on the screen; the reply oddly mentions 'a structured JSON response'."
+  },
+  "advice": {
+   "pass": true,
+   "note": "Sleep tips (with a medical caveat)."
+  },
+  "code": {
+   "pass": true,
+   "note": "def reverse_string with s[::-1], on the screen."
+  },
+  "date-today": {
+   "pass": true
+  },
+  "time-now": {
+   "pass": true
+  },
+  "joke": {
+   "pass": true
+  },
+  "how-install": {
+   "pass": true
+  },
+  "download": {
+   "pass": true
+  },
+  "price": {
+   "pass": true
+  },
+  "mac": {
+   "pass": true
+  },
+  "windows-safe": {
+   "pass": true
+  },
+  "requirements": {
+   "pass": true
+  },
+  "old-laptop": {
+   "pass": true
+  },
+  "privacy": {
+   "pass": true
+  },
+  "is-it-free": {
+   "pass": true
+  },
+  "airpods": {
+   "pass": true
+  },
+  "are-you-claude": {
+   "pass": true
+  },
+  "who-made": {
+   "pass": true
+  },
+  "anthropic": {
+   "pass": true
+  },
+  "cant-do": {
+   "pass": true
+  },
+  "control-my-pc": {
+   "pass": true
+  },
+  "real-or-fake": {
+   "pass": true
+  },
+  "gibberish": {
+   "pass": true,
+   "note": "The page's 'I didn't catch that', with what to try."
+  },
+  "emoji": {
+   "pass": true
+  },
+  "question-mark": {
+   "pass": true
+  },
+  "chinese": {
+   "pass": true
+  },
+  "spanish": {
+   "pass": true
+  },
+  "malay": {
+   "pass": true
+  },
+  "rude": {
+   "pass": true
+  },
+  "long": {
+   "pass": true
+  },
+  "haze-trace": {
+   "pass": true,
+   "note": "The haze from the air reading and Wikipedia; 'look it up' looks again; 'why can't you?' gets 'I can look things up!'."
+  },
+  "haze-now": {
+   "pass": true,
+   "note": "The air now (US AQI 198, unhealthy), named as Open-Meteo's."
+  },
+  "pm": {
+   "pass": true,
+   "note": "Lawrence Wong, from Wikipedia."
+  },
+  "world-cup": {
+   "pass": true,
+   "note": "Spain, beating Argentina in the final, from Wikipedia (after Gemini's training)."
+  },
+  "look-it-up": {
+   "pass": true,
+   "note": "Moshe Safdie from memory (no source claimed), then from Wikipedia."
+  },
+  "search-population": {
+   "pass": true,
+   "note": "6.21 million (June 2026), from Wikipedia; it calls the total 'residents'."
+  },
+  "headlines": {
+   "pass": true,
+   "note": "A summary of the day's stories, and the list on the screen."
+  },
+  "news-yesterday": {
+   "pass": true,
+   "note": "Yesterday's stories, from Wikipedia's Current events."
+  },
+  "why-no-internet": {
+   "pass": true,
+   "note": "The page's own answer: it can, through the page."
+  },
+  "tell-me-more": {
+   "pass": true,
+   "note": "The haze explained, then '1997' for the follow-up."
+  }
+ }
+}

@@ -171,6 +171,17 @@ def test_the_demo_works_in_a_browser():
     calls = res["ai_calls"]
     assert len(calls["created"]) == 1 and calls["created"][0]["monitored"] and "Gemini Nano" in calls["created"][0]["system"]
     assert calls["prompts"] == [{"text": "write a short poem about the sea", "schema": True}]
+    # Under each message, as in the Claude app, and different under each: yours (when, ask again, edit, copy) and the
+    # answer's (copy, read aloud, good, bad, ask again, when); the latest answer's row shows. Its words faded in.
+    assert res["fading"] and set(res["fading"]) == {"fresh"}
+    assert res["rows"] == [
+        {"kind": "mine", "last": False, "when": "just now", "acts": ["Ask again", "Edit", "Copy"], "shown": "0", "after": "you"},
+        {"kind": "theirs", "last": True, "when": "just now", "acts": ["Copy", "Read aloud", "Good answer", "Bad answer", "Ask again"],
+         "shown": "1", "after": "ai"}]
+    fb = res["feedback"]
+    assert fb["on"] == ["good"] and [(k["good"], k["on"], k["prompt"]) for k in fb["kept"]] == [(True, True, "is it free")]
+    assert res["edit"] == {"box": "is it free", "focused": "input"}
+    assert res["retry"] == {"yous": ["is it free", "is it free"], "last": 1}
     # A phone: no sidebars and no switches; the buttons are inside the box, and it works.
     phone = res["phone_opening"]
     assert phone["first_ai"] == "hello, world" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False, False]

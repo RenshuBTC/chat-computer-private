@@ -1,0 +1,223 @@
+{
+ "about": "Hand labels for the last desktop run on Opus 5.5 at max effort (run os-final2-opus, 20 Oct 2026, after the fixes from final-opus.json: the reminders and auto-sleep descriptions, and a simulation that installs only what Ubuntu's library has and opens Spotify's sign-in page), read from each case's outcome and reply. A general check's failure, when one was seen, is among a case's modes.",
+ "labels": {
+  "files-find-open": {
+   "pass": true,
+   "modes": []
+  },
+  "files-rename": {
+   "pass": true,
+   "modes": []
+  },
+  "files-tidy-screenshots": {
+   "pass": true,
+   "modes": []
+  },
+  "files-recent": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-whats-on": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-copy-photos": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-eject": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-none": {
+   "pass": true,
+   "modes": []
+  },
+  "print-boarding-pass": {
+   "pass": true,
+   "modes": []
+  },
+  "print-two-copies": {
+   "pass": true,
+   "modes": []
+  },
+  "print-photo": {
+   "pass": true,
+   "modes": []
+  },
+  "print-no-printer": {
+   "pass": true,
+   "modes": []
+  },
+  "brightness-too-bright": {
+   "pass": true,
+   "modes": []
+  },
+  "brightness-set": {
+   "pass": true,
+   "modes": []
+  },
+  "brightness-desktop": {
+   "pass": true,
+   "modes": []
+  },
+  "night-light": {
+   "pass": true,
+   "modes": []
+  },
+  "text-bigger": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-too-loud": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-speakers": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-mute": {
+   "pass": true,
+   "modes": []
+  },
+  "wifi-join": {
+   "pass": true,
+   "modes": []
+  },
+  "wifi-slow": {
+   "pass": true,
+   "modes": [],
+   "note": "speed, the router's delay vs the internet's, nothing else using it: past the router"
+  },
+  "vpn": {
+   "pass": true,
+   "modes": []
+  },
+  "bt-keyboard": {
+   "pass": true,
+   "modes": []
+  },
+  "bt-airpods": {
+   "pass": true,
+   "modes": []
+  },
+  "battery-left": {
+   "pass": true,
+   "modes": []
+  },
+  "battery-desktop": {
+   "pass": true,
+   "modes": []
+  },
+  "shutdown": {
+   "pass": true,
+   "modes": []
+  },
+  "windows-briefly": {
+   "pass": true,
+   "modes": []
+  },
+  "timer": {
+   "pass": true,
+   "modes": []
+  },
+  "reminder": {
+   "pass": true,
+   "modes": []
+  },
+  "alarm": {
+   "pass": true,
+   "modes": [],
+   "note": "set, and says the computer must stay on (not off or put to sleep): right now"
+  },
+  "timezone": {
+   "pass": true,
+   "modes": []
+  },
+  "install-vlc": {
+   "pass": true,
+   "modes": []
+  },
+  "install-spotify": {
+   "pass": true,
+   "modes": [],
+   "note": "opened the web player (Ubuntu's library has no Spotify): sign in once, then ask"
+  },
+  "updates": {
+   "pass": true,
+   "modes": []
+  },
+  "screenshot-save": {
+   "pass": true,
+   "modes": []
+  },
+  "screenshot-of-page": {
+   "pass": true,
+   "modes": []
+  },
+  "dark-mode": {
+   "pass": true,
+   "modes": []
+  },
+  "keyboard-azerty": {
+   "pass": true,
+   "modes": []
+  },
+  "language-chinese": {
+   "pass": true,
+   "modes": []
+  },
+  "default-windows": {
+   "pass": true,
+   "modes": []
+  },
+  "lock-screen": {
+   "pass": true,
+   "modes": []
+  },
+  "password-kids": {
+   "pass": true,
+   "modes": []
+  },
+  "camera-on": {
+   "pass": true,
+   "modes": []
+  },
+  "backup-usb": {
+   "pass": true,
+   "modes": []
+  },
+  "backup-status": {
+   "pass": true,
+   "modes": []
+  },
+  "storage-left": {
+   "pass": true,
+   "modes": []
+  },
+  "feels-slow": {
+   "pass": true,
+   "modes": [
+    "shell_ask"
+   ],
+   "note": "computer idle, the internet slow past the router, what to try; asked once to run a command"
+  },
+  "which-version": {
+   "pass": true,
+   "modes": []
+  },
+  "youtube-jazz": {
+   "pass": true,
+   "modes": []
+  },
+  "weather": {
+   "pass": true,
+   "modes": []
+  },
+  "open-gmail": {
+   "pass": true,
+   "modes": []
+  }
+ }
+}

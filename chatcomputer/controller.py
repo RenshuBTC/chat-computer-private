@@ -17,7 +17,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
-from . import __version__, answers, logcopy, slash_search, update
+from . import __version__, answers, logcopy, schedule as sch, slash_search, update
 from .brain.agent import Brain, BrainEvents, TurnResult, friendly_error
 from .brain.permissions import PermissionGate, is_private
 from .brain.prompt import build_system_prompt, turn_prefix
@@ -28,6 +28,7 @@ from .files_index import FileIndex
 from .messages import Inbox
 from .pins import Pins
 from .journal import Journal
+from .lock import PIN_RE, PinLock
 from .memory import Memory
 from .platform import Platform
 from .screen import Screen
@@ -48,6 +49,10 @@ AIRPODS_RETRY_S = 3.0               # ...trying to connect them this often
 AIRPODS_ASKED_S = 20.0              # asked for ("connect my AirPods"): how long to keep trying
 LOG_COPY_FIRST_S = 60.0             # the logs are copied to Windows' drive this long after the start...
 LOG_COPY_EVERY_S = 600.0            # ...and then this often (see logcopy.py)
+DRIVE_CHECK_S = 3.0                 # how often to look for a drive (or keyboard) just plugged in
+RING_FOR_S = {"reminder": 0.0, "timer": 60.0, "alarm": 600.0}   # how long each rings unless stopped first
+RING_EVERY_S = {"reminder": 5.0, "timer": 4.0, "alarm": 6.0}
+SNOOZE_S = 9 * 60
 
 log = logging.getLogger("chatcomputer.controller")
 
@@ -83,6 +88,13 @@ class Controller:
         self.journal = Journal(self.paths)
         self.memory = Memory(self.paths)
         self.history = History(self.paths)          # What's done (chatcomputer/done.py)
+        self.schedule = sch.Schedule(self.paths.root / "schedule.json")   # timers, reminders, alarms
+        self.ringing: dict[str, Any] | None = None   # the timer, reminder or alarm ringing now
+        self._time_wake: asyncio.Event | None = None  # what rings next changed: look again
+        self._night_applied: tuple[bool, int] | None = None   # the night light as last set here (on, warmth)
+        self.pinlock = PinLock(self.paths.secrets / "lock_pin")   # the lock screen's PIN (chatcomputer/lock.py)
+        self.locked = False
+        self._pin_form: dict[str, Any] | None = None   # the PIN form on the screen: {"mode", "then_lock"}
         self.pins = Pins(self.paths.root / "pins.json")     # pinned in What's done and in Messages
         self.inbox: Inbox | None = None                 # Messages (chatcomputer/messages)
         # The message that asked for each turn, for What's done: turn id -> (its id on the screen, words, time).
@@ -132,6 +144,8 @@ class Controller:
         self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0] if s.user_name else "",
                                    model_label(s.model))
         self.screen.panels(self._panels())
+        if self.pinlock.has_pin():
+            self.lock_now()
         self._show_history()
         self.screen.on_goto = lambda target, ts, before: self._spawn(self.go_back_to(target, ts, before))
         self.screen.on_page_event = self.page_event
@@ -170,7 +184,10 @@ class Controller:
                                  on_mic_changed=lambda: self.loop.call_soon_threadsafe(self._spawn, self._reopen_mic()),
                                  keyboard=self.set_keyboard, before_power=self._before_power,
                                  airpods=self.connect_airpods, history=self.history, inbox=self.inbox,
-                                 announce=lambda text: self.loop.call_soon_threadsafe(self._announce, text))
+                                 announce=lambda text: self.loop.call_soon_threadsafe(self._announce, text),
+                                 schedule=self.schedule, on_schedule_changed=self._schedule_changed,
+                                 stop_ringing=self._stop_ringing_from_tool, on_night_light=self.apply_night_light,
+                                 lock=self.lock_action)
         server, policies, self.tool_names = T.build(self.ctx)
         self.gate = PermissionGate(self.paths, self.journal, self.confirm, policies)
         self.token = read_token(self.paths)
@@ -190,6 +207,10 @@ class Controller:
             else:
                 await self._start_voice()
         self._spawn(self._housekeeping())
+        self._time_wake = asyncio.Event()
+        self._spawn(self._keep_time())
+        self._spawn(self._watch_hardware())
+        self._spawn(self._keep_night_light())
         if self.airtouch_enabled and s.airtouch:
             self._spawn(self._start_airtouch(delay=AIRTOUCH_DELAY_S))
         self.screen.state("listening")
@@ -200,7 +221,7 @@ class Controller:
                    f"Until then I can only do simple things like Wi-Fi, volume and switching to {self.platform.other_os}.")
             self.screen.notice(msg, "warn")
             self._spawn(self._say_on_headphones(msg))
-        elif self.greet and self.voice_enabled:
+        elif self.greet and self.voice_enabled and not self.locked:
             first = (s.user_name or "").split(" ")[0]
             self._spawn(self._say_on_headphones(f"Hi{' ' + first if first else ''}. I'm listening."))
         if self.offer_headphones or self.offer_updates:
@@ -636,6 +657,25 @@ class Controller:
         self.last_heard = time.time()
         self.screen.partial("")
 
+        if self.ringing is not None:
+            # Whatever they say or type stops a timer or alarm that's ringing; "snooze", "stop", "okay thanks"
+            # are about it and go no further, anything else is a request as usual.
+            item = self._stop_ringing()
+            if item and (answers.is_snooze(text) or answers.stops_ringing_only(text)):
+                uid = "u" + uuid.uuid4().hex[:8]
+                self.screen.user_text(uid, text, True)
+                self._transcript("user", text, msg_id=uid)
+                if answers.is_snooze(text) and item["kind"] == "alarm":
+                    again = self.schedule.add("alarm", time.time() + SNOOZE_S, item.get("label", ""))
+                    self._schedule_changed()
+                    self._reply(f"Snoozed. I'll ring again at {sch.clock(again['at'])}.", typed)
+                return
+
+        if self.locked:
+            # Locked: whoever is talking or typing here isn't listened to until the PIN is typed on the screen.
+            log.info("locked: not listening to that")
+            return
+
         if self.asleep:
             if typed:
                 self.wake()          # typing wakes Chat Computer by itself: no wake word to type
@@ -736,6 +776,14 @@ class Controller:
         """What the conversation page says was done on it (GtkScreen.PAGE_EVENTS): a pin, a message opened, an
         account to connect, a sign-in form filled in or cancelled."""
         kind = msg.get("type")
+        if kind == "unlock":
+            self._unlock(str(msg.get("pin") or ""))
+            return
+        if kind in ("account", "account_cancel") and msg.get("form") == "lock_pin":
+            self._pin_form_done(msg.get("values") if kind == "account" and isinstance(msg.get("values"), dict) else None)
+            return
+        if self.locked:
+            return
         if self._search_event(msg):
             return
         if kind == "text_scale":
@@ -1109,6 +1157,8 @@ class Controller:
         """A hand gesture: thumbs up or down answers a question; an open hand stops (or wakes) Chat Computer; a
         beckon up brings the keyboard up, a beckon down takes it away."""
         log.info("AirTouch gesture: %s", name)
+        if self.locked:
+            return              # locked: the hand can tap the keypad, nothing else
         if name in ("keyboard up", "keyboard down"):
             if (name == "keyboard up") != self.keyboard_up:
                 await self.set_keyboard(name == "keyboard up")
@@ -1437,6 +1487,8 @@ class Controller:
         self.asleep = True
         self.screen.partial("")
         self.screen.state("sleeping")
+        if self.pinlock.has_pin():
+            self.lock_now()         # with a PIN, going to sleep locks the screen too
 
     def wake(self) -> None:
         if self.asleep:
@@ -1513,6 +1565,299 @@ class Controller:
                 log.info("auto-sleep after %.0f min", idle / 60)
                 await self._sleep_when_quiet()
 
+    # ================================================================ the lock screen
+    def has_lock_pin(self) -> bool:
+        return self.pinlock.has_pin()
+
+    def lock_now(self) -> bool:
+        """Lock the screen (only with a PIN: without one, anyone could unlock it). Timers and alarms still ring, and
+        the person's phone still reaches Claude; what Claude opens stays off the screen until it's unlocked."""
+        if not self.pinlock.has_pin():
+            return False
+        if not self.locked:
+            log.info("locked")
+            self.locked = True
+            if self.pending_confirm is not None and not self.pending_confirm.done():
+                self.pending_confirm.set_result("no")         # a question asked here goes unanswered: no
+        self.screen.lock_screen({"note": "Type your PIN to unlock."})
+        return True
+
+    def _unlock(self, pin: str) -> None:
+        if not self.locked:
+            return
+        ok, why = self.pinlock.check(pin)
+        if ok:
+            log.info("unlocked")
+            self.locked = False
+            self.last_heard = time.time()
+            self.screen.lock_screen(None)
+            if self.asleep:
+                self.wake()
+        else:
+            log.info("wrong PIN on the lock screen")      # (never the PIN itself)
+            self.screen.lock_screen({"error": why})
+
+    def _show_pin_form(self, error: str = "") -> None:
+        mode = (self._pin_form or {}).get("mode", "set")
+        current = [{"name": "current", "label": "Your PIN now", "type": "password"}] if mode in ("change", "remove") else []
+        if mode == "remove":
+            form = {"id": "lock_pin", "title": "Turn off the PIN", "fields": current, "ok": "Turn off",
+                    "text": ["The screen won't lock any more."]}
+        else:
+            form = {"id": "lock_pin", "title": "Choose a PIN" if mode == "set" else "Change the PIN", "ok": "Set PIN",
+                    "fields": current + [{"name": "pin", "label": "New PIN", "type": "password"},
+                                         {"name": "again", "label": "The same PIN again", "type": "password"}],
+                    "text": ["4 to 12 digits, typed here: the screen asks for it to unlock. Claude never sees it.",
+                             "With a PIN, the screen locks when Chat Computer starts and when it goes to sleep."]}
+        if error:
+            form["error"] = error
+        self.screen.account_form(form)
+
+    def _pin_form_done(self, values: dict[str, Any] | None) -> None:
+        """The PIN form filled in (values) or cancelled (None). The PINs in it go no further than here."""
+        f = self._pin_form
+        if f is None:
+            self.screen.account_form(None)
+            return
+        if values is None:
+            self._pin_form = None
+            self.screen.account_form(None)
+            return
+        if f["mode"] in ("change", "remove"):
+            ok, why = self.pinlock.check(str(values.get("current") or ""))
+            if not ok:
+                self._show_pin_form(why)
+                return
+        if f["mode"] == "remove":
+            self.pinlock.remove_pin()
+            self._pin_form = None
+            self.screen.account_form(None)
+            self.screen.notice("The PIN is off: the screen won't lock any more.")
+            return
+        pin, again = str(values.get("pin") or ""), str(values.get("again") or "")
+        if not PIN_RE.match(pin):
+            self._show_pin_form("A PIN is 4 to 12 digits.")
+            return
+        if pin != again:
+            self._show_pin_form("The two PINs aren't the same. Type it twice.")
+            return
+        self.pinlock.set_pin(pin)
+        self._pin_form = None
+        self.screen.account_form(None)
+        if f.get("then_lock"):
+            self.lock_now()
+        else:
+            self.screen.notice("PIN set. The screen locks when Chat Computer starts and when it goes to sleep.")
+
+    async def lock_action(self, action: str) -> str:
+        """The lock_screen tool. The PIN is only ever typed on the screen, never through Claude."""
+        has = self.pinlock.has_pin()
+        if action == "status":
+            return (f"The screen is {'locked' if self.locked else 'unlocked'}. " +
+                    ("A PIN is set: the screen locks when Chat Computer starts and when it goes to sleep, and they "
+                     "unlock it by typing the PIN on it." if has else "No PIN is set, so the screen doesn't lock."))
+        if action == "lock":
+            if has:
+                self.lock_now()
+                return "Locked. Nothing can be used until the PIN is typed on the screen."
+            self._pin_form = {"mode": "set", "then_lock": True}
+            self._show_pin_form()
+            return ("There's no PIN yet: a form to choose one is on the screen. They type it there (never aloud); the "
+                    "screen locks as soon as it's set.")
+        if action == "set_pin":
+            self._pin_form = {"mode": "change" if has else "set", "then_lock": False}
+            self._show_pin_form()
+            return "A form to choose the PIN is on the screen: they type it there, twice (never aloud or to you)."
+        if action == "remove_pin":
+            if not has:
+                return "No PIN is set."
+            self._pin_form = {"mode": "remove", "then_lock": False}
+            self._show_pin_form()
+            return "A form is on the screen: they type their PIN there to turn it off."
+        return f"Unknown action {action}."
+
+    # ================================================================ timers, reminders, alarms
+    def _schedule_changed(self) -> None:
+        """(Any thread.) What rings next may have changed: the timekeeper looks again."""
+        if self.loop is not None and self._time_wake is not None:
+            self.loop.call_soon_threadsafe(self._time_wake.set)
+
+    async def _keep_time(self) -> None:
+        """Rings each timer, reminder and alarm when it's due. One that came due while the computer was off or
+        asleep is shown as missed instead (ringing an alarm hours late would only confuse)."""
+        while True:
+            now = time.time()
+            for item in self.schedule.due(now):
+                self.schedule.rang(item["id"], now)
+                if now - item["at"] > sch.LATE_S:
+                    self._missed(item)
+                else:
+                    self._spawn(self._ring(item))
+            nxt = self.schedule.next_at()
+            wait = 30.0 if nxt is None else max(0.2, min(30.0, nxt - time.time()))
+            self._time_wake.clear()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._time_wake.wait(), wait)
+
+    @staticmethod
+    def _ring_text(item: dict[str, Any]) -> str:
+        label = (item.get("label") or "").strip().rstrip(".")
+        if item["kind"] == "timer":
+            what = sch.say_duration(item.get("duration") or item["at"] - item["created"])
+            return f"Your {what} timer is done" + (f": {label}." if label else ".")
+        if item["kind"] == "reminder":
+            return f"Reminder: {label}." if label else "Here's your reminder."
+        return f"It's {sch.clock(item['at'])}" + (f": {label}." if label else ".")
+
+    def _chatcomputer_says(self, text: str) -> None:
+        """Something Chat Computer says by itself (a timer ringing): in the conversation, as its own message."""
+        mid = "s" + uuid.uuid4().hex[:8]
+        self.screen.ai_delta(mid, text)
+        self.screen.ai_done(mid)
+        self._transcript("assistant", text, msg_id=mid)
+
+    def _reply(self, text: str, typed: bool) -> None:
+        self._chatcomputer_says(text)
+        if not typed:
+            self._say(text)
+
+    async def _ring(self, item: dict[str, Any]) -> None:
+        """Ring: the chime and the words, again and again (a timer for a minute, an alarm for ten) until they say
+        or type anything, or press an AirPod. A reminder rings once."""
+        if self.ringing is not None:
+            self._stop_ringing()
+        self.ringing = item
+        text = self._ring_text(item)
+        if self.asleep:
+            self.wake()
+        self.screen.notice(text)
+        self._chatcomputer_says(text)
+        until = time.time() + RING_FOR_S[item["kind"]]
+        rounds = 0
+        try:
+            from .voice.chime import chime
+            sound = chime(item["kind"])
+        except Exception:
+            sound = None
+        while self.ringing is item:
+            if self.player is not None and sound is not None:
+                self.player.play(sound)
+            if rounds % 5 == 0:
+                self._say(text)
+            rounds += 1
+            if time.time() >= until:
+                break
+            await asyncio.sleep(RING_EVERY_S[item["kind"]])
+        if self.ringing is item:
+            self.ringing = None
+
+    def _stop_ringing(self) -> dict[str, Any] | None:
+        item, self.ringing = self.ringing, None
+        if item is not None:
+            if self.speaker:
+                self.speaker.stop()
+            elif self.player is not None:
+                self.player.stop()
+        return item
+
+    def _stop_ringing_from_tool(self) -> str:
+        """(Any thread: a tool.)"""
+        item = self.ringing
+        if item is None:
+            return "Nothing is ringing."
+        self.loop.call_soon_threadsafe(self._stop_ringing)
+        return f"Stopped the {item['kind']}."
+
+    def _missed(self, item: dict[str, Any]) -> None:
+        when = sch.clock(item["at"])
+        if item["kind"] == "timer":
+            text = f"Your timer finished at {when}, while the computer was asleep or off."
+        elif item["kind"] == "reminder":
+            text = f"A reminder from {when}, while the computer was asleep or off: {item.get('label') or ''}".rstrip(": ")
+        else:
+            text = f"Your alarm for {when} couldn't ring: the computer was asleep or off."
+        self.screen.notice(text, "warn")
+        self._chatcomputer_says(text)
+
+    # ================================================================ drives, the keyboard, the night light
+    async def _watch_hardware(self) -> None:
+        """A drive plugged in opens by itself, as on Windows and macOS (one ejected here stays closed until it's
+        unplugged), and a keyboard plugged in gets the keyboard layout they chose."""
+        seen: set[str] | None = None
+        devices: list[str] | None = None
+        warned = False
+        while True:
+            try:
+                ds = await self.loop.run_in_executor(None, self.platform.drives)
+            except Exception as exc:
+                log.debug("drives: %s", exc)
+                ds = None
+            if ds is not None:
+                for d in ds:
+                    if (seen is not None and d["id"] in seen) or d.get("mounted"):
+                        continue
+                    try:
+                        await self.loop.run_in_executor(None, self.platform.open_drive, d["id"])
+                        if seen is not None:
+                            self.screen.notice(f"{d['name']} is plugged in: its files are ready.")
+                    except Exception as exc:
+                        log.info("couldn't open the drive %s: %s", d.get("name"), exc)
+                        if "udisks2" in str(exc) and not warned:
+                            warned = True
+                            self.screen.notice(f"{d['name']} is plugged in, but this computer can't open drives "
+                                               "yet: ask me to set that up.", "warn")
+                seen = {d["id"] for d in ds}
+            if self.settings.keyboard_layout:
+                try:
+                    now = await self.loop.run_in_executor(None, self.platform.input_devices)
+                    if devices is not None and set(now) - set(devices):
+                        await self.loop.run_in_executor(None, self.platform.set_keyboard_layout,
+                                                        self.settings.keyboard_layout)
+                    devices = now
+                except Exception as exc:
+                    log.debug("keyboards: %s", exc)
+            await asyncio.sleep(DRIVE_CHECK_S)
+
+    def _night_light_wanted(self, now: float | None = None) -> bool:
+        s = self.settings
+        if s.night_light == "on":
+            return True
+        if s.night_light != "evenings":
+            return False
+        import datetime
+        try:
+            a, b = sch.clock_time(s.night_light_from), sch.clock_time(s.night_light_until)
+        except ValueError:
+            a, b = sch.clock_time("21:00"), sch.clock_time("07:00")
+        t = datetime.datetime.fromtimestamp(now if now is not None else time.time()).time()
+        return (a <= t < b) if a < b else (t >= a or t < b)
+
+    def apply_night_light(self) -> None:
+        """(Any thread.) The night light as its setting says now: on, off, or by the clock in the evenings; set again
+        if the screen lost it (after a sleep, or another monitor)."""
+        want = (self._night_light_wanted(), int(self.settings.night_light_warmth or 50))
+        lost = want[0] and bool(getattr(self.platform, "night_light_lost", lambda: False)())
+        if want == self._night_applied and not lost:
+            return
+        if self._night_applied is None and not want[0]:
+            self._night_applied = want         # it's off, as the screen starts: nothing to undo
+            return
+        self.platform.set_night_light(want[0], want[1])
+        self._night_applied = want
+
+    async def _keep_night_light(self) -> None:
+        if self.settings.keyboard_layout:
+            try:
+                await self.loop.run_in_executor(None, self.platform.set_keyboard_layout, self.settings.keyboard_layout)
+            except Exception as exc:
+                log.info("couldn't set the keyboard layout %s: %s", self.settings.keyboard_layout, exc)
+        while True:
+            try:
+                await self.loop.run_in_executor(None, self.apply_night_light)
+            except Exception as exc:
+                log.info("night light: %s", exc)
+            await asyncio.sleep(60)
+
     # ================================================================ hardware events (from the UI)
     def media_key(self, key: str) -> None:
         """An AirPods stem press or a keyboard media key."""
@@ -1520,6 +1865,11 @@ class Controller:
 
     async def _media_key(self, key: str) -> None:
         log.info("media key %s", key)
+        if self.ringing is not None:
+            self._stop_ringing()
+            return
+        if self.locked:
+            return
         if self.speaker and self.speaker.speaking:
             self.speaker.stop()
             return

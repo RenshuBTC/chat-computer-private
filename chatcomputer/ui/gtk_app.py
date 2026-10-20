@@ -106,7 +106,8 @@ MESSAGES_SHOWN = 400         # Messages: how many the page holds (the rest are i
 # What the conversation page tells the controller (Controller.page_event).
 PAGE_EVENTS = {"pin", "open_message", "add_account", "account", "account_cancel", "panels",
                "search", "open_file",           # "/" in the message box: searching this computer, opening a file
-               "text_scale"}                    # two fingers pinched on the conversation: its text bigger or smaller
+               "text_scale",                    # two fingers pinched on the conversation: its text bigger or smaller
+               "unlock"}                        # the PIN typed on the lock screen
 
 
 def use_cpu_rendering(environ: Any = os.environ) -> bool:
@@ -185,6 +186,7 @@ class GtkScreen(Screen):
         self._hole: tuple[int, int, int, int] | None = None
         self._fullscreen = False
         self._expanded = False          # F1: what's open fills the whole screen
+        self._locked = False            # the lock screen is up: nothing else comes on the screen
         self._drafting = False
         # WhatsApp and the social sites Messages reads, each in a browser view of its own (chatcomputer/messages/web.py),
         # kept in a window that's never on the screen until one is shown between the sidebars.
@@ -553,6 +555,8 @@ class GtkScreen(Screen):
         except Exception:
             msg = {}
         kind = msg.get("type") if isinstance(msg, dict) else None
+        if self._locked and kind not in ("unlock", "ready", "hole", "keys", "drafting", "keyboard"):
+            return              # locked: only the PIN (the page shows nothing else to use)
         if kind == "send":
             # Enter in the message box.
             text = str(msg.get("text") or "").strip()
@@ -609,7 +613,8 @@ class GtkScreen(Screen):
             self._reloading = False
             self.chat_backlog.clear()
             last = self._replay_last
-            scripts = [last[k] for k in ("settings", "layout", "panels", "mic", "done", "messages", "mode") if k in last]
+            scripts = [last[k] for k in ("settings", "layout", "panels", "mic", "done", "messages", "mode", "lock")
+                       if k in last]
             scripts += list(self._replay)
             scripts += [last["state"]] if "state" in last else []
         else:
@@ -681,12 +686,31 @@ class GtkScreen(Screen):
         self._expanded = not self._expanded
         self._place(self.shown, full=self._expanded or self._fullscreen)
 
+    def lock_screen(self, info: dict[str, Any] | None) -> None:
+        def run() -> None:
+            was, self._locked = self._locked, info is not None
+            if self._locked and not was:
+                if self.air.up:
+                    self.touch_keyboard(False)
+                if self.shown is not None:
+                    self._put_away(self.shown)          # stays open, off the screen, until unlocked
+            elif was and not self._locked and self.mode == "content" and self.shown is not None:
+                self._show_view(self.shown)
+            # Kept for the page's rebuild ("lock"): a page started again after its renderer stopped is locked too.
+            self._chat_run(f"CO.lock({json.dumps(info)})", "lock")
+            self.chat.grab_focus()
+        self._ui(run)
+
     def _show_view(self, view: Any) -> None:
-        """Puts a view between the sidebars (or over everything, after F1), in place of what was there."""
+        """Puts a view between the sidebars (or over everything, after F1), in place of what was there. While
+        locked, it's only noted: it comes on the screen once unlocked."""
         if self.shown is not None and self.shown is not view:
             self._put_away(self.shown)
         self.mode = "content"
         self.shown = view
+        if self._locked:
+            self._put_away(view)
+            return
         self._chat_run('CO.mode("content")', "mode")
         self._place(view, full=self._expanded or (self._fullscreen and view is self.content))
         view.show()
@@ -1097,6 +1121,77 @@ class GtkScreen(Screen):
             return int(ox * sf), int(oy * sf), sf
         return await self._ui_call(calc)
 
+    async def content_rect(self) -> tuple[int, int, int, int] | None:
+        def calc() -> tuple[int, int, int, int] | None:
+            gw = self.content.get_window()
+            if self.mode != "content" or gw is None or not self.content.get_mapped():
+                return None
+            _, ox, oy = gw.get_origin()
+            sf = float(self.content.get_scale_factor() or 1)
+            a = self.content.get_allocation()
+            return int(ox * sf), int(oy * sf), int(a.width * sf), int(a.height * sf)
+        return await self._ui_call(calc)
+
+    async def to_pdf(self, path: str, html: str | None = None, base_dir: str | None = None) -> dict[str, Any]:
+        """Print to a PDF with WebKit's own printing ("Print to File", no dialog), on the paper this country uses:
+        a page given as HTML, in a view of its own that's never shown, or what's open between the panels."""
+        assert self.loop is not None
+        fut = self.loop.create_future()
+
+        def finish(error: str | None) -> None:
+            self.loop.call_soon_threadsafe(lambda: fut.done() or fut.set_result(
+                {"ok": False, "error": error} if error else {"ok": True, "path": path}))
+
+        def start() -> None:
+            if html is None:
+                if self.mode != "content":
+                    finish("Nothing is open on the screen.")
+                    return
+                self._print_view(self.content, path, finish)
+                return
+            # A window off the screen, for WebKit to lay the page out in; gone once it's printed.
+            win = Gtk.OffscreenWindow()
+            win.set_default_size(900, 1200)
+            view = WebKit2.WebView(web_context=self.ctx)
+            view.get_settings().set_enable_javascript(True)      # md.js turns a document's Markdown into its page
+            win.add(view)
+            win.show_all()
+
+            def done(error: str | None) -> None:
+                finish(error)
+                GLib.idle_add(lambda: win.destroy() and False)
+
+            def loaded(v: WebKit2.WebView, event: WebKit2.LoadEvent) -> None:
+                if event == WebKit2.LoadEvent.FINISHED:
+                    v.disconnect_by_func(loaded)
+                    # The page's own scripts (a document's Markdown) run as it loads: a moment more, then print.
+                    GLib.timeout_add(300, lambda: self._print_view(v, path, done) and False)
+            view.connect("load-changed", loaded)
+            view.load_html(html, Path(base_dir).as_uri() + "/" if base_dir else None)
+
+        self._ui(start)
+        try:
+            return await asyncio.wait_for(fut, 60)
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": "Making the PDF took too long."}
+
+    @staticmethod
+    def _print_view(view: WebKit2.WebView, path: str, done: Callable[[str | None], None]) -> None:
+        settings = Gtk.PrintSettings()
+        settings.set_printer("Print to File")
+        settings.set(Gtk.PRINT_SETTINGS_OUTPUT_FILE_FORMAT, "pdf")
+        settings.set(Gtk.PRINT_SETTINGS_OUTPUT_URI, Path(path).as_uri())
+        setup = Gtk.PageSetup()
+        setup.set_paper_size(Gtk.PaperSize.new(Gtk.PaperSize.get_default()))   # A4, or Letter where that's used
+        op = WebKit2.PrintOperation.new(view)
+        op.set_print_settings(settings)
+        op.set_page_setup(setup)
+        said: list[str] = []
+        # "failed" comes before "finished" when it goes wrong; "finished" always comes.
+        op.connect("failed", lambda o, err: said.append(str(getattr(err, "message", err)) or "printing failed"))
+        op.connect("finished", lambda o: done(said[0] if said else None))
+        op.print_()
+
     # ================================================================ conversation layer
     def user_text(self, msg_id: str, text: str, final: bool) -> None:
         self._chat_js(f"CO.user({json.dumps(msg_id)},{json.dumps(text)},{json.dumps(final)})")
@@ -1315,6 +1410,8 @@ class GtkScreen(Screen):
     def _touch_gesture(self, name: str) -> None:
         """One of the iPad's system gestures (ui/touch.py) was made."""
         log.info("touch: %s", name)
+        if self._locked:
+            return              # locked: only the keypad works
         if name == "home":
             if self.mode == "content":
                 self.close_content()
@@ -1365,6 +1462,10 @@ class GtkScreen(Screen):
         if ctrl and (ev.state & Gdk.ModifierType.SHIFT_MASK) and name in ("Q", "q"):
             Gtk.main_quit()
             return True
+        if self._locked:
+            if not self.chat.has_focus():
+                self.chat.grab_focus()        # every key is for the lock screen's PIN box
+            return False
         if name == "F1" and self.mode == "content":
             self.toggle_expand()             # what's open fills the screen, or goes back between the sidebars
             return True

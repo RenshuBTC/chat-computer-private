@@ -70,6 +70,24 @@ def is_stop(text: str) -> bool:
     return t in _STOP
 
 
+_RINGING_DONE = _STOP | {
+    "ok", "okay", "ok thanks", "okay thanks", "thanks", "thank you", "got it", "alright", "all right", "i'm up",
+    "im up", "i'm awake", "im awake", "dismiss", "off", "turn it off", "switch it off", "stop the alarm",
+    "stop the timer", "turn off the alarm", "turn the alarm off", "alarm off", "timer off", "silence", "yes", "yeah",
+}
+
+
+def stops_ringing_only(text: str) -> bool:
+    """What someone says to a timer or alarm that's ringing, meaning only "that's enough" ("stop", "okay thanks",
+    "I'm up"): it stops it, and isn't a request for Claude."""
+    t = normalize(text.replace("claude", "")).rstrip(".!")
+    return t in _RINGING_DONE
+
+
+def is_snooze(text: str) -> bool:
+    return "snooze" in normalize(text)
+
+
 def is_sleep(text: str) -> bool:
     t = normalize(text)
     return t in _SLEEP or t.rstrip(".") in _SLEEP

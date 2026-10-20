@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -38,7 +39,7 @@ ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
 SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
             "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "phone_access", "airtouch",
-            "left_panel", "right_panel", "bottom_panel"}
+            "left_panel", "right_panel", "bottom_panel", "keyboard_layout"}
 # Windows' own folders, at the top of its drive (a folder of the person's own called Recovery or Boot is theirs).
 WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
 
@@ -64,6 +65,11 @@ class ToolContext:
     airpods: Callable[[], Awaitable[str]] | None = None   # connect the AirPods in one step (Controller.connect_airpods)
     history: Any = None           # What's done (chatcomputer/done.py History), for recent_actions
     inbox: Any = None             # Messages (chatcomputer/messages Inbox), for the messages tool
+    schedule: Any = None          # timers, reminders and alarms (chatcomputer/schedule.py Schedule)
+    on_schedule_changed: Callable[[], None] | None = None   # the controller looks again at what rings next
+    stop_ringing: Callable[[], str] | None = None           # stop a timer or alarm that's ringing now
+    on_night_light: Callable[[], None] | None = None        # the night light's setting changed: apply it now
+    lock: Callable[[str], Awaitable[str]] | None = None     # the lock screen (Controller.lock_action)
     shot_scale: float = 1.0
     power_delay_s: float = 4.0
 
@@ -88,9 +94,30 @@ def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=1, default=str)
 
 
+def _size(n: float) -> str:
+    """A size as people say it: 840 KB, 3.4 MB, 12 GB."""
+    for unit, f in (("GB", 1e9), ("MB", 1e6), ("KB", 1e3)):
+        if n >= f:
+            v = n / f
+            return f"{v:.1f} {unit}" if v < 10 else f"{v:.0f} {unit}"
+    return f"{int(n)} bytes"
+
+
 def _names(paths: list[str], n: int = 4) -> str:
     names = [os.path.basename(p.rstrip("/")) or p for p in paths]
     return ", ".join(names[:n]) + (f" and {len(names) - n} more" if len(names) > n else "")
+
+
+def _version() -> dict[str, str]:
+    """Which Chat Computer this is: its version, and when this copy of it was put in place (installed or updated)."""
+    from .. import __version__
+    out = {"version": __version__}
+    try:
+        out["installed"] = time.strftime("%d %B %Y", time.localtime(
+            os.path.getmtime(os.path.join(os.path.dirname(os.path.dirname(__file__)), "__init__.py"))))
+    except OSError:
+        pass
+    return out
 
 
 def normalize_url(url: str) -> str:
@@ -395,6 +422,11 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         if not ctx.index:
             return _err("The file index isn't running; use Glob or Grep instead.")
         folder = ctx.resolve(a["folder"]) if a.get("folder") else None
+        if folder:
+            real = os.path.realpath(folder)
+            if not any(real == r or real.startswith(r.rstrip("/") + "/") for _, r in list(ctx.index.roots)):
+                return _err(f"search_files doesn't cover {folder} (it searches the home folder and " +
+                            ("the files from macOS" if on_mac else "Windows' files") + "): look there with Glob or Grep.")
         res = await asyncio.to_thread(ctx.index.search, a.get("query", ""), a.get("kind") or None,
                                       a.get("modified_after"), a.get("modified_before"), folder, a.get("limit") or 20)
         note = ""
@@ -468,8 +500,35 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             else:
                 shutil.move(src, dst)
                 ctx.journal.record_move(src, dst, backup)
-            out.append(f"{'copied' if copy else 'moved'} {src} → {dst}")
+            # A folder: how much went, and (a copy) that every file arrived whole, so nobody needs to look again.
+            what = ""
+            if os.path.isdir(dst):
+                n, size, short = _tally(src if copy else dst, dst if copy else None)
+                what = f" ({n} file{'s' if n != 1 else ''}, {_size(size)}" + \
+                       (f"; {short} came out different: copy again" if short else ", every one checked" if copy else "") + ")"
+            out.append(f"{'copied' if copy else 'moved'} {src} → {dst}{what}")
         return out
+
+    def _tally(src: str, dst: str | None) -> tuple[int, int, int]:
+        """A folder's files and their size; with dst, how many of them aren't there whole (compared byte for byte)."""
+        import filecmp
+        n = size = short = 0
+        for dirpath, _, names in os.walk(src):
+            for name in names:
+                f = os.path.join(dirpath, name)
+                if os.path.islink(f):
+                    continue
+                n += 1
+                with contextlib.suppress(OSError):
+                    size += os.path.getsize(f)
+                if dst is not None:
+                    twin = os.path.join(dst, os.path.relpath(f, src))
+                    try:
+                        same = filecmp.cmp(f, twin, shallow=False)
+                    except OSError:
+                        same = False
+                    short += not same
+        return n, size, short
 
     item_schema = {"type": "array", "items": obj({"from": S, "to": S}, ["from", "to"])}
 
@@ -598,13 +657,16 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         return _err(f"Unknown action {act}.")
 
     # ================================================================ the machine
-    @reg("system_status", "Check the computer: internet, Wi-Fi, Bluetooth/AirPods, sound, disks, time, " +
-         ("the drive with the files from macOS, " if on_mac else "the Windows drive, ") +
-         "and the user's Claude usage limits.", obj({}))
+    @reg("system_status", "Check the computer: internet, Wi-Fi, Bluetooth/AirPods, sound, disks, time, the kind of "
+         "computer (desktop, laptop...) and its battery (None: it has none, it runs on mains power), what's keeping it "
+         "busy (the busiest programs, the processor with its speed and power mode, memory and disk, now and over the "
+         "last minutes), the camera and which program has it open, " +
+         ("the drive with the files from macOS, " if on_mac else "the Windows drive (and the folder its files are in), ") +
+         "the user's Claude usage limits, and which version of Chat Computer this is.", obj({}))
     async def system_status(a):
         p = ctx.platform
-        parts = {"internet": p.internet_ok, "machine": p.system_info, "wifi": p.wifi_status,
-                 "bluetooth": p.bt_status, "sound": p.audio_status,
+        parts = {"internet": p.internet_ok, "machine": p.system_info, "busy": p.busiest, "wifi": p.wifi_status,
+                 "bluetooth": p.bt_status, "sound": p.audio_status, "camera": p.camera_status,
                  ("macos_files" if on_mac else "windows_drive"): p.windows_status}
 
         async def one(fn: Callable[[], Any]) -> Any:
@@ -614,7 +676,11 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                 return f"unavailable ({exc})"
         # Side by side: each asks a different part of the system, and some wait (the internet check up to 3 s,
         # NetworkManager's own connectivity check longer), so the answer takes as long as the slowest, not all.
-        st: dict[str, Any] = dict(zip(parts, await asyncio.gather(*(one(fn) for fn in parts.values()))))
+        st: dict[str, Any] = dict(zip(parts, await asyncio.gather(*(one(fn) for fn in parts.values())), strict=True))
+        wd = st.get("windows_drive")
+        if isinstance(wd, dict) and wd.get("windows_mounted"):
+            wd["folder"] = ctx.settings.windows_mount
+        st["chatcomputer"] = _version()
         if ctx.index:
             st["file_index"] = {**ctx.index.status, "files": ctx.index.status.get("files")}
         if ctx.airtouch_status:
@@ -631,13 +697,23 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             return f"Forget the Wi-Fi network {a.get('network', '')}?"
         return None
 
-    @reg("wifi", "Wi-Fi: status, list networks, connect (network + password), disconnect, forget, on, off.",
-         obj({"action": {"type": "string", "enum": ["status", "list", "connect", "disconnect", "forget", "on", "off"]},
+    @reg("wifi", "Wi-Fi: status, list networks, connect (network + password), disconnect, forget, on, off; speed: "
+         "measure the internet's speed in about 15 seconds: download and upload (Cloudflare's speed test), the delay "
+         "to the internet and to the home router (a slow router or Wi-Fi shows there), how much this computer was "
+         "already using, and the Wi-Fi's signal.",
+         obj({"action": {"type": "string", "enum": ["status", "list", "connect", "disconnect", "forget", "on", "off", "speed"]},
               "network": S, "password": S}, ["action"]), _wifi_policy)
     async def wifi(a):
         act, p = a["action"], ctx.platform
         if act == "status":
             return _text(_json(await asyncio.to_thread(p.wifi_status)))
+        if act == "speed":
+            try:
+                speed, st = await asyncio.gather(asyncio.to_thread(p.speed_test), asyncio.to_thread(p.wifi_status))
+            except RuntimeError as exc:
+                return _err(str(exc))
+            ctx.journal.record("network", f"speed test: {speed.get('download_mbps')} Mbps down")
+            return _text(_json({"speed": speed, "connection": {k: st.get(k) for k in ("connected_to", "signal", "ethernet")}}))
         if act == "list":
             return _text(_json(await asyncio.to_thread(p.wifi_scan)))
         if act == "connect":
@@ -740,6 +816,482 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             return _text(said)
         return _text(await asyncio.to_thread(p.set_output, str(v or "")))
 
+    # ---------------------------------------------------------------- drives, printing, the screen, reminders
+    async def _machine(fn: Callable[..., Any], *args: Any) -> Any:
+        """A platform call that says what went wrong in plain words (RuntimeError) when it can't be done."""
+        return await asyncio.to_thread(fn, *args)
+
+    @reg("drives", "USB sticks, memory cards and external drives. They open by themselves when plugged in. list: "
+         "what's plugged in, each with the folder its files are in (like /media/ren/SANDISK), to use with show_file, "
+         "copy_files, move_files, Glob and Grep (search_files doesn't cover drives); open: open one that isn't open; "
+         "eject: close one so it can be pulled out safely (do this before telling them it's safe to pull it out).",
+         obj({"action": {"type": "string", "enum": ["list", "open", "eject"]}, "drive": S}, ["action"]))
+    async def drives(a):
+        act, p = a["action"], ctx.platform
+        try:
+            if act == "list":
+                ds = await _machine(p.drives)
+                if not ds:
+                    return _text("No USB drive or memory card is plugged in.")
+                return _text(_json([{k: d.get(k) for k in ("name", "kind", "size_gb", "free_gb", "mounted", "path", "id")
+                                     if d.get(k) is not None} for d in ds]))
+            if act == "open":
+                path = await _machine(p.open_drive, a.get("drive") or "")
+                return _text(f"It's open: its files are in {path}")
+            name = await _machine(p.eject_drive, a.get("drive") or "")
+            ctx.journal.record("drive", f"ejected {name}")
+            return _text(f"{name} is ejected: it's safe to pull it out now.")
+        except RuntimeError as exc:
+            return _err(str(exc))
+
+    # Files a printer takes as they are; the rest become a PDF first: office documents with LibreOffice (as they look),
+    # Markdown, HTML and Chat Computer's pages as Chat Computer shows them.
+    AS_IS = {".pdf", ".ps", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".txt", ".csv", ".log"}
+    OFFICE = {".doc", ".docx", ".odt", ".rtf", ".xls", ".xlsx", ".ods", ".ppt", ".pptx", ".odp", ".pages"}
+
+    async def _as_pdf(path: str, out_dir: str) -> str:
+        """A PDF of a document (path, or "" for what's open between the panels), made in out_dir; its path."""
+        if not path:
+            info = await ctx.screen.content_info()
+            name = re.sub(r'[\\/:*?"<>|]+', " ", str(info.get("title") or "Page")).strip()[:80] or "Page"
+            pdf = os.path.join(out_dir, name + ".pdf")
+            r = await ctx.screen.to_pdf(pdf)
+        else:
+            ext = os.path.splitext(path)[1].lower()
+            if ext in OFFICE:
+                return await asyncio.to_thread(ctx.platform.office_to_pdf, path, out_dir)
+            pdf = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0] + ".pdf")
+            if ext in (".html", ".htm"):
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    page = f.read()
+                r = await ctx.screen.to_pdf(pdf, page, os.path.dirname(path))
+                if not r.get("ok"):
+                    raise RuntimeError("The PDF couldn't be made: " + str(r.get("error") or "it didn't work"))
+                return pdf
+            if ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp"):
+                def photo() -> str:
+                    from PIL import Image
+                    with Image.open(path) as im:
+                        im.convert("RGB").save(pdf, "PDF", resolution=150)
+                    return pdf
+                return await asyncio.to_thread(photo)
+            kind, payload = await asyncio.to_thread(render.file_view, path, ctx.settings, ctx.paths)
+            if kind != "html":
+                raise RuntimeError(f"A {ext or 'file like this'} can't be made into a PDF here.")
+            r = await ctx.screen.to_pdf(pdf, payload, os.path.dirname(path))
+        if not r.get("ok"):
+            raise RuntimeError("The PDF couldn't be made: " + str(r.get("error") or "it didn't work"))
+        return pdf
+
+    @reg("printer", "Print on a printer: print a file (path; PDFs, photos, text, Word, Excel and PowerPoint files, "
+         "Markdown) with copies, pages (like '1-3' or '2,4'), two_sided, black_and_white, and printer (by name; when "
+         "left out, the only or the usual one); list: the printers; queue: what's waiting to print; cancel: a print "
+         "job by its id, or all; save_pdf: save a PDF of a file (path), or of what's open between the panels (no "
+         "path), next to it or in folder, to print elsewhere or send. Printers on the same Wi-Fi, or plugged in with "
+         "a USB cable, are found by themselves once they're on: there's nothing to install or set up.",
+         obj({"action": {"type": "string", "enum": ["print", "list", "queue", "cancel", "save_pdf"]}, "path": S,
+              "printer": S, "copies": I, "pages": S, "two_sided": B, "black_and_white": B, "job": S, "folder": S},
+             ["action"]))
+    async def printer(a):
+        act, p = a["action"], ctx.platform
+        try:
+            if act == "list":
+                ps = await _machine(p.printers)
+                return _text(_json(ps) if ps else "No printer is connected. A printer on the same Wi-Fi as this "
+                             "computer, or plugged in with a USB cable, is found by itself once it's turned on.")
+            if act == "queue":
+                q = await _machine(p.print_queue)
+                return _text(_json(q) if q else "Nothing is waiting to print.")
+            if act == "cancel":
+                return _text(await _machine(p.cancel_printing, str(a.get("job") or "all")))
+            if act == "save_pdf":
+                path = ctx.resolve(a["path"]) if a.get("path") else ""
+                if path and is_private(ctx.paths, path):
+                    return _err("That file holds passwords or sign-in keys, so Chat Computer keeps it private.")
+                if path and not os.path.isfile(path):
+                    return _err(f"There's no file at {path}. Try search_files.")
+                folder = _their_folder(a.get("folder"), os.path.dirname(path) if path else "Documents")
+                if folder.startswith("DENY: "):
+                    return _err(folder[6:])
+                os.makedirs(folder, exist_ok=True)
+                with _scratch() as tmp:
+                    made = await _as_pdf(path, tmp)
+                    dst = _free_name(os.path.join(folder, os.path.basename(made)))
+                    shutil.move(made, dst)
+                ctx.journal.record_copy(dst)
+                return _text(f"Saved {dst}")
+            if not a.get("path"):
+                return _err("Which file? Give its path (search_files finds it).")
+            path = ctx.resolve(a["path"])
+            if is_private(ctx.paths, path):
+                return _err("That file holds passwords or sign-in keys, so Chat Computer keeps it private.")
+            copies = max(1, min(int(a.get("copies") or 1), 99))
+            args = (a.get("printer") or None, copies, str(a.get("pages") or ""), bool(a.get("two_sided")),
+                    not a.get("black_and_white"))
+            ext = os.path.splitext(path)[1].lower()
+            if ext in AS_IS or not os.path.isfile(path):
+                name = await asyncio.to_thread(p.print_file, path, *args)
+            else:
+                if not await _machine(p.printers):
+                    raise RuntimeError("No printer is connected. A printer on the same Wi-Fi as this computer, or "
+                                       "plugged in with a USB cable, is found by itself once it's turned on.")
+                with _scratch() as tmp:          # a PDF of it first, printed, then gone
+                    pdf = await _as_pdf(path, tmp)
+                    name = await asyncio.to_thread(p.print_file, pdf, *args)
+            ctx.journal.record("print", f"printed {path} on {name}" + (f", {copies} copies" if copies > 1 else ""))
+            return _text(f"Sent {os.path.basename(path)} to {name}" + (f", {copies} copies" if copies > 1 else "") +
+                         ". It's printing.")
+        except RuntimeError as exc:
+            return _err(str(exc))
+
+    # ---------------------------------------------------------------- their folders, as a place to put things
+    home = os.path.expanduser("~")
+
+    def _their_folder(raw: Any, default: str, copied_out: bool = False) -> str:
+        """A folder of theirs, from what they said: "Desktop" is the one in their home folder; ~/x, C:\\... and full
+        paths are as given. "DENY: why" for Chat Computer's private folders and its program; with copied_out (its
+        files go elsewhere), also for a folder holding the private ones, like the home folder itself."""
+        raw = str(raw or "").strip().strip('"') or default
+        path = ctx.resolve(raw) if os.path.isabs(os.path.expanduser(raw)) or re.match(r"^[A-Za-z]:[\\/]", raw) \
+            else os.path.join(home, raw)
+        if is_private(ctx.paths, path):
+            return "DENY: That's Chat Computer's private folder: choose one of theirs, like Documents or Desktop."
+        if copied_out and holds_private(ctx.paths, path):
+            return ("DENY: That folder holds Chat Computer's private sign-in files: choose the folders inside it instead, "
+                    "like Documents, Pictures or Desktop.")
+        if is_program(path):
+            return "DENY: " + PROGRAM_DENIED
+        return path
+
+    def _free_name(path: str) -> str:
+        """path, or "name 2.ext", "name 3.ext"... when there's already a file there."""
+        stem, ext = os.path.splitext(path)
+        n = 2
+        while os.path.exists(path):
+            path = f"{stem} {n}{ext}"
+            n += 1
+        return path
+
+    @contextlib.contextmanager
+    def _scratch():
+        import tempfile
+        d = tempfile.mkdtemp(prefix="chatcomputer-")
+        try:
+            yield d
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    # ---------------------------------------------------------------- screenshots
+    @reg("screenshot", "Save a picture of the screen as a PNG file (a screenshot): part screen (everything they see, "
+         "the default) or open (just what's open between the panels: the website or document). It goes in "
+         "Pictures/Screenshots unless they say where (folder: one of theirs, like Desktop, Pictures or Documents).",
+         obj({"part": {"type": "string", "enum": ["screen", "open"]}, "folder": S}))
+    async def screenshot(a):
+        folder = _their_folder(a.get("folder"), os.path.join("Pictures", "Screenshots"))
+        if folder.startswith("DENY: "):
+            return _err(folder[6:])
+        rect = None
+        if a.get("part") == "open":
+            rect = await ctx.screen.content_rect()
+            if rect is None:
+                return _err("Nothing is open between the panels: part screen takes the whole screen.")
+        png = await asyncio.to_thread(ctx.platform.screenshot_png)
+
+        def save() -> str:
+            from io import BytesIO
+
+            from PIL import Image
+            data = png
+            if rect:
+                x, y, w, h = rect
+                with Image.open(BytesIO(png)) as im:
+                    buf = BytesIO()
+                    im.crop((x, y, x + w, y + h)).save(buf, "PNG")
+                    data = buf.getvalue()
+            os.makedirs(folder, exist_ok=True)
+            path = _free_name(os.path.join(folder, time.strftime("Screenshot %Y-%m-%d at %H.%M.%S.png")))
+            with open(path, "wb") as f:
+                f.write(data)
+            return path
+        path = await asyncio.to_thread(save)
+        ctx.journal.record_copy(path)
+        return _text(f"Saved the screenshot: {path}")
+
+    # ---------------------------------------------------------------- backups, to a USB drive or an external disk
+    BACKUP = "Chat Computer backup"
+    STANDARD = ["Documents", "Pictures", "Desktop", "Music", "Videos", "Downloads"] + (["Mac"] if on_mac else [])
+    backups_file = ctx.paths.root / "backups.json"
+
+    def _backups() -> list[dict[str, Any]]:
+        try:
+            return json.loads(backups_file.read_text())
+        except (OSError, ValueError):
+            return []
+
+    def _backup_status() -> str:
+        from datetime import datetime
+        lines = []
+        made = _backups()
+        if made:
+            b = made[-1]
+            lines.append(f"Last backup: {datetime.fromtimestamp(b['when']).strftime('%A %d %B %Y, %H:%M')}, to "
+                         f"{b['drive']} ({', '.join(b['folders'])}: {b['files']} files, {_size(b['bytes'])}), in "
+                         f"{b['path']}." + (f" {b['failed']} files couldn't be copied then." if b.get("failed") else ""))
+            if len(made) > 1:
+                lines.append(f"{len(made)} backups have been made in all.")
+        else:
+            lines.append("No backup has been made on this computer yet.")
+        lines.append("Nothing backs up by itself here: a backup is made when they ask (backup now, to a USB drive or "
+                     "an external disk).")
+        try:
+            for d in ctx.platform.drives():
+                there = os.path.join(d.get("path") or "", BACKUP)
+                if d.get("mounted") and os.path.isdir(there):
+                    lines.append(f"{d['name']} (plugged in) has backups from: {', '.join(sorted(os.listdir(there))[-5:])}.")
+        except Exception:
+            pass
+        if not on_mac:
+            lines.append("Windows still has its own copies of the files brought over from it, as they were then, on its "
+                         f"drive ({ctx.settings.windows_mount}).")
+        return "\n".join(lines)
+
+    def _backup_now(drive: dict[str, Any], folders: list[str]) -> str:
+        import filecmp
+        files = []
+        for src in folders:
+            for dirpath, dirnames, names in os.walk(src):
+                dirnames[:] = [n for n in dirnames if not (is_private(ctx.paths, os.path.join(dirpath, n))
+                                                           or os.path.islink(os.path.join(dirpath, n)))]
+                files += [os.path.join(dirpath, n) for n in names
+                          if not os.path.islink(os.path.join(dirpath, n)) and not is_private(ctx.paths, os.path.join(dirpath, n))]
+        need = sum(os.path.getsize(f) for f in files if os.path.isfile(f))
+        free = shutil.disk_usage(drive["path"]).free
+        if need > free * 0.98:
+            raise RuntimeError(f"That's {_size(need)}, and {drive['name']} has {_size(free)} free: choose fewer folders, "
+                               "or a bigger drive.")
+        root = os.path.join(drive["path"], BACKUP, time.strftime("%Y-%m-%d %H.%M"))
+        copied, failed = [], []
+        for f in files:
+            dst = os.path.join(root, os.path.relpath(f, home))
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(f, dst)
+                copied.append((f, dst))
+            except OSError as exc:
+                failed.append(f"{os.path.relpath(f, home)} ({exc.strerror or exc})")
+        # Every file read back from the drive and compared with the original.
+        different = [os.path.relpath(f, home) for f, dst in copied if not filecmp.cmp(f, dst, shallow=False)]
+        names = [os.path.relpath(f, home) for f in folders]
+        made = _backups()[-49:] + [{"when": time.time(), "drive": drive["name"], "path": root, "folders": names,
+                                     "files": len(copied), "bytes": need, "failed": len(failed) + len(different)}]
+        backups_file.parent.mkdir(parents=True, exist_ok=True)
+        backups_file.write_text(json.dumps(made, indent=1))
+        out = (f"Backed up {', '.join(names)} to {drive['name']}: {len(copied)} files, {_size(need)}, in {root}. "
+               + ("Every file was read back and matches." if copied and not different and not failed else ""))
+        if different:
+            out += f" {len(different)} came out different (the drive may be failing): " + ", ".join(different[:5])
+        if failed:
+            out += (f" {len(failed)} couldn't be copied (a USB stick can't hold names with : ? * or files over 4 GB): "
+                    + "; ".join(failed[:5]))
+        return out.strip()
+
+    @reg("backup", "Copies of their files on a USB drive or external disk, for when this computer breaks or is lost. "
+         "status: what's been backed up, when and where (and what Windows still has); now: back up to a drive (drive: "
+         "its name, from drives list; folders: which of their folders, by default Documents, Pictures, Desktop, Music, "
+         "Videos and Downloads) into a dated folder on it, every file read back and checked. Nothing on the drive is "
+         "deleted or replaced.",
+         obj({"action": {"type": "string", "enum": ["status", "now"]}, "drive": S,
+              "folders": {"type": "array", "items": S}}, ["action"]))
+    async def backup(a):
+        if a["action"] == "status":
+            return _text(await asyncio.to_thread(_backup_status))
+        try:
+            ds = await _machine(ctx.platform.drives)
+            if not ds:
+                return _err("No USB drive or external disk is plugged in: plug one in, then back up to it.")
+            want = str(a.get("drive") or "").strip().lower()
+            pick = [d for d in ds if want and want in (str(d.get("name", "")).lower(), str(d.get("id", "")).lower(),
+                                                       str(d.get("path") or "").lower())] or \
+                [d for d in ds if want and want in str(d.get("name", "")).lower()] or (ds if len(ds) == 1 and not want else [])
+            if len(pick) != 1:
+                return _err("Which drive? " + ", ".join(d["name"] for d in ds))
+            d = dict(pick[0])
+            if not d.get("mounted"):
+                d["path"] = await _machine(ctx.platform.open_drive, d.get("id") or d["name"])
+            folders = []
+            for raw in a.get("folders") or [f for f in STANDARD if os.path.isdir(os.path.join(home, f))]:
+                f = _their_folder(raw, "Documents", copied_out=True)
+                if f.startswith("DENY: "):
+                    return _err(f[6:])
+                if not os.path.isdir(f):
+                    return _err(f"There's no folder {f}.")
+                folders.append(f)
+            if not folders:
+                return _err("Which folders? None of the usual ones (Documents, Pictures, Desktop...) is here: name them.")
+            res = await asyncio.to_thread(_backup_now, d, folders)
+        except RuntimeError as exc:
+            return _err(str(exc))
+        ctx.journal.record("backup", res.split(":")[0])
+        return _text(res)
+
+    # ---------------------------------------------------------------- VPNs
+    def _vpn_policy(a: dict[str, Any]) -> str | None:
+        if a.get("action") == "add":
+            return f"Add the VPN from {os.path.basename(str(a.get('file') or 'that file'))}? It stays off until it's turned on."
+        return None
+
+    @reg("vpn", "VPNs: list: the VPNs set up here, and whether each is on; on / off: turn one on or off (name; the only "
+         "one when there's one); add: set one up from the settings file its provider gives (file: a WireGuard .conf or "
+         "an OpenVPN .ovpn file of theirs; most VPN companies offer one, for Linux or routers, and then their own app "
+         "isn't needed).",
+         obj({"action": {"type": "string", "enum": ["list", "on", "off", "add"]}, "name": S, "file": S}, ["action"]),
+         _vpn_policy)
+    async def vpn(a):
+        act, p = a["action"], ctx.platform
+        try:
+            if act == "list":
+                vs = await asyncio.to_thread(p.vpns)
+                return _text(_json(vs) if vs else "No VPN is set up on this computer. One can be added from the settings "
+                             "file a VPN company gives (WireGuard .conf, or OpenVPN .ovpn): vpn add.")
+            if act == "add":
+                if not a.get("file"):
+                    return _err("Which file? The VPN company's settings file (.conf or .ovpn): search_files finds it.")
+                path = ctx.resolve(a["file"])
+                if is_private(ctx.paths, path):
+                    return _err("That file holds passwords or sign-in keys, so Chat Computer keeps it private.")
+                name = await asyncio.to_thread(p.vpn_import, path)
+                ctx.journal.record("vpn", f"added {name}")
+                return _text(f"Added the VPN {name}. It's off until it's turned on (vpn on).")
+            name = await asyncio.to_thread(p.vpn_connect if act == "on" else p.vpn_disconnect, str(a.get("name") or ""))
+            ctx.journal.record("vpn", f"{name} {act}")
+            return _text(f"{name} is on: the internet goes through it now." if act == "on" else f"{name} is off.")
+        except RuntimeError as exc:
+            return _err(str(exc))
+
+    def _hhmm(v: Any, default: str) -> str:
+        from ..schedule import clock_time
+        return clock_time(str(v)).strftime("%H:%M") if str(v or "").strip() else default
+
+    @reg("display", "The screen itself. status: its brightness, the night light, its size and how big Chat "
+         "Computer's text is drawn (bigger text: chatcomputer_settings text_scale); brightness: set it (value "
+         "0-100); brighter / dimmer: by value (default 15); night_light: mode on (now, until it's turned off), off, or "
+         "evenings (by itself every evening, from 'from' until 'until', default 21:00 to 07:00), with warmth 1-100 "
+         "(default 50; higher is warmer, less blue light). A desktop's monitor may only change with its own buttons: "
+         "status says so.",
+         obj({"action": {"type": "string", "enum": ["status", "brightness", "brighter", "dimmer", "night_light"]},
+              "value": {"type": ["number", "string"]}, "mode": {"type": "string", "enum": ["on", "off", "evenings"]},
+              "from": S, "until": S, "warmth": I}, ["action"]))
+    async def display(a):
+        act, p, s = a["action"], ctx.platform, ctx.settings
+        try:
+            if act == "status":
+                st = await _machine(p.display_status)
+                st["night_light_setting"] = s.night_light if s.night_light != "evenings" else \
+                    f"evenings, {s.night_light_from} to {s.night_light_until}"
+                with contextlib.suppress(Exception):
+                    w, h = await asyncio.to_thread(p.screen_size)
+                    st["pixels"] = f"{w}x{h}"
+                info = ctx.screen.layout_info()
+                if info:
+                    st["screen"] = info.get("summary", info)
+                st["text_scale"] = s.text_scale     # on top of the automatic size: chatcomputer_settings text_scale
+                return _text(_json(st))
+            if act in ("brightness", "brighter", "dimmer"):
+                if act == "brightness":
+                    now = await _machine(p.set_brightness, _amount(a.get("value"), 50), None)
+                else:
+                    step = _amount(a.get("value"), 15)
+                    now = await _machine(p.set_brightness, None, step if act == "brighter" else -step)
+                ctx.journal.record("display", f"brightness {now}%")
+                return _text(f"The brightness is {now}% now.")
+            mode = a.get("mode") or "on"
+            warmth = max(1, min(100, int(a.get("warmth") or s.night_light_warmth or 50)))
+            changed = ["night_light", "night_light_warmth"]
+            s.set("night_light_warmth", warmth)
+            if mode == "evenings":
+                try:
+                    s.set("night_light_from", _hhmm(a.get("from"), s.night_light_from or "21:00"))
+                    s.set("night_light_until", _hhmm(a.get("until"), s.night_light_until or "07:00"))
+                except ValueError as exc:
+                    return _err(str(exc))
+                changed += ["night_light_from", "night_light_until"]
+            s.set("night_light", mode)
+            s.save(ctx.paths)
+            if ctx.on_night_light:
+                await asyncio.to_thread(ctx.on_night_light)          # applies it now (on, off, or as the clock says)
+            else:
+                await _machine(p.set_night_light, mode == "on", warmth)
+            ctx.journal.record("display", f"night light {mode}")
+            if mode == "evenings":
+                on_now = (await _machine(p.display_status)).get("night_light", {}).get("on")
+                return _text(f"The night light comes on by itself every evening at {s.night_light_from} and goes off at "
+                             f"{s.night_light_until}" + (" (it's on now)." if on_now else "."))
+            return _text("The night light is on: warmer colours, less blue light." if mode == "on" else
+                         "The night light is off: the colours are back to normal.")
+        except RuntimeError as exc:
+            return _err(str(exc))
+
+    @reg("reminders", "Timers, reminders and alarms. They ring here, on the screen and out loud, whatever is on the "
+         "screen, and last through a restart. They ring while Chat Computer isn't listening too (its auto-sleep only "
+         "stops it listening); only a computer that's off, or put to sleep with power sleep, can't ring them. timer: "
+         "minutes and/or seconds, with an optional label; reminder: text, and at (a time like 18:00 or 6pm, or "
+         "'2026-10-21 18:00') or in_minutes; alarm: at, date ('today', 'tomorrow' or YYYY-MM-DD; by default the next "
+         "time that clock time comes), repeat (daily, weekdays, weekends), label; list; cancel: by id, or 'all' (or "
+         "'timers', 'alarms'...); stop: silence one that's ringing (saying stop does too).",
+         obj({"action": {"type": "string", "enum": ["timer", "reminder", "alarm", "list", "cancel", "stop"]},
+              "minutes": {"type": "number"}, "seconds": {"type": "number"}, "text": S, "label": S, "at": S,
+              "date": S, "in_minutes": {"type": "number"},
+              "repeat": {"type": "string", "enum": ["", "daily", "weekdays", "weekends"]}, "id": S}, ["action"]))
+    async def reminders(a):
+        from .. import schedule as sch
+        if ctx.schedule is None:
+            return _err("Timers and reminders aren't running.")
+        act, now = a["action"], time.time()
+        try:
+            if act == "list":
+                items = ctx.schedule.items()
+                return _text("\n".join(f"[{i['id']}] {sch.describe(i, now)}" for i in items) or "Nothing is set.")
+            if act == "cancel":
+                gone = ctx.schedule.cancel(str(a.get("id") or ""))
+                if ctx.on_schedule_changed:
+                    ctx.on_schedule_changed()
+                return _text("Cancelled " + "; ".join(sch.describe(i, now) for i in gone) + "." if gone else
+                             "Nothing like that is set. (list shows what is.)")
+            if act == "stop":
+                return _text(ctx.stop_ringing() if ctx.stop_ringing else "Nothing is ringing.")
+            if act == "timer":
+                secs = float(a.get("minutes") or 0) * 60 + float(a.get("seconds") or 0)
+                if secs <= 0:
+                    return _err("How long? Give minutes and/or seconds.")
+                if secs > 24 * 3600:
+                    return _err("A timer can be up to 24 hours: for longer, set a reminder or an alarm.")
+                item = ctx.schedule.add("timer", now + secs, str(a.get("label") or ""), duration=secs, now=now)
+            elif act == "reminder":
+                text = str(a.get("text") or a.get("label") or "").strip()
+                if not text:
+                    return _err("What should the reminder say? Give text.")
+                item = ctx.schedule.add("reminder", sch.when(a.get("at"), a.get("date"), a.get("in_minutes"), now),
+                                        text, str(a.get("repeat") or ""), now=now)
+            else:
+                item = ctx.schedule.add("alarm", sch.when(a.get("at"), a.get("date"), None, now),
+                                        str(a.get("label") or ""), str(a.get("repeat") or ""), now=now)
+        except ValueError as exc:
+            return _err(str(exc))
+        if ctx.on_schedule_changed:
+            ctx.on_schedule_changed()
+        return _text(f"Set {sch.describe(item, now)}. [{item['id']}]")
+
+    @reg("lock_screen", "The lock screen, so nobody else can use the computer. lock: lock it now (with no PIN yet, "
+         "they choose one first, on the screen); set_pin: choose or change the PIN; remove_pin: turn the PIN off; "
+         "status. The PIN is only ever typed on the screen, in a form Chat Computer shows: never ask for it, say it "
+         "or type it. With a PIN, the screen also locks by itself when Chat Computer starts and when it goes to "
+         "sleep, and timers and alarms still ring while it's locked.",
+         obj({"action": {"type": "string", "enum": ["lock", "set_pin", "remove_pin", "status"]}}, ["action"]))
+    async def lock_screen(a):
+        if ctx.lock is None:
+            return _err("There's no lock screen here.")
+        return _text(await ctx.lock(a["action"]))
+
     POWER_Q: dict[str, str | None] = {
         "shutdown": "Shut down the computer?",
         "restart": "Restart the computer?",
@@ -800,15 +1352,30 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             return f"Install {pk}? It comes from " + ("Fedora's software library." if on_mac else "Ubuntu's software library.")
         if a.get("action") == "remove":
             return f"Remove {pk}?"
+        if a.get("action") == "check":
+            return None
         return "Update all the software on this computer? It can take a few minutes."
 
-    @reg("software", "Install, remove or update programs on the hidden Linux layer (" +
-         ("Fedora" if on_mac else "Ubuntu") + " package names, e.g. 'vlc', 'libreoffice', 'ffmpeg'). Most things "
-         "don't need a program: use websites and pages instead.",
-         obj({"action": {"type": "string", "enum": ["install", "remove", "update"]},
+    @reg("software", "Programs on the hidden Linux layer (" + ("Fedora" if on_mac else "Ubuntu") + " package names, "
+         "e.g. 'vlc', 'libreoffice', 'ffmpeg'). check: the updates waiting, without installing anything (and what "
+         "updates by itself); update: install all the updates; install; remove. Most things don't need a program: use "
+         "websites and pages instead.",
+         obj({"action": {"type": "string", "enum": ["check", "update", "install", "remove"]},
               "packages": {"type": "array", "items": S}}, ["action"]), _sw_policy)
     async def software(a):
         p = ctx.platform
+        if a["action"] == "check":
+            try:
+                r = await asyncio.to_thread(p.check_updates)
+            except RuntimeError as exc:
+                return _err(str(exc))
+            head = (f"{r['count']} update{'s' if r['count'] != 1 else ''} waiting" if r.get("count") else
+                    "Everything is up to date") + (f" (as of {r['checked']})" if r.get("checked") else "") + "."
+            if r.get("automatic"):
+                head += " " + r["automatic"]
+            ups = r.get("updates") or []
+            return _text(head + ("\n" + "\n".join(f"- {u['name']} {u['version']}" + (f" (now {u['from']})" if u.get("from") else "")
+                                                for u in ups) if ups else ""))
         if a["action"] == "update":
             return _text(await asyncio.to_thread(p.update_system))
         fn = p.install if a["action"] == "install" else p.remove
@@ -836,12 +1403,28 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             return _text(ctx.memory.forget(a.get("text", "")))
         return _text(ctx.memory.for_prompt() or "Nothing remembered yet.")
 
+    def _settings_policy(a: dict[str, Any]) -> str | None:
+        """Which Claude answers them, and how hard it thinks, are theirs to choose: changed only once they say yes
+        (not because a reply was slow, say)."""
+        if a.get("action") != "set" or a.get("key") not in ("model", "effort"):
+            return None
+        from ..config import model_label
+        v, s = str(a.get("value") or ""), ctx.settings
+        if a["key"] == "model":
+            return f"Switch me from {model_label(s.model)} to {model_label(v) or v}?"
+        return (f"Change how hard I think from {s.effort} to {v}? Lower answers sooner; higher takes more care."
+                if v != s.effort else None)
+
     @reg("chatcomputer_settings", "Read or change Chat Computer settings: voice (af_heart, af_bella, af_nicole, am_michael, "
          "am_fenrir, bf_emma, bm_george...), speech_speed (0.7-1.6), show_activity (true/false), "
-         "auto_sleep_minutes (0 = never), barge_in, wake_words, model, effort, user_name. The screen is always "
+         "auto_sleep_minutes (minutes of quiet before Chat Computer stops listening until its wake word; the computer "
+         "stays on, and timers and alarms still ring; 0 = never), barge_in, wake_words, model, effort, user_name, "
+         "keyboard_layout (the "
+         "keyboard's layout, as us, gb, fr, de, es, it, ch, be, or a kind of one like fr(bepo): set it when the "
+         "letters they type come out wrong). The screen is always "
          "black text on white in Atkinson Hyperlegible, a font made to be easy to read; there is no dark mode "
-         "(if it's too bright, they can turn down the screen's own brightness). Text size is worked out from the "
-         "screen's real size and viewing distance; "
+         "(if it's too bright, turn the brightness down with display, and in the evening the night light helps). "
+         "Text size is worked out from the screen's real size and viewing distance; "
          "'get' shows the result. To make all text bigger or smaller set text_scale (1.0 = automatic; e.g. 1.15 "
          "bigger, 0.87 smaller). When the user says how far they sit from the screen, set viewing_distance_cm. "
          "If the screen's size is wrong (some TVs don't report it), set screen_inches (the diagonal). web_zoom "
@@ -850,7 +1433,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          "Chat Computer Setup). airtouch (true/false) turns AirTouch, the hand gestures seen by the screen's camera, on or "
          "off. left_panel, right_panel and bottom_panel (true/false) show or hide Messages (left), What's done (right) "
          "and, while something is open, the conversation under it (bottom), as their switches on the screen do.",
-         obj({"action": {"type": "string", "enum": ["get", "set"]}, "key": S, "value": {}}, ["action"]))
+         obj({"action": {"type": "string", "enum": ["get", "set"]}, "key": S, "value": {}}, ["action"]),
+         _settings_policy)
     async def chatcomputer_settings(a):
         if a["action"] == "get":
             pub = ctx.settings.public()
@@ -868,6 +1452,16 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             return _err(f"effort must be one of: {', '.join(EFFORTS)}.")
         if key == "model" and not MODEL_RE.match(str(value or "")):
             return _err("That isn't a Claude model name (like claude-sonnet-5-5, or opus).")
+        if key == "voice" and not re.fullmatch(r"[ab][fm]_[a-z]+", str(value or "")):
+            # Kokoro's voices start with their language (a: American English, b: British English, z: Mandarin...),
+            # and Chat Computer speaks English: another language's voice would read English sounds badly, or nothing.
+            return _err("Chat Computer speaks English only for now: the voice is one of af_*, am_*, bf_* or bm_* "
+                        "(like af_heart, am_michael, bf_emma, bm_george).")
+        if key == "keyboard_layout":
+            try:
+                value = await asyncio.to_thread(ctx.platform.set_keyboard_layout, str(value or ""))
+            except RuntimeError as exc:
+                return _err(str(exc))
         if key == "stt_model":
             from ..voice.models import WHISPER_MODELS
             if str(value) not in WHISPER_MODELS:

@@ -3,8 +3,9 @@
 // the box (the logo goes with the first message sent); the
 // panels' switches; music (made by the browser); "/" lists the files in front of what's open; F1 and Escape; a
 // message opened; Connect Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
-// when it ends, with a stand-in for YouTube's player; answers streamed); Connect AirPods' sheet; a phone (music
-// turned down, then stopped).
+// when it ends, with a stand-in for YouTube's player; answers streamed; thinking first, as Opus 5.5 always does);
+// Connect AirPods' sheet; Chrome's built-in AI, with a stand-in (Free answers: its sheet, the download, then it
+// answers); a phone (music turned down, then stopped).
 // Prints JSON.  Run: node tests/demo_check.js [shot-prefix]
 const path = require("path");
 const { chromium } = require("playwright");
@@ -26,17 +27,21 @@ window.end = function () { send({ event: "onStateChange", info: 0 }); };
 </script>`;
 
 // Anthropic's API, standing in: the key check; a map of Tokyo asked for (show_map), or a video (play_youtube); then
-// the answer, once the tool's result is back.
+// the answer, once the tool's result is back. A tool's turn starts with thinking, as the real one's do: its text
+// left out (display "omitted"), only its signature.
 function sse(events) { return events.map((e) => "event: " + e.type + "\ndata: " + JSON.stringify(e) + "\n\n").join(""); }
 const START = { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", content: [], model: "claude-sonnet-5-5",
   stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } };
 function toolTurn(id, name, json) {
   const half = Math.floor(json.length / 2);
   return sse([START,
-    { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: id, name: name, input: {} } },
-    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: json.slice(0, half) } },
-    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: json.slice(half) } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-" + id } },
     { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: id, name: name, input: {} } },
+    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: json.slice(0, half) } },
+    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: json.slice(half) } },
+    { type: "content_block_stop", index: 1 },
     { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 30 } },
     { type: "message_stop" }]);
 }
@@ -78,7 +83,7 @@ async function state(page) {
       typing_in: document.activeElement && document.activeElement.id,
       hint: shown("hint") ? document.getElementById("hint").textContent : null,
       hint_weight: getComputedStyle(document.getElementById("hint")).fontWeight,
-      tools: tools ? Array.from(tools.querySelectorAll("button")).map((b) => b.getAttribute("aria-label")) : null,
+      tools: tools ? Array.from(tools.querySelectorAll("button")).filter((b) => getComputedStyle(b).display !== "none").map((b) => b.getAttribute("aria-label")) : null,
       tools_at: tools ? tools.parentNode.id : null,
       more: document.querySelectorAll(".more").length,
       // What shows above the message box while something is open (the messages inside the strip's own area).
@@ -126,8 +131,10 @@ async function ask(page, text) {
   await page.route("https://api.anthropic.com/**", (route) => {
     const req = route.request(), body = JSON.parse(req.postData() || "{}");
     api.push({ url: req.url(), key: req.headers()["x-api-key"], direct: req.headers()["anthropic-dangerous-direct-browser-access"],
-               version: req.headers()["anthropic-version"], model: body.model, stream: !!body.stream,
-               tools: (body.tools || []).map((t) => t.name), last: JSON.stringify((body.messages || []).slice(-1)) });
+               version: req.headers()["anthropic-version"], model: body.model, stream: !!body.stream, max_tokens: body.max_tokens,
+               system: body.system ? body.system[0].text : null, thinking: body.thinking || null, effort: body.output_config || null,
+               tools: (body.tools || []).map((t) => t.name), last: JSON.stringify((body.messages || []).slice(-1)),
+               all: JSON.stringify(body.messages || []) });
     if (!body.stream) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "msg_0", type: "message",
       role: "assistant", content: [{ type: "text", text: "Hi" }], stop_reason: "max_tokens", usage: { input_tokens: 8, output_tokens: 1 } }) });
     const last = JSON.stringify(body.messages.slice(-1));
@@ -228,6 +235,53 @@ async function ask(page, text) {
   await page.click("#demo-airpods");
   out.talk_sheet = await state(page);
   await page.keyboard.press("Escape");
+
+  // Chrome's built-in AI, standing in: it can be downloaded; "Free answers", its sheet, the download (its progress on
+  // the button), then it answers what the written answers can't, with a page on the screen. Written answers still
+  // answer what they can (music).
+  const ai = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+  ai.on("pageerror", (e) => errors.push(String(e)));
+  await ai.addInitScript(() => {
+    window.__ai = { created: [], prompts: [] };
+    let ready = false;
+    window.LanguageModel = {
+      availability: () => Promise.resolve(ready ? "available" : "downloadable"),
+      create: (o) => {
+        window.__ai.created.push({ system: o.initialPrompts && o.initialPrompts[0].role === "system" && o.initialPrompts[0].content,
+                                   inputs: o.expectedInputs, monitored: typeof o.monitor === "function" });
+        const m = new EventTarget();
+        if (o.monitor) o.monitor(m);
+        return new Promise((ok) => {
+          const step = (loaded) => { const e = new Event("downloadprogress"); e.loaded = loaded; m.dispatchEvent(e); };
+          setTimeout(() => step(0.5), 100);
+          window.__ai.half = () => { step(1); ready = true; ok({
+            prompt: (text, opts) => { window.__ai.prompts.push({ text, schema: !!(opts && opts.responseConstraint) });
+              return Promise.resolve(JSON.stringify({ reply: "Here's a short poem about the sea.", action: "show_page", title: "The sea",
+                                                       markdown: "The tide comes in on silver feet." })); },
+            destroy: () => {} }); };
+        });
+      },
+    };
+  });
+  await ai.goto(page_url);
+  await ai.waitForFunction(() => document.getElementById("demo-tools") && !document.getElementById("demo-nano").hidden);
+  out.ai_opening = await state(ai);
+  await ai.click("#demo-nano");
+  out.ai_sheet = await state(ai);
+  await ai.click("#sheet-ok");
+  await ai.waitForFunction(() => /50%/.test(document.getElementById("demo-nano").getAttribute("aria-label")));
+  out.ai_downloading = await state(ai);
+  await ai.evaluate(() => window.__ai.half());
+  await ai.waitForFunction(() => getComputedStyle(document.getElementById("demo-nano")).display === "none");
+  out.ai_on = await state(ai);
+  await ai.click("#input");
+  await ask(ai, "write a short poem about the sea");
+  out.ai_poem = await state(ai);
+  out.ai_poem_view = await viewText(ai);
+  await ask(ai, "play some piano music");
+  out.ai_music = await state(ai);
+  out.ai_calls = await ai.evaluate(() => window.__ai);
+  if (shot) await ai.screenshot({ path: shot + "-ai.png" });
 
   // A phone: no sidebars and no switches; the buttons inside the box; the conversation and the box still work.
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });

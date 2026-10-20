@@ -17,3 +17,10 @@ article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; mar
 .said.mail { padding: 0 0 1rem; margin: 0 0 1.25rem; border-bottom: 2px solid var(--bubble); }
 .said.mail:last-child { border-bottom: 0; }
 .said.mail .meta { margin: 0.25rem 0 0.5rem; }
+/* On paper (a PDF, a printer): the size of a printed page's text, the page's own width, no screen colours. */
+@media print {
+  html { font-size: 11pt !important; }
+  html, body { background: var(--ground) !important; color: var(--ink) !important; overflow: visible !important; }
+  article { width: auto; max-width: none; margin: 0; padding: 0; }
+  .media, .sound, .image { position: static; }
+}

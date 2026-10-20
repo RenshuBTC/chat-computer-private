@@ -216,3 +216,23 @@ def test_the_model_is_named_as_the_claude_app_names_it():
     assert model_label("opus") == "Opus"
     assert model_label("claude-sonnet-5-5[1m]") == "Sonnet 5.5"
     assert model_label("") == ""
+
+
+def test_words_after_a_tool_call_are_not_glued_to_the_words_before():
+    # Claude writes "Checking the drive." then calls a tool, then "It's open." in a new block of text: on the screen
+    # and out loud that's two sentences, not "drive.It's open".
+    from claude_agent_sdk.types import StreamEvent
+
+    shown = []
+    brain = Brain(Paths(), Settings(), SimpleNamespace(get=lambda k, d=None: d, set=lambda **k: None), None, {}, None,
+                  lambda: "", BrainEvents(on_text=lambda tid, t: shown.append(t)))
+    brain._cur = brain._new_turn("here")
+
+    def ev(e):
+        brain._route(StreamEvent(uuid="u", session_id="s", event=e))
+    for block in ("Checking the drive.", "It's open.", " Your photos are on it.", "Done\n", "Bye"):
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": block}})
+    ev({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "t", "name": "x"}})
+    assert brain._cur.res.text == "Checking the drive. It's open. Your photos are on it. Done\nBye"
+    assert "".join(shown) == brain._cur.res.text

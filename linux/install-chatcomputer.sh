@@ -433,6 +433,8 @@ fedora_firewall() {
   for svc in ssh cockpit; do
     firewall-offline-cmd --zone="${zone:-public}" --remove-service="$svc" >/dev/null 2>&1 || true
   done
+  # Printers on the network answer mDNS (Bonjour): let their answers in, so they're found by themselves.
+  firewall-offline-cmd --zone="${zone:-public}" --add-service=mdns >/dev/null 2>&1 || true
 }
 
 log "Chat Computer installer: user=$USER_NAME from_installer=$FROM_INSTALLER dry_run=$DRY_RUN skip_models=$SKIP_MODELS distro=$DISTRO"
@@ -471,6 +473,12 @@ PACKAGES=(
   # --- The Mac: its start-up volume ("switch to macOS") and the drive macOS shares. ---
   asahi-bless                # choose the Mac's start-up volume from Linux
   exfatprogs                 # the Chat Computer drive is exFAT, which macOS opens too
+
+  # --- USB drives and printers, as macOS has them. ---
+  udisks2                    # opens (mounts) and ejects USB drives and memory cards for the person, no admin needed
+  cups cups-filters          # printing: printers found by themselves, no drivers (IPP Everywhere, AirPrint)
+  avahi                      # finds printers on the network (mDNS, Bonjour)
+  ipp-usb                    # USB printers, the same way
 
   # --- Fonts (so the UI and emoji render). ---
   google-noto-sans-fonts google-noto-serif-fonts google-noto-sans-cjk-fonts google-noto-color-emoji-fonts
@@ -539,6 +547,13 @@ PACKAGES=(
   ntfs-3g                    # read/write NTFS (Windows partition)
   cryptsetup-bin             # open Windows' BitLocker drive with Chat Computer's own key (cryptsetup BITLK)
   efibootmgr                 # UEFI BootNext ("switch to Windows")
+
+  # --- USB drives and printers, as Windows and macOS have them. ---
+  udisks2                    # opens (mounts) and ejects USB drives and memory cards for the person, no admin needed
+  cups                       # printing (CUPS): printers found by themselves, no drivers (IPP Everywhere, AirPrint)
+  cups-filters               # turns PDFs, photos and text into what the printer takes
+  avahi-daemon               # finds printers on the network (mDNS, Bonjour)
+  ipp-usb                    # USB printers, the same way
 
   # --- Voice I/O helpers for the runtime. ---
   libportaudio2              # PortAudio runtime (sounddevice)
@@ -743,6 +758,9 @@ apply_bluez_main_conf
 run systemctl --global enable wireplumber.service pipewire.service pipewire-pulse.socket 2>/dev/null \
   || warn "could not --global enable pipewire/wireplumber (will still autostart via dbus)"
 sctl_enable "bluetooth.service"
+# Printing: CUPS, and avahi to find printers on the network. (Drives need nothing started: udisks2 starts when asked.)
+sctl_enable "cups.service"
+sctl_enable "avahi-daemon.service"
 
 # PipeWire/WirePlumber as user services need lingering off (they start with the
 # graphical session), but enabling dbus-user-session is enough; nothing to do.

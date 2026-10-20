@@ -123,7 +123,8 @@ def describe(name: str, inp: dict[str, Any], result: str = "") -> tuple[str, boo
         return {"connect": ("Joined the Wi-Fi network " + g("network")[:50], False),
                 "disconnect": ("Disconnected the Wi-Fi", False),
                 "forget": ("Forgot the Wi-Fi network " + g("network")[:50], False),
-                "on": ("Turned the Wi-Fi on", False), "off": ("Turned the Wi-Fi off", False)}.get(act)
+                "on": ("Turned the Wi-Fi on", False), "off": ("Turned the Wi-Fi off", False),
+                "speed": ("Tested the internet's speed", False)}.get(act)
     if short == "bluetooth":
         if act == "airpods":
             return None if "already" in (result or "") else ("Connected your AirPods", False)
@@ -148,10 +149,49 @@ def describe(name: str, inp: dict[str, Any], result: str = "") -> tuple[str, boo
         return ("Set Chat Computer to start first" if g("system") == "chatcomputer" else
                 "Set the other system to start first"), False
     if short == "software":
+        if act == "check":
+            return "Checked for updates", True
         pk = ", ".join(str(x) for x in inp.get("packages") or [])
         return {"install": "Installed " + pk, "remove": "Removed " + pk}.get(act, "Updated the software"), False
     if short == "set_timezone":
         return "Set the time zone to " + g("zone"), False
+    if short == "drives":
+        if act == "eject":
+            return "Ejected " + (g("drive")[:50] or "the drive"), False
+        return ("Opened the drive " + g("drive")[:50], False) if act == "open" else None
+    if short == "printer":
+        if act == "print":
+            n = int(inp.get("copies") or 1) if str(inp.get("copies") or "1").isdigit() else 1
+            return "Printed " + _base(g("path")) + (f" ({n} copies)" if n > 1 else ""), False
+        if act == "save_pdf":
+            saved = re.match(r"Saved (.+)$", (result or "").strip())
+            return "Saved " + (_base(saved.group(1)) if saved else "a PDF"), False
+        return ("Cancelled printing", False) if act == "cancel" else None
+    if short == "screenshot":
+        return "Took a screenshot" + (" of the page" if g("part") == "open" else ""), False
+    if short == "backup":
+        if act == "now" and (result or "").startswith("Backed up"):
+            return result.split(":")[0].strip()[:120], False
+        return None
+    if short == "vpn":
+        name = g("name")[:40] or "the VPN"
+        return {"on": ("Turned on " + name, False), "off": ("Turned off " + name, False),
+                "add": ("Added the VPN from " + _base(g("file")), False)}.get(act)
+    if short == "display":
+        if act == "brightness":
+            return f"Set the brightness to {g('value').rstrip('%')}%", False
+        if act in ("brighter", "dimmer"):
+            return ("Made the screen brighter" if act == "brighter" else "Dimmed the screen"), False
+        if act == "night_light":
+            return {"on": "Turned the night light on", "off": "Turned the night light off",
+                    "evenings": "Set the night light to come on in the evenings"}.get(g("mode") or "on"), False
+        return None
+    if short == "lock_screen":
+        return ("Locked the screen", False) if act == "lock" and (result or "").startswith("Locked") else None
+    if short == "reminders":
+        if act in ("timer", "reminder", "alarm", "cancel") and (result or "").startswith(("Set ", "Cancelled ")):
+            return re.sub(r"\s*\[\w+\]\s*$", "", result.strip()).rstrip(".")[:120], False
+        return None
     if short == "memory":
         return {"remember": ("Remembered " + _quote(g("text"), 80), False),
                 "forget": ("Forgot " + _quote(g("text"), 80), False)}.get(act)

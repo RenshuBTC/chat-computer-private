@@ -21,6 +21,13 @@ class Screen:
     async def navigate(self, action: str) -> dict[str, Any]: raise NotImplementedError
     async def focus_content(self) -> None: raise NotImplementedError
     async def content_origin(self) -> tuple[int, int, float]: raise NotImplementedError
+    async def content_rect(self) -> tuple[int, int, int, int] | None:
+        """Where what's open is on the screen, in the screen's pixels (x, y, width, height); None when nothing is."""
+        return None
+    async def to_pdf(self, path: str, html: str | None = None, base_dir: str | None = None) -> dict[str, Any]:
+        """Print to a PDF file, with no printer and nothing shown: the page given (html), or what's open between
+        the panels. {"ok": True, "path": path} or {"ok": False, "error": why}."""
+        return {"ok": False, "error": "PDFs can't be made here."}
     # --- conversation layer
     def user_text(self, msg_id: str, text: str, final: bool) -> None: ...
     def partial(self, text: str) -> None: ...
@@ -93,6 +100,10 @@ class Screen:
     def screen_bounds(self) -> tuple[int, int, int, int] | None:
         """Where Chat Computer's screen is (x, y, width, height in the display's pixels), for AirTouch's pointer."""
         return None
+    def lock_screen(self, info: dict[str, Any] | None) -> None:
+        """The lock screen over everything ({"error": what to say about the last PIN, "note": the line under
+        "Locked"}), or None to take it away. What's open stays open, off the screen, until then. The PIN typed on
+        it comes back as the page event {"type": "unlock", "pin": ...}."""
     def layout_info(self) -> dict[str, Any]:
         """The screen's size, the estimated viewing distance and the text size worked out from them."""
         return {}
@@ -145,6 +156,20 @@ class RecordingScreen(Screen):
 
     async def content_origin(self) -> tuple[int, int, float]:
         return 0, 0, 1.0
+
+    async def content_rect(self) -> tuple[int, int, int, int] | None:
+        return (100, 50, 800, 600) if self.mode == "content" else None
+
+    async def to_pdf(self, path: str, html: str | None = None, base_dir: str | None = None) -> dict[str, Any]:
+        """A one-page PDF saying what it was made from (the page's title), for tests."""
+        if html is None and self.mode != "content":
+            return {"ok": False, "error": "Nothing is open on the screen."}
+        import re
+        title = (re.search(r"<title>([^<]*)</title>", html or "") or [None, self.title or self.url or "page"])[1]
+        self.events.append(("pdf", (path, title)))
+        with open(path, "wb") as f:
+            f.write(b"%PDF-1.4\n% " + str(title).encode() + b"\n%%EOF\n")
+        return {"ok": True, "path": path}
 
     def user_text(self, msg_id: str, text: str, final: bool) -> None:
         self.events.append(("user", (msg_id, text, final)))
@@ -201,6 +226,7 @@ class RecordingScreen(Screen):
         self.events.append(("pinned", (kind, item_id, bool(pinned))))
 
     def account_form(self, form: dict[str, Any] | None) -> None:
+        self.form = form
         self.events.append(("form", dict(form) if form else None))
 
     def source_open(self, provider: str, url: str, reload: bool = False) -> None:
@@ -230,6 +256,10 @@ class RecordingScreen(Screen):
 
     def quit(self) -> None:
         self.events.append(("quit", None))
+
+    def lock_screen(self, info: dict[str, Any] | None) -> None:
+        self.locked = info is not None
+        self.events.append(("lock", info))
 
     # A 1920x1080 screen with the keyboard along its bottom 432 pixels.
     KEYBOARD_TOP, KEYBOARD_SIZE = 648, (1920, 432)

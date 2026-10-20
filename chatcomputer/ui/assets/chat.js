@@ -248,9 +248,11 @@
   // Typing always goes into the box, even after a click elsewhere on the page or selecting words to copy them (but
   // not while a sign-in form is open: that has boxes of its own).
   function focusBox() {
+    if (locked) { lockFocus(); return; }
     if (!body.classList.contains("sheet") && document.activeElement !== input) input.focus({ preventScroll: true });
   }
   document.addEventListener("keydown", function (e) {
+    if (locked) { if (e.target !== $("lock-pin")) lockFocus(); return; }   // keys are for the PIN, nothing else
     if (body.classList.contains("sheet")) return;
     var paste = (e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V");
     if (!(paste || (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter")))) return;
@@ -569,6 +571,48 @@
   }
   $("sheet-cancel").addEventListener("click", cancelForm);
   $("sheet").addEventListener("keydown", function (e) { if (e.key === "Escape") { e.preventDefault(); cancelForm(); } });
+
+  // ------------------------------------------------------------------ the lock screen
+  // CO.lock({error}) covers everything with the time and a keypad; the PIN typed (on the keypad, or a keyboard) goes
+  // back to Chat Computer to check, never to Claude. CO.lock(null) takes it away.
+  var locked = false;
+  function lockFocus() { var p = $("lock-pin"); if (document.activeElement !== p) p.focus({ preventScroll: true }); }
+  function lockClock() {
+    if (!locked) return;
+    var d = new Date();
+    $("lock-time").textContent = clock(d.getTime() / 1000);
+    $("lock-date").textContent = d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
+    setTimeout(lockClock, 1000 - d.getMilliseconds() + 20);
+  }
+  function showLock(info) {
+    var was = locked;
+    locked = !!info;
+    body.classList.toggle("locked", locked);
+    $("lock-pin").value = "";
+    $("lock-error").textContent = (info && info.error) || "";
+    if (info && info.note) $("lock-note").textContent = info.note;
+    if (locked) { if (!was) lockClock(); lockFocus(); } else { focusBox(); }
+  }
+  function sendPin() {
+    var pin = $("lock-pin").value;
+    $("lock-pin").value = "";
+    if (pin) post({ type: "unlock", pin: pin });
+  }
+  $("lock-form").addEventListener("submit", function (e) { e.preventDefault(); sendPin(); });
+  $("lock-pin").addEventListener("input", function () {
+    var p = $("lock-pin");
+    p.value = p.value.replace(/\D+/g, "").slice(0, 12);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("#lock-pad button"), function (b) {
+    b.addEventListener("click", function (e) {
+      var k = b.dataset.key, p = $("lock-pin");
+      if (k === "ok") return;                    // the form's submit
+      e.preventDefault();
+      if (k === "del") p.value = p.value.slice(0, -1);
+      else if (p.value.length < 12) p.value += k;
+      $("lock-error").textContent = "";
+    });
+  });
 
   // ------------------------------------------------------------------ "/": searching this computer
   // A "/" first in the box makes it search this computer's files (Chat Computer's index of them) for the words after
@@ -940,6 +984,7 @@
       drawMessages();
     },
     accountForm: function (f) { showForm(f || null); },
+    lock: function (info) { showLock(info || null); },
     // The person's name and the model: nothing on this page shows them (before anything is said, the word logo and
     // Chat Computer's "hello, world").
     settings: function () {},

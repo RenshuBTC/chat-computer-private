@@ -359,6 +359,25 @@ def test_undo_never_deletes_what_was_there_before(tmp_path, monkeypatch):
     assert (bin_ / "note.txt").read_text() == "changed later"
 
 
+def test_claude_is_opus_5_5_at_max_effort_unless_they_chose_another(tmp_path):
+    assert (Settings().model, Settings().effort) == ("claude-opus-5-5", "max")
+    paths = Paths(tmp_path / "ChatComputer").ensure()
+    # A Chat Computer from before: its settings file holds the old default, never changed. It gets today's.
+    paths.settings_file.write_text(json.dumps({"model": "claude-sonnet-5-5", "effort": "medium", "speech_speed": 1.2}))
+    s = Settings.load(paths)
+    assert (s.model, s.effort, s.speech_speed) == ("claude-opus-5-5", "max", 1.2)
+    s.save(paths)
+    # Someone who picks Sonnet at medium effort now keeps it.
+    s.set("model", "claude-sonnet-5-5")
+    s.set("effort", "medium")
+    s.save(paths)
+    s = Settings.load(paths)
+    assert (s.model, s.effort) == ("claude-sonnet-5-5", "medium")
+    # And one who had picked another before keeps theirs.
+    paths.settings_file.write_text(json.dumps({"model": "claude-haiku-5-5", "effort": "low"}))
+    assert (Settings.load(paths).model, Settings.load(paths).effort) == ("claude-haiku-5-5", "low")
+
+
 def test_settings_that_would_stop_claude_are_refused(tmp_path):
     ctx, server, *_ = make(tmp_path)
     for key, value in (("effort", "extreme"), ("model", "Claude 5 please"), ("stt_model", "../../x")):

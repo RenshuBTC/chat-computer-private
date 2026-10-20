@@ -20,6 +20,7 @@ TOKEN_RE = re.compile(r"^sk-ant-(oat01|api03)-[A-Za-z0-9_\-]{20,}$")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MODEL_RE = re.compile(r"^[a-z][a-z0-9.\-]{1,62}(\[1m\])?$")
 _MODEL_NAME = re.compile(r"^(?:claude-)?([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$")
+OLD_CLAUDE = ("claude-sonnet-5-5", "medium")   # the default model and effort until 20 Oct 2026
 
 
 def model_label(model: str | None) -> str:
@@ -84,9 +85,10 @@ class Settings:
     windows_user: str = ""
     timezone: str = ""
     locale: str = "en_US.UTF-8"
-    # Claude
-    model: str = "claude-sonnet-5-5"
-    effort: str = "medium"
+    # Claude: Opus 5.5 at its most thorough, unless the person picks another (OLD_CLAUDE in load is the one before).
+    model: str = "claude-opus-5-5"
+    effort: str = "max"
+    defaults_version: int = 2       # 2: Settings from after the Claude default became Opus 5.5 at max effort
     fresh_session_after_idle_hours: float = 8.0
     # Voice
     voice: str = "af_heart"
@@ -111,6 +113,14 @@ class Settings:
     left_panel: bool = True
     right_panel: bool = True
     bottom_panel: bool = True
+    # The screen itself: the night light (warmer colours): off, on, or evenings (by itself from night_light_from to
+    # night_light_until), and how warm (1-100). The brightness is the screen's own (it keeps it).
+    night_light: str = "off"
+    night_light_from: str = "21:00"
+    night_light_until: str = "07:00"
+    night_light_warmth: int = 50
+    # The keyboard's layout (XKB: us, gb, fr, de, fr(azerty)...); "" = as the computer was set up.
+    keyboard_layout: str = ""
     # Typing: the Claude app on the phone is the keyboard (Remote Control); needs the full sign-in
     phone_access: bool = True
     # AirTouch: the hand, through the screen's camera, as the pointer (chatcomputer/airtouch). Off unless asked for: the
@@ -142,6 +152,9 @@ class Settings:
         if data.get("text_size") == 28 and "text_scale" not in data:
             data["text_size"] = 0   # 28 px was the fixed default before text was sized from the screen
         data.pop("theme", None)     # the old light/dark choice: the screen is black on white now
+        if "defaults_version" not in data and (data.get("model"), data.get("effort")) == OLD_CLAUDE:
+            data.pop("model")       # the default from before 20 Oct 2026, never changed: today's default instead
+            data.pop("effort")
         kwargs: dict[str, Any] = {}
         extra: dict[str, Any] = {}
         defaults = cls()

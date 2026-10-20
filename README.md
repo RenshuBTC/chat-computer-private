@@ -111,7 +111,7 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   * "Find the tax letter I got in March"
   * "Connect to my phone's hotspot"
   * "Make the text bigger"
-  * "Use my webcam's microphone" or "switch to Opus"
+  * "Use my webcam's microphone" or "switch to Sonnet"
   * "I sit about two metres from the screen"
   * "Go to sleep"
 * **Risky things need a yes.** Before anything risky, like deleting, buying, sending, installing
@@ -426,14 +426,24 @@ You won't need it day to day; it's only for repairs.
 **https://chatcomputer.ai** is Chat Computer's screen in a browser, for trying it before
 installing it: the word logo, Chat Computer saying `hello, world`, and the message box with the cursor in it. It is the same page
 and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py` copies them, and
-`tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the computer:
-Claude's answers to a few things are written in advance (music is a few soft chords the browser makes), the
-messages and files are made up, and nothing typed there leaves the browser (from elsewhere comes only, when
-asked for, a map from OpenStreetMap), unless you use one of the two buttons at the right of the message box
-(`docs/demo/demo.css`):
+`tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the computer. The
+messages and files there are made up. Everyone gets answers, free:
 
-* **Connect Claude**: paste an API key from Claude Console, and Claude (Sonnet 5.5, as on a Chat Computer)
-  answers for real and does things on the screen: plays YouTube videos (YouTube's player between the panels;
+* **Written answers**, in `host.js`: what Chat Computer is, what it needs and costs (it's free, on a Claude Pro
+  or Max plan; the download is coming soon), and what the page can show: music (a few soft chords the browser
+  makes), maps, the weather, timers, sums, the date and time, the made-up messages and files. Asked for something
+  only an AI can do (a recipe, a poem, a translation), it says so, and how to get one.
+* **The browser's own AI**, where there is one: Chrome on a computer has Gemini Nano built in, and Edge
+  Phi-4-mini, running on the device itself. The **Free answers** button at the right of the message box shows
+  while the browser can download it; Chrome downloads it once, after that click, and keeps it for every site.
+  Then it answers what the written answers can't, and can put a page it writes, a map or a timer on the screen.
+
+What's typed stays in the browser, except a place's name asked about for a map or the weather, which goes to
+Open-Meteo's free geocoding and forecast (the map itself comes from OpenStreetMap), and except with the two
+other buttons at the right of the message box (`docs/demo/demo.css`):
+
+* **Connect Claude**: paste an API key from Claude Console, and Claude (Opus 5.5, as on a Chat Computer, but at
+  the API's own effort, medium, rather than max, for quicker answers) answers for real and does things on the screen: plays YouTube videos (YouTube's player between the panels;
   when the video ends, the conversation has the middle again), shows maps and pages it writes, opens the
   made-up messages and files, makes timers, searches the web. Browsers let a page play sound by itself only
   after a click, tap or key on the site, so a video starts without sound if there hasn't been one yet, and the
@@ -459,3 +469,8 @@ Pages (A records for the domain itself, a CNAME record for `www`).
   Fedora Asahi Remix on a Mac), and `chatcomputer/` Chat Computer itself.
 * `os/` is Chat Computer's own operating system, being written from scratch to replace the Linux base. Its
   README says what runs so far, what no operating system can own on a PC, and the steps ahead.
+* `evals/` says whether a change made things better. `evals/os` gives Chat Computer's Claude everyday requests on
+  a simulated computer, each in its own sandbox (`python -m evals.os.run OUT_DIR`, Opus 5.5 at max effort), and
+  `evals/web` types a first-time visitor's questions into the website (`node evals/web/run.js OUT.json`). Each
+  has pass/fail checks (`evaluate.py`), written from reading the answers and kept honest against hand labels
+  (`labels/`).

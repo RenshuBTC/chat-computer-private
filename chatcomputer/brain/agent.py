@@ -136,6 +136,7 @@ class _Turn:
     res: TurnResult = field(default_factory=TurnResult)
     done: asyncio.Event = field(default_factory=asyncio.Event)
     last: float = field(default_factory=time.time)
+    gap: bool = False                # a new block of text begins: it's kept apart from what came before
 
 
 def _user_text(m: UserMessage) -> str:
@@ -584,11 +585,20 @@ class Brain:
         res = t.res
         if isinstance(m, StreamEvent):
             e = m.event
-            if e.get("type") == "content_block_delta":
+            if e.get("type") == "content_block_start" and (e.get("content_block") or {}).get("type") == "text":
+                # Words written after a tool call (or in a later block) carry on the same reply: they'd otherwise be
+                # glued to the last sentence ("...check again.Your internet is fine"), on the screen and out loud.
+                t.gap = bool(res.text) and not res.text[-1].isspace()
+            elif e.get("type") == "content_block_delta":
                 d = e.get("delta", {})
                 if d.get("type") == "text_delta" and d.get("text"):
-                    res.text += d["text"]
-                    self.ev.on_text(t.tid, d["text"])
+                    text = d["text"]
+                    if t.gap:
+                        t.gap = False
+                        if not text[0].isspace():
+                            text = " " + text
+                    res.text += text
+                    self.ev.on_text(t.tid, text)
         elif isinstance(m, AssistantMessage):
             if m.error:
                 res.error_kind = {"authentication_failed": "auth", "billing_error": "billing",

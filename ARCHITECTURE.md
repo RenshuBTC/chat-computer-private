@@ -349,6 +349,36 @@ retrying with backoff, then starts listening.
   turn silent for 15 minutes is closed. Local questions carry the "[time · screen: ...]" prefix; the system
   prompt tells Claude that a message without it came from the phone.
 * Chat Computer tools are in-process MCP tools (screen, files, computer control, apps, system, memory, self-made tools).
+* The computer's everyday abilities, as Windows and macOS have them, through Linux's own services and never the
+  root helper (`chatcomputer/platform/linux.py`; `tests/test_machine.py`):
+  * USB drives and memory cards (`drives`): udisks2 opens a drive when it's plugged in and ejects it (powering a
+    USB disk off when nothing on it is open), for the person at the computer without an administrator.
+  * Printing (`printer`): CUPS finds printers on the Wi-Fi or USB by themselves (driverless: IPP Everywhere,
+    AirPrint, ipp-usb). PDFs, photos and text go as they are; anything else becomes a PDF first: Word, Excel and
+    PowerPoint files with LibreOffice when it's installed (`software install libreoffice-nogui`; the error says
+    so when it isn't), Markdown and HTML as Chat Computer shows them, printed by WebKit to a PDF without a dialog
+    (`GtkScreen.to_pdf`, in a view of its own that's never shown, on the paper the locale uses). `save_pdf` keeps
+    such a PDF, of a file or of what's open.
+  * The screen (`display`): brightness through logind (the laptop's backlight), else ddcutil (a monitor that
+    takes DDC/CI); the night light as XRandR gamma ramps scaled by a black-body white point (`platform/gamma.py`),
+    now or every evening; the keyboard layout (`setxkbmap`, checked against `evdev.lst`, applied again to a
+    keyboard plugged in later).
+  * Timers, reminders and alarms (`reminders`, `chatcomputer/schedule.py`): kept in `schedule.json`, rung by the
+    controller with a chime and speech, shown as missed when the computer was off; the lock screen (`lock_screen`,
+    `chatcomputer/lock.py`: a PIN kept as a PBKDF2 hash, wrong guesses slowed).
+  * Screenshots (`screenshot`): the whole screen, or just what's open (`Screen.content_rect`), as a PNG in
+    Pictures/Screenshots or the folder they name; undoable like any new file.
+  * Backups (`backup`): their folders onto a USB drive or external disk, into "Chat Computer backup/<date
+    time>", every file read back and compared; `backups.json` remembers when, where and how much, for `status`.
+  * VPNs (`vpn`): NetworkManager's WireGuard and OpenVPN connections: listed, turned on and off, and added from
+    the provider's `.conf` or `.ovpn` file (OpenVPN's needs `network-manager-openvpn`).
+  * Updates (`software check`): what's waiting, from `apt list --upgradable` (dnf's cache on a Mac), without an
+    administrator or a download; security updates install by themselves (unattended-upgrades).
+  * The internet's speed (`wifi speed`): Cloudflare's speed test (speed.cloudflare.com): four round trips on an
+    open connection for the delay, up to 25 MB or 8 s down, 4 MB up.
+  * `system_status` also says the kind of computer (SMBIOS chassis type, or the Mac's model) and its battery
+    (none on a desktop), what's keeping it busy (each program's processes together, measured over half a second,
+    with the names people know them by), and the camera, with the programs that have it open.
 * Typed or said: what's typed on this PC's keyboard is answered in writing only (`Brain.ask(typed=True)`, and the
   controller doesn't speak that turn), like what's typed on the phone; only what's said out loud gets a spoken
   answer. Its note ends with "typed" (`[time · screen: ... · typed]`), and the system prompt tells Claude to
@@ -561,7 +591,7 @@ retrying with backoff, then starts listening.
     of its own, `TextReader`, at nice 10. In Chat Computer's own process they held the interpreter long enough for
     speech to skip (6 to 11 underflows in 6 s of speech under PipeWire; none since, and none from walking
     folders). A document a reader hangs on is given up after 60 s, and stopping Chat Computer doesn't wait for one.
-  * Tools: `system_status` asks its six parts side by side. Without a Bluetooth adapter (`/sys/class/bluetooth`
+  * Tools: `system_status` asks its eight parts side by side. Without a Bluetooth adapter (`/sys/class/bluetooth`
     empty or missing) bluetoothd may not run, and each bluetoothctl command waited 8 s for it: the Bluetooth
     calls now say so at once. `look_at_screen` makes the JPEG straight from the grab (a 4K screen: 0.65 s with a
     PNG in between, 0.17 s without), of the whole screen (mss's monitor 0), so click positions match with more

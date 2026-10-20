@@ -418,13 +418,163 @@
     }, 0);
   });
 
-  // ------------------------------------------------------------------ Claude's answers, written in advance
+  // ------------------------------------------------------------------ answers written in advance
+  // Without Claude (Connect Claude) or Chrome's built-in AI (below), the page answers from what's written here: what
+  // Chat Computer is and how to get it, what this page can show, and honest answers about what it can't do without an
+  // AI. The facts are README.md's, in one place, for the written answers and for Chrome's AI.
+  // The browser's own AI: Chrome's is Gemini Nano, from Google; Edge has the same, with Microsoft's Phi-4-mini.
+  var EDGE = /\bEdg\//.test(navigator.userAgent || "");
+  var AI = { browser: EDGE ? "Edge" : "Chrome", model: EDGE ? "Phi-4-mini" : "Gemini Nano", maker: EDGE ? "Microsoft" : "Google" };
+  var FACTS = {
+    what: "Chat Computer is Claude, made by Anthropic, running a whole computer: there's no desktop and no apps to learn. " +
+      "You talk, type or touch the screen, and it does what you ask: opens websites, plays music and videos, reads your " +
+      "messages, looks after your files and settings.",
+    soon: "Chat Computer isn't out yet: the download is coming soon.",
+    free: "Chat Computer itself is free. It runs on your own Claude Pro or Max plan, which is where Claude comes from.",
+    pc: "On a Windows PC it installs next to Windows, on free space: Windows, your apps and your files stay, one restart " +
+      "away, and you can remove Chat Computer any time. The PC must start in UEFI mode (every PC from the last ten years " +
+      "does) and have about 70 GB free.",
+    mac: "On a Mac with Apple silicon it installs next to macOS the same way: M1 and M2 Macs work fully, M3 Macs with some " +
+      "limits for now, and Intel Macs or M4 and newer can't run it yet. The Mac version is the newest: it hasn't been " +
+      "tried on a real Mac yet.",
+    use: "You can touch the screen, type on a keyboard or in the Claude app on your phone, or talk through AirPods.",
+    private: "On Chat Computer your files stay on your computer, and speech is turned into text on the computer itself. " +
+      "What you ask goes to Claude through your own Claude account, as in the Claude app.",
+    indie: "Chat Computer is an independent project, not made by Anthropic. It runs on Claude, which Anthropic makes."
+  };
   var CITIES = { singapore: [103.6, 1.2, 104.1, 1.47], london: [-0.35, 51.38, 0.15, 51.62], "new york": [-74.1, 40.6, -73.8, 40.85],
                  tokyo: [139.55, 35.55, 139.95, 35.8], paris: [2.22, 48.8, 2.47, 48.92], sydney: [151.0, -33.98, 151.35, -33.78] };
-  var TRY = "Try \u201cplay some piano music\u201d, \u201cshow me a map of Tokyo\u201d, \u201cmake me a timer\u201d, " +
-            "\u201cwhat did Jane say?\u201d or \u201copen my packing list\u201d. Type / to search the files.";
+  var TRY = "Try “play some piano music”, “show me a map of Tokyo”, “weather in London”, " +
+            "“set a timer for 5 minutes” or “what did Jane say?”. Type / to search the files.";
   var REAL = "Connect Claude, at the right of the message box, and Claude answers for real, with your own API key.";
   function map(b) { show({ src: "https://www.openstreetmap.org/export/embed.html?bbox=" + b.join("%2C") + "&layer=mapnik" }); }
+  function title(s) { return String(s).replace(/\b\w/g, function (c) { return c.toUpperCase(); }); }
+  // A page with a link to a site: other sites can't show inside this page (they forbid being framed).
+  function link(url, name, note) {
+    return page(name, '<article><h1 class="title">' + esc(name) + '</h1><p class="demo-note">' + esc(note) +
+      '</p><p><a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">Open ' + esc(name) + " in a new tab</a></p></article>", NOTE_CSS);
+  }
+  function youtubeSearch(q, you, uts) {
+    var url = "https://www.youtube.com/results?search_query=" + encodeURIComponent(q);
+    return { text: "This page can't search YouTube by itself, so I can't play “" + clip(q, 50) + "” here. On a Chat " +
+      "Computer I'd find it and play it right here. YouTube's search for it is a click away, on the screen.",
+      done: ["Showed a link to YouTube's search for “" + clip(q, 40) + "”"],
+      act: function () { show({ html: link(url, "YouTube: " + clip(q, 40), "On Chat Computer, YouTube opens right here and plays it. Other sites can't show inside this page.") }); } };
+  }
+  // Where a place is, from Open-Meteo's free geocoding (only the place's name goes there): for maps and the weather.
+  function place_(name) {
+    return fetch("https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=" + encodeURIComponent(name))
+      .then(function (r) { return r.json(); }).then(function (j) {
+        var p = j && j.results && j.results[0];
+        if (!p) throw new Error("not found");
+        return { name: p.name, country: p.country || "", lat: +p.latitude, lon: +p.longitude };
+      });
+  }
+  // The place a question is about: one of the cities known here, or the name in "show me Rome on a map", "where is
+  // Rome?", "weather in Rome"...; else "" (then it's the visitor's own, from their time zone).
+  var PLACE_IN = [/\bshow me\s+([A-Za-zÀ-ɏ][\wÀ-ɏ .'-]{1,40}?)\s+on a map\b/i,
+                  /\bwhere(?:'s| is)\s+([A-Za-zÀ-ɏ][\wÀ-ɏ .'-]{1,40}?)\s*[?.!]*$/i,
+                  /\b(?:in|for|of|at|to|near)\s+([A-Za-zÀ-ɏ][\wÀ-ɏ .'-]{1,40}?)(?:\s+(?:today|tomorrow|tonight|now|this week|please|on a map))?\s*[?.!]*$/i];
+  function placeIn(t) {
+    var known = Object.keys(CITIES).filter(function (c) { return t.toLowerCase().indexOf(c) >= 0; })[0];
+    if (known) return known;
+    for (var i = 0; i < PLACE_IN.length; i++) {
+      var m = PLACE_IN[i].exec(t), name = m ? m[1].replace(/^(the|a)\s+/i, "").trim() : "";
+      if (name && !/^(the )?(weather|map|world|it|there|here|me|my area|work|bed|home|you)$/i.test(name)) return name;
+    }
+    return "";
+  }
+  function hereName() {
+    try {
+      var z = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+      return z.indexOf("/") > 0 ? z.split("/").pop().replace(/_/g, " ") : "";
+    } catch (e) { return ""; }
+  }
+  var SKY = { 0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "cloudy", 45: "foggy", 48: "foggy", 51: "light drizzle",
+              53: "drizzle", 55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain", 66: "freezing rain",
+              67: "freezing rain", 71: "light snow", 73: "snow", 75: "heavy snow", 77: "snow", 80: "showers", 81: "showers",
+              82: "heavy showers", 85: "snow showers", 86: "snow showers", 95: "thunderstorms", 96: "thunderstorms with hail",
+              99: "thunderstorms with hail" };
+  function weather(t) {
+    var asked = placeIn(t), where = asked || hereName() || "Singapore", tomorrow = /\btomorrow\b/i.test(t);
+    return { later: function () {
+      return place_(where).then(function (p) {
+        return fetch("https://api.open-meteo.com/v1/forecast?latitude=" + p.lat + "&longitude=" + p.lon +
+          "&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min," +
+          "precipitation_probability_max&timezone=auto&forecast_days=2").then(function (r) { return r.json(); }).then(function (w) {
+          var d = w.daily, i = tomorrow ? 1 : 0, rain = d.precipitation_probability_max[i];
+          var day = (tomorrow ? "Tomorrow" : "Today") + " in " + p.name + ": " + (SKY[d.weather_code[i]] || "mixed") + ", " +
+            Math.round(d.temperature_2m_min[i]) + "° to " + Math.round(d.temperature_2m_max[i]) + "°, " +
+            (rain == null ? "" : rain + "% chance of rain") + ".";
+          var now_ = !tomorrow && w.current ? " It's " + Math.round(w.current.temperature_2m) + "° and " +
+            (SKY[w.current.weather_code] || "mixed") + " now." : "";
+          var brolly = /umbrella|rain/i.test(t) ? (rain >= 40 ? " Take an umbrella." : " You shouldn't need an umbrella.") : "";
+          return { text: day + now_ + brolly + (asked ? "" : " (For somewhere else, say where.)"),
+                   done: ["Looked up the weather for " + p.name] };
+        });
+      }).catch(function () {
+        return { text: "I couldn't get the weather for " + where + " just now. On a Chat Computer I look it up on the web for you." };
+      });
+    } };
+  }
+  function mapOf(t) {
+    var name = placeIn(t) || "";
+    if (!name) return { text: "Which place? Say “map of” and its name, like “map of Tokyo”." };
+    if (CITIES[name.toLowerCase()]) {
+      return { text: "Here's " + title(name) + ".", done: ["Opened openstreetmap.org"], act: function () { map(CITIES[name.toLowerCase()]); } };
+    }
+    return { later: function () {
+      return place_(name).then(function (p) {
+        var b = [p.lon - 0.12, p.lat - 0.08, p.lon + 0.12, p.lat + 0.08].map(function (x) { return x.toFixed(4); });
+        return { text: "Here's " + p.name + (p.country ? ", " + p.country : "") + ".", done: ["Opened openstreetmap.org"],
+                 act: function () { map(b); } };
+      }).catch(function () {
+        return { text: "I couldn't find “" + clip(name, 40) + "” on the map. Try another name for it." };
+      });
+    } };
+  }
+  // A sum, or a percentage of a number: "what's 15% of 84.50", "12 * 7.5", "1/3 + 2".
+  function sum(t) {
+    var pc = /(\d+(?:\.\d+)?)\s*(?:%|percent)\s+of\s+(\d+(?:\.\d+)?)/i.exec(t);
+    var v, shown;
+    if (pc) { v = (+pc[1]) * (+pc[2]) / 100; shown = pc[1] + "% of " + pc[2]; }
+    else {
+      var e = t.replace(/^\s*(what'?s|what is|calculate|how much is|work out)\s*/i, "").replace(/[?=]+\s*$/, "")
+        .replace(/\btimes\b|×/gi, "*").replace(/\bplus\b/gi, "+").replace(/\bminus\b/gi, "-").replace(/\bdivided by\b|÷/gi, "/");
+      if (!/^[\d\s.+\-*/()]+$/.test(e) || !/\d\s*[+\-*/]\s*[\d(]/.test(e)) return null;
+      try { v = Function('"use strict";return (' + e + ")")(); } catch (x) { return null; }
+      shown = e.replace(/\s+/g, " ").trim();
+    }
+    if (typeof v !== "number" || !isFinite(v)) return null;
+    var r = Math.round(v * 100) / 100, exact = Math.round(v * 1e6) / 1e6;
+    return { text: shown + " is " + (r === exact ? r : r + " (" + exact + ")") + "." };
+  }
+  var JOKES = ["I told my computer I needed a break. It said: “No problem, I'll go to sleep.”",
+               "Why did the computer go to the doctor? It had a virus, and a terrible case of bytes.",
+               "I'd tell you a joke about Wi-Fi, but I'm not sure you'd get the connection."];
+  var OTHER = {
+    zh: "你好！这是 Chat Computer 的屏幕：Claude 来操作整台电脑，你只要说话、打字或触摸屏幕，它就替你完成。这个页面的回答是预先写好的，而且目前只用英文。试试输入 “play some piano music”。",
+    ja: "こんにちは！これは Chat Computer の画面です。Claude がコンピューター全体を動かし、話す・打つ・触るだけで何でもしてくれます。このページでは今のところ英語でお試しください。",
+    es: "¡Hola! Esto es Chat Computer: Claude maneja todo el ordenador, y tú solo hablas, escribes o tocas la pantalla. " +
+        "Por ahora esta página responde en inglés: prueba “play some piano music” o “show me a map of Tokyo”.",
+    ms: "Hai! Ini Chat Computer: Claude menjalankan seluruh komputer, dan anda hanya bercakap, menaip atau menyentuh skrin. " +
+        "Buat masa ini halaman ini menjawab dalam bahasa Inggeris: cuba “play some piano music”."
+  };
+  function language(t) {
+    if (/[぀-ヿ]/.test(t)) return "ja";
+    if (/[一-鿿]/.test(t)) return "zh";
+    if (/[¿¡]|\b(hola|qué|que es|cómo|esto|puedes|gracias)\b/i.test(t)) return "es";
+    if (/\b(apa (ini|itu|khabar)|boleh|awak|anda|terima kasih|saya)\b/i.test(t)) return "ms";
+    return "";
+  }
+  // Asked to write, explain or translate something: only an AI can (Chrome's built-in one when there is one, else an
+  // honest note, see fallback), whatever else the words mention ("write an email to my boss" isn't about Jane's).
+  var OPEN_ENDED = /\b(write|draft|compose|poem|story|essay|explain|summari[sz]e|translate|how do you say|in (japanese|french|spanish|german|chinese|korean|italian)|recipe for|how (do i|to) (make|cook|bake)|plan (a|my)|itinerary|advice|tips|capital of|python|javascript)\b/i;
+  // What was asked for, for the honest note: "I can't write a recipe on this page without an AI".
+  var WANTS = [[/recipe|cook|bake/i, "write a recipe"], [/poem/i, "write a poem"], [/story/i, "write a story"],
+               [/email|letter/i, "write an email"], [/python|javascript|code|function/i, "write code"],
+               [/translate|how do you say|in (japanese|french|spanish|german|chinese|korean|italian)/i, "translate"],
+               [/explain|summari/i, "explain that"], [/plan|itinerary|trip/i, "plan that"], [/advice|tips/i, "give advice"]];
   var INTENTS = [
     // Closing, and the volume, before music: "stop the music", "close the song" or "turn the music down" have music
     // words in them too (and would start it again).
@@ -442,30 +592,119 @@
       return { text: up ? "Volume is 60%." : "Volume is 40%.", done: [up ? "Turned the volume up" : "Turned the volume down"],
         act: function () { setVolume(up ? 60 : 40); } };
     }],
-    [/\b(music|song|songs|piano|play|playing|spotify|youtube|lofi|jazz)\b/i, function () {
+    // Who's answering, and who made it.
+    [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|ai|real|human|bot|model)\b|^(who are you|are you real)\b/i, function () {
+      return { text: (nano.state === "available" && nano.session ? "Right now " + AI.browser + "'s built-in AI (" + AI.model + ") is answering, on your " +
+        "device, with what's written here about Chat Computer." : "On this page my answers are written in advance.") +
+        " On a real Chat Computer, Claude answers, through your own Claude plan. " + REAL };
+    }],
+    [/\bwho (made|built|makes|created|is behind)\b|\bwho'?s behind\b|\bmade by\b|\banthropic\b/i, function (t) {
+      return { text: (/\banthropic\b/i.test(t) && /\bis (this|it)|made by\b/i.test(t) ? "No. " : "") + FACTS.indie };
+    }],
+    [/\b(real|my real|actual)\b.*\bmessages?\b|\bmessages?\b.*\b(real|fake|made up)\b|\bare these (mine|real)\b/i, function () {
+      return { text: "No, they're made up for this page. On a Chat Computer, Messages shows yours, from the email and chat accounts you connect." };
+    }],
+    [/\b(my (actual|real|own) (computer|files|pc)|on my (computer|pc|laptop)|control my (pc|computer))\b/i, function () {
+      return { text: "Not from this page: a website can't reach your computer, and the files here are made up. Installed, " +
+        "Chat Computer opens your own files, from your Windows folders too." };
+    }],
+    [/\bwhat (can'?t|can not|cannot) you do\b|\byour limits\b|\bwhat don'?t you do\b/i, function () {
+      return { text: "On this page I can only show a few things: music the browser makes, maps, timers, the weather and the made-up " +
+        "messages and files. Real answers need Claude (Connect Claude) or the AI built into Chrome and Edge. On a Chat Computer, Claude does " +
+        "most of what a computer does, by talking; it doesn't run Windows or Mac apps (it uses websites instead), and " +
+        "Windows stays one restart away." };
+    }],
+    // Getting it: what it needs, what it costs, whether it's safe.
+    [/\b(install|download|get it|get this|buy|where (can|do) i get|how (do|can) i (get|try|use) (it|this|chat ?computer)|sign ?up|waitlist)\b|^download\b/i, function () {
+      return { text: FACTS.soon + " " + FACTS.free + " " + FACTS.pc + " Macs with M1, M2 or M3 too. Until then, this page shows what it does: " + TRY };
+    }],
+    [/\b(price|cost|costs|how much|free|paid|pay|subscription|charge)\b/i, function () { return { text: FACTS.free + " " + FACTS.soon }; }],
+    [/\b(mac|macbook|imac|mac mini|macos|apple)\b/i, function () { return { text: "Yes. " + FACTS.mac + " " + FACTS.soon }; }],
+    [/\b(delete|remove|wipe|replace|erase|lose|keep|safe)\b.*\bwindows\b|\bwindows\b.*\b(safe|deleted?|removed?|stay|gone|still)\b|\bdual ?boot\b/i, function () {
+      return { text: "No. " + FACTS.pc + " You can go back to Windows for one restart, every day, or remove Chat Computer for good." };
+    }],
+    [/\bwindows ?(10|11|7|8)\b|\b(old|older|my) (laptop|pc|computer)\b.*\b(use|run|work|install)\b/i, function () {
+      return { text: "Very likely. " + FACTS.pc + " It installs next to Windows 10 or 11, which stays. " + FACTS.soon };
+    }],
+    [/\b(requirements?|what do i need|system requirements|specs|minimum|need to (run|use|install))\b/i, function () {
+      return { text: "A Windows PC that starts in UEFI mode (any from the last ten years) with about 70 GB free, or a Mac with " +
+        "M1, M2 or M3; the internet; and a Claude Pro or Max plan. " + FACTS.use + " " + FACTS.soon };
+    }],
+    [/\b(privacy|private|my data|data|secure|security|safe to use|track|spy|listening to me)\b/i, function () {
+      return { text: "On this page, what you type stays in your browser, unless you connect Claude (then it goes to Anthropic) " +
+        "or ask for a map or the weather (only the place's name goes to Open-Meteo). The AI built into Chrome and Edge runs on your device. " +
+        FACTS.private };
+    }],
+    [/\b(do i need|need|require|have to have)\b.*\b(airpods|headphones|earbuds|a keyboard|a mouse|a touch ?screen)\b/i, function () {
+      return { text: "No. " + FACTS.use + " AirPods are for talking to it." };
+    }],
+    // What it is.
+    [/\b(operating system|an os|is (this|it) an? (os|operating))\b/i, function () {
+      return { text: "Yes, in a way: Chat Computer runs the whole computer, with Claude in charge instead of a desktop. Underneath, " +
+        "it uses Linux (Ubuntu on a PC) for Wi-Fi, sound and the screen, next to Windows or macOS. This page shows its screen. " + TRY };
+    }],
+    // Someone choosing for a parent: whether it fits them, and what setting it up takes (README's "Installing").
+    // Websites can't use the camera or microphone in Chat Computer yet (it turns their requests down), so no calls.
+    [/\b(father|mother|dad|mum|mom|parents?|grand(ma|pa|mother|father)|elderly|older person|senior)\b.*\b(computer|laptop|pc|windows|struggles?|technology|tech)\b/i, function (t) {
+      var she = /\b(mother|mum|mom|grandma|grandmother)\b/i.test(t), he = /\b(father|dad|grandpa|grandfather)\b/i.test(t);
+      var p = she && !he ? "She just says or types what she wants" : he && !she ? "He just says or types what he wants" :
+        "They just say or type what they want";
+      return { text: "Chat Computer is made for that: there's no desktop, no menus and no apps to learn. " + p + ", like the news " +
+        "or a YouTube video, and it does it, on a big, plain screen. Video calls are the " +
+        "exception: it can't make them yet.\n\nSetting it up takes a keyboard and mouse, once: on the Windows PC you run Chat " +
+        "Computer Setup and sign in to Claude, and it makes room and installs itself next to Windows, usually in well under an " +
+        "hour; Windows stays. The PC must start in UEFI mode (any from the last ten years) and have about 70 GB free. " +
+        FACTS.free + " " + FACTS.soon };
+    }],
+    [/^\s*(hi|hello|hey|hiya|yo|good (morning|afternoon|evening)|\u{1F44B}|help)( there| claude| chat ?computer| everyone| all)?[\s!.,?]*$|\bwhat can you do\b|\bhow does (this|it) work\b|\bwhat is (this|chat ?computer)\b|^what('?s| is) this\b|^\?+$/iu, function () {
+      return { text: "Hi! I'm Chat Computer: Claude, running the whole computer. You talk, type or touch, and I do it: open websites, " +
+        "play music, read your messages, look after your files and settings.\n\nOn this page my answers are written in advance " +
+        "(or, in Chrome and Edge, come from their built-in AI), and what you type stays in your browser. " + REAL + " " + FACTS.indie + " " + TRY };
+    }],
+    [/^\s*(how are you|how'?s it going|how do you do)\b/i, function () { return { text: "I'm good, thanks! What would you like to try? " + TRY }; }],
+    [/\b(useless|stupid|dumb|rubbish|sucks?|hate you|terrible|worst)\b/i, function () {
+      return { text: "Sorry I'm not much help yet: on this page my answers are written in advance. " + REAL + " " + TRY };
+    }],
+    // Things it can show or do here.
+    [/^(?=.*\b(youtube|videos?)\b)(?=.*\b(cats?|dogs?|funny|of|about|music video)\b)|\bplay\s+(?!(some|me some|music|a song|songs|piano|lofi|jazz|something)\b)([a-z][\w' &-]{2,40})$/i, function (t) {
+      var q = t.replace(/^\s*(please\s+)?(show me|play|find|put on)\s+(me\s+)?(a\s+|some\s+)?/i, "").replace(/\s+on youtube\b/i, "").trim();
+      return youtubeSearch(q || t);
+    }],
+    [/\b(music|song|songs|piano|play|playing|spotify|lofi|jazz|relax|calm|chill)\b/i, function () {
       return { text: "Playing some calm piano.", done: ["Played some calm piano"], act: piano };
     }],
-    [/\b(hi|hello|hey|good (morning|afternoon|evening))\b|^help\b|what can you do|how does (this|it) work|what is (this|chatcomputer)/i, function () {
-      return { text: "Hi! I'm Chat Computer: Claude, running the whole computer. You talk, type or touch, and I do it: open websites, " +
-        "play music, read your messages, look after your files and settings.\n\nIn this demo my answers are written in advance, " +
-        "and what you type stays in your browser. " + REAL + " Chat Computer is an independent project, not made by Anthropic. " + TRY };
+    [/\b(directions|how (do|can) i get (from|to)|route to|how far)\b/i, function (t) {
+      var m = /from\s+(.+?)\s+to\s+(.+?)[?.!]*$/i.exec(t) || /to\s+(.+?)[?.!]*$/i.exec(t);
+      var url = "https://www.google.com/maps/dir/?api=1" + (m && m[2] ? "&origin=" + encodeURIComponent(m[1]) + "&destination=" + encodeURIComponent(m[2])
+        : m ? "&destination=" + encodeURIComponent(m[1]) : "");
+      return { text: "This page can't plan routes, so here's Google Maps with the directions, a click away. On a Chat Computer I'd " +
+        "open it right here and tell you the way.", done: ["Showed a link to Google Maps"],
+        act: function () { show({ html: link(url, "Directions", "On Chat Computer, Google Maps opens right here. Other sites can't show inside this page.") }); } };
     }],
-    [/\b(map|maps|where is|directions|how far)\b/i, function (t) {
-      var name = Object.keys(CITIES).filter(function (c) { return t.toLowerCase().indexOf(c) >= 0; })[0] || "singapore", b = CITIES[name];
-      var label = name.replace(/\b\w/g, function (c) { return c.toUpperCase(); });
-      return { text: "Here's " + label + ".", done: ["Opened openstreetmap.org"], act: function () { map(b); } };
+    [/\b(map|maps|where is|where's|show me .+ on a map)\b/i, mapOf],
+    [/\b(timer|countdown|stopwatch|remind me in|tell me when)\b|\bboil(ing)? (an? )?eggs?\b/i, function (t) {
+      var m = /(\d+)\s*(min|minute|m\b)/i.exec(t), eggs = /\beggs?\b/i.test(t), mins = m ? Math.min(180, +m[1]) : eggs ? 9 : 10;
+      return { text: (eggs && !m ? "A 9-minute timer for hard-boiled eggs (6 minutes for soft), on the screen: press Start." :
+        "A " + mins + "-minute timer, on the screen: press Start. I made it just now: on Chat Computer I can make any little page or app like this."),
+        done: ["Made a timer"], act: function () { show({ html: timer(mins) }); } };
     }],
-    [/\b(timer|countdown|stopwatch)\b/i, function (t) {
-      var m = /(\d+)\s*(min|minute)/i.exec(t), mins = m ? Math.min(180, +m[1]) : 10;
-      return { text: "A " + mins + "-minute timer, on the screen. I made it just now: on Chat Computer I can make any little page " +
-        "or app like this.", done: ["Made a timer"], act: function () { show({ html: timer(mins) }); } };
+    [/\b(weather|rain|raining|forecast|temperature|umbrella|sunny|hot|cold) ?(today|tomorrow|outside|like|in|now)?\b/i, weather],
+    [/\b(news|headlines)\b/i, function () {
+      return { text: "This page can't look up the news. On a Chat Computer I read today's news for you, from the sites you like. " +
+        "BBC News is a click away, on the screen.", act: function () { show({ html: link("https://www.bbc.com/news", "BBC News", "On Chat Computer, news sites open right here.") }); } };
     }],
-    [/\b(weather|rain|raining|forecast|temperature|umbrella|sunny)\b/i, function () {
-      return { text: "I can't look things up in this demo, so here's a made-up forecast to show where it goes: a short answer here, " +
-        "the details on the screen.", act: function () {
-        show({ html: doc("Weather", "| | Morning | Afternoon | Evening |\n|---|---|---|---|\n| Today | 27\u00b0, cloudy | 31\u00b0, showers | 28\u00b0, clear |\n" +
-          "| Tomorrow | 26\u00b0, clear | 32\u00b0, sunny | 28\u00b0, clear |", "Made up for the demo. On Chat Computer this is today's real forecast.") });
-      } };
+    [/^(open |go to |show me )?(https?:\/\/)?(www\.)?([a-z0-9-]+\.(com|org|net|ai|io|co|sg|uk|de|fr|jp)(\.[a-z]{2})?)\b|^(google|youtube|gmail|facebook|instagram|netflix|wikipedia)[.!?]*$/i, function (t) {
+      var host = (/([a-z0-9-]+\.(com|org|net|ai|io|co|sg|uk|de|fr|jp)(\.[a-z]{2})?)/i.exec(t) || [])[1] ||
+        { google: "google.com", youtube: "youtube.com", gmail: "mail.google.com", facebook: "facebook.com", instagram: "instagram.com",
+          netflix: "netflix.com", wikipedia: "wikipedia.org" }[t.trim().replace(/[.!?]+$/, "").toLowerCase()];
+      return { text: "Other sites can't show inside this page, so " + host + " is a click away, on the screen. On a Chat Computer it opens right here, and I use it for you.",
+        done: ["Showed a link to " + host], act: function () { show({ html: link("https://" + host, host, "On Chat Computer, " + host + " opens right here. Other sites can't show inside this page.") }); } };
+    }],
+    [/\b(reply|answer|send|write back|text)\b.*\b(mum|mom|jane|alex|her|him|them|message|email)\b/i, function (t) {
+      var alex = /alex/i.test(t), jane = /jane/i.test(t);
+      return { text: "I can't send messages: Chat Computer reads your messages, but replying isn't possible yet. " +
+        (alex ? "Alex's" : jane ? "Jane's" : "Mum's") + " message is on the screen, so you can reply on your phone.",
+        act: function () { openMessage(alex ? "m3" : jane ? "m2" : "m1"); } };
     }],
     [/\b(jane|lunch|email|emails|e-mail|mail|inbox|gmail|outlook)\b/i, function () {
       return { text: "Jane says 12:30 at the usual place works for her, for lunch on Friday. Her emails are on the screen.", act: function () {
@@ -480,30 +719,190 @@
     }],
     [/\b(mum|mom|whatsapp|telegram|texts?|messages?|alex)\b/i, function (t) {
       var alex = /alex|telegram/i.test(t);
-      return { text: alex ? "Alex sent you the slides for Monday." : "Your mum asks if you're coming to dinner at 7 tonight, and to bring the photos from the trip.",
+      return { text: alex ? "Alex sent you the slides for Monday." : "You have two new messages. Your mum asks if you're coming to dinner at 7 " +
+        "tonight, and to bring the photos from the trip; Jane says 12:30 works for lunch on Friday.",
         act: function () { openMessage(alex ? "m3" : "m1"); } };
     }],
-    [/\b(packing|list|notes?|document|doc|write)\b/i, function () {
+    [/\bpacking( list)?\b|\b(open|show) (my )?(list|notes?)\b/i, function () {
       return { text: "Here's your packing list for Sunday.", act: function () { show({ html: PAGES.packing() }); } };
     }],
-    [/\b(wi-?fi|internet|network)\b/i, function () {
+    [/\b(wi-?fi|internet|network|online|connected)\b/i, function () {
       return { text: "You're on Home Wi-Fi, and the internet's working.", done: [] };
     }],
     [/\b(airpods|bluetooth|headphones|earbuds)\b/i, function () {
       return { text: "Connect AirPods, at the right of the message box, and you can talk to me through them.", done: [] };
     }],
-    [/\b(file|files|find|search|photo|photos|pictures?|beach)\b/i, function (t) {
+    [/\b(file|files|find|search|photo|photos|pictures?|beach|budget|resume|cv|recipes?|taxes)\b/i, function (t) {
       if (/beach|photo|picture/i.test(t)) return { text: "Here's Beach.jpg, from your Pictures.", act: function () { show({ html: PAGES.beach() }); } };
-      return { text: "Type / in the message box to search this computer's files: they show above the box as you type, and Enter opens one." };
+      var words = t.toLowerCase().replace(/\b(search|find|look for|open|show|my|me|the|files?|for|in|a|please)\b/g, " ").trim();
+      var found = words ? search(words) : [];
+      if (found.length) {
+        var f = found[0];
+        return { text: "Found " + f.name + ", in " + f.where + ". It's on the screen." + (found.length > 1 ? " (" + (found.length - 1) + " more match.)" : ""),
+          done: ["Opened " + f.name], act: function () { show({ html: PAGES[f.path]() }); } };
+      }
+      return { text: "Nothing in this page's files matches that. Type / in the message box to search them: they show above the box as you type, and Enter opens one." };
     }],
-    [/\b(thanks|thank you|cool|great|nice|awesome)\b/i, function () { return { text: "Any time." }; }],
-    [/./, function () {
-      return { text: "In this demo I only know a few things; on Chat Computer, Claude answers anything, and does it. " + REAL + " " + TRY };
+    [/\b(bored|boring|something fun|entertain me)\b/i, function () {
+      return { text: "How about some music? I've put on some calm piano. Or try “show me a map of Tokyo”, or ask me for the weather anywhere.",
+        done: ["Played some calm piano"], act: piano };
+    }],
+    [/\b(what'?s the date|what day|today'?s date|date today|what is the date)\b|^date[?.!]*$/i, function () {
+      return { text: "It's " + new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) + "." };
+    }],
+    [/\b(what time|the time|time now|time is it)\b|^time[?.!]*$/i, function () {
+      return { text: "It's " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + "." };
+    }],
+    [/\b(joke|make me laugh|something funny)\b/i, function () { return { text: JOKES[Math.floor(Math.random() * JOKES.length)] }; }],
+    [/^\s*(thanks|thank you|thx|ty|cheers|cool|great|nice|awesome|ok(ay)?|perfect)[\s!.,]*(very much|a lot|so much)?[\s!.]*$/i, function () {
+      return { text: "Any time." };
     }]
   ];
   function answer(text) {
+    var lang = language(text);
+    if (lang) return { text: OTHER[lang] };
+    var s = sum(text);
+    if (s) return s;
+    if (OPEN_ENDED.test(text)) return { ai: true };
     for (var i = 0; i < INTENTS.length; i++) if (INTENTS[i][0].test(text)) return INTENTS[i][1](text);
-    return { text: "" };
+    return { ai: true };
+  }
+  // A question only an AI can answer, with none here: say so, and how to get one.
+  function fallback(text) {
+    if (/^[\W\d_]*[a-z]{0,6}[\W\d_]*$/i.test(text) && !/\b(hi|ok)\b/i.test(text)) {
+      return { text: "I didn't catch that. " + TRY };
+    }
+    var chrome = nano.state === "downloadable" || nano.state === "downloading";
+    var want = WANTS.filter(function (w) { return w[0].test(text); })[0];
+    return { text: "I can't " + (want ? want[1] : "answer that") + " on this page without an AI: my answers here are written in advance. " +
+      (chrome ? "Your " + AI.browser + " has a free AI built in that can answer on your device: press “Free answers” at the right of the message box. " : "") +
+      REAL + " On a Chat Computer, Claude answers anything, and does it. " + TRY };
+  }
+
+  // ------------------------------------------------------------------ the browser's built-in AI (Gemini Nano), free
+  // Chrome on a computer (Windows, macOS, Linux) has a small AI built in, Gemini Nano, that runs on the device itself:
+  // nothing typed leaves it. Where it's there (LanguageModel, Chrome's Prompt API), it answers what the written answers
+  // can't, free, and its answer can also show something on the screen (a page it writes, a map, a timer...). It has to
+  // be downloaded once, which Chrome does only after a click: the "Free answers" button. Edge has the same with Phi-4-mini.
+  var nano = { state: "none", session: null, creating: null, progress: 0 };
+  var NANO_LANG = { expectedInputs: [{ type: "text", languages: ["en"] }], expectedOutputs: [{ type: "text", languages: ["en"] }] };
+  function nanoCheck() {
+    if (typeof LanguageModel === "undefined" || !LanguageModel.availability) return;
+    LanguageModel.availability(NANO_LANG).then(function (a) {
+      nano.state = a;
+      if (a === "available") nanoSession().catch(function () {});
+      drawTools();
+    }, function () { nano.state = "unavailable"; });
+  }
+  function nanoSystem() {
+    return "You answer on Chat Computer's website (chatcomputer.ai), a demo of Chat Computer's screen. You are " + AI.model + ", " +
+      AI.browser + "'s built-in AI, running on the visitor's device: you are not Claude. Facts: " + FACTS.what + " " + FACTS.indie + " " +
+      FACTS.free + " " + FACTS.soon + " " + FACTS.pc + " " + FACTS.mac + "\n\n" +
+      "Reply in one to three short, plain sentences, in English, without markdown. Anything longer (a recipe, a plan, an email " +
+      "draft, a poem, code, an explanation) goes on the screen: action show_page with a title and markdown, and your reply says " +
+      "in a sentence what it is. You can't look anything up on the internet: say so when asked for news or prices. Never make " +
+      "up facts about Chat Computer beyond those above.\n\nActions: none; show_page (title, markdown); show_map (place); " +
+      "play_music (soft piano the browser plays); youtube_search (query: a link to YouTube's search); open_website (url); " +
+      "open_message (id: m1 Mum on WhatsApp about dinner at 7, m2 Jane about lunch on Friday, m3 Alex with the slides); " +
+      "open_file (name: Packing list.md, Beach.jpg, Budget 2026.xlsx, Taxes 2025.pdf, Recipes.txt, Resume.docx); " +
+      "make_timer (minutes); set_volume (percent); close. Their messages and files are made up for the demo.";
+  }
+  function nanoSession(monitor) {
+    if (nano.session) return Promise.resolve(nano.session);
+    if (!nano.creating) {
+      var opts = { initialPrompts: [{ role: "system", content: nanoSystem() }] };
+      for (var k in NANO_LANG) opts[k] = NANO_LANG[k];
+      if (monitor) opts.monitor = monitor;
+      nano.creating = LanguageModel.create(opts).then(function (s) {
+        nano.session = s;
+        nano.state = "available";
+        drawTools();
+        return s;
+      }, function (e) { nano.creating = null; throw e; });
+    }
+    return nano.creating;
+  }
+  function nanoButton() {
+    if (nano.state === "available" || nano.state === "downloading" && nano.creating) return;
+    call("accountForm", { id: "nano", title: "Free answers, from " + AI.browser, ok: "Download it", text: [
+      AI.browser + " has a small AI built in, " + AI.model + ", that can answer here for free. It runs on this computer: what you type " +
+      "doesn't leave it.",
+      AI.browser + " downloads it once (a few gigabytes, from " + AI.maker + ") and keeps it for every site that uses it. The written answers " +
+      "work meanwhile.",
+      "For answers from Claude itself, use Connect Claude instead."] });
+  }
+  function nanoDownload() {
+    call("accountForm", null);
+    nano.state = "downloading";
+    drawTools();
+    nanoSession(function (m) {
+      m.addEventListener("downloadprogress", function (e) { nano.progress = Math.round((e.loaded || 0) * 100); drawTools(); });
+    }).then(function () { did("Turned on " + AI.browser + "'s built-in AI"); }, function (e) {
+      nano.state = "downloadable";
+      drawTools();
+      call("accountForm", { id: "nano-no", title: AI.browser + "'s AI didn't start", ok: "OK", text: [
+        AI.browser + " said: " + clip(e && e.message || "it couldn't", 160) + ".",
+        "It needs " + AI.browser + " on a computer with enough room and memory (see " + AI.browser + "'s built-in AI requirements). " +
+        "The written answers still work."] });
+    });
+  }
+  var NANO_SCHEMA = { type: "object", properties: {
+    reply: { type: "string" },
+    action: { type: "string", enum: ["none", "show_page", "show_map", "play_music", "youtube_search", "open_website", "open_message",
+                                     "open_file", "make_timer", "set_volume", "close"] },
+    title: { type: "string" }, markdown: { type: "string" }, place: { type: "string" }, query: { type: "string" },
+    url: { type: "string" }, id: { type: "string" }, name: { type: "string" }, minutes: { type: "integer" },
+    percent: { type: "integer" } }, required: ["reply", "action"] };
+  // What its answer says to show, done here (the same as the written answers do), and what to add to its words.
+  function nanoAct(r, you, uts) {
+    var a = r.action;
+    if (a === "show_page" && r.markdown) {
+      show({ html: doc(clip(r.title || "Page", 80), String(r.markdown), "Written by " + AI.browser + "'s built-in AI, on this device.") });
+      did("Showed “" + clip(r.title || "a page", 60) + "”", you, uts);
+    } else if (a === "show_map" && r.place) {
+      return Promise.resolve(mapOf("map of " + r.place)).then(function (m) { return m.later ? m.later() : m; })
+        .then(function (m) { if (m.act) m.act(); (m.done || []).forEach(function (d) { did(d, you, uts); }); return ""; });
+    } else if (a === "play_music") { piano(); did("Played some calm piano", you, uts); }
+    else if (a === "youtube_search" && r.query) { var y = youtubeSearch(r.query); y.act(); y.done.forEach(function (d) { did(d, you, uts); }); }
+    else if (a === "open_website" && /^https?:\/\/[^\s]+$/i.test(r.url || "")) {
+      var host = r.url.replace(/^https?:\/\/(www\.)?/i, "").split(/[/?#]/)[0];
+      show({ html: link(r.url, host, "On Chat Computer, " + host + " opens right here. Other sites can't show inside this page.") });
+      did("Showed a link to " + host, you, uts);
+    } else if (a === "open_message" && THREADS[r.id]) openMessage(r.id);
+    else if (a === "open_file") {
+      var f = FILES.filter(function (x) { return x.name.toLowerCase() === String(r.name || "").toLowerCase(); })[0];
+      if (f) { show({ html: PAGES[f.page]() }); did("Opened " + f.name, you, uts); }
+    } else if (a === "make_timer") {
+      var mins = Math.max(1, Math.min(180, parseInt(r.minutes, 10) || 10));
+      show({ html: timer(mins) });
+      did("Made a timer", you, uts);
+    } else if (a === "set_volume" && r.percent != null) setVolume(Number(r.percent));
+    else if (a === "close") close();
+    return Promise.resolve("");
+  }
+  function nanoTurn(text, you, uts, id) {
+    call("aiStart", id);
+    nanoSession().then(function (s) {
+      return s.prompt(text, { responseConstraint: NANO_SCHEMA }).catch(function (e) {
+        if (e && /quota|context|too (long|large)/i.test(e.name + " " + e.message)) {       // the conversation's grown too long:
+          try { s.destroy(); } catch (x) {}                                                // start it again
+          nano.session = null;
+          nano.creating = null;
+          return nanoSession().then(function (s2) { return s2.prompt(text, { responseConstraint: NANO_SCHEMA }); });
+        }
+        throw e;
+      });
+    }).then(function (raw) {
+      var r;
+      try { r = JSON.parse(raw); } catch (e) { r = { reply: String(raw || ""), action: "none" }; }
+      var words = String(r.reply || "").replace(/[*_`#]+/g, "").trim() || "Done.";
+      return Promise.resolve(nanoAct(r, you, uts)).then(function () {
+        stream(id, words, function () { say(words); });
+      });
+    }).catch(function () {
+      var f = fallback(text);
+      stream(id, f.text, function () { say(f.text); });
+    });
   }
   function setScale(s) {
     scale = Math.max(0.6, Math.min(2.2, s));
@@ -526,13 +925,18 @@
     call("user", you, text, true);
     if (claude.key) { claudeTurn(text, you, uts, id); return; }
     var r = answer(text);
+    if (r.ai && nano.state === "available") { setTimeout(function () { nanoTurn(text, you, uts, id); }, 120); return; }
+    if (r.ai) r = fallback(text);
     setTimeout(function () {
       call("aiStart", id);
-      setTimeout(function () {
-        if (r.act) r.act();
-        (r.done || []).forEach(function (d) { did(d, you, uts); });
-        stream(id, r.text || "", function () { say(r.text || ""); });
-      }, 600);
+      var waited = Date.now();
+      Promise.resolve(r.later ? r.later() : r).then(function (a) {
+        setTimeout(function () {
+          if (a.act) a.act();
+          (a.done || []).forEach(function (d) { did(d, you, uts); });
+          stream(id, a.text || "", function () { say(a.text || ""); });
+        }, Math.max(0, 600 - (Date.now() - waited)));
+      });
     }, 120);
   }
   function did(text, you, uts) { call("done", { id: uid("d"), ts: now(), text: text, prompt_id: you || "", prompt_ts: uts || now() }); }
@@ -581,9 +985,13 @@
   // stays in this browser (localStorage), and what's used is billed to it. (Anthropic doesn't let other apps sign
   // in with a Claude Pro or Max plan, so a key it is.)
   var API = "https://api.anthropic.com/v1/";
-  var MODEL = "claude-sonnet-5-5", MODEL_NAME = "Sonnet 5.5";      // as on a Chat Computer (chatcomputer/config.py)
+  // The model a Chat Computer uses (chatcomputer/config.py), but at the API's own effort (medium) rather than the
+  // computer's max, for quicker answers. It always thinks first, and max_tokens counts the thinking too.
+  var MODEL = "claude-opus-5-5", MODEL_NAME = "Opus 5.5", MAX_TOKENS = 16000;
   var KEY = "chatcomputer-demo-claude-key";
-  var claude = { key: store(KEY) || "", talk: [], search: true };
+  // talk: the conversation, as sent; system: its system prompt, made when it starts and kept as it is, as the
+  // thinking Claude sends back is only valid while the system prompt, the tools and the messages before it don't change.
+  var claude = { key: store(KEY) || "", talk: [], system: "", search: true };
   function headers(key) {
     return { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json",
              "anthropic-dangerous-direct-browser-access": "true" };
@@ -595,9 +1003,13 @@
       return "- " + m.id + ", " + m.label + ", from " + m.who + ", " + when(m.ts) + (m.unread ? " (unread)" : "") + ": " + lines.join(" / ");
     }).join("\n");
   }
-  function systemPrompt() {
-    var d = new Date(), zone = "";
+  function clock() {
+    var zone = "";
     try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+    return new Date().toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "numeric",
+                                               minute: "2-digit" }) + (zone ? ", " + zone : "");
+  }
+  function systemPrompt() {
     return "You are Chat Computer: Claude, running a whole computer. People talk, type or touch, and you do things for them. " +
       "Right now you're in Chat Computer's demo website (chatcomputer.ai), in the person's web browser, with their own Claude " +
       "API key. The screen is Chat Computer's: Messages at the left, What's done at the right (each thing you do is listed " +
@@ -615,8 +1027,7 @@
       "say so in a sentence.\n\n" +
       "Their messages and files here are made up for the demo:\n" + inbox() + "\n\nFiles:\n" +
       FILES.map(function (f) { return "- " + f.name + ", in " + f.where; }).join("\n") +
-      "\n\nIt's " + d.toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit" }) +
-      (zone ? " (" + zone + ")" : "") + ".";
+      "\n\nEach of their messages starts with the date and time it was sent, in brackets.";
   }
   function obj(props, required) { return { type: "object", properties: props, required: required || [] }; }
   var TOOLS = [
@@ -705,7 +1116,8 @@
   }
   // One turn: Claude's answer streams in, its tools run here, and it goes on until it's done (at most 8 rounds).
   function claudeTurn(text, you, uts, id) {
-    var said = "", gap = false, rounds = 0, asked = { role: "user", content: text };
+    var said = "", gap = false, rounds = 0, asked = { role: "user", content: "[" + clock() + "] " + text };
+    if (!claude.talk.length) claude.system = systemPrompt();
     claude.talk.push(asked);
     trimTalk();
     call("aiStart", id);
@@ -718,7 +1130,7 @@
     (function round() {
       if (++rounds > 8) { finish(); return; }
       gap = true;
-      message(onText, you, uts).then(function (msg) {
+      message(onText, you, uts, claude.talk.indexOf(asked)).then(function (msg) {
         claude.talk.push({ role: "assistant", content: msg.content });
         if (msg.stop === "pause_turn") { round(); return; }
         var uses = msg.content.filter(function (b) { return b.type === "tool_use"; });
@@ -767,11 +1179,20 @@
     e.noSearch = status === 400 && /web.?search/i.test(msg || "");
     return e;
   }
+  // The conversation as sent: the thinking of turns already over is left out (allowed outside a turn's tool use, and
+  // still right after older turns are trimmed away); this turn's, from its question on, goes back as it came.
+  function sent(from) {
+    return claude.talk.map(function (m, i) {
+      if (i >= from || m.role !== "assistant" || typeof m.content === "string") return m;
+      var c = m.content.filter(function (b) { return b.type !== "thinking" && b.type !== "redacted_thinking"; });
+      return { role: "assistant", content: c.length ? c : [{ type: "text", text: "\u2026" }] };
+    });
+  }
   // One request, streamed: text as it comes, and the whole message (its blocks, cleaned) at the end.
-  function message(onText, you, uts) {
-    var body = { model: MODEL, max_tokens: 1500, stream: true,
-                 system: [{ type: "text", text: systemPrompt(), cache_control: { type: "ephemeral" } }],
-                 tools: tools(), messages: claude.talk };
+  function message(onText, you, uts, from) {
+    var body = { model: MODEL, max_tokens: MAX_TOKENS, stream: true,
+                 system: [{ type: "text", text: claude.system || systemPrompt(), cache_control: { type: "ephemeral" } }],
+                 tools: tools(), messages: sent(from) };
     return fetch(API + "messages", { method: "POST", headers: headers(claude.key), body: JSON.stringify(body) }).then(function (res) {
       if (!res.ok) return res.text().then(function (t) { throw apiError(res.status, t); });
       var reader = res.body.getReader(), dec = new TextDecoder(), buf = "", blocks = [], stop = null, failed = null;
@@ -956,20 +1377,27 @@
   var KEY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16.5 6.5l2.5 2.5M14 9l2 2"/></svg>';
   var PODS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3a4 4 0 0 0-4 4 4 4 0 0 0 3 3.87V19a1.5 1.5 0 0 0 3 0V7a4 4 0 0 0-2-4z"/>' +
     '<path d="M16 3a4 4 0 0 1 4 4 4 4 0 0 1-3 3.87V19a1.5 1.5 0 0 1-3 0V7a4 4 0 0 1 2-4z"/></svg>';
+  var SPARK_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
   var tools_ = null;
   function drawTools() {
     if (!tools_) {
       tools_ = document.createElement("div");
       tools_.id = "demo-tools";
-      tools_.innerHTML = '<button type="button" id="demo-claude" tabindex="-1">' + KEY_ICON + '<span class="label"></span></button>' +
+      tools_.innerHTML = '<button type="button" id="demo-nano" tabindex="-1" hidden>' + SPARK_ICON + '<span class="label"></span></button>' +
+        '<button type="button" id="demo-claude" tabindex="-1">' + KEY_ICON + '<span class="label"></span></button>' +
         '<button type="button" id="demo-airpods" tabindex="-1">' + PODS_ICON + '<span class="dot"></span><span class="label"></span></button>';
       $("box").appendChild(tools_);
       tools_.addEventListener("mousedown", function (e) { e.preventDefault(); });       // typing stays in the box
       $("demo-claude").addEventListener("click", claudeButton);
+      $("demo-nano").addEventListener("click", nanoButton);
       $("demo-airpods").addEventListener("click", talkButton);
       new ResizeObserver(function () { requestAnimationFrame(placeTools); }).observe($("box"));
     }
-    var c = $("demo-claude"), p = $("demo-airpods");
+    var c = $("demo-claude"), p = $("demo-airpods"), g = $("demo-nano");
+    // Chrome's AI: offered while it can be downloaded, its progress while it is; once on, it just answers.
+    g.hidden = !!claude.key || !(nano.state === "downloadable" || nano.state === "downloading");
+    label(g, nano.state === "downloading" ? ["", "Downloading", nano.progress ? " " + nano.progress + "%" : ""] : ["", "Free answers", ""]);
+    g.title = nano.state === "downloading" ? AI.browser + " is downloading its built-in AI" : "Answers from " + AI.browser + "'s built-in AI, free, on this device";
     c.classList.toggle("on", !!claude.key);
     label(c, claude.key ? ["", "Claude", " connected"] : ["Connect ", "Claude", ""]);
     c.title = claude.key ? "Claude answers, with your API key. Click to disconnect it." : "Real Claude here, with your own API key";
@@ -994,17 +1422,19 @@
   function placeTools() {
     if (!tools_) return;
     var box = $("box"), rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    tools_.classList.remove("stack", "short", "compact", "inside");
+    tools_.classList.remove("stack", "short", "compact", "inside", "rise");
     if (tools_.parentNode !== box) box.appendChild(tools_);
     var b = box.getBoundingClientRect(), limit = $("composer").getBoundingClientRect().right;
     var t = $("toggle-bottom"), tr = t.getBoundingClientRect();
     if (tr.width && getComputedStyle(t).display !== "none") limit = Math.min(limit, tr.left);
     var room = limit - b.right - 1.25 * rem;
+    // A stack taller than the box (three buttons) that would reach the window's bottom edge rises from the box's bottom.
+    function rise() { if (tools_.getBoundingClientRect().bottom > innerHeight - 0.25 * rem) tools_.classList.add("rise"); }
     if (tools_.offsetWidth <= room) return;
     tools_.classList.add("stack");
-    if (tools_.offsetWidth <= room) return;
+    if (tools_.offsetWidth <= room) { rise(); return; }
     tools_.classList.add("short");
-    if (tools_.offsetWidth <= room) return;
+    if (tools_.offsetWidth <= room) { rise(); return; }
     tools_.classList.remove("stack", "short");
     tools_.classList.add("compact");
     if (tools_.offsetWidth <= room) return;
@@ -1028,6 +1458,7 @@
         }));
         call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
         drawTools();
+        nanoCheck();
         break;
       case "send": ask(String(msg.text || "")); break;
       case "drafting": drafting = !!msg.on; break;
@@ -1060,6 +1491,7 @@
         if (msg.form === "claude") { connectClaude(String(values.key || "").trim()); break; }
         if (msg.form === "claude-off") { forget(); call("accountForm", null); did("Disconnected Claude"); break; }
         if (msg.form === "talk") { call("accountForm", null); startTalking(); break; }
+        if (msg.form === "nano") { nanoDownload(); break; }
         call("accountForm", null);
         break;
       }

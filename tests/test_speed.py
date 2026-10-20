@@ -343,6 +343,12 @@ class SlowParts(FakePlatform):
     def audio_status(self):
         return self._slow({"outputs": []})
 
+    def busiest(self, n=5):                 # measured over half a second on a real computer
+        return self._slow({"cpu_percent": 3.0, "programs": []})
+
+    def camera_status(self):
+        return self._slow({"cameras": [], "in_use_by": []})
+
     def windows_status(self):
         raise RuntimeError("no helper")
 
@@ -354,10 +360,10 @@ def test_the_status_check_asks_every_part_side_by_side(tmp_path):
     out = _call(server, "system_status", {})
     took = time.monotonic() - t0
     st = json.loads(out.content[0].text)
-    assert took < 1.2                       # five parts of 0.4 s each: 2 s one after another
+    assert took < 1.2                       # seven parts of 0.4 s each: 2.8 s one after another
     assert st["internet"] is True and st["wifi"] == {"connected_to": "Home"}
     assert st["windows_drive"] == "unavailable (no helper)"
-    assert list(st)[:6] == ["internet", "machine", "wifi", "bluetooth", "sound", "windows_drive"]
+    assert list(st)[:8] == ["internet", "machine", "busy", "wifi", "bluetooth", "sound", "camera", "windows_drive"]
 
 
 def test_volume_zero_is_silence_not_the_default(tmp_path):

@@ -323,3 +323,59 @@ def test_streamed_words_are_drawn_as_the_whole_message_would_be():
     res = json.loads(r.stdout.strip().splitlines()[-1])
     assert res["checked"] > 900 and res["bad"] == 0, res["examples"]
     assert res["ol"].startswith('<ol><li>one</li></ol><ol start="2"><li>two</li></ol><ol start="3">')
+
+
+@pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
+                    reason="xvfb-run or xdotool not available")
+def test_the_lock_screen_covers_everything_and_only_takes_a_pin():
+    # Locked: the time and a keypad over everything (the conversation, the sidebars, the message box). Typing goes
+    # only into the PIN box, which keeps only digits; Enter sends the PIN to Chat Computer to check (the "unlock" page
+    # event), never a message to Claude. The keypad types and deletes; a wrong PIN says so; unlocked, it all comes
+    # back.
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).with_name("screen_lock_check.py")
+    r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable, str(script)],
+                       capture_output=True, text=True, timeout=120)
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
+    assert "timeout" not in res, res
+    assert not res["before"]["locked"] and res["before"]["column"]
+    lk = res["locked"]
+    assert lk["locked"] and lk["lock_shown"] and not lk["column"] and not lk["composer"] and lk["pin_focused"]
+    assert lk["time"]
+    assert res["events"] == [{"type": "unlock", "pin": "24"}] and res["sent_text"] == []
+    assert res["typed"]["box"] == "" and res["pad"]["pin"] == "137"
+    assert res["wrong"]["error"] == "That's not the PIN." and res["wrong"]["pin"] == ""
+    un = res["unlocked"]
+    assert not un["locked"] and not un["lock_shown"] and un["column"] and un["composer"]
+
+
+@pytest.mark.skipif(not __import__("shutil").which("xvfb-run"), reason="xvfb-run not available")
+def test_pdfs_and_where_what_s_open_is():
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).with_name("screen_pdf_check.py")
+    r = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable, str(script)],
+                       capture_output=True, text=True, timeout=150)
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
+    assert "timeout" not in res and "error" not in res, res
+    # Nothing open: no place for it, and nothing to print.
+    assert res["rect_chat"] is None and res["open_nothing"] == {"ok": False, "error": "Nothing is open on the screen."}
+    # A document printed without being shown: its words, on the paper this country uses (A4 or Letter).
+    assert res["doc"]["ok"] and res["doc_shown"] == "chat"
+    d = res["doc_pdf"]
+    assert d["exists"] and d["pages"] == 1 and d["size_pt"] in ([595, 842], [612, 792])
+    assert "Ren Shu" in d["text"] and "Curriculum Vitae" in d["text"] and "Designer" in d["text"]
+    # What's open: where it is on the screen, and printed as it is.
+    x, y, w, h = res["rect_open"]
+    sw, sh = res["screen"]
+    assert 0 <= x and 0 <= y and 200 < w <= sw and 200 < h <= sh
+    assert res["open"]["ok"] and "Packing list" in res["open_pdf"]["text"] and "Passport" in res["open_pdf"]["text"]

@@ -93,7 +93,8 @@ FORBIDDEN_PATTERNS = [
     (re.compile(r"--no-preserve-root"), "That isn't allowed."),
     (re.compile(r":\(\)\s*\{\s*:\|:&\s*\};:"), "That isn't allowed."),
     (re.compile(r"\bsudo\b(?!\s+-n\s+/usr/local/libexec/chatcomputer/chatcomputer-root)"),
-     "Admin commands go through Chat Computer's own tools (install_apps, update_system, power) instead of sudo."),
+     "Admin commands go through Chat Computer's own tools instead of sudo (software installs and updates "
+     "programs; drives, printer, display, power and set_timezone do the rest)."),
     (re.compile(r"\bchmod\s+(-R\s+)?[0-7]*7[0-7]*\s+/(\s|$)|\bchown\s+-R\s+\S+\s+/(\s|$)"), "That isn't allowed."),
 ]
 

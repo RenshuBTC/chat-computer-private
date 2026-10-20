@@ -33,11 +33,21 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     for call in ("XMLHttpRequest", "sendBeacon", "WebSocket", "EventSource", "navigator.geolocation"):
         assert call not in host, call
     # From elsewhere: a map when asked, and with the visitor's own key (Connect Claude) Anthropic's API, where every
-    # request goes, and YouTube's player for a video Claude plays.
+    # request goes, and YouTube's player for a video Claude plays. For a place's map or weather, Open-Meteo, sent only
+    # the place's name (then its latitude and longitude). YouTube's search, Google Maps and BBC News are only links,
+    # opened by the visitor in a new tab.
     assert set(re.findall(r"https?://[^/\"' ]+", host)) == {
-        "https://www.youtube-nocookie.com", "https://www.openstreetmap.org", "https://api.anthropic.com"}
+        "https://www.youtube-nocookie.com", "https://www.openstreetmap.org", "https://api.anthropic.com",
+        "https://geocoding-api.open-meteo.com", "https://api.open-meteo.com",
+        "https://www.youtube.com", "https://www.google.com", "https://www.bbc.com"}
     fetches = re.findall(r"fetch\(([^,)]+)", host)
-    assert fetches and all(f.startswith("API +") for f in fetches), fetches
+    assert sorted(f.split("?")[0] for f in fetches if not f.startswith("API +")) == [
+        '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search'], fetches
+    assert [f for f in fetches if "open-meteo" in f][0].endswith("&name=\" + encodeURIComponent(name")
+    for site in ("https://www.youtube.com/", "https://www.google.com/", "https://www.bbc.com/"):
+        for at in [m.start() for m in re.finditer(re.escape(site), host)]:
+            line = host[host.rfind("\n", 0, at):host.find("\n", at)]
+            assert "var url = " in line or "link(" in line, line
     assert host.count("x-api-key") == 1 and "anthropic-dangerous-direct-browser-access" in host
     assert "not made by Anthropic" in host and "written in advance" in host
     # Claude Pro or Max sign-ins aren't for other apps: a sign-in token is turned away, and the sheet says why.
@@ -104,7 +114,7 @@ def test_the_demo_works_in_a_browser():
     # A long answer while something is open: both messages in full above the box (no "more").
     long = res["fallback"]
     assert long["more"] == 0 and long["strip"][0] == "what's the meaning of life?"
-    assert long["strip"][1].startswith("In this demo I only know") and long["strip"][1].endswith("Type / to search the files.")
+    assert long["strip"][1].startswith("I can't answer that on this page without an AI") and long["strip"][1].endswith("Type / to search the files.")
     # Connect Claude: a key, checked with Anthropic; then Claude answers and does things here (a map, as asked).
     assert res["claude_sheet"]["sheet"] and res["claude_sheet"]["sheet_title"] == "Connect Claude"
     assert not res["claude_on"]["sheet"] and res["claude_on"]["tools"][0] == "Claude connected"
@@ -120,14 +130,40 @@ def test_the_demo_works_in_a_browser():
     assert not res["video_ended"]["content"] and res["video_ended"]["view"] is None
     api = res["api"]
     assert len(api) == 5 and all(a["url"] == "https://api.anthropic.com/v1/messages" for a in api)
-    assert all(a["key"] == "sk-ant-api03-demo-test-key" and a["direct"] == "true" and a["model"] == "claude-sonnet-5-5" for a in api)
+    assert all(a["key"] == "sk-ant-api03-demo-test-key" and a["direct"] == "true" and a["model"] == "claude-opus-5-5" for a in api)
     assert not api[0]["stream"] and api[1]["stream"] and "show_map" in api[1]["tools"] and "web_search" in api[1]["tools"]
     assert "tool_result" in api[2]["last"] and "toolu_1" in api[2]["last"]
+    # Opus 5.5 always thinks first, within max_tokens: room for it, at the API's own effort (nothing sent for either).
+    assert all(a["max_tokens"] == 16000 and a["thinking"] is None and a["effort"] is None for a in api[1:])
+    # Its thinking is only valid while the system prompt, the tools and the messages before it stay the same: the
+    # system prompt is the same all conversation (the time is in each question instead), the turn's own thinking
+    # goes back with the tool's result as it came, and a finished turn's is left out after.
+    assert len({a["system"] for a in api[1:]}) == 1 and "It's " not in api[1]["system"]
+    first_q = json.loads(api[1]["all"])[0]["content"]
+    assert re.fullmatch(r"\[\w+day \d{1,2} \w+ 20\d\d.*\] show me Tokyo", first_q), first_q
+    assert '"signature":"sig-toolu_1"' in api[2]["all"] and "sig-toolu_1" not in api[3]["all"] and "toolu_1" in api[3]["all"]
+    assert '"signature":"sig-toolu_2"' in api[4]["all"]
     # Disconnecting: the key leaves the browser, and the written answers are back.
     assert res["claude_off_sheet"]["sheet_title"] == "Claude is connected"
     assert res["claude_off"]["tools"][0] == "Connect Claude" and res["stored_after"] is None
     # Connect AirPods says what it does before the microphone is asked for.
     assert res["talk_sheet"]["sheet"] and res["talk_sheet"]["sheet_title"] == "Talk through your AirPods"
+    # Chrome's built-in AI, where Chrome has it: "Free answers" first; its sheet says what it is before anything is
+    # downloaded; the download's progress on the button; then it answers what the written answers can't (a page on
+    # the screen, said in What's done), from a session told what Chat Computer is, and the written answers still
+    # answer what they can.
+    assert res["ai_opening"]["tools"] == ["Free answers", "Connect Claude", "Connect AirPods"]
+    assert res["ai_sheet"]["sheet"] and res["ai_sheet"]["sheet_title"] == "Free answers, from Chrome"
+    assert not res["ai_downloading"]["sheet"] and res["ai_downloading"]["tools"][0] == "Downloading 50%"
+    on = res["ai_on"]
+    assert on["tools"] == ["Connect Claude", "Connect AirPods"] and on["done"][-1] == "Turned on Chrome's built-in AI"
+    poem = res["ai_poem"]
+    assert poem["content"] and poem["last"] == "Here's a short poem about the sea." and poem["done"][-1] == "Showed \u201cThe sea\u201d"
+    assert "The tide comes in on silver feet." in res["ai_poem_view"] and "Written by Chrome's built-in AI" in res["ai_poem_view"]
+    assert res["ai_music"]["last"] == "Playing some calm piano."
+    calls = res["ai_calls"]
+    assert len(calls["created"]) == 1 and calls["created"][0]["monitored"] and "Gemini Nano" in calls["created"][0]["system"]
+    assert calls["prompts"] == [{"text": "write a short poem about the sea", "schema": True}]
     # A phone: no sidebars and no switches; the buttons are inside the box, and it works.
     phone = res["phone_opening"]
     assert phone["first_ai"] == "hello, world" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False, False]

@@ -125,7 +125,9 @@ def test_the_demo_works_in_a_browser():
     hello, greeting = res["greeting"].split("\n")
     options = res["greeting_options"]
     assert hello == "hello, world" and greeting in options["time"] + options["here"], (greeting, options)
-    assert "Greetings, whoever you are" in options["time"] and not any("{" in g for g in options["time"])
+    assert "and greetings to you, whoever you are" in options["time"] and not any("{" in g for g in options["time"])
+    # One greeting, not two: what's under hello, world goes on from it ("and ...").
+    assert all(g.startswith("and ") for g in options["time"] + options["here"]), options
     one, two = res["visits"]
     assert one.startswith("hello, world\n") and two.startswith("hello, world\n") and one != two
     # Then: nothing open, no sheet, no button to press, the cursor in the box under the dimmed hint, and nothing else
@@ -215,31 +217,35 @@ def test_the_demo_works_in_a_browser():
     # name you go by; and for where you are (your time zone's city, Singapore) and its weather (Open-Meteo: only the
     # place's name, then its position, kept half an hour: a second visit asks again for neither).
     ev = res["greet_evening"]
-    assert ev["now"]["time"] == ["Ren returns!", "Good evening, Ren", "Evening, Ren", "How was your day, Ren?"]
-    assert ev["now"]["here"] == ["Evening in Singapore, Ren", "How's Singapore this evening, Ren?", "Rainy evening in Singapore, Ren?",
-                                 "Stay dry out there, Ren", "Warm night in Singapore, Ren"]
+    assert ev["now"]["time"] == ["and look who's back: Ren!", "and good evening to you, Ren", "and to you, Ren: how was your day?"]
+    assert ev["now"]["here"] == ["and good evening to you in Singapore, Ren", "and hello, Singapore! How was your day, Ren?",
+                                 "and to you in rainy Singapore, Ren: stay dry", "and hello, rainy Singapore! A cozy evening in, Ren?",
+                                 "and hello, Singapore! A warm night, Ren"]
     hello, greeting = ev["said"].split("\n")
     assert hello == "hello, world" and greeting in ev["now"]["time"] + ev["now"]["here"]
     assert ev["meteo"] == ["geocoding-api Singapore", "api"]
     mo = res["greet_morning"]
-    assert mo["now"]["time"] == ["Good morning", "Welcome", "Hey there", "Happy Friday", "That Friday feeling", "Greetings, whoever you are"]
-    assert mo["now"]["here"] == ["Morning in Singapore", "How's Singapore this morning?", "Sunny morning in Singapore",
-                                 "Blue skies over Singapore"]
+    assert mo["now"]["time"] == ["and good morning to you", "and welcome", "and hey there to you", "and a happy Friday to you",
+                                 "and hello to that Friday feeling", "and greetings to you, whoever you are"]
+    assert mo["now"]["here"] == ["and good morning to you in Singapore", "and hello, Singapore! How's your morning?",
+                                 "and hello, sunny Singapore! Lovely morning", "and to you under blue skies in Singapore"]
     assert mo["said"].split("\n")[1] in mo["now"]["time"] + mo["now"]["here"]
-    # Still dark at a quarter past six: a morning's greetings, not a night's ("Warm night"), nor a day's ("Grey skies").
-    assert res["greet_dawn"] == ["Morning in Singapore", "How's Singapore this morning?", "Cloudy morning in Singapore"]
+    # Not light yet at a quarter past six: a morning's greetings, not a night's ("A warm night"), nor a day's ("grey skies").
+    assert res["greet_dawn"] == ["and good morning to you in Singapore", "and hello, Singapore! How's your morning?",
+                                 "and hello, cloudy Singapore! How's your morning?"]
     # The name you go by: asked, given ("call me", in your words, capitalised), not taken from "call me back later",
     # and forgotten; where you live: found on the map (Penang, in your word for it), its weather in the greeting and
     # when you ask for the weather.
     assert res["name_asked"] == "You're Ren. (To change it, say \u201ccall me\u201d and the name you'd like.)"
     assert res["name_given"]["said"] == "Nice to meet you, Ren Shu! I'll greet you by name from now on."
-    assert res["name_given"]["time"][1] == "Good evening, Ren Shu"
+    assert res["name_given"]["time"][1] == "and good evening to you, Ren Shu"
     assert not res["name_not"].startswith("Nice to meet you")
     assert res["place_given"]["said"].startswith("Got it: you live in Penang, Malaysia.")
-    assert res["place_given"]["here"][:3] == ["Evening in Penang, Ren Shu", "How's Penang this evening, Ren Shu?", "Rainy evening in Penang, Ren Shu?"]
+    assert res["place_given"]["here"][:3] == ["and good evening to you in Penang, Ren Shu", "and hello, Penang! How was your day, Ren Shu?",
+                                              "and to you in rainy Penang, Ren Shu: stay dry"]
     assert res["place_weather"].startswith("Today in Penang: light rain, 26\u00b0 to 31\u00b0")
     forgot = res["name_forgotten"]
-    assert forgot["said"] == "Done: I've forgotten your name." and "Greetings, whoever you are" in forgot["time"]
+    assert forgot["said"] == "Done: I've forgotten your name." and "and greetings to you, whoever you are" in forgot["time"]
     assert forgot["done"][-4:] == ["Set your name to Ren Shu", "Set your place to Penang", "Looked up the weather for Penang",
                                    "Forgot your name"]
     # Penang found once; its weather looked up for the greeting, then kept (the forecast asked for itself).

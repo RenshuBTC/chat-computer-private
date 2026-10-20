@@ -1,6 +1,6 @@
-"""Where the person is, and the weather there now: for the greeting under "hello, world" (chat.js: CO.here), which,
-as the Claude app's greetings are for the time of day, can be for the place and its weather ("Rainy evening in
-Singapore, Ren?").
+"""Where the person is, and the weather there now: for the greeting that goes on from "hello, world" (chat.js:
+CO.here), which, as the Claude app's greetings are for the time of day, can be for the place and its weather ("and
+to you in rainy Singapore, Ren: stay dry").
 
 The place is where they said they live (settings.home_place), else their time zone's city ("Asia/Singapore":
 Singapore). Its position comes from Open-Meteo's geocoding (only the place's name goes there, once: places don't

@@ -86,11 +86,12 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   Claude app: under Claude's, copy, read aloud, thumbs up or down (kept, to make Chat Computer better) and ask
   again; under yours, ask again, edit and copy; with when it was. A
   conversation starts with its name, **Chat Computer**, alone in the middle; after a second it fades away, and
-  Chat Computer's first words come in as if just typed, as its answers do: the classic `hello, world`, and under
-  it a greeting, as warm and personal as the Claude app's, a different one each time: Claude's own greetings for
-  the time of day and the day of the week, with your name (“Good evening, Ren”, “Happy Friday, Ren”, “Hello,
-  night owl”), and ones for where you are and its weather (“Rainy evening in Singapore, Ren?”, “Blue skies over
-  Singapore”). Your name is the one Chat Computer was set up with, or the one you give it (“call me Ren”); where you
+  Chat Computer's first words come in as if just typed, as its answers do: always the classic `hello, world`
+  first, and under it the rest of the same greeting, going on from it, as warm and personal as the Claude app's
+  greetings and a different one each time: Claude's own greetings for the time of day and the day of the week,
+  with your name (“hello, world / and good evening to you, Ren”, “and a happy Friday to you, Ren”, “and hello to
+  you too, night owl”), and ones for where you are and its weather (“and hello, Singapore! How was your day,
+  Ren?”, “and to you in rainy Singapore, Ren: stay dry”). Your name is the one Chat Computer was set up with, or the one you give it (“call me Ren”); where you
   are is your time zone's city, or where you say you live (“I live in Penang”). For the weather, the place's name
   goes to Open-Meteo, then its position, at most once every half hour.
   The empty message box, white on the off-white screen as the Claude app's is, says, dimmed, "Type anything or “/”

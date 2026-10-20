@@ -465,13 +465,15 @@ retrying with backoff, then starts listening.
   then Chat Computer's first words come in as its answers do, as if just typed (`greet()` in chat.js: an
   `.ai.hello` message the page adds itself, not part of the transcript, a moment's thinking and then a few
   letters at a time through `CO.ai`, so they fade in; none if something was said first): `hello, world`, lower
-  case with its comma as in Kernighan's C tutorial and K&R, and under it a greeting as the Claude app's are:
-  Claude's own (as claude.ai's code has them: each for a time of day, from 6, 12, 17 and 21 o'clock, some for a
-  day of the week, "Coffee and Claude time?" only where Claude answers), with the name from `CO.settings` (on a
-  Chat Computer `user_name`'s first word; on the website the name given with "call me ...", or connected Claude's
-  `set_name`), said without it where there's none ("Good evening", and "Greetings, whoever you are"); and, half
-  the time where there's a place, one for the place and its weather now from `CO.here` ({place, code, temp,
-  day}: "Rainy evening in Singapore, Ren?"). The place is where they said they live (`home_place`, or the
+  case with its comma as in Kernighan's C tutorial and K&R, always first, and under it the rest of the same
+  greeting, a line going on from it ("and ...": one greeting, not two), as the Claude app's are: Claude's own (as
+  claude.ai's code has them: each for a time of day, from 6, 12, 17 and 21 o'clock, some for a day of the week,
+  "coffee and Claude time?" only where Claude answers), said on from hello, world ("and good evening to you,
+  Ren"), with the name from `CO.settings` (on a Chat Computer `user_name`'s first word; on the website the name
+  given with "call me ...", or connected Claude's `set_name`), and without it where there's none ("and good
+  evening to you", "and greetings to you, whoever you are"); and, half the time where there's a place, one for
+  the place and its weather now from `CO.here` ({place, code, temp, day}), from the world to the city: "and
+  hello, Singapore! How was your day, Ren?", "and to you in rainy Singapore, Ren: stay dry". The place is where they said they live (`home_place`, or the
   website's "I live in ..."), else the time zone's city; its weather comes from Open-Meteo (`here.py` on a Chat
   Computer, every half hour; the website's host, at most once every half hour), and the greeting is chosen once
   the moment's thinking is over, so a weather looked up meanwhile can be in it. Never the one shown last time

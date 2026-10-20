@@ -117,62 +117,88 @@
   // what's said is the conversation.
   var LOGO_MS = 1000, LOGO_FADE_MS = 500, THINK_MS = 600;
   var HELLO = "hello, world";
-  // Under it, a greeting as the Claude app greets you: its own greetings (as claude.ai's code has them), each for a
-  // time of day (from 6 in the morning, 12, 5 in the evening, 9 at night) and some for a day of the week, with the
-  // name you go by (CO.settings: on a Chat Computer the one it was set up with; "call me ..." changes it). Where no
-  // name is known, the same greetings without one ("Good evening"), and "Greetings, whoever you are". "Coffee and
-  // Claude time?" only where Claude is the one answering. [words, from, until (hours), days (0 Sunday) or null, claude]
+  // Under it, always after it, the rest of the same greeting: one line that goes on from "hello, world" ("and ..."),
+  // warm and personal as the Claude app's greetings are. Theirs (as claude.ai's code has them) are by the time of day
+  // (from 6 in the morning, 12, 5 in the evening, 9 at night), some by the day of the week, with the name you go by
+  // ("Good evening, Ren"); here the same, said on from hello, world: "and good evening to you, Ren". The name comes
+  // from CO.settings (on a Chat Computer the one it was set up with; "call me ..." changes it). [with the name,
+  // without one (null: not without), from, until (hours), days (0 Sunday) or null, only where Claude answers]
   var GREETINGS = [
-    ["Good morning, {name}", 6, 12], ["Welcome, {name}", 6, 12], ["Hey there, {name}", 6, 12],
-    ["Happy Monday, {name}", 6, 12, [1]], ["Happy Tuesday, {name}", 6, 12, [2]], ["Happy Wednesday, {name}", 6, 12, [3]],
-    ["Happy Thursday, {name}", 6, 12, [4]], ["Happy Friday, {name}", 6, 12, [5]], ["That Friday feeling, {name}", 6, 12, [5]],
-    ["Welcome to the weekend, {name}", 6, 12, [6, 0]], ["Happy Saturday, {name}", 6, 12, [6]],
-    ["What's on your mind, {name}?", 6, 12, [6, 0]], ["Sunday session, {name}?", 6, 12, [0]], ["Happy Sunday, {name}", 6, 12, [0]],
-    ["Coffee and Claude time?", 6, 12, null, true],
-    ["Good afternoon, {name}", 12, 17], ["Hi {name}, how are you?", 12, 17], ["What's new, {name}?", 12, 17],
-    ["Back at it, {name}", 12, 17],
-    ["{name} returns!", 17, 21], ["Good evening, {name}", 17, 21], ["Evening, {name}", 17, 21], ["How was your day, {name}?", 17, 21],
-    ["How's it going, {name}?", 21, 6], ["What's on your mind tonight?", 21, 6], ["Hello, night owl", 21, 6]
+    ["and good morning to you, {name}", "and good morning to you", 6, 12],
+    ["and welcome, {name}", "and welcome", 6, 12],
+    ["and hey there, {name}", "and hey there to you", 6, 12],
+    ["and a happy Monday to you, {name}", "and a happy Monday to you", 6, 12, [1]],
+    ["and a happy Tuesday to you, {name}", "and a happy Tuesday to you", 6, 12, [2]],
+    ["and a happy Wednesday to you, {name}", "and a happy Wednesday to you", 6, 12, [3]],
+    ["and a happy Thursday to you, {name}", "and a happy Thursday to you", 6, 12, [4]],
+    ["and a happy Friday to you, {name}", "and a happy Friday to you", 6, 12, [5]],
+    ["and hello to that Friday feeling, {name}", "and hello to that Friday feeling", 6, 12, [5]],
+    ["and welcome to the weekend, {name}", "and welcome to the weekend", 6, 12, [6, 0]],
+    ["and a happy Saturday to you, {name}", "and a happy Saturday to you", 6, 12, [6]],
+    ["and to you, {name}: what's on your mind?", "and to you: what's on your mind?", 6, 12, [6, 0]],
+    ["and to you, {name}: Sunday session?", "and to you: Sunday session?", 6, 12, [0]],
+    ["and a happy Sunday to you, {name}", "and a happy Sunday to you", 6, 12, [0]],
+    ["and to you, {name}: coffee and Claude time?", "and to you: coffee and Claude time?", 6, 12, null, true],
+    ["and good afternoon to you, {name}", "and good afternoon to you", 12, 17],
+    ["and hi, {name}: how are you?", "and hi to you: how are you?", 12, 17],
+    ["and to you, {name}: what's new?", "and to you: what's new?", 12, 17],
+    ["and to you, {name}: back at it?", "and to you: back at it?", 12, 17],
+    ["and look who's back: {name}!", null, 17, 21],
+    ["and good evening to you, {name}", "and good evening to you", 17, 21],
+    ["and to you, {name}: how was your day?", "and to you: how was your day?", 17, 21],
+    ["and to you, {name}: how's it going?", "and to you: how's it going?", 21, 6],
+    ["and to you, {name}: what's on your mind tonight?", "and to you: what's on your mind tonight?", 21, 6],
+    ["and hello to you too, night owl", "and hello to you too, night owl", 21, 6]
   ];
   var who = "", claudeAnswers = false;            // the name you go by, and whether Claude answers (CO.settings)
-  // Claude's greetings: for this hour and this day, with the name or without it.
+  // Claude's greetings: for this hour and this day, with the name or without it (and, without, one of their own:
+  // "Greetings, whoever you are").
   function greetings(at) {
     var h = at.getHours(), day = at.getDay(), out = [];
     GREETINGS.forEach(function (g) {
-      if (!(g[1] < g[2] ? h >= g[1] && h < g[2] : h >= g[1] || h < g[2])) return;
-      if ((g[3] && g[3].indexOf(day) < 0) || (g[4] && !claudeAnswers)) return;
-      out.push(named(g[0]));
+      if (!(g[2] < g[3] ? h >= g[2] && h < g[3] : h >= g[2] || h < g[3])) return;
+      if ((g[4] && g[4].indexOf(day) < 0) || (g[5] && !claudeAnswers)) return;
+      out.push(named(g));
     });
-    if (!who) out.push("Greetings, whoever you are");
+    if (!who) out.push("and greetings to you, whoever you are");
     return out.filter(Boolean);
   }
-  // A greeting with the name in it, or without it where none is known ("{name} returns!" can't be said without one).
-  function named(text) {
-    if (who) return text.replace("{name}", who);
-    return text.indexOf("{name}") === 0 ? "" : text.replace(/,? ?\{name\}/, "");
-  }
-  // And, as the Claude app's are for the time of day, greetings for where you are and its weather now (CO.here: the
-  // place, your time zone's city or where you said you live; the weather there from Open-Meteo, as a WMO weather
-  // code, °C and whether it's light there). {part}: morning (from 6), afternoon (12), evening (5 pm) or night (9 pm).
+  // A greeting with the name in it, or as it's said without one ("" where it can't be).
+  function named(g) { return who ? g[0].replace("{name}", who) : g[1] || ""; }
+  // And, as theirs are for the time of day, greetings for where you are and its weather now (CO.here: the place,
+  // your time zone's city or where you said you live; the weather there from Open-Meteo, as a WMO weather code, °C
+  // and whether it's light there), from the world to your city: "and hello, Singapore! How was your day, Ren?".
+  // {part}: morning (from 6), afternoon (12), evening (5 pm) or night (9 pm).
   var here = { place: "", code: null, temp: null, day: null, pending: false };
   var AROUND = {
-    morning: ["Morning in {place}, {name}", "How's {place} this morning, {name}?"],
-    afternoon: ["Afternoon in {place}, {name}", "How's {place} today, {name}?"],
-    evening: ["Evening in {place}, {name}", "How's {place} this evening, {name}?"],
-    night: ["Late night in {place}, {name}?", "How's {place} tonight, {name}?"]
+    morning: [["and good morning to you in {place}, {name}", "and good morning to you in {place}"],
+              ["and hello, {place}! How's your morning, {name}?", "and hello, {place}! How's your morning?"]],
+    afternoon: [["and good afternoon to you in {place}, {name}", "and good afternoon to you in {place}"],
+                ["and hello, {place}! How's your day going, {name}?", "and hello, {place}! How's your day going?"]],
+    evening: [["and good evening to you in {place}, {name}", "and good evening to you in {place}"],
+              ["and hello, {place}! How was your day, {name}?", "and hello, {place}! How was your day?"]],
+    night: [["and hello, {place}! Still up, {name}?", "and hello, {place}! Still up?"],
+            ["and to you in {place}, {name}: how's the night going?", "and to you in {place}: how's the night going?"]]
   };
-  // [words, "day" or "night" for only then]: by the weather (weatherOf), and the heat or cold.
+  // [with the name, without, "day" or "night" for only then]: by the weather (weatherOf), and the heat or cold.
   var WEATHER = {
-    storm: [["Stormy {part} in {place}, {name}"], ["Stay safe in the storm, {name}"]],
-    snow: [["Snowy {part} in {place}, {name}"], ["Stay warm, {name}"]],
-    rain: [["Rainy {part} in {place}, {name}?"], ["Stay dry out there, {name}"]],
-    fog: [["Foggy {part} in {place}, {name}"]],
-    clear: [["Sunny {part} in {place}, {name}", "day"], ["Blue skies over {place}, {name}", "day"],
-            ["Clear skies over {place} tonight, {name}", "night"]],
-    cloud: [["Cloudy {part} in {place}, {name}"], ["Grey skies over {place}, {name}?", "day"]],
-    hot: [["Hot one in {place} today, {name}", "day"], ["Stay cool, {name}"]],
-    warm: [["Warm night in {place}, {name}", "night"]],
-    cold: [["Chilly {part} in {place}, {name}"], ["Bundle up, {name}"]]
+    storm: [["and to you in stormy {place}, {name}: stay safe", "and to you in stormy {place}: stay safe"],
+            ["and hello, {place}! Quite the storm out there, {name}", "and hello, {place}! Quite the storm out there"]],
+    snow: [["and to you in snowy {place}, {name}: stay warm", "and to you in snowy {place}: stay warm"],
+           ["and hello, snowy {place}! Snow day, {name}?", "and hello, snowy {place}! Snow day?"]],
+    rain: [["and to you in rainy {place}, {name}: stay dry", "and to you in rainy {place}: stay dry"],
+           ["and hello, rainy {place}! A cozy {part} in, {name}?", "and hello, rainy {place}! A cozy {part} in?"]],
+    fog: [["and hello, foggy {place}! Mind how you go, {name}", "and hello, foggy {place}! Mind how you go"]],
+    clear: [["and hello, sunny {place}! Lovely {part}, {name}", "and hello, sunny {place}! Lovely {part}", "day"],
+            ["and to you under blue skies in {place}, {name}", "and to you under blue skies in {place}", "day"],
+            ["and hello, {place}! Clear skies tonight, {name}", "and hello, {place}! Clear skies tonight", "night"]],
+    cloud: [["and hello, cloudy {place}! How's your {part}, {name}?", "and hello, cloudy {place}! How's your {part}?"],
+            ["and to you under grey skies in {place}, {name}", "and to you under grey skies in {place}", "day"]],
+    hot: [["and to you in the heat of {place}, {name}: stay cool", "and to you in the heat of {place}: stay cool"],
+          ["and hello, {place}! A hot one today, {name}", "and hello, {place}! A hot one today", "day"]],
+    warm: [["and hello, {place}! A warm night, {name}", "and hello, {place}! A warm night", "night"]],
+    cold: [["and to you in chilly {place}, {name}: bundle up", "and to you in chilly {place}: bundle up"],
+           ["and hello, {place}! A chilly {part}, {name}", "and hello, {place}! A chilly {part}"]]
   };
   function partOf(h) { return h >= 6 && h < 12 ? "morning" : h >= 12 && h < 17 ? "afternoon" : h >= 17 && h < 21 ? "evening" : "night"; }
   function weatherOf(code) {
@@ -182,17 +208,17 @@
   }
   function hereGreetings(at) {
     if (!here.place) return [];
-    var part = partOf(at.getHours()), lines = AROUND[part].map(function (t) { return [t]; }), w = here.code;
+    var part = partOf(at.getHours()), lines = AROUND[part].slice(), w = here.code;
     if (typeof w === "number") {
       var light = here.day !== false, t = here.temp;
       lines = lines.concat(WEATHER[weatherOf(w)] || []);
       if (typeof t === "number") lines = lines.concat(t >= 32 ? WEATHER.hot : t <= 5 ? WEATHER.cold : t >= 26 && !light ? WEATHER.warm : []);
       // "day" while it's light; "night" once the light's gone in the evening or at night (not before dawn).
       var late = part === "evening" || part === "night";
-      lines = lines.filter(function (l) { return !l[1] || (l[1] === "day" ? light : !light && late); });
+      lines = lines.filter(function (l) { return !l[2] || (l[2] === "day" ? light : !light && late); });
     }
     return lines.map(function (l) {
-      return named(l[0].replace("{place}", here.place).replace("{part}", part));
+      return named(l).replace("{place}", here.place).replace("{part}", part);
     }).filter(Boolean);
   }
   // One of them, never the one shown last time (kept in this browser, where it can be): half the time one for where

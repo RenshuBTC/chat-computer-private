@@ -152,7 +152,7 @@ class SimScreen(RecordingScreen):
                     x = W - 240 - col if who == "user" else 240
                     y = _draw_lines(d, x, y, [words[:600]], fp, col, (40, 40, 40) if who == "user" else (0, 0, 0)) + 30
                 d.rectangle((240, H - 120, W - 240, H - 50), outline=(180, 180, 180), width=2)
-                d.text((270, H - 105), "Chat computer anything or type “/” to search", font=_font(int(fp * 0.875)),
+                d.text((270, H - 105), "Chat anything or type “/”", font=_font(int(fp * 0.875)),
                        fill=(160, 160, 160))
             _to_display(img)
         except Exception:
@@ -162,8 +162,8 @@ class SimScreen(RecordingScreen):
         self.mode, self.url, self.title, self.html = "content", url, title or _site(url)["title"], None
         self.paint()
 
-    async def show_url(self, url: str) -> dict[str, Any]:
-        await super().show_url(url)
+    async def show_url(self, url: str, title: str | None = None) -> dict[str, Any]:
+        await super().show_url(url, title)
         self.title = _site(url)["title"]
         self._paused = False
         self.paint()

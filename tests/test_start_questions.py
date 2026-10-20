@@ -381,6 +381,38 @@ def test_replies_to_typed_questions_are_shown_not_spoken(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_a_typed_answer_in_words_brings_the_conversation_back(tmp_path, monkeypatch):
+    """Something open fills the middle, with the conversation put away. A question typed here and answered only in
+    words brings the conversation back to show the answer (music left playing); one whose turn worked on what's
+    open (scrolled it) leaves it there, and so does a spoken one, whose answer is heard."""
+    c, screen = _controller(tmp_path, monkeypatch)
+    c.speaker = FakeSpeaker()
+    typed = {"t1", "t2"}
+    c.brain = SimpleNamespace(origin_of=lambda tid: "here", typed_here=lambda tid: tid in typed,
+                              current_origin="here", use_token_instead=lambda: False)
+
+    async def turn(tid, tools):
+        c._on_turn_start(tid)
+        c._on_text(tid, "Paris is the capital of France.")
+        c._on_turn_end(tid, SimpleNamespace(ok=True, interrupted=False, error_kind=None, tools=tools))
+        await asyncio.sleep(0.01)
+        return screen.mode
+
+    async def run():
+        c.loop = asyncio.get_running_loop()
+        await screen.show_url("https://www.google.com/")
+        assert await turn("t2", ["mcp__chatcomputer__scroll"]) == "content"     # typed, but it scrolled the page
+        assert await turn("t3", []) == "content"                                # said out loud: heard
+        assert await turn("t1", ["WebSearch"]) == "chat" and screen.events[-1] == ("hide", None)
+    asyncio.run(run())
+
+
+def test_the_tools_that_work_on_what_s_open_are_claude_s_own():
+    src = (Path(C.__file__).parent / "tools" / "__init__.py").read_text(encoding="utf-8")
+    import re
+    assert C.SCREEN_TOOLS <= set(re.findall(r'@reg\("([a-z_]+)"', src))
+
+
 def test_typed_text_reaches_claude_as_typed(tmp_path, monkeypatch):
     c, screen = _controller(tmp_path, monkeypatch)
     asks = []

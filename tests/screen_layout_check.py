@@ -1,8 +1,9 @@
 """The screen's layout with both sidebars: Messages at the left (newest first, pins, opening one) and Actions at
-the right, as rounded cards; something opened (a website) between them, in a frame above the latest exchange (both
-messages in full) and the message box; "/" searching, its list in front (the page ends above it); the panels'
-switches (the sidebars off and on, the conversation under the page off, and typing bringing it back); F1 makes it
-fill the screen and back; Escape closes it.
+the right, as rounded cards; something opened (a website) in the middle between them, in a frame with its name and a
+close button, from the top down to the message box, the conversation put away; "/" searching, its list in front (the
+page ends above it); the sidebars' switches; the website has the keys (typing goes into its box), and Page Down in the
+message box scrolls it; Escape makes the middle fill the screen and back (from the page, and from the message box);
+the x closes it; Escape in the conversation too.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, clicks and presses keys with xdotool, prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1920x1080x24" python tests/screen_layout_check.py [shot-prefix]
@@ -68,7 +69,9 @@ screen.messages_list([
      "ts": now - 7200, "unread": False, "pinned": now - 100},
 ], [{"id": "a1", "label": "Gmail"}])
 site = Path(tempfile.mkdtemp()) / "site.html"
-site.write_text("<!doctype html><title>A website</title><body style='margin:0'><h1>A website</h1></body>")
+site.write_text("<!doctype html><title>A website</title><body style='margin:0'><h1>A website</h1>"
+                "<input id=q style='position:absolute;left:20px;top:100px;width:300px;height:40px'>"
+                "<div style='height:4000px'></div></body>")
 out: dict = {}
 
 STATE_JS = """(function () {
@@ -91,9 +94,12 @@ STATE_JS = """(function () {
     return {x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), pressed: e.getAttribute('aria-pressed'),
             shown: getComputedStyle(e).display !== 'none'}; }
   function shown(id) { return getComputedStyle(document.getElementById(id)).display !== 'none'; }
-  return JSON.stringify({content: document.body.classList.contains('content'),
-    toggles: {left: toggle('left'), right: toggle('right'), bottom: toggle('bottom')},
-    sides: [shown('messages'), shown('done')], composer: shown('composer'),
+  var x = document.getElementById('frame-close').getBoundingClientRect(), box = document.getElementById('box').getBoundingClientRect();
+  return JSON.stringify({content: document.body.classList.contains('content'), full: document.body.classList.contains('full'),
+    toggles: {left: toggle('left'), right: toggle('right')}, bottom_toggle: !!document.getElementById('toggle-bottom'),
+    sides: [shown('messages'), shown('done')], composer: shown('composer'), column_shown: shown('column'),
+    frame_title: document.getElementById('frame-title').textContent, close: [Math.round(x.left + x.width / 2), Math.round(x.top + x.height / 2)],
+    box: document.getElementById('input').value, box_rect: [box.left, box.top, box.right, box.bottom],
     hello: document.querySelectorAll('#log > .ai.hello').length,
     messages: [m.left, m.top, m.right, m.bottom], done: [d.left, d.top, d.right, d.bottom],
     frame: [f.left, f.top, f.right, f.bottom], column: [col.left, col.top, col.right, col.bottom],
@@ -104,8 +110,7 @@ STATE_JS = """(function () {
     ai_bottom: aiEl.getBoundingClientRect().bottom, more: document.querySelectorAll('.more').length,
     searching: document.body.classList.contains('searching'), results: [res.left, res.top, res.right, res.bottom],
     input: [Math.round(inp.left + 20), Math.round(inp.top + inp.height / 2)],
-    hint: getComputedStyle(document.getElementById('hint')).display !== 'none' ? document.getElementById('hint').textContent : null,
-    strip_h: document.getElementById('column').getBoundingClientRect().height});
+    hint: getComputedStyle(document.getElementById('hint')).display !== 'none' ? document.getElementById('hint').textContent : null});
 })()"""
 
 
@@ -127,11 +132,21 @@ def content_box() -> list:
 
 
 def read(name: str, then) -> None:
+    def page(view, res, *_):
+        try:
+            out[name]["page"] = json.loads(view.evaluate_javascript_finish(res).to_string())
+        except Exception as e:                 # nothing open
+            out[name]["page"] = {"error": str(e)[:80]}
+        then()
+
     def done(view, res, *_):
         out[name] = json.loads(view.evaluate_javascript_finish(res).to_string())
         out[name]["content_view"] = content_box()
         out[name]["mode"] = screen.mode
-        then()
+        out[name]["keys_in_page"] = screen.content.has_focus()
+        screen.content.evaluate_javascript(
+            "JSON.stringify({typed: (document.getElementById('q') || {}).value, y: Math.round(scrollY)})",
+            -1, None, None, None, page, None)
     screen.chat.evaluate_javascript(STATE_JS, -1, None, None, None, done, None)
 
 
@@ -204,32 +219,56 @@ def click(name: str, then_name: str, then, *toggles: str) -> None:
 
 
 def step_sides_off() -> None:
-    click("unslashed", "sides_off", step_bottom_off, "left", "right")
-
-
-def step_bottom_off() -> None:
-    click("sides_off", "bottom_off", step_typed_back, "bottom")
-
-
-def step_typed_back() -> None:
-    act([["windowfocus", "--sync", wid()], ["type", "a"]], lambda: read("typed_back", step_sides_on))
+    click("unslashed", "sides_off", step_sides_on, "left", "right")
 
 
 def step_sides_on() -> None:
     out["panel_events"] = [e for e in events if e.get("type") == "panels"]
-    act([["key", "BackSpace"]], lambda: click("typed_back", "sides_on", step_f1, "left", "right"))
+    click("sides_off", "sides_on", step_type_in_page, "left", "right")
 
 
-def step_f1() -> None:
-    act([["windowfocus", "--sync", wid()], ["key", "F1"]], lambda: read("expanded", step_f1_back))
+def step_type_in_page() -> None:
+    """A click on the website's box, and typing goes there (not into the message box)."""
+    v = out["sides_on"]["content_view"]
+    act([["windowfocus", "--sync", wid()], ["mousemove", "--window", wid(), str(v[0] + 60), str(v[1] + 120)],
+         ["click", "1"], ["sleep", "0.3"], ["type", "--delay", "60", "abc"]], lambda: read("typed_in_page", step_page_full))
 
 
-def step_f1_back() -> None:
-    act([["key", "F1"]], lambda: read("framed", step_escape))
+def step_page_full() -> None:
+    act([["key", "Escape"]], lambda: (shot("full"), read("page_full", step_page_back)))
 
 
-def step_escape() -> None:
-    act([["key", "Escape"]], lambda: (shot("chat"), read("closed", finish)))
+def step_page_back() -> None:
+    act([["key", "Escape"]], lambda: read("page_back", step_page_down))
+
+
+def step_page_down() -> None:
+    """Page Down in the (empty) message box scrolls what's open."""
+    box = out["page_back"]["input"]
+    act([["mousemove", "--window", wid(), str(box[0]), str(box[1])], ["click", "1"], ["sleep", "0.3"], ["key", "Page_Down"]],
+        lambda: read("paged", step_box_full))
+
+
+def step_box_full() -> None:
+    act([["key", "Escape"]], lambda: read("box_full", step_box_back))
+
+
+def step_box_back() -> None:
+    act([["key", "Escape"]], lambda: read("box_back", step_close))
+
+
+def step_close() -> None:
+    x = out["box_back"]["close"]
+    act([["mousemove", "--window", wid(), str(x[0]), str(x[1])], ["click", "1"]],
+        lambda: (shot("chat"), read("closed", step_chat_full)))
+
+
+def step_chat_full() -> None:
+    act([["windowfocus", "--sync", wid()], ["key", "Escape"]], lambda: read("chat_full", step_chat_back))
+
+
+def step_chat_back() -> None:
+    act([["key", "Escape"]], lambda: read("chat_back", finish))
 
 
 def finish() -> None:

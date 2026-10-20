@@ -436,13 +436,21 @@ retrying with backoff, then starts listening.
   sign-in.
 * Screen: one full-screen GTK 3 window (`chatcomputer/ui/gtk_app.py`), a `Gtk.Overlay`: the conversation page
   (`ui/assets/chat.html`) fills it, and the content layer (a real browser with a persistent profile in
-  `~/ChatComputer/web`) is laid over the space the page leaves for it ("hole", reported by chat.js): between the two
-  sidebar cards, above the latest exchange and the message box, inset in a rounded frame. F1 makes it fill the
-  window and back (`toggle_expand`); Escape closes it (`close_content`) unless the message box has text. While
-  it's open the conversation shrinks to a strip (`--strip-h`) of two messages: your latest and Chat Computer's
-  latest (while you speak: its latest and what you're saying), each in full, however many lines (up to 60% of
-  the screen; past that the strip scrolls, showing the end); notes and older messages between them don't show
-  there (`.off-strip`). With nothing said yet the strip is empty and the frame reaches the message box. While "/"
+  `~/ChatComputer/web`) is laid over the space the page leaves for it ("hole", reported by chat.js): the middle,
+  between the two sidebar cards, from the top down to the message box, inside a rounded frame (`#frame`) under
+  its bar (`#frame-bar`: the name, `CO.mode("content", title)` then `CO.title` as the page's title comes, and a
+  close button that posts `close_content`). The conversation (`#column`) is hidden while something is open: the
+  screen is only ever three parts side by side, Messages, the middle and Actions. Escape makes the middle fill
+  the screen (`body.full`: no sidebars or switches, `--left`/`--panel` 0, the frame or the conversation and the
+  message box across the width) and back: chat.js has it when the conversation page has the keys, the window
+  (`_on_key`, calling `CO.toggleFull()`) when what's open has them, except a full-screen video's Escape, which
+  leaves full screen. A website gets the keys when it's shown (typing and the keys that scroll are its own) and a
+  page of Chat Computer's own (`native_uris`) leaves them in the message box; Page Up and Down there, and the
+  arrow keys, Home and End while it's empty, scroll what's open (`scroll_open`, `__CO.scroll`). A question typed
+  here and answered in words alone, with something open, brings the conversation back to show the answer
+  (`Controller._show_words`: not when the turn used a tool in `SCREEN_TOOLS`, which work on what's open; what's
+  open is put away, still playing, as `show_conversation` does). The browser demo does the same for every answer
+  (`wordsOnly`, `putAway` in host.js: nothing done to what's open during the turn). While "/"
   searches, its list (`#results`) is in front: the frame ends above it, since the window lays the content layer
   over the page (in the browser demo, which draws what's open in the page itself, `CO.openInPage`, the list just
   overlaps it). The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
@@ -451,16 +459,17 @@ retrying with backoff, then starts listening.
   Hyperlegible Next at 800; it goes once there's a message of yours, `body.has-you`) and the conversation starts
   with Chat Computer's first words (`greet()` in chat.js, an `.ai.hello` message the page adds itself, not part
   of the transcript): `hello, world`, lower case with its comma as in Kernighan's C tutorial and K&R; the empty
-  message box shows `#hint`, "Chat computer anything or type “/” to search", dimmed
+  message box shows `#hint`, "Chat anything or type “/”", dimmed
   (`--dim`; its first half where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
-  the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items and
-  the panels' switches: settings, the microphone (sound tool, `input`) and the model are changed by asking.
-* The panels' switches (`.toggle` in chat.html): Messages' at the top left, Actions' at the top right, the
-  conversation's at the bottom right while something is open; each icon is the screen with its panel marked,
-  filled while it shows. Off, a sidebar leaves a 3.45 rem margin (`--rail`) with its switch; the conversation's
-  frees the strip and the message box (typing brings them back). The page posts `panels`; the controller keeps
-  them in `settings.left_panel`, `right_panel`, `bottom_panel` (also set by asking) and sends them back at the
-  start (`CO.panels`). Only where the sidebars fit (`body.panel`).
+  the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items,
+  the sidebars' switches and what's open's close button: settings, the microphone (sound tool, `input`) and the
+  model are changed by asking.
+* The sidebars' switches (`.toggle` in chat.html): Messages' at the top left, Actions' at the top right; each
+  icon is the screen with its sidebar marked, filled while it shows. Off, a sidebar leaves a 3.45 rem margin
+  (`--rail`) with its switch. The page posts `panels`; the controller keeps them in `settings.left_panel` and
+  `right_panel` (also set by asking; the old `bottom_panel` is dropped when settings load) and sends them back at
+  the start (`CO.panels`). Only where the sidebars fit (`body.panel`), and not while the middle fills the
+  screen.
 * Sidebars: Messages at the left (`chatcomputer/messages`), Actions at the right (`done.py`), each a card
   (2 px `--bubble` border, 1.1 rem corners, 0.75 rem from the screen's edges and from the frame), each item
   pressable, and pinnable (`pins.py`, `~/ChatComputer/pins.json`: pinned items first, newest pin first). Actions

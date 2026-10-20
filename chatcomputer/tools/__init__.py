@@ -39,7 +39,7 @@ ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
 SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
             "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "phone_access", "airtouch",
-            "left_panel", "right_panel", "bottom_panel", "keyboard_layout"}
+            "left_panel", "right_panel", "keyboard_layout"}
 # Windows' own folders, at the top of its drive (a folder of the person's own called Recovery or Boot is theirs).
 WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
 
@@ -1431,8 +1431,8 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          "zooms websites (0 = automatic). text_size forces a fixed pixel size (0 = automatic). phone_access "
          "(true/false) lets them message you from the Claude app on their phone (needs the full sign-in from "
          "Chat Computer Setup). airtouch (true/false) turns AirTouch, the hand gestures seen by the screen's camera, on or "
-         "off. left_panel, right_panel and bottom_panel (true/false) show or hide Messages (left), Actions (right) "
-         "and, while something is open, the conversation under it (bottom), as their switches on the screen do.",
+         "off. left_panel and right_panel (true/false) show or hide Messages (left) and Actions (right), as their "
+         "switches on the screen do.",
          obj({"action": {"type": "string", "enum": ["get", "set"]}, "key": S, "value": {}}, ["action"]),
          _settings_policy)
     async def chatcomputer_settings(a):

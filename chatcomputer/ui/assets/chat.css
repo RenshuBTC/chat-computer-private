@@ -3,9 +3,9 @@
    screen, with the answer coming in under it (chat.js leaves room under the latest exchange for that: #room), so
    it's never below the screen: scrolling up (the mouse wheel, Page Up, the arrow keys while the box is empty, or
    pinching and moving with AirTouch) shows earlier messages. On a wide screen, Messages runs down the left and
-   Actions down the right: a sixth of the screen each, as the Claude app's side panels take. What Claude opens (a
-   website, a video, a document) goes between them, above your latest message, Claude's latest reply and the
-   message box. */
+   Actions down the right: a sixth of the screen each, as the Claude app's side panels take. Three parts, side by
+   side, and no more: what's open (a website, a video, a message, a document) takes the conversation's place in the
+   middle, with the message box under it, until it's closed. */
 html { scrollbar-width: none; }
 ::-webkit-scrollbar { display: none; }
 body.panel { --left: 17vw; --panel: 17vw; --rail: calc(3.45rem + 2px); }
@@ -20,7 +20,6 @@ body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
 }
 #log { display: flex; flex-direction: column; gap: 1.25rem; }
 #room { flex: none; height: 0; }
-body.content #room { display: none; }
 
 /* Your words: on the right, in a bubble no wider than most of the column, the way chat apps show them. */
 .you {
@@ -72,7 +71,6 @@ body.content #room { display: none; }
 .act .i-done, .act.did .i-copy { display: none; }
 .act.did .i-done { display: block; }
 .act.on svg { fill: currentColor; }
-body.content #log > .acts { display: none; }
 
 /* Messages from an earlier day, put back to show where something was asked: their day above them. */
 .day, .gap { align-self: center; font-size: 0.8rem; }
@@ -99,30 +97,24 @@ body.hearing #live { display: block; }
 }
 body.has-you #welcome, body.content #welcome { display: none; }
 
-/* Something open (body.content): the conversation shrinks to just your latest message and Chat Computer's latest,
-   in full, above the message box, and the page Claude opened is laid over the space above them, in a rounded frame
-   like the sidebars' (the window places it inside #frame: chat.js reports where). Older messages are still there,
-   above, cut off. */
+/* Something open (body.content): a website, a video, a map, a conversation from Messages, a file. It fills the
+   middle, from the top down to the message box, in a rounded frame like the sidebars', with its name and a close
+   button (x) above it; the conversation with Chat Computer is put away until it's closed (the window lays what's
+   open inside #frame, below its bar: chat.js reports where). There's no other part: Messages at the left, what's
+   in the middle, Actions at the right. */
 #frame { display: none; position: fixed; border: 2px solid var(--line); border-radius: 1.1rem; }
 body.content #frame { display: block; }
-body.content #column {
-  position: fixed; bottom: var(--composer-h, 5rem); min-height: 0; height: var(--strip-h, 4rem);
-  left: calc(var(--left, 0px) + var(--side-gap)); right: calc(var(--panel, 0px) + var(--side-gap));
-  display: block; width: auto; margin: 0; padding: 0; overflow-y: auto;
-  --side-gap: max(1.5rem, (100vw - var(--left, 0px) - var(--panel, 0px) - var(--co-column, 30rem)) / 2);
+body.content #column { display: none; }
+#frame-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  height: 2.4rem; padding: 0 0.45rem 0 1.1rem; font-size: 0.8rem; line-height: 1.2;
 }
-/* With the switches at the sides, the latest exchange and the message box leave room at their right for the
-   conversation's own switch. */
-body.panel.content #column {
-  --side-gap: max(2.85rem, (100vw - var(--left, 0px) - var(--panel, 0px) - var(--co-column, 30rem)) / 2);
-}
-body.panel.content #box, body.panel.content #wake { width: min(var(--co-column, 30rem), 100% - 5.7rem); }
-/* There, the two messages are closer together, each in full, however many lines it takes (the page above makes
-   room; past six-tenths of the screen they scroll, showing the end). What you're saying shows the same way. */
-body.content #log { gap: 0.4rem; }
-body.content #log > .off-strip { display: none; }
-body.content .you { padding: 0.1rem 0.75rem; }
-body.content #live { padding: 0.1rem 0.75rem; margin-top: 0.4rem; }
+#frame-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
+#frame-close { width: 1.75rem; height: 1.75rem; }
+/* Escape: the middle fills the screen (body.full), whatever is in it, the message box included; the sidebars and
+   their switches go until Escape again. */
+body.full { --left: 0px !important; --panel: 0px !important; }
+body.full .side, body.full .toggle { display: none !important; }
 
 /* The message box, as in the Claude app: a rounded box the width of the conversation at the bottom of the
    screen; it grows with what's typed (up to a few lines, then scrolls). Enter sends, Shift+Enter starts a new
@@ -139,8 +131,8 @@ body.content #live { padding: 0.1rem 0.75rem; margin-top: 0.4rem; }
   padding: 0.6rem 0.7rem 0.6rem 1rem;
 }
 #row { position: relative; display: flex; align-items: flex-end; gap: 0.5rem; }
-/* The empty box's hint, where typing starts: "Chat computer anything or type “/” to search", dimmed (--dim, the
-   one grey text on the screen); in a box too narrow for all of it, just "Chat computer anything" (.short). It goes
+/* The empty box's hint, where typing starts: "Chat anything or type “/”", dimmed (--dim, the one grey text on
+   the screen); in a box too narrow for all of it, just "Chat anything" (.short). It goes
    with the first thing typed. */
 #hint {
   position: absolute; left: 0; top: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
@@ -290,11 +282,10 @@ body.sheet #sheet { display: flex; }
 #sheet-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 1.25em; margin-top: 1.5em; }
 body.sheet-busy #sheet-ok { visibility: hidden; }
 
-/* The panels' switches, like the Claude app's sidebar button: Messages' at the top left, Actions' at the top
-   right, and the conversation's (while something is open) at the bottom right, beside the message box. Each icon
-   is the screen with its panel marked, filled in while the panel shows. Switched off, Messages and Actions
-   leave a narrow margin with just their switch; the conversation's leaves the page room down to its switch. Only
-   where the sidebars fit (body.panel). */
+/* The sidebars' switches, like the Claude app's sidebar button: Messages' at the top left, Actions' at the top
+   right. Each icon is the screen with its sidebar marked, filled in while the sidebar shows. Switched off, a
+   sidebar leaves a narrow margin with just its switch. Only where the sidebars fit (body.panel), and not while
+   the middle fills the screen (body.full). */
 .toggle {
   position: fixed; z-index: 7; display: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.15rem;
   border: 0; border-radius: 0.4rem; background: none; color: var(--ink); cursor: pointer;
@@ -303,15 +294,13 @@ body.sheet-busy #sheet-ok { visibility: hidden; }
 .toggle .fill { fill: currentColor; stroke: none; }
 .toggle[aria-pressed="false"] .fill { display: none; }
 .toggle:hover { background: var(--bubble); }
-body.panel #toggle-left, body.panel #toggle-right, body.panel.content #toggle-bottom { display: block; }
+body.panel #toggle-left, body.panel #toggle-right { display: block; }
 #toggle-left, #toggle-right { top: calc(1.69rem + 2px); }
 #toggle-left { left: calc(1.25rem + 2px); }
 #toggle-right { right: calc(1.25rem + 2px); }
-#toggle-bottom { right: calc(var(--panel, 0px) + 0.5rem); bottom: 0.75rem; }
 body.panel.hide-left #messages, body.panel.hide-right #done { display: none; }
 body.panel #messages .side-head { padding-left: 1.55rem; }
 body.panel #done .side-head { padding-right: 1.65rem; }
-body.panel.content.hide-bottom #column, body.panel.content.hide-bottom #composer { display: none; }
 
 /* Locked: one screen over everything, the time and a keypad; nothing of the conversation, the sidebars or what's open
    shows until the PIN is typed (what's open is taken off the screen by the window, gtk_app.py). */

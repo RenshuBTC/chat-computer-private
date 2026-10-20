@@ -87,18 +87,22 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   again; under yours, ask again, edit and copy; with when it was. Before
   anything is said, its name, **Chat Computer**, is in the middle, and the conversation starts with its first
   words, the classic `hello, world`; the name goes once you say something.
-  The empty message box says, dimmed, "Chat computer anything or type “/” to search", with the cursor already
+  The empty message box says, dimmed, "Chat anything or type “/”" (a "/" searches your files), with the cursor already
   blinking in it. The round button at its right sends: grey while there's
   nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
   the mouse wheel, Page Up) to read back.
-* **What Claude opens** (a website, a video, a document) goes between the two panels, in a rounded frame,
-  above your latest message and Claude's latest reply, both in full. F1 makes it fill the screen and F1 again
-  puts it back; Escape, or a swipe up from the bottom edge, closes it. Typing "/" to search shows its list in
-  front of it.
+* **What Claude opens** (a website, a video, a document, a message) takes the conversation's place in the
+  middle, from the top of the screen down to the message box, in a rounded frame with its name and a close
+  button (×) at the top; the conversation comes back when it's closed (with the ×, a swipe up from the bottom
+  edge, or by asking), and when something you type is answered in words alone (what's open is put away, music
+  still playing). It's a page like any other: scroll it, and type in it (a website has the keys until you
+  tap the message box; Page Up and Down in the box scroll it too). There are only ever three parts, side by
+  side: Messages, the middle and Actions. **Escape** makes the middle fill the screen, message box and all, and
+  Escape again brings the panels back. Typing "/" to search shows its list in front of it.
 * **Messages.** On a wide screen, a panel at the left gathers what's sent to you from every account you
   connect, newest first: Gmail, Outlook and Hotmail, iCloud Mail, other email, Telegram, WhatsApp, X,
-  Instagram, Facebook, TikTok and LinkedIn. Tap one to read it between the panels (an email shows as the
-  conversation with whoever sent it). Tap + to connect an account: see [Connecting accounts](#connecting-accounts).
+  Instagram, Facebook, TikTok and LinkedIn. Tap one to read it in the middle: the whole conversation with
+  whoever sent it. Tap + to connect an account: see [Connecting accounts](#connecting-accounts).
 * **Actions.** A panel at the right shows today's date and the time, and lists everything done for you,
   by day, each with its time: sites opened, web searches, files changed, settings, programs. Tap one to
   scroll back to the message that asked for it, even from an earlier day. Ask "what did I change yesterday?"
@@ -222,9 +226,9 @@ and say "pair my keyboard" (or "my mouse"). A keyboard may want a code typed on 
 and says it. Type it on the keyboard, then press Enter.
 
 * On the conversation screen, typing goes into the message box at the bottom: Enter sends, Shift+Enter
-  starts a new line, Escape clears it, and the cursor, selecting and pasting work as anywhere else. The
-  answer is written, not spoken, and questions like "Go ahead?" are answered by typing yes or no. On a
-  website, typing goes into the box you're in.
+  starts a new line, and the cursor, selecting and pasting work as anywhere else; Escape makes the middle fill
+  the screen (and back). The answer is written, not spoken, and questions like "Go ahead?" are answered by
+  typing yes or no. On a website, typing goes into the website, into the box you're in.
 * The mouse's arrow shows when you move the mouse and hides once it has been still for 3 seconds. Each screen
   runs at the fastest refresh rate it offers (as most are set in Windows), so the arrow moves as smoothly as
   there. If a screen flickers or goes black at that rate, create an empty file `~/ChatComputer/keep-refresh-rate`
@@ -437,7 +441,10 @@ messages and files there are made up. Everyone gets answers, free:
 * **Written answers**, in `host.js`: what Chat Computer is, what it needs and costs (it's free, on a Claude Pro
   or Max plan; the download is coming soon), and what the page can show: music (a few soft chords the browser
   makes), maps, the weather and the air, timers, sums, the date and time, the news (Wikipedia's Current events),
-  Wikipedia's article for a question of fact or "look up …", the made-up messages and files. Asked for something
+  Wikipedia's article for a question of fact or "look up …", the made-up messages and files. Google (its search,
+  for what Wikipedia hasn't got too), Google Maps' directions and Wikipedia open for real in the middle, to scroll
+  and type in: they're the sites that let another page show them (`framed()` in host.js; Google's own addresses
+  for that, `igu=1` and `output=embed`). Any other site asked for is a link. Asked for something
   only an AI can do (a recipe, a poem, a translation), it says so, and how to get one.
 * **The browser's own AI**, where there is one: Chrome on a computer has Gemini Nano built in, and Edge
   Phi-4-mini, running on the device itself. The **Download Gemini** button (in Edge, Download Phi-4-mini) at the
@@ -452,7 +459,8 @@ messages and files there are made up. Everyone gets answers, free:
 
 What's typed stays in the browser, except a place's name asked about for a map, the weather or the air, which goes
 to Open-Meteo's free geocoding and forecasts (the map itself comes from OpenStreetMap), the words looked up on
-Wikipedia, and with the two other buttons at the right of the message box (`docs/demo/demo.css`):
+Wikipedia, Google's pages when asked for (as on google.com), and with the two other buttons at the right of the
+message box (`docs/demo/demo.css`):
 
 * **Connect Claude**: paste an API key from Claude Console, and Claude (Opus 5.5, as on a Chat Computer, but at
   the API's own effort, medium, rather than max, for quicker answers) answers for real and does things on the screen: plays YouTube videos (YouTube's player between the panels;
@@ -469,6 +477,9 @@ Wikipedia, and with the two other buttons at the right of the message box (`docs
   can't.
 
 Chat Computer is an independent project, not made by Anthropic.
+
+The tab's icon is Chat Computer's: a monitor whose screen shows a speech bubble (`chatcomputer/ui/assets/icon.svg`,
+as `docs/favicon.svg`; `scripts/make_icons.js` draws `docs/favicon.ico` and `docs/apple-touch-icon.png` from it).
 
 GitHub Pages serves it from the `docs` folder (Settings, Pages, branch `main`, folder `/docs`; a private
 repository needs GitHub Pro) at chatcomputer.ai: `docs/CNAME` names the domain, and its DNS points at GitHub

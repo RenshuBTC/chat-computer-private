@@ -53,6 +53,12 @@ DRIVE_CHECK_S = 3.0                 # how often to look for a drive (or keyboard
 RING_FOR_S = {"reminder": 0.0, "timer": 60.0, "alarm": 600.0}   # how long each rings unless stopped first
 RING_EVERY_S = {"reminder": 5.0, "timer": 4.0, "alarm": 6.0}
 SNOOZE_S = 9 * 60
+# Claude's tools that show something in the middle or work on what's there: a typed turn that used one leaves what's
+# open on the screen; one answered only in words brings the conversation back to show them (_show_words).
+SCREEN_TOOLS = {"show_website", "read_screen", "click", "type_text", "press_keys", "on_screen_keyboard", "scroll",
+                "look_at_screen", "browser", "media", "show_document", "show_page", "saved_pages", "show_file",
+                "show_conversation", "confirm_with_user", "messages", "sound", "screenshot", "display", "printer",
+                "lock_screen"}
 
 log = logging.getLogger("chatcomputer.controller")
 
@@ -823,8 +829,8 @@ class Controller:
                 self._settings_changed(["text_scale"])
             return
         if kind == "panels":
-            # A panel's switch pressed (or typing that brought the conversation back): kept for the next start.
-            changed = [f"{k}_panel" for k in ("left", "right", "bottom")
+            # A sidebar's switch pressed: kept for the next start.
+            changed = [f"{k}_panel" for k in ("left", "right")
                        if isinstance(msg.get(k), bool) and msg[k] != getattr(self.settings, f"{k}_panel")]
             for key in changed:
                 setattr(self.settings, key, not getattr(self.settings, key))
@@ -959,6 +965,19 @@ class Controller:
                                "warn")
             self._spawn(self._copy_logs())      # so the reason can be read from Windows too
 
+    def _show_words(self, tid: str, said: str, res: Any) -> None:
+        """A question typed here, answered only in words, while something is open: the answer isn't on the screen
+        (what's open has the middle, and the conversation is put away) and isn't heard (a typed question gets a
+        written answer), so the conversation comes back to show it, leaving music playing, as show_conversation
+        does. A turn that worked on what's open (scrolled it, played it, opened something) leaves it there."""
+        if not said.strip() or not self.brain or not self.brain.typed_here(tid):
+            return
+        if getattr(self.screen, "mode", "chat") != "content":
+            return
+        if any(str(name).split("__")[-1] in SCREEN_TOOLS for name in getattr(res, "tools", None) or []):
+            return
+        self._spawn(self.screen.hide_content())
+
     def _on_activity(self, tid: str, text: str) -> None:
         if self.settings.show_activity:
             self.screen.activity(tid, text)
@@ -978,8 +997,9 @@ class Controller:
         spoken = self._spoken(tid)
         if spoken:
             self.speaker.end()
-        self._transcript("assistant", self.turn_text.pop(tid, "") or "", via="phone" if self._typed(tid) else None,
-                         msg_id=tid)
+        said = self.turn_text.pop(tid, "") or ""
+        self._transcript("assistant", said, via="phone" if self._typed(tid) else None, msg_id=tid)
+        self._show_words(tid, said, res)
         if (not res.ok and res.error_kind == "auth" and self.brain and self.brain.use_token_instead()):
             # The full sign-in (for the phone) stopped working; the one-year sign-in still does.
             self.screen.notice("My sign-in for the Claude app on your phone has expired, so the phone can't reach "
@@ -1961,7 +1981,7 @@ class Controller:
         if {"text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "user_name", "model"} & set(keys):
             self.screen.apply_settings(s.text_size, (s.user_name or "").split(" ")[0], model_label(s.model))
-        if {"left_panel", "right_panel", "bottom_panel"} & set(keys):
+        if {"left_panel", "right_panel"} & set(keys):
             self.screen.panels(self._panels())
         if "airtouch" in keys and self.airtouch_enabled:
             self._spawn(self._start_airtouch() if s.airtouch else self._stop_airtouch())
@@ -1978,7 +1998,7 @@ class Controller:
 
     def _panels(self) -> dict[str, bool]:
         s = self.settings
-        return {"left": s.left_panel, "right": s.right_panel, "bottom": s.bottom_panel}
+        return {"left": s.left_panel, "right": s.right_panel}
 
     async def _restart_brain_when_idle(self) -> None:
         """Apply what the engine reads when it starts (phone access on or off, the model, effort): start it again

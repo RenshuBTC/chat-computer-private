@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <title>Chat Computer</title>
+  <!-- Chat Computer's icon: a monitor whose screen shows a speech bubble (a computer you chat with), black on the
+       warm off-white of its screen. The off-white screen and the black edge (and the stand's off-white rim, drawn
+       first, under the screen) show on a light tab strip and a dark one alike. Made into docs/favicon.ico and
+       docs/apple-touch-icon.png by scripts/make_icons.js; copied to docs/favicon.svg by scripts/build_demo.py. -->
+  <path d="M16 22.75v4.5M10.5 28h11" fill="none" stroke="#F8F5F0" stroke-width="4.1" stroke-linecap="round"/>
+  <rect x="2.25" y="3.25" width="27.5" height="19.5" rx="4" fill="#F8F5F0" stroke="#000" stroke-width="2.5"/>
+  <path d="M11 7.25h10a3 3 0 0 1 3 3v3a3 3 0 0 1-3 3h-5l-4.25 3.25v-3.25a3 3 0 0 1-3-3v-3a3 3 0 0 1 3-3z" fill="#000"/>
+  <path d="M16 22.75v4.5M10.5 28h11" fill="none" stroke="#000" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

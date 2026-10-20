@@ -1,8 +1,10 @@
 // The browser demo (docs/index.html: Chat Computer's own screen, with docs/demo/host.js standing in for the computer),
 // tried in Chromium with Playwright: it opens on the word logo, Chat Computer saying hello, world, the cursor in
 // the box (the logo goes with the first message sent); the
-// panels' switches; music (made by the browser); "/" lists the files in front of what's open; F1 and Escape; a
-// message opened; Connect Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
+// sidebars' switches; music (made by the browser), in the middle in the conversation's place; "/" lists the files in
+// front of what's open; Escape fills the screen and back; the x closes it; a message opened as its whole
+// conversation; an answer in words alone bringing the conversation back; Google, for real, typed into; Connect
+// Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
 // when it ends, with a stand-in for YouTube's player; answers streamed; thinking first, as Opus 5.5 always does);
 // Connect AirPods' sheet; Chrome's built-in AI, with a stand-in (Download Gemini: its sheet, the download, then it
 // answers); a phone (music turned down, then stopped).
@@ -25,6 +27,10 @@ addEventListener("message", function (e) {
 });
 window.end = function () { send({ event: "onStateChange", info: 0 }); };
 </script>`;
+
+// Google, standing in: its page, with a search box to type in.
+const GOOGLE = `<!doctype html><title>Google</title><body style="margin:0"><input id="q" aria-label="Search"
+  style="position:absolute;left:30px;top:40px;width:300px;height:36px"></body>`;
 
 // Anthropic's API, standing in: the key check; a map of Tokyo asked for (show_map), or a video (play_youtube); then
 // the answer, once the tool's result is back. A tool's turn starts with thinking, as the real one's do: its text
@@ -79,21 +85,18 @@ async function state(page) {
       said: document.querySelectorAll("#log > .you, #log > .ai").length,
       sides: [shown("messages"), shown("done")],
       composer: shown("composer"),
-      toggles: ["left", "right", "bottom"].map((k) => shown("toggle-" + k) && document.getElementById("toggle-" + k).getAttribute("aria-pressed")),
+      toggles: ["left", "right"].map((k) => shown("toggle-" + k) && document.getElementById("toggle-" + k).getAttribute("aria-pressed")),
+      bottom_toggle: !!document.getElementById("toggle-bottom"),
+      full: document.body.classList.contains("full"),
+      column_shown: shown("column"),
+      frame_title: document.getElementById("frame-title").textContent,
+      box: document.getElementById("input").value,
       typing_in: document.activeElement && document.activeElement.id,
       hint: shown("hint") ? document.getElementById("hint").textContent : null,
       hint_weight: getComputedStyle(document.getElementById("hint")).fontWeight,
       tools: tools ? Array.from(tools.querySelectorAll("button")).filter((b) => getComputedStyle(b).display !== "none").map((b) => b.getAttribute("aria-label")) : null,
       tools_at: tools ? tools.parentNode.id : null,
       more: document.querySelectorAll(".more").length,
-      // What shows above the message box while something is open (the messages inside the strip's own area).
-      strip: (() => {
-        const c = document.getElementById("column").getBoundingClientRect();
-        return Array.from(document.querySelectorAll("#log > *")).filter((n) => {
-          const r = n.getBoundingClientRect();
-          return getComputedStyle(n).display !== "none" && r.height > 0 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1;
-        }).map((n) => n.textContent.trim());
-      })(),
     };
   });
 }
@@ -127,6 +130,7 @@ async function ask(page, text) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.route(/youtube/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: PLAYER }));      // no network needed
+  await page.route(/www\.google\.com/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: GOOGLE }));
   // Wikipedia finds nothing here (a question of fact then gets the page's honest note, as with no AI).
   await page.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
     headers: { "access-control-allow-origin": "*" }, body: "{}" }));
@@ -172,21 +176,21 @@ async function ask(page, text) {
     return !!(at && at.closest("#results"));
   });
   out.over_view = (await state(page)).view;
-  await page.keyboard.press("Escape");                     // clears the box
-  await page.keyboard.press("F1");
-  out.f1 = await state(page);
-  await page.keyboard.press("F1");
-  out.f1_back = await state(page);
-  // The conversation's switch: the page takes its room; typing brings it back.
-  await page.click("#toggle-bottom");
+  await page.keyboard.press("Escape");                     // ends the search
+  out.unslashed = await state(page);
+  // Escape: the middle fills the screen (what's open and the message box), and back.
+  await page.keyboard.press("Escape");
   await page.waitForTimeout(200);
-  out.bottom_off = await state(page);
-  await page.keyboard.type("x");
+  out.full = await state(page);
+  if (shot) await page.screenshot({ path: shot + "-full.png" });
+  await page.keyboard.press("Escape");
   await page.waitForTimeout(200);
-  out.bottom_back = await state(page);
-  await page.keyboard.press("Escape");                     // clears the box
-  await page.keyboard.press("Escape");                     // closes what's open
-  out.escaped = await state(page);
+  out.full_back = await state(page);
+  // Its x: closed, the conversation back.
+  await page.click("#frame-close");
+  await page.waitForFunction(() => !document.body.classList.contains("content"));
+  out.closed = await state(page);
+  await page.click("#input");
   await page.keyboard.type("/pack", { delay: 40 });
   await page.waitForSelector("#results .res");
   out.search = await state(page);
@@ -195,19 +199,33 @@ async function ask(page, text) {
   await page.waitForTimeout(400);
   out.opened = await state(page);
   out.opened_view = await viewText(page);
-  await page.keyboard.press("Escape");
+  await page.click("#frame-close");
+  // A message: its whole conversation, in the middle, the conversation with Chat Computer put away.
   await page.click("#messages .msg:has-text('Jane')");
   await page.waitForTimeout(400);
   out.jane = await viewText(page);
-  await page.keyboard.press("Escape");
+  out.jane_state = await state(page);
+  if (shot) await page.screenshot({ path: shot + "-message.png" });
+  await page.click("#frame-close");
+  await page.click("#input");
   await ask(page, "make me a 5 minute timer");
   out.timer = await viewText(page);
   out.after_timer = await state(page);
-  // A long answer while something is open: both messages in full above the box, no "more".
+  // Asked something else, answered in words alone: what's open is put away and the conversation has the middle.
   await ask(page, "what's the meaning of life?");
   out.fallback = await state(page);
   if (shot) await page.screenshot({ path: shot + "-long.png" });
-  await page.keyboard.press("Escape");
+  // Google, for real: in the middle, and a click on its box, and typing goes there.
+  await ask(page, "google.com");
+  out.google = await state(page);
+  const g = await (await page.$("#demo-view")).contentFrame();
+  await g.waitForSelector("#q");
+  await g.click("#q");
+  await page.keyboard.type("cats", { delay: 20 });
+  out.google_typed = { frame: await g.evaluate(() => document.getElementById("q").value), box: (await state(page)).box };
+  if (shot) await page.screenshot({ path: shot + "-google.png" });
+  await page.click("#frame-close");
+  await page.click("#input");
 
   // Connect Claude: its sheet, a key, and then Claude (a stand-in) answers, using a tool of the demo's.
   await page.click("#demo-claude");
@@ -314,7 +332,7 @@ async function ask(page, text) {
   await rows.hover("#log > .you");
   await rows.click("#log > .acts.mine .act[data-act=edit]");
   out.edit = await rows.evaluate(() => ({ box: document.getElementById("input").value, focused: document.activeElement.id }));
-  await rows.keyboard.press("Escape");
+  await rows.fill("#input", "");
   await rows.hover("#log > .you");
   await rows.click("#log > .acts.mine .act[data-act=retry]");
   await rows.waitForFunction(() => document.querySelectorAll("#log > .acts.theirs").length === 2);

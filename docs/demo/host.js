@@ -12,7 +12,9 @@
      does it on Google's servers).
    Fetched from elsewhere: a map from OpenStreetMap when you ask for one, the weather and the air from Open-Meteo,
    YouTube's player when connected Claude plays a video, and, when the browser's own AI looks something up for an
-   answer (or you ask for the news), Wikipedia's articles and its Current events: only the words looked up go there. */
+   answer (or you ask for the news), Wikipedia's articles and its Current events: only the words looked up go there.
+   Google's own pages (its search, Google Maps' directions) and Wikipedia's show in the middle when asked for: of the
+   sites that might be asked for, they're the ones that let another page show them. */
 (function () {
   "use strict";
   var START = Date.now() / 1000;
@@ -118,71 +120,90 @@
   }
   window.addEventListener("resize", layout);
 
-  // ------------------------------------------------------------------ what's open between the sidebars
-  // On Chat Computer a second browser view, laid over the space the conversation page leaves for it ("hole"); here a
-  // frame. F1 makes it fill the window, F1 again puts it back; Escape closes it.
-  var view = null, open = false, expanded = false, hole = null, drafting = false;
+  // ------------------------------------------------------------------ what's open in the middle
+  // On Chat Computer a second browser view, laid over the frame the conversation page draws for it ("hole"); here an
+  // iframe, a new one each time (a site can leave one blank for good). It's a page like any other: it scrolls, and
+  // once clicked it has the keys (Google's search box, a map), until the message box is clicked. Its x closes it;
+  // Escape makes the middle fill the screen (chat.js), here too while a page of the demo's own has the keys.
+  var view = null, open = false, hole = null;
+  var acted = 0;        // how many times what's open changed (shown, closed, the volume): see wordsOnly
   function frame() {
-    if (view) return view;
-    view = document.createElement("iframe");
-    view.id = "demo-view";
-    view.title = "What's open";
-    view.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
-    view.style.cssText = "position:fixed;border:0;background:var(--ground);display:none;z-index:5";
-    // F1 and Escape work while a page of the demo's own has the keys too (a map's page keeps them to itself).
-    view.addEventListener("load", function () {
-      try { view.contentDocument.addEventListener("keydown", keys, true); } catch (e) {}
+    if (view) view.remove();
+    var v = view = document.createElement("iframe");
+    v.id = "demo-view";
+    v.title = "What's open";
+    v.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
+    v.style.cssText = "position:fixed;border:0;background:var(--ground);display:none;z-index:5";
+    v.addEventListener("load", function () {
+      try { v.contentDocument.addEventListener("keydown", keys, true); } catch (e) {}
     });
-    document.body.appendChild(view);
-    return view;
+    document.body.appendChild(v);
+    return v;
   }
   function show(page) {
     var v = frame();
+    acted++;
     player.token = {};                       // what was playing is gone
     player.id = page.youtube || "";
-    if (page.src) { v.removeAttribute("srcdoc"); v.src = page.src; }
-    else { v.removeAttribute("src"); v.srcdoc = page.html; }
+    if (page.src) v.src = page.src;
+    else v.srcdoc = page.html;
     open = true;
-    expanded = false;
     v.style.display = "block";
-    call("mode", "content");
+    call("mode", "content", page.title || titleOf(page.html));
     place();
   }
-  function place() {
-    if (!view || !open) return;
-    var r = expanded ? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight } : hole;
-    if (!r) return;
-    view.style.left = r.x + "px";
-    view.style.top = r.y + "px";
-    view.style.width = r.w + "px";
-    view.style.height = r.h + "px";
-    view.style.zIndex = expanded ? "9" : "5";
+  // A page's name (its <title>), for the top of its frame.
+  function titleOf(html) {
+    var m = /<title>([^<]*)<\/title>/i.exec(html || "");
+    if (!m) return "";
+    var t = document.createElement("textarea");
+    t.innerHTML = m[1];
+    return t.value;
   }
+  function place() {
+    if (!view || !open || !hole) return;
+    view.style.left = hole.x + "px";
+    view.style.top = hole.y + "px";
+    view.style.width = hole.w + "px";
+    view.style.height = hole.h + "px";
+  }
+  // Closed (its x, "close", a swipe up from the bottom edge): gone, and what played stops.
   function close() {
-    if (!open) return;
+    if (!view) return;
+    var was = open;
+    acted++;
     open = false;
-    expanded = false;
     player.token = {};
     player.id = "";
+    view.remove();
+    view = null;
+    if (was) call("mode", "chat");
+  }
+  // Put away, for the conversation to have the middle again: out of sight, still playing (as on a Chat Computer, where
+  // the conversation coming back leaves music playing). "Close" or "stop" then closes it.
+  function putAway() {
+    if (!open) return;
+    open = false;
     view.style.display = "none";
-    view.srcdoc = "";
-    view.removeAttribute("src");
     call("mode", "chat");
   }
+  // A turn that did nothing to what's open (showed nothing, closed nothing, left the volume) and has words to say:
+  // they'd be out of sight, the conversation being put away while something's open, so what's open is put away for
+  // them. Only one thing has the middle at a time.
+  function wordsOnly(since) { if (open && acted === since) putAway(); }
   function keys(e) {
-    if (e.key === "F1" && open) { e.preventDefault(); expanded = !expanded; place(); }
-    // (Escape is the box's while it has words in it: the box itself says so here, without waiting for "drafting".)
-    else if (e.key === "Escape" && open && !$("input").value.trim() && !document.body.classList.contains("sheet")) {
-      e.preventDefault();
-      close();
-    }
+    if (e.key === "Escape" && open && !e.isComposing) { e.preventDefault(); call("toggleFull"); }
   }
-  document.addEventListener("keydown", keys, true);
-  // Typing always goes into the message box. A click on the video gives YouTube's player the keys (for its own
-  // shortcuts); they come back to the box as soon as the pointer leaves it.
-  document.addEventListener("pointermove", function () {
-    if (view && document.activeElement === view && !document.body.classList.contains("sheet")) $("input").focus({ preventScroll: true });
-  }, true);
+  // Page Up and Down (and the arrow keys, Home and End while the message box is empty) scroll what's open, when
+  // it's a page of the demo's own (another site's page can't be reached from here: a click on it, and it scrolls).
+  function scrollOpen(how) {
+    var w;
+    try { w = view && view.contentWindow; w.document; } catch (e) { return; }
+    if (!w) return;
+    var by = { page_up: -0.85, page_down: 0.85, up: -0.15, down: 0.15 }[how];
+    if (how === "top" || how === "bottom") w.scrollTo({ top: how === "top" ? 0 : w.document.documentElement.scrollHeight, behavior: "smooth" });
+    else if (by) w.scrollBy({ top: by * w.innerHeight, behavior: "smooth" });
+  }
   // A touchscreen, as an iPad's: swipe up from the bottom edge to close what's open (Home), down from the top for
   // Messages. (On Chat Computer the window does these, and more: three fingers copy and paste, the sides go back.)
   var swipe = null;
@@ -295,7 +316,7 @@
   function piano() {
     show({ html: page("Now playing", '<article><h1 class="title">Calm piano</h1><p>On Chat Computer this is YouTube, playing ' +
       "what you asked for. Here, your browser plays a few soft chords.</p><p><button id=\"play\" class=\"b\">Play</button></p>" +
-      "<p>Escape, or a swipe up from the bottom edge, closes it; F1 makes it fill the screen.</p></article>",
+      "<p>The \u00d7 above closes it (so does a swipe up from the bottom edge); Escape makes it fill the screen.</p></article>",
       ".b{font:inherit;padding:0.4em 1.2em;border:2px solid var(--ink);border-radius:0.6em;background:var(--ground);color:var(--ink);cursor:pointer}",
       "var vol=" + player.volume / 100 + ";" + MUSIC) });
   }
@@ -308,14 +329,15 @@
   // without, and then the sound comes on with the first click, tap or key anywhere here, the video included. The
   // player's own controls pause it. (The player and this page talk with YouTube's player messages.)
   var player = { token: {}, id: "", heard: false, state: -2, armed: false, volume: 100 };
-  function youtube(id, start) {
+  function youtube(id, start, title) {
     start = start || 0;
+    acted++;                                            // it's coming: the turn's words don't put anything away
     var token = player.token = {};
     soundAllowed().then(function (sound) {
       if (player.token !== token) return;               // something else was opened meanwhile
       var origin = /^https?:$/.test(location.protocol) ? "&origin=" + encodeURIComponent(location.origin) : "";
       show({ youtube: id, src: "https://www.youtube-nocookie.com/embed/" + id + "?autoplay=1&playsinline=1&rel=0&enablejsapi=1" +
-             "&start=" + start + (sound ? "" : "&mute=1") + origin });
+             "&start=" + start + (sound ? "" : "&mute=1") + origin, title: title || "YouTube" });
       var mine = player.token;
       player.heard = false;
       player.state = -2;
@@ -449,9 +471,47 @@
   var TRY = "Try “play some piano music”, “show me a map of Tokyo”, “weather in London”, " +
             "“set a timer for 5 minutes” or “what did Jane say?”. Type / to search the files.";
   var REAL = "Connect Claude, at the right of the message box, and Claude answers for real, with your own API key.";
-  function map(b) { show({ src: "https://www.openstreetmap.org/export/embed.html?bbox=" + b.join("%2C") + "&layer=mapnik" }); }
+  function map(b, name) {
+    show({ src: "https://www.openstreetmap.org/export/embed.html?bbox=" + b.join("%2C") + "&layer=mapnik",
+           title: name ? "Map of " + name : "Map" });
+  }
   function title(s) { return String(s).replace(/\b\w/g, function (c) { return c.toUpperCase(); }); }
-  // A page with a link to a site: other sites can't show inside this page (they forbid being framed).
+  // Sites that let another page show them, so they open right here, to scroll and type in, as on a Chat Computer:
+  // Google (its search, from the address Google itself lets other pages show it at, with igu=1), Google Maps' own
+  // embedded maps and directions (output=embed), and Wikipedia. Most sites forbid it: they're a link (link()).
+  // The address to show, or null.
+  function framed(url) {
+    var u;
+    try { u = new URL(url); } catch (e) { return null; }
+    if (!/^https?:$/.test(u.protocol)) return null;
+    var host = u.hostname.toLowerCase().replace(/^www\./, ""), q = u.searchParams;
+    if (/(^|\.)wikipedia\.org$/.test(host)) return "https://" + u.hostname + u.pathname + u.search + u.hash;
+    if (!/^(maps\.)?google\.[a-z]{2,3}(\.[a-z]{2})?$/.test(host)) return null;
+    if (/^maps\./.test(host) || /^\/maps\b/.test(u.pathname)) {
+      var from = q.get("origin") || q.get("saddr"), to = q.get("destination") || q.get("daddr");
+      var place = q.get("query") || q.get("q"), named = /^\/maps\/(?:place|search)\/([^/]+)/.exec(u.pathname);
+      if (!place && named) { try { place = decodeURIComponent(named[1].replace(/\+/g, " ")); } catch (e) { place = named[1]; } }
+      if (to) return directionsMap(from, to);
+      if (place) return "https://www.google.com/maps?output=embed&q=" + encodeURIComponent(place);
+      return null;
+    }
+    if (u.pathname === "/" || u.pathname === "/webhp") return "https://www.google.com/webhp?igu=1";
+    if (u.pathname === "/search" && q.get("q")) {
+      q.set("igu", "1"); return "https://www.google.com/search?" + q.toString();     // igu=1: Google's own, to be framed
+    }
+    return null;
+  }
+  function googleSearch(q) { return "https://www.google.com/search?igu=1&q=" + encodeURIComponent(q); }
+  function directionsMap(from, to) {
+    return "https://maps.google.com/maps?output=embed&" + (from ? "saddr=" + encodeURIComponent(from) + "&daddr=" : "q=") +
+      encodeURIComponent(to);
+  }
+  // A site: right here when it lets this page show it (framed), else a page with a link to it.
+  function site(url, name, note) {
+    var f = framed(url);
+    return f ? { src: f, title: name } : { html: link(url, name, note) };
+  }
+  // A page with a link to a site: most sites can't show inside this page (they forbid being framed).
   function link(url, name, note) {
     return page(name, '<article><h1 class="title">' + esc(name) + '</h1><p class="demo-note">' + esc(note) +
       '</p><p><a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">Open ' + esc(name) + " in a new tab</a></p></article>", NOTE_CSS);
@@ -523,13 +583,13 @@
     var name = placeIn(t) || "";
     if (!name) return { text: "Which place? Say “map of” and its name, like “map of Tokyo”." };
     if (CITIES[name.toLowerCase()]) {
-      return { text: "Here's " + title(name) + ".", done: ["Opened openstreetmap.org"], act: function () { map(CITIES[name.toLowerCase()]); } };
+      return { text: "Here's " + title(name) + ".", done: ["Opened openstreetmap.org"], act: function () { map(CITIES[name.toLowerCase()], title(name)); } };
     }
     return { later: function () {
       return place_(name).then(function (p) {
         var b = [p.lon - 0.12, p.lat - 0.08, p.lon + 0.12, p.lat + 0.08].map(function (x) { return x.toFixed(4); });
         return { text: "Here's " + p.name + (p.country ? ", " + p.country : "") + ".", done: ["Opened openstreetmap.org"],
-                 act: function () { map(b); } };
+                 act: function () { map(b, p.name); } };
       }).catch(function () {
         return { text: "I couldn't find “" + clip(name, 40) + "” on the map. Try another name for it." };
       });
@@ -679,10 +739,9 @@
       return { text: wikiWords(list[0]), done: ["Searched Wikipedia for “" + clip(q, 50) + "”"] };
     }).catch(function () {
       if (otherwise) return otherwise;
-      var url = "https://www.google.com/search?q=" + encodeURIComponent(q);
-      return { text: "Wikipedia has nothing on “" + clip(q, 50) + "”. Google's search for it is a click away, on the screen.",
-               done: ["Showed a link to Google's search for “" + clip(q, 40) + "”"],
-               act: function () { show({ html: link(url, "Google: " + clip(q, 40), "On Chat Computer, Claude searches the whole web for you. Other sites can't show inside this page.") }); } };
+      return { text: "Wikipedia has nothing on “" + clip(q, 50) + "”, so here's Google's search for it.",
+               done: ["Searched Google for “" + clip(q, 40) + "”"],
+               act: function () { show({ src: googleSearch(q), title: "Google: " + clip(q, 60) }); } };
     });
   }
   // "Look it up" (what was asked before), "search the web for X", "google X", "look up X": their files aren't the web.
@@ -735,7 +794,7 @@
     // Closing, and the volume, before music: "stop the music", "close the song" or "turn the music down" have music
     // words in them too (and would start it again).
     [/^(close|stop|pause)\b|\b(close|stop|pause|hide|turn off|switch off)\s+(the\s+|that\s+|this\s+|my\s+)?(it|that|this|music|videos?|page|songs?|piano|playing|youtube|timer|map)\b|\b(turn|switch)\s+(it|that|this|the\s+(music|video|song|piano))\s+off\b/i, function () {
-      return { text: open ? "Closed it." : "Nothing's open.", act: close };
+      return { text: view ? "Closed it." : "Nothing's open.", act: close };
     }],
     [/\b(volume|louder|quieter|softer|mute|unmute)\b|\bturn\s+(up|down|(it|that|this|the\s+(music|sound|song|video|piano|volume))\s+(up|down))\b/i, function (t) {
       if (/\bmute\b/i.test(t)) return { text: "Muted.", done: ["Muted the sound"], act: function () { setVolume(0); } };
@@ -796,6 +855,8 @@
       return { text: "On this page, what you type stays in your browser, unless you connect Claude (then it goes to Anthropic). " +
         "For a map or the weather only the place's name goes out (to Open-Meteo), and when the AI built into Chrome and Edge, which " +
         "runs on your device, looks something up or you ask for the news, only the words looked up go out (to Wikipedia). " +
+        "Google's own pages show here when you open Google, ask for directions or look up something Wikipedia hasn't got: " +
+        "those words go to Google, as they would on google.com. " +
         FACTS.private };
     }],
     [/\b(do i need|need|require|have to have)\b.*\b(airpods|headphones|earbuds|a keyboard|a mouse|a touch ?screen)\b/i, function () {
@@ -837,13 +898,14 @@
     [/\b(music|song|songs|piano|play|playing|spotify|lofi|jazz|relax|calm|chill)\b/i, function () {
       return { text: "Playing some calm piano.", done: ["Played some calm piano"], act: piano };
     }],
+    // Directions: Google Maps' own, on the screen ("how far is A from B" is from B to A).
     [/\b(directions|how (do|can) i get (from|to)|route to|how far)\b/i, function (t) {
-      var m = /from\s+(.+?)\s+to\s+(.+?)[?.!]*$/i.exec(t) || /to\s+(.+?)[?.!]*$/i.exec(t);
-      var url = "https://www.google.com/maps/dir/?api=1" + (m && m[2] ? "&origin=" + encodeURIComponent(m[1]) + "&destination=" + encodeURIComponent(m[2])
-        : m ? "&destination=" + encodeURIComponent(m[1]) : "");
-      return { text: "This page can't plan routes, so here's Google Maps with the directions, a click away. On a Chat Computer I'd " +
-        "open it right here and tell you the way.", done: ["Showed a link to Google Maps"],
-        act: function () { show({ html: link(url, "Directions", "On Chat Computer, Google Maps opens right here. Other sites can't show inside this page.") }); } };
+      var m = /from\s+(.+?)\s+to\s+(.+?)[?.!]*$/i.exec(t), far = /how far is\s+(.+?)\s+from\s+(.+?)[?.!]*$/i.exec(t);
+      var from = m ? m[1] : far ? far[2] : "", to = m ? m[2] : far ? far[1] : (/\bto\s+(.+?)[?.!]*$/i.exec(t) || [])[1];
+      if (!to) return { text: "Where to? Say where you're going, and from where, like “directions from Orchard Road to Marina Bay Sands”." };
+      return { text: from ? "Here's the way from " + from + " to " + to + ", on Google Maps." :
+          "Here's " + to + " on Google Maps. Say where you're starting from, and it shows the way.",
+        done: ["Opened Google Maps"], act: function () { show({ src: directionsMap(from, to), title: from ? "Directions" : to }); } };
     }],
     [/\b(map|maps|where is|where's|show me .+ on a map)\b/i, mapOf],
     [/\b(timer|countdown|stopwatch|remind me in|tell me when)\b|\bboil(ing)? (an? )?eggs?\b/i, function (t) {
@@ -855,12 +917,20 @@
     [/\b(weather|rain|raining|forecast|temperature|umbrella|sunny|hot|cold) ?(today|tomorrow|outside|like|in|now)?\b/i, weather],
     // The news: looked up (and, with the browser's AI on, told in its words).
     [/\b(news|headlines)\b/i, function () { return { search: "news", news: true, later: newsAnswer }; }],
-    [/^(open |go to |show me )?(https?:\/\/)?(www\.)?([a-z0-9-]+\.(com|org|net|ai|io|co|sg|uk|de|fr|jp)(\.[a-z]{2})?)\b|^(google|youtube|gmail|facebook|instagram|netflix|wikipedia)[.!?]*$/i, function (t) {
-      var host = (/([a-z0-9-]+\.(com|org|net|ai|io|co|sg|uk|de|fr|jp)(\.[a-z]{2})?)/i.exec(t) || [])[1] ||
+    // A website: right here when it lets this page show it (Google, Wikipedia: framed), else a link to it.
+    [/^(open |go to |show me )?(https?:\/\/)?((?:[a-z0-9-]+\.)+(com|org|net|ai|io|co|sg|uk|de|fr|jp)(\.[a-z]{2})?)\b|^(google|youtube|gmail|facebook|instagram|netflix|wikipedia)[.!?]*$/i, function (t) {
+      var m = /((?:[a-z0-9-]+\.)*[a-z0-9-]+\.(?:com|org|net|ai|io|co|sg|uk|de|fr|jp)(?:\.[a-z]{2})?)(\/[^\s]*)?/i.exec(t);
+      var host = m ? m[1].replace(/^www\./i, "").toLowerCase() :
         { google: "google.com", youtube: "youtube.com", gmail: "mail.google.com", facebook: "facebook.com", instagram: "instagram.com",
           netflix: "netflix.com", wikipedia: "wikipedia.org" }[t.trim().replace(/[.!?]+$/, "").toLowerCase()];
-      return { text: "Other sites can't show inside this page, so " + host + " is a click away, on the screen. On a Chat Computer it opens right here, and I use it for you.",
-        done: ["Showed a link to " + host], act: function () { show({ html: link("https://" + host, host, "On Chat Computer, " + host + " opens right here. Other sites can't show inside this page.") }); } };
+      var url = "https://" + (/^(google\.com|wikipedia\.org)$/.test(host) ? "www." : "") + host + (m && m[2] ? m[2].replace(/[.!?,]+$/, "") : "/");
+      var name = { "google.com": "Google", "wikipedia.org": "Wikipedia", "en.wikipedia.org": "Wikipedia" }[host] || host;
+      if (framed(url)) {
+        return { text: "Here's " + name + ". Click in it to type, and scroll it as you'd scroll any page.", done: ["Opened " + host],
+                 act: function () { show(site(url, name)); } };
+      }
+      return { text: "Most sites can't show inside this page, " + host + " included, so it's a click away, on the screen. On a Chat Computer it opens right here, and I use it for you.",
+        done: ["Showed a link to " + host], act: function () { show({ html: link(url, host, "On Chat Computer, " + host + " opens right here. Most sites can't show inside this page.") }); } };
     }],
     [/\b(reply|answer|send|write back|text)\b.*\b(mum|mom|jane|alex|her|him|them|message|email)\b/i, function (t) {
       var alex = /alex/i.test(t), jane = /jane/i.test(t);
@@ -1078,8 +1148,8 @@
     else if (a === "youtube_search" && r.query) { var y = youtubeSearch(r.query); y.act(); y.done.forEach(function (d) { did(d, you, uts); }); }
     else if (a === "open_website" && /^https?:\/\/[^\s]+$/i.test(r.url || "")) {
       var host = r.url.replace(/^https?:\/\/(www\.)?/i, "").split(/[/?#]/)[0];
-      show({ html: link(r.url, host, "On Chat Computer, " + host + " opens right here. Other sites can't show inside this page.") });
-      did("Showed a link to " + host, you, uts);
+      show(site(r.url, host, "On Chat Computer, " + host + " opens right here. Most sites can't show inside this page."));
+      did((framed(r.url) ? "Opened " : "Showed a link to ") + host, you, uts);
     } else if (a === "open_message" && THREADS[r.id]) openMessage(r.id);
     else if (a === "open_file") {
       var f = FILES.filter(function (x) { return x.name.toLowerCase() === String(r.name || "").toLowerCase(); })[0];
@@ -1124,7 +1194,7 @@
   }
   // One turn: it answers, or says what to look up; then the page looks it up (in Actions) and it answers from what
   // was found. wants: what the written answers know already: that it's a search (query: for what), or the news.
-  function nanoTurn(text, you, uts, id, wants) {
+  function nanoTurn(text, you, uts, id, wants, since) {
     wants = wants || {};
     call("aiStart", id);
     var looked = null;            // what was found, once looked up
@@ -1145,18 +1215,19 @@
         }).catch(function () { return fromFound(got, q); });
       });
     }).then(function (r) {
-      if (r.written) { deliver(r.written, id, you, uts); return; }
+      if (r.written) { deliver(r.written, id, you, uts, since); return; }
       // Its words go in the conversation as they are, Markdown and all (a JSON copy of its answer in them is dropped).
       var words = String(r.reply || "").replace(/```json[\s\S]*?(```|$)/g, "").trim();
       // Where it's from, only when it was looked up: from memory, it doesn't say "according to Wikipedia".
       if (!looked) words = unsourced(words);
       words = words || "Done.";
       return Promise.resolve(nanoAct(r, you, uts)).then(function () {
+        if (since != null) wordsOnly(since);
         stream(id, words, function () { say(words); });
       });
     }).catch(function () {
       var f = fallback(text);
-      Promise.resolve(f.later ? f.later() : f).then(function (a) { deliver(a, id, you, uts); });
+      Promise.resolve(f.later ? f.later() : f).then(function (a) { deliver(a, id, you, uts, since); });
     });
   }
   function unsourced(s) {
@@ -1181,25 +1252,26 @@
     layout();
   }
   function setVolume(p) {
+    acted++;
     player.volume = Math.max(0, Math.min(100, Math.round(p)));
     command("setVolume", [player.volume]);
     if (player.volume > 0 && !player.armed) command("unMute");
     // The piano the browser makes (the written answers' music, a page of the demo's own) follows it too.
-    if (view && open && !player.id && view.hasAttribute("srcdoc")) {
+    if (view && !player.id && view.hasAttribute("srcdoc")) {
       try { view.contentWindow.postMessage({ volume: player.volume }, "*"); } catch (e) {}
     }
   }
 
   var turns = 0;
   function ask(text) {
-    var you = uid("u"), uts = now(), id = "a" + (++turns);
+    var you = uid("u"), uts = now(), id = "a" + (++turns), since = acted;
     call("user", you, text, true);
-    if (claude.key) { claudeTurn(text, you, uts, id); return; }
+    if (claude.key) { claudeTurn(text, you, uts, id, since); return; }
     var r = answer(text), ai = nano.state === "available";
     if (!LOOK_IT_UP.test(text)) lastAsked = text;              // what "look it up" means next
     // The browser's AI answers what only an AI can, and what's looked up (in its words, from what's found).
     if (ai && (r.ai || r.search)) {
-      setTimeout(function () { nanoTurn(text, you, uts, id, r.search ? { search: true, query: r.search, news: r.news } : null); }, 120);
+      setTimeout(function () { nanoTurn(text, you, uts, id, r.search ? { search: true, query: r.search, news: r.news } : null, since); }, 120);
       return;
     }
     if (r.ai) r = fallback(text);
@@ -1208,16 +1280,17 @@
       var waited = Date.now();
       Promise.resolve(r.later ? r.later() : r).then(function (a) {
         setTimeout(function () {
-          deliver(a, id, you, uts);
+          deliver(a, id, you, uts, since);
           if (ai) nanoNote(text, a.text);
         }, Math.max(0, 600 - (Date.now() - waited)));
       });
     }, 120);
   }
-  // A written answer: what it shows, what it did (Actions), and its words.
-  function deliver(a, id, you, uts) {
+  // A written answer: what it shows, what it did (Actions), and its words (where they can be read: wordsOnly).
+  function deliver(a, id, you, uts, since) {
     if (a.act) a.act();
     (a.done || []).forEach(function (d) { did(d, you, uts); });
+    if (a.text && since != null) wordsOnly(since);
     stream(id, a.text || "", function () { say(a.text || ""); });
   }
   function did(text, you, uts) { call("done", { id: uid("d"), ts: now(), text: text, prompt_id: you || "", prompt_ts: uts || now() }); }
@@ -1294,14 +1367,17 @@
     return "You are Chat Computer: Claude, running a whole computer. People talk, type or touch, and you do things for them. " +
       "Right now you're in Chat Computer's demo website (chatcomputer.ai), in the person's web browser, with their own Claude " +
       "API key. The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
-      "there), and what you open goes between them, above their latest message, your latest reply and the message box.\n\n" +
+      "there), and in the middle the conversation, or what you open in its place, with the message box under it. While " +
+      "something is open the conversation is out of sight: a reply that's only words brings it back, putting what's open " +
+      "away (still playing).\n\n" +
       "Answer in the conversation, like a chat: briefly for simple things, in full when they ask for more (a recipe, a " +
       "plan, code), with a little Markdown where it helps (a list, a table, a code block; links can't be clicked here). " +
       "When they talk to you (through their AirPods) it's read aloud too, so keep it to a few sentences then. Do things " +
       "rather than describe them, and don't announce a tool before using it.\n\n" +
       "Here you can: play YouTube videos (play_youtube; use web_search to find a video's address when you don't know its " +
-      "ID for certain), show maps (show_map), show a page you write when they ask for one on the screen (show_page), give a link to a website (open_website: " +
-      "other sites can't show inside the demo; on a Chat Computer they open right here and you use them), open their " +
+      "ID for certain), show maps (show_map), show a page you write when they ask for one on the screen (show_page), open a website (open_website: " +
+      "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
+      "most other sites can't show inside the demo, so it's a link; on a Chat Computer any site opens right here and you use it), open their " +
       "messages and files (open_message, open_file), make a timer (make_timer), set the volume of what's playing " +
       "(set_volume), close what's open (close), and search the web. On a real Chat Computer you also use any website, " +
       "their real files, apps and settings, and their AirPods; when they ask for something only a Chat Computer can do, " +
@@ -1320,7 +1396,9 @@
       north: { type: "number" } }, ["place", "west", "south", "east", "north"]) },
     { name: "show_page", description: "Show a page you write between the sidebars, in Markdown (headings, lists, tables), when " +
       "they ask for something on the screen; answers go in the conversation.", input_schema: obj({ title: { type: "string" }, markdown: { type: "string" } }, ["title", "markdown"]) },
-    { name: "open_website", description: "Open a website. Other sites can't show inside the demo, so this shows a link to it there.",
+    { name: "open_website", description: "Open a website. Google (google.com, its searches, Google Maps' places and directions) and " +
+      "Wikipedia open in the middle of the screen, for them to scroll and type in; most other sites can't show inside the demo, so " +
+      "this shows a link to them there.",
       input_schema: obj({ url: { type: "string", description: "The full web address, with https" }, title: { type: "string" } }, ["url"]) },
     { name: "open_message", description: "Open one of their messages between the sidebars (as the conversation it's part of).",
       input_schema: obj({ id: { type: "string", enum: MESSAGES.map(function (m) { return m.id; }) } }, ["id"]) },
@@ -1341,14 +1419,14 @@
       var vid = String(a.video_id || "").trim();
       if (!/^[A-Za-z0-9_-]{11}$/.test(vid)) return "That isn't a YouTube video ID (11 letters, digits, - or _).";
       var start = Math.max(0, parseInt(a.start, 10) || 0);
-      youtube(vid, start);
+      youtube(vid, start, clip(a.title || "", 80));
       did("Played \u201c" + clip(a.title || "a video", 60) + "\u201d on YouTube", you, uts);
       return "Playing between the sidebars. (If its owner doesn't allow it to play on other sites, YouTube says so there.)";
     }
     if (n === "show_map") {
       var b = [a.west, a.south, a.east, a.north].map(Number);
       if (b.some(isNaN) || b[0] >= b[2] || b[1] >= b[3] || Math.abs(b[1]) > 90 || Math.abs(b[3]) > 90) return "That box isn't west < east, south < north, in degrees.";
-      map(b);
+      map(b, clip(a.place || "", 60));
       did("Opened openstreetmap.org", you, uts);
       return "The map of " + clip(a.place, 60) + " is on the screen.";
     }
@@ -1361,8 +1439,14 @@
       var url = String(a.url || "").trim(), host;
       try { var p = new URL(url); if (!/^https?:$/.test(p.protocol)) throw 0; host = p.hostname.replace(/^www\./, ""); url = p.href; }
       catch (e) { return "That isn't a full web address, with http or https."; }
+      var real = framed(url);
+      if (real) {
+        show({ src: real, title: clip(a.title || host, 80) });
+        did("Opened " + host, you, uts);
+        return host + " is on the screen, in the middle: they can scroll it and type in it (you can't see or use it from here).";
+      }
       show({ html: page(host, '<article><h1 class="title">' + esc(a.title || host) + '</h1><p class="demo-note">On Chat Computer, ' + esc(host) +
-        " opens right here, and Claude uses it for you. Other sites can't show inside this demo, so here's the link.</p><p><a href=\"" + esc(url) +
+        " opens right here, and Claude uses it for you. Most sites can't show inside this demo, so here's the link.</p><p><a href=\"" + esc(url) +
         '" target="_blank" rel="noopener noreferrer">Open ' + esc(host) + " in a new tab</a></p></article>", NOTE_CSS) });
       did("Showed a link to " + host, you, uts);
       return "A link to " + host + " is on the screen (it opens in a new tab).";
@@ -1392,17 +1476,18 @@
       did("Set the volume to " + player.volume + "%", you, uts);
       return "The volume is " + player.volume + "%.";
     }
-    if (n === "close") { var was = open; close(); return was ? "Closed." : "Nothing was open."; }
+    if (n === "close") { var was = !!view; close(); return was ? "Closed." : "Nothing was open."; }
     return "There's no tool called " + n + " here.";
   }
   // One turn: Claude's answer streams in, its tools run here, and it goes on until it's done (at most 8 rounds).
-  function claudeTurn(text, you, uts, id) {
+  function claudeTurn(text, you, uts, id, since) {
     var said = "", gap = false, rounds = 0, asked = { role: "user", content: "[" + clock() + "] " + text };
     if (!claude.talk.length) claude.system = systemPrompt();
     claude.talk.push(asked);
     trimTalk();
     call("aiStart", id);
     function onText(t) {
+      if (!said && since != null && /\S/.test(t)) wordsOnly(since);
       if (gap && said && !/\s$/.test(said)) { call("ai", id, " "); said += " "; }
       gap = false;
       said += t;
@@ -1681,7 +1766,10 @@
       $("demo-claude").addEventListener("click", claudeButton);
       $("demo-nano").addEventListener("click", nanoButton);
       $("demo-airpods").addEventListener("click", talkButton);
-      new ResizeObserver(function () { requestAnimationFrame(placeTools); }).observe($("box"));
+      // The box or the room beside it changed (the sidebars switched off, Escape filling the screen): placed again.
+      var ro = new ResizeObserver(function () { requestAnimationFrame(placeTools); });
+      ro.observe($("box"));
+      ro.observe($("composer"));
     }
     var c = $("demo-claude"), p = $("demo-airpods"), g = $("demo-nano");
     // Chrome's AI: offered while it can be downloaded, its progress while it is; once on, it just answers.
@@ -1716,8 +1804,6 @@
     tools_.classList.remove("stack", "short", "compact", "inside", "rise");
     if (tools_.parentNode !== box) box.appendChild(tools_);
     var b = box.getBoundingClientRect(), limit = $("composer").getBoundingClientRect().right;
-    var t = $("toggle-bottom"), tr = t.getBoundingClientRect();
-    if (tr.width && getComputedStyle(t).display !== "none") limit = Math.min(limit, tr.left);
     var room = limit - b.right - 1.25 * rem;
     // A stack taller than the box (three buttons) that would reach the window's bottom edge rises from the box's bottom.
     function rise() { if (tools_.getBoundingClientRect().bottom > innerHeight - 0.25 * rem) tools_.classList.add("rise"); }
@@ -1752,10 +1838,9 @@
         nanoCheck();
         break;
       case "send": ask(String(msg.text || "")); break;
-      case "drafting": drafting = !!msg.on; break;
       case "hole": hole = { x: msg.x, y: msg.y, w: msg.w, h: msg.h }; place(); break;
       case "close_content": close(); break;
-      case "expand": expanded = !expanded; place(); break;
+      case "scroll_open": scrollOpen(msg.how); break;
       case "open_message": openMessage(msg.id); break;
       case "pin": {
         var pins = store("chatcomputer-demo-pins") || {};
@@ -1778,7 +1863,7 @@
         break;
       case "open_file": if (PAGES[msg.path]) show({ html: PAGES[msg.path]() }); break;
       case "text_scale": setScale(scale * (+msg.factor || 1)); break;
-      case "panels": store("chatcomputer-demo-panels", { left: !!msg.left, right: !!msg.right, bottom: !!msg.bottom }); break;
+      case "panels": store("chatcomputer-demo-panels", { left: !!msg.left, right: !!msg.right }); break;
       case "add_account":
         call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
           "On Chat Computer, Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, X, Instagram, Facebook, TikTok and LinkedIn " +

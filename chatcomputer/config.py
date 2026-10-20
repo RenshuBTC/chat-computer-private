@@ -108,11 +108,9 @@ class Settings:
     viewing_distance_cm: int = 0    # 0 = estimated from the screen size
     screen_inches: float = 0.0      # 0 = what the monitor reports (set it if the monitor reports nothing)
     web_zoom: float = 0.0           # 0 = automatic zoom for websites
-    # The panels, each with a switch on the screen: Messages (left), Actions (right), and while something is
-    # open, the conversation under it (bottom).
+    # The sidebars, each with a switch on the screen: Messages (left) and Actions (right).
     left_panel: bool = True
     right_panel: bool = True
-    bottom_panel: bool = True
     # The screen itself: the night light (warmer colours): off, on, or evenings (by itself from night_light_from to
     # night_light_until), and how warm (1-100). The brightness is the screen's own (it keeps it).
     night_light: str = "off"
@@ -152,6 +150,7 @@ class Settings:
         if data.get("text_size") == 28 and "text_scale" not in data:
             data["text_size"] = 0   # 28 px was the fixed default before text was sized from the screen
         data.pop("theme", None)     # the old light/dark choice: the screen is black on off-white now
+        data.pop("bottom_panel", None)  # the old switch for the conversation under what's open: nothing is under it now
         if "defaults_version" not in data and (data.get("model"), data.get("effort")) == OLD_CLAUDE:
             data.pop("model")       # the default from before 20 Oct 2026, never changed: today's default instead
             data.pop("effort")

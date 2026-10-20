@@ -26,6 +26,15 @@ def test_the_demo_is_chatcomputer_s_real_screen_as_it_is_now():
     # The demo's host comes before Chat Computer's own scripts, which are the real ones; its own look after theirs.
     assert page.index("demo/host.js") < page.index("demo/md.js") < page.index("demo/chat.js")
     assert page.index("demo/chat.css") < page.index("demo/demo.css")
+    # The tab's icon: Chat Computer's (a monitor showing a speech bubble), as an SVG, and drawn for browsers that
+    # don't take one (.ico: 16, 32 and 48 pixels) and for home screens (180) by scripts/make_icons.js.
+    assert '<link rel="icon" href="favicon.svg" type="image/svg+xml">' in page and '<link rel="icon" href="favicon.ico"' in page
+    assert '<link rel="apple-touch-icon" href="apple-touch-icon.png">' in page
+    ico = (ROOT / "docs" / "favicon.ico").read_bytes()
+    assert ico[:4] == b"\0\0\1\0" and int.from_bytes(ico[4:6], "little") == 3
+    assert sorted(ico[6 + 16 * i] for i in range(3)) == [16, 32, 48]
+    png = (ROOT / "docs" / "apple-touch-icon.png").read_bytes()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and int.from_bytes(png[16:20], "big") == int.from_bytes(png[20:24], "big") == 180
 
 
 def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
@@ -35,13 +44,15 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     # From elsewhere: a map when asked, and with the visitor's own key (Connect Claude) Anthropic's API, where every
     # request goes, and YouTube's player for a video Claude plays. For a place's map, weather or air, Open-Meteo, sent
     # only the place's name (then its latitude and longitude). What's looked up (by the browser's AI, "look it up", a
-    # question of fact, the news) goes to Wikipedia: only the words looked up. YouTube's search, Google's, Google Maps
-    # and BBC News are only links, opened by the visitor in a new tab (open-meteo.com too: the air's source, named).
+    # question of fact, the news) goes to Wikipedia: only the words looked up. Google's own pages show in the middle
+    # when asked for (Google, its search for what Wikipedia hasn't got, Google Maps' directions: the addresses Google
+    # lets other pages show, igu=1 and output=embed). YouTube's search and BBC News are only links, opened by the
+    # visitor in a new tab (open-meteo.com too: the air's source, named).
     assert set(re.findall(r"https?://[^/\"' ]+", host)) == {
         "https://www.youtube-nocookie.com", "https://www.openstreetmap.org", "https://api.anthropic.com",
         "https://geocoding-api.open-meteo.com", "https://api.open-meteo.com", "https://air-quality-api.open-meteo.com",
         "https://en.wikipedia.org", "https://open-meteo.com",
-        "https://www.youtube.com", "https://www.google.com", "https://www.bbc.com"}
+        "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com"}
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("API +")) == [
         '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search', "url"], fetches
@@ -51,10 +62,16 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     assert gets and all(g.startswith(("WIKI +", '"https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" + p.lat'))
                         for g in gets if g != "url"), gets
     assert 'var WIKI = "https://en.wikipedia.org/w/api.php?' in host and "gsrsearch=\" + encodeURIComponent(q)" in host
-    for site in ("https://www.youtube.com/", "https://www.google.com/", "https://www.bbc.com/"):
+    for site in ("https://www.youtube.com/", "https://www.bbc.com/"):
         for at in [m.start() for m in re.finditer(re.escape(site), host)]:
             line = host[host.rfind("\n", 0, at):host.find("\n", at)]
             assert "var url = " in line or "link(" in line, line
+    for site in ("https://www.google.com/", "https://maps.google.com/"):
+        for at in [m.start() for m in re.finditer(re.escape(site), host)]:
+            line = host[host.rfind("\n", 0, at):host.find("\n", at)]
+            assert "igu" in line or "output=embed" in line, line
+    # Only Google's and Wikipedia's addresses are shown for real (framed); any other site asked for is a link.
+    assert "function framed(url)" in host and "wikipedia\\.org$" in host
     assert host.count("x-api-key") == 1 and "anthropic-dangerous-direct-browser-access" in host
     assert "not made by Anthropic" in host and "written in advance" in host
     # Claude Pro or Max sign-ins aren't for other apps: a sign-in token is turned away, and the sheet says why.
@@ -84,56 +101,69 @@ def test_the_demo_works_in_a_browser():
     # It opens on the word logo and Chat Computer's first words, hello, world (nothing open, no sheet, no button to
     # press), the cursor in the box under the dimmed hint, and the two buttons at the box's right.
     first = res["opening"]
-    assert not first["content"] and not first["sheet"] and first["view"] is None and first["toggles"] == ["true", "true", False]
+    assert not first["content"] and not first["sheet"] and first["view"] is None and first["toggles"] == ["true", "true"]
+    assert not first["bottom_toggle"] and not first["full"]
     assert first["first_ai"] == first["last"] == "hello, world" and first["said"] == 1 and first["logo"] == "Chat Computer"
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
-    assert first["typing_in"] == "input" and first["hint"] == "Chat computer anything or type \u201c/\u201d to search"
+    assert first["typing_in"] == "input" and first["hint"] == "Chat anything or type \u201c/\u201d"
     assert first["hint_weight"] == "400" and first["tools"] == ["Connect Claude", "Connect AirPods"] and first["tools_at"] == "box"
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
     assert res["sides_off"]["sides"] == [False, False] and res["sides_off"]["toggles"][:2] == ["false", "false"]
-    assert json.loads(res["kept"]) == {"left": False, "right": False, "bottom": True}
+    assert json.loads(res["kept"]) == {"left": False, "right": False}
     assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["first_ai"] == "hello, world"
     assert res["sides_on"]["logo"] == "Chat Computer"
-    # Asked for music: soft piano made by the browser, between the sidebars, and Actions says so.
+    # Asked for music: soft piano made by the browser, in the middle in the conversation's place (named at the top
+    # of its frame, with the message box under it), and Actions says so.
     music = res["music"]
     assert music["content"] and music["last"] == "Playing some calm piano." and music["done"][-1] == "Played some calm piano"
+    assert not music["column_shown"] and music["frame_title"] == "Now playing" and music["composer"]
     # The first thing said took the word logo away; hello, world is still the conversation's first message.
     assert music["logo"] is None and music["first_ai"] == "hello, world"
-    # Above the message box: what was asked and Chat Computer's answer, in full.
-    assert music["strip"] == ["play some piano music", "Playing some calm piano."]
     f, v = music["frame"], music["view"]
-    assert f[0] < v[0] and f[1] < v[1] and v[0] + v[2] < f[0] + f[2] and v[1] + v[3] < f[1] + f[3]
-    # "/": the list is in front of what's open.
+    assert f[0] < v[0] and f[1] + 30 < v[1] and v[0] + v[2] < f[0] + f[2] and v[1] + v[3] < f[1] + f[3]
+    # "/": the list is in front of what's open; Escape ends the search (and only that).
     assert res["over"] and res["over_view"] == v
-    # F1: the whole window, and back.
-    assert res["f1"]["view"] == [0, 0, 1600, 900] and res["f1_back"]["view"] == v
-    # The conversation's switch: the page reaches down to it; typing brings the conversation back.
-    off, back = res["bottom_off"], res["bottom_back"]
-    assert not off["composer"] and off["toggles"][2] == "false" and off["view"][3] > v[3] + 100
-    assert back["composer"] and back["toggles"][2] == "true" and back["view"] == v
-    assert not res["escaped"]["content"] and res["escaped"]["view"] is None
+    assert res["unslashed"]["content"] and not res["unslashed"]["full"] and res["unslashed"]["view"] == v
+    # Escape: the middle fills the screen (the sidebars and their switches gone, the message box still under it),
+    # and Escape again brings them back.
+    full = res["full"]
+    assert full["full"] and full["sides"] == [False, False] and full["toggles"] == [False, False] and full["composer"]
+    assert full["view"][0] < 40 and full["view"][2] > 1500 and full["view"][1] == v[1] and full["view"][3] == v[3]
+    assert not res["full_back"]["full"] and res["full_back"]["view"] == v and res["full_back"]["sides"] == [True, True]
+    # The x closes it: the conversation is back.
+    assert not res["closed"]["content"] and res["closed"]["view"] is None and res["closed"]["column_shown"]
     # "/": the demo's files; Enter opens one.
     assert res["search"]["results"][0].startswith("Packing list.md")
     assert res["opened"]["content"] and res["opened_view"].startswith("Packing list")
-    # A message opens as the conversation with its sender; a timer made on the spot.
-    assert "12:30 at the usual place" in res["jane"] and res["timer"].startswith("Timer 5:00")
-    assert res["after_timer"]["done"][-1] == "Made a timer"
-    # A long answer while something is open: both messages in full above the box (no "more").
+    assert res["opened"]["frame_title"] == "Packing list"
+    # A message opens as the whole conversation with its sender, in the middle (not the conversation with Chat
+    # Computer); a timer made on the spot.
+    assert "12:30 at the usual place" in res["jane"] and "Are you free for lunch on Friday?" in res["jane"]
+    jane = res["jane_state"]
+    assert jane["content"] and not jane["column_shown"] and jane["frame_title"] == "Jane Lim"
+    assert res["timer"].startswith("Timer 5:00") and res["after_timer"]["done"][-1] == "Made a timer"
+    # Asked something else while the timer is open, and answered only in words: the timer is put away and the
+    # conversation has the middle again, the answer in it in full (no "more").
     long = res["fallback"]
-    assert long["more"] == 0 and long["strip"][0] == "what's the meaning of life?"
-    assert long["strip"][1].startswith("I can't answer that on this page without an AI") and long["strip"][1].endswith("Type / to search the files.")
+    assert not long["content"] and long["column_shown"] and long["view"] is None and long["more"] == 0
+    assert long["last"].startswith("I can't answer that on this page without an AI") and long["last"].endswith("Type / to search the files.")
+    # Google, for real, in the middle: its own address for being shown in another page; a click on its box, and
+    # typing goes there, not into the message box.
+    g = res["google"]
+    assert g["content"] and g["src"] == "https://www.google.com/webhp?igu=1" and g["frame_title"] == "Google"
+    assert g["done"][-1] == "Opened google.com" and res["google_typed"] == {"frame": "cats", "box": ""}
     # Connect Claude: a key, checked with Anthropic; then Claude answers and does things here (a map, as asked).
     assert res["claude_sheet"]["sheet"] and res["claude_sheet"]["sheet_title"] == "Connect Claude"
     assert not res["claude_on"]["sheet"] and res["claude_on"]["tools"][0] == "Claude connected"
     assert json.loads(res["stored"]) == "sk-ant-api03-demo-test-key"
     m = res["claude_map"]
     assert m["last"] == "Here's Tokyo." and "openstreetmap.org/export/embed.html?bbox=139.55%2C35.55%2C139.95%2C35.8" in m["src"]
-    assert m["done"][-1] == "Opened openstreetmap.org" and m["strip"] == ["show me Tokyo", "Here's Tokyo."]
+    assert m["done"][-1] == "Opened openstreetmap.org" and m["frame_title"] == "Map of Tokyo" and not m["column_shown"]
     # A video Claude plays: YouTube's player between the sidebars, Actions says so, and when it ends the
     # conversation has the middle again.
     cv = res["claude_video"]
     assert cv["content"] and "youtube-nocookie.com/embed/aBcDeFgHiJk?autoplay=1" in cv["src"] and cv["last"] == "Playing it."
-    assert cv["done"][-1] == "Played \u201cA test video\u201d on YouTube"
+    assert cv["done"][-1] == "Played \u201cA test video\u201d on YouTube" and cv["frame_title"] == "A test video"
     assert not res["video_ended"]["content"] and res["video_ended"]["view"] is None
     api = res["api"]
     assert len(api) == 5 and all(a["url"] == "https://api.anthropic.com/v1/messages" for a in api)
@@ -184,7 +214,7 @@ def test_the_demo_works_in_a_browser():
     assert res["retry"] == {"yous": ["is it free", "is it free"], "last": 1}
     # A phone: no sidebars and no switches; the buttons are inside the box, and it works.
     phone = res["phone_opening"]
-    assert phone["first_ai"] == "hello, world" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False, False]
+    assert phone["first_ai"] == "hello, world" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False]
     assert phone["tools_at"] == "row"
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
     # Music, and then asked about it ("turn the music down", "stop the music": music words too): turned down (the

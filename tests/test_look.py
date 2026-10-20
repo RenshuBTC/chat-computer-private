@@ -38,7 +38,7 @@ def test_only_black_text_on_a_warm_off_white():
     assert COLOR.findall(theme.replace(root, "")) == []
     assert COLOR.findall(chat) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
-    sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--strip-h", "--side-gap"}
+    sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--side-gap"}
     assert used - sizes == {"--ground", "--ink", "--bubble", "--line", "--dim", "--sans", "--mono"}
     dims = re.findall(r"([^{}]+)\{[^}]*var\(--dim\)", chat)
     assert [d.strip() for d in dims] == ["#hint", "#send"]

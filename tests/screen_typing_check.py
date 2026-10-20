@@ -1,6 +1,7 @@
 """The message box on the conversation screen: what's typed goes into it (a real text box, typed into with real
-key presses), Shift+Enter starts a new line and the box grows, Enter sends, Escape clears it, typing after a click
-elsewhere still goes into it, and the page reports how long letters took to reach the screen.
+key presses), Shift+Enter starts a new line and the box grows, Enter sends, typing after a click elsewhere still
+goes into it, Escape makes the middle fill the screen (keeping what's typed) and back, and the page reports how long
+letters took to reach the screen.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, types with xdotool, and prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1280x800x24" python tests/screen_typing_check.py
@@ -41,7 +42,7 @@ out: dict = {}
 PAGE_JS = """(function(){var i=document.getElementById('input'), b=document.getElementById('box');
   var c=document.getElementById('composer').getBoundingClientRect(), r=b.getBoundingClientRect();
   return JSON.stringify({value: i.value, focused: document.activeElement === i,
-    drafting: document.body.classList.contains('drafting'),
+    drafting: document.body.classList.contains('drafting'), full: document.body.classList.contains('full'),
     send: getComputedStyle(document.getElementById('send')).backgroundColor,
     box_h: r.height, box_bottom: window.innerHeight - r.bottom,
     below_box: c.bottom - r.bottom, above_box: r.top - c.top,
@@ -74,6 +75,7 @@ def steps():
         ("sent", [["key", "Return"]]),
         ("after_blur", [["type", "--delay", "40", "abc"]]),
         ("escaped", [["key", "Escape"]]),
+        ("escaped_again", [["key", "Escape"]]),
     ]
 
     def run(i: int) -> None:

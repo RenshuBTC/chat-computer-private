@@ -1,6 +1,6 @@
 """ "/" in the message box, in a real Chat Computer window: typing "/" first makes the box search this computer (results
 in a list above it, matching letters bold); the arrow keys choose, Enter opens one; with nothing found, the only
-line asks Claude; Escape clears it. Anything else typed is a message, as always, and right-clicking the box opens
+line asks Claude; Escape ends the search (clearing the box). Anything else typed is a message, as always, and right-clicking the box opens
 no menu: Chat Computer is the conversation. Real key presses and clicks (xdotool) on a virtual display; Chat Computer's
 answers (the search results) come from here, as the controller would send them. Prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1600x900x24" python tests/screen_search_check.py [shot-prefix]
@@ -111,7 +111,7 @@ def steps() -> None:
     plan = [
         ("right_click", [["windowfocus", "--sync", wid()], ["mousemove", "--window", wid(), str(cx), str(cy)],
                          ["click", "3"]]),
-        ("search", [["key", "Escape"], ["type", "--delay", "60", "/rep"]]),
+        ("search", [["type", "--delay", "60", "/rep"]]),
         ("search_down", [["key", "Down"]]),
         ("search_up", [["key", "Up"]]),
         ("opened", [["key", "Return"]]),

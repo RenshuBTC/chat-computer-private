@@ -9,7 +9,9 @@ class Screen:
     """Async interface to the one Chat Computer window: the conversation and the content layer."""
 
     # --- content layer (websites, documents, files, pages Claude made)
-    async def show_url(self, url: str) -> dict[str, Any]: raise NotImplementedError
+    async def show_url(self, url: str, title: str | None = None) -> dict[str, Any]:
+        """Opens an address in the middle; `title` names it at the top of its frame (else its site's name)."""
+        raise NotImplementedError
     async def show_html(self, html: str, title: str, base_dir: str | None = None) -> dict[str, Any]: raise NotImplementedError
     async def hide_content(self) -> None: raise NotImplementedError
     async def content_info(self) -> dict[str, Any]: raise NotImplementedError
@@ -25,8 +27,8 @@ class Screen:
         """Where what's open is on the screen, in the screen's pixels (x, y, width, height); None when nothing is."""
         return None
     async def to_pdf(self, path: str, html: str | None = None, base_dir: str | None = None) -> dict[str, Any]:
-        """Print to a PDF file, with no printer and nothing shown: the page given (html), or what's open between
-        the panels. {"ok": True, "path": path} or {"ok": False, "error": why}."""
+        """Print to a PDF file, with no printer and nothing shown: the page given (html), or what's open in the
+        middle. {"ok": True, "path": path} or {"ok": False, "error": why}."""
         return {"ok": False, "error": "PDFs can't be made here."}
     # --- conversation layer
     def user_text(self, msg_id: str, text: str, final: bool) -> None: ...
@@ -123,8 +125,8 @@ class RecordingScreen(Screen):
         self.js_results: dict[str, Any] = {}
         self.js_calls: list[str] = []
 
-    async def show_url(self, url: str) -> dict[str, Any]:
-        self.mode, self.url, self.title, self.html = "content", url, url, None
+    async def show_url(self, url: str, title: str | None = None) -> dict[str, Any]:
+        self.mode, self.url, self.title, self.html = "content", url, title or url, None
         self.events.append(("show_url", url))
         return {"ok": True, "url": url, "title": url}
 

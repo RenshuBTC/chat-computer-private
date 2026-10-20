@@ -41,6 +41,9 @@ from .render import ASSETS, FONTS, NATIVE, asset  # noqa: E402
 
 log = logging.getLogger("chatcomputer.ui")
 WORLD = "chatcomputer"
+# Keys in the message box that scroll what's open (chat.js "scroll_open"): which way, and how many screens.
+SCROLL_OPEN = {"page_up": ("up", 1), "page_down": ("down", 1), "up": ("up", 0.2), "down": ("down", 0.2),
+               "top": ("top", 1), "bottom": ("bottom", 1)}
 SOURCE_WORLD = "chatcomputer-sources"  # where sources.js reads WhatsApp's and the social sites' pages
 SAFARI_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) "
              "Version/18.5 Safari/605.1.15")
@@ -182,22 +185,20 @@ class GtkScreen(Screen):
         self._done_entries: list[dict[str, Any]] = []     # Actions, as the page shows it (to rebuild the page)
         self._msg_items: dict[str, dict[str, Any]] = {}   # Messages, likewise
         self._msg_accounts: list[dict[str, Any]] = []
-        # Where the page leaves room for what Claude opens (x, y, width, height in the window), as the conversation
-        # page last said; whether a video is full screen; whether there's something typed in the message box.
+        # Where the page leaves room for what's open (x, y, width, height in the window), as the conversation page
+        # last said; whether a video is full screen.
         self._hole: tuple[int, int, int, int] | None = None
         self._fullscreen = False
-        self._expanded = False          # F1: what's open fills the whole screen
         self._locked = False            # the lock screen is up: nothing else comes on the screen
-        self._drafting = False
         # WhatsApp and the social sites Messages reads, each in a browser view of its own (chatcomputer/messages/web.py),
-        # kept in a window that's never on the screen until one is shown between the sidebars.
+        # kept in a window that's never on the screen until one is shown in the middle.
         self.sources: dict[str, Any] = {}
         self._src_windows: dict[str, Any] = {}
         self._src_ctx: Any = None
-        self.shown: Any = None          # the view between the sidebars (the content view, or a source's)
+        self.shown: Any = None          # the view in the middle (the content view, or a source's)
         self.on_source: Callable[[str, dict[str, Any]], None] = lambda provider, msg: None
         self._redirects: dict[str, Callable[[str], None]] = {}   # address prefix -> what to do instead of loading
-        self.on_closed: Callable[[], None] = lambda: None     # what was open was closed (Escape, or Close)
+        self.on_closed: Callable[[], None] = lambda: None     # what was open was closed (its x, or Home)
         self.on_page_event: Callable[[dict[str, Any]], None] = lambda msg: None   # see PAGE_EVENTS
         self.windowed = windowed
         self.layout: Layout | None = None
@@ -259,10 +260,10 @@ class GtkScreen(Screen):
         # Touches where no page is (the onscreen keyboard's place) come as touches too, not as a mouse's clicks.
         self.win.add_events(Gdk.EventMask.TOUCH_MASK)
 
-        # The conversation page fills the window: the sidebars, the conversation and the message box. A page Claude
-        # opens (a website, a video, a document) is a second view laid over it, in the space between the sidebars and
-        # above the message box that the page leaves for it (see _place). AirTouch's dots and keyboard are drawn over
-        # everything.
+        # The conversation page fills the window: the sidebars, the conversation and the message box. What's open (a
+        # website, a video, a document) is a second view laid over it, in the conversation's place between the
+        # sidebars, above the message box, in the frame the page draws for it (see _place). AirTouch's dots and
+        # keyboard are drawn over everything.
         self.root = Gtk.Overlay()
         self.win.add(self.root)
 
@@ -318,9 +319,10 @@ class GtkScreen(Screen):
         self.content.connect("permission-request", lambda v, req: (req.deny(), True)[1])
         self.content.connect("close", lambda v: self._show_chat())
         self.content.connect("web-process-terminated", self._on_renderer_stopped)
-        # A video made full screen covers everything, as in any browser; Escape brings it back between the sidebars.
+        # A video made full screen covers everything, as in any browser; Escape brings it back into its frame.
         self.content.connect("enter-fullscreen", lambda v: self._fullscreen_changed(True))
         self.content.connect("leave-fullscreen", lambda v: self._fullscreen_changed(False))
+        self.content.connect("notify::title", lambda v, p: self._retitle(v))
         self._add_in_hole(self.content)
 
         self.pointer_area = Gtk.DrawingArea()
@@ -556,7 +558,7 @@ class GtkScreen(Screen):
         except Exception:
             msg = {}
         kind = msg.get("type") if isinstance(msg, dict) else None
-        if self._locked and kind not in ("unlock", "ready", "hole", "keys", "drafting", "keyboard"):
+        if self._locked and kind not in ("unlock", "ready", "hole", "keys", "keyboard"):
             return              # locked: only the PIN (the page shows nothing else to use)
         if kind == "send":
             # Enter in the message box.
@@ -586,23 +588,25 @@ class GtkScreen(Screen):
             self._speed["keys"] += [ms for ms in msg.get("ms") or [] if isinstance(ms, (int, float)) and 0 <= ms < 60_000]
             return
         if kind == "hole":
-            # Where the conversation page leaves room for what Claude opened.
+            # Where the conversation page leaves room for what's open: its frame, in the middle.
             try:
                 self._hole = tuple(max(0, int(msg[k])) for k in ("x", "y", "w", "h"))      # type: ignore[assignment]
             except (KeyError, TypeError, ValueError):
                 return
             if self.mode == "content" and self.shown is not None:
-                self._place(self.shown, full=self._fullscreen or self._expanded)
+                self._place(self.shown, full=self._fullscreen and self.shown is self.content)
             return
         if kind == "close_content":
-            # Close (or a tap on Actions) on the conversation page.
+            # The x at the top of what's open (or a tap on Actions) on the conversation page.
             self.close_content(pause=bool(msg.get("pause", True)))
             return
-        if kind == "expand":
-            self.toggle_expand()
-            return
-        if kind == "drafting":
-            self._drafting = bool(msg.get("on"))
+        if kind == "scroll_open":
+            # Page Up or Down in the message box (or the arrow keys, Home and End while it's empty) with something
+            # open: that scrolls, as it would with the keys itself.
+            how = SCROLL_OPEN.get(str(msg.get("how")))
+            if how and self.mode == "content" and self.shown is self.content and not self._locked:
+                self.content.evaluate_javascript(f"window.__CO && __CO.scroll({json.dumps(how[0])}, {how[1]}) && 1",
+                                                 -1, WORLD, None, None, None, None)
             return
         if kind == "keyboard":
             # A finger on the message box (the onscreen keyboard comes up), or somewhere else (it goes).
@@ -656,9 +660,9 @@ class GtkScreen(Screen):
             GLib.timeout_add(300, lambda: self.content.reload() and False)
 
     # ================================================================ content layer
-    # What Claude opens (a website, a video, a document, a page it made) is shown between the two sidebars, above
-    # the latest of the conversation and the message box: the conversation page says where (a "hole" message),
-    # and the view is laid over the page there.
+    # What's open (a website, a video, a message, a document, a page Claude made) fills the middle, between the two
+    # sidebars, from the top down to the message box, in place of the conversation: the conversation page draws its
+    # frame and says where (a "hole" message), and the view is laid over the page there.
     def _add_in_hole(self, view: Gtk.Widget) -> None:
         view.set_halign(Gtk.Align.FILL)
         view.set_valign(Gtk.Align.FILL)
@@ -666,12 +670,12 @@ class GtkScreen(Screen):
         self.root.add_overlay(view)
 
     def _default_hole(self) -> tuple[int, int, int, int]:
-        """Before the page has said where: the whole width, above the message box and the latest messages."""
+        """Before the page has said where: the whole width, above the message box."""
         w, h = self.root.get_allocated_width(), self.root.get_allocated_height()
         if w <= 1 or h <= 1:
             w, h = self.win.get_default_size()
         rem = self.layout.font_px if self.layout else 24.0
-        return 0, 0, w, max(0, int(h - 13 * rem))
+        return 0, 0, w, max(0, int(h - 5 * rem))
 
     def _place(self, view: Gtk.Widget, full: bool = False) -> None:
         w, h = self.root.get_allocated_width(), self.root.get_allocated_height()
@@ -685,15 +689,23 @@ class GtkScreen(Screen):
 
     def _fullscreen_changed(self, full: bool) -> bool:
         self._fullscreen = full
-        self._place(self.content, full=full or self._expanded)
+        self._place(self.content, full=full)
         return False                      # WebKit goes on to make the video fill the view
 
-    def toggle_expand(self) -> None:
-        """F1: what's open fills the whole screen, or goes back between the sidebars."""
-        if self.mode != "content" or self.shown is None:
-            return
-        self._expanded = not self._expanded
-        self._place(self.shown, full=self._expanded or self._fullscreen)
+    def _title_of(self, view: Any) -> str:
+        """What's open, as named at the top of its frame: its page's title, else its site's name."""
+        title = " ".join((view.get_title() or "").split())
+        if title:
+            return title[:200]
+        host = urllib.parse.urlsplit(view.get_uri() or "").hostname or ""
+        return host[4:] if host.startswith("www.") else host
+
+    def _retitle(self, view: Any) -> None:
+        """A page's title came (or changed): the top of its frame says so."""
+        if self.mode == "content" and self.shown is view and not self._locked:
+            title = self._title_of(view)
+            if title:
+                self._chat_run(f"CO.title({json.dumps(title)})", "transient")
 
     def lock_screen(self, info: dict[str, Any] | None) -> None:
         def run() -> None:
@@ -710,9 +722,13 @@ class GtkScreen(Screen):
             self.chat.grab_focus()
         self._ui(run)
 
-    def _show_view(self, view: Any) -> None:
-        """Puts a view between the sidebars (or over everything, after F1), in place of what was there. While
-        locked, it's only noted: it comes on the screen once unlocked."""
+    def _show_view(self, view: Any, title: str | None = None) -> None:
+        """Puts a view in the middle, in place of the conversation or what was there, named at the top of its frame
+        (`title`, else its page's). A website has the keys: typing and the keys that scroll are the page's (its
+        search box, its shortcuts) until the message box is tapped. A page of Chat Computer's own (a document, a
+        message, a page Claude made) leaves them in the message box until it's tapped itself: it scrolls under the
+        pointer, and with Page Up and Down there. While locked, it's only noted: it comes on the screen once
+        unlocked."""
         if self.shown is not None and self.shown is not view:
             self._put_away(self.shown)
         self.mode = "content"
@@ -720,10 +736,14 @@ class GtkScreen(Screen):
         if self._locked:
             self._put_away(view)
             return
-        self._chat_run('CO.mode("content")', "mode")
-        self._place(view, full=self._expanded or (self._fullscreen and view is self.content))
+        name = self._title_of(view) if title is None else title
+        self._chat_run(f'CO.mode("content", {json.dumps(name)})', "mode")
+        self._place(view, full=self._fullscreen and view is self.content)
         view.show()
-        view.grab_focus()
+        if view is self.content and (view.get_uri() or "") in self.native_uris:
+            self.chat.grab_focus()
+        else:
+            view.grab_focus()
 
     def _put_away(self, view: Any) -> None:
         if view is self.content:
@@ -731,21 +751,17 @@ class GtkScreen(Screen):
         else:
             self._source_offscreen(view)
 
-    def _show_content(self) -> None:
-        self._show_view(self.content)
-
     def _show_chat(self) -> None:
         if self.shown is not None:
             self._put_away(self.shown)
         self.shown = None
         self.mode = "chat"
-        self._expanded = False
         self._chat_run('CO.mode("chat")', "mode")
         self.chat.grab_focus()
 
     def close_content(self, pause: bool = True) -> None:
-        """Escape, or Close under the message box: what was open goes away (a video stops), and the conversation
-        is back. (show_conversation, Claude's, leaves music playing.)"""
+        """The x at the top of what's open: it goes away (a video stops), and the conversation is back.
+        (show_conversation, Claude's, leaves music playing.)"""
         if self.mode != "content":
             return
         if pause and self.shown is self.content:
@@ -793,6 +809,7 @@ class GtkScreen(Screen):
         view.connect("decide-policy", self._on_decide_policy)
         view.connect("create", lambda v, action: None)          # no pop-up windows
         view.connect("permission-request", lambda v, req: (req.deny(), True)[1])
+        view.connect("notify::title", lambda v, p: self._retitle(v))
         view.set_halign(Gtk.Align.FILL)
         view.set_valign(Gtk.Align.FILL)
         self.sources[provider] = view
@@ -834,7 +851,7 @@ class GtkScreen(Screen):
         self._ui(run)
 
     def source_show(self, provider: str, url: str | None = None, chat: str | None = None) -> None:
-        """A site's page between the sidebars: to sign in, or to read a conversation (by its address, or for
+        """A site's page in the middle: to sign in, or to read a conversation (by its address, or for
         WhatsApp by its name)."""
         def run() -> None:
             view = self._source_view(provider)
@@ -1003,15 +1020,20 @@ class GtkScreen(Screen):
             # A finger on a website's box to type in (the onscreen keyboard comes up), or it left it.
             self.touch_keyboard(bool(msg.get("show")))
 
-    async def show_url(self, url: str) -> dict[str, Any]:
+    async def show_url(self, url: str, title: str | None = None) -> dict[str, Any]:
+        """Opens an address in the middle, named `title` at the top of its frame (else its site's name) until its
+        page's own title comes."""
         assert self.loop is not None
         fut = self.loop.create_future()
+        if title is None:
+            host = urllib.parse.urlsplit(url).hostname or ""
+            title = host[4:] if host.startswith("www.") else host
 
         def go() -> None:
             self.load_waiters.append(fut)
             self.load_error = None
             self.content.load_uri(url)
-            self._show_content()
+            self._show_view(self.content, title)
         await self._ui_call(go)
         try:
             return await asyncio.wait_for(asyncio.shield(fut), 20)
@@ -1034,7 +1056,7 @@ class GtkScreen(Screen):
             self.native_uris.add(uri)
         else:
             self.native_uris.discard(uri)
-        return await self.show_url(uri)
+        return await self.show_url(uri, title)
 
     async def hide_content(self) -> None:
         await self._ui_call(self._show_chat)
@@ -1475,15 +1497,12 @@ class GtkScreen(Screen):
             if not self.chat.has_focus():
                 self.chat.grab_focus()        # every key is for the lock screen's PIN box
             return False
-        if name == "F1" and self.mode == "content":
-            self.toggle_expand()             # what's open fills the screen, or goes back between the sidebars
+        if name == "Escape" and self.mode == "content" and not self._fullscreen and not self.chat.has_focus():
+            # Escape while what's open has the keys: the middle fills the screen, or the sidebars come back, as on
+            # the conversation page (chat.js, which has Escape otherwise). A full-screen video leaves full screen
+            # first, as anywhere.
+            self._chat_run("CO.toggleFull()", "transient")
             return True
-        if name == "Escape" and self.mode == "content" and not self._fullscreen:
-            # Escape takes away what's open. (Typed words in the message box go first; a full-screen video
-            # leaves full screen first, as anywhere.)
-            if not (self.chat.has_focus() and self._drafting):
-                self.close_content()
-                return True
         if self.mode == "chat" and not self.chat.has_focus():
             self.chat.grab_focus()      # typing goes into the conversation's message box (chat.js), whatever has focus
         # Everything else goes to the page that's showing: the conversation's message box (a real text box, so the

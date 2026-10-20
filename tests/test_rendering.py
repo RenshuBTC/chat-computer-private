@@ -134,8 +134,9 @@ def test_the_conversation_comes_back_after_its_renderer_stops():
                     reason="xvfb-run or xdotool not available")
 def test_the_message_box_works_like_the_claude_apps():
     # A real text box at the bottom, typed into with real key presses: Shift+Enter starts a new line and the box
-    # grows, Enter sends it all, Escape clears it, and typing after a click elsewhere still goes into it. Each
-    # letter's time to reach the screen is reported (logged once a minute, see GtkScreen._watch_speed).
+    # grows, Enter sends it all, and typing after a click elsewhere still goes into it. Escape makes the middle fill
+    # the screen, keeping what's typed, and Escape again brings the sidebars back. Each letter's time to reach the
+    # screen is reported (logged once a minute, see GtkScreen._watch_speed).
     import json
     import subprocess
     import sys
@@ -149,24 +150,28 @@ def test_the_message_box_works_like_the_claude_apps():
     # The cursor in the box from the start; the round send button grey until there's something to send, then black.
     assert empty["focused"] and empty["value"] == "" and empty["send"] == "rgb(145, 143, 138)"
     # Nothing under the box (or above it while awake), and in it just the dimmed hint.
-    assert empty["words"] == "Chat computer anything or type \u201c/\u201d to search" and empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
+    assert empty["words"] == "Chat anything or type \u201c/\u201d" and empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
     assert typed["value"] == "hi there" and typed["drafting"] and typed["send"] == "rgb(0, 0, 0)"
     assert two["value"] == "hi there\nsecond line" and two["box_h"] > typed["box_h"] + 20
     assert res["sent_text"] == ["hi there\nsecond line"]
     assert sent["value"] == "" and sent["box_h"] == typed["box_h"] and not sent["drafting"]
     assert res["after_blur"]["value"] == "abc" and res["after_blur"]["focused"]
-    assert res["escaped"]["value"] == ""
+    assert res["escaped"]["value"] == "abc" and res["escaped"]["full"] and res["escaped"]["focused"]
+    assert res["escaped_again"]["value"] == "abc" and not res["escaped_again"]["full"]
     assert len(res["typed_ms"]) >= 15 and all(0 <= ms < 2000 for ms in res["typed_ms"])
 
 
 
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
                     reason="xvfb-run or xdotool not available")
-def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
+def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
     # Messages at the left and Actions at the right, as rounded cards inset from the screen's edges. Something
-    # opened (a website) goes in a rounded frame between them, the same space apart, above your latest message,
-    # Claude's latest reply and the message box. F1 makes it fill the screen and F1 again puts it back; Escape
-    # closes it. A message can be pinned (it goes to the top) and opened, with real clicks.
+    # opened (a website) takes the conversation's place in the middle: a rounded frame between the cards, the same
+    # space apart, from the top down to the message box, with its name and a close button (x) at the top. There's no
+    # other part. The website has the keys (typing goes into its box); Page Down in the message box scrolls it.
+    # Escape makes the middle fill the screen, the sidebars gone, and Escape again brings them back, whether the
+    # page or the message box has the keys; in the conversation too. The x closes it. A message can be pinned (it
+    # goes to the top) and opened, with real clicks.
     import json
     import subprocess
     import sys
@@ -178,8 +183,7 @@ def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
     assert lines, (r.stdout[-2000:], r.stderr[-2000:])
     res = json.loads(lines[-1])
     assert "timeout" not in res, res
-    start, pinned, content, expanded, framed, closed = (res[k] for k in ("start", "pinned", "content", "expanded",
-                                                                         "framed", "closed"))
+    start, pinned, content = res["start"], res["pinned"], res["content"]
     w, h = start["view"]
     gap = start["messages"][0]                                  # the cards' space from the screen's edges
     assert 10 < gap < 30 and start["messages"][1] == gap and h - start["messages"][3] == gap
@@ -192,45 +196,55 @@ def test_what_is_open_sits_between_the_sidebars_and_f1_and_escape_work():
     assert not any(i["clipped"] or i["title"] for i in pinned["pinned"] + pinned["list"])
     assert res["events"] == [{"type": "pin", "list": "messages", "id": "m2", "on": True},
                              {"type": "open_message", "id": "m1"}]
-    # Open: the page is inside the frame, which is between the cards (the same space apart) and above the latest
-    # exchange; your latest message shows just above the message box.
-    assert content["mode"] == "content" and content["content"]
-    f, v = content["frame"], content["content_view"]
+    # Only the sidebars' two switches, at the top corners, filled in while their sidebar shows.
+    assert not start["bottom_toggle"] and set(start["toggles"]) == {"left", "right"}
+    tl, tr = start["toggles"]["left"], start["toggles"]["right"]
+    assert tl["shown"] and tr["shown"] and tl["x"] < start["messages"][0] + 60 and tr["x"] > start["done"][2] - 60
+    # Open: the conversation is put away, and the page is in the frame, named after its title, which is between the
+    # cards (the same space apart) from the top down to the message box, the same space above it.
+    assert content["mode"] == "content" and content["content"] and not content["column_shown"]
+    assert content["frame_title"] == "A website" and content["keys_in_page"]
+    f, v, box = content["frame"], content["content_view"], content["box_rect"]
     assert abs(f[0] - (start["messages"][2] + gap)) <= 1 and abs(f[2] - (start["done"][0] - gap)) <= 1
-    assert abs(f[1] - gap) <= 1 and f[0] < v[0] and f[1] < v[1] and v[2] < f[2] and v[3] < f[3]
-    assert f[3] < content["column"][1] <= content["last_you"][1] and content["last_you"][3] <= content["column"][3]
-    # There, your latest message and Claude's latest reply both show in full (no "\u2026 more"): the page above leaves
-    # them the room. The empty box says, dimmed, "Chat computer anything or type “/” to search".
-    assert content["more"] == 0 and content["ai_h"] > 5 * content["line"] and content["ai_bottom"] <= content["column"][3] + 1
-    assert content["hint"] == "Chat computer anything or type \u201c/\u201d to search"
+    assert abs(f[1] - gap) <= 1 and abs(box[1] - f[3] - gap) <= 2
+    assert f[0] < v[0] and f[1] + 30 < v[1] and v[2] < f[2] and v[3] < f[3]          # under its bar, inside
+    assert content["close"][0] > v[2] - 60 and f[1] < content["close"][1] < v[1]       # the x: top right, in the bar
+    assert content["hint"] == "Chat anything or type \u201c/\u201d"
     # "/": its list shows in front. The window lays the page over this one, so the page ends above the list; it
-    # comes back down when the search ends.
+    # comes back down when the search ends (Escape, which ends the search rather than filling the screen).
     sl = res["slash"]
     assert sl["searching"] and sl["results"][3] - sl["results"][1] > 2 * sl["line"] and sl["hint"] is None
     assert sl["content_view"][3] <= sl["results"][1] and sl["content_view"][1] == v[1]
-    assert not res["unslashed"]["searching"] and res["unslashed"]["content_view"] == v
-    # The panels' switches, each in its corner (the conversation's only while something is open), filled in while
-    # their panel shows. Both sidebars off: the page spreads into their room, leaving a narrow margin with each switch.
-    tl, tr, tb = (content["toggles"][k] for k in ("left", "right", "bottom"))
-    assert all(x["shown"] and x["pressed"] == "true" for x in (tl, tr, tb)) and not start["toggles"]["bottom"]["shown"]
-    assert tl["x"] < start["messages"][0] + 60 and tr["x"] > start["done"][2] - 60 and tb["y"] > h - 60
+    un = res["unslashed"]
+    assert not un["searching"] and un["content_view"] == v and not un["full"]
+    # Both sidebars off: the page spreads into their room, leaving a narrow margin with each switch; on again.
     off = res["sides_off"]
     assert off["sides"] == [False, False] and off["toggles"]["left"]["pressed"] == "false"
     ov = off["content_view"]
     assert ov[0] < v[0] - 100 and ov[2] > v[2] + 100 and ov[0] > tl["x"] and ov[2] < tr["x"]
-    # The conversation off: the page reaches down to its switch; typing brings the conversation back.
-    bo = res["bottom_off"]
-    assert not bo["composer"] and bo["content_view"][3] > ov[3] + 50 and bo["content_view"][3] < tb["y"]
-    tb2 = res["typed_back"]
-    assert tb2["composer"] and tb2["toggles"]["bottom"]["pressed"] == "true" and tb2["content_view"] == ov
+    assert [(e["left"], e["right"]) for e in res["panel_events"]] == [(False, True), (False, False)]
     assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["content_view"] == v
-    assert [(e["left"], e["right"], e["bottom"]) for e in res["panel_events"]] == [
-        (False, True, True), (False, False, True), (False, False, False), (False, False, True)]
-    # F1: the whole screen; F1 again: back in the frame. Escape: closed, back to the conversation.
-    assert expanded["content_view"] == [0, 0, w, h]
-    assert framed["content_view"] == v and framed["mode"] == "content"
+    # The website has the keys: clicked, its box gets what's typed, not the message box.
+    t = res["typed_in_page"]
+    assert t["keys_in_page"] and t["page"]["typed"] == "abc" and t["box"] == ""
+    # Escape from the page: the middle fills the screen (the sidebars and their switches gone), the message box
+    # still under it; Escape again: back.
+    full, back = res["page_full"], res["page_back"]
+    assert full["full"] and full["sides"] == [False, False] and not full["toggles"]["left"]["shown"] and full["composer"]
+    fv = full["content_view"]
+    assert fv[0] < gap + 20 and fv[2] > w - gap - 20 and fv[1] == v[1] and fv[3] == v[3] and full["page"]["typed"] == "abc"
+    assert not back["full"] and back["sides"] == [True, True] and back["content_view"] == v
+    # Page Down in the empty message box scrolls the page; Escape there fills the screen too, and back.
+    assert res["paged"]["page"]["y"] > 300 and not res["paged"]["keys_in_page"]
+    assert res["box_full"]["full"] and res["box_full"]["content_view"] == fv and res["box_full"]["box"] == ""
+    assert not res["box_back"]["full"] and res["box_back"]["content_view"] == v
+    # The x: closed, back to the conversation.
+    closed = res["closed"]
     assert closed["mode"] == "chat" and closed["content_view"] == [] and not closed["content"] and res["closed_called"]
-
+    assert closed["column_shown"] and not closed["full"]
+    # Escape in the conversation: it fills the screen; again, the sidebars are back.
+    assert res["chat_full"]["full"] and res["chat_full"]["sides"] == [False, False] and res["chat_full"]["column_shown"]
+    assert not res["chat_back"]["full"] and res["chat_back"]["sides"] == [True, True]
 
 
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),

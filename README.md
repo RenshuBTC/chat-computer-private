@@ -478,8 +478,9 @@ message box (`docs/demo/demo.css`):
 
 Chat Computer is an independent project, not made by Anthropic.
 
-The tab's icon is Chat Computer's: a monitor whose screen shows a speech bubble (`chatcomputer/ui/assets/icon.svg`,
-as `docs/favicon.svg`; `scripts/make_icons.js` draws `docs/favicon.ico` and `docs/apple-touch-icon.png` from it).
+The tab's icon is Chat Computer's: an old, bulky beige CRT monitor, a cursor glowing on its screen
+(`chatcomputer/ui/assets/icon.svg`, as `docs/favicon.svg`; `scripts/make_icons.js` draws `docs/favicon.ico` and
+`docs/apple-touch-icon.png` from it).
 
 GitHub Pages serves it from the `docs` folder (Settings, Pages, branch `main`, folder `/docs`; a private
 repository needs GitHub Pro) at chatcomputer.ai: `docs/CNAME` names the domain, and its DNS points at GitHub

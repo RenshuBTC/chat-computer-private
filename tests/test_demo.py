@@ -26,8 +26,8 @@ def test_the_demo_is_chatcomputer_s_real_screen_as_it_is_now():
     # The demo's host comes before Chat Computer's own scripts, which are the real ones; its own look after theirs.
     assert page.index("demo/host.js") < page.index("demo/md.js") < page.index("demo/chat.js")
     assert page.index("demo/chat.css") < page.index("demo/demo.css")
-    # The tab's icon: Chat Computer's (a monitor showing a speech bubble), as an SVG, and drawn for browsers that
-    # don't take one (.ico: 16, 32 and 48 pixels) and for home screens (180) by scripts/make_icons.js.
+    # The tab's icon: Chat Computer's (an old CRT monitor with a cursor on its screen), as an SVG, and drawn for
+    # browsers that don't take one (.ico: 16, 32 and 48 pixels) and for home screens (180) by scripts/make_icons.js.
     assert '<link rel="icon" href="favicon.svg" type="image/svg+xml">' in page and '<link rel="icon" href="favicon.ico"' in page
     assert '<link rel="apple-touch-icon" href="apple-touch-icon.png">' in page
     ico = (ROOT / "docs" / "favicon.ico").read_bytes()

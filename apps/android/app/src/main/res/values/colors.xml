@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The screen's off-white (theme.css's ground), for the bars at the top and bottom. -->
+    <color name="ground">#F8F5F0</color>
+</resources>

@@ -6,3 +6,10 @@ __pycache__/
 apps/desktop/frontend/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+# The Android app's build (Gradle), and the iPhone app's (XcodeGen makes the Xcode project from project.yml).
+apps/android/.gradle/
+apps/android/build/
+apps/android/app/build/
+apps/android/local.properties
+apps/ios/ChatComputer.xcodeproj/
+apps/ios/build/

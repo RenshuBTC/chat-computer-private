@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "ai.chatcomputer.app",
+    "sha256_cert_fingerprints": ["FA:94:D5:E8:FD:CC:3E:34:0A:2A:43:4D:42:68:61:AA:E4:CC:0C:5D:5F:55:75:DA:55:15:7B:0C:38:8D:F2:FB"]
+  }
+}]

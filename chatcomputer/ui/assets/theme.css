@@ -15,8 +15,8 @@
    to send, as in ChatGPT. The other colours are the light grey of your messages' bubbles (black on it is still
    16.5:1, and it stands off the background as #EDEDED did off white), which sets your words apart from Claude's the
    way chat apps do, and a little darker grey for lines (--line), as thin lines need more contrast than filled areas
-   to show as well. The message box alone is white (--paper), a card set off from the background with a soft
-   shadow, as the Claude app's is. Sizes are in rem. The screen sets the root size for this monitor and viewing distance
+   to show as well. The message box and the sidebars are white (--paper), cards set off from the background with a
+   soft shadow, as the Claude app's message box is. Sizes are in rem. The screen sets the root size for this monitor and viewing distance
    (chatcomputer/ui/layout.py), so the letters' x-height covers 0.3 degrees of view and lines hold about 70
    characters. */
 @font-face {

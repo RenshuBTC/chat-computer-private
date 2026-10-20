@@ -53,6 +53,9 @@ chat-computer/
   tests/                    Python tests for the runtime (+ mock Claude API)
   docs/                     The browser demo (GitHub Pages): Chat Computer's own screen with docs/demo/host.js standing
                             in for the computer; scripts/build_demo.py copies the screen, tests/test_demo.py checks
+  docs/get/                 chatcomputer.ai/get: the apps to download (as Annotated's page offers its extension)
+  apps/chrome/              The Chrome extension: the website in Chrome's side panel (?app=chrome), its sites in
+                            real Chrome tabs; scripts/build_apps.py zips it into docs/get, tests/test_apps.py checks
 ```
 
 ## Base system

@@ -512,6 +512,19 @@ GitHub Pages serves it from the `docs` folder (Settings, Pages, branch `main`, f
 repository needs GitHub Pro) at chatcomputer.ai: `docs/CNAME` names the domain, and its DNS points at GitHub
 Pages (A records for the domain itself, a CNAME record for `www`).
 
+## The apps
+
+**https://chatcomputer.ai/get** offers Chat Computer as apps, laid out as Annotated's page is (the name, a button
+for each, the line that says what it is; no video):
+
+* **Chrome**: an extension (`apps/chrome`) that shows Chat Computer in Chrome's side panel. The panel is the
+  website itself (chatcomputer.ai, in its frame with `?app=chrome`, so it's always the newest), at a side panel's
+  text size, and the sites asked for open in real Chrome tabs, any site, without a click: the website asks the
+  extension, which opens them (only chatcomputer.ai can ask, and only for a web address). It asks for one
+  permission, the side panel. Add to Chrome downloads it as a zip (`scripts/build_apps.py` makes it): unzip it, open
+  chrome://extensions, turn on Developer mode and choose Load unpacked, until it's in the Chrome Web Store.
+* **Windows, Mac and Android**: coming. **iPhone**: coming to the App Store.
+
 ## For the curious
 
 * `ARCHITECTURE.md` explains how it fits together.

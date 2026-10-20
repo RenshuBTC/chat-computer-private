@@ -14,10 +14,23 @@
    YouTube's player when connected Claude plays a video, and, when the browser's own AI looks something up for an
    answer (or you ask for the news), Wikipedia's articles and its Current events: only the words looked up go there.
    Google's own pages (its search, Google Maps' directions) and Wikipedia's show in the middle when asked for: of the
-   sites that might be asked for, they're the ones that let another page show them. */
+   sites that might be asked for, they're the ones that let another page show them.
+   In Chrome's side panel (the Chat Computer extension, apps/chrome: this page in its frame, ?app=chrome), sites
+   open in real Chrome tabs instead, which the extension opens: SHELL, below. */
 (function () {
   "use strict";
   var START = Date.now() / 1000;
+  // Inside the Chrome extension's side panel: any site asked for opens in a new Chrome tab (the extension's
+  // panel.js opens it, for this page, without a click), and the text is the size of a side panel's.
+  var SHELL = (function () {
+    var app = "";
+    try { app = new URLSearchParams(location.search).get("app") || ""; } catch (e) {}
+    if (app === "chrome" && window.parent !== window) {
+      return { kind: "chrome", textPx: 16, name: "Chrome's side panel",
+               openTab: function (url) { window.parent.postMessage({ chatcomputer: "open_tab", url: url }, "*"); } };
+    }
+    return null;
+  })();
   function now() { return Date.now() / 1000; }
   function call(name) {
     var args = Array.prototype.slice.call(arguments, 1);
@@ -125,6 +138,7 @@
   var size = 20, column = 600, scale = store(scaleKey()) || 1;
   // The text's size before it's made bigger or smaller (scale), from the screen; and what it is at a scale.
   function baseSize() {
+    if (SHELL && SHELL.textPx) return SHELL.textPx;
     var s = window.screen || {}, sw = s.width || window.innerWidth, sh = s.height || window.innerHeight, across = Math.min(sw, sh);
     if (onPhone()) return Math.max(16, Math.min(24, across / 18));
     if (touchOnly.matches) return Math.max(16, Math.min(20, across / 46));
@@ -503,6 +517,7 @@
   // The address to show, or null.
   function framed(url) {
     var u;
+    if (SHELL && SHELL.openTab) return null;            // (in the extension, every site in a real tab)
     try { u = new URL(url); } catch (e) { return null; }
     if (!/^https?:$/.test(u.protocol)) return null;
     var host = u.hostname.toLowerCase().replace(/^www\./, ""), q = u.searchParams;
@@ -571,6 +586,7 @@
   // A new tab with the site (without a way back to this page), or null where the browser stops it (it lets a page
   // open one only straight after a click, a tap or a key).
   function newTab(url) {
+    if (SHELL && SHELL.openTab) { SHELL.openTab(url); return {}; }
     try {
       if (navigator.userActivation && !navigator.userActivation.isActive) return null;
       var tab = window.open("", "_blank");
@@ -590,8 +606,9 @@
                         act: function () { youtube(video.id, video.start, "YouTube"); } };
     if (here) return { text: "Here's " + name + ". Click in it to type, and scroll it as you'd scroll any page.", done: ["Opened " + host],
                        act: function () { show({ src: here, title: name }); } };
-    if (tab) return { text: "Opened " + name + " in a new tab. Most sites, " + name + " among them, don't let another page show " +
-                        "them, so here they open beside this one; on a Chat Computer they open right here.",
+    if (tab) return { text: SHELL ? "Opened " + name + " in a new tab." : "Opened " + name + " in a new tab. Most sites, " + name +
+                        " among them, don't let another page show them, so here they open beside this one; on a Chat Computer " +
+                        "they open right here.",
                       done: ["Opened " + host + " in a new tab"] };
     return { text: "Your browser stopped the new tab, so " + name + " is a click away, on the screen. (Most sites can't show " +
                "inside this page; on a Chat Computer they open right here.)", done: ["Showed a link to " + host],
@@ -1255,8 +1272,11 @@
     else if (a === "youtube_search" && r.query) { var y = youtubeSearch(r.query); y.act(); y.done.forEach(function (d) { did(d, you, uts); }); }
     else if (a === "open_website" && /^https?:\/\/[^\s]+$/i.test(r.url || "")) {
       var host = r.url.replace(/^https?:\/\/(www\.)?/i, "").split(/[/?#]/)[0];
-      show(site(r.url, host, "On Chat Computer, " + host + " opens right here. Most sites can't show inside this page."));
-      did((framed(r.url) ? "Opened " : "Showed a link to ") + host, you, uts);
+      if (!framed(r.url) && SHELL && newTab(r.url)) did("Opened " + host + " in a new tab", you, uts);
+      else {
+        show(site(r.url, host, "On Chat Computer, " + host + " opens right here. Most sites can't show inside this page."));
+        did((framed(r.url) ? "Opened " : "Showed a link to ") + host, you, uts);
+      }
     } else if (a === "open_message" && THREADS[r.id]) openMessage(r.id);
     else if (a === "open_file") {
       var f = FILES.filter(function (x) { return x.name.toLowerCase() === String(r.name || "").toLowerCase(); })[0];
@@ -1667,8 +1687,9 @@
   }
   function systemPrompt() {
     return "You are Chat Computer: Claude, running a whole computer. People talk, type or touch, and you do things for them. " +
-      "Right now you're in Chat Computer's demo website (chatcomputer.ai), in the person's web browser, with their own Claude " +
-      "API key. The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
+      (SHELL ? "Right now you're in the Chat Computer extension, Chat Computer's demo website (chatcomputer.ai) in " + SHELL.name +
+        ", with the person's own Claude API key." : "Right now you're in Chat Computer's demo website (chatcomputer.ai), in the " +
+        "person's web browser, with their own Claude API key.") + " The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
       "there), and in the middle the conversation, or what you open in its place, with the message box under it. While " +
       "something is open the conversation is out of sight: a reply that's only words brings it back, putting what's open " +
       "away (still playing).\n\n" +
@@ -1678,8 +1699,9 @@
       "rather than describe them, and don't announce a tool before using it.\n\n" +
       "Here you can: play YouTube videos (play_youtube; use web_search to find a video's address when you don't know its " +
       "ID for certain), show maps (show_map), show a page you write when they ask for one on the screen (show_page), open a website (open_website: " +
+      (SHELL ? "any site, in a new Chrome tab; on a Chat Computer any site opens right here and you use it), open their " :
       "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
-      "most other sites can't show inside the demo, so it's a link; on a Chat Computer any site opens right here and you use it), open their " +
+      "most other sites can't show inside the demo, so it's a link; on a Chat Computer any site opens right here and you use it), open their ") +
       "messages and files (open_message, open_file), make a timer (make_timer), set the volume of what's playing " +
       "(set_volume), close what's open (close), and search the web. On a real Chat Computer you also use any website, " +
       "their real files, apps and settings, and their AirPods; when they ask for something only a Chat Computer can do, " +
@@ -1698,7 +1720,8 @@
       north: { type: "number" } }, ["place", "west", "south", "east", "north"]) },
     { name: "show_page", description: "Show a page you write between the sidebars, in Markdown (headings, lists, tables), when " +
       "they ask for something on the screen; answers go in the conversation.", input_schema: obj({ title: { type: "string" }, markdown: { type: "string" } }, ["title", "markdown"]) },
-    { name: "open_website", description: "Open a website. Google (google.com, its searches, Google Maps' places and directions) and " +
+    { name: "open_website", description: SHELL ? "Open a website, in a new Chrome tab beside the side panel." :
+      "Open a website. Google (google.com, its searches, Google Maps' places and directions) and " +
       "Wikipedia open in the middle of the screen, for them to scroll and type in; most other sites can't show inside the demo, so " +
       "this shows a link to them there.",
       input_schema: obj({ url: { type: "string", description: "The full web address, with https" }, title: { type: "string" } }, ["url"]) },
@@ -1749,7 +1772,8 @@
       }
       if (newTab(url)) {                // only while the click or key that asked still lets a page open a tab
         did("Opened " + host + " in a new tab", you, uts);
-        return host + " opened in a new tab beside this page (most sites can't show inside it): they're looking at it there.";
+        return SHELL ? host + " opened in a new Chrome tab: they're looking at it there." :
+          host + " opened in a new tab beside this page (most sites can't show inside it): they're looking at it there.";
       }
       show({ html: page(host, '<article><h1 class="title">' + esc(a.title || host) + '</h1><p class="demo-note">On Chat Computer, ' + esc(host) +
         " opens right here, and Claude uses it for you. Most sites can't show inside this demo, so here's the link.</p><p><a href=\"" + esc(url) +

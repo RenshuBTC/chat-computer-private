@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get Chat Computer</title>
+<meta name="description" content="Chat Computer for Chrome, Windows, Mac, Android and iPhone, and in your browser.">
+<link rel="stylesheet" href="../demo/theme.css">
+<style>
+  /* As Annotated's page is: the name, then what to get it with, then the line that says what it is. In Chat
+     Computer's own look: black on its off-white, Atkinson Hyperlegible Next, the name in the word logo's weight. */
+  html { font-size: 16px; }
+  html, body { height: auto; }
+  main { max-width: 1072px; margin: 0 auto; padding: 56px 16px 72px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 40px; font-weight: 800; line-height: 1.1; letter-spacing: -0.02em; white-space: nowrap; }
+  .get { display: flex; flex-wrap: wrap; gap: 10px; }
+  .add {
+    display: inline-flex; align-items: center; justify-content: center; height: 40px; padding: 0 22px;
+    border: 2px solid var(--ink); border-radius: 999px; background: var(--ink); color: var(--ground);
+    font-weight: 700; font-size: 15px; text-decoration: none; white-space: nowrap;
+  }
+  .add:hover { background: var(--paper); color: var(--ink); }
+  .add:focus-visible { outline: 3px solid var(--dim); outline-offset: 2px; }
+  .add.web { background: var(--paper); color: var(--ink); border-color: var(--paper);
+             box-shadow: 0 0.3rem 1.4rem color-mix(in srgb, var(--ink) 9%, transparent); }
+  .add.web:hover { border-color: var(--ink); }
+  .add.soon { background: none; color: var(--dim); border-color: var(--line); cursor: default; }
+  .tagline { margin: 44px 0 0; font-size: 30px; font-weight: 700; line-height: 1.2; text-align: center; text-wrap: balance; }
+  @media (max-width: 560px) {
+    main { padding-top: 32px; }
+    h1 { font-size: clamp(26px, 8.5vw, 32px); }
+    .get { width: 100%; flex-direction: column; }
+    .add { width: 100%; height: 44px; }
+    .tagline { margin-top: 32px; font-size: clamp(21px, 6.6vw, 26px); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Chat Computer</h1>
+    <nav class="get" aria-label="Get Chat Computer">
+      <a class="add" id="chrome" href="Chat-Computer-Chrome.zip" download
+         title="Downloads the extension. Unzip it, open chrome://extensions, turn on Developer mode, and choose Load unpacked.">Add to Chrome</a>
+      <span class="add soon" id="windows" aria-disabled="true" title="Coming soon">Windows</span>
+      <span class="add soon" id="mac" aria-disabled="true" title="Coming soon">Mac</span>
+      <span class="add soon" id="android" aria-disabled="true" title="Coming soon">Android</span>
+      <span class="add soon" id="iphone" aria-disabled="true" title="Coming to the App Store">iPhone</span>
+      <a class="add web" id="web" href="../" title="Chat Computer in this browser, nothing to install.">Try it here</a>
+    </nav>
+  </header>
+  <h2 class="tagline">Talk, type or touch. Claude does the rest.</h2>
+</main>
+</body>
+</html>

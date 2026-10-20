@@ -76,7 +76,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $site = Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1','--directory','apps/desktop/smoke' -PassThru
+          $site = Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1','--directory','apps/desktop/smoke' -WindowStyle Hidden -PassThru
           $env:CHATCOMPUTER_OPEN = 'http://127.0.0.1:8765/index.html'
           $app = Start-Process 'apps/desktop/src-tauri/target/release/chat-computer.exe' -PassThru
           Start-Sleep -Seconds 25
@@ -92,12 +92,14 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p screens
+          hdiutil attach "out/${{ matrix.out }}" -mountpoint /Volumes/ChatComputer -nobrowse -quiet
           python3 -m http.server 8765 --bind 127.0.0.1 --directory apps/desktop/smoke & site=$!
           CHATCOMPUTER_OPEN=http://127.0.0.1:8765/index.html \
-            "apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Chat Computer.app/Contents/MacOS/chat-computer" & app=$!
+            "/Volumes/ChatComputer/Chat Computer.app/Contents/MacOS/chat-computer" & app=$!
           sleep 30
           screencapture -x screens/mac.png || true
           kill $app $site || true
+          hdiutil detach /Volumes/ChatComputer -quiet || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -104,6 +104,8 @@ def test_the_demo_works_in_a_browser():
     assert not first["content"] and not first["sheet"] and first["view"] is None and first["toggles"] == ["true", "true"]
     assert not first["bottom_toggle"] and not first["full"]
     assert first["first_ai"] == first["last"] == "hello, world" and first["said"] == 1 and first["logo"] == "Chat Computer"
+    # The tab's icon, the old monitor, at the word logo's left, facing it.
+    assert first["mark"]["loaded"] and first["mark"]["left"] == 0 and first["mark"]["w"] > 30
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
     assert first["typing_in"] == "input" and first["hint"] == "Chat anything or \u201c/\u201d"
     assert first["hint_weight"] == "400" and first["tools"] == ["Connect Claude", "Connect AirPods"] and first["tools_at"] == "box"

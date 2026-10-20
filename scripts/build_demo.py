@@ -48,6 +48,7 @@ def index_html() -> str:
          '<link rel="stylesheet" href="demo/chat.css">\n<link rel="stylesheet" href="demo/demo.css">'),
         ('<script src="md.js"></script>', '<script src="demo/host.js"></script>\n<script src="demo/md.js"></script>'),
         ('<script src="chat.js"></script>', '<script src="demo/chat.js"></script>'),
+        ('<img id="mark" src="icon.svg"', '<img id="mark" src="favicon.svg"'),     # the icon, as the tab's
     ]
     for old, new in swaps:
         if page.count(old) != 1:

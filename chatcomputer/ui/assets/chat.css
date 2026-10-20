@@ -86,15 +86,19 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* Before you've said anything: the word logo in the middle of the screen, with Chat Computer's first words,
-   hello, world, as its message above the box. The logo goes with the first thing you say. */
+/* Before you've said anything: the word logo in the middle of the screen, Chat Computer's icon at its left (the old
+   monitor of the browser tab's icon, turned to face the words, about as tall as the letters with their stems),
+   with Chat Computer's first words, hello, world, as its message above the box. The logo goes with the first thing
+   you say. */
 #welcome {
   position: fixed; left: var(--left, 0px); right: var(--panel, 0px); top: 0; bottom: var(--composer-h, 5rem);
   display: flex; align-items: center; justify-content: center; margin: 0; pointer-events: none;
 }
 #wordmark {
+  display: flex; align-items: center; gap: 0.28em;
   font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0;
 }
+#mark { flex: none; width: 1.3em; height: 1.3em; }
 body.has-you #welcome, body.content #welcome { display: none; }
 
 /* Something open (body.content): a website, a video, a map, a conversation from Messages, a file. It fills the

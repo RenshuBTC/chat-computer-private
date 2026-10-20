@@ -82,6 +82,13 @@ async function state(page) {
       panel: document.body.classList.contains("panel"),
       first_ai: ((document.querySelector("#log > .ai") || {}).textContent || "").trim(),
       logo: shown("welcome") ? document.getElementById("wordmark").textContent : null,
+      // The icon at the word logo's left: drawn, how far in from the logo's left edge, and how wide.
+      mark: (() => {
+        const m = document.getElementById("mark");
+        if (!m || !shown("welcome")) return null;
+        const r = m.getBoundingClientRect(), t = document.getElementById("wordmark").getBoundingClientRect();
+        return { loaded: m.complete && m.naturalWidth > 0, left: Math.round(r.left - t.left), w: Math.round(r.width) };
+      })(),
       said: document.querySelectorAll("#log > .you, #log > .ai").length,
       sides: [shown("messages"), shown("done")],
       composer: shown("composer"),

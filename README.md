@@ -85,7 +85,8 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   they come, so you never scroll down to read it; scroll up for anything earlier. Under each message, as in the
   Claude app: under Claude's, copy, read aloud, thumbs up or down (kept, to make Chat Computer better) and ask
   again; under yours, ask again, edit and copy; with when it was. Before
-  anything is said, its name, **Chat Computer**, is in the middle, and the conversation starts with its first
+  anything is said, its name, **Chat Computer**, is in the middle, with its icon (an old monitor, facing the name)
+  at the left, and the conversation starts with its first
   words, the classic `hello, world`; the name goes once you say something.
   The empty message box says, dimmed, "Chat anything or “/”" (a "/" searches your files), with the cursor already
   blinking in it. The round button at its right sends: grey while there's

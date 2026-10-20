@@ -154,7 +154,7 @@
   // And, as the Claude app's are for the time of day, greetings for where you are and its weather now (CO.here: the
   // place, your time zone's city or where you said you live; the weather there from Open-Meteo, as a WMO weather
   // code, °C and whether it's light there). {part}: morning (from 6), afternoon (12), evening (5 pm) or night (9 pm).
-  var here = { place: "", code: null, temp: null, day: null };
+  var here = { place: "", code: null, temp: null, day: null, pending: false };
   var AROUND = {
     morning: ["Morning in {place}, {name}", "How's {place} this morning, {name}?"],
     afternoon: ["Afternoon in {place}, {name}", "How's {place} today, {name}?"],
@@ -187,7 +187,9 @@
       var light = here.day !== false, t = here.temp;
       lines = lines.concat(WEATHER[weatherOf(w)] || []);
       if (typeof t === "number") lines = lines.concat(t >= 32 ? WEATHER.hot : t <= 5 ? WEATHER.cold : t >= 26 && !light ? WEATHER.warm : []);
-      lines = lines.filter(function (l) { return !l[1] || (l[1] === "day") === light; });
+      // "day" while it's light; "night" once the light's gone in the evening or at night (not before dawn).
+      var late = part === "evening" || part === "night";
+      lines = lines.filter(function (l) { return !l[1] || (l[1] === "day" ? light : !light && late); });
     }
     return lines.map(function (l) {
       return named(l[0].replace("{place}", here.place).replace("{part}", part));
@@ -220,13 +222,15 @@
     introLater(LOGO_MS, function () { body.classList.remove("intro"); });
     introLater(LOGO_MS + LOGO_FADE_MS, function () {
       if (log.children.length) return;                            // something was said first
-      var text = "", at = 0, m = ensureAI("hello");
+      var text = "", at = 0, waited = 0, m = ensureAI("hello");
       m.el.classList.add("hello");
       follow();
       // In pieces of a few letters, as the demo's written answers come (docs/demo/host.js: stream). Chosen once the
       // thinking's over: the weather looked up meanwhile can be in it.
       introLater(THINK_MS, function step() {
         if (ai.hello !== m) return;
+        // While the weather is being looked up (CO.here: pending), a little longer, up to a second and a half.
+        if (!text && here.pending && waited < 1500) { waited += 100; introLater(100, step); return; }
         if (!text) text = greeting();
         var to = Math.min(text.length, at + 3 + Math.floor(Math.random() * 6));
         window.CO.ai("hello", text.slice(at, to));
@@ -1440,12 +1444,13 @@
       who = String(name || "").replace(/[^\p{L}\p{M}'’ .-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 40);
       claudeAnswers = !!model;
     },
-    // Where you are, and its weather now when it's been looked up: {place, code, temp, day} (see hereGreetings).
+    // Where you are, and its weather now when it's been looked up: {place, code, temp, day} (see hereGreetings);
+    // pending while it's being looked up (the greeting waits for it a moment).
     here: function (info) {
       info = info || {};
       here = { place: String(info.place || "").replace(/[^\p{L}\p{M}\p{N}'’ .,()-]/gu, "").trim().slice(0, 60),
                code: typeof info.code === "number" ? info.code : null, temp: typeof info.temp === "number" ? info.temp : null,
-               day: typeof info.day === "boolean" ? info.day : null };
+               day: typeof info.day === "boolean" ? info.day : null, pending: !!info.pending };
     },
     // The greetings there are to choose from now: Claude's for the time and day, and those for where you are.
     greetingsNow: function () { var at = new Date(); return { time: greetings(at), here: hereGreetings(at) }; },

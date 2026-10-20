@@ -86,5 +86,7 @@ def test_the_screen_is_told_and_claude_can_set_where_they_live(tmp_path, monkeyp
             if screen.events[-1][1].get("code") is not None:
                 break
     asyncio.run(run())
-    assert screen.events[-1] == ("here", {"place": "Singapore", "code": 61, "temp": 27.4, "day": False})
+    # First the place, saying its weather is coming (a greeting about to be chosen waits a moment), then the weather.
+    assert screen.events[-2:] == [("here", {"place": "Singapore", "pending": True}),
+                                  ("here", {"place": "Singapore", "code": 61, "temp": 27.4, "day": False})]
     assert "home_place" in T.SETTABLE

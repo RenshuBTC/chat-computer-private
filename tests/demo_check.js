@@ -823,6 +823,10 @@ export async function pipeline(task, model, opts) {
   const [mornCtx, morn] = await singapore("2026-10-23T08:15:00+08:00");         // a Friday morning, sunny, no name
   out.greet_morning = { said: await greeted(morn), now: await morn.evaluate(() => window.CO.greetingsNow()) };
   await mornCtx.close();
+  Object.assign(sky, { code: 3, temp: 26.5, day: 0 });
+  const [dawnCtx, dawn] = await singapore("2026-10-21T06:15:00+08:00");         // a Wednesday, cloudy, still dark
+  out.greet_dawn = (await dawn.evaluate(() => window.CO.greetingsNow())).here;
+  await dawnCtx.close();
 
   out.errors = errors;
   await browser.close();

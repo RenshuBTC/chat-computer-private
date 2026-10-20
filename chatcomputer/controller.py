@@ -2010,13 +2010,17 @@ class Controller:
         it's old, where the weather is looked up at all."""
         s = self.settings
         place = self.here.place_for(s.home_place, s.timezone)
-        self.screen.here(self.here.known(place))
-        if self.weather and (look or self.here.stale(place)) and self.loop:
-            async def fetch() -> None:
-                info = await self.loop.run_in_executor(None, self.here.look_up, place)
-                if info and place == self.here.place_for(self.settings.home_place, self.settings.timezone):
-                    self.screen.here(info)
-            self._spawn(fetch())
+        known = self.here.known(place)
+        if not (self.weather and (look or self.here.stale(place)) and self.loop):
+            self.screen.here(known)
+            return
+        self.screen.here({**known, "pending": True})       # (a greeting about to be chosen waits a moment for it)
+
+        async def fetch() -> None:
+            info = await self.loop.run_in_executor(None, self.here.look_up, place)
+            if place == self.here.place_for(self.settings.home_place, self.settings.timezone):
+                self.screen.here(info or known)
+        self._spawn(fetch())
 
     async def _weather_now_and_then(self) -> None:
         """Every half hour, so the next conversation's greeting has the weather as it is."""

@@ -226,6 +226,8 @@ def test_the_demo_works_in_a_browser():
     assert mo["now"]["here"] == ["Morning in Singapore", "How's Singapore this morning?", "Sunny morning in Singapore",
                                  "Blue skies over Singapore"]
     assert mo["said"].split("\n")[1] in mo["now"]["time"] + mo["now"]["here"]
+    # Still dark at a quarter past six: a morning's greetings, not a night's ("Warm night"), nor a day's ("Grey skies").
+    assert res["greet_dawn"] == ["Morning in Singapore", "How's Singapore this morning?", "Cloudy morning in Singapore"]
     # The name you go by: asked, given ("call me", in your words, capitalised), not taken from "call me back later",
     # and forgotten; where you live: found on the map (Penang, in your word for it), its weather in the greeting and
     # when you ask for the weather.

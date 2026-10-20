@@ -675,16 +675,16 @@
     if (!place) { call("here", {}); return; }
     if (kept.place !== place) kept = { place: place };
     if (now() - (kept.ts || 0) < 1800) { call("here", kept); return; }
-    call("here", { place: place });                       // the place now, its weather once it's here
+    call("here", { place: place, pending: true });        // the place now, its weather once it's here
     (typeof kept.lat === "number" ? Promise.resolve(kept) : place_(place)).then(function (p) {
       return forecast(p).then(function (w) {
         var c = w && w.current;
-        if (!c || typeof c.weather_code !== "number") return;
+        if (!c || typeof c.weather_code !== "number") throw new Error("no weather");
         var info = { place: place, lat: p.lat, lon: p.lon, code: c.weather_code, temp: c.temperature_2m, day: c.is_day === 1, ts: now() };
         store(HERE_KEY, info);
         call("here", info);
       });
-    }).catch(function () {});
+    }).catch(function () { call("here", { place: place }); });
   }
   function hereName() {
     try {

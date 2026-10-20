@@ -185,6 +185,34 @@ for _ in $(seq 1 100); do [ -f "$LOGDIR/session.log.1" ] && break; sleep 0.1; do
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 if [ -f "$LOGDIR/session.log.1" ]; then pass "log rotation produced session.log.1"; else fail "log rotation did not rotate (no .1)"; ls -la "$LOGDIR" >&2; fi
 
+# --- Test 5b: the log stays small while Chat Computer runs (for weeks), not only between runs ----------
+rm -f "$LOGDIR"/session.log*
+LONG="$WORK/fake-long"
+cat > "$LONG" <<LF
+#!/bin/bash
+echo \$\$ > "$WORK/long.pid"
+for i in \$(seq 1 300); do printf '%0199d\n' "\$i"; sleep 0.005; done
+echo "written" > "$WORK/long.done"
+sleep 30
+LF
+chmod +x "$LONG"
+rm -f "$WORK/long.done"
+env HOME="$HOME" CHATCOMPUTER_START_CMD="$LONG" CHATCOMPUTER_DOCTOR_CMD="$FAKE_DOCTOR" CHATCOMPUTER_NO_X_SETUP=1 \
+    CHATCOMPUTER_LOG_MAX_BYTES=4096 CHATCOMPUTER_LOG_KEEP=2 CHATCOMPUTER_LOG_CHECK_S=0.2 \
+    bash "$SESSION" > "$WORK/session.out" 2>&1 &
+pid=$!
+for _ in $(seq 1 150); do [ -f "$WORK/long.done" ] && break; sleep 0.1; done
+sleep 0.6                                   # a look at the log after the last of it
+size=$(wc -c < "$LOGDIR/session.log" 2>/dev/null || echo 0)
+kept=$(cat "$LOGDIR"/session.log* 2>/dev/null | wc -c)
+kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+kill "$(cat "$WORK/long.pid" 2>/dev/null)" 2>/dev/null
+if [ -f "$WORK/long.done" ] && [ "$size" -lt 4096 ] && [ -f "$LOGDIR/session.log.1" ]; then
+  pass "log rotation while Chat Computer runs (session.log $size bytes, $kept kept of 60000 written)"
+else
+  fail "log grew while Chat Computer ran: session.log $size bytes, $kept kept"; ls -la "$LOGDIR" >&2
+fi
+
 # --- Test 6 (optional): X setup path under Xvfb ----------------------------
 if command -v Xvfb >/dev/null 2>&1 && command -v xset >/dev/null 2>&1; then
   export DISPLAY=:99

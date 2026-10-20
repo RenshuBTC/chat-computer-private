@@ -277,6 +277,28 @@ def test_render_files(tmp_path):
     assert "Quarterly plan" in html and "Ship Chat Computer." in html
 
 
+def test_table_cells_with_line_breaks_or_bars_stay_in_their_row(tmp_path):
+    # A spreadsheet cell with a line break in it (Alt+Enter in Excel), a header with a "|", a Word table the same:
+    # each table row stays one Markdown row, so the table shows as a table.
+    import docx
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Item | code", "Notes"])
+    ws.append(["Rent", "Due on the 1st\nPaid by transfer"])
+    wb.save(tmp_path / "b.xlsx")
+    md = render._xlsx_markdown(str(tmp_path / "b.xlsx"))
+    lines = [ln for ln in md.splitlines() if ln.startswith("|")]
+    assert lines == ["| Item \\| code | Notes |", "|---|---|", "| Rent | Due on the 1st Paid by transfer |"]
+    d = docx.Document()
+    t = d.add_table(rows=2, cols=2)
+    t.cell(0, 0).text, t.cell(0, 1).text = "A|B", "C"
+    t.cell(1, 0).text, t.cell(1, 1).text = "one\ntwo", "three"
+    d.save(tmp_path / "t.docx")
+    md = render._docx_markdown(str(tmp_path / "t.docx"))
+    assert md.splitlines() == ["| A\\|B | C |", "|---|---|", "| one two | three |"]
+
+
 def test_private_sign_in_files_stay_private(tmp_path):
     ctx, server, policies, _ = make(tmp_path)
     token = ctx.paths.token_file

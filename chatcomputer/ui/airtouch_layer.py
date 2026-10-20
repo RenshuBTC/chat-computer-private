@@ -123,9 +123,9 @@ class AirLayer:
     # ---------------------------------------------------------------- the dots
     def set_dots(self, dots: list[tuple[float, float, str]]) -> None:
         old, self.dots = self.dots, list(dots)
-        r = self._radius("press") + 4
-        for x, y, _kind in old + self.dots:
-            self.area.queue_draw_area(int(x - r), int(y - r), int(2 * r) + 2, int(2 * r) + 2)
+        for x, y, kind in old + self.dots:
+            r = self._reach(kind) + 2                  # (and the edge's smoothing)
+            self.area.queue_draw_area(*self._int_rect((x - r, y - r, 2 * r, 2 * r)))
         if self.up:
             hover = set()
             for x, y, kind in self.dots:
@@ -141,6 +141,16 @@ class AirLayer:
         rem = self.rem() or 24.0
         # The typing dots are small: they sit on the keys' letters.
         return {"key": 0.15, "press": 0.3, "pinch": 0.42, "scroll": 0.42}.get(kind, 0.32) * rem
+
+    @staticmethod
+    def _edge(r: float) -> float:
+        return max(2.0, r * 0.28)
+
+    def _reach(self, kind: str) -> float:
+        """How far from its middle a dot is drawn: its white rim, or its ring's white edge (see _draw_dot). What's
+        drawn again when it moves must reach that far, or a ring leaves bits of itself behind."""
+        r = self._radius(kind)
+        return r + (self._edge(r) if kind in ("point", "key") else 1.5 * self._edge(r))
 
     def _line(self) -> float:
         return max(1.5, round((self.rem() or 24.0) * 0.07, 1))
@@ -160,7 +170,7 @@ class AirLayer:
 
     def _draw_dot(self, cr: Any, x: float, y: float, kind: str) -> None:
         r = self._radius(kind)
-        edge = max(2.0, r * 0.28)
+        edge = self._edge(r)
         if kind in ("point", "key"):
             # A black dot with a white rim, so it shows on any picture.
             cr.set_source_rgb(*WHITE)

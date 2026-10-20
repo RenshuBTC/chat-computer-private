@@ -37,6 +37,7 @@ VIDIOC_ENUM_FRAMESIZES = 0xC02C564A
 VIDIOC_ENUM_FRAMEINTERVALS = 0xC034564B
 
 BUF_TYPE_VIDEO_CAPTURE = 1
+BUF_FLAG_ERROR = 0x40        # the picture in the buffer may be damaged (the camera goes on all the same)
 MEMORY_MMAP = 1
 CAP_VIDEO_CAPTURE = 0x1
 CAP_STREAMING = 0x04000000
@@ -249,13 +250,17 @@ class Camera:
                 continue
             except OSError:
                 return                      # unplugged
-            i, used = struct.unpack_from("<II", b, 0)[0], struct.unpack_from("<I", b, 8)[0]
-            data = bytes(self.maps[i][:used])
+            i = struct.unpack_from("<I", b, 0)[0]
+            used, flags = struct.unpack_from("<II", b, 8)
+            # A picture the camera says may be damaged, or an uncompressed one cut short, is passed over: the
+            # next one is whole.
+            whole = used and not flags & BUF_FLAG_ERROR and (self.fmt != YUYV or used >= self.stride * self.height)
+            data = bytes(self.maps[i][:used]) if whole else b""
             try:
                 _ioctl(self.fd, VIDIOC_QBUF, b)
             except OSError:
                 return
-            if used:
+            if data:
                 yield data
 
     def decode(self, data: bytes, max_width: int = 960) -> Image.Image:

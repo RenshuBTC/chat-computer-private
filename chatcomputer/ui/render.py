@@ -136,6 +136,20 @@ VIDEO = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi", ".ogv"}
 AUDIO = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac"}
 
 
+def _cell(c: Any) -> str:
+    """A table cell as Markdown: one line (a cell's line breaks would end the table's row there), and | as text."""
+    return " ".join(str(c).replace("|", "\\|").splitlines())
+
+
+def _table(rows: list[list[str]]) -> str:
+    """Rows (the first is the header) as a Markdown table."""
+    width = max(len(r) for r in rows)
+    rows = [r + [""] * (width - len(r)) for r in rows]
+    lines = ["| " + " | ".join(_cell(c) for c in rows[0]) + " |", "|" + "---|" * width]
+    lines += ["| " + " | ".join(_cell(c) for c in r) + " |" for r in rows[1:]]
+    return "\n".join(lines)
+
+
 def _csv_markdown(path: str, limit: int = 200) -> str:
     import csv
     with open(path, newline="", encoding="utf-8", errors="replace") as f:
@@ -148,12 +162,7 @@ def _csv_markdown(path: str, limit: int = 200) -> str:
         rows = [r for _, r in zip(range(limit + 1), csv.reader(f, dialect))]
     if not rows:
         return "(empty)"
-    width = max(len(r) for r in rows)
-    rows = [r + [""] * (width - len(r)) for r in rows]
-    esc = lambda c: c.replace("|", "\\|").replace("\n", " ")
-    lines = ["| " + " | ".join(esc(c) for c in rows[0]) + " |", "|" + "---|" * width]
-    lines += ["| " + " | ".join(esc(c) for c in r) + " |" for r in rows[1:]]
-    return "\n".join(lines)
+    return _table(rows)
 
 
 def _xlsx_markdown(path: str) -> str:
@@ -165,10 +174,7 @@ def _xlsx_markdown(path: str) -> str:
         rows = [r for r in rows if any(x.strip() for x in r)]
         if not rows:
             continue
-        width = max(len(r) for r in rows)
-        rows = [r + [""] * (width - len(r)) for r in rows]
-        parts.append(f"## {ws.title}\n\n" + "| " + " | ".join(rows[0]) + " |\n|" + "---|" * width + "\n" +
-                     "\n".join("| " + " | ".join(c.replace("|", "\\|") for c in r) + " |" for r in rows[1:]))
+        parts.append(f"## {ws.title}\n\n" + _table(rows))
     wb.close()
     return "\n\n".join(parts) or "(empty spreadsheet)"
 
@@ -193,10 +199,9 @@ def _docx_markdown(path: str) -> str:
         else:
             out.append(t)
     for table in d.tables[:10]:
-        rows = [[c.text.strip().replace("|", "\\|") for c in r.cells] for r in table.rows]
+        rows = [[c.text.strip() for c in r.cells] for r in table.rows]
         if rows:
-            w = max(len(r) for r in rows)
-            out.append("| " + " | ".join(rows[0]) + " |\n|" + "---|" * w + "\n" + "\n".join("| " + " | ".join(r) + " |" for r in rows[1:]))
+            out.append(_table(rows))
     return "\n\n".join(out)
 
 

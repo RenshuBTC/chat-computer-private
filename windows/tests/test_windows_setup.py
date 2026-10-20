@@ -21,7 +21,7 @@ import pytest
 
 WIN = Path(__file__).resolve().parents[1]
 REPO = WIN.parent
-SCRATCH = Path("/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/windows-setup")
+SCRATCH = Path(os.environ.get("CHATCOMPUTER_TEST_SCRATCH", str(Path.home() / ".cache" / "chatcomputer-test" / "windows-setup")))
 
 
 def _find(env, *candidates):

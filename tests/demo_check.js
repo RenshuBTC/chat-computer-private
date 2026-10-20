@@ -3,7 +3,8 @@
 // the box (the logo goes with the first message sent); the
 // panels' switches; music (made by the browser); "/" lists the files in front of what's open; F1 and Escape; a
 // message opened; Connect Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
-// when it ends, with a stand-in for YouTube's player; answers streamed); Connect AirPods' sheet; a phone.
+// when it ends, with a stand-in for YouTube's player; answers streamed); Connect AirPods' sheet; a phone (music
+// turned down, then stopped).
 // Prints JSON.  Run: node tests/demo_check.js [shot-prefix]
 const path = require("path");
 const { chromium } = require("playwright");
@@ -240,6 +241,17 @@ async function ask(page, text) {
   await ask(phone, "hello");
   out.phone = await state(phone);
   if (shot) await phone.screenshot({ path: shot + "-phone.png" });
+  // Music, and then asked about it: turned down (the same music, quieter: not started again), then stopped.
+  await ask(phone, "play some piano music");
+  out.phone_music = await state(phone);
+  const piano = await (await phone.$("#demo-view")).contentFrame();
+  await piano.waitForSelector("#play");
+  await piano.evaluate(() => { window.same = true; });
+  await ask(phone, "turn the music down");
+  out.phone_down = await state(phone);
+  out.phone_down_piano = await piano.evaluate(() => ({ same: window.same === true, vol: window.vol }));
+  await ask(phone, "stop the music");
+  out.phone_stopped = await state(phone);
   out.errors = errors;
   await browser.close();
   console.log(JSON.stringify(out));

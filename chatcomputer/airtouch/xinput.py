@@ -105,15 +105,18 @@ class SharedPointer:
     def __init__(self, x: Any) -> None:
         self.x = x
         self.left_at: tuple[int, int] | None = None
+        self.mouse_at: tuple[int, int] | None = None       # where the mouse last put it
         self.hidden = False
         self.mouse_t = -1e9
 
     def check(self, t: float) -> bool:
-        """Whether a mouse has the pointer (call this often: it notices one moving it)."""
-        if self.left_at is not None:
+        """Whether a mouse has the pointer (call this often: it notices one moving it, and one that goes on moving
+        it keeps it)."""
+        at = self.left_at if self.left_at is not None else self.mouse_at
+        if at is not None:
             px, py = self.x.position()
-            if abs(px - self.left_at[0]) > 2 or abs(py - self.left_at[1]) > 2:
-                self.mouse_t, self.left_at = t, None
+            if abs(px - at[0]) > 2 or abs(py - at[1]) > 2:
+                self.mouse_t, self.left_at, self.mouse_at = t, None, (px, py)
                 self._arrow(True)
         return t - self.mouse_t < MOUSE_YIELD_S
 

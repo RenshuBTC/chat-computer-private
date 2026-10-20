@@ -109,11 +109,25 @@ def download(paths: Paths, settings: Settings, progress: Callable[[str], None] =
     progress("voice models ready")
 
 
+def stt_repo(name: str) -> str:
+    """The Hugging Face repository a speech recognition model comes from: the one faster-whisper itself downloads
+    it from. The distil models are Systran/faster-distil-whisper-<size> (not Systran/faster-distil-<size>, which
+    doesn't exist: choosing one of them used to leave the voice waiting for a download that could never work)."""
+    try:
+        from faster_whisper.utils import _MODELS
+        if name in _MODELS:
+            return _MODELS[name]
+    except Exception:
+        pass
+    if name.startswith("distil-"):
+        return f"Systran/faster-distil-whisper-{name[len('distil-'):]}"
+    return f"Systran/faster-whisper-{name}"
+
+
 def download_stt(paths: Paths, name: str, progress: Callable[[str], None] = print) -> None:
     """One speech recognition model (faster-whisper's, from Hugging Face), unless it's here already."""
     wdir = whisper_dir(paths, name)
     if not (wdir / "model.bin").exists():
         progress(f"downloading speech recognition ({name})…")
         from huggingface_hub import snapshot_download
-        repo = f"Systran/faster-whisper-{name}" if not name.startswith("distil") else f"Systran/faster-{name}"
-        snapshot_download(repo, local_dir=str(wdir))
+        snapshot_download(stt_repo(name), local_dir=str(wdir))

@@ -26,7 +26,7 @@ from chatcomputer.airtouch.gestures import Engine, pose_of
 HERE = Path(__file__).resolve().parent
 REFERENCE = json.loads((HERE / "data" / "airtouch_reference.json").read_text())["pictures"]
 MODELS = Path(os.environ.get("CHATCOMPUTER_TEST_MODELS",
-                             "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/models"))
+                             str(Path.home() / ".cache" / "chatcomputer-test" / "models")))
 PALM, LANDMARKS = MODELS / "airtouch" / "palm_detection_lite.tflite", MODELS / "airtouch" / "hand_landmark_lite.tflite"
 PICTURES = MODELS / "airtouch-pictures"
 need_models = pytest.mark.skipif(not (PALM.exists() and LANDMARKS.exists() and PICTURES.is_dir()),
@@ -817,6 +817,27 @@ def test_dots_are_drawn_and_only_their_squares_redrawn():
     assert xs[0] < 100 < xs[-1] + 40 and any(x > 250 for x in xs)                 # where they were, and are
 
 
+@pytest.mark.parametrize("rem", [16.0, 24.0, 40.0])
+def test_what_is_drawn_again_covers_every_kind_of_dot(rem):
+    # A ring (pinching, scrolling) reaches further than a dot: what's drawn again when it moves must cover all of
+    # it, or bits of the ring stay behind on the screen (and the new one shows cut off).
+    cairo = pytest.importorskip("cairo")
+    from chatcomputer.ui.airtouch_layer import AirLayer
+    for kind in ("point", "key", "press", "pinch", "scroll"):
+        layer = AirLayer(_Area(), lambda: rem)
+        layer.set_dots([(200.4, 199.6, kind)])
+        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, 400, 400)
+        cr = cairo.Context(surf)
+        cr.set_source_rgb(0.5, 0.5, 0.5)
+        cr.paint()
+        layer.draw(None, cr)
+        surf.flush()
+        img = np.frombuffer(surf.get_data(), np.uint8).reshape(400, surf.get_stride() // 4, 4)[:, :400, :3].astype(int)
+        ys, xs = np.nonzero(np.abs(img - 128).max(axis=2) > 1)
+        (x, y, w, h), = layer.area.rects
+        assert x <= xs.min() and xs.max() < x + w and y <= ys.min() and ys.max() < y + h, (kind, rem)
+
+
 def test_pressing_a_key_says_what_to_type_and_lights_it():
     layer = _layer()
     layer.show_keyboard(1280, 800)
@@ -896,6 +917,31 @@ def test_no_cameras_means_none():
     assert camera.devices() == [] or all(isinstance(d, camera.Device) for d in camera.devices())
 
 
+def test_damaged_pictures_from_the_camera_are_passed_over(monkeypatch):
+    # The camera marks a picture it may have damaged; an uncompressed one cut short can't be read either. Each
+    # buffer still goes back to the camera.
+    cam = object.__new__(camera.Camera)
+    cam.fd, cam.fmt, cam.width, cam.height, cam.stride = -1, camera.YUYV, 4, 2, 8
+    cam.maps = [bytes(range(16)), bytes(range(16, 32))]
+    script = [(0, 16, camera.BUF_FLAG_ERROR), (1, 10, 0), (0, 16, 0), (1, 16, 0)]   # damaged, short, whole, whole
+    queued = []
+
+    def ioctl(fd, request, buf):
+        if request == camera.VIDIOC_DQBUF:
+            if not script:
+                raise OSError(19, "No such device")            # unplugged: the pictures end
+            i, used, flags = script.pop(0)
+            struct.pack_into("<II", buf, 0, i, camera.BUF_TYPE_VIDEO_CAPTURE)
+            struct.pack_into("<II", buf, 8, used, flags)
+        elif request == camera.VIDIOC_QBUF:
+            queued.append(struct.unpack_from("<I", buf, 0)[0])
+        return buf
+    monkeypatch.setattr(camera, "_ioctl", ioctl)
+    monkeypatch.setattr(camera, "select", type("Select", (), {"select": staticmethod(lambda r, w, x, t: (r, w, x))}))
+    assert list(cam.frames()) == [bytes(range(16)), bytes(range(16, 32))]
+    assert queued == [0, 1, 0, 1]
+
+
 # ================================================================== the pointer
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="no X display")
 def test_the_pointer_moves_through_xtest():
@@ -955,6 +1001,22 @@ def test_the_arrow_hides_while_hands_move_the_pointer_and_a_mouse_gets_it_back()
     assert m.pos == (180, 100) and m.arrow[-1] is False
     p.release()
     assert m.arrow[-1] is True
+
+
+def test_a_mouse_that_goes_on_moving_keeps_the_pointer():
+    from chatcomputer.airtouch.xinput import MOUSE_YIELD_S, SharedPointer
+    m = _Mouse()
+    p = SharedPointer(m)
+    p.move(0.0, 100, 100)
+    m.pos = (500, 500)                                             # a mouse moved it
+    p.move(0.1, 120, 100)
+    for i in range(1, 6):                                          # and goes on moving it, for longer than the wait
+        m.pos = (500 + 20 * i, 500)
+        p.move(0.1 + i * MOUSE_YIELD_S / 2, 120 + i, 100)
+        assert m.pos == (500 + 20 * i, 500), i
+    assert m.arrow == [False, True]
+    p.move(0.2 + 3.5 * MOUSE_YIELD_S, 180, 100)                    # still for long enough: the hand again
+    assert m.pos == (180, 100) and m.arrow[-1] is False
 
 
 # ================================================================== the whole process, with a pretend camera
@@ -1044,6 +1106,58 @@ def test_the_airtouch_process_follows_the_finger_and_sees_a_thumbs_up(monkeypatc
     dots = [m[1] for m in sent if m[0] == "dots"]
     assert dots and all(len(d) <= 2 for d in dots) and any(d and d[0][2] == "point" for d in dots)
     assert mouse.arrow[0] is False and mouse.arrow[-1] is True      # hidden while it moved; shown when it stopped
+
+
+@need_models
+def test_a_damaged_picture_is_passed_over_and_the_camera_goes_on(monkeypatch):
+    # A picture cut short, or that isn't one, now and then: the next ones are looked at, without stopping the
+    # camera to start it again (and losing the hand).
+    from chatcomputer.airtouch import worker, xinput
+    sent, opened = [], []
+    whole = [_frame("pointing_up.jpg", 6 * i, 3 * i) for i in range(16)]
+    frames = [whole[0][: len(whole[0]) // 2], b"\xff\xd8 not a picture"] + whole[:8] + [whole[8][:3000]] + whole[8:]
+
+    class Pointer(_Mouse):
+        def __init__(self, *a):
+            super().__init__()
+
+        def screen_size(self):
+            return 1920, 1080
+
+        def close(self):
+            pass
+
+    class Conn:
+        waiting = []
+
+        def send(self, msg):
+            sent.append(msg)
+
+        def poll(self, timeout=0):
+            return bool(self.waiting)
+
+        def recv(self):
+            return self.waiting.pop(0)
+
+    conn = Conn()
+    monkeypatch.setattr(xinput, "XInput", Pointer)
+    monkeypatch.setattr(camera, "devices", lambda: [camera.Device("/dev/video9", "Pretend", {camera.MJPG: [(640, 480, 30.0)]})])
+
+    def fake_camera(dev):
+        cam = _FakeCamera(frames if not opened else whole)       # (the second time, should it be started again)
+        opened.append(cam)
+        real = cam.frames
+
+        def once(idle_s=3.0):
+            yield from real()
+            conn.waiting.append(("stop",))
+        cam.frames = once
+        return cam
+    monkeypatch.setattr(camera, "Camera", fake_camera)
+    worker.main(conn, {"palm_model": str(PALM), "landmark_model": str(LANDMARKS), "bounds": (0, 0, 1920, 1080)})
+    states = [m[1]["state"] for m in sent if m[0] == "status"]
+    assert states == ["starting", "running", "no camera"] and len(opened) == 1
+    assert ("hand", True) in sent and ("hand", False) not in sent
 
 
 # ================================================================== what Chat Computer does with it

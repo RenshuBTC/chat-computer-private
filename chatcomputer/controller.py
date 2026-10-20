@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -1622,9 +1623,12 @@ class Controller:
         say = (lambda _text: None) if typed else self._say
         run = lambda fn, *a: self.loop.run_in_executor(None, fn, *a)
         reply = None
-        if any(w in t for w in ("wifi", "wi fi", "internet", "network", "connected")):
-            if t.startswith("connect to "):
-                name = text.strip()[len("connect to "):].strip(" .?!")
+        # "connect to <network>" is a Wi-Fi request even without a Wi-Fi word in it (the offline reply tells
+        # them to say exactly this), and the name keeps its original spelling (SSIDs are case-sensitive).
+        joining = re.match(r"\s*connect to\s+(.+)", text.strip(), re.I)
+        if joining or any(w in t for w in ("wifi", "wi fi", "internet", "network", "connected")):
+            if joining:
+                name = joining.group(1).strip(" .?!")
                 reply = await run(p.wifi_connect, name, None)
                 if "Failed" in reply:
                     reply = (f"I couldn't join {name} without its password. Plug in a keyboard and say "

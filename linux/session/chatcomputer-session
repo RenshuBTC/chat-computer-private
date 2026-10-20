@@ -32,6 +32,7 @@
 #                             shown or answered                      [60]
 #   CHATCOMPUTER_UPDATE_PENDING   the file saying the version is a new update
 #   CHATCOMPUTER_ROOT_CMD         override how the root helper is run
+#   CHATCOMPUTER_LOG_CHECK_S      seconds between looks at the log's size while Chat Computer runs [60]
 
 set -u
 
@@ -42,6 +43,7 @@ LOG_DIR="${HOME}/ChatComputer/logs"
 LOG_FILE="${LOG_DIR}/session.log"
 LOG_MAX_BYTES=${CHATCOMPUTER_LOG_MAX_BYTES:-1048576}  # rotate at ~1 MiB
 LOG_KEEP=${CHATCOMPUTER_LOG_KEEP:-2}                # keep .1 and .2
+LOG_CHECK_S=${CHATCOMPUTER_LOG_CHECK_S:-60}         # how often the log's size is looked at while Chat Computer runs
 
 START_CMD=${CHATCOMPUTER_START_CMD:-}
 DOCTOR_CMD=${CHATCOMPUTER_DOCTOR_CMD:-}
@@ -68,6 +70,8 @@ mkdir -p "$LOG_DIR"
 rotate_log() {
   # Size-based rotation to keep the log small (appliance has finite disk and no
   # admin to clean up). Rotate session.log -> .1 -> .2, dropping the oldest.
+  # $1 = "copy" while Chat Computer runs: its output goes straight into session.log, so the log is copied and
+  # emptied rather than moved (Chat Computer would go on writing into the moved file).
   [ -f "$LOG_FILE" ] || return 0
   local size
   size=$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
@@ -76,8 +80,19 @@ rotate_log() {
     for (( i=LOG_KEEP-1; i>=1; i-- )); do
       [ -f "${LOG_FILE}.$i" ] && mv -f "${LOG_FILE}.$i" "${LOG_FILE}.$((i+1))"
     done
-    mv -f "$LOG_FILE" "${LOG_FILE}.1"
+    if [ "${1:-}" = "copy" ]; then
+      cp -f "$LOG_FILE" "${LOG_FILE}.1" && : > "$LOG_FILE"
+    else
+      mv -f "$LOG_FILE" "${LOG_FILE}.1"
+    fi
   fi
+}
+
+# While Chat Computer runs (for weeks, as an appliance): the log kept small all the same. Ends with this session.
+watch_log() {
+  while sleep "$LOG_CHECK_S" && kill -0 $$ 2>/dev/null; do
+    rotate_log copy
+  done
 }
 
 log() {
@@ -218,10 +233,13 @@ supervise() {
     rotate_log
     log "starting Chat Computer: $START_CMD"
 
-    # Run Chat Computer in the foreground; tee its output into the log.
-    # We use a subshell so CHATCOMPUTER_* variables propagate, and capture the exit code.
+    # Run Chat Computer in the foreground, its output into the log, and capture the exit code.
+    watch_log &
+    local watcher=$!
     $START_CMD >> "$LOG_FILE" 2>&1
     code=$?
+    kill "$watcher" 2>/dev/null
+    wait "$watcher" 2>/dev/null
     log "Chat Computer exited with code $code"
 
     case "$code" in

@@ -39,6 +39,7 @@ SEARCH_EVERY = 0.25          # palm detection at most this often when something 
 SEARCH_ANYWAY = 2.0          # ...and this often regardless
 SECOND_HAND_EVERY = 0.5      # with one hand followed, looking for the other
 MOTION = 0.01                # share of the small picture that changed, to count as movement
+DAMAGED_IN_A_ROW = 30        # pictures that can't be read, one after another, before the camera is started again
 
 
 def thumbnail(cam: Any, data: bytes) -> np.ndarray:
@@ -133,6 +134,21 @@ def main(conn: Any, options: dict[str, Any]) -> None:
         engine.cursor = [min(max(px - bounds[0], 0), bounds[2] - 1), min(max(py - bounds[1], 0), bounds[3] - 1)]
     stopping = False
     last_dots: list | None = None
+    damaged = 0
+
+    def readable(read: Any, *args: Any) -> Any:
+        """read(*args): or None, for a picture that can't be read. A camera sends a damaged one now and then (cut
+        short, say) and the next is whole, so it's passed over; many in a row, and the camera is started again."""
+        nonlocal damaged
+        try:
+            out = read(*args)
+        except (OSError, ValueError):
+            damaged += 1
+            if damaged >= DAMAGED_IN_A_ROW:
+                raise
+            return None
+        damaged = 0
+        return out
 
     def commands() -> None:
         nonlocal bounds, stopping
@@ -199,6 +215,7 @@ def main(conn: Any, options: dict[str, Any]) -> None:
         send("status", {"state": "running", "camera": devs[0].name, "size": [cam.width, cam.height],
                         "format": "YUYV" if cam.fmt == camera.YUYV else "MJPEG"})
         pacer = Pacer()
+        damaged = 0
         try:
             for data in cam.frames():
                 commands()
@@ -208,7 +225,9 @@ def main(conn: Any, options: dict[str, Any]) -> None:
                 if pointer:
                     pointer.check(t)                    # a mouse moving the pointer gets it back
                 tracking = bool(tracker.tracks)
-                thumb = None if tracking else thumbnail(cam, data)
+                thumb = None if tracking else readable(thumbnail, cam, data)
+                if thumb is None and not tracking:
+                    continue                            # a damaged picture
                 pacer.budget = TYPING_BUDGET if engine.keyboard else BUDGET
                 if not pacer.want(t, tracking, thumb):
                     if not tracking:
@@ -216,7 +235,10 @@ def main(conn: Any, options: dict[str, Any]) -> None:
                     continue
                 start = time.perf_counter()
                 search = pacer.search(t, len(tracker.tracks), tracker.max_hands)
-                found = tracker.track(cam.decode(data), search=search)
+                picture = readable(cam.decode, data)
+                if picture is None:
+                    continue
+                found = tracker.track(picture, search=search)
                 dispatch(engine.update(t, {hid: (h.joints, h.right) for hid, h in found}), t)
                 pacer.done(t, time.perf_counter() - start, bool(found), search, engine.calm, thumb)
         except Exception as exc:              # report, and start the camera again

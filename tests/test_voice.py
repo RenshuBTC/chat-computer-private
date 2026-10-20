@@ -12,7 +12,7 @@ import pytest
 
 from chatcomputer.voice.tts import SentenceSplitter, TTS, speakable, _resample
 
-MODELS = Path(os.environ.get("CHATCOMPUTER_TEST_MODELS", "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/models"))
+MODELS = Path(os.environ.get("CHATCOMPUTER_TEST_MODELS", str(Path.home() / ".cache" / "chatcomputer-test" / "models")))
 KOKORO = MODELS / "kokoro-v1.0.int8.onnx"
 VOICES = MODELS / "voices-v1.0.bin"
 WHISPER = MODELS / "whisper" / f"faster-whisper-{os.environ.get('CHATCOMPUTER_TEST_STT', 'small.en')}"
@@ -143,6 +143,25 @@ def test_partials_wait_longer_when_transcribing_is_slow():
     assert lis.partial_every == Listener.PARTIAL_EVERY
     lis.stt_seconds = 2.0
     assert lis.partial_every == 3.0
+
+
+def test_every_speech_model_downloads_from_a_repository_that_exists():
+    # The settings allow any of WHISPER_MODELS; a wrong repository name for one left the voice waiting forever for
+    # a download that could never work ("distil" models are Systran/faster-distil-whisper-..., not faster-distil-...).
+    from chatcomputer.voice import models as M
+    official = pytest.importorskip("faster_whisper.utils")._MODELS
+    for name in M.WHISPER_MODELS:
+        assert M.stt_repo(name) == official.get(name, M.stt_repo(name)), name
+    assert M.stt_repo("distil-large-v3") == "Systran/faster-distil-whisper-large-v3"
+
+
+def test_speech_model_repositories_without_faster_whispers_own_list(monkeypatch):
+    from chatcomputer.voice import models as M
+    utils = pytest.importorskip("faster_whisper.utils")
+    monkeypatch.setattr(utils, "_MODELS", {})
+    assert M.stt_repo("distil-small.en") == "Systran/faster-distil-whisper-small.en"
+    assert M.stt_repo("small.en") == "Systran/faster-whisper-small.en"
+    assert M.stt_repo("large-v3") == "Systran/faster-whisper-large-v3"
 
 
 def test_sentence_splitter_streams_sentences():

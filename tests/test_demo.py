@@ -133,3 +133,11 @@ def test_the_demo_works_in_a_browser():
     assert phone["first_ai"] == "hello, world" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False, False]
     assert phone["tools_at"] == "row"
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
+    # Music, and then asked about it ("turn the music down", "stop the music": music words too): turned down (the
+    # same music, quieter, not started again), then stopped.
+    assert res["phone_music"]["content"] and res["phone_music"]["last"] == "Playing some calm piano."
+    down = res["phone_down"]
+    assert down["content"] and down["last"] == "Volume is 40%." and down["done"][-1] == "Turned the volume down"
+    assert res["phone_down_piano"] == {"same": True, "vol": 0.4}
+    stopped = res["phone_stopped"]
+    assert not stopped["content"] and stopped["view"] is None and stopped["last"] == "Closed it."

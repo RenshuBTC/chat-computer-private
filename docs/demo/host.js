@@ -277,9 +277,11 @@
   // ------------------------------------------------------------------ music, made by the browser
   // On Chat Computer, "play some piano music" opens YouTube and plays it. Here, the page that opens plays soft
   // chords made by the browser itself (or, where a browser waits for a tap first, its Play button does).
-  var MUSIC = "var ctx=null,timer=0,btn=document.getElementById('play');" +
-    "function play(){var C=window.AudioContext||window.webkitAudioContext;if(!C)return;ctx=new C();var out=ctx.createGain();" +
-    "out.gain.value=0.18;out.connect(ctx.destination);var chords=[[60,64,67,71],[57,60,64,67],[53,57,60,64],[55,59,62,65]]," +
+  // (vol, the volume, comes first: piano() says what it is, and the page is told when it changes.)
+  var MUSIC = "var ctx=null,out=null,timer=0,btn=document.getElementById('play');" +
+    "addEventListener('message',function(e){if(e.data&&typeof e.data.volume==='number'){vol=e.data.volume/100;if(out)out.gain.value=0.18*vol;}});" +
+    "function play(){var C=window.AudioContext||window.webkitAudioContext;if(!C)return;ctx=new C();out=ctx.createGain();" +
+    "out.gain.value=0.18*vol;out.connect(ctx.destination);var chords=[[60,64,67,71],[57,60,64,67],[53,57,60,64],[55,59,62,65]]," +
     "beat=0.42,t0=ctx.currentTime+0.1,bar=0;function note(m,at,len){var o=ctx.createOscillator(),g=ctx.createGain();" +
     "o.type='triangle';o.frequency.value=440*Math.pow(2,(m-69)/12);g.gain.setValueAtTime(0,at);" +
     "g.gain.linearRampToValueAtTime(0.5,at+0.02);g.gain.exponentialRampToValueAtTime(0.001,at+len);o.connect(g);g.connect(out);" +
@@ -294,7 +296,7 @@
       "what you asked for. Here, your browser plays a few soft chords.</p><p><button id=\"play\" class=\"b\">Play</button></p>" +
       "<p>Escape, or a swipe up from the bottom edge, closes it; F1 makes it fill the screen.</p></article>",
       ".b{font:inherit;padding:0.4em 1.2em;border:2px solid var(--ink);border-radius:0.6em;background:var(--ground);color:var(--ink);cursor:pointer}",
-      MUSIC) });
+      "var vol=" + player.volume / 100 + ";" + MUSIC) });
   }
 
   // ------------------------------------------------------------------ YouTube, when Claude plays a video
@@ -424,11 +426,24 @@
   var REAL = "Connect Claude, at the right of the message box, and Claude answers for real, with your own API key.";
   function map(b) { show({ src: "https://www.openstreetmap.org/export/embed.html?bbox=" + b.join("%2C") + "&layer=mapnik" }); }
   var INTENTS = [
+    // Closing, and the volume, before music: "stop the music", "close the song" or "turn the music down" have music
+    // words in them too (and would start it again).
+    [/^(close|stop|pause)\b|\b(close|stop|pause|hide|turn off|switch off)\s+(the\s+|that\s+|this\s+|my\s+)?(it|that|this|music|videos?|page|songs?|piano|playing|youtube|timer|map)\b|\b(turn|switch)\s+(it|that|this|the\s+(music|video|song|piano))\s+off\b/i, function () {
+      return { text: open ? "Closed it." : "Nothing's open.", act: close };
+    }],
+    [/\b(volume|louder|quieter|softer|mute|unmute)\b|\bturn\s+(up|down|(it|that|this|the\s+(music|sound|song|video|piano|volume))\s+(up|down))\b/i, function (t) {
+      if (/\bmute\b/i.test(t)) return { text: "Muted.", done: ["Muted the sound"], act: function () { setVolume(0); } };
+      var asked = /\b(\d{1,3})\s*(%|percent\b)?/i.exec(t);
+      if (asked) {
+        var p = Math.min(100, +asked[1]);
+        return { text: "Volume is " + p + "%.", done: ["Set the volume to " + p + "%"], act: function () { setVolume(p); } };
+      }
+      var up = /\b(louder|up|unmute)\b/i.test(t);
+      return { text: up ? "Volume is 60%." : "Volume is 40%.", done: [up ? "Turned the volume up" : "Turned the volume down"],
+        act: function () { setVolume(up ? 60 : 40); } };
+    }],
     [/\b(music|song|songs|piano|play|playing|spotify|youtube|lofi|jazz)\b/i, function () {
       return { text: "Playing some calm piano.", done: ["Played some calm piano"], act: piano };
-    }],
-    [/\b(close|stop|hide) (it|that|this|the (music|video|page|song))\b|^(close|stop)\b/i, function () {
-      return { text: open ? "Closed it." : "Nothing's open.", act: close };
     }],
     [/\b(hi|hello|hey|good (morning|afternoon|evening))\b|^help\b|what can you do|how does (this|it) work|what is (this|chatcomputer)/i, function () {
       return { text: "Hi! I'm Chat Computer: Claude, running the whole computer. You talk, type or touch, and I do it: open websites, " +
@@ -457,6 +472,12 @@
         openMessage("m2");
       } };
     }],
+    // Before the messages: "make the text bigger" isn't a text message.
+    [/\b(bigger|larger|smaller|text size|font|zoom)\b/i, function (t) {
+      var bigger = /bigger|larger|zoom in/i.test(t);
+      return { text: bigger ? "Made the text bigger." : "Made the text smaller.", done: [bigger ? "Made the text bigger" : "Made the text smaller"],
+        act: function () { setScale(scale * (bigger ? 1.15 : 1 / 1.15)); } };
+    }],
     [/\b(mum|mom|whatsapp|telegram|texts?|messages?|alex)\b/i, function (t) {
       var alex = /alex|telegram/i.test(t);
       return { text: alex ? "Alex sent you the slides for Monday." : "Your mum asks if you're coming to dinner at 7 tonight, and to bring the photos from the trip.",
@@ -464,11 +485,6 @@
     }],
     [/\b(packing|list|notes?|document|doc|write)\b/i, function () {
       return { text: "Here's your packing list for Sunday.", act: function () { show({ html: PAGES.packing() }); } };
-    }],
-    [/\b(volume|louder|quieter|softer|mute|unmute)\b/i, function (t) {
-      var up = /louder|up|unmute/i.test(t);
-      return { text: up ? "Volume is 60%." : "Volume is 40%.", done: [up ? "Turned the volume up" : "Turned the volume down"],
-        act: function () { setVolume(up ? 60 : 40); } };
     }],
     [/\b(wi-?fi|internet|network)\b/i, function () {
       return { text: "You're on Home Wi-Fi, and the internet's working.", done: [] };
@@ -479,11 +495,6 @@
     [/\b(file|files|find|search|photo|photos|pictures?|beach)\b/i, function (t) {
       if (/beach|photo|picture/i.test(t)) return { text: "Here's Beach.jpg, from your Pictures.", act: function () { show({ html: PAGES.beach() }); } };
       return { text: "Type / in the message box to search this computer's files: they show above the box as you type, and Enter opens one." };
-    }],
-    [/\b(bigger|smaller|text size|font|zoom)\b/i, function (t) {
-      var bigger = /bigger|larger|zoom in/i.test(t);
-      return { text: bigger ? "Made the text bigger." : "Made the text smaller.", done: [bigger ? "Made the text bigger" : "Made the text smaller"],
-        act: function () { setScale(scale * (bigger ? 1.15 : 1 / 1.15)); } };
     }],
     [/\b(thanks|thank you|cool|great|nice|awesome)\b/i, function () { return { text: "Any time." }; }],
     [/./, function () {
@@ -503,6 +514,10 @@
     player.volume = Math.max(0, Math.min(100, Math.round(p)));
     command("setVolume", [player.volume]);
     if (player.volume > 0 && !player.armed) command("unMute");
+    // The piano the browser makes (the written answers' music, a page of the demo's own) follows it too.
+    if (view && open && !player.id && view.hasAttribute("srcdoc")) {
+      try { view.contentWindow.postMessage({ volume: player.volume }, "*"); } catch (e) {}
+    }
   }
 
   var turns = 0;

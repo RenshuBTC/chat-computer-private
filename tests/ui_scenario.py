@@ -110,7 +110,7 @@ settings = Settings(user_name="Ren Shu", windows_user="rensh", stt_model=os.envi
 # Pretend-monitor size and viewing distance (the virtual display always reports 96 dpi).
 settings.screen_inches = float(os.environ.get("UITEST_INCHES", "0") or 0)
 settings.viewing_distance_cm = int(os.environ.get("UITEST_DISTANCE_CM", "0") or 0)
-MODELS = Path(os.environ.get("CHATCOMPUTER_TEST_MODELS", "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/models"))
+MODELS = Path(os.environ.get("CHATCOMPUTER_TEST_MODELS", str(Path.home() / ".cache" / "chatcomputer-test" / "models")))
 
 
 class XPlatform(FakePlatform):

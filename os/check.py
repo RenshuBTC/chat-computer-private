@@ -58,6 +58,13 @@ log go to out/.
                                      in later), a stick of 4 KiB blocks with NTFS plugged in later; a stick unplugged
                                      and a card taken out; Chat Computer's own folder on a stick never read (also
                                      needs dosfstools and mtools)
+    ./check.py --power               the firmware's own programs (ACPI's AML) run by the kernel's interpreter: a battery,
+                                     an AC adapter and a lid added to the virtual PC's firmware tables (aml/tests/
+                                     power.asl), read at start-up and followed as they change (unplugged, the battery
+                                     low, the lid closed: the notes said); a general-purpose event (a processor
+                                     plugged in) handled by the firmware's own method; the power button pressed: the
+                                     PC turns off, with the firmware's _TTS and _PTS run first (also needs iasl, from
+                                     acpica-tools)
     ./check.py --sound               sound: a build that rings the timer's chime once it's ready, on each kind of
                                      HD Audio QEMU has (the ICH6's and ICH9's controllers; codecs with a line out,
                                      a line out and in, and a speaker and microphone), recorded: the chime's two
@@ -2186,6 +2193,71 @@ def sound(args) -> list[str]:
     return problems
 
 
+def power_check(args) -> list[str]:
+    """The firmware's programs: a laptop's battery, AC adapter and lid (an extra table, whose readings change 15 seconds
+    after the battery is first read), a processor plugged in (QEMU's own firmware handles that event with its _E02
+    method, which notifies the processor's device), then the power button."""
+    if not args.no_build:
+        build()
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp())
+    turned_off = False
+    try:
+        r = subprocess.run(["iasl", "-p", str(tmp / "power"), str(HERE / "aml/tests/power.asl")], capture_output=True, text=True)
+        table = tmp / "power.aml"
+        if r.returncode or not table.exists():
+            return [f"iasl couldn't compile the test table: {r.stdout[-400:]}"]
+        debug = tmp / "debugcon.txt"
+        cpu_driver = f"{args.cpu}-x86_64-cpu"
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu,
+                       extra=("-acpitable", f"file={table}", "-smp", "1,maxcpus=2",
+                              "-chardev", f"file,id=dbg,path={debug}", "-device", "isa-debugcon,iobase=0x403,chardev=dbg"))
+        try:
+            got = wait_for(pc.log, ("Chat Computer: ready", "stopped", "couldn't start"), args.timeout)
+            if got != "Chat Computer: ready":
+                problems.append("the kernel didn't say it was ready" + (f" (the log says {got!r})" if got else " in time"))
+                return problems
+            pc.settled_picture("power-1")
+            # A processor plugged in: QEMU signals general-purpose event 2, which the firmware's _E02 handles.
+            monitor(pc.mon, f"device_add {cpu_driver},id=cpu1,socket-id=0,core-id=1,thread-id=0")
+            if not wait_for(pc.log, ("firmware: notified \\_SB_.CPUS.C001",), 20):
+                problems.append("the processor plugged in wasn't handled (the firmware's _E02 didn't notify it)")
+            # Unplugged, the battery low, the lid closed: read within the 10 s the kernel reads them every.
+            if not wait_for(pc.log, ("The battery is low (9%)",), 60):
+                problems.append("the battery's going low wasn't noticed")
+            time.sleep(1)
+            pc.settled_picture("power-2")
+            monitor(pc.mon, "system_powerdown")
+            if wait_for(pc.log, ("kernel: turning off",), 30):
+                try:
+                    pc.qemu.wait(timeout=20)
+                    turned_off = True
+                except subprocess.TimeoutExpired:
+                    pass
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        said = debug.read_text(errors="replace").split("\n") if debug.exists() else []
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    for words in ["firmware: 2 tables of programs", "power button: the fixed one",
+                  "battery: 64%, charging (plugged in), full in about 1 h 26 min", "lid: open",
+                  "firmware: unplugged", "firmware: Unplugged: on battery power, 9%.",
+                  "firmware: The battery is low (9%): plug the PC in.", "firmware: lid closed",
+                  "firmware: the power button was pressed",
+                  "firmware: The power button was pressed: Chat Computer is turning the PC off."]:
+        if words not in text:
+            problems.append(f"the log doesn't say {words!r}")
+    if "(0 problems)" not in text:
+        problems.append("the firmware's programs had problems loading or starting (see the log)")
+    if [l for l in said if l] != ["TTS 5", "PTS 5"]:
+        problems.append(f"the firmware's _TTS(5) and _PTS(5) weren't run before turning off, in that order: {said!r}")
+    if not turned_off:
+        problems.append("the power button didn't turn the PC off (the virtual PC didn't end)")
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--size", default="1920x1080", help="screen resolution the virtual monitor reports")
@@ -2204,6 +2276,7 @@ def main() -> int:
     ap.add_argument("--bitlocker", action="store_true", help="Windows' drive encrypted with BitLocker, unlocked")
     ap.add_argument("--drives", action="store_true", help="the PC's other drives (NVMe and SATA) read, by Windows' letters")
     ap.add_argument("--usb", action="store_true", help="USB drives (sticks, a card reader) read as they come and go")
+    ap.add_argument("--power", action="store_true", help="the firmware's programs: a battery, an AC adapter, a lid, the power button")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
@@ -2229,6 +2302,8 @@ def main() -> int:
         problems = drives_check(args)
     elif args.usb:
         problems = usb_check(args)
+    elif args.power:
+        problems = power_check(args)
     else:
         if not args.no_build:
             build()

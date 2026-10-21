@@ -128,9 +128,10 @@ const NOTES_CHARS: usize = 8000;
 const TOOLS: [api::Tool; 13] = [
     api::Tool {
         name: "computer_status",
-        description: "What this computer is and how it's doing: its processor, memory, screen, how long Chat Computer's \
-                      own system has been running, the date and time by its clock, its network connection and its \
-                      keyboards.",
+        description: "What this computer is and how it's doing: its processor, memory, screen, battery (charge, \
+                      charging or not, time left), whether it's plugged in, its lid, its temperature, how long Chat \
+                      Computer's own system has been running, the date and time by its clock, its network connection and \
+                      its keyboards.",
         input_schema: r#"{"type":"object","properties":{}}"#,
     },
     api::Tool {

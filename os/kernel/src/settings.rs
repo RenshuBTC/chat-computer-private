@@ -5,6 +5,8 @@
 //!     claude-api-key = sk-ant-...       the key Chat Computer talks to Claude with (from console.anthropic.com)
 //!     clock-offset-minutes = 480        how far the PC's clock is ahead of UTC (Windows keeps it in local time)
 //!     memory-id = 1a2b3c4d              the memory file's id (its tags carry it: remember crate), in hex
+//!     firmware-programs = off           don't run the firmware's own programs (ACPI's AML: firmware.rs), for a PC
+//!                                       whose firmware does something odd with them
 //!
 //! The key is never written to the log or shown on the screen.
 
@@ -18,6 +20,8 @@ pub struct Settings {
     pub key_problem: Option<&'static str>,
     pub clock_offset_minutes: Option<i32>,
     pub memory_id: Option<u32>,
+    /// Run the firmware's own programs (on unless the settings say off).
+    pub firmware_programs_off: bool,
     /// How many lines weren't understood (their words aren't logged: one might be a key).
     pub not_understood: usize,
 }
@@ -71,6 +75,11 @@ pub fn parse(bytes: &[u8]) -> Settings {
                     s.not_understood += 1;
                 }
             }
+            "firmware-programs" => match value.to_ascii_lowercase().as_str() {
+                "off" | "no" | "false" => s.firmware_programs_off = true,
+                "on" | "yes" | "true" => s.firmware_programs_off = false,
+                _ => s.not_understood += 1,
+            },
             _ => s.not_understood += 1,
         }
     }

@@ -1,13 +1,14 @@
 # Chat Computer's own operating system (os/).
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
 #   engine's, text setting's, chimes', FAT, exFAT, NTFS, ZIP, Office, picture, BitLocker and registry readers',
-#   Markdown reader's, memory file's and HID descriptors' tests;
+#   Markdown reader's, memory file's, HID descriptors' and AML interpreter's tests (the last against ACPICA's acpiexec);
 #   starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a crash stops it
 #   cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts), checking the
 #   firmware refuses it unsigned; types on PS/2 and USB keyboards (on ports, behind a hub, plugged in and out),
 #   checking what comes out; rings a timer, recording its chime; and has a stand-in for Claude read files on a
 #   Windows drive (NTFS) with its tools, then on one BitLocker encrypts, unlocked with its recovery key, on the PC's
-#   other drives, by the letters Windows' registry gives them, and on USB drives as they come and go.
+#   other drives, by the letters Windows' registry gives them, and on USB drives as they come and go; and runs the
+#   firmware's own programs: a battery, an AC adapter and a lid, an event, and the power button turning it off.
 # - windows: signs the release file on real Windows, the way "Chat Computer Own System" does on a PC, and (when the
 #   machine starts in UEFI mode) puts it on the start-up partition and in the power-on menu and takes it off again.
 # - secure-boot-windows: starts the file Windows signed in a virtual PC whose firmware trusts only Microsoft's
@@ -37,11 +38,11 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil python3-cryptography sbsigntool dosfstools mtools gdisk xz-utils zip ntfs-3g
+          sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil python3-cryptography sbsigntool dosfstools mtools gdisk xz-utils zip ntfs-3g acpica-tools
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
-      - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, picture, BitLocker and registry readers, Markdown, memory file and HID tests
-        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p markdown -p remember -p hid
+      - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, picture, BitLocker and registry readers, Markdown, memory file, HID and AML tests
+        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p markdown -p remember -p hid -p aml
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh
@@ -70,6 +71,8 @@ jobs:
         run: ./check.py --drives
       - name: USB drives (a stick, a card reader's two slots, a stick of 4 KiB blocks; plugged in and out)
         run: ./check.py --usb
+      - name: The firmware's programs (a battery, an AC adapter and a lid; an event; the power button)
+        run: ./check.py --no-build --power
       - name: Keep the pictures and the log
         if: always()
         uses: actions/upload-artifact@v6

@@ -1,9 +1,11 @@
 //! Reads the firmware's ACPI tables: how many processor cores there are, where the interrupt
-//! controllers are, which timers exist, where PCI Express devices' configuration can be read, and how to
-//! restart and turn off the PC. Only the tables (plain data) are read; the small programs (AML) some tables
-//! contain are not run (the one value needed from them, S5's sleep type, is plain data in them).
+//! controllers are, which timers exist, where PCI Express devices' configuration can be read, how to
+//! restart and turn off the PC, where the firmware's own programs (AML, in the DSDT and SSDTs) are, and the
+//! registers its events come through. The programs are run by firmware.rs, with Chat Computer's own interpreter (the
+//! aml crate); S5's sleep type is read here from the DSDT's bytes too, for turning off when they can't be run.
 
 use crate::paging;
+use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct IoApic {
@@ -53,6 +55,48 @@ pub struct Acpi {
     pub reset: Option<ResetRegister>,
     /// How to turn the PC off ("soft off", ACPI's S5), if the firmware says enough.
     pub soft_off: Option<SoftOff>,
+    /// The firmware's programs: its DSDT and its SSDTs, where they are (physical addresses; 0: no DSDT).
+    pub dsdt: u64,
+    pub ssdts: Vec<u64>,
+    /// Every table the root table lists, by its signature: for the firmware's programs that ask for one (LoadTable).
+    pub tables: Vec<([u8; 4], u64)>,
+    /// The registers the firmware's events come through, and what it says about them (the FADT's).
+    pub events: Option<Events>,
+}
+
+/// A register a table points at: an I/O port, or memory.
+#[derive(Clone, Copy, Debug)]
+pub struct Register {
+    pub memory: bool,
+    pub address: u64,
+}
+
+/// The fixed hardware the firmware's events come through (ACPI 6.5, chapter 4): the power button's and others' status
+/// and enable bits (PM1 event registers), the general-purpose events' (GPE blocks), and how to put the PC in ACPI mode.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Events {
+    /// The system control interrupt's number (SCI_INT).
+    pub sci: u16,
+    /// The PM1 event registers (status, then enable), each `pm1_length` bytes long in all.
+    pub pm1a: Option<Register>,
+    pub pm1b: Option<Register>,
+    pub pm1_length: u8,
+    /// The PM1 control registers (I/O ports; PM1b: 0, none): ACPI mode's bit, the global lock's release bit.
+    pub pm1a_control: u16,
+    pub pm1b_control: u16,
+    /// The general-purpose event blocks: where (status bytes, then as many enable bytes), how long in all; GPE1's
+    /// first event's number.
+    pub gpe0: Option<(Register, u8)>,
+    pub gpe1: Option<(Register, u8, u8)>,
+    /// Switching to ACPI mode: the SMI command port and the value (0: the PC is always in ACPI mode).
+    pub smi_cmd: u16,
+    pub acpi_enable: u8,
+    /// The power button is the fixed kind (its bits in the PM1 registers), not a device in the firmware's programs.
+    pub fixed_power_button: bool,
+    /// A "hardware-reduced" PC: none of the above, events come through GPIO pins.
+    pub hardware_reduced: bool,
+    /// The FACS table, where the global lock is (0: none).
+    pub facs: u64,
 }
 
 /// Turning the PC off: the sleep type the firmware gives for S5 (the `\_S5` package in its DSDT), written with "sleep
@@ -76,6 +120,7 @@ pub struct SoftOff {
 #[derive(Default)]
 struct Fadt {
     dsdt: u64,
+    facs: u64,
     pm1a: u16,
     pm1b: u16,
     sleep_control: Option<(u8, u64)>,
@@ -188,7 +233,6 @@ impl Acpi {
         let step = if wide { 8 } else { 4 };
         let mut at = 36;
         let mut fadt = Fadt::default();
-        let (mut ssdts, mut ssdt_count) = ([0u64; 32], 0);
         while at + step <= root.len() {
             let phys = if wide { u64_at(root, at) } else { u32_at(root, at) as u64 };
             at += step;
@@ -197,6 +241,7 @@ impl Acpi {
                 crate::log!("Chat Computer kernel: ACPI table {} has a bad checksum; using it anyway",
                             core::str::from_utf8(&t[..4]).unwrap_or("????"));
             }
+            acpi.tables.push(([t[0], t[1], t[2], t[3]], phys));
             match &t[..4] {
                 b"APIC" => acpi.read_madt(t),
                 b"FACP" => fadt = acpi.read_fadt(t),
@@ -205,14 +250,12 @@ impl Acpi {
                 b"MCFG" => acpi.read_mcfg(t),
                 b"DMAR" => acpi.read_dmar(t),
                 b"IVRS" => acpi.read_ivrs(t),
-                b"SSDT" if ssdt_count < ssdts.len() => {
-                    ssdts[ssdt_count] = phys;
-                    ssdt_count += 1;
-                }
+                b"SSDT" => acpi.ssdts.push(phys),
                 _ => {}
             }
         }
-        acpi.soft_off = fadt.soft_off(&ssdts[..ssdt_count]);
+        acpi.soft_off = fadt.soft_off(&acpi.ssdts);
+        acpi.dsdt = fadt.dsdt;
         acpi
     }
 
@@ -341,6 +384,40 @@ impl Acpi {
         if t.len() >= 256 && matches!(u8_at(t, 244), 0 | 1) && u64_at(t, 248) != 0 {
             fadt.sleep_control = Some((u8_at(t, 244), u64_at(t, 248)));
         }
+        // The FACS (the 32-bit address at 36, as Windows uses it, else the 64-bit one at 132), where the global lock is.
+        fadt.facs = u32_at(t, 36) as u64;
+        if fadt.facs == 0 && t.len() >= 140 {
+            fadt.facs = u64_at(t, 132);
+        }
+        // The events' registers: the PM1 event blocks (old fields at 56 and 60, generic addresses at 148 and 160, their
+        // length at 88), the GPE blocks (80 and 84, at 220 and 232, their lengths at 92 and 93, GPE1's first number at
+        // 94), the SCI's number (46); the flags say whether the power button is a fixed one (bit 4 clear).
+        let register = |old: usize, generic: usize| -> Option<Register> {
+            if t.len() >= generic + 12 {
+                let (space, address) = (u8_at(t, generic), u64_at(t, generic + 4));
+                if address != 0 && (space == 0 || (space == 1 && address <= 0xFFFF)) {
+                    return Some(Register { memory: space == 0, address });
+                }
+            }
+            let port = u32_at(t, old) as u64;
+            (port != 0 && port <= 0xFFFF).then_some(Register { memory: false, address: port })
+        };
+        let (gpe0_length, gpe1_length) = (u8_at(t, 92), u8_at(t, 93));
+        self.events = Some(Events {
+            sci: u16::from_le_bytes([u8_at(t, 46), u8_at(t, 47)]),
+            pm1a: register(56, 148),
+            pm1b: register(60, 160),
+            pm1_length: u8_at(t, 88),
+            pm1a_control: fadt.pm1a,
+            pm1b_control: fadt.pm1b,
+            gpe0: register(80, 220).filter(|_| gpe0_length >= 2).map(|r| (r, gpe0_length)),
+            gpe1: register(84, 232).filter(|_| gpe1_length >= 2).map(|r| (r, gpe1_length, u8_at(t, 94))),
+            smi_cmd: fadt.smi_cmd,
+            acpi_enable: fadt.acpi_enable,
+            fixed_power_button: flags & (1 << 4) == 0,
+            hardware_reduced: fadt.hardware_reduced,
+            facs: fadt.facs,
+        });
         fadt
     }
 }

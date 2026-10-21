@@ -25,9 +25,9 @@ use core::fmt;
 use core::ops::Range;
 use font::raster::ONE;
 
-const BACK_TO_WINDOWS: &str = "To go back to Windows, ask Claude to restart the PC, or hold the power button until it \
-                               turns off and turn it on again. Chat Computer writes nothing on your disks but its own \
-                               memory file, so either is safe.";
+const BACK_TO_WINDOWS: &str = "To go back to Windows, ask Claude to restart the PC, or turn it off with its power button \
+                               (holding it down if a press doesn't) and on again. Chat Computer writes nothing on your \
+                               disks but its own memory file, so either is safe.";
 /// The same, once Chat Computer has stopped (Claude can't be asked).
 const BACK_TO_WINDOWS_STOPPED: &str = "To go back to Windows, hold the power button until the PC turns off, then turn \
                                        it on again. Chat Computer writes nothing on your disks but its own memory \

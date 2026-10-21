@@ -27,6 +27,7 @@ registry = { path = "../registry" }
 remember = { path = "../remember" }
 markdown = { path = "../markdown" }
 hid = { path = "../hid" }
+aml = { path = "../aml" }
 
 [[bin]]
 name = "chatcomputer-kernel"

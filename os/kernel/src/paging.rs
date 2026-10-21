@@ -205,6 +205,12 @@ pub fn map_device(phys: u64, len: u64, cache: Cache) -> u64 {
     virt + (phys - start)
 }
 
+/// Whether `phys` to `phys + len` is RAM, reached at PHYS_OFFSET (the firmware's own RAM too: its ACPI tables' and
+/// ACPI NVS memory).
+pub fn in_ram(phys: u64, len: u64) -> bool {
+    TABLES.lock().as_ref().is_some_and(|t| t.in_direct_map(phys, len))
+}
+
 /// A virtual address for reading firmware tables at `phys`: in the RAM map if they're in RAM,
 /// otherwise mapped like device memory.
 pub fn map_firmware_table(phys: u64, len: u64) -> u64 {

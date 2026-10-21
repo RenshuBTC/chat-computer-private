@@ -69,6 +69,19 @@ NVMe and SATA drivers.
     hand-off, which also stops the firmware making a USB keyboard look like a PS/2 one), then stopped
     and reset before the memory the firmware used is reused. On Intel's 2012-2015 chipsets, the
     sockets are moved over from the older controller next to it;
+  * the firmware's own programs (ACPI Machine Language, in its DSDT and SSDTs), run by Chat Computer's own
+    interpreter (`aml/`) the way ACPICA (Linux's interpreter) runs them, once the PC is in ACPI mode, as every
+    system puts it: the embedded controller's driver (its ports from its device's resources), the firmware told it's
+    there (`_REG`), and the devices' `_INI`s. Then the firmware's events are watched, checked 20 times a second: the
+    power button (pressing it turns the PC off, with the conversation kept), the general-purpose events the
+    firmware's `_Lxx` and `_Exx` methods handle, and the embedded controller's queries (its `_Qxx` methods).
+    Batteries (`_BIX` or `_BIF`, and `_BST`), AC adapters (`_PSR`), lids (`_LID`) and thermal zones (`_TMP`,
+    `_CRT`) are read when the firmware says they changed, and every so often anyway. They're in the computer's
+    status for Claude, and a note says when the PC is plugged in or out, or its battery is low. A nearly empty
+    battery turns it off a minute later unless it's plugged in, and so does reaching the firmware's critical
+    temperature, at once (`firmware.rs`). A method that runs too long is given up, and an embedded controller
+    that doesn't answer is left alone for a while. `firmware-programs = off` in the settings file turns all of it
+    off, for a PC whose firmware does something odd;
   * the PS/2 keyboard controller, which most laptops' built-in keyboards use;
   * then, with interrupts on, the USB controllers start. Interrupts come by MSI-X or MSI. A
     controller that can do neither is checked for work every time the kernel wakes. What is plugged in
@@ -181,11 +194,11 @@ NVMe and SATA drivers.
     * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
       keyboard controller's reset line (`power.rs`);
-    * `turn_off_computer`: the PC turned off a few seconds after Claude's answer, by ACPI's S5 ("soft off"). S5's
-      sleep type is read from the firmware's DSDT, where it is plain data, and written with "sleep enable" to the
-      PM1 control registers (or a hardware-reduced PC's sleep control register). Other systems also run the
-      firmware's own preparation for it (AML, which Chat Computer doesn't run yet); nearly all PCs turn off without
-      it, and if one doesn't, the screen says so;
+    * `turn_off_computer`: the PC turned off a few seconds after Claude's answer, by ACPI's S5 ("soft off"). First
+      the firmware's own preparation for it runs (its `_TTS` and `_PTS` methods). S5's sleep type, which the
+      firmware's `\_S5` gives (or the DSDT's bytes, where it is plain data, when its programs aren't run), is written
+      with "sleep enable" to the PM1 control registers (or a hardware-reduced PC's sleep control register). If the
+      PC doesn't turn off, the screen says so;
     * `start_new_conversation`: when the person asks to start over, the conversation ends after Claude's answer. It
       is no longer sent or kept, and stays on the screen above a line until the next restart;
     * `remember` and `forget`: Claude's notes about the person (their name, what they like), kept in the memory file
@@ -315,6 +328,24 @@ NVMe and SATA drivers.
   chose) and the chunk's place, so nothing but this file is ever written; two copies written in turn, each with a
   hash, so a restart in the middle of a write leaves the last whole copy. Tested with writes cut short and with
   blocks that aren't the file's.
+* `aml/` is Chat Computer's own interpreter of ACPI Machine Language, the byte code a PC's firmware describes its
+  devices and their power with (the ACPI specification, 6.5): the namespace of devices, methods, data, operation
+  regions and their fields (memory, I/O ports, PCI configuration space, the embedded controller, CMOS), mutexes and
+  events, every operator, the implicit conversions as ACPICA does them, 32-bit integers for old tables, `_OSI`
+  answered as Windows answers it (firmware is written and tested for Windows), the firmware's global lock, and
+  resource templates (I/O ports, memory, interrupts, GPIO pins, I2C devices). Where ACPICA (Linux's interpreter) has
+  rules of its own, it keeps them: start-up in its order (`_REG`, `\_INI` and `\_SB._INI`, then each device's
+  `_STA` and `_INI`), names in packages settled once every table is loaded, and what's an error (a device defined
+  twice, a local read before anything was stored in it, a method's missing value where one is wanted). A table with
+  an error loses only what fails, and the rest loads where the table puts it. Every byte is checked before it's
+  used, and a loop waiting for hardware that never answers is given up after a while: a damaged table gives an
+  error, never a crash or a hang. Tested against ACPICA's own `acpiexec` (Intel's reference interpreter): test
+  tables (`tests/*.asl`, compiled by `iasl`) whose every method must give the same in both, run in CI; real PCs'
+  tables from the linuxhw/ACPI collection (`tests/corpus.py`, set up as acpiexec sets itself up): of 59,468 objects
+  on 144 PCs (79 laptops, 65 desktops, 7 of them AMD AM5 boards), every one the same but 20, 8 on two laptops whose
+  batteries are on I2C, which acpiexec simulates in its own way, and 12 on two whose tables have an error inside a
+  device, after which ACPICA files what follows inside that device; and damaged tables at random (`examples/fuzz.rs`),
+  which must never make it panic.
 * `bootinfo/` defines what the start-up stage hands the kernel, once for both.
 * `shared/mem.rs` holds Chat Computer's own `memcpy`, `memmove`, `memset` and `memcmp`.
 
@@ -366,7 +397,8 @@ sharing its connection over USB ("USB tethering") works too. Otherwise it shows 
 be reached yet, until that network chip's driver comes (step 6); the list of parts in `pc.txt` says which chip that
 is.
 
-To go back to Windows, hold the power button until the PC turns off, or ask Claude to restart it. The only thing
+To go back to Windows, press the power button (the PC turns off; hold it if a press doesn't), or ask Claude to restart
+it. The only thing
 Chat Computer writes on any disk is its memory file, in place. Running the script again with `-Remove` (or choosing
 Remove) takes the files (the conversation with them) and the entry off again, and deletes the key.
 
@@ -380,15 +412,16 @@ fetches it. To try it you also need QEMU, OVMF and Pillow (`apt install qemu-sys
 python3-pil`).
 
 ```
-./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 3.1 MB)
-cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p remember -p markdown -p chime -p hid
+./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 3.4 MB)
+cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p remember -p markdown -p chime -p hid -p aml
                                  # the font engine and text setting, network stack, cryptography, TLS (needs
                                  # openssl), Claude API client, FAT reader (needs dosfstools and mtools), exFAT
                                  # and NTFS readers (need xz), ZIP, Office and picture readers (need python3 and
                                  # Pillow),
                                  # BitLocker reader (needs curl, xz and python3-cryptography; BITLOCKER_IMAGES
                                  # names the test volumes' archive if it's here already), registry reader (needs
-                                 # xz), memory file, Markdown reader, chimes and HID descriptors
+                                 # xz), memory file, Markdown reader, chimes, HID descriptors and the AML
+                                 # interpreter (needs acpica-tools: iasl and acpiexec)
 cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
@@ -422,6 +455,11 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # reader's two slots (a FAT16 card with no partition table; an exFAT card put in
                                  # later), a stick of 4 KiB blocks with NTFS plugged in later, then a stick
                                  # unplugged and a card taken out; Chat Computer's own folder never read
+./check.py --power               # the firmware's own programs: a battery, an AC adapter and a lid added to the
+                                 # virtual PC's tables (aml/tests/power.asl), read and followed as they change
+                                 # (unplugged, the battery low, the lid closed), a processor plugged in (an event
+                                 # QEMU's firmware handles), then the power button: the PC turns off, the
+                                 # firmware's _TTS and _PTS run first (needs iasl, from acpica-tools)
 ./check.py --bitlocker           # the same drive encrypted with BitLocker: locked; a wrong recovery key typed
                                  # refused, the right one unlocking it, its files read; neither key reaching
                                  # Claude or the disk; and read at once with BitLocker's key in the clear (needs
@@ -457,8 +495,8 @@ over. On any standard PC, some software stays outside. The PC this is first aime
   * It starts Chat Computer.
   * It leaves System Management Mode code behind, which can pause any operating system and which the OS
     cannot disable ([Wikipedia](https://en.wikipedia.org/wiki/System_Management_Mode)).
-  * Its ACPI tables include small power-management programs (AML) that an OS has to run for things like
-    sleep. Chat Computer reads the tables but doesn't run those programs yet.
+  * Its ACPI tables include small power-management programs (AML) that an OS has to run for the battery, the
+    power button and sleep. Chat Computer runs them with its own interpreter, but they're the firmware's code.
 * **CPU microcode**, from the processor's maker.
 * **Firmware inside devices**: the SSD, graphics, network and Bluetooth chips, and the AirPods. Some chips
   need the OS to load their maker's firmware into them each time they power on
@@ -532,8 +570,12 @@ PC.
     controllers and codecs). To do: trying it on real PCs, microphones, USB audio, then Bluetooth (HCI over USB,
     L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
-12. Power: ✓ restart, ✓ turning off (ACPI's S5, without the firmware's AML). To do: sleep; on laptops the battery
-    and the lid. These need an AML interpreter.
+12. Power: ✓ restart, ✓ turning off (ACPI's S5, with the firmware's _TTS and _PTS), ✓ the firmware's own programs
+    (AML) run by Chat Computer's own interpreter: ✓ the power button, ✓ laptops' batteries, AC adapters and lids, ✓
+    the firmware's events (GPEs, the embedded controller's queries), ✓ its critical temperature. Checked against
+    ACPICA on 144 real PCs' tables and in a virtual PC; to be tried on real PCs. To do: sleep (S3) and waking, the
+    screen's brightness (_BCM), and the touchpads and keyboards laptops have on I2C (described only in the
+    firmware's tables).
 13. Updates: signed, with a way back.
 14. Later: Wi-Fi (Intel's and MediaTek's chips, which most laptops have), touchpads, graphics
     acceleration, and showing websites.
@@ -554,6 +596,6 @@ Three things stand between the steps above and a download that works on any PC o
    can drive everything the PC needs (screen, keyboard, storage and the internet), and the Linux-based
    Chat Computer otherwise. Both look and work the same to the person.
 3. **Drivers, in order of how many PCs each one covers.** Standard interfaces first, where one driver
-   covers nearly every PC: USB (done), PS/2 keyboards (done), NVMe and SATA (done), the internet over USB (done), HD
-   Audio and USB audio, and laptops' power (ACPI). Then the most common chips: Realtek's and Intel's
+   covers nearly every PC: USB (done), PS/2 keyboards (done), NVMe and SATA (done), the internet over USB (done),
+   laptops' power (ACPI: done, to be tried on real laptops), HD Audio and USB audio. Then the most common chips: Realtek's and Intel's
    wired network (written; to be tried on real PCs), then Intel's and MediaTek's Wi-Fi, the hardest single piece.

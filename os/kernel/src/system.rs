@@ -54,6 +54,8 @@ pub fn status() -> String {
     }
     let m = memory::stats();
     lines.push(format!("Memory: {} in all, {} free", size(m.total_ram), size(m.free)));
+    // The battery, power, lid and temperature, as the firmware's programs say.
+    lines.extend(crate::firmware::status());
     let up = time::uptime_ms() / 1000;
     lines.push(format!(
         "Chat Computer's own system has been running for {} h {} min {} s (since this PC started it)",
@@ -90,7 +92,7 @@ pub fn status() -> String {
     lines.push(String::from(
         "Not yet in Chat Computer's own system: changing files (it reads Windows' drives and USB drives, and writes only \
          its own memory file), Office's files from before 2007, sound other than its chimes (no speech, music or microphones), Wi-Fi, \
-         Bluetooth, and the other processor cores",
+         Bluetooth, sleep (it can turn off), the screen's brightness, and the other processor cores",
     ));
     lines.join("\n")
 }

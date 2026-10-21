@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "aml"
+version = "0.1.0"
+
+[[package]]
 name = "bitlocker"
 version = "0.1.0"
 dependencies = [
@@ -24,6 +28,7 @@ dependencies = [
 name = "chatcomputer-kernel"
 version = "0.1.0"
 dependencies = [
+ "aml",
  "bitlocker",
  "bootinfo",
  "chime",

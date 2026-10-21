@@ -21,6 +21,7 @@ mod cpu;
 mod dma;
 mod draw;
 mod files;
+mod firmware;
 mod gdt;
 mod heap;
 mod idt;
@@ -171,6 +172,10 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     usb::take_over();
     let freed = memory::reclaim_firmware_memory(unsafe { info.memory_map() });
     log!("Chat Computer kernel: {} MiB the firmware used is free again", freed >> 20);
+    // The firmware's own programs (ACPI's AML): the embedded controller, the battery, the power button. Before the
+    // keyboard: on a laptop, the embedded controller is what the keyboard is behind.
+    log!("Chat Computer kernel: {}", firmware::init(&acpi, settings.firmware_programs_off));
+    power::use_firmware_s5(&acpi);
     // After the USB controllers: a firmware that made a USB keyboard look like a PS/2 one has stopped.
     let ps2_name = if acpi.portable { "built-in keyboard" } else { "PS/2 keyboard" };
     let ps2 = ps2::init();
@@ -240,6 +245,8 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         }
         schedule::work();
         sound::work();
+        // The firmware's events: the power button, the battery, the lid.
+        firmware::work();
         chat::tick();
         power::due();
     }

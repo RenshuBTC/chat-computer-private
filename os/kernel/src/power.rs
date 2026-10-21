@@ -6,8 +6,9 @@
 //! reset line, and last a processor reset by a fault it can't handle.
 //!
 //! Turning off is ACPI's S5 ("soft off"): S5's sleep type, which the firmware gives in its DSDT, written with "sleep
-//! enable" to the PM1 control registers (acpi.rs). Operating systems also run the firmware's own preparation for it
-//! (its _PTS method, which is AML, and Chat Computer doesn't run AML yet); PCs turn off without it, nearly all.
+//! enable" to the PM1 control registers (acpi.rs). First the firmware's own preparation for it runs (its _TTS and _PTS
+//! methods: firmware.rs), as it expects, and its \_S5 says the sleep type (or the DSDT's bytes do, when its programs
+//! aren't run).
 
 use crate::acpi::{Acpi, ResetRegister, SoftOff};
 use crate::cpu;
@@ -40,6 +41,39 @@ pub fn can_turn_off() -> bool {
     SOFT_OFF.lock().is_some()
 }
 
+/// Once the firmware's programs have run: S5's sleep types as its \_S5 gives them (when the DSDT's bytes didn't say,
+/// or said otherwise: the programs are the firmware's own word).
+pub fn use_firmware_s5(acpi: &Acpi) {
+    let Some((typ_a, typ_b)) = crate::firmware::s5_types() else { return };
+    let mut soft_off = SOFT_OFF.lock();
+    match soft_off.as_mut() {
+        Some(s) => {
+            if (s.typ_a, s.typ_b) != (typ_a, typ_b) {
+                crate::log!("Chat Computer kernel: turning off: sleep type {typ_a}, as the firmware's \\_S5 says (its DSDT's bytes said {})", s.typ_a);
+            }
+            s.typ_a = typ_a;
+            s.typ_b = typ_b;
+        }
+        None => {
+            if let Some(e) = acpi.events
+                && e.pm1a_control != 0
+                && !e.hardware_reduced
+            {
+                *soft_off = Some(SoftOff {
+                    pm1a: e.pm1a_control,
+                    pm1b: e.pm1b_control,
+                    sleep_control: None,
+                    typ_a,
+                    typ_b,
+                    smi_cmd: e.smi_cmd,
+                    acpi_enable: e.acpi_enable,
+                });
+                crate::log!("Chat Computer kernel: turning off: sleep type {typ_a}, as the firmware's \\_S5 says");
+            }
+        }
+    }
+}
+
 /// Restarts the PC in `ms` milliseconds (from the main loop, `due`).
 pub fn restart_in(ms: u64) {
     RESTART_AT.store(time::uptime_ms() + ms.max(1), Ordering::Relaxed);
@@ -68,8 +102,13 @@ pub fn turn_off() -> ! {
     crate::log!("Chat Computer kernel: turning off");
     cpu::disable_interrupts();
     crate::keep::shut_down();
+    // The firmware's own preparation, which can say S5's sleep types too.
+    let types = crate::firmware::before_turning_off();
     let soft_off = *SOFT_OFF.lock();
-    if let Some(s) = soft_off {
+    if let Some(mut s) = soft_off {
+        if let Some((a, b)) = types {
+            (s.typ_a, s.typ_b) = (a, b);
+        }
         unsafe { enter_s5(&s) };
         time::delay_ms(3000);
     }

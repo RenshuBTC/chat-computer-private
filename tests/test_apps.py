@@ -35,10 +35,60 @@ def test_the_get_page_is_as_annotated_s_without_the_video():
     for name, href in links.items():
         if not href.startswith(("../", "http")):
             assert (GET / href).is_file(), (name, href)
-    assert links["chrome"] == "Chat-Computer-Chrome.zip" and links["web"] == "../"
+    assert links == {"chrome": "Chat-Computer-Chrome.zip", "windows": "Chat-Computer-Windows.exe", "mac": "Chat-Computer-Mac.dmg",
+                     "android": "Chat-Computer-Android.apk", "web": "../"}
     assert 'title="Downloads the extension. Unzip it, open chrome://extensions, turn on Developer mode, and choose Load unpacked."' in page
+    # The apps aren't signed with paid certificates yet: each button says what's asked the first time.
+    assert "choose More info, then Run anyway" in page and "Privacy &amp; Security, and choose Open Anyway" in page
+    assert "allow installing from your browser" in page
     soon = re.findall(r'<span class="add soon" id="(\w+)" aria-disabled="true"', page)
-    assert "iphone" in soon and not set(soon) & set(links)
+    assert soon == ["iphone"] and 'title="Coming to the App Store">iPhone<' in page
+    # What each download is: Windows' installer (NSIS), a Mac disk image, an Android app.
+    assert (GET / "Chat-Computer-Windows.exe").read_bytes()[:2] == b"MZ" and b"Nullsoft" in (GET / "Chat-Computer-Windows.exe").read_bytes()
+    assert (GET / "Chat-Computer-Mac.dmg").read_bytes()[-512:][:4] == b"koly"
+    with __import__("zipfile").ZipFile(GET / "Chat-Computer-Android.apk") as z:
+        assert "AndroidManifest.xml" in z.namelist() and "classes.dex" in z.namelist()
+
+
+def _apk_certificate(apk: bytes) -> bytes:
+    """The certificate an APK is signed with (APK Signature Scheme v2/v3: the signing block just before the zip's
+    central directory)."""
+    import struct
+    eocd = apk.rfind(b"PK\x05\x06")
+    cd = struct.unpack_from("<I", apk, eocd + 16)[0]
+    assert apk[cd - 16:cd] == b"APK Sig Block 42"
+    size = struct.unpack_from("<Q", apk, cd - 24)[0]
+    at, end = cd - size, cd - 24                        # (the pairs: after the first size, before the second)
+    while at < end:
+        length, kind = struct.unpack_from("<QI", apk, at)
+        value = apk[at + 12:at + 8 + length]
+        at += 8 + length
+        if kind in (0x7109871A, 0xF05368C0):                 # v2, v3
+            p = 4 + 4                                            # signers, the first signer
+            p += 4                                               # its signed data
+            digests = struct.unpack_from("<I", value, p)[0]
+            p += 4 + digests + 4                                 # past the digests, into the certificates
+            n = struct.unpack_from("<I", value, p)[0]
+            return value[p + 4:p + 4 + n]
+    raise AssertionError("no v2 or v3 signature")
+
+
+def test_the_android_app_is_the_one_chatcomputer_ai_vouches_for():
+    """chatcomputer.ai says the Android app is its own (docs/.well-known/assetlinks.json): its package, and the
+    fingerprint of the key it's signed with, which must be the downloadable app's, or Chrome shows an address bar."""
+    import hashlib
+    links = json.loads((ROOT / "docs" / ".well-known" / "assetlinks.json").read_text())
+    target = links[0]["target"]
+    assert links[0]["relation"] == ["delegate_permission/common.handle_all_urls"] and target["package_name"] == "ai.chatcomputer.app"
+    cert = _apk_certificate((GET / "Chat-Computer-Android.apk").read_bytes())
+    fingerprint = ":".join(f"{b:02X}" for b in hashlib.sha256(cert).digest())
+    assert target["sha256_cert_fingerprints"] == [fingerprint]
+    gradle = (ROOT / "apps" / "android" / "app" / "build.gradle.kts").read_text()
+    assert 'applicationId = "ai.chatcomputer.app"' in gradle and "CHATCOMPUTER_KEYSTORE" in gradle
+    manifest = (ROOT / "apps" / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text()
+    assert "com.google.androidbrowserhelper.trusted.LauncherActivity" in manifest and 'android:host="chatcomputer.ai"' in manifest
+    strings = (ROOT / "apps" / "android" / "app" / "src" / "main" / "res" / "values" / "strings.xml").read_text()
+    assert '\\"site\\": \\"https://chatcomputer.ai\\"' in strings and "https://chatcomputer.ai/</string>" in strings
 
 
 def test_the_chrome_extension_is_small_and_asks_for_little():

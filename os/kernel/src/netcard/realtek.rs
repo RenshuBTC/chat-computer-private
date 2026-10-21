@@ -12,9 +12,10 @@
 //! a microcontroller to talk the chip out of the state a firmware's or Windows' driver left it in (Linux's
 //! sequence, followed here), and the 8125 keeps its interrupt registers and "send now" register elsewhere.
 //!
-//! Left out so far: the PCI Express PHY's tuning tables and the PHY firmware patches Linux applies (Linux works
-//! without the firmware; its maintainer says it is for compatibility on some systems), checksum offloads, and the
-//! DASH management variants' handshake with their management processor.
+//! Left out so far: the PCI Express PHY's tuning tables, the PHY firmware patches and the PHY parameter writes Linux
+//! applies to each chip (Linux works without the firmware; its maintainer says it is for compatibility on some
+//! systems; FreeBSD's driver makes none of the writes on the 8111E to 8111H), checksum offloads, and the DASH
+//! management variants' handshake with their management processor.
 
 use super::Card;
 use crate::dma::Page;
@@ -154,12 +155,20 @@ const BMCR_RESET: u16 = 1 << 15;
 const BMCR_LOOPBACK: u16 = 1 << 14;
 const BMCR_AN_ENABLE: u16 = 1 << 12;
 const BMCR_POWER_DOWN: u16 = 1 << 11;
+const BMCR_ISOLATE: u16 = 1 << 10;
 const BMCR_AN_RESTART: u16 = 1 << 9;
+/// What a driver before (or a firmware) may have left set in the PHY's control register: a reset under way, powered
+/// down, cut off from the chip, looped back.
+const BMCR_LEFT: u16 = BMCR_RESET | BMCR_POWER_DOWN | BMCR_ISOLATE | BMCR_LOOPBACK;
 const ADVERTISE_10_100: u16 = 0x01E1;
 const ADVERTISE_1000_FULL: u16 = 1 << 9;
 const OCP_STANDARD: u16 = 0xA400;
 const OCP_ALDPS: u16 = 0xA430; // bit 2: the PHY's link-down power saving, which Linux switches off
 const OCP_ADVERTISE_2500: u16 = 0xA5D4; // bit 7
+/// Energy Efficient Ethernet offered: bits 1 and 2 at 100 and 1000 Mb/s; on the 8125, bit 0 of the other at 2.5 Gb/s
+/// (the clause 45 registers' copies Linux's Realtek PHY driver uses).
+const OCP_EEE_ADVERTISE: u16 = 0xA5D0;
+const OCP_EEE_ADVERTISE_2500: u16 = 0xA6D4;
 
 /// Descriptors per ring, and the size of each buffer (a frame and its checksum must fit in one).
 const RING: usize = 64;
@@ -412,30 +421,64 @@ impl Realtek {
         ([0x02, r[1], r[2], r[3], r[4], r[5]], false)
     }
 
-    /// The PHY: its link-down power saving off (Linux), reset, then negotiating with the other end, offering every
-    /// speed it has (1000 Mb/s unless it's a 100 Mb/s PHY; 2500 on the 8125). False if it didn't answer.
+    /// The PHY: awake (a driver before may have powered it down, and a restart without a power cut leaves it so; then
+    /// a moment, as "internal PHY's from RTL8168h up may not be instantly ready", Linux says), its link-down power
+    /// saving off (Linux), reset, Energy Efficient Ethernet not offered, then negotiating with the other end, offering
+    /// every speed it has (1000 Mb/s unless it's a 100 Mb/s PHY; 2500 on the 8125). False if it didn't answer or
+    /// didn't finish its reset (it's set going all the same).
     fn phy_up(&self, gigabit: bool) -> bool {
-        if self.has_ocp() {
-            if let Some(v) = self.phy_ocp_read(OCP_ALDPS) {
-                self.phy_ocp_write(OCP_ALDPS, v & !(1 << 2));
-            }
-        } else {
+        if !self.has_ocp() {
             self.phy_write(PAGE, 0);
         }
         let Some(control) = self.phy_read(BMCR) else { return false };
-        self.phy_write(BMCR, control | BMCR_RESET);
+        self.phy_write(BMCR, control & !BMCR_LEFT);
+        time::delay_ms(20);
+        if self.has_ocp()
+            && let Some(v) = self.phy_ocp_read(OCP_ALDPS)
+        {
+            self.phy_ocp_write(OCP_ALDPS, v & !(1 << 2));
+        }
+        self.phy_write(BMCR, BMCR_RESET | BMCR_AN_ENABLE);
         let reset = (0..60).any(|_| {
             time::delay_ms(10);
             self.phy_read(BMCR).is_some_and(|v| v & BMCR_RESET == 0)
         });
-        if !reset {
-            return false;
-        }
+        self.eee_off();
         let ok = self.phy_write(ANAR, ADVERTISE_10_100)
             && self.phy_write(GBCR, if gigabit { ADVERTISE_1000_FULL } else { 0 })
             && (!self.is_8125() || self.phy_ocp_read(OCP_ADVERTISE_2500).is_some_and(|v| self.phy_ocp_write(OCP_ADVERTISE_2500, v | 1 << 7)));
         let control = self.phy_read(BMCR).unwrap_or(0);
-        ok && self.phy_write(BMCR, (control & !(BMCR_POWER_DOWN | BMCR_LOOPBACK)) | BMCR_AN_ENABLE | BMCR_AN_RESTART)
+        let going = self.phy_write(BMCR, (control & !BMCR_LEFT) | BMCR_AN_ENABLE | BMCR_AN_RESTART);
+        reset && ok && going
+    }
+
+    /// Energy Efficient Ethernet off, as Realtek's own driver leaves it (Linux leaves it off on the 8111H, and at
+    /// 2.5 Gb/s on the 8125A): with some switches it drops the link or stalls. The PHY doesn't offer it (8111G and
+    /// later), and the chip never asks for the line's low-power idle when sending (Linux's register for each chip).
+    fn eee_off(&self) {
+        if self.has_ocp()
+            && let Some(v) = self.phy_ocp_read(OCP_EEE_ADVERTISE)
+        {
+            self.phy_ocp_write(OCP_EEE_ADVERTISE, v & !0x0006);
+        }
+        if self.is_8125()
+            && let Some(v) = self.phy_ocp_read(OCP_EEE_ADVERTISE_2500)
+        {
+            self.phy_ocp_write(OCP_EEE_ADVERTISE_2500, v & !0x0001);
+        }
+        match self.version {
+            34..=52 => {
+                if let Some(v) = self.eri_read(0x1B0) {
+                    self.eri_write(0x1B0, 0xF, v & !0x0003);
+                }
+            }
+            61 => {
+                self.mac_ocp_modify(0xE040, 0x0003, 0);
+                self.mac_ocp_modify(0xEB62, 0x0006, 0);
+            }
+            _ if self.is_8125() => self.mac_ocp_modify(0xE040, 0x0003, 0),
+            _ => {}
+        }
     }
 
     /// The 8125's common setting up (Linux's "hw_start_8125_common", written to the microcontroller's registers;
@@ -488,7 +531,9 @@ impl Realtek {
             return Err(String::from("its register region is too small"));
         }
         let regs = paging::map_device(bar.phys, bar.size.min(0x10000), Cache::Uncached);
-        f.at.enable(true);
+        // Its registers on; its use of memory (bus mastering) only once it has been reset, below, so nothing a system
+        // before left running can write into memory that's now Chat Computer's (Linux's order too).
+        f.at.enable(false);
         let tx_config = unsafe { read_volatile((regs + TX_CONFIG) as *const u32) };
         if tx_config == !0 {
             return Err(String::from("it doesn't answer"));
@@ -542,7 +587,7 @@ impl Realtek {
             if !card.hw_init() {
                 notes.push_str("; its microcontroller didn't answer as expected");
             }
-            if (51..=52).contains(&version) {
+            if (51..=52).contains(&version) || version == 66 {
                 notes.push_str("; it has a DASH management processor, which this driver doesn't talk to yet");
             }
         } else {
@@ -552,6 +597,7 @@ impl Realtek {
         if !card.poll(100, 100, |s| s.r8(CHIP_CMD) & CMD_RESET == 0) {
             return Err(String::from("it didn't come back from a reset"));
         }
+        f.at.enable(true);
 
         // Its address, written back (another system may have left another one in its address registers).
         let (mac, known) = card.read_mac();
@@ -585,6 +631,11 @@ impl Realtek {
         }
         card.w8(CONFIG2, card.r8(CONFIG2) & !(1 << 7));
         card.w8(CONFIG5, card.r8(CONFIG5) & !(1 << 0));
+        // Not "ready for L2/L3" (a PCI Express power state's handshake): "an issue when PCI reset occurs during L2/L3
+        // state", Linux says, on the 8411 and the 8111G and later. (The 8125's common setting up does it too.)
+        if version == 38 || (40..=52).contains(&version) {
+            card.w8(CONFIG3, card.r8(CONFIG3) & !(1 << 1));
+        }
         // C+ command: only "normal mode" and the interrupt timer kept (no VLAN stripping, no checksums, no 64-bit DAC
         // bit, which iPXE saw lock some cards up).
         card.w16(CPLUS_CMD, card.r16(CPLUS_CMD) & 0x2003);
@@ -602,6 +653,20 @@ impl Realtek {
             card.mac_ocp_modify(0xC0AC, 0x0000, 0x1F80); // (leaving L1 when there is traffic)
         } else {
             card.w8(MAX_TX_PACKET, if version >= 34 { 0x27 } else { 0x3F });
+            // The FIFOs' sizes, within which the chips from the 8111E-VL on manage them by themselves (TxConfig's
+            // automatic FIFO, set below): Linux's values for each chip ("exact meaning of FIFO values isn't known",
+            // it says).
+            match version {
+                34..=38 => {
+                    card.eri_write(0xC8, 0xF, 0x0010_0002);
+                    card.eri_write(0xE8, 0xF, 0x0010_0006);
+                }
+                40..=52 => {
+                    card.eri_write(0xC8, 0xF, 0x0008_0002);
+                    card.eri_write(0xE8, 0xF, 0x0010_0006);
+                }
+                _ => {}
+            }
             if version >= 34 {
                 // The packet filter reset (Linux), and out of management mode.
                 card.eri_write(0xDC, 0xF, card.eri_read(0xDC).unwrap_or(0) & !1);
@@ -754,7 +819,8 @@ impl Card for Realtek {
             self.doorbell();
         }
         let mut n = 0;
-        loop {
+        // At most a ring's worth at a time, good frames or bad, so a flood can't keep this here.
+        for _ in 0..RING {
             let d = self.rx.desc(self.rx_next);
             let opts1 = unsafe { read_volatile(d as *const u32) };
             if opts1 & OWN != 0 {
@@ -770,9 +836,6 @@ impl Card for Realtek {
             }
             self.give_rx(self.rx_next);
             self.rx_next = (self.rx_next + 1) % RING;
-            if n >= RING {
-                break;
-            }
         }
         n
     }

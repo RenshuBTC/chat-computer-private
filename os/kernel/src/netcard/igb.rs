@@ -20,6 +20,7 @@ use crate::{pci, time};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 
@@ -67,6 +68,12 @@ const DEVICES: &[(u16, &str, Family)] = &[
     (0x125F, "I226 (blank NVM)", Family::I225),
 ];
 
+/// The I225s (not the I226, I221 or I220) whose first revisions can't take frames at 2.5 Gb/s with the shortest gap
+/// between them (FreeBSD's igc).
+const I225_IDS: &[u16] = &[0x15F2, 0x15F3, 0x3100, 0x15F8, 0x3101, 0x5502, 0x0D9F, 0x15FD];
+/// The I210s (not the I211), whose packet buffers keep their sizes through a reset.
+const I210_IDS: &[u16] = &[0x1533, 0x157B];
+
 /// The chip's name, if it's one of these (and an Ethernet controller).
 pub fn model(f: &pci::Function) -> Option<&'static str> {
     if f.vendor != VENDOR || f.class != 0x02 || f.subclass != 0x00 {
@@ -91,8 +98,10 @@ const EEER: u64 = 0x0E30; // Energy Efficient Ethernet (I225)
 const IPCNFG: u64 = 0x0E38; // (I225)
 const EEMNGCTL: u64 = 0x1010;
 const IVAR0: u64 = 0x1700;
-const RXPBS: u64 = 0x2404; // the receive packet buffer's size (I225)
-const TXPBS: u64 = 0x3404; // the transmit packet buffer's (I225)
+const RXPBS: u64 = 0x2404; // the receive packet buffer's size (I210, I225)
+const TXPBS: u64 = 0x3404; // the transmit packet buffer's (I210, I225)
+const DTXMXPKTSZ_I210: u64 = 0x355C; // the largest frame sent
+const TQAVCTRL_I210: u64 = 0x3570; // the send side's mode (bit 0: the time-sensitive "Qav" mode)
 const RFCTL: u64 = 0x5008;
 const MTA: u64 = 0x5200;
 const RAL0: u64 = 0x5400;
@@ -135,7 +144,9 @@ const CTRL_FRCDPLX: u32 = 1 << 12;
 const CTRL_RST: u32 = 1 << 26;
 const CTRL_PHY_RST: u32 = 1 << 31;
 const STATUS_LU: u32 = 1 << 1;
+const STATUS_SPEED_2500: u32 = 1 << 22; // (I225)
 const STATUS_FUNC_SHIFT: u32 = 2;
+const TIPG_IPGT: u32 = 0x3FF;
 const STATUS_GIO_MASTER_ENABLE: u32 = 1 << 19;
 const STATUS_DEV_RST_SET: u32 = 1 << 20;
 const EECD_AUTO_RD: u32 = 1 << 9;
@@ -238,7 +249,11 @@ const INVM_PLL_WORKAROUND: u16 = 0x0010;
 // Descriptor bits: advanced receive write-back (status at byte 8), advanced transmit data descriptor.
 const RX_DD: u32 = 1 << 0;
 const RX_EOP: u32 = 1 << 1;
-const RX_ERRORS: u32 = 0xFFF0_0000;
+/// The receive errors that make a frame bad: on the igb family, a CRC, symbol, sequence or carrier-extension error, or
+/// "RX data error" (Linux's igb); on the I225 and I226, RX data error (Linux's and FreeBSD's igc). Checksum errors
+/// aren't among them: the network stack checks every checksum itself (and the I225 sets one wrongly on some frames).
+const RX_FRAME_ERRORS: u32 = 1 << 24 | 1 << 25 | 1 << 26 | 1 << 28 | 1 << 31;
+const RX_FRAME_ERRORS_I225: u32 = 1 << 31;
 const TX_DTYP_DATA: u32 = 0x3 << 20;
 const TX_EOP: u32 = 1 << 24;
 const TX_IFCS: u32 = 1 << 25;
@@ -250,6 +265,9 @@ const TX_DD: u32 = 1 << 0;
 /// Descriptors per ring (1 KB: the chip's rings are multiples of 128 bytes), and the size of each buffer.
 const RING: usize = 64;
 const BUF: usize = 2048;
+/// Frames sent are at least this long (without their checksum): Ethernet's shortest. (The chip pads shorter ones
+/// itself, but only from 17 bytes up.)
+const SHORTEST: usize = 60;
 
 /// One ring: the descriptors (one page), the buffers (two to a page).
 struct Ring {
@@ -289,6 +307,12 @@ pub struct Igb {
     /// This port's PHY semaphore bit, and the PHY's address on its management bus.
     phy_lock: u32,
     phy_address: u32,
+    /// Whether a semaphore left set has been cleared already (that's done once).
+    semaphore_cleared: Cell<bool>,
+    /// The receive errors that make a frame bad, on this chip.
+    rx_errors: u32,
+    /// A first-revision I225: its gap between frames follows the link's speed.
+    gap_workaround: bool,
     rx: Ring,
     tx: Ring,
     /// The next receive descriptor to look at.
@@ -337,8 +361,12 @@ impl Igb {
     /// The hardware semaphore: software's bit, then the bit that keeps the firmware out (SWESMBI, ours if it stays
     /// set).
     fn semaphore(&self) -> bool {
-        // (A semaphore left set, by a firmware's driver say, is cleared once, as Linux does for the I210 and I225.)
+        // (A semaphore left set, by a firmware's driver say, is cleared once, as Linux and FreeBSD do for the I210 and
+        // I225; clearing it again would take it from whoever holds it.)
         if !self.smbi() {
+            if self.semaphore_cleared.replace(true) {
+                return false;
+            }
             self.semaphore_off();
             if !self.smbi() {
                 return false;
@@ -452,11 +480,9 @@ impl Igb {
     }
 
     /// The I225's PHY reset (Linux's igc does one before using the PHY: firmware has been seen to leave it on another
-    /// register page), unless the firmware forbids it. Then wait for "reset complete".
+    /// register page, where even its id reads wrong). Then wait for "reset complete". (Not when the firmware keeps the
+    /// PHY: the caller checks.)
     fn phy_reset_i225(&self) -> bool {
-        if self.r(MANC) & MANC_BLK_PHY_RST_ON_IDE != 0 {
-            return true;
-        }
         self.with_phy(|s| {
             s.w(CTRL, s.r(CTRL) | CTRL_PHY_RST);
             time::delay_us(100);
@@ -469,18 +495,6 @@ impl Igb {
             time::delay_us(100);
             done
         }) == Some(true)
-    }
-
-    /// The I225's PHY address: drivers use 0; 1 is tried too, for a PHY that doesn't answer there.
-    fn find_phy_i225(&mut self) -> bool {
-        for address in [0, 1] {
-            self.phy_address = address;
-            if self.phy_read(PHY_ID1).is_some_and(|id| id != 0 && id != 0xFFFF) {
-                return true;
-            }
-        }
-        self.phy_address = 0;
-        false
     }
 
     /// A word of the I210's or I211's one-time-programmable memory, if it holds one for `address`.
@@ -575,7 +589,11 @@ impl Igb {
             icr,
             mac: [0; 6],
             phy_lock: SWFW_PHY[0],
+            // (The I225's internal PHY answers at 0, as Linux's and FreeBSD's igc use it; the igb family's at 1.)
             phy_address: if family == Family::I225 { 0 } else { 1 },
+            semaphore_cleared: Cell::new(false),
+            rx_errors: if family == Family::I225 { RX_FRAME_ERRORS_I225 } else { RX_FRAME_ERRORS },
+            gap_workaround: false,
             rx,
             tx,
             rx_next: 0,
@@ -622,6 +640,15 @@ impl Igb {
 
         // A driver is here now (the chip's firmware, if it has one, leaves the port to it).
         card.w(CTRL_EXT, card.r(CTRL_EXT) | CTRL_EXT_DRV_LOAD);
+        if I210_IDS.contains(&f.device) {
+            // The I210's packet buffers keep their sizes through a reset (only a power cut resets them): a system
+            // before that changed them, for its time-sensitive queues say, would leave the chip unable to pass traffic
+            // (iPXE). Their defaults, and the send side's plain mode, as Linux's igb sets them.
+            card.w(RXPBS, 0xA2);
+            card.w(TXPBS, 0x0400_0014);
+            card.w(DTXMXPKTSZ_I210, 0x98);
+            card.w(TQAVCTRL_I210, card.r(TQAVCTRL_I210) & !1);
+        }
         if family == Family::I225 {
             // The packet buffers split as Intel's I225/I226 manual says (Linux's igc), and Energy Efficient Ethernet
             // off: the I226-V can hang with it on (DPDK), and Linux and FreeBSD switch it off too.
@@ -631,10 +658,8 @@ impl Igb {
             card.w(EEER, card.r(EEER) & !EEER_LPI);
             card.w(VET, 0x8100);
             // The first I225s (PCI revision 0 and 1) can't take frames sent with the shortest gap at 2.5 Gb/s:
-            // Intel's workaround is to send with a 15-byte gap (FreeBSD).
-            if f.at.read8(0x08) < 2 {
-                card.w(TIPG, (card.r(TIPG) & !0x3FF) | 0x0B);
-            }
+            // Intel's workaround is to send with a 15-byte gap at that speed (FreeBSD; set as the link comes up).
+            card.gap_workaround = I225_IDS.contains(&f.device) && f.at.read8(0x08) < 2;
             // PCI Express power saving the I225 and I226 get wrong (L1.2): off (Linux, FreeBSD). The I225 can enter it
             // when it shouldn't, so both kinds go; the I226 is only too slow coming out of the ASPM kind.
             f.at.disable_l1_2(name.starts_with("I225") || name.starts_with("I220"));
@@ -665,16 +690,22 @@ impl Igb {
             Family::I225 => card.w(PHPM, card.r(PHPM) & !(PHPM_GO_LINKD | PHPM_DIS_1000 | PHPM_DIS_2500)),
             _ => card.w(PHPM, card.r(PHPM) & !(PHPM_GO_LINKD | PHPM_D0_LPLU)),
         }
-        if family == Family::I225 {
-            if !card.find_phy_i225() {
-                notes.push_str("; its PHY didn't say who it is");
+        if card.r(MANC) & MANC_BLK_PHY_RST_ON_IDE != 0 {
+            // A management firmware (Intel's AMT, a server's BMC) keeps the PHY: its link is already up, and
+            // negotiating again would drop the firmware's own connection (Linux and FreeBSD leave it too).
+            notes.push_str("; its management firmware keeps the PHY, so the link is as the firmware set it");
+        } else {
+            if family == Family::I225 {
+                if !card.phy_reset_i225() {
+                    notes.push_str("; its PHY didn't finish a reset");
+                }
+                if !card.phy_read(PHY_ID1).is_some_and(|id| id != 0 && id != 0xFFFF) {
+                    notes.push_str("; its PHY didn't say who it is");
+                }
             }
-            if !card.phy_reset_i225() {
-                notes.push_str("; its PHY didn't finish a reset");
+            if !card.phy_up(family) {
+                notes.push_str("; its PHY didn't answer");
             }
-        }
-        if !card.phy_up(family) {
-            notes.push_str("; its PHY didn't answer");
         }
 
         // Receiving: queue 0 off while it's set up, then every descriptor gets an empty buffer; the chip may fill all
@@ -696,9 +727,11 @@ impl Igb {
         for i in 0..RING {
             card.give_rx(i);
         }
+        // (The queue says it's on before its tail may move: Intel's I210 datasheet, 4.5.9. No other driver waits for
+        // it, so one that doesn't say so goes on anyway.)
         card.w(RXDCTL, RXDCTL_THRESHOLDS | DCTL_ENABLE);
         if !card.wait(10, |s| s.r(RXDCTL) & DCTL_ENABLE != 0) {
-            return Err(String::from("its receive queue didn't start"));
+            notes.push_str("; its receive queue didn't say it started");
         }
         card.w(RDT, (RING - 1) as u32);
         card.w(RCTL, (card.r(RCTL) & !RCTL_OFF) | RCTL_EN | RCTL_BAM | RCTL_SECRC);
@@ -712,7 +745,7 @@ impl Igb {
         card.w(TDT, 0);
         card.w(TXDCTL, txdctl_thresholds(family) | DCTL_ENABLE);
         if !card.wait(10, |s| s.r(TXDCTL) & DCTL_ENABLE != 0) {
-            return Err(String::from("its send queue didn't start"));
+            notes.push_str("; its send queue didn't say it started");
         }
         card.w(TCTL, (card.r(TCTL) & !TCTL_CT_MASK) | TCTL_EN | TCTL_PSP | TCTL_CT | TCTL_RTLC);
 
@@ -763,7 +796,16 @@ impl Card for Igb {
     }
 
     fn link_up(&self) -> bool {
-        self.r(STATUS) & STATUS_LU != 0
+        let status = self.r(STATUS);
+        if self.gap_workaround && status & STATUS_LU != 0 {
+            // A first-revision I225's gap between frames: 15 bytes at 2.5 Gb/s, the standard 12 below (FreeBSD).
+            let gap = if status & STATUS_SPEED_2500 != 0 { 0x0B } else { 0x08 };
+            let tipg = self.r(TIPG);
+            if tipg & TIPG_IPGT != gap {
+                self.w(TIPG, (tipg & !TIPG_IPGT) | gap);
+            }
+        }
+        status & STATUS_LU != 0
     }
 
     fn send(&mut self, frame: &[u8]) -> bool {
@@ -784,12 +826,13 @@ impl Card for Igb {
         }
         let (phys, at) = self.tx.buffer(self.tx_tail);
         let d = self.tx.desc(self.tx_tail);
-        let len = frame.len() as u32;
+        let len = frame.len().max(SHORTEST);
         unsafe {
             core::ptr::copy_nonoverlapping(frame.as_ptr(), at, frame.len());
+            core::ptr::write_bytes(at.add(frame.len()), 0, len - frame.len());
             write_volatile(d as *mut u64, phys);
-            write_volatile(d.add(12) as *mut u32, len << TX_PAYLEN_SHIFT);
-            write_volatile(d.add(8) as *mut u32, len | TX_DTYP_DATA | TX_DEXT | TX_EOP | TX_IFCS | TX_RS);
+            write_volatile(d.add(12) as *mut u32, (len as u32) << TX_PAYLEN_SHIFT);
+            write_volatile(d.add(8) as *mut u32, len as u32 | TX_DTYP_DATA | TX_DEXT | TX_EOP | TX_IFCS | TX_RS);
         }
         fence(Ordering::SeqCst);
         self.tx_tail = next;
@@ -800,7 +843,8 @@ impl Card for Igb {
     fn receive(&mut self, took: &mut dyn FnMut(&[u8])) -> usize {
         let _ = self.r(self.icr); // (clears the causes, so the next frame interrupts again)
         let mut n = 0;
-        loop {
+        // At most a ring's worth at a time, good frames or bad, so a flood can't keep this here.
+        for _ in 0..RING {
             let d = self.rx.desc(self.rx_next);
             let status = unsafe { read_volatile(d.add(8) as *const u32) };
             if status & RX_DD == 0 {
@@ -808,7 +852,7 @@ impl Card for Igb {
             }
             fence(Ordering::SeqCst);
             let len = unsafe { read_volatile(d.add(12) as *const u16) } as usize;
-            if status & RX_EOP != 0 && status & RX_ERRORS == 0 && len > 0 && len <= BUF {
+            if status & RX_EOP != 0 && status & self.rx_errors == 0 && len > 0 && len <= BUF {
                 let (_, at) = self.rx.buffer(self.rx_next);
                 took(unsafe { core::slice::from_raw_parts(at, len) });
                 n += 1;
@@ -818,9 +862,6 @@ impl Card for Igb {
             fence(Ordering::SeqCst);
             self.w(RDT, self.rx_next as u32);
             self.rx_next = (self.rx_next + 1) % RING;
-            if n >= RING {
-                break;
-            }
         }
         n
     }

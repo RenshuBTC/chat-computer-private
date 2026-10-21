@@ -80,6 +80,15 @@ pub fn invlpg(addr: u64) {
 pub fn wbinvd() {
     unsafe { asm!("wbinvd", options(nostack, preserves_flags)) }
 }
+/// Writes the cache line holding `addr` back to memory and drops it from the caches: for a device that may read
+/// memory, or write it, without the caches knowing (a sound controller set not to snoop).
+pub fn flush_line(addr: u64) {
+    unsafe { asm!("clflush [{}]", in(reg) addr, options(nostack, preserves_flags)) }
+}
+/// Every load and store before it done before any after it (clflush included).
+pub fn memory_fence() {
+    unsafe { asm!("mfence", options(nostack, preserves_flags)) }
+}
 
 /// CPUID leaf `leaf`, sub-leaf `sub`: (eax, ebx, ecx, edx).
 pub fn cpuid(leaf: u32, sub: u32) -> (u32, u32, u32, u32) {

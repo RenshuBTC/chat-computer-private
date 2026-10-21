@@ -38,7 +38,9 @@ mod ps2;
 mod random;
 mod rich;
 mod screen;
+mod schedule;
 mod settings;
+mod sound;
 mod storage;
 mod sync;
 mod system;
@@ -180,6 +182,7 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     if cards == 0 {
         log!("Chat Computer kernel: network: no card Chat Computer has a driver for");
     }
+    log!("Chat Computer kernel: {}", sound::init());
     // The memory file on the start-up drive, and the conversation it kept.
     log!("Chat Computer kernel: {}", keep::init(&info.start_disk, settings.memory_id));
     assistant::init(settings.claude_api_key, settings.key_problem);
@@ -193,6 +196,8 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
             let _ = unsafe { core::ptr::read_volatile(0x10 as *const u64) };
         }
         Some("panic") => panic!("a test of what happens when the kernel stops"),
+        // (A timer, as Claude's reminders tool sets one.)
+        Some("sound") => log!("Chat Computer kernel: test: {}", schedule::timer(2.0, "tea").unwrap_or_else(|e| e)),
         _ => {}
     }
 
@@ -208,6 +213,7 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         ps2::poll();
         keyboard::repeat();
         while let Some(press) = keyboard::take() {
+            schedule::key();
             chat::typed(press);
         }
         let turned = mouse::take_wheel();
@@ -218,6 +224,8 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
             keyboards_shown = usb::changes();
             chat::keyboards(&usb::status(), ps2::present().then_some(ps2_name));
         }
+        schedule::work();
+        sound::work();
         chat::tick();
         power::due();
     }

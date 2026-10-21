@@ -953,6 +953,16 @@ pub fn restore(turns: &[(bool, String)]) {
     }
 }
 
+/// A line from Chat Computer itself at the end of the conversation (a timer ringing).
+pub fn note(text: String) {
+    if let Some(c) = CHAT.lock().as_mut()
+        && !c.stopped
+    {
+        c.blocks.push(Block::new(Kind::Note, Live::No, text));
+        c.relayout = true;
+    }
+}
+
 /// Something came of the question to Claude.
 pub fn claude(e: Event) {
     if let Some(c) = CHAT.lock().as_mut() {

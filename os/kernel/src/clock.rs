@@ -96,6 +96,13 @@ fn offset() -> Option<i32> {
     CLOCK.lock().as_ref().and_then(|c| c.offset)
 }
 
+/// The local time now (seconds since 1970, as if the local time were UTC), when the settings gave its offset and the
+/// clock is close enough to trust for a time of day (a reminder at 6 pm).
+pub fn local_now() -> Option<i64> {
+    let (t, m) = (now()?, offset()?);
+    (error() <= 3 * 3600).then_some(t + m as i64 * 60)
+}
+
 /// The date (and time, when it's known well enough) now, for people: in local time when the settings gave the
 /// time zone, else in UTC.
 pub fn now_text() -> Option<String> {

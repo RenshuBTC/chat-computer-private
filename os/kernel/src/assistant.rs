@@ -85,15 +85,16 @@ const CLOSING_MS: u64 = 30_000;
 
 const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, search the \
-web and read web pages, and look after this computer with the tools you have (its status, the text size, restarting \
-it or turning it off, starting a new conversation), but you can't yet use the computer's files. The conversation is \
+web and read web pages, and look after this computer with the tools you have (its status, the text size, timers and \
+reminders, how loud their chimes are, restarting it or turning it off, starting a new conversation), but you can't yet \
+use the computer's files. The conversation is \
 kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, quotes and simple \
 tables. Nothing can be opened from it (no links, no pictures), so write an address out in full when the person needs \
 it.";
 const SYSTEM_NO_WEB: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, and look \
-after this computer with the tools you have (its status, the text size, restarting it or turning it off, starting a \
-new conversation), but you can't use the web here (it isn't enabled for this API key) or the computer's files. The \
+after this computer with the tools you have (its status, the text size, timers and reminders, how loud their chimes \
+are, restarting it or turning it off, starting a new conversation), but you can't use the web here (it isn't enabled for this API key) or the computer's files. The \
 conversation is kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, \
 quotes and simple tables. Nothing can be opened from it (no links, no pictures), so write an address out in full when \
 the person needs it.";
@@ -115,7 +116,7 @@ const NOTE_CHARS: usize = 400;
 const NOTES_CHARS: usize = 8000;
 
 /// What Claude can do on this computer.
-const TOOLS: [api::Tool; 7] = [
+const TOOLS: [api::Tool; 9] = [
     api::Tool {
         name: "computer_status",
         description: "What this computer is and how it's doing: its processor, memory, screen, how long Chat Computer's \
@@ -158,6 +159,24 @@ const TOOLS: [api::Tool; 7] = [
         description: "Forgets the notes you made with remember that contain these words. Use it when the person asks \
                       you to forget something.",
         input_schema: r#"{"type":"object","properties":{"words":{"type":"string","description":"Words from the note or notes to forget."}},"required":["words"]}"#,
+    },
+    api::Tool {
+        name: "reminders",
+        description: "Timers, reminders and alarms. They ring here: a line in the conversation, and a chime on this \
+                      computer's speakers or headphones (where its sound works with Chat Computer's own system), \
+                      again and again (a timer for a minute, an alarm for ten) until a key is pressed; a reminder \
+                      rings once. timer: minutes and/or seconds, with an optional label; reminder: text, and \
+                      in_minutes or at (a time of day like 18:00 or 6pm: the next time it comes, when this computer's \
+                      local time is known); alarm: at, and an optional label; list; cancel: by id, or 'all' (or \
+                      'timers', 'reminders', 'alarms'); stop: silences one that's ringing. They last until the computer \
+                      restarts.",
+        input_schema: r#"{"type":"object","properties":{"action":{"type":"string","enum":["timer","reminder","alarm","list","cancel","stop"]},"minutes":{"type":"number"},"seconds":{"type":"number"},"text":{"type":"string"},"label":{"type":"string"},"in_minutes":{"type":"number"},"at":{"type":"string"},"id":{"type":"string"}},"required":["action"]}"#,
+    },
+    api::Tool {
+        name: "set_volume",
+        description: "Sets how loud the chimes of timers and reminders are on this computer's speakers or headphones, \
+                      0 (silent) to 100 (as loud as Chat Computer makes them).",
+        input_schema: r#"{"type":"object","properties":{"percent":{"type":"integer","minimum":0,"maximum":100}},"required":["percent"]}"#,
     },
     api::Tool {
         name: "start_new_conversation",
@@ -592,11 +611,49 @@ fn run_tool(call: &ToolUse, job: &mut Job, notes: &mut Vec<String>, events: &mut
                 }
             }
         }
+        "reminders" => {
+            let text = |key: &str| call.input.get(key).and_then(|v| v.str()).map(str::trim).unwrap_or("");
+            let num = |key: &str| call.input.get(key).and_then(number);
+            let said = match text("action") {
+                "timer" => {
+                    let seconds = num("minutes").unwrap_or(0.0) * 60.0 + num("seconds").unwrap_or(0.0);
+                    let label = if text("label").is_empty() { text("text") } else { text("label") };
+                    crate::schedule::timer(seconds, label)
+                }
+                kind @ ("reminder" | "alarm") => {
+                    let label = if text("text").is_empty() { text("label") } else { text("text") };
+                    crate::schedule::reminder(kind == "alarm", label, num("in_minutes"), Some(text("at")))
+                }
+                "list" => Ok(crate::schedule::list()),
+                "cancel" => crate::schedule::cancel(text("id")),
+                "stop" => Ok(crate::schedule::stop()),
+                other => Err(format!("{other:?} isn't one of timer, reminder, alarm, list, cancel or stop.")),
+            };
+            match said {
+                Ok(s) => (s, false),
+                Err(e) => (e, true),
+            }
+        }
+        "set_volume" => match call.input.get("percent").and_then(number) {
+            Some(p) if (0.0..=100.0).contains(&p) => match crate::sound::set_volume(p as u32) {
+                Some(v) => (format!("The chimes are at {v}% now."), false),
+                None => (format!("This computer has no sound Chat Computer's own system can use: {}", crate::sound::status()), true),
+            },
+            _ => (String::from("percent must be from 0 to 100"), true),
+        },
         "start_new_conversation" => {
             job.new_conversation = true;
             (String::from("A new conversation starts when your answer ends: say so, in a few words."), false)
         }
         other => (format!("There's no tool called {other}."), true),
+    }
+}
+
+/// A number Claude gave (3 or 2.5), if it's one.
+fn number(v: &Json) -> Option<f64> {
+    match v {
+        Json::Num(n) => n.parse::<f64>().ok().filter(|x| x.is_finite()),
+        _ => None,
     }
 }
 

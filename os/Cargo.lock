@@ -18,6 +18,7 @@ name = "chatcomputer-kernel"
 version = "0.1.0"
 dependencies = [
  "bootinfo",
+ "chime",
  "claude",
  "crypto",
  "fat",
@@ -29,6 +30,10 @@ dependencies = [
  "text",
  "tls",
 ]
+
+[[package]]
+name = "chime"
+version = "0.1.0"
 
 [[package]]
 name = "claude"

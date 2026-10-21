@@ -11,6 +11,7 @@ build = "build.rs"
 bootinfo = { path = "../bootinfo" }
 font = { path = "../font" }
 text = { path = "../text" }
+chime = { path = "../chime" }
 net = { path = "../net" }
 crypto = { path = "../crypto" }
 tls = { path = "../tls" }

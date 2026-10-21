@@ -83,10 +83,12 @@ pub fn status() -> String {
     } else {
         format!("Mice: {} (the wheel scrolls the conversation; there is no pointer on the screen to move or click yet)", u.mice.join(", "))
     });
+    lines.push(format!("Sound: {}", crate::sound::status()));
+    lines.push(crate::schedule::status());
     lines.push(crate::keep::status());
     lines.push(String::from(
-        "Not yet in Chat Computer's own system: files (it reads and writes only its own memory file), sound, Wi-Fi, \
-         Bluetooth, and the other processor cores",
+        "Not yet in Chat Computer's own system: files (it reads and writes only its own memory file), sound other than \
+         its chimes (no speech, music or microphones), Wi-Fi, Bluetooth, and the other processor cores",
     ));
     lines.join("\n")
 }

@@ -106,12 +106,29 @@ NVMe and SATA drivers.
     on the same conversation. Only the memory file's own blocks are
     ever written, each read and checked first: never the file system, Windows' files or any other partition.
     Before a restart, the drive is told to write what it has cached;
+  * the sound controller (`sound/hda.rs`): HD Audio, Intel's High Definition Audio, which nearly every PC's chipset
+    has, Intel's and AMD's alike. It's reset and its codecs found on its link; the first codec with an audio function
+    that has outputs is used (a graphics card's controller has only its screens' digital ones). Each codec
+    describes its widgets and how they connect, so the way from an output converter (a DAC) to each output pin the
+    PC's maker marked as speakers, headphones or a line out is found by following those connections, through
+    mixers and selectors, as Linux's generic driver does; on the way, the right connections are chosen and the
+    amplifiers unmuted at 0 dB (a mixer's other inputs, such as a microphone's loop back, muted), the pins switched on
+    with their external amplifiers (EAPD), and built-in speakers left off while headphones are plugged in. A sound
+    plays whole from memory on the first output stream, 48 kHz in 16 bits, and the stream stops after it. Commands
+    go through the command and response rings, one at a time; nothing interrupts. Only QEMU's controllers and codecs
+    have played it so far;
   * Claude, with the API key from the settings and Mozilla's certificate authorities (`assistant.rs`), and the
     tools Claude may use on this computer:
     * `computer_status`: what the computer is and how it's doing (processor, screen, firmware, Secure Boot,
-      memory, how long it has been running, the date and time, the network, the keyboards and mice) and what the own
-      system can't do yet (`system.rs`);
+      memory, how long it has been running, the date and time, the network, the keyboards and mice, the sound and the
+      timers set) and what the own system can't do yet (`system.rs`);
     * `set_text_size`: the text 50% to 300% of the size chosen for this monitor;
+    * `reminders`: timers, reminders and alarms, as the main Chat Computer has them (`schedule.rs`): for a time from
+      now, or for a time of day when the settings give the local time's offset. When one is due, a line says so at
+      the end of the conversation and its chime plays (`chime/`, the main Chat Computer's: two bell notes), again
+      every 4 seconds for a minute (an alarm every 6 for ten minutes) until a key is pressed; a reminder rings once.
+      They count the kernel's own time, so a clock that's out doesn't move them, and last until the PC restarts;
+    * `set_volume`: how loud the chimes are, 0 to 100%;
     * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
       keyboard controller's reset line (`power.rs`);
@@ -178,6 +195,10 @@ NVMe and SATA drivers.
 * `fat/` is Chat Computer's own reader of FAT12, FAT16 and FAT32 (the file system of every PC's start-up
   partition), long names included: it finds a file's blocks. Tested against volumes made by `mkfs.vfat` and
   filled by mtools, fragmented files among them.
+* `chime/` makes the chimes of timers and reminders: bell notes, each a tone with its second and third harmonics,
+  rising in 5 ms and dying away, the same as the main Chat Computer's (`chatcomputer/voice/chime.py`), at any
+  sample rate. Made with sine recurrences (each sample from the two before), as the kernel's floating point is
+  done in software. Tested against the main Chat Computer's formula worked out by numpy.
 * `hid/` reads USB HID report descriptors: the description each mouse gives of its own reports (how many
   buttons, how fine its movement, whether it has a wheel, and where each is), by the HID specification and the way
   Linux reads the usages some devices declare out of order. Tested with QEMU's mouse and tablet, a wireless
@@ -370,7 +391,9 @@ PC.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting Claude's answers use
    (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font. To do: accents
    placed over letters typed as two characters (GPOS's mark positioning), and Chinese, Japanese and Korean.
-10. Sound and AirPods: Bluetooth (HCI over USB, L2CAP, A2DP and HFP, SBC and mSBC).
+10. Sound and AirPods: ✓ HD Audio's outputs, for the chimes of timers and reminders (checked with QEMU's
+    controllers and codecs). To do: trying it on real PCs, microphones, USB audio, then Bluetooth (HCI over USB,
+    L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
 12. Power: ✓ restart, ✓ turning off (ACPI's S5, without the firmware's AML). To do: sleep; on laptops the battery
     and the lid. These need an AML interpreter.

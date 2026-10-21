@@ -40,6 +40,10 @@ log go to out/.
                                      to it), then the PC turned off (ACPI's S5); the memory
                                      file's two copies, and nothing else on the disk changed (fsck.vfat too, so also
                                      needs dosfstools, mtools and gdisk)
+    ./check.py --sound               sound: a build that rings the timer's chime once it's ready, on each kind of
+                                     HD Audio QEMU has (the ICH6's and ICH9's controllers; codecs with a line out,
+                                     a line out and in, and a speaker and microphone), recorded: the chime's two
+                                     notes, in order, in both channels, as loud as the main Chat Computer's
     ./check.py --secure-boot        Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
@@ -710,7 +714,9 @@ def claude(args) -> list[str]:
 
     requests: list[dict] = []
     r1 = [("thinking", "sig-1/+="), ("text", ["Let me ", "look."]), ("tool_use", "toolu_1", "computer_status", [])]
-    r2 = [("thinking", "sig-2"), ("tool_use", "toolu_2", "set_text_size", ['{"percent"', ': 125}'])]
+    # (Two tools at once: the text bigger, and a timer, which rings long after the test.)
+    r2 = [("thinking", "sig-2"), ("tool_use", "toolu_2", "set_text_size", ['{"percent"', ': 125}']),
+          ("tool_use", "toolu_2b", "reminders", ['{"action": "timer", "min', 'utes": 30, "label": "the oven"}'])]
     final: list[str] = []
     search_result = {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1",
                      "content": [{"type": "web_search_result", "title": "Weather", "url": "https://example.com/w",
@@ -897,8 +903,9 @@ def claude(args) -> list[str]:
             if body.get("messages") != [{"role": "user", "content": "hi"}]:
                 problems.append(f"the first request's messages were {body.get('messages')!r}")
             tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])
-            if tools != [("computer_status", None), ("forget", None), ("remember", None), ("restart_computer", None),
-                         ("set_text_size", None), ("start_new_conversation", None), ("turn_off_computer", None),
+            if tools != [("computer_status", None), ("forget", None), ("remember", None), ("reminders", None),
+                         ("restart_computer", None), ("set_text_size", None), ("set_volume", None),
+                         ("start_new_conversation", None), ("turn_off_computer", None),
                          ("web_fetch", "web_fetch_20250910"), ("web_search", "web_search_20250305")]:
                 problems.append(f"the request offered the tools {body.get('tools')!r}")
             m2 = (requests[1]["body"] or {}).get("messages") or []
@@ -906,11 +913,19 @@ def claude(args) -> list[str]:
                 problems.append(f"the first answer didn't come back unchanged: {m2[:2]!r}")
             result = ((m2[2:3] or [{}])[0].get("content") or [{}])[0] if len(m2) == 3 else {}
             if (result.get("type"), result.get("tool_use_id"), result.get("is_error")) != ("tool_result", "toolu_1", False) \
-                    or "Processor: " not in str(result.get("content")) or "Memory: " not in str(result.get("content")):
+                    or "Processor: " not in str(result.get("content")) or "Memory: " not in str(result.get("content")) \
+                    or "Sound: none: no HD Audio controller" not in str(result.get("content")) \
+                    or "Timers and reminders: none set" not in str(result.get("content")):
                 problems.append(f"the computer's status didn't come back as the tool's result: {result!r}")
             m3 = (requests[2]["body"] or {}).get("messages") or []
             if m3[:3] != m2 or m3[3:4] != [{"role": "assistant", "content": blocks_as_sent(r2)}] or len(m3) != 5:
                 problems.append(f"the second round's request wasn't the first's plus the answer and result: {m3[3:]!r}")
+            # Both tools' results, in one message, in order: the timer set as asked.
+            results = [(b.get("tool_use_id"), str(b.get("content")), b.get("is_error"))
+                       for b in ((m3[4:5] or [{}])[0].get("content") or [])]
+            if [r[0] for r in results] != ["toolu_2", "toolu_2b"] or any(r[2] for r in results) \
+                    or not results[1][1].startswith("Set a 30-minute timer for the oven (rings in 30 minutes)."):
+                problems.append(f"the two tools' results didn't come back as they should: {results!r}")
             m4 = (requests[3]["body"] or {}).get("messages") or []
             if len(m4) != 7 or m4[:5] != m3 or m4[6] != {"role": "user", "content": "again"} \
                     or m4[5] != {"role": "assistant", "content": blocks_as_sent([("thinking", "sig-3"), ("text", final[:1])])}:
@@ -1241,6 +1256,133 @@ def signed_by_someone(args) -> list[str]:
     return problems
 
 
+# The timer's chime (the chime crate's, the main Chat Computer's): its two notes, how long each lasts with the gap
+# after it, and its loudest sample.
+CHIME_NOTES = (1046.5, 1318.5)
+CHIME_NOTE_S = 0.42 + 0.07
+CHIME_PEAK = 8194
+
+
+def goertzel(samples: list[int], rate: int, freq: float) -> float:
+    """How much of `freq` there is in `samples` (the power of that one frequency, by Goertzel's algorithm)."""
+    import math
+
+    k = 2 * math.cos(2 * math.pi * freq / rate)
+    s1 = s2 = 0.0
+    for x in samples:
+        s1, s2 = x + k * s1 - s2, s1
+    return (s1 * s1 + s2 * s2 - k * s1 * s2) / max(1, len(samples)) ** 2
+
+
+def chimes_in(wav: Path) -> tuple[list[list[int]], int, list[str]]:
+    """The chimes recorded (each its left channel's samples), the rate, and what's wrong with the recording. (QEMU
+    records only while a stream plays, so chimes rung seconds apart come one after another, a moment apart.)"""
+    import array
+    import wave
+
+    if not wav.exists() or wav.stat().st_size <= 44:
+        return [], 0, [f"{wav.name}: nothing was recorded"]
+    with wave.open(str(wav)) as w:
+        rate, channels, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+        raw = w.readframes(w.getnframes())
+    if (channels, width) != (2, 2):
+        return [], rate, [f"{wav.name}: {channels} channels of {8 * width} bits, not 2 of 16"]
+    both = array.array("h", raw)
+    left, right = both[0::2], both[1::2]
+    problems = []
+    if any(abs(a - b) > 1 for a, b in zip(left, right)):
+        problems.append(f"{wav.name}: the channels differ")
+    # Each chime: sound, with no more than its notes' gap (0.07 s) of silence in it.
+    chimes: list[list[int]] = []
+    start = last = None
+    for i, x in enumerate(left):
+        if abs(x) > 200:
+            if start is None or i - last > rate // 10:
+                if start is not None:
+                    chimes.append(list(left[start:last + 1]))
+                start = i
+            last = i
+    if start is not None:
+        chimes.append(list(left[start:last + 1]))
+    return chimes, rate, problems
+
+
+def check_chime(name: str, samples: list[int], rate: int) -> list[str]:
+    """One chime: the timer's, its first note then its second, as loud as it should be."""
+    problems = []
+    peak = max(abs(x) for x in samples)
+    if abs(peak - CHIME_PEAK) > CHIME_PEAK * 0.05:
+        problems.append(f"{name}: its loudest sample is {peak}, not about {CHIME_PEAK}")
+    heard = len(samples) / rate
+    if not 0.75 < heard < 1.0:
+        problems.append(f"{name}: sound for {heard:.2f} s, not the chime's 0.9 s or so")
+    note = int(rate * CHIME_NOTE_S)
+    for n, freq in enumerate(CHIME_NOTES):
+        part = samples[n * note:n * note + int(rate * 0.3)]
+        other = CHIME_NOTES[1 - n]
+        mine, theirs, below = (goertzel(part, rate, f) for f in (freq, other, freq / 2))
+        if not (mine > 50 * theirs and mine > 50 * below):
+            problems.append(f"{name}: note {n + 1} isn't {freq} Hz ({mine:.0f} there, {theirs:.0f} at {other} Hz, "
+                            f"{below:.0f} at {freq / 2} Hz)")
+    return problems
+
+
+def sound(args) -> list[str]:
+    """A 2-second timer, set by a test build once it's ready (as Claude's reminders tool sets one), on each HD Audio
+    controller and codec QEMU has: it rings (a line in the conversation, and the timer's chime), and rings again 4
+    seconds later until a key is pressed (the first time, after two chimes; then after one). Every chime recorded is
+    checked."""
+    import re
+
+    build("sound")
+    problems = []
+    first = True
+    for controller in ("intel-hda", "ich9-intel-hda"):
+        for codec in ("hda-output", "hda-duplex", "hda-micro"):
+            label = f"{controller} + {codec}"
+            wav = OUT / f"sound-{controller}-{codec}.wav"
+            wav.unlink(missing_ok=True)
+            extra = ("-audiodev", f"wav,id=snd0,path={wav},out.frequency=48000",
+                     "-device", f"{controller},id=hda0", "-device", f"{codec},audiodev=snd0,bus=hda0.0")
+            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
+            want = 2 if first else 1
+            try:
+                got = wait_for(pc.log, ("Your 2-second timer is done: tea.", "kernel stopped"), args.timeout)
+                if got and "done" in got:
+                    # Rung: a key once it has rung `want` times stops it.
+                    wait_for(pc.log, ("test: chime at",), 10, times=want)
+                    time.sleep(1.5)
+                    if first:
+                        pc.picture("sound-rung")
+                    monitor(pc.mon, "sendkey a")
+                    time.sleep(5.5)
+            finally:
+                pc.stop()
+            text = pc.text()
+            found = next((line for line in text.splitlines() if "kernel: sound" in line), "(no line about sound)")
+            print(f"{label}: {found}")
+            if "test: Set a 2-second timer for tea (rings in 2 seconds). [1]" not in text:
+                problems.append(f"{label}: the timer wasn't set as Claude's tool sets one")
+            if got is None or "done" not in got:
+                problems.append(f"{label}: the timer didn't ring ({got or 'nothing said in time'})")
+                continue
+            times = [int(t) for t in re.findall(r"test: chime at (\d+) ms", text)]
+            if len(times) != want:
+                problems.append(f"{label}: the chime rang {len(times)} times, not {want} (a key stops it)")
+            elif want == 2 and not 3700 <= times[1] - times[0] <= 4400:
+                problems.append(f"{label}: it rang again {times[1] - times[0]} ms after, not 4 s")
+            chimes, rate, wrong = chimes_in(wav)
+            problems += [f"{label}: {p}" for p in wrong]
+            if len(chimes) != want:
+                problems.append(f"{label}: {len(chimes)} chimes were recorded, not {want}")
+            for k, c in enumerate(chimes):
+                problems += [f"{label}: {p}" for p in check_chime(f"{wav.name} chime {k + 1}", c, rate)]
+            print(f"{label}: {len(chimes)} chime(s) recorded at {rate} Hz")
+            first = False
+    build()  # never leave a test build in out/
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--size", default="1920x1080", help="screen resolution the virtual monitor reports")
@@ -1254,6 +1396,7 @@ def main() -> int:
     ap.add_argument("--card", action="append", choices=[c[0] for c in CARDS], help="with --network: only this card")
     ap.add_argument("--claude", action="store_true", help="a conversation with a stand-in for Claude's API, over HTTPS")
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
+    ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
@@ -1269,6 +1412,8 @@ def main() -> int:
         problems = claude(args)
     elif args.remember:
         problems = remember(args)
+    elif args.sound:
+        problems = sound(args)
     else:
         if not args.no_build:
             build()

@@ -9,6 +9,7 @@ import os
 import stat
 import time
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -84,6 +85,32 @@ def test_an_inbox_page_s_conversations_become_messages():
     # The same latest message is the same item; a new one is a new item.
     assert web.snapshot_items("whatsapp", "a9", chats[:1], now)[0]["id"] == items[0]["id"]
     assert web.snapshot_items("whatsapp", "a9", [{**chats[0], "text": "Or 8?"}], now)[0]["id"] != items[0]["id"]
+
+
+def test_wechat_is_read_from_wechat_for_web():
+    """WeChat connects as WhatsApp does: WeChat for Web, its code scanned with the phone, kept open; its list read
+    by sources.js (tried on a stand-in for its page, where node and Playwright are)."""
+    site = web.SITES["wechat"]
+    assert site["label"] == "WeChat" and site["inbox"] == "https://web.wechat.com/?lang=en_US" and site["live"] is True
+    assert "Scan the code with WeChat" in site["how"] and "can't use WeChat for Web" in site["how"]
+    from chatcomputer.messages import CHOICES
+    assert ("WeChat", "wechat") in CHOICES
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    root = subprocess.run(["npm", "root", "-g"], capture_output=True, text=True).stdout.strip() if shutil.which("npm") else ""
+    if not node or not root or not (Path(root) / "playwright").exists():
+        pytest.skip("node with Playwright not available")
+    r = subprocess.run([node, str(Path(__file__).parent / "sources_check.js")], capture_output=True, text=True, timeout=120,
+                       env={**os.environ, "NODE_PATH": root})
+    res = json.loads([x for x in r.stdout.splitlines() if x.startswith("{")][-1])
+    assert "failed" not in res, res["failed"]
+    assert [(c["name"], c["time"], c["text"], c["unread"]) for c in res["chats"]] == [
+        ("Mum", "13:05", "Dinner at 7? Bring the photos", True), ("Alex Tan", "Yesterday", "[Photo]", False),
+        ("Family group", "10/18/26", "Lin: see you Sunday", True)]
+    assert res["login"] == {"chats": 0, "code": True}
+    items = web.snapshot_items("wechat", "a3", res["chats"])
+    assert [i["label"] for i in items] == ["WeChat"] * 3 and items[0]["who"] == "Mum"
 
 
 # ------------------------------------------------------------------ email over IMAP

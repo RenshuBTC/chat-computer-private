@@ -1,4 +1,4 @@
-/* Reads the list of conversations on WhatsApp's and the social sites' own inbox pages, for Messages
+/* Reads the list of conversations on WhatsApp's, WeChat's and the social sites' own inbox pages, for Messages
    (chatcomputer/messages/web.py). It runs in a script world of its own (the page's scripts can't see or call it), only
    reads what the page shows, and never types, sends or clicks by itself; __CS.open(name) clicks a conversation in
    the list only when the person asked to see it.
@@ -21,6 +21,11 @@
     "tiktok.com": { items: "[data-e2e='chat-list-item'], [class*='DivItemWrapper']", login: "[data-e2e='top-login-button'], [data-e2e='login-modal']" },
     "linkedin.com": { items: ".msg-conversation-listitem, .msg-conversations-container__convo-item", login: "#username, input[name='session_key']" }
   };
+  // WeChat for Web (web.wechat.com, which is wx.qq.com, or wx2.qq.com for some accounts): each conversation a
+  // .chat_item, its name in .nickname_text, a red dot or count when there's something unread.
+  var WECHAT = { items: ".chat_item", name: ".nickname_text",
+                 unread: ".web_wechat_reddot, .web_wechat_reddot_middle, .web_wechat_reddot_bbig", login: ".login_box .qrcode" };
+  ["web.wechat.com", "wx.qq.com", "wx2.qq.com", "wx8.qq.com", "web2.wechat.com"].forEach(function (h) { SITES[h] = WECHAT; });
   var rule = SITES[host] || { items: "[role='listitem'], [role='row']", login: "input[type='password']" };
   var TIME = /^(\d{1,2}[:.]\d{2}(\s?[ap]\.?m\.?)?|yesterday|today|now|just now|active now|\d+\s?(s|m|min|mins|h|hr|hrs|d|w|wk|y)|(mon|tue|wed|thu|fri|sat|sun)[a-z]*|\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?|[a-z]{3,9}\.? \d{1,2}(, \d{4})?|\d{1,2} [a-z]{3,9}\.?( \d{4})?)$/i;
 
@@ -35,8 +40,8 @@
   function parse(it) {
     var ls = lines(it);
     if (ls.length < 2) return null;
-    var nameEl = it.querySelector("span[title], [dir='auto'][title]");
-    var name = (nameEl && nameEl.getAttribute("title")) || ls[0];
+    var named = rule.name && it.querySelector(rule.name), nameEl = it.querySelector("span[title], [dir='auto'][title]");
+    var name = (named && named.textContent.replace(/\s+/g, " ").trim()) || (nameEl && nameEl.getAttribute("title")) || ls[0];
     var time = "", rest = [];
     ls.forEach(function (l) {
       if (l === name) return;
@@ -49,7 +54,7 @@
     var badge = rest.filter(function (l) { return /^\d{1,3}$/.test(l); });
     var words = rest.filter(function (l) { return !/^\d{1,3}$/.test(l) && !/^@\S+$/.test(l); });
     var text = words.sort(function (a, b) { return b.length - a.length; })[0] || "";
-    var unread = badge.length > 0 || !!it.querySelector("[aria-label*='unread' i]");
+    var unread = badge.length > 0 || !!it.querySelector("[aria-label*='unread' i]") || !!(rule.unread && it.querySelector(rule.unread));
     var a = it.matches("a[href]") ? it : (it.closest("a[href]") || it.querySelector("a[href]"));
     return { name: name.slice(0, 120), text: text.slice(0, 300), time: time, unread: unread, link: a ? a.href : "" };
   }

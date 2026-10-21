@@ -1,16 +1,18 @@
-"""WhatsApp and social media, read from their own web pages inside Chat Computer.
+"""WhatsApp, WeChat and social media, read from their own web pages inside Chat Computer.
 
-None of them offers a way for an app to read a personal account's messages (WhatsApp has no such API; Instagram's
-and Facebook's are for business accounts; X's costs money per message read). So, as the person chose, Chat Computer
+None of them offers a way for an app to read a personal account's messages (WhatsApp and WeChat have no such API;
+Instagram's and Facebook's are for business accounts; X's costs money per message read). So, as the person chose, Chat Computer
 opens each site's own inbox page in a browser of its own (its sign-ins kept apart from Claude's browser, in
 ~/ChatComputer/sources, where Claude's tools can't look), and reads the list of conversations shown there: who, the
 latest message, when, unread. It only reads: it never sends, posts or clicks anything by itself. The person
-signs in once, on the site's own page, shown between the sidebars (WhatsApp: by scanning its code with the phone).
+signs in once, on the site's own page, shown between the sidebars (WhatsApp and WeChat: by scanning its code with
+the phone). WeChat's is WeChat for Web, which not every WeChat account may use (WeChat says so on the page), and
+which signs out now and then (scanning again signs back in).
 
 These sites' terms forbid reading them by automated means, so an account could be restricted; the person was told
 and chose this. The pages change often; when one can't be read, Messages says so (see the log for what was found).
-WhatsApp stays open all the time (it's a live connection); the others are looked at every few minutes, one at a
-time.
+WhatsApp and WeChat stay open all the time (they're live connections); the others are looked at every few minutes,
+one at a time.
 """
 from __future__ import annotations
 
@@ -23,6 +25,9 @@ from typing import Any
 SITES: dict[str, dict[str, Any]] = {
     "whatsapp": {"label": "WhatsApp", "inbox": "https://web.whatsapp.com/", "live": True,
                  "how": "Scan the code with WhatsApp on your phone: Settings, Linked devices, Link a device."},
+    "wechat": {"label": "WeChat", "inbox": "https://web.wechat.com/?lang=en_US", "live": True,
+               "how": "Scan the code with WeChat on your phone (+ at the top right, then Scan), and confirm on the "
+                      "phone. Some WeChat accounts can't use WeChat for Web: then WeChat says so here."},
     "x": {"label": "X", "inbox": "https://x.com/messages", "how": "Sign in to X on the page."},
     "instagram": {"label": "Instagram", "inbox": "https://www.instagram.com/direct/inbox/",
                   "how": "Sign in to Instagram on the page."},

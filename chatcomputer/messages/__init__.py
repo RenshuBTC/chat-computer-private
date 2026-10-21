@@ -29,7 +29,7 @@ RETRY_MAX_S = 30 * 60
 SIGNED_OUT_WAIT_S = 30 * 60       # an account that stopped taking its sign-in is tried again this often
 
 CHOICES = [("Gmail", "gmail"), ("Outlook or Hotmail", "outlook"), ("iCloud Mail", "icloud"), ("Yahoo Mail", "yahoo"),
-           ("Other email", "imap"), ("Telegram", "telegram"), ("WhatsApp", "whatsapp"), ("X", "x"),
+           ("Other email", "imap"), ("Telegram", "telegram"), ("WhatsApp", "whatsapp"), ("WeChat", "wechat"), ("X", "x"),
            ("Instagram", "instagram"), ("Facebook", "facebook"), ("TikTok", "tiktok"), ("LinkedIn", "linkedin")]
 MAIL_HELP = {
     "gmail": ["Gmail needs an app password, not your usual one. Turn on 2-Step Verification for your Google "

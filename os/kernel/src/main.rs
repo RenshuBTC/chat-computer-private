@@ -224,8 +224,9 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
             schedule::key();
             chat::typed(press);
         }
-        // A BitLocker recovery key typed: Windows' drive unlocked with it (what came of it said, never the key).
-        if let Some(said) = files::work() {
+        // USB drives plugged in or out, cards put in or taken out; a BitLocker recovery key typed, a drive unlocked
+        // with it (what came of it said, never the key).
+        for said in files::work() {
             log!("Chat Computer kernel: files: {said}");
             chat::note(said);
         }

@@ -1,13 +1,14 @@
 //! What is plugged into a USB controller. When something is plugged in, Chat Computer gives it a slot and
 //! an address, asks it what it is (its descriptors), and sets it up if it is something Chat Computer uses:
-//! a keyboard, a mouse, a hub with more devices behind it, or a network adapter (net.rs). Unplugged devices (and
-//! everything behind an unplugged hub) give their slots back.
+//! a keyboard, a mouse, a hub with more devices behind it, a network adapter (net.rs), or a drive (storage.rs: a USB
+//! stick, a card reader). Unplugged devices (and everything behind an unplugged hub) give their slots back.
 //!
 //! Requests to a device go on its control endpoint (endpoint 0) as a setup packet, an optional data
 //! stage and a status stage. Keyboards, mice and hubs also send small reports on an interrupt endpoint,
 //! which the controller collects from them a few hundred times a second.
 
 use super::net::{self, Net};
+use super::storage::{self, Storage};
 use super::xhci::{self, Doorbell, Page, Ring, Trb};
 use super::{changed, sleep, wait, with, Speed};
 use crate::{keyboard, mouse};
@@ -28,6 +29,8 @@ pub enum Role {
     Input(Vec<Input>),
     Hub(Hub),
     Net(alloc::boxed::Box<Net>),
+    /// A drive: a USB stick, an external disk, a card reader.
+    Storage(alloc::boxed::Box<Storage>),
 }
 
 /// One of a device's interfaces for typing or pointing (HID's, the USB class for them).
@@ -266,6 +269,11 @@ impl Device {
             if !n.transfer_event(&mut self.rings, db, self.slot, e) {
                 self.stopped |= 1 << dci;
             }
+            return;
+        }
+        // (A drive's command takes its events itself, errors included.)
+        if let Role::Storage(s) = &mut self.role {
+            s.transfer_event(e);
             return;
         }
         let ok = xhci::ok(e.code());
@@ -638,7 +646,7 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
         return Err(Error::Bad("its device descriptor was too short"));
     }
     let (class, vendor, product) = (d[4], u16::from_le_bytes([d[8], d[9]]), u16::from_le_bytes([d[10], d[11]]));
-    let (maker_index, product_index) = (d[14], d[15]);
+    let (maker_index, product_index, serial_index) = (d[14], d[15], d[16]);
     let language = descriptor(hc, slot, 3, 0, 0, 4).ok().filter(|l| l.len() >= 4).map_or(0x0409, |l| u16::from_le_bytes([l[2], l[3]]));
     let name = string(hc, slot, product_index, language).or_else(|| string(hc, slot, maker_index, language));
     // Its configurations: the first, unless another is a network adapter's (adapters often offer a maker's own
@@ -683,6 +691,10 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
         }
     } else if let Some((what, plain_name)) = set_up_inputs(hc, slot, speed, &hid)? {
         (what, Some(plain_name))
+    } else if storage::interface(&interfaces).is_some() {
+        // (Its serial number: Windows names a USB stick by it.)
+        let serial = string(hc, slot, serial_index, language);
+        (storage::set_up(hc, slot, speed, &interfaces, serial)?, Some("USB drive"))
     } else {
         (String::from("a device Chat Computer doesn't use yet"), None)
     };
@@ -1062,9 +1074,9 @@ fn detach(hc: usize, slot: u8) {
     for child in children {
         detach(hc, child);
     }
-    let (name, used) = with(hc, |c| match c.devices.get(slot as usize) {
-        Some(Some(d)) => (d.name.clone(), matches!(d.role, Role::Input(_) | Role::Net(_))),
-        _ => (String::new(), false),
+    let (name, used, drive) = with(hc, |c| match c.devices.get(slot as usize) {
+        Some(Some(d)) => (d.name.clone(), matches!(d.role, Role::Input(_) | Role::Net(_)), matches!(d.role, Role::Storage(_))),
+        _ => (String::new(), false, false),
     });
     let _ = command(hc, |h| h.disable_slot(slot));
     let place = with(hc, |c| {
@@ -1084,6 +1096,9 @@ fn detach(hc: usize, slot: u8) {
     if used {
         keyboard::stop_repeat();
         changed();
+    }
+    if drive {
+        storage::changed();
     }
     if let Some(place) = place {
         log_port(hc, &place.describe(), &format!("\"{name}\" was unplugged"));

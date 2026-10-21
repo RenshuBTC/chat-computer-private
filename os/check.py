@@ -53,6 +53,11 @@ log go to out/.
                                      way (MBR) and another (GPT), each with an NTFS volume, read by the letters
                                      Windows' registry gives them (one Windows hasn't seen given the next free one;
                                      also needs ntfs-3g's mkntfs)
+    ./check.py --usb                 USB drives, as they come and go: a FAT32 stick Windows' registry names, a card
+                                     reader with two slots (a FAT16 card with no partition table; an exFAT card put
+                                     in later), a stick of 4 KiB blocks with NTFS plugged in later; a stick unplugged
+                                     and a card taken out; Chat Computer's own folder on a stick never read (also
+                                     needs dosfstools and mtools)
     ./check.py --sound               sound: a build that rings the timer's chime once it's ready, on each kind of
                                      HD Audio QEMU has (the ICH6's and ICH9's controllers; codecs with a line out,
                                      a line out and in, and a speaker and microphone), recorded: the chime's two
@@ -1477,15 +1482,15 @@ def gpt_disk(path: Path, volume: bytes, guid: str | None = None) -> None:
         f.write(volume)
 
 
-def mbr_disk(path: Path, volume: bytes, signature: int) -> None:
-    """A disk as older PCs partition one: an MBR with the disk's signature, and one NTFS partition (type 7) from 1 MiB
-    holding `volume`."""
+def mbr_disk(path: Path, volume: bytes, signature: int, kind: int = 0x07) -> None:
+    """A disk as older PCs partition one (and USB sticks and memory cards are): an MBR with the disk's signature, and
+    one partition of type `kind` (7: NTFS or exFAT; 0Ch: FAT32) from 1 MiB holding `volume`."""
     import struct
 
     sectors = len(volume) // 512
     mbr = bytearray(512)
     mbr[0x1B8:0x1BC] = struct.pack("<I", signature)
-    mbr[0x1BE:0x1CE] = bytes([0, 0xFE, 0xFF, 0xFF, 0x07, 0xFE, 0xFF, 0xFF]) + struct.pack("<II", 2048, sectors)
+    mbr[0x1BE:0x1CE] = bytes([0, 0xFE, 0xFF, 0xFF, kind, 0xFE, 0xFF, 0xFF]) + struct.pack("<II", 2048, sectors)
     mbr[510:512] = b"\x55\xAA"
     with open(path, "wb") as f:
         f.write(mbr)
@@ -1608,6 +1613,196 @@ def drives_check(args) -> list[str]:
                 problems.append(f"{q}: {said[q][:600]!r}")
         if not results["nodrive"].get("is_error"):
             problems.append("asking for a drive there isn't wasn't an error")
+    finally:
+        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
+def fat_volume(tmp: Path, label: str, mib: int, bits: int, cluster: int, files: dict[str, bytes]) -> bytes:
+    """A FAT`bits` volume of `mib` MiB named `label`, with `cluster` sectors a cluster (mkfs.vfat), and `files` put on
+    it (mtools), as a PC would write them."""
+    img = tmp / f"{label}.vfat"
+    with open(img, "wb") as f:
+        f.truncate(mib << 20)
+    subprocess.run(["mkfs.vfat", "-F", str(bits), "-s", str(cluster), "-n", label, str(img)], check=True, stdout=subprocess.DEVNULL)
+    env = dict(os.environ, TZ="UTC", LANG="C.UTF-8", LC_ALL="C.UTF-8")
+    local = tmp / "file"
+    for path, data in files.items():
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            # (Already there, for a second file in a folder: mmd says so, which is fine.)
+            subprocess.run(["mmd", "-i", str(img), "::/" + "/".join(parts[:i])], env=env, capture_output=True)
+        local.write_bytes(data)
+        subprocess.run(["mcopy", "-o", "-i", str(img), str(local), "::/" + path], check=True, env=env)
+    data = img.read_bytes()
+    img.unlink()
+    return data
+
+
+# The USB stick Windows' registry (the SYSTEM hive in Windows' test volume) gives F:, by its serial number.
+STICK_SERIAL = "4C530001234567891234"
+
+
+def usb_check(args) -> list[str]:
+    """USB drives, read as they come and go. At the start: a USB stick (an MBR, a FAT32 partition named MY STICK) whose
+    serial number Windows' registry gives F:, and a card reader with two slots (two logical units), one with a FAT16
+    card that has no partition table (G:, the next letter Windows hasn't given), the other empty. Then an exFAT card
+    (the exfat crate's SD card volume, in an MBR) is put in the empty slot (H:), and a stick with an NTFS volume of 4
+    KiB sectors and no partition table, on a drive of 4 KiB blocks (the ntfs crate's big-sectors volume), is plugged in
+    (I:); then the first stick is unplugged and the exFAT card taken out. A stand-in for Claude asks for the computer's
+    status, lists folders, reads files (Chat Computer's own folder on the stick refused), finds one, all along."""
+    import http.server
+    import re
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-usb-"))
+    test_authority(tmp)
+    requests: list[dict] = []
+    calls = {
+        "status": ("computer_status", {}),
+        "flist": ("list_files", {"path": "F:\\"}),
+        "fread": ("read_file", {"path": "F:\\Documents\\Shopping list.txt"}),
+        "fown": ("read_file", {"path": "F:\\EFI\\chatcomputer-own\\settings.txt"}),
+        "gread": ("read_file", {"path": "g:/notes/TODO.TXT"}),
+        "hlist": ("list_files", {"path": "H:\\Documents"}),
+        "hread": ("read_file", {"path": "H:\\hello.txt"}),
+        "hbig": ("read_file", {"path": "H:\\Big.bin", "offset": 500000}),
+        "hfind": ("find_files", {"words": "lower", "in": "H:\\"}),
+        "iread": ("read_file", {"path": "I:\\hello.txt"}),
+        "gone": ("read_file", {"path": "F:\\hello.txt"}),
+        "status2": ("computer_status", {}),
+    }
+
+    class Api(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
+            requests.append(body)
+            asked = ((body.get("messages") or [{}])[-1]).get("content")
+            if isinstance(asked, str) and asked in calls:
+                name, inp = calls[asked]
+                send_stream(self, [("thinking", "sig-u"), ("tool_use", f"toolu_{asked}", name, [json.dumps(inp)])], "tool_use")
+            else:
+                send_stream(self, [("text", ["Done."])], "end_turn")
+
+    server = serve_https(Api, tmp)
+    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    problems: list[str] = []
+    try:
+        settings = f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
+        disk = tmp / "pc.img"
+        windows_disk(disk, BUILT, settings, MEMORY_ID)
+        stick_files = {
+            "hello.txt": b"Hello from a USB stick.\r\n",
+            "Documents/Shopping list.txt": "Bread, cheese \u2014 and olives.\r\n".encode(),
+            "Photos/Holiday/Notes.txt": b"Sunny.\n",
+            "EFI/chatcomputer-own/settings.txt": b"claude-api-key = not-to-be-read\r\n",
+        }
+        mbr_disk(tmp / "stick.img", fat_volume(tmp, "MY STICK", 300, 32, 8, stick_files), 0x1234ABCD, 0x0C)
+        (tmp / "old.img").write_bytes(fat_volume(tmp, "OLD CARD", 16, 16, 4, {"Notes/todo.txt": b"Buy stamps.\n"}))
+        sd = subprocess.run(["xz", "-dc", str(HERE / "exfat/tests/sd.img.xz")], check=True, capture_output=True).stdout
+        mbr_disk(tmp / "card.img", sd, 0x5D5D5D5D, 0x07)
+        ntfs4k = subprocess.run(["xz", "-dc", str(HERE / "ntfs/tests/big-sectors.img.xz")], check=True, capture_output=True).stdout
+        (tmp / "ntfs4k.img").write_bytes(ntfs4k)
+        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=",
+                 "-device", "qemu-xhci,id=xhci",
+                 "-drive", f"if=none,id=stick,format=raw,file={tmp / 'stick.img'}",
+                 "-device", f"usb-storage,bus=xhci.0,port=1,drive=stick,id=stick1,removable=on,serial={STICK_SERIAL}",
+                 "-device", "usb-bot,bus=xhci.0,port=2,id=reader",
+                 "-drive", "if=none,id=slot0",
+                 "-device", "scsi-hd,bus=reader.0,scsi-id=0,lun=0,drive=slot0,removable=on,vendor=Generic,product=SD/MMC",
+                 "-drive", f"if=none,id=slot1,format=raw,file={tmp / 'old.img'}",
+                 "-device", "scsi-hd,bus=reader.0,scsi-id=0,lun=1,drive=slot1,removable=on,vendor=Generic,product=MS/MS-Pro",
+                 "-drive", f"if=none,id=ssd,format=raw,file={tmp / 'ntfs4k.img'}")
+        # (Drives there at the start are in the first list of drives, or said to have come just after, depending on
+        # how soon they're ready.)
+        stick = "F: \u201cMY STICK\u201d (FAT32, 314.5 MB"
+        old = "G: \u201cOLD CARD\u201d (FAT16, 16.7 MB"
+        card = "files: USB drive \u201cGeneric SD/MMC\u201d: H: \u201cSD CARD\u201d (exFAT, 100.6 MB). Claude can read its files."
+        ssd = "files: USB drive \u201cQEMU QEMU HARDDISK\u201d: I: \u201cbig-sectors\u201d (NTFS, 67.1 MB). Claude can read its files."
+        steps: list[tuple[str, str, str]] = [
+            ("ask", "status", ""), ("ask", "flist", ""), ("ask", "fread", ""), ("ask", "fown", ""), ("ask", "gread", ""),
+            ("do", f"change slot0 {tmp / 'card.img'} raw", card),
+            ("ask", "hlist", ""), ("ask", "hread", ""), ("ask", "hbig", ""), ("ask", "hfind", ""),
+            ("do", "device_add usb-storage,bus=xhci.0,port=3,drive=ssd,id=stick3,logical_block_size=4096,physical_block_size=4096", ssd),
+            ("ask", "iread", ""),
+            ("do", "device_del stick1", "files: F: (\u201cMY STICK\u201d) is gone: its USB drive was unplugged, or its card taken out."),
+            ("do", "eject -f slot0", "files: H: (\u201cSD CARD\u201d) is gone: its USB drive was unplugged, or its card taken out."),
+            ("ask", "gone", ""), ("ask", "status2", ""),
+        ]
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            wait_for(pc.log, ("network: address",), 60)
+            for note in (stick, old):
+                if not wait_for(pc.log, (note,), 30):
+                    problems.append(f"no {note!r} in the log")
+            asked = 0
+            for n, (kind, what, note) in enumerate(steps):
+                if kind == "do":
+                    monitor(pc.mon, what)
+                    if not wait_for(pc.log, (note,), 30):
+                        problems.append(f"after {what!r}: no {note!r} in the log")
+                    time.sleep(1)
+                    pc.picture(f"usb-{n}")  # the line saying what came or went
+                    continue
+                monitor_many(pc.mon, keys_for(what) + ["sendkey ret"])
+                asked += 1
+                end = time.time() + 60
+                while time.time() < end and pc.text().count("Claude: answered (5 characters") < asked:
+                    time.sleep(0.5)
+            time.sleep(1)
+            pc.picture("usb")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        results = {}
+        for r in requests:
+            last = ((r.get("messages") or [{}])[-1]).get("content")
+            if isinstance(last, list) and last and last[0].get("type") == "tool_result":
+                results[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
+        missing = [q for q in calls if q not in results]
+        if missing:
+            return problems + [f"no tool result came back for {missing}"]
+        said = {q: str(r.get("content")[0]["text"] if isinstance(r.get("content"), list) else r.get("content")) for q, r in results.items()}
+        day = r"\d{4}-\d\d-\d\d"
+        usb_drive = "on the USB drive \u201c"
+        drives = (f"C: Windows' drive (NTFS, 33.5 MB); F: \u201cMY STICK\u201d (FAT32, 314.5 MB, {usb_drive}QEMU QEMU HARDDISK\u201d); "
+                  f"G: \u201cOLD CARD\u201d (FAT16, 16.7 MB, {usb_drive}Generic MS/MS-Pro\u201d, its letter given here, as Windows hasn't "
+                  "named it), read only")
+        later = (f"C: Windows' drive (NTFS, 33.5 MB); G: \u201cOLD CARD\u201d (FAT16, 16.7 MB, {usb_drive}Generic MS/MS-Pro\u201d, its "
+                 f"letter given here, as Windows hasn't named it); I: \u201cbig-sectors\u201d (NTFS, 67.1 MB, {usb_drive}QEMU QEMU "
+                 "HARDDISK\u201d, its letter given here, as Windows hasn't named it), read only")
+        want = {
+            "status": rf"(?s).*Files: {re.escape(drives)}\n.*",
+            "flist": rf"(?s)F:\\: 3 folders, 1 file\n.*hello\.txt \(25 bytes, {day}\).*",
+            "fread": rf"F:\\Documents\\Shopping list\.txt \(31 bytes, changed {day}\):\nBread, cheese \u2014 and olives\.\r\n",
+            "fown": r"F:\\EFI\\chatcomputer-own: Chat Computer's own folder \(its settings and memory\), which isn't read here",
+            "gread": rf"G:\\Notes\\todo\.txt \(12 bytes, changed {day}\):\nBuy stamps\.\n",
+            "hlist": rf"(?s)H:\\Documents: 0 folders, 3 files\n.*\u00dcn\u00efc\u00f6d\u00e9 \u2014 \u540d\u524d \U0001f642\.txt \(\d+ bytes, {day}\).*",
+            "hread": rf"H:\\hello\.txt \(18 bytes, changed {day}\):\nHello from exFAT\.\n",
+            "hbig": r"(?s)H:\\Big\.bin \(1\.0 MB, changed .*\):\n0003:000007a120\n0003:000007a130\n.*\[The file goes on: read_file with offset 560000 reads the next part\.\]",
+            "hfind": rf"Under H:\\, 1 found:\nH:\\MiXeD CaSe\\lower\.TXT \(5 bytes, {day}\)\n\[Looked in \d+ folders: all of them\.\]",
+            "iread": rf"I:\\hello\.txt \(17 bytes, changed {day}\):\nHello from NTFS\.\n",
+            "gone": r"There's no drive F: here \(its drives are C:, G:, I:\)",
+            "status2": rf"(?s).*Files: {re.escape(later)}\n.*",
+        }
+        for q, pattern in want.items():
+            if not re.fullmatch(pattern, said[q]):
+                problems.append(f"{q}: {said[q][:600]!r}")
+        for q in ("fown", "gone"):
+            if not results[q].get("is_error"):
+                problems.append(f"{q} wasn't an error")
+        if "not-to-be-read" in json.dumps(requests):
+            problems.append("Chat Computer's own settings reached Claude")
     finally:
         server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
@@ -2008,6 +2203,7 @@ def main() -> int:
     ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by Claude's file tools")
     ap.add_argument("--bitlocker", action="store_true", help="Windows' drive encrypted with BitLocker, unlocked")
     ap.add_argument("--drives", action="store_true", help="the PC's other drives (NVMe and SATA) read, by Windows' letters")
+    ap.add_argument("--usb", action="store_true", help="USB drives (sticks, a card reader) read as they come and go")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
@@ -2031,6 +2227,8 @@ def main() -> int:
         problems = bitlocker_check(args)
     elif args.drives:
         problems = drives_check(args)
+    elif args.usb:
+        problems = usb_check(args)
     else:
         if not args.no_build:
             build()

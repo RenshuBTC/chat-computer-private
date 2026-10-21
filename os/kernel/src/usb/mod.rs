@@ -1,6 +1,6 @@
 //! USB: Chat Computer's own drivers for the PC's USB controllers and what is plugged into them. So far:
-//! keyboards, mice, network adapters and phones sharing their connection (net.rs), and the hubs they may be behind (a
-//! monitor's, a dock's, or one inside the PC).
+//! keyboards, mice, network adapters and phones sharing their connection (net.rs), drives (storage.rs: USB sticks,
+//! external disks, card readers), and the hubs they may be behind (a monitor's, a dock's, or one inside the PC).
 //!
 //! The controllers' events are handled in their interrupt, or, on a controller that can't send
 //! interrupt messages, whenever the kernel wakes. Work that has to wait for a device (finding out what
@@ -8,6 +8,7 @@
 
 mod device;
 mod net;
+pub mod storage;
 mod xhci;
 
 use crate::sync::SpinLock;
@@ -172,7 +173,8 @@ fn handle_events(c: &mut Controller) {
     }
 }
 
-/// In the kernel's main loop: devices plugged in or out, hubs' changes, keyboards' lights.
+/// In the kernel's main loop: devices plugged in or out, hubs' changes, keyboards' lights, media put in drives or
+/// taken out.
 pub fn work() {
     let count = CONTROLLERS.lock().len();
     for hc in 0..count {
@@ -182,6 +184,7 @@ pub fn work() {
                 break;
             }
         }
+        storage::poll(hc);
     }
 }
 

@@ -82,6 +82,11 @@ NVMe and SATA drivers.
       keyboard and mouse both work;
     * network adapters: the configuration that offers a standard way to carry Ethernet, its bulk endpoints, and the
       way's own framing (`usb/net.rs`);
+    * drives (`usb/storage.rs`): USB sticks, external SSDs and hard drives, and card readers (many laptops' SD card
+      slot is one), by USB's mass storage class: SCSI's commands (INQUIRY, TEST UNIT READY, REQUEST SENSE, READ
+      CAPACITY, READ), over its bulk-only transport, 64 KiB at a time, with its reset recovery when something goes
+      wrong. Each logical unit (a card reader's slot) is asked about once a second whether a medium is in it, so a
+      card put in is read at once, and one taken out forgotten. Nothing is ever written to them;
     * devices plugged in and out at any time. Unplugging a hub lets go of everything behind it.
   * the network cards there are drivers for (`netcard/`), and Chat Computer's own network stack on the first
     (`net/`):
@@ -109,12 +114,16 @@ NVMe and SATA drivers.
     Before a restart, the drive is told to write what it has cached. The PC's other drives are started too, to be
     read: every NVMe controller's first namespace, and every SATA port with a disk on it (an optical drive left
     alone); each told before a restart too (an SSD counts being switched off without being told);
-  * Windows' drives, read and never changed (`files.rs`, by Chat Computer's own NTFS reader, `ntfs/`): every NTFS
-    volume in the basic data partitions of every drive (GPT, or an older PC's MBR), with the letter Windows gives it:
-    C:, Windows' own (the one with Windows' folders), and the others as Windows' registry names them (SYSTEM's
-    MountedDevices, read by `registry/` from C:, by each partition's GUID, or its disk's signature and where it
-    starts); a drive Windows hasn't seen gets the next letter no drive has, as Windows would give it. The computer's
-    status lists them, with their names. Claude reads the person's files there through its tools (below). Links are
+  * Windows' drives and USB drives, read and never changed (`files.rs`, by Chat Computer's own readers of NTFS,
+    `ntfs/`, exFAT, `exfat/`, and FAT, `fat/`): every volume in the basic data partitions of every drive (GPT, or an
+    MBR, its extended partition's logical drives included; or a whole stick or card with no partition table), with
+    the letter Windows gives it: C:, Windows' own (the one with Windows' folders), and the others as Windows' registry
+    names them (SYSTEM's MountedDevices, read by `registry/` from C:, by each partition's GUID, or its disk's
+    signature and where it starts; a USB stick by its serial number); a drive Windows hasn't seen gets the next
+    letter no drive has, as Windows would give it. USB drives come and go: a stick plugged in or a card put in gets
+    its letters (the other drives keep theirs), and a line in the conversation says so, as it does when it's gone.
+    The partition Chat Computer starts from, and its own folder (`\EFI\chatcomputer-own`, with its settings and the
+    Claude API key) wherever it is, are never read. The computer's status lists the drives, with their names. Claude reads the person's files there through its tools (below). Links are
     followed within a drive (a junction such as "My Documents", a symbolic link);
     OneDrive's files are read when they're downloaded to the PC, and said to be online only when they aren't. Word,
     Excel and PowerPoint files are read as their words (`office/`, through Chat Computer's own ZIP and DEFLATE
@@ -126,9 +135,9 @@ NVMe and SATA drivers.
     at once if BitLocker keeps its key in the clear (suspended, or not switched on yet), else once the person types
     its recovery key in the message box (48 digits, from their Microsoft account at aka.ms/myrecoverykey). The key
     is taken out of the message there and never sent to Claude, shown or kept (so it's typed again after a restart);
-    a wrong one is refused, naming the key ID that unlocks the drive (each locked drive is tried). Not yet: a drive
-    Windows is still encrypting as it's written to, files Windows compressed itself ("Compact OS", mostly its own),
-    USB drives, and Office's files from before 2007;
+    a wrong one is refused, naming the key ID that unlocks the drive (each locked drive is tried; a USB drive's
+    "BitLocker To Go" too). Not yet: a drive Windows is still encrypting as it's written to, files Windows compressed
+    itself ("Compact OS", mostly its own), and Office's files from before 2007;
   * the sound controller (`sound/hda.rs`): HD Audio, Intel's High Definition Audio, which nearly every PC's chipset
     has, Intel's and AMD's alike. It's reset and its codecs found on its link; the first codec with an audio function
     that has outputs is used (a graphics card's controller has only its screens' digital ones). Each codec
@@ -152,7 +161,8 @@ NVMe and SATA drivers.
       every 4 seconds for a minute (an alarm every 6 for ten minutes) until a key is pressed; a reminder rings once.
       They count the kernel's own time, so a clock that's out doesn't move them, and last until the PC restarts;
     * `set_volume`: how loud the chimes are, 0 to 100%;
-    * `list_files`, `read_file` and `find_files`: a folder's files and folders on one of Windows' drives (C:, D:...)
+    * `list_files`, `read_file` and `find_files`: a folder's files and folders on one of the drives (C:, D:..., USB
+      sticks and memory cards included)
       (with their sizes and when they changed; Windows' hidden system files, such as desktop.ini, left out as File
       Explorer leaves them out), a file's text (UTF-8, or UTF-16 as Notepad saves it, 60,000 bytes at a time, from any
       point), and the files and folders whose names have some words in them, from the person's folders (Users) down by
@@ -232,8 +242,17 @@ NVMe and SATA drivers.
   screen's renderer (`chatcomputer/ui/assets/md.js`). Its test runs md.js on each case (`markdown/gen/`) and
   checks the two read it the same way.
 * `fat/` is Chat Computer's own reader of FAT12, FAT16 and FAT32 (the file system of every PC's start-up
-  partition), long names included: it finds a file's blocks. Tested against volumes made by `mkfs.vfat` and
-  filled by mtools, fragmented files among them.
+  partition, and of most USB sticks and memory cards up to 32 GB), long names included, and 8.3 names in small
+  letters as Windows keeps them: a file's blocks (for the memory file), folders' lists (names, sizes, attributes,
+  times) and files' bytes anywhere, the FAT read a few sectors at a time. Tested against volumes made by `mkfs.vfat`
+  and filled by mtools: FAT12, FAT16 and FAT32, every file and folder as the tools put them there, fragmented files,
+  and every byte of the first sector, the FAT and the root folder changed in turn.
+* `exfat/` is Chat Computer's own reader of exFAT (USB sticks bigger than 32 GB, SD cards, drives shared with
+  Macs): the boot sector, the FAT (or a file's clusters in one run, as exFAT keeps most), folders' entry sets (names
+  in several entries, times with their offset from UTC), the volume's name, and its up-case table, by which names
+  are compared as Windows compares them. Tested against volumes made by exfatprogs' `mkfs.exfat` and filled by
+  exfat-fuse (`exfat/tests/make.py`), with 4 KiB and 32 KiB clusters: every file's bytes against a hash of what was
+  written, and damaged volumes.
 * `ntfs/` is Chat Computer's own reader of NTFS, the file system of Windows' drive, which it never changes: the master
   file table's records (put back together from their update sequences, attributes kept in them or in runs of clusters,
   and in other records, through an attribute list, for a file in hundreds of pieces), folders' indexes (B-trees of
@@ -361,11 +380,12 @@ fetches it. To try it you also need QEMU, OVMF and Pillow (`apt install qemu-sys
 python3-pil`).
 
 ```
-./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 2.8 MB)
-cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p remember -p markdown -p chime -p hid
+./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 3.1 MB)
+cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p remember -p markdown -p chime -p hid
                                  # the font engine and text setting, network stack, cryptography, TLS (needs
-                                 # openssl), Claude API client, FAT reader (needs dosfstools and mtools), NTFS
-                                 # reader (needs xz), ZIP, Office and picture readers (need python3 and Pillow),
+                                 # openssl), Claude API client, FAT reader (needs dosfstools and mtools), exFAT
+                                 # and NTFS readers (need xz), ZIP, Office and picture readers (need python3 and
+                                 # Pillow),
                                  # BitLocker reader (needs curl, xz and python3-cryptography; BITLOCKER_IMAGES
                                  # names the test volumes' archive if it's here already), registry reader (needs
                                  # xz), memory file, Markdown reader, chimes and HID descriptors
@@ -398,6 +418,10 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
 ./check.py --drives              # the PC's other drives: a second NVMe SSD (GPT) and two SATA drives (MBR and
                                  # GPT), read by the letters Windows' registry gives them, one Windows hasn't seen
                                  # given the next free letter (needs ntfs-3g's mkntfs too)
+./check.py --usb                 # USB drives as they come and go: a FAT32 stick Windows' registry names, a card
+                                 # reader's two slots (a FAT16 card with no partition table; an exFAT card put in
+                                 # later), a stick of 4 KiB blocks with NTFS plugged in later, then a stick
+                                 # unplugged and a card taken out; Chat Computer's own folder never read
 ./check.py --bitlocker           # the same drive encrypted with BitLocker: locked; a wrong recovery key typed
                                  # refused, the right one unlocking it, its files read; neither key reaching
                                  # Claude or the disk; and read at once with BitLocker's key in the clear (needs
@@ -484,8 +508,10 @@ PC.
 5. Storage: ✓ NVMe and SATA (the drive the PC started from), ✓ the conversation kept across restarts in a file on
    the start-up partition, ✓ Windows' drive read (NTFS), for Claude to read the person's files. Checked in virtual
    PCs. ✓ Word, Excel and PowerPoint files' words, and pictures and PDFs for Claude to see. ✓ A drive BitLocker
-   encrypts, with its recovery key. ✓ The PC's other drives (NVMe and SATA), by Windows' letters. To do: USB drives,
-   a drive still being encrypted as it's written to, unlocking with the PC's TPM (for Chat Computer's own start-up,
+   encrypts, with its recovery key. ✓ The PC's other drives (NVMe and SATA), by Windows' letters. ✓ USB drives
+   (sticks, external disks, card readers) as they come and go, and exFAT and FAT besides NTFS. To do: USB 3 hubs'
+   own side (for USB 3 drives behind one), UAS (USB-attached SCSI, faster), memory card
+   readers on PCI Express (Realtek's, in many laptops), a drive still being encrypted as it's written to, unlocking with the PC's TPM (for Chat Computer's own start-up,
    measured), files Windows compressed itself (XPRESS and LZX), Office's files from before 2007, Chat Computer's own
    file system for memory and logs, and keeping them encrypted.
 6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e, igb); the internet over

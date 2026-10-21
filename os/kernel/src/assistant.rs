@@ -89,7 +89,7 @@ const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a 
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, search the \
 web and read web pages, and look after this computer with the tools you have (its status, the text size, timers and \
 reminders, how loud their chimes are, restarting it or turning it off, starting a new conversation), and read (not \
-change) the files on its drives (Windows' C: and the others). The conversation is \
+change) the files on its drives (Windows' C: and the others, USB sticks and memory cards included). The conversation is \
 kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, quotes and simple \
 tables. Nothing can be opened from it (no links), and the only pictures it shows are the ones you show with \
 show_picture, so write an address out in full when the person needs it.";
@@ -190,7 +190,8 @@ const TOOLS: [api::Tool; 13] = [
     api::Tool {
         name: "list_files",
         description: "Lists a folder on one of this computer's drives (C:, where Windows is, and its others, D: and on, \
-                      as computer_status lists them): its folders, and its files with their size and when each was \
+                      USB sticks and memory cards included, as computer_status lists them): its folders, and its \
+                      files with their size and when each was \
                       last changed. The person's own folders are in C:\\Users\\<their name> \
                       (Desktop, Documents, Downloads, Pictures...); where OneDrive backs them up, their Desktop, \
                       Documents and Pictures are in C:\\Users\\<their name>\\OneDrive instead, and a file that's \

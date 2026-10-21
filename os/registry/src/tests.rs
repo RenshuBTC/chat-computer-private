@@ -80,6 +80,9 @@ fn reads_what_hivex_reads() {
     }
 }
 
+/// The name MountedDevices gives the test hive's USB stick (tests/make.py).
+const USB: &str = "_??_USBSTOR#Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00#4C530001234567891234&0#{53f56307-b6bf-11d0-94f2-00a0c91efb8b}";
+
 #[test]
 fn finds_keys_values_and_drive_letters() {
     let mut f = system();
@@ -104,9 +107,13 @@ fn finds_keys_values_and_drive_letters() {
             ('C', Mounted::Gpt(guid("b0e1f3a2-5c4d-4e6f-8a9b-0c1d2e3f4a5b"))),
             ('D', Mounted::Gpt(guid("c1f2a4b3-6d5e-4f70-9bac-1d2e3f4a5b6c"))),
             ('E', Mounted::Mbr { signature: 0x5EED_CAFE, offset: 1 << 20 }),
-            ('F', Mounted::Device),
+            ('F', Mounted::Device(std::string::String::from(USB))),
         ]
     );
+    // A USB stick's volume, by its drive's serial number and logical unit.
+    assert!(letters[3].1.is_usb("4c530001234567891234", 0));
+    assert!(!letters[3].1.is_usb("4C530001234567891234", 1) && !letters[3].1.is_usb("4C53000123456789123", 0) && !letters[3].1.is_usb("", 0));
+    assert!(!letters[0].1.is_usb("4C530001234567891234", 0));
     // A few cells read, not the whole hive.
     assert!(f.reads < 60, "{} reads", f.reads);
     // Whatever the case.

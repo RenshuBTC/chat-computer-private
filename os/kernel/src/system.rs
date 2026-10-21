@@ -88,8 +88,8 @@ pub fn status() -> String {
     lines.push(crate::files::status());
     lines.push(crate::keep::status());
     lines.push(String::from(
-        "Not yet in Chat Computer's own system: changing files (it reads Windows' drive, and writes only its own memory \
-         file), Office's files from before 2007, sound other than its chimes (no speech, music or microphones), Wi-Fi, \
+        "Not yet in Chat Computer's own system: changing files (it reads Windows' drives and USB drives, and writes only \
+         its own memory file), Office's files from before 2007, sound other than its chimes (no speech, music or microphones), Wi-Fi, \
          Bluetooth, and the other processor cores",
     ));
     lines.join("\n")

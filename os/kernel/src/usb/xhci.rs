@@ -90,6 +90,7 @@ pub const EVENT_HOST: u32 = 37;
 // TRB control bits.
 const CYCLE: u32 = 1 << 0;
 const TOGGLE_CYCLE: u32 = 1 << 1;
+pub const CHAIN: u32 = 1 << 4;
 pub const SHORT_OK: u32 = 1 << 2; // ISP: tell about a short packet
 pub const ON_COMPLETION: u32 = 1 << 5; // IOC
 pub const IMMEDIATE: u32 = 1 << 6; // IDT
@@ -225,7 +226,8 @@ impl Ring {
         unsafe { write_trb(self.page.at(16 * at), t.param, t.status, (t.control & !CYCLE) | self.cycle) };
         self.enqueue += 1;
         if self.enqueue == RING_TRBS - 1 {
-            let link = TRB_LINK << 10 | TOGGLE_CYCLE | self.cycle;
+            // (A transfer whose TRBs are chained across the ring's end has the link in its chain too.)
+            let link = TRB_LINK << 10 | TOGGLE_CYCLE | (t.control & CHAIN) | self.cycle;
             unsafe { write_trb(self.page.at(16 * self.enqueue), self.page.phys, 0, link) };
             self.enqueue = 0;
             self.cycle ^= 1;
@@ -306,6 +308,8 @@ pub struct Host {
     pub max_slots: u8,
     /// Bytes per context: 32 or 64.
     pub context_size: usize,
+    /// The version of the specification it follows (0x0100: 1.0).
+    pub version: u16,
     /// It can only reach the first 4 GiB of memory.
     pub low: bool,
     /// The USB major version (2 or 3) of each port, by port number.
@@ -391,6 +395,7 @@ impl Host {
             ports: (params1 >> 24) as u8,
             max_slots: params1 as u8,
             context_size: if cparams1 & (1 << 2) != 0 { 64 } else { 32 },
+            version: (read32(cap + CAPLENGTH) >> 16) as u16,
             low: cparams1 & 1 == 0,
             protocol: [0; 256],
             signal: pci::Signal::None,

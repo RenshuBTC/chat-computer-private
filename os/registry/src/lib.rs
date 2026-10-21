@@ -359,12 +359,25 @@ impl Hive {
 
 /// What SYSTEM's MountedDevices says a volume is, to know which has which letter: a GPT partition by its unique
 /// GUID ("DMIO:ID:" and the GUID's 16 bytes), or an MBR partition by its disk's signature and where it starts (bytes);
-/// or another kind of volume (a USB stick's, say, by its device's name).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// or another kind of volume by its device's name, in UTF-16 (a USB stick's:
+/// "_??_USBSTOR#Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00#<its serial number>&0#{53f56307-...}").
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Mounted {
     Gpt([u8; 16]),
     Mbr { signature: u32, offset: u64 },
-    Device,
+    Device(String),
+}
+
+impl Mounted {
+    /// Whether this names the volume of a USB drive's logical unit `lun` whose serial number is `serial` (USB sticks
+    /// are named by their device, not their partitions).
+    pub fn is_usb(&self, serial: &str, lun: u8) -> bool {
+        let Mounted::Device(name) = self else { return false };
+        let name = name.to_ascii_uppercase();
+        !serial.is_empty()
+            && (name.starts_with("_??_USBSTOR#") || name.starts_with("\\??\\USBSTOR#"))
+            && name.contains(&alloc::format!("#{}&{lun}#", serial.to_ascii_uppercase()))
+    }
 }
 
 /// The drive letters in SYSTEM's MountedDevices ("\DosDevices\D:"), each with the volume it's for.
@@ -380,7 +393,8 @@ pub fn drive_letters(hive: &Hive, src: &mut impl Source) -> Result<Vec<(char, Mo
         } else if d.len() == 12 {
             Mounted::Mbr { signature: u32_at(d, 0).unwrap(), offset: u64_at(d, 4).unwrap() }
         } else {
-            Mounted::Device
+            let units = d.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]));
+            Mounted::Device(char::decode_utf16(units).map(|c| c.unwrap_or('\u{FFFD}')).collect::<String>().trim_end_matches('\0').into())
         };
         out.push((letter.to_ascii_uppercase(), mounted));
     }

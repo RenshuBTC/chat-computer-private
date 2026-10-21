@@ -1,25 +1,31 @@
-//! Windows' drives, read and never changed: the person's files, for Claude (its list_files, read_file, find_files and
-//! show_picture tools), as the main Chat Computer can read them. Every NTFS volume in the partitions the PC's drives'
-//! GPTs (or old MBRs) list as basic data is found; the one with Windows' own folders ("Windows" and "Users") is C:,
-//! and Windows' registry there (SYSTEM's MountedDevices, through registry/) says which letter each other partition
-//! has, by its GUID or its disk's signature and where it starts. A drive Windows hasn't seen gets the next letter no
-//! drive has, as Windows would give it. The NTFS reader (ntfs/) does the rest. Links (a junction such as "My
-//! Documents", a symbolic link) are followed, within a drive; OneDrive's files are read when they're on the PC, and
-//! said to be online only when they aren't.
+//! The PC's drives and USB drives, read and never changed: the person's files, for Claude (its list_files, read_file,
+//! find_files and show_picture tools), as the main Chat Computer can read them. Every volume in the partitions the
+//! drives' GPTs (or old MBRs) list as basic data is found: NTFS (ntfs/), exFAT (exfat/) or FAT (fat/). The one with
+//! Windows' own folders ("Windows" and "Users") is C:, and Windows' registry there (SYSTEM's MountedDevices, through
+//! registry/) says which letter each other partition has, by its GUID or its disk's signature and where it starts. A
+//! drive Windows hasn't seen gets the next letter no drive has, as Windows would give it. Links (a junction such as
+//! "My Documents", a symbolic link) are followed, within a drive; OneDrive's files are read when they're on the PC,
+//! and said to be online only when they aren't.
 //!
-//! A drive BitLocker encrypts (bitlocker/) is read decrypted: unlocked at once if BitLocker keeps its key in the clear
-//! (suspended, or waiting to be switched on, as a new PC's device encryption does until its owner signs in), else
-//! once the person types its recovery key in the message box (each locked drive tried). chat.rs hands the key here
-//! and never to Claude, and it isn't kept: after a restart it's typed again.
+//! USB drives (usb/storage.rs: sticks, external disks, the cards in a card reader) are read as they come and go: a
+//! drive plugged in, or a card put in, has its volumes found and given letters (Windows' for a USB stick, by its
+//! serial number, if Windows' registry has one no drive here has; else the next free one), the other drives keeping
+//! theirs; and they're forgotten when it's unplugged or taken out. A stick or card may have no partition table: its
+//! first block is then its volume's own.
+//!
+//! A drive BitLocker encrypts (bitlocker/; a USB drive's "BitLocker To Go" too) is read decrypted: unlocked at once if
+//! BitLocker keeps its key in the clear (suspended, or waiting to be switched on, as a new PC's device encryption does
+//! until its owner signs in), else once the person types its recovery key in the message box (each locked drive
+//! tried). chat.rs hands the key here and never to Claude, and it isn't kept: after a restart it's typed again.
 //!
 //! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); a
 //! ZIP archive as the list of what's in it; and pictures (JPEG, PNG, GIF, WebP) and PDFs whole, for Claude to see
 //! (the API takes them as they are: Claude reads a PDF's pages as words and as pictures). A picture bigger than the
 //! API shows Claude goes made smaller, as a JPEG.
 
-use crate::storage::{self, Disk};
+use crate::storage::{self, Disk, Drive};
 use crate::sync::SpinLock;
-use crate::time;
+use crate::{time, usb};
 use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -28,8 +34,6 @@ use alloc::vec::Vec;
 
 /// GPT's "Microsoft basic data" partition type, as stored (its first three fields little-endian).
 const BASIC_DATA: [u8; 16] = [0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7];
-/// An MBR partition's type for NTFS.
-const MBR_NTFS: u8 = 0x07;
 /// The most of a file read_file gives at once, in bytes.
 const READ_AT_ONCE: usize = 60_000;
 /// The most entries list_files gives, and results find_files gives.
@@ -157,9 +161,9 @@ fn dimensions(media: &str, b: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// A whole file's bytes (at most `most`).
-fn whole(v: &ntfs::Volume, p: &mut Partition, f: &ntfs::File, most: u64) -> Result<Vec<u8>, ntfs::Error> {
+fn whole(fs: &Fs, p: &mut Partition, f: &File, most: u64) -> Result<Vec<u8>, ntfs::Error> {
     let mut data = vec![0u8; f.size.min(most) as usize];
-    let n = v.read(p, f, 0, &mut data)?;
+    let n = fs.read(p, f, 0, &mut data)?;
     data.truncate(n);
     Ok(data)
 }
@@ -170,15 +174,17 @@ struct Unlocked {
     key: bitlocker::Key,
 }
 
-/// A volume on one of the PC's drives: NTFS, perhaps encrypted with BitLocker.
+/// A volume on one of the PC's drives, or a USB drive: NTFS, exFAT or FAT, perhaps encrypted with BitLocker.
 struct Volume {
-    /// Which drive it's on (storage::with_drive's number), its partition's first block and size in blocks, the
-    /// drive's block size, and the partition as Windows' MountedDevices names it.
-    drive: usize,
+    /// Which drive it's on, its partition's first block and size in blocks, the drive's block size, and the
+    /// partition as Windows' MountedDevices names it.
+    drive: Drive,
     start: u64,
     blocks: u64,
     block_size: u32,
     id: registry::Mounted,
+    /// On a USB drive: what's known of it.
+    usb: Option<Usb>,
     /// Its letter: Windows' (from Windows' registry: `named`), else one given here.
     letter: char,
     named: bool,
@@ -189,9 +195,18 @@ struct Volume {
     state: State,
 }
 
+/// A USB drive a volume is on: its name, serial number and logical unit (Windows names a USB stick's volume by
+/// those), and whether the volume is the first on it (the one Windows' name for the stick is for).
+struct Usb {
+    name: String,
+    serial: Option<String>,
+    lun: u8,
+    first: bool,
+}
+
 enum State {
-    /// Read: its NTFS volume, and BitLocker's key if BitLocker encrypts it (and how it was unlocked).
-    Open { ntfs: ntfs::Volume, bitlocker: Option<(Unlocked, &'static str)> },
+    /// Read: its file system, and BitLocker's key if BitLocker encrypts it (and how it was unlocked).
+    Open { fs: Fs, bitlocker: Option<(Unlocked, &'static str)> },
     /// BitLocker encrypts it, locked: its recovery key unlocks it.
     Locked(bitlocker::Volume),
     /// BitLocker encrypts it in a way that isn't read (why).
@@ -206,27 +221,89 @@ const BY_RECOVERY_KEY: &str = "encrypted with BitLocker: unlocked with its recov
 const SYSTEM_HIVE: &str = "Windows\\System32\\config\\SYSTEM";
 
 static VOLUMES: SpinLock<Vec<Volume>> = SpinLock::new(Vec::new());
+/// The letters Windows' registry gives drives, once read (None: there's no Windows drive to read them from).
+static LETTERS: SpinLock<Option<Vec<(char, registry::Mounted)>>> = SpinLock::new(None);
+/// The USB drives' media looked at (whether or not anything on them could be read), and usb's count of changes to
+/// them when they were.
+static USB_SEEN: SpinLock<(Vec<Drive>, u64)> = SpinLock::new((Vec::new(), 0));
 /// A recovery key typed in the message box, for `work` to unlock with.
 static RECOVERY_KEY: SpinLock<Option<String>> = SpinLock::new(None);
 /// What was found, for the computer's status.
 static SAID: SpinLock<Option<String>> = SpinLock::new(None);
 
-/// The partition's bytes for the NTFS reader, from the drive's blocks (a page at most at a time), decrypted if
-/// BitLocker encrypts it.
+/// The partition's bytes for the file systems' readers, from the drive's blocks, decrypted if BitLocker encrypts it.
+/// The last run of blocks read is kept: file systems read small pieces near each other (a FAT's entries, a folder's).
 struct Partition<'a> {
     disk: &'a mut dyn Disk,
     start: u64,
     blocks: u64,
     unlocked: Option<&'a Unlocked>,
+    /// The first of the blocks kept, and their bytes.
+    kept: (u64, Vec<u8>),
+}
+
+impl<'a> Partition<'a> {
+    fn new(disk: &'a mut dyn Disk, start: u64, blocks: u64, unlocked: Option<&'a Unlocked>) -> Partition<'a> {
+        Partition { disk, start, blocks, unlocked, kept: (0, Vec::new()) }
+    }
+
+    /// `buf.len()` bytes from byte `offset` of the partition, decrypted if it's encrypted.
+    fn bytes(&mut self, offset: u64, buf: &mut [u8]) -> bool {
+        match self.unlocked {
+            Some(u) => u.volume.read(&u.key, &mut Raw(self), offset, buf),
+            None => self.raw(offset, buf),
+        }
+    }
+
+    /// The bytes as they are on the drive: whole runs of blocks (as many as the drive reads at once) straight in, and
+    /// the rest through the blocks kept.
+    fn raw(&mut self, offset: u64, buf: &mut [u8]) -> bool {
+        let bs = self.disk.block_size() as usize;
+        let run = (self.disk.most() / bs).max(1) as u64;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let pos = offset + done as u64;
+            let lba = pos / bs as u64;
+            if lba >= self.blocks {
+                return false;
+            }
+            let left = buf.len() - done;
+            let (first, kept) = (self.kept.0, &self.kept.1);
+            if lba >= first && lba < first + (kept.len() / bs) as u64 {
+                let at = (pos - first * bs as u64) as usize;
+                let n = (kept.len() - at).min(left);
+                buf[done..done + n].copy_from_slice(&kept[at..at + n]);
+                done += n;
+                continue;
+            }
+            if pos.is_multiple_of(bs as u64) && left >= run as usize * bs {
+                let n = (left / bs).min(run as usize).min((self.blocks - lba) as usize);
+                if self.disk.read(self.start + lba, &mut buf[done..done + n * bs]).is_err() {
+                    return false;
+                }
+                done += n * bs;
+            } else {
+                let n = run.min(self.blocks - lba) as usize;
+                let mut blocks = vec![0u8; n * bs];
+                if self.disk.read(self.start + lba, &mut blocks).is_err() {
+                    return false;
+                }
+                self.kept = (lba, blocks);
+            }
+        }
+        true
+    }
 }
 
 impl ntfs::Disk for Partition<'_> {
     fn read(&mut self, offset: u64, buf: &mut [u8]) -> bool {
-        let unlocked = self.unlocked;
-        match unlocked {
-            Some(u) => u.volume.read(&u.key, &mut Raw(self), offset, buf),
-            None => self.raw(offset, buf),
-        }
+        self.bytes(offset, buf)
+    }
+}
+
+impl exfat::Disk for Partition<'_> {
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> bool {
+        self.bytes(offset, buf)
     }
 }
 
@@ -239,55 +316,275 @@ impl bitlocker::Disk for Raw<'_, '_> {
     }
 }
 
-impl Partition<'_> {
-    fn raw(&mut self, offset: u64, buf: &mut [u8]) -> bool {
-        let bs = self.disk.block_size() as usize;
-        let mut done = 0usize;
-        let mut block = vec![0u8; bs];
-        while done < buf.len() {
-            let pos = offset + done as u64;
-            let lba = pos / bs as u64;
-            let within = (pos % bs as u64) as usize;
-            if lba >= self.blocks {
-                return false;
-            }
-            let left = buf.len() - done;
-            if within == 0 && left >= bs {
-                // Whole blocks straight in, up to a page.
-                let n = (left / bs).min((4096 / bs).max(1)).min((self.blocks - lba) as usize);
-                if self.disk.read(self.start + lba, &mut buf[done..done + n * bs]).is_err() {
-                    return false;
-                }
-                done += n * bs;
-            } else {
-                if self.disk.read(self.start + lba, &mut block).is_err() {
-                    return false;
-                }
-                let n = (bs - within).min(left);
-                buf[done..done + n].copy_from_slice(&block[within..within + n]);
-                done += n;
-            }
-        }
-        true
+/// The partition's sectors for FAT's reader, `size` bytes each.
+struct Sectors<'p, 'a> {
+    p: &'p mut Partition<'a>,
+    size: u64,
+}
+
+impl fat::Sectors for Sectors<'_, '_> {
+    fn read(&mut self, sector: u64, buf: &mut [u8]) -> bool {
+        self.p.bytes(sector * self.size, buf)
     }
 }
 
-/// The basic data partitions on the drive, as (first block, blocks, the partition as MountedDevices names it): from
-/// its GPT (each partition's own GUID), or its MBR on an older PC (the disk's signature and where it starts).
+/// A volume's file system.
+enum Fs {
+    Ntfs(ntfs::Volume),
+    Exfat(exfat::Volume),
+    Fat(fat::Volume),
+}
+
+/// A file or folder, on whichever file system.
+#[derive(Clone)]
+struct Entry {
+    name: String,
+    folder: bool,
+    size: u64,
+    /// When it was last changed, in seconds since 1970.
+    modified: i64,
+    hidden: bool,
+    system: bool,
+    /// NTFS's: Windows encrypts it (EFS); it's a link (a junction, a symbolic link); its reparse tag (0: none).
+    encrypted: bool,
+    link: bool,
+    tag: u32,
+    at: At,
+}
+
+/// Where a file or folder is, in its file system's own terms.
+#[derive(Clone)]
+enum At {
+    Ntfs(u64),
+    Exfat(exfat::Entry),
+    Fat(fat::Entry),
+}
+
+/// A file, opened to read.
+struct File {
+    size: u64,
+    at: FileAt,
+}
+
+enum FileAt {
+    Ntfs(ntfs::File),
+    Exfat(exfat::Entry),
+    Fat(fat::Entry),
+}
+
+impl Entry {
+    fn of_ntfs(e: ntfs::Entry) -> Entry {
+        Entry {
+            folder: e.folder,
+            size: e.size,
+            modified: e.modified,
+            hidden: e.attributes & ntfs::HIDDEN != 0,
+            system: e.attributes & ntfs::SYSTEM != 0,
+            encrypted: e.attributes & ntfs::ENCRYPTED != 0,
+            link: e.link,
+            tag: e.tag,
+            at: At::Ntfs(e.record),
+            name: e.name,
+        }
+    }
+
+    fn of_exfat(e: exfat::Entry) -> Entry {
+        Entry {
+            name: e.name.clone(),
+            folder: e.folder,
+            size: e.size,
+            modified: e.modified,
+            hidden: e.attributes & exfat::HIDDEN != 0,
+            system: e.attributes & exfat::SYSTEM != 0,
+            encrypted: false,
+            link: false,
+            tag: 0,
+            at: At::Exfat(e),
+        }
+    }
+
+    fn of_fat(i: fat::Item) -> Entry {
+        Entry {
+            folder: i.entry.folder,
+            size: i.entry.size as u64,
+            modified: i.modified,
+            hidden: i.attributes & fat::HIDDEN != 0,
+            system: i.attributes & fat::SYSTEM != 0,
+            encrypted: false,
+            link: false,
+            tag: 0,
+            at: At::Fat(i.entry),
+            name: i.name,
+        }
+    }
+}
+
+/// FAT's and exFAT's errors, said as NTFS's same ones.
+fn fat_error(e: fat::Error) -> ntfs::Error {
+    match e {
+        fat::Error::Read => ntfs::Error::Read,
+        fat::Error::NotFound => ntfs::Error::NotFound,
+        fat::Error::NotAFolder => ntfs::Error::NotAFolder,
+        fat::Error::NotAFile => ntfs::Error::NotAFile,
+        fat::Error::NotFat | fat::Error::Damaged => ntfs::Error::Damaged,
+    }
+}
+
+fn exfat_error(e: exfat::Error) -> ntfs::Error {
+    match e {
+        exfat::Error::Read => ntfs::Error::Read,
+        exfat::Error::NotFound => ntfs::Error::NotFound,
+        exfat::Error::NotAFolder => ntfs::Error::NotAFolder,
+        exfat::Error::NotAFile => ntfs::Error::NotAFile,
+        exfat::Error::NotExfat | exfat::Error::Damaged => ntfs::Error::Damaged,
+    }
+}
+
+impl Fs {
+    /// The file system on a partition, if it's one that's read.
+    fn open(p: &mut Partition) -> Option<Fs> {
+        if let Ok(v) = ntfs::open(p) {
+            return Some(Fs::Ntfs(v));
+        }
+        if let Ok(v) = exfat::open(p) {
+            return Some(Fs::Exfat(v));
+        }
+        // (FAT's sector size is in its first sector, which is read as 512 bytes.)
+        fat::open(&mut Sectors { p, size: 512 }).ok().map(Fs::Fat)
+    }
+
+    /// Its name: "NTFS", "exFAT", "FAT32".
+    fn name(&self) -> &'static str {
+        match self {
+            Fs::Ntfs(_) => "NTFS",
+            Fs::Exfat(_) => "exFAT",
+            Fs::Fat(v) => match v.kind {
+                fat::Kind::Fat12 => "FAT12",
+                fat::Kind::Fat16 => "FAT16",
+                fat::Kind::Fat32 => "FAT32",
+            },
+        }
+    }
+
+    /// The volume's name (File Explorer's, beside its letter).
+    fn label(&self, p: &mut Partition) -> String {
+        match self {
+            Fs::Ntfs(v) => v.label(p).unwrap_or_default(),
+            Fs::Exfat(v) => v.label.clone(),
+            Fs::Fat(v) => v.label(&mut Sectors { p, size: v.bytes_per_sector as u64 }).unwrap_or_default(),
+        }
+    }
+
+    fn root(&self) -> Entry {
+        match self {
+            Fs::Ntfs(_) => Entry::of_ntfs(ntfs::root()),
+            Fs::Exfat(v) => Entry::of_exfat(v.root()),
+            Fs::Fat(_) => Entry::of_fat(fat::Item { name: String::new(), short: String::new(), entry: fat::root(), attributes: fat::FOLDER, modified: 0 }),
+        }
+    }
+
+    /// Whether it's Windows' own drive: NTFS with Windows' folders.
+    fn is_windows(&self, p: &mut Partition) -> bool {
+        let root = self.root();
+        matches!(self, Fs::Ntfs(_)) && ["Windows", "Users"].iter().all(|f| self.child(p, &root, f).is_ok_and(|e| e.folder))
+    }
+
+    /// The files and folders in a folder.
+    fn list(&self, p: &mut Partition, folder: &Entry) -> Result<Vec<Entry>, ntfs::Error> {
+        match (self, &folder.at) {
+            (Fs::Ntfs(v), At::Ntfs(record)) => Ok(v.list(p, *record)?.into_iter().map(Entry::of_ntfs).collect()),
+            (Fs::Exfat(v), At::Exfat(e)) => Ok(v.list(p, e).map_err(exfat_error)?.into_iter().map(Entry::of_exfat).collect()),
+            (Fs::Fat(v), At::Fat(e)) => {
+                let items = v.list(&mut Sectors { p, size: v.bytes_per_sector as u64 }, e).map_err(fat_error)?;
+                Ok(items.into_iter().map(Entry::of_fat).collect())
+            }
+            _ => Err(ntfs::Error::Damaged),
+        }
+    }
+
+    /// The file or folder named `name` in a folder, whatever its case.
+    fn child(&self, p: &mut Partition, folder: &Entry, name: &str) -> Result<Entry, ntfs::Error> {
+        match (self, &folder.at) {
+            (Fs::Ntfs(v), At::Ntfs(record)) => Ok(Entry::of_ntfs(v.child(p, *record, name)?)),
+            (Fs::Exfat(v), At::Exfat(e)) => Ok(Entry::of_exfat(v.child(p, e, name).map_err(exfat_error)?)),
+            (Fs::Fat(v), At::Fat(e)) => Ok(Entry::of_fat(v.child(&mut Sectors { p, size: v.bytes_per_sector as u64 }, e, name).map_err(fat_error)?)),
+            _ => Err(ntfs::Error::Damaged),
+        }
+    }
+
+    /// A file, to read.
+    fn open_file(&self, p: &mut Partition, e: &Entry) -> Result<File, ntfs::Error> {
+        if e.folder {
+            return Err(ntfs::Error::NotAFile);
+        }
+        match (self, &e.at) {
+            (Fs::Ntfs(v), At::Ntfs(record)) => {
+                let f = v.open_file(p, *record)?;
+                Ok(File { size: f.size, at: FileAt::Ntfs(f) })
+            }
+            (Fs::Exfat(_), At::Exfat(x)) => Ok(File { size: e.size, at: FileAt::Exfat(x.clone()) }),
+            (Fs::Fat(_), At::Fat(x)) => Ok(File { size: e.size, at: FileAt::Fat(*x) }),
+            _ => Err(ntfs::Error::Damaged),
+        }
+    }
+
+    /// `buf.len()` bytes of a file from byte `offset` (fewer at its end): how many were read.
+    fn read(&self, p: &mut Partition, f: &File, offset: u64, buf: &mut [u8]) -> Result<usize, ntfs::Error> {
+        match (self, &f.at) {
+            (Fs::Ntfs(v), FileAt::Ntfs(file)) => v.read(p, file, offset, buf),
+            (Fs::Exfat(v), FileAt::Exfat(e)) => v.read(p, e, offset, buf).map_err(exfat_error),
+            (Fs::Fat(v), FileAt::Fat(e)) => v.read(&mut Sectors { p, size: v.bytes_per_sector as u64 }, e, offset, buf).map_err(fat_error),
+            _ => Err(ntfs::Error::Damaged),
+        }
+    }
+
+    /// Where a link goes (NTFS's links; FAT and exFAT have none).
+    fn link_target(&self, p: &mut Partition, e: &Entry) -> Result<Option<String>, ntfs::Error> {
+        match (self, &e.at) {
+            (Fs::Ntfs(v), At::Ntfs(record)) => v.link_target(p, *record),
+            _ => Ok(None),
+        }
+    }
+}
+
+/// MBR partition types read here: NTFS's and exFAT's (07h), FAT12's (01h), FAT16's (04h, 06h, 0Eh), FAT32's (0Bh,
+/// 0Ch).
+const MBR_VOLUMES: [u8; 7] = [0x07, 0x01, 0x04, 0x06, 0x0E, 0x0B, 0x0C];
+/// MBR partition types of an extended partition, which has more ("logical drives") in it.
+const MBR_EXTENDED: [u8; 3] = [0x05, 0x0F, 0x85];
+
+/// Whether a drive's first block is a volume's own (a drive with no partition table, as some sticks and memory cards
+/// are formatted): NTFS's, exFAT's, BitLocker's, or FAT's (its BIOS parameter block making sense).
+fn is_volume(b: &[u8]) -> bool {
+    let u16_at = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+    matches!(&b[3..11], b"NTFS    " | b"EXFAT   " | b"-FVE-FS-")
+        || bitlocker::is_bitlocker(b)
+        || (matches!(b[0], 0xEB | 0xE9)
+            && matches!(u16_at(11), 512 | 1024 | 2048 | 4096)
+            && b[13].is_power_of_two()
+            && u16_at(14) > 0
+            && matches!(b[16], 1 | 2)
+            && (b[21] == 0xF0 || b[21] >= 0xF8))
+}
+
+/// The volumes' partitions on a drive, as (first block, blocks, the partition as MountedDevices names it): its GPT's
+/// basic data partitions (each by its own GUID); or its MBR's, with the logical drives in an extended partition (by
+/// the disk's signature and where each starts, in bytes); or, with no partition table, the whole drive.
 fn partitions(disk: &mut dyn Disk) -> Vec<(u64, u64, registry::Mounted)> {
     let bs = disk.block_size() as usize;
+    let total = disk.blocks();
     let mut out = Vec::new();
+    let u32_at = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+    let u64_at = |b: &[u8], i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
     let mut header = vec![0u8; bs];
     if disk.read(1, &mut header).is_ok() && &header[..8] == b"EFI PART" {
-        let u32_at = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
-        let u64_at = |b: &[u8], i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
         let (first, count, size) = (u64_at(&header, 72), u32_at(&header, 80) as usize, u32_at(&header, 84) as usize);
         if !(128..=1024).contains(&size) || count > 1024 {
             return out;
         }
-        let total = (count * size).div_ceil(bs);
-        let mut entries = vec![0u8; total * bs];
-        for k in 0..total {
+        let blocks = (count * size).div_ceil(bs);
+        let mut entries = vec![0u8; blocks * bs];
+        for k in 0..blocks {
             if disk.read(first + k as u64, &mut entries[k * bs..(k + 1) * bs]).is_err() {
                 return out;
             }
@@ -295,7 +592,7 @@ fn partitions(disk: &mut dyn Disk) -> Vec<(u64, u64, registry::Mounted)> {
         for e in entries.chunks_exact(size).take(count) {
             if e[..16] == BASIC_DATA {
                 let (lo, hi) = (u64_at(e, 32), u64_at(e, 40));
-                if hi >= lo && hi < disk.blocks() {
+                if hi >= lo && hi < total {
                     out.push((lo, hi - lo + 1, registry::Mounted::Gpt(e[16..32].try_into().unwrap())));
                 }
             }
@@ -303,50 +600,113 @@ fn partitions(disk: &mut dyn Disk) -> Vec<(u64, u64, registry::Mounted)> {
         return out;
     }
     let mut mbr = vec![0u8; bs];
-    if disk.read(0, &mut mbr).is_ok() && mbr[510] == 0x55 && mbr[511] == 0xAA {
-        let signature = u32::from_le_bytes(mbr[0x1B8..0x1BC].try_into().unwrap());
-        for k in 0..4 {
-            let e = &mbr[0x1BE + 16 * k..0x1BE + 16 * (k + 1)];
-            let (start, count) = (u32::from_le_bytes(e[8..12].try_into().unwrap()), u32::from_le_bytes(e[12..16].try_into().unwrap()));
-            if e[4] == MBR_NTFS && count > 0 {
-                out.push((start as u64, count as u64, registry::Mounted::Mbr { signature, offset: start as u64 * bs as u64 }));
+    if disk.read(0, &mut mbr).is_err() || mbr[510] != 0x55 || mbr[511] != 0xAA {
+        return out;
+    }
+    if is_volume(&mbr) {
+        out.push((0, total, registry::Mounted::Device(String::new())));
+        return out;
+    }
+    let signature = u32_at(&mbr, 0x1B8);
+    let mut add = |start: u64, count: u64| {
+        if count > 0 && start.checked_add(count).is_some_and(|end| end <= total) {
+            out.push((start, count, registry::Mounted::Mbr { signature, offset: start * bs as u64 }));
+        }
+    };
+    let mut extended = None;
+    for k in 0..4 {
+        let e = &mbr[0x1BE + 16 * k..0x1BE + 16 * (k + 1)];
+        let (start, count) = (u32_at(e, 8) as u64, u32_at(e, 12) as u64);
+        if MBR_VOLUMES.contains(&e[4]) {
+            add(start, count);
+        } else if MBR_EXTENDED.contains(&e[4]) && extended.is_none() {
+            extended = Some(start);
+        }
+    }
+    // An extended partition's logical drives: a chain of extended boot records, each with a drive (from the record)
+    // and where the next record is (from the extended partition's start).
+    if let Some(base) = extended {
+        let mut at = base;
+        let mut ebr = vec![0u8; bs];
+        for _ in 0..64 {
+            if at >= total || disk.read(at, &mut ebr).is_err() || ebr[510] != 0x55 || ebr[511] != 0xAA {
+                break;
             }
+            let (this, next) = (&ebr[0x1BE..0x1CE], &ebr[0x1CE..0x1DE]);
+            if MBR_VOLUMES.contains(&this[4]) {
+                add(at + u32_at(this, 8) as u64, u32_at(this, 12) as u64);
+            }
+            if !MBR_EXTENDED.contains(&next[4]) || u32_at(next, 8) == 0 {
+                break;
+            }
+            at = base + u32_at(next, 8) as u64;
         }
     }
     out
 }
 
-/// What a partition holds: NTFS (decrypted with `unlocked`, if BitLocker encrypts it), opened, with its name and
-/// whether it's Windows' drive; or BitLocker's volume, still locked (or why it can't be read); or nothing to read.
+/// What a partition holds: a file system read here (decrypted with `unlocked`, if BitLocker encrypts it), opened,
+/// with its name and whether it's Windows' drive; or BitLocker's volume, still locked (or why it can't be read); or
+/// nothing to read.
 fn open_partition(disk: &mut dyn Disk, start: u64, blocks: u64, unlocked: Option<(Unlocked, &'static str)>) -> Option<(State, String, bool)> {
-    let opened = {
-        let mut p = Partition { disk: &mut *disk, start, blocks, unlocked: unlocked.as_ref().map(|(u, _)| u) };
-        ntfs::open(&mut p).map(|volume| {
-            let windows = ["Windows", "Users"].iter().all(|f| volume.find(&mut p, f).is_ok_and(|e| e.folder));
-            let label = volume.label(&mut p).unwrap_or_default();
-            (volume, label, windows)
-        })
-    };
-    match opened {
-        Ok((ntfs, label, windows)) => Some((State::Open { ntfs, bitlocker: unlocked }, label, windows)),
-        Err(ntfs::Error::BitLocker) if unlocked.is_none() => {
-            let mut p = Partition { disk: &mut *disk, start, blocks, unlocked: None };
-            match bitlocker::open(&mut Raw(&mut p)) {
-                // Its key in the clear: BitLocker suspended, or not switched on yet.
-                Ok(volume) => match volume.unlock_clear() {
-                    Ok(key) => open_partition(disk, start, blocks, Some((Unlocked { volume, key }, BY_CLEAR_KEY))),
-                    Err(_) => Some((State::Locked(volume), String::new(), false)),
-                },
-                Err(bitlocker::Error::Unsupported(what)) => Some((
-                    State::Unreadable(format!("encrypted with BitLocker in a way Chat Computer's own system can't read yet ({what})")),
-                    String::new(),
-                    false,
-                )),
-                Err(e) => Some((State::Unreadable(format!("encrypted with BitLocker, whose own records on it couldn't be read ({e:?})")), String::new(), false)),
+    let mut boot = [0u8; 512];
+    let encrypted = Partition::new(&mut *disk, start, blocks, None).raw(0, &mut boot) && bitlocker::is_bitlocker(&boot);
+    if encrypted && unlocked.is_none() {
+        let mut p = Partition::new(&mut *disk, start, blocks, None);
+        return match bitlocker::open(&mut Raw(&mut p)) {
+            // Its key in the clear: BitLocker suspended, or not switched on yet.
+            Ok(volume) => match volume.unlock_clear() {
+                Ok(key) => open_partition(disk, start, blocks, Some((Unlocked { volume, key }, BY_CLEAR_KEY))),
+                Err(_) => Some((State::Locked(volume), String::new(), false)),
+            },
+            Err(bitlocker::Error::Unsupported(what)) => Some((
+                State::Unreadable(format!("encrypted with BitLocker in a way Chat Computer's own system can't read yet ({what})")),
+                String::new(),
+                false,
+            )),
+            Err(e) => Some((State::Unreadable(format!("encrypted with BitLocker, whose own records on it couldn't be read ({e:?})")), String::new(), false)),
+        };
+    }
+    let mut p = Partition::new(&mut *disk, start, blocks, unlocked.as_ref().map(|(u, _)| u));
+    let fs = Fs::open(&mut p)?;
+    let windows = fs.is_windows(&mut p);
+    let label = fs.label(&mut p);
+    Some((State::Open { fs, bitlocker: unlocked }, label, windows))
+}
+
+/// Whether a partition is the one Chat Computer started from (on the start-up drive, or, if that isn't one started
+/// here, on a USB drive): its files are Chat Computer's own (its settings, the Claude API key among them), not a
+/// drive's to read.
+fn start_up_partition(drive: Drive, start: u64, blocks: u64) -> bool {
+    let (s_start, s_blocks, on_start) = storage::start_partition();
+    s_blocks != 0 && (start, blocks) == (s_start, s_blocks) && if on_start { drive == Drive::Start } else { matches!(drive, Drive::Usb { .. }) }
+}
+
+/// The folder of Chat Computer's own files (its settings, with the Claude API key, and its memory file), which is
+/// never read, wherever it is.
+const OWN_FOLDER: &str = "efi\\chatcomputer-own";
+
+/// Whether a path from a volume's root is Chat Computer's own folder, or in it.
+fn own(rel: &str) -> bool {
+    let rel = rel.to_lowercase();
+    rel == OWN_FOLDER || rel.starts_with(&format!("{OWN_FOLDER}\\"))
+}
+
+/// The volumes on a drive, opened, their letters not given yet.
+fn volumes_on(drive: Drive) -> Vec<Volume> {
+    let unit = storage::usb_unit(drive);
+    let found = storage::with_drive(drive, |disk| {
+        let block_size = disk.block_size();
+        let mut out = Vec::new();
+        for (start, blocks, id) in partitions(disk).into_iter().filter(|&(start, blocks, _)| !start_up_partition(drive, start, blocks)) {
+            if let Some((state, label, windows)) = open_partition(&mut *disk, start, blocks, None) {
+                let usb = unit.as_ref().map(|u| Usb { name: u.name.clone(), serial: u.serial.clone(), lun: u.lun, first: out.is_empty() });
+                out.push(Volume { drive, start, blocks, block_size, id, usb, letter: '?', named: false, label, windows, state });
             }
         }
-        Err(_) => None,
-    }
+        out
+    });
+    found.unwrap_or_default()
 }
 
 /// The hive file's bytes, through the NTFS reader.
@@ -362,12 +722,12 @@ impl registry::Source for HiveFile<'_, '_> {
     }
 }
 
-/// The drive letters Windows' registry (SYSTEM's MountedDevices, on Windows' drive) gives partitions.
+/// The drive letters Windows' registry (SYSTEM's MountedDevices, on Windows' drive) gives volumes.
 fn windows_letters(volumes: &[Volume]) -> Option<Vec<(char, registry::Mounted)>> {
     let w = volumes.iter().find(|v| v.windows && matches!(v.state, State::Open { .. }))?;
-    let State::Open { ntfs, bitlocker } = &w.state else { return None };
+    let State::Open { fs: Fs::Ntfs(ntfs), bitlocker } = &w.state else { return None };
     storage::with_drive(w.drive, |disk| {
-        let mut p = Partition { disk, start: w.start, blocks: w.blocks, unlocked: bitlocker.as_ref().map(|(u, _)| u) };
+        let mut p = Partition::new(disk, w.start, w.blocks, bitlocker.as_ref().map(|(u, _)| u));
         let e = ntfs.find(&mut p, SYSTEM_HIVE).ok()?;
         let f = ntfs.open_file(&mut p, e.record).ok()?;
         let mut file = HiveFile { v: ntfs, p: &mut p, f };
@@ -376,29 +736,45 @@ fn windows_letters(volumes: &[Volume]) -> Option<Vec<(char, registry::Mounted)>>
     })?
 }
 
-/// Gives each volume its letter: Windows' where its registry has one (`letters`); else Windows' own drive C: (if no
-/// drive here has it), and the others the next letters from D: that neither a drive here nor Windows (for another
-/// drive, such as a USB stick) has, in order, as Windows gives a drive it hasn't seen.
-fn name_volumes(volumes: &mut [Volume], letters: &[(char, registry::Mounted)]) {
-    let mut used: Vec<char> = Vec::new();
-    for v in volumes.iter_mut() {
+/// The letter Windows' registry gives a volume: by its partition (a GPT partition's GUID, an MBR disk's signature and
+/// where it starts), or, for a USB stick's first volume, by the stick (its serial number and logical unit).
+fn registry_letter(v: &Volume, letters: &[(char, registry::Mounted)]) -> Option<char> {
+    letters
+        .iter()
+        .find(|(_, m)| match m {
+            registry::Mounted::Device(_) => v.usb.as_ref().is_some_and(|u| u.first && u.serial.as_deref().is_some_and(|s| m.is_usb(s, u.lun))),
+            _ => *m == v.id,
+        })
+        .map(|(l, _)| *l)
+}
+
+/// The first letter from D: that no volume here has (`used`) and, if one's left, that Windows hasn't given another
+/// drive (`taken`: a USB stick not plugged in, say), as Windows gives a drive it hasn't seen.
+fn next_letter(used: &[char], taken: &[char]) -> char {
+    ('D'..='Z').find(|c| !used.contains(c) && !taken.contains(c)).or_else(|| ('D'..='Z').find(|c| !used.contains(c))).unwrap_or('?')
+}
+
+/// Gives the volumes from `new` on their letters, the others keeping theirs: Windows' where its registry has one
+/// (`letters`) that no volume here has; else Windows' own drive C: (if no drive here has it), and the others the
+/// next letters, as `next_letter` says. All of them (`new` 0): Windows' letters first, the rest in order.
+fn name_volumes(volumes: &mut [Volume], new: usize, letters: &[(char, registry::Mounted)]) {
+    let mut used: Vec<char> = volumes[..new].iter().map(|v| v.letter).collect();
+    for v in volumes[new..].iter_mut() {
         v.named = false;
-        if let Some((l, _)) = letters.iter().find(|(_, m)| *m == v.id) {
-            v.letter = *l;
+        if let Some(l) = registry_letter(v, letters)
+            && !used.contains(&l)
+        {
+            v.letter = l;
             v.named = true;
-            used.push(*l);
+            used.push(l);
         }
     }
     let taken: Vec<char> = letters.iter().map(|(l, _)| *l).collect();
     // (With no Windows drive read, a locked one on the start-up drive is most likely Windows'.)
     let windows_found = volumes.iter().any(|v| v.windows);
-    for v in volumes.iter_mut().filter(|v| !v.named) {
-        let likely_windows = v.windows || (!windows_found && v.drive == 0 && matches!(v.state, State::Locked(_)));
-        v.letter = if likely_windows && !used.contains(&'C') {
-            'C'
-        } else {
-            ('D'..='Z').find(|c| !used.contains(c) && !taken.contains(c)).unwrap_or('?')
-        };
+    for v in volumes[new..].iter_mut().filter(|v| !v.named) {
+        let likely_windows = v.windows || (!windows_found && v.drive == Drive::Start && matches!(v.state, State::Locked(_)));
+        v.letter = if likely_windows && !used.contains(&'C') { 'C' } else { next_letter(&used, &taken) };
         used.push(v.letter);
     }
     // One Windows drive: C: (another with Windows' folders, an old Windows on a second drive say, is just a drive).
@@ -410,7 +786,8 @@ fn name_volumes(volumes: &mut [Volume], letters: &[(char, registry::Mounted)]) {
     volumes.sort_by_key(|v| v.letter);
 }
 
-/// What a volume is, for the computer's status: "C: Windows' drive (NTFS, 512.1 GB)".
+/// What a volume is, for the computer's status: "C: Windows' drive (NTFS, 512.1 GB)", "E: “MY STICK” (FAT32, 32.0
+/// GB, on the USB drive “SanDisk Ultra”)".
 fn describe(v: &Volume, registry_read: bool) -> String {
     let what = if v.windows {
         String::from("Windows' drive")
@@ -419,23 +796,29 @@ fn describe(v: &Volume, registry_read: bool) -> String {
     } else {
         String::from("a drive")
     };
+    let mut more = String::new();
+    if let Some(u) = &v.usb {
+        more += &format!(", on the USB drive \u{201C}{}\u{201D}", u.name);
+    }
+    if registry_read && !v.named {
+        more += ", its letter given here, as Windows hasn't named it";
+    }
     let size = size(v.blocks * v.block_size as u64);
-    let given = if registry_read && !v.named { ", its letter given here, as Windows hasn't named it" } else { "" };
     match &v.state {
-        State::Open { bitlocker: Some((_, how)), .. } => format!("{}: {what} (NTFS, {size}, {how}{given})", v.letter),
-        State::Open { .. } => format!("{}: {what} (NTFS, {size}{given})", v.letter),
+        State::Open { fs, bitlocker: Some((_, how)) } => format!("{}: {what} ({}, {size}, {how}{more})", v.letter, fs.name()),
+        State::Open { fs, .. } => format!("{}: {what} ({}, {size}{more})", v.letter, fs.name()),
         State::Locked(b) => {
             let ids: Vec<String> = b.recovery_key_ids().iter().map(|id| String::from(&id[..8])).collect();
-            format!("{}: encrypted with BitLocker, locked ({size}; its recovery key's ID starts {}{given})", v.letter, ids.join(" or "))
+            format!("{}: encrypted with BitLocker, locked ({size}{more}; its recovery key's ID starts {})", v.letter, ids.join(" or "))
         }
-        State::Unreadable(why) => format!("{}: {why} ({size}{given})", v.letter),
+        State::Unreadable(why) => format!("{}: {why} ({size}{more})", v.letter),
     }
 }
 
 /// The computer's status's line about files, from the volumes found.
 fn said_of(volumes: &[Volume], registry_read: bool) -> String {
     if volumes.is_empty() {
-        return String::from("none: no NTFS partition on this PC's drives");
+        return String::from("none: no NTFS, exFAT or FAT volume on this PC's drives, or on a USB drive");
     }
     let mut said = volumes.iter().map(|v| describe(v, registry_read)).collect::<Vec<String>>().join("; ");
     said += ", read only";
@@ -447,23 +830,21 @@ fn said_of(volumes: &[Volume], registry_read: bool) -> String {
     said
 }
 
-/// Finds the volumes on the PC's drives, and gives them their letters. Says what it found, for the log.
+/// Finds the volumes on the PC's drives and the USB drives plugged in, and gives them their letters. Says what it
+/// found, for the log.
 pub fn init() -> String {
+    let changes = usb::storage::changes();
+    let drives = storage::drives();
     let mut volumes: Vec<Volume> = Vec::new();
-    for drive in 0..storage::drives() {
-        let _ = storage::with_drive(drive, |disk| {
-            let block_size = disk.block_size();
-            for (start, blocks, id) in partitions(disk) {
-                if let Some((state, label, windows)) = open_partition(&mut *disk, start, blocks, None) {
-                    volumes.push(Volume { drive, start, blocks, block_size, id, letter: '?', named: false, label, windows, state });
-                }
-            }
-        });
+    for &drive in &drives {
+        volumes.extend(volumes_on(drive));
     }
     let letters = windows_letters(&volumes);
-    name_volumes(&mut volumes, letters.as_deref().unwrap_or(&[]));
+    name_volumes(&mut volumes, 0, letters.as_deref().unwrap_or(&[]));
     let said = said_of(&volumes, letters.is_some());
     *VOLUMES.lock() = volumes;
+    *LETTERS.lock() = letters;
+    *USB_SEEN.lock() = (drives.into_iter().filter(|d| matches!(d, Drive::Usb { .. })).collect(), changes);
     *SAID.lock() = Some(said.clone());
     format!("files: {said}")
 }
@@ -503,13 +884,79 @@ pub fn wipe(s: &mut String) {
     s.clear();
 }
 
-/// From the main loop: a drive unlocked with a recovery key typed, if one was; what came of it, for the screen.
-/// (Stretching the key takes a second or so: the screen waits.)
-pub fn work() -> Option<String> {
-    let mut typed = RECOVERY_KEY.lock().take()?;
-    let said = unlock(&typed);
-    wipe(&mut typed);
-    Some(said)
+/// From the main loop: USB drives plugged in or out (or cards put in or taken out), their volumes found and given
+/// letters, or forgotten; and a drive unlocked with a recovery key typed, if one was. What came of it, for the screen.
+/// (Stretching a key takes a second or so: the screen waits.)
+pub fn work() -> Vec<String> {
+    let mut said = Vec::new();
+    if usb::storage::changes() != USB_SEEN.lock().1 {
+        said.extend(usb_changed());
+    }
+    if let Some(mut typed) = RECOVERY_KEY.lock().take() {
+        said.push(unlock(&typed));
+        wipe(&mut typed);
+    }
+    said
+}
+
+/// What's on a USB drive's medium that came, for the screen: its volumes, or why none can be read.
+fn arrived(v: &[&Volume], name: &str, bytes: u64) -> String {
+    if v.is_empty() {
+        return format!(
+            "USB drive \u{201C}{name}\u{201D} ({}): nothing on it can be read here: Chat Computer's own system reads NTFS, \
+             exFAT and FAT, as Windows formats drives (not a Mac's or Linux's own).",
+            size(bytes)
+        );
+    }
+    let all: Vec<String> = v
+        .iter()
+        .map(|v| {
+            let label = if v.label.is_empty() { String::new() } else { format!(" \u{201C}{}\u{201D}", v.label) };
+            match &v.state {
+                State::Open { fs, .. } => format!("{}:{label} ({}, {})", v.letter, fs.name(), size(v.blocks * v.block_size as u64)),
+                State::Locked(_) => format!("{}: (encrypted with BitLocker: to read it, type its recovery key in the message box)", v.letter),
+                State::Unreadable(why) => format!("{}: ({why})", v.letter),
+            }
+        })
+        .collect();
+    let readable = v.iter().any(|v| matches!(v.state, State::Open { .. }));
+    format!("USB drive \u{201C}{name}\u{201D}: {}.{}", all.join(", "), if readable { " Claude can read its files." } else { "" })
+}
+
+/// The USB drives' media now: those gone forgotten, with their volumes; those new looked at, and their volumes given
+/// letters (the other drives keep theirs). What came and went, for the screen.
+fn usb_changed() -> Vec<String> {
+    let changes = usb::storage::changes();
+    let now: Vec<Drive> = storage::drives().into_iter().filter(|d| matches!(d, Drive::Usb { .. })).collect();
+    let seen = core::mem::replace(&mut *USB_SEEN.lock(), (now.clone(), changes)).0;
+    let mut said = Vec::new();
+    let mut volumes = core::mem::take(&mut *VOLUMES.lock());
+    let (gone, kept): (Vec<Volume>, Vec<Volume>) = volumes.drain(..).partition(|v| matches!(v.drive, Drive::Usb { .. }) && !now.contains(&v.drive));
+    volumes = kept;
+    for v in &gone {
+        let label = if v.label.is_empty() { String::new() } else { format!(" (\u{201C}{}\u{201D})", v.label) };
+        said.push(format!("{}:{label} is gone: its USB drive was unplugged, or its card taken out.", v.letter));
+    }
+    let old = volumes.len();
+    let mut new_drives = Vec::new();
+    for &drive in now.iter().filter(|d| !seen.contains(d)) {
+        let found = volumes_on(drive);
+        new_drives.push((drive, found.len()));
+        volumes.extend(found);
+    }
+    if volumes.len() > old {
+        let letters = LETTERS.lock().clone();
+        name_volumes(&mut volumes, old, letters.as_deref().unwrap_or(&[]));
+    }
+    for (drive, _) in &new_drives {
+        let Some(unit) = storage::usb_unit(*drive) else { continue };
+        let on: Vec<&Volume> = volumes.iter().filter(|v| v.drive == *drive).collect();
+        said.push(arrived(&on, &unit.name, unit.medium.blocks * unit.medium.block_size as u64));
+    }
+    let registry_read = LETTERS.lock().is_some();
+    *SAID.lock() = Some(said_of(&volumes, registry_read));
+    *VOLUMES.lock() = volumes;
+    said
 }
 
 fn unlock(typed: &str) -> String {
@@ -540,11 +987,14 @@ fn unlock_in(volumes: &mut Vec<Volume>, typed: &str) -> String {
         let v = &mut volumes[i];
         (v.state, v.label, v.windows) = (state, label, windows);
         // Windows' drive unlocked: its registry says which drive has which letter.
-        let letters = windows_letters(volumes);
-        if windows && letters.is_some() {
-            name_volumes(volumes, letters.as_deref().unwrap_or(&[]));
+        if windows {
+            let letters = windows_letters(volumes);
+            if letters.is_some() {
+                name_volumes(volumes, 0, letters.as_deref().unwrap_or(&[]));
+                *LETTERS.lock() = letters;
+            }
         }
-        *SAID.lock() = Some(said_of(volumes, letters.is_some()));
+        *SAID.lock() = Some(said_of(volumes, LETTERS.lock().is_some()));
         let v = volumes.iter().find(|v| v.drive == drive && v.start == start).unwrap();
         let what = if v.windows { String::from(" (Windows' drive)") } else if v.label.is_empty() { String::new() } else { format!(" (\u{201C}{}\u{201D})", v.label) };
         return format!("{}:{what} is unlocked: Claude can read its files now, until Chat Computer restarts.", v.letter);
@@ -573,8 +1023,8 @@ fn windows_letter() -> char {
     VOLUMES.lock().iter().find(|v| v.windows).map_or('C', |v| v.letter)
 }
 
-/// Runs `f` with the volume of drive letter `letter` (Err if there's none to read: the reason, for Claude).
-fn with<T>(letter: char, f: impl FnOnce(&ntfs::Volume, &mut Partition) -> T) -> Result<T, String> {
+/// Runs `f` with the file system of drive letter `letter` (Err if there's none to read: the reason, for Claude).
+fn with<T>(letter: char, f: impl FnOnce(&Fs, &mut Partition) -> T) -> Result<T, String> {
     let volumes = core::mem::take(&mut *VOLUMES.lock());
     let result = match volumes.iter().find(|v| v.letter == letter) {
         None if volumes.is_empty() => {
@@ -587,11 +1037,14 @@ fn with<T>(letter: char, f: impl FnOnce(&ntfs::Volume, &mut Partition) -> T) -> 
             Err(format!("There's no drive {letter}: here (its drives are {})", all.join(", ")))
         }
         Some(v) => match &v.state {
-            State::Open { ntfs, bitlocker } => storage::with_drive(v.drive, |disk| {
-                let mut p = Partition { disk, start: v.start, blocks: v.blocks, unlocked: bitlocker.as_ref().map(|(u, _)| u) };
-                f(ntfs, &mut p)
+            State::Open { fs, bitlocker } => storage::with_drive(v.drive, |disk| {
+                let mut p = Partition::new(disk, v.start, v.blocks, bitlocker.as_ref().map(|(u, _)| u));
+                f(fs, &mut p)
             })
-            .ok_or_else(|| String::from("the drive is busy")),
+            .ok_or_else(|| match v.usb {
+                Some(_) => format!("{letter}: is gone: its USB drive was unplugged, or its card taken out"),
+                None => String::from("the drive is busy"),
+            }),
             State::Locked(b) => Err(locked_why(letter, b)),
             State::Unreadable(why) => Err(format!("{letter}: is {why}")),
         },
@@ -657,18 +1110,18 @@ fn error_text(e: ntfs::Error, what: &str) -> String {
 
 /// Whether to leave a file or folder out of lists and searches: Windows' own hidden system files (desktop.ini, the
 /// recycle bin), as File Explorer does.
-fn left_out(e: &ntfs::Entry) -> bool {
-    e.attributes & ntfs::HIDDEN != 0 && e.attributes & ntfs::SYSTEM != 0
+fn left_out(e: &Entry) -> bool {
+    e.hidden && e.system
 }
 
 /// The file or folder at `rel` (links on the way followed, to the end), its path with the names as the drive has them,
 /// and the first link followed, if one was.
-fn found(v: &ntfs::Volume, p: &mut Partition, letter: char, rel: &str) -> Result<(ntfs::Entry, String, Option<String>), String> {
+fn found(fs: &Fs, p: &mut Partition, letter: char, rel: &str) -> Result<(Entry, String, Option<String>), String> {
     let shown = |rel: &str| shown(letter, rel);
     let mut parts: VecDeque<String> = rel.split(['\\', '/']).filter(|s| !s.is_empty()).map(String::from).collect();
-    let mut way: Vec<ntfs::Entry> = Vec::new();
+    let mut way: Vec<Entry> = Vec::new();
     let mut links: Vec<String> = Vec::new();
-    let path = |way: &[ntfs::Entry]| way.iter().map(|e| e.name.as_str()).collect::<Vec<&str>>().join("\\");
+    let path = |way: &[Entry]| way.iter().map(|e| e.name.as_str()).collect::<Vec<&str>>().join("\\");
     while let Some(part) = parts.pop_front() {
         if part == "." {
             continue;
@@ -677,11 +1130,14 @@ fn found(v: &ntfs::Volume, p: &mut Partition, letter: char, rel: &str) -> Result
             way.pop();
             continue;
         }
-        let here = way.last().cloned().unwrap_or_else(ntfs::root);
+        let here = way.last().cloned().unwrap_or_else(|| fs.root());
         if !here.folder {
             return Err(error_text(ntfs::Error::NotAFolder, &shown(&path(&way))));
         }
-        let e = v.child(p, here.record, &part).map_err(|err| error_text(err, &shown(&joined(&path(&way), &part))))?;
+        let e = fs.child(p, &here, &part).map_err(|err| error_text(err, &shown(&joined(&path(&way), &part))))?;
+        if own(&joined(&path(&way), &e.name)) {
+            return Err(format!("{}: Chat Computer's own folder (its settings and memory), which isn't read here", shown(&joined(&path(&way), &e.name))));
+        }
         if !e.link {
             way.push(e);
             continue;
@@ -690,7 +1146,7 @@ fn found(v: &ntfs::Volume, p: &mut Partition, letter: char, rel: &str) -> Result
         if links.len() == MOST_LINKS {
             return Err(format!("{at}: a link to a link to... (more than {MOST_LINKS}), which Chat Computer's own system stops following"));
         }
-        let target = v.link_target(p, e.record).map_err(|err| error_text(err, &at))?;
+        let target = fs.link_target(p, &e).map_err(|err| error_text(err, &at))?;
         let Some(target) = target else { return Err(error_text(ntfs::Error::Link, &at)) };
         // A path from this drive's letter (or from / on it, or /mnt/c for a link made under Linux on C:) goes from
         // the root; one to another drive, a network's or Linux's own, isn't followed; others go from the link's folder.
@@ -716,15 +1172,15 @@ fn found(v: &ntfs::Volume, p: &mut Partition, letter: char, rel: &str) -> Result
         links.push(at);
     }
     let real = path(&way);
-    Ok((way.pop().unwrap_or_else(ntfs::root), real, links.into_iter().next()))
+    Ok((way.pop().unwrap_or_else(|| fs.root()), real, links.into_iter().next()))
 }
 
 /// After a file's or folder's name in a list: "\\" for a folder, and for a file its size and when it was changed; a
 /// link says where it goes, and a file whose bytes aren't here, or can't be read here, says so.
-fn details(v: &ntfs::Volume, p: &mut Partition, e: &ntfs::Entry) -> String {
+fn details(fs: &Fs, p: &mut Partition, e: &Entry) -> String {
     let slash = if e.folder { "\\" } else { "" };
     if e.link {
-        return match v.link_target(p, e.record) {
+        return match fs.link_target(p, e) {
             Ok(Some(t)) => format!("{slash} (a link to {t})"),
             _ => format!("{slash} (a link)"),
         };
@@ -733,10 +1189,10 @@ fn details(v: &ntfs::Volume, p: &mut Partition, e: &ntfs::Entry) -> String {
         return String::from(slash);
     }
     let mut d = format!("{}, {}", size(e.size), date(e.modified));
-    if e.attributes & ntfs::ENCRYPTED != 0 {
+    if e.encrypted {
         d += ", encrypted by Windows";
     } else if e.tag != 0 {
-        match v.open_file(p, e.record) {
+        match fs.open_file(p, e) {
             Err(ntfs::Error::Online(_)) => d += ", online only: not on this PC",
             Err(ntfs::Error::Compacted) => d += ", compressed by Windows",
             _ => {}
@@ -753,12 +1209,12 @@ fn by_way_of(link: &Option<String>) -> String {
 /// The files and folders in a folder (list_files).
 pub fn list(path: &str) -> Result<String, String> {
     let (letter, rel) = inside(path);
-    with(letter, |v, p| {
-        let (here, rel, link) = found(v, p, letter, &rel)?;
+    with(letter, |fs, p| {
+        let (here, rel, link) = found(fs, p, letter, &rel)?;
         if !here.folder {
             return Err(error_text(ntfs::Error::NotAFolder, &shown(letter, &rel)));
         }
-        let all: Vec<ntfs::Entry> = v.list(p, here.record).map_err(|e| error_text(e, &shown(letter, &rel)))?.into_iter().filter(|e| !left_out(e)).collect();
+        let all: Vec<Entry> = fs.list(p, &here).map_err(|e| error_text(e, &shown(letter, &rel)))?.into_iter().filter(|e| !left_out(e)).collect();
         let (folders, files) = (all.iter().filter(|e| e.folder).count(), all.iter().filter(|e| !e.folder).count());
         let mut out = format!(
             "{}{}: {folders} folder{}, {files} file{}",
@@ -768,8 +1224,8 @@ pub fn list(path: &str) -> Result<String, String> {
             if files == 1 { "" } else { "s" }
         );
         for e in all.iter().take(MOST_LISTED) {
-            out += &format!("\n{}{}", e.name, details(v, p, e));
-            if e.attributes & ntfs::HIDDEN != 0 {
+            out += &format!("\n{}{}", e.name, details(fs, p, e));
+            if e.hidden {
                 out += " (hidden)";
             }
         }
@@ -785,20 +1241,20 @@ pub fn list(path: &str) -> Result<String, String> {
 /// kind is said to be one.
 pub fn read(path: &str, from: u64) -> Result<Read, String> {
     let (letter, rel) = inside(path);
-    with(letter, |v, p| {
-        let (e, rel, link) = found(v, p, letter, &rel)?;
-        let f = v.open_file(p, e.record).map_err(|err| error_text(err, &shown(letter, &rel)))?;
+    with(letter, |fs, p| {
+        let (e, rel, link) = found(fs, p, letter, &rel)?;
+        let f = fs.open_file(p, &e).map_err(|err| error_text(err, &shown(letter, &rel)))?;
         let said = |text: String| Ok(Read { text, attachment: None });
         let fail = |err: ntfs::Error| error_text(err, &shown(letter, &rel));
         let name = format!("{}{}", shown(letter, &rel), by_way_of(&link));
         let mut head = [0u8; 32];
-        let n = v.read(p, &f, 0, &mut head).map_err(fail)?;
+        let n = fs.read(p, &f, 0, &mut head).map_err(fail)?;
         match kind_of(&head[..n], &rel) {
             Kind::Picture(media) => {
                 if f.size > MOST_SHOWN {
                     return said(format!("{name} is a picture of {}: too big for Chat Computer's own system to open.", size(f.size)));
                 }
-                let data = whole(v, p, &f, MOST_SHOWN).map_err(fail)?;
+                let data = whole(fs, p, &f, MOST_SHOWN).map_err(fail)?;
                 let pixels = dimensions(media, &data);
                 let head = format!(
                     "{name} ({}{}, changed {})",
@@ -840,7 +1296,7 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
                 if f.size > MOST_PDF {
                     return said(format!("{name} is a PDF of {}: too big to send to Claude (at most {}).", size(f.size), size(MOST_PDF)));
                 }
-                let data = whole(v, p, &f, MOST_PDF).map_err(fail)?;
+                let data = whole(fs, p, &f, MOST_PDF).map_err(fail)?;
                 let text = format!("{name} ({}, changed {}): the PDF is below, its pages' words and pictures.", size(f.size), date(e.modified));
                 Ok(Read { text, attachment: Some(Attachment::Pdf(data)) })
             }
@@ -848,7 +1304,7 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
                 said(format!("{name} is {}: too big for Chat Computer's own system to open.", size(f.size)))
             }
             Kind::Office => {
-                let data = whole(v, p, &f, MOST_OFFICE).map_err(fail)?;
+                let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
                 match office::read(&data) {
                     Ok((kind, words)) => said(part_of(&words, from, &format!("{name} ({}, {}, changed {}), its words", kind.name(), size(f.size), date(e.modified)))),
                     Err(office::Error::Zip(zip::Error::Encrypted)) => said(format!("{name}: a password protects it, so it can't be read here.")),
@@ -856,7 +1312,7 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
                 }
             }
             Kind::Zip => {
-                let data = whole(v, p, &f, MOST_OFFICE).map_err(fail)?;
+                let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
                 match zip::Archive::open(&data) {
                     Ok(archive) => {
                         let files: Vec<&zip::Entry> = archive.entries().iter().filter(|e| !e.is_folder()).collect();
@@ -887,7 +1343,7 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
                     return said(format!("{} is {} long: nothing from byte {from}.", shown(letter, &rel), size(f.size)));
                 }
                 let mut buf = vec![0u8; (f.size - from.min(f.size)).min(READ_AT_ONCE as u64) as usize];
-                let n = v.read(p, &f, from, &mut buf).map_err(fail)?;
+                let n = fs.read(p, &f, from, &mut buf).map_err(fail)?;
                 buf.truncate(n);
                 let Some((text, used)) = as_text(&buf, from == 0) else {
                     let kind = rel.rsplit('.').next().filter(|k| k.len() <= 5 && *k != rel).unwrap_or("binary");
@@ -934,14 +1390,14 @@ fn seen_edge(w: u32, h: u32) -> u32 {
 pub fn picture(path: &str, w: u32, h: u32, ground: u32) -> Result<(String, picture::Picture), String> {
     let (letter, rel) = inside(path);
     let background = [(ground >> 16) as u8, (ground >> 8) as u8, ground as u8];
-    with(letter, |v, p| {
-        let (e, rel, link) = found(v, p, letter, &rel)?;
-        let f = v.open_file(p, e.record).map_err(|err| error_text(err, &shown(letter, &rel)))?;
+    with(letter, |fs, p| {
+        let (e, rel, link) = found(fs, p, letter, &rel)?;
+        let f = fs.open_file(p, &e).map_err(|err| error_text(err, &shown(letter, &rel)))?;
         let name = format!("{}{}", shown(letter, &rel), by_way_of(&link));
         if f.size > MOST_SHOWN {
             return Err(format!("{name} is {}: too big to show here.", size(f.size)));
         }
-        let data = whole(v, p, &f, MOST_SHOWN).map_err(|err| error_text(err, &shown(letter, &rel)))?;
+        let data = whole(fs, p, &f, MOST_SHOWN).map_err(|err| error_text(err, &shown(letter, &rel)))?;
         match picture::decode_within(&data, w, h, background, decoding_room()) {
             Ok(pic) => {
                 let full = picture::size(&data).map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default();
@@ -1014,31 +1470,31 @@ pub fn find(words: &str, from: &str) -> Result<String, String> {
     if wanted.is_empty() {
         return Err(String::from("Say which words the name has."));
     }
-    with(letter, |v, p| {
-        let (top, rel, _) = found(v, p, letter, &rel)?;
+    with(letter, |fs, p| {
+        let (top, rel, _) = found(fs, p, letter, &rel)?;
         if !top.folder {
             return Err(error_text(ntfs::Error::NotAFolder, &shown(letter, &rel)));
         }
         let started = time::uptime_ms();
-        let mut queue: VecDeque<(u64, String)> = VecDeque::from([(top.record, rel.clone())]);
+        let mut queue: VecDeque<(Entry, String)> = VecDeque::from([(top, rel.clone())]);
         let mut found: Vec<String> = Vec::new();
         let mut looked = 0usize;
         let mut cut_short = false;
-        while let Some((record, path)) = queue.pop_front() {
+        while let Some((folder, path)) = queue.pop_front() {
             if looked >= MOST_FOLDERS || time::uptime_ms() - started > SEARCH_MS {
                 cut_short = true;
                 break;
             }
             looked += 1;
-            let Ok(entries) = v.list(p, record) else { continue };
+            let Ok(entries) = fs.list(p, &folder) else { continue };
             for e in entries.into_iter().filter(|e| !left_out(e)) {
                 let full = joined(&path, &e.name);
                 let lower = e.name.to_lowercase();
                 if wanted.iter().all(|w| lower.contains(w.as_str())) && found.len() < MOST_FOUND {
-                    found.push(format!("{}{}", shown(letter, &full), details(v, p, &e)));
+                    found.push(format!("{}{}", shown(letter, &full), details(fs, p, &e)));
                 }
-                if e.folder && !e.link && e.attributes & ntfs::HIDDEN == 0 {
-                    queue.push_back((e.record, full));
+                if e.folder && !e.link && !e.hidden && !own(&full) {
+                    queue.push_back((e, full));
                 }
             }
             if found.len() >= MOST_FOUND {

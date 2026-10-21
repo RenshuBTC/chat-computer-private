@@ -1,6 +1,7 @@
 //! Storage: the drive Chat Computer's start-up partition is on, and Chat Computer's memory file in that partition
-//! (`\EFI\chatcomputer-own\memory.bin`), where the conversation is kept across restarts; and the PC's other drives
-//! (NVMe and SATA), for Windows' other drives (D:...), only ever read.
+//! (`\EFI\chatcomputer-own\memory.bin`), where the conversation is kept across restarts; the PC's other drives
+//! (NVMe and SATA), for Windows' other drives (D:...); and USB drives (usb/storage.rs: sticks, external disks, cards
+//! in a card reader), as they're plugged in. All but the memory file only ever read.
 //!
 //! The start-up stage says which drive and partition it was started from (the firmware's device path for it: the
 //! PCI devices on the way to the controller, the NVMe namespace or SATA port, the partition's first block). The
@@ -12,8 +13,8 @@
 pub mod ahci;
 pub mod nvme;
 
-use crate::pci;
 use crate::sync::SpinLock;
+use crate::{pci, usb};
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
@@ -21,11 +22,15 @@ use alloc::vec;
 use alloc::vec::Vec;
 use bootinfo::StartDisk;
 
-/// What a drive's driver does: whole blocks, a page (4 KiB) at most at a time.
+/// What a drive's driver does: whole blocks, `most` bytes (a page, 4 KiB, unless it says more) at most at a time.
 pub trait Disk: Send {
     /// Bytes in a block (its logical sector): 512 or 4096, mostly.
     fn block_size(&self) -> u32;
     fn blocks(&self) -> u64;
+    /// The most bytes a read can bring in.
+    fn most(&self) -> usize {
+        4096
+    }
     fn read(&mut self, lba: u64, out: &mut [u8]) -> Result<(), String>;
     fn write(&mut self, lba: u64, data: &[u8]) -> Result<(), String>;
     /// Makes sure what was written is on the drive, not just in its cache.
@@ -67,14 +72,25 @@ static START_IS: SpinLock<Option<(pci::Address, Option<u32>)>> = SpinLock::new(N
 /// they're used, as the start-up drive is.
 static OTHERS: SpinLock<Vec<Option<Box<dyn Disk>>>> = SpinLock::new(Vec::new());
 
+/// The start-up partition's first block and size in blocks (0: not known), and whether it's on the start-up drive
+/// started here (else on a drive of another kind: a USB stick's, say). Its files (Chat Computer's settings, the
+/// Claude API key among them) are Chat Computer's own, never read as a drive's (files.rs).
+static START_PARTITION: SpinLock<(u64, u64, bool)> = SpinLock::new((0, 0, false));
+
+pub fn start_partition() -> (u64, u64, bool) {
+    *START_PARTITION.lock()
+}
+
 /// Starts the drive the start-up partition is on. Says which, or why it couldn't, for the log.
 pub fn open_start(d: &StartDisk) -> Result<String, String> {
+    *START_PARTITION.lock() = (d.partition_start, d.partition_blocks, false);
     let result = if d.kind == bootinfo::DISK_UNKNOWN {
         Err(String::from("the start-up partition isn't on an NVMe or SATA drive"))
     } else {
         start_disk(d).map(|disk| {
             let said = disk.describe();
             *START.lock() = Some(disk);
+            START_PARTITION.lock().2 = true;
             said
         })
     };
@@ -95,21 +111,71 @@ pub fn with_start<T>(f: impl FnOnce(&mut dyn Disk) -> T) -> Option<T> {
     Some(result)
 }
 
-/// How many drives there are to read: the start-up drive (0) and the others (1 on).
-pub fn drives() -> usize {
-    1 + OTHERS.lock().len()
+/// A drive to read: the start-up drive, one of the PC's other drives (by its number), or a USB drive's medium (the
+/// drive's own number, its logical unit, and which medium in it: a card taken out and another put in is another).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Drive {
+    Start,
+    Other(usize),
+    Usb { id: u64, lun: u8, generation: u64 },
 }
 
-/// Runs `f` with drive `i` (0: the start-up drive; 1 on: the others), nothing locked meanwhile (None if there's no
-/// such drive, or it isn't started).
-pub fn with_drive<T>(i: usize, f: impl FnOnce(&mut dyn Disk) -> T) -> Option<T> {
-    if i == 0 {
-        return with_start(f);
+/// The drives there are to read: the start-up drive, the others, and the USB drives' media.
+pub fn drives() -> Vec<Drive> {
+    let mut out = vec![Drive::Start];
+    out.extend((0..OTHERS.lock().len()).map(Drive::Other));
+    out.extend(usb::storage::units().iter().map(|u| Drive::Usb { id: u.id, lun: u.lun, generation: u.medium.generation }));
+    out
+}
+
+/// What's known of a USB drive's medium: its drive's name, whether it's a removable one, its serial number.
+pub fn usb_unit(drive: Drive) -> Option<usb::storage::Unit> {
+    let Drive::Usb { id, lun, generation } = drive else { return None };
+    usb::storage::units().into_iter().find(|u| u.id == id && u.lun == lun && u.medium.generation == generation)
+}
+
+/// Runs `f` with a drive, nothing locked meanwhile (None if there's no such drive now, or it isn't started).
+pub fn with_drive<T>(drive: Drive, f: impl FnOnce(&mut dyn Disk) -> T) -> Option<T> {
+    match drive {
+        Drive::Start => with_start(f),
+        Drive::Other(i) => {
+            let mut disk = OTHERS.lock().get_mut(i)?.take()?;
+            let result = f(disk.as_mut());
+            OTHERS.lock()[i] = Some(disk);
+            Some(result)
+        }
+        Drive::Usb { .. } => Some(f(&mut UsbDisk(usb_unit(drive)?))),
     }
-    let mut disk = OTHERS.lock().get_mut(i - 1)?.take()?;
-    let result = f(disk.as_mut());
-    OTHERS.lock()[i - 1] = Some(disk);
-    Some(result)
+}
+
+/// A USB drive's medium, read through usb/storage.rs.
+struct UsbDisk(usb::storage::Unit);
+
+impl Disk for UsbDisk {
+    fn block_size(&self) -> u32 {
+        self.0.medium.block_size
+    }
+    fn blocks(&self) -> u64 {
+        self.0.medium.blocks
+    }
+    fn most(&self) -> usize {
+        usb::storage::MOST
+    }
+    fn read(&mut self, lba: u64, out: &mut [u8]) -> Result<(), String> {
+        usb::storage::read(&self.0, lba, out)
+    }
+    fn write(&mut self, _lba: u64, _data: &[u8]) -> Result<(), String> {
+        Err(String::from("USB drives are only read"))
+    }
+    fn flush(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    fn shut_down(&mut self) -> bool {
+        true
+    }
+    fn describe(&self) -> String {
+        format!("USB drive \"{}\"", self.0.name)
+    }
 }
 
 /// Starts the PC's other drives: every NVMe controller's first namespace, and every SATA controller's ports with a
@@ -195,11 +261,12 @@ pub struct Partition<'a> {
 
 impl fat::Sectors for Partition<'_> {
     fn read(&mut self, sector: u64, buf: &mut [u8]) -> bool {
-        // FAT's sectors are the drive's blocks (checked in `open`).
-        if buf.len() as u32 != self.disk.block_size() || sector >= self.blocks {
+        // FAT's sectors are the drive's blocks (checked in `open`): a block at a time.
+        let bs = self.disk.block_size() as usize;
+        if buf.is_empty() || !buf.len().is_multiple_of(bs) || sector.checked_add((buf.len() / bs) as u64).is_none_or(|end| end > self.blocks) {
             return false;
         }
-        self.disk.read(self.start + sector, buf).is_ok()
+        buf.chunks_mut(bs).enumerate().all(|(k, block)| self.disk.read(self.start + sector + k as u64, block).is_ok())
     }
 }
 
@@ -242,7 +309,7 @@ struct BlockSized<'a, 'b>(&'a mut Partition<'b>);
 impl fat::Sectors for BlockSized<'_, '_> {
     fn read(&mut self, sector: u64, buf: &mut [u8]) -> bool {
         let size = self.0.disk.block_size() as usize;
-        if buf.len() == size {
+        if buf.len() >= size {
             return self.0.read(sector, buf);
         }
         let mut whole = vec![0u8; size];

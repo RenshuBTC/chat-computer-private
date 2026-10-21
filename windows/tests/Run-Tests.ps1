@@ -752,6 +752,72 @@ Assert-True ($noKey -match '(?m)^clock-offset-minutes = -300\r$') 'own settings:
 Assert-Equal '' (Get-OwnSettingsKey $noKey) 'own settings: no key read back'
 Assert-Equal $ownText ([Text.Encoding]::ASCII.GetString([Text.Encoding]::ASCII.GetBytes($ownText))) 'own settings: plain ASCII'
 Assert-True ((Get-ClockOffsetMinutes) -is [int]) 'own settings: the clock offset is a number of minutes'
+Assert-True ($ownText -notmatch 'memory-id') 'own settings: no memory id without a memory file'
+Assert-Equal $null (Get-OwnSettingsMemoryId $ownText) 'own settings: no memory id read back'
+$withMemory = New-OwnSettingsText -Key $fakeKey -ClockOffsetMinutes 0 -MemoryId ([uint32]0x0A1B2C3D)
+Assert-True ($withMemory -match '(?m)^memory-id = 0a1b2c3d\r$') 'own settings: the memory id, in hex as the kernel reads it'
+Assert-Equal ([uint32]0x0A1B2C3D) (Get-OwnSettingsMemoryId $withMemory) 'own settings: the memory id read back'
+Assert-Equal ([uint32]4294967295) (Get-OwnSettingsMemoryId (New-OwnSettingsText -Key '' -ClockOffsetMinutes 0 -MemoryId ([uint32]::MaxValue))) 'own settings: the biggest memory id'
+Assert-Equal $null (Get-OwnSettingsMemoryId "memory-id = 0`r`n") 'own settings: a memory id of 0 is none'
+Assert-Equal $fakeKey (Get-OwnSettingsKey $withMemory) 'own settings: the key read back next to a memory id'
+
+# Its memory file, as Chat Computer's own system reads it (os/remember: 512-byte chunks, each tagged with "CCMEMORY",
+# the file's id and the chunk's number).
+Assert-Equal '43-43-4D-45-4D-4F-52-59-FE-CA-ED-5E-03-00-00-00' ([BitConverter]::ToString((New-OwnMemoryTag -Id ([uint32]0x5EEDCAFE) -Index 3))) 'own memory: a chunk''s tag'
+$memBytes = New-OwnMemoryBytes -Id ([uint32]0x5EEDCAFE) -Bytes 8192
+Assert-Equal 8192 $memBytes.Length 'own memory: whole chunks'
+Assert-Equal '43-43-4D-45-4D-4F-52-59-FE-CA-ED-5E-0F-00-00-00' ([BitConverter]::ToString($memBytes, 15 * 512, 16)) 'own memory: the last chunk''s tag'
+Assert-Equal 0 (@($memBytes[16..511] | Where-Object { $_ -ne 0 })).Count 'own memory: nothing kept yet'
+Assert-Equal 1000 (@(1..1000 | ForEach-Object { New-OwnMemoryId } | Where-Object { $_ -ne 0 } | Sort-Object -Unique)).Count 'own memory: random ids, never 0'
+$memTmp = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-memory-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $memTmp | Out-Null
+try {
+    $memFile = Join-Path $memTmp 'memory.bin'
+    $memRoot = [IO.Path]::GetPathRoot($memTmp)
+    # A first setup: a new file, at the biggest size.
+    $memId = Install-OwnMemory -Dir $memTmp -Root $memRoot -Id $null
+    Assert-True ($memId -ne 0) 'own memory: made'
+    Assert-Equal (4 * 1024 * 1024) ((Get-Item -LiteralPath $memFile).Length) 'own memory: 4 MB'
+    Assert-True (Test-OwnMemoryFile -Path $memFile -Id $memId) 'own memory: its tags'
+    Assert-True (-not (Test-OwnMemoryFile -Path $memFile -Id ([uint32]($memId -bxor 1)))) 'own memory: another id''s file is not this one'
+    Assert-True (-not (Test-OwnMemoryFile -Path $memFile -Id $null)) 'own memory: no id, no file'
+    # Setting up again: the file stays, with what it keeps.
+    $stream = [IO.File]::OpenWrite($memFile)
+    $stream.Position = 20
+    $stream.WriteByte(0x42)
+    $stream.Dispose()
+    Assert-Equal $memId (Install-OwnMemory -Dir $memTmp -Root $memRoot -Id $memId) 'own memory: set up again, the same file'
+    Assert-Equal 0x42 ([IO.File]::ReadAllBytes($memFile)[20]) 'own memory: what it keeps stays'
+    # Settings whose id isn't the file's (or no settings): a new file, with a new id.
+    $newId = Install-OwnMemory -Dir $memTmp -Root $memRoot -Id ([uint32]($memId -bxor 1))
+    Assert-True ($newId -ne 0 -and $newId -ne $memId) 'own memory: a new file when the id is not the file''s'
+    Assert-True (Test-OwnMemoryFile -Path $memFile -Id $newId) 'own memory: the new file''s tags'
+    Assert-Equal 0 ([IO.File]::ReadAllBytes($memFile)[20]) 'own memory: the new file keeps nothing yet'
+    # Something added at its end, or a file cut mid-chunk, is not the memory file.
+    $grown = [IO.File]::ReadAllBytes($memFile) + (New-Object byte[] 512)
+    [IO.File]::WriteAllBytes($memFile, [byte[]]$grown)
+    Assert-True (-not (Test-OwnMemoryFile -Path $memFile -Id $newId)) 'own memory: a chunk added at its end that is not its own'
+    [IO.File]::WriteAllBytes($memFile, [byte[]]($grown[0..4999]))
+    Assert-True (-not (Test-OwnMemoryFile -Path $memFile -Id $newId)) 'own memory: a file cut mid-chunk is not it'
+    # Too little room on the partition: the smaller size, or none.
+    $roomBefore = $Script:OwnEspRoom
+    $free = Get-OwnFreeSpace $memRoot
+    if ($null -ne $free) {
+        Remove-Item -LiteralPath $memFile
+        $Script:OwnEspRoom = $free - 2MB
+        $smallId = Install-OwnMemory -Dir $memTmp -Root $memRoot -Id $null
+        Assert-True ($smallId -ne 0) 'own memory: made smaller when there is less room'
+        Assert-Equal (1024 * 1024) ((Get-Item -LiteralPath $memFile).Length) 'own memory: 1 MB'
+        $Script:OwnEspRoom = $free + 1GB
+        Assert-Equal ([uint32]0) (Install-OwnMemory -Dir $memTmp -Root $memRoot -Id ([uint32]($smallId -bxor 1))) 'own memory: none when there is no room'
+        Assert-True (-not (Test-Path -LiteralPath $memFile)) 'own memory: no file left behind'
+    } else {
+        Write-Host 'own memory: free space unknown here, room not tested'
+    }
+    $Script:OwnEspRoom = $roomBefore
+} finally {
+    Remove-Item -LiteralPath $memTmp -Recurse -Force
+}
 
 # ------------------------------------------------------------------ files from a disc image
 # On a real PC, grub.cfg copied from the mounted Ubuntu image kept the image's read-only mark, and setup

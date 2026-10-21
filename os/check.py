@@ -27,7 +27,14 @@ log go to out/.
                                      thinking sent back unchanged, a web search (run by Anthropic: its results and
                                      citations kept as they came, the answer paused and carried on), the web tools
                                      refused and left out, and a failure shown
-    ./check.py --secure-boot         Secure Boot, as on a PC that has approved Chat Computer's key: signs the
+    ./check.py --remember            the conversation kept across a restart: started from a disk laid out like a
+                                     PC's (a FAT32 start-up partition with Windows' files and Chat Computer's,
+                                     its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
+                                     drive; a question answered, the PC restarted, the conversation back on the
+                                     screen and sent with the next question; the memory file's two copies, and
+                                     nothing else on the disk changed (fsck.vfat too, so also needs dosfstools,
+                                     mtools and gdisk)
+    ./check.py --secure-boot        Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
                                      checks the firmware refuses the same build unsigned
@@ -118,7 +125,8 @@ class VirtualPC:
     """One run of the virtual PC, started from `efi` as \\EFI\\BOOT\\BOOTX64.EFI."""
 
     def __init__(self, efi: Path, *, size: str, memory: str, cpu: str, secure_vars: Path | None = None,
-                 extra: tuple[str, ...] = (), settings: str | None = None):
+                 extra: tuple[str, ...] = (), settings: str | None = None, disk: tuple[Path, str] | None = None):
+        """`disk`: start from this disk image instead (on an NVMe or SATA drive: "nvme" or "sata")."""
         self.tmp = tempfile.TemporaryDirectory()
         tmp = Path(self.tmp.name)
         esp = tmp / "esp"
@@ -128,6 +136,12 @@ class VirtualPC:
             # Where the Windows setup puts it (own-os.ps1).
             (esp / "EFI/chatcomputer-own").mkdir(parents=True)
             (esp / "EFI/chatcomputer-own/settings.txt").write_text(settings)
+        if disk is None:
+            drive = ("-drive", f"format=raw,file=fat:rw:{esp}")
+        elif disk[1] == "nvme":
+            drive = ("-drive", f"if=none,id=d0,format=raw,file={disk[0]}", "-device", "nvme,serial=ccmemory1,drive=d0")
+        else:
+            drive = ("-drive", f"if=none,id=d0,format=raw,file={disk[0]}", "-device", "ide-hd,drive=d0,bus=ide.0")
         vars_fd = tmp / "vars.fd"
         shutil.copy(secure_vars or VARS, vars_fd)
         self.mon = tmp / "monitor.sock"
@@ -143,7 +157,7 @@ class VirtualPC:
             "-m", memory,
             "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={code}",
             "-drive", f"if=pflash,format=raw,unit=1,file={vars_fd}",
-            "-drive", f"format=raw,file=fat:rw:{esp}",
+            *drive,
             "-vga", "none",
             "-device", f"VGA,edid=on,xres={xres},yres={yres}",
             "-display", "none",
@@ -536,6 +550,57 @@ def stream(blocks: list[tuple], stop: str) -> list[tuple[str, dict]]:
     return events
 
 
+def test_authority(tmp: Path) -> None:
+    """A certificate authority made for the test (tmp/ca.der, which a test build trusts instead of Mozilla's), and a
+    certificate from it for "localhost" (tmp/leaf.pem, tmp/leaf.key)."""
+    def openssl(*a: str) -> None:
+        subprocess.run(["openssl", *a], cwd=tmp, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    p256 = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
+    openssl("req", "-x509", "-nodes", *p256, "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
+            "-subj", "/CN=Chat Computer test authority (not for real use)",
+            "-addext", "basicConstraints=critical,CA:true", "-addext", "keyUsage=critical,keyCertSign")
+    (tmp / "leaf.ext").write_text("subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n"
+                                  "keyUsage=critical,digitalSignature\nbasicConstraints=critical,CA:false\n")
+    openssl("req", "-nodes", *p256, "-keyout", "leaf.key", "-out", "leaf.csr", "-subj", "/CN=localhost")
+    openssl("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "leaf.pem",
+            "-days", "2", "-extfile", "leaf.ext")
+    openssl("x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der")
+
+
+def serve_https(handler, tmp: Path):
+    """The stand-in for Claude's API: `handler` over HTTPS (TLS 1.3, tmp's certificate) on CLAUDE_PORT."""
+    import http.server
+    import ssl
+    import threading
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", CLAUDE_PORT), handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.load_cert_chain(tmp / "leaf.pem", tmp / "leaf.key")
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def send_stream(handler, blocks: list[tuple], stop: str) -> None:
+    """An answer, streamed as Claude's API streams one (see `stream`)."""
+    handler.send_response(200)
+    handler.send_header("content-type", "text/event-stream")
+    handler.send_header("transfer-encoding", "chunked")
+    handler.end_headers()
+    for event, payload in stream(blocks, stop):
+        if event == "wait":
+            time.sleep(payload["seconds"])
+            continue
+        chunk = f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+        handler.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+        handler.wfile.flush()
+        time.sleep(0.05)
+    handler.wfile.write(b"0\r\n\r\n")
+    handler.wfile.flush()
+
+
 def blocks_as_sent(blocks: list[tuple]) -> list[dict]:
     """The same blocks as the answer's content, which must come back unchanged in the next request."""
     out = []
@@ -565,24 +630,9 @@ def claude(args) -> list[str]:
     (as it does when an organization has switched them off), so the question must be asked again without them;
     then Claude restarts the PC. The stand-in checks what it was sent."""
     import http.server
-    import ssl
-    import threading
 
     tmp = Path(tempfile.mkdtemp(prefix="cc-claude-"))
-
-    def openssl(*a: str) -> None:
-        subprocess.run(["openssl", *a], cwd=tmp, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    p256 = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
-    openssl("req", "-x509", "-nodes", *p256, "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
-            "-subj", "/CN=Chat Computer test authority (not for real use)",
-            "-addext", "basicConstraints=critical,CA:true", "-addext", "keyUsage=critical,keyCertSign")
-    (tmp / "leaf.ext").write_text("subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n"
-                                  "keyUsage=critical,digitalSignature\nbasicConstraints=critical,CA:false\n")
-    openssl("req", "-nodes", *p256, "-keyout", "leaf.key", "-out", "leaf.csr", "-subj", "/CN=localhost")
-    openssl("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "leaf.pem",
-            "-days", "2", "-extfile", "leaf.ext")
-    openssl("x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der")
+    test_authority(tmp)
 
     requests: list[dict] = []
     r1 = [("thinking", "sig-1/+="), ("text", ["Let me ", "look."]), ("tool_use", "toolu_1", "computer_status", [])]
@@ -657,12 +707,7 @@ def claude(args) -> list[str]:
                 self.wfile.write(error)
             self.wfile.flush()
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", CLAUDE_PORT), Api)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_3
-    context.load_cert_chain(tmp / "leaf.pem", tmp / "leaf.key")
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server = serve_https(Api, tmp)
     build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
     problems: list[str] = []
     try:
@@ -795,6 +840,183 @@ def claude(args) -> list[str]:
     return problems
 
 
+MEMORY_ID = 0x5EEDCAFE
+
+
+def blank_memory(memory_id: int, size: int) -> bytes:
+    """Chat Computer's memory file as Windows' setup makes it (the remember crate's format, windows/lib/OwnOs.ps1):
+    512-byte chunks, each starting with "CCMEMORY", the file's id and the chunk's number (little-endian)."""
+    out = bytearray(size // 512 * 512)
+    for i in range(size // 512):
+        out[i * 512:i * 512 + 16] = b"CCMEMORY" + memory_id.to_bytes(4, "little") + i.to_bytes(4, "little")
+    return bytes(out)
+
+
+def kept_in(memory: bytes, memory_id: int) -> tuple[int, bytes] | None:
+    """What a memory file holds (its newest whole copy: sequence number and data), read as the remember crate does;
+    None if nothing. Every chunk's tag must still be there."""
+    import struct
+
+    chunks = len(memory) // 512
+    for i in range(chunks):
+        if memory[i * 512:i * 512 + 16] != b"CCMEMORY" + memory_id.to_bytes(4, "little") + i.to_bytes(4, "little"):
+            raise ValueError(f"chunk {i}'s tag was changed")
+    best = None
+    for h in (0, 1):
+        def data(c: int) -> bytes:
+            return memory[c * 512 + 16:(c + 1) * 512]
+        first = data(h * (chunks // 2))
+        if first[:8] != b"CCMEMDAT":
+            continue
+        _, sequence, length, expected = struct.unpack("<IQIQ", first[8:32])
+        body = b"".join(data(h * (chunks // 2) + k) for k in range((32 + length + 495) // 496))[32:32 + length]
+        h64 = 0xCBF29CE484222325
+        for b in body:
+            h64 = ((h64 ^ b) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        if h64 == expected and (best is None or sequence > best[0]):
+            best = (sequence, body)
+    return best
+
+
+ESP_START, ESP_MIB = 1 << 20, 80
+
+
+def memory_disk(path: Path, efi: Path, settings: str, memory_id: int) -> dict[str, bytes]:
+    """A disk like a PC's: a GPT, one EFI system partition from 1 MiB (FAT32, 1 KiB clusters, as Windows makes it),
+    with Chat Computer's files, a stand-in for Windows' start-up file, and a 4 MiB memory file. Returns the files."""
+    with open(path, "wb") as f:
+        f.truncate(96 << 20)
+    subprocess.run(["sgdisk", "-n", f"1:2048:+{ESP_MIB}M", "-t", "1:EF00", str(path)], check=True, stdout=subprocess.DEVNULL)
+    esp = path.with_suffix(".esp")
+    esp.unlink(missing_ok=True)
+    subprocess.run(["mkfs.vfat", "-C", "-F", "32", "-s", "2", str(esp), str(ESP_MIB * 1024)], check=True,
+                   stdout=subprocess.DEVNULL)
+    files = {"EFI/Microsoft/Boot/bootmgfw.efi": os.urandom(300_000), "EFI/BOOT/BOOTX64.EFI": efi.read_bytes(),
+             "EFI/chatcomputer-own/settings.txt": settings.encode(),
+             "EFI/chatcomputer-own/memory.bin": blank_memory(memory_id, 4 << 20)}
+    for folder in ("::/EFI", "::/EFI/Microsoft", "::/EFI/Microsoft/Boot", "::/EFI/BOOT", "::/EFI/chatcomputer-own"):
+        subprocess.run(["mmd", "-i", str(esp), folder], check=True)
+    for name, data in files.items():
+        local = path.with_suffix(".file")
+        local.write_bytes(data)
+        subprocess.run(["mcopy", "-i", str(esp), str(local), f"::/{name}"], check=True)
+        local.unlink()
+    with open(path, "r+b") as f:
+        f.seek(ESP_START)
+        f.write(esp.read_bytes())
+    esp.unlink()
+    return files
+
+
+def esp_now(path: Path, files: dict[str, bytes]) -> tuple[list[str], bytes]:
+    """The disk's start-up partition checked: its file system clean (fsck.vfat, changing nothing), every file but the
+    memory file as it was. Returns the problems, and the memory file."""
+    problems = []
+    esp = path.with_suffix(".esp")
+    with open(path, "rb") as f:
+        f.seek(ESP_START)
+        esp.write_bytes(f.read(ESP_MIB << 20))
+    fsck = subprocess.run(["fsck.vfat", "-n", str(esp)], capture_output=True, text=True)
+    if fsck.returncode != 0:
+        problems.append(f"the start-up partition's file system isn't clean: {fsck.stdout.strip()} {fsck.stderr.strip()}")
+    memory = b""
+    for name, data in files.items():
+        local = path.with_suffix(".out")
+        local.unlink(missing_ok=True)
+        subprocess.run(["mcopy", "-i", str(esp), f"::/{name}", str(local)], check=True)
+        now = local.read_bytes()
+        local.unlink()
+        if name.endswith("memory.bin"):
+            memory = now
+            if len(now) != len(data):
+                problems.append("the memory file's size changed")
+        elif now != data:
+            problems.append(f"{name} changed")
+    esp.unlink()
+    return problems, memory
+
+
+def remember(args) -> list[str]:
+    """The conversation kept across a restart, with the start-up partition on an NVMe drive, then on a SATA one: a
+    disk like a PC's (memory_disk), a question answered by a stand-in for Claude's API, then the virtual PC started
+    again: the conversation must be on the screen, and in the next question's request, and in the memory file in the
+    format Windows' setup made it for. The partition's file system must stay clean and its other files untouched."""
+    import http.server
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-memory-"))
+    test_authority(tmp)
+    requests: list[dict] = []
+    first_answer = [("thinking", "sig-m1"), ("text", ["Hello! The word is ", "pumpkin."])]
+
+    class Api(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
+            requests.append(body)
+            asked = ((body.get("messages") or [{}])[-1]).get("content")
+            send_stream(self, first_answer if asked == "hi" else [("text", ["Pumpkin."])], "end_turn")
+
+    server = serve_https(Api, tmp)
+    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    problems: list[str] = []
+    first = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(first_answer)}]
+    try:
+        for kind in ("nvme", "sata"):
+            requests.clear()
+            disk = tmp / f"{kind}.img"
+            settings = (f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\n"
+                        f"memory-id = {MEMORY_ID:08x}\r\n")
+            files = memory_disk(disk, BUILT, settings, MEMORY_ID)
+            extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
+            texts = []
+            for start in (1, 2):
+                pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, kind))
+                try:
+                    if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                        print(pc.text())
+                        return problems + [f"{kind}, start {start}: the kernel didn't say it was ready"]
+                    wait_for(pc.log, ("network: address",), 60)
+                    time.sleep(1)
+                    if start == 2:
+                        pc.settled_picture(f"memory-{kind}-restored")
+                    question = "hi" if start == 1 else "word"
+                    monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
+                    wait_for(pc.log, ("memory: the conversation kept", "couldn't be kept", "Claude: failed"), 120)
+                    pc.settled_picture(f"memory-{kind}-{start}")
+                finally:
+                    pc.stop()
+                texts.append(pc.text())
+                print(pc.text())
+                fs_problems, memory_file = esp_now(disk, files)
+                problems += [f"{kind}, start {start}: {p}" for p in fs_problems]
+                try:
+                    kept = kept_in(memory_file, MEMORY_ID)
+                except ValueError as e:
+                    problems.append(f"{kind}, start {start}: {e}")
+                    continue
+                wanted = first if start == 1 else first + [{"role": "user", "content": "word"},
+                                                           {"role": "assistant", "content": [{"type": "text", "text": "Pumpkin."}]}]
+                if kept is None or kept[0] != start or json.loads(kept[1]) != wanted:
+                    problems.append(f"{kind}, start {start}: the memory file holds {kept!r}")
+            drive = "NVMe SSD" if kind == "nvme" else "SATA drive"
+            if f"memory: {drive}" not in texts[0]:
+                problems.append(f"{kind}: the memory file wasn't found on the {drive}")
+            if "the conversation from before the restart (2 turns)" not in texts[1]:
+                problems.append(f"{kind}: the conversation didn't come back after the restart")
+            if len(requests) != 2 or requests[1].get("messages") != first + [{"role": "user", "content": "word"}]:
+                problems.append(f"{kind}: the question after the restart wasn't asked with the conversation before it: "
+                                f"{[r.get('messages') for r in requests]!r}")
+    finally:
+        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
 def secure_vars_with(cert: Path, where: Path) -> Path:
     """Firmware settings like a shop PC's (Microsoft's keys, Secure Boot on), plus `cert` in db."""
     pem = where / "cert.pem"
@@ -862,6 +1084,7 @@ def main() -> int:
     ap.add_argument("--network", action="store_true", help="each network card there's a driver for: DHCP, DNS and TCP")
     ap.add_argument("--card", action="append", choices=[c[0] for c in CARDS], help="with --network: only this card")
     ap.add_argument("--claude", action="store_true", help="a conversation with a stand-in for Claude's API, over HTTPS")
+    ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
@@ -875,6 +1098,8 @@ def main() -> int:
         problems = network(args)
     elif args.claude:
         problems = claude(args)
+    elif args.remember:
+        problems = remember(args)
     else:
         if not args.no_build:
             build()

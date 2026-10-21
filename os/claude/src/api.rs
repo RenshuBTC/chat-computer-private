@@ -94,22 +94,9 @@ pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools
         body.push_str(&all.join(","));
         body.push(']');
     }
-    body.push_str(",\"messages\":[");
-    for (i, turn) in conversation.iter().enumerate() {
-        if i > 0 {
-            body.push(',');
-        }
-        let role = match turn.role {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-        };
-        let content = match &turn.content {
-            Content::Text(text) => json::quote(text),
-            Content::Blocks(blocks) => Json::Arr(blocks.clone()).write(),
-        };
-        body.push_str(&format!("{{\"role\":\"{role}\",\"content\":{content}}}"));
-    }
-    body.push_str("]}");
+    body.push_str(",\"messages\":");
+    body.push_str(&messages(conversation));
+    body.push('}');
     http::request(
         "POST",
         host,
@@ -123,6 +110,48 @@ pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools
         ],
         body.as_bytes(),
     )
+}
+
+/// The conversation as the API's "messages" array (JSON text): what goes in a request, and what's kept across restarts.
+pub fn messages(conversation: &[Turn]) -> String {
+    let mut out = String::from("[");
+    for (i, turn) in conversation.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let role = match turn.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        };
+        let content = match &turn.content {
+            Content::Text(text) => json::quote(text),
+            Content::Blocks(blocks) => Json::Arr(blocks.clone()).write(),
+        };
+        out.push_str(&format!("{{\"role\":\"{role}\",\"content\":{content}}}"));
+    }
+    out.push(']');
+    out
+}
+
+/// A conversation from its "messages" JSON (as `messages` wrote it); None if it isn't one.
+pub fn parse_messages(text: &str) -> Option<Vec<Turn>> {
+    let Json::Arr(items) = json::parse(text)? else { return None };
+    items
+        .into_iter()
+        .map(|m| {
+            let role = match m.get("role")?.str()? {
+                "user" => Role::User,
+                "assistant" => Role::Assistant,
+                _ => return None,
+            };
+            let content = match m.get("content")? {
+                Json::Str(s) => Content::Text(s.clone()),
+                Json::Arr(blocks) => Content::Blocks(blocks.clone()),
+                _ => return None,
+            };
+            Some(Turn { role, content })
+        })
+        .collect()
 }
 
 /// What the answer brought.

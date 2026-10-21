@@ -7,7 +7,7 @@ pub mod edid;
 /// "ChatComp" in ASCII: the first field of [`BootInfo`], so the kernel can tell it got the real thing.
 pub const MAGIC: u64 = u64::from_le_bytes(*b"ChatComp");
 /// Raised whenever [`BootInfo`] changes shape.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// All of physical memory is visible to the kernel at this virtual address: physical address `p` is at
 /// `PHYS_OFFSET + p`. It is the start of the upper half of the address space (page-map slot 256).
@@ -109,6 +109,31 @@ pub struct KernelSegment {
 
 pub const MAX_SEGMENTS: usize = 8;
 
+/// What kind of drive the start-up partition is on.
+pub const DISK_UNKNOWN: u32 = 0;
+pub const DISK_NVME: u32 = 1;
+pub const DISK_SATA: u32 = 2;
+
+/// The drive and partition the start-up stage was started from, from the firmware's device path for it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StartDisk {
+    /// A `DISK_` value.
+    pub kind: u32,
+    /// The PCI root bridge's number (ACPI _UID: 0 on nearly every PC).
+    pub pci_root: u32,
+    /// The PCI devices from the root to the drive's controller: (device, function) pairs, bridges first.
+    pub path_len: u32,
+    pub path: [[u8; 2]; 8],
+    /// NVMe: the namespace; SATA: the controller's port and the port multiplier's (0xFFFF: none).
+    pub nvme_namespace: u32,
+    pub sata_port: u16,
+    pub sata_multiplier: u16,
+    /// The partition: its first block and its size, in the drive's blocks (0: not known).
+    pub partition_start: u64,
+    pub partition_blocks: u64,
+}
+
 #[repr(C)]
 pub struct BootInfo {
     pub magic: u64,
@@ -144,6 +169,8 @@ pub struct BootInfo {
     /// on the start-up partition), as it was; 0 if there's none.
     pub settings_len: u32,
     pub settings: [u8; SETTINGS_MAX],
+    /// Where the start-up partition is.
+    pub start_disk: StartDisk,
 }
 
 /// The most of the settings file that's passed on.

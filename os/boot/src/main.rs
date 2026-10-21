@@ -14,7 +14,7 @@ mod uefi;
 #[path = "../../shared/mem.rs"]
 mod mem;
 
-use bootinfo::{BootInfo, Framebuffer, KernelSegment, MemoryRegion, MAX_SEGMENTS, PAGE_SIZE, PHYS_OFFSET};
+use bootinfo::{BootInfo, Framebuffer, KernelSegment, MemoryRegion, StartDisk, MAX_SEGMENTS, PAGE_SIZE, PHYS_OFFSET};
 use core::arch::asm;
 use core::ffi::c_void;
 use core::mem::size_of;
@@ -185,6 +185,7 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
         info.secure_boot = secure_boot(st);
         (info.time, info.time_zone) = clock(st);
         info.settings_len = settings(bs, image, &mut info.settings) as u32;
+        info.start_disk = start_disk(bs, image);
     }
 
     // Last call: the final memory map, then ExitBootServices. If something (a timer event, say) changed
@@ -349,6 +350,66 @@ unsafe fn settings(bs: &BootServices, image: Handle, out: &mut [u8]) -> usize {
     }
     unsafe { ((*root).close)(root) };
     got
+}
+
+/// The drive and partition this program was started from: the firmware's device path for its partition, read node
+/// by node (UEFI 2.10, 10.3): the PCI root bridge (ACPI, PNP0A03 or PNP0A08), the PCI devices on the way, the NVMe
+/// namespace or SATA port, and the partition (a hard drive media node). Anything else leaves the kind unknown.
+unsafe fn start_disk(bs: &BootServices, image: Handle) -> StartDisk {
+    let mut d = StartDisk { sata_multiplier: 0xFFFF, ..StartDisk::default() };
+    let mut loaded: *mut core::ffi::c_void = null_mut();
+    if unsafe { (bs.handle_protocol)(image, &uefi::LOADED_IMAGE, &mut loaded) } != SUCCESS || loaded.is_null() {
+        return d;
+    }
+    let device = unsafe { (*(loaded as *mut uefi::LoadedImage)).device_handle };
+    let mut path: *mut core::ffi::c_void = null_mut();
+    if unsafe { (bs.handle_protocol)(device, &uefi::DEVICE_PATH, &mut path) } != SUCCESS || path.is_null() {
+        return d;
+    }
+    let mut at = path as *const u8;
+    let (mut root, mut kind) = (false, bootinfo::DISK_UNKNOWN);
+    // (A path of more than 64 nodes isn't a real one.)
+    for _ in 0..64 {
+        let (t, sub) = unsafe { (*at, *at.add(1)) };
+        let len = unsafe { (at.add(2) as *const u16).read_unaligned() } as usize;
+        if (t, sub) == (0x7F, 0xFF) || len < 4 {
+            break;
+        }
+        let u32_at = |o: usize| unsafe { (at.add(o) as *const u32).read_unaligned() };
+        let u64_at = |o: usize| unsafe { (at.add(o) as *const u64).read_unaligned() };
+        let u16_at = |o: usize| unsafe { (at.add(o) as *const u16).read_unaligned() };
+        match (t, sub) {
+            (2, 1) if len >= 12 && matches!(u32_at(4), 0x0A03_41D0 | 0x0A08_41D0) => {
+                root = true;
+                d.pci_root = u32_at(8);
+            }
+            (1, 1) if len >= 6 && root && (d.path_len as usize) < d.path.len() => {
+                d.path[d.path_len as usize] = unsafe { [*at.add(5), *at.add(4)] }; // (device, function)
+                d.path_len += 1;
+            }
+            (3, 0x17) if len >= 8 => {
+                kind = bootinfo::DISK_NVME;
+                d.nvme_namespace = u32_at(4);
+            }
+            (3, 0x12) if len >= 10 => {
+                kind = bootinfo::DISK_SATA;
+                d.sata_port = u16_at(4);
+                d.sata_multiplier = u16_at(6);
+            }
+            (4, 1) if len >= 24 => {
+                d.partition_start = u64_at(8);
+                d.partition_blocks = u64_at(16);
+            }
+            // Anything else on the way (USB, SCSI...): not a drive this kernel has a driver for.
+            (3, _) => kind = bootinfo::DISK_UNKNOWN,
+            _ => {}
+        }
+        at = unsafe { at.add(len) };
+    }
+    if root && d.path_len > 0 && d.partition_start != 0 {
+        d.kind = kind;
+    }
+    d
 }
 
 fn halt() -> ! {

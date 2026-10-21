@@ -41,23 +41,32 @@ chat-computer/
     kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards, network
                             adapters: CDC ECM and NCM, RNDIS), PS/2 keyboards, network cards (netcard/: virtio,
                             Intel's e1000 and igb families and I225/I226, Realtek's RTL8111/8168 and
-                            RTL8125), the settings (the Claude API key) and the clock from the
+                            RTL8125), the drive the PC started from (storage/: NVMe, SATA by AHCI), the
+                            settings (the Claude API key, the memory file's id) and the clock from the
                             start-up stage, Claude (assistant.rs) with tools on the computer (its status:
-                            system.rs; the text size; a restart: power.rs), and the conversation screen (chat.rs,
-                            drawn in memory: draw.rs)
+                            system.rs; the text size; a restart: power.rs), the conversation kept across restarts
+                            (keep.rs), and the conversation screen (chat.rs, drawn in memory: draw.rs)
     net/                    Own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
     crypto/                 Own cryptography: SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305, X25519, ECDSA, RSA
     tls/                    Own TLS 1.3 client and certificate checks, against Mozilla's authorities (roots.txt)
     claude/                 Claude's Messages API, streamed: the request (Opus 5.5, effort max), HTTP/1.1, JSON
     font/                   Own TrueType reader and rasterizer
+    fat/                    Own FAT12/16/32 reader: a file's blocks on the start-up partition
+    remember/               The memory file's format (memory.bin): 512-byte chunks tagged "CCMEMORY" + file id
+                            (u32 LE) + chunk number (u32 LE), 496 data bytes each; two halves written in turn, each
+                            headed "CCMEMDAT" + version + sequence + length + FNV-1a 64 (header written last); a
+                            sector is written only after all its tags are read back and match
     build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced,
-                            typing on PS/2 and USB keyboards, the network, and a conversation with a stand-in
-                            for Claude's API over HTTPS)
+                            typing on PS/2 and USB keyboards, the network, a conversation with a stand-in
+                            for Claude's API over HTTPS, and the conversation kept across a restart on NVMe
+                            and SATA)
     release/chatcomputer.efi  The reproducible build Windows uses (CI checks it matches the source)
   windows/own-os.ps1        "Chat Computer Own System.cmd": signs os/release with a key Windows makes on the PC
                             (CurrentUser\My, not exportable), asks for a Claude API key (hidden, never logged),
-                            copies it to \EFI\chatcomputer-own on Windows' EFI partition with ChatComputer.cer and
-                            settings.txt (the key, the clock's offset from UTC), adds "Chat Computer (own system)" last in the power-on
+                            copies it to \EFI\chatcomputer-own on Windows' EFI partition with ChatComputer.cer,
+                            settings.txt (the key, the clock's offset from UTC, memory-id = <8 hex digits>) and
+                            memory.bin (made at full size, 4 MiB, else 1 MiB, only if 16 MiB stay free; kept when
+                            its first and last tags carry the settings' id), adds "Chat Computer (own system)" last in the power-on
                             menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
                             guides approving it (db Append) or turning Secure Boot off, then shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime

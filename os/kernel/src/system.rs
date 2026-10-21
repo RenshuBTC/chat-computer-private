@@ -78,9 +78,10 @@ pub fn status() -> String {
         keyboards.push(String::from(ps2));
     }
     lines.push(if keyboards.is_empty() { String::from("Keyboards: none found") } else { format!("Keyboards: {}", keyboards.join(", ")) });
+    lines.push(crate::keep::status());
     lines.push(String::from(
-        "Not yet in Chat Computer's own system: storage (it reads and writes no disk), sound, Wi-Fi, Bluetooth, the \
-         web, and the other processor cores",
+        "Not yet in Chat Computer's own system: files (it reads and writes only its own memory file), sound, Wi-Fi, \
+         Bluetooth, and the other processor cores",
     ));
     lines.join("\n")
 }

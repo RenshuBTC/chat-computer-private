@@ -430,6 +430,11 @@ pub fn init(acpi: &Acpi) -> (usize, &'static str) {
     (count, if acpi.pci_window.is_some() { "through the PCI Express window" } else { "through the old ports" })
 }
 
+/// The device function at bus, device, function, if there is one.
+pub fn at(bus: u8, device: u8, function: u8) -> Option<Function> {
+    FUNCTIONS.lock().iter().find(|f| f.at == Address { bus, device, function }).copied()
+}
+
 /// Every device function of a class (0x02: network controllers), whatever its subclass.
 pub fn of_class(class: u8) -> Vec<Function> {
     FUNCTIONS.lock().iter().filter(|f| f.class == class).copied().collect()

@@ -207,6 +207,8 @@ struct Assistant {
     history: Vec<Turn>,
     /// Whether to offer the web tools (until the API says they aren't enabled for this key).
     web: bool,
+    /// The conversation changed since it was last kept (keep.rs).
+    unkept: bool,
 }
 
 static ASSISTANT: SpinLock<Option<Assistant>> = SpinLock::new(None);
@@ -222,8 +224,26 @@ pub fn init(key: Option<String>, key_problem: Option<&'static str>) {
         roots.len(),
         if test_build() { " (the test's own)" } else { " (Mozilla's)" }
     );
-    *ASSISTANT.lock() =
-        Some(Assistant { key, key_problem, roots, job: None, closing: Vec::new(), address: None, history: Vec::new(), web: true });
+    // The conversation from before the last restart, if it was kept.
+    let history = crate::keep::load()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|text| api::parse_messages(&text))
+        .filter(|turns| turns.first().is_none_or(|t| matches!(t, Turn { role: Role::User, content: Content::Text(_) })))
+        .unwrap_or_default();
+    if !history.is_empty() {
+        crate::log!("Chat Computer kernel: Claude: the conversation from before the restart ({} turns)", history.len());
+    }
+    *ASSISTANT.lock() = Some(Assistant {
+        key,
+        key_problem,
+        roots,
+        job: None,
+        closing: Vec::new(),
+        address: None,
+        history,
+        web: true,
+        unkept: false,
+    });
 }
 
 pub fn ready() -> Ready {
@@ -240,6 +260,70 @@ pub fn ready() -> Ready {
         _ if status.address.is_none() && !status.link => Ready::NoCable,
         _ if status.address.is_none() => Ready::NoAddress,
         _ => Ready::Yes,
+    }
+}
+
+/// The conversation so far, as the screen shows it: what was typed, and Claude's words for each question (its
+/// answers' words together, a blank line between rounds).
+pub fn conversation() -> Vec<(bool, String)> {
+    let guard = ASSISTANT.lock();
+    let Some(a) = guard.as_ref() else { return Vec::new() };
+    let mut shown: Vec<(bool, String)> = Vec::new();
+    for turn in &a.history {
+        match (turn.role, &turn.content) {
+            (Role::User, Content::Text(t)) => shown.push((true, t.clone())),
+            (Role::User, Content::Blocks(_)) => {} // tools' results
+            (Role::Assistant, Content::Blocks(blocks)) => {
+                for b in blocks {
+                    if b.get("type").and_then(|t| t.str()) != Some("text") {
+                        continue;
+                    }
+                    let words = b.get("text").and_then(|t| t.str()).unwrap_or("");
+                    match shown.last_mut() {
+                        Some((false, said)) if !words.is_empty() => {
+                            said.push_str("\n\n");
+                            said.push_str(words);
+                        }
+                        _ if !words.is_empty() => shown.push((false, String::from(words))),
+                        _ => {}
+                    }
+                }
+            }
+            (Role::Assistant, Content::Text(t)) => shown.push((false, t.clone())),
+        }
+    }
+    shown
+}
+
+/// From the main loop, when an answer is over: the conversation kept (as much of it as the memory file holds, the
+/// oldest questions left out first).
+pub fn keep() {
+    let text = {
+        let mut guard = ASSISTANT.lock();
+        let Some(a) = guard.as_mut() else { return };
+        if !a.unkept || a.job.is_some() {
+            return;
+        }
+        a.unkept = false;
+        let capacity = crate::keep::capacity();
+        if capacity == 0 {
+            return;
+        }
+        let mut start = 0;
+        loop {
+            let text = api::messages(&a.history[start..]);
+            if text.len() <= capacity || start >= a.history.len() {
+                break text;
+            }
+            start += 1;
+            while start < a.history.len() && !matches!(&a.history[start], Turn { role: Role::User, content: Content::Text(_) }) {
+                start += 1;
+            }
+        }
+    };
+    match crate::keep::save(text.as_bytes()) {
+        Ok(()) => crate::log!("Chat Computer kernel: memory: the conversation kept ({} bytes)", text.len()),
+        Err(e) => crate::log!("Chat Computer kernel: memory: the conversation couldn't be kept: {e}"),
     }
 }
 
@@ -486,6 +570,7 @@ impl Assistant {
             if test_build() {
                 crate::log!("Chat Computer kernel: test: Claude said {:?}", job.text);
             }
+            self.unkept = true;
             events.push(Event::Done);
             if job.restart {
                 events.push(Event::Restarting(5));

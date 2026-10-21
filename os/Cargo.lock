@@ -20,8 +20,10 @@ dependencies = [
  "bootinfo",
  "claude",
  "crypto",
+ "fat",
  "font",
  "net",
+ "remember",
  "tls",
 ]
 
@@ -37,11 +39,19 @@ name = "crypto"
 version = "0.1.0"
 
 [[package]]
+name = "fat"
+version = "0.1.0"
+
+[[package]]
 name = "font"
 version = "0.1.0"
 
 [[package]]
 name = "net"
+version = "0.1.0"
+
+[[package]]
+name = "remember"
 version = "0.1.0"
 
 [[package]]

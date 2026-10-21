@@ -8,6 +8,9 @@ $Script:OwnKeyName = 'Chat Computer Secure Boot key'  # the certificate's friend
 $Script:OwnFile = 'chatcomputer.efi'
 $Script:OwnCert = 'ChatComputer.cer'
 $Script:OwnSettings = 'settings.txt'            # read by the kernel at start-up (os/kernel/src/settings.rs)
+$Script:OwnMemory = 'memory.bin'                # the conversation, kept across restarts (os/remember)
+$Script:OwnMemorySizes = @(4MB, 1MB)            # the memory file's size: the first that leaves room on the partition
+$Script:OwnEspRoom = 16MB                       # left free on the start-up partition, for Windows' own updates
 
 # ------------------------------------------------------------------ its settings: the Claude API key, the clock
 function ConvertTo-OwnKey {
@@ -43,14 +46,16 @@ function Get-ClockOffsetMinutes {
 }
 
 function New-OwnSettingsText {
-    # The settings file, as the kernel reads it: "name = value" lines, # for notes.
-    param([AllowEmptyString()][string]$Key, [int]$ClockOffsetMinutes)
+    # The settings file, as the kernel reads it: "name = value" lines, # for notes. $MemoryId: the memory file's id
+    # (0: there's no memory file).
+    param([AllowEmptyString()][string]$Key, [int]$ClockOffsetMinutes, [uint32]$MemoryId = 0)
     $lines = @(
         '# Chat Computer''s settings, read by its own system when it starts. Written by Chat Computer Own System.',
         '# The Claude API key is kept here as it is: anyone who can read this partition can read it.'
     )
     if ($Key) { $lines += ('claude-api-key = ' + $Key) }
     $lines += ('clock-offset-minutes = ' + $ClockOffsetMinutes)
+    if ($MemoryId -ne 0) { $lines += ('memory-id = ' + $MemoryId.ToString('x8')) }
     return (($lines -join "`r`n") + "`r`n")
 }
 
@@ -63,6 +68,133 @@ function Get-OwnSettingsKey {
         if ($m.Success) { return $m.Groups[1].Value }
     }
     return ''
+}
+
+function Get-OwnSettingsMemoryId {
+    # The memory file's id in a settings file's text ($null if none).
+    param([AllowNull()][string]$Text)
+    if (-not $Text) { return $null }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $m = [regex]::Match($line, '^\s*memory-id\s*=\s*([0-9a-fA-F]{1,8})\s*$')
+        if ($m.Success) {
+            $id = [Convert]::ToUInt32($m.Groups[1].Value, 16)
+            if ($id -ne 0) { return $id }
+        }
+    }
+    return $null
+}
+
+# ------------------------------------------------------------------ its memory file: the conversation, kept across restarts
+# Chat Computer's own system has no file system of its own: it keeps the conversation in this file, which it only
+# ever changes in place (os/remember), so it's made here at its full size. The file is 512-byte chunks, each starting
+# with a tag: "CCMEMORY", the file's id (a random number, also in the settings) and the chunk's number, little-endian.
+# Before writing anything, its own system checks that the place it writes to carries this file's tags.
+function New-OwnMemoryId {
+    # A random id for a new memory file (never 0, which the kernel reads as none).
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $b = New-Object byte[] 4
+        do {
+            $rng.GetBytes($b)
+            $id = [BitConverter]::ToUInt32($b, 0)
+        } while ($id -eq 0)
+        return $id
+    } finally {
+        $rng.Dispose()
+    }
+}
+
+function New-OwnMemoryTag {
+    # The 16 bytes chunk $Index of the memory file with $Id starts with.
+    param([uint32]$Id, [uint32]$Index)
+    $t = New-Object byte[] 16
+    [Array]::Copy([Text.Encoding]::ASCII.GetBytes('CCMEMORY'), 0, $t, 0, 8)
+    [Array]::Copy([BitConverter]::GetBytes($Id), 0, $t, 8, 4)
+    [Array]::Copy([BitConverter]::GetBytes($Index), 0, $t, 12, 4)
+    return , $t
+}
+
+function New-OwnMemoryBytes {
+    # A new memory file of $Bytes (whole chunks): every chunk tagged, nothing kept yet.
+    param([uint32]$Id, [int]$Bytes)
+    $chunks = [int][Math]::Floor($Bytes / 512)
+    $b = New-Object byte[] ($chunks * 512)
+    $magic = [Text.Encoding]::ASCII.GetBytes('CCMEMORY')
+    $idBytes = [BitConverter]::GetBytes($Id)
+    for ($i = 0; $i -lt $chunks; $i++) {
+        $o = $i * 512
+        [Array]::Copy($magic, 0, $b, $o, 8)
+        [Array]::Copy($idBytes, 0, $b, $o + 8, 4)
+        [Array]::Copy([BitConverter]::GetBytes([uint32]$i), 0, $b, $o + 12, 4)
+    }
+    return , $b
+}
+
+function Test-OwnMemoryFile {
+    # Whether the file at $Path is the memory file with $Id: whole chunks, its first and last carrying their tags.
+    param([Parameter(Mandatory = $true)][string]$Path, $Id)
+    if ($null -eq $Id -or [uint32]$Id -eq 0 -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $length = [int64](Get-Item -LiteralPath $Path).Length
+    if ($length -lt 4096 -or ($length % 512) -ne 0) { return $false }
+    $last = [int64][Math]::Floor($length / 512) - 1
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $buf = New-Object byte[] 16
+        foreach ($chunk in @([int64]0, $last)) {
+            $stream.Position = $chunk * 512
+            if ($stream.Read($buf, 0, 16) -ne 16) { return $false }
+            $want = New-OwnMemoryTag -Id ([uint32]$Id) -Index ([uint32]$chunk)
+            if ([BitConverter]::ToString($buf) -ne [BitConverter]::ToString($want)) { return $false }
+        }
+        return $true
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Get-OwnFreeSpace {
+    # Free bytes on the drive at $Root ($null if Windows won't say).
+    param([Parameter(Mandatory = $true)][string]$Root)
+    try {
+        return [int64](New-Object IO.DriveInfo $Root).AvailableFreeSpace
+    } catch {
+        Write-SetupLog ('Free space at ' + $Root + ': ' + $_.Exception.Message)
+        return $null
+    }
+}
+
+function Install-OwnMemory {
+    # The memory file in $Dir (on the drive at $Root). The one there stays, with the conversation in it, when it's the
+    # one with the settings' id ($Id); otherwise a new one is made, of the first size in $Script:OwnMemorySizes that
+    # leaves $Script:OwnEspRoom free. Returns its id: 0 when there's no room for one (nothing is kept then).
+    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][string]$Root, $Id)
+    $path = Join-Path $Dir $Script:OwnMemory
+    if (Test-OwnMemoryFile -Path $path -Id $Id) {
+        Write-SetupLog ('Kept the memory file there, ' + (Get-Item -LiteralPath $path).Length + ' bytes')
+        return [uint32]$Id
+    }
+    $free = Get-OwnFreeSpace $Root
+    $there = 0
+    if (Test-Path -LiteralPath $path -PathType Leaf) { $there = [int64](Get-Item -LiteralPath $path).Length }
+    foreach ($size in $Script:OwnMemorySizes) {
+        if ($null -ne $free -and $free + $there - $size -lt $Script:OwnEspRoom) { continue }
+        $newId = New-OwnMemoryId
+        try {
+            [IO.File]::WriteAllBytes($path, (New-OwnMemoryBytes -Id $newId -Bytes $size))
+        } catch {
+            Write-SetupLog ('Writing the memory file: ' + $_.Exception.Message)
+            break
+        }
+        if (Test-OwnMemoryFile -Path $path -Id $newId) {
+            Write-SetupLog ('Made a memory file of ' + $size + ' bytes')
+            return $newId
+        }
+        Write-SetupLog 'The memory file written is not the same when read back.'
+        break
+    }
+    Write-SetupLog ('No memory file (free on the partition: ' + $free + ' bytes)')
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    return [uint32]0
 }
 
 function Get-OwnSha256 {
@@ -187,9 +319,9 @@ function Get-OwnBootEntry {
 }
 
 function Install-OwnFiles {
-    # The signed start-up file, the key's certificate and the settings, in \EFI\chatcomputer-own on the partition
-    # Windows starts from. $ApiKey: the Claude API key to put in the settings ('' keeps the one there, if any).
-    # Returns whether the settings have a Claude API key.
+    # The signed start-up file, the key's certificate, the settings and the memory file, in \EFI\chatcomputer-own on
+    # the partition Windows starts from. $ApiKey: the Claude API key to put in the settings ('' keeps the one there,
+    # if any). Returns whether the settings have a Claude API key (HasKey) and whether there's a memory file (Memory).
     param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate,
           [AllowEmptyString()][string]$ApiKey = '')
     $esp = Get-WindowsEsp
@@ -203,13 +335,14 @@ function Install-OwnFiles {
         Copy-Item -LiteralPath $Certificate -Destination (Join-Path $dir $Script:OwnCert) -Force
         if ((Get-OwnSha256 $file) -ne (Get-OwnSha256 $Signed)) { throw 'The copy on the start-up partition is not the same as the original.' }
         $settings = Join-Path $dir $Script:OwnSettings
-        if (-not $ApiKey -and (Test-Path -LiteralPath $settings)) {
-            $ApiKey = Get-OwnSettingsKey ([IO.File]::ReadAllText($settings))
-        }
-        $text = New-OwnSettingsText -Key $ApiKey -ClockOffsetMinutes (Get-ClockOffsetMinutes)
+        $before = ''
+        if (Test-Path -LiteralPath $settings) { $before = [IO.File]::ReadAllText($settings) }
+        if (-not $ApiKey) { $ApiKey = Get-OwnSettingsKey $before }
+        $memoryId = Install-OwnMemory -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before)
+        $text = New-OwnSettingsText -Key $ApiKey -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId
         [IO.File]::WriteAllText($settings, $text, [Text.Encoding]::ASCII)
         Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($ApiKey) { 'with' } else { 'without' }) + ' a Claude API key')
-        return [bool]$ApiKey
+        return [pscustomobject]@{ HasKey = [bool]$ApiKey; Memory = ($memoryId -ne 0) }
     } finally {
         Dismount-EspPartition $m
     }
@@ -404,9 +537,11 @@ function Start-OwnSystem {
     if ($approved -eq $true) { Write-Good 'This PC already trusts Chat Computer''s key.' }
 
     Write-Step 'What changes'
-    Write-Line '  * Chat Computer''s start-up file (signed with this PC''s key), the key''s certificate and its settings (your'
-    Write-Line '    Claude API key, and how far this PC''s clock is from UTC) go in \EFI\chatcomputer-own on the partition this'
-    Write-Line '    PC starts from (about 800 KB). Windows'' own files there stay as they are.'
+    Write-Line '  * Chat Computer''s start-up file (signed with this PC''s key), the key''s certificate, its settings (your'
+    Write-Line '    Claude API key, and how far this PC''s clock is from UTC) and its memory file (where it keeps your'
+    Write-Line '    conversation across restarts) go in \EFI\chatcomputer-own on the partition this PC starts from (about'
+    Write-Line '    5 MB). Windows'' own files there stay as they are. Like the key, the conversation is kept there as it is,'
+    Write-Line '    where anyone who can read that partition can read it.'
     Write-Line ('  * "' + $Script:OwnEntryName + '" goes at the end of the power-on menu and starts once, at the next restart.')
     Write-Line '    The restart after that starts Windows, as now.'
     if ($bitlocker) {
@@ -416,9 +551,12 @@ function Start-OwnSystem {
         Write-Line 'Nothing was changed.'
         return
     }
-    $hasKey = Install-OwnFiles -Signed $signed -Certificate $cer -ApiKey $apiKey
+    $installed = Install-OwnFiles -Signed $signed -Certificate $cer -ApiKey $apiKey
     $apiKey = $null
-    if (-not $hasKey) { Write-Line 'There''s no Claude API key in its settings: run this again to give one.' }
+    if (-not $installed.HasKey) { Write-Line 'There''s no Claude API key in its settings: run this again to give one.' }
+    if (-not $installed.Memory) {
+        Write-Warn 'Its memory file couldn''t be made on the start-up partition (too little room, or it couldn''t be written), so the conversation won''t be kept across restarts.'
+    }
     $id = Get-OwnBootEntry
     Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
     Write-Good ('Chat Computer''s own system is on the start-up partition, and "' + $Script:OwnEntryName + '" starts at the next restart, once.')

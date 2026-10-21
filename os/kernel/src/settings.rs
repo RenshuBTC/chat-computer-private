@@ -4,6 +4,7 @@
 //!
 //!     claude-api-key = sk-ant-...       the key Chat Computer talks to Claude with (from console.anthropic.com)
 //!     clock-offset-minutes = 480        how far the PC's clock is ahead of UTC (Windows keeps it in local time)
+//!     memory-id = 1a2b3c4d              the memory file's id (its tags carry it: remember crate), in hex
 //!
 //! The key is never written to the log or shown on the screen.
 
@@ -16,6 +17,7 @@ pub struct Settings {
     /// Why the key that's there can't be used, if it can't.
     pub key_problem: Option<&'static str>,
     pub clock_offset_minutes: Option<i32>,
+    pub memory_id: Option<u32>,
     /// How many lines weren't understood (their words aren't logged: one might be a key).
     pub not_understood: usize,
 }
@@ -60,6 +62,12 @@ pub fn parse(bytes: &[u8]) -> Settings {
             "clock-offset-minutes" => {
                 s.clock_offset_minutes = value.parse::<i32>().ok().filter(|m| (-1440..=1440).contains(m));
                 if s.clock_offset_minutes.is_none() {
+                    s.not_understood += 1;
+                }
+            }
+            "memory-id" => {
+                s.memory_id = u32::from_str_radix(value, 16).ok().filter(|&id| id != 0);
+                if s.memory_id.is_none() {
                     s.not_understood += 1;
                 }
             }

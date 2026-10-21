@@ -21,13 +21,18 @@ UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF,
 open-source UEFI firmware). It reaches the internet through the wired network chips most PCs have (Intel's
 I219, I210, I211, I225 and I226, Realtek's RTL8111/8168 and RTL8125: written to the makers' datasheets and the
 open-source drivers, not yet tried on a real PC), a USB network adapter, an Android phone sharing its connection
-over USB, or a virtual machine's network card; other network chips need their drivers first (step 6, below).
+over USB, or a virtual machine's network card; other network chips need their drivers first (step 6, below). It
+keeps the conversation across restarts, in a file on the PC's start-up partition that it writes through its own
+NVMe and SATA drivers.
 
 * `boot/` is the start-up stage, a UEFI program (`\EFI\BOOT\BOOTX64.EFI`) that carries the kernel inside
   it.
   * It asks the firmware for the screen, the monitor's description (EDID), the memory map, where the
     ACPI tables are and the time (the PC's clock), and reads Chat Computer's settings file
     (`\EFI\chatcomputer-own\settings.txt`) from the partition it was started from.
+  * It notes which drive and partition that is, from the firmware's description of where it was started from
+    (its device path): the PCI path to the NVMe or SATA controller, the NVMe namespace or the SATA port, and
+    where the partition starts and ends. The kernel finds the drive again from that.
   * It copies the kernel into memory and builds the kernel's first page tables.
   * It ends the firmware's services (ExitBootServices) and jumps to the kernel. Nothing in the firmware is
     called after that.
@@ -90,6 +95,13 @@ over USB, or a virtual machine's network card; other network chips need their dr
     Of these, only the virtual machines' have run so far; the others haven't been tried on a real PC, and the log
     says so when one starts. Without a card, a USB network adapter plugged in at any time takes over (USB CDC ECM and
     NCM, the USB standard's, and RNDIS, which most Android phones use to share their connection over USB);
+  * the drive the PC started from (`storage/`): an NVMe SSD (`nvme.rs`), or a SATA drive on an AHCI controller
+    (`ahci.rs`), the kinds nearly every PC starts from. On it, Chat Computer's memory file
+    (`\EFI\chatcomputer-own\memory.bin`, which Windows' setup makes), found through Chat Computer's own FAT reader
+    (`fat/`). The conversation is kept there (`keep.rs`, in the format `remember/` defines) after every answer, and
+    read back at start-up, so a restart carries on the same conversation. Only the memory file's own blocks are
+    ever written, each read and checked first: never the file system, Windows' files or any other partition.
+    Before a restart, the drive is told to write what it has cached;
   * Claude, with the API key from the settings and Mozilla's certificate authorities (`assistant.rs`), and the
     tools Claude may use on this computer:
     * `computer_status`: what the computer is and how it's doing (processor, screen, firmware, Secure Boot,
@@ -129,6 +141,13 @@ over USB, or a virtual machine's network card; other network chips need their dr
   (thinking, words and their citations, tool calls, web searches and their results) to send back.
 * `font/` is Chat Computer's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It's tested against fontTools' reading of the same font.
+* `fat/` is Chat Computer's own reader of FAT12, FAT16 and FAT32 (the file system of every PC's start-up
+  partition), long names included: it finds a file's blocks. Tested against volumes made by `mkfs.vfat` and
+  filled by mtools, fragmented files among them.
+* `remember/` is the memory file's format: 512-byte chunks, each tagged with the file's id (a random number setup
+  chose) and the chunk's place, so nothing but this file is ever written; two copies written in turn, each with a
+  hash, so a restart in the middle of a write leaves the last whole copy. Tested with writes cut short and with
+  blocks that aren't the file's.
 * `bootinfo/` defines what the start-up stage hands the kernel, once for both.
 * `shared/mem.rs` holds Chat Computer's own `memcpy`, `memmove`, `memset` and `memcmp`.
 
@@ -153,9 +172,11 @@ needed.
 3. It asks for your Claude API key (paste it; it isn't shown or logged). Make a key just for this at
    console.anthropic.com, so you can switch it off there any time.
 4. After you confirm, it puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
-   next to Windows' own files, with `settings.txt`: the key, and how far the PC's clock is from UTC (Windows
-   keeps that clock in local time). The key is kept there as it is, so anyone who can read that partition can
-   read it.
+   next to Windows' own files, with `settings.txt` (the key, how far the PC's clock is from UTC, as Windows
+   keeps that clock in local time, and the memory file's id) and `memory.bin`, the memory file where Chat
+   Computer keeps the conversation across restarts (4 MB, or 1 MB if the partition is short of room; running
+   setup again keeps it, with the conversation in it). The key and the conversation are kept there as they are,
+   so anyone who can read that partition can read them.
 5. It adds "Chat Computer (own system)" to the end of the power-on menu and starts it once, at the next restart.
    The restart after that starts Windows.
 
@@ -175,9 +196,9 @@ sharing its connection over USB ("USB tethering") works too. Otherwise it shows 
 be reached yet, until that network chip's driver comes (step 6); the list of parts in `pc.txt` says which chip that
 is.
 
-To go back to Windows, hold the power button until the PC turns off. Chat Computer doesn't write to any disk yet.
-Running the script again with `-Remove` (or choosing Remove) takes the file and the entry off again, and
-deletes the key.
+To go back to Windows, hold the power button until the PC turns off, or ask Claude to restart it. The only thing
+Chat Computer writes on any disk is its memory file, in place. Running the script again with `-Remove` (or choosing
+Remove) takes the files (the conversation with them) and the entry off again, and deletes the key.
 
 `release/chatcomputer.efi` is committed because Windows has no Rust compiler. The build is reproducible, and CI
 rebuilds it and checks that it's the same file, byte for byte. `./release.sh` updates it.
@@ -190,8 +211,9 @@ python3-pil`).
 
 ```
 ./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 750 KB)
-cargo test -p font -p net -p crypto -p tls -p claude   # the font engine, network stack, cryptography, TLS
-                                 # (needs openssl) and Claude API client
+cargo test -p font -p net -p crypto -p tls -p claude -p fat -p remember
+                                 # the font engine, network stack, cryptography, TLS (needs openssl), Claude
+                                 # API client, FAT reader (needs dosfstools and mtools) and memory file
 cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
@@ -207,6 +229,9 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # authority): the request, the streamed answer on the screen, Claude's tools
                                  # (the computer's status, a bigger text size, a restart), a web search with a
                                  # paused answer, the web tools refused, a failure
+./check.py --remember            # the conversation kept across a restart, on an NVMe SSD and a SATA drive laid
+                                 # out like a PC's; nothing else on the disk changed (needs dosfstools, mtools
+                                 # and gdisk)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/chatcomputer.efi
@@ -286,7 +311,9 @@ PC.
 3. ✓ Keyboard: USB (the xHCI controllers, hubs and keyboards) and PS/2 (laptops' built-in keyboards).
    Checked in virtual PCs; on the real PC with step 2.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
-5. Storage: NVMe and SATA, and Chat Computer's own file system for settings, memory and logs.
+5. Storage: ✓ NVMe and SATA (the drive the PC started from), and the conversation kept across restarts in a file on
+   the start-up partition. Checked in virtual PCs. To do: other drives, Chat Computer's own file system for memory
+   and logs, and keeping them encrypted.
 6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e, igb); the internet over
    a USB cable (USB Ethernet adapters and Android phones' tethering: CDC ECM, NCM and RNDIS); written, not yet tried
    on a real PC: Intel's I219, I210, I211, I225 and I226, and Realtek's RTL8111/8168 and RTL8125. To do: trying those
@@ -323,6 +350,6 @@ Three things stand between the steps above and a download that works on any PC o
    can drive everything the PC needs (screen, keyboard, storage and the internet), and the Linux-based
    Chat Computer otherwise. Both look and work the same to the person.
 3. **Drivers, in order of how many PCs each one covers.** Standard interfaces first, where one driver
-   covers nearly every PC: USB (done), PS/2 keyboards (done), NVMe and SATA, the internet over USB (done), HD
+   covers nearly every PC: USB (done), PS/2 keyboards (done), NVMe and SATA (done), the internet over USB (done), HD
    Audio and USB audio, and laptops' power (ACPI). Then the most common chips: Realtek's and Intel's
    wired network (written; to be tried on real PCs), then Intel's and MediaTek's Wi-Fi, the hardest single piece.

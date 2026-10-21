@@ -6,9 +6,10 @@ scratch) on this PC, without a USB stick:
   1. checks this PC (read-only) and saves a list of its parts, for writing Chat Computer's drivers,
   2. signs Chat Computer's start-up file with a key made on this PC (the key never leaves it),
   3. asks for your Claude API key, for talking to Claude there (optional; it's never shown or logged),
-  4. after you confirm, puts the signed file and its settings on the partition the PC starts from
-     (\EFI\chatcomputer-own), next to Windows' own files, and adds "Chat Computer (own system)" to the end of the
-     power-on menu, started once.
+  4. after you confirm, puts the signed file, its settings and its memory file (where it keeps the conversation
+     across restarts; kept when this runs again) on the partition the PC starts from (\EFI\chatcomputer-own),
+     next to Windows' own files, and adds "Chat Computer (own system)" to the end of the power-on menu, started
+     once.
 With Secure Boot on, the PC must first trust Chat Computer's key: one approval in the PC's setup screen (or turn
 Secure Boot off there). Then the PC restarts into Chat Computer's own system; the restart after that is Windows.
 

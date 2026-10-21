@@ -36,6 +36,7 @@ pub fn due() {
 pub fn restart() -> ! {
     crate::log!("Chat Computer kernel: restarting");
     cpu::disable_interrupts();
+    crate::keep::shut_down();
     let reset = *RESET.lock();
     if let Some(r) = reset {
         match r.space {

@@ -77,6 +77,23 @@ fn tools_and_whole_answers_go_in_the_request_unchanged() {
                Some(r#"[{"type":"tool_result","tool_use_id":"toolu_1","content":"8 GB of memory","is_error":false}]"#.into()));
 }
 
+#[test]
+fn a_conversation_kept_as_json_comes_back_the_same() {
+    let blocks = vec![
+        json::parse(r#"{"type":"thinking","thinking":"","signature":"s/+="}"#).unwrap(),
+        json::parse(r#"{"type":"text","text":"Hi \"there\" \u00e9 \n","citations":[{"type":"x","n":1.50}]}"#).unwrap(),
+    ];
+    let conversation = vec![
+        Turn::text(Role::User, "hello\n\"you\""),
+        Turn { role: Role::Assistant, content: Content::Blocks(blocks) },
+        Turn { role: Role::User, content: Content::Blocks(vec![api::tool_result("t1", "ok", false)]) },
+    ];
+    let text = api::messages(&conversation);
+    assert_eq!(api::parse_messages(&text), Some(conversation));
+    assert_eq!(api::parse_messages("[{\"role\":\"system\",\"content\":\"x\"}]"), None);
+    assert_eq!(api::parse_messages("not json"), None);
+}
+
 /// An answer that calls a tool: its thinking left out (as Opus 5.5 does unless asked), a few words, then the call,
 /// its input in pieces.
 fn tool_answer() -> Vec<u8> {

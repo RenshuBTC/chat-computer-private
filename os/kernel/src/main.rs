@@ -24,6 +24,7 @@ mod gdt;
 mod heap;
 mod idt;
 mod iommu;
+mod keep;
 mod keyboard;
 mod layout;
 mod memory;
@@ -36,6 +37,7 @@ mod ps2;
 mod random;
 mod screen;
 mod settings;
+mod storage;
 mod sync;
 mod system;
 mod text;
@@ -177,7 +179,10 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     if cards == 0 {
         log!("Chat Computer kernel: network: no card Chat Computer has a driver for");
     }
+    // The memory file on the start-up drive, and the conversation it kept.
+    log!("Chat Computer kernel: {}", keep::init(&info.start_disk, settings.memory_id));
     assistant::init(settings.claude_api_key, settings.key_problem);
+    chat::restore(&assistant::conversation());
     log!("Chat Computer: ready");
 
     // Tests of the crash path, built in only when asked for (CHATCOMPUTER_TEST=page-fault ./build.sh).
@@ -197,6 +202,7 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         for event in assistant::work() {
             chat::claude(event);
         }
+        assistant::keep();
         usb::work();
         ps2::poll();
         keyboard::repeat();

@@ -14,6 +14,8 @@ net = { path = "../net" }
 crypto = { path = "../crypto" }
 tls = { path = "../tls" }
 claude = { path = "../claude" }
+fat = { path = "../fat" }
+remember = { path = "../remember" }
 
 [[bin]]
 name = "chatcomputer-kernel"

@@ -36,6 +36,8 @@ const BOX_LINES: usize = 6;
 const SHADOW: u32 = 23;
 /// Big redraws (more than a quarter of the screen) at most this often, so a fast answer doesn't take all the time.
 const BIG_REDRAW_MS: u64 = 40;
+/// Under a conversation brought back after a restart.
+const RESTARTED: &str = "Chat Computer started again; the conversation above was kept.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -847,6 +849,24 @@ impl Chat {
         }
     }
 
+    /// The conversation from before the last restart, in place of the start screen, scrolled to its end.
+    fn restore(&mut self, turns: &[(bool, String)]) {
+        if turns.is_empty() || self.stopped {
+            return;
+        }
+        self.started = true;
+        self.blocks.clear();
+        for (you, text) in turns {
+            self.blocks.push(Block::new(if *you { Kind::You } else { Kind::Claude }, Live::No, text.clone()));
+        }
+        self.blocks.push(Block::new(Kind::Note, Live::No, String::from(RESTARTED)));
+        self.lay_out_box();
+        self.lay_out();
+        self.anchor = 0;
+        self.scroll = None;
+        self.dirty = self.canvas.whole();
+    }
+
     /// Replaces everything with what stopped the kernel, the details, and how to go back.
     fn stop(&mut self, what: &str, details: &str) {
         self.stopped = true;
@@ -879,6 +899,13 @@ pub fn keyboards(status: &usb::Status, other: Option<&str>) {
 pub fn typed(p: Press) {
     if let Some(c) = CHAT.lock().as_mut() {
         c.edit(p);
+    }
+}
+
+/// The conversation from before the last restart, shown (nothing if there was none).
+pub fn restore(turns: &[(bool, String)]) {
+    if let Some(c) = CHAT.lock().as_mut() {
+        c.restore(turns);
     }
 }
 

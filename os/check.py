@@ -32,8 +32,9 @@ log go to out/.
                                      its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
                                      drive; a question answered, the PC restarted, the conversation back on the
                                      screen and sent with the next question, then a new conversation started (the
-                                     next question sent alone); the memory file's two copies, and nothing else on
-                                     the disk changed (fsck.vfat too, so also needs dosfstools, mtools and gdisk)
+                                     next question sent alone), then the PC turned off (ACPI's S5); the memory
+                                     file's two copies, and nothing else on the disk changed (fsck.vfat too, so also
+                                     needs dosfstools, mtools and gdisk)
     ./check.py --secure-boot        Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
@@ -803,8 +804,8 @@ def claude(args) -> list[str]:
                 problems.append(f"the first request's messages were {body.get('messages')!r}")
             tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])
             if tools != [("computer_status", None), ("restart_computer", None), ("set_text_size", None),
-                         ("start_new_conversation", None), ("web_fetch", "web_fetch_20250910"),
-                         ("web_search", "web_search_20250305")]:
+                         ("start_new_conversation", None), ("turn_off_computer", None),
+                         ("web_fetch", "web_fetch_20250910"), ("web_search", "web_search_20250305")]:
                 problems.append(f"the request offered the tools {body.get('tools')!r}")
             m2 = (requests[1]["body"] or {}).get("messages") or []
             if m2[:2] != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(r1)}]:
@@ -957,6 +958,7 @@ def remember(args) -> list[str]:
     requests: list[dict] = []
     first_answer = [("thinking", "sig-m1"), ("text", ["Hello! The word is ", "pumpkin."])]
     new_call = [("thinking", "sig-m2"), ("tool_use", "toolu_new", "start_new_conversation", ["{}"])]
+    off_call = [("thinking", "sig-m3"), ("tool_use", "toolu_off", "turn_off_computer", ["{}"])]
 
     class Api(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -972,8 +974,11 @@ def remember(args) -> list[str]:
                 send_stream(self, first_answer, "end_turn")
             elif asked == "new":
                 send_stream(self, new_call, "tool_use")
-            elif isinstance(asked, list):  # the tool's result
-                send_stream(self, [("text", ["Starting afresh."])], "end_turn")
+            elif asked == "off":
+                send_stream(self, off_call, "tool_use")
+            elif isinstance(asked, list):  # a tool's result
+                after = "Turning off now." if asked[0].get("tool_use_id") == "toolu_off" else "Starting afresh."
+                send_stream(self, [("text", [after])], "end_turn")
             else:
                 send_stream(self, [("text", ["Pumpkin."])], "end_turn")
 
@@ -998,6 +1003,7 @@ def remember(args) -> list[str]:
             files = memory_disk(disk, BUILT, settings, MEMORY_ID)
             extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
             texts = []
+            turned_off = False
             for start in (1, 2):
                 pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, kind))
                 try:
@@ -1009,11 +1015,21 @@ def remember(args) -> list[str]:
                     if start == 2:
                         pc.settled_picture(f"memory-{kind}-restored")
                     # The first start: a question. The second: a question after the restart, then a new conversation
-                    # asked for, then a question in it.
-                    for n, question in enumerate(["hi"] if start == 1 else ["word", "new", "hi"]):
+                    # asked for, then a question in it, then Claude asked to turn the PC off (ACPI's S5, which ends
+                    # the virtual PC).
+                    for n, question in enumerate(["hi"] if start == 1 else ["word", "new", "hi", "off"]):
                         monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
                         kept_or_failed(pc.log, n + 1)
-                        pc.settled_picture(f"memory-{kind}-{start}-{question}")
+                        if question == "off":
+                            pc.picture(f"memory-{kind}-{start}-{question}")  # (at once: it turns off 5 s on)
+                        else:
+                            pc.settled_picture(f"memory-{kind}-{start}-{question}")
+                    if start == 2 and wait_for(pc.log, ("kernel: turning off",), 30):
+                        try:
+                            pc.qemu.wait(timeout=20)
+                            turned_off = True
+                        except subprocess.TimeoutExpired:
+                            pass
                 finally:
                     pc.stop()
                 texts.append(pc.text())
@@ -1026,9 +1042,13 @@ def remember(args) -> list[str]:
                     problems.append(f"{kind}, start {start}: {e}")
                     continue
                 # Kept once after each answer: the conversation, then (the second time) the new one, which began
-                # with "hi" again.
-                if kept is None or kept[0] != (1 if start == 1 else 4) or json.loads(kept[1]) != first:
-                    problems.append(f"{kind}, start {start}: the memory file holds {kept!r}")
+                # with "hi" again and ended with Claude turning the PC off.
+                held = json.loads(kept[1]) if kept else None
+                if start == 1 and (kept is None or kept[0] != 1 or held != first):
+                    problems.append(f"{kind}, start 1: the memory file holds {kept!r}")
+                if start == 2 and (kept is None or kept[0] != 5 or held[:3] != first + [{"role": "user", "content": "off"}]
+                                   or held[-1] != {"role": "assistant", "content": [{"type": "text", "text": "Turning off now."}]}):
+                    problems.append(f"{kind}, start 2: the memory file holds {kept!r}")
             drive = "NVMe SSD" if kind == "nvme" else "SATA drive"
             if f"memory: {drive}" not in texts[0]:
                 problems.append(f"{kind}: the memory file wasn't found on the {drive}")
@@ -1036,7 +1056,7 @@ def remember(args) -> list[str]:
                 problems.append(f"{kind}: the conversation didn't come back after the restart")
             word = first + [{"role": "user", "content": "word"}]
             asked = [r.get("messages") for r in requests]
-            if len(asked) != 5 or asked[1] != word:
+            if len(asked) != 7 or asked[1] != word:
                 problems.append(f"{kind}: the question after the restart wasn't asked with the conversation before it: {asked!r}")
             elif asked[2] != word + [{"role": "assistant", "content": [{"type": "text", "text": "Pumpkin."}]},
                                      {"role": "user", "content": "new"}]:
@@ -1045,6 +1065,10 @@ def remember(args) -> list[str]:
                 problems.append(f"{kind}: the question after a new conversation began wasn't sent alone: {asked[4]!r}")
             if "Claude: uses start_new_conversation" not in texts[1] or "Claude: a new conversation starts" not in texts[1]:
                 problems.append(f"{kind}: the new conversation didn't start")
+            if "turning off: sleep type 0 by the PM1 control registers" not in texts[0]:
+                problems.append(f"{kind}: the way to turn off wasn't found in the firmware's tables")
+            if "Claude: uses turn_off_computer" not in texts[1] or not turned_off:
+                problems.append(f"{kind}: asked to, the PC didn't turn off (the virtual PC ended: {turned_off})")
     finally:
         server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)

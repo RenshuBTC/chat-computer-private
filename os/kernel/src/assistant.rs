@@ -39,6 +39,8 @@ pub enum Event {
     TextSize(u32),
     /// Claude is restarting the PC, in this many seconds.
     Restarting(u64),
+    /// Claude is turning the PC off, in this many seconds.
+    TurningOff(u64),
     /// What Claude is doing before it answers ("Searching the web").
     Activity(&'static str),
     /// The conversation so far is over: the next question starts a new one.
@@ -81,15 +83,16 @@ const CLOSING_MS: u64 = 30_000;
 const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, search the \
 web and read web pages, and look after this computer with the tools you have (its status, the text size, restarting \
-it, starting a new conversation), but you can't yet use the computer's files. The conversation is kept across \
-restarts. This screen shows plain text only, so write without Markdown: no asterisks, pound signs, backticks or \
-tables. Separate paragraphs with a blank line, and start list items with a bullet (\u{2022}) or a number.";
+it or turning it off, starting a new conversation), but you can't yet use the computer's files. The conversation is \
+kept across restarts. This screen shows plain text only, so write without Markdown: no asterisks, pound signs, \
+backticks or tables. Separate paragraphs with a blank line, and start list items with a bullet (\u{2022}) or a number.";
 const SYSTEM_NO_WEB: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, and look \
-after this computer with the tools you have (its status, the text size, restarting it, starting a new conversation), \
-but you can't use the web here (it isn't enabled for this API key) or the computer's files. The conversation is kept \
-across restarts. This screen shows plain text only, so write without Markdown: no asterisks, pound signs, backticks or \
-tables. Separate paragraphs with a blank line, and start list items with a bullet (\u{2022}) or a number.";
+after this computer with the tools you have (its status, the text size, restarting it or turning it off, starting a \
+new conversation), but you can't use the web here (it isn't enabled for this API key) or the computer's files. The \
+conversation is kept across restarts. This screen shows plain text only, so write without Markdown: no asterisks, \
+pound signs, backticks or tables. Separate paragraphs with a blank line, and start list items with a bullet (\u{2022}) \
+or a number.";
 /// Said when the oldest part of a long conversation is no longer sent (see `SENT_BYTES`).
 const SYSTEM_SHORTENED: &str = " This conversation began earlier: its oldest part isn't sent to you any more, to keep \
 it short, but the person can still scroll back to it.";
@@ -103,7 +106,7 @@ const WEB_TOOLS: [&str; 2] = [api::WEB_SEARCH, api::WEB_FETCH];
 const SENT_BYTES: usize = 600_000;
 
 /// What Claude can do on this computer.
-const TOOLS: [api::Tool; 4] = [
+const TOOLS: [api::Tool; 5] = [
     api::Tool {
         name: "computer_status",
         description: "What this computer is and how it's doing: its processor, memory, screen, how long Chat Computer's \
@@ -123,6 +126,13 @@ const TOOLS: [api::Tool; 4] = [
                       just once, so the PC then starts what it normally does (Windows, usually); this conversation is \
                       kept for the next time Chat Computer starts. Use it only when the person asks to restart, or to \
                       go back to Windows.",
+        input_schema: r#"{"type":"object","properties":{}}"#,
+    },
+    api::Tool {
+        name: "turn_off_computer",
+        description: "Turns this PC off a few seconds after you finish answering. When it's turned on again, it starts \
+                      what it normally does (Windows, usually); this conversation is kept for the next time Chat \
+                      Computer starts. Use it only when the person asks to turn the computer off or shut it down.",
         input_schema: r#"{"type":"object","properties":{}}"#,
     },
     api::Tool {
@@ -206,8 +216,9 @@ struct Job {
     /// Whether any words have been shown, and whether the next ones start a new paragraph (after tools ran).
     said: bool,
     separate: bool,
-    /// Restart the PC once the answer is over.
+    /// Restart the PC, or turn it off, once the answer is over.
     restart: bool,
+    turn_off: bool,
     /// Start a new conversation once the answer is over.
     new_conversation: bool,
     /// The last answer was paused (during a web search, say): the next one carries on with it.
@@ -392,6 +403,7 @@ pub fn ask(text: &str) -> Result<(), String> {
         said: false,
         separate: false,
         restart: false,
+        turn_off: false,
         new_conversation: false,
         continuing: false,
         text: String::new(),
@@ -485,6 +497,17 @@ fn run_tool(call: &ToolUse, job: &mut Job, events: &mut Vec<Event>) -> (String, 
             job.restart = true;
             (String::from("The PC restarts a few seconds after your answer: tell the person."), false)
         }
+        "turn_off_computer" if crate::power::can_turn_off() => {
+            job.turn_off = true;
+            (String::from("The PC turns off a few seconds after your answer: tell the person."), false)
+        }
+        "turn_off_computer" => (
+            String::from(
+                "Chat Computer can't turn this PC off: its firmware doesn't say how. The person can hold the power \
+                 button for a few seconds instead.",
+            ),
+            true,
+        ),
         "start_new_conversation" => {
             job.new_conversation = true;
             (String::from("A new conversation starts when your answer ends: say so, in a few words."), false)
@@ -645,6 +668,9 @@ impl Assistant {
             if job.restart {
                 events.push(Event::Restarting(5));
                 crate::power::restart_in(5000);
+            } else if job.turn_off {
+                events.push(Event::TurningOff(5));
+                crate::power::turn_off_in(5000);
             }
             return;
         }

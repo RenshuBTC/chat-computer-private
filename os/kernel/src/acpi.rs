@@ -1,6 +1,7 @@
 //! Reads the firmware's ACPI tables: how many processor cores there are, where the interrupt
-//! controllers are, which timers exist, and where PCI Express devices' configuration can be read.
-//! Only the tables (plain data) are read; the small programs (AML) some tables contain are not run.
+//! controllers are, which timers exist, where PCI Express devices' configuration can be read, and how to
+//! restart and turn off the PC. Only the tables (plain data) are read; the small programs (AML) some tables
+//! contain are not run (the one value needed from them, S5's sleep type, is plain data in them).
 
 use crate::paging;
 
@@ -50,6 +51,77 @@ pub struct Acpi {
     pub amd_iommu_count: usize,
     /// How the firmware says to restart the PC (the FADT's reset register), if it says.
     pub reset: Option<ResetRegister>,
+    /// How to turn the PC off ("soft off", ACPI's S5), if the firmware says enough.
+    pub soft_off: Option<SoftOff>,
+}
+
+/// Turning the PC off: the sleep type the firmware gives for S5 (the `\_S5` package in its DSDT), written with "sleep
+/// enable" to the PM1 control registers (or, on a "hardware-reduced" PC, the sleep control register).
+#[derive(Clone, Copy, Debug)]
+pub struct SoftOff {
+    /// The PM1a and PM1b control registers' I/O ports (PM1b: 0, there's none).
+    pub pm1a: u16,
+    pub pm1b: u16,
+    /// A hardware-reduced PC's sleep control register: its generic address (space, address).
+    pub sleep_control: Option<(u8, u64)>,
+    /// S5's sleep type values, for PM1a and PM1b.
+    pub typ_a: u8,
+    pub typ_b: u8,
+    /// To switch the PC into ACPI mode, if the firmware hasn't: the SMI command port, and the value.
+    pub smi_cmd: u16,
+    pub acpi_enable: u8,
+}
+
+/// What the FADT says about turning off, until the `\_S5` package is found.
+#[derive(Default)]
+struct Fadt {
+    dsdt: u64,
+    pm1a: u16,
+    pm1b: u16,
+    sleep_control: Option<(u8, u64)>,
+    hardware_reduced: bool,
+    smi_cmd: u16,
+    acpi_enable: u8,
+}
+
+/// The `\_S5` package's first two values (the sleep types for PM1a and PM1b), found by its name in AML: "_S5_" given a
+/// package by a Name, the form firmware uses. (One worked out by a method would need the AML run.)
+fn s5_in(aml: &[u8]) -> Option<(u8, u8)> {
+    let mut from = 0;
+    while let Some(found) = aml[from..].windows(4).position(|w| w == b"_S5_") {
+        let at = from + found;
+        from = at + 4;
+        // NameOp (0x08) just before the name, or before its root (\) or parent (^) prefix.
+        let name = match at.checked_sub(1).map(|i| aml[i]) {
+            Some(0x08) => true,
+            Some(b'\\' | b'^') => at >= 2 && aml[at - 2] == 0x08,
+            _ => false,
+        };
+        if !name || aml.get(at + 4) != Some(&0x12) {
+            continue; // not a Name with a Package (PackageOp 0x12)
+        }
+        // The package's length (its first byte's top two bits say how many more bytes it has), then how many
+        // elements it has, then the elements.
+        let mut j = at + 5;
+        j += 1 + (*aml.get(j)? >> 6) as usize;
+        let count = *aml.get(j)?;
+        j += 1;
+        let mut values = [0u8; 2];
+        for v in values.iter_mut().take(count.min(2) as usize) {
+            let (value, len) = match *aml.get(j)? {
+                0x00 => (0, 1),                // Zero
+                0x01 => (1, 1),                // One
+                0x0A => (*aml.get(j + 1)?, 2), // a byte
+                0x0B => (*aml.get(j + 1)?, 3), // a word (the values are 3 bits)
+                0x0C => (*aml.get(j + 1)?, 5), // a double word
+                _ => return None,
+            };
+            *v = value;
+            j += len;
+        }
+        return Some((values[0], values[1]));
+    }
+    None
 }
 
 /// A register to write a value to, to restart the PC.
@@ -115,6 +187,8 @@ impl Acpi {
         };
         let step = if wide { 8 } else { 4 };
         let mut at = 36;
+        let mut fadt = Fadt::default();
+        let (mut ssdts, mut ssdt_count) = ([0u64; 32], 0);
         while at + step <= root.len() {
             let phys = if wide { u64_at(root, at) } else { u32_at(root, at) as u64 };
             at += step;
@@ -125,15 +199,20 @@ impl Acpi {
             }
             match &t[..4] {
                 b"APIC" => acpi.read_madt(t),
-                b"FACP" => acpi.read_fadt(t),
+                b"FACP" => fadt = acpi.read_fadt(t),
                 // Its registers' "generic address": usable when it's in memory (address space 0).
                 b"HPET" if u8_at(t, 40) == 0 => acpi.hpet = Some(u64_at(t, 44)).filter(|a| *a != 0),
                 b"MCFG" => acpi.read_mcfg(t),
                 b"DMAR" => acpi.read_dmar(t),
                 b"IVRS" => acpi.read_ivrs(t),
+                b"SSDT" if ssdt_count < ssdts.len() => {
+                    ssdts[ssdt_count] = phys;
+                    ssdt_count += 1;
+                }
                 _ => {}
             }
         }
+        acpi.soft_off = fadt.soft_off(&ssdts[..ssdt_count]);
         acpi
     }
 
@@ -215,11 +294,12 @@ impl Acpi {
         }
     }
 
-    /// The FADT: fixed hardware, including the power-management timer.
-    fn read_fadt(&mut self, t: &[u8]) {
+    /// The FADT: fixed hardware, including the power-management timer. Returns what it says about turning off.
+    fn read_fadt(&mut self, t: &[u8]) -> Fadt {
         // Preferred power profile: 2 is "mobile", 8 "tablet".
         self.portable = matches!(u8_at(t, 45), 2 | 8);
-        let wide = u32_at(t, 112) & (1 << 8) != 0;
+        let flags = u32_at(t, 112);
+        let wide = flags & (1 << 8) != 0;
         // ACPI 2.0+ gives the timer as a "generic address" at 208; use it when it's an I/O port.
         let mut port = u32_at(t, 76) as u64;
         if t.len() >= 220 && u8_at(t, 208) == 1 && u64_at(t, 212) != 0 {
@@ -229,11 +309,61 @@ impl Acpi {
             self.pm_timer = Some(PmTimer { port: port as u16, wide });
         }
         // The reset register (ACPI 2.0+): a generic address at 116 and the value at 128, if flag 10 says so.
-        if t.len() >= 129 && u32_at(t, 112) & (1 << 10) != 0 {
+        if t.len() >= 129 && flags & (1 << 10) != 0 {
             let (space, address) = (u8_at(t, 116), u64_at(t, 120));
             if matches!(space, 0 | 1) && address != 0 {
                 self.reset = Some(ResetRegister { space, address, value: u8_at(t, 128) });
             }
         }
+        // For turning off: the DSDT (its 64-bit address at 140, ACPI 2.0+, else the 32-bit one at 40); the PM1 control
+        // registers (I/O ports: the generic addresses at 172 and 184, else the old fields at 64 and 68); on a
+        // hardware-reduced PC (flag 20), the sleep control register (a generic address at 244, ACPI 5.0+); and the
+        // SMI command port (48) and value (52) that put the PC in ACPI mode.
+        let port = |old: usize, generic: usize| -> u16 {
+            let address = u64_at(t, generic + 4);
+            if t.len() >= generic + 12 && u8_at(t, generic) == 1 && address != 0 && address <= 0xFFFF {
+                return address as u16;
+            }
+            u16::try_from(u32_at(t, old)).unwrap_or(0)
+        };
+        let mut fadt = Fadt {
+            dsdt: u32_at(t, 40) as u64,
+            pm1a: port(64, 172),
+            pm1b: port(68, 184),
+            hardware_reduced: flags & (1 << 20) != 0,
+            smi_cmd: u16::try_from(u32_at(t, 48)).unwrap_or(0),
+            acpi_enable: u8_at(t, 52),
+            ..Fadt::default()
+        };
+        if t.len() >= 148 && u64_at(t, 140) != 0 {
+            fadt.dsdt = u64_at(t, 140);
+        }
+        if t.len() >= 256 && matches!(u8_at(t, 244), 0 | 1) && u64_at(t, 248) != 0 {
+            fadt.sleep_control = Some((u8_at(t, 244), u64_at(t, 248)));
+        }
+        fadt
+    }
+}
+
+impl Fadt {
+    /// Turning off, if the FADT gives the registers and the DSDT (or an SSDT) the sleep types.
+    fn soft_off(&self, ssdts: &[u64]) -> Option<SoftOff> {
+        let sleep_control = if self.hardware_reduced { Some(self.sleep_control?) } else { None };
+        if sleep_control.is_none() && self.pm1a == 0 {
+            return None;
+        }
+        let (typ_a, typ_b) = core::iter::once(self.dsdt)
+            .chain(ssdts.iter().copied())
+            .filter_map(table)
+            .find_map(|t| s5_in(t.get(36..)?))?;
+        Some(SoftOff {
+            pm1a: self.pm1a,
+            pm1b: self.pm1b,
+            sleep_control,
+            typ_a,
+            typ_b,
+            smi_cmd: self.smi_cmd,
+            acpi_enable: self.acpi_enable,
+        })
     }
 }

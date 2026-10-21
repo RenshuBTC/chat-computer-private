@@ -44,7 +44,7 @@ chat-computer/
                             RTL8125), the drive the PC started from (storage/: NVMe, SATA by AHCI), the
                             settings (the Claude API key, the memory file's id) and the clock from the
                             start-up stage, Claude (assistant.rs) with tools on the computer (its status:
-                            system.rs; the text size; a restart: power.rs; a new conversation), the conversation
+                            system.rs; the text size; a restart, or turning off by ACPI S5: power.rs; a new conversation), the conversation
                             kept across restarts (keep.rs; at most ~600 KB of it sent), and the conversation screen (chat.rs, drawn in memory: draw.rs)
     net/                    Own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
     crypto/                 Own cryptography: SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305, X25519, ECDSA, RSA

@@ -25,8 +25,13 @@ use core::fmt;
 use core::ops::Range;
 use font::raster::ONE;
 
-const BACK_TO_WINDOWS: &str = "To go back to Windows, hold the power button until the PC turns off, then turn it on \
-                               again. Chat Computer doesn't write to your disks, so this is safe.";
+const BACK_TO_WINDOWS: &str = "To go back to Windows, ask Claude to restart the PC, or hold the power button until it \
+                               turns off and turn it on again. Chat Computer writes nothing on your disks but its own \
+                               memory file, so either is safe.";
+/// The same, once Chat Computer has stopped (Claude can't be asked).
+const BACK_TO_WINDOWS_STOPPED: &str = "To go back to Windows, hold the power button until the PC turns off, then turn \
+                                       it on again. Chat Computer writes nothing on your disks but its own memory \
+                                       file, so this is safe.";
 
 /// The longest message that can be typed.
 const TYPED_MAX: usize = 4000;
@@ -855,6 +860,10 @@ impl Chat {
                 self.blocks.push(Block::new(Kind::Note, Live::No, format!("Restarting in {seconds} seconds\u{2026}")));
                 self.relayout = true;
             }
+            Event::TurningOff(seconds) => {
+                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Turning off in {seconds} seconds\u{2026}")));
+                self.relayout = true;
+            }
             Event::NewConversation => {
                 self.blocks.push(Block::new(Kind::Divider, Live::No, String::from(NEW_CONVERSATION)));
                 self.relayout = true;
@@ -887,7 +896,7 @@ impl Chat {
         self.blocks = alloc::vec![
             Block::new(Kind::Title, Live::No, format!("Chat Computer stopped: {what}.")),
             Block::new(Kind::Text, Live::No, format!("Details: {details}")),
-            Block::new(Kind::Text, Live::No, String::from(BACK_TO_WINDOWS)),
+            Block::new(Kind::Text, Live::No, String::from(BACK_TO_WINDOWS_STOPPED)),
         ];
         self.relayout = true;
         self.draw(true);

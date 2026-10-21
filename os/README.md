@@ -111,6 +111,11 @@ NVMe and SATA drivers.
     * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
       keyboard controller's reset line (`power.rs`);
+    * `turn_off_computer`: the PC turned off a few seconds after Claude's answer, by ACPI's S5 ("soft off"). S5's
+      sleep type is read from the firmware's DSDT, where it is plain data, and written with "sleep enable" to the
+      PM1 control registers (or a hardware-reduced PC's sleep control register). Other systems also run the
+      firmware's own preparation for it (AML, which Chat Computer doesn't run yet); nearly all PCs turn off without
+      it, and if one doesn't, the screen says so;
     * `start_new_conversation`: when the person asks to start over, the conversation ends after Claude's answer. It
       is no longer sent or kept, and stays on the screen above a line until the next restart.
 
@@ -238,8 +243,8 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # (the computer's status, a bigger text size, a restart), a web search with a
                                  # paused answer, the web tools refused, a failure
 ./check.py --remember            # the conversation kept across a restart, on an NVMe SSD and a SATA drive laid
-                                 # out like a PC's, then a new conversation started; nothing else on the disk
-                                 # changed (needs dosfstools, mtools and gdisk)
+                                 # out like a PC's, then a new conversation started, then the PC turned off;
+                                 # nothing else on the disk changed (needs dosfstools, mtools and gdisk)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/chatcomputer.efi
@@ -336,8 +341,8 @@ PC.
    Claude's answers use (Markdown).
 10. Sound and AirPods: Bluetooth (HCI over USB, L2CAP, A2DP and HFP, SBC and mSBC).
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
-12. Power: ✓ restart. To do: shut down and sleep; on laptops the battery and the lid. These need an AML
-    interpreter.
+12. Power: ✓ restart, ✓ turning off (ACPI's S5, without the firmware's AML). To do: sleep; on laptops the battery
+    and the lid. These need an AML interpreter.
 13. Updates: signed, with a way back.
 14. Later: Wi-Fi (Intel's and MediaTek's chips, which most laptops have), touchpads, graphics
     acceleration, and showing websites.

@@ -17,6 +17,7 @@ claude = { path = "../claude" }
 fat = { path = "../fat" }
 remember = { path = "../remember" }
 markdown = { path = "../markdown" }
+hid = { path = "../hid" }
 
 [[bin]]
 name = "chatcomputer-kernel"

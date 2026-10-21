@@ -22,6 +22,7 @@ dependencies = [
  "crypto",
  "fat",
  "font",
+ "hid",
  "markdown",
  "net",
  "remember",
@@ -45,6 +46,10 @@ version = "0.1.0"
 
 [[package]]
 name = "font"
+version = "0.1.0"
+
+[[package]]
+name = "hid"
 version = "0.1.0"
 
 [[package]]

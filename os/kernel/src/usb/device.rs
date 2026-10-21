@@ -1,16 +1,16 @@
 //! What is plugged into a USB controller. When something is plugged in, Chat Computer gives it a slot and
 //! an address, asks it what it is (its descriptors), and sets it up if it is something Chat Computer uses:
-//! a keyboard, a hub with more devices behind it, or a network adapter (net.rs). Unplugged devices (and
+//! a keyboard, a mouse, a hub with more devices behind it, or a network adapter (net.rs). Unplugged devices (and
 //! everything behind an unplugged hub) give their slots back.
 //!
 //! Requests to a device go on its control endpoint (endpoint 0) as a setup packet, an optional data
-//! stage and a status stage. Keyboards and hubs also send small reports on an interrupt endpoint,
+//! stage and a status stage. Keyboards, mice and hubs also send small reports on an interrupt endpoint,
 //! which the controller collects from them a few hundred times a second.
 
 use super::net::{self, Net};
 use super::xhci::{self, Doorbell, Page, Ring, Trb};
 use super::{changed, sleep, wait, with, Speed};
-use crate::keyboard;
+use crate::{keyboard, mouse};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -24,19 +24,35 @@ const MAX_DEPTH: u8 = 5;
 pub enum Role {
     /// Something Chat Computer doesn't use yet.
     Other,
-    Keyboard(Keyboard),
+    /// Something to type or point with: a keyboard, a mouse, or both (a wireless receiver), an interface each.
+    Input(Vec<Input>),
     Hub(Hub),
     Net(alloc::boxed::Box<Net>),
 }
 
-pub struct Keyboard {
+/// One of a device's interfaces for typing or pointing (HID's, the USB class for them).
+pub struct Input {
     pub interface: u8,
     dci: u8,
+    /// The longest report it sends.
     size: u16,
-    last: [u8; 8],
-    /// The lights last asked for (0xFF: not yet).
-    pub lights: u8,
+    /// Where its reports land in the device's data page.
+    at: usize,
+    pub kind: InputKind,
 }
+
+pub enum InputKind {
+    /// A keyboard, in the boot protocol: its last report, and the lights last asked for (0xFF: not yet).
+    Keyboard { last: [u8; 8], lights: u8 },
+    /// A mouse, in the report protocol: where its controls are in its reports.
+    Mouse(hid::Pointer),
+}
+
+/// A device's inputs share its data page, this much each, from the page's end down (so that a device with one input
+/// reads its reports at an offset, as one with several does).
+const INPUT_ROOM: usize = 512;
+/// So at most this many of a device's interfaces are used.
+const INPUTS_MAX: usize = 4096 / INPUT_ROOM;
 
 pub struct Hub {
     ports: u8,
@@ -69,8 +85,8 @@ pub struct Device {
     /// Events on endpoint 0 since its last request.
     events: Vec<Trb>,
     pub(super) low: bool,
-    /// An interrupt endpoint that stopped after an error (to restart in the main loop).
-    pub stopped: Option<u8>,
+    /// Endpoints that stopped after an error, to restart in the main loop (bit n: device context index n).
+    pub stopped: u32,
     pub name: String,
     pub role: Role,
 }
@@ -174,7 +190,7 @@ impl Device {
             rings: (0..32).map(|_| None).collect(),
             events: Vec::new(),
             low,
-            stopped: None,
+            stopped: 0,
             name: String::new(),
             role: Role::Other,
         })
@@ -201,15 +217,20 @@ impl Device {
         set_dword(&self.input, ep + 16, 8);
     }
 
-    /// Asks again for what its endpoints bring in (after it was set up, or after an endpoint was restarted).
-    fn queue_interrupt(&mut self, db: Doorbell) {
-        let (dci, size) = match &mut self.role {
-            Role::Keyboard(k) => (k.dci, k.size),
-            Role::Hub(h) => (h.dci, h.size),
-            Role::Net(_) | Role::Other => return,
+    /// Asks again for what interrupt endpoint `dci` brings in (after it was set up, after its last report, or after
+    /// it was restarted).
+    fn queue_interrupt(&mut self, db: Doorbell, dci: u8) {
+        let (size, at) = match &self.role {
+            Role::Input(inputs) => match inputs.iter().find(|i| i.dci == dci) {
+                Some(i) => (i.size, i.at),
+                None => return,
+            },
+            Role::Hub(h) if h.dci == dci => (h.size, 0),
+            _ => return,
         };
         if let Some(Some(ring)) = self.rings.get_mut(dci as usize) {
-            ring.push(Trb::new(xhci::TRB_NORMAL, self.data.phys, size as u32, xhci::ON_COMPLETION | xhci::SHORT_OK));
+            let buffer = self.data.phys + at as u64;
+            ring.push(Trb::new(xhci::TRB_NORMAL, buffer, size as u32, xhci::ON_COMPLETION | xhci::SHORT_OK));
             db.ring(self.slot, dci);
         }
     }
@@ -228,7 +249,7 @@ impl Device {
         if let Role::Net(n) = &mut self.role {
             n.restarted(&mut self.rings, db, self.slot, dci);
         } else {
-            self.queue_interrupt(db);
+            self.queue_interrupt(db, dci);
         }
     }
 
@@ -243,36 +264,43 @@ impl Device {
         }
         if let Role::Net(n) = &mut self.role {
             if !n.transfer_event(&mut self.rings, db, self.slot, e) {
-                self.stopped = Some(dci);
+                self.stopped |= 1 << dci;
             }
             return;
         }
         let ok = xhci::ok(e.code());
         let data = &self.data;
-        let read = |n: usize| -> Vec<u8> { (0..n).map(|i| unsafe { read_volatile(data.at::<u8>(i)) }).collect() };
+        let read = |at: usize, n: usize| -> Vec<u8> { (0..n).map(|i| unsafe { read_volatile(data.at::<u8>(at + i)) }).collect() };
         match &mut self.role {
-            Role::Keyboard(k) if dci == k.dci => {
+            Role::Input(inputs) => {
+                let Some(input) = inputs.iter_mut().find(|i| i.dci == dci) else { return };
                 if ok {
-                    let got = (k.size as usize).saturating_sub(e.residual() as usize).min(8);
-                    if got >= 3 {
-                        let mut report = [0u8; 8];
-                        report[..got].copy_from_slice(&read(got));
-                        keyboard::report(&mut k.last, &report);
+                    let got = (input.size as usize).saturating_sub(e.residual() as usize);
+                    match &mut input.kind {
+                        InputKind::Keyboard { last, .. } => {
+                            let got = got.min(8);
+                            if got >= 3 {
+                                let mut report = [0u8; 8];
+                                report[..got].copy_from_slice(&read(input.at, got));
+                                keyboard::report(last, &report);
+                            }
+                        }
+                        InputKind::Mouse(layout) => mouse::report(layout, &read(input.at, got)),
                     }
                 }
             }
             Role::Hub(h) if dci == h.dci => {
                 if ok {
                     let got = (h.size as usize).saturating_sub(e.residual() as usize).min(4);
-                    h.changes |= read(got).iter().enumerate().fold(0u32, |a, (i, b)| a | (*b as u32) << (8 * i));
+                    h.changes |= read(0, got).iter().enumerate().fold(0u32, |a, (i, b)| a | (*b as u32) << (8 * i));
                 }
             }
             _ => return,
         }
         if ok {
-            self.queue_interrupt(db);
+            self.queue_interrupt(db, dci);
         } else {
-            self.stopped = Some(dci);
+            self.stopped |= 1 << dci;
         }
     }
 }
@@ -412,6 +440,8 @@ pub(super) struct Interface {
     pub protocol: u8,
     pub endpoints: Vec<Endpoint>,
     pub extra: Vec<Vec<u8>>,
+    /// A HID interface's report descriptor's length, from its HID descriptor.
+    pub report_length: Option<u16>,
 }
 
 #[derive(Clone, Copy)]
@@ -462,6 +492,7 @@ fn parse_configuration(d: &[u8]) -> Option<(u8, Vec<Interface>)> {
                 protocol: e[7],
                 endpoints: Vec::new(),
                 extra: Vec::new(),
+                report_length: None,
             }),
             5 if len >= 7 => {
                 if let Some(interface) = interfaces.last_mut() {
@@ -480,6 +511,15 @@ fn parse_configuration(d: &[u8]) -> Option<(u8, Vec<Interface>)> {
                     && interface.endpoints.is_empty()
                 {
                     interface.extra.push(e.to_vec());
+                }
+            }
+            // A HID interface's own descriptor: its first class descriptor is its report descriptor, usually.
+            0x21 if len >= 9 => {
+                if let Some(interface) = interfaces.last_mut()
+                    && interface.class == 3
+                    && e[6] == 0x22
+                {
+                    interface.report_length = Some(u16::from_le_bytes([e[7], e[8]]));
                 }
             }
             _ => {}
@@ -628,42 +668,38 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
     control(hc, slot, Request::to_class(0x00, SET_CONFIGURATION, value as u16, 0), &[])?;
 
     let first: Vec<&Interface> = interfaces.iter().filter(|i| i.alt == 0).collect();
-    let keyboard = first.iter().find(|i| i.class == 3 && i.subclass == 1 && i.protocol == 1).copied();
+    let hid: Vec<&Interface> = first.iter().filter(|i| i.class == 3).copied().collect();
     let hub = first.iter().find(|i| i.class == 9).filter(|_| class == 9 || class == 0).copied();
-    let what = if let Some(kind) = net_kind {
+    // What it is, for the log, and what to call it if it gives no name.
+    let (what, plain_name): (String, Option<&str>) = if let Some(kind) = net_kind {
         net::set_up(hc, slot, speed, kind, &interfaces)?;
-        net::describe(kind)
+        (String::from(net::describe(kind)), Some("USB network adapter"))
     } else if let Some(i) = hub {
         if matches!(speed, Speed::Super | Speed::SuperPlus) {
-            "a USB 3 hub (keyboards behind it show up on its USB 2 side)"
+            (String::from("a USB 3 hub (keyboards and mice behind it show up on its USB 2 side)"), Some("USB hub"))
         } else {
             set_up_hub(hc, slot, place, speed, i)?;
-            "a hub"
+            (String::from("a hub"), Some("USB hub"))
         }
-    } else if let Some(i) = keyboard {
-        set_up_keyboard(hc, slot, speed, i)?;
-        "a keyboard"
+    } else if let Some((what, plain_name)) = set_up_inputs(hc, slot, speed, &hid)? {
+        (what, Some(plain_name))
     } else {
-        "a device Chat Computer doesn't use yet"
+        (String::from("a device Chat Computer doesn't use yet"), None)
     };
-    let name = name.unwrap_or_else(|| match what {
-        "a keyboard" => "USB keyboard".to_string(),
-        "a hub" => "USB hub".to_string(),
-        _ if net_kind.is_some() => "USB network adapter".to_string(),
-        _ => format!("USB device {vendor:04x}:{product:04x}"),
-    });
+    let name = name.unwrap_or_else(|| plain_name.map_or_else(|| format!("USB device {vendor:04x}:{product:04x}"), String::from));
     log_port(
         hc,
         &place.describe(),
         &format!("{what}, \"{name}\" ({vendor:04x}:{product:04x}, {}), in slot {slot}", speed.name()),
     );
-    let is_keyboard = what == "a keyboard";
-    with(hc, |c| {
-        if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
+    let used = with(hc, |c| match c.devices.get_mut(slot as usize) {
+        Some(Some(d)) => {
             d.name = name;
+            matches!(d.role, Role::Input(_) | Role::Net(_))
         }
+        _ => false,
     });
-    if is_keyboard || net_kind.is_some() {
+    if used {
         changed();
     }
     Ok(())
@@ -778,26 +814,117 @@ fn add_interrupt_in(hc: usize, slot: u8, ep: Endpoint, speed: Speed, hub: Option
     Ok(dci)
 }
 
-fn set_up_keyboard(hc: usize, slot: u8, speed: Speed, interface: &Interface) -> Result<(), Error> {
-    let ep = *interface.endpoints.iter().find(|e| e.interrupt_in()).ok_or(Error::Bad("the keyboard has no endpoint for keys"))?;
-    let number = interface.number as u16;
-    // The boot protocol: the simple 8-byte reports every keyboard can send (PC firmware uses them too).
-    // A keyboard that refuses is used anyway: most send the same reports regardless.
-    if let Err(e) = control(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 0, number), &[]) {
-        log_port(hc, &format!("slot {slot}"), &format!("the keyboard refused the boot protocol ({}); using it anyway", e.say()));
+/// Sets up a device's HID interfaces that are keyboards or mice, each with its interrupt endpoint. Returns what they
+/// make it, for the log, and what to call it if it gives no name; None if none is a keyboard or a mouse (a game
+/// controller, say, or a security key's own interface). An interface that can't be set up is passed over, and said
+/// so in the log, unless none can be.
+fn set_up_inputs(hc: usize, slot: u8, speed: Speed, interfaces: &[&Interface]) -> Result<Option<(String, &'static str)>, Error> {
+    let mut inputs: Vec<Input> = Vec::new();
+    let mut failed = None;
+    for interface in interfaces {
+        if inputs.len() == INPUTS_MAX {
+            break;
+        }
+        let Some(ep) = interface.endpoints.iter().find(|e| e.interrupt_in()).copied() else { continue };
+        let keyboard = interface.subclass == 1 && interface.protocol == 1;
+        let kind = if keyboard {
+            keyboard_protocol(hc, slot, interface.number);
+            InputKind::Keyboard { last: [0; 8], lights: 0xFF }
+        } else {
+            let Some(layout) = mouse_layout(hc, slot, interface) else { continue };
+            InputKind::Mouse(layout)
+        };
+        match add_interrupt_in(hc, slot, ep, speed, None) {
+            Ok(dci) => {
+                let (least, most) = if keyboard { (8, 64) } else { (1, INPUT_ROOM as u16) };
+                let size = (ep.max_packet & 0x7FF).clamp(least, most);
+                let at = (INPUTS_MAX - 1 - inputs.len()) * INPUT_ROOM;
+                inputs.push(Input { interface: interface.number, dci, size, at, kind });
+            }
+            Err(e) => {
+                log_port(hc, &format!("slot {slot}"), &format!("its interface {} couldn't be set up: {}", interface.number, e.say()));
+                failed = Some(e);
+            }
+        }
     }
-    // Only send a report when something changes. Some keyboards don't take this; that's fine.
-    let _ = control(hc, slot, Request::to_class(0x21, HID_SET_IDLE, 0, number), &[]);
-    let dci = add_interrupt_in(hc, slot, ep, speed, None)?;
+    if inputs.is_empty() {
+        return failed.map_or(Ok(None), Err);
+    }
+    let keyboard = inputs.iter().any(|i| matches!(i.kind, InputKind::Keyboard { .. }));
+    let mouse = inputs.iter().find_map(|i| match &i.kind {
+        InputKind::Mouse(layout) => Some(describe_mouse(layout)),
+        InputKind::Keyboard { .. } => None,
+    });
+    let described = match (keyboard, mouse) {
+        (false, Some(m)) => (m, "USB mouse"),
+        (true, Some(m)) => (format!("a keyboard and {m}"), "USB keyboard and mouse"),
+        _ => (String::from("a keyboard"), "USB keyboard"),
+    };
     with(hc, |c| {
         let db = c.host.doorbell();
         if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
-            let size = (ep.max_packet & 0x7FF).clamp(8, 64);
-            d.role = Role::Keyboard(Keyboard { interface: interface.number, dci, size, last: [0; 8], lights: 0xFF });
-            d.queue_interrupt(db);
+            let endpoints: Vec<u8> = inputs.iter().map(|i| i.dci).collect();
+            d.role = Role::Input(inputs);
+            for dci in endpoints {
+                d.queue_interrupt(db, dci);
+            }
         }
     });
-    Ok(())
+    Ok(Some(described))
+}
+
+/// A keyboard interface: the boot protocol, the simple 8-byte reports every keyboard can send (PC firmware uses them
+/// too), and a report only when something changes. A keyboard that refuses the boot protocol is used anyway (most
+/// send the same reports regardless); some don't take the second, which is fine.
+fn keyboard_protocol(hc: usize, slot: u8, number: u8) {
+    let number = number as u16;
+    if let Err(e) = control(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 0, number), &[]) {
+        log_port(hc, &format!("slot {slot}"), &format!("the keyboard refused the boot protocol ({}); using it anyway", e.say()));
+    }
+    let _ = control(hc, slot, Request::to_class(0x21, HID_SET_IDLE, 0, number), &[]);
+}
+
+/// Where a HID interface's buttons, movement and wheel are, if it is a mouse: from its report descriptor, in the
+/// report protocol. A boot mouse (one that can also send the boot protocol's fixed reports) whose descriptor can't be
+/// read or used is read in the boot protocol instead.
+fn mouse_layout(hc: usize, slot: u8, interface: &Interface) -> Option<hid::Pointer> {
+    let number = interface.number as u16;
+    // A report only when something changes (a mouse's usual way; one that refuses is fine).
+    let _ = control(hc, slot, Request::to_class(0x21, HID_SET_IDLE, 0, number), &[]);
+    let length = interface.report_length.unwrap_or(1024).clamp(1, CONTROL_MAX as u16);
+    let get_report_descriptor = Request { kind: 0x81, request: 6, value: 0x22 << 8, index: number, length };
+    // A test build can be told to pass the descriptor over, to try the boot protocol (check.py --keyboard).
+    let layout = if option_env!("CHATCOMPUTER_TEST_USB_MOUSE") == Some("boot") {
+        None
+    } else {
+        control(hc, slot, get_report_descriptor, &[]).ok().and_then(|d| hid::parse(&d))
+    };
+    // Only boot devices take a protocol. A device starts in the report protocol, but the firmware may have asked for
+    // the boot protocol before Chat Computer took over.
+    let boot = interface.subclass == 1;
+    match layout {
+        Some(layout) => {
+            if boot {
+                let _ = control(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 1, number), &[]);
+            }
+            Some(layout)
+        }
+        None if boot && interface.protocol == 2 => {
+            control(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 0, number), &[]).ok()?;
+            Some(hid::boot_mouse())
+        }
+        None => None,
+    }
+}
+
+/// "a mouse (3 buttons, a wheel)", for the log.
+fn describe_mouse(layout: &hid::Pointer) -> String {
+    let buttons = match layout.button_count() {
+        1 => String::from("1 button"),
+        n => format!("{n} buttons"),
+    };
+    let wheel = if layout.wheel.is_some_and(|w| w.relative) { ", a wheel" } else { ", no wheel" };
+    format!("a mouse ({buttons}{wheel})")
 }
 
 pub fn set_lights(hc: usize, slot: u8, interface: u8, lights: u8) {
@@ -829,7 +956,7 @@ fn set_up_hub(hc: usize, slot: u8, place: Place, speed: Speed, interface: &Inter
             // Every port is looked at once, then whenever the hub reports a change.
             let all = ((1u32 << (ports + 1)) - 1) & !1;
             d.role = Role::Hub(Hub { ports, dci, size, changes: all });
-            d.queue_interrupt(db);
+            d.queue_interrupt(db, dci);
         }
     });
     Ok(())
@@ -935,8 +1062,8 @@ fn detach(hc: usize, slot: u8) {
     for child in children {
         detach(hc, child);
     }
-    let (name, was_keyboard) = with(hc, |c| match c.devices.get(slot as usize) {
-        Some(Some(d)) => (d.name.clone(), matches!(d.role, Role::Keyboard(_) | Role::Net(_))),
+    let (name, used) = with(hc, |c| match c.devices.get(slot as usize) {
+        Some(Some(d)) => (d.name.clone(), matches!(d.role, Role::Input(_) | Role::Net(_))),
         _ => (String::new(), false),
     });
     let _ = command(hc, |h| h.disable_slot(slot));
@@ -954,7 +1081,7 @@ fn detach(hc: usize, slot: u8) {
         }
         place
     });
-    if was_keyboard {
+    if used {
         keyboard::stop_repeat();
         changed();
     }

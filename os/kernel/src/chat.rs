@@ -3,7 +3,7 @@
 //! right in a light grey bubble; the message box at the bottom, a white card with a soft shadow, "Type anything"
 //! in it while it's empty, and its send button, grey until there's something to send. What you send goes to the
 //! top of the screen, with the answer coming in under it (and the screen following the answer down); Page Up and
-//! Page Down, or the arrow keys, scroll. Esc clears the box, or stops an answer.
+//! Page Down, the arrow keys, or a mouse's wheel scroll. Esc clears the box, or stops an answer.
 //!
 //! Before the first message, the column says what this PC is, how long Chat Computer has been running on it
 //! (counted by the kernel's own timer), which keyboards it found, whether Claude can be reached, and how to get
@@ -921,6 +921,19 @@ pub fn tick() {
 pub fn keyboards(status: &usb::Status, other: Option<&str>) {
     if let Some(c) = CHAT.lock().as_mut() {
         c.show_keyboards(status, other);
+    }
+}
+
+/// A mouse's wheel turned this many notches (positive away from you): the conversation scrolls three lines a notch,
+/// back for a turn away from you, as Windows' default is.
+pub fn wheel(notches: i32) {
+    // A test build of the keyboard (check.py --keyboard) says so in the log, so the test can check the turns arrive.
+    if option_env!("CHATCOMPUTER_TEST") == Some("keyboard") {
+        crate::log!("Chat Computer kernel: test: wheel {notches}");
+    }
+    if let Some(c) = CHAT.lock().as_mut() {
+        let lines = 3 * c.m.line;
+        c.scroll_by(notches.saturating_mul(lines).saturating_neg());
     }
 }
 

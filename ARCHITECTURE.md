@@ -38,14 +38,17 @@ chat-computer/
   "Chat Computer Setup.command"  Double-click entry point for Mac setup (runs mac/setup.sh)
   os/                       Chat Computer's own operating system, from scratch (Rust, no outside code); see os/README.md
     boot/                   UEFI start-up stage (BOOTX64.EFI) that carries the kernel
-    kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards, network
-                            adapters: CDC ECM and NCM, RNDIS), PS/2 keyboards, network cards (netcard/: virtio,
+    kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards, mice (their
+                            wheels scroll: mouse.rs), network adapters: CDC ECM and NCM, RNDIS), PS/2 keyboards,
+                            network cards (netcard/: virtio,
                             Intel's e1000 and igb families and I225/I226, Realtek's RTL8111/8168 and
                             RTL8125), the drive the PC started from (storage/: NVMe, SATA by AHCI), the
                             settings (the Claude API key, the memory file's id) and the clock from the
                             start-up stage, Claude (assistant.rs) with tools on the computer (its status:
-                            system.rs; the text size; a restart, or turning off by ACPI S5: power.rs; a new conversation), the conversation
-                            kept across restarts (keep.rs; at most ~600 KB of it sent), and the conversation screen (chat.rs, drawn in memory: draw.rs;
+                            system.rs; the text size; a restart, or turning off by ACPI S5: power.rs; a new conversation;
+                            notes about the person: remember and forget), the conversation and the notes kept across
+                            restarts (keep.rs, as JSON {"notes": [...], "messages": [...]}; at most ~600 KB of the
+                            conversation sent), and the conversation screen (chat.rs, drawn in memory: draw.rs;
                             Claude's answers laid out from their Markdown: rich.rs)
     net/                    Own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
     crypto/                 Own cryptography: SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305, X25519, ECDSA, RSA
@@ -55,13 +58,14 @@ chat-computer/
     font/                   Own TrueType reader and rasterizer, variable fonts too (fvar/avar/gvar: the bold, from the same file)
     markdown/               Claude's Markdown read by md.js's rules (tested against md.js itself: markdown/gen/gen.js)
     fat/                    Own FAT12/16/32 reader: a file's blocks on the start-up partition
+    hid/                    USB HID report descriptors: where a mouse's buttons, movement and wheel are in its reports
     remember/               The memory file's format (memory.bin): 512-byte chunks tagged "CCMEMORY" + file id
                             (u32 LE) + chunk number (u32 LE), 496 data bytes each; two halves written in turn, each
                             headed "CCMEMDAT" + version + sequence + length + FNV-1a 64 (header written last); a
                             sector is written only after all its tags are read back and match
     build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced,
-                            typing on PS/2 and USB keyboards, the network, a conversation with a stand-in
-                            for Claude's API over HTTPS, and the conversation kept across a restart on NVMe
+                            typing on PS/2 and USB keyboards, USB mice's wheels, the network, a conversation with a
+                            stand-in for Claude's API over HTTPS, and the conversation kept across a restart on NVMe
                             and SATA)
     release/chatcomputer.efi  The reproducible build Windows uses (CI checks it matches the source)
   windows/own-os.ps1        "Chat Computer Own System.cmd": signs os/release with a key Windows makes on the PC

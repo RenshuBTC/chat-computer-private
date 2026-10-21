@@ -78,6 +78,11 @@ pub fn status() -> String {
         keyboards.push(String::from(ps2));
     }
     lines.push(if keyboards.is_empty() { String::from("Keyboards: none found") } else { format!("Keyboards: {}", keyboards.join(", ")) });
+    lines.push(if u.mice.is_empty() {
+        String::from("Mice: none found (a USB mouse's wheel would scroll the conversation)")
+    } else {
+        format!("Mice: {} (the wheel scrolls the conversation; there is no pointer on the screen to move or click yet)", u.mice.join(", "))
+    });
     lines.push(crate::keep::status());
     lines.push(String::from(
         "Not yet in Chat Computer's own system: files (it reads and writes only its own memory file), sound, Wi-Fi, \

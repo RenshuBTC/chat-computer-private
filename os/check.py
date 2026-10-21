@@ -10,7 +10,10 @@ log go to out/.
     ./check.py --keyboard            keyboards: PS/2; USB on a port and behind a hub, with MSI-X, MSI and
                                      no interrupts, and with Intel's and AMD's IOMMUs present; typing
                                      (Shift, Backspace, Caps Lock) reaches the screen; a keyboard plugged
-                                     in later, then unplugged; a hub unplugged
+                                     in later, then unplugged; a hub unplugged; USB mice (QEMU's mouse
+                                     and tablet), their wheels' turns reaching the screen, read from their
+                                     report descriptors (and by the boot protocol in a build told to); a
+                                     smart card reader left alone
     ./check.py --crash page-fault    a kernel that faults on purpose once ready: it must stop cleanly,
                                      with the fault in its log and a message on the screen (also: panic)
     ./check.py --network             the network, with each kind of card there's a driver for (virtio, Intel's
@@ -26,7 +29,8 @@ log go to out/.
                                      a bigger text size, a restart, which ends the virtual PC), the answers'
                                      thinking sent back unchanged, a web search (run by Anthropic: its results and
                                      citations kept as they came, the answer paused and carried on), the web tools
-                                     refused and left out, and a failure shown
+                                     refused and left out, a failure shown, and the conversation scrolled back and
+                                     forth by a USB mouse's wheel
     ./check.py --remember            the conversation kept across a restart: started from a disk laid out like a
                                      PC's (a FAT32 start-up partition with Windows' files and Chat Computer's,
                                      its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
@@ -110,6 +114,44 @@ def monitor(sock_path: Path, command: str) -> None:
             s.recv(65536)
         except TimeoutError:
             pass
+
+
+def monitor_ask(sock_path: Path, command: str) -> str:
+    """Sends a monitor command and returns what the monitor answered."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.connect(str(sock_path))
+        s.settimeout(0.5)
+        time.sleep(0.2)
+        try:
+            s.recv(65536)  # the banner
+        except TimeoutError:
+            pass
+        s.sendall(command.encode() + b"\n")
+        time.sleep(0.5)
+        answer = b""
+        try:
+            while chunk := s.recv(65536):
+                answer += chunk
+        except TimeoutError:
+            pass
+    return answer.decode(errors="replace")
+
+
+def use_mouse(sock_path: Path, name: str) -> bool:
+    """Makes the mouse QEMU's "info mice" lists as `name` the one the monitor's mouse commands move. Returns whether
+    there is one."""
+    import re
+
+    m = re.search(rf"Mouse #(\d+): {re.escape(name)}", monitor_ask(sock_path, "info mice"))
+    if m:
+        monitor(sock_path, f"mouse_set {m.group(1)}")
+    return m is not None
+
+
+def turn_wheel(sock_path: Path, notches: list[int]) -> None:
+    """Turns the mouse's wheel a notch at a time: away from you for 1, towards you for -1."""
+    for n in notches:
+        monitor(sock_path, f"mouse_move 0 0 {n}")
 
 
 def wait_for(log: Path, words: tuple[str, ...], timeout: float, times: int = 1) -> str | None:
@@ -299,15 +341,18 @@ KEYS = ["shift-h", "i", "shift-1", "spc", "c", "x", "backspace", "l", "a", "u", 
 TYPED = "Hi! claude OK"
 
 
-def keyboard_run(label: str, controller: str, args, plug: bool) -> list[str]:
-    """One start with a USB controller (`controller`: QEMU's device and options), a keyboard on one of
-    its ports, a hub with a keyboard behind it, and a tablet (which Chat Computer doesn't use yet and must
-    leave alone). QEMU types on the keyboard made last: the one behind the hub."""
-    print(f"--- USB keyboards, interrupts: {label}")
+def keyboard_run(label: str, controller: str, args, plug: bool, boot_mice: bool = False) -> list[str]:
+    """One start with a USB controller (`controller`: QEMU's device and options), a keyboard on one of its ports, a
+    tablet on another, a hub with a keyboard, a mouse and a smart card reader (which Chat Computer doesn't use yet and
+    must leave alone) behind it. QEMU types on the keyboard made last: the one behind the hub. `boot_mice`: the build
+    reads mice by the boot protocol, which QEMU's tablet doesn't offer."""
+    print(f"--- USB keyboards and mice, interrupts: {label}")
     extra = ("-device", f"{controller},id=xhci",
              "-device", "usb-kbd,bus=xhci.0,port=1,id=kbd1",
              "-device", "usb-tablet,bus=xhci.0,port=3",
              "-device", "usb-hub,bus=xhci.0,port=2,id=hub",
+             "-device", "usb-mouse,bus=xhci.0,port=2.2",
+             "-device", "usb-ccid,bus=xhci.0,port=2.3",
              "-device", "usb-kbd,bus=xhci.0,port=2.1,id=kbd2")
     pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
     problems = []
@@ -322,8 +367,15 @@ def keyboard_run(label: str, controller: str, args, plug: bool) -> list[str]:
             problems.append(f"{label}: expected two keyboards in the log")
         if "port 6.1: a keyboard" not in text:
             problems.append(f"{label}: the keyboard behind the hub wasn't found")
-        if "QEMU USB Tablet" not in text or "doesn't use yet" not in text:
-            problems.append(f"{label}: the tablet wasn't found and left alone")
+        # QEMU's mouse: five buttons by its report descriptor, the boot protocol's three by that.
+        mouse = f"port 6.2: a mouse ({3 if boot_mice else 5} buttons, a wheel), \"QEMU USB Mouse\""
+        if mouse not in text:
+            problems.append(f"{label}: the mouse behind the hub wasn't found as {mouse!r}")
+        tablet = "port 7: " + ("a device Chat Computer doesn't use yet" if boot_mice else "a mouse (3 buttons, a wheel)")
+        if f"{tablet}, \"QEMU USB Tablet\"" not in text:
+            problems.append(f"{label}: the tablet wasn't found as {tablet!r}")
+        if "port 6.3: a device Chat Computer doesn't use yet" not in text:
+            problems.append(f"{label}: the smart card reader wasn't found and left alone")
         time.sleep(1)
         before = pc.picture(f"{name}-1")
         monitor_many(pc.mon, [f"sendkey {k}" for k in KEYS])
@@ -340,6 +392,19 @@ def keyboard_run(label: str, controller: str, args, plug: bool) -> list[str]:
             box = (0, rows[0], before.size[0], rows[1])
             if ImageChops.difference(before.crop(box), after.crop(box)).getbbox() is None:
                 problems.append(f"{label}: the typed line didn't appear in the message box")
+        # The mouse's wheel turned away from you twice and back once, then the tablet's back once.
+        import re
+        if not use_mouse(pc.mon, "QEMU HID Mouse"):
+            problems.append(f"{label}: QEMU has no USB mouse to turn the wheel of")
+        turn_wheel(pc.mon, [1, 1, -1])
+        wanted = [1, 1, -1]
+        if not boot_mice and use_mouse(pc.mon, "QEMU HID Tablet"):
+            turn_wheel(pc.mon, [-1])
+            wanted.append(-1)
+        time.sleep(1)
+        turns = [int(t) for t in re.findall(r"test: wheel (-?\d+)", pc.text())]
+        if turns != wanted:
+            problems.append(f"{label}: the wheels' turns came out as {turns}, not {wanted}")
         if plug:
             # Plug a third keyboard in (QEMU then types on it), type on it, and unplug it; then unplug
             # the hub, which takes the keyboard behind it along.
@@ -355,8 +420,9 @@ def keyboard_run(label: str, controller: str, args, plug: bool) -> list[str]:
             monitor(pc.mon, "device_del hub")
             if not wait_for(pc.log, ("port 6: \"QEMU USB Hub\" was unplugged",), 15):
                 problems.append(f"{label}: unplugging the hub wasn't noticed")
-            elif "port 6.1: \"QEMU USB Keyboard\" was unplugged" not in pc.text():
-                problems.append(f"{label}: the keyboard behind the unplugged hub wasn't let go")
+            elif "port 6.1: \"QEMU USB Keyboard\" was unplugged" not in pc.text() \
+                    or "port 6.2: \"QEMU USB Mouse\" was unplugged" not in pc.text():
+                problems.append(f"{label}: the keyboard and mouse behind the unplugged hub weren't let go")
             time.sleep(1)
             pc.picture(f"{name}-3")
     finally:
@@ -419,7 +485,9 @@ def keyboard(args) -> list[str]:
         # interrupts at all.
         problems += keyboard_run("MSI-X", "qemu-xhci", args, plug=True)
         problems += keyboard_run("MSI", "nec-usb-xhci,msix=off", args, plug=False)
-        problems += keyboard_run("none", "nec-usb-xhci,msix=off,msi=off", args, plug=False)
+        # A build that reads mice by the boot protocol, as it reads a mouse whose report descriptor can't be used.
+        build("keyboard", {"CHATCOMPUTER_TEST_USB_MOUSE": "boot"})
+        problems += keyboard_run("none", "nec-usb-xhci,msix=off,msi=off", args, plug=False, boot_mice=True)
     finally:
         build()  # never leave a test build in out/
     return problems
@@ -631,8 +699,11 @@ def claude(args) -> list[str]:
     runs): its results and the answer's citations must come back as they came, and the answer, paused by the API,
     must be sent back to go on, the rest joining it. The fourth asks to restart: the API first refuses the web tools
     (as it does when an organization has switched them off), so the question must be asked again without them;
-    then Claude restarts the PC. The stand-in checks what it was sent."""
+    then Claude restarts the PC. The stand-in checks what it was sent. After the third answer, a USB mouse's wheel
+    scrolls the conversation back a notch and forward again."""
     import http.server
+
+    from PIL import ImageChops
 
     tmp = Path(tempfile.mkdtemp(prefix="cc-claude-"))
     test_authority(tmp)
@@ -719,8 +790,9 @@ def claude(args) -> list[str]:
     build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
     problems: list[str] = []
     try:
-        # (Intel's card here; --network tries every kind.)
-        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
+        # (Intel's card here; --network tries every kind.) And a USB mouse, to scroll with.
+        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=",
+                 "-device", "qemu-xhci,id=xhci", "-device", "usb-mouse,bus=xhci.0")
         # As Chat Computer Own System writes it on Windows (New-OwnSettingsText): notes, Windows' line breaks.
         settings = ("# Chat Computer's settings, read by its own system when it starts. Written by Chat Computer Own System.\r\n"
                     "# The Claude API key is kept here as it is: anyone who can read this partition can read it.\r\n"
@@ -728,6 +800,7 @@ def claude(args) -> list[str]:
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings)
         first = second = third = searched = searching = None
         restarted = ended = False
+        scrolled = []
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
@@ -748,7 +821,13 @@ def claude(args) -> list[str]:
                 time.sleep(1)
                 searching = pc.picture("claude-searching")
             searched = wait_for(pc.log, ("Enjoy the day",), 60)
-            pc.settled_picture("claude-search")
+            at_end = pc.settled_picture("claude-search")
+            # The wheel a notch away from you: the conversation scrolls back; a notch towards you: forward again.
+            if use_mouse(pc.mon, "QEMU HID Mouse"):
+                turn_wheel(pc.mon, [1])
+                back = pc.settled_picture("claude-scrolled")
+                turn_wheel(pc.mon, [-1])
+                scrolled = [at_end, back, pc.settled_picture("claude-scrolled-forward")]
             # Asked to restart: Claude's answer, then a restart (which ends a virtual PC started with -no-reboot).
             monitor_many(pc.mon, [f"sendkey {k}" for k in "restart"] + ["sendkey ret"])
             third = wait_for(pc.log, ("Restarting now", "Claude: failed", "stopped"), 60)
@@ -787,6 +866,10 @@ def claude(args) -> list[str]:
             problems.append(f"the answer after a web search didn't come whole (the log says {searched!r})")
         if "Claude: searches the web" not in text:
             problems.append("the web search wasn't noticed")
+        if not scrolled:
+            problems.append("QEMU has no USB mouse to scroll with")
+        elif [ImageChops.difference(scrolled[0], b).getbbox() is None for b in scrolled[1:]] != [False, True]:
+            problems.append("the mouse's wheel didn't scroll the conversation back, then forward to where it was")
         if "the web tools aren't enabled for this API key" not in text:
             problems.append("the web tools weren't left out once the API refused them")
         if len(requests) != 9:

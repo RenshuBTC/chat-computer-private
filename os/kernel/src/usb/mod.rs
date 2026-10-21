@@ -1,5 +1,5 @@
 //! USB: Chat Computer's own drivers for the PC's USB controllers and what is plugged into them. So far:
-//! keyboards, network adapters and phones sharing their connection (net.rs), and the hubs they may be behind (a
+//! keyboards, mice, network adapters and phones sharing their connection (net.rs), and the hubs they may be behind (a
 //! monitor's, a dock's, or one inside the PC).
 //!
 //! The controllers' events are handled in their interrupt, or, on a controller that can't send
@@ -15,7 +15,7 @@ use crate::{cpu, idt, keyboard, pci, time};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use device::{Device, Role};
+use device::{Device, InputKind, Role};
 use xhci::Host;
 
 /// How fast a device talks.
@@ -70,7 +70,7 @@ pub struct Controller {
 }
 
 static CONTROLLERS: SpinLock<Vec<Controller>> = SpinLock::new(Vec::new());
-/// Counts changes to the list of keyboards, so the screen knows when to say so.
+/// Counts changes to the lists of keyboards, mice and network adapters, so the screen knows when to say so.
 static CHANGES: AtomicU64 = AtomicU64::new(0);
 
 fn changed() {
@@ -201,7 +201,11 @@ fn pass(hc: usize) -> bool {
                 _ => None,
             })
             .collect();
-        let broken: Vec<(u8, u8)> = c.devices.iter_mut().flatten().filter_map(|d| d.stopped.take().map(|dci| (d.slot, dci))).collect();
+        let mut broken: Vec<(u8, u8)> = Vec::new();
+        for d in c.devices.iter_mut().flatten() {
+            let stopped = core::mem::take(&mut d.stopped);
+            broken.extend((1..32u8).filter(|dci| stopped & 1 << dci != 0).map(|dci| (d.slot, dci)));
+        }
         (c.host.take_port_changes(), hubs, broken)
     });
     let busy = !ports.is_empty() || !hubs.is_empty() || !broken.is_empty();
@@ -216,17 +220,19 @@ fn pass(hc: usize) -> bool {
     }
     let lights = keyboard::lights();
     let keyboards: Vec<(u8, u8)> = with(hc, |c| {
-        c.devices
-            .iter_mut()
-            .flatten()
-            .filter_map(|d| match &mut d.role {
-                Role::Keyboard(k) if k.lights != lights => {
-                    k.lights = lights;
-                    Some((d.slot, k.interface))
+        let mut out = Vec::new();
+        for d in c.devices.iter_mut().flatten() {
+            let Role::Input(inputs) = &mut d.role else { continue };
+            for i in inputs.iter_mut() {
+                if let InputKind::Keyboard { lights: shown, .. } = &mut i.kind
+                    && *shown != lights
+                {
+                    *shown = lights;
+                    out.push((d.slot, i.interface));
                 }
-                _ => None,
-            })
-            .collect()
+            }
+        }
+        out
     });
     for (slot, interface) in keyboards {
         device::set_lights(hc, slot, interface, lights);
@@ -278,22 +284,30 @@ pub struct Status {
     pub controllers: usize,
     pub running: usize,
     pub keyboards: Vec<String>,
+    pub mice: Vec<String>,
 }
 
 pub fn status() -> Status {
     let controllers = CONTROLLERS.lock();
-    let mut keyboards = Vec::new();
+    let (mut keyboards, mut mice) = (Vec::new(), Vec::new());
     for c in controllers.iter().filter(|c| c.host.running) {
         for d in c.devices.iter().flatten() {
-            if matches!(d.role, Role::Keyboard(_)) {
+            let Role::Input(inputs) = &d.role else { continue };
+            // A keyboard if its first interface is one: a wireless receiver's is (its mouse comes second), while a
+            // gaming mouse's keys (for its macros) come after its mouse.
+            if inputs.first().is_some_and(|i| matches!(i.kind, InputKind::Keyboard { .. })) {
                 keyboards.push(d.name.clone());
+            }
+            if inputs.iter().any(|i| matches!(i.kind, InputKind::Mouse(_))) {
+                mice.push(d.name.clone());
             }
         }
     }
-    Status { controllers: controllers.len(), running: controllers.iter().filter(|c| c.host.running).count(), keyboards }
+    let running = controllers.iter().filter(|c| c.host.running).count();
+    Status { controllers: controllers.len(), running, keyboards, mice }
 }
 
-/// Changes whenever the list of keyboards (or network adapters) may have changed.
+/// Changes whenever the lists of keyboards, mice or network adapters may have changed.
 pub fn changes() -> u64 {
     CHANGES.load(Ordering::Relaxed)
 }

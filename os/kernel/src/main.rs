@@ -28,6 +28,7 @@ mod keep;
 mod keyboard;
 mod layout;
 mod memory;
+mod mouse;
 mod netcard;
 mod network;
 mod paging;
@@ -209,6 +210,10 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         keyboard::repeat();
         while let Some(press) = keyboard::take() {
             chat::typed(press);
+        }
+        let turned = mouse::take_wheel();
+        if turned != 0 {
+            chat::wheel(turned);
         }
         if usb::changes() != keyboards_shown {
             keyboards_shown = usb::changes();

@@ -76,6 +76,9 @@ NVMe and SATA drivers.
     * hubs, up to five in a row. This includes the USB 2 side of USB 3 hubs, where keyboards appear, and
       the "transaction translator" fields that slow devices behind fast hubs need;
     * keyboards, in the boot protocol every keyboard supports, with their Caps Lock light;
+    * mice, read as each one's report descriptor says (`hid/`), or by the boot protocol if it can't be used. Their
+      wheels scroll the conversation (`mouse.rs`); there is no pointer on the screen yet. A wireless receiver's
+      keyboard and mouse both work;
     * network adapters: the configuration that offers a standard way to carry Ethernet, its bulk endpoints, and the
       way's own framing (`usb/net.rs`);
     * devices plugged in and out at any time. Unplugging a hub lets go of everything behind it.
@@ -106,8 +109,8 @@ NVMe and SATA drivers.
   * Claude, with the API key from the settings and Mozilla's certificate authorities (`assistant.rs`), and the
     tools Claude may use on this computer:
     * `computer_status`: what the computer is and how it's doing (processor, screen, firmware, Secure Boot,
-      memory, how long it has been running, the date and time, the network, the keyboards) and what the own system
-      can't do yet (`system.rs`);
+      memory, how long it has been running, the date and time, the network, the keyboards and mice) and what the own
+      system can't do yet (`system.rs`);
     * `set_text_size`: the text 50% to 300% of the size chosen for this monitor;
     * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
@@ -144,8 +147,8 @@ NVMe and SATA drivers.
   the answer shown as it streams in, with a pulsing dot while Claude thinks. Claude's answers are Markdown, laid
   out as the main screen shows them (`rich.rs`): headings, bold, italics, lists and tasks, code in the code font,
   quotes, tables and rules. Esc stops an answer; Page Up and
-  Page Down scroll. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat work, in the US
-  layout. Nothing typed or answered is written to the log.
+  Page Down, or a mouse's wheel, scroll. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat
+  work, in the US layout. Nothing typed or answered is written to the log.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
   retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
   its own with lost, repeated and reordered packets.
@@ -168,6 +171,10 @@ NVMe and SATA drivers.
 * `fat/` is Chat Computer's own reader of FAT12, FAT16 and FAT32 (the file system of every PC's start-up
   partition), long names included: it finds a file's blocks. Tested against volumes made by `mkfs.vfat` and
   filled by mtools, fragmented files among them.
+* `hid/` reads USB HID report descriptors: the description each mouse gives of its own reports (how many
+  buttons, how fine its movement, whether it has a wheel, and where each is), by the HID specification and the way
+  Linux reads the usages some devices declare out of order. Tested with QEMU's mouse and tablet, a wireless
+  receiver's and a high-resolution wheel's layouts, descriptors cut short, and random ones.
 * `remember/` is the memory file's format: 512-byte chunks, each tagged with the file's id (a random number setup
   chose) and the chunk's place, so nothing but this file is ever written; two copies written in turn, each with a
   hash, so a restart in the middle of a write leaves the last whole copy. Tested with writes cut short and with

@@ -37,8 +37,8 @@ jobs:
           sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil sbsigntool
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
-      - name: Font engine, Markdown reader and memory file tests
-        run: cargo test -p font -p markdown -p remember
+      - name: Font engine, Markdown reader, memory file and HID descriptor tests
+        run: cargo test -p font -p markdown -p remember -p hid
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh

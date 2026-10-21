@@ -341,3 +341,81 @@ fn reads_the_fallback_fonts() {
         assert_eq!(f.glyph_index('a'), 0, "{file}");
     }
 }
+
+/// Every glyph's advance at the weights other than the default, as HarfBuzz reads them (advance_reference.txt, from
+/// reference.py): from the advances' own variations (HVAR), which a browser uses, rather than the outlines' (gvar),
+/// which can round the other way (the bold space: 312, not 313). All at once, or one at a time, the same.
+#[test]
+fn advances_vary_as_harfbuzz_has_them() {
+    let data = atkinson();
+    let f = Font::parse(&data).unwrap();
+    let reference: Vec<Vec<u16>> = include_str!("advance_reference.txt")
+        .lines()
+        .map(|l| l.split(' ').map(|v| v.parse().unwrap()).collect())
+        .collect();
+    assert_eq!(reference.len(), f.glyph_count() as usize);
+    for (k, weight) in [700, 200, 800].into_iter().enumerate() {
+        let at = f.instance(b"wght", weight).unwrap();
+        let all = f.advances_at(&at, 0..f.glyph_count());
+        let want: Vec<u16> = reference.iter().map(|r| r[k]).collect();
+        assert_eq!(all, want, "at {weight}");
+        for g in [0, 1, f.glyph_index(' '), f.glyph_count() - 1] {
+            assert_eq!(f.advance_at(g, &at), want[g as usize], "glyph {g} at {weight}");
+        }
+    }
+    assert_eq!(f.advance_at(f.glyph_index(' '), &f.instance(b"wght", 700).unwrap()), 312);
+}
+
+/// Atkinson Hyperlegible Next's kerning, as HarfBuzz shapes it (kern_reference.txt, from reference.py): every
+/// pair of 152 characters (ASCII, accented letters, quotes and dashes) at four weights, those that kern and those
+/// that don't. Its 'kern' feature has two lookups (glyph pairs and classes of glyphs), the second adding to the first,
+/// and its adjustments vary with the weight (GDEF's item variation store).
+#[test]
+fn kerns_as_harfbuzz_does() {
+    let data = atkinson();
+    let f = Font::parse(&data).unwrap();
+    let reference = include_str!("kern_reference.txt");
+    let mut lines = reference.lines();
+    let hex = |s: &str| char::from_u32(u32::from_str_radix(s, 16).unwrap()).unwrap();
+    let chars: Vec<char> = lines.next().unwrap().split(' ').skip(1).map(hex).collect();
+    assert_eq!(chars.len(), 152);
+    let mut kerned = std::collections::HashMap::new();
+    for line in lines {
+        let v: Vec<&str> = line.split(' ').collect();
+        let k: Vec<i32> = v[2..].iter().map(|x| x.parse().unwrap()).collect();
+        kerned.insert((hex(v[0]), hex(v[1])), k);
+    }
+    assert_eq!(kerned.len(), 4368);
+    let at = |w: i32| (w != 400).then(|| f.instance(b"wght", w).unwrap());
+    let instances = [400, 700, 200, 800].map(at);
+    let kernings: Vec<Kerning> = instances.iter().map(|i| f.kerning(i.as_ref())).collect();
+    assert!(kernings.iter().all(|k| !k.is_empty()));
+    let mut wrong = Vec::new();
+    for &a in &chars {
+        for &b in &chars {
+            let want = kerned.get(&(a, b)).cloned().unwrap_or(vec![0; 4]);
+            let got: Vec<i32> = kernings.iter().map(|k| k.pair(f.glyph_index(a), f.glyph_index(b))).collect();
+            if got != want {
+                wrong.push(format!("{a}{b}: {got:?}, HarfBuzz {want:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{} of {} pairs differ, e.g. {:?}", wrong.len(), chars.len() * chars.len(), &wrong[..wrong.len().min(8)]);
+    // ("AV", "To" and "y." closer; nothing moves the glyph before a mark: an accent is placed by the 'mark' feature.)
+    let k = &kernings[0];
+    let g = |c| f.glyph_index(c);
+    assert!(k.pair(g('A'), g('V')) < 0 && k.pair(g('T'), g('o')) < 0 && k.pair(g('y'), g('.')) < 0);
+    assert_eq!(k.pair(g('A'), g('\u{301}')), 0);
+}
+
+#[test]
+fn a_font_without_kerning_kerns_nothing() {
+    let data = std::fs::read(format!("{}/../fonts/ChatComputerFallback.ttf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let f = Font::parse(&data).unwrap();
+    let k = f.kerning(None);
+    assert!(k.is_empty());
+    assert_eq!(k.pair(f.glyph_index('→'), f.glyph_index('α')), 0);
+    let mono = std::fs::read(format!("{}/../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleMono.ttf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let m = Font::parse(&mono).unwrap();
+    assert!(m.kerning(None).is_empty(), "the code font has marks positioned, but no kerning");
+}

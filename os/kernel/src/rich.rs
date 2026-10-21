@@ -4,7 +4,7 @@
 //! are "marks", filled rectangles in the text's colour.
 
 use crate::draw::Rect;
-use crate::text::{Face, Style, Type};
+use text::{Face, Style, Type};
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -140,6 +140,10 @@ impl Lay<'_> {
             let mut pen = 0i32; // 1/256 pixel
             let mut k = r.start;
             while k < r.end {
+                if k > r.start {
+                    // (A link or struck words in the same face are kerned with the words before them, as measured.)
+                    pen += self.ty.kern_between(chars[k - 1], chars[k], style.size);
+                }
                 let (f, m) = (chars[k].1, marks[k]);
                 let mut e = k;
                 while e < r.end && chars[e].1 == f && marks[e] == m {

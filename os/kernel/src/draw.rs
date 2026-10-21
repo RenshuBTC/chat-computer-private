@@ -2,7 +2,7 @@
 //! where something changed and then copied to the screen, so nothing flickers. Colours are 0xRRGGBB. Everything
 //! drawn is clipped to the canvas's clip rectangle, so any part of the screen can be redrawn on its own.
 
-use crate::text::Ink;
+use text::Ink;
 use alloc::vec;
 use alloc::vec::Vec;
 

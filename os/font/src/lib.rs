@@ -1,16 +1,20 @@
 //! Chat Computer's own TrueType font reader: which glyph a character uses, how wide it is, and its outline.
 //!
 //! It reads 'glyf' outlines (made of straight lines and quadratic curves), including glyphs built from
-//! other glyphs (é = e + ´), and a variable font's other instances (bold, from the same file: vary.rs). It
-//! ignores the hinting programs fonts carry: Chat Computer never runs code that comes inside a font.
+//! other glyphs (é = e + ´), a variable font's other instances (bold, from the same file: vary.rs), and its
+//! kerning (kern.rs). It ignores the hinting programs fonts carry: Chat Computer never runs code that comes inside a
+//! font.
 //! Everything is bounds-checked; a damaged font gives `None`, never a crash.
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
+mod kern;
 pub mod raster;
+mod store;
 mod vary;
 
+pub use kern::Kerning;
 pub use vary::Instance;
 
 use alloc::vec::Vec;
@@ -66,10 +70,14 @@ pub struct Font<'a> {
     h_metrics: u16,
     glyphs: u16,
     cmap: Option<Cmap>,
-    /// A variable font's axes, avar mapping and glyph variations.
+    /// A variable font's axes, avar mapping and glyph variations, and its advances' own variations (HVAR).
     fvar: Option<&'a [u8]>,
     avar: Option<&'a [u8]>,
     gvar: Option<&'a [u8]>,
+    hvar: Option<&'a [u8]>,
+    /// Glyph positioning (kerning) and the glyphs' classes, with the variations of both.
+    gpos: Option<&'a [u8]>,
+    gdef: Option<&'a [u8]>,
     pub metrics: Metrics,
 }
 
@@ -174,6 +182,9 @@ impl<'a> Font<'a> {
             fvar: find(b"fvar"),
             avar: find(b"avar"),
             gvar: find(b"gvar"),
+            hvar: find(b"HVAR"),
+            gpos: find(b"GPOS"),
+            gdef: find(b"GDEF"),
             metrics,
         };
         font.cmap = find(b"cmap").and_then(|c| font.pick_cmap(c));
@@ -203,6 +214,11 @@ impl<'a> Font<'a> {
         found.then_some(Instance { coords })
     }
 
+    /// The font's kerning at `instance` (None: its default instance). A font without it kerns nothing.
+    pub fn kerning(&self, instance: Option<&Instance>) -> Kerning<'a> {
+        Kerning::new(self.gpos, self.gdef, instance.map_or(&[][..], |at| &at.coords))
+    }
+
     /// Axis `axis`'s avar segment map (from, to pairs in 2.14; empty: none).
     fn avar_segments(&self, axis: usize) -> Vec<(i32, i32)> {
         let Some(avar) = self.avar else { return Vec::new() };
@@ -220,8 +236,32 @@ impl<'a> Font<'a> {
         Vec::new()
     }
 
-    /// The glyph's advance at `instance`, in font units: the default one moved by its phantom points' deltas.
+    /// The glyph's advance at `instance`, in font units: the default one moved by the advances' own variations
+    /// (HVAR, as HarfBuzz and so browsers use them), or, in a font without them, by the glyph's phantom points' deltas.
     pub fn advance_at(&self, glyph: u16, instance: &Instance) -> u16 {
+        self.advances_at(instance, glyph..glyph + 1).first().copied().unwrap_or(0)
+    }
+
+    /// The advances of glyphs `glyphs` at `instance`, as `advance_at` gives each (the variations read once).
+    pub fn advances_at(&self, instance: &Instance, glyphs: core::ops::Range<u16>) -> Vec<u16> {
+        if let Some(hvar) = self.hvar
+            && let Some(at) = u32_at(hvar, 4)
+        {
+            let map = u32_at(hvar, 8).unwrap_or(0) as usize;
+            let store = store::Store::new(hvar, at as usize, &instance.coords);
+            return glyphs
+                .map(|g| {
+                    let base = self.advance(g) as i32;
+                    let delta = store.as_ref().zip(store::mapped(hvar, map, g as u32)).and_then(|(s, (o, i))| s.rounded(o, i));
+                    (base + delta.unwrap_or(0)).clamp(0, u16::MAX as i32) as u16
+                })
+                .collect();
+        }
+        glyphs.map(|g| self.phantom_advance(g, instance)).collect()
+    }
+
+    /// The glyph's advance at `instance` from its phantom points' deltas (gvar).
+    fn phantom_advance(&self, glyph: u16, instance: &Instance) -> u16 {
         let base = self.advance(glyph) as i64;
         let Some(gvar) = self.gvar else { return base as u16 };
         let Some(points) = self.point_count(glyph) else { return base as u16 };

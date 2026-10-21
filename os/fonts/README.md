@@ -10,7 +10,7 @@ the system's fonts; the own system has no other fonts, so it carries these two, 
 | `ChatComputerFallback.ttf` | Latin letters with other accents, Greek, Cyrillic, punctuation, super- and subscripts, currency and letterlike symbols; arrows, maths and geometric shapes; dingbats and other symbols; emoji (in black and white) | Noto Sans, Noto Sans Math, Noto Sans Symbols 2, Noto Sans Symbols and Noto Emoji, in that order where two have a character |
 | `ChatComputerFallbackMono.ttf` | for code: box drawing, blocks and shapes, arrows, maths, Greek and Cyrillic | Noto Sans Mono, its glyphs stretched from 600 to 632 units wide (Atkinson Hyperlegible Mono's width), so lines meet |
 
-Only characters Atkinson Hyperlegible lacks are in them (`kernel/src/text.rs` looks there when it does). Both are
+Only characters Atkinson Hyperlegible lacks are in them (`text/src/lib.rs` looks there when it does). Both are
 regular weight only (bold text shows these characters regular), with 1000 units to the em, and without hinting,
 layout tables or glyph names. Chinese, Japanese and Korean aren't in them (their fonts are 10 MB or more): those
 characters still show as boxes.

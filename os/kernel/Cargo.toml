@@ -10,6 +10,7 @@ build = "build.rs"
 [dependencies]
 bootinfo = { path = "../bootinfo" }
 font = { path = "../font" }
+text = { path = "../text" }
 net = { path = "../net" }
 crypto = { path = "../crypto" }
 tls = { path = "../tls" }

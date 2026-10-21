@@ -42,7 +42,6 @@ mod settings;
 mod storage;
 mod sync;
 mod system;
-mod text;
 mod time;
 mod usb;
 #[path = "../../shared/mem.rs"]

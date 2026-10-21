@@ -2,13 +2,18 @@
 //! Atkinson Hyperlegible Mono, set with Chat Computer's own font engine: measuring, wrapping and drawing lines.
 //! Characters they don't have (arrows, check marks, maths, Greek and Cyrillic, emoji, and box drawing in code) come
 //! from fallback fonts made from Google's Noto fonts (`os/fonts/`), as a browser would take them from the system's.
+//! Letters side by side are kerned as the font says ("AV", "To" and "y." closer), at its regular weight and its bold,
+//! as a browser does: within a run of one font and face, so not across a change to bold or to a fallback font.
 //! Sizes are in 1/256 of a pixel.
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
 use font::raster::{Pen, Raster, ONE};
-use font::{Font, Instance, Outline};
+use font::{Font, Instance, Kerning, Outline};
 
 static ATKINSON: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf");
 static MONO: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleMono.ttf");
@@ -86,9 +91,19 @@ enum Source {
 }
 
 /// Characters that show nothing and take no room: joiners and zero-width spaces, variation selectors (the "as an
-/// emoji" after ❤ in ❤️), the byte order mark, and the soft hyphen.
+/// emoji" after ❤ in ❤️), the byte order mark, and the soft hyphen. (Nor do they come between letters that kern, as
+/// HarfBuzz leaves them out.)
 fn invisible(c: char) -> bool {
     matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}')
+}
+
+/// A character as it's set: its glyph (which font's, and which), its face, and how far it moves the pen (font units).
+#[derive(Clone, Copy)]
+struct Set {
+    source: Source,
+    glyph: u16,
+    face: Face,
+    advance: i32,
 }
 
 pub struct Type {
@@ -99,6 +114,9 @@ pub struct Type {
     /// The bold instance, and every glyph's advance in it (worked out once: they come from the glyphs' variations).
     bold: Option<Instance>,
     bold_advances: Vec<u16>,
+    /// The text font's kerning, at its regular weight and its bold. (The code font has none, nor have the fallbacks.)
+    kerning: Kerning<'static>,
+    bold_kerning: Kerning<'static>,
 }
 
 /// A line of text drawn as ink coverage, ready to put on the screen.
@@ -121,10 +139,11 @@ impl Type {
         assert!([&mono, &fallback, &fallback_mono].iter().all(|f| f.metrics.units_per_em == upem), "the fonts' sizes differ");
         let bold = font.instance(b"wght", 700);
         let bold_advances = match &bold {
-            Some(at) => (0..font.glyph_count()).map(|g| font.advance_at(g, at)).collect(),
+            Some(at) => font.advances_at(at, 0..font.glyph_count()),
             None => Vec::new(),
         };
-        Type { font, mono, fallback, fallback_mono, bold, bold_advances }
+        let (kerning, bold_kerning) = (font.kerning(None), font.kerning(bold.as_ref()));
+        Type { font, mono, fallback, fallback_mono, bold, bold_advances, kerning, bold_kerning }
     }
 
     fn scale(&self, units: i32, size: i32) -> i32 {
@@ -157,117 +176,139 @@ impl Type {
         (order[0], 0)
     }
 
-    fn advance_units(&self, c: char) -> i32 {
-        self.advance_in(c, Face::Regular)
+    /// How a character is set in `face` (None: one that shows nothing and takes no room).
+    fn set(&self, c: char, face: Face) -> Option<Set> {
+        if invisible(c) {
+            return None;
+        }
+        let (source, glyph) = self.glyph(c, face);
+        let advance = match source {
+            Source::Text => match self.bold_advances.get(glyph as usize) {
+                Some(&a) if face.bold() => a,
+                _ => self.font.advance(glyph),
+            },
+            _ => self.font_of(source).advance(glyph),
+        };
+        Some(Set { source, glyph, face, advance: advance as i32 })
     }
 
-    /// A character's advance in `face`, in font units (every font has 1000 to the em).
-    fn advance_in(&self, c: char, face: Face) -> i32 {
-        if invisible(c) {
+    /// The kerning between two characters set side by side, in font units: the text font's own, between its glyphs in
+    /// one face (as a browser shapes each run of one font and style by itself).
+    fn kern(&self, a: Set, b: Set) -> i32 {
+        if a.face != b.face || a.source != Source::Text || b.source != Source::Text {
             return 0;
         }
-        match self.glyph(c, face) {
-            (Source::Text, glyph) => match self.bold_advances.get(glyph as usize) {
-                Some(&a) if face.bold() => a as i32,
-                _ => self.font.advance(glyph) as i32,
-            },
-            (source, glyph) => self.font_of(source).advance(glyph) as i32,
-        }
+        if a.face.bold() { self.bold_kerning.pair(a.glyph, b.glyph) } else { self.kerning.pair(a.glyph, b.glyph) }
+    }
+
+    /// Where each character of `text` in `face` is set along the line (font units from its start), with how it's set:
+    /// its advance, and the kerning with the one before it, already in.
+    fn line<'a>(&'a self, text: &'a str, face: Face) -> impl Iterator<Item = (i32, Set)> + 'a {
+        let (mut x, mut before): (i32, Option<Set>) = (0, None);
+        text.chars().filter_map(move |c| {
+            let s = self.set(c, face)?;
+            x += before.map_or(0, |b| self.kern(b, s));
+            let at = x;
+            x += s.advance;
+            before = Some(s);
+            Some((at, s))
+        })
     }
 
     /// The width of `text` at `size`.
     pub fn width(&self, text: &str, size: i32) -> i32 {
-        self.scale(text.chars().map(|c| self.advance_units(c)).sum(), size)
+        self.width_in(text, Face::Regular, size)
     }
 
     /// The width of `text` in `face` at `size`.
     pub fn width_in(&self, text: &str, face: Face, size: i32) -> i32 {
-        self.scale(text.chars().map(|c| self.advance_in(c, face)).sum(), size)
+        self.scale(self.line(text, face).last().map_or(0, |(x, s)| x + s.advance), size)
+    }
+
+    /// Where the character at `at` (a byte in `text`, set in the regular face) starts along the line, at `size`:
+    /// where the caret goes before it (after the kerning with the one before: it starts where it's drawn).
+    pub fn x_at(&self, text: &str, at: usize, size: i32) -> i32 {
+        let end = text.len().min(at);
+        let before = self.line(&text[..end], Face::Regular).last().map_or(0, |(x, s)| x + s.advance);
+        let next = self.line(&text[..end], Face::Regular).last().zip(text[end..].chars().find_map(|c| self.set(c, Face::Regular)));
+        self.scale(before + next.map_or(0, |((_, a), b)| self.kern(a, b)), size)
+    }
+
+    /// The kerning between two styled characters side by side, at `size` (for text drawn in runs of one style, to
+    /// put each run where the line was measured to have it).
+    pub fn kern_between(&self, a: (char, Face), b: (char, Face), size: i32) -> i32 {
+        match (self.set(a.0, a.1), self.set(b.0, b.1)) {
+            (Some(x), Some(y)) => self.scale(self.kern(x, y), size),
+            _ => 0,
+        }
     }
 
     /// Where styled text (each character with its face) breaks into lines no wider than `max` at `size`, as
     /// `breaks` does: ranges of `chars`, without the line breaks and the spaces lines broke at.
     pub fn breaks_styled(&self, chars: &[(char, Face)], size: i32, max: i32) -> Vec<Range<usize>> {
-        let upem = self.font.metrics.units_per_em as i64;
-        let max = (max.max(0) as i64 * upem / size.max(1) as i64) as i32;
-        let mut lines = Vec::new();
-        let (mut start, mut width) = (0, 0);
-        let mut space: Option<(usize, i32)> = None;
-        for (i, &(c, face)) in chars.iter().enumerate() {
-            if c == '\n' {
-                lines.push(start..i);
-                (start, width, space) = (i + 1, 0, None);
-                continue;
-            }
-            let w = self.advance_in(c, face);
-            if c == ' ' {
-                width += w;
-                space = Some((i, width));
-                continue;
-            }
-            if width + w > max && i > start {
-                match space {
-                    Some((at, after)) if at > start => {
-                        lines.push(start..at);
-                        start = at + 1;
-                        width -= after;
-                    }
-                    _ => {
-                        lines.push(start..i);
-                        start = i;
-                        width = 0;
-                    }
-                }
-                space = None;
-            }
-            width += w;
-        }
-        lines.push(start..chars.len());
-        lines
+        self.break_lines(chars.iter().enumerate().map(|(i, &(c, f))| (i, c, f)), chars.len(), size, max)
     }
 
     /// Where `text` breaks into lines no wider than `max` (at `size`): at spaces, inside a word only if it's
     /// longer than a line, and after every line break ('\n', not part of any line). One pass, however long.
     pub fn breaks(&self, text: &str, size: i32, max: i32) -> Vec<Range<usize>> {
+        self.break_lines(text.char_indices().map(|(i, c)| (i, c, Face::Regular)), text.len(), size, max)
+    }
+
+    /// Lines no wider than `max` from characters (each where it is, as `end` counts, and its face): ranges of those
+    /// places, without the line breaks and the spaces lines broke at. Measured as they're drawn, kerning and all.
+    fn break_lines(&self, chars: impl Iterator<Item = (usize, char, Face)>, end: usize, size: i32, max: i32) -> Vec<Range<usize>> {
         let upem = self.font.metrics.units_per_em as i64;
         let max = (max.max(0) as i64 * upem / size.max(1) as i64) as i32; // in the font's units
         let mut lines = Vec::new();
         let mut start = 0;
-        let mut width = 0; // of text[start..here], in font units
-        // The last space on this line: where it is, and the width up to just after it.
+        let mut width = 0; // of the line so far, in font units
+        // The last space on this line: where it is, and the line's width up to just after it; and the kerning between
+        // it and the character after it (gone if the line breaks there).
         let mut space: Option<(usize, i32)> = None;
-        for (i, c) in text.char_indices() {
+        let mut after_space = 0;
+        // The character before this one on the line, and whether it was a space.
+        let (mut before, mut spaced): (Option<Set>, bool) = (None, false);
+        for (i, c, face) in chars {
             if c == '\n' {
                 lines.push(start..i);
-                start = i + 1;
-                width = 0;
-                space = None;
+                (start, width, space, before, spaced) = (i + 1, 0, None, None, false);
                 continue;
             }
-            let w = self.advance_units(c);
+            let Some(s) = self.set(c, face) else { continue };
+            let mut k = before.map_or(0, |b| self.kern(b, s));
+            let first_after_space = spaced;
+            (before, spaced) = (Some(s), c == ' ');
             if c == ' ' {
-                width += w;
+                width += k + s.advance;
                 space = Some((i, width));
                 continue;
             }
-            if width + w > max && i > start {
+            if first_after_space {
+                after_space = k;
+            }
+            if width + k + s.advance > max && i > start {
                 match space {
                     Some((at, after)) if at > start => {
                         lines.push(start..at);
                         start = at + 1;
-                        width -= after;
+                        // (What's after the space is the line now, without its kerning with the space.)
+                        width -= after + after_space;
+                        if first_after_space {
+                            (width, k) = (0, 0);
+                        }
                     }
                     _ => {
                         lines.push(start..i);
                         start = i;
-                        width = 0;
+                        (width, k) = (0, 0);
                     }
                 }
                 space = None;
             }
-            width += w;
+            width += k + s.advance;
         }
-        lines.push(start..text.len());
+        lines.push(start..end);
         lines
     }
 
@@ -322,27 +363,24 @@ impl Type {
         let mut raster = Raster::new(w, h);
         let mut pen = Pen::new(&mut raster, style.size, m.units_per_em);
         pen.y = baseline;
-        let mut units = 0;
-        for c in text.chars() {
-            if invisible(c) {
-                continue;
-            }
+        for (units, s) in self.line(text, face) {
             pen.x = PAD as i32 * ONE + self.scale(units, style.size);
-            let (source, glyph) = self.glyph(c, face);
-            let font = self.font_of(source);
+            let font = self.font_of(s.source);
             let draw = |out: &mut dyn Outline| match &self.bold {
-                Some(at) if face.bold() && source == Source::Text => font.outline_at(glyph, at, out),
-                _ => font.outline(glyph, out),
+                Some(at) if face.bold() && s.source == Source::Text => font.outline_at(s.glyph, at, out),
+                _ => font.outline(s.glyph, out),
             };
             if face.slanted() {
                 draw(&mut Slant { to: &mut pen });
             } else {
                 draw(&mut pen);
             }
-            units += self.advance_in(c, face);
         }
         let mut coverage = vec![0; w * h];
         raster.coverage(&mut coverage);
         Ink { width: w, height: h, coverage, left: PAD }
     }
 }
+
+#[cfg(test)]
+mod tests;

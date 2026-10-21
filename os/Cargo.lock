@@ -26,6 +26,7 @@ dependencies = [
  "markdown",
  "net",
  "remember",
+ "text",
  "tls",
 ]
 
@@ -63,6 +64,13 @@ version = "0.1.0"
 [[package]]
 name = "remember"
 version = "0.1.0"
+
+[[package]]
+name = "text"
+version = "0.1.0"
+dependencies = [
+ "font",
+]
 
 [[package]]
 name = "tls"

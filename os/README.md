@@ -163,8 +163,15 @@ NVMe and SATA drivers.
   (thinking, words and their citations, tool calls, web searches and their results) to send back.
 * `font/` is Chat Computer's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It reads variable fonts too (fvar, avar and gvar: deltas, intermediate regions and
-  inferred deltas), so the bold comes from the same font file as the regular. It's tested against fontTools'
-  reading of the same font, at the default weight and at others.
+  inferred deltas; HVAR for the advances), so the bold comes from the same font file as the regular. And it reads
+  a font's kerning (GPOS's pair adjustments, by pairs of glyphs and by classes, varying with the weight through
+  GDEF's item variation store). It's tested against fontTools' reading of the same font, at the default weight and
+  at others, and against HarfBuzz: every glyph's advance at three weights, and the kerning of every pair of 152
+  characters at four (`font/reference.py`).
+* `text/` sets lines of text in those fonts: which font has each character (the fallback fonts for what Atkinson
+  Hyperlegible lacks), how wide lines are, where they wrap, and drawing them, with the kerning a browser applies
+  (within a run of one font and face). Tested against where HarfBuzz puts each letter, at the regular weight and
+  the bold (`text/reference.py`).
 * `markdown/` reads the Markdown Claude writes into blocks and styled words, by the same rules as the main
   screen's renderer (`chatcomputer/ui/assets/md.js`). Its test runs md.js on each case (`markdown/gen/`) and
   checks the two read it the same way.
@@ -361,7 +368,8 @@ PC.
    ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)), and the own kernel doesn't
    run the Claude Code program (a Linux program), so it uses an API key.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting Claude's answers use
-   (Markdown, with bold from the variable font). To do: kerning.
+   (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font. To do: accents
+   placed over letters typed as two characters (GPOS's mark positioning), and Chinese, Japanese and Korean.
 10. Sound and AirPods: Bluetooth (HCI over USB, L2CAP, A2DP and HFP, SBC and mSBC).
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
 12. Power: ✓ restart, ✓ turning off (ACPI's S5, without the firmware's AML). To do: sleep; on laptops the battery

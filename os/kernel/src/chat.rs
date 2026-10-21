@@ -15,7 +15,7 @@ use crate::keyboard::{Key, Press};
 use crate::layout::{self, Layout};
 use crate::screen::Screen;
 use crate::sync::SpinLock;
-use crate::text::{Face, Ink, Style, Type};
+use text::{Face, Ink, Style, Type};
 use crate::{heap, memory, rich, time, usb};
 use alloc::format;
 use alloc::string::String;
@@ -577,8 +577,10 @@ impl Chat {
         let li = b.lines.iter().rposition(|l| l.start <= self.cursor).unwrap_or(0);
         if (b.first..b.first + b.shown).contains(&li) {
             let start = b.lines.get(li).map_or(0, |l| l.start);
-            let end = self.cursor.min(b.lines.get(li).map_or(0, |l| l.end)).max(start);
-            let x = b.text_x + self.ty.width(&self.typed[start..end], m.body.size) / ONE;
+            let line_end = b.lines.get(li).map_or(0, |l| l.end).max(start);
+            let end = self.cursor.min(line_end).max(start);
+            // (Where the next letter starts: kerned closer to the one before, the caret is too.)
+            let x = b.text_x + self.ty.x_at(&self.typed[start..line_end], end - start, m.body.size) / ONE;
             let y = b.text_y + (li - b.first) as i32 * m.line;
             canvas.fill(Rect::new(x, y + m.line * 18 / 100, caret_w, m.line * 64 / 100), INK);
         }

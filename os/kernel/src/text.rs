@@ -1,5 +1,7 @@
 //! Text in Atkinson Hyperlegible Next (its regular and bold, both from the one variable font file) and, for code,
 //! Atkinson Hyperlegible Mono, set with Chat Computer's own font engine: measuring, wrapping and drawing lines.
+//! Characters they don't have (arrows, check marks, maths, Greek and Cyrillic, emoji, and box drawing in code) come
+//! from fallback fonts made from Google's Noto fonts (`os/fonts/`), as a browser would take them from the system's.
 //! Sizes are in 1/256 of a pixel.
 
 use alloc::vec;
@@ -10,6 +12,8 @@ use font::{Font, Instance, Outline};
 
 static ATKINSON: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf");
 static MONO: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleMono.ttf");
+static FALLBACK: &[u8] = include_bytes!("../../fonts/ChatComputerFallback.ttf");
+static FALLBACK_MONO: &[u8] = include_bytes!("../../fonts/ChatComputerFallbackMono.ttf");
 
 /// Some letters reach a little past their own width (an italic f, an accent); the drawn line keeps
 /// this much room on each side, in pixels.
@@ -70,9 +74,28 @@ impl Outline for Slant<'_> {
     }
 }
 
+/// Which font a glyph is from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Text,
+    Mono,
+    /// Characters the text font lacks (in its weight only: there's no bold of them).
+    Fallback,
+    /// Characters the code font lacks, a code character wide (box drawing lines meet).
+    FallbackMono,
+}
+
+/// Characters that show nothing and take no room: joiners and zero-width spaces, variation selectors (the "as an
+/// emoji" after ❤ in ❤️), the byte order mark, and the soft hyphen.
+fn invisible(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}')
+}
+
 pub struct Type {
     font: Font<'static>,
     mono: Font<'static>,
+    fallback: Font<'static>,
+    fallback_mono: Font<'static>,
     /// The bold instance, and every glyph's advance in it (worked out once: they come from the glyphs' variations).
     bold: Option<Instance>,
     bold_advances: Vec<u16>,
@@ -91,31 +114,64 @@ impl Type {
     pub fn atkinson() -> Type {
         let font = Font::parse(ATKINSON).expect("the built-in font is damaged");
         let mono = Font::parse(MONO).expect("the built-in code font is damaged");
+        let fallback = Font::parse(FALLBACK).expect("the built-in fallback font is damaged");
+        let fallback_mono = Font::parse(FALLBACK_MONO).expect("the built-in fallback code font is damaged");
+        // (Glyphs from every font are drawn to the same scale: all have 1000 units to the em.)
+        let upem = font.metrics.units_per_em;
+        assert!([&mono, &fallback, &fallback_mono].iter().all(|f| f.metrics.units_per_em == upem), "the fonts' sizes differ");
         let bold = font.instance(b"wght", 700);
         let bold_advances = match &bold {
             Some(at) => (0..font.glyph_count()).map(|g| font.advance_at(g, at)).collect(),
             None => Vec::new(),
         };
-        Type { font, mono, bold, bold_advances }
+        Type { font, mono, fallback, fallback_mono, bold, bold_advances }
     }
 
     fn scale(&self, units: i32, size: i32) -> i32 {
         (units as i64 * size as i64 / self.font.metrics.units_per_em as i64) as i32
     }
 
-    fn advance_units(&self, c: char) -> i32 {
-        self.font.advance(self.font.glyph_index(c)) as i32
+    fn font_of(&self, source: Source) -> &Font<'static> {
+        match source {
+            Source::Text => &self.font,
+            Source::Mono => &self.mono,
+            Source::Fallback => &self.fallback,
+            Source::FallbackMono => &self.fallback_mono,
+        }
     }
 
-    /// A character's advance in `face`, in its font's units (both fonts have 1000 to the em).
-    fn advance_in(&self, c: char, face: Face) -> i32 {
-        if face == Face::Mono {
-            return self.mono.advance(self.mono.glyph_index(c)) as i32;
+    /// Where a character's glyph is for `face`: in the face's own font, else in a fallback font; else the face's own
+    /// "missing" glyph (a box), for characters none has (Chinese, Japanese and Korean, for now).
+    fn glyph(&self, c: char, face: Face) -> (Source, u16) {
+        let order: [Source; 3] = if face == Face::Mono {
+            [Source::Mono, Source::FallbackMono, Source::Fallback]
+        } else {
+            [Source::Text, Source::Fallback, Source::FallbackMono]
+        };
+        for source in order {
+            let glyph = self.font_of(source).glyph_index(c);
+            if glyph != 0 {
+                return (source, glyph);
+            }
         }
-        let glyph = self.font.glyph_index(c);
-        match self.bold_advances.get(glyph as usize) {
-            Some(&a) if face.bold() => a as i32,
-            _ => self.font.advance(glyph) as i32,
+        (order[0], 0)
+    }
+
+    fn advance_units(&self, c: char) -> i32 {
+        self.advance_in(c, Face::Regular)
+    }
+
+    /// A character's advance in `face`, in font units (every font has 1000 to the em).
+    fn advance_in(&self, c: char, face: Face) -> i32 {
+        if invisible(c) {
+            return 0;
+        }
+        match self.glyph(c, face) {
+            (Source::Text, glyph) => match self.bold_advances.get(glyph as usize) {
+                Some(&a) if face.bold() => a as i32,
+                _ => self.font.advance(glyph) as i32,
+            },
+            (source, glyph) => self.font_of(source).advance(glyph) as i32,
         }
     }
 
@@ -268,11 +324,14 @@ impl Type {
         pen.y = baseline;
         let mut units = 0;
         for c in text.chars() {
+            if invisible(c) {
+                continue;
+            }
             pen.x = PAD as i32 * ONE + self.scale(units, style.size);
-            let font = if face == Face::Mono { &self.mono } else { &self.font };
-            let glyph = font.glyph_index(c);
+            let (source, glyph) = self.glyph(c, face);
+            let font = self.font_of(source);
             let draw = |out: &mut dyn Outline| match &self.bold {
-                Some(at) if face.bold() => font.outline_at(glyph, at, out),
+                Some(at) if face.bold() && source == Source::Text => font.outline_at(glyph, at, out),
                 _ => font.outline(glyph, out),
             };
             if face.slanted() {

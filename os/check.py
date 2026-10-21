@@ -720,10 +720,12 @@ def claude(args) -> list[str]:
     r_search = [("thinking", "sig-s"), ("server_tool_use", "srvtoolu_1", "web_search", ['{"query": ', '"weather"}']),
                 ("wait", 4), ("result", search_result), ("text", ["It's ", "sunny."], [citation])]
     # The rest of that answer in Markdown, as Claude writes: a heading, bold and italic, a list, a table, a quote and
-    # code, which the screen lays out (its picture: claude-search.png).
+    # code, which the screen lays out (its picture: claude-search.png); with characters the text and code fonts lack,
+    # from the fallback fonts: an arrow, a check mark, Greek and maths, emoji (one with the "as an emoji" selector,
+    # which shows nothing itself) and box drawing.
     more = ("## Today\n\n**Sunny** all day, with *light* wind and ~~no~~ little cloud:\n\n- Morning: `12 °C`\n"
-            "- Afternoon: 18 °C\n\n| Time | Sky | Wind |\n|---|---|---|\n| 9:00 | Clear | 5 km/h |\n"
-            "| 15:00 | **Sunny** | 10 km/h |\n\n> Enjoy the day.\n\n```\nforecast --today\n```")
+            "- Afternoon: 18 °C → 20 °C ✓\n\n| Time | Sky | Wind |\n|---|---|---|\n| 9:00 | Clear ☀\ufe0f | 5 km/h |\n"
+            "| 15:00 | **Sunny** | 10 km/h (Δ ≈ 5) |\n\n> Enjoy the day. 🙂\n\n```\nforecast --today\n└─ sunny, 20 °C\n```")
     r_more = [("text", [more[:40], more[40:]])]
     r5 = [("thinking", "sig-5"), ("tool_use", "toolu_5", "restart_computer", ["{}"])]
     r6 = [("text", ["Restarting now: see you in Windows."])]
@@ -862,7 +864,9 @@ def claude(args) -> list[str]:
         elif not restarted or not ended:
             problems.append(f"the PC didn't restart (the kernel said so: {restarted}; the virtual PC ended: {ended})")
         after_search = "It's sunny.\n\n" + more
-        if searched != "Enjoy the day" or f"test: Claude said {json.dumps(after_search, ensure_ascii=False)}" not in text:
+        # (As the kernel's log writes it: Rust escapes a variation selector.)
+        logged = json.dumps(after_search, ensure_ascii=False).replace("\ufe0f", "\\u{fe0f}")
+        if searched != "Enjoy the day" or f"test: Claude said {logged}" not in text:
             problems.append(f"the answer after a web search didn't come whole (the log says {searched!r})")
         if "Claude: searches the web" not in text:
             problems.append("the web search wasn't noticed")

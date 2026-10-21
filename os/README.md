@@ -185,7 +185,10 @@ NVMe and SATA drivers.
 The screen follows Chat Computer's look (`chatcomputer/ui/assets/theme.css` and `chat.css`):
 * black text on the warm off-white background, your messages in light grey bubbles on the right, the
   message box a white card with a soft shadow at the bottom;
-* Atkinson Hyperlegible Next (its regular and bold), and Atkinson Hyperlegible Mono for code;
+* Atkinson Hyperlegible Next (its regular and bold), and Atkinson Hyperlegible Mono for code. What they lack
+  (arrows, check marks, maths, Greek and Cyrillic, emoji in black and white, box drawing in code) comes from two
+  fallback fonts made from Google's Noto fonts (`fonts/`, built by `fonts/build.py`), as a browser would take it
+  from the system's fonts. Chinese, Japanese and Korean show as boxes still;
 * text sized by the same 0.3° x-height rule as `chatcomputer/ui/layout.py`, from the monitor's real size;
 * a column at most 30 em wide.
 

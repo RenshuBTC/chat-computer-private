@@ -56,6 +56,8 @@ chat-computer/
     claude/                 Claude's Messages API, streamed: the request (Opus 5.5, effort max, automatic prompt
                             caching), HTTP/1.1, JSON
     font/                   Own TrueType reader and rasterizer, variable fonts too (fvar/avar/gvar: the bold, from the same file)
+    fonts/                  Fallback fonts for what Atkinson Hyperlegible lacks (arrows, maths, Greek, Cyrillic, emoji,
+                            box drawing), cut and merged from Noto fonts by build.py
     markdown/               Claude's Markdown read by md.js's rules (tested against md.js itself: markdown/gen/gen.js)
     fat/                    Own FAT12/16/32 reader: a file's blocks on the start-up partition
     hid/                    USB HID report descriptors: where a mouse's buttons, movement and wheel are in its reports

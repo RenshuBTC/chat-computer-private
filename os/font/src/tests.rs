@@ -299,3 +299,45 @@ fn bold_and_light_come_from_the_same_font() {
         assert_eq!(f.advance_at(f.glyph_index(*c), &regular), *advance, "{c:?} at the default weight");
     }
 }
+
+/// The own system's fallback fonts (os/fonts/): (character, glyph number, advance, signed area) as fontTools reads
+/// them. One merged from several Noto fonts, with emoji scaled from 2048 units to the em and glyphs built from others
+/// (ǅ); the code one stretched to Atkinson Hyperlegible Mono's width.
+const FALLBACK: [(char, u16, u16, f64); 10] = [
+    ('→', 1988, 1012, -94250.0),
+    ('✓', 1624, 780, -104113.0),
+    ('α', 170, 623, -133071.0),
+    ('Ж', 217, 905, -229335.0),
+    ('🙂', 4251, 1270, -166110.0),
+    ('☀', 2435, 914, -159571.0),
+    ('⌘', 2677, 814, -253561.0),
+    ('①', 3118, 1000, -173016.0),
+    ('ʃ', 845, 258, -98927.0),
+    ('ǅ', 671, 1200, -286870.0),
+];
+const FALLBACK_MONO: [(char, u16, u16, f64); 6] = [
+    ('└', 974, 632, -68835.0),
+    ('─', 970, 632, -45724.0),
+    ('│', 971, 632, -91875.0),
+    ('├', 976, 632, -112110.0),
+    ('→', 964, 632, -32264.0),
+    ('α', 162, 632, -137777.0),
+];
+
+#[test]
+fn reads_the_fallback_fonts() {
+    for (file, expected) in [("ChatComputerFallback.ttf", &FALLBACK[..]), ("ChatComputerFallbackMono.ttf", &FALLBACK_MONO[..])] {
+        let data = std::fs::read(format!("{}/../fonts/{file}", env!("CARGO_MANIFEST_DIR"))).expect("the font file");
+        let f = Font::parse(&data).unwrap();
+        assert_eq!(f.metrics.units_per_em, 1000, "{file}");
+        for &(c, glyph, advance, area) in expected {
+            assert_eq!((f.glyph_index(c), f.advance(glyph)), (glyph, advance), "{file}: {c:?}");
+            let mut a = Area::default();
+            assert!(f.outline(glyph, &mut a));
+            let got = a.twice / 2.0;
+            assert!((got - area).abs() < area.abs() * 0.0005, "{file}: {c:?}: area {got}, fontTools {area}");
+        }
+        // Atkinson Hyperlegible's own characters aren't in them.
+        assert_eq!(f.glyph_index('a'), 0, "{file}");
+    }
+}

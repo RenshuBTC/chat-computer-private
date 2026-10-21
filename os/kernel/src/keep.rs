@@ -9,7 +9,6 @@
 
 use crate::storage::{self, Disk, FileBlocks};
 use crate::sync::SpinLock;
-use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -18,7 +17,6 @@ use bootinfo::StartDisk;
 const PATH: [&str; 3] = ["EFI", "chatcomputer-own", "memory.bin"];
 
 struct Kept {
-    disk: Box<dyn Disk>,
     file: FileBlocks,
     memory: remember::Memory,
 }
@@ -51,21 +49,24 @@ impl remember::Store for FileStore<'_> {
     }
 }
 
-/// Finds the drive and the memory file. Returns what to log.
+/// Finds the memory file on the start-up drive (storage::open_start has started it). Returns what to log.
 pub fn init(start: &StartDisk, id: Option<u32>) -> String {
     let result = (|| -> Result<(Kept, String), String> {
         let id = id.ok_or_else(|| String::from("the settings have no memory id (set up again on Windows to make one)"))?;
-        if start.kind == bootinfo::DISK_UNKNOWN {
-            return Err(String::from("the start-up partition isn't on an NVMe or SATA drive"));
-        }
-        let mut disk = storage::start_disk(start).map_err(|e| format!("the start-up drive: {e}"))?;
-        let described = disk.describe();
-        let file = storage::find_file(disk.as_mut(), start.partition_start, start.partition_blocks, &PATH)
-            .map_err(|e| format!("{described}: {e}"))?;
-        let store = FileStore { disk: disk.as_mut(), file: &file };
-        let memory = remember::Memory::new(&store, id).map_err(|e| format!("the memory file: {e:?}"))?;
-        let note = format!("{described}; the memory file holds {} KB", memory.capacity() / 1024);
-        Ok((Kept { disk, file, memory }, note))
+        let described = match storage::start_said() {
+            Some(Ok(d)) => d,
+            Some(Err(e)) => return Err(format!("the start-up drive: {e}")),
+            None => return Err(String::from("the start-up drive wasn't started")),
+        };
+        storage::with_start(|disk| {
+            let file = storage::find_file(disk, start.partition_start, start.partition_blocks, &PATH)
+                .map_err(|e| format!("{described}: {e}"))?;
+            let store = FileStore { disk, file: &file };
+            let memory = remember::Memory::new(&store, id).map_err(|e| format!("the memory file: {e:?}"))?;
+            let note = format!("{described}; the memory file holds {} KB", memory.capacity() / 1024);
+            Ok((Kept { file, memory }, note))
+        })
+        .unwrap_or_else(|| Err(String::from("the start-up drive is busy")))
     })();
     match result {
         Ok((kept, note)) => {
@@ -80,12 +81,12 @@ pub fn init(start: &StartDisk, id: Option<u32>) -> String {
     }
 }
 
-/// Runs `f` with the drive and file, nothing locked meanwhile (None if there's no memory file).
-fn with<T>(f: impl FnOnce(&mut Kept) -> T) -> Option<T> {
+/// Runs `f` with the memory file and the drive, nothing locked meanwhile (None if there's no memory file).
+fn with<T>(f: impl FnOnce(&mut Kept, &mut dyn Disk) -> T) -> Option<T> {
     let mut kept = KEPT.lock().take()?;
-    let result = f(&mut kept);
+    let result = storage::with_start(|disk| f(&mut kept, disk));
     *KEPT.lock() = Some(kept);
-    Some(result)
+    result
 }
 
 /// The most that can be kept, in bytes (0 if nothing can).
@@ -95,8 +96,8 @@ pub fn capacity() -> usize {
 
 /// What was kept before the last restart, if anything.
 pub fn load() -> Option<Vec<u8>> {
-    with(|k| {
-        let mut store = FileStore { disk: k.disk.as_mut(), file: &k.file };
+    with(|k, disk| {
+        let mut store = FileStore { disk, file: &k.file };
         match k.memory.load(&mut store) {
             Ok(Some((_, sequence, data))) => {
                 crate::log!("Chat Computer kernel: memory: copy {sequence} read ({} bytes)", data.len());
@@ -114,8 +115,8 @@ pub fn load() -> Option<Vec<u8>> {
 
 /// Keeps `data` (replacing what was kept).
 pub fn save(data: &[u8]) -> Result<(), String> {
-    with(|k| {
-        let mut store = FileStore { disk: k.disk.as_mut(), file: &k.file };
+    with(|k, disk| {
+        let mut store = FileStore { disk, file: &k.file };
         k.memory.save(&mut store, data).map_err(|e| format!("{e:?}"))
     })
     .unwrap_or_else(|| Err(String::from("there's no memory file")))
@@ -123,22 +124,20 @@ pub fn save(data: &[u8]) -> Result<(), String> {
 
 /// Before the PC restarts: the drive writes what it has cached.
 pub fn shut_down() {
-    if let Some(mut guard) = KEPT.try_lock()
-        && let Some(k) = guard.as_mut()
-    {
-        let _ = k.disk.flush();
-        k.disk.shut_down();
-    }
+    storage::shut_down();
 }
 
 /// For the computer's status.
 pub fn status() -> String {
     if let Some(k) = KEPT.lock().as_ref() {
+        let drive = match storage::start_said() {
+            Some(Ok(d)) => d,
+            _ => String::from("start-up drive"),
+        };
         return format!(
             "The conversation is kept across restarts, in Chat Computer's memory file on the start-up partition \
-             ({} KB), on the {}",
+             ({} KB), on the {drive}",
             k.memory.capacity() / 1024,
-            k.disk.describe()
         );
     }
     match WHY_NOT.lock().as_ref() {

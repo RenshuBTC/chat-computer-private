@@ -26,6 +26,7 @@ dependencies = [
  "hid",
  "markdown",
  "net",
+ "ntfs",
  "remember",
  "text",
  "tls",
@@ -64,6 +65,10 @@ version = "0.1.0"
 
 [[package]]
 name = "net"
+version = "0.1.0"
+
+[[package]]
+name = "ntfs"
 version = "0.1.0"
 
 [[package]]

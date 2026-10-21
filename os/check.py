@@ -40,6 +40,10 @@ log go to out/.
                                      to it), then the PC turned off (ACPI's S5); the memory
                                      file's two copies, and nothing else on the disk changed (fsck.vfat too, so also
                                      needs dosfstools, mtools and gdisk)
+    ./check.py --files               Windows' drive read: a disk like a PC's, with Windows' NTFS partition after the
+                                     start-up one (the ntfs crate's test volume), and a stand-in for Claude that
+                                     lists a folder, reads files (UTF-8 and UTF-16, a Word file it can't, a long one
+                                     in two parts) and finds one by name (needs xz and sgdisk)
     ./check.py --sound               sound: a build that rings the timer's chime once it's ready, on each kind of
                                      HD Audio QEMU has (the ICH6's and ICH9's controllers; codecs with a line out,
                                      a line out and in, and a speaker and microphone), recorded: the chime's two
@@ -903,10 +907,11 @@ def claude(args) -> list[str]:
             if body.get("messages") != [{"role": "user", "content": "hi"}]:
                 problems.append(f"the first request's messages were {body.get('messages')!r}")
             tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])
-            if tools != [("computer_status", None), ("forget", None), ("remember", None), ("reminders", None),
-                         ("restart_computer", None), ("set_text_size", None), ("set_volume", None),
-                         ("start_new_conversation", None), ("turn_off_computer", None),
-                         ("web_fetch", "web_fetch_20250910"), ("web_search", "web_search_20250305")]:
+            if tools != [("computer_status", None), ("find_files", None), ("forget", None), ("list_files", None),
+                         ("read_file", None), ("remember", None), ("reminders", None), ("restart_computer", None),
+                         ("set_text_size", None), ("set_volume", None), ("start_new_conversation", None),
+                         ("turn_off_computer", None), ("web_fetch", "web_fetch_20250910"),
+                         ("web_search", "web_search_20250305")]:
                 problems.append(f"the request offered the tools {body.get('tools')!r}")
             m2 = (requests[1]["body"] or {}).get("messages") or []
             if m2[:2] != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(r1)}]:
@@ -1201,6 +1206,167 @@ def remember(args) -> list[str]:
     return problems
 
 
+def windows_disk(path: Path, efi: Path, settings: str, memory_id: int) -> dict[str, bytes]:
+    """A disk like a PC's (memory_disk), with Windows' drive after the start-up partition: a basic data partition
+    holding the ntfs crate's test volume (Windows' folders, a person's in Users, and more). Returns the start-up
+    partition's files."""
+    files = memory_disk(path, efi, settings, memory_id)
+    volume = subprocess.run(["xz", "-dc", str(HERE / "ntfs/tests/small.img.xz")], check=True, capture_output=True).stdout
+    with open(path, "r+b") as f:
+        f.truncate((96 << 20) + len(volume) + (4 << 20))
+    subprocess.run(["sgdisk", "-e", str(path)], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["sgdisk", "-n", f"2:0:+{len(volume) >> 20}M", "-t", "2:0700", "-c", "2:Windows", str(path)], check=True,
+                   stdout=subprocess.DEVNULL)
+    info = subprocess.run(["sgdisk", "-i", "2", str(path)], check=True, capture_output=True, text=True).stdout
+    first = int(next(line for line in info.splitlines() if line.startswith("First sector:")).split()[2])
+    with open(path, "r+b") as f:
+        f.seek(first * 512)
+        f.write(volume)
+    return files
+
+
+def files_check(args) -> list[str]:
+    """Windows' drive, read: a stand-in for Claude asks for folders, files and a search, each by its tool, and what
+    comes back is checked: a folder listed (a hidden system file left out), files read whatever the case of the path
+    (UTF-8 and UTF-16 text; a Word file said to be one; a long file in two parts), links followed (a junction, "My
+    Documents", and a symbolic link on the Desktop), OneDrive's files read when they're on the PC and said to be
+    online only when they aren't, a file Windows compressed itself said to be one, and a search that finds the
+    shopping list (and the link to it) but not the one in AppData (a hidden folder). computer_status says what the
+    drive is."""
+    import http.server
+    import re
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-files-"))
+    test_authority(tmp)
+    requests: list[dict] = []
+    calls = {
+        "list": ("list_files", {"path": "C:\\Users\\Sam\\Documents"}),
+        "read": ("read_file", {"path": "c:/users/sam/documents/SHOPPING LIST.txt"}),
+        "note": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Old note.txt"}),
+        "word": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Letter.docx"}),
+        "find": ("find_files", {"words": "shopping LIST"}),
+        "big": ("read_file", {"path": "\\Documents\\Report 2026.txt"}),
+        "more": ("read_file", {"path": "C:\\Documents\\Report 2026.txt", "offset": 60000}),
+        "gone": ("read_file", {"path": "C:\\Users\\Sam\\nothing.txt"}),
+        "mydocs": ("list_files", {"path": "C:\\Users\\Sam\\My Documents"}),
+        "desk": ("list_files", {"path": "C:\\Users\\Sam\\Desktop"}),
+        "linked": ("read_file", {"path": "C:\\Users\\Sam\\Desktop\\Shopping list.txt"}),
+        "od": ("list_files", {"path": "C:\\Users\\Sam\\OneDrive\\Documents"}),
+        "budget": ("read_file", {"path": "C:\\Users\\Sam\\OneDrive\\Documents\\Budget.txt"}),
+        "plan": ("read_file", {"path": "C:\\Users\\Sam\\OneDrive\\Documents\\Plan.docx"}),
+        "compact": ("read_file", {"path": "C:\\Windows\\System32\\notepad.exe"}),
+        "status": ("computer_status", {}),
+    }
+
+    class Api(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
+            requests.append(body)
+            asked = ((body.get("messages") or [{}])[-1]).get("content")
+            if isinstance(asked, str) and asked in calls:
+                name, inp = calls[asked]
+                send_stream(self, [("thinking", "sig-f"), ("tool_use", f"toolu_{asked}", name, [json.dumps(inp)])], "tool_use")
+            else:
+                send_stream(self, [("text", ["Done."])], "end_turn")
+
+    server = serve_https(Api, tmp)
+    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    problems: list[str] = []
+    results: dict[str, dict] = {}
+    try:
+        disk = tmp / "pc.img"
+        settings = f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
+        windows_disk(disk, BUILT, settings, MEMORY_ID)
+        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            wait_for(pc.log, ("network: address",), 60)
+            time.sleep(1)
+            for n, question in enumerate(calls):
+                monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
+                end = time.time() + 60
+                while time.time() < end and pc.text().count("Claude: answered (5 characters") < n + 1:
+                    time.sleep(0.5)
+            pc.settled_picture("files")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        for r in requests:
+            last = ((r.get("messages") or [{}])[-1]).get("content")
+            if isinstance(last, list) and last and last[0].get("type") == "tool_result":
+                results[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
+        if "files: Windows' drive (C:, NTFS, 33.5 MB), read only" not in text:
+            problems.append("Windows' drive wasn't found as it should be")
+        missing = [q for q in calls if q not in results]
+        if missing:
+            problems.append(f"no tool result came back for {missing}")
+            return problems
+        said = {q: str(r.get("content")) for q, r in results.items()}
+        errors = {q for q, r in results.items() if r.get("is_error")}
+        day = r"\d{4}-\d\d-\d\d"
+        want = {
+            "list": rf"C:\\Users\\Sam\\Documents: 0 folders, 3 files\nLetter\.docx \(4 KB, {day}\)\n"
+                    rf"Old note\.txt \(76 bytes, {day}\)\nShopping list\.txt \(43 bytes, {day}\)",
+            "read": rf"C:\\Users\\Sam\\Documents\\Shopping list\.txt \(43 bytes, changed {day}\):\n"
+                    r"Milk, eggs, tea — and café au lait\.\r\n",
+            "note": rf"C:\\Users\\Sam\\Documents\\Old note\.txt \(76 bytes, changed {day}\):\n"
+                    r"A note saved by Notepad, in UTF-16\.\r\n",
+            "word": r"C:\\Users\\Sam\\Documents\\Letter\.docx \(4 KB\) isn't text: it's a docx file, which "
+                    r"Chat Computer's own system can't read inside yet\.",
+            "find": r"Under C:\\Users, 2 found:\n"
+                    r"C:\\Users\\Sam\\Desktop\\Shopping list\.txt \(a link to \.\.\\Documents\\Shopping list\.txt\)\n"
+                    rf"C:\\Users\\Sam\\Documents\\Shopping list\.txt \(43 bytes, {day}\)\n"
+                    r"\[Looked in \d+ folders: all of them\.\]",
+            "gone": r"C:\\Users\\Sam\\nothing\.txt: there's no such file or folder",
+            "mydocs": r"C:\\Users\\Sam\\Documents \(reached by the link C:\\Users\\Sam\\My Documents\): 0 folders, "
+                      rf"3 files\nLetter\.docx \(4 KB, {day}\)\n.*",
+            "desk": r"C:\\Users\\Sam\\Desktop: 0 folders, 1 file\n"
+                    r"Shopping list\.txt \(a link to \.\.\\Documents\\Shopping list\.txt\)",
+            "linked": r"C:\\Users\\Sam\\Documents\\Shopping list\.txt \(reached by the link "
+                      rf"C:\\Users\\Sam\\Desktop\\Shopping list\.txt\) \(43 bytes, changed {day}\):\n"
+                      r"Milk, eggs, tea — and café au lait\.\r\n",
+            "od": rf"C:\\Users\\Sam\\OneDrive\\Documents: 0 folders, 4 files\nBudget\.txt \(19 bytes, {day}\)\n"
+                  rf"Half\.bin \(301 KB, {day}, online only: not on this PC\)\n"
+                  rf"Notes\.txt \(6 bytes, {day}, online only: not on this PC\)\n"
+                  rf"Plan\.docx \(50 KB, {day}, online only: not on this PC\)",
+            "budget": rf"C:\\Users\\Sam\\OneDrive\\Documents\\Budget\.txt \(19 bytes, changed {day}\):\n"
+                      r"Rent 1200\nFood 400\n",
+            "plan": r"C:\\Users\\Sam\\OneDrive\\Documents\\Plan\.docx: this file is online only: it's in OneDrive, "
+                    r"not downloaded to this PC \(Windows downloads it when it's opened there\)",
+            "compact": r"C:\\Windows\\System32\\notepad\.exe: Windows compressed this file itself \(Compact OS\), which "
+                       r"Chat Computer's own system can't read yet",
+        }
+        for q, pattern in want.items():
+            if not re.fullmatch(pattern, said[q], re.S):
+                problems.append(f"{q}: {said[q][:400]!r}")
+        if errors != {"gone", "plan", "compact"}:
+            problems.append(f"errors came back for {sorted(errors)}, not just for the files that can't be read")
+        report = (HERE / "ntfs/tests/small.txt").read_text()
+        size = int(next(line for line in report.splitlines() if line.startswith("Documents/Report 2026.txt\t")).split("\t")[2])
+        big, more = said["big"], said["more"]
+        if not (big.endswith("[The file goes on: read_file with offset 60000 reads the next part.]")
+                and len(big.split(":\n", 1)[1].rsplit("\n[The file", 1)[0]) == 60_000):
+            problems.append(f"the long file's first part wasn't 60,000 bytes and where to go on: {big[-200:]!r}")
+        if "The file goes on" in more or len(more.split(":\n", 1)[1]) != size - 60_000:
+            problems.append(f"the long file's second part wasn't the rest of it: {more[-200:]!r}")
+        if "Files: Windows' drive (C:, NTFS, 33.5 MB), read only" not in said["status"]:
+            problems.append("computer_status didn't say what files it can read")
+    finally:
+        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
 def secure_vars_with(cert: Path, where: Path) -> Path:
     """Firmware settings like a shop PC's (Microsoft's keys, Secure Boot on), plus `cert` in db."""
     pem = where / "cert.pem"
@@ -1397,6 +1563,7 @@ def main() -> int:
     ap.add_argument("--claude", action="store_true", help="a conversation with a stand-in for Claude's API, over HTTPS")
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
+    ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by Claude's file tools")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
@@ -1414,6 +1581,8 @@ def main() -> int:
         problems = remember(args)
     elif args.sound:
         problems = sound(args)
+    elif args.files:
+        problems = files_check(args)
     else:
         if not args.no_build:
             build()

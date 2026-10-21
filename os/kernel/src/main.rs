@@ -20,6 +20,7 @@ mod clock;
 mod cpu;
 mod dma;
 mod draw;
+mod files;
 mod gdt;
 mod heap;
 mod idt;
@@ -183,8 +184,13 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         log!("Chat Computer kernel: network: no card Chat Computer has a driver for");
     }
     log!("Chat Computer kernel: {}", sound::init());
-    // The memory file on the start-up drive, and the conversation it kept.
+    // The start-up drive; the memory file on it, and the conversation it kept; Windows' drive, to read.
+    match storage::open_start(&info.start_disk) {
+        Ok(drive) => log!("Chat Computer kernel: start-up drive: {drive}"),
+        Err(why) => log!("Chat Computer kernel: start-up drive: not started: {why}"),
+    }
     log!("Chat Computer kernel: {}", keep::init(&info.start_disk, settings.memory_id));
+    log!("Chat Computer kernel: {}", files::init());
     assistant::init(settings.claude_api_key, settings.key_problem);
     chat::restore(&assistant::conversation());
     log!("Chat Computer: ready");

@@ -12,6 +12,7 @@ pub mod ahci;
 pub mod nvme;
 
 use crate::pci;
+use crate::sync::SpinLock;
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
@@ -54,8 +55,53 @@ fn follow(d: &StartDisk) -> Result<pci::Function, String> {
     found.ok_or_else(|| String::from("the start-up stage gave no PCI path"))
 }
 
+/// The start-up drive, once started: the memory file is on it (keep.rs), and Windows' drive usually is too
+/// (files.rs). Used from the main loop only, taken out of its lock while it works (a read or save takes a moment).
+static START: SpinLock<Option<Box<dyn Disk>>> = SpinLock::new(None);
+/// What it is (for the computer's status), or why it couldn't be started.
+static START_SAID: SpinLock<Option<Result<String, String>>> = SpinLock::new(None);
+
+/// Starts the drive the start-up partition is on. Says which, or why it couldn't, for the log.
+pub fn open_start(d: &StartDisk) -> Result<String, String> {
+    let result = if d.kind == bootinfo::DISK_UNKNOWN {
+        Err(String::from("the start-up partition isn't on an NVMe or SATA drive"))
+    } else {
+        start_disk(d).map(|disk| {
+            let said = disk.describe();
+            *START.lock() = Some(disk);
+            said
+        })
+    };
+    *START_SAID.lock() = Some(result.clone());
+    result
+}
+
+/// What the start-up drive is, or why it isn't started (None: not tried yet).
+pub fn start_said() -> Option<Result<String, String>> {
+    START_SAID.lock().clone()
+}
+
+/// Runs `f` with the start-up drive, nothing locked meanwhile (None if it isn't started).
+pub fn with_start<T>(f: impl FnOnce(&mut dyn Disk) -> T) -> Option<T> {
+    let mut disk = START.lock().take()?;
+    let result = f(disk.as_mut());
+    *START.lock() = Some(disk);
+    Some(result)
+}
+
+/// Before the PC restarts or turns off: the start-up drive writes what it has cached. (Not if it's in use: a crash
+/// in the middle of a save.)
+pub fn shut_down() {
+    if let Some(mut guard) = START.try_lock()
+        && let Some(disk) = guard.as_mut()
+    {
+        let _ = disk.flush();
+        disk.shut_down();
+    }
+}
+
 /// The drive the start-up partition is on, started (or why not).
-pub fn start_disk(d: &StartDisk) -> Result<Box<dyn Disk>, String> {
+fn start_disk(d: &StartDisk) -> Result<Box<dyn Disk>, String> {
     let f = follow(d)?;
     match d.kind {
         bootinfo::DISK_NVME if (f.class, f.subclass, f.interface) == (0x01, 0x08, 0x02) => {

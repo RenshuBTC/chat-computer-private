@@ -85,10 +85,12 @@ pub fn status() -> String {
     });
     lines.push(format!("Sound: {}", crate::sound::status()));
     lines.push(crate::schedule::status());
+    lines.push(crate::files::status());
     lines.push(crate::keep::status());
     lines.push(String::from(
-        "Not yet in Chat Computer's own system: files (it reads and writes only its own memory file), sound other than \
-         its chimes (no speech, music or microphones), Wi-Fi, Bluetooth, and the other processor cores",
+        "Not yet in Chat Computer's own system: changing files (it reads Windows' drive, and writes only its own memory \
+         file), reading inside Word or PDF files, sound other than its chimes (no speech, music or microphones), Wi-Fi, \
+         Bluetooth, and the other processor cores",
     ));
     lines.join("\n")
 }

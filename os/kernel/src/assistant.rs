@@ -86,15 +86,16 @@ const CLOSING_MS: u64 = 30_000;
 const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, search the \
 web and read web pages, and look after this computer with the tools you have (its status, the text size, timers and \
-reminders, how loud their chimes are, restarting it or turning it off, starting a new conversation), but you can't yet \
-use the computer's files. The conversation is \
+reminders, how loud their chimes are, restarting it or turning it off, starting a new conversation), and read (not \
+change) the files on its Windows drive. The conversation is \
 kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, quotes and simple \
 tables. Nothing can be opened from it (no links, no pictures), so write an address out in full when the person needs \
 it.";
 const SYSTEM_NO_WEB: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, and look \
 after this computer with the tools you have (its status, the text size, timers and reminders, how loud their chimes \
-are, restarting it or turning it off, starting a new conversation), but you can't use the web here (it isn't enabled for this API key) or the computer's files. The \
+are, restarting it or turning it off, starting a new conversation, reading the files on its Windows drive), but you \
+can't use the web here (it isn't enabled for this API key). The \
 conversation is kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, \
 quotes and simple tables. Nothing can be opened from it (no links, no pictures), so write an address out in full when \
 the person needs it.";
@@ -116,7 +117,7 @@ const NOTE_CHARS: usize = 400;
 const NOTES_CHARS: usize = 8000;
 
 /// What Claude can do on this computer.
-const TOOLS: [api::Tool; 9] = [
+const TOOLS: [api::Tool; 12] = [
     api::Tool {
         name: "computer_status",
         description: "What this computer is and how it's doing: its processor, memory, screen, how long Chat Computer's \
@@ -177,6 +178,30 @@ const TOOLS: [api::Tool; 9] = [
         description: "Sets how loud the chimes of timers and reminders are on this computer's speakers or headphones, \
                       0 (silent) to 100 (as loud as Chat Computer makes them).",
         input_schema: r#"{"type":"object","properties":{"percent":{"type":"integer","minimum":0,"maximum":100}},"required":["percent"]}"#,
+    },
+    api::Tool {
+        name: "list_files",
+        description: "Lists a folder on this computer's Windows drive (C:): its folders, and its files with their size \
+                      and when each was last changed. The person's own folders are in C:\\Users\\<their name> \
+                      (Desktop, Documents, Downloads, Pictures...); where OneDrive backs them up, their Desktop, \
+                      Documents and Pictures are in C:\\Users\\<their name>\\OneDrive instead, and a file that's \
+                      online only (not downloaded to this PC) can't be read here. Links are followed. Read only: \
+                      nothing here can be changed.",
+        input_schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"The folder, like C:\\Users or C:\\Users\\Sam\\Documents."}},"required":["path"]}"#,
+    },
+    api::Tool {
+        name: "read_file",
+        description: "Reads a file on this computer's Windows drive (C:): a text file (.txt, .md, .csv, code...) as it \
+                      is, up to 60,000 bytes at a time (offset reads further on). Word and PDF files, pictures and \
+                      other kinds can't be read inside yet.",
+        input_schema: r#"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0,"description":"Where to start, in bytes (0: the start)."}},"required":["path"]}"#,
+    },
+    api::Tool {
+        name: "find_files",
+        description: "Finds the files and folders on this computer's Windows drive whose names have all of these words \
+                      in them, from a folder down: by default C:\\Users, where the person's files are (hidden folders \
+                      like AppData are left out). It looks in a few thousand folders at most.",
+        input_schema: r#"{"type":"object","properties":{"words":{"type":"string"},"in":{"type":"string","description":"The folder to search from (default C:\\Users)."}},"required":["words"]}"#,
     },
     api::Tool {
         name: "start_new_conversation",
@@ -641,6 +666,18 @@ fn run_tool(call: &ToolUse, job: &mut Job, notes: &mut Vec<String>, events: &mut
             },
             _ => (String::from("percent must be from 0 to 100"), true),
         },
+        "list_files" | "read_file" | "find_files" => {
+            let text = |key: &str| call.input.get(key).and_then(|v| v.str()).unwrap_or("");
+            let said = match call.name.as_str() {
+                "list_files" => crate::files::list(text("path")),
+                "read_file" => crate::files::read(text("path"), call.input.get("offset").and_then(number).unwrap_or(0.0).max(0.0) as u64),
+                _ => crate::files::find(text("words"), text("in")),
+            };
+            match said {
+                Ok(s) => (s, false),
+                Err(e) => (e, true),
+            }
+        }
         "start_new_conversation" => {
             job.new_conversation = true;
             (String::from("A new conversation starts when your answer ends: say so, in a few words."), false)

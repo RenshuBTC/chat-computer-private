@@ -16,7 +16,8 @@ everywhere, and PCs move to the own kernel as its drivers grow (see "Reaching ev
 You type to Claude on it: Opus 5.5 at its highest effort, with your own Claude API key, through Chat Computer's own
 network stack, its own encryption and its own TLS 1.3, and the answer streams onto a screen that looks like Chat
 Computer's. Claude can search the web and read web pages (Anthropic runs those tools, so no browser is needed here),
-and act on the computer through tools: see how it's doing, make the text bigger or smaller, and restart it. The PC's
+and act on the computer through tools: see how it's doing, make the text bigger or smaller, set timers, read your
+files on Windows' drive, and restart it. The PC's
 UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF, the
 open-source UEFI firmware). It reaches the internet through the wired network chips most PCs have (Intel's
 I219, I210, I211, I225 and I226, Realtek's RTL8111/8168 and RTL8125: written to the makers' datasheets and the
@@ -106,6 +107,13 @@ NVMe and SATA drivers.
     on the same conversation. Only the memory file's own blocks are
     ever written, each read and checked first: never the file system, Windows' files or any other partition.
     Before a restart, the drive is told to write what it has cached;
+  * Windows' drive, C:, read and never changed (`files.rs`, by Chat Computer's own NTFS reader, `ntfs/`): of the
+    start-up drive's basic data partitions, the NTFS one with Windows' folders. Claude reads the person's files there
+    through its tools (below). Links are followed on C: (a junction such as "My Documents", a symbolic link);
+    OneDrive's files are read when they're downloaded to the PC, and said to be online only when they aren't. Not
+    yet: a drive BitLocker encrypts (the status says so; many new laptops have Windows' "device encryption" on),
+    files Windows compressed itself ("Compact OS", mostly its own), other drives (D:), and the insides of Word and
+    PDF files;
   * the sound controller (`sound/hda.rs`): HD Audio, Intel's High Definition Audio, which nearly every PC's chipset
     has, Intel's and AMD's alike. It's reset and its codecs found on its link; the first codec with an audio function
     that has outputs is used (a graphics card's controller has only its screens' digital ones). Each codec
@@ -129,6 +137,11 @@ NVMe and SATA drivers.
       every 4 seconds for a minute (an alarm every 6 for ten minutes) until a key is pressed; a reminder rings once.
       They count the kernel's own time, so a clock that's out doesn't move them, and last until the PC restarts;
     * `set_volume`: how loud the chimes are, 0 to 100%;
+    * `list_files`, `read_file` and `find_files`: a folder's files and folders on Windows' drive (with their sizes and
+      when they changed; Windows' hidden system files, such as desktop.ini, left out as File Explorer leaves them
+      out), a file's text (UTF-8, or UTF-16 as Notepad saves it, 60,000 bytes at a time, from any point), and the
+      files and folders whose names have some words in them, from the person's folders (Users) down by default,
+      hidden folders such as AppData passed by. A file that isn't text is said to be the kind it is;
     * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
       keyboard controller's reset line (`power.rs`);
@@ -195,6 +208,17 @@ NVMe and SATA drivers.
 * `fat/` is Chat Computer's own reader of FAT12, FAT16 and FAT32 (the file system of every PC's start-up
   partition), long names included: it finds a file's blocks. Tested against volumes made by `mkfs.vfat` and
   filled by mtools, fragmented files among them.
+* `ntfs/` is Chat Computer's own reader of NTFS, the file system of Windows' drive, which it never changes: the
+  master file table's records (put back together from their update sequences, attributes kept in them or in runs
+  of clusters, and in other records, through an attribute list, for a file in hundreds of pieces), folders' indexes
+  (B-trees of names, compared in capitals as the volume's own table makes them, as Windows compares them), long and
+  8.3 names, hard links, sparse files, compressed files (LZNT1), and reparse points: links (where they go), and
+  placeholders, such as OneDrive's (whether the file's bytes are on the PC). Encrypted files (EFS), files Windows
+  compressed itself and volumes BitLocker encrypts are recognized, not read. Every number read from the disk is
+  checked first, so a damaged volume gives an error, not a crash. Tested against volumes made by Linux's
+  `mkntfs` and filled by ntfs-3g (`ntfs/tests/make.py`), with 512-byte and 4 KiB sectors, 4 KiB and 64 KiB
+  clusters: every file's bytes, against a hash of what ntfs-3g wrote, and every byte of the volume's first records
+  changed in turn.
 * `chime/` makes the chimes of timers and reminders: bell notes, each a tone with its second and third harmonics,
   rising in 5 ms and dying away, the same as the main Chat Computer's (`chatcomputer/voice/chime.py`), at any
   sample rate. Made with sine recurrences (each sample from the two before), as the kernel's floating point is
@@ -272,11 +296,11 @@ fetches it. To try it you also need QEMU, OVMF and Pillow (`apt install qemu-sys
 python3-pil`).
 
 ```
-./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 1.1 MB)
-cargo test -p font -p net -p crypto -p tls -p claude -p fat -p remember -p markdown
-                                 # the font engine, network stack, cryptography, TLS (needs openssl), Claude
-                                 # API client, FAT reader (needs dosfstools and mtools), memory file and
-                                 # Markdown reader
+./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 2.7 MB)
+cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p ntfs -p remember -p markdown -p chime -p hid
+                                 # the font engine and text setting, network stack, cryptography, TLS (needs
+                                 # openssl), Claude API client, FAT reader (needs dosfstools and mtools), NTFS
+                                 # reader (needs xz), memory file, Markdown reader, chimes and HID descriptors
 cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
@@ -296,6 +320,12 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # a SATA drive laid out like a PC's, then a new conversation started (the note
                                  # still shown to Claude), then the PC turned off;
                                  # nothing else on the disk changed (needs dosfstools, mtools and gdisk)
+./check.py --sound               # a timer set by a stand-in for Claude, its chime recorded from each of QEMU's
+                                 # HD Audio controllers and codecs and checked against the chime's own samples
+./check.py --files               # Windows' drive read by Claude's tools (a stand-in for Claude asks): a folder
+                                 # listed, text files read (UTF-8 and UTF-16, a long one in two parts), links
+                                 # followed, OneDrive's files on the PC and online only, a search
+                                 # (needs xz and gdisk)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/chatcomputer.efi
@@ -375,9 +405,11 @@ PC.
 3. ✓ Keyboard: USB (the xHCI controllers, hubs and keyboards) and PS/2 (laptops' built-in keyboards).
    Checked in virtual PCs; on the real PC with step 2.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
-5. Storage: ✓ NVMe and SATA (the drive the PC started from), and the conversation kept across restarts in a file on
-   the start-up partition. Checked in virtual PCs. To do: other drives, Chat Computer's own file system for memory
-   and logs, and keeping them encrypted.
+5. Storage: ✓ NVMe and SATA (the drive the PC started from), ✓ the conversation kept across restarts in a file on
+   the start-up partition, ✓ Windows' drive read (NTFS), for Claude to read the person's files. Checked in virtual
+   PCs. To do: a drive BitLocker encrypts (with its recovery key), files Windows compressed itself (XPRESS and LZX),
+   other drives, the text inside Word and PDF files, Chat Computer's own file system for memory and logs, and
+   keeping them encrypted.
 6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e, igb); the internet over
    a USB cable (USB Ethernet adapters and Android phones' tethering: CDC ECM, NCM and RNDIS); written, not yet tried
    on a real PC: Intel's I219, I210, I211, I225 and I226, and Realtek's RTL8111/8168 and RTL8125. To do: trying those

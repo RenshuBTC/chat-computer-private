@@ -17,6 +17,7 @@ crypto = { path = "../crypto" }
 tls = { path = "../tls" }
 claude = { path = "../claude" }
 fat = { path = "../fat" }
+ntfs = { path = "../ntfs" }
 remember = { path = "../remember" }
 markdown = { path = "../markdown" }
 hid = { path = "../hid" }

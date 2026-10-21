@@ -1,10 +1,11 @@
 # Chat Computer's own operating system (os/).
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
-#   engine's, text setting's, Markdown reader's and memory file's tests; starts it in virtual PCs (QEMU with OVMF) and checks the
-#   screen and the clock; checks that a crash stops it cleanly; starts it with Secure Boot enforced (signed with a
-#   test key the firmware trusts),
-#   checking the firmware refuses it unsigned; types on PS/2 and USB keyboards (on ports, behind a hub,
-#   plugged in and out), checking what comes out; and rings a timer, recording its chime.
+#   engine's, text setting's, chimes', NTFS reader's, Markdown reader's, memory file's and HID descriptors' tests;
+#   starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a crash stops it
+#   cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts), checking the
+#   firmware refuses it unsigned; types on PS/2 and USB keyboards (on ports, behind a hub, plugged in and out),
+#   checking what comes out; rings a timer, recording its chime; and has a stand-in for Claude read files on a
+#   Windows drive (NTFS) with its tools.
 # - windows: signs the release file on real Windows, the way "Chat Computer Own System" does on a PC, and (when the
 #   machine starts in UEFI mode) puts it on the start-up partition and in the power-on menu and takes it off again.
 # - secure-boot-windows: starts the file Windows signed in a virtual PC whose firmware trusts only Microsoft's
@@ -34,11 +35,11 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil sbsigntool
+          sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil sbsigntool dosfstools mtools gdisk xz-utils
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
-      - name: Font engine, text setting, chimes, Markdown reader, memory file and HID descriptor tests
-        run: cargo test -p font -p text -p chime -p markdown -p remember -p hid
+      - name: Font engine, text setting, chimes, NTFS reader, Markdown reader, memory file and HID descriptor tests
+        run: cargo test -p font -p text -p chime -p ntfs -p markdown -p remember -p hid
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh
@@ -59,6 +60,8 @@ jobs:
         run: ./check.py --sound
       - name: Keyboards (PS/2; USB on ports and behind a hub, with MSI-X, MSI and no interrupts; IOMMUs)
         run: ./check.py --keyboard
+      - name: Files (Windows' drive, NTFS, read by Claude's tools; a stand-in for Claude's API over HTTPS)
+        run: ./check.py --files
       - name: Keep the pictures and the log
         if: always()
         uses: actions/upload-artifact@v6

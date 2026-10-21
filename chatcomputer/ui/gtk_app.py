@@ -107,7 +107,7 @@ TOUCH_EVENTS = {Gdk.EventType.TOUCH_BEGIN, Gdk.EventType.TOUCH_UPDATE, Gdk.Event
 DONE_SHOWN = 300             # Actions: how many the page holds (the rest are in done.jsonl)
 MESSAGES_SHOWN = 400         # Messages: how many the page holds (the rest are in messages.db)
 # What the conversation page tells the controller (Controller.page_event).
-PAGE_EVENTS = {"pin", "open_message", "add_account", "account", "account_cancel", "panels",
+PAGE_EVENTS = {"pin", "revert", "open_message", "add_account", "account", "account_cancel", "panels",
                "search", "open_file",           # "/" in the message box: searching this computer, opening a file
                "text_scale",                    # two fingers pinched on the conversation: its text bigger or smaller
                "unlock",                        # the PIN typed on the lock screen
@@ -1302,6 +1302,22 @@ class GtkScreen(Screen):
             self._done_entries = (self._done_entries + [entry])[-DONE_SHOWN:]
             self._replay_last["done"] = f"CO.doneList({json.dumps(self._done_entries)})"
             self._chat_run(f"CO.done({json.dumps(entry)})", "transient")
+        self._ui(run)
+
+    def done_states(self, entries: list[dict[str, Any]]) -> None:
+        def run() -> None:
+            marks = {e["id"]: e for e in entries}
+            for e in self._done_entries:
+                m = marks.get(e.get("id"))
+                if m is not None:
+                    for k in ("revert", "reverted"):
+                        if m.get(k):
+                            e[k] = m[k]
+                        else:
+                            e.pop(k, None)
+            self._replay_last["done"] = f"CO.doneList({json.dumps(self._done_entries)})"
+            states = [{k: e[k] for k in ("id", "revert", "reverted") if k in e} for e in entries]
+            self._chat_run(f"CO.doneStates({json.dumps(states)})", "transient")
         self._ui(run)
 
     def messages_list(self, items: list[dict[str, Any]], accounts: list[dict[str, Any]] | None = None) -> None:

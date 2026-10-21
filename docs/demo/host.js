@@ -120,9 +120,11 @@
   ];
   var DONE = APP ? [] : [
     { id: "d1", ts: START - 86400 - 2995, text: "Opened youtube.com", prompt_id: "y1", prompt_ts: START - 86400 - 3010 },
-    { id: "d2", ts: START - 86400 - 2905, text: "Set the volume to 40%", prompt_id: "y2", prompt_ts: START - 86400 - 2910 },
+    { id: "d2", ts: START - 86400 - 2905, text: "Set the volume to 40%", prompt_id: "y2", prompt_ts: START - 86400 - 2910,
+      undo: { kind: "volume", value: 70 } },
     { id: "d3", ts: START - 5400, text: "Searched the web for \u201ctrains to the airport on Sunday\u201d", prompt_id: "h1", prompt_ts: START - 5410 },
-    { id: "d4", ts: START - 5390, text: "Saved Packing list.md", prompt_id: "h1", prompt_ts: START - 5410 }
+    { id: "d4", ts: START - 5390, text: "Saved Packing list.md", prompt_id: "h1", prompt_ts: START - 5410,
+      undo: { kind: "file", name: "Packing list.md" } }
   ];
   var FILES = APP ? [] : [
     { name: "Packing list.md", where: "~/Documents", kind: "document", ts: START - 5390, page: "packing" },
@@ -177,7 +179,7 @@
   var view = null, open = false, hole = null;
   var acted = 0;        // how many times what's open changed (shown, closed, the volume): see wordsOnly
   function frame() {
-    if (view) view.remove();
+    if (view) { viewGone(view); view.remove(); }
     var v = view = document.createElement("iframe");
     v.id = "demo-view";
     v.title = "What's open";
@@ -193,6 +195,7 @@
     if (APP && page.src && /^https?:/i.test(page.src)) { showSite(page); return; }
     if (site.on) closeSite();
     var v = frame();
+    v.dataset.undo = "";                     // (no longer what an action opened: shown() marks it, for Revert)
     acted++;
     player.token = {};                       // what was playing is gone
     player.id = page.youtube || "";
@@ -202,6 +205,12 @@
     v.style.display = "block";
     call("mode", "content", page.title || titleOf(page.html));
     place();
+  }
+  // What's open now, marked as opened by an action: Revert closes it, while it's still what's open.
+  function shown() {
+    if (!view) return null;
+    view.dataset.undo = uid("v");
+    return { kind: "close", view: view.dataset.undo };
   }
   // A page's name (its <title>), for the top of its frame.
   function titleOf(html) {
@@ -228,6 +237,7 @@
     open = false;
     player.token = {};
     player.id = "";
+    viewGone(view);
     view.remove();
     view = null;
     if (was) call("mode", "chat");
@@ -247,7 +257,7 @@
   // Claude) or a message held puts it out of sight meanwhile: the app's view would be in front of them.
   var site = { on: false, hidden: false, url: "" };
   function showSite(page) {
-    if (view) { view.remove(); view = null; }
+    if (view) { viewGone(view); view.remove(); view = null; }
     acted++;
     player.token = {};
     player.id = page.youtube || "";
@@ -1094,15 +1104,15 @@
       return { text: view ? "Closed it." : "Nothing's open.", act: close };
     }],
     [/\b(volume|louder|quieter|softer|mute|unmute)\b|\bturn\s+(up|down|(it|that|this|the\s+(music|sound|song|video|piano|volume))\s+(up|down))\b/i, function (t) {
-      if (/\bmute\b/i.test(t)) return { text: "Muted.", done: ["Muted the sound"], act: function () { setVolume(0); } };
+      if (/\bmute\b/i.test(t)) return { text: "Muted.", done: ["Muted the sound"], act: function () { return volumeTo(0); } };
       var asked = /\b(\d{1,3})\s*(%|percent\b)?/i.exec(t);
       if (asked) {
         var p = Math.min(100, +asked[1]);
-        return { text: "Volume is " + p + "%.", done: ["Set the volume to " + p + "%"], act: function () { setVolume(p); } };
+        return { text: "Volume is " + p + "%.", done: ["Set the volume to " + p + "%"], act: function () { return volumeTo(p); } };
       }
       var up = /\b(louder|up|unmute)\b/i.test(t);
       return { text: up ? "Volume is 60%." : "Volume is 40%.", done: [up ? "Turned the volume up" : "Turned the volume down"],
-        act: function () { setVolume(up ? 60 : 40); } };
+        act: function () { return volumeTo(up ? 60 : 40); } };
     }],
     // Who's answering, and who made it.
     [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|ai|real|human|bot|model)\b|^(who are you|are you real)\b|\bwhat('s| is) (running|powering|behind) (you|this)\b|\bwho('s| is) (answering|talking|running this)\b|\bpowered by\b|\bwhat powers (you|this|it)\b|\bwhat (are you|is this|is it) (running|built|based) on\b|\bwhat('s| is) your (model|engine|brain|ai)\b/i, function () {
@@ -1224,7 +1234,7 @@
       var m = /(\d+)\s*(min|minute|m\b)/i.exec(t), eggs = /\beggs?\b/i.test(t), mins = m ? Math.min(180, +m[1]) : eggs ? 9 : 10;
       return { text: (eggs && !m ? "A 9-minute timer for hard-boiled eggs (6 minutes for soft), on the screen: press Start." :
         "A " + mins + "-minute timer, on the screen: press Start. I made it just now: on Chat Computer I can make any little page or app like this."),
-        done: ["Made a timer"], act: function () { show({ html: timer(mins) }); } };
+        done: ["Made a timer"], act: function () { show({ html: timer(mins) }); return shown(); } };
     }],
     [/\b(weather|rain|raining|forecast|temperature|umbrella|sunny|hot|cold) ?(today|tomorrow|outside|like|in|now)?\b/i, weather],
     // The news: looked up (and, with the browser's AI on, told in its words).
@@ -1263,7 +1273,7 @@
           "The text is its usual size already." };
       }
       var said = way > 0 ? "Made the text bigger" : way < 0 ? "Made the text smaller" : "Put the text back to its usual size";
-      return { text: said + ".", done: [said], act: function () { setScale(to); } };
+      return { text: said + ".", done: [said], act: function () { var was = scale; setScale(to); return { kind: "scale", value: was }; } };
     }],
     [/\b(mum|mom|whatsapp|telegram|texts?|messages?|alex)\b/i, function (t) {
       var alex = /alex|telegram/i.test(t);
@@ -1490,8 +1500,11 @@
     } else if (a === "make_timer") {
       var mins = Math.max(1, Math.min(180, parseInt(r.minutes, 10) || 10));
       show({ html: timer(mins) });
-      did("Made a timer", you, uts);
-    } else if (a === "set_volume" && r.percent != null) setVolume(Number(r.percent));
+      did("Made a timer", you, uts, shown());
+    } else if (a === "set_volume" && r.percent != null) {
+      var back = volumeTo(Number(r.percent));
+      did("Set the volume to " + player.volume + "%", you, uts, back);
+    }
     else if (a === "close") close();
     return Promise.resolve("");
   }
@@ -1898,6 +1911,12 @@
     store(scaleKey(), scale);
     layout();
   }
+  // The volume set, and how to put it back (Revert, in Actions); null when it didn't change.
+  function volumeTo(p) {
+    var was = player.volume;
+    setVolume(p);
+    return was === player.volume ? null : { kind: "volume", value: was };
+  }
   function setVolume(p) {
     acted++;
     player.volume = Math.max(0, Math.min(100, Math.round(p)));
@@ -1939,17 +1958,99 @@
   }
   // A written answer: what it shows, what it did (Actions), and its words (where they can be read: wordsOnly).
   function deliver(a, id, you, uts, since) {
-    if (a.act) a.act();
-    (a.done || []).forEach(function (d) { did(d, you, uts); });
+    var back = a.act ? a.act() : null;           // (how to take it back, when it says)
+    (a.done || []).forEach(function (d, i) { did(d, you, uts, i === 0 ? back : null); });
     if (a.text && since != null) wordsOnly(since);
     stream(id, a.text || "", function () { say(a.text || ""); });
   }
-  function did(text, you, uts) {
+  // Something done, in Actions. `back`: how to take it back ({kind, ...}: takeBack), for its Revert.
+  function did(text, you, uts, back) {
     var entry = { id: uid("d"), ts: now(), text: text, prompt_id: you || "", prompt_ts: uts || now() };
-    call("done", entry);
+    if (back && typeof back.kind === "string") entry.undo = back;
+    known[entry.id] = entry;
+    call("done", forScreen(entry));
     if (APP) store(APP_DONE, (store(APP_DONE) || []).concat([entry]).slice(-200));     // (the app keeps its Actions)
+    return entry;
   }
   var APP_DONE = "chatcomputer-app-done";
+  // Every action this page has listed, by id (with how to take each back).
+  var known = {};
+  function forScreen(e) {
+    var o = { id: e.id, ts: e.ts, text: e.text, prompt_id: e.prompt_id, prompt_ts: e.prompt_ts };
+    if (e.reverted) o.reverted = true;
+    else if (e.undo) o.revert = true;
+    return o;
+  }
+  // Revert, on something in Actions (chat.js): it's taken back as far as this page can (the volume, the text size,
+  // a timer still open, the demo's own saved file), and that's listed as an action of its own, which can be reverted
+  // in turn (the action is back). The app keeps the marks with its Actions.
+  function revert(id) {
+    var e = known[id], can = !!(e && e.undo && !e.reverted);
+    var back = can ? takeBack(e.undo) : { why: e && e.reverted ? "It was already reverted." : "That can't be reverted." };
+    if (!back.ok) {
+      call("notice", (can ? "Couldn't revert \u201c" + e.text + "\u201d: " : "Nothing reverted: ") + back.why, "warn");
+      if (can && back.gone) delete e.undo;         // (nor ever will be: its Revert goes)
+    } else {
+      e.reverted = true;
+      var was = e.reverts && known[e.reverts];
+      if (was) delete was.reverted;               // a revert reverted: the action is back
+      var r = did("Reverted \u201c" + e.text + "\u201d", e.prompt_id, e.prompt_ts, back.undo);
+      r.reverts = id;
+    }
+    if (APP) keepDone();
+    showStates();
+  }
+  // Which actions can be reverted and which have been, to the page (after a revert, or what one opened closing).
+  function showStates() {
+    var states = [];
+    for (var k in known) states.push(forScreen(known[k]));
+    call("doneStates", states);
+  }
+  // The app's Actions, kept with their marks (and how to take each back).
+  function keepDone() {
+    store(APP_DONE, (store(APP_DONE) || []).map(function (x) { return known[x.id] || x; }));
+  }
+  // What's open is going (closed, or something else shown in its place): the action that opened it has nothing left
+  // to take back, so its Revert goes.
+  function viewGone(v) {
+    var mark = v && v.dataset.undo, changed = false;
+    if (!mark) return;
+    for (var k in known) {
+      var u = known[k].undo;
+      if (u && u.kind === "close" && u.view === mark) { delete known[k].undo; changed = true; }
+    }
+    if (changed) { if (APP) keepDone(); showStates(); }
+  }
+  // Takes back what an action did: {ok, undo: how to take that back in turn} or {why} (and gone: for good).
+  function takeBack(u) {
+    if (u.kind === "volume") {
+      var vol = player.volume;
+      setVolume(u.value);
+      return { ok: true, undo: { kind: "volume", value: vol } };
+    }
+    if (u.kind === "scale") {
+      var before = scale;
+      setScale(u.value);
+      return { ok: true, undo: { kind: "scale", value: before } };
+    }
+    if (u.kind === "close") {                      // (open, or put away while something else was asked)
+      if (!view || view.dataset.undo !== u.view) return { why: "it isn't open any more.", gone: true };
+      close();
+      return { ok: true, undo: null };
+    }
+    if (u.kind === "file") {                       // the demo's made-up files: one saved taken away, or put back
+      var at = -1;
+      FILES.forEach(function (f, i) { if (f.name === (u.file ? u.file.name : u.name)) at = i; });
+      if (u.file) {
+        if (at >= 0) return { why: "it's there already." };
+        FILES.splice(Math.min(u.at || 0, FILES.length), 0, u.file);      // (where it was in the list)
+        return { ok: true, undo: { kind: "file", name: u.file.name } };
+      }
+      if (at < 0) return { why: "it isn't there any more." };
+      return { ok: true, undo: { kind: "file", file: FILES.splice(at, 1)[0], at: at } };
+    }
+    return { why: "that can't be undone here." };
+  }
   // When a file last changed, as a person would say it: 2:03 PM today, Oct 3 this year, Oct 3, 2024 before.
   function whenText(ts) {
     var d = new Date(ts * 1000), today = new Date();
@@ -2191,13 +2292,13 @@
     if (n === "make_timer") {
       var mins = Math.max(1, Math.min(180, parseInt(a.minutes, 10) || 10));
       show({ html: timer(mins) });
-      did("Made a timer", you, uts);
+      did("Made a timer", you, uts, shown());
       return "A " + mins + "-minute timer is on the screen, with Start and Reset.";
     }
     if (n === "set_volume") {
       if (!player.id) return "Nothing is playing.";
-      setVolume(Number(a.percent));
-      did("Set the volume to " + player.volume + "%", you, uts);
+      var back = volumeTo(Number(a.percent));
+      did("Set the volume to " + player.volume + "%", you, uts, back);
       return "The volume is " + player.volume + "%.";
     }
     if (n === "close") { var was = !!view; close(); return was ? "Closed." : "Nothing was open."; }
@@ -2963,8 +3064,10 @@
         }
         if (store("chatcomputer-demo-panels")) call("panels", store("chatcomputer-demo-panels"));
         call("doneList", (APP ? store(APP_DONE) || [] : DONE).map(function (e) {
-          var pins = (store("chatcomputer-demo-pins") || {}).done || {}, o = {};
-          for (var k in e) o[k] = e[k];
+          var pins = (store("chatcomputer-demo-pins") || {}).done || {}, o;
+          if (e.undo && e.undo.kind === "close") delete e.undo;       // (what it opened went with the page before)
+          known[e.id] = e;
+          o = forScreen(e);
           if (pins[e.id]) o.pinned = pins[e.id];
           return o;
         }));
@@ -2990,6 +3093,7 @@
         break;
       }
       case "goto": call("earlier", EARLIER, msg.id, msg.ts); break;
+      case "revert": revert(String(msg.id || "")); break;
       // Under a message: read it aloud; good or bad (kept in this browser only: nothing leaves it).
       case "speak": readAloud(String(msg.text || "")); break;
       case "feedback": {

@@ -24,7 +24,8 @@ class Memory:
     def facts(self) -> list[str]:
         return [ln[2:].strip() for ln in self.text().splitlines() if ln.startswith("- ")]
 
-    def remember(self, fact: str) -> str:
+    def remember(self, fact: str, added: list[str] | None = None) -> str:
+        """Keeps a fact (`added` gets the line written, for Revert in Actions)."""
         fact = " ".join(fact.split()).strip()
         if not fact:
             return "Nothing to remember."
@@ -41,9 +42,12 @@ class Memory:
             facts = [ln for ln in lines if ln.startswith("- ")]
             body = HEADER + "".join(facts[-200:])
         atomic_write(self.paths.memory_file, body)
+        if added is not None:
+            added.append(line.rstrip("\n"))
         return "Got it, I'll remember that."
 
-    def forget(self, text: str) -> str:
+    def forget(self, text: str, dropped_lines: list[str] | None = None) -> str:
+        """Forgets the facts with all of `text`'s words (`dropped_lines` gets the lines taken out, for Revert)."""
         words = [w for w in re.findall(r"\w+", text.lower()) if len(w) > 2]
         if not words:
             return "Tell me what to forget."
@@ -53,12 +57,33 @@ class Memory:
             low = ln.lower()
             if ln.startswith("- ") and all(w in low for w in words):
                 dropped.append(ln[2:].strip())
+                if dropped_lines is not None:
+                    dropped_lines.append(ln.rstrip("\n"))
             else:
                 keep.append(ln)
         if not dropped:
             return "I didn't have anything like that."
         atomic_write(self.paths.memory_file, "".join(keep) or HEADER)
         return f"Forgotten: {'; '.join(dropped)}"
+
+    def drop_lines(self, lines: list[str]) -> list[str]:
+        """Takes out exactly these lines (Revert of something remembered); returns those that were there."""
+        wanted = {ln.rstrip("\n") for ln in lines}
+        keep, gone = [], []
+        for ln in self.text().splitlines(keepends=True):
+            (gone if ln.rstrip("\n") in wanted else keep).append(ln)
+        if gone:
+            atomic_write(self.paths.memory_file, "".join(keep) or HEADER)
+        return [ln.rstrip("\n") for ln in gone]
+
+    def add_lines(self, lines: list[str]) -> list[str]:
+        """Puts back lines taken out (Revert of something forgotten), as they were; returns those added."""
+        body = self.text() or HEADER
+        have = {ln.rstrip("\n") for ln in body.splitlines()}
+        new = [ln.rstrip("\n") for ln in lines if ln.startswith("- ") and ln.rstrip("\n") not in have]
+        if new:
+            atomic_write(self.paths.memory_file, body + ("" if body.endswith("\n") else "\n") + "\n".join(new) + "\n")
+        return new
 
     def for_prompt(self) -> str:
         facts = self.facts()

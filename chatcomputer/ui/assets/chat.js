@@ -722,6 +722,19 @@
     b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-pin"/></svg>';
     return b;
   }
+  // Revert, on something in Actions that changed something which can be taken back (a file, a setting): the computer
+  // takes it back, lists that as an action of its own, and marks this one reverted (CO.doneStates).
+  function revertButton() {
+    var b = document.createElement("button");
+    b.className = "revert";
+    b.type = "button";
+    b.tabIndex = -1;
+    b.title = "Revert: undo this";
+    b.dataset.label = "Revert";                          // what it says when an item is swiped (touchscreen)
+    b.setAttribute("aria-label", b.title);
+    b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-revert"/></svg>';
+    return b;
+  }
   // Pins: a pinned item stays at the top of its list, newest pin first, until it's unpinned. The page shows it at
   // once; Chat Computer keeps it (pins.json) for next time.
   function togglePin(kind, items, id) {
@@ -735,7 +748,8 @@
       ul.addEventListener("mousedown", function (e) { e.preventDefault(); });     // typing stays in the box
       ul.addEventListener("click", function (e) {
         var li = e.target.closest ? e.target.closest(".item") : null;
-        if (li) handler(li, !!(e.target.closest && e.target.closest(".pin")));
+        var tool = e.target.closest ? e.target.closest(".pin, .revert") : null;
+        if (li) handler(li, tool ? tool.className.split(" ")[0] : "");
       });
     });
   }
@@ -744,15 +758,31 @@
   var dones = [], doneById = {}, lastDay = "", labelsFor = "", DONE_MAX = 300;
   function doneItem(e) {
     var li = document.createElement("li");
-    li.className = "item done-item" + (e.pinned ? " pinned" : "");
+    li.className = "item done-item" + (e.pinned ? " pinned" : "") + (e.reverted ? " reverted" : "") +
+      (e.reverting ? " reverting" : "") + (e.revert && !e.reverted && !e.reverting ? " revertable" : "");
     li.dataset.id = e.id;
     li.dataset.prompt = e.prompt_id || "";
     li.dataset.ts = String(e.prompt_ts || e.ts);
     var pinnedDay = e.pinned && new Date(e.ts * 1000).toDateString() !== new Date().toDateString();
-    li.appendChild(el("done-when", (pinnedDay ? dayLabel(e.ts) + " " : "") + clock(e.ts)));
+    li.appendChild(el("done-when", e.reverting ? "Reverting\u2026" : (pinnedDay ? dayLabel(e.ts) + " " : "") + clock(e.ts)));
     li.appendChild(el("done-what", e.text));
+    if (e.revert && !e.reverted && !e.reverting) li.appendChild(revertButton());
     li.appendChild(pinButton(e.pinned));
     return li;
+  }
+  // One item's marks changed (Revert, reverted): only what differs is changed, where it is (not the whole list again:
+  // it can hold 300, and the one changed is often under the pointer).
+  function redrawDone(e) {
+    var li = null;
+    [doneList, donePinned].forEach(function (list) {
+      Array.prototype.forEach.call(list.children, function (x) { if (x.dataset.id === e.id) li = x; });
+    });
+    if (!li) return;
+    var fresh = doneItem(e), when = li.querySelector(".done-when"), button = li.querySelector(".revert");
+    li.className = fresh.className;
+    if (when.textContent !== fresh.firstChild.textContent) when.textContent = fresh.firstChild.textContent;
+    if (button && !fresh.querySelector(".revert")) li.removeChild(button);
+    else if (!button && fresh.querySelector(".revert")) li.insertBefore(revertButton(), li.querySelector(".pin"));
   }
   function addDone(e) {
     if (e.pinned) return;
@@ -760,7 +790,8 @@
     if (day !== lastDay) { doneList.appendChild(dayItem(e.ts)); lastDay = day; }
     doneList.appendChild(doneItem(e));
   }
-  function drawDone() {
+  function drawDone(keepScroll) {
+    var at = [doneList.scrollTop, donePinned.scrollTop];
     doneList.textContent = "";
     donePinned.textContent = "";
     lastDay = "";
@@ -771,7 +802,8 @@
     dones.forEach(addDone);
     labelsFor = new Date().toDateString();
     body.classList.toggle("has-done", dones.length > 0);
-    doneList.scrollTop = doneList.scrollHeight;
+    if (keepScroll) { doneList.scrollTop = at[0]; donePinned.scrollTop = at[1]; }
+    else doneList.scrollTop = doneList.scrollHeight;
   }
   // Today's date and the time, above Actions: changed on the minute (and the days' names at midnight).
   function tick() {
@@ -782,8 +814,17 @@
     Array.prototype.forEach.call(log.querySelectorAll(".acts .when"), function (w) { w.textContent = ago(+w.dataset.ts); });
     setTimeout(tick, 60000 - (d.getSeconds() * 1000 + d.getMilliseconds()) + 50);
   }
-  onSide([doneList, donePinned], function (li, pin) {
-    if (pin) { togglePin("done", doneById, li.dataset.id); drawDone(); return; }
+  onSide([doneList, donePinned], function (li, tool) {
+    if (tool === "pin") { togglePin("done", doneById, li.dataset.id); drawDone(true); return; }
+    if (tool === "revert") {
+      var it = doneById[li.dataset.id];
+      if (it && it.revert && !it.reverting) {
+        it.reverting = true;                 // until the computer says how it went (CO.doneStates)
+        post({ type: "revert", id: it.id });
+        redrawDone(it);
+      }
+      return;
+    }
     var ts = parseFloat(li.dataset.ts) || 0, id = li.dataset.prompt;
     if (mode === "content") {
       post({ type: "close_content", pause: false });     // back to the conversation, to show where it was asked
@@ -867,7 +908,8 @@
     all.filter(function (m) { return !m.pinned; }).sort(function (a, b) { return a.ts - b.ts; })
       .slice(0, all.length - MSG_MAX).forEach(function (m) { delete msgs[m.id]; });
   }
-  onSide([msgList, msgPinned], function (li, pin) {
+  onSide([msgList, msgPinned], function (li, tool) {
+    var pin = tool === "pin";
     var m = msgs[li.dataset.id];
     if (!m) return;
     if (pin) togglePin("messages", msgs, m.id);
@@ -1087,7 +1129,8 @@
   // forward, three fingers to copy and paste...). Here, the conversation's own: a finger on the message box brings
   // up the onscreen keyboard and a finger anywhere else puts it away; two fingers pinched make the text bigger or
   // smaller; holding a message selects it; a double tap selects a word and a triple tap a paragraph; holding the
-  // message box and moving moves where typing goes; a sidebar item swiped left shows Pin, as Mail shows its buttons.
+  // message box and moving moves where typing goes; a sidebar item swiped left shows Pin (and Revert), as Mail shows its
+  // buttons.
   // On a phone, as in the Claude app there: two fingers do nothing (nothing zooms), holding a message brings up what
   // can be done with it (see "holding a message"), and in the box the phone's own magnifier and handles work.
   var HOLD_MS = 500, MOVE_PX = 10, TAP_MS = 350;
@@ -1434,6 +1477,19 @@
       if (target) reveal(target);
     },
     doneList: function (entries) { dones = (entries || []).slice(-DONE_MAX); drawDone(); },
+    // Which can be reverted and which have been, after a revert (or "undo that"): only the marks change.
+    doneStates: function (states) {
+      var changed = {};
+      dones.forEach(function (e) { if (e.reverting) { delete e.reverting; changed[e.id] = e; } });   // (answered)
+      (states || []).forEach(function (s) {
+        var e = doneById[s.id];
+        if (!e || !!e.revert === !!s.revert && !!e.reverted === !!s.reverted) return;
+        if (s.revert) e.revert = true; else delete e.revert;
+        if (s.reverted) e.reverted = true; else delete e.reverted;
+        changed[e.id] = e;
+      });
+      for (var id in changed) redrawDone(changed[id]);
+    },
     done: function (e) {
       var bottom = doneList.scrollHeight - doneList.scrollTop - doneList.clientHeight < 4;
       dones.push(e);

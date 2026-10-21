@@ -122,9 +122,9 @@ def test_the_brain_reports_tool_calls_when_they_finish():
                              tool_use_result={"x": 1}))
     brain._route(AssistantMessage(content=[ServerToolResultBlock(tool_use_id="s1", content={"type": "web_search_result"})],
                                   model="m"))
-    assert got == [(tid, "WebSearch", {"query": "trains"}, True, "results"),
-                   (tid, "mcp__chatcomputer__wifi", {"action": "connect", "network": "Home"}, False, "Failed: no"),
-                   (tid, "web_search", {"query": "laksa"}, True, "")]
+    assert got == [(tid, "WebSearch", {"query": "trains"}, True, "results", "t1"),
+                   (tid, "mcp__chatcomputer__wifi", {"action": "connect", "network": "Home"}, False, "Failed: no", "t2"),
+                   (tid, "web_search", {"query": "laksa"}, True, "", "s1")]
     brain._route(UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="again")], tool_use_result={}))
     assert len(got) == 3                        # each once
 

@@ -72,6 +72,8 @@ class ToolContext:
     lock: Callable[[str], Awaitable[str]] | None = None     # the lock screen (Controller.lock_action)
     shot_scale: float = 1.0
     power_delay_s: float = 4.0
+    # Every tool by name (filled by build): what Revert in Actions calls to put a setting back as it was.
+    tool_fns: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = field(default_factory=dict)
 
     def resolve(self, p: str) -> str:
         """Accept ~/x, C:\\Users\\x (the Windows drive) and plain paths."""
@@ -150,10 +152,20 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                     log.exception("tool %s failed", name)
                     return _err(f"{name} failed: {exc}")
             tools.append(tool(name, description, schema)(wrapped))
+            ctx.tool_fns[name] = wrapped
             if policy:
                 policies[name] = policy
             return fn
         return deco
+
+    def _undo_by(summary: str, name: str, inp: dict[str, Any]) -> None:
+        """How to take back what a tool just changed: tool `name` called with `inp` (Revert, in Actions)."""
+        ctx.journal.record_change(summary, {"type": "tool", "tool": name, "input": inp})
+
+    def _worked(said: Any) -> bool:
+        """Whether a platform call's answer says it worked (Chat Computer's own say it in words when it didn't)."""
+        from ..done import FAILED
+        return isinstance(said, str) and bool(said.strip()) and not FAILED.match(said)
 
     def obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
         return {"type": "object", "properties": props, "required": required or []}
@@ -716,15 +728,28 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             return _text(_json({"speed": speed, "connection": {k: st.get(k) for k in ("connected_to", "signal", "ethernet")}}))
         if act == "list":
             return _text(_json(await asyncio.to_thread(p.wifi_scan)))
-        if act == "connect":
-            if not a.get("network"):
-                return _err("Which network?")
-            return _text(await asyncio.to_thread(p.wifi_connect, a["network"], a.get("password")))
-        if act == "disconnect":
-            return _text(await asyncio.to_thread(p.wifi_disconnect))
         if act == "forget":
             return _text(await asyncio.to_thread(p.wifi_forget, a.get("network", "")))
-        return _text(await asyncio.to_thread(p.wifi_radio, act == "on"))
+        if act == "connect" and not a.get("network"):
+            return _err("Which network?")
+        # What it was before, to put back on Revert: the network it was on, and whether the Wi-Fi was on.
+        before = await asyncio.to_thread(p.wifi_status)
+        was_on, was_on_network = before.get("radio") != "disabled", before.get("connected_to")
+        if act == "connect":
+            said = await asyncio.to_thread(p.wifi_connect, a["network"], a.get("password"))
+            if _worked(said) and was_on_network != a["network"]:
+                _undo_by(f"Wi-Fi was on {was_on_network or 'no network'}", "wifi",
+                         {"action": "connect", "network": was_on_network} if was_on_network else {"action": "disconnect"})
+            return _text(said)
+        if act == "disconnect":
+            said = await asyncio.to_thread(p.wifi_disconnect)
+            if _worked(said) and was_on_network:
+                _undo_by(f"Wi-Fi was on {was_on_network}", "wifi", {"action": "connect", "network": was_on_network})
+            return _text(said)
+        said = await asyncio.to_thread(p.wifi_radio, act == "on")
+        if _worked(said) and was_on != (act == "on"):
+            _undo_by(f"Wi-Fi was {'on' if was_on else 'off'}", "wifi", {"action": "on" if was_on else "off"})
+        return _text(said)
 
     def _bt_policy(a: dict[str, Any]) -> str | None:
         if a.get("action") == "forget":
@@ -760,9 +785,15 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         if act == "airpods":
             if ctx.airpods is None:
                 return _err("Connecting AirPods in one step isn't available here: use pair or connect.")
+            before = {d["address"] for d in (await asyncio.to_thread(p.bt_status)).get("connected", [])}
             said = await ctx.airpods()
             # "Your AirPods Pro are connected." / "... already connected."; anything else is why they aren't.
-            return _text(said) if said.rstrip().endswith("connected.") else _err(said)
+            if not said.rstrip().endswith("connected."):
+                return _err(said)
+            for d in (await asyncio.to_thread(p.bt_status)).get("connected", []):
+                if d["address"] not in before:
+                    _undo_by(f"{d['name']} wasn't connected", "bluetooth", {"action": "disconnect", "device": d["address"]})
+            return _text(said)
         if act == "status":
             return _text(_json(await asyncio.to_thread(p.bt_status)))
         if act == "scan":
@@ -772,13 +803,23 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         addr = await _bt_address(a.get("device", ""))
         if not addr:
             return _err(f"I can't find a Bluetooth device called {a.get('device')!r}. Is it in pairing mode?")
+        st = await asyncio.to_thread(p.bt_status)
+        was_paired = any(d["address"] == addr for d in st.get("paired", []))
+        was_connected = any(d["address"] == addr for d in st.get("connected", []))
         if act == "pair":
             def code(digits: str) -> None:            # from the pairing thread, while it waits for the keyboard
                 if ctx.announce:
                     ctx.announce(f"Type {' '.join(digits)} on the keyboard, then press Enter.")
-            return _text(await asyncio.to_thread(p.bt_pair, addr, code))
+            said = await asyncio.to_thread(p.bt_pair, addr, code)
+            if _worked(said) and not was_paired:
+                _undo_by(f"{a.get('device') or addr} wasn't paired", "bluetooth", {"action": "forget", "device": addr})
+            return _text(said)
         fn = {"connect": p.bt_connect, "disconnect": p.bt_disconnect, "forget": p.bt_forget}[act]
-        return _text(await asyncio.to_thread(fn, addr))
+        said = await asyncio.to_thread(fn, addr)
+        if _worked(said) and act in ("connect", "disconnect") and was_connected != (act == "connect"):
+            _undo_by(f"{a.get('device') or addr} was {'connected' if was_connected else 'not connected'}", "bluetooth",
+                     {"action": "connect" if was_connected else "disconnect", "device": addr})
+        return _text(said)
 
     def _amount(v: Any, default: int) -> int:
         """A number Claude gave: 0 is a number (volume 0 is silence, not the default), and "40%" is 40."""
@@ -788,6 +829,17 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         if not m:
             raise ValueError(f"{v!r} isn't a number")
         return round(float(m.group()))
+
+    def _audio_now() -> dict[str, Any]:
+        """The sound as it is: the speakers' (default output's) volume and mute, and the names of the default output
+        and microphone (what Revert puts back)."""
+        try:
+            st = ctx.platform.audio_status()
+        except Exception:
+            return {}
+        out = next((o for o in st.get("outputs", []) if o.get("default")), None) or {}
+        mic = next((i for i in st.get("inputs", []) if i.get("default")), None) or {}
+        return {"volume": out.get("volume"), "muted": out.get("muted"), "output": out.get("name"), "input": mic.get("name")}
 
     @reg("sound", "Sound: status (lists the outputs and the microphones), set_volume (0-100), volume_up / "
          "volume_down (by value, default 10), mute, unmute, output (switch where sound plays, by name), input "
@@ -799,22 +851,40 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         act, p, v = a["action"], ctx.platform, a.get("value")
         if act == "status":
             return _text(_json(await asyncio.to_thread(p.audio_status)))
-        if act == "set_volume":
-            return _text(await asyncio.to_thread(p.set_volume, _amount(v, 50), None))
-        if act in ("volume_up", "volume_down"):
-            step = _amount(v, 10)
-            return _text(await asyncio.to_thread(p.set_volume, None, step if act == "volume_up" else -step))
+        before = await asyncio.to_thread(_audio_now)
+        if act in ("set_volume", "volume_up", "volume_down"):
+            if act == "set_volume":
+                said = await asyncio.to_thread(p.set_volume, _amount(v, 50), None)
+            else:
+                step = _amount(v, 10)
+                said = await asyncio.to_thread(p.set_volume, None, step if act == "volume_up" else -step)
+            if _worked(said) and before.get("volume") is not None:
+                # (Setting the volume unmutes: muted again after the volume, when taken back.)
+                if before.get("muted"):
+                    _undo_by("the sound was muted", "sound", {"action": "mute"})
+                _undo_by(f"the volume was {before['volume']}%", "sound", {"action": "set_volume", "value": before["volume"]})
+            return _text(said)
         if act in ("mute", "unmute"):
-            return _text(await asyncio.to_thread(p.set_mute, act == "mute"))
+            said = await asyncio.to_thread(p.set_mute, act == "mute")
+            if _worked(said) and before.get("muted") is not None and bool(before["muted"]) != (act == "mute"):
+                _undo_by(f"the sound was {'muted' if before['muted'] else 'on'}", "sound",
+                         {"action": "mute" if before["muted"] else "unmute"})
+            return _text(said)
         if act == "input":
             if not str(v or "").strip():
                 st = await asyncio.to_thread(p.audio_status)
                 return _text("Which microphone? Available: " + (", ".join(i["name"] for i in st.get("inputs", [])) or "none"))
             said = await asyncio.to_thread(p.set_input, str(v))
-            if said.startswith("Listening with") and ctx.on_mic_changed:
-                ctx.on_mic_changed()
+            if said.startswith("Listening with"):
+                if before.get("input") and before["input"] not in said:
+                    _undo_by(f"listened with {before['input']}", "sound", {"action": "input", "value": before["input"]})
+                if ctx.on_mic_changed:
+                    ctx.on_mic_changed()
             return _text(said)
-        return _text(await asyncio.to_thread(p.set_output, str(v or "")))
+        said = await asyncio.to_thread(p.set_output, str(v or ""))
+        if said.startswith("Sound now plays on") and before.get("output") and before["output"] not in said:
+            _undo_by(f"the sound played on {before['output']}", "sound", {"action": "output", "value": before["output"]})
+        return _text(said)
 
     # ---------------------------------------------------------------- drives, printing, the screen, reminders
     async def _machine(fn: Callable[..., Any], *args: Any) -> Any:
@@ -1162,8 +1232,12 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                 name = await asyncio.to_thread(p.vpn_import, path)
                 ctx.journal.record("vpn", f"added {name}")
                 return _text(f"Added the VPN {name}. It's off until it's turned on (vpn on).")
+            was_on = {v.get("name"): bool(v.get("on")) for v in await asyncio.to_thread(p.vpns)}
             name = await asyncio.to_thread(p.vpn_connect if act == "on" else p.vpn_disconnect, str(a.get("name") or ""))
             ctx.journal.record("vpn", f"{name} {act}")
+            if name in was_on and was_on[name] != (act == "on"):
+                _undo_by(f"{name} was {'on' if was_on[name] else 'off'}", "vpn",
+                         {"action": "on" if was_on[name] else "off", "name": name})
             return _text(f"{name} is on: the internet goes through it now." if act == "on" else f"{name} is off.")
         except RuntimeError as exc:
             return _err(str(exc))
@@ -1197,18 +1271,26 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                 st["text_scale"] = s.text_scale     # on top of the automatic size: chatcomputer_settings text_scale
                 return _text(_json(st))
             if act in ("brightness", "brighter", "dimmer"):
+                was: Any = None
+                with contextlib.suppress(Exception):
+                    was = (await _machine(p.display_status)).get("brightness")
                 if act == "brightness":
                     now = await _machine(p.set_brightness, _amount(a.get("value"), 50), None)
                 else:
                     step = _amount(a.get("value"), 15)
                     now = await _machine(p.set_brightness, None, step if act == "brighter" else -step)
                 ctx.journal.record("display", f"brightness {now}%")
+                if isinstance(was, int) and was != now:
+                    _undo_by(f"the brightness was {was}%", "display", {"action": "brightness", "value": was})
                 return _text(f"The brightness is {now}% now.")
             mode = a.get("mode") or "on"
+            before = {"action": "night_light", "mode": s.night_light or "off", "warmth": s.night_light_warmth or 50,
+                      "from": s.night_light_from or "21:00", "until": s.night_light_until or "07:00"}
             warmth = max(1, min(100, int(a.get("warmth") or s.night_light_warmth or 50)))
             changed = ["night_light", "night_light_warmth"]
             s.set("night_light_warmth", warmth)
-            if mode == "evenings":
+            # (The evening hours are kept when given with another mode too: Revert puts them back that way.)
+            if mode == "evenings" or a.get("from") or a.get("until"):
                 try:
                     s.set("night_light_from", _hhmm(a.get("from"), s.night_light_from or "21:00"))
                     s.set("night_light_until", _hhmm(a.get("until"), s.night_light_until or "07:00"))
@@ -1222,6 +1304,9 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             else:
                 await _machine(p.set_night_light, mode == "on", warmth)
             ctx.journal.record("display", f"night light {mode}")
+            if (before["mode"], before["warmth"], before["from"], before["until"]) != \
+                    (mode, warmth, s.night_light_from or "21:00", s.night_light_until or "07:00"):
+                _undo_by(f"the night light was {before['mode']}", "display", before)
             if mode == "evenings":
                 on_now = (await _machine(p.display_status)).get("night_light", {}).get("on")
                 return _text(f"The night light comes on by itself every evening at {s.night_light_from} and goes off at "
@@ -1255,8 +1340,9 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                 gone = ctx.schedule.cancel(str(a.get("id") or ""))
                 if ctx.on_schedule_changed:
                     ctx.on_schedule_changed()
-                return _text("Cancelled " + "; ".join(sch.describe(i, now) for i in gone) + "." if gone else
-                             "Nothing like that is set. (list shows what is.)")
+                if not gone:
+                    return _err("Nothing like that is set. (list shows what is.)")
+                return _text("Cancelled " + "; ".join(sch.describe(i, now) for i in gone) + ".")
             if act == "stop":
                 return _text(ctx.stop_ringing() if ctx.stop_ringing else "Nothing is ringing.")
             if act == "timer":
@@ -1279,6 +1365,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             return _err(str(exc))
         if ctx.on_schedule_changed:
             ctx.on_schedule_changed()
+        _undo_by(f"set {act} {item['id']}", "reminders", {"action": "cancel", "id": item["id"]})
         return _text(f"Set {sch.describe(item, now)}. [{item['id']}]")
 
     @reg("lock_screen", "The lock screen, so nobody else can use the computer. lock: lock it now (with no PIN yet, "
@@ -1315,7 +1402,12 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          obj({"system": {"type": "string", "enum": ["chatcomputer", "other"]}}, ["system"]), _default_q)
     async def start_by_default(a):
         ctx.journal.record("start_by_default", a["system"])
-        return _text(await asyncio.to_thread(ctx.platform.set_default_os, a["system"]))
+        said = await asyncio.to_thread(ctx.platform.set_default_os, a["system"])
+        # Chat Computer started this time, so it started first before (Revert: it does again). Setting Chat Computer
+        # itself, what started first before isn't known: no going back to it.
+        if a["system"] != "chatcomputer" and _worked(said):
+            _undo_by("Chat Computer started first", "start_by_default", {"system": "chatcomputer"})
+        return _text(said)
 
     @reg("power", ("Shut down, restart, sleep, or restart into macOS (switch_to_macos)." if on_mac else
                    "Shut down, restart, sleep, or restart into Windows (switch_to_windows)."),
@@ -1378,9 +1470,19 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                                                 for u in ups) if ups else ""))
         if a["action"] == "update":
             return _text(await asyncio.to_thread(p.update_system))
+        packages = list(a.get("packages") or [])
         fn = p.install if a["action"] == "install" else p.remove
-        res = await asyncio.to_thread(fn, list(a.get("packages") or []))
+        try:
+            had = set(await asyncio.to_thread(p.installed, packages))
+        except Exception:
+            had = None                  # not known: no Revert, rather than removing what was there before
+        res = await asyncio.to_thread(fn, packages)
         ctx.journal.record("software", res)
+        if had is not None and _worked(res):
+            changed = [k for k in packages if (k in had) != (a["action"] == "install")]
+            if changed:
+                _undo_by(f"{', '.join(changed)} {'not installed' if a['action'] == 'install' else 'installed'}", "software",
+                         {"action": "remove" if a["action"] == "install" else "install", "packages": changed})
         return _text(res)
 
     @reg("set_timezone", "Set the computer's time zone (IANA name like Asia/Singapore).", obj({"zone": S}, ["zone"]))
@@ -1390,7 +1492,11 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             zoneinfo.ZoneInfo(z)
         except Exception:
             return _err(f"{z} isn't a time zone name I know.")
-        return _text(await asyncio.to_thread(ctx.platform.set_timezone, z))
+        was = await asyncio.to_thread(ctx.platform.timezone)
+        said = await asyncio.to_thread(ctx.platform.set_timezone, z)
+        if was and was != z and said.startswith("Time zone set"):
+            _undo_by(f"the time zone was {was}", "set_timezone", {"zone": was})
+        return _text(said)
 
     # ================================================================ Chat Computer itself
     @reg("memory", "Long-term memory about the user: remember a fact or preference, forget something, or list "
@@ -1398,9 +1504,17 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          obj({"action": {"type": "string", "enum": ["remember", "forget", "list"]}, "text": S}, ["action"]))
     async def memory(a):
         if a["action"] == "remember":
-            return _text(ctx.memory.remember(a.get("text", "")))
+            added: list[str] = []
+            said = ctx.memory.remember(a.get("text", ""), added=added)
+            if added:
+                ctx.journal.record_change("remembered " + added[0][2:], {"type": "memory_forget", "lines": added})
+            return _text(said)
         if a["action"] == "forget":
-            return _text(ctx.memory.forget(a.get("text", "")))
+            dropped: list[str] = []
+            said = ctx.memory.forget(a.get("text", ""), dropped_lines=dropped)
+            if dropped:
+                ctx.journal.record_change(f"forgot {len(dropped)} fact(s)", {"type": "memory_restore", "lines": dropped})
+            return _text(said)
         return _text(ctx.memory.for_prompt() or "Nothing remembered yet.")
 
     def _settings_policy(a: dict[str, Any]) -> str | None:
@@ -1486,8 +1600,11 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                 return _err(why)
             if not (lo <= n <= hi or (key in auto_or and n == 0)):
                 return _err(why)
+        was = getattr(ctx.settings, key, None)
         ctx.settings.set(key, value)
         ctx.settings.save(ctx.paths)
+        if was != getattr(ctx.settings, key, None):
+            _undo_by(f"{key} was {was!r}", "chatcomputer_settings", {"action": "set", "key": key, "value": was})
         if ctx.on_settings_changed:
             ctx.on_settings_changed([key])
         later = (" (from their next message)" if key in ("model", "effort") else

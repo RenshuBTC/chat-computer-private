@@ -2,6 +2,8 @@
 or read /proc); callers run them in a worker thread."""
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -75,6 +77,17 @@ class Platform:
     def remove(self, packages: list[str]) -> str: raise NotImplementedError
     def update_system(self) -> str: raise NotImplementedError
     def set_timezone(self, zone: str) -> str: raise NotImplementedError
+    def timezone(self) -> str | None:
+        """The computer's time zone, as an IANA name like Asia/Singapore (None: it can't be told)."""
+        try:
+            target = os.readlink("/etc/localtime")
+        except OSError:
+            return None
+        m = re.search(r"zoneinfo/(.+)$", target)
+        return m.group(1) if m else None
+    def installed(self, packages: list[str]) -> list[str]:
+        """Which of these programs (package names) are installed."""
+        raise NotImplementedError
     # --- Chat Computer itself (chatcomputer/update.py)
     def update_app(self) -> dict[str, Any]:
         """Puts the other version of Chat Computer, in the folder Chat Computer Setup ran from, in place of this one; Chat Computer

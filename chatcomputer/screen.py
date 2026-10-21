@@ -56,6 +56,9 @@ class Screen:
         (prompt_id, prompt_ts)."""
     def done(self, entry: dict[str, Any]) -> None:
         """Something just done, at the end of the list."""
+    def done_states(self, entries: list[dict[str, Any]]) -> None:
+        """Which of those shown can be reverted ("revert") and which have been ("reverted"): after a revert, or "undo
+        that". Only their marks change, not the list."""
     def earlier(self, items: list[dict[str, Any]], target_id: str | None, target_ts: float) -> None:
         """Earlier messages (from the transcript) put back above the conversation, then scrolled to the one asked
         for: the answer to on_goto."""
@@ -220,6 +223,10 @@ class RecordingScreen(Screen):
 
     def done(self, entry: dict[str, Any]) -> None:
         self.events.append(("done", dict(entry)))
+
+    def done_states(self, entries: list[dict[str, Any]]) -> None:
+        self.events.append(("done_states", {e["id"]: "reverted" if e.get("reverted") else "revert" if e.get("revert")
+                                             else "" for e in entries}))
 
     def earlier(self, items: list[dict[str, Any]], target_id: str | None, target_ts: float) -> None:
         self.events.append(("earlier", ([(i["role"], i["text"]) for i in items], target_id)))

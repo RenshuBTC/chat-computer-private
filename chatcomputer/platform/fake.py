@@ -41,6 +41,8 @@ class FakePlatform(Platform):
         self.speed = {"download_mbps": 48.2, "upload_mbps": 11.6, "latency_ms": 21, "router_ms": 2.1,
                       "in_use_before_mbps": {"down": 0.02, "up": 0.01}, "server": "a stand-in"}
         self.vpn_list: list[dict[str, Any]] = []
+        self.zone = "Asia/Singapore"
+        self.packages = {"firefox", "libreoffice"}
 
     def _c(self, name: str, *a: Any) -> None:
         self.calls.append((name, a))
@@ -72,7 +74,8 @@ class FakePlatform(Platform):
 
     def wifi_radio(self, on: bool) -> str:
         self._c("wifi_radio", on)
-        return "ok"
+        self.wifi["radio"] = "enabled" if on else "disabled"
+        return "Wi-Fi turned " + ("on." if on else "off.")
 
     def bt_status(self) -> dict[str, Any]:
         return dict(self.bt)
@@ -116,6 +119,7 @@ class FakePlatform(Platform):
             self.volume = max(0, min(100, percent))
         elif delta is not None:
             self.volume = max(0, min(100, self.volume + delta))
+        self.muted = False                    # (as the real one: setting the volume unmutes)
         return f"Volume is {self.volume}%."
 
     def set_mute(self, mute: bool | None) -> str:
@@ -148,11 +152,16 @@ class FakePlatform(Platform):
 
     def install(self, packages: list[str]) -> str:
         self._c("install", tuple(packages))
+        self.packages |= set(packages)
         return "Installed " + ", ".join(packages) + "."
 
     def remove(self, packages: list[str]) -> str:
         self._c("remove", tuple(packages))
+        self.packages -= set(packages)
         return "Removed " + ", ".join(packages) + "."
+
+    def installed(self, packages: list[str]) -> list[str]:
+        return [p for p in packages if p in self.packages]
 
     def update_system(self) -> str:
         self._c("update_system")
@@ -160,7 +169,11 @@ class FakePlatform(Platform):
 
     def set_timezone(self, zone: str) -> str:
         self._c("set_timezone", zone)
+        self.zone = zone
         return f"Time zone set to {zone}."
+
+    def timezone(self) -> str | None:
+        return self.zone
 
     def update_app(self) -> dict[str, Any]:
         self._c("update_app")

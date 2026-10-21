@@ -1,6 +1,8 @@
 """Actions, at the right of the conversation once Escape has brought the sidebars in (there are none to start with):
 a sixth of the screen wide, grouped by day; tapping an item scrolls back to the message that asked for it, and for
 one from an earlier day, puts that day's messages back first (from the transcript). Typing stays in the message box.
+An item that can be reverted shows Revert beside its pin, under the pointer; clicking it asks the computer, and the
+item says "Reverting…" until the computer says it's done, then it's struck through.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, clicks with xdotool, and prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1600x900x24" python tests/screen_done_check.py [screenshot.png]
@@ -75,11 +77,14 @@ screen.done_list([
     {"id": "d1", "ts": yesterday + 70, "text": "Opened youtube.com", "prompt_id": "y1", "prompt_ts": yesterday + 60},
     {"id": "d2", "ts": now - 2700, "text": "Searched the web for “trains on Sunday”", "prompt_id": "u5",
      "prompt_ts": now - 3000 + 5 * 60},
-    {"id": "d3", "ts": now - 600, "text": "Saved notes.txt", "prompt_id": "u25", "prompt_ts": now - 3000 + 25 * 60},
+    {"id": "d3", "ts": now - 600, "text": "Saved notes.txt", "prompt_id": "u25", "prompt_ts": now - 3000 + 25 * 60,
+     "revert": True},
 ])
 screen.done({"id": "d4", "ts": now - 60, "text": "Set the volume to 40%", "prompt_id": "u29",
              "prompt_ts": now - 3000 + 29 * 60})
 out: dict = {}
+page_events: list = []
+screen.on_page_event = page_events.append
 
 STATE_JS = """(function () {
   var d = document.getElementById('done'), r = d.getBoundingClientRect(), p = document.scrollingElement;
@@ -144,7 +149,57 @@ def start() -> None:
 
 def go_earlier() -> None:
     it = item("Opened")
-    click(it["x"], it["y"], lambda: read("earlier", shoot))
+    click(it["x"], it["y"], lambda: read("earlier", hover_revert))
+
+
+REVERT_JS = """(function () {
+  var li = document.querySelector('#done-list li[data-id="d3"]'), b = li && li.querySelector('.revert');
+  function at(e) {
+    if (!e) return null;
+    var r = e.getBoundingClientRect();
+    return {x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), left: r.left, right: r.right,
+            visible: getComputedStyle(e).visibility};
+  }
+  var last = document.querySelector('#done-list li:last-child');
+  return JSON.stringify({cls: li ? li.className : null, revert: at(b), pin: at(li && li.querySelector('.pin')),
+    struck: li ? getComputedStyle(li.querySelector('.done-what')).textDecorationLine : null,
+    when: li ? li.querySelector('.done-when').textContent : null,
+    colors: li ? [getComputedStyle(li.querySelector('.done-what')).color, getComputedStyle(li).opacity] : null,
+    with_revert: Array.prototype.map.call(document.querySelectorAll('#done-list .revert'), function (x) {
+      return x.closest('li').dataset.id; }),
+    last: last ? [last.dataset.id, last.className] : null});
+})()"""
+
+
+def read_revert(name: str, then) -> None:
+    def done(view, res, *_):
+        out[name] = json.loads(view.evaluate_javascript_finish(res).to_string())
+        then()
+    screen.chat.evaluate_javascript(REVERT_JS, -1, None, None, None, done, None)
+
+
+def hover_revert() -> None:
+    """Under the pointer, the item that can be reverted shows Revert, left of its pin."""
+    wid = str(screen.win.get_window().get_xid())
+    it = next(i for i in out["earlier"]["items"] if i["text"] == "Saved notes.txt")
+
+    def work() -> None:
+        subprocess.run(["xdotool", "mousemove", "--window", wid, str(it["x"]), str(it["y"])], timeout=20)
+        GLib.timeout_add(600, lambda: read_revert("hover", click_revert) and False)
+    threading.Thread(target=work, daemon=True).start()
+
+
+def click_revert() -> None:
+    b = out["hover"]["revert"]
+    click(b["x"], b["y"], lambda: read_revert("reverting", answered))
+
+
+def answered() -> None:
+    """The computer's answer: that one reverted, and the revert listed after it."""
+    out["page_events"] = [e for e in page_events if e.get("type") == "revert"]
+    screen.done_states([{"id": "d3", "reverted": True}, {"id": "d5", "revert": True}])
+    screen.done({"id": "d5", "ts": time.time(), "text": "Reverted “Saved notes.txt”", "revert": True})
+    GLib.timeout_add(700, lambda: read_revert("reverted", shoot) and False)
 
 
 def shoot() -> None:

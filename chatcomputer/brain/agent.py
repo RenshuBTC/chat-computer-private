@@ -55,7 +55,8 @@ class BrainEvents:
     on_user_text: Callable[[str, str], None] = lambda tid, text: None        # what they typed on the phone
     on_remote: Callable[[str, Any], None] = lambda state, info: None         # the Claude app link: on | failed
     # A tool call finished: (turn, tool name, its input, whether it worked, the words of its result).
-    on_tool: Callable[[str, str, dict[str, Any], bool, str], None] = lambda tid, name, inp, ok, result: None
+    # A tool call finished: (turn id, tool, input, worked, result, the call's tool_use_id).
+    on_tool: Callable[[str, str, dict[str, Any], bool, str, str], None] = lambda tid, name, inp, ok, result, use_id: None
 
 
 @dataclass
@@ -537,7 +538,7 @@ class Brain:
             return
         tid, name, inp = call
         try:
-            self.ev.on_tool(tid, name, inp, ok, result)
+            self.ev.on_tool(tid, name, inp, ok, result, use_id)
         except Exception:
             log.exception("on_tool failed")
 

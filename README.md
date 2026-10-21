@@ -134,7 +134,11 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   * "Go to sleep"
 * **Risky things need a yes.** Before anything risky, like deleting, buying, sending, installing
   or restarting, Claude asks and waits for your yes: out loud when you talked, in the chat when you
-  typed. Most file changes can be undone: say "undo that".
+  typed. Most file changes can be undone: say "undo that". Or, in Actions at the right, point at what was
+  done and press Revert, beside its pin: files go back as they were (edited, saved, moved, copied, trashed,
+  new folders), and so do settings (volume, mute, brightness, night light, Wi-Fi, Bluetooth, time zone,
+  timers, VPN, what's remembered, programs installed or removed). The revert is listed too, so it can be
+  reverted in turn.
 * **Your files.** On a PC, everything on Windows' drive is there to open, and Chat Computer offers to bring
   the folders you use over, so your files live in Chat Computer from then on (Windows keeps its copies). If
   Windows' drive is encrypted with BitLocker, setup gives Chat Computer a key of its own for it. On a Mac,

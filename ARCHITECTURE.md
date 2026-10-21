@@ -483,6 +483,33 @@ retrying with backoff, then starts listening.
   `Controller.go_back_to` → `History.earlier`: the transcript from that message to where the page starts, at
   most 300 messages) and scrolls there (`CO.earlier`). `recent_actions` reads the same list (words to look for,
   days back) for Claude.
+* Revert, on an item in Actions (beside its pin, under the pointer; swiped left on a touchscreen): what that action
+  changed is taken back, its last change first, and that is listed as an action of its own ("Reverted “…”"),
+  which can be reverted in turn (the action is back, and can be reverted again). Every change that can be taken
+  back is a record in the journal (`chatcomputer/journal.py`, `~/ChatComputer/journal.jsonl`): files as
+  before (`file_change`: the copy in `~/ChatComputer/undo` of what was overwritten, both ends of a move, where a
+  trashed file came from), and other changes (`change`) with how to put them back, the tool call that does
+  (`{"type": "tool", "tool": ..., "input": ...}`: the Wi-Fi's network, or the Wi-Fi on or off; a Bluetooth device
+  paired, connected or disconnected; the volume, mute, where sound plays and which microphone listens; the
+  brightness and the night light; a timer, reminder or alarm set (cancelled); a VPN on or off; the time zone;
+  Chat Computer starting first again; Chat Computer's settings; programs installed or removed) or what was
+  remembered (`memory_forget`, `memory_restore`). Each record names the
+  tool call that made it: Claude's calls run one at a time, and the permission gate sets `Journal.call` to each
+  one's `tool_use_id` (`ToolPermissionContext.tool_use_id`) just before it runs; a revert names itself
+  (`journal.CALL`). Each line in `done.jsonl` keeps its call's records (`changes`), and a revert also the line
+  it reverted (`reverts`). Taking a change back never destroys anything: a file it would overwrite is copied
+  first, one it would remove goes to the trash; what it does is recorded too, marked as taking that record back
+  (`by_undo`, `inverse_of`), and an `undo` record says the change was taken back (`undoes`), or, for a change
+  that took another back, that the other is back (`redoes`): `journal.undone_ids` reads which are taken back
+  now. The page gets `revert` on a line with changes not taken back (that the journal still has: past 5 MB it's
+  cut to its last 5,000 records) and `reverted` on one with all taken back (by Revert, or by "undo that":
+  `undo_last_change` only walks back changes not made by undoing), and the click posts `revert`
+  (`Controller.revert`), the line saying "Reverting…" until `CO.doneStates` comes back. What couldn't be taken
+  back (a file no longer there or something else in its place, a setting the computer refused) is said in a
+  notice, with why. Not revertible:
+  what only looked, opened a page or site, or can't be put back (a Wi-Fi network forgotten, power, printing).
+  On the website and in the app (`docs/demo/host.js`), the volume, the text's size, a timer still open and the
+  demo's saved file can be reverted the same way; the app keeps the marks with its Actions.
 * Logs on Windows' drive (`chatcomputer/logcopy.py`): Chat Computer's own drive can't be opened from Windows, so the end
   of `chatcomputer.log` and `session.log` (1.5 MB each, CRLF line endings, anything like a sign-in, password or key
   blanked) and `info.json` (the phone link's state and why, voice, microphone, AirTouch) are copied to

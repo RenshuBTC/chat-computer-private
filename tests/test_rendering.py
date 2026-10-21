@@ -101,7 +101,7 @@ def test_whats_done_takes_you_back_to_where_it_was_asked():
     assert start["column_right"] <= start["left"] and start["box"][1] <= start["left"]
     assert [(i["cls"], i["text"]) for i in start["items"]] == [
         ("side-day", "Yesterday"), ("done-item", "Opened youtube.com"), ("side-day", "Today"),
-        ("done-item", "Searched the web for “trains on Sunday”"), ("done-item", "Saved notes.txt"),
+        ("done-item", "Searched the web for “trains on Sunday”"), ("done-item revertable", "Saved notes.txt"),
         ("done-item", "Set the volume to 40%")]
     # Each thing done says when, and under it what (the words get the panel's width); the date and the time now
     # are above them. No line down the side.
@@ -117,6 +117,19 @@ def test_whats_done_takes_you_back_to_where_it_was_asked():
     assert earlier["found"]["id"] == "y1" and 0 <= earlier["found"]["top"] < 100
     assert earlier["messages"] == start["messages"] + 5 and earlier["days"] == ["Yesterday", "Today"]
     assert today["focused"] and earlier["focused"]
+    # Revert: only on the one that can be reverted, under the pointer, left of the pin.
+    hover, reverting, reverted = res["hover"], res["reverting"], res["reverted"]
+    assert hover["with_revert"] == ["d3"] and hover["revert"]["visible"] == "visible"
+    assert hover["revert"]["right"] <= hover["pin"]["left"] + 1 and hover["struck"] == "none"
+    # Clicked: the computer is asked, and the item says so where its time was (no Revert) until it answers...
+    assert res["page_events"] == [{"type": "revert", "id": "d3"}]
+    assert "reverting" in reverting["cls"] and reverting["revert"] is None and reverting["when"] == "Reverting\u2026"
+    # ...then struck through (still black: no text is grey), its time back, and the revert listed last, which can be
+    # reverted in turn.
+    assert "reverted" in reverted["cls"] and "reverting" not in reverted["cls"] and reverted["struck"] == "line-through"
+    assert reverted["colors"] == ["rgb(0, 0, 0)", "1"] and re.fullmatch(r"\d{1,2}:\d\d(\s?[AP]M)?", reverted["when"])
+    assert reverted["revert"] is None and reverted["with_revert"] == ["d5"]
+    assert reverted["last"][0] == "d5" and "revertable" in reverted["last"][1]
 
 
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run"), reason="xvfb-run not available")

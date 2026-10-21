@@ -6,6 +6,11 @@ The conversation screen lists it in a panel at the right, "Actions". Tapping one
 that asked for it; when that message isn't on the screen any more (an earlier day), the conversation from there on
 is put back from the transcript first. Claude reads the list with recent_actions ("what did I change yesterday?").
 
+Each one keeps the ids of the changes it made that can be taken back (the journal's records: files changed, and
+settings with how to put them back, journal.py). One with changes not yet taken back has Revert, which takes them back
+together (Controller.revert) and is listed itself ("Reverted …"): it can be reverted in turn, which puts the action
+back. One whose changes have all been taken back (by Revert, or by "undo that") shows as reverted.
+
 Only what was really done is kept: a tool that failed, or that only looked at something, isn't listed. (Steps that
 only read or looked, like reading a file, are kept for recent_actions but not listed.)
 """
@@ -274,8 +279,10 @@ class History:
         self._lock = threading.Lock()
 
     def add(self, text: str, tool: str = "", inp: dict[str, Any] | None = None, minor: bool = False,
-            prompt: tuple[str, str, float] | None = None) -> dict[str, Any]:
-        """Something done. `prompt`: the message that asked for it (its id on the screen, its words, its time)."""
+            prompt: tuple[str, str, float] | None = None, changes: list[str] | None = None,
+            reverts: str | None = None) -> dict[str, Any]:
+        """Something done. `prompt`: the message that asked for it (its id on the screen, its words, its time);
+        `changes`: what it changed that can be taken back (journal record ids); `reverts`: the action it reverted."""
         entry: dict[str, Any] = {"id": "d" + uuid.uuid4().hex[:10], "ts": time.time(), "text": text}
         if tool:
             entry["tool"] = tool
@@ -286,6 +293,10 @@ class History:
             entry["minor"] = True
         if prompt:
             entry["prompt_id"], entry["prompt"], entry["prompt_ts"] = prompt[0], prompt[1][:300], prompt[2]
+        if changes:
+            entry["changes"] = list(changes)
+        if reverts:
+            entry["reverts"] = reverts
         with self._lock:
             try:
                 with open(self.file, "a", encoding="utf-8") as f:
@@ -302,9 +313,14 @@ class History:
     def _all(self) -> list[dict[str, Any]]:
         return _records(_tail_lines(self.file, DONE_TAIL_BYTES))
 
-    def recent(self, n: int = 150, pinned: dict[str, float] | None = None) -> list[dict[str, Any]]:
+    def get(self, entry_id: str) -> dict[str, Any] | None:
+        """One thing done, by its id."""
+        return next((d for d in reversed(self._all()) if d.get("id") == entry_id), None)
+
+    def recent(self, n: int = 150, pinned: dict[str, float] | None = None,
+               changes: tuple[set[str], set[str]] | None = None) -> list[dict[str, Any]]:
         """The newest things done, for the panel (not the minor steps), oldest first; and the pinned ones (with when
-        they were pinned), however old."""
+        they were pinned), however old. `changes`: the journal's records kept, and those taken back (Revert)."""
         pinned = pinned or {}
         listed = [d for d in self._all() if not d.get("minor") or d.get("id") in pinned]
         out = listed[-n:]
@@ -312,7 +328,7 @@ class History:
         out = [d for d in listed if d.get("id") in pinned and d["id"] not in have] + out
         shown = []
         for d in out:
-            e = _for_screen(d)
+            e = for_screen(d, changes)
             if d.get("id") in pinned:
                 e["pinned"] = pinned[d["id"]]
             shown.append(e)
@@ -362,5 +378,18 @@ class History:
         return seg
 
 
-def _for_screen(d: dict[str, Any]) -> dict[str, Any]:
-    return {k: d[k] for k in ("id", "ts", "text", "prompt_id", "prompt_ts") if k in d}
+def for_screen(d: dict[str, Any], changes: tuple[set[str], set[str]] | None = None) -> dict[str, Any]:
+    """What the screen gets of a thing done: with "revert" when it has changes not yet taken back (that the journal
+    still has), or "reverted" when they've all been taken back. `changes`: (the journal's record ids, those taken
+    back); None: not known, so nothing either way."""
+    out = {k: d[k] for k in ("id", "ts", "text", "prompt_id", "prompt_ts") if k in d}
+    ids = d.get("changes") or []
+    if ids and changes is not None:
+        kept, undone = changes
+        left = [c for c in ids if c not in undone]
+        if not left:
+            out["reverted"] = True
+        elif any(c in kept for c in left):
+            out["revert"] = True
+    return out
+

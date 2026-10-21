@@ -818,6 +818,14 @@ class LinuxPlatform(Platform):
         d = self._root("apt-remove", *packages, timeout=900)
         return "Removed " + ", ".join(packages) + "." if d.get("ok") else "Remove failed: " + str(d.get("error"))
 
+    def installed(self, packages: list[str]) -> list[str]:
+        names = [p for p in packages if PKG_RE.match(p)]
+        if not names:
+            return []
+        # (dpkg-query fails when one of them is unknown to it, but lists the others all the same.)
+        r = run(["dpkg-query", "-W", "-f", "${Package} ${db:Status-Status}\n", *names], timeout=20)
+        return [ln.split()[0] for ln in r.out.splitlines() if ln.endswith(" installed") and ln.split()[0] in names]
+
     def update_system(self) -> str:
         d = self._root("system-update", timeout=3600)
         return "The system is up to date." if d.get("ok") else "Update failed: " + str(d.get("error"))
@@ -1429,6 +1437,14 @@ class MacPlatform(LinuxPlatform):
 
     def bt_import_windows_keys(self) -> str:
         return "There's no Windows on this Mac to copy pairings from."
+
+    def installed(self, packages: list[str]) -> list[str]:
+        names = [p for p in packages if PKG_RE.match(p)]
+        if not names:
+            return []
+        # (For one that isn't installed, rpm says so in a line of its own, not its name.)
+        r = run(["rpm", "-q", "--qf", "%{NAME}\n", *names], timeout=20)
+        return [ln.strip() for ln in r.out.splitlines() if ln.strip() in names]
 
     office_package = "libreoffice-writer libreoffice-calc libreoffice-impress"
     openvpn_package = "NetworkManager-openvpn"

@@ -990,6 +990,63 @@ export async function pipeline(task, model, opts) {
   out.greet_dawn = (await dawn.evaluate(() => window.CO.greetingsNow())).here;
   await dawnCtx.close();
 
+  // Revert, in Actions: what can be taken back has it, under the pointer, beside its pin. The demo's saved file taken
+  // away, then put back (its revert reverted), as "/" shows; yesterday's volume; the text made bigger, and back; a
+  // timer closed; one closed already, by its x, has nothing left to take back (no Revert).
+  const rv = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+  rv.on("pageerror", (e) => errors.push(String(e)));
+  await rv.goto(page_url);
+  await greeted(rv);
+  await rv.keyboard.press("Escape");                         // the sidebars in
+  await rv.waitForTimeout(200);
+  const acts = () => rv.evaluate(() => Array.from(document.querySelectorAll("#done-list > li.done-item")).map((li) => ({
+    id: li.dataset.id, text: li.querySelector(".done-what").textContent, button: !!li.querySelector(".revert"),
+    marks: ["revertable", "reverted", "reverting"].filter((c) => li.classList.contains(c)),
+    struck: getComputedStyle(li.querySelector(".done-what")).textDecorationLine === "line-through" })));
+  const named = (list, text) => list.filter((a) => a.text === text).pop();
+  const typingIn = () => rv.evaluate(() => document.activeElement && document.activeElement.id);
+  async function revertIt(id) {
+    const li = rv.locator('#done-list > li[data-id="' + id + '"]');
+    await li.hover();
+    const b = li.locator(".revert");
+    const seen = await b.evaluate((e) => getComputedStyle(e).visibility);
+    await b.click();
+    await rv.waitForTimeout(250);
+    return seen;
+  }
+  out.revert_start = { acts: await acts(), hidden: await rv.evaluate(() =>
+    getComputedStyle(document.querySelector('#done-list li[data-id="d4"] .revert')).visibility) };
+  out.revert_seen = await revertIt("d4");
+  out.reverted_file = { acts: await acts(), typing_in: await typingIn() };
+  if (shot) await rv.screenshot({ path: shot + "-revert.png" });
+  out.reverted_file.files = await slash(rv);
+  await revertIt(named(out.reverted_file.acts, "Reverted “Saved Packing list.md”").id);
+  out.unreverted_file = { acts: await acts(), files: await slash(rv) };
+  await revertIt("d2");
+  out.reverted_volume = await acts();
+  const textSize = () => rv.evaluate(() => getComputedStyle(document.documentElement).fontSize);
+  out.text_sizes = [await textSize()];
+  await rv.click("#input");
+  await ask(rv, "make the text bigger");
+  out.text_sizes.push(await textSize());
+  await revertIt(named(await acts(), "Made the text bigger").id);
+  out.text_sizes.push(await textSize());
+  out.reverted_size = (await acts()).slice(-2);
+  await rv.click("#input");
+  await ask(rv, "make me a 5 minute timer");
+  const timerAct = named(await acts(), "Made a timer");
+  out.timer_made = { act: timerAct, open: await rv.evaluate(() => document.body.classList.contains("content")) };
+  await revertIt(timerAct.id);
+  out.timer_reverted = { acts: (await acts()).slice(-2), open: await rv.evaluate(() => document.body.classList.contains("content")) };
+  await rv.click("#input");
+  await ask(rv, "make me a 2 minute timer");
+  out.timer_kept = (await acts()).pop();
+  await rv.click("#frame-close");
+  await rv.waitForFunction(() => !document.body.classList.contains("content"));
+  out.timer_closed = (await acts()).pop();
+  out.revert_notices = await rv.evaluate(() => Array.from(document.querySelectorAll("#log > .notice")).map((n) => n.textContent));
+  await rv.close();
+
   out.errors = errors;
   await browser.close();
   console.log(JSON.stringify(out));

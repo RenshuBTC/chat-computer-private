@@ -4,7 +4,8 @@ Chat Computer shows everything in Atkinson Hyperlegible Next, and code in Atkins
 Braille Institute made them so that letters that are easy to confuse look different from each other.
 `theme.css` loads them, and the screen gives them to the captions it draws over websites
 (`chatcomputer/ui/gtk_app.py`). Characters these fonts don't have, such as Chinese, Japanese, Korean, Greek,
-Cyrillic and emoji, come from the system's fonts.
+Cyrillic and emoji, come from the system's fonts (Chat Computer's own system, which has none, carries its own:
+`os/fonts`).
 
 | File | Font | Source in google/fonts |
 |---|---|---|

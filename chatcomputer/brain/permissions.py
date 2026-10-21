@@ -667,6 +667,9 @@ class PermissionGate:
 
     # ------------------------------------------------------------------ the gate
     async def __call__(self, tool: str, inp: dict[str, Any], ctx: Any = None):
+        # The tool call about to run (Claude's run one at a time, each just after this): what it changes is recorded
+        # as its, so Actions can take that back (Revert).
+        self.journal.call = getattr(ctx, "tool_use_id", None) or None
         try:
             return await self._decide(tool, inp)
         except Exception as exc:  # never let a bug in the gate approve something by accident

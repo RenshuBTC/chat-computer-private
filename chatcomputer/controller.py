@@ -23,12 +23,13 @@ from .brain.permissions import PermissionGate, is_private
 from .brain.prompt import build_system_prompt, turn_prefix
 from .config import (Paths, Settings, State, has_login, login_valid, model_label, read_token, save_login, save_token,
                      token_kind)
-from .done import History, describe as describe_done
+from .done import FAILED, History, describe as describe_done, for_screen, result_text
 from .files_index import FileIndex
 from .here import Here
 from .messages import Inbox
 from .pins import Pins
-from .journal import Journal
+from . import journal as jn
+from .journal import CantUndo, Journal
 from .lock import PIN_RE, PinLock
 from .memory import Memory
 from .platform import Platform
@@ -128,6 +129,7 @@ class Controller:
         self.turn_text: dict[str, str] = {}
         self.ready: asyncio.Event | None = None  # created in start()
         self.brain: Brain | None = None
+        self.ctx: T.ToolContext | None = None      # the tools' (start())
         self.listener = None
         self.speaker = None
         self.mic = None
@@ -768,7 +770,7 @@ class Controller:
         d = describe_done("mcp__chatcomputer__show_website", {"url": url}, "")
         if d is not None:
             entry = self.history.add(d[0], tool="show_website", inp={"url": url}, minor=d[1], prompt=prompt)
-            self.screen.done({k: entry[k] for k in ("id", "ts", "text", "prompt_id", "prompt_ts") if k in entry})
+            self.screen.done(for_screen(entry))
 
     def _prompt(self, uid: str, text: str, via: str | None = None) -> tuple[str, str, float]:
         """A message that asks Claude for something: on the screen and in the transcript, with the same id and
@@ -786,8 +788,11 @@ class Controller:
         while len(self.prompt_of) > 500:
             self.prompt_of.pop(next(iter(self.prompt_of)))
 
-    def _on_tool(self, tid: str, name: str, inp: dict[str, Any], ok: bool, result: str) -> None:
-        """A tool call finished: what it did goes into Actions (if it worked and did something)."""
+    def _on_tool(self, tid: str, name: str, inp: dict[str, Any], ok: bool, result: str, use_id: str = "") -> None:
+        """A tool call finished: what it did goes into Actions (if it worked and did something), with what it changed
+        that Revert can take back (the journal's records of that call)."""
+        if use_id and self.journal.call == use_id:
+            self.journal.call = None        # (it's over: nothing recorded from now on is this call's)
         if not ok:
             return
         try:
@@ -798,15 +803,97 @@ class Controller:
         if d is None:
             return
         text, minor = d
+        changes = self.journal.changes_of(use_id)
         entry = self.history.add(text, tool=name, inp=inp, minor=minor,
-                                 prompt=self.prompt_of.get(tid) or self._last_prompt)
+                                 prompt=self.prompt_of.get(tid) or self._last_prompt, changes=changes)
         if not minor:
-            self.screen.done({k: entry[k] for k in ("id", "ts", "text", "prompt_id", "prompt_ts") if k in entry})
+            self.screen.done(for_screen(entry, (set(changes), set()) if changes else None))
+        if name.endswith("undo_last_change"):
+            self._spawn(self._show_done(states_only=True))     # what it undid shows as reverted
 
-    async def _show_done(self) -> None:
+    def _change_state(self) -> tuple[set[str], set[str]]:
+        """The journal's records still kept, and the changes among them taken back (for Revert, in Actions)."""
+        records = self.journal.everything()
+        return {e["id"] for e in records}, jn.undone_ids(records)
+
+    async def _show_done(self, states_only: bool = False) -> None:
+        """Actions, all of them (at the start); or, `states_only`, which can be reverted and which have been, on
+        those already shown (after a revert, or "undo that")."""
         pinned = self.pins.of("done")
-        entries = await self.loop.run_in_executor(None, lambda: self.history.recent(150, pinned))
-        self.screen.done_list(entries)
+        entries = await self.loop.run_in_executor(None, lambda: self.history.recent(150, pinned, self._change_state()))
+        if states_only:
+            self.screen.done_states(entries)
+        else:
+            self.screen.done_list(entries)
+
+    async def revert(self, done_id: str) -> None:
+        """Revert, on an item in Actions: what that action changed is taken back, its last change first (files as
+        they were, settings as they were: journal.py), and that is listed as an action of its own, which can be
+        reverted in turn (putting the action back). The screen says what couldn't be taken back, and why."""
+        entry = await asyncio.to_thread(self.history.get, done_id)
+        records = await asyncio.to_thread(self.journal.everything)
+        by_id, undone = {e["id"]: e for e in records}, jn.undone_ids(records)
+        ids = (entry or {}).get("changes") or []
+        todo = [by_id[c] for c in ids if c in by_id and c not in undone]
+        if entry is None or not todo:
+            why = ("It was already reverted." if ids and all(c in undone for c in ids) else
+                   "That was too long ago to revert." if ids else "That can't be reverted.")
+            self.screen.notice(f"Nothing reverted: {why}", "warn")
+            await self._show_done(states_only=True)
+            return
+        call = "revert-" + uuid.uuid4().hex[:10]
+        said: list[str] = []
+        failed: list[str] = []
+        token = jn.CALL.set(call)
+        try:
+            for e in reversed(todo):
+                back = jn.TAKING_BACK.set(e["id"])
+                try:
+                    said.append(await self._take_back(e))
+                    self.journal.note_undone(e, said[-1])
+                except Exception as exc:          # CantUndo, or the file system's own error
+                    log.info("couldn't take back %s: %s", e.get("summary"), exc)
+                    failed.append(str(exc) or type(exc).__name__)
+                finally:
+                    jn.TAKING_BACK.reset(back)
+        finally:
+            jn.CALL.reset(token)
+        if said:
+            new = self.history.add(f"Reverted “{entry['text']}”", tool="revert", inp={"id": done_id},
+                                   changes=self.journal.changes_of(call), reverts=done_id)
+            self.screen.done(for_screen(new, (set(self.journal.changes_of(call)), set())))
+        if failed:
+            what = "Couldn't revert all of it" if said else f"Couldn't revert “{entry['text']}”"
+            self.screen.notice(f"{what}: " + "; ".join(dict.fromkeys(failed))[:300], "warn")
+        await self._show_done(states_only=True)
+
+    async def _take_back(self, e: dict[str, Any]) -> str:
+        """Takes back one change from the journal: a file's by the journal itself; a setting's by the tool call that
+        puts it back; the memory's here. Says what it did; raises CantUndo (or OSError) when it can't."""
+        u = e.get("undo") or {}
+        kind = u.get("type")
+        if kind == "tool":
+            fn = self.ctx.tool_fns.get(str(u.get("tool") or "")) if self.ctx is not None else None
+            if fn is None:
+                raise CantUndo("that can't be changed from here")
+            res = await fn(dict(u.get("input") or {}))
+            text = result_text(res.get("content")).strip()
+            if res.get("is_error") or FAILED.match(text):
+                raise CantUndo(text or "it didn't work")
+            return text
+        if kind == "memory_forget":
+            gone = self.memory.drop_lines(list(u.get("lines") or []))
+            if not gone:
+                raise CantUndo("that isn't remembered any more")
+            self.journal.record_change(f"forgot {len(gone)} fact(s)", {"type": "memory_restore", "lines": gone})
+            return "forgot " + "; ".join(ln[2:] for ln in gone)
+        if kind == "memory_restore":
+            back = self.memory.add_lines(list(u.get("lines") or []))
+            if not back:
+                raise CantUndo("that's remembered already")
+            self.journal.record_change(f"remembered {len(back)} fact(s) again", {"type": "memory_forget", "lines": back})
+            return "remembered again " + "; ".join(ln[2:] for ln in back)
+        return await asyncio.to_thread(self.journal.undo_file, e)
 
     def page_event(self, msg: dict[str, Any]) -> None:
         """What the conversation page says was done on it (GtkScreen.PAGE_EVENTS): a pin, a message opened, an
@@ -870,6 +957,8 @@ class Controller:
         if kind == "pin":
             which, item = str(msg.get("list") or ""), str(msg.get("id") or "")
             self.screen.set_pinned(which, item, self.pins.set(which, item, bool(msg.get("on"))))
+        elif kind == "revert":
+            self._spawn(self.revert(str(msg.get("id") or "")))
         elif self.inbox is None:
             return
         elif kind == "open_message":

@@ -464,3 +464,37 @@ def test_the_demo_works_in_a_browser():
     refused = res["talk_refused"]
     assert refused["title"] == "Talking stopped" and "Siri or Dictation" in refused["text"]
     assert refused["hint"] == "Type anything or \u201c/\u201d" and refused["awake"] == 0      # (no Escape on a phone)
+    # Revert, in Actions: on what can be taken back (yesterday's volume, the saved file), under the pointer, beside its
+    # pin; not on what only looked or opened a site. The saved file taken away (struck through, "/" no longer lists
+    # it, and the revert listed, revertable itself; typing still in the box); that revert reverted: the file back, and
+    # the action revertable again. The volume; the text made bigger, back to its size; a timer closed. A timer
+    # closed by its x has nothing left to take back: no Revert. Nothing went wrong on the way (no notices).
+    start = {a["id"]: a for a in res["revert_start"]["acts"]}
+    assert [start[d]["marks"] for d in ("d1", "d2", "d3", "d4")] == [[], ["revertable"], [], ["revertable"]]
+    assert [start[d]["button"] for d in ("d1", "d2", "d3", "d4")] == [False, True, False, True]
+    assert res["revert_start"]["hidden"] == "hidden" and res["revert_seen"] == "visible"
+    gone = res["reverted_file"]
+    d4 = next(a for a in gone["acts"] if a["id"] == "d4")
+    assert d4["marks"] == ["reverted"] and d4["struck"] and not d4["button"] and gone["typing_in"] == "input"
+    assert gone["acts"][-1]["text"] == "Reverted “Saved Packing list.md”" and gone["acts"][-1]["marks"] == ["revertable"]
+    assert "Packing list.md" not in gone["files"] and "Beach.jpg" in gone["files"]
+    back = res["unreverted_file"]
+    by = {a["text"]: a for a in back["acts"]}
+    assert by["Saved Packing list.md"]["marks"] == ["revertable"] and not by["Saved Packing list.md"]["struck"]
+    assert by["Reverted “Saved Packing list.md”"]["marks"] == ["reverted"]
+    assert back["acts"][-1]["text"] == "Reverted “Reverted “Saved Packing list.md””"
+    assert back["acts"][-1]["marks"] == ["revertable"]
+    assert back["files"].index("Packing list.md") == res["slash"].index("Packing list.md")
+    vol = {a["id"]: a for a in res["reverted_volume"]}
+    assert vol["d2"]["marks"] == ["reverted"] and res["reverted_volume"][-1]["text"] == "Reverted “Set the volume to 40%”"
+    small, big, again = res["text_sizes"]
+    assert float(big[:-2]) > float(small[:-2]) and again == small
+    assert [(a["text"], a["marks"]) for a in res["reverted_size"]] == [
+        ("Made the text bigger", ["reverted"]), ("Reverted “Made the text bigger”", ["revertable"])]
+    assert res["timer_made"]["open"] and res["timer_made"]["act"]["marks"] == ["revertable"]
+    t = res["timer_reverted"]
+    assert not t["open"] and [(a["text"], a["marks"], a["button"]) for a in t["acts"]] == [
+        ("Made a timer", ["reverted"], False), ("Reverted “Made a timer”", [], False)]
+    assert res["timer_kept"]["marks"] == ["revertable"]
+    assert res["timer_closed"]["text"] == "Made a timer" and res["timer_closed"]["marks"] == [] and not res["timer_closed"]["button"]
+    assert res["revert_notices"] == []

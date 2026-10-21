@@ -241,6 +241,7 @@ impl E1000 {
         let Some(&(_, name, family)) = DEVICES.iter().find(|d| d.0 == f.device) else {
             return Err(String::from("it isn't a card this driver knows"));
         };
+        f.at.power_on();
         let bar = f.at.memory_bar(0).ok_or_else(|| String::from("its registers aren't in memory"))?;
         if bar.size < 0x6000 {
             return Err(String::from("its register region is too small"));

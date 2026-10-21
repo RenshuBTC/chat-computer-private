@@ -14,16 +14,19 @@ log go to out/.
     ./check.py --crash page-fault    a kernel that faults on purpose once ready: it must stop cleanly,
                                      with the fault in its log and a message on the screen (also: panic)
     ./check.py --network             the network, with each kind of card there's a driver for (virtio, Intel's
-                                     e1000e and e1000, a USB network adapter by CDC ECM, plugged in once the
+                                     e1000e, e1000 and igb, a USB network adapter by CDC ECM, plugged in once the
                                      kernel is running and then unplugged, and by RNDIS): an address from DHCP, a
                                      name looked up with DNS, and a TCP conversation with a server on this computer
+                                     (--card igb: only that one)
     ./check.py --claude              a conversation with Claude, typed on the keyboard: with a stand-in for
                                      Claude's API on this computer (HTTPS, with a certificate authority made for
                                      the test, which the test build trusts instead of Mozilla's): the request
                                      (model, effort, the key from the settings file, the conversation so far),
                                      the answer streamed onto the screen, Claude's tools (the computer's status,
                                      a bigger text size, a restart, which ends the virtual PC), the answers'
-                                     thinking sent back unchanged, and a failure shown
+                                     thinking sent back unchanged, a web search (run by Anthropic: its results and
+                                     citations kept as they came, the answer paused and carried on), the web tools
+                                     refused and left out, and a failure shown
     ./check.py --secure-boot         Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
@@ -416,6 +419,7 @@ CARDS = [
     ("virtio", ("-device", "virtio-net-pci,netdev=n0,romfile="), "virtio network card", None, None),
     ("e1000e", ("-device", "e1000e,netdev=n0,romfile="), "Intel 82574L network card", None, None),  # QEMU's e1000e
     ("e1000", ("-device", "e1000,netdev=n0,romfile="), "Intel 82540EM network card", None, None),  # VirtualBox's, VMware's
+    ("igb", ("-device", "igb,netdev=n0,romfile="), "Intel 82576 network chip", None, None),  # the I210's and I211's family
     ("usb-ecm", ("-device", "qemu-xhci,id=xhci"), "USB network adapter \"RNDIS/QEMU USB Network Device\" (USB CDC ECM",
      None, USB_ADAPTER),
     ("usb-rndis", ("-device", "qemu-xhci,id=xhci", "-device", USB_ADAPTER),
@@ -445,6 +449,8 @@ def network(args) -> list[str]:
     built = None
     try:
         for device, devices, named, env, later in CARDS:
+            if args.card and device not in args.card:
+                continue
             print(f"--- {device}")
             if built != (env or {}):
                 build("network", env)
@@ -493,11 +499,20 @@ FIRST_WORDS = "Let me look."
 
 def stream(blocks: list[tuple], stop: str) -> list[tuple[str, dict]]:
     """An answer as Claude's API streams one: each block ("thinking", signature) (its words left out, as Opus 5.5 does
-    unless asked), ("text", [words...]) or ("tool_use", id, name, [pieces of its input's JSON]), then why it stopped."""
+    unless asked), ("text", [words...]) or ("text", [words...], [citations...]), ("tool_use", id, name, [pieces of its
+    input's JSON]), ("server_tool_use", id, name, [pieces]) for the tools Anthropic runs, or ("result", block) for
+    their results (which come whole), then why it stopped. ("wait", seconds) is a pause in the stream, as while
+    Anthropic searches the web."""
     events = [("message_start", {"type": "message_start", "message": {"id": "msg_test", "type": "message", "role": "assistant",
                                                                        "model": "claude-opus-5-5", "content": [], "stop_reason": None}})]
-    for i, b in enumerate(blocks):
-        def delta(d: dict) -> tuple[str, dict]:
+    i = -1
+    for b in blocks:
+        if b[0] == "wait":
+            events.append(("wait", {"seconds": b[1]}))
+            continue
+        i += 1
+
+        def delta(d: dict, i: int = i) -> tuple[str, dict]:
             return "content_block_delta", {"type": "content_block_delta", "index": i, "delta": d}
         if b[0] == "thinking":
             events += [("content_block_start", {"type": "content_block_start", "index": i,
@@ -506,9 +521,12 @@ def stream(blocks: list[tuple], stop: str) -> list[tuple[str, dict]]:
         elif b[0] == "text":
             events.append(("content_block_start", {"type": "content_block_start", "index": i, "content_block": {"type": "text", "text": ""}}))
             events += [delta({"type": "text_delta", "text": w}) for w in b[1]]
+            events += [delta({"type": "citations_delta", "citation": c}) for c in (b[2] if len(b) > 2 else [])]
+        elif b[0] == "result":
+            events.append(("content_block_start", {"type": "content_block_start", "index": i, "content_block": b[1]}))
         else:
             events.append(("content_block_start", {"type": "content_block_start", "index": i,
-                                                   "content_block": {"type": "tool_use", "id": b[1], "name": b[2], "input": {}}}))
+                                                   "content_block": {"type": b[0], "id": b[1], "name": b[2], "input": {}}}))
             events += [delta({"type": "input_json_delta", "partial_json": piece}) for piece in b[3]]
         events.append(("content_block_stop", {"type": "content_block_stop", "index": i}))
         if i == 0:
@@ -522,12 +540,16 @@ def blocks_as_sent(blocks: list[tuple]) -> list[dict]:
     """The same blocks as the answer's content, which must come back unchanged in the next request."""
     out = []
     for b in blocks:
+        if b[0] == "wait":
+            continue
         if b[0] == "thinking":
             out.append({"type": "thinking", "thinking": "", "signature": b[1]})
         elif b[0] == "text":
-            out.append({"type": "text", "text": "".join(b[1])})
+            out.append({"type": "text", "text": "".join(b[1])} | ({"citations": b[2]} if len(b) > 2 else {}))
+        elif b[0] == "result":
+            out.append(b[1])
         else:
-            out.append({"type": "tool_use", "id": b[1], "name": b[2], "input": json.loads("".join(b[3]) or "{}")})
+            out.append({"type": b[0], "id": b[1], "name": b[2], "input": json.loads("".join(b[3]) or "{}")})
     return out
 
 
@@ -537,7 +559,11 @@ def claude(args) -> list[str]:
     instead of Mozilla's). The first question is answered with tools: the stand-in has Claude look at the computer's
     status, then make the text bigger, then answer with what the status said (streamed, a piece at a time); each
     answer, thinking included, must come back unchanged with the tool's result. The second question gets Claude's
-    API's "overloaded" error, which the screen must show. The stand-in checks what it was sent."""
+    API's "overloaded" error, which the screen must show. The third is answered after a web search (which Anthropic
+    runs): its results and the answer's citations must come back as they came, and the answer, paused by the API,
+    must be sent back to go on, the rest joining it. The fourth asks to restart: the API first refuses the web tools
+    (as it does when an organization has switched them off), so the question must be asked again without them;
+    then Claude restarts the PC. The stand-in checks what it was sent."""
     import http.server
     import ssl
     import threading
@@ -562,6 +588,14 @@ def claude(args) -> list[str]:
     r1 = [("thinking", "sig-1/+="), ("text", ["Let me ", "look."]), ("tool_use", "toolu_1", "computer_status", [])]
     r2 = [("thinking", "sig-2"), ("tool_use", "toolu_2", "set_text_size", ['{"percent"', ': 125}'])]
     final: list[str] = []
+    search_result = {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1",
+                     "content": [{"type": "web_search_result", "title": "Weather", "url": "https://example.com/w",
+                                  "encrypted_content": "EqgfCi+/=", "page_age": None}]}
+    citation = {"type": "web_search_result_location", "url": "https://example.com/w", "title": "Weather",
+                "encrypted_index": "Eo8B=", "cited_text": "Sunny all day."}
+    r_search = [("thinking", "sig-s"), ("server_tool_use", "srvtoolu_1", "web_search", ['{"query": ', '"weather"}']),
+                ("wait", 4), ("result", search_result), ("text", ["It's ", "sunny."], [citation])]
+    r_more = [("text", ["Enjoy the day."])]
     r5 = [("thinking", "sig-5"), ("tool_use", "toolu_5", "restart_computer", ["{}"])]
     r6 = [("text", ["Restarting now: see you in Windows."])]
 
@@ -587,15 +621,28 @@ def claude(args) -> list[str]:
                 data = None
             requests.append({"path": self.path, "key": self.headers.get("x-api-key"),
                              "version": self.headers.get("anthropic-version"), "body": data})
-            script = {1: (r1, "tool_use"), 2: (r2, "tool_use"), 5: (r5, "tool_use"), 6: (r6, "end_turn")}.get(len(requests))
+            script = {1: (r1, "tool_use"), 2: (r2, "tool_use"), 5: (r_search, "pause_turn"), 6: (r_more, "end_turn"),
+                      8: (r5, "tool_use"), 9: (r6, "end_turn")}.get(len(requests))
             if len(requests) == 3:
                 script = (r3(), "end_turn")
-            if script:
+            if len(requests) == 7:
+                # As the API answers when an organization has switched web search off for its keys.
+                error = json.dumps({"type": "error", "error": {"type": "invalid_request_error",
+                                                               "message": "web search is not enabled for this organization"}}).encode()
+                self.send_response(400)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(error)))
+                self.end_headers()
+                self.wfile.write(error)
+            elif script:
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream")
                 self.send_header("transfer-encoding", "chunked")
                 self.end_headers()
                 for event, payload in stream(*script):
+                    if event == "wait":
+                        time.sleep(payload["seconds"])
+                        continue
                     chunk = f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                     self.wfile.flush()
@@ -626,7 +673,7 @@ def claude(args) -> list[str]:
                     "# The Claude API key is kept here as it is: anyone who can read this partition can read it.\r\n"
                     f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\n")
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings)
-        first = second = third = None
+        first = second = third = searched = searching = None
         restarted = ended = False
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
@@ -642,6 +689,13 @@ def claude(args) -> list[str]:
             monitor_many(pc.mon, [f"sendkey {k}" for k in "again"] + ["sendkey ret"])
             second = wait_for(pc.log, ("Claude: failed", "stopped"), 60)
             pc.settled_picture("claude-2")
+            # A question answered after a web search.
+            monitor_many(pc.mon, [f"sendkey {k}" for k in "weather"] + ["sendkey ret"])
+            if wait_for(pc.log, ("Claude: searches the web",), 60):
+                time.sleep(1)
+                searching = pc.picture("claude-searching")
+            searched = wait_for(pc.log, ("Enjoy the day",), 60)
+            pc.settled_picture("claude-search")
             # Asked to restart: Claude's answer, then a restart (which ends a virtual PC started with -no-reboot).
             monitor_many(pc.mon, [f"sendkey {k}" for k in "restart"] + ["sendkey ret"])
             third = wait_for(pc.log, ("Restarting now", "Claude: failed", "stopped"), 60)
@@ -675,8 +729,14 @@ def claude(args) -> list[str]:
             problems.append("asking to restart didn't reach the restart tool")
         elif not restarted or not ended:
             problems.append(f"the PC didn't restart (the kernel said so: {restarted}; the virtual PC ended: {ended})")
-        if len(requests) != 6:
-            problems.append(f"the stand-in got {len(requests)} requests, not 6")
+        if searched != "Enjoy the day" or 'test: Claude said "It\'s sunny.\\n\\nEnjoy the day."' not in text:
+            problems.append(f"the answer after a web search didn't come whole (the log says {searched!r})")
+        if "Claude: searches the web" not in text:
+            problems.append("the web search wasn't noticed")
+        if "the web tools aren't enabled for this API key" not in text:
+            problems.append("the web tools weren't left out once the API refused them")
+        if len(requests) != 9:
+            problems.append(f"the stand-in got {len(requests)} requests, not 9")
         else:
             r = requests[0]
             body = r["body"] or {}
@@ -690,7 +750,9 @@ def claude(args) -> list[str]:
                 problems.append("the request didn't say the screen shows plain text")
             if body.get("messages") != [{"role": "user", "content": "hi"}]:
                 problems.append(f"the first request's messages were {body.get('messages')!r}")
-            if sorted(t.get("name") for t in body.get("tools") or []) != ["computer_status", "restart_computer", "set_text_size"]:
+            tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])
+            if tools != [("computer_status", None), ("restart_computer", None), ("set_text_size", None),
+                         ("web_fetch", "web_fetch_20250910"), ("web_search", "web_search_20250305")]:
                 problems.append(f"the request offered the tools {body.get('tools')!r}")
             m2 = (requests[1]["body"] or {}).get("messages") or []
             if m2[:2] != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(r1)}]:
@@ -706,6 +768,22 @@ def claude(args) -> list[str]:
             if len(m4) != 7 or m4[:5] != m3 or m4[6] != {"role": "user", "content": "again"} \
                     or m4[5] != {"role": "assistant", "content": blocks_as_sent([("thinking", "sig-3"), ("text", final[:1])])}:
                 problems.append(f"the second question's messages were {m4!r}")
+            # The web search: the paused answer sent back as it came, to go on; then joined by the rest.
+            m5 = (requests[4]["body"] or {}).get("messages") or []
+            if m5 != m4[:6] + [{"role": "user", "content": "weather"}]:
+                problems.append(f"the third question's messages were {m5[5:]!r}")
+            m6 = (requests[5]["body"] or {}).get("messages") or []
+            if m6 != m5 + [{"role": "assistant", "content": blocks_as_sent(r_search)}]:
+                problems.append(f"the paused answer didn't come back as it came: {m6[6:]!r}")
+            m7 = (requests[6]["body"] or {}).get("messages") or []
+            joined = {"role": "assistant", "content": blocks_as_sent(r_search) + blocks_as_sent(r_more)}
+            if m7 != m5 + [joined, {"role": "user", "content": "restart"}]:
+                problems.append(f"the answer after the search wasn't kept whole: {m7[6:]!r}")
+            b8 = requests[7]["body"] or {}
+            if b8.get("messages") != m7:
+                problems.append("the refused question wasn't asked again as it was")
+            if any(t.get("type", "").startswith("web_") for t in b8.get("tools") or []) or "can't use the web" not in str(b8.get("system")):
+                problems.append(f"the question asked again still offered the web tools: {b8.get('tools')!r}")
         if first == "test: Claude said":
             problems += check_colours(answered, args.size)
             if colours(answered).get(BUBBLE, 0) < 1000:
@@ -781,7 +859,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=240)
     ap.add_argument("--crash", choices=["page-fault", "panic"])
     ap.add_argument("--keyboard", action="store_true", help="USB keyboards: on a port, behind a hub, plugged in and out")
-    ap.add_argument("--network", action="store_true", help="a virtio network card: DHCP, DNS and a TCP conversation")
+    ap.add_argument("--network", action="store_true", help="each network card there's a driver for: DHCP, DNS and TCP")
+    ap.add_argument("--card", action="append", choices=[c[0] for c in CARDS], help="with --network: only this card")
     ap.add_argument("--claude", action="store_true", help="a conversation with a stand-in for Claude's API, over HTTPS")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")

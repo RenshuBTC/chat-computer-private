@@ -1,8 +1,9 @@
 //! Claude's Messages API (POST /v1/messages), streamed: the request, and the answer as it comes, from the
 //! server-sent events (event: and data: lines, a blank line after each). The answer's words come out as they
-//! arrive; the whole answer (its content blocks: thinking, words, tool calls) is kept, to go back in the
-//! conversation, and when Claude calls tools, to go back with their results. The API asks for thinking blocks to come
-//! back complete and unmodified, so they are kept exactly as they came.
+//! arrive; the whole answer (its content blocks: thinking, words and their citations, tool calls, and the tools
+//! Anthropic runs itself, like web search, with their results) is kept, to go back in the conversation, and when
+//! Claude calls tools, to go back with their results. The API asks for thinking blocks, and the web tools' encrypted
+//! results, to come back complete and unmodified, so they are kept exactly as they came.
 
 use crate::http::{self, Response};
 use crate::json::{self, Json};
@@ -61,8 +62,14 @@ pub fn tool_result(id: &str, content: &str, is_error: bool) -> Json {
     ])
 }
 
-/// The whole request, ready to send: the conversation so far, newest last.
-pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools: &[Tool]) -> Vec<u8> {
+/// Tools Anthropic runs itself (server tools), as their definitions' JSON: Claude searches the web, and reads web
+/// pages, without the computer doing either.
+pub const WEB_SEARCH: &str = r#"{"type":"web_search_20250305","name":"web_search","max_uses":5}"#;
+pub const WEB_FETCH: &str = r#"{"type":"web_fetch_20250910","name":"web_fetch","max_uses":5,"max_content_tokens":25000}"#;
+
+/// The whole request, ready to send: the conversation so far, newest last, the tools this computer runs, and the
+/// server tools (`WEB_SEARCH`...).
+pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools: &[Tool], server_tools: &[&str]) -> Vec<u8> {
     let mut body = format!(
         "{{\"model\":{},\"max_tokens\":{},\"stream\":true,\"output_config\":{{\"effort\":{}}},\"system\":{}",
         json::quote(MODEL),
@@ -70,19 +77,21 @@ pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools
         json::quote(EFFORT),
         json::quote(system)
     );
-    if !tools.is_empty() {
+    if !tools.is_empty() || !server_tools.is_empty() {
+        let mut all: Vec<String> = tools
+            .iter()
+            .map(|t| {
+                format!(
+                    "{{\"name\":{},\"description\":{},\"input_schema\":{}}}",
+                    json::quote(t.name),
+                    json::quote(t.description),
+                    t.input_schema
+                )
+            })
+            .collect();
+        all.extend(server_tools.iter().map(|t| String::from(*t)));
         body.push_str(",\"tools\":[");
-        for (i, t) in tools.iter().enumerate() {
-            if i > 0 {
-                body.push(',');
-            }
-            body.push_str(&format!(
-                "{{\"name\":{},\"description\":{},\"input_schema\":{}}}",
-                json::quote(t.name),
-                json::quote(t.description),
-                t.input_schema
-            ));
-        }
+        body.push_str(&all.join(","));
         body.push(']');
     }
     body.push_str(",\"messages\":[");
@@ -121,7 +130,10 @@ pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools
 pub enum Event {
     /// More of the answer's words.
     Text(String),
-    /// The answer is complete (`Stream::stop_reason` says why it stopped: "tool_use" when Claude called tools).
+    /// Claude started using a server tool (its name: "web_search", "web_fetch"); Anthropic runs it.
+    Tool(String),
+    /// The answer is complete (`Stream::stop_reason` says why it stopped: "tool_use" when Claude called tools,
+    /// "pause_turn" when a server tool's turn was paused, to be sent back to go on).
     Done,
     /// It failed: why, in Anthropic's words or ours.
     Failed(String),
@@ -295,6 +307,10 @@ impl Stream {
                         self.inputs.resize(i + 1, String::new());
                     }
                     self.blocks[i] = Some(block.clone());
+                    if block.get("type").and_then(|t| t.str()) == Some("server_tool_use") {
+                        let name = block.get("name").and_then(|n| n.str()).unwrap_or("");
+                        out.push(Event::Tool(String::from(name)));
+                    }
                 }
             }
             "content_block_delta" => {
@@ -320,6 +336,11 @@ impl Stream {
                             b.append("signature", &more);
                         }
                     }
+                    Some("citations_delta") => {
+                        if let (Some(c), Some(b)) = (delta.get("citation").cloned(), index.and_then(|i| self.block(i))) {
+                            b.push("citations", c);
+                        }
+                    }
                     Some("input_json_delta") => {
                         let more = String::from(text("partial_json"));
                         if let Some(input) = index.and_then(|i| self.inputs.get_mut(i)) {
@@ -333,7 +354,7 @@ impl Stream {
                 if let Some(i) = index {
                     let input = self.inputs.get(i).cloned().unwrap_or_default();
                     if let Some(b) = self.block(i)
-                        && b.get("type").and_then(|t| t.str()) == Some("tool_use")
+                        && matches!(b.get("type").and_then(|t| t.str()), Some("tool_use" | "server_tool_use"))
                     {
                         let parsed = if input.trim().is_empty() { Some(Json::Obj(Vec::new())) } else { json::parse(&input) };
                         b.set("input", parsed.unwrap_or(Json::Obj(Vec::new())));

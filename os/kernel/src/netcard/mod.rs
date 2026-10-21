@@ -1,9 +1,13 @@
 //! Network cards: Chat Computer's own drivers for them. So far: virtio's (virtual machines), Intel's e1000 family
-//! (virtual machines' e1000 and e1000e, and Intel's gigabit chips), and USB network adapters and phones sharing
+//! (virtual machines' e1000 and e1000e, and Intel's gigabit chips built into its chipsets), Intel's igb family and
+//! I225/I226 (the I210, I211, I225-V and I226-V on many motherboards, and virtual machines' igb), Realtek's
+//! RTL8111/8168 and RTL8125 (the most common chips on motherboards), and USB network adapters and phones sharing
 //! their connection (usbnet.rs, over the USB driver). The rest of the PC's network chips are named in the log,
 //! with their maker's and the chip's numbers, so drivers can be written for exactly those.
 
 mod e1000;
+mod igb;
+mod realtek;
 mod usbnet;
 mod virtio;
 
@@ -68,6 +72,21 @@ pub fn find() -> Vec<Box<dyn Card>> {
             match e1000::E1000::start(&f, idt::NET_VECTOR) {
                 Ok(card) => cards.push(Box::new(card)),
                 Err(why) => crate::log!("Chat Computer kernel: Intel {name} network card at {}: couldn't start it: {why}", f.at),
+            }
+        } else if let Some(name) = igb::model(&f) {
+            match igb::Igb::start(&f, idt::NET_VECTOR) {
+                Ok(card) => cards.push(Box::new(card)),
+                Err(why) => crate::log!("Chat Computer kernel: Intel {name} network chip at {}: couldn't start it: {why}", f.at),
+            }
+        } else if realtek::ours(&f) {
+            match realtek::Realtek::start(&f, idt::NET_VECTOR) {
+                Ok(card) => cards.push(Box::new(card)),
+                Err(why) => crate::log!(
+                    "Chat Computer kernel: Realtek network chip {:04x}:{:04x} at {}: couldn't start it: {why}",
+                    f.vendor,
+                    f.device,
+                    f.at
+                ),
             }
         } else {
             let name = format!("{} {kind} chip {:04x}:{:04x}", maker(f.vendor), f.vendor, f.device);

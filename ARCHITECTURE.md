@@ -40,7 +40,8 @@ chat-computer/
     boot/                   UEFI start-up stage (BOOTX64.EFI) that carries the kernel
     kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards, network
                             adapters: CDC ECM and NCM, RNDIS), PS/2 keyboards, network cards (netcard/: virtio,
-                            Intel's e1000 family), the settings (the Claude API key) and the clock from the
+                            Intel's e1000 and igb families and I225/I226, Realtek's RTL8111/8168 and
+                            RTL8125), the settings (the Claude API key) and the clock from the
                             start-up stage, Claude (assistant.rs) with tools on the computer (its status:
                             system.rs; the text size; a restart: power.rs), and the conversation screen (chat.rs,
                             drawn in memory: draw.rs)

@@ -80,13 +80,26 @@ struct Block {
     bubble: Rect,
     /// Claude's answer with no words yet: the pulsing dot.
     thinking: bool,
+    /// What Claude is doing while it thinks ("Searching the web"), shown by the dot.
+    activity: Option<&'static str>,
     /// Its text changed since it was laid out.
     changed: bool,
 }
 
 impl Block {
     fn new(kind: Kind, live: Live, text: String) -> Block {
-        Block { kind, live, text, lines: Vec::new(), top: 0, height: 0, bubble: Rect::default(), thinking: false, changed: true }
+        Block {
+            kind,
+            live,
+            text,
+            lines: Vec::new(),
+            top: 0,
+            height: 0,
+            bubble: Rect::default(),
+            thinking: false,
+            activity: None,
+            changed: true,
+        }
     }
 }
 
@@ -513,6 +526,10 @@ impl Chat {
                 let d = m.px(0.5);
                 let baseline = ty.baseline(m.body) / ONE;
                 canvas.circle((m.column_x * 2 + d) * 4, (y + baseline) * 8 - d * 4, d * 4, INK, pulse(now));
+                if let Some(doing) = b.activity {
+                    let ink = ty.ink(doing, m.body, 0);
+                    canvas.ink(m.column_x + d + m.px(0.6) - ink.left as i32, y, &ink, DIM);
+                }
             }
         }
         if !self.stopped {
@@ -817,6 +834,12 @@ impl Chat {
             Event::Done => self.answer_over(None),
             Event::Failed(why) => self.answer_over(Some(why)),
             Event::TextSize(percent) => self.set_text_size(percent),
+            Event::Activity(doing) => {
+                let Some(i) = self.asking else { return };
+                self.blocks[i].activity = Some(doing);
+                let area = self.block_area(i);
+                self.dirty = self.dirty.union(&area);
+            }
             Event::Restarting(seconds) => {
                 self.blocks.push(Block::new(Kind::Note, Live::No, format!("Restarting in {seconds} seconds\u{2026}")));
                 self.relayout = true;

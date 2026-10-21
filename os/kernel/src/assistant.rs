@@ -6,8 +6,10 @@
 //!
 //! Claude can act on this computer through tools (`TOOLS`): see how it's doing, change the text size, restart it.
 //! When an answer calls them, they run here, and their results go back in a new request with the answer as it
-//! came (its thinking included, unchanged, as the API requires), until Claude has finished. The conversation (every
-//! turn, as the API had it) is kept here.
+//! came (its thinking included, unchanged, as the API requires), until Claude has finished. Claude can also search
+//! the web and read web pages: Anthropic runs those tools itself (`api::WEB_SEARCH`, `api::WEB_FETCH`), so this
+//! computer needs no browser for them; their results come back in the answer, and go back in the conversation as
+//! they came. The conversation (every turn, as the API had it) is kept here.
 //!
 //! A test build (CHATCOMPUTER_TEST=claude, by check.py --claude) talks to a stand-in on the computer running the
 //! virtual PC instead (10.0.2.2, as "localhost"), and trusts only that test's own certificate authority.
@@ -37,6 +39,8 @@ pub enum Event {
     TextSize(u32),
     /// Claude is restarting the PC, in this many seconds.
     Restarting(u64),
+    /// What Claude is doing before it answers ("Searching the web").
+    Activity(&'static str),
 }
 
 /// Whether Claude can be asked now, and if not, why not.
@@ -73,10 +77,19 @@ const ADDRESS_MS: u64 = 300_000;
 const CLOSING_MS: u64 = 30_000;
 
 const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
+conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, search the \
+web and read web pages, and look after this computer with the tools you have (its status, the text size, restarting \
+it), but you can't yet use the computer's files. This screen shows plain text only, so write without Markdown: no \
+asterisks, pound signs, backticks or tables. Separate paragraphs with a blank line, and start list items with a bullet \
+(\u{2022}) or a number.";
+const SYSTEM_NO_WEB: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, and look \
-after this computer with the tools you have (its status, the text size, restarting it), but you can't yet use the web \
-or the computer's files. This screen shows plain text only, so write without Markdown: no asterisks, pound signs, \
-backticks or tables. Separate paragraphs with a blank line, and start list items with a bullet (\u{2022}) or a number.";
+after this computer with the tools you have (its status, the text size, restarting it), but you can't use the web here \
+(it isn't enabled for this API key) or the computer's files. This screen shows plain text only, so write without \
+Markdown: no asterisks, pound signs, backticks or tables. Separate paragraphs with a blank line, and start list items \
+with a bullet (\u{2022}) or a number.";
+/// The tools Anthropic runs: searching the web, reading web pages.
+const WEB_TOOLS: [&str; 2] = [api::WEB_SEARCH, api::WEB_FETCH];
 
 /// What Claude can do on this computer.
 const TOOLS: [api::Tool; 3] = [
@@ -101,7 +114,7 @@ const TOOLS: [api::Tool; 3] = [
         input_schema: r#"{"type":"object","properties":{}}"#,
     },
 ];
-/// Rounds of tool calls in one answer, at most.
+/// Rounds of tool calls (and of continuing a paused answer) in one answer, at most.
 const TOOL_ROUNDS: u32 = 8;
 
 fn test_build() -> bool {
@@ -144,6 +157,8 @@ struct Talk {
     chars: usize,
     /// The whole answer, once it has come.
     answer: Option<Answer>,
+    /// The API refused the web tools (not enabled for this key): ask again without them.
+    again_without_web: bool,
 }
 
 /// An answer that came whole: its content blocks, why it stopped, and the tools it called.
@@ -173,6 +188,8 @@ struct Job {
     separate: bool,
     /// Restart the PC once the answer is over.
     restart: bool,
+    /// The last answer was paused (during a web search, say): the next one carries on with it.
+    continuing: bool,
     /// The answer's words, kept only by a test build, for its log.
     text: String,
 }
@@ -188,6 +205,8 @@ struct Assistant {
     address: Option<(Ipv4, u64)>,
     /// The conversation, as the API has it.
     history: Vec<Turn>,
+    /// Whether to offer the web tools (until the API says they aren't enabled for this key).
+    web: bool,
 }
 
 static ASSISTANT: SpinLock<Option<Assistant>> = SpinLock::new(None);
@@ -203,7 +222,8 @@ pub fn init(key: Option<String>, key_problem: Option<&'static str>) {
         roots.len(),
         if test_build() { " (the test's own)" } else { " (Mozilla's)" }
     );
-    *ASSISTANT.lock() = Some(Assistant { key, key_problem, roots, job: None, closing: Vec::new(), address: None, history: Vec::new() });
+    *ASSISTANT.lock() =
+        Some(Assistant { key, key_problem, roots, job: None, closing: Vec::new(), address: None, history: Vec::new(), web: true });
 }
 
 pub fn ready() -> Ready {
@@ -258,6 +278,7 @@ pub fn ask(text: &str) -> Result<(), String> {
         said: false,
         separate: false,
         restart: false,
+        continuing: false,
         text: String::new(),
     });
     Ok(())
@@ -309,6 +330,12 @@ pub fn work() -> Vec<Event> {
     }
     if let Some(mut job) = over {
         wipe(&mut job.request);
+        if matches!(&job.phase, Phase::Talking(t) if t.again_without_web) {
+            job.request = a.request();
+            job.phase = Phase::Network(now);
+            a.job = Some(job);
+            return events;
+        }
         let answer = match &mut job.phase {
             Phase::Talking(t) => t.answer.take(),
             _ => None,
@@ -415,11 +442,12 @@ fn suite_name(s: Option<tls::Suite>) -> &'static str {
 impl Assistant {
     /// The request for the conversation so far.
     fn request(&self) -> Vec<u8> {
-        let mut system = String::from(SYSTEM);
+        let mut system = String::from(if self.web { SYSTEM } else { SYSTEM_NO_WEB });
         if let Some(now) = clock::now_text() {
             system.push_str(&format!(" The computer's clock says it is {now}."));
         }
-        api::request(host(), self.key.as_deref().unwrap_or(""), &system, &self.history, &TOOLS)
+        let web: &[&str] = if self.web { &WEB_TOOLS } else { &[] };
+        api::request(host(), self.key.as_deref().unwrap_or(""), &system, &self.history, &TOOLS, web)
     }
 
     /// An answer came whole: kept in the conversation; if it called tools, they run and their results go back in a new
@@ -427,12 +455,33 @@ impl Assistant {
     fn answered(&mut self, now: u64, mut job: Job, answer: Answer, events: &mut Vec<Event>) {
         let has_words = answer.content.iter().any(|b| b.get("type").and_then(|t| t.str()) == Some("text"));
         let calls = answer.stop.as_deref() == Some("tool_use") && !answer.calls.is_empty();
-        if !has_words && !calls && !job.said {
+        // Paused (the API does that during its own tools, a long web search say): sent back as it is, it goes on.
+        let paused = answer.stop.as_deref() == Some("pause_turn");
+        if !has_words && !calls && !paused && !job.said {
             self.history.truncate(job.base);
             fail(events, String::from("Claude didn't say anything."));
             return;
         }
-        self.history.push(Turn { role: Role::Assistant, content: Content::Blocks(answer.content) });
+        // What carries on a paused answer belongs to that answer.
+        match self.history.last_mut() {
+            Some(Turn { role: Role::Assistant, content: Content::Blocks(blocks) }) if job.continuing => blocks.extend(answer.content),
+            _ => self.history.push(Turn { role: Role::Assistant, content: Content::Blocks(answer.content) }),
+        }
+        job.continuing = false;
+        if paused {
+            if job.rounds >= TOOL_ROUNDS {
+                self.history.truncate(job.base);
+                fail(events, String::from("Claude's answer kept on pausing, so Chat Computer stopped it."));
+                return;
+            }
+            job.rounds += 1;
+            job.continuing = true;
+            job.separate = job.said;
+            job.request = self.request();
+            job.phase = Phase::Network(now);
+            self.job = Some(job);
+            return;
+        }
         if !calls {
             if test_build() {
                 crate::log!("Chat Computer kernel: test: Claude said {:?}", job.text);
@@ -546,6 +595,7 @@ impl Assistant {
                                 sent: false,
                                 chars: 0,
                                 answer: None,
+                                again_without_web: false,
                             }));
                         }
                         TcpState::Closed => {
@@ -627,6 +677,15 @@ impl Assistant {
                         t.chars += s.chars().count();
                         words.push(s);
                     }
+                    api::Event::Tool(name) => {
+                        let (doing, log) = match name.as_str() {
+                            "web_search" => ("Searching the web", "searches the web"),
+                            "web_fetch" => ("Reading a web page", "reads a web page"),
+                            _ => ("Working", "uses one of Anthropic's tools"),
+                        };
+                        crate::log!("Chat Computer kernel: Claude: {log}");
+                        events.push(Event::Activity(doing));
+                    }
                     e => {
                         over = Some(e);
                         break 'reading;
@@ -638,6 +697,7 @@ impl Assistant {
             for e in t.stream.closed() {
                 match e {
                     api::Event::Text(s) => words.push(s),
+                    api::Event::Tool(_) => {}
                     e => over = Some(e),
                 }
             }
@@ -661,12 +721,21 @@ impl Assistant {
                 return true;
             }
             Some(api::Event::Failed(m)) => {
-                let why = api_text(t.stream.status(), &m);
+                let status = t.stream.status();
                 t.tls.close();
                 t.out.extend(t.tls.outgoing());
                 stack.send(t.socket, &t.out);
                 self.close(now, stack, t.socket);
-                return fail(events, why);
+                // An organization can switch the web tools off for its keys: then the API refuses any request that
+                // offers them. Asked again without them, and not offered again.
+                let lower = m.to_ascii_lowercase();
+                if self.web && status == Some(400) && ["web search", "web_search", "web fetch", "web_fetch"].iter().any(|w| lower.contains(w)) {
+                    crate::log!("Chat Computer kernel: Claude: the web tools aren't enabled for this API key; asking without them");
+                    self.web = false;
+                    t.again_without_web = true;
+                    return true;
+                }
+                return fail(events, api_text(status, &m));
             }
             _ => {}
         }

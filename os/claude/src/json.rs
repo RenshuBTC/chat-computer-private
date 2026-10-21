@@ -62,6 +62,14 @@ impl Json {
         }
     }
 
+    /// Adds a value to an array field (making it if it isn't there).
+    pub fn push(&mut self, key: &str, value: Json) {
+        match self.get_mut(key) {
+            Some(Json::Arr(items)) => items.push(value),
+            _ => self.set(key, Json::Arr(alloc::vec![value])),
+        }
+    }
+
     /// As JSON text again: what was read comes out the same (numbers as they were written).
     pub fn write(&self) -> String {
         let mut out = String::new();

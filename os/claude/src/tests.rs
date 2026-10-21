@@ -23,7 +23,7 @@ fn json_reads_what_the_api_sends_and_writes_strings_safely() {
 
 #[test]
 fn the_request_is_opus_at_max_effort_streamed() {
-    let r = api::request("api.anthropic.com", "sk-ant-test", "Be brief.", &[Turn::text(Role::User, "Hi \"Claude\"")], &[]);
+    let r = api::request("api.anthropic.com", "sk-ant-test", "Be brief.", &[Turn::text(Role::User, "Hi \"Claude\"")], &[], &[]);
     let text = String::from_utf8(r).unwrap();
     let (head, body) = text.split_once("\r\n\r\n").unwrap();
     assert!(head.starts_with("POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\n"));
@@ -60,11 +60,17 @@ fn tools_and_whole_answers_go_in_the_request_unchanged() {
         Turn { role: Role::Assistant, content: Content::Blocks(vec![thinking.clone(), call.clone()]) },
         Turn { role: Role::User, content: Content::Blocks(vec![api::tool_result("toolu_1", "8 GB of memory", false)]) },
     ];
-    let r = api::request("api.anthropic.com", "k", "s", &conversation, &tools);
+    let r = api::request("api.anthropic.com", "k", "s", &conversation, &tools, &[api::WEB_SEARCH]);
     let text = String::from_utf8(r).unwrap();
     let (_, body) = text.split_once("\r\n\r\n").unwrap();
     let j = json::parse(body).unwrap();
-    assert_eq!(j.path(&["tools"]).map(|t| t.write()), Some(r#"[{"name":"computer_status","description":"What this computer is.","input_schema":{"type":"object","properties":{}}}]"#.into()));
+    assert_eq!(
+        j.path(&["tools"]).map(|t| t.write()),
+        Some(
+            r#"[{"name":"computer_status","description":"What this computer is.","input_schema":{"type":"object","properties":{}}},{"type":"web_search_20250305","name":"web_search","max_uses":5}]"#
+                .into()
+        )
+    );
     let Some(Json::Arr(messages)) = j.get("messages") else { panic!() };
     assert_eq!(messages[1].get("content"), Some(&Json::Arr(vec![thinking, call])));
     assert_eq!(messages[2].path(&["content"]).map(|c| c.write()),
@@ -118,6 +124,58 @@ fn a_tool_call_comes_out_whole_with_its_thinking_kept_as_it_came() {
         assert_eq!(
             s.tool_uses(),
             vec![ToolUse { id: "toolu_9".into(), name: "set_text_size".into(), input: json::parse(r#"{"percent":125}"#).unwrap() }]
+        );
+    }
+}
+
+/// An answer that searched the web (Anthropic runs the search): the search's call, its results (encrypted, to go back
+/// as they came), then words with a citation; the turn paused, as the API may do during server tools.
+fn search_answer() -> Vec<u8> {
+    let events = [
+        r#"{"type":"message_start","message":{"id":"msg_3","type":"message","role":"assistant","content":[]}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\": \"weath"}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"er\"}"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_result","title":"Weather","url":"https://example.com/w","encrypted_content":"EqgfCi+/=","page_age":null}]}}"#,
+        r#"{"type":"content_block_stop","index":1}"#,
+        r#"{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"It's sunny."}}"#,
+        r#"{"type":"content_block_delta","index":2,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","url":"https://example.com/w","title":"Weather","encrypted_index":"Eo8B=","cited_text":"Sunny all day."}}}"#,
+        r#"{"type":"content_block_stop","index":2}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":30}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+    let mut sse = String::new();
+    for d in events {
+        sse.push_str(&format!("data: {d}\n\n"));
+    }
+    let mut r = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n", sse.len()).into_bytes();
+    r.extend_from_slice(sse.as_bytes());
+    r
+}
+
+#[test]
+fn a_web_search_comes_out_whole_with_its_results_and_citations_kept_as_they_came() {
+    for cut in [1, 7, 64, 100_000] {
+        let mut s = Stream::new();
+        let mut events = Vec::new();
+        for piece in search_answer().chunks(cut) {
+            events.extend(s.feed(piece));
+        }
+        assert_eq!(events, vec![Event::Tool("web_search".into()), Event::Text("It's sunny.".into()), Event::Done], "cut {cut}");
+        assert_eq!(s.stop_reason(), Some("pause_turn"));
+        assert!(s.tool_uses().is_empty(), "a server tool isn't for this computer to run");
+        let content = s.content();
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[0].write(), r#"{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"weather"}}"#);
+        assert_eq!(
+            content[1].write(),
+            r#"{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_result","title":"Weather","url":"https://example.com/w","encrypted_content":"EqgfCi+/=","page_age":null}]}"#
+        );
+        assert_eq!(
+            content[2].write(),
+            r#"{"type":"text","text":"It's sunny.","citations":[{"type":"web_search_result_location","url":"https://example.com/w","title":"Weather","encrypted_index":"Eo8B=","cited_text":"Sunny all day."}]}"#
         );
     }
 }

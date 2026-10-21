@@ -24,6 +24,10 @@ const COMMAND_BUS_MASTER: u16 = 1 << 2;
 const COMMAND_NO_INTX: u16 = 1 << 10;
 const STATUS_CAPABILITIES: u16 = 1 << 4;
 
+const CAP_POWER: u8 = 0x01;
+const CAP_EXPRESS: u8 = 0x10;
+/// PCI Express's extended capability: L1 PM Substates (its control register 1 is 8 bytes in).
+const EXT_CAP_L1_SUBSTATES: u16 = 0x1E;
 const CAP_MSI: u8 = 0x05;
 const CAP_MSIX: u8 = 0x11;
 
@@ -208,6 +212,83 @@ impl Address {
         }
         if wanted != command {
             self.write16(COMMAND, wanted);
+        }
+    }
+
+    /// Brings the device to full power (D0), if a firmware or the system before left it in a low-power state; true
+    /// if it had to. A device needs 10 ms to come back from D3 (PCI Power Management 1.2, 5.6.1).
+    pub fn power_on(self) -> bool {
+        let Some(control) = self.power_control() else { return false };
+        let state = self.read16(control);
+        if state & 3 == 0 {
+            return false;
+        }
+        self.write16(control, state & !3);
+        crate::time::delay_ms(10);
+        true
+    }
+
+    /// Where the device's power-management control and status register is, if it has one.
+    pub fn power_control(self) -> Option<u16> {
+        self.capability(CAP_POWER).map(|cap| cap + 4)
+    }
+
+    /// Where extended capability `id` is (PCI Express's, from offset 0x100), if the device has it. Only reachable
+    /// through the PCI Express window: the old ports reach the first 256 bytes only.
+    pub fn ext_capability(self, id: u16) -> Option<u16> {
+        CONFIG.lock().in_window(self, 0x100)?;
+        let mut at: u16 = 0x100;
+        for _ in 0..64 {
+            let header = self.read32(at);
+            if header == 0 || header == 0xFFFF_FFFF {
+                return None;
+            }
+            if header as u16 == id {
+                return Some(at);
+            }
+            at = (header >> 20) as u16 & !3;
+            if at < 0x100 {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// The bridge (a root port or a switch's port) this device is behind, if any.
+    pub fn upstream(self) -> Option<Address> {
+        FUNCTIONS
+            .lock()
+            .iter()
+            .find(|f| f.class == 0x06 && f.subclass == 0x04 && f.at.read8(0x19) == self.bus && self.bus != 0)
+            .map(|f| f.at)
+    }
+
+    /// Switches off the L1.2 power-saving state of the device's PCI Express link (the L1 PM Substates capability's
+    /// control register 1: ASPM L1.2, and with `pci_pm` the PCI-PM L1.2 as well), for devices that get it wrong: on
+    /// the device first, then on the port above it, the order PCI Express asks for.
+    pub fn disable_l1_2(self, pci_pm: bool) {
+        let off = 1 << 2 | if pci_pm { 1 << 0 } else { 0 };
+        for at in [Some(self), self.upstream()].into_iter().flatten() {
+            if let Some(cap) = at.ext_capability(EXT_CAP_L1_SUBSTATES) {
+                let control = at.read32(cap + 8);
+                if control & off != 0 {
+                    at.write32(cap + 8, control & !off);
+                }
+            }
+        }
+    }
+
+    /// Switches off the power saving of the device's PCI Express link (ASPM's L0s and L1, and L1's substates), on
+    /// the device and on the port above it, for devices that are unreliable with it.
+    pub fn disable_aspm(self) {
+        self.disable_l1_2(true);
+        for at in [Some(self), self.upstream()].into_iter().flatten() {
+            if let Some(cap) = at.capability(CAP_EXPRESS) {
+                let control = at.read16(cap + 0x10); // Link Control: bits 1:0 are ASPM's
+                if control & 3 != 0 {
+                    at.write16(cap + 0x10, control & !3);
+                }
+            }
         }
     }
 

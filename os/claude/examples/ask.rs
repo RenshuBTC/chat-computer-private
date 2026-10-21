@@ -25,7 +25,7 @@ fn main() {
     let roots: &'static [tls::Cert<'static>] = Box::leak(tls::roots().into_boxed_slice());
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let mut client = tls::Client::new(host, now, roots, &mut urandom);
-    let request = api::request(host, "", "Answer in one short sentence.", &[Turn::text(Role::User, "hi")], &[]);
+    let request = api::request(host, "", "Answer in one short sentence.", &[Turn::text(Role::User, "hi")], &[], &[]);
     let mut stream = Stream::new();
     let mut sent = false;
     let mut buf = vec![0u8; 16384];

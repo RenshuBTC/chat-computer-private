@@ -59,17 +59,21 @@ chat-computer/
   apps/desktop/             The Windows and Mac app (Tauri 2): src-tauri/ (Rust: the window, the site's own view
                             laid over the page's frame, "/" file search, the Mac's 127.0.0.1 page server,
                             capabilities/ giving only the app's own page its commands), frontend/ (made by
-                            build_apps.py desktop: the website's page, with Gemma's code), smoke/ (a site for
+                            build_apps.py desktop: the website's page, with Gemma's and Heart's code), smoke/ (a site for
                             CI's real start-up pictures); .github/workflows/apps.yml builds both on GitHub;
                             tests/test_desktop.py checks it, driving a Linux build with WebDriver where there is one
+  apps/android/             The Android app: chatcomputer.ai full screen in Chrome (a Trusted Web Activity, Google's
+                            androidbrowserhelper; docs/.well-known/assetlinks.json vouches for its key), Gradle
+  apps/ios/                 The iPhone app: chatcomputer.ai in a WKWebView (SwiftUI), other sites in Safari's view;
+                            XcodeGen's project.yml, built for the simulator by .github/workflows/ios.yml
 ```
 
 ## The Windows and Mac app
 
 The website's page (docs/index.html and docs/demo/, copied by `scripts/build_apps.py desktop`) is bundled into the
-app, so the app's own page (the webview `main`) never runs code from elsewhere: even Gemma's Transformers.js and
-ONNX Runtime's WebAssembly come with it (`demo/lm/`, the website's versions, from npm), and only the model is
-downloaded. host.js sees the app (Tauri's `window.__TAURI__`, `SHELL.kind == "app"`) and then:
+app, so the app's own page (the webview `main`) never runs code from elsewhere: even Gemma's Transformers.js, Heart's
+kokoro-js (the warmer voice) and ONNX Runtime's WebAssembly come with it (`demo/lm/`, the website's versions, from
+npm), and only the models are downloaded. host.js sees the app (Tauri's `window.__TAURI__`, `SHELL.kind == "app"`) and then:
 
 * A site goes in the app's own browser view, the webview `site` (`show_site`), laid over the frame chat.js draws,
   moved with it (`place_site`), put out of sight while the conversation has the middle or a sheet or a held message

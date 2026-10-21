@@ -1105,10 +1105,21 @@
         act: function () { setVolume(up ? 60 : 40); } };
     }],
     // Who's answering, and who made it.
-    [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|ai|real|human|bot|model)\b|^(who are you|are you real)\b|\bwhat('s| is) (running|powering|behind) (you|this)\b|\bwho('s| is) (answering|talking|running this)\b/i, function () {
-      return { text: (nano.state === "available" && nano.session ? "Right now " + AI.browser + "'s built-in AI (" + AI.model + ") is answering, on your " +
-        "device, with what's written here about Chat Computer, and what it looks up on Wikipedia." : "On this page my answers are written in advance.") +
-        " On a real Chat Computer, Claude answers, through your own Claude plan. " + REAL };
+    [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|ai|real|human|bot|model)\b|^(who are you|are you real)\b|\bwhat('s| is) (running|powering|behind) (you|this)\b|\bwho('s| is) (answering|talking|running this)\b|\bpowered by\b|\bwhat powers (you|this|it)\b|\bwhat (are you|is this|is it) (running|built|based) on\b|\bwhat('s| is) your (model|engine|brain|ai)\b/i, function () {
+      var now = nano.state === "available" && nano.session ? AI.browser + "'s built-in AI, " + AI.model + ", on this " + deviceWord() :
+        gemma.state === "available" ? "Google's " + GEMMA.name + ", free, on this " + deviceWord() : "";
+      return { text: (now ? "Right now, " + now + "." : "Here, answers written in advance.") + " Chat Computer itself runs on Claude, " +
+        "by Anthropic" + (now ? "." : ": type / and choose Connect Claude to try it.") };
+    }],
+    // Whether the free AI is coming ("are you stuck downloading?"): where its download is.
+    [/\b(stuck|still|how long|how much longer|progress|done|finished|ready|working)\b.*\b(download(ing|ed)?|gemma|gemini|phi)\b|\b(download(ing)?|gemma|gemini)\b.*\b(stuck|slow|done|ready|finished|working|progress)\b/i, function () {
+      if (gemma.state === "downloading") return { text: GEMMA.name + " is downloading: " + (gemma.progress || 0) + "% so far. If it stops (the page closed, " +
+        "the phone locked), it carries on from there." };
+      if (gemma.state === "starting") return { text: GEMMA.name + " is here, and starting: a moment." };
+      if (gemma.state === "available" || (nano.state === "available" && nano.session)) return { text: "It's here: ask me anything." };
+      if (nano.state === "downloading") return { text: AI.short + " is downloading" + (nano.progress ? ": " + nano.progress + "% so far" : "") + "." };
+      if (gemma.state === "downloadable") return { text: "Nothing's downloading. Type / and choose " + (gemma.cached ? "Start " : "Download ") + GEMMA.name + "." };
+      return { text: "Nothing's downloading." };
     }],
     // Whether it can go on the internet ("why can't you look things up?"): it can, through this page.
     [/^(?!.*\b(files?|photos?|pictures?|documents?)\b).*\b(can|do|could|are|why can'?t|why don'?t|why won'?t)\s+you\b.*\b(internet|online|the web|search|google|look (things|it|stuff|that|this) up|browse)\b/i, function () {
@@ -1188,7 +1199,7 @@
     }],
     [/^\s*(how are you|how'?s it going|how do you do)\b/i, function () { return { text: "I'm good, thanks! What would you like to try? " + TRY }; }],
     [/\b(useless|stupid|dumb|rubbish|sucks?|hate you)\b|\b(you'?re|you are|this is|that'?s|it'?s) (so )?(terrible|awful|the worst)\b/i, function () {
-      return { text: "Sorry I'm not much help yet: on this page my answers are written in advance. " + REAL + " " + TRY };
+      return { text: "Sorry I'm not much help yet. " + nextStep() };
     }],
     // Things it can show or do here. The air first ("where is the haze from?" isn't a map).
     [AIRY, function (t) { return { search: t, later: function () { return airAnswer(t); } }; }],
@@ -1300,7 +1311,7 @@
     if (lang) return { text: OTHER[lang] };
     var s = sum(text);
     if (s) return s;
-    if (MASH.test(text)) return { text: "I didn't catch that. " + TRY };
+    if (MASH.test(text)) return { text: "I didn't catch that. Try “play some piano music” or “weather”." };
     if (LOOK_IT_UP.test(text) || SEARCH_FOR.test(text)) { var l = lookUp(text); if (l) return l; }
     if (OPEN_ENDED.test(text)) return { ai: true };
     for (var i = 0; i < INTENTS.length; i++) {
@@ -1312,21 +1323,26 @@
   // A question only an AI can answer, with none here: a question of fact gets Wikipedia's article on it (the news, for
   // the news); the rest an honest note, and how to get an AI.
   var FACTUAL = /^\s*(who|what|when|where|which|whose|why|how (many|much|old|tall|big|far|long|does|do|did|is|are|was|were)|tell me about|explain|define)\b/i;
+  // No good answer here (only an AI could answer it, and there's none): a line, short (a phone's screen is small),
+  // and what gets one: the free AI this browser can download, the one already coming, or else the app or Claude.
+  function noAnswer(want) { return "I can't " + (want ? want[1] : "answer that") + " yet. " + nextStep(); }
+  function nextStep() {
+    if (gemma.state === "downloading") return GEMMA.name + " is downloading (" + (gemma.progress || 0) + "%): ask me again once it's here.";
+    if (gemma.state === "starting") return GEMMA.name + " is starting: ask me again in a moment.";
+    if (nano.state === "downloading") return AI.short + " is downloading" + (nano.progress ? " (" + nano.progress + "%)" : "") + ": ask me again once it's here.";
+    if (nano.state === "downloadable") return "Type / and choose Download " + AI.short + ": it's free, and then I can.";
+    if (gemma.state === "downloadable") return "Type / and choose " + (gemma.cached ? "Start " : "Download ") + GEMMA.name + ": it's free, and then I can.";
+    // Nothing that answers can run in this browser: Claude, or (where there's one for it) the app.
+    return APP || iOS() ? "Type / and choose Connect Claude, and Claude can." :
+      "Get the Chat Computer app at chatcomputer.ai/get, or type / and choose Connect Claude.";
+  }
+  function iOS() { return /iPhone|iPad|iPod/.test(navigator.userAgent || "") || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
   function fallback(text) {
     if (/^[\W\d_]*[a-z]{0,6}[\W\d_]*$/i.test(text) && !/\b(hi|ok)\b/i.test(text)) {
-      return { text: "I didn't catch that. " + TRY };
+      return { text: "I didn't catch that. Try “play some piano music” or “weather”." };
     }
-    var chrome = nano.state === "downloadable" || nano.state === "downloading";
     var want = WANTS.filter(function (w) { return w[0].test(text); })[0];
-    var note = { text: "I can't " + (want ? want[1] : "answer that") + " on this page without an AI: my answers here are written in advance. " +
-      (chrome ? "Your " + AI.browser + " has a free AI built in that can answer on your device: type / and choose “Download " + AI.short + "”. " : "") +
-      (gemma.state === "downloadable" ? "A free AI from Google, Gemma, can answer here on your " + deviceWord() + ": type / and choose “" +
-        (gemma.cached ? "Start" : "Download") + " Gemma”. " : "") +
-      (gemma.state === "downloading" ? "Gemma is still downloading" + (gemma.progress ? " (" + gemma.progress + "%)" : "") +
-        ": it answers once it's here. " : "") +
-      (gemma.checked && gemma.state === "none" ? "This browser can't run a free AI on this " + deviceWord() + " (that needs " +
-        "WebGPU: Safari on iOS 26 or later, or Chrome on Android or a computer). " : "") +
-      REAL + " On a Chat Computer, Claude answers anything, and does it. " + TRY };
+    var note = { text: noAnswer(want) };
     // (Not about this page or the one answering, and not a follow-up: "when was the worst one?" needs what came before.)
     if ((!want || want[1] === "explain that") && FACTUAL.test(text) && !/\b(you|your|yours|this page|chat ?computer)\b/i.test(text)) {
       if (NEWSY.test(text)) return { later: newsAnswer };
@@ -1639,14 +1655,17 @@
     var files = {};
     // From the browser's copy only while it has one (Transformers.js takes what it keeps first): checked again here,
     // so a copy the browser has since cleared isn't downloaded again unasked.
-    gemma.loading = (download ? Promise.resolve(true) : gemmaKept()).then(function (kept) {
+    if (download && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
+    gemma.loading = (download ? gemmaFetch(files).then(function (how) {
+      if (how !== "unranged") store(GEMMA_STARTING, true);       // (here: it's being put in memory next)
+      return true;
+    }) : gemmaKept()).then(function (kept) {
       if (!kept) throw new Error("this browser no longer has its copy of " + GEMMA.name);
       return import(LM_LIBRARY);
     }).then(function (lm) {
       gemma.lib = lm;
       if (LM_HERE) lm.env.backends.onnx.wasm.wasmPaths = { mjs: LM_HERE + "ort-wasm-simd-threaded.asyncify.mjs",
                                                             wasm: LM_HERE + "ort-wasm-simd-threaded.asyncify.wasm" };
-      if (download && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
       return lm.pipeline("text-generation", GEMMA.model, { device: "webgpu", dtype: gemma.dtype,
         progress_callback: function (p) {
           if (download && p.status === "done" && /\.onnx_data$/.test(p.file || "")) store(GEMMA_STARTING, true);
@@ -1683,6 +1702,123 @@
     });
     return gemma.loading;
   }
+  // The model's big file (about 0.76 GB), in pieces (pieceFetch, below), counted with Transformers.js' own progress for
+  // the small files.
+  var GEMMA_PARTS = "chatcomputer-gemma-parts";
+  function gemmaFetch(files) {
+    var name = "onnx/model_" + gemma.dtype + ".onnx_data";
+    return pieceFetch(gemmaFile(".onnx_data"), GEMMA_PARTS, function (got, total) {
+      files[name] = [got, total || GEMMA_BYTES[gemma.dtype]];
+      var all = 0, sum = 0;
+      for (var f in files) { sum += files[f][0]; all += files[f][1]; }
+      var pct = Math.min(99, Math.floor(sum / Math.max(all, GEMMA_BYTES[gemma.dtype]) * 100));
+      if (pct !== gemma.progress) { gemma.progress = pct; status(); }
+    });
+  }
+  // A big file (Gemma's, Heart's) comes in pieces of 16 MB (Range requests, which Hugging Face's servers allow from any
+  // page), each kept as it arrives (the browser's store, under `parts`): a phone that leaves the page, locks itself or
+  // loses its signal loses only the piece it was on, and the download goes on from there. A piece that stops coming
+  // for 20 seconds, or that was cut off while the page was out of sight, is asked for again; an offline phone waits
+  // to be online. Once all are here they're put together in Transformers.js' own store, under the file's address,
+  // where it finds it, and the pieces are thrown away. The screen is kept on meanwhile where the browser can.
+  // report(bytes so far, the file's size once known). "unranged": the server sent the whole file instead (then
+  // Transformers.js downloads it, as before).
+  var PIECE = 16 * 1024 * 1024, fetching = [];
+  function pieceFetch(url, parts, report) {
+    var wake = null, mine = null;
+    try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (l) { wake = l; }, noop); } catch (e) {}
+    function done() { try { if (wake) wake.release(); } catch (e) {} fetching = fetching.filter(function (f) { return f !== mine; }); }
+    return Promise.all([caches.open(parts), caches.open("transformers-cache")]).then(function (cs) {
+      var pieces = cs[0], kept = cs[1], total = 0, have = {};
+      function key(i) { return url + "?piece=" + i; }        // (not #: the store ignores what follows a #)
+      function shown(now) {
+        var got = now || 0;
+        for (var i in have) got += have[i];
+        report(got, total);
+      }
+      // One piece: asked for again when it stalls, up to 8 times.
+      function piece(i, tries) {
+        var from = i * PIECE, to = total ? Math.min(total, from + PIECE) - 1 : from + PIECE - 1;
+        var stop = new AbortController(), last = Date.now(), timer = 0, size = 0, chunks = [], want = 0;
+        fetching = fetching.filter(function (f) { return f !== mine; });
+        fetching.push(mine = { last: function () { return last; }, abort: function () { stop.abort(); } });
+        timer = setInterval(function () { if (Date.now() - last > 20000) stop.abort(); }, 2000);
+        return fetch(url, { headers: { Range: "bytes=" + from + "-" + to }, signal: stop.signal, cache: "no-store" }).then(function (res) {
+          if (res.status === 200) { stop.abort(); throw { unranged: true }; }
+          if (res.status !== 206 || !res.body) throw new Error("the server said " + res.status);
+          var range = /bytes (\d+)-(\d+)\/(\d+)/.exec(res.headers.get("Content-Range") || "");
+          if (!range) throw new Error("the server didn't say which part it sent");
+          want = +range[2] - +range[1] + 1;
+          if (!total) { total = +range[3]; pieces.put(url + "?size", new Response(String(total))).catch(noop); }
+          var reader = res.body.getReader();
+          return (function read() {
+            return reader.read().then(function (r) {
+              if (r.done) return;
+              chunks.push(r.value);
+              size += r.value.byteLength;
+              last = Date.now();
+              shown(size);
+              return read();
+            });
+          })();
+        }).then(function () {
+          clearInterval(timer);
+          if (size !== want) throw new Error("a piece came short");
+          return pieces.put(key(i), new Response(new Blob(chunks))).then(function () { have[i] = size; shown(0); });
+        }, function (e) {
+          clearInterval(timer);
+          if (e && e.unranged) throw e;
+          if ((tries || 0) >= 8) throw new Error("the download kept stopping (" + (e && e.message || e) + ")");
+          return (navigator.onLine === false ? new Promise(function (go) { window.addEventListener("online", go, { once: true }); })
+            : new Promise(function (go) { setTimeout(go, Math.min(30000, 1000 * Math.pow(2, tries || 0))); }))
+            .then(function () { return piece(i, (tries || 0) + 1); });
+        });
+      }
+      return kept.match(url).then(function (already) {
+        if (already) return "kept";
+        return pieces.match(url + "?size").then(function (r) { return r ? r.text() : ""; }).then(function (t) {
+          total = +t || 0;
+          return pieces.keys();
+        }).then(function (keys) {
+          return Promise.all(keys.map(function (r) {
+            var m = /\?piece=(\d+)$/.exec(r.url);
+            if (!m || r.url.indexOf(url + "?") !== 0) return null;
+            return pieces.match(r).then(function (res) { return res.blob(); }).then(function (b) { have[+m[1]] = b.size; });
+          }));
+        }).then(function () {
+          shown(0);
+          var i = 0;
+          return (function next() {
+            if (total && i * PIECE >= total) return null;
+            if (have[i] != null) { i++; return next(); }
+            return piece(i).then(function () { i++; return next(); });
+          })();
+        }).then(function () {
+          var n = Math.ceil(total / PIECE), blobs = [];
+          return (function each(i) {
+            if (i >= n) return null;
+            return pieces.match(key(i)).then(function (r) {
+              if (!r) throw new Error("a piece of the download went missing");
+              return r.blob();
+            }).then(function (b) { blobs.push(b); return each(i + 1); });
+          })(0).then(function () {
+            var whole = new Blob(blobs, { type: "application/octet-stream" });
+            if (whole.size !== total) throw new Error("the download came out the wrong size");
+            return kept.put(url, new Response(whole, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(total) } }));
+          }).then(function () { return caches.delete(parts); }).then(function () { return "fetched"; });
+        });
+      });
+    }).then(function (how) { done(); return how; }, function (e) {
+      done();
+      if (e && e.unranged) return "unranged";
+      throw e;
+    });
+  }
+  // Back on the page after a while away: a piece that was being downloaded is asked for again at once.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") return;
+    fetching.forEach(function (f) { if (Date.now() - f.last() > 4000) f.abort(); });
+  });
   function gemmaRemoveButton() {
     call("accountForm", { id: "gemma-remove", title: "Remove " + GEMMA.name, ok: "Remove it", text: [
       "This frees about " + gemmaSize() + " on this " + deviceWord() + ". You can download " + GEMMA.name + " again any time: type / " +
@@ -1697,7 +1833,7 @@
       return c.keys().then(function (keys) {
         return Promise.all(keys.filter(function (r) { return r.url.indexOf(GEMMA.model) >= 0; }).map(function (r) { return c.delete(r); }));
       });
-    }).catch(function () {}).then(function () {
+    }).then(function () { return caches.delete(GEMMA_PARTS); }).catch(function () {}).then(function () {
       gemma.cached = false;
       gemma.state = "downloadable";
       status();
@@ -2414,7 +2550,7 @@
     clearTimeout(ears.waiting);
     ears.waiting = 0;
     if (ears.rec) { try { ears.rec.abort(); } catch (x) {} ears.rec = null; }
-    try { window.speechSynthesis.cancel(); } catch (x) {}
+    voiceStop();
     ears.speaking = false;
     ears.said = null;
     keepAwake(false);
@@ -2440,21 +2576,148 @@
     if (document.hidden) { if (ears.rec) { try { ears.rec.abort(); } catch (x) {} } }
     else { keepAwake(true); hear(); }
   });
-  // Read aloud, under a message: the browser says it now (in place of anything it was saying).
-  // Read aloud, under a message: the browser's own voice. Pressed again while it's reading that message, it stops.
-  var reading = "";
-  function readAloud(text) {
-    var synth = window.speechSynthesis;
-    if (!synth || !text) return;
-    var plain = String(text).replace(/[*_`#>|~]/g, "").replace(/\s+/g, " ").trim(), busy = synth.speaking || synth.pending;
-    if (busy) { try { synth.cancel(); } catch (e) {} }
-    if (busy && reading === plain) { reading = ""; return; }
-    reading = plain;
-    speakPieces(plain, function () { if (reading === plain) reading = ""; });
+  // ------------------------------------------------------------------ the voice
+  // Read aloud (under an answer, or in a held message's menu), and answers said while talking: in Heart, a warm,
+  // natural voice (Kokoro's af_heart: the voice Chat Computer itself speaks with), made on this device by its graphics
+  // chip (WebGPU) once the visitor has downloaded it; else in the best voice the browser has: its natural, neural or
+  // premium voices first (Edge's Ava, Android's neural voices), then Google's, then the usual one, never a novelty
+  // voice. Heart is offered the first time Read aloud is pressed where it can run (and in the "/" list): a phone's
+  // processor alone makes it slower than it speaks, so where there's no WebGPU it isn't offered. (Safari lets pages
+  // use only an iPhone's built-in voices, which sound robotic: Heart is the warm voice there.)
+  var HEART = { name: "Heart", library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js",
+                model: "onnx-community/Kokoro-82M-v1.0-ONNX", voice: "af_heart", size: "330 MB" };
+  if (APP) HEART.library = LM_HERE + "kokoro.web.js";       // (in the app, its code comes with it, as Gemma's does)
+  var HEART_PARTS = "chatcomputer-heart-parts", HEART_NO = "chatcomputer-demo-heart-no", HEART_STARTING = "chatcomputer-demo-heart-starting";
+  // state: none (it can't run here), downloadable, downloading, starting, ready (downloaded), available (started).
+  var heart = { state: "none", cached: false, tts: null, loading: null, progress: 0, ctx: null, turn: 0, playing: null,
+                wanted: null, offered: null, stopped: false };
+  function heartFile() { return "https://huggingface.co/" + HEART.model + "/resolve/main/onnx/model.onnx"; }
+  function heartKept() {
+    return caches.open("transformers-cache").then(function (c) { return c.match(heartFile()); })
+      .then(function (r) { return !!r; }, function () { return false; });
   }
-  // Said in pieces of a sentence or so (Chrome's voices stop partway through one long piece), one after another;
-  // done once the last is.
-  function speakPieces(plain, done) {
+  function heartCheck() {
+    var can = navigator.gpu && navigator.gpu.requestAdapter && window.caches && (window.AudioContext || window.webkitAudioContext);
+    return (can ? navigator.gpu.requestAdapter() : Promise.resolve(null)).then(function (a) {
+      if (!a) return;
+      return heartKept().then(function (kept) {
+        heart.cached = kept;
+        heart.stopped = !!store(HEART_STARTING);              // (the page stopped while it was starting: not by itself)
+        store(HEART_STARTING, null);
+        heart.state = kept && !heart.stopped ? "ready" : "downloadable";
+        status();
+      });
+    }).catch(noop);
+  }
+  // Its sheet: what it is, and its size, before anything's downloaded. Pressing Read aloud brought it up: closed, the
+  // browser's voice reads (and Heart isn't offered that way again: the "/" list has it).
+  function heartButton(then) {
+    if (heart.state !== "downloadable") return;
+    heart.offered = then || null;
+    heart.sheet = true;
+    call("accountForm", { id: "heart", title: "A warmer voice", ok: heart.cached ? "Start it" : "Download it", text: [
+      "Read aloud can use Heart, a warm, natural voice: the one Chat Computer itself speaks with. It runs on this " +
+      deviceWord() + ", for free.",
+      heart.stopped ? "Last time, this page stopped while Heart was starting: this " + deviceWord() + " may not have enough memory " +
+        "free for it. Closing other apps can help." :
+      heart.cached ? "This browser has it already." :
+      "It's about " + HEART.size + ", downloaded once from Hugging Face and kept by this browser (Wi-Fi is best).",
+      then ? "Close this to hear this " + deviceWord() + "'s own voice instead." : "Until then, this " + deviceWord() + "'s own voice reads."] });
+  }
+  function heartRemoveButton() {
+    call("accountForm", { id: "heart-remove", title: "Remove Heart", ok: "Remove it", text: [
+      "This frees about " + HEART.size + " on this " + deviceWord() + ", and Read aloud uses this " + deviceWord() + "'s own voice " +
+      "again. You can download Heart again any time: type / and choose Download Heart."] });
+  }
+  // Downloaded the first time (its progress in the empty box, and in the list), from this browser's copy after.
+  function heartStart() {
+    if (heart.tts) return Promise.resolve(heart.tts);
+    if (heart.loading) return heart.loading;
+    var download = !heart.cached;
+    heart.state = download ? "downloading" : "starting";
+    heart.progress = 0;
+    status();
+    if (download && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(noop);
+    heart.loading = (download ? pieceFetch(heartFile(), HEART_PARTS, function (got, total) {
+      var pct = Math.min(99, Math.floor(got / (total || 326e6) * 100));
+      if (pct !== heart.progress) { heart.progress = pct; status(); }
+    }) : Promise.resolve("kept")).then(function () {
+      heart.state = "starting";
+      status();
+      store(HEART_STARTING, true);                            // (being put in memory: if the page stops now, not by itself next time)
+      return import(HEART.library);
+    }).then(function (k) {
+      if (LM_HERE && k.env) k.env.wasmPaths = LM_HERE;
+      return k.KokoroTTS.from_pretrained(HEART.model, { dtype: "fp32", device: "webgpu" });
+    }).then(function (tts) {
+      heart.tts = tts;
+      heart.loading = null;
+      heart.cached = true;
+      heart.stopped = false;
+      heart.state = "available";
+      store(HEART_STARTING, null);
+      status();
+      if (download) did("Turned on the Heart voice, on this " + deviceWord());
+      return tts;
+    }, function (e) {
+      heart.loading = null;
+      store(HEART_STARTING, null);
+      return heartKept().then(function (kept) {
+        heart.cached = kept;
+        heart.state = "downloadable";
+        status();
+        call("accountForm", { id: "heart-no", title: "Heart didn't start", ok: "OK", text: [
+          "The browser said: " + clip(e && e.message || "it couldn't", 160) + ".",
+          "Read aloud uses this " + deviceWord() + "'s own voice meanwhile."] });
+        throw e;
+      });
+    });
+    return heart.loading;
+  }
+  function heartRemove() {
+    voiceStop();
+    var tts = heart.tts;
+    heart.tts = null;
+    try { if (tts && tts.model && tts.model.dispose) tts.model.dispose().catch(noop); } catch (e) {}
+    return caches.open("transformers-cache").then(function (c) {
+      return c.keys().then(function (keys) {
+        return Promise.all(keys.filter(function (r) { return r.url.indexOf(HEART.model) >= 0; }).map(function (r) { return c.delete(r); }));
+      });
+    }).then(function () { return caches.delete(HEART_PARTS); }).catch(noop).then(function () {
+      heart.cached = false;
+      heart.state = "downloadable";
+      status();
+      did("Removed the Heart voice from this " + deviceWord());
+    });
+  }
+  // Heart's sound plays through the page's own audio (Web Audio), which a browser only lets start with a tap: so a
+  // tap on Read aloud, or on the sheet's button, starts it, there and then (iPhones: as media, heard with the ringer
+  // switch on silent, as the browser's own voice is).
+  function heartAudio() {
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    if (!heart.ctx) {
+      try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
+      heart.ctx = new C();
+      var hush = heart.ctx.createBufferSource();             // (a moment of nothing, which unlocks it on an iPhone)
+      hush.buffer = heart.ctx.createBuffer(1, 1, 22050);
+      hush.connect(heart.ctx.destination);
+      try { hush.start(0); } catch (e) {}
+    }
+    if (heart.ctx.state !== "running") heart.ctx.resume().catch(noop);
+    return heart.ctx;
+  }
+  ["pointerup", "touchend", "click", "keydown"].forEach(function (type) {
+    document.addEventListener(type, function (e) {
+      if (heart.state === "none") return;
+      var t = e.target && e.target.closest ? e.target : null, ready = heart.state === "ready" || heart.state === "available";
+      // (Read aloud; Heart's sheet; and, once it's here, any sheet's button: Start talking, whose answers it says)
+      if (t && (t.closest('[data-act="speak"], [data-do="speak"]') || t.closest("#sheet-ok") && (heart.sheet || ready))) heartAudio();
+    }, true);
+  });
+  // Said in pieces of a sentence or so (Chrome's voices stop partway through one long piece, and Heart makes one
+  // while the one before plays).
+  function piecesOf(plain) {
     var all = [], cur = "";
     (plain.match(/[^.!?\u2026]+(?:[.!?\u2026]+["\u201d\u2019)\]]*|$)\s*/g) || [plain]).forEach(function (part) {
       while (part.length > 220) {                           // one sentence too long: at a comma, or a space
@@ -2468,12 +2731,134 @@
       cur += part;
     });
     if (cur.trim()) all.push(cur.trim());
+    return all;
+  }
+  // Heart: each piece made in turn and played straight after the one before, the next made while one plays; done once
+  // the last has played. Should Heart fail, the browser's voice says the rest.
+  function heartSay(plain, done) {
+    var ctx = heartAudio();
+    if (!ctx) { systemSay(plain, done); return; }
+    var my = ++heart.turn, pieces = piecesOf(plain), sources = [], at = 0, over = false;
+    function finish() {
+      if (over) return;
+      over = true;
+      if (heart.turn === my) heart.playing = null;
+      if (done) done();
+    }
+    heart.playing = { stop: function () {
+      over = true;
+      sources.forEach(function (s) { try { s.onended = null; s.stop(); } catch (e) {} });
+    } };
+    (function next(i) {
+      if (over || heart.turn !== my || i >= pieces.length) return;
+      heartStart().then(function (tts) { return tts.generate(pieces[i], { voice: HEART.voice }); }).then(function (out) {
+        if (over || heart.turn !== my) return;
+        var samples = out.audio, buf = ctx.createBuffer(1, samples.length, out.sampling_rate);
+        if (buf.copyToChannel) buf.copyToChannel(samples, 0); else buf.getChannelData(0).set(samples);
+        var src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        at = Math.max(at, ctx.currentTime + 0.05);
+        src.start(at);
+        at += buf.duration;
+        sources.push(src);
+        if (i === pieces.length - 1) src.onended = finish;
+        next(i + 1);
+      }, function () {
+        if (over || heart.turn !== my) return;
+        heart.playing = null;
+        over = true;
+        systemSay(pieces.slice(i).join(" "), done);
+      });
+    })(0);
+  }
+  // The browser's own voice: the best it has for the page's language (see above), at its natural pace.
+  var NOVELTY = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley|Fred|Junior|Kathy|Ralph)\b/;
+  function bestVoice() {
+    var all = [], lang = String(navigator.language || "en-US").toLowerCase(), best = null, top = -1;
+    try { all = window.speechSynthesis.getVoices() || []; } catch (e) {}
+    all.forEach(function (v) {
+      var n = String(v.name || ""), vl = String(v.lang || "").toLowerCase().replace("_", "-"), s = 0;
+      if (vl.split("-")[0] !== lang.split("-")[0] || NOVELTY.test(n)) return;
+      if (/\b(Natural|Neural)\b/i.test(n)) s += 100;
+      if (/\(Premium\)/i.test(n)) s += 90;
+      if (/\(Enhanced\)/i.test(n)) s += 70;
+      if (/^Google\b/.test(n)) s += 60;
+      if (/\b(Ava|Emma|Jenny|Aria|Zoe|Samantha|Allison|Serena|Libby|Sonia|Natasha)\b/.test(n)) s += 8;   // warm, clear voices
+      if (/female/i.test(n)) s += 4;
+      if (vl === lang) s += 5;
+      if (v.default) s += 2;
+      if (s > top) { top = s; best = v; }
+    });
+    return best;
+  }
+  try { if (window.speechSynthesis) window.speechSynthesis.getVoices(); } catch (e) {}   // (Chrome lists them a moment later)
+  function systemSay(plain, done) {
+    var synth = window.speechSynthesis;
+    if (!synth || !window.SpeechSynthesisUtterance) { if (done) done(); return; }
+    var voice = bestVoice(), all = piecesOf(plain);
     all.forEach(function (piece, i) {
       var u = new SpeechSynthesisUtterance(piece);
-      u.lang = navigator.language || "en-US";
+      try { if (voice) u.voice = voice; } catch (e) {}
+      u.lang = voice && voice.lang || navigator.language || "en-US";
       if (i === all.length - 1) u.onend = u.onerror = done;
-      window.speechSynthesis.speak(u);
+      synth.speak(u);
     });
+  }
+  function voiceBusy() {
+    var synth = window.speechSynthesis;
+    return !!(heart.playing || synth && (synth.speaking || synth.pending));
+  }
+  function voiceStop() {
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (x) {}
+    heart.turn++;
+    if (heart.playing) { heart.playing.stop(); heart.playing = null; }
+  }
+  // Says `plain`, in Heart once it's here (started first, from the browser's copy, if need be), else the browser's
+  // voice. asked: Read aloud pressed (Heart offered, or awaited while it downloads); not: an answer said while talking.
+  function voiceSay(plain, done, asked) {
+    if (heart.state === "available" || heart.state === "ready") { heartSay(plain, done); return; }
+    if (asked && heart.state === "downloadable" && !heart.stopped && !store(HEART_NO)) {
+      heartButton({ text: plain, done: done });
+      return;
+    }
+    if (asked && heart.loading) { heartLater({ text: plain, done: done }); return; }
+    systemSay(plain, done);
+  }
+  // Read once Heart is here (if nothing else was asked for meanwhile, and it wasn't pressed again), or in the
+  // browser's voice should it not start.
+  function heartLater(w) {
+    heart.wanted = w;
+    if (!w) return;
+    heartStart().then(function () {
+      if (heart.wanted === w) { heart.wanted = null; heartSay(w.text, w.done); }
+    }, function () {
+      if (heart.wanted === w) { heart.wanted = null; systemSay(w.text, w.done); }
+    });
+  }
+  // Read aloud: pressed again while it reads that message (or while Heart comes for it), it stops.
+  var reading = "";
+  function readAloud(text) {
+    var plain = String(text || "").replace(/[*_`#>|~]/g, "").replace(/\s+/g, " ").trim();
+    if (!plain) return;
+    var busy = voiceBusy(), waiting = heart.wanted && heart.wanted.text === plain;
+    voiceStop();
+    heart.wanted = null;
+    if ((busy || waiting) && reading === plain) { reading = ""; return; }
+    reading = plain;
+    voiceSay(plain, function () { if (reading === plain) reading = ""; }, true);
+  }
+  // Heart's sheet answered: started (then it reads what was asked meanwhile), or closed (the browser's voice reads it).
+  function heartChosen(ok) {
+    var then = heart.offered;
+    heart.offered = null;
+    heart.sheet = false;
+    if (!ok) {
+      if (then) { store(HEART_NO, true); systemSay(then.text, then.done); }
+      return;
+    }
+    if (then) heartLater(then);
+    else heartStart().catch(noop);
   }
   // An answer, read out while talking (not listening meanwhile, so it doesn't hear itself). Listening again once it's
   // said, or after about as long as it takes to say, where the browser doesn't tell (some don't, for a long one).
@@ -2483,7 +2868,7 @@
     ears.waiting = 0;
     if (!ears.on) return;
     var plain = String(text || "").replace(/[*_`#>|~]/g, "").replace(/\s+/g, " ").trim();
-    if (!plain || !window.speechSynthesis) { hear(); return; }
+    if (!plain || !window.speechSynthesis && heart.state !== "available" && heart.state !== "ready") { hear(); return; }
     ears.speaking = true;
     if (ears.rec) { try { ears.rec.abort(); } catch (x) {} }
     var mine = ears.said = {};
@@ -2494,8 +2879,8 @@
       ears.speaking = false;
       hear();
     }
-    var guard = setTimeout(after, 5000 + plain.length * 100);
-    speakPieces(plain, after);
+    var guard = setTimeout(after, 15000 + plain.length * 120);
+    voiceSay(plain, after, false);
   }
 
   // ------------------------------------------------------------------ "/": connecting things
@@ -2525,6 +2910,14 @@
     if (gemma.state === "ready" || gemma.state === "available") {
       list.push({ command: "gemma-remove", icon: "i-spark", name: "Remove " + GEMMA.name, where: "Frees " + gemmaSize() + " on this " + deviceWord() });
     }
+    if (heart.state === "downloadable" || heart.state === "downloading") {
+      list.push({ command: "heart", icon: "i-voice", name: heart.state === "downloading" ?
+        "Downloading Heart" + (heart.progress ? " (" + heart.progress + "%)" : "") : (heart.cached ? "Start Heart" : "Download Heart"),
+        where: "A warmer voice for Read aloud, on this " + deviceWord() + (heart.cached ? "" : " (" + HEART.size + ")") });
+    }
+    if (heart.state === "ready" || heart.state === "available") {
+      list.push({ command: "heart-remove", icon: "i-voice", name: "Remove Heart", where: "Frees " + HEART.size + " on this " + deviceWord() });
+    }
     return list;
   }
   function matching(list, q) {
@@ -2540,6 +2933,8 @@
     else if (id === "gemini") nanoButton();
     else if (id === "gemma") gemmaButton();
     else if (id === "gemma-remove") gemmaRemoveButton();
+    else if (id === "heart") heartButton(null);
+    else if (id === "heart-remove") heartRemoveButton();
   }
   function status() {
     var h = "";
@@ -2547,6 +2942,8 @@
     else if (nano.state === "downloading") h = "Downloading " + AI.short + (nano.progress ? " (" + nano.progress + "%)" : "") + "…";
     else if (gemma.state === "downloading") h = "Downloading " + GEMMA.name + (gemma.progress ? " (" + gemma.progress + "%)" : "") + "…";
     else if (gemma.state === "starting") h = "Starting " + GEMMA.name + "…";
+    else if (heart.state === "downloading") h = "Downloading Heart" + (heart.progress ? " (" + heart.progress + "%)" : "") + "…";
+    else if (heart.state === "starting") h = "Starting Heart…";
     call("hint", h);
   }
 
@@ -2574,6 +2971,7 @@
         call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
         status();
         nanoCheck().then(gemmaCheck);          // the browser's own AI, else Gemma where it can run
+        heartCheck();                          // and Heart, the warmer voice, where it can
         break;
       case "send": {
         var said = String(msg.text || ""), typed = address(said);      // an address opens its site, as a browser's would
@@ -2620,13 +3018,13 @@
       case "add_account":
         if (APP) {
           call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
-            "On Chat Computer itself (installed in place of a desktop), Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, X, " +
+            "On Chat Computer itself (installed in place of a desktop), Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, WeChat, X, " +
             "Instagram, Facebook, TikTok and LinkedIn connect here, and their messages come into Messages, newest first.",
             "The app doesn't connect accounts yet: open them as sites, right here (say “open gmail.com”)."] });
           break;
         }
         call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
-          "On Chat Computer, Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, X, Instagram, Facebook, TikTok and LinkedIn " +
+          "On Chat Computer, Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, WeChat, X, Instagram, Facebook, TikTok and LinkedIn " +
           "connect here, and their messages come into Messages, newest first. Sign-ins stay on your computer.",
           "The demo can't connect accounts."] });
         break;
@@ -2638,11 +3036,14 @@
         if (msg.form === "nano") { nanoDownload(); break; }
         if (msg.form === "gemma") { call("accountForm", null); gemmaStart(true).catch(function () {}); break; }
         if (msg.form === "gemma-remove") { call("accountForm", null); gemmaRemove(); break; }
+        if (msg.form === "heart") { call("accountForm", null); heartChosen(true); break; }
+        if (msg.form === "heart-remove") { call("accountForm", null); heartRemove(); break; }
         call("accountForm", null);
         break;
       }
       case "account_cancel":
         call("accountForm", null);
+        if (msg.form === "heart") heartChosen(false);
         break;
       default: break;            // keys, keyboard: nothing to do in a browser
     }

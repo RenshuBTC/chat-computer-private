@@ -35,7 +35,11 @@ def test_the_app_s_page_is_the_website_s(tmp_path, monkeypatch):
     assert '"@huggingface/transformers@4.3.1"' in (ROOT / "scripts" / "build_apps.py").read_text()
     assert 'var LM_LIBRARY = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";' in host
     assert 'if (APP) LM_LIBRARY = LM_HERE + "transformers.min.js";' in host
-    assert list(build_apps.LM) == ["@huggingface/transformers@4.3.1", "onnxruntime-web@1.31.0-dev.20260914-8d85527a0"]
+    assert list(build_apps.LM) == ["@huggingface/transformers@4.3.1", "onnxruntime-web@1.31.0-dev.20260914-8d85527a0",
+                                   "kokoro-js@1.2.1", "@huggingface/transformers@3.5.1"]
+    # And Heart's (the warmer voice): kokoro-js, the website's version, and the ONNX Runtime its Transformers.js loads.
+    assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
+    assert 'if (APP) HEART.library = LM_HERE + "kokoro.web.js";' in host and "if (LM_HERE && k.env) k.env.wasmPaths = LM_HERE;" in host
 
 
 def test_only_the_app_s_own_page_may_ask_the_app():

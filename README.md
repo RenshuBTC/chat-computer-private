@@ -109,7 +109,7 @@ Setup saves a **recovery password** in your Windows Documents folder, in
   side: Messages, the middle and Actions. To start with, the middle fills the screen, message box and all;
   **Escape** brings the panels in at its sides, and Escape again puts them away. Typing "/" to search shows its list in front of it.
 * **Messages.** On a wide screen, a panel at the left gathers what's sent to you from every account you
-  connect, newest first: Gmail, Outlook and Hotmail, iCloud Mail, other email, Telegram, WhatsApp, X,
+  connect, newest first: Gmail, Outlook and Hotmail, iCloud Mail, other email, Telegram, WhatsApp, WeChat, X,
   Instagram, Facebook, TikTok and LinkedIn. Tap one to read it in the middle: the whole conversation with
   whoever sent it. Tap + to connect an account: see [Connecting accounts](#connecting-accounts).
 * **Actions.** A panel at the right shows today's date and the time, and lists everything done for you,
@@ -179,8 +179,10 @@ WhatsApp or social media conversation opens on the site's own page, which may ma
 * **Other email:** any provider with IMAP: its server, your address and password.
 * **Telegram:** an api_id and api_hash of your own (from my.telegram.org, "API development tools"), your phone
   number, and the code Telegram sends. Channels aren't shown, only chats and groups.
-* **WhatsApp, X, Instagram, Facebook, TikTok, LinkedIn:** you sign in on the site's own page (WhatsApp: scan
-  its code with your phone), and Chat Computer reads the list of conversations from it. These sites don't allow
+* **WhatsApp, WeChat, X, Instagram, Facebook, TikTok, LinkedIn:** you sign in on the site's own page (WhatsApp
+  and WeChat: scan its code with your phone), and Chat Computer reads the list of conversations from it. WeChat's
+  is WeChat for Web: WeChat doesn't let every account use it (it says so on the page when yours can't), and it
+  signs out now and then (scan again). These sites don't allow
   automated reading, so they could restrict an account that's read this way. (X's own API, which allows it,
   charges per message read.)
 
@@ -480,6 +482,15 @@ messages and files there are made up. Everyone gets answers, free:
   unasked; if the page stopped while it was starting (a phone short of memory closes the page), it waits to be
   chosen again (Start Gemma). **Remove Gemma** in the list frees the room. It's far smaller than Claude: fine for
   everyday questions and writing, and it can get things wrong.
+* **Heart, a warmer voice** for Read aloud (and for answers read out while talking): Kokoro's `af_heart`, the voice
+  Chat Computer itself speaks with, made on the device by its graphics chip (WebGPU) with kokoro-js (a fixed
+  version, from jsDelivr). The first time Read aloud is pressed where it can run, a sheet offers it, with its size
+  (about 330 MB, downloaded once from Hugging Face in pieces, as Gemma is, and kept by the browser); it then reads
+  what was asked. Closed, the browser's own voice reads, and Heart stays in the **/** list (**Download Heart**,
+  later **Remove Heart**). Otherwise the browser's best voice reads: natural, neural or premium voices first
+  (Edge's Ava), then Google's, then the usual one, never a novelty voice. Safari lets pages use only an iPhone's
+  built-in voices, which sound robotic, so on an iPhone Heart is the warm one. Where there's no WebGPU it isn't
+  offered: a phone's processor alone makes it more slowly than it speaks.
 
 What's typed stays in the browser, except a place's name asked about for a map, the weather or the air, which goes
 to Open-Meteo's free geocoding and forecasts (as does, for the greeting's weather, your time zone's city or where
@@ -546,7 +557,13 @@ for each, the line that says what it is; no video):
   image for Macs with Apple silicon or Intel. They aren't signed with a paid certificate yet, so the first time,
   Windows says it protected your PC (choose More info, then Run anyway) and macOS says it can't check the app
   (System Settings, Privacy & Security, Open Anyway).
-* **Android**: coming. **iPhone**: coming to the App Store.
+* **Android**: the Chat Computer app (`apps/android`), chatcomputer.ai full screen in Chrome, with no address bar (a
+  Trusted Web Activity: the site says the app is its own, in `docs/.well-known/assetlinks.json`, by its signing
+  key's fingerprint). Downloaded from /get as an APK until it's on Google Play: Android asks once to allow
+  installing from the browser. Its signing key is kept outside the repository.
+* **iPhone**: the Chat Computer app (`apps/ios`), chatcomputer.ai full screen, other sites in Safari's own view
+  over it; built for the simulator by `.github/workflows/ios.yml` (with a picture of it running). Coming to the
+  App Store, which needs Apple's developer account.
 
 ## For the curious
 

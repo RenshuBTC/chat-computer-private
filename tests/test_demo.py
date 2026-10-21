@@ -55,10 +55,17 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
         "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com",
         "https://cdn.jsdelivr.net", "https://huggingface.co"}
     assert 'var LM_LIBRARY = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";' in host
-    assert host.count("import(") == 1 and "import(LM_LIBRARY)" in host
+    # (and Heart, the warmer voice, when the visitor downloads it: kokoro-js, a fixed version, from jsDelivr, and its
+    # model from Hugging Face; it too runs on the device, so nothing read aloud is sent anywhere)
+    assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
+    assert host.count("import(") == 2 and "import(LM_LIBRARY)" in host and "import(HEART.library)" in host
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("API +")) == [
-        '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search', "url"], fetches
+        '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search', "url", "url"], fetches
+    # (getJSON's, and Gemma's and Heart's big files, a piece at a time, from Hugging Face: only which bytes are asked for)
+    assert 'pieceFetch(gemmaFile(".onnx_data"), GEMMA_PARTS' in host and 'pieceFetch(heartFile(), HEART_PARTS' in host
+    assert host.count("pieceFetch(") == 3 and 'fetch(url, { headers: { Range: "bytes=" + from + "-" + to }' in host
+    assert "huggingface.co/\" + GEMMA.model + \"/resolve/main/" in host and "huggingface.co/\" + HEART.model + \"/resolve/main/" in host
     assert [f for f in fetches if "open-meteo" in f][0].endswith("&name=\" + encodeURIComponent(name")
     # getJSON(url): Wikipedia's API (search, or a day's Current events), and the air where a place is.
     gets = re.findall(r"getJSON\(([^,)]+)", host)
@@ -184,9 +191,9 @@ def test_the_demo_works_in_a_browser():
     # conversation has the middle again, the answer in it in full (no "more").
     long = res["fallback"]
     assert not long["content"] and long["column_shown"] and long["view"] is None and long["more"] == 0
-    assert long["last"].startswith("I can't answer that on this page without an AI") and long["last"].endswith("Type / to search the files.")
-    # (Here the browser has no AI of its own and can't run Gemma, no WebGPU: it says so.)
-    assert "This browser can't run a free AI on this device (that needs WebGPU: Safari on iOS 26" in long["last"]
+    # No good answer: a line, short enough for a phone, and the one thing that gets one (here, where the browser can't
+    # run a free AI, no WebGPU: the app, or Claude).
+    assert long["last"] == "I can't answer that yet. Get the Chat Computer app at chatcomputer.ai/get, or type / and choose Connect Claude."
     # Google, for real, in the middle: its own address for being shown in another page; a click on its box, and
     # typing goes there, not into the message box.
     g = res["google"]
@@ -297,10 +304,19 @@ def test_the_demo_works_in_a_browser():
     # Transformers.js): "Download Gemma" in the "/" list, and the written answers say so meanwhile; its sheet says what
     # it is (and how big) before anything's downloaded; the download's progress in the empty box and the list.
     assert res["lm_opening"][:3] == ["Connect Claude", "Connect AirPods", "Download Gemma"]
-    assert "type / and choose “Download Gemma”" in res["lm_before"]
+    assert res["lm_before"] == "I can't answer that yet. Type / and choose Download Gemma: it's free, and then I can."
     sheet = res["lm_sheet"]
     assert sheet["sheet"] and sheet["sheet_title"] == "Download Gemma"
-    assert res["lm_downloading"]["hint"] == "Downloading Gemma (49%)…" and res["lm_downloading_slash"][2] == "Downloading Gemma (49%)"
+    pct = re.fullmatch(r"Downloading Gemma \((\d+)%\)…", res["lm_downloading"]["hint"])
+    assert pct and res["lm_downloading_slash"][2] == "Downloading Gemma (" + pct.group(1) + "%)"
+    assert res["lm_stuck"] == "Gemma is downloading: " + pct.group(1) + "% so far. If it stops (the page closed, the phone locked), it carries on from there."
+    # Its big file comes in pieces, each kept as it comes: the page left after two of the three, the next visit asks
+    # only for the third (cut off once, asked for again), puts them together where Transformers.js finds the file, and
+    # throws the pieces away.
+    assert res["lm_ranges_first"] == ["bytes=0-16777215", "bytes=16777216-33554431", "bytes=33554432-41943039"]
+    assert res["lm_pieces_kept"] == ["piece=0", "piece=1", "size"]
+    assert res["lm_again_slash"][2] == "Download Gemma"
+    assert res["lm_ranges_again"] == ["bytes=33554432-41943039", "bytes=33554432-41943039"] and res["lm_pieces_after"] == []
     # Then it's on (said in Actions), Remove Gemma in the list, and it answers what the written answers can't, its
     # words streamed in, told who it is; the written answers still answer what they can, and what was said (theirs
     # too) goes with the next question.
@@ -310,7 +326,7 @@ def test_the_demo_works_in_a_browser():
     assert res["lm_haiku"]["last"] == "Dark cup in my hands, the day starts with you." and res["lm_music"] == "Playing some calm piano."
     calls = res["lm_calls"]
     assert calls["loads"] == [{"task": "text-generation", "model": "onnx-community/gemma-3-1b-it-ONNX", "device": "webgpu",
-                               "dtype": "q4f16", "kept": False}]
+                               "dtype": "q4f16", "kept": False, "data": 40 * 1024 * 1024}]
     first_q, second_q = calls["asked"]
     assert first_q[0][0] == "system" and first_q[0][1].startswith("You are Gemma, a small AI made by Google")
     assert first_q[1:] == [["user", "write a haiku about coffee"]]
@@ -330,6 +346,37 @@ def test_the_demo_works_in_a_browser():
     assert res["lm_remove_sheet"]["sheet_title"] == "Remove Gemma"
     gone = res["lm_removed"]
     assert gone["slash"][2] == "Download Gemma" and gone["disposed"] and gone["kept"] == 0
+    # Read aloud's voice where the graphics chip can make Heart's (WebGPU): offered the first time Read aloud is pressed
+    # (nothing said yet), with its size; closed, the browser's best voice reads the answer (Edge's natural Ava, not
+    # Google's, the usual Samantha or a novelty voice), and on another visit it reads straight away, Heart in the list.
+    assert res["voice_slash"][:4] == ["Connect Claude", "Connect AirPods", "Download Gemma", "Download Heart"]
+    vs = res["voice_sheet"]
+    assert vs["title"] == "A warmer voice" and vs["ok"] == "Download it" and vs["spoken"] == 0
+    assert "the one Chat Computer itself speaks with" in vs["text"] and "about 330 MB" in vs["text"]
+    system = res["voice_system"]
+    assert not system["sheet"] and system["heart"] == 0 and system["spoken"]
+    assert {s["voice"] for s in system["spoken"]} == {"Microsoft Ava Online (Natural) - English (United States)"}
+    assert system["answer"].startswith(system["spoken"][0]["text"]) and len(system["spoken"]) > 1    # (a sentence or so at a time)
+    assert res["voice_again"]["sheet"] is False and res["voice_again"]["spoken"] > 0
+    assert "Download Heart" in res["voice_again_slash"]
+    # Chosen: its progress in the box and the list; downloaded in two pieces (kept as they came, thrown away after),
+    # started on the graphics chip from Transformers.js' store, and then the answer read in Heart (af_heart), not by
+    # the browser's voice; Actions says so; Remove Heart in the list.
+    dl = res["voice_downloading"]
+    pct = re.fullmatch(r"Downloading Heart \((\d+)%\)…", dl["hint"])
+    assert pct and "Downloading Heart (" + pct.group(1) + "%)" in dl["slash"]
+    h = res["voice_heart"]
+    assert h["loads"] == [{"model": "onnx-community/Kokoro-82M-v1.0-ONNX", "dtype": "fp32", "device": "webgpu", "data": 20 * 1024 * 1024}]
+    assert h["said"][0]["voice"] == "af_heart" and h["answer"].startswith(h["said"][0]["text"]) and h["spoken"] == 0
+    assert "Turned on the Heart voice, on this device" in h["done"] and not h["hint"].startswith("Downloading")
+    assert res["voice_ranges"] == ["bytes=0-16777215", "bytes=16777216-20971519"] and res["voice_parts_after"] == []
+    assert "Remove Heart" in res["voice_on_slash"] and not any(n.startswith("Download Heart") for n in res["voice_on_slash"])
+    # A later visit: started from the browser's copy (nothing downloaded), no sheet, in Heart; Remove Heart frees it.
+    later = res["voice_later"]
+    assert len(later["loads"]) == 1 and later["loads"][0]["data"] == 20 * 1024 * 1024 and later["spoken"] == 0 and not later["sheet"]
+    assert res["voice_later_ranges"] == [] and res["voice_remove_sheet"] == "Remove Heart"
+    gone = res["voice_removed"]
+    assert "Download Heart" in gone["slash"] and gone["kept"] == 0 and gone["disposed"]
     # Under each message, as in the Claude app, and different under each: yours (when, ask again, edit, copy) and the
     # answer's (copy, read aloud, good, bad, ask again, when); the latest answer's row shows. Its words faded in.
     assert res["fading"] and set(res["fading"]) == {"fresh"}

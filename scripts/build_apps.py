@@ -9,9 +9,10 @@ Run it after changing apps/:  python scripts/build_apps.py
 
 And the page the Windows and Mac app bundles (apps/desktop/frontend, not kept in git), before building the app
 (.github/workflows/apps.yml does both):  python scripts/build_apps.py desktop
-It's the website's page (docs/index.html, docs/demo/), with Gemma's code beside it (demo/lm/: Transformers.js and
-ONNX Runtime's WebAssembly, the versions the website loads from jsDelivr, fetched with npm, which checks them
-against the registry's checksums), so nothing that runs in the app's own page comes from elsewhere.
+It's the website's page (docs/index.html, docs/demo/), with Gemma's and Heart's code beside it (demo/lm/:
+Transformers.js, kokoro-js and ONNX Runtime's WebAssembly, the versions the website loads from jsDelivr, fetched with
+npm, which checks them against the registry's checksums), so nothing that runs in the app's own page comes from
+elsewhere.
 """
 from __future__ import annotations
 
@@ -31,11 +32,14 @@ CHROME_FILES = ["manifest.json", "background.js", "panel.html", "panel.css", "pa
 CHROME_FOLDER = "Chat Computer"
 DOCS = ROOT / "docs"
 FRONTEND = APPS / "desktop" / "frontend"
-# Gemma's code, as docs/demo/host.js loads it on the website: npm package, and the files taken from it (to demo/lm/).
+# Gemma's code, and Heart's (the warmer voice: kokoro-js, and the ONNX Runtime its Transformers.js loads), as
+# docs/demo/host.js loads them on the website: npm package, and the files taken from it (to demo/lm/).
 LM = {
     "@huggingface/transformers@4.3.1": ["dist/transformers.min.js"],
     "onnxruntime-web@1.31.0-dev.20260914-8d85527a0": ["dist/ort-wasm-simd-threaded.asyncify.mjs",
                                                       "dist/ort-wasm-simd-threaded.asyncify.wasm"],
+    "kokoro-js@1.2.1": ["dist/kokoro.web.js"],
+    "@huggingface/transformers@3.5.1": ["dist/ort-wasm-simd-threaded.jsep.mjs", "dist/ort-wasm-simd-threaded.jsep.wasm"],
 }
 
 
@@ -65,7 +69,7 @@ def desktop_frontend(lm: bool = True) -> Path:
         (FRONTEND / "demo" / "lm").mkdir()
         npm = shutil.which("npm")
         if not npm:
-            raise SystemExit("npm is needed to fetch Gemma's code (or: build_apps.py desktop --no-lm)")
+            raise SystemExit("npm is needed to fetch Gemma's and Heart's code (or: build_apps.py desktop --no-lm)")
         with tempfile.TemporaryDirectory() as tmp:
             for spec, wanted in LM.items():
                 out = subprocess.run([npm, "pack", spec, "--silent"], cwd=tmp, capture_output=True, text=True, check=True)

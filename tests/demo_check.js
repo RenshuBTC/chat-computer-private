@@ -408,9 +408,10 @@ async function ask(page, text, meanwhile) {
   const LM = `export class TextStreamer { constructor(tokenizer, o) { this.o = o; } }
 export async function pipeline(task, model, opts) {
   const lm = window.__lm, base = "https://huggingface.co/" + model + "/resolve/main/";
-  const files = [["onnx/model_" + opts.dtype + ".onnx", 461341], ["onnx/model_" + opts.dtype + ".onnx_data", 763067904], ["tokenizer.json", 20323013]];
-  const c0 = await caches.open("transformers-cache"), kept = !!(await c0.match(base + files[1][0]));
-  lm.loads.push({ task, model, device: opts.device, dtype: opts.dtype, kept });
+  const files = [["onnx/model_" + opts.dtype + ".onnx", 461341], ["tokenizer.json", 20323013]];
+  const c0 = await caches.open("transformers-cache"), data = await c0.match(base + "onnx/model_" + opts.dtype + ".onnx_data");
+  const kept = !!(await c0.match(base + files[0][0])) && !!data;
+  lm.loads.push({ task, model, device: opts.device, dtype: opts.dtype, kept, data: data ? (await data.blob()).size : 0 });
   if (kept) await new Promise((ok) => setTimeout(ok, 400));       // started from the browser's copy, as Transformers.js does
   else {
     files.forEach(([file, total]) => opts.progress_callback({ status: "progress", file, loaded: total / 2, total }));
@@ -432,6 +433,21 @@ export async function pipeline(task, model, opts) {
   return gen;
 }`;
   const lmCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  const DATA = 40 * 1024 * 1024, ranges = [], hub = { hold: true, fail: 0, held: null };
+  await lmCtx.route(/^https:\/\/huggingface\.co\/.*\.onnx_data$/, async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*",
+      "access-control-allow-headers": "range", "access-control-allow-methods": "GET" } });
+    const range = req.headers()["range"] || "", m = /bytes=(\d+)-(\d+)/.exec(range);
+    ranges.push(range);
+    if (!m) return route.fulfill({ status: 200, body: Buffer.alloc(16) });
+    const from = +m[1], to = Math.min(+m[2], DATA - 1);
+    if (from >= 32 * 1024 * 1024 && hub.hold) { hub.held = route; return; }       // the third piece: never comes
+    if (from >= 32 * 1024 * 1024 && hub.fail > 0) { hub.fail--; return route.abort("connectionreset"); }   // cut off once
+    return route.fulfill({ status: 206, headers: { "access-control-allow-origin": "*", "access-control-expose-headers": "*",
+      "content-range": "bytes " + from + "-" + to + "/" + DATA, "content-type": "application/octet-stream" },
+      body: Buffer.alloc(to - from + 1, from >> 24) });
+  });
   await lmCtx.addInitScript(() => {
     window.__lm = { loads: [], asked: [], words: ["Dark cup ", "in my hands, ", "the day ", "starts with you."] };
     Object.defineProperty(navigator, "gpu", { value: { requestAdapter: () => Promise.resolve({ features: new Set(["shader-f16"]) }) } });
@@ -451,22 +467,45 @@ export async function pipeline(task, model, opts) {
   await slash(lm, "Download Gemma");
   out.lm_sheet = await state(lm);
   await lm.click("#sheet-ok");
-  await lm.waitForFunction(() => /49%/.test(document.getElementById("input").placeholder));
+  const kept = (p) => p.evaluate(() => caches.open("chatcomputer-gemma-parts").then((c) => c.keys()).then((k) => k.map((r) => r.url.split("?")[1]).sort()));
+  // (asked again until so: waitForFunction takes a promise for a yes)
+  for (let t = Date.now(); (await kept(lm)).length < 3; ) {
+    if (Date.now() - t > 20000) throw new Error("the pieces never came");
+    await new Promise((ok) => setTimeout(ok, 100));
+  }
+  await lm.waitForFunction(() => /\(\d+%\)/.test(document.getElementById("input").placeholder), null, { timeout: 5000 });
   out.lm_downloading = await state(lm);
   out.lm_downloading_slash = await slash(lm);
-  await lm.evaluate(() => window.__lm.finish());
-  await lm.waitForFunction(() => !/Downloading/.test(document.getElementById("input").placeholder));
-  out.lm_on = await state(lm);
-  out.lm_on_slash = await slash(lm);
   await lm.click("#input");
-  await ask(lm, "write a haiku about coffee");
-  out.lm_haiku = await state(lm);
-  await ask(lm, "play some piano music");
-  out.lm_music = (await state(lm)).last;
-  await lm.evaluate(() => { window.__lm.words = ["Here's ", "a longer one."]; });
-  await ask(lm, "make it longer");
-  out.lm_calls = await lm.evaluate(() => ({ loads: window.__lm.loads, asked: window.__lm.asked.map((m) => m.map((x) => [x.role, x.content])) }));
-  await lm.close();
+  out.lm_stuck = await ask(lm, "are you stuck downloading?");
+  out.lm_pieces_kept = await kept(lm);
+  out.lm_ranges_first = ranges.splice(0);
+  await lm.close();                                         // (left mid-download: the third piece never came)
+  hub.hold = false;
+  hub.fail = 1;
+  const lm1 = await lmCtx.newPage();
+  lm1.on("pageerror", (e) => errors.push(String(e)));
+  await lm1.goto(page_url);
+  await greeted(lm1);
+  out.lm_again_slash = await slash(lm1);
+  await slash(lm1, "Download Gemma");
+  await lm1.click("#sheet-ok");
+  await lm1.waitForFunction(() => window.__lm.loads.length === 1, null, { timeout: 20000 });
+  out.lm_ranges_again = ranges.splice(0);
+  out.lm_pieces_after = await kept(lm1);
+  await lm1.evaluate(() => window.__lm.finish());
+  await lm1.waitForFunction(() => !/Downloading/.test(document.getElementById("input").placeholder));
+  out.lm_on = await state(lm1);
+  out.lm_on_slash = await slash(lm1);
+  await lm1.click("#input");
+  await ask(lm1, "write a haiku about coffee");
+  out.lm_haiku = await state(lm1);
+  await ask(lm1, "play some piano music");
+  out.lm_music = (await state(lm1)).last;
+  await lm1.evaluate(() => { window.__lm.words = ["Here's ", "a longer one."]; });
+  await ask(lm1, "make it longer");
+  out.lm_calls = await lm1.evaluate(() => ({ loads: window.__lm.loads, asked: window.__lm.asked.map((m) => m.map((x) => [x.role, x.content])) }));
+  await lm1.close();
   // A later visit: it's here, started (from the browser's copy) when it's first needed.
   const lm2 = await lmCtx.newPage();
   lm2.on("pageerror", (e) => errors.push(String(e)));
@@ -505,6 +544,129 @@ export async function pipeline(task, model, opts) {
   out.lm_removed = { slash: await slash(lm3), disposed: await lm3.evaluate(() => !!window.__lm.disposed),
     kept: await lm3.evaluate(() => caches.open("transformers-cache").then((c) => c.keys()).then((k) => k.length)) };
   await lmCtx.close();
+
+  // Read aloud's voice, where the graphics chip can make Heart's (WebGPU; a stand-in for kokoro-js, and the browser's
+  // voices standing in too). The first time Read aloud is pressed, Heart is offered: closed, the browser's best voice
+  // reads (Edge's natural Ava before Google's and the usual one, never a novelty voice), and Heart isn't offered that
+  // way again (the "/" list has it). Chosen, it downloads in pieces (its progress in the box and the list), then reads
+  // what was asked, in Heart, not the browser's voice; a later visit starts it from the browser's copy; Remove Heart.
+  const KOKORO = `export class KokoroTTS {
+  static async from_pretrained(model, opts) {
+    const h = window.__heart, c = await caches.open("transformers-cache");
+    const data = await c.match("https://huggingface.co/" + model + "/resolve/main/onnx/model.onnx");
+    h.loads.push({ model, dtype: opts.dtype, device: opts.device, data: data ? (await data.blob()).size : 0 });
+    return { model: { dispose: async () => { h.disposed = true; } }, generate: async (text, o) => {
+      h.said.push({ text, voice: o.voice });
+      await new Promise((r) => setTimeout(r, 10));
+      return { audio: new Float32Array(1200), sampling_rate: 24000 };
+    } };
+  }
+}`;
+  const VDATA = 20 * 1024 * 1024, vranges = [], vhub = { hold: false, held: null };
+  function fulfilPiece(route, from, to) {
+    return route.fulfill({ status: 206, headers: { "access-control-allow-origin": "*", "access-control-expose-headers": "*",
+      "content-range": "bytes " + from + "-" + to + "/" + VDATA, "content-type": "application/octet-stream" }, body: Buffer.alloc(to - from + 1, 7) });
+  }
+  async function voiceContext() {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    await ctx.route(/^https:\/\/huggingface\.co\/onnx-community\/Kokoro-82M-v1\.0-ONNX\/resolve\/main\/onnx\/model\.onnx$/, async (route) => {
+      const req = route.request();
+      if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*",
+        "access-control-allow-headers": "range", "access-control-allow-methods": "GET" } });
+      const range = req.headers()["range"] || "", m = /bytes=(\d+)-(\d+)/.exec(range);
+      vranges.push(range);
+      if (!m) return route.fulfill({ status: 200, body: Buffer.alloc(16) });
+      const from = +m[1], to = Math.min(+m[2], VDATA - 1);
+      if (from > 0 && vhub.hold) { vhub.held = () => fulfilPiece(route, from, to); return; }   // the second piece: when let go
+      return fulfilPiece(route, from, to);
+    });
+    await ctx.route("https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js", (route) => route.fulfill({ status: 200,
+      contentType: "text/javascript", headers: { "access-control-allow-origin": "*" }, body: KOKORO }));
+    await ctx.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
+      headers: { "access-control-allow-origin": "*" }, body: "{}" }));
+    await ctx.addInitScript(() => {
+      window.__heart = { loads: [], said: [] };
+      window.__spoken = [];
+      Object.defineProperty(navigator, "gpu", { value: { requestAdapter: () => Promise.resolve({ features: new Set() }) } });
+      const voices = [{ name: "Albert", lang: "en-US" }, { name: "Samantha", lang: "en-US", default: true },
+        { name: "Google US English", lang: "en-US" }, { name: "Microsoft Ava Online (Natural) - English (United States)", lang: "en-US" },
+        { name: "Thomas", lang: "fr-FR" }];
+      window.speechSynthesis.getVoices = () => voices;
+      window.SpeechSynthesisUtterance = function (t) { this.text = t; };
+      window.speechSynthesis.speak = (u) => { window.__spoken.push({ text: u.text, voice: u.voice && u.voice.name });
+        setTimeout(() => u.onend && u.onend(), 5); };
+      window.speechSynthesis.cancel = () => {};
+    });
+    return ctx;
+  }
+  const speakLast = (p) => p.click("#log > .acts.theirs.last .act[data-act=speak]");
+  const parts = (p) => p.evaluate(() => caches.open("chatcomputer-heart-parts").then((c) => c.keys()).then((k) => k.map((r) => r.url.split("?")[1]).sort()));
+  async function answered(p) {
+    const page = await p.newPage();
+    page.on("pageerror", (e) => errors.push(String(e)));
+    await page.goto(page_url);
+    await greeted(page);
+    await page.waitForFunction(() => document.querySelector("#log > .ai.hello") && window.CO);
+    await page.click("#input");
+    await ask(page, "what is chat computer");
+    return page;
+  }
+  // Closed: the browser's voice.
+  const vc1 = await voiceContext();
+  const v1 = await answered(vc1);
+  out.voice_slash = await slash(v1);
+  await v1.click("#input");
+  await speakLast(v1);
+  await v1.waitForFunction(() => document.body.classList.contains("sheet"));
+  out.voice_sheet = await v1.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
+    text: document.getElementById("sheet-text").innerText, ok: document.getElementById("sheet-ok").textContent, spoken: window.__spoken.length }));
+  await v1.click("#sheet-cancel");
+  await v1.waitForFunction(() => window.__spoken.length > 0);
+  out.voice_system = await v1.evaluate(() => ({ spoken: window.__spoken.slice(), answer: Array.from(document.querySelectorAll("#log > .ai")).pop().textContent,
+    sheet: document.body.classList.contains("sheet"), heart: window.__heart.loads.length }));
+  await v1.close();
+  const v1b = await answered(vc1);                           // another visit: no sheet, the browser's voice straight away
+  await speakLast(v1b);
+  await v1b.waitForFunction(() => window.__spoken.length > 0);
+  out.voice_again = await v1b.evaluate(() => ({ sheet: document.body.classList.contains("sheet"), spoken: window.__spoken.length }));
+  out.voice_again_slash = await slash(v1b);
+  await vc1.close();
+  // Chosen: downloaded (the second piece held a moment: its progress shown), then the answer read in Heart.
+  const vc2 = await voiceContext();
+  const v2 = await answered(vc2);
+  vhub.hold = true;
+  await speakLast(v2);
+  await v2.waitForFunction(() => document.body.classList.contains("sheet"));
+  await v2.click("#sheet-ok");
+  for (let t = Date.now(); !(await parts(v2)).includes("piece=0"); ) {
+    if (Date.now() - t > 20000) throw new Error("Heart's first piece never came");
+    await new Promise((ok) => setTimeout(ok, 100));
+  }
+  await v2.waitForFunction(() => /\(\d+%\)/.test(document.getElementById("input").placeholder), null, { timeout: 5000 });
+  out.voice_downloading = { hint: await v2.evaluate(() => document.getElementById("input").placeholder), slash: await slash(v2) };
+  vhub.hold = false;
+  await vhub.held();
+  await v2.waitForFunction(() => window.__heart.said.length >= 1, null, { timeout: 20000 });
+  out.voice_heart = await v2.evaluate(() => ({ loads: window.__heart.loads, said: window.__heart.said.slice(), spoken: window.__spoken.length,
+    answer: Array.from(document.querySelectorAll("#log > .ai")).pop().textContent, done: document.getElementById("done").textContent,
+    hint: document.getElementById("input").placeholder }));
+  out.voice_ranges = vranges.splice(0);
+  out.voice_parts_after = await parts(v2);
+  out.voice_on_slash = await slash(v2);
+  await v2.close();
+  // A later visit: from the browser's copy (nothing downloaded), in Heart; then removed.
+  const v3 = await answered(vc2);
+  await speakLast(v3);
+  await v3.waitForFunction(() => window.__heart.said.length >= 1, null, { timeout: 20000 });
+  out.voice_later = await v3.evaluate(() => ({ loads: window.__heart.loads, spoken: window.__spoken.length, sheet: document.body.classList.contains("sheet") }));
+  out.voice_later_ranges = vranges.splice(0);
+  await slash(v3, "Remove Heart");
+  out.voice_remove_sheet = await v3.evaluate(() => document.getElementById("sheet-title").textContent);
+  await v3.click("#sheet-ok");
+  await v3.waitForFunction(() => /Removed the Heart voice/.test(document.getElementById("done").textContent));
+  out.voice_removed = { slash: await slash(v3), kept: await v3.evaluate(() => caches.open("transformers-cache").then((c) => c.keys())
+    .then((k) => k.filter((r) => /Kokoro/.test(r.url)).length)), disposed: await v3.evaluate(() => !!window.__heart.disposed) };
+  await vc2.close();
 
   // Under each message, as in the Claude app: yours has when, ask again, edit and copy; the answer's has copy, read
   // aloud, good, bad, ask again and when, and the latest answer's row shows. While an answer comes in, its newest

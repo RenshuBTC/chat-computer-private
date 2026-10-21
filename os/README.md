@@ -98,8 +98,9 @@ NVMe and SATA drivers.
   * the drive the PC started from (`storage/`): an NVMe SSD (`nvme.rs`), or a SATA drive on an AHCI controller
     (`ahci.rs`), the kinds nearly every PC starts from. On it, Chat Computer's memory file
     (`\EFI\chatcomputer-own\memory.bin`, which Windows' setup makes), found through Chat Computer's own FAT reader
-    (`fat/`). The conversation is kept there (`keep.rs`, in the format `remember/` defines) after every answer, and
-    read back at start-up, so a restart carries on the same conversation. Only the memory file's own blocks are
+    (`fat/`). The conversation and Claude's notes are kept there (`keep.rs`, in the format `remember/` defines, as
+    JSON: `{"notes": [...], "messages": [...]}`) after every answer, and read back at start-up, so a restart carries
+    on the same conversation. Only the memory file's own blocks are
     ever written, each read and checked first: never the file system, Windows' files or any other partition.
     Before a restart, the drive is told to write what it has cached;
   * Claude, with the API key from the settings and Mozilla's certificate authorities (`assistant.rs`), and the
@@ -117,7 +118,10 @@ NVMe and SATA drivers.
       firmware's own preparation for it (AML, which Chat Computer doesn't run yet); nearly all PCs turn off without
       it, and if one doesn't, the screen says so;
     * `start_new_conversation`: when the person asks to start over, the conversation ends after Claude's answer. It
-      is no longer sent or kept, and stays on the screen above a line until the next restart.
+      is no longer sent or kept, and stays on the screen above a line until the next restart;
+    * `remember` and `forget`: Claude's notes about the person (their name, what they like), kept in the memory file
+      with the conversation and shown to Claude in every conversation after, new ones and restarts included. The
+      screen says when Claude notes or forgets something. At most 40 notes, 8,000 characters in all.
 
     And the tools Anthropic runs itself: web search (`web_search`) and reading a web page (`web_fetch`). While Claude
     uses one, the screen says so by the thinking dot ("Searching the web"). If an organization has switched them off
@@ -250,8 +254,9 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # authority): the request, the streamed answer on the screen, Claude's tools
                                  # (the computer's status, a bigger text size, a restart), a web search with a
                                  # paused answer, the web tools refused, a failure
-./check.py --remember            # the conversation kept across a restart, on an NVMe SSD and a SATA drive laid
-                                 # out like a PC's, then a new conversation started, then the PC turned off;
+./check.py --remember            # the conversation and Claude's notes kept across a restart, on an NVMe SSD and
+                                 # a SATA drive laid out like a PC's, then a new conversation started (the note
+                                 # still shown to Claude), then the PC turned off;
                                  # nothing else on the disk changed (needs dosfstools, mtools and gdisk)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused

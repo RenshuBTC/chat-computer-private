@@ -862,6 +862,15 @@ impl Chat {
                 self.blocks.push(Block::new(Kind::Note, Live::No, format!("Turning off in {seconds} seconds\u{2026}")));
                 self.relayout = true;
             }
+            Event::Noted(note) => {
+                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Claude will remember: {note}")));
+                self.relayout = true;
+            }
+            Event::Forgot(n) => {
+                let what = if n == 1 { String::from("a note") } else { format!("{n} notes") };
+                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Claude forgot {what}.")));
+                self.relayout = true;
+            }
             Event::NewConversation => {
                 self.blocks.push(Block::new(Kind::Divider, Live::No, String::from(NEW_CONVERSATION)));
                 self.relayout = true;

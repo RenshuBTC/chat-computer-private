@@ -24,6 +24,9 @@ struct Clock {
     utc: i64,
     /// How far off that may be, in seconds.
     error: i64,
+    /// The local time's offset from UTC, in minutes, if the settings gave it (Windows' time zone when Chat Computer
+    /// was set up).
+    offset: Option<i32>,
 }
 
 static CLOCK: SpinLock<Option<Clock>> = SpinLock::new(None);
@@ -42,7 +45,7 @@ pub fn init(raw: i64, zone: i32, offset_minutes: Option<i32>) -> String {
         // A zone the firmware gives, but the specification's versions disagree on which way it goes.
         (None, z) => (raw, (z.unsigned_abs() as i64).min(1440) * 60 + DRIFT, "time zone from the firmware"),
     };
-    *CLOCK.lock() = Some(Clock { utc, error });
+    *CLOCK.lock() = Some(Clock { utc, error, offset: offset_minutes });
     let behind = if utc + error < WRITTEN { " (behind: earlier than this kernel was written)" } else { "" };
     format!("{} ({how}){behind}", text(utc, error))
 }
@@ -88,12 +91,32 @@ pub fn text(t: i64, error: i64) -> String {
     if error > 3 * 3600 { format!("{d} {month} {y}") } else { format!("{d} {month} {y}, {h:02}:{mi:02} UTC") }
 }
 
-/// The date (and time, when it's known well enough) now, for people.
-pub fn now_text() -> Option<String> {
-    now().map(|t| text(t, error()))
+/// The local time's offset from UTC in minutes, if known.
+fn offset() -> Option<i32> {
+    CLOCK.lock().as_ref().and_then(|c| c.offset)
 }
 
-/// Today's date (in UTC), for people.
+/// The date (and time, when it's known well enough) now, for people: in local time when the settings gave the
+/// time zone, else in UTC.
+pub fn now_text() -> Option<String> {
+    let (t, error) = (now()?, error());
+    match offset() {
+        Some(m) if error <= 3 * 3600 => {
+            let (y, mo, d, h, mi) = civil(t + m as i64 * 60);
+            let month = MONTHS[(mo as usize).clamp(1, 12) - 1];
+            let sign = if m < 0 { '-' } else { '+' };
+            let (oh, om) = (m.unsigned_abs() / 60, m.unsigned_abs() % 60);
+            Some(format!("{d} {month} {y}, {h:02}:{mi:02} local time (UTC{sign}{oh}:{om:02})"))
+        }
+        _ => Some(text(t, error)),
+    }
+}
+
+/// Today's date, for people: the local date when the settings gave the time zone, else the date in UTC (said so).
 pub fn today_text() -> Option<String> {
-    now().map(|t| text(t, i64::MAX))
+    let t = now()?;
+    match offset() {
+        Some(m) => Some(text(t + m as i64 * 60, i64::MAX)),
+        None => Some(format!("{} (UTC)", text(t, i64::MAX))),
+    }
 }

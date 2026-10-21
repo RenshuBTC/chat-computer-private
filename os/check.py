@@ -32,7 +32,8 @@ log go to out/.
                                      its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
                                      drive; a question answered, the PC restarted, the conversation back on the
                                      screen and sent with the next question, then a new conversation started (the
-                                     next question sent alone), then the PC turned off (ACPI's S5); the memory
+                                     next question sent alone; a note Claude made before the restart still shown
+                                     to it), then the PC turned off (ACPI's S5); the memory
                                      file's two copies, and nothing else on the disk changed (fsck.vfat too, so also
                                      needs dosfstools, mtools and gdisk)
     ./check.py --secure-boot        Secure Boot, as on a PC that has approved Chat Computer's key: signs the
@@ -809,8 +810,8 @@ def claude(args) -> list[str]:
             if body.get("messages") != [{"role": "user", "content": "hi"}]:
                 problems.append(f"the first request's messages were {body.get('messages')!r}")
             tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])
-            if tools != [("computer_status", None), ("restart_computer", None), ("set_text_size", None),
-                         ("start_new_conversation", None), ("turn_off_computer", None),
+            if tools != [("computer_status", None), ("forget", None), ("remember", None), ("restart_computer", None),
+                         ("set_text_size", None), ("start_new_conversation", None), ("turn_off_computer", None),
                          ("web_fetch", "web_fetch_20250910"), ("web_search", "web_search_20250305")]:
                 problems.append(f"the request offered the tools {body.get('tools')!r}")
             m2 = (requests[1]["body"] or {}).get("messages") or []
@@ -954,9 +955,10 @@ def remember(args) -> list[str]:
     """The conversation kept across a restart, with the start-up partition on an NVMe drive, then on a SATA one: a
     disk like a PC's (memory_disk), a question answered by a stand-in for Claude's API, then the virtual PC started
     again: the conversation must be on the screen, and in the next question's request, and in the memory file in the
-    format Windows' setup made it for. Then Claude is asked to start a new conversation (its tool): the next question
-    must be sent alone, and only the new conversation kept. The partition's file system must stay clean and its other
-    files untouched."""
+    format Windows' setup made it for. Before the restart Claude notes something about the person (its remember tool):
+    the note must be shown to Claude after the restart, and after a new conversation (its tool), whose next question
+    must be sent alone, and only the new conversation kept. Last, Claude is asked to turn the PC off. The partition's
+    file system must stay clean and its other files untouched."""
     import http.server
 
     tmp = Path(tempfile.mkdtemp(prefix="cc-memory-"))
@@ -965,6 +967,9 @@ def remember(args) -> list[str]:
     first_answer = [("thinking", "sig-m1"), ("text", ["Hello! The word is ", "pumpkin."])]
     new_call = [("thinking", "sig-m2"), ("tool_use", "toolu_new", "start_new_conversation", ["{}"])]
     off_call = [("thinking", "sig-m3"), ("tool_use", "toolu_off", "turn_off_computer", ["{}"])]
+    note = "Their favourite word is pumpkin."
+    note_call = [("thinking", "sig-m4"), ("tool_use", "toolu_note", "remember", ['{"note": ', json.dumps(note) + "}"])]
+    after_tool = {"toolu_off": "Turning off now.", "toolu_new": "Starting afresh.", "toolu_note": "Noted."}
 
     class Api(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -982,9 +987,10 @@ def remember(args) -> list[str]:
                 send_stream(self, new_call, "tool_use")
             elif asked == "off":
                 send_stream(self, off_call, "tool_use")
+            elif asked == "note":
+                send_stream(self, note_call, "tool_use")
             elif isinstance(asked, list):  # a tool's result
-                after = "Turning off now." if asked[0].get("tool_use_id") == "toolu_off" else "Starting afresh."
-                send_stream(self, [("text", [after])], "end_turn")
+                send_stream(self, [("text", [after_tool.get(asked[0].get("tool_use_id"), "?")])], "end_turn")
             else:
                 send_stream(self, [("text", ["Pumpkin."])], "end_turn")
 
@@ -1020,10 +1026,10 @@ def remember(args) -> list[str]:
                     time.sleep(1)
                     if start == 2:
                         pc.settled_picture(f"memory-{kind}-restored")
-                    # The first start: a question. The second: a question after the restart, then a new conversation
-                    # asked for, then a question in it, then Claude asked to turn the PC off (ACPI's S5, which ends
-                    # the virtual PC).
-                    for n, question in enumerate(["hi"] if start == 1 else ["word", "new", "hi", "off"]):
+                    # The first start: a question, then a note. The second: a question after the restart, then a new
+                    # conversation asked for, then a question in it, then Claude asked to turn the PC off (ACPI's S5,
+                    # which ends the virtual PC).
+                    for n, question in enumerate(["hi", "note"] if start == 1 else ["word", "new", "hi", "off"]):
                         monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
                         kept_or_failed(pc.log, n + 1)
                         if question == "off":
@@ -1047,28 +1053,39 @@ def remember(args) -> list[str]:
                 except ValueError as e:
                     problems.append(f"{kind}, start {start}: {e}")
                     continue
-                # Kept once after each answer: the conversation, then (the second time) the new one, which began
-                # with "hi" again and ended with Claude turning the PC off.
-                held = json.loads(kept[1]) if kept else None
-                if start == 1 and (kept is None or kept[0] != 1 or held != first):
-                    problems.append(f"{kind}, start 1: the memory file holds {kept!r}")
-                if start == 2 and (kept is None or kept[0] != 5 or held[:3] != first + [{"role": "user", "content": "off"}]
-                                   or held[-1] != {"role": "assistant", "content": [{"type": "text", "text": "Turning off now."}]}):
-                    problems.append(f"{kind}, start 2: the memory file holds {kept!r}")
+                # Kept once after each answer, with the note: the conversation, then (the second time) the new one,
+                # which began with "hi" again and ended with Claude turning the PC off.
+                held = json.loads(kept[1]) if kept else {}
+                messages = held.get("messages") or []
+                said_last = {"role": "assistant", "content": [{"type": "text", "text": "Noted." if start == 1 else "Turning off now."}]}
+                if (kept is None or kept[0] != (2 if start == 1 else 6) or held.get("notes") != [note]
+                        or messages[:3] != first + [{"role": "user", "content": "note" if start == 1 else "off"}]
+                        or messages[-1:] != [said_last]):
+                    problems.append(f"{kind}, start {start}: the memory file holds {kept!r}")
             drive = "NVMe SSD" if kind == "nvme" else "SATA drive"
             if f"memory: {drive}" not in texts[0]:
                 problems.append(f"{kind}: the memory file wasn't found on the {drive}")
-            if "the conversation from before the restart (2 turns)" not in texts[1]:
-                problems.append(f"{kind}: the conversation didn't come back after the restart")
-            word = first + [{"role": "user", "content": "word"}]
-            asked = [r.get("messages") for r in requests]
-            if len(asked) != 7 or asked[1] != word:
-                problems.append(f"{kind}: the question after the restart wasn't asked with the conversation before it: {asked!r}")
-            elif asked[2] != word + [{"role": "assistant", "content": [{"type": "text", "text": "Pumpkin."}]},
-                                     {"role": "user", "content": "new"}]:
-                problems.append(f"{kind}: asking for a new conversation wasn't sent with the conversation: {asked[2]!r}")
-            elif asked[4] != [{"role": "user", "content": "hi"}]:
-                problems.append(f"{kind}: the question after a new conversation began wasn't sent alone: {asked[4]!r}")
+            if "the conversation from before the restart (6 turns)" not in texts[1] or "Claude: 1 note from before" not in texts[1]:
+                problems.append(f"{kind}: the conversation or the note didn't come back after the restart")
+            asked = [r.get("messages") or [] for r in requests]
+            systems = [str(r.get("system")) for r in requests]
+            if len(asked) != 9:
+                problems.append(f"{kind}: the stand-in got {len(asked)} requests, not 9: {asked!r}")
+            else:
+                noted = asked[2] + [{"role": "assistant", "content": [{"type": "text", "text": "Noted."}]}]
+                word = noted + [{"role": "user", "content": "word"}]
+                if asked[3] != word:
+                    problems.append(f"{kind}: the question after the restart wasn't asked with the conversation before it: {asked[3]!r}")
+                elif asked[4] != word + [{"role": "assistant", "content": [{"type": "text", "text": "Pumpkin."}]},
+                                         {"role": "user", "content": "new"}]:
+                    problems.append(f"{kind}: asking for a new conversation wasn't sent with the conversation: {asked[4]!r}")
+                elif asked[6] != [{"role": "user", "content": "hi"}]:
+                    problems.append(f"{kind}: the question after a new conversation began wasn't sent alone: {asked[6]!r}")
+                result = (asked[2][-1].get("content") or [{}])[0]
+                if (result.get("type"), result.get("tool_use_id"), result.get("is_error")) != ("tool_result", "toolu_note", False):
+                    problems.append(f"{kind}: the note's tool result was {result!r}")
+                if note in systems[0] or note not in systems[3] or note not in systems[6]:
+                    problems.append(f"{kind}: the note wasn't shown to Claude after the restart and the new conversation")
             if "Claude: uses start_new_conversation" not in texts[1] or "Claude: a new conversation starts" not in texts[1]:
                 problems.append(f"{kind}: the new conversation didn't start")
             if "turning off: sleep type 0 by the PM1 control registers" not in texts[0]:

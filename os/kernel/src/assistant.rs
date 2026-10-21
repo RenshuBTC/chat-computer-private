@@ -22,7 +22,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use claude::api::{self, Content, Role, Stream, ToolUse, Turn};
-use claude::json::Json;
+use claude::json::{self, Json};
 use net::tcp::Socket;
 use net::{Ipv4, Stack, TcpState};
 use tls::Cert;
@@ -41,6 +41,9 @@ pub enum Event {
     Restarting(u64),
     /// Claude is turning the PC off, in this many seconds.
     TurningOff(u64),
+    /// Claude noted something about the person (its words), or forgot this many notes.
+    Noted(String),
+    Forgot(usize),
     /// What Claude is doing before it answers ("Searching the web").
     Activity(&'static str),
     /// The conversation so far is over: the next question starts a new one.
@@ -84,14 +87,14 @@ const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a 
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, search the \
 web and read web pages, and look after this computer with the tools you have (its status, the text size, restarting \
 it or turning it off, starting a new conversation), but you can't yet use the computer's files. The conversation is \
-kept across restarts. This screen shows Markdown formatted: headings, bold and italic, lists, code, quotes and simple \
+kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, quotes and simple \
 tables. Nothing can be opened from it (no links, no pictures), so write an address out in full when the person needs \
 it.";
 const SYSTEM_NO_WEB: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, and look \
 after this computer with the tools you have (its status, the text size, restarting it or turning it off, starting a \
 new conversation), but you can't use the web here (it isn't enabled for this API key) or the computer's files. The \
-conversation is kept across restarts. This screen shows Markdown formatted: headings, bold and italic, lists, code, \
+conversation is kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, \
 quotes and simple tables. Nothing can be opened from it (no links, no pictures), so write an address out in full when \
 the person needs it.";
 /// Said when the oldest part of a long conversation is no longer sent (see `SENT_BYTES`).
@@ -106,8 +109,13 @@ const WEB_TOOLS: [&str; 2] = [api::WEB_SEARCH, api::WEB_FETCH];
 /// it from its cache (api::request).
 const SENT_BYTES: usize = 600_000;
 
+/// The most notes Claude keeps, the longest one, and the most of them all together, in characters.
+const MAX_NOTES: usize = 40;
+const NOTE_CHARS: usize = 400;
+const NOTES_CHARS: usize = 8000;
+
 /// What Claude can do on this computer.
-const TOOLS: [api::Tool; 5] = [
+const TOOLS: [api::Tool; 7] = [
     api::Tool {
         name: "computer_status",
         description: "What this computer is and how it's doing: its processor, memory, screen, how long Chat Computer's \
@@ -135,6 +143,21 @@ const TOOLS: [api::Tool; 5] = [
                       what it normally does (Windows, usually); this conversation is kept for the next time Chat \
                       Computer starts. Use it only when the person asks to turn the computer off or shut it down.",
         input_schema: r#"{"type":"object","properties":{}}"#,
+    },
+    api::Tool {
+        name: "remember",
+        description: "Notes something about the person to know in every later conversation, after restarts and new \
+                      conversations too: their name, what they like, what they're working on. Use it when they ask \
+                      you to remember something, or tell you something lasting about themselves that they'd want you \
+                      to know later. Your notes are shown to you at the start of every conversation. One short \
+                      sentence a note.",
+        input_schema: r#"{"type":"object","properties":{"note":{"type":"string","description":"The note: one short sentence."}},"required":["note"]}"#,
+    },
+    api::Tool {
+        name: "forget",
+        description: "Forgets the notes you made with remember that contain these words. Use it when the person asks \
+                      you to forget something.",
+        input_schema: r#"{"type":"object","properties":{"words":{"type":"string","description":"Words from the note or notes to forget."}},"required":["words"]}"#,
     },
     api::Tool {
         name: "start_new_conversation",
@@ -241,6 +264,8 @@ struct Assistant {
     history: Vec<Turn>,
     /// Where the part of it that's sent starts (a question; see `SENT_BYTES`).
     sent_from: usize,
+    /// What Claude noted about the person (its remember tool), shown to it in every conversation.
+    notes: Vec<String>,
     /// Whether to offer the web tools (until the API says they aren't enabled for this key).
     web: bool,
     /// The conversation changed since it was last kept (keep.rs).
@@ -260,14 +285,18 @@ pub fn init(key: Option<String>, key_problem: Option<&'static str>) {
         roots.len(),
         if test_build() { " (the test's own)" } else { " (Mozilla's)" }
     );
-    // The conversation from before the last restart, if it was kept.
-    let history = crate::keep::load()
+    // Claude's notes and the conversation from before the last restart, if they were kept.
+    let (notes, history) = crate::keep::load()
         .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|text| api::parse_messages(&text))
-        .filter(|turns| turns.first().is_none_or(is_question))
+        .and_then(|text| from_kept(&text))
         .unwrap_or_default();
+    let history = if history.first().is_none_or(is_question) { history } else { Vec::new() };
     if !history.is_empty() {
         crate::log!("Chat Computer kernel: Claude: the conversation from before the restart ({} turns)", history.len());
+    }
+    if !notes.is_empty() {
+        let n = notes.len();
+        crate::log!("Chat Computer kernel: Claude: {n} note{} from before", if n == 1 { "" } else { "s" });
     }
     *ASSISTANT.lock() = Some(Assistant {
         key,
@@ -278,9 +307,32 @@ pub fn init(key: Option<String>, key_problem: Option<&'static str>) {
         address: None,
         history,
         sent_from: 0,
+        notes,
         web: true,
         unkept: false,
     });
+}
+
+/// What the memory file keeps: Claude's notes and the conversation, as {"notes": [...], "messages": [...]} (the
+/// messages as the API has them).
+fn kept_text(notes: &[String], history: &[Turn]) -> String {
+    let notes = Json::Arr(notes.iter().map(|n| Json::Str(n.clone())).collect()).write();
+    format!("{{\"notes\":{notes},\"messages\":{}}}", api::messages(history))
+}
+
+/// The notes and conversation in the memory file's text (an older system kept the messages alone).
+fn from_kept(text: &str) -> Option<(Vec<String>, Vec<Turn>)> {
+    match json::parse(text)? {
+        Json::Arr(_) => Some((Vec::new(), api::parse_messages(text)?)),
+        kept @ Json::Obj(_) => {
+            let notes = match kept.get("notes") {
+                Some(Json::Arr(items)) => items.iter().filter_map(|n| n.str().map(String::from)).collect(),
+                _ => Vec::new(),
+            };
+            Some((notes, api::parse_messages(&kept.get("messages")?.write())?))
+        }
+        _ => None,
+    }
 }
 
 /// Whether a turn is a question: what the person typed (not tools' results).
@@ -353,7 +405,7 @@ pub fn keep() {
         }
         let mut start = 0;
         loop {
-            let text = api::messages(&a.history[start..]);
+            let text = kept_text(&a.notes, &a.history[start..]);
             if text.len() <= capacity || start >= a.history.len() {
                 break text;
             }
@@ -477,7 +529,7 @@ pub fn work() -> Vec<Event> {
 }
 
 /// Runs a tool Claude called: its result for Claude, and whether that's an error.
-fn run_tool(call: &ToolUse, job: &mut Job, events: &mut Vec<Event>) -> (String, bool) {
+fn run_tool(call: &ToolUse, job: &mut Job, notes: &mut Vec<String>, events: &mut Vec<Event>) -> (String, bool) {
     crate::log!("Chat Computer kernel: Claude: uses {}", call.name);
     match call.name.as_str() {
         "computer_status" => (crate::system::status(), false),
@@ -509,6 +561,37 @@ fn run_tool(call: &ToolUse, job: &mut Job, events: &mut Vec<Event>) -> (String, 
             ),
             true,
         ),
+        "remember" => {
+            let note = call.input.get("note").and_then(|n| n.str()).map(str::trim).unwrap_or("");
+            let total: usize = notes.iter().map(|n| n.chars().count()).sum();
+            if note.is_empty() {
+                (String::from("note must be a sentence about the person"), true)
+            } else if note.chars().count() > NOTE_CHARS {
+                (format!("A note can be at most {NOTE_CHARS} characters: make it shorter."), true)
+            } else if notes.iter().any(|n| n == note) {
+                (String::from("That's noted already."), false)
+            } else if notes.len() >= MAX_NOTES || total + note.chars().count() > NOTES_CHARS {
+                (String::from("There's no room for more notes: forget one that matters less first (ask the person)."), true)
+            } else {
+                notes.push(String::from(note));
+                events.push(Event::Noted(String::from(note)));
+                (String::from("Noted: you'll see it in every conversation from now on."), false)
+            }
+        }
+        "forget" => {
+            let words = call.input.get("words").and_then(|w| w.str()).map(str::trim).unwrap_or("").to_lowercase();
+            let before = notes.len();
+            if !words.is_empty() {
+                notes.retain(|n| !n.to_lowercase().contains(&words));
+            }
+            match before - notes.len() {
+                0 => (String::from("No note has those words."), true),
+                n => {
+                    events.push(Event::Forgot(n));
+                    (format!("Forgot {n} note{}.", if n == 1 { "" } else { "s" }), false)
+                }
+            }
+        }
         "start_new_conversation" => {
             job.new_conversation = true;
             (String::from("A new conversation starts when your answer ends: say so, in a few words."), false)
@@ -590,10 +673,17 @@ impl Assistant {
         let from = self.sending_from();
         let mut system = String::from(if self.web { SYSTEM } else { SYSTEM_NO_WEB });
         if let Some(today) = clock::today_text() {
-            system.push_str(&format!(" Today is {today} (UTC), by the computer's clock; its status has the time."));
+            system.push_str(&format!(" Today is {today}, by the computer's clock; its status has the time."));
         }
         if from > 0 {
             system.push_str(SYSTEM_SHORTENED);
+        }
+        if !self.notes.is_empty() {
+            system.push_str("\n\nYour notes about the person, from earlier conversations (made with remember):");
+            for n in &self.notes {
+                system.push_str("\n\u{2022} ");
+                system.push_str(n);
+            }
         }
         let web: &[&str] = if self.web { &WEB_TOOLS } else { &[] };
         api::request(host(), self.key.as_deref().unwrap_or(""), &system, &self.history[from..], &TOOLS, web)
@@ -682,7 +772,9 @@ impl Assistant {
         }
         let mut results = Vec::new();
         for call in &answer.calls {
-            let (text, error) = run_tool(call, &mut job, events);
+            let before = self.notes.len();
+            let (text, error) = run_tool(call, &mut job, &mut self.notes, events);
+            self.unkept |= self.notes.len() != before;
             results.push(api::tool_result(&call.id, &text, error));
         }
         self.history.push(Turn { role: Role::User, content: Content::Blocks(results) });

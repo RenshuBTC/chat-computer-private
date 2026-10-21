@@ -12,7 +12,8 @@
 //!
 //! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); a
 //! ZIP archive as the list of what's in it; and pictures (JPEG, PNG, GIF, WebP) and PDFs whole, for Claude to see
-//! (the API takes them as they are: Claude reads a PDF's pages as words and as pictures).
+//! (the API takes them as they are: Claude reads a PDF's pages as words and as pictures). A picture bigger than the
+//! API shows Claude goes made smaller, as a JPEG.
 
 use crate::storage::{self, Disk};
 use crate::sync::SpinLock;
@@ -37,9 +38,17 @@ const MOST_FOLDERS: usize = 4_000;
 const SEARCH_MS: u64 = 5_000;
 /// The most links followed on the way to a file (a link to a link to...), so links in a circle end.
 const MOST_LINKS: usize = 8;
-/// The biggest picture Claude is shown (the API takes 10 MB of base64: 7.5 MB), and its most pixels each way.
+/// The biggest picture sent to Claude as it is (the API takes 10 MB of base64: 7.5 MB), and its most pixels each way.
 const MOST_PICTURE: u64 = 7_400_000;
 const MOST_PIXELS: u32 = 8_000;
+/// What Claude's API shows Claude of a picture (Opus 4.7 and later): at most 2576 pixels on its long edge, and 4784
+/// "visual tokens" of 28 × 28 pixels. A picture bigger than that, or than the API takes, is sent the size Claude sees
+/// it, as a JPEG written here (picture::encode_jpeg): a phone's photo of several megabytes becomes a few hundred
+/// kilobytes, so more of them fit in what's sent with each question.
+const SEEN_EDGE: u32 = 2576;
+const SEEN_TOKENS: u32 = 4784;
+/// The JPEG quality a picture made smaller is written at.
+const QUALITY: u8 = 90;
 /// The biggest PDF (the API takes a request of 32 MB, the conversation and the PDF's base64 together), and Office
 /// file or ZIP archive, read.
 const MOST_PDF: u64 = 20_000_000;
@@ -686,17 +695,46 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
         let n = v.read(p, &f, 0, &mut head).map_err(fail)?;
         match kind_of(&head[..n], &rel) {
             Kind::Picture(media) => {
-                if f.size > MOST_PICTURE {
-                    return said(format!("{name} is a picture of {}: too big for Claude to see (at most {}).", size(f.size), size(MOST_PICTURE)));
+                if f.size > MOST_SHOWN {
+                    return said(format!("{name} is a picture of {}: too big for Chat Computer's own system to open.", size(f.size)));
                 }
-                let data = whole(v, p, &f, MOST_PICTURE).map_err(fail)?;
+                let data = whole(v, p, &f, MOST_SHOWN).map_err(fail)?;
                 let pixels = dimensions(media, &data);
-                if let Some((w, h)) = pixels.filter(|&(w, h)| w > MOST_PIXELS || h > MOST_PIXELS) {
-                    return said(format!("{name} is a picture of {w}×{h} pixels: too big for Claude to see (at most {MOST_PIXELS} each way)."));
+                let head = format!(
+                    "{name} ({}{}, changed {})",
+                    size(f.size),
+                    pixels.map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default(),
+                    date(e.modified)
+                );
+                // As it is, if the API takes it and shows it to Claude as it is (a WebP picture, which isn't made
+                // smaller here, if the API takes it).
+                let takes = f.size <= MOST_PICTURE && pixels.is_some_and(|(w, h)| w <= MOST_PIXELS && h <= MOST_PIXELS);
+                let as_it_is = pixels.is_some_and(|(w, h)| seen_edge(w, h) == w.max(h));
+                if takes && (as_it_is || media == "image/webp") {
+                    return Ok(Read { text: format!("{head}: the picture is below."), attachment: Some(Attachment::Picture(media, data)) });
                 }
-                let pixels = pixels.map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default();
-                let text = format!("{name} ({}{pixels}, changed {}): the picture is below.", size(f.size), date(e.modified));
-                Ok(Read { text, attachment: Some(Attachment::Picture(media, data)) })
+                if media == "image/webp" {
+                    return said(format!("{head} is a WebP picture too big for Claude to see, and Chat Computer's own system can't make WebP pictures smaller yet."));
+                }
+                let Some((w, h)) = pixels.or_else(|| picture::size(&data)) else {
+                    return said(format!("{head}: it seems to be damaged, so it can't be made smaller for Claude to see."));
+                };
+                let edge = seen_edge(w, h);
+                match picture::decode_within(&data, edge, edge, [255, 255, 255], decoding_room()) {
+                    Ok(pic) => {
+                        let jpeg = picture::encode_jpeg(&pic, QUALITY);
+                        let text = format!(
+                            "{head}: the picture is below, made smaller ({}×{} pixels, {}) as Claude's API would.",
+                            pic.width,
+                            pic.height,
+                            size(jpeg.len() as u64)
+                        );
+                        Ok(Read { text, attachment: Some(Attachment::Picture("image/jpeg", jpeg)) })
+                    }
+                    Err(picture::Error::TooBig) => said(format!("{head}: too many pixels for Chat Computer's own system to make it smaller for Claude.")),
+                    Err(picture::Error::Unsupported(what)) => said(format!("{head} is a {what}, which Chat Computer's own system can't make smaller for Claude.")),
+                    Err(_) => said(format!("{head}: it seems to be damaged, so it can't be made smaller for Claude to see.")),
+                }
             }
             Kind::Pdf => {
                 if f.size > MOST_PDF {
@@ -769,8 +807,27 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
     })?
 }
 
-/// The biggest picture file shown on the screen.
+/// The biggest picture file shown on the screen, or made smaller for Claude.
 const MOST_SHOWN: u64 = 64_000_000;
+
+/// The memory a picture may take as it's decoded: half the biggest piece of the kernel's heap that's free (a bigger
+/// picture is said to be too big, rather than the heap running out).
+fn decoding_room() -> u64 {
+    crate::heap::largest_free() as u64 / 2
+}
+
+/// The long edge Claude's API shows a `w` × `h` picture to Claude at (its own, if it's no bigger).
+fn seen_edge(w: u32, h: u32) -> u32 {
+    let mut edge = w.max(h).min(SEEN_EDGE);
+    while edge > 28 {
+        let (a, b) = picture::fitted(w, h, edge, edge);
+        if a.div_ceil(28) * b.div_ceil(28) <= SEEN_TOKENS {
+            break;
+        }
+        edge -= 1;
+    }
+    edge
+}
 
 /// A picture on Windows' drive for the screen (show_picture): what was shown, and its pixels, made to fit `w` × `h`
 /// on the screen's background (`ground`, as 0xRRGGBB) where it's transparent.
@@ -785,7 +842,7 @@ pub fn picture(path: &str, w: u32, h: u32, ground: u32) -> Result<(String, pictu
             return Err(format!("{name} is {}: too big to show here.", size(f.size)));
         }
         let data = whole(v, p, &f, MOST_SHOWN).map_err(|err| error_text(err, &shown(&rel)))?;
-        match picture::decode(&data, w, h, background) {
+        match picture::decode_within(&data, w, h, background, decoding_room()) {
             Ok(pic) => {
                 let full = picture::size(&data).map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default();
                 Ok((format!("Shown on the screen: {name} ({}{full}).", size(f.size)), pic))

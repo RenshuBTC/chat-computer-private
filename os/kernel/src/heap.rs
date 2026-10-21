@@ -34,6 +34,20 @@ pub fn init() -> usize {
     bytes
 }
 
+/// The biggest piece of the heap free now, in bytes: the most one allocation could have.
+pub fn largest_free() -> usize {
+    let heap = HEAP.lock();
+    let mut most = 0;
+    let mut p = heap.first;
+    while !p.is_null() {
+        unsafe {
+            most = most.max((*p).size);
+            p = (*p).next;
+        }
+    }
+    most
+}
+
 /// Whether the heap is in use right now (for the crash path, which must not wait for it).
 pub fn busy() -> bool {
     HEAP.is_locked()

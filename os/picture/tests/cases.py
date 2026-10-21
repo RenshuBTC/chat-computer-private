@@ -7,7 +7,8 @@ JPEGs are written and decoded by Pillow (libjpeg-turbo): every kind of subsampli
 markers, odd sizes, every quality from 5 to 100, optimized Huffman tables, Adobe CMYK, EXIF's eight orientations, and
 pictures decoded smaller than they are. PNGs by Pillow, and by a writer here for what Pillow doesn't write (every
 depth of every colour type, 16 bits, transparency, Adam7 interlacing, each filter), whose pixels are worked out here.
-GIFs by Pillow, interlaced or not, with a transparent colour.
+GIFs by Pillow, interlaced or not, with a transparent colour. And pictures for the crate's JPEG writer, with
+Pillow's JPEG of each, which it must write the same.
 
     python3 tests/cases.py <folder>
 """
@@ -303,6 +304,31 @@ def gif_cases(c: Cases) -> None:
     c.add("gif-four-colours", "gif", out.getvalue(), Image.open(io.BytesIO(out.getvalue())).convert("RGB"))
 
 
+def encoder_cases(folder: Path) -> None:
+    """Pictures for the crate's JPEG writer, and Pillow's JPEG of each (4:2:0, its standard tables, as Pillow saves by
+    default): encode.txt lists each one's name, width, height and quality. Sizes of every kind: whole MCUs, a block
+    over, a pixel over, odd ones, a line, a dot."""
+    lines = []
+    sizes = [(64, 48), (65, 49), (72, 40), (105, 77), (16, 1), (1, 16), (1, 1), (37, 23), (200, 133), (2576, 11)]
+    for n, ((w, h), q) in enumerate(zip(sizes, [85, 85, 75, 90, 85, 50, 85, 95, 85, 85])):
+        im = photo(w, h, 30 + n)
+        name = f"enc-{w}x{h}-q{q}"
+        (folder / f"{name}.rgb").write_bytes(im.tobytes())
+        out = io.BytesIO()
+        im.save(out, "JPEG", quality=q, subsampling=2)
+        (folder / f"{name}.jpg").write_bytes(out.getvalue())
+        lines.append(f"{name}\t{w}\t{h}\t{q}")
+    for q in (1, 10, 30, 60, 100):
+        im = photo(50, 30, 99)
+        name = f"enc-50x30-q{q}"
+        (folder / f"{name}.rgb").write_bytes(im.tobytes())
+        out = io.BytesIO()
+        im.save(out, "JPEG", quality=q, subsampling=2)
+        (folder / f"{name}.jpg").write_bytes(out.getvalue())
+        lines.append(f"{name}\t50\t30\t{q}")
+    (folder / "encode.txt").write_text("\n".join(lines) + "\n")
+
+
 if __name__ == "__main__":
     folder = Path(sys.argv[1])
     folder.mkdir(parents=True, exist_ok=True)
@@ -311,3 +337,4 @@ if __name__ == "__main__":
     png_cases(cases)
     gif_cases(cases)
     cases.save()
+    encoder_cases(folder)

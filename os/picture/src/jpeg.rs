@@ -242,8 +242,9 @@ pub fn size(data: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The picture, decoded at the smallest of its full size, a half, a quarter or an eighth that's still at least what
-/// fits `box_w` × `box_h` (turned, if EXIF's orientation turns it); that orientation; and its whole size.
-pub fn decode(data: &[u8], box_w: u32, box_h: u32, most: u64) -> Result<(Picture, u8, (u32, u32)), Error> {
+/// fits `box_w` × `box_h` (turned, if EXIF's orientation turns it); that orientation; and its whole size. At most
+/// `most` pixels decoded, and a progressive picture's coefficients in half of `memory` bytes.
+pub fn decode(data: &[u8], box_w: u32, box_h: u32, most: u64, memory: u64) -> Result<(Picture, u8, (u32, u32)), Error> {
     if !data.starts_with(&[0xFF, 0xD8]) {
         return Err(Error::NotAPicture);
     }
@@ -357,7 +358,7 @@ pub fn decode(data: &[u8], box_w: u32, box_h: u32, most: u64) -> Result<(Picture
                     // One scan of every component, not progressive: decoded as it comes.
                     streaming = !f.progressive && ns == f.components.len();
                     let coefficients: usize = f.components.iter().map(|c| c.padded_w * c.padded_h * 64).sum();
-                    if !streaming && coefficients > MOST_COEFFICIENTS {
+                    if !streaming && (coefficients > MOST_COEFFICIENTS || coefficients as u64 * 2 > memory / 2) {
                         return Err(Error::TooBig);
                     }
                     for c in &mut f.components {

@@ -1,7 +1,8 @@
 //! Against pictures written by Pillow (libjpeg-turbo, zlib) and by a PNG writer of the tests' own, and the pixels
 //! each should come out as (tests/cases.py makes them all, in a folder of its own for each run): JPEGs as libjpeg
 //! decodes them (a sample at most 1 off), PNGs and GIFs exactly, pictures decoded smaller near enough to the whole
-//! averaged down. Damaged pictures give errors, never a crash.
+//! averaged down. Damaged pictures give errors, never a crash, and pictures that would need more memory than given are
+//! too big. JPEGs written here are byte for byte what Pillow (libjpeg-turbo) writes.
 
 extern crate std;
 
@@ -135,4 +136,80 @@ fn shrinks_and_turns() {
     assert_eq!(orient(p.clone(), 2).rgb, [2, 2, 2, 1, 1, 1]);
     assert_eq!((orient(p.clone(), 6).width, orient(p.clone(), 6).rgb), (1, [1, 1, 1, 2, 2, 2].into()));
     assert_eq!(orient(p.clone(), 8).rgb, [2, 2, 2, 1, 1, 1]);
+}
+
+/// A JPEG's scan: its entropy-coded bytes, from after the start of scan to the end of the picture.
+fn scan_of(jpeg: &[u8]) -> &[u8] {
+    let sos = jpeg.windows(2).position(|w| w == [0xFF, 0xDA]).unwrap();
+    let len = u16::from_be_bytes([jpeg[sos + 2], jpeg[sos + 3]]) as usize;
+    &jpeg[sos + 2 + len..jpeg.len() - 2]
+}
+
+/// A JPEG's quantization tables, by their number (each 64 bytes, in zigzag order as stored).
+fn tables_of(jpeg: &[u8]) -> Vec<(u8, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut at = 2;
+    while at + 4 <= jpeg.len() && jpeg[at] == 0xFF && jpeg[at + 1] != 0xDA {
+        let len = u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]) as usize;
+        if jpeg[at + 1] == 0xDB {
+            let mut k = at + 4;
+            while k < at + 2 + len {
+                out.push((jpeg[k] & 15, jpeg[k + 1..k + 65].to_vec()));
+                k += 65;
+            }
+        }
+        at += 2 + len;
+    }
+    out.sort();
+    out
+}
+
+/// The JPEG writer, against Pillow's JPEG of the same pixels at the same quality: the same quantization tables, and
+/// the same scan, byte for byte (so libjpeg's arithmetic, from its colour conversion to the edges' padding and its
+/// dummy blocks, is followed exactly); and it decodes to the same pixels.
+#[test]
+fn writes_jpeg_as_libjpeg_does() {
+    let dir = cases();
+    let list = std::fs::read_to_string(dir.join("encode.txt")).unwrap();
+    for line in list.lines() {
+        let v: Vec<&str> = line.split('\t').collect();
+        let (name, w, h, q): (&str, u32, u32, u8) = (v[0], v[1].parse().unwrap(), v[2].parse().unwrap(), v[3].parse().unwrap());
+        let p = Picture { width: w, height: h, rgb: std::fs::read(dir.join(format!("{name}.rgb"))).unwrap() };
+        let pillow = std::fs::read(dir.join(format!("{name}.jpg"))).unwrap();
+        let ours = encode::jpeg(&p, q);
+        assert_eq!(tables_of(&ours), tables_of(&pillow), "{name}: quantization tables");
+        let (a, b) = (scan_of(&ours), scan_of(&pillow));
+        if a != b {
+            let first = a.iter().zip(b).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+            panic!("{name}: the scan differs from byte {first} (of {} and {})", a.len(), b.len());
+        }
+        let (mine, theirs) = (decode(&ours, w, h, BACKGROUND).unwrap(), decode(&pillow, w, h, BACKGROUND).unwrap());
+        assert!(mine.rgb == theirs.rgb, "{name}: decodes differently");
+    }
+}
+
+/// A picture that would take more memory than it's given to decode is too big, not decoded: a PNG by its pixels (12
+/// bytes each, at most), a JPEG by its pixels as decoded (8 bytes each), a progressive JPEG by its coefficients too.
+#[test]
+fn decoding_keeps_to_its_memory() {
+    let all = all();
+    let case = |name: &str| all.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no case {name}"));
+    let png = case("png-shrunk");
+    let need = 300 * 200 * 12;
+    assert_eq!(decode_within(&png.data, 150, 120, BACKGROUND, need - 1).err(), Some(Error::TooBig));
+    assert!(decode_within(&png.data, 150, 120, BACKGROUND, need).is_ok());
+    for c in all.iter().filter(|c| c.data.starts_with(&[0xFF, 0xD8])) {
+        let (w, h) = size(&c.data).unwrap();
+        // Decoded whole (its box as big as it is), it needs 8 bytes a pixel, and a progressive one 3 bytes a pixel or
+        // more for its coefficients: with less than a byte a pixel, every one is too big.
+        assert_eq!(decode_within(&c.data, w, h, BACKGROUND, (w * h) as u64 / 2).err(), Some(Error::TooBig), "{}", c.name);
+        assert!(decode_within(&c.data, w, h, BACKGROUND, 64 * (w * h) as u64 + (1 << 20)).is_ok(), "{}", c.name);
+    }
+    // Decoded at an eighth of its size, a progressive JPEG's pixels take little, but its coefficients (2 bytes each,
+    // a pixel and a half's at 4:2:0) are kept whole.
+    let progressive = case("jpeg-progressive");
+    let (w, h) = size(&progressive.data).unwrap();
+    let wh = (w * h) as u64;
+    assert_eq!(decode_within(&progressive.data, w / 8, h / 8, BACKGROUND, 2 * wh).err(), Some(Error::TooBig));
+    assert!(decode_within(&progressive.data, w / 8, h / 8, BACKGROUND, 8 * wh).is_ok());
 }

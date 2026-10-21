@@ -112,7 +112,10 @@ NVMe and SATA drivers.
     through its tools (below). Links are followed on C: (a junction such as "My Documents", a symbolic link);
     OneDrive's files are read when they're downloaded to the PC, and said to be online only when they aren't. Word,
     Excel and PowerPoint files are read as their words (`office/`, through Chat Computer's own ZIP and DEFLATE
-    reader, `zip/`); pictures and PDFs go to Claude whole, as the API takes them, for Claude to see. A drive
+    reader, `zip/`); pictures and PDFs go to Claude whole, as the API takes them, for Claude to see, and a picture
+    bigger than the API shows Claude (2576 pixels on its long edge, 4784 "visual tokens"), or than it takes, goes as a
+    JPEG of the size Claude sees, written by `picture/` (a phone's photo of several megabytes becomes a few hundred
+    kilobytes, so more fit in what's sent with each question). A drive
     BitLocker encrypts (many new laptops have Windows' "device encryption" on) is read decrypted (`bitlocker/`):
     at once if BitLocker keeps its key in the clear (suspended, or not switched on yet), else once the person types
     its recovery key in the message box (48 digits, from their Microsoft account at aka.ms/myrecoverykey). The key
@@ -150,9 +153,10 @@ NVMe and SATA drivers.
       hidden folders such as AppData passed by. A Word, Excel or PowerPoint file (or OpenDocument's) comes back as
       its words: a document's paragraphs with Markdown's headings, lists and tables; a workbook's sheets as CSV with
       each row's number and each column's letter, dates as dates, formulas after their values; a presentation's
-      slides with their notes. A picture (JPEG, PNG, GIF or WebP, up to 7.4 MB and 8,000 pixels each way) or a PDF
-      (up to 20 MB) goes to Claude whole, in the tool's result, so Claude sees it (a PDF's pages as words and as
-      pictures). The newest of them are sent with each question, up to 28 MB and 20 of them; older ones are taken out,
+      slides with their notes. A picture (JPEG, PNG, GIF or WebP) or a PDF (up to 20 MB) goes to Claude in the tool's
+      result, so Claude sees it (a PDF's pages as words and as pictures): a picture whole if the API shows it to Claude
+      as it is, else a JPEG made the size Claude sees (WebP pictures, which aren't made smaller yet, whole up to 7.4 MB
+      and 8,000 pixels each way). The newest of them are sent with each question, up to 28 MB and 20 of them; older ones are taken out,
       a line saying each was there, and the memory file keeps the conversation without them. A ZIP archive's files are
       listed. Anything else is said to be the kind it is;
     * `show_picture`: a photo, a screenshot or a drawing on Windows' drive (JPEG, PNG or GIF), shown to the person in
@@ -261,9 +265,13 @@ NVMe and SATA drivers.
   Adobe's CMYK, EXIF's orientation) as libjpeg decodes it (its accurate integer inverse DCT, its "fancy" upsampling,
   its YCbCr arithmetic), a big one at a half, a quarter or an eighth of its size when that's enough, so a phone's
   48-megapixel photo needs a few megabytes; PNG (every colour type and depth, transparency, interlacing); and GIF's
-  first frame. Shrunk to fit by averaging, in integers only. Tested against Pillow's (libjpeg-turbo's) decoding of
-  pictures it wrote (within one level a sample) and PNGs written by its test, every depth and colour type
-  (exactly), and damaged pictures.
+  first frame. Shrunk to fit by averaging, in integers only, and in the memory it's given (the kernel gives half its
+  heap's biggest free piece: a bigger picture is said to be too big). It writes JPEGs too, for pictures made smaller
+  for Claude: baseline, 4:2:0, the standard's tables, exactly as libjpeg writes them (its colour arithmetic, its
+  rounding as it halves the colour, its edges and dummy blocks, its accurate integer DCT). Tested against Pillow's
+  (libjpeg-turbo's) decoding of pictures it wrote (within one level a sample) and PNGs written by its test, every
+  depth and colour type (exactly), damaged pictures, and Pillow's JPEGs of the same pixels, which the writer's must
+  match byte for byte, at every size and quality tried.
 * `chime/` makes the chimes of timers and reminders: bell notes, each a tone with its second and third harmonics,
   rising in 5 ms and dying away, the same as the main Chat Computer's (`chatcomputer/voice/chime.py`), at any
   sample rate. Made with sine recurrences (each sample from the two before), as the kernel's floating point is

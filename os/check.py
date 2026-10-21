@@ -1251,8 +1251,8 @@ def files_check(args) -> list[str]:
     online only when they aren't, a file Windows compressed itself said to be one, and a search that finds the
     shopping list (and the link to it) but not the one in AppData (a hidden folder). Word, Excel and PowerPoint files
     come back as their words; a photo and a PDF whole, for Claude to see (each byte checked); a ZIP archive as its
-    list; what can't be read (a damaged Word file, one from before 2007, an iPhone's photo, a picture too wide) says
-    why. The memory file keeps the conversation without the pictures. computer_status says what the drive is. Last, a
+    list; a picture too wide for the API made smaller, as a JPEG; what can't be read (a damaged Word file, one from
+    before 2007, an iPhone's photo) says why. The memory file keeps the conversation without the pictures. computer_status says what the drive is. Last, a
     photo shown on the screen (show_picture): its sun's yellow must be there in the picture of the screen."""
     import http.server
     import re
@@ -1393,8 +1393,8 @@ def files_check(args) -> list[str]:
                       r"\(\.doc, \.xls, \.ppt\), which Chat Computer's own system can't read inside yet\.",
             "heic": r"C:\\Users\\Sam\\Pictures\\IMG_0001\.HEIC \(3 KB\) is a HEIC picture \(as iPhones take them\), which "
                     r"Chat Computer's own system can't show Claude yet\.",
-            "wide": r"C:\\Users\\Sam\\Pictures\\Panorama\.png is a picture of 9000×40 pixels: too big for Claude to see "
-                    r"\(at most 8000 each way\)\.",
+            "wide": rf"C:\\Users\\Sam\\Pictures\\Panorama\.png \(\d+ KB, 9000×40 pixels, changed {day}\): the picture is "
+                    r"below, made smaller \(2576×11 pixels, \d+ KB\) as Claude's API would\.",
             "nopic": r"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx isn't a picture this screen shows \(JPEG, PNG or GIF\)\.",
             "showpic": r"Shown on the screen: C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels\)\.",
         }
@@ -1414,6 +1414,18 @@ def files_check(args) -> list[str]:
             if (content[1].get("type"), source.get("type"), source.get("media_type")) != (block, "base64", media) or \
                     (len(data), f"{fnv1a(data):016x}") != (int(want[2]), want[3]):
                 problems.append(f"{q}: the {block} wasn't sent as it is on the drive: {str(content)[:300]}")
+        # The panorama, too wide for the API: a JPEG of the size Claude sees.
+        from PIL import Image
+        import io
+        content = results["wide"].get("content")
+        source = content[1].get("source", {}) if isinstance(content, list) and len(content) == 2 else {}
+        try:
+            small = Image.open(io.BytesIO(base64.b64decode(source.get("data", ""))))
+            made = (source.get("media_type"), small.format, small.size)
+        except Exception as e:
+            made = (source.get("media_type"), repr(e), None)
+        if made != ("image/jpeg", "JPEG", (2576, 11)):
+            problems.append(f"the panorama wasn't sent made smaller: {made}")
         # The photo on the screen: the sun's yellow (250, 220, 90 as it was drawn), in a good few of its pixels.
         from PIL import Image
         screen = Image.open(HERE / "out" / "files.png").convert("RGB")

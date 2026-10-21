@@ -2,7 +2,9 @@
 //! and depth, interlaced or not) and GIF (its first frame), as RGB pixels on a background (where they're
 //! transparent), made to fit a box: shrunk by averaging (never enlarged), and a photo turned the way its camera says
 //! (its EXIF orientation). A big JPEG is decoded at a half, a quarter or an eighth of its size when that's still
-//! enough for the box, which takes a fraction of the memory and time.
+//! enough for the box, which takes a fraction of the memory and time. Decoding keeps to the memory it's given.
+//!
+//! And JPEG, written (encode.rs): a picture made smaller for Claude, written exactly as libjpeg writes it.
 //!
 //! Integer arithmetic only (the kernel's floating point is done in software). Every number read is checked before
 //! it's used, so a damaged picture gives an error, never a crash.
@@ -14,6 +16,9 @@ extern crate alloc;
 mod gif;
 mod jpeg;
 mod png;
+mod encode;
+
+pub use encode::jpeg as encode_jpeg;
 
 #[cfg(test)]
 mod tests;
@@ -64,23 +69,41 @@ pub fn format(data: &[u8]) -> Option<Format> {
 /// The most pixels decoded at once, before shrinking (a JPEG decoded smaller counts as its smaller size).
 const MOST_PIXELS: u64 = 40 << 20;
 
+/// The most bytes a pixel decoded can take while it's decoded, by format: a JPEG's three planes and the result; a PNG's
+/// rows as stored (up to 8 bytes a pixel, at 16 bits with transparency) and the result; a GIF's indexes and the result.
+fn per_pixel(f: Format) -> u64 {
+    match f {
+        Format::Jpeg => 8,
+        Format::Png => 12,
+        Format::Gif => 5,
+    }
+}
+
 /// The picture in `data`, turned as its camera says, on `background` where it's transparent, and shrunk (if need be)
 /// to fit `width` × `height`, its proportions kept.
 pub fn decode(data: &[u8], width: u32, height: u32, background: [u8; 3]) -> Result<Picture, Error> {
-    let (p, full) = match format(data).ok_or(Error::NotAPicture)? {
+    decode_within(data, width, height, background, u64::MAX)
+}
+
+/// The same, using at most about `memory` bytes as it's decoded: a picture that would take more is `TooBig` (so a
+/// kernel with a heap of its own size can say so, rather than run out).
+pub fn decode_within(data: &[u8], width: u32, height: u32, background: [u8; 3], memory: u64) -> Result<Picture, Error> {
+    let kind = format(data).ok_or(Error::NotAPicture)?;
+    let most = (memory / per_pixel(kind)).min(MOST_PIXELS);
+    let (p, full) = match kind {
         Format::Png => {
-            let p = png::decode(data, background, MOST_PIXELS)?;
+            let p = png::decode(data, background, most)?;
             let full = (p.width, p.height);
             (p, full)
         }
         Format::Gif => {
-            let p = gif::decode(data, background, MOST_PIXELS)?;
+            let p = gif::decode(data, background, most)?;
             let full = (p.width, p.height);
             (p, full)
         }
         Format::Jpeg => {
             // (Decoded perhaps at a fraction of its size: the size it fits is worked out from its whole size.)
-            let (p, orientation, (w, h)) = jpeg::decode(data, width, height, MOST_PIXELS)?;
+            let (p, orientation, (w, h)) = jpeg::decode(data, width, height, most, memory)?;
             (orient(p, orientation), if orientation >= 5 { (h, w) } else { (w, h) })
         }
     };

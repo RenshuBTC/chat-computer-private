@@ -72,17 +72,30 @@ impl Json {
 
     /// As JSON text again: what was read comes out the same (numbers as they were written).
     pub fn write(&self) -> String {
-        let mut out = String::new();
+        let mut out = String::with_capacity(self.size());
         self.write_to(&mut out);
         out
     }
 
-    fn write_to(&self, out: &mut String) {
+    /// About how long its JSON text is (exactly, unless strings need escaping): room to make for it.
+    pub fn size(&self) -> usize {
+        match self {
+            Json::Null => 4,
+            Json::Bool(_) => 5,
+            Json::Num(n) => n.len(),
+            Json::Str(s) => s.len() + 2,
+            Json::Arr(items) => 2 + items.iter().map(|v| v.size() + 1).sum::<usize>(),
+            Json::Obj(fields) => 2 + fields.iter().map(|(k, v)| k.len() + 4 + v.size()).sum::<usize>(),
+        }
+    }
+
+    /// Its JSON text, at the end of `out`.
+    pub fn write_to(&self, out: &mut String) {
         match self {
             Json::Null => out.push_str("null"),
             Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Json::Num(n) => out.push_str(n),
-            Json::Str(s) => out.push_str(&quote(s)),
+            Json::Str(s) => quote_into(out, s),
             Json::Arr(items) => {
                 out.push('[');
                 for (i, v) in items.iter().enumerate() {
@@ -99,7 +112,7 @@ impl Json {
                     if i > 0 {
                         out.push(',');
                     }
-                    out.push_str(&quote(k));
+                    quote_into(out, k);
                     out.push(':');
                     v.write_to(out);
                 }
@@ -264,7 +277,19 @@ pub fn parse(s: &str) -> Option<Json> {
 /// `s` as a JSON string, quotes included.
 pub fn quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
+    quote_into(&mut out, s);
+    out
+}
+
+/// `s` as a JSON string, quotes included, at the end of `out` (a long one that needs nothing escaped, like a
+/// picture's base64, copied whole).
+pub fn quote_into(out: &mut String, s: &str) {
     out.push('"');
+    if !s.bytes().any(|b| b < 0x20 || b == b'"' || b == b'\\') {
+        out.push_str(s);
+        out.push('"');
+        return;
+    }
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),
@@ -281,5 +306,4 @@ pub fn quote(s: &str) -> String {
         }
     }
     out.push('"');
-    out
 }

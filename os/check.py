@@ -61,6 +61,7 @@ virt-fw-vars (pip install virt-firmware).
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -1206,6 +1207,14 @@ def remember(args) -> list[str]:
     return problems
 
 
+def fnv1a(data: bytes) -> int:
+    """FNV-1a, 64 bits: the hash the ntfs crate's test volumes list each file's bytes by."""
+    h = 0xCBF29CE484222325
+    for x in data:
+        h = ((h ^ x) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
 def windows_disk(path: Path, efi: Path, settings: str, memory_id: int) -> dict[str, bytes]:
     """A disk like a PC's (memory_disk), with Windows' drive after the start-up partition: a basic data partition
     holding the ntfs crate's test volume (Windows' folders, a person's in Users, and more). Returns the start-up
@@ -1231,8 +1240,10 @@ def files_check(args) -> list[str]:
     (UTF-8 and UTF-16 text; a Word file said to be one; a long file in two parts), links followed (a junction, "My
     Documents", and a symbolic link on the Desktop), OneDrive's files read when they're on the PC and said to be
     online only when they aren't, a file Windows compressed itself said to be one, and a search that finds the
-    shopping list (and the link to it) but not the one in AppData (a hidden folder). computer_status says what the
-    drive is."""
+    shopping list (and the link to it) but not the one in AppData (a hidden folder). Word, Excel and PowerPoint files
+    come back as their words; a photo and a PDF whole, for Claude to see (each byte checked); a ZIP archive as its
+    list; what can't be read (a damaged Word file, one from before 2007, an iPhone's photo, a picture too wide) says
+    why. The memory file keeps the conversation without the pictures. computer_status says what the drive is."""
     import http.server
     import re
 
@@ -1255,6 +1266,15 @@ def files_check(args) -> list[str]:
         "budget": ("read_file", {"path": "C:\\Users\\Sam\\OneDrive\\Documents\\Budget.txt"}),
         "plan": ("read_file", {"path": "C:\\Users\\Sam\\OneDrive\\Documents\\Plan.docx"}),
         "compact": ("read_file", {"path": "C:\\Windows\\System32\\notepad.exe"}),
+        "docx": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Work\\Letter to the council.docx"}),
+        "xlsx": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Work\\Budget.xlsx"}),
+        "pptx": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Work\\Talk.pptx"}),
+        "photo": ("read_file", {"path": "C:\\Users\\Sam\\Pictures\\Beach.jpg"}),
+        "pdf": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Work\\Receipt.pdf"}),
+        "zip": ("read_file", {"path": "C:\\Users\\Sam\\Downloads\\photos.zip"}),
+        "olddoc": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Work\\Old letter.doc"}),
+        "heic": ("read_file", {"path": "C:\\Users\\Sam\\Pictures\\IMG_0001.HEIC"}),
+        "wide": ("read_file", {"path": "C:\\Users\\Sam\\Pictures\\Panorama.png"}),
         "status": ("computer_status", {}),
     }
 
@@ -1310,24 +1330,26 @@ def files_check(args) -> list[str]:
         if missing:
             problems.append(f"no tool result came back for {missing}")
             return problems
-        said = {q: str(r.get("content")) for q, r in results.items()}
+        # (A result with a picture or PDF: its words first, then the picture's or PDF's block.)
+        said = {q: str(r.get("content")[0]["text"] if isinstance(r.get("content"), list) else r.get("content"))
+                for q, r in results.items()}
         errors = {q for q, r in results.items() if r.get("is_error")}
         day = r"\d{4}-\d\d-\d\d"
         want = {
-            "list": rf"C:\\Users\\Sam\\Documents: 0 folders, 3 files\nLetter\.docx \(4 KB, {day}\)\n"
-                    rf"Old note\.txt \(76 bytes, {day}\)\nShopping list\.txt \(43 bytes, {day}\)",
+            "list": rf"C:\\Users\\Sam\\Documents: 1 folder, 3 files\nLetter\.docx \(4 KB, {day}\)\n"
+                    rf"Old note\.txt \(76 bytes, {day}\)\nShopping list\.txt \(43 bytes, {day}\)\nWork\\",
             "read": rf"C:\\Users\\Sam\\Documents\\Shopping list\.txt \(43 bytes, changed {day}\):\n"
                     r"Milk, eggs, tea — and café au lait\.\r\n",
             "note": rf"C:\\Users\\Sam\\Documents\\Old note\.txt \(76 bytes, changed {day}\):\n"
                     r"A note saved by Notepad, in UTF-16\.\r\n",
-            "word": r"C:\\Users\\Sam\\Documents\\Letter\.docx \(4 KB\) isn't text: it's a docx file, which "
-                    r"Chat Computer's own system can't read inside yet\.",
+            "word": r"C:\\Users\\Sam\\Documents\\Letter\.docx \(4 KB\) should be a Word, Excel or PowerPoint file, but "
+                    r"Chat Computer's own system can't read it: it may be damaged\.",
             "find": r"Under C:\\Users, 2 found:\n"
                     r"C:\\Users\\Sam\\Desktop\\Shopping list\.txt \(a link to \.\.\\Documents\\Shopping list\.txt\)\n"
                     rf"C:\\Users\\Sam\\Documents\\Shopping list\.txt \(43 bytes, {day}\)\n"
                     r"\[Looked in \d+ folders: all of them\.\]",
             "gone": r"C:\\Users\\Sam\\nothing\.txt: there's no such file or folder",
-            "mydocs": r"C:\\Users\\Sam\\Documents \(reached by the link C:\\Users\\Sam\\My Documents\): 0 folders, "
+            "mydocs": r"C:\\Users\\Sam\\Documents \(reached by the link C:\\Users\\Sam\\My Documents\): 1 folder, "
                       rf"3 files\nLetter\.docx \(4 KB, {day}\)\n.*",
             "desk": r"C:\\Users\\Sam\\Desktop: 0 folders, 1 file\n"
                     r"Shopping list\.txt \(a link to \.\.\\Documents\\Shopping list\.txt\)",
@@ -1344,12 +1366,44 @@ def files_check(args) -> list[str]:
                     r"not downloaded to this PC \(Windows downloads it when it's opened there\)",
             "compact": r"C:\\Windows\\System32\\notepad\.exe: Windows compressed this file itself \(Compact OS\), which "
                        r"Chat Computer's own system can't read yet",
+            "docx": rf"C:\\Users\\Sam\\Documents\\Work\\Letter to the council\.docx \(a Word document, 38 KB, changed {day}\), "
+                    r"its words:\n# A letter to the council\n\n# Why I'm writing\n.*\| Week \| Bins \| Emptied \|\n.*Yours faithfully,",
+            "xlsx": rf"C:\\Users\\Sam\\Documents\\Work\\Budget\.xlsx \(an Excel workbook, 8 KB, changed {day}\), its words:\n"
+                    r"## Budget\nrow,A,B,C,D,E,F,G\n.*\n4,Total,1612\.5 \(=SUM\(B2:B3\)\),,,,,\n.*## Notes\n.*",
+            "pptx": rf"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx \(a PowerPoint presentation, 35 KB, changed {day}\), its "
+                    r"words:\n## Slide 1: Chat Computer\n.*## Slide 2: What it does\n.*Notes: Say hello first\.\n.*",
+            "photo": rf"C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels, changed {day}\): the picture is below\.",
+            "pdf": rf"C:\\Users\\Sam\\Documents\\Work\\Receipt\.pdf \(600 bytes, changed {day}\): the PDF is below, its pages' "
+                   r"words and pictures\.",
+            "zip": r"C:\\Users\\Sam\\Downloads\\photos\.zip is a ZIP archive \(4 KB\) of 2 files:\nBeach\.jpg \(10 KB\)\n"
+                   r"notes\.txt \(23 bytes\)\n\[What's in it isn't opened here\.\]",
+            "olddoc": r"C:\\Users\\Sam\\Documents\\Work\\Old letter\.doc \(5 KB\) is in Office's format from before 2007 "
+                      r"\(\.doc, \.xls, \.ppt\), which Chat Computer's own system can't read inside yet\.",
+            "heic": r"C:\\Users\\Sam\\Pictures\\IMG_0001\.HEIC \(3 KB\) is a HEIC picture \(as iPhones take them\), which "
+                    r"Chat Computer's own system can't show Claude yet\.",
+            "wide": r"C:\\Users\\Sam\\Pictures\\Panorama\.png is a picture of 9000×40 pixels: too big for Claude to see "
+                    r"\(at most 8000 each way\)\.",
         }
         for q, pattern in want.items():
             if not re.fullmatch(pattern, said[q], re.S):
                 problems.append(f"{q}: {said[q][:400]!r}")
         if errors != {"gone", "plan", "compact"}:
             problems.append(f"errors came back for {sorted(errors)}, not just for the files that can't be read")
+        # The photo and the PDF, whole: each a block after the words, its bytes as they are on the drive.
+        listing = {line.split("\t")[0]: line.split("\t") for line in (HERE / "ntfs/tests/small.txt").read_text().splitlines()}
+        for q, path, block, media in [("photo", "Users/Sam/Pictures/Beach.jpg", "image", "image/jpeg"),
+                                      ("pdf", "Users/Sam/Documents/Work/Receipt.pdf", "document", "application/pdf")]:
+            content = results[q].get("content")
+            source = content[1].get("source", {}) if isinstance(content, list) and len(content) == 2 else {}
+            data = base64.b64decode(source.get("data", ""))
+            want = listing[path]
+            if (content[1].get("type"), source.get("type"), source.get("media_type")) != (block, "base64", media) or \
+                    (len(data), f"{fnv1a(data):016x}") != (int(want[2]), want[3]):
+                problems.append(f"{q}: the {block} wasn't sent as it is on the drive: {str(content)[:300]}")
+        # The memory file: the conversation, without the pictures and PDF (each a line saying it was there).
+        kept = [int(m) for m in re.findall(r"memory: the conversation kept \((\d+) bytes\)", text)]
+        if not kept or max(kept) > 300_000:
+            problems.append(f"the memory file kept {kept} bytes: pictures in it?")
         report = (HERE / "ntfs/tests/small.txt").read_text()
         size = int(next(line for line in report.splitlines() if line.startswith("Documents/Report 2026.txt\t")).split("\t")[2])
         big, more = said["big"], said["more"]

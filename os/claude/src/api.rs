@@ -62,6 +62,92 @@ pub fn tool_result(id: &str, content: &str, is_error: bool) -> Json {
     ])
 }
 
+/// A tool's result with more than words: its words, then pictures or a document (`image`, `pdf`) for Claude to see.
+pub fn tool_result_with(id: &str, content: &str, is_error: bool, more: Vec<Json>) -> Json {
+    let mut blocks = alloc::vec![object(&[("type", Json::Str(String::from("text"))), ("text", Json::Str(String::from(content)))])];
+    blocks.extend(more);
+    object(&[
+        ("type", Json::Str(String::from("tool_result"))),
+        ("tool_use_id", Json::Str(String::from(id))),
+        ("content", Json::Arr(blocks)),
+        ("is_error", Json::Bool(is_error)),
+    ])
+}
+
+/// A picture for Claude to see, as the API takes one in a tool's result: JPEG, PNG, GIF or WebP (`media_type`, such
+/// as "image/jpeg"), its bytes in base64 (at most 10 MB of it).
+pub fn image(media_type: &str, data: &[u8]) -> Json {
+    attachment("image", media_type, data)
+}
+
+/// A PDF for Claude to read, its pages' words and pictures both (at most 32 MB of request, with the rest).
+pub fn pdf(data: &[u8]) -> Json {
+    attachment("document", "application/pdf", data)
+}
+
+fn attachment(kind: &str, media_type: &str, data: &[u8]) -> Json {
+    let source = object(&[
+        ("type", Json::Str(String::from("base64"))),
+        ("media_type", Json::Str(String::from(media_type))),
+        ("data", Json::Str(base64(data))),
+    ]);
+    object(&[("type", Json::Str(String::from(kind))), ("source", source)])
+}
+
+/// The pictures and documents in a turn's tool results: each one's size, as base64, in order.
+pub fn attachments(turn: &Turn) -> Vec<usize> {
+    let Content::Blocks(blocks) = &turn.content else { return Vec::new() };
+    let mut sizes = Vec::new();
+    for b in blocks {
+        if let Some(Json::Arr(inner)) = b.get("content") {
+            sizes.extend(inner.iter().filter_map(|i| i.path(&["source", "data"]).and_then(|d| d.str())).map(|d| d.len()));
+        }
+    }
+    sizes
+}
+
+/// Takes the pictures and documents out of a turn's tool results (the first `keep` of them stay), each replaced by
+/// a line saying it was there. How many were taken out.
+pub fn unattach(turn: &mut Turn, keep: usize) -> usize {
+    let Content::Blocks(blocks) = &mut turn.content else { return 0 };
+    let (mut seen, mut taken) = (0, 0);
+    for b in blocks.iter_mut() {
+        if let Some(Json::Arr(inner)) = b.get_mut("content") {
+            for i in inner.iter_mut() {
+                if i.path(&["source", "data"]).is_none() {
+                    continue;
+                }
+                seen += 1;
+                if seen > keep {
+                    let what = if i.get("type").and_then(|t| t.str()) == Some("image") { "picture" } else { "document" };
+                    let note = alloc::format!("[The {what} read here isn't sent any more: read_file shows it again.]");
+                    *i = object(&[("type", Json::Str(String::from("text"))), ("text", Json::Str(note))]);
+                    taken += 1;
+                }
+            }
+        }
+    }
+    taken
+}
+
+fn object(fields: &[(&str, Json)]) -> Json {
+    Json::Obj(fields.iter().map(|(k, v)| (String::from(*k), v.clone())).collect())
+}
+
+/// Base64 (RFC 4648, with padding).
+pub fn base64(data: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        out.push(ABC[(n >> 18) as usize & 63]);
+        out.push(ABC[(n >> 12) as usize & 63]);
+        out.push(if chunk.len() > 1 { ABC[(n >> 6) as usize & 63] } else { b'=' });
+        out.push(if chunk.len() > 2 { ABC[n as usize & 63] } else { b'=' });
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
 /// Tools Anthropic runs itself (server tools), as their definitions' JSON: Claude searches the web, and reads web
 /// pages, without the computer doing either.
 pub const WEB_SEARCH: &str = r#"{"type":"web_search_20250305","name":"web_search","max_uses":5}"#;
@@ -99,7 +185,9 @@ pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools
         body.push(']');
     }
     body.push_str(",\"messages\":");
-    body.push_str(&messages(conversation));
+    let room: usize = conversation.iter().map(turn_size).sum::<usize>() + 16;
+    body.reserve(room);
+    write_messages(&mut body, conversation);
     body.push('}');
     http::request(
         "POST",
@@ -118,7 +206,22 @@ pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools
 
 /// The conversation as the API's "messages" array (JSON text): what goes in a request, and what's kept across restarts.
 pub fn messages(conversation: &[Turn]) -> String {
-    let mut out = String::from("[");
+    let mut out = String::with_capacity(conversation.iter().map(turn_size).sum::<usize>() + 2);
+    write_messages(&mut out, conversation);
+    out
+}
+
+/// About how long a turn's JSON is.
+pub fn turn_size(turn: &Turn) -> usize {
+    32 + match &turn.content {
+        Content::Text(t) => t.len() + 2,
+        Content::Blocks(blocks) => blocks.iter().map(|b| b.size() + 1).sum(),
+    }
+}
+
+/// The "messages" array, at the end of `out` (written in place: a picture's base64 isn't copied more than once).
+fn write_messages(out: &mut String, conversation: &[Turn]) {
+    out.push('[');
     for (i, turn) in conversation.iter().enumerate() {
         if i > 0 {
             out.push(',');
@@ -127,14 +230,25 @@ pub fn messages(conversation: &[Turn]) -> String {
             Role::User => "user",
             Role::Assistant => "assistant",
         };
-        let content = match &turn.content {
-            Content::Text(text) => json::quote(text),
-            Content::Blocks(blocks) => Json::Arr(blocks.clone()).write(),
-        };
-        out.push_str(&format!("{{\"role\":\"{role}\",\"content\":{content}}}"));
+        out.push_str("{\"role\":\"");
+        out.push_str(role);
+        out.push_str("\",\"content\":");
+        match &turn.content {
+            Content::Text(text) => json::quote_into(out, text),
+            Content::Blocks(blocks) => {
+                out.push('[');
+                for (k, b) in blocks.iter().enumerate() {
+                    if k > 0 {
+                        out.push(',');
+                    }
+                    b.write_to(out);
+                }
+                out.push(']');
+            }
+        }
+        out.push('}');
     }
     out.push(']');
-    out
 }
 
 /// A conversation from its "messages" JSON (as `messages` wrote it); None if it isn't one.

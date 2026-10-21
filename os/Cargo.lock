@@ -27,9 +27,11 @@ dependencies = [
  "markdown",
  "net",
  "ntfs",
+ "office",
  "remember",
  "text",
  "tls",
+ "zip",
 ]
 
 [[package]]
@@ -72,6 +74,13 @@ name = "ntfs"
 version = "0.1.0"
 
 [[package]]
+name = "office"
+version = "0.1.0"
+dependencies = [
+ "zip",
+]
+
+[[package]]
 name = "remember"
 version = "0.1.0"
 
@@ -88,3 +97,7 @@ version = "0.1.0"
 dependencies = [
  "crypto",
 ]
+
+[[package]]
+name = "zip"
+version = "0.1.0"

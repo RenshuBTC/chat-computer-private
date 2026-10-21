@@ -674,6 +674,14 @@ Users/Sam/Documents	dir	0	0
 Users/Sam/Documents/Letter.docx	file	3004	0adda31a09ae1d9d
 Users/Sam/Documents/Old note.txt	file	76	771bdd60807cbb65
 Users/Sam/Documents/Shopping list.txt	file	43	dd2d83ee9ed238f1
+Users/Sam/Documents/Work	dir	0	0
+Users/Sam/Documents/Work/Budget.xlsx	file	7420	a0c98c830053595a
+Users/Sam/Documents/Work/Letter to the council.docx	file	37141	cada8f2a7228149e
+Users/Sam/Documents/Work/Old letter.doc	file	4008	21e322186a549b7b
+Users/Sam/Documents/Work/Receipt.pdf	file	600	a06c4b8247168e54
+Users/Sam/Documents/Work/Talk.pptx	file	34883	4d55a2926899c648
+Users/Sam/Downloads	dir	0	0
+Users/Sam/Downloads/photos.zip	file	3020	229b48eb6671626f
 Users/Sam/My Documents	link	0	0
 Users/Sam/OneDrive	dir	0	0
 Users/Sam/OneDrive/Documents	dir	0	0
@@ -683,6 +691,11 @@ Users/Sam/OneDrive/Documents/Notes.txt	online	0	0
 Users/Sam/OneDrive/Documents/Plan.docx	online	0	0
 Users/Sam/OneDrive/Pictures	dir	0	0
 Users/Sam/OneDrive/Pictures/Big.raw	file	100000	8b05e35704c276f2
+Users/Sam/Pictures	dir	0	0
+Users/Sam/Pictures/Beach.jpg	file	9912	2ac7049f92de8832
+Users/Sam/Pictures/IMG_0001.HEIC	file	2024	9d81ec493ddada88
+Users/Sam/Pictures/Panorama.png	file	1460	780451ff00e9ea81
+Users/Sam/Pictures/Screenshot.png	file	1187	2437f38f861df328
 Windows	dir	0	0
 Windows/System32	dir	0	0
 Windows/System32/drivers	dir	0	0

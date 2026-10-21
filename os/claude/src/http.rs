@@ -27,6 +27,7 @@ pub fn request(method: &str, host: &str, path: &str, headers: &[(&str, &str)], b
     }
     r.push_str("\r\n");
     let mut out = r.into_bytes();
+    out.reserve_exact(body.len());
     out.extend_from_slice(body);
     out
 }

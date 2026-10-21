@@ -282,3 +282,42 @@ fn http_bodies_by_length_chunks_or_until_closed() {
     let req = http::request("GET", "example.com", "/", &[("Accept", "*/*")], b"");
     assert_eq!(req, b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept: */*\r\n\r\n".to_vec());
 }
+
+#[test]
+fn pictures_and_pdfs_go_in_tool_results_as_base64_and_come_out_again() {
+    assert_eq!(api::base64(b""), "");
+    assert_eq!(api::base64(b"f"), "Zg==");
+    assert_eq!(api::base64(b"fo"), "Zm8=");
+    assert_eq!(api::base64(b"foo"), "Zm9v");
+    assert_eq!(api::base64(&[0xFB, 0xFF, 0xBF]), "+/+/");
+    let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 16];
+    let result = api::tool_result_with("toolu_1", "C:\\Beach.jpg (6 bytes):", false, vec![api::image("image/jpeg", &jpeg), api::pdf(b"%PDF-1.7")]);
+    let mut turn = Turn { role: Role::User, content: Content::Blocks(vec![result]) };
+    let sent = json::parse(&api::messages(core::slice::from_ref(&turn))).unwrap();
+    let Json::Arr(turns) = &sent else { panic!("{sent:?}") };
+    let Some(Json::Arr(blocks)) = turns[0].get("content") else { panic!("{sent:?}") };
+    let Some(Json::Arr(content)) = blocks[0].get("content") else { panic!("{sent:?}") };
+    assert_eq!(content[0], json::parse(r#"{"type":"text","text":"C:\\Beach.jpg (6 bytes):"}"#).unwrap());
+    assert_eq!(
+        content[1],
+        json::parse(r#"{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"/9j/4AAQ"}}"#).unwrap()
+    );
+    assert_eq!(content[2].path(&["source", "media_type"]).and_then(|m| m.str()), Some("application/pdf"));
+    assert_eq!(api::attachments(&turn), [8, 12]);
+    // Taken out, all but the first: a line says each was there.
+    assert_eq!(api::unattach(&mut turn, 1), 1);
+    assert_eq!(api::attachments(&turn), [8]);
+    let text = api::messages(core::slice::from_ref(&turn));
+    assert!(text.contains("The document read here isn't sent any more"), "{text}");
+    assert_eq!(api::unattach(&mut turn, 0), 1);
+    assert!(api::attachments(&turn).is_empty());
+    // Written in place, the request is the same JSON as the conversation written whole.
+    let whole = Json::Arr(vec![Json::Obj(vec![
+        ("role".into(), Json::Str("user".into())),
+        ("content".into(), match &turn.content {
+            Content::Blocks(b) => Json::Arr(b.clone()),
+            Content::Text(t) => Json::Str(t.clone()),
+        }),
+    ])]);
+    assert_eq!(api::messages(core::slice::from_ref(&turn)), whole.write());
+}

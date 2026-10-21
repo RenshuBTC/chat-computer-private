@@ -5,7 +5,8 @@ and Unicode names, long names and 8.3 short names, small files kept in their fil
 fragmented into hundreds of pieces (so its file record needs an attribute list and others to hold them all), a sparse
 file, compressed files (in a compressed folder), named streams, a hard link, symbolic links, a junction, empty files, a
 folder of 600 files (an index of several blocks, in two levels), OneDrive's files (downloaded, or "online only") and a
-file Windows compressed itself. Each volume's contents are listed in tests/<name>.txt: each file's path, what it is
+file Windows compressed itself; and documents as people keep them (Word, Excel and PowerPoint files, a PDF, photos, a
+ZIP archive, a Word file from before 2007 and an iPhone's photo). Each volume's contents are listed in tests/<name>.txt: each file's path, what it is
 (a file, a folder, a link, a file "online" only or "compacted" by Windows), its size and a hash of its bytes (FNV-1a,
 64 bits), for the tests to check against.
 
@@ -13,6 +14,7 @@ file Windows compressed itself. Each volume's contents are listed in tests/<name
 """
 from __future__ import annotations
 
+import io
 import lzma
 import os
 import random
@@ -20,7 +22,10 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
+
+from PIL import Image, ImageDraw
 
 HERE = Path(__file__).resolve().parent
 
@@ -57,6 +62,41 @@ def text(n: int, seed: int) -> bytes:
     return "".join(out).encode()[:n]
 
 
+def picture(width: int, height: int, kind: str) -> bytes:
+    """A picture made here: a sky, a sea and a sun (so it's a photo of sorts), as JPEG or PNG."""
+    im = Image.new("RGB", (width, height))
+    d = ImageDraw.Draw(im)
+    for y in range(height):
+        blue = 120 + 135 * y // max(height, 1)
+        d.line([(0, y), (width, y)], fill=(40, 90 + y * 60 // max(height, 1), blue) if y > height * 3 // 5 else (150, 200, blue))
+    d.ellipse([width * 2 // 3, height // 8, width * 2 // 3 + height // 4, height // 8 + height // 4], fill=(250, 220, 90))
+    out = io.BytesIO()
+    im.save(out, kind, quality=85) if kind == "JPEG" else im.save(out, kind)
+    return out.getvalue()
+
+
+def tiny_pdf(words: bytes) -> bytes:
+    """A PDF of one page with one line on it, its cross-reference table's offsets as they are."""
+    content = b"BT /F1 24 Tf 72 700 Td (" + words + b") Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for i, o in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % off for off in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return out
+
+
 def fill(mnt: Path, big_cluster: bool) -> None:
     def put(rel: str, data: bytes) -> None:
         p = mnt / rel
@@ -74,6 +114,25 @@ def fill(mnt: Path, big_cluster: bool) -> None:
     put("Users/Sam/Desktop/desktop.ini", b"[.ShellClassInfo]\r\n")
     os.setxattr(mnt / "Users/Sam/Desktop/desktop.ini", "system.ntfs_attrib_be", (0x02 | 0x04 | 0x20).to_bytes(4, "big"))
     put("Users/Sam/AppData/Local/Temp/shopping list (old).txt", b"in a hidden folder\n")
+    # Documents as people keep them: Word, Excel and PowerPoint files (the office crate's own test documents), a PDF,
+    # a photo and a screenshot, one too wide for Claude to be shown, a ZIP archive, a Word file from before 2007 (a
+    # compound file), and an iPhone's photo (HEIC).
+    office = HERE.parent.parent / "office" / "tests"
+    for name, to in [("letter.docx", "Letter to the council.docx"), ("budget-libreoffice.xlsx", "Budget.xlsx"),
+                     ("talk.pptx", "Talk.pptx")]:
+        put(f"Users/Sam/Documents/Work/{to}", (office / name).read_bytes())
+    put("Users/Sam/Documents/Work/Receipt.pdf", tiny_pdf(b"Receipt: 3 coffees, 12.50"))
+    put("Users/Sam/Documents/Work/Old letter.doc", bytes([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) + pattern(4_000, 21))
+    beach = picture(640, 480, "JPEG")
+    put("Users/Sam/Pictures/Beach.jpg", beach)
+    put("Users/Sam/Pictures/Screenshot.png", picture(300, 200, "PNG"))
+    put("Users/Sam/Pictures/Panorama.png", picture(9_000, 40, "PNG"))
+    put("Users/Sam/Pictures/IMG_0001.HEIC", b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + pattern(2_000, 22))
+    photos = io.BytesIO()
+    with zipfile.ZipFile(photos, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("Beach.jpg", beach)
+        z.writestr("notes.txt", "Photos from the beach.\n")
+    put("Users/Sam/Downloads/photos.zip", photos.getvalue())
     os.setxattr(mnt / "Users/Sam/AppData", "system.ntfs_attrib_be", (0x10 | 0x02).to_bytes(4, "big"))
     put("Empty.txt", b"")
     put("Documents/Report 2026.txt", text(100_000, 1))

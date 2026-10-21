@@ -4,6 +4,10 @@
 //! folders ("Windows" and "Users") is C:. The NTFS reader (ntfs/) does the rest. Links (a junction such as "My
 //! Documents", a symbolic link) are followed, on C:; OneDrive's files are read when they're on the PC, and said to be
 //! online only when they aren't. A drive BitLocker encrypts can't be read yet, and the status says so.
+//!
+//! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); a
+//! ZIP archive as the list of what's in it; and pictures (JPEG, PNG, GIF, WebP) and PDFs whole, for Claude to see
+//! (the API takes them as they are: Claude reads a PDF's pages as words and as pictures).
 
 use crate::storage::{self, Disk};
 use crate::sync::SpinLock;
@@ -28,6 +32,121 @@ const MOST_FOLDERS: usize = 4_000;
 const SEARCH_MS: u64 = 5_000;
 /// The most links followed on the way to a file (a link to a link to...), so links in a circle end.
 const MOST_LINKS: usize = 8;
+/// The biggest picture Claude is shown (the API takes 10 MB of base64: 7.5 MB), and its most pixels each way.
+const MOST_PICTURE: u64 = 7_400_000;
+const MOST_PIXELS: u32 = 8_000;
+/// The biggest PDF (the API takes a request of 32 MB, the conversation and the PDF's base64 together), and Office
+/// file or ZIP archive, read.
+const MOST_PDF: u64 = 20_000_000;
+const MOST_OFFICE: u64 = 64_000_000;
+
+/// What read_file gives Claude: words, and perhaps a picture or a PDF to see.
+pub struct Read {
+    pub text: String,
+    pub attachment: Option<Attachment>,
+}
+
+pub enum Attachment {
+    /// A picture's type ("image/jpeg") and bytes.
+    Picture(&'static str, Vec<u8>),
+    Pdf(Vec<u8>),
+}
+
+/// What a file is, from its first bytes (and, for a ZIP, its name's extension).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Picture(&'static str),
+    Pdf,
+    Office,
+    Zip,
+    /// Microsoft's "compound file": Office's files before 2007, and Office files a password protects.
+    OldOffice,
+    /// A picture or video in the ISO media format: what it is ("a HEIC picture").
+    Media(&'static str),
+    Other,
+}
+
+fn kind_of(head: &[u8], name: &str) -> Kind {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Kind::Picture("image/jpeg");
+    }
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Kind::Picture("image/png");
+    }
+    if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        return Kind::Picture("image/gif");
+    }
+    if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
+        return Kind::Picture("image/webp");
+    }
+    if head.starts_with(b"%PDF-") {
+        return Kind::Pdf;
+    }
+    if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
+        let office = ["docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx", "ppsx", "odt", "ods", "odp", "ott", "ots", "otp"];
+        return if office.contains(&ext.as_str()) { Kind::Office } else { Kind::Zip };
+    }
+    if head.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        return Kind::OldOffice;
+    }
+    if head.get(4..8) == Some(b"ftyp") {
+        return match head.get(8..12) {
+            Some(b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1") => Kind::Media("a HEIC picture (as iPhones take them)"),
+            Some(b"avif" | b"avis") => Kind::Media("an AVIF picture"),
+            _ => Kind::Media("a video"),
+        };
+    }
+    Kind::Other
+}
+
+/// A picture's width and height in pixels, from its header (None if it doesn't say where it's looked for).
+fn dimensions(media: &str, b: &[u8]) -> Option<(u32, u32)> {
+    let be16 = |i: usize| Some(u16::from_be_bytes(b.get(i..i + 2)?.try_into().ok()?) as u32);
+    let le16 = |i: usize| Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?) as u32);
+    let be32 = |i: usize| Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?));
+    let le24 = |i: usize| Some(b.get(i..i + 3)?.iter().rev().fold(0u32, |v, &x| v << 8 | x as u32));
+    match media {
+        "image/png" => Some((be32(16)?, be32(20)?)),
+        "image/gif" => Some((le16(6)?, le16(8)?)),
+        "image/webp" => match b.get(12..16)? {
+            b"VP8X" => Some((le24(24)? + 1, le24(27)? + 1)),
+            b"VP8L" => {
+                let v = u32::from_le_bytes(b.get(21..25)?.try_into().ok()?);
+                Some(((v & 0x3FFF) + 1, (v >> 14 & 0x3FFF) + 1))
+            }
+            b"VP8 " => Some((le16(26)? & 0x3FFF, le16(28)? & 0x3FFF)),
+            _ => None,
+        },
+        // JPEG: its segments, to the start of the frame (SOF0 to SOF15, but not DHT, JPG or DAC), which has them.
+        _ => {
+            let mut at = 2;
+            while at + 9 < b.len() {
+                if b[at] != 0xFF {
+                    return None;
+                }
+                let marker = b[at + 1];
+                if marker == 0xFF {
+                    at += 1;
+                    continue;
+                }
+                if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+                    return Some((be16(at + 7)?, be16(at + 5)?));
+                }
+                at += 2 + be16(at + 2)? as usize;
+            }
+            None
+        }
+    }
+}
+
+/// A whole file's bytes (at most `most`).
+fn whole(v: &ntfs::Volume, p: &mut Partition, f: &ntfs::File, most: u64) -> Result<Vec<u8>, ntfs::Error> {
+    let mut data = vec![0u8; f.size.min(most) as usize];
+    let n = v.read(p, f, 0, &mut data)?;
+    data.truncate(n);
+    Ok(data)
+}
 
 struct Windows {
     /// The partition's first block on the start-up drive, and its size in blocks.
@@ -353,35 +472,123 @@ pub fn list(path: &str) -> Result<String, String> {
     })?
 }
 
-/// A file's words (read_file), from byte `from`: text as it is (UTF-8, or UTF-16 as Notepad saves it); a file of
-/// another kind is said to be one.
-pub fn read(path: &str, from: u64) -> Result<String, String> {
+/// A file (read_file), from byte `from`: text as it is (UTF-8, or UTF-16 as Notepad saves it); an Office file's
+/// words (`from` counts in them); a ZIP archive's list; a picture or a PDF whole, for Claude to see. A file of another
+/// kind is said to be one.
+pub fn read(path: &str, from: u64) -> Result<Read, String> {
     let rel = inside(path)?;
     with(|v, p| {
         let (e, rel, link) = found(v, p, &rel)?;
         let f = v.open_file(p, e.record).map_err(|err| error_text(err, &shown(&rel)))?;
-        if from >= f.size && f.size > 0 {
-            return Ok(format!("{} is {} long: nothing from byte {from}.", shown(&rel), size(f.size)));
+        let said = |text: String| Ok(Read { text, attachment: None });
+        let fail = |err: ntfs::Error| error_text(err, &shown(&rel));
+        let name = format!("{}{}", shown(&rel), by_way_of(&link));
+        let mut head = [0u8; 32];
+        let n = v.read(p, &f, 0, &mut head).map_err(fail)?;
+        match kind_of(&head[..n], &rel) {
+            Kind::Picture(media) => {
+                if f.size > MOST_PICTURE {
+                    return said(format!("{name} is a picture of {}: too big for Claude to see (at most {}).", size(f.size), size(MOST_PICTURE)));
+                }
+                let data = whole(v, p, &f, MOST_PICTURE).map_err(fail)?;
+                let pixels = dimensions(media, &data);
+                if let Some((w, h)) = pixels.filter(|&(w, h)| w > MOST_PIXELS || h > MOST_PIXELS) {
+                    return said(format!("{name} is a picture of {w}×{h} pixels: too big for Claude to see (at most {MOST_PIXELS} each way)."));
+                }
+                let pixels = pixels.map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default();
+                let text = format!("{name} ({}{pixels}, changed {}): the picture is below.", size(f.size), date(e.modified));
+                Ok(Read { text, attachment: Some(Attachment::Picture(media, data)) })
+            }
+            Kind::Pdf => {
+                if f.size > MOST_PDF {
+                    return said(format!("{name} is a PDF of {}: too big to send to Claude (at most {}).", size(f.size), size(MOST_PDF)));
+                }
+                let data = whole(v, p, &f, MOST_PDF).map_err(fail)?;
+                let text = format!("{name} ({}, changed {}): the PDF is below, its pages' words and pictures.", size(f.size), date(e.modified));
+                Ok(Read { text, attachment: Some(Attachment::Pdf(data)) })
+            }
+            Kind::Office | Kind::Zip if f.size > MOST_OFFICE => {
+                said(format!("{name} is {}: too big for Chat Computer's own system to open.", size(f.size)))
+            }
+            Kind::Office => {
+                let data = whole(v, p, &f, MOST_OFFICE).map_err(fail)?;
+                match office::read(&data) {
+                    Ok((kind, words)) => said(part_of(&words, from, &format!("{name} ({}, {}, changed {}), its words", kind.name(), size(f.size), date(e.modified)))),
+                    Err(office::Error::Zip(zip::Error::Encrypted)) => said(format!("{name}: a password protects it, so it can't be read here.")),
+                    Err(_) => said(format!("{name} ({}) should be a Word, Excel or PowerPoint file, but Chat Computer's own system can't read it: it may be damaged.", size(f.size))),
+                }
+            }
+            Kind::Zip => {
+                let data = whole(v, p, &f, MOST_OFFICE).map_err(fail)?;
+                match zip::Archive::open(&data) {
+                    Ok(archive) => {
+                        let files: Vec<&zip::Entry> = archive.entries().iter().filter(|e| !e.is_folder()).collect();
+                        let mut out = format!("{name} is a ZIP archive ({}) of {} file{}:", size(f.size), files.len(), if files.len() == 1 { "" } else { "s" });
+                        for entry in files.iter().take(MOST_LISTED) {
+                            out += &format!("\n{} ({})", entry.name, size(entry.size));
+                        }
+                        if files.len() > MOST_LISTED {
+                            out += &format!("\n...and {} more", files.len() - MOST_LISTED);
+                        }
+                        out += "\n[What's in it isn't opened here.]";
+                        said(out)
+                    }
+                    Err(_) => said(format!("{name} ({}) isn't a ZIP archive Chat Computer's own system can read: it may be damaged.", size(f.size))),
+                }
+            }
+            Kind::OldOffice => {
+                let ext = rel.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                said(if ext.ends_with('x') || ext.ends_with('m') {
+                    format!("{name}: a password protects it, so it can't be read here.")
+                } else {
+                    format!("{name} ({}) is in Office's format from before 2007 (.doc, .xls, .ppt), which Chat Computer's own system can't read inside yet.", size(f.size))
+                })
+            }
+            Kind::Media(what) => said(format!("{name} ({}) is {what}, which Chat Computer's own system can't show Claude yet.", size(f.size))),
+            Kind::Other => {
+                if from >= f.size && f.size > 0 {
+                    return said(format!("{} is {} long: nothing from byte {from}.", shown(&rel), size(f.size)));
+                }
+                let mut buf = vec![0u8; (f.size - from.min(f.size)).min(READ_AT_ONCE as u64) as usize];
+                let n = v.read(p, &f, from, &mut buf).map_err(fail)?;
+                buf.truncate(n);
+                let Some((text, used)) = as_text(&buf, from == 0) else {
+                    let kind = rel.rsplit('.').next().filter(|k| k.len() <= 5 && *k != rel).unwrap_or("binary");
+                    return said(format!(
+                        "{name} ({}) isn't text: it's a {kind} file, which Chat Computer's own system can't read inside yet.",
+                        size(f.size)
+                    ));
+                };
+                let next = from + used as u64;
+                let mut out = format!("{name} ({}, changed {}):\n{text}", size(f.size), date(e.modified));
+                if next < f.size {
+                    out += &format!("\n[The file goes on: read_file with offset {next} reads the next part.]");
+                }
+                said(out)
+            }
         }
-        let mut buf = vec![0u8; (f.size - from.min(f.size)).min(READ_AT_ONCE as u64) as usize];
-        let n = v.read(p, &f, from, &mut buf).map_err(|err| error_text(err, &shown(&rel)))?;
-        buf.truncate(n);
-        let Some((text, used)) = as_text(&buf, from == 0) else {
-            let kind = rel.rsplit('.').next().filter(|k| k.len() <= 5 && *k != rel).unwrap_or("binary");
-            return Ok(format!(
-                "{}{} ({}) isn't text: it's a {kind} file, which Chat Computer's own system can't read inside yet.",
-                shown(&rel),
-                by_way_of(&link),
-                size(f.size)
-            ));
-        };
-        let next = from + used as u64;
-        let mut out = format!("{}{} ({}, changed {}):\n{text}", shown(&rel), by_way_of(&link), size(f.size), date(e.modified));
-        if next < f.size {
-            out += &format!("\n[The file goes on: read_file with offset {next} reads the next part.]");
-        }
-        Ok(out)
     })?
+}
+
+/// Up to `READ_AT_ONCE` bytes of `words`, from byte `from` (moved back to a character's start), after `header`; and,
+/// if there's more, where to go on from.
+fn part_of(words: &str, from: u64, header: &str) -> String {
+    let mut start = (from as usize).min(words.len());
+    while !words.is_char_boundary(start) {
+        start -= 1;
+    }
+    if start >= words.len() && !words.is_empty() {
+        return format!("{header}: {} bytes of them, so nothing from {from}.", words.len());
+    }
+    let mut end = (start + READ_AT_ONCE).min(words.len());
+    while !words.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = format!("{header}{}:\n{}", if start > 0 { format!(", from byte {start}") } else { String::new() }, &words[start..end]);
+    if end < words.len() {
+        out += &format!("\n[The words go on: read_file with offset {end} reads the next part.]");
+    }
+    out
 }
 
 /// Bytes as text, if they are text: UTF-16 with its byte order mark, or UTF-8 (a character cut off at the end left

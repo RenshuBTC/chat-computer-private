@@ -111,6 +111,12 @@ const WEB_TOOLS: [&str; 2] = [api::WEB_SEARCH, api::WEB_FETCH];
 /// it from its cache (api::request).
 const SENT_BYTES: usize = 600_000;
 
+/// The most of pictures and PDFs (as base64) sent with a question, and how many: newest first, older ones taken out
+/// (a line says each was there). Under the API's 32 MB a request, with the rest of the conversation; and at most 20,
+/// as more than that would make the API take only smaller pictures.
+const ATTACHED_BYTES: usize = 28_000_000;
+const MOST_ATTACHED: usize = 20;
+
 /// The most notes Claude keeps, the longest one, and the most of them all together, in characters.
 const MAX_NOTES: usize = 40;
 const NOTE_CHARS: usize = 400;
@@ -191,9 +197,13 @@ const TOOLS: [api::Tool; 12] = [
     },
     api::Tool {
         name: "read_file",
-        description: "Reads a file on this computer's Windows drive (C:): a text file (.txt, .md, .csv, code...) as it \
-                      is, up to 60,000 bytes at a time (offset reads further on). Word and PDF files, pictures and \
-                      other kinds can't be read inside yet.",
+        description: "Reads a file on this computer's Windows drive (C:). A text file (.txt, .md, .csv, code...) as it \
+                      is; a Word, Excel or PowerPoint file (or OpenDocument's) as its words: a document's paragraphs, \
+                      headings, lists and tables, a workbook's sheets as CSV with row numbers and column letters \
+                      (formulas after their values), a presentation's slides with their notes. Up to 60,000 bytes at \
+                      a time (offset reads further on). A picture (JPEG, PNG, GIF or WebP, up to 7.4 MB) or a PDF (up \
+                      to 20 MB) comes to you whole, for you to see. A ZIP archive's files are listed. Office's files \
+                      from before 2007 (.doc, .xls, .ppt) and HEIC pictures can't be read yet.",
         input_schema: r#"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0,"description":"Where to start, in bytes (0: the start)."}},"required":["path"]}"#,
     },
     api::Tool {
@@ -358,10 +368,23 @@ pub fn init(key: Option<String>, key_problem: Option<&'static str>) {
 }
 
 /// What the memory file keeps: Claude's notes and the conversation, as {"notes": [...], "messages": [...]} (the
-/// messages as the API has them).
+/// messages as the API has them, without pictures and PDFs: `without_attachments`).
 fn kept_text(notes: &[String], history: &[Turn]) -> String {
     let notes = Json::Arr(notes.iter().map(|n| Json::Str(n.clone())).collect()).write();
     format!("{{\"notes\":{notes},\"messages\":{}}}", api::messages(history))
+}
+
+/// The conversation without its pictures and PDFs (a line says where each was): what the memory file keeps, as
+/// they're on the PC already, and too big for it.
+fn without_attachments(history: &[Turn]) -> Vec<Turn> {
+    history
+        .iter()
+        .map(|t| {
+            let mut t = t.clone();
+            api::unattach(&mut t, 0);
+            t
+        })
+        .collect()
 }
 
 /// The notes and conversation in the memory file's text (an older system kept the messages alone).
@@ -447,14 +470,15 @@ pub fn keep() {
         if capacity == 0 {
             return;
         }
+        let history = without_attachments(&a.history);
         let mut start = 0;
         loop {
-            let text = kept_text(&a.notes, &a.history[start..]);
-            if text.len() <= capacity || start >= a.history.len() {
+            let text = kept_text(&a.notes, &history[start..]);
+            if text.len() <= capacity || start >= history.len() {
                 break text;
             }
             start += 1;
-            while start < a.history.len() && !is_question(&a.history[start]) {
+            while start < history.len() && !is_question(&history[start]) {
                 start += 1;
             }
         }
@@ -572,8 +596,9 @@ pub fn work() -> Vec<Event> {
     events
 }
 
-/// Runs a tool Claude called: its result for Claude, and whether that's an error.
-fn run_tool(call: &ToolUse, job: &mut Job, notes: &mut Vec<String>, events: &mut Vec<Event>) -> (String, bool) {
+/// Runs a tool Claude called: its result for Claude, and whether that's an error (and in `more`, a picture or PDF to go
+/// with it).
+fn run_tool(call: &ToolUse, job: &mut Job, notes: &mut Vec<String>, events: &mut Vec<Event>, more: &mut Vec<Json>) -> (String, bool) {
     crate::log!("Chat Computer kernel: Claude: uses {}", call.name);
     match call.name.as_str() {
         "computer_status" => (crate::system::status(), false),
@@ -668,9 +693,20 @@ fn run_tool(call: &ToolUse, job: &mut Job, notes: &mut Vec<String>, events: &mut
         },
         "list_files" | "read_file" | "find_files" => {
             let text = |key: &str| call.input.get(key).and_then(|v| v.str()).unwrap_or("");
+            events.push(Event::Activity(if call.name == "read_file" { "Reading a file" } else { "Looking through your files" }));
             let said = match call.name.as_str() {
                 "list_files" => crate::files::list(text("path")),
-                "read_file" => crate::files::read(text("path"), call.input.get("offset").and_then(number).unwrap_or(0.0).max(0.0) as u64),
+                "read_file" => {
+                    let offset = call.input.get("offset").and_then(number).unwrap_or(0.0).max(0.0) as u64;
+                    crate::files::read(text("path"), offset).map(|r| {
+                        match r.attachment {
+                            Some(crate::files::Attachment::Picture(media, data)) => more.push(api::image(media, &data)),
+                            Some(crate::files::Attachment::Pdf(data)) => more.push(api::pdf(&data)),
+                            None => {}
+                        }
+                        r.text
+                    })
+                }
                 _ => crate::files::find(text("words"), text("in")),
             };
             match said {
@@ -789,7 +825,9 @@ impl Assistant {
         if !self.history.get(self.sent_from).is_some_and(is_question) {
             self.sent_from = 0;
         }
-        let sizes: Vec<usize> = self.history.iter().map(|t| api::messages(core::slice::from_ref(t)).len()).collect();
+        // (Pictures and PDFs don't count: they have their own limit, `ATTACHED_BYTES`.)
+        let sizes: Vec<usize> =
+            self.history.iter().map(|t| api::turn_size(t).saturating_sub(api::attachments(t).iter().sum::<usize>())).collect();
         let mut total: usize = sizes[self.sent_from..].iter().sum();
         if total > SENT_BYTES {
             while total > SENT_BYTES / 3 * 2 {
@@ -802,6 +840,33 @@ impl Assistant {
             crate::log!("Chat Computer kernel: Claude: the conversation's oldest part is no longer sent");
         }
         self.sent_from
+    }
+
+    /// Keeps the pictures and PDFs sent within `ATTACHED_BYTES` and `MOST_ATTACHED`: the newest, in the order they
+    /// came; older ones are taken out, a line saying each was there.
+    fn limit_attachments(&mut self) {
+        let (mut bytes, mut count) = (0usize, 0usize);
+        for turn in self.history.iter_mut().rev() {
+            let sizes = api::attachments(turn);
+            let fit = sizes
+                .iter()
+                .take_while(|&&b| {
+                    let ok = bytes + b <= ATTACHED_BYTES && count < MOST_ATTACHED;
+                    if ok {
+                        bytes += b;
+                        count += 1;
+                    }
+                    ok
+                })
+                .count();
+            if fit < sizes.len() {
+                let taken = api::unattach(turn, fit);
+                crate::log!("Chat Computer kernel: Claude: {taken} older picture(s) or PDF(s) no longer sent");
+                // (Nothing older is sent, once one isn't.)
+                bytes = ATTACHED_BYTES;
+                count = MOST_ATTACHED;
+            }
+        }
     }
 
     /// An answer came whole: kept in the conversation; if it called tools, they run and their results go back in a new
@@ -867,11 +932,13 @@ impl Assistant {
         let mut results = Vec::new();
         for call in &answer.calls {
             let before = self.notes.len();
-            let (text, error) = run_tool(call, &mut job, &mut self.notes, events);
+            let mut more = Vec::new();
+            let (text, error) = run_tool(call, &mut job, &mut self.notes, events, &mut more);
             self.unkept |= self.notes.len() != before;
-            results.push(api::tool_result(&call.id, &text, error));
+            results.push(if more.is_empty() { api::tool_result(&call.id, &text, error) } else { api::tool_result_with(&call.id, &text, error, more) });
         }
         self.history.push(Turn { role: Role::User, content: Content::Blocks(results) });
+        self.limit_attachments();
         job.rounds += 1;
         job.separate = job.said;
         job.request = self.request();

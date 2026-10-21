@@ -31,9 +31,9 @@ log go to out/.
                                      PC's (a FAT32 start-up partition with Windows' files and Chat Computer's,
                                      its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
                                      drive; a question answered, the PC restarted, the conversation back on the
-                                     screen and sent with the next question; the memory file's two copies, and
-                                     nothing else on the disk changed (fsck.vfat too, so also needs dosfstools,
-                                     mtools and gdisk)
+                                     screen and sent with the next question, then a new conversation started (the
+                                     next question sent alone); the memory file's two copies, and nothing else on
+                                     the disk changed (fsck.vfat too, so also needs dosfstools, mtools and gdisk)
     ./check.py --secure-boot        Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
@@ -110,12 +110,13 @@ def monitor(sock_path: Path, command: str) -> None:
             pass
 
 
-def wait_for(log: Path, words: tuple[str, ...], timeout: float) -> str | None:
+def wait_for(log: Path, words: tuple[str, ...], timeout: float, times: int = 1) -> str | None:
+    """Waits until one of `words` is in the log (`times` times), and says which."""
     end = time.time() + timeout
     while time.time() < end:
         text = log.read_text(errors="replace") if log.exists() else ""
         for w in words:
-            if w in text:
+            if text.count(w) >= times:
                 return w
         time.sleep(0.5)
     return None
@@ -785,10 +786,15 @@ def claude(args) -> list[str]:
         else:
             r = requests[0]
             body = r["body"] or {}
-            wanted = {"model": "claude-opus-5-5", "max_tokens": 64000, "stream": True, "output_config": {"effort": "max"}}
+            wanted = {"model": "claude-opus-5-5", "max_tokens": 64000, "stream": True, "output_config": {"effort": "max"},
+                      "cache_control": {"type": "ephemeral"}}
             for k, v in wanted.items():
                 if body.get(k) != v:
                     problems.append(f"the request's {k} was {body.get(k)!r}, not {v!r}")
+            # The same system prompt every time (with the date, not the time), so the API's cache keeps working.
+            systems = {str((q["body"] or {}).get("system")) for q in requests[:7]}
+            if len(systems) != 1 or "Today is " not in systems.pop():
+                problems.append("the system prompt changed from one request to the next, or doesn't give the date")
             if (r["path"], r["key"], r["version"]) != ("/v1/messages", TEST_KEY, "2023-06-01"):
                 problems.append(f"the request went to {r['path']!r} with key {r['key'] == TEST_KEY} and version {r['version']!r}")
             if "plain text" not in str(body.get("system")):
@@ -797,7 +803,8 @@ def claude(args) -> list[str]:
                 problems.append(f"the first request's messages were {body.get('messages')!r}")
             tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])
             if tools != [("computer_status", None), ("restart_computer", None), ("set_text_size", None),
-                         ("web_fetch", "web_fetch_20250910"), ("web_search", "web_search_20250305")]:
+                         ("start_new_conversation", None), ("web_fetch", "web_fetch_20250910"),
+                         ("web_search", "web_search_20250305")]:
                 problems.append(f"the request offered the tools {body.get('tools')!r}")
             m2 = (requests[1]["body"] or {}).get("messages") or []
             if m2[:2] != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(r1)}]:
@@ -940,13 +947,16 @@ def remember(args) -> list[str]:
     """The conversation kept across a restart, with the start-up partition on an NVMe drive, then on a SATA one: a
     disk like a PC's (memory_disk), a question answered by a stand-in for Claude's API, then the virtual PC started
     again: the conversation must be on the screen, and in the next question's request, and in the memory file in the
-    format Windows' setup made it for. The partition's file system must stay clean and its other files untouched."""
+    format Windows' setup made it for. Then Claude is asked to start a new conversation (its tool): the next question
+    must be sent alone, and only the new conversation kept. The partition's file system must stay clean and its other
+    files untouched."""
     import http.server
 
     tmp = Path(tempfile.mkdtemp(prefix="cc-memory-"))
     test_authority(tmp)
     requests: list[dict] = []
     first_answer = [("thinking", "sig-m1"), ("text", ["Hello! The word is ", "pumpkin."])]
+    new_call = [("thinking", "sig-m2"), ("tool_use", "toolu_new", "start_new_conversation", ["{}"])]
 
     class Api(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -958,7 +968,22 @@ def remember(args) -> list[str]:
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
             requests.append(body)
             asked = ((body.get("messages") or [{}])[-1]).get("content")
-            send_stream(self, first_answer if asked == "hi" else [("text", ["Pumpkin."])], "end_turn")
+            if asked == "hi":
+                send_stream(self, first_answer, "end_turn")
+            elif asked == "new":
+                send_stream(self, new_call, "tool_use")
+            elif isinstance(asked, list):  # the tool's result
+                send_stream(self, [("text", ["Starting afresh."])], "end_turn")
+            else:
+                send_stream(self, [("text", ["Pumpkin."])], "end_turn")
+
+    def kept_or_failed(log: Path, times: int) -> None:
+        end = time.time() + 120
+        while time.time() < end:
+            text = log.read_text(errors="replace") if log.exists() else ""
+            if text.count("memory: the conversation kept") >= times or "couldn't be kept" in text or "Claude: failed" in text:
+                return
+            time.sleep(0.5)
 
     server = serve_https(Api, tmp)
     build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
@@ -983,10 +1008,12 @@ def remember(args) -> list[str]:
                     time.sleep(1)
                     if start == 2:
                         pc.settled_picture(f"memory-{kind}-restored")
-                    question = "hi" if start == 1 else "word"
-                    monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
-                    wait_for(pc.log, ("memory: the conversation kept", "couldn't be kept", "Claude: failed"), 120)
-                    pc.settled_picture(f"memory-{kind}-{start}")
+                    # The first start: a question. The second: a question after the restart, then a new conversation
+                    # asked for, then a question in it.
+                    for n, question in enumerate(["hi"] if start == 1 else ["word", "new", "hi"]):
+                        monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
+                        kept_or_failed(pc.log, n + 1)
+                        pc.settled_picture(f"memory-{kind}-{start}-{question}")
                 finally:
                     pc.stop()
                 texts.append(pc.text())
@@ -998,18 +1025,26 @@ def remember(args) -> list[str]:
                 except ValueError as e:
                     problems.append(f"{kind}, start {start}: {e}")
                     continue
-                wanted = first if start == 1 else first + [{"role": "user", "content": "word"},
-                                                           {"role": "assistant", "content": [{"type": "text", "text": "Pumpkin."}]}]
-                if kept is None or kept[0] != start or json.loads(kept[1]) != wanted:
+                # Kept once after each answer: the conversation, then (the second time) the new one, which began
+                # with "hi" again.
+                if kept is None or kept[0] != (1 if start == 1 else 4) or json.loads(kept[1]) != first:
                     problems.append(f"{kind}, start {start}: the memory file holds {kept!r}")
             drive = "NVMe SSD" if kind == "nvme" else "SATA drive"
             if f"memory: {drive}" not in texts[0]:
                 problems.append(f"{kind}: the memory file wasn't found on the {drive}")
             if "the conversation from before the restart (2 turns)" not in texts[1]:
                 problems.append(f"{kind}: the conversation didn't come back after the restart")
-            if len(requests) != 2 or requests[1].get("messages") != first + [{"role": "user", "content": "word"}]:
-                problems.append(f"{kind}: the question after the restart wasn't asked with the conversation before it: "
-                                f"{[r.get('messages') for r in requests]!r}")
+            word = first + [{"role": "user", "content": "word"}]
+            asked = [r.get("messages") for r in requests]
+            if len(asked) != 5 or asked[1] != word:
+                problems.append(f"{kind}: the question after the restart wasn't asked with the conversation before it: {asked!r}")
+            elif asked[2] != word + [{"role": "assistant", "content": [{"type": "text", "text": "Pumpkin."}]},
+                                     {"role": "user", "content": "new"}]:
+                problems.append(f"{kind}: asking for a new conversation wasn't sent with the conversation: {asked[2]!r}")
+            elif asked[4] != [{"role": "user", "content": "hi"}]:
+                problems.append(f"{kind}: the question after a new conversation began wasn't sent alone: {asked[4]!r}")
+            if "Claude: uses start_new_conversation" not in texts[1] or "Claude: a new conversation starts" not in texts[1]:
+                problems.append(f"{kind}: the new conversation didn't start")
     finally:
         server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)

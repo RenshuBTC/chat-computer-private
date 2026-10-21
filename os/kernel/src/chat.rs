@@ -10,7 +10,7 @@
 //! back to Windows. If the kernel ever stops, the same place says so, with details to pass on.
 
 use crate::assistant::{self, Event, Ready};
-use crate::draw::{Canvas, Rect, BUBBLE, DIM, GROUND, INK, PAPER};
+use crate::draw::{Canvas, Rect, BUBBLE, DIM, GROUND, INK, LINE, PAPER};
 use crate::keyboard::{Key, Press};
 use crate::layout::{self, Layout};
 use crate::screen::Screen;
@@ -38,6 +38,8 @@ const SHADOW: u32 = 23;
 const BIG_REDRAW_MS: u64 = 40;
 /// Under a conversation brought back after a restart.
 const RESTARTED: &str = "Chat Computer started again; the conversation above was kept.";
+/// After Claude starts a new conversation.
+const NEW_CONVERSATION: &str = "A new conversation starts here: Claude no longer sees what's above, and it won't be kept.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -51,6 +53,8 @@ enum Kind {
     Claude,
     /// Chat Computer itself saying something: what went wrong, mostly.
     Note,
+    /// A line across, then words: where the conversation was picked up after a restart, or a new one starts.
+    Divider,
 }
 
 /// What a start-screen paragraph is, for the ones that change.
@@ -400,7 +404,8 @@ impl Chat {
             b.height = line;
         } else {
             let ranges = ty.breaks(&shown, style.size, m.column_w * ONE);
-            let mut y = 0;
+            // (A divider's line, then 1 em, then its words.)
+            let mut y = if b.kind == Kind::Divider { m.px(1.0) } else { 0 };
             for r in &ranges {
                 let text = &shown[r.clone()];
                 if text.trim().is_empty() {
@@ -491,6 +496,7 @@ impl Chat {
         let view_top = self.view_top();
         let log = Rect::new(0, 0, self.screen.width as i32, if self.stopped { self.screen.height as i32 } else { self.log_bottom() });
         let m = self.m;
+        let rule = ((2.0 * self.layout.scale + 0.5) as i32).max(1); // (theme.css's 2px lines)
         let now = time::uptime_ms();
         let Chat { canvas, blocks, ty, .. } = self;
         canvas.set_clip(clip);
@@ -514,6 +520,9 @@ impl Chat {
             if b.kind == Kind::You {
                 let r = Rect::new(m.column_x + b.bubble.x, y + b.bubble.y, b.bubble.w, b.bubble.h);
                 canvas.round_rect(r, m.px(1.1), BUBBLE);
+            }
+            if b.kind == Kind::Divider {
+                canvas.fill(Rect::new(m.column_x, y, m.column_w, rule), LINE);
             }
             let line_h = style.line_height / ONE;
             for l in &mut b.lines {
@@ -846,6 +855,10 @@ impl Chat {
                 self.blocks.push(Block::new(Kind::Note, Live::No, format!("Restarting in {seconds} seconds\u{2026}")));
                 self.relayout = true;
             }
+            Event::NewConversation => {
+                self.blocks.push(Block::new(Kind::Divider, Live::No, String::from(NEW_CONVERSATION)));
+                self.relayout = true;
+            }
         }
     }
 
@@ -859,7 +872,7 @@ impl Chat {
         for (you, text) in turns {
             self.blocks.push(Block::new(if *you { Kind::You } else { Kind::Claude }, Live::No, text.clone()));
         }
-        self.blocks.push(Block::new(Kind::Note, Live::No, String::from(RESTARTED)));
+        self.blocks.push(Block::new(Kind::Divider, Live::No, String::from(RESTARTED)));
         self.lay_out_box();
         self.lay_out();
         self.anchor = 0;

@@ -32,6 +32,7 @@ fn the_request_is_opus_at_max_effort_streamed() {
     let j = json::parse(body).unwrap();
     assert_eq!(j.get("model").and_then(|m| m.str()), Some("claude-opus-5-5"));
     assert_eq!(j.path(&["output_config", "effort"]).and_then(|m| m.str()), Some("max"));
+    assert_eq!(j.path(&["cache_control", "type"]).and_then(|m| m.str()), Some("ephemeral"));
     assert_eq!(j.get("stream"), Some(&Json::Bool(true)));
     assert_eq!(j.get("messages").map(|m| format!("{m:?}")).unwrap().matches("Hi \\\"Claude\\\"").count(), 1);
     assert!(j.get("tools").is_none());

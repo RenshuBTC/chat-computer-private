@@ -44,12 +44,13 @@ chat-computer/
                             RTL8125), the drive the PC started from (storage/: NVMe, SATA by AHCI), the
                             settings (the Claude API key, the memory file's id) and the clock from the
                             start-up stage, Claude (assistant.rs) with tools on the computer (its status:
-                            system.rs; the text size; a restart: power.rs), the conversation kept across restarts
-                            (keep.rs), and the conversation screen (chat.rs, drawn in memory: draw.rs)
+                            system.rs; the text size; a restart: power.rs; a new conversation), the conversation
+                            kept across restarts (keep.rs; at most ~600 KB of it sent), and the conversation screen (chat.rs, drawn in memory: draw.rs)
     net/                    Own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
     crypto/                 Own cryptography: SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305, X25519, ECDSA, RSA
     tls/                    Own TLS 1.3 client and certificate checks, against Mozilla's authorities (roots.txt)
-    claude/                 Claude's Messages API, streamed: the request (Opus 5.5, effort max), HTTP/1.1, JSON
+    claude/                 Claude's Messages API, streamed: the request (Opus 5.5, effort max, automatic prompt
+                            caching), HTTP/1.1, JSON
     font/                   Own TrueType reader and rasterizer
     fat/                    Own FAT12/16/32 reader: a file's blocks on the start-up partition
     remember/               The memory file's format (memory.bin): 512-byte chunks tagged "CCMEMORY" + file id

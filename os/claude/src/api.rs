@@ -68,10 +68,14 @@ pub const WEB_SEARCH: &str = r#"{"type":"web_search_20250305","name":"web_search
 pub const WEB_FETCH: &str = r#"{"type":"web_fetch_20250910","name":"web_fetch","max_uses":5,"max_content_tokens":25000}"#;
 
 /// The whole request, ready to send: the conversation so far, newest last, the tools this computer runs, and the
-/// server tools (`WEB_SEARCH`...).
+/// server tools (`WEB_SEARCH`...). With the API's automatic prompt caching: it caches the request up to its last
+/// block, so the next request (the conversation one answer longer, or a tool's result added) reads all that from the
+/// cache, for a twentieth of the price and faster, as long as it comes within 5 minutes and starts the same way (the
+/// same tools and system prompt).
 pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools: &[Tool], server_tools: &[&str]) -> Vec<u8> {
     let mut body = format!(
-        "{{\"model\":{},\"max_tokens\":{},\"stream\":true,\"output_config\":{{\"effort\":{}}},\"system\":{}",
+        "{{\"model\":{},\"max_tokens\":{},\"stream\":true,\"output_config\":{{\"effort\":{}}},\
+         \"cache_control\":{{\"type\":\"ephemeral\"}},\"system\":{}",
         json::quote(MODEL),
         MAX_TOKENS,
         json::quote(EFFORT),

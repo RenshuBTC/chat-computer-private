@@ -92,3 +92,8 @@ pub fn text(t: i64, error: i64) -> String {
 pub fn now_text() -> Option<String> {
     now().map(|t| text(t, error()))
 }
+
+/// Today's date (in UTC), for people.
+pub fn today_text() -> Option<String> {
+    now().map(|t| text(t, i64::MAX))
+}

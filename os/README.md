@@ -110,7 +110,9 @@ NVMe and SATA drivers.
     * `set_text_size`: the text 50% to 300% of the size chosen for this monitor;
     * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
-      keyboard controller's reset line (`power.rs`).
+      keyboard controller's reset line (`power.rs`);
+    * `start_new_conversation`: when the person asks to start over, the conversation ends after Claude's answer. It
+      is no longer sent or kept, and stays on the screen above a line until the next restart.
 
     And the tools Anthropic runs itself: web search (`web_search`) and reading a web page (`web_fetch`). While Claude
     uses one, the screen says so by the thinking dot ("Searching the web"). If an organization has switched them off
@@ -119,6 +121,12 @@ NVMe and SATA drivers.
     Claude may use tools (or have its answer paused by the API, during a long search) up to 8 times for one message.
     Its answers go back into the conversation whole, thinking blocks, search results and citations exactly as they
     came, as the API asks.
+
+    Every request asks for the API's prompt caching. When the next message (or a tool's result) comes within 5
+    minutes, the conversation so far is read from Anthropic's cache, for a twentieth of the price. The system prompt
+    changes at most once a day (it gives the date, not the time) so that the cache keeps matching. At most about
+    600 KB of the conversation is sent; in a longer one the oldest questions are left out, a third at a time. They
+    stay on the screen and in the memory file.
 
   Then the screen is the conversation (`chat.rs`), drawn in memory and copied to the screen where it changed.
   Before the first message it says what the PC is, how long Chat Computer has been running (by the kernel's own
@@ -230,8 +238,8 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # (the computer's status, a bigger text size, a restart), a web search with a
                                  # paused answer, the web tools refused, a failure
 ./check.py --remember            # the conversation kept across a restart, on an NVMe SSD and a SATA drive laid
-                                 # out like a PC's; nothing else on the disk changed (needs dosfstools, mtools
-                                 # and gdisk)
+                                 # out like a PC's, then a new conversation started; nothing else on the disk
+                                 # changed (needs dosfstools, mtools and gdisk)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/chatcomputer.efi

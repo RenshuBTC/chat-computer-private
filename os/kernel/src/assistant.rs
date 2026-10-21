@@ -41,6 +41,8 @@ pub enum Event {
     Restarting(u64),
     /// What Claude is doing before it answers ("Searching the web").
     Activity(&'static str),
+    /// The conversation so far is over: the next question starts a new one.
+    NewConversation,
 }
 
 /// Whether Claude can be asked now, and if not, why not.
@@ -79,20 +81,29 @@ const CLOSING_MS: u64 = 30_000;
 const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, search the \
 web and read web pages, and look after this computer with the tools you have (its status, the text size, restarting \
-it), but you can't yet use the computer's files. This screen shows plain text only, so write without Markdown: no \
-asterisks, pound signs, backticks or tables. Separate paragraphs with a blank line, and start list items with a bullet \
-(\u{2022}) or a number.";
+it, starting a new conversation), but you can't yet use the computer's files. The conversation is kept across \
+restarts. This screen shows plain text only, so write without Markdown: no asterisks, pound signs, backticks or \
+tables. Separate paragraphs with a blank line, and start list items with a bullet (\u{2022}) or a number.";
 const SYSTEM_NO_WEB: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, and look \
-after this computer with the tools you have (its status, the text size, restarting it), but you can't use the web here \
-(it isn't enabled for this API key) or the computer's files. This screen shows plain text only, so write without \
-Markdown: no asterisks, pound signs, backticks or tables. Separate paragraphs with a blank line, and start list items \
-with a bullet (\u{2022}) or a number.";
+after this computer with the tools you have (its status, the text size, restarting it, starting a new conversation), \
+but you can't use the web here (it isn't enabled for this API key) or the computer's files. The conversation is kept \
+across restarts. This screen shows plain text only, so write without Markdown: no asterisks, pound signs, backticks or \
+tables. Separate paragraphs with a blank line, and start list items with a bullet (\u{2022}) or a number.";
+/// Said when the oldest part of a long conversation is no longer sent (see `SENT_BYTES`).
+const SYSTEM_SHORTENED: &str = " This conversation began earlier: its oldest part isn't sent to you any more, to keep \
+it short, but the person can still scroll back to it.";
 /// The tools Anthropic runs: searching the web, reading web pages.
 const WEB_TOOLS: [&str; 2] = [api::WEB_SEARCH, api::WEB_FETCH];
 
+/// The most of the conversation sent with each question, in bytes of the API's JSON (very roughly 150,000 tokens):
+/// beyond it the oldest questions and their answers are left out (they stay on the screen, and in the memory file). A
+/// third goes at a time, so the part that's sent keeps the same start for a while, and Claude's API can go on reading
+/// it from its cache (api::request).
+const SENT_BYTES: usize = 600_000;
+
 /// What Claude can do on this computer.
-const TOOLS: [api::Tool; 3] = [
+const TOOLS: [api::Tool; 4] = [
     api::Tool {
         name: "computer_status",
         description: "What this computer is and how it's doing: its processor, memory, screen, how long Chat Computer's \
@@ -109,8 +120,17 @@ const TOOLS: [api::Tool; 3] = [
     api::Tool {
         name: "restart_computer",
         description: "Restarts this PC a few seconds after you finish answering. Chat Computer's own system was started \
-                      just once, so the PC then starts what it normally does (Windows, usually), and this conversation \
-                      ends. Use it only when the person asks to restart, or to go back to Windows.",
+                      just once, so the PC then starts what it normally does (Windows, usually); this conversation is \
+                      kept for the next time Chat Computer starts. Use it only when the person asks to restart, or to \
+                      go back to Windows.",
+        input_schema: r#"{"type":"object","properties":{}}"#,
+    },
+    api::Tool {
+        name: "start_new_conversation",
+        description: "Ends this conversation once you finish answering: the next message starts a new one, and this one \
+                      is no longer sent to you or kept across restarts (it stays on the screen, above a line, until \
+                      the computer restarts). Use it only when the person asks to start over, to start a new \
+                      conversation or chat, or to forget this one.",
         input_schema: r#"{"type":"object","properties":{}}"#,
     },
 ];
@@ -188,6 +208,8 @@ struct Job {
     separate: bool,
     /// Restart the PC once the answer is over.
     restart: bool,
+    /// Start a new conversation once the answer is over.
+    new_conversation: bool,
     /// The last answer was paused (during a web search, say): the next one carries on with it.
     continuing: bool,
     /// The answer's words, kept only by a test build, for its log.
@@ -205,6 +227,8 @@ struct Assistant {
     address: Option<(Ipv4, u64)>,
     /// The conversation, as the API has it.
     history: Vec<Turn>,
+    /// Where the part of it that's sent starts (a question; see `SENT_BYTES`).
+    sent_from: usize,
     /// Whether to offer the web tools (until the API says they aren't enabled for this key).
     web: bool,
     /// The conversation changed since it was last kept (keep.rs).
@@ -228,7 +252,7 @@ pub fn init(key: Option<String>, key_problem: Option<&'static str>) {
     let history = crate::keep::load()
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|text| api::parse_messages(&text))
-        .filter(|turns| turns.first().is_none_or(|t| matches!(t, Turn { role: Role::User, content: Content::Text(_) })))
+        .filter(|turns| turns.first().is_none_or(is_question))
         .unwrap_or_default();
     if !history.is_empty() {
         crate::log!("Chat Computer kernel: Claude: the conversation from before the restart ({} turns)", history.len());
@@ -241,9 +265,15 @@ pub fn init(key: Option<String>, key_problem: Option<&'static str>) {
         closing: Vec::new(),
         address: None,
         history,
+        sent_from: 0,
         web: true,
         unkept: false,
     });
+}
+
+/// Whether a turn is a question: what the person typed (not tools' results).
+fn is_question(t: &Turn) -> bool {
+    matches!(t, Turn { role: Role::User, content: Content::Text(_) })
 }
 
 pub fn ready() -> Ready {
@@ -316,7 +346,7 @@ pub fn keep() {
                 break text;
             }
             start += 1;
-            while start < a.history.len() && !matches!(&a.history[start], Turn { role: Role::User, content: Content::Text(_) }) {
+            while start < a.history.len() && !is_question(&a.history[start]) {
                 start += 1;
             }
         }
@@ -362,6 +392,7 @@ pub fn ask(text: &str) -> Result<(), String> {
         said: false,
         separate: false,
         restart: false,
+        new_conversation: false,
         continuing: false,
         text: String::new(),
     });
@@ -454,6 +485,10 @@ fn run_tool(call: &ToolUse, job: &mut Job, events: &mut Vec<Event>) -> (String, 
             job.restart = true;
             (String::from("The PC restarts a few seconds after your answer: tell the person."), false)
         }
+        "start_new_conversation" => {
+            job.new_conversation = true;
+            (String::from("A new conversation starts when your answer ends: say so, in a few words."), false)
+        }
         other => (format!("There's no tool called {other}."), true),
     }
 }
@@ -524,14 +559,41 @@ fn suite_name(s: Option<tls::Suite>) -> &'static str {
 }
 
 impl Assistant {
-    /// The request for the conversation so far.
-    fn request(&self) -> Vec<u8> {
+    /// The request for the conversation so far (as much of it as is sent: `SENT_BYTES`). The system prompt changes at
+    /// most once a day (the date), so Claude's API can keep the request's start in its cache; the time of day is in
+    /// the computer's status.
+    fn request(&mut self) -> Vec<u8> {
+        let from = self.sending_from();
         let mut system = String::from(if self.web { SYSTEM } else { SYSTEM_NO_WEB });
-        if let Some(now) = clock::now_text() {
-            system.push_str(&format!(" The computer's clock says it is {now}."));
+        if let Some(today) = clock::today_text() {
+            system.push_str(&format!(" Today is {today} (UTC), by the computer's clock; its status has the time."));
+        }
+        if from > 0 {
+            system.push_str(SYSTEM_SHORTENED);
         }
         let web: &[&str] = if self.web { &WEB_TOOLS } else { &[] };
-        api::request(host(), self.key.as_deref().unwrap_or(""), &system, &self.history, &TOOLS, web)
+        api::request(host(), self.key.as_deref().unwrap_or(""), &system, &self.history[from..], &TOOLS, web)
+    }
+
+    /// Where the part of the conversation that's sent starts: where it did, unless that's now more than `SENT_BYTES`;
+    /// then later questions, until it's at most two thirds of that. Never past the last question.
+    fn sending_from(&mut self) -> usize {
+        if !self.history.get(self.sent_from).is_some_and(is_question) {
+            self.sent_from = 0;
+        }
+        let sizes: Vec<usize> = self.history.iter().map(|t| api::messages(core::slice::from_ref(t)).len()).collect();
+        let mut total: usize = sizes[self.sent_from..].iter().sum();
+        if total > SENT_BYTES {
+            while total > SENT_BYTES / 3 * 2 {
+                let Some(next) = (self.sent_from + 1..self.history.len()).find(|&i| is_question(&self.history[i])) else {
+                    break;
+                };
+                total -= sizes[self.sent_from..next].iter().sum::<usize>();
+                self.sent_from = next;
+            }
+            crate::log!("Chat Computer kernel: Claude: the conversation's oldest part is no longer sent");
+        }
+        self.sent_from
     }
 
     /// An answer came whole: kept in the conversation; if it called tools, they run and their results go back in a new
@@ -570,8 +632,16 @@ impl Assistant {
             if test_build() {
                 crate::log!("Chat Computer kernel: test: Claude said {:?}", job.text);
             }
+            if job.new_conversation {
+                self.history.clear();
+                self.sent_from = 0;
+                crate::log!("Chat Computer kernel: Claude: a new conversation starts");
+            }
             self.unkept = true;
             events.push(Event::Done);
+            if job.new_conversation {
+                events.push(Event::NewConversation);
+            }
             if job.restart {
                 events.push(Event::Restarting(5));
                 crate::power::restart_in(5000);

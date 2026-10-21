@@ -13,6 +13,8 @@ pub const INK: u32 = 0x000000;
 pub const BUBBLE: u32 = 0xE7E4DD;
 /// The empty message box's hint, and its send button until there's something to send.
 pub const DIM: u32 = 0x918F8A;
+/// Lines between things (theme.css --line).
+pub const LINE: u32 = 0xDDD9D1;
 /// The message box.
 pub const PAPER: u32 = 0xFFFFFF;
 

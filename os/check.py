@@ -910,9 +910,9 @@ def claude(args) -> list[str]:
             tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])
             if tools != [("computer_status", None), ("find_files", None), ("forget", None), ("list_files", None),
                          ("read_file", None), ("remember", None), ("reminders", None), ("restart_computer", None),
-                         ("set_text_size", None), ("set_volume", None), ("start_new_conversation", None),
-                         ("turn_off_computer", None), ("web_fetch", "web_fetch_20250910"),
-                         ("web_search", "web_search_20250305")]:
+                         ("set_text_size", None), ("set_volume", None), ("show_picture", None),
+                         ("start_new_conversation", None), ("turn_off_computer", None),
+                         ("web_fetch", "web_fetch_20250910"), ("web_search", "web_search_20250305")]:
                 problems.append(f"the request offered the tools {body.get('tools')!r}")
             m2 = (requests[1]["body"] or {}).get("messages") or []
             if m2[:2] != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(r1)}]:
@@ -1243,7 +1243,8 @@ def files_check(args) -> list[str]:
     shopping list (and the link to it) but not the one in AppData (a hidden folder). Word, Excel and PowerPoint files
     come back as their words; a photo and a PDF whole, for Claude to see (each byte checked); a ZIP archive as its
     list; what can't be read (a damaged Word file, one from before 2007, an iPhone's photo, a picture too wide) says
-    why. The memory file keeps the conversation without the pictures. computer_status says what the drive is."""
+    why. The memory file keeps the conversation without the pictures. computer_status says what the drive is. Last, a
+    photo shown on the screen (show_picture): its sun's yellow must be there in the picture of the screen."""
     import http.server
     import re
 
@@ -1276,6 +1277,8 @@ def files_check(args) -> list[str]:
         "heic": ("read_file", {"path": "C:\\Users\\Sam\\Pictures\\IMG_0001.HEIC"}),
         "wide": ("read_file", {"path": "C:\\Users\\Sam\\Pictures\\Panorama.png"}),
         "status": ("computer_status", {}),
+        "nopic": ("show_picture", {"path": "C:\\Users\\Sam\\Documents\\Work\\Talk.pptx"}),
+        "showpic": ("show_picture", {"path": "C:\\Users\\Sam\\Pictures\\Beach.jpg"}),
     }
 
     class Api(http.server.BaseHTTPRequestHandler):
@@ -1383,11 +1386,13 @@ def files_check(args) -> list[str]:
                     r"Chat Computer's own system can't show Claude yet\.",
             "wide": r"C:\\Users\\Sam\\Pictures\\Panorama\.png is a picture of 9000×40 pixels: too big for Claude to see "
                     r"\(at most 8000 each way\)\.",
+            "nopic": r"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx isn't a picture this screen shows \(JPEG, PNG or GIF\)\.",
+            "showpic": r"Shown on the screen: C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels\)\.",
         }
         for q, pattern in want.items():
             if not re.fullmatch(pattern, said[q], re.S):
                 problems.append(f"{q}: {said[q][:400]!r}")
-        if errors != {"gone", "plan", "compact"}:
+        if errors != {"gone", "plan", "compact", "nopic"}:
             problems.append(f"errors came back for {sorted(errors)}, not just for the files that can't be read")
         # The photo and the PDF, whole: each a block after the words, its bytes as they are on the drive.
         listing = {line.split("\t")[0]: line.split("\t") for line in (HERE / "ntfs/tests/small.txt").read_text().splitlines()}
@@ -1400,6 +1405,13 @@ def files_check(args) -> list[str]:
             if (content[1].get("type"), source.get("type"), source.get("media_type")) != (block, "base64", media) or \
                     (len(data), f"{fnv1a(data):016x}") != (int(want[2]), want[3]):
                 problems.append(f"{q}: the {block} wasn't sent as it is on the drive: {str(content)[:300]}")
+        # The photo on the screen: the sun's yellow (250, 220, 90 as it was drawn), in a good few of its pixels.
+        from PIL import Image
+        screen = Image.open(HERE / "out" / "files.png").convert("RGB")
+        px = screen.tobytes()
+        sun = sum(1 for i in range(0, len(px), 3) if abs(px[i] - 250) < 30 and abs(px[i + 1] - 220) < 30 and abs(px[i + 2] - 90) < 40)
+        if sun < 2_000:
+            problems.append(f"the photo wasn't on the screen: {sun} pixels of its sun's yellow")
         # The memory file: the conversation, without the pictures and PDF (each a line saying it was there).
         kept = [int(m) for m in re.findall(r"memory: the conversation kept \((\d+) bytes\)", text)]
         if not kept or max(kept) > 300_000:

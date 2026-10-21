@@ -46,6 +46,8 @@ pub enum Event {
     Forgot(usize),
     /// What Claude is doing before it answers ("Searching the web").
     Activity(&'static str),
+    /// A picture Claude shows the person (show_picture), made to fit the conversation's column.
+    Picture(picture::Picture),
     /// The conversation so far is over: the next question starts a new one.
     NewConversation,
 }
@@ -123,7 +125,7 @@ const NOTE_CHARS: usize = 400;
 const NOTES_CHARS: usize = 8000;
 
 /// What Claude can do on this computer.
-const TOOLS: [api::Tool; 12] = [
+const TOOLS: [api::Tool; 13] = [
     api::Tool {
         name: "computer_status",
         description: "What this computer is and how it's doing: its processor, memory, screen, how long Chat Computer's \
@@ -205,6 +207,14 @@ const TOOLS: [api::Tool; 12] = [
                       to 20 MB) comes to you whole, for you to see. A ZIP archive's files are listed. Office's files \
                       from before 2007 (.doc, .xls, .ppt) and HEIC pictures can't be read yet.",
         input_schema: r#"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0,"description":"Where to start, in bytes (0: the start)."}},"required":["path"]}"#,
+    },
+    api::Tool {
+        name: "show_picture",
+        description: "Shows the person a picture from this computer's Windows drive (C:) on the screen, in the \
+                      conversation where your answer is: a photo, a screenshot, a drawing (JPEG, PNG or GIF). Use it \
+                      when they ask to see a picture, or when seeing one helps them. It shows the picture to the \
+                      person, not to you: read_file shows it to you.",
+        input_schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"The picture, like C:\\Users\\Sam\\Pictures\\Beach.jpg."}},"required":["path"]}"#,
     },
     api::Tool {
         name: "find_files",
@@ -691,6 +701,17 @@ fn run_tool(call: &ToolUse, job: &mut Job, notes: &mut Vec<String>, events: &mut
             },
             _ => (String::from("percent must be from 0 to 100"), true),
         },
+        "show_picture" => {
+            let path = call.input.get("path").and_then(|v| v.str()).unwrap_or("");
+            let (w, h) = crate::chat::picture_box();
+            match crate::files::picture(path, w, h, crate::draw::GROUND) {
+                Ok((said, picture)) => {
+                    events.push(Event::Picture(picture));
+                    (said, false)
+                }
+                Err(why) => (why, true),
+            }
+        }
         "list_files" | "read_file" | "find_files" => {
             let text = |key: &str| call.input.get(key).and_then(|v| v.str()).unwrap_or("");
             events.push(Event::Activity(if call.name == "read_file" { "Reading a file" } else { "Looking through your files" }));

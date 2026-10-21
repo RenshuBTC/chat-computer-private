@@ -60,7 +60,14 @@ enum Kind {
     Note,
     /// A line across, then words: where the conversation was picked up after a restart, or a new one starts.
     Divider,
+    /// A picture Claude showed (show_picture).
+    Picture,
 }
+
+/// The most pictures the conversation keeps the pixels of (older ones become a line saying one was there).
+const MOST_PICTURES: usize = 12;
+/// What's left of a picture whose pixels went.
+const PICTURE_GONE: &str = "(A picture was shown here.)";
 
 /// What a start-screen paragraph is, for the ones that change.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -101,6 +108,8 @@ struct Block {
     activity: Option<&'static str>,
     /// Its text changed since it was laid out.
     changed: bool,
+    /// A picture's pixels.
+    picture: Option<picture::Picture>,
 }
 
 impl Block {
@@ -117,6 +126,7 @@ impl Block {
             thinking: false,
             activity: None,
             changed: true,
+            picture: None,
         }
     }
 }
@@ -381,7 +391,13 @@ impl Chat {
         b.thinking = b.kind == Kind::Claude && shown.trim().is_empty();
         b.marks.clear();
         let line = style.line_height / ONE;
-        if b.kind == Kind::Claude && !b.thinking {
+        if let Some(p) = b.picture.as_mut() {
+            // (Narrower than it was shown at, after the text was made bigger: shrunk to the column.)
+            if p.width as i32 > m.column_w {
+                *p = picture::shrink(p, m.column_w.max(1) as u32, p.height);
+            }
+            b.height = p.height as i32;
+        } else if b.kind == Kind::Claude && !b.thinking {
             // Claude's words, as Markdown (rich.rs).
             let laid = rich::lay_out(ty, &shown, m.rem, style, m.column_w, hair);
             for (i, run) in laid.runs.into_iter().enumerate() {
@@ -524,6 +540,10 @@ impl Chat {
             }
             if b.kind == Kind::Divider {
                 canvas.fill(Rect::new(m.column_x, y, m.column_w, rule), LINE);
+            }
+            if let Some(p) = &b.picture {
+                canvas.picture(m.column_x, y, p.width as usize, p.height as usize, &p.rgb);
+                canvas.round_corners(Rect::new(m.column_x, y, p.width as i32, p.height as i32), m.px(0.6), GROUND);
             }
             for r in &b.marks {
                 canvas.fill(Rect::new(m.column_x + r.x, y + r.y, r.w, r.h), INK);
@@ -856,6 +876,7 @@ impl Chat {
                 let area = self.block_area(i);
                 self.dirty = self.dirty.union(&area);
             }
+            Event::Picture(p) => self.show_picture(p),
             Event::Restarting(seconds) => {
                 self.blocks.push(Block::new(Kind::Note, Live::No, format!("Restarting in {seconds} seconds\u{2026}")));
                 self.relayout = true;
@@ -878,6 +899,38 @@ impl Chat {
                 self.relayout = true;
             }
         }
+    }
+
+    /// A picture Claude shows: where the answer is, before its words if it hasn't any yet, else after them (and the
+    /// answer goes on below it). Only the last `MOST_PICTURES` keep their pixels.
+    fn show_picture(&mut self, p: picture::Picture) {
+        let Some(i) = self.asking else { return };
+        let mut block = Block::new(Kind::Picture, Live::No, String::new());
+        block.picture = Some(p);
+        if self.blocks[i].text.trim().is_empty() {
+            self.blocks.insert(i, block);
+            self.asking = Some(i + 1);
+        } else {
+            self.blocks.insert(i + 1, block);
+            self.blocks.insert(i + 2, Block::new(Kind::Claude, Live::No, String::new()));
+            self.asking = Some(i + 2);
+        }
+        let mut kept = 0;
+        for b in self.blocks.iter_mut().rev() {
+            if b.picture.is_some() {
+                kept += 1;
+                if kept > MOST_PICTURES {
+                    *b = Block::new(Kind::Note, Live::No, String::from(PICTURE_GONE));
+                }
+            }
+        }
+        self.relayout = true;
+    }
+
+    /// The most room a picture gets: the column's width, and two thirds of the conversation's height.
+    fn picture_box(&self) -> (u32, u32) {
+        let room = (self.log_bottom() - self.m.px(4.0)).max(1);
+        (self.m.column_w.max(1) as u32, (room * 2 / 3).max(1) as u32)
     }
 
     /// The conversation from before the last restart, in place of the start screen, scrolled to its end.
@@ -913,6 +966,11 @@ impl Chat {
 }
 
 /// Called after every interrupt: the start screen's live lines, the thinking dot, and whatever changed.
+/// The most room a picture gets on the screen (show_picture).
+pub fn picture_box() -> (u32, u32) {
+    CHAT.lock().as_ref().map_or((800, 600), |c| c.picture_box())
+}
+
 pub fn tick() {
     if let Some(c) = CHAT.lock().as_mut() {
         c.tick();

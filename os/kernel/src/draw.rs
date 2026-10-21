@@ -103,6 +103,24 @@ fn exp(x: f64) -> f64 {
     y
 }
 
+/// How much (0 to 255) of pixel (`dx`, `dy`) of a corner's square is inside its rounding (a circle of `radius`
+/// whose centre is `radius` in from the corner), from 4 × 4 points in it.
+fn corner_coverage(radius: i32, dx: i32, dy: i32) -> u32 {
+    let rr = (radius * 8) as i64 * (radius * 8) as i64;
+    let mut inside = 0;
+    for sy in 0..4 {
+        for sx in 0..4 {
+            // The point, in eighths of a pixel, from the circle's centre.
+            let px = (radius - dx) as i64 * 8 - (sx * 2 + 1);
+            let py = (radius - dy) as i64 * 8 - (sy * 2 + 1);
+            if px * px + py * py <= rr {
+                inside += 1;
+            }
+        }
+    }
+    (inside * 255 + 8) / 16
+}
+
 pub struct Canvas {
     pub width: usize,
     pub height: usize,
@@ -165,6 +183,35 @@ impl Canvas {
         }
     }
 
+    /// A picture's pixels (RGB, row by row), its top left corner at (`x`, `y`).
+    pub fn picture(&mut self, x: i32, y: i32, width: usize, height: usize, rgb: &[u8]) {
+        let area = Rect::new(x, y, width as i32, height as i32).intersect(&self.clip);
+        for py in area.y..area.bottom() {
+            let src = &rgb[((py - y) as usize * width + (area.x - x) as usize) * 3..];
+            let row = py as usize * self.width;
+            for (i, p) in self.pixels[row + area.x as usize..row + area.right() as usize].iter_mut().enumerate() {
+                *p = (src[i * 3] as u32) << 16 | (src[i * 3 + 1] as u32) << 8 | src[i * 3 + 2] as u32;
+            }
+        }
+    }
+
+    /// What's drawn in `r` given corners rounded to `radius` pixels: outside them, `rgb` (the ground), edges smoothed.
+    pub fn round_corners(&mut self, r: Rect, radius: i32, rgb: u32) {
+        let radius = radius.min(r.w / 2).min(r.h / 2).max(0);
+        for dy in 0..radius {
+            for dx in 0..radius {
+                let outside = 255 - corner_coverage(radius, dx, dy);
+                if outside == 0 {
+                    continue;
+                }
+                self.blend(r.x + dx, r.y + dy, rgb, outside);
+                self.blend(r.right() - 1 - dx, r.y + dy, rgb, outside);
+                self.blend(r.x + dx, r.bottom() - 1 - dy, rgb, outside);
+                self.blend(r.right() - 1 - dx, r.bottom() - 1 - dy, rgb, outside);
+            }
+        }
+    }
+
     /// A rectangle with corners rounded to `radius` pixels, edges smoothed.
     pub fn round_rect(&mut self, r: Rect, radius: i32, rgb: u32) {
         let radius = radius.min(r.w / 2).min(r.h / 2).max(0);
@@ -172,25 +219,13 @@ impl Canvas {
         self.fill(Rect::new(r.x + radius, r.y, r.w - 2 * radius, r.h), rgb);
         self.fill(Rect::new(r.x, r.y + radius, radius, r.h - 2 * radius), rgb);
         self.fill(Rect::new(r.right() - radius, r.y + radius, radius, r.h - 2 * radius), rgb);
-        // The corners: how much of each pixel is inside the circle, from 4 x 4 points in it.
-        let rr = (radius * 8) as i64 * (radius * 8) as i64;
+        // The corners: how much of each pixel is inside the circle.
         for dy in 0..radius {
             for dx in 0..radius {
-                let mut inside = 0;
-                for sy in 0..4 {
-                    for sx in 0..4 {
-                        // The point, in eighths of a pixel, from the circle's centre (radius in from the corner).
-                        let px = (radius - dx) as i64 * 8 - (sx * 2 + 1);
-                        let py = (radius - dy) as i64 * 8 - (sy * 2 + 1);
-                        if px * px + py * py <= rr {
-                            inside += 1;
-                        }
-                    }
-                }
-                if inside == 0 {
+                let a = corner_coverage(radius, dx, dy);
+                if a == 0 {
                     continue;
                 }
-                let a = (inside * 255 + 8) / 16;
                 self.blend(r.x + dx, r.y + dy, rgb, a);
                 self.blend(r.right() - 1 - dx, r.y + dy, rgb, a);
                 self.blend(r.x + dx, r.bottom() - 1 - dy, rgb, a);

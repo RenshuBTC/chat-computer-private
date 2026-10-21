@@ -20,6 +20,7 @@ fat = { path = "../fat" }
 ntfs = { path = "../ntfs" }
 zip = { path = "../zip" }
 office = { path = "../office" }
+picture = { path = "../picture" }
 remember = { path = "../remember" }
 markdown = { path = "../markdown" }
 hid = { path = "../hid" }

@@ -1,7 +1,7 @@
 # Chat Computer's own operating system (os/).
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
-#   engine's, text setting's, chimes', NTFS, ZIP and Office readers', Markdown reader's, memory file's and HID
-#   descriptors' tests;
+#   engine's, text setting's, chimes', NTFS, ZIP, Office and picture readers', Markdown reader's, memory file's and
+#   HID descriptors' tests;
 #   starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a crash stops it
 #   cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts), checking the
 #   firmware refuses it unsigned; types on PS/2 and USB keyboards (on ports, behind a hub, plugged in and out),
@@ -39,8 +39,8 @@ jobs:
           sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil sbsigntool dosfstools mtools gdisk xz-utils zip
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
-      - name: Font engine, text setting, chimes, NTFS, ZIP and Office readers, Markdown reader, memory file and HID tests
-        run: cargo test -p font -p text -p chime -p ntfs -p zip -p office -p markdown -p remember -p hid
+      - name: Font engine, text setting, chimes, NTFS, ZIP, Office and picture readers, Markdown, memory file and HID tests
+        run: cargo test -p font -p text -p chime -p ntfs -p zip -p office -p picture -p markdown -p remember -p hid
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh

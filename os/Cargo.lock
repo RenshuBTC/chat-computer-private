@@ -28,6 +28,7 @@ dependencies = [
  "net",
  "ntfs",
  "office",
+ "picture",
  "remember",
  "text",
  "tls",
@@ -75,6 +76,13 @@ version = "0.1.0"
 
 [[package]]
 name = "office"
+version = "0.1.0"
+dependencies = [
+ "zip",
+]
+
+[[package]]
+name = "picture"
 version = "0.1.0"
 dependencies = [
  "zip",

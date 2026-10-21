@@ -1,0 +1,216 @@
+//! Pictures, read: JPEG (baseline and progressive, as cameras, phones and the web make them), PNG (every colour type
+//! and depth, interlaced or not) and GIF (its first frame), as RGB pixels on a background (where they're
+//! transparent), made to fit a box: shrunk by averaging (never enlarged), and a photo turned the way its camera says
+//! (its EXIF orientation). A big JPEG is decoded at a half, a quarter or an eighth of its size when that's still
+//! enough for the box, which takes a fraction of the memory and time.
+//!
+//! Integer arithmetic only (the kernel's floating point is done in software). Every number read is checked before
+//! it's used, so a damaged picture gives an error, never a crash.
+
+#![no_std]
+
+extern crate alloc;
+
+mod gif;
+mod jpeg;
+mod png;
+
+#[cfg(test)]
+mod tests;
+
+use alloc::vec;
+use alloc::vec::Vec;
+
+/// A picture: its pixels, RGB, row by row.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Picture {
+    pub width: u32,
+    pub height: u32,
+    pub rgb: Vec<u8>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Error {
+    /// Not a JPEG, PNG or GIF.
+    NotAPicture,
+    /// Something in it doesn't add up.
+    Damaged,
+    /// A kind of JPEG this doesn't read (lossless, arithmetic-coded, 12-bit, hierarchical).
+    Unsupported(&'static str),
+    /// More pixels than it reads at once.
+    TooBig,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Format {
+    Jpeg,
+    Png,
+    Gif,
+}
+
+/// What `data` is, from its first bytes.
+pub fn format(data: &[u8]) -> Option<Format> {
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(Format::Jpeg)
+    } else if data.starts_with(png::SIGNATURE) {
+        Some(Format::Png)
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        Some(Format::Gif)
+    } else {
+        None
+    }
+}
+
+/// The most pixels decoded at once, before shrinking (a JPEG decoded smaller counts as its smaller size).
+const MOST_PIXELS: u64 = 40 << 20;
+
+/// The picture in `data`, turned as its camera says, on `background` where it's transparent, and shrunk (if need be)
+/// to fit `width` × `height`, its proportions kept.
+pub fn decode(data: &[u8], width: u32, height: u32, background: [u8; 3]) -> Result<Picture, Error> {
+    let (p, full) = match format(data).ok_or(Error::NotAPicture)? {
+        Format::Png => {
+            let p = png::decode(data, background, MOST_PIXELS)?;
+            let full = (p.width, p.height);
+            (p, full)
+        }
+        Format::Gif => {
+            let p = gif::decode(data, background, MOST_PIXELS)?;
+            let full = (p.width, p.height);
+            (p, full)
+        }
+        Format::Jpeg => {
+            // (Decoded perhaps at a fraction of its size: the size it fits is worked out from its whole size.)
+            let (p, orientation, (w, h)) = jpeg::decode(data, width, height, MOST_PIXELS)?;
+            (orient(p, orientation), if orientation >= 5 { (h, w) } else { (w, h) })
+        }
+    };
+    let (w, h) = fitted(full.0, full.1, width, height);
+    Ok(shrink_to(&p, w, h))
+}
+
+/// A colour with an alpha (0 to 255) on the background.
+pub(crate) fn blend(c: [u8; 3], alpha: u8, background: [u8; 3]) -> [u8; 3] {
+    let a = alpha as u32;
+    let mix = |f: u8, b: u8| ((f as u32 * a + b as u32 * (255 - a) + 127) / 255) as u8;
+    [mix(c[0], background[0]), mix(c[1], background[1]), mix(c[2], background[2])]
+}
+
+/// The size a picture of `w` × `h` is made to fit `max_w` × `max_h`: as it is, or smaller, its proportions kept
+/// (each side at least a pixel).
+pub fn fitted(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    if w <= max_w && h <= max_h {
+        return (w, h);
+    }
+    // Whichever side is tighter decides.
+    if w as u64 * max_h as u64 >= h as u64 * max_w as u64 {
+        (max_w.max(1), ((h as u64 * max_w as u64 / w as u64) as u32).max(1))
+    } else {
+        (((w as u64 * max_h as u64 / h as u64) as u32).max(1), max_h.max(1))
+    }
+}
+
+/// `p` shrunk to fit `max_w` × `max_h`: each new pixel the average of the old ones it covers, counted by how much of
+/// each it covers (in integers: one side's pixels are cut into the other side's count of parts).
+pub fn shrink(p: &Picture, max_w: u32, max_h: u32) -> Picture {
+    let (w, h) = fitted(p.width, p.height, max_w, max_h);
+    shrink_to(p, w, h)
+}
+
+/// `p` shrunk to `w` × `h` (each at most what it is).
+fn shrink_to(p: &Picture, w: u32, h: u32) -> Picture {
+    let (w, h) = (w.clamp(1, p.width.max(1)), h.clamp(1, p.height.max(1)));
+    if (w, h) == (p.width, p.height) {
+        return p.clone();
+    }
+    let (sw, sh) = (p.width as usize, p.height as usize);
+    let (dw, dh) = (w as usize, h as usize);
+    // Across: each row to `dw` pixels.
+    let mut across = vec![0u8; dw * sh * 3];
+    let columns = spans(sw, dw);
+    for y in 0..sh {
+        let src = &p.rgb[y * sw * 3..(y + 1) * sw * 3];
+        let dst = &mut across[y * dw * 3..(y + 1) * dw * 3];
+        for (x, span) in columns.iter().enumerate() {
+            let mut sum = [0u32; 3];
+            for &(i, weight) in span {
+                for c in 0..3 {
+                    sum[c] += src[i * 3 + c] as u32 * weight;
+                }
+            }
+            for c in 0..3 {
+                dst[x * 3 + c] = ((sum[c] + sw as u32 / 2) / sw as u32) as u8;
+            }
+        }
+    }
+    // Down: each column to `dh` pixels.
+    let mut rgb = vec![0u8; dw * dh * 3];
+    let rows = spans(sh, dh);
+    for (y, span) in rows.iter().enumerate() {
+        let mut sums = vec![0u32; dw * 3];
+        for &(i, weight) in span {
+            let row = &across[i * dw * 3..(i + 1) * dw * 3];
+            for (s, &v) in sums.iter_mut().zip(row) {
+                *s += v as u32 * weight;
+            }
+        }
+        for (d, s) in rgb[y * dw * 3..(y + 1) * dw * 3].iter_mut().zip(&sums) {
+            *d = ((s + sh as u32 / 2) / sh as u32) as u8;
+        }
+    }
+    Picture { width: w, height: h, rgb }
+}
+
+/// For each of `to` new pixels, the old ones (of `from`) it covers and by how much, in parts: old pixel i is
+/// [i·to, (i+1)·to), new pixel x is [x·from, (x+1)·from), and each new one's weights add up to `from`.
+fn spans(from: usize, to: usize) -> Vec<Vec<(usize, u32)>> {
+    (0..to)
+        .map(|x| {
+            let (start, end) = (x * from, (x + 1) * from);
+            (start / to..end.div_ceil(to))
+                .map(|i| {
+                    let (a, b) = (i * to, (i + 1) * to);
+                    (i, (b.min(end) - a.max(start)) as u32)
+                })
+                .filter(|&(_, w)| w > 0)
+                .collect()
+        })
+        .collect()
+}
+
+/// A picture turned as EXIF's orientation says (1: as it is; 2: mirrored; 3: turned half round; 4: mirrored top to
+/// bottom; 5: mirrored along its diagonal; 6: turned a quarter clockwise; 7: mirrored along its other diagonal; 8: turned
+/// a quarter anticlockwise).
+pub fn orient(p: Picture, orientation: u8) -> Picture {
+    if !(2..=8).contains(&orientation) {
+        return p;
+    }
+    let (w, h) = (p.width as usize, p.height as usize);
+    let swap = orientation >= 5;
+    let (nw, nh) = if swap { (h, w) } else { (w, h) };
+    let mut rgb = vec![0u8; nw * nh * 3];
+    for y in 0..nh {
+        for x in 0..nw {
+            // Where the new pixel comes from.
+            let (sx, sy) = match orientation {
+                2 => (w - 1 - x, y),
+                3 => (w - 1 - x, h - 1 - y),
+                4 => (x, h - 1 - y),
+                5 => (y, x),
+                6 => (y, h - 1 - x),
+                7 => (w - 1 - y, h - 1 - x),
+                _ => (w - 1 - y, x),
+            };
+            rgb[(y * nw + x) * 3..][..3].copy_from_slice(&p.rgb[(sy * w + sx) * 3..][..3]);
+        }
+    }
+    Picture { width: nw as u32, height: nh as u32, rgb }
+}
+
+/// The size a picture says it is (before it's turned), from its header: for checking it, without decoding it.
+pub fn size(data: &[u8]) -> Option<(u32, u32)> {
+    match format(data)? {
+        Format::Png => png::size(data),
+        Format::Gif => gif::size(data),
+        Format::Jpeg => jpeg::size(data),
+    }
+}

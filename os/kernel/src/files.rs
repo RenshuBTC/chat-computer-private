@@ -570,6 +570,39 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
     })?
 }
 
+/// The biggest picture file shown on the screen.
+const MOST_SHOWN: u64 = 64_000_000;
+
+/// A picture on Windows' drive for the screen (show_picture): what was shown, and its pixels, made to fit `w` × `h`
+/// on the screen's background (`ground`, as 0xRRGGBB) where it's transparent.
+pub fn picture(path: &str, w: u32, h: u32, ground: u32) -> Result<(String, picture::Picture), String> {
+    let rel = inside(path)?;
+    let background = [(ground >> 16) as u8, (ground >> 8) as u8, ground as u8];
+    with(|v, p| {
+        let (e, rel, link) = found(v, p, &rel)?;
+        let f = v.open_file(p, e.record).map_err(|err| error_text(err, &shown(&rel)))?;
+        let name = format!("{}{}", shown(&rel), by_way_of(&link));
+        if f.size > MOST_SHOWN {
+            return Err(format!("{name} is {}: too big to show here.", size(f.size)));
+        }
+        let data = whole(v, p, &f, MOST_SHOWN).map_err(|err| error_text(err, &shown(&rel)))?;
+        match picture::decode(&data, w, h, background) {
+            Ok(pic) => {
+                let full = picture::size(&data).map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default();
+                Ok((format!("Shown on the screen: {name} ({}{full}).", size(f.size)), pic))
+            }
+            Err(picture::Error::NotAPicture) => Err(match kind_of(&data[..data.len().min(32)], &rel) {
+                Kind::Picture("image/webp") => format!("{name} is a WebP picture, which this screen can't show yet (read_file shows it to you)."),
+                Kind::Media(what) => format!("{name} is {what}, which Chat Computer's own system can't show yet."),
+                _ => format!("{name} isn't a picture this screen shows (JPEG, PNG or GIF)."),
+            }),
+            Err(picture::Error::Unsupported(what)) => Err(format!("{name} is a {what}, which Chat Computer's own system can't show yet.")),
+            Err(picture::Error::TooBig) => Err(format!("{name} has too many pixels to show here.")),
+            Err(picture::Error::Damaged) => Err(format!("{name} seems to be damaged: it can't be shown.")),
+        }
+    })?
+}
+
 /// Up to `READ_AT_ONCE` bytes of `words`, from byte `from` (moved back to a character's start), after `header`; and,
 /// if there's more, where to go on from.
 fn part_of(words: &str, from: u64, header: &str) -> String {

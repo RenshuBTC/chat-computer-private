@@ -150,6 +150,9 @@ NVMe and SATA drivers.
       pictures). The newest of them are sent with each question, up to 28 MB and 20 of them; older ones are taken out,
       a line saying each was there, and the memory file keeps the conversation without them. A ZIP archive's files are
       listed. Anything else is said to be the kind it is;
+    * `show_picture`: a photo, a screenshot or a drawing on Windows' drive (JPEG, PNG or GIF), shown to the person in
+      the conversation where Claude's answer is, as wide as the column at most (and two thirds of its height), its
+      corners rounded, turned the way the camera says (`picture/`). The last 12 shown keep their pixels;
     * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
       keyboard controller's reset line (`power.rs`);
@@ -237,6 +240,13 @@ NVMe and SATA drivers.
   that make dates, times and percentages, both of Excel's date systems, formulas), a presentation's slides in order
   with their notes. Tested against documents made by python-docx, openpyxl and python-pptx, the same saved by
   LibreOffice, and documents written by hand with what programs write less often (`office/tests/make.py`).
+* `picture/` decodes pictures for the screen: JPEG (baseline and progressive, any sampling, restart markers,
+  Adobe's CMYK, EXIF's orientation) as libjpeg decodes it (its accurate integer inverse DCT, its "fancy" upsampling,
+  its YCbCr arithmetic), a big one at a half, a quarter or an eighth of its size when that's enough, so a phone's
+  48-megapixel photo needs a few megabytes; PNG (every colour type and depth, transparency, interlacing); and GIF's
+  first frame. Shrunk to fit by averaging, in integers only. Tested against Pillow's (libjpeg-turbo's) decoding of
+  pictures it wrote (within one level a sample) and PNGs written by its test, every depth and colour type
+  (exactly), and damaged pictures.
 * `chime/` makes the chimes of timers and reminders: bell notes, each a tone with its second and third harmonics,
   rising in 5 ms and dying away, the same as the main Chat Computer's (`chatcomputer/voice/chime.py`), at any
   sample rate. Made with sine recurrences (each sample from the two before), as the kernel's floating point is
@@ -315,11 +325,11 @@ python3-pil`).
 
 ```
 ./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 2.8 MB)
-cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p ntfs -p zip -p office -p remember -p markdown -p chime -p hid
+cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p ntfs -p zip -p office -p picture -p remember -p markdown -p chime -p hid
                                  # the font engine and text setting, network stack, cryptography, TLS (needs
                                  # openssl), Claude API client, FAT reader (needs dosfstools and mtools), NTFS
-                                 # reader (needs xz), ZIP and Office readers (need python3), memory file, Markdown
-                                 # reader, chimes and HID descriptors
+                                 # reader (needs xz), ZIP, Office and picture readers (need python3 and Pillow),
+                                 # memory file, Markdown reader, chimes and HID descriptors
 cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
@@ -344,8 +354,8 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
 ./check.py --files               # Windows' drive read by Claude's tools (a stand-in for Claude asks): a folder
                                  # listed, text files read (UTF-8 and UTF-16, a long one in two parts), links
                                  # followed, OneDrive's files on the PC and online only, Word, Excel and
-                                 # PowerPoint files as words, a photo and a PDF sent whole, a search
-                                 # (needs xz and gdisk)
+                                 # PowerPoint files as words, a photo and a PDF sent whole, a search, and a
+                                 # photo shown on the screen (needs xz and gdisk)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/chatcomputer.efi
@@ -441,7 +451,8 @@ PC.
    ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)), and the own kernel doesn't
    run the Claude Code program (a Linux program), so it uses an API key.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting Claude's answers use
-   (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font. To do: accents
+   (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the
+   conversation (JPEG, PNG, GIF). To do: accents
    placed over letters typed as two characters (GPOS's mark positioning), and Chinese, Japanese and Korean.
 10. Sound and AirPods: ✓ HD Audio's outputs, for the chimes of timers and reminders (checked with QEMU's
     controllers and codecs). To do: trying it on real PCs, microphones, USB audio, then Bluetooth (HCI over USB,

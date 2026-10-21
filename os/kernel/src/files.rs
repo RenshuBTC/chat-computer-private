@@ -3,7 +3,12 @@
 //! nearly always is: of the partitions its GPT (or an old MBR) lists as basic data, the NTFS one with Windows' own
 //! folders ("Windows" and "Users") is C:. The NTFS reader (ntfs/) does the rest. Links (a junction such as "My
 //! Documents", a symbolic link) are followed, on C:; OneDrive's files are read when they're on the PC, and said to be
-//! online only when they aren't. A drive BitLocker encrypts can't be read yet, and the status says so.
+//! online only when they aren't.
+//!
+//! A drive BitLocker encrypts (bitlocker/) is read decrypted: unlocked at once if BitLocker keeps its key in the clear
+//! (suspended, or waiting to be switched on, as a new PC's device encryption does until its owner signs in), else
+//! once the person types its recovery key in the message box. chat.rs hands the key here and never to Claude, and it
+//! isn't kept: after a restart it's typed again.
 //!
 //! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); a
 //! ZIP archive as the list of what's in it; and pictures (JPEG, PNG, GIF, WebP) and PDFs whole, for Claude to see
@@ -148,26 +153,65 @@ fn whole(v: &ntfs::Volume, p: &mut Partition, f: &ntfs::File, most: u64) -> Resu
     Ok(data)
 }
 
+/// BitLocker's sector key for a partition it encrypts, once unlocked.
+struct Unlocked {
+    volume: bitlocker::Volume,
+    key: bitlocker::Key,
+}
+
 struct Windows {
     /// The partition's first block on the start-up drive, and its size in blocks.
     start: u64,
     blocks: u64,
     volume: ntfs::Volume,
+    /// If BitLocker encrypts it: its key.
+    bitlocker: Option<Unlocked>,
+}
+
+/// A partition BitLocker encrypts, still locked: its recovery key unlocks it.
+struct Locked {
+    start: u64,
+    blocks: u64,
+    volume: bitlocker::Volume,
 }
 
 static WINDOWS: SpinLock<Option<Windows>> = SpinLock::new(None);
+static LOCKED: SpinLock<Vec<Locked>> = SpinLock::new(Vec::new());
+/// A recovery key typed in the message box, for `work` to unlock with.
+static RECOVERY_KEY: SpinLock<Option<String>> = SpinLock::new(None);
 /// What was found, for the computer's status.
 static SAID: SpinLock<Option<String>> = SpinLock::new(None);
 
-/// The partition's bytes for the NTFS reader, from the drive's blocks (a page at most at a time).
+/// The partition's bytes for the NTFS reader, from the drive's blocks (a page at most at a time), decrypted if
+/// BitLocker encrypts it.
 struct Partition<'a> {
     disk: &'a mut dyn Disk,
     start: u64,
     blocks: u64,
+    unlocked: Option<&'a Unlocked>,
 }
 
 impl ntfs::Disk for Partition<'_> {
     fn read(&mut self, offset: u64, buf: &mut [u8]) -> bool {
+        let unlocked = self.unlocked;
+        match unlocked {
+            Some(u) => u.volume.read(&u.key, &mut Raw(self), offset, buf),
+            None => self.raw(offset, buf),
+        }
+    }
+}
+
+/// The partition's bytes as they are on the drive (BitLocker's reader decrypts them).
+struct Raw<'p, 'a>(&'p mut Partition<'a>);
+
+impl bitlocker::Disk for Raw<'_, '_> {
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> bool {
+        self.0.raw(offset, buf)
+    }
+}
+
+impl Partition<'_> {
+    fn raw(&mut self, offset: u64, buf: &mut [u8]) -> bool {
         let bs = self.disk.block_size() as usize;
         let mut done = 0usize;
         let mut block = vec![0u8; bs];
@@ -241,40 +285,193 @@ fn partitions(disk: &mut dyn Disk) -> Vec<(u64, u64)> {
     out
 }
 
+/// What a partition turned out to be.
+enum Found {
+    Windows(Windows),
+    /// NTFS, but not Windows' own.
+    NotWindows,
+    BitLocker,
+    Nothing,
+}
+
+/// The NTFS volume on a partition (decrypted with `unlocked`, if BitLocker encrypts it), if it's Windows' drive.
+fn windows_on(disk: &mut dyn Disk, start: u64, blocks: u64, unlocked: Option<Unlocked>) -> Found {
+    let opened = {
+        let mut p = Partition { disk, start, blocks, unlocked: unlocked.as_ref() };
+        ntfs::open(&mut p).map(|volume| {
+            let windows = ["Windows", "Users"].iter().all(|f| volume.find(&mut p, f).is_ok_and(|e| e.folder));
+            (volume, windows)
+        })
+    };
+    match opened {
+        Ok((volume, true)) => Found::Windows(Windows { start, blocks, volume, bitlocker: unlocked }),
+        Ok((_, false)) => Found::NotWindows,
+        Err(ntfs::Error::BitLocker) => Found::BitLocker,
+        Err(_) => Found::Nothing,
+    }
+}
+
+/// What Windows' drive is, for the computer's status: "Windows' drive (C:, NTFS, 512.1 GB), read only".
+fn said_of(w: &Windows, disk: &dyn Disk, how: &str) -> String {
+    format!("Windows' drive (C:, NTFS, {}{how}), read only", size(w.blocks * disk.block_size() as u64))
+}
+
 /// Finds Windows' drive on the start-up drive. Says what it found, for the log.
 pub fn init() -> String {
     let found = storage::with_start(|disk| {
         let mut why = String::from("no NTFS partition on the start-up drive");
+        let mut locked: Vec<Locked> = Vec::new();
+        let mut unreadable: Option<bitlocker::Error> = None;
         for (start, blocks) in partitions(disk) {
-            let mut p = Partition { disk: &mut *disk, start, blocks };
-            match ntfs::open(&mut p) {
-                Ok(volume) => {
-                    let windows = ["Windows", "Users"].iter().all(|f| volume.find(&mut p, f).is_ok_and(|e| e.folder));
-                    let size = blocks * p.disk.block_size() as u64;
-                    if windows {
-                        return Ok((Windows { start, blocks, volume }, size));
+            match windows_on(&mut *disk, start, blocks, None) {
+                Found::Windows(w) => return Ok(said_of(&w, disk, "") + &stored(w)),
+                Found::NotWindows => why = String::from("no NTFS partition with Windows on it"),
+                Found::BitLocker => {
+                    let mut p = Partition { disk: &mut *disk, start, blocks, unlocked: None };
+                    let volume = match bitlocker::open(&mut Raw(&mut p)) {
+                        Ok(volume) => volume,
+                        Err(e) => {
+                            unreadable = Some(e);
+                            continue;
+                        }
+                    };
+                    // Its key in the clear: BitLocker suspended, or not switched on yet.
+                    if let Ok(key) = volume.unlock_clear() {
+                        if let Found::Windows(w) = windows_on(&mut *disk, start, blocks, Some(Unlocked { volume, key })) {
+                            let how = ", encrypted with BitLocker, which keeps its key in the clear: suspended, or not switched on yet";
+                            return Ok(said_of(&w, disk, how) + &stored(w));
+                        }
+                        continue;
                     }
-                    why = String::from("no NTFS partition with Windows on it");
+                    locked.push(Locked { start, blocks, volume });
                 }
-                Err(ntfs::Error::BitLocker) => {
-                    return Err(String::from("Windows' drive is encrypted with BitLocker, which Chat Computer's own system can't read yet"));
-                }
-                Err(_) => {}
+                Found::Nothing => {}
             }
         }
-        Err(why)
+        if let Some(l) = locked.first() {
+            let why = locked_why(&l.volume);
+            *LOCKED.lock() = locked;
+            return Err(why);
+        }
+        Err(match unreadable {
+            Some(bitlocker::Error::Unsupported(what)) => {
+                format!("Windows' drive is encrypted with BitLocker in a way Chat Computer's own system can't read yet ({what})")
+            }
+            Some(e) => format!("Windows' drive is encrypted with BitLocker, whose own records on it couldn't be read ({e:?})"),
+            None => why,
+        })
     });
     let said = match found {
-        Some(Ok((w, size))) => {
-            let said = format!("Windows' drive (C:, NTFS, {}), read only", self::size(size));
-            *WINDOWS.lock() = Some(w);
-            said
-        }
+        Some(Ok(said)) => said,
         Some(Err(why)) => format!("none: {why}"),
         None => String::from("none: the start-up drive isn't started"),
     };
     *SAID.lock() = Some(said.clone());
     format!("files: {said}")
+}
+
+/// Keeps Windows' drive to read (and says nothing more).
+fn stored(w: Windows) -> String {
+    *WINDOWS.lock() = Some(w);
+    String::new()
+}
+
+/// Why a drive BitLocker encrypts can't be read yet, and how it can be: the person types its recovery key.
+fn locked_why(v: &bitlocker::Volume) -> String {
+    let ids = v.recovery_key_ids();
+    if ids.is_empty() {
+        return String::from(
+            "Windows' drive is encrypted with BitLocker, with no recovery key: only this PC's security chip (its TPM) \
+             unlocks it, for Windows as it starts, so Chat Computer's own system can't read it",
+        );
+    }
+    let id: Vec<&str> = ids.iter().map(|id| &id[..8]).collect();
+    format!(
+        "Windows' drive is encrypted with BitLocker. To read it here, the person types its recovery key in the message \
+         box: 48 digits, which Windows keeps in their Microsoft account (https://aka.ms/myrecoverykey) if they signed in \
+         with one, or which they saved or printed; its key ID starts {}. Chat Computer's own system unlocks the drive with \
+         the key itself: it isn't sent to Claude, or kept, so it's typed again after a restart",
+        id.join(" or ")
+    )
+}
+
+/// A recovery key typed in the message box (chat.rs): `work` unlocks Windows' drive with it.
+pub fn unlock_later(key: String) {
+    if let Some(mut old) = RECOVERY_KEY.lock().replace(key) {
+        wipe(&mut old);
+    }
+}
+
+/// Overwrites a key's characters before it's dropped.
+pub fn wipe(s: &mut String) {
+    // (Zeros are still UTF-8.)
+    for b in unsafe { s.as_bytes_mut() } {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+    s.clear();
+}
+
+/// From the main loop: Windows' drive unlocked with a recovery key typed, if one was; what came of it, for the screen.
+/// (Stretching the key takes a second or so: the screen waits.)
+pub fn work() -> Option<String> {
+    let mut typed = RECOVERY_KEY.lock().take()?;
+    let said = unlock(&typed);
+    wipe(&mut typed);
+    Some(said)
+}
+
+fn unlock(typed: &str) -> String {
+    if WINDOWS.lock().is_some() {
+        return String::from("Windows' drive isn't locked: Claude can already read your files.");
+    }
+    let locked = core::mem::take(&mut *LOCKED.lock());
+    if locked.is_empty() {
+        return String::from("No drive here is locked with BitLocker, so that recovery key isn't needed.");
+    }
+    let mut still = Vec::new();
+    let mut said = None;
+    for l in locked {
+        if said.is_some() {
+            still.push(l);
+            continue;
+        }
+        match l.volume.unlock_recovery(typed) {
+            Ok(key) => {
+                let found = storage::with_start(|disk| match windows_on(disk, l.start, l.blocks, Some(Unlocked { volume: l.volume.clone(), key })) {
+                    Found::Windows(w) => {
+                        let how = ", encrypted with BitLocker: unlocked with its recovery key until Chat Computer restarts";
+                        *SAID.lock() = Some(said_of(&w, disk, how));
+                        stored(w);
+                        Ok(())
+                    }
+                    Found::NotWindows => Err("That recovery key unlocks a drive BitLocker encrypts, but not Windows' own (C:)."),
+                    _ => Err("That recovery key unlocks the drive, but its files can't be read: it may be damaged."),
+                });
+                match found {
+                    Some(Ok(())) => said = Some(String::from("Windows' drive is unlocked: Claude can read your files now, until Chat Computer restarts.")),
+                    Some(Err(why)) => said = Some(String::from(why)),
+                    None => {
+                        still.push(l);
+                        said = Some(String::from("The drive is busy: type the recovery key again in a moment."));
+                    }
+                }
+            }
+            Err(bitlocker::Error::WrongKey | bitlocker::Error::NoSuchProtector) => still.push(l),
+            Err(e) => {
+                said = Some(format!("That recovery key can't unlock Windows' drive here ({e:?})."));
+                still.push(l);
+            }
+        }
+    }
+    let ids: Vec<String> = still.iter().flat_map(|l| l.volume.recovery_key_ids()).map(|id| String::from(&id[..8])).collect();
+    *LOCKED.lock() = still;
+    said.unwrap_or_else(|| {
+        format!(
+            "That recovery key doesn't unlock Windows' drive. The key that does has the ID starting {} (as \
+             https://aka.ms/myrecoverykey lists it).",
+            ids.join(" or ")
+        )
+    })
 }
 
 /// What files can be read, for the computer's status.
@@ -285,10 +482,12 @@ pub fn status() -> String {
 /// Runs `f` with Windows' drive (None if there's no drive to read: the reason, for Claude).
 fn with<T>(f: impl FnOnce(&ntfs::Volume, &mut Partition) -> T) -> Result<T, String> {
     let Some(w) = WINDOWS.lock().take() else {
-        return Err(format!("Chat Computer's own system can't read this computer's files: {}", status().trim_start_matches("Files: ")));
+        let why = status();
+        let why = why.trim_start_matches("Files: ").trim_start_matches("none: ");
+        return Err(format!("Chat Computer's own system can't read this computer's files: {why}"));
     };
     let result = storage::with_start(|disk| {
-        let mut p = Partition { disk, start: w.start, blocks: w.blocks };
+        let mut p = Partition { disk, start: w.start, blocks: w.blocks, unlocked: w.bitlocker.as_ref() };
         f(&w.volume, &mut p)
     });
     *WINDOWS.lock() = Some(w);

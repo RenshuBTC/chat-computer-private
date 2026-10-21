@@ -112,9 +112,14 @@ NVMe and SATA drivers.
     through its tools (below). Links are followed on C: (a junction such as "My Documents", a symbolic link);
     OneDrive's files are read when they're downloaded to the PC, and said to be online only when they aren't. Word,
     Excel and PowerPoint files are read as their words (`office/`, through Chat Computer's own ZIP and DEFLATE
-    reader, `zip/`); pictures and PDFs go to Claude whole, as the API takes them, for Claude to see. Not yet: a drive
-    BitLocker encrypts (the status says so; many new laptops have Windows' "device encryption" on), files Windows
-    compressed itself ("Compact OS", mostly its own), other drives (D:), and Office's files from before 2007;
+    reader, `zip/`); pictures and PDFs go to Claude whole, as the API takes them, for Claude to see. A drive
+    BitLocker encrypts (many new laptops have Windows' "device encryption" on) is read decrypted (`bitlocker/`):
+    at once if BitLocker keeps its key in the clear (suspended, or not switched on yet), else once the person types
+    its recovery key in the message box (48 digits, from their Microsoft account at aka.ms/myrecoverykey). The key
+    is taken out of the message there and never sent to Claude, shown or kept (so it's typed again after a restart);
+    a wrong one is refused, naming the key ID that unlocks the drive. Not yet: a drive Windows is still encrypting
+    as it's written to, files Windows compressed itself ("Compact OS", mostly its own), other drives (D:), and
+    Office's files from before 2007;
   * the sound controller (`sound/hda.rs`): HD Audio, Intel's High Definition Audio, which nearly every PC's chipset
     has, Intel's and AMD's alike. It's reset and its codecs found on its link; the first codec with an audio function
     that has outputs is used (a graphics card's controller has only its screens' digital ones). Each codec
@@ -224,12 +229,24 @@ NVMe and SATA drivers.
   of clusters, and in other records, through an attribute list, for a file in hundreds of pieces), folders' indexes
   (B-trees of names, compared in capitals as the volume's own table makes them, as Windows compares them), long and
   8.3 names, hard links, sparse files, compressed files (LZNT1), and reparse points: links (where they go), and
-  placeholders, such as OneDrive's (whether the file's bytes are on the PC). Encrypted files (EFS), files Windows
-  compressed itself and volumes BitLocker encrypts are recognized, not read. Every number read from the disk is
+  placeholders, such as OneDrive's (whether the file's bytes are on the PC). Encrypted files (EFS) and files Windows
+  compressed itself are recognized, not read; a volume BitLocker encrypts is read through `bitlocker/`. Every number read from the disk is
   checked first, so a damaged volume gives an error, not a crash. Tested against volumes made by Linux's
   `mkntfs` and filled by ntfs-3g (`ntfs/tests/make.py`), with 512-byte and 4 KiB sectors, 4 KiB and 64 KiB
   clusters: every file's bytes, against a hash of what ntfs-3g wrote, and every byte of the volume's first records
   changed in turn.
+* `bitlocker/` reads a drive BitLocker encrypts, never writing it: its metadata (the first of its three copies
+  whose CRC is right), its key protectors, the volume master key opened with the recovery key (stretched by a
+  million rounds of SHA-256) or a password, or taken from a clear key, and then the full volume encryption key
+  (AES-CCM); the metadata's own hash, sealed with the master key, must match. Sectors are decrypted with AES-XTS
+  (Windows 10 and 11) or AES-CBC (7 and 8), NTFS's first sectors read from where BitLocker keeps them and its
+  metadata's places read as zeros. Windows 7's Elephant diffuser, Vista's format and drives still being encrypted
+  are recognized, not read. Its own AES uses tables (the crypto crate's computes its S-box in constant time, for
+  TLS, and only encrypts). Tested against the volumes Windows encrypted that cryptsetup tests with (downloaded at a
+  fixed commit and checked): 17 of them, unlocked by recovery key, password, second recovery key and clear key,
+  each decrypting to exactly the SHA-256 cryptsetup's decryption gives, To Go's FAT volumes and 4 KiB sectors
+  among them; reads of every size anywhere; wrong keys, damaged metadata copies, and metadata changed but its CRCs
+  made right. `bitlocker/tests/encrypt.py` makes volumes for the virtual PCs' check.
 * `zip/` is Chat Computer's own reader of ZIP archives (ZIP64 too) and DEFLATE, and zlib's wrapping of it (for
   PNG, later): what Word, Excel and PowerPoint files are made of. Its decoder works as zlib's "puff" does, with a
   table for short codes; what comes out is capped, so a "zip bomb" stops. Tested against zlib at every level and
@@ -325,11 +342,13 @@ python3-pil`).
 
 ```
 ./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 2.8 MB)
-cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p ntfs -p zip -p office -p picture -p remember -p markdown -p chime -p hid
+cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p ntfs -p zip -p office -p picture -p bitlocker -p remember -p markdown -p chime -p hid
                                  # the font engine and text setting, network stack, cryptography, TLS (needs
                                  # openssl), Claude API client, FAT reader (needs dosfstools and mtools), NTFS
                                  # reader (needs xz), ZIP, Office and picture readers (need python3 and Pillow),
-                                 # memory file, Markdown reader, chimes and HID descriptors
+                                 # BitLocker reader (needs curl, xz and python3-cryptography; BITLOCKER_IMAGES
+                                 # names the test volumes' archive if it's here already), memory file, Markdown
+                                 # reader, chimes and HID descriptors
 cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
@@ -356,6 +375,10 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # followed, OneDrive's files on the PC and online only, Word, Excel and
                                  # PowerPoint files as words, a photo and a PDF sent whole, a search, and a
                                  # photo shown on the screen (needs xz and gdisk)
+./check.py --bitlocker           # the same drive encrypted with BitLocker: locked; a wrong recovery key typed
+                                 # refused, the right one unlocking it, its files read; neither key reaching
+                                 # Claude or the disk; and read at once with BitLocker's key in the clear (needs
+                                 # python3-cryptography too)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/chatcomputer.efi
@@ -437,9 +460,11 @@ PC.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
 5. Storage: ✓ NVMe and SATA (the drive the PC started from), ✓ the conversation kept across restarts in a file on
    the start-up partition, ✓ Windows' drive read (NTFS), for Claude to read the person's files. Checked in virtual
-   PCs. ✓ Word, Excel and PowerPoint files' words, and pictures and PDFs for Claude to see. To do: a drive BitLocker
-   encrypts (with its recovery key), files Windows compressed itself (XPRESS and LZX), other drives, Office's files
-   from before 2007, Chat Computer's own file system for memory and logs, and keeping them encrypted.
+   PCs. ✓ Word, Excel and PowerPoint files' words, and pictures and PDFs for Claude to see. ✓ A drive BitLocker
+   encrypts, with its recovery key. To do: a drive still being encrypted as it's written to, unlocking with the
+   PC's TPM (for Chat Computer's own start-up, measured), files Windows compressed itself (XPRESS and LZX), other
+   drives, Office's files from before 2007, Chat Computer's own file system for memory and logs, and keeping them
+   encrypted.
 6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e, igb); the internet over
    a USB cable (USB Ethernet adapters and Android phones' tethering: CDC ECM, NCM and RNDIS); written, not yet tried
    on a real PC: Intel's I219, I210, I211, I225 and I226, and Realtek's RTL8111/8168 and RTL8125. To do: trying those

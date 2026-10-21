@@ -2,7 +2,7 @@
 # See README.md. Each crate is built for its own target by ./build.sh (cargo can't mix targets in one build).
 [workspace]
 resolver = "3"
-members = ["bootinfo", "boot", "kernel", "font", "text", "chime", "net", "crypto", "tls", "claude", "fat", "ntfs", "zip", "office", "picture", "remember", "markdown", "hid"]
+members = ["bootinfo", "boot", "kernel", "font", "text", "chime", "net", "crypto", "tls", "claude", "fat", "ntfs", "zip", "office", "picture", "bitlocker", "remember", "markdown", "hid"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,14 @@ license = "Personal use"
 [profile.dev]
 panic = "abort"
 opt-level = 1
+
+# Unlocking a BitLocker volume stretches its key with a million rounds of SHA-256, and the BitLocker reader's tests
+# decrypt 2 GB: those two crates are optimized fully even when tested.
+[profile.dev.package.bitlocker]
+opt-level = 3
+
+[profile.dev.package.crypto]
+opt-level = 3
 
 [profile.release]
 panic = "abort"

@@ -16,7 +16,7 @@ use crate::layout::{self, Layout};
 use crate::screen::Screen;
 use crate::sync::SpinLock;
 use text::{Face, Ink, Style, Type};
-use crate::{heap, memory, rich, time, usb};
+use crate::{files, heap, memory, rich, time, usb};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -303,7 +303,9 @@ impl Chat {
             size_mm,
             percent: 100,
             asking: None,
-            typed: String::new(),
+            // (Room for the longest message from the start, so what's typed is never copied elsewhere as it grows: a
+            // BitLocker recovery key typed is overwritten where it is.)
+            typed: String::with_capacity(TYPED_MAX * 4),
             cursor: 0,
             composer: BoxLayout::default(),
             anchor: 0,
@@ -785,16 +787,39 @@ impl Chat {
             self.dirty = self.dirty.union(&area);
             return;
         }
-        let text = String::from(self.typed.trim());
-        if text.is_empty() || self.asking.is_some() {
+        if self.typed.trim().is_empty() || self.asking.is_some() {
             return;
         }
-        self.typed.clear();
-        self.cursor = 0;
         if !self.started {
             self.started = true;
             self.blocks.clear();
         }
+        // A BitLocker recovery key unlocks Windows' drive here (files::work): it isn't shown, sent to Claude or kept,
+        // nor is anything typed with it.
+        if let Some(key) = bitlocker::find_recovery_key(&self.typed) {
+            let alone = key.len() == self.typed.trim().len();
+            files::unlock_later(String::from(key));
+            files::wipe(&mut self.typed);
+            self.cursor = 0;
+            let note = if alone {
+                "A BitLocker recovery key: Chat Computer unlocks Windows' drive with it here, without sending it to Claude \
+                 or keeping it. Unlocking\u{2026}"
+            } else {
+                "Your message has a BitLocker recovery key in it, so it wasn't sent to Claude: Chat Computer unlocks \
+                 Windows' drive with the key here instead, and doesn't keep it. Unlocking\u{2026}"
+            };
+            self.blocks.push(Block::new(Kind::Note, Live::No, String::from(note)));
+            self.lay_out_box();
+            self.lay_out();
+            self.anchor = self.blocks[self.blocks.len() - 1].top - self.m.px(2.0);
+            self.scroll = None;
+            // (On the screen before the unlocking starts, as the screen waits while it's done.)
+            self.draw(true);
+            return;
+        }
+        let text = String::from(self.typed.trim());
+        self.typed.clear();
+        self.cursor = 0;
         self.blocks.push(Block::new(Kind::You, Live::No, text.clone()));
         let you = self.blocks.len() - 1;
         match assistant::ask(&text) {
@@ -965,12 +990,12 @@ impl Chat {
     }
 }
 
-/// Called after every interrupt: the start screen's live lines, the thinking dot, and whatever changed.
 /// The most room a picture gets on the screen (show_picture).
 pub fn picture_box() -> (u32, u32) {
     CHAT.lock().as_ref().map_or((800, 600), |c| c.picture_box())
 }
 
+/// Called after every interrupt: the start screen's live lines, the thinking dot, and whatever changed.
 pub fn tick() {
     if let Some(c) = CHAT.lock().as_mut() {
         c.tick();

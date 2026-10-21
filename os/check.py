@@ -44,6 +44,11 @@ log go to out/.
                                      start-up one (the ntfs crate's test volume), and a stand-in for Claude that
                                      lists a folder, reads files (UTF-8 and UTF-16, a Word file it can't, a long one
                                      in two parts) and finds one by name (needs xz and sgdisk)
+    ./check.py --bitlocker           Windows' drive encrypted with BitLocker (the same volume, encrypted as Windows
+                                     10 and 11 do): locked, then unlocked by its recovery key typed in the message
+                                     box (a wrong one refused), the key reaching neither Claude nor the disk; and
+                                     read at once when BitLocker keeps its key in the clear (also needs
+                                     python3-cryptography)
     ./check.py --sound               sound: a build that rings the timer's chime once it's ready, on each kind of
                                      HD Audio QEMU has (the ICH6's and ICH9's controllers; codecs with a line out,
                                      a line out and in, and a speaker and microphone), recorded: the chime's two
@@ -1215,12 +1220,16 @@ def fnv1a(data: bytes) -> int:
     return h
 
 
-def windows_disk(path: Path, efi: Path, settings: str, memory_id: int) -> dict[str, bytes]:
+def windows_volume() -> bytes:
+    """The ntfs crate's test volume: Windows' folders, a person's in Users, and more."""
+    return subprocess.run(["xz", "-dc", str(HERE / "ntfs/tests/small.img.xz")], check=True, capture_output=True).stdout
+
+
+def windows_disk(path: Path, efi: Path, settings: str, memory_id: int, volume: bytes | None = None) -> dict[str, bytes]:
     """A disk like a PC's (memory_disk), with Windows' drive after the start-up partition: a basic data partition
-    holding the ntfs crate's test volume (Windows' folders, a person's in Users, and more). Returns the start-up
-    partition's files."""
+    holding `volume` (else the ntfs crate's test volume). Returns the start-up partition's files."""
     files = memory_disk(path, efi, settings, memory_id)
-    volume = subprocess.run(["xz", "-dc", str(HERE / "ntfs/tests/small.img.xz")], check=True, capture_output=True).stdout
+    volume = windows_volume() if volume is None else volume
     with open(path, "r+b") as f:
         f.truncate((96 << 20) + len(volume) + (4 << 20))
     subprocess.run(["sgdisk", "-e", str(path)], check=True, stdout=subprocess.DEVNULL)
@@ -1433,6 +1442,201 @@ def files_check(args) -> list[str]:
     return problems
 
 
+def keys_for(text: str) -> list[str]:
+    """The monitor's commands that type `text` (letters, digits, spaces, dashes, colons and full stops)."""
+    named = {" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot"}
+    return [f"sendkey {named.get(c, c)}" for c in text]
+
+
+def encrypted(volume: bytes, clear: bool) -> tuple[bytes, dict]:
+    """`volume` encrypted with BitLocker (bitlocker/tests/encrypt.py), and its recovery key and the key's ID."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("encrypt", HERE / "bitlocker/tests/encrypt.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.encrypt(volume, clear=clear)
+
+
+def bitlocker_check(args) -> list[str]:
+    """Windows' drive encrypted with BitLocker (the ntfs crate's test volume, encrypted by bitlocker/tests/encrypt.py
+    as Windows 10 and 11 do, with a TPM's protector and a recovery key), as on a PC with device encryption. Locked at
+    first: Claude's file tools say how to unlock it (its recovery key, typed in the message box, and the key's ID). A
+    wrong recovery key typed is refused, naming the key ID that unlocks it; then a message with the right one in it
+    (spaces between its groups) unlocks it, and the files read as from an unencrypted drive: a folder listed, a text
+    file, a photo (each of its bytes), the computer's status. Neither key, nor the message with one in it, reaches
+    Claude's API, the screen's log or the disk (the memory file). Then the same drive with BitLocker's key in the clear
+    (BitLocker suspended): read at once, with nothing typed."""
+    import http.server
+    import re
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-bitlocker-"))
+    test_authority(tmp)
+    requests: list[dict] = []
+    calls = {
+        "locked": ("list_files", {"path": "C:\\Users\\Sam\\Documents"}),
+        "list": ("list_files", {"path": "C:\\Users\\Sam\\Documents"}),
+        "read": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Shopping list.txt"}),
+        "photo": ("read_file", {"path": "C:\\Users\\Sam\\Pictures\\Beach.jpg"}),
+        "status": ("computer_status", {}),
+    }
+
+    class Api(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
+            requests.append(body)
+            asked = ((body.get("messages") or [{}])[-1]).get("content")
+            if isinstance(asked, str) and asked in calls:
+                name, inp = calls[asked]
+                send_stream(self, [("thinking", "sig-b"), ("tool_use", f"toolu_{asked}", name, [json.dumps(inp)])], "tool_use")
+            else:
+                send_stream(self, [("text", ["Done."])], "end_turn")
+
+    def results_of() -> dict[str, dict]:
+        out = {}
+        for r in requests:
+            last = ((r.get("messages") or [{}])[-1]).get("content")
+            if isinstance(last, list) and last and last[0].get("type") == "tool_result":
+                out[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
+        return out
+
+    def said_in(result: dict) -> str:
+        content = result.get("content")
+        return str(content[0]["text"] if isinstance(content, list) else content)
+
+    server = serve_https(Api, tmp)
+    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    problems: list[str] = []
+    try:
+        ntfs = windows_volume()
+        size = f"{(len(ntfs) + (1 << 20)) / 1e6:.1f} MB"
+        settings = f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
+        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
+
+        # Locked, then unlocked with its recovery key.
+        volume, info = encrypted(ntfs, clear=False)
+        right, key_id = info["recovery_key"], info["recovery_id"][:8]
+        groups = right.split("-")
+        wrong = "-".join(groups[1:] + groups[:1])
+        disk = tmp / "pc.img"
+        windows_disk(disk, BUILT, settings, MEMORY_ID, volume)
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
+        answered = 0
+
+        def ask(question: str) -> None:
+            nonlocal answered
+            answered += 1
+            monitor_many(pc.mon, keys_for(question) + ["sendkey ret"])
+            end = time.time() + 60
+            while time.time() < end and pc.text().count("Claude: answered (5 characters") < answered:
+                time.sleep(0.5)
+
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            wait_for(pc.log, ("network: address",), 60)
+            time.sleep(1)
+            ask("locked")
+            monitor_many(pc.mon, keys_for(wrong) + ["sendkey ret"])
+            if not wait_for(pc.log, ("files: That recovery key doesn't unlock",), 120):
+                problems.append("a wrong recovery key typed wasn't refused")
+            monitor_many(pc.mon, keys_for("here it is: " + right.replace("-", " ")) + ["sendkey ret"])
+            if not wait_for(pc.log, ("files: Windows' drive is unlocked",), 120):
+                problems.append("the right recovery key didn't unlock the drive")
+            pc.settled_picture("bitlocker-unlocked")
+            for question in ("list", "read", "photo", "status"):
+                ask(question)
+            pc.settled_picture("bitlocker")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        results = results_of()
+        missing = [q for q in calls if q not in results]
+        if missing:
+            problems.append(f"no tool result came back for {missing}")
+            return problems
+        said = {q: said_in(r) for q, r in results.items()}
+        day = r"\d{4}-\d\d-\d\d"
+        locked = (r"Chat Computer's own system can't read this computer's files: Windows' drive is encrypted with "
+                  r"BitLocker\. To read it here, the person types its recovery key in the message box: 48 digits, .*; its "
+                  rf"key ID starts {key_id}\. Chat Computer's own system unlocks the drive with the key itself: it isn't "
+                  r"sent to Claude, or kept, so it's typed again after a restart")
+        want = {
+            "locked": locked,
+            "list": rf"C:\\Users\\Sam\\Documents: 1 folder, 3 files\nLetter\.docx \(4 KB, {day}\)\n"
+                    rf"Old note\.txt \(76 bytes, {day}\)\nShopping list\.txt \(43 bytes, {day}\)\nWork\\",
+            "read": rf"C:\\Users\\Sam\\Documents\\Shopping list\.txt \(43 bytes, changed {day}\):\n"
+                    r"Milk, eggs, tea — and café au lait\.\r\n",
+            "photo": rf"C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels, changed {day}\): the picture is below\.",
+        }
+        for q, pattern in want.items():
+            if not re.fullmatch(pattern, said[q], re.S):
+                problems.append(f"{q}: {said[q][:500]!r}")
+        if not results["locked"].get("is_error"):
+            problems.append("the locked drive's listing wasn't an error")
+        if f"files: none: Windows' drive is encrypted with BitLocker. To read it here" not in text:
+            problems.append("the log didn't say Windows' drive is locked with BitLocker")
+        if f"files: That recovery key doesn't unlock Windows' drive. The key that does has the ID starting {key_id}" not in text:
+            problems.append("the wrong key's refusal didn't name the right key's ID")
+        unlocked = f"Files: Windows' drive (C:, NTFS, {size}, encrypted with BitLocker: unlocked with its recovery key until Chat Computer restarts), read only"
+        if unlocked not in said["status"]:
+            problems.append(f"computer_status didn't say the drive was unlocked: {said['status'][:600]!r}")
+        listing = {line.split("\t")[0]: line.split("\t") for line in (HERE / "ntfs/tests/small.txt").read_text().splitlines()}
+        content = results["photo"].get("content")
+        source = content[1].get("source", {}) if isinstance(content, list) and len(content) == 2 else {}
+        data = base64.b64decode(source.get("data", ""))
+        if (len(data), f"{fnv1a(data):016x}") != (int(listing["Users/Sam/Pictures/Beach.jpg"][2]), listing["Users/Sam/Pictures/Beach.jpg"][3]):
+            problems.append("the photo didn't come back as it is on the drive")
+        # The keys, as typed and as digits: nowhere but the keyboard.
+        sent = json.dumps(requests)
+        on_disk = disk.read_bytes()
+        for key in (right, wrong):
+            for form in {key, key.replace("-", " "), key.replace("-", "")}:
+                for where, what in (("Claude's API", sent), ("the log", text)):
+                    if form in what:
+                        problems.append(f"a recovery key reached {where}")
+                if form.encode() in on_disk or form.encode("utf-16-le") in on_disk:
+                    problems.append("a recovery key was written on the disk")
+        if "here it is" in sent:
+            problems.append("the message with the recovery key in it was sent to Claude")
+
+        # The key in the clear: read at once.
+        volume, _ = encrypted(ntfs, clear=True)
+        windows_disk(disk, BUILT, settings, MEMORY_ID, volume)
+        requests.clear()
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
+        answered = 0
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return problems + ["the kernel didn't say it was ready, with BitLocker's key in the clear"]
+            wait_for(pc.log, ("network: address",), 60)
+            time.sleep(1)
+            ask("read")
+        finally:
+            pc.stop()
+        text = pc.text()
+        clear = (f"files: Windows' drive (C:, NTFS, {size}, encrypted with BitLocker, which keeps its key in the clear: "
+                 "suspended, or not switched on yet), read only")
+        if clear not in text:
+            problems.append("with BitLocker's key in the clear, the drive wasn't read at once")
+        results = results_of()
+        if "read" not in results or not re.fullmatch(want["read"], said_in(results["read"]), re.S):
+            problems.append(f"with BitLocker's key in the clear, the file didn't read: {str(results.get('read'))[:400]}")
+    finally:
+        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
 def secure_vars_with(cert: Path, where: Path) -> Path:
     """Firmware settings like a shop PC's (Microsoft's keys, Secure Boot on), plus `cert` in db."""
     pem = where / "cert.pem"
@@ -1630,6 +1834,7 @@ def main() -> int:
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
     ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by Claude's file tools")
+    ap.add_argument("--bitlocker", action="store_true", help="Windows' drive encrypted with BitLocker, unlocked")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
@@ -1649,6 +1854,8 @@ def main() -> int:
         problems = sound(args)
     elif args.files:
         problems = files_check(args)
+    elif args.bitlocker:
+        problems = bitlocker_check(args)
     else:
         if not args.no_build:
             build()

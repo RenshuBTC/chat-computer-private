@@ -13,13 +13,17 @@ everywhere, and PCs move to the own kernel as its drivers grow (see "Reaching ev
 
 ## What it does today
 
-The PC's UEFI firmware starts it. So far it has only run in a virtual PC: QEMU with OVMF, the
-open-source UEFI firmware.
+You type to Claude on it: Opus 5.5 at its highest effort, with your own Claude API key, through Chat Computer's own
+network stack, its own encryption and its own TLS 1.3, and the answer streams onto a screen that looks like Chat
+Computer's. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF, the
+open-source UEFI firmware), where it reaches the internet through the virtual network card; on a real PC it
+needs a driver for that PC's network chip first (step 6, below).
 
 * `boot/` is the start-up stage, a UEFI program (`\EFI\BOOT\BOOTX64.EFI`) that carries the kernel inside
   it.
-  * It asks the firmware for the screen, the monitor's description (EDID), the memory map and where the
-    ACPI tables are.
+  * It asks the firmware for the screen, the monitor's description (EDID), the memory map, where the
+    ACPI tables are and the time (the PC's clock), and reads Chat Computer's settings file
+    (`\EFI\chatcomputer-own\settings.txt`) from the partition it was started from.
   * It copies the kernel into memory and builds the kernel's first page tables.
   * It ends the firmware's services (ExitBootServices) and jumps to the kernel. Nothing in the firmware is
     called after that.
@@ -62,20 +66,42 @@ open-source UEFI firmware.
       the "transaction translator" fields that slow devices behind fast hubs need;
     * keyboards, in the boot protocol every keyboard supports, with their Caps Lock light;
     * devices plugged in and out at any time. Unplugging a hub lets go of everything behind it.
+  * the network cards there are drivers for (so far virtio's, the virtual machines' card: its rings of
+    buffers, interrupts by MSI-X), and Chat Computer's own network stack on the first (`net/`);
+  * Claude, with the API key from the settings and Mozilla's certificate authorities (`assistant.rs`).
 
-  Then it keeps the screen's clock current, and shows what is typed on the line under it, with the
-  keyboards found by name. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat work,
-  in the US layout. Typed lines go nowhere yet; Claude comes at step 8.
+  Then the screen is the conversation (`chat.rs`), drawn in memory and copied to the screen where it changed.
+  Before the first message it says what the PC is, how long Chat Computer has been running (by the kernel's own
+  timer), which keyboards it found and whether Claude can be reached. Type, press Enter, and the message goes
+  to Claude: the name looked up, a connection made, the certificate checked, the conversation so far sent, and
+  the answer shown as it streams in, with a pulsing dot while Claude thinks. Esc stops an answer; Page Up and
+  Page Down scroll. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat work, in the US
+  layout. Nothing typed or answered is written to the log.
+* `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
+  retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
+  its own with lost, repeated and reordered packets.
+* `crypto/` is Chat Computer's own cryptography: SHA-256, SHA-384 and SHA-512, HMAC, HKDF, AES-GCM,
+  ChaCha20-Poly1305, X25519, ECDSA on P-256 and P-384, RSA (PKCS #1 v1.5 and PSS), and a generator of random
+  bytes for keys, seeded from the processor. Tested against the standards' own test vectors and OpenSSL's.
+* `tls/` is Chat Computer's own TLS 1.3 client, with its own certificate checks (chains, names, dates, what
+  each certificate may be used for, name constraints) against Mozilla's certificate authorities. Tested against
+  OpenSSL's server with every cipher and kind of key, and against the chain the real api.anthropic.com sends.
+* `claude/` talks to Claude's Messages API: the request (Opus 5.5, effort "max"), HTTP/1.1, JSON and the
+  streamed answer's events.
 * `font/` is Chat Computer's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It's tested against fontTools' reading of the same font.
 * `bootinfo/` defines what the start-up stage hands the kernel, once for both.
 * `shared/mem.rs` holds Chat Computer's own `memcpy`, `memmove`, `memset` and `memcmp`.
 
-The screen follows Chat Computer's look:
-* black text on white;
+The screen follows Chat Computer's look (`chatcomputer/ui/assets/theme.css` and `chat.css`):
+* black text on the warm off-white background, your messages in light grey bubbles on the right, the
+  message box a white card with a soft shadow at the bottom;
 * Atkinson Hyperlegible Next;
 * text sized by the same 0.3° x-height rule as `chatcomputer/ui/layout.py`, from the monitor's real size;
 * a column at most 30 em wide.
+
+Claude is asked to write plain text there, as the screen doesn't show Markdown yet (marks it uses anyway, like
+`**`, are taken out).
 
 ## Starting it on a PC
 
@@ -85,9 +111,13 @@ needed.
 1. It checks the PC (read-only) and saves a list of its parts in `%LOCALAPPDATA%\ChatComputer\own-os\pc.txt`, so
    drivers can be written for exactly those chips.
 2. It signs `release/chatcomputer.efi` with a key that Windows makes on that PC and won't let be copied off.
-3. After you confirm, it puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
-   next to Windows' own files.
-4. It adds "Chat Computer (own system)" to the end of the power-on menu and starts it once, at the next restart.
+3. It asks for your Claude API key (paste it; it isn't shown or logged). Make a key just for this at
+   console.anthropic.com, so you can switch it off there any time.
+4. After you confirm, it puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
+   next to Windows' own files, with `settings.txt`: the key, and how far the PC's clock is from UTC (Windows
+   keeps that clock in local time). The key is kept there as it is, so anyone who can read that partition can
+   read it.
+5. It adds "Chat Computer (own system)" to the end of the power-on menu and starts it once, at the next restart.
    The restart after that starts Windows.
 
 With Secure Boot on, the PC first has to trust Chat Computer's key. That takes one approval in the PC's setup
@@ -97,6 +127,10 @@ can turn Secure Boot off there instead. The script shows the steps and restarts 
 Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock's), and so do most
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
 Bluetooth comes at step 10.
+
+Claude needs the internet, and so far the own kernel has a driver only for virtual machines' network card. On
+a real PC it shows what it found, and says Claude can't be reached yet, until its network chip's driver comes
+(step 6). The list of parts in `pc.txt` says which chip that is.
 
 To go back to Windows, hold the power button until the PC turns off. Chat Computer doesn't write to any disk yet.
 Running the script again with `-Remove` (or choosing Remove) takes the file and the entry off again, and
@@ -112,8 +146,10 @@ fetches it. To try it you also need QEMU, OVMF and Pillow (`apt install qemu-sys
 python3-pil`).
 
 ```
-./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 350 KB)
-cargo test -p font               # the font engine's tests
+./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 750 KB)
+cargo test -p font -p net -p crypto -p tls -p claude   # the font engine, network stack, cryptography, TLS
+                                 # (needs openssl) and Claude API client
+cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
 ./check.py --crash page-fault    # a kernel that faults on purpose: checks it stops cleanly
@@ -121,6 +157,9 @@ cargo test -p font               # the font engine's tests
 ./check.py --keyboard            # typing on a PS/2 keyboard, then USB keyboards on a port and behind a
                                  # hub (MSI-X, MSI, no interrupts), with Intel's and AMD's IOMMUs
                                  # present, plugged in and out
+./check.py --network            # the virtual network card, DHCP, DNS and a TCP conversation
+./check.py --claude              # typing to a stand-in for Claude's API (HTTPS, with a test certificate
+                                 # authority): the request, the streamed answer on the screen, a failure
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/chatcomputer.efi
@@ -184,7 +223,8 @@ Some things are made by others but are not software between the hardware and Cha
   the heap). Chat Computer replaces pieces of it with its own where that matters; `memcpy` and its relatives
   are already Chat Computer's own.
 * **Data**, such as the font (Atkinson Hyperlegible Next, by the Braille Institute, under the SIL Open
-  Font License). Chat Computer ignores the hinting programs inside the font. Later, speech models' weights
+  Font License), and the list of certificate authorities Chat Computer trusts, which is Mozilla's
+  (`tls/roots.txt`). Chat Computer ignores the hinting programs inside the font. Later, speech models' weights
   will be data of this kind too.
 * **Claude itself**, which runs in Anthropic's cloud.
 
@@ -200,17 +240,17 @@ PC.
    Checked in virtual PCs; on the real PC with step 2.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
 5. Storage: NVMe and SATA, and Chat Computer's own file system for settings, memory and logs.
-6. Network: the internet over a USB cable (a phone's tethering, USB Ethernet adapters: standard, so one
-   driver covers most), then the common wired chips (Realtek's and Intel's), then IPv4 and IPv6, DHCP,
-   DNS and TCP.
-7. Encryption: SHA-2, HMAC and HKDF, X25519, AES-GCM, ChaCha20-Poly1305, certificate checks, and
-   TLS 1.3.
-8. Claude: HTTPS and the conversation itself, streamed. There's a decision to make at this step.
-   Anthropic says subscription sign-in is for Claude Code and its own apps
-   ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)). So either Chat Computer
-   runs the unmodified Claude Code program, which means it must run Linux programs, or it uses an API
-   key, billed per use.
-9. The conversation screen: kerning, scrolling, and the formatting Claude's answers use.
+6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP, and the virtual machines' card (virtio). To do: the internet
+   over a USB cable (a phone's tethering, USB Ethernet adapters: standard, so one driver covers most), then the
+   common wired chips (Realtek's and Intel's), then IPv6.
+7. ✓ Encryption: SHA-2, HMAC and HKDF, X25519, AES-GCM, ChaCha20-Poly1305, ECDSA and RSA signatures,
+   certificate checks against Mozilla's authorities, and TLS 1.3.
+8. ✓ Claude: HTTPS and the conversation itself, streamed, with an API key (billed per use). Anthropic says
+   subscription sign-in is for Claude Code and its own apps
+   ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)), and the own kernel doesn't
+   run the Claude Code program (a Linux program), so it uses an API key.
+9. The conversation screen: ✓ the conversation, wrapping and scrolling. To do: kerning, and the formatting
+   Claude's answers use (Markdown).
 10. Sound and AirPods: Bluetooth (HCI over USB, L2CAP, A2DP and HFP, SBC and mSBC).
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
 12. Power: shut down, restart and sleep; on laptops the battery and the lid. These need an AML

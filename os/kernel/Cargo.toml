@@ -10,6 +10,10 @@ build = "build.rs"
 [dependencies]
 bootinfo = { path = "../bootinfo" }
 font = { path = "../font" }
+net = { path = "../net" }
+crypto = { path = "../crypto" }
+tls = { path = "../tls" }
+claude = { path = "../claude" }
 
 [[bin]]
 name = "chatcomputer-kernel"

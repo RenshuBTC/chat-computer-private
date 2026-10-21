@@ -1,5 +1,6 @@
-//! The screen: the framebuffer the firmware set up, drawn on directly. Chat Computer draws black, white,
-//! and the greys between them that smooth the edges of letters. Nothing else.
+//! The screen: the framebuffer the firmware set up. Chat Computer draws a picture of the whole screen in memory
+//! (draw.rs) and copies the parts that changed here, converting its colours (0xRRGGBB) to the framebuffer's
+//! pixel layout on the way.
 
 use crate::paging::{self, Cache};
 use bootinfo::{Framebuffer, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB};
@@ -9,20 +10,21 @@ pub struct Screen {
     pub width: usize,
     pub height: usize,
     stride: usize,
-    /// The pixel value for each grey level, 0 = black to 255 = white.
-    grey: [u32; 256],
+    format: u32,
+    masks: [u32; 3],
 }
 
 unsafe impl Send for Screen {}
 
-fn channel(mask: u32, level: u8) -> u32 {
+/// An 8-bit channel value placed in `mask`'s bits.
+fn channel(mask: u32, level: u32) -> u32 {
     if mask == 0 {
         return 0;
     }
     let shift = mask.trailing_zeros();
     let bits = (mask >> shift).count_ones().min(16);
     let max = (1u32 << bits) - 1;
-    ((level as u32 * max + 127) / 255) << shift & mask
+    ((level * max + 127) / 255) << shift & mask
 }
 
 impl Screen {
@@ -33,51 +35,48 @@ impl Screen {
         }
         // Every pixel is 32 bits wide. A format described by masks that all fit in fewer bits has
         // smaller pixels, which this code can't draw (the start-up stage doesn't pick those).
-        if fb.format == PIXEL_BITMASK && (fb.red_mask | fb.green_mask | fb.blue_mask | fb.reserved_mask).leading_zeros() >= 8 {
-            return None;
-        }
-        let mut grey = [0u32; 256];
-        for (level, v) in grey.iter_mut().enumerate() {
-            let l = level as u32;
-            *v = match fb.format {
-                PIXEL_RGB | PIXEL_BGR => l << 16 | l << 8 | l,
-                PIXEL_BITMASK => {
-                    channel(fb.red_mask, level as u8) | channel(fb.green_mask, level as u8) | channel(fb.blue_mask, level as u8)
-                }
-                _ => return None,
-            };
+        match fb.format {
+            PIXEL_RGB | PIXEL_BGR => {}
+            PIXEL_BITMASK if (fb.red_mask | fb.green_mask | fb.blue_mask | fb.reserved_mask).leading_zeros() < 8 => {}
+            _ => return None,
         }
         let base = paging::map_device(fb.phys, bytes, Cache::WriteCombining) as *mut u32;
-        Some(Screen { base, width: fb.width as usize, height: fb.height as usize, stride: fb.stride as usize, grey })
+        Some(Screen {
+            base,
+            width: fb.width as usize,
+            height: fb.height as usize,
+            stride: fb.stride as usize,
+            format: fb.format,
+            masks: [fb.red_mask, fb.green_mask, fb.blue_mask],
+        })
     }
 
-    /// Fills a rectangle with one grey level (clipped to the screen).
-    pub fn fill(&mut self, x: usize, y: usize, w: usize, h: usize, level: u8) {
-        let v = self.grey[level as usize];
-        for row in y.min(self.height)..(y + h).min(self.height) {
-            let line = unsafe { self.base.add(row * self.stride) };
-            for col in x.min(self.width)..(x + w).min(self.width) {
-                unsafe { line.add(col).write(v) };
-            }
+    /// The framebuffer's value for a colour.
+    fn native(&self, rgb: u32) -> u32 {
+        let (r, g, b) = (rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF);
+        match self.format {
+            PIXEL_BGR => rgb & 0xFF_FFFF, // blue in the lowest byte: the same layout
+            PIXEL_RGB => r | g << 8 | b << 16,
+            _ => channel(self.masks[0], r) | channel(self.masks[1], g) | channel(self.masks[2], b),
         }
     }
 
-    /// Draws ink coverage (0 = paper, 255 = full ink) as black on white, with its top-left corner at
-    /// (`x`, `y`), clipped to the screen.
-    pub fn draw_ink(&mut self, x: isize, y: isize, w: usize, h: usize, ink: &[u8]) {
-        for row in 0..h {
-            let sy = y + row as isize;
-            if sy < 0 || sy >= self.height as isize {
-                continue;
-            }
-            let line = unsafe { self.base.add(sy as usize * self.stride) };
-            for col in 0..w {
-                let sx = x + col as isize;
-                if sx < 0 || sx >= self.width as isize {
-                    continue;
+    /// Copies a `w` by `h` rectangle of colours (`src`, rows `src_stride` apart, its top left at (`x`, `y`) of
+    /// the screen as well), clipped to the screen.
+    pub fn copy(&mut self, x: usize, y: usize, w: usize, h: usize, src: &[u32], src_stride: usize) {
+        let (x1, y1) = ((x + w).min(self.width), (y + h).min(self.height));
+        if x >= x1 || y >= y1 {
+            return;
+        }
+        for row in y..y1 {
+            let from = &src[row * src_stride + x..row * src_stride + x1];
+            let line = unsafe { self.base.add(row * self.stride + x) };
+            if self.format == PIXEL_BGR {
+                unsafe { core::ptr::copy_nonoverlapping(from.as_ptr(), line, from.len()) };
+            } else {
+                for (i, &c) in from.iter().enumerate() {
+                    unsafe { line.add(i).write(self.native(c)) };
                 }
-                let v = self.grey[255 - ink[row * w + col] as usize];
-                unsafe { line.add(sx as usize).write(v) };
             }
         }
     }

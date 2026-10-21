@@ -5,8 +5,10 @@ Starts Chat Computer's own operating system (os/ in this folder: its own start-u
 scratch) on this PC, without a USB stick:
   1. checks this PC (read-only) and saves a list of its parts, for writing Chat Computer's drivers,
   2. signs Chat Computer's start-up file with a key made on this PC (the key never leaves it),
-  3. after you confirm, puts the signed file on the partition the PC starts from (\EFI\chatcomputer-own), next
-     to Windows' own files, and adds "Chat Computer (own system)" to the end of the power-on menu, started once.
+  3. asks for your Claude API key, for talking to Claude there (optional; it's never shown or logged),
+  4. after you confirm, puts the signed file and its settings on the partition the PC starts from
+     (\EFI\chatcomputer-own), next to Windows' own files, and adds "Chat Computer (own system)" to the end of the
+     power-on menu, started once.
 With Secure Boot on, the PC must first trust Chat Computer's key: one approval in the PC's setup screen (or turn
 Secure Boot off there). Then the PC restarts into Chat Computer's own system; the restart after that is Windows.
 
@@ -64,9 +66,10 @@ try {
     Write-Line ''
     Write-Host 'Chat Computer''s own system' -ForegroundColor White
     Write-Line 'This starts Chat Computer''s own operating system on this PC: its own start-up and kernel, written from'
-    Write-Line 'scratch, with nothing from Linux or other projects. So far it shows one screen: what it found on this'
-    Write-Line 'PC, and how long it has been running. No USB stick is needed, and Windows isn''t changed: one small file'
-    Write-Line 'goes on the partition the PC starts from, next to Windows'' own files.'
+    Write-Line 'scratch, with nothing from Linux or other projects. You type to Claude there, with your own Claude API'
+    Write-Line 'key, over a network cable (on a PC whose network chip it has no driver for yet, it shows what it found).'
+    Write-Line 'No USB stick is needed, and Windows isn''t changed: a few small files go on the partition the PC starts'
+    Write-Line 'from, next to Windows'' own files.'
     $mode = 0
     if ($Remove) {
         $mode = 1

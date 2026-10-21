@@ -7,6 +7,63 @@ $Script:OwnEntryName = 'Chat Computer (own system)'
 $Script:OwnKeyName = 'Chat Computer Secure Boot key'  # the certificate's friendly name in Windows' certificate store
 $Script:OwnFile = 'chatcomputer.efi'
 $Script:OwnCert = 'ChatComputer.cer'
+$Script:OwnSettings = 'settings.txt'            # read by the kernel at start-up (os/kernel/src/settings.rs)
+
+# ------------------------------------------------------------------ its settings: the Claude API key, the clock
+function ConvertTo-OwnKey {
+    # A pasted API key, without the spaces, line breaks or quotes that come along with pastes.
+    param([AllowNull()][string]$Text)
+    if ($null -eq $Text) { return '' }
+    $t = [regex]::Replace($Text, '[\s"''`]', '')
+    $m = [regex]::Match($t, 'sk-ant-[A-Za-z0-9_\-]+')
+    if ($m.Success) { return $m.Value }
+    return $t
+}
+
+function Get-OwnKeyProblem {
+    # Why a pasted key can't be used ('' if it can). Only API keys work there: the kernel talks to Claude's API.
+    param([AllowNull()][string]$Key)
+    if ([string]::IsNullOrEmpty($Key)) { return 'Nothing was pasted.' }
+    if ($Key -cmatch '^sk-ant-oat') {
+        return 'That is a Claude sign-in code (for Claude Code), not an API key. Make an API key at console.anthropic.com.'
+    }
+    if ($Key -cnotmatch '^sk-ant-[A-Za-z0-9_\-]{20,500}$') { return 'That doesn''t look like a Claude API key (they start with sk-ant-).' }
+    return ''
+}
+
+function Get-ClockOffsetMinutes {
+    # How far ahead of UTC the clock the PC keeps when it's off is: Windows keeps it in local time (unless
+    # RealTimeIsUniversal is set), so it's this time zone's offset now. Chat Computer's kernel reads that clock.
+    try {
+        $v = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation' -ErrorAction Stop
+        $utc = Get-Prop $v 'RealTimeIsUniversal'
+        if ($null -ne $utc -and [int64]$utc -ne 0) { return 0 }
+    } catch { $null = $_ }
+    return [int][Math]::Round([TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now).TotalMinutes)
+}
+
+function New-OwnSettingsText {
+    # The settings file, as the kernel reads it: "name = value" lines, # for notes.
+    param([AllowEmptyString()][string]$Key, [int]$ClockOffsetMinutes)
+    $lines = @(
+        '# Chat Computer''s settings, read by its own system when it starts. Written by Chat Computer Own System.',
+        '# The Claude API key is kept here as it is: anyone who can read this partition can read it.'
+    )
+    if ($Key) { $lines += ('claude-api-key = ' + $Key) }
+    $lines += ('clock-offset-minutes = ' + $ClockOffsetMinutes)
+    return (($lines -join "`r`n") + "`r`n")
+}
+
+function Get-OwnSettingsKey {
+    # The key in a settings file's text ('' if none).
+    param([AllowNull()][string]$Text)
+    if (-not $Text) { return '' }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $m = [regex]::Match($line, '^\s*claude-api-key\s*=\s*(\S+)\s*$')
+        if ($m.Success) { return $m.Groups[1].Value }
+    }
+    return ''
+}
 
 function Get-OwnSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -130,8 +187,11 @@ function Get-OwnBootEntry {
 }
 
 function Install-OwnFiles {
-    # The signed start-up file and the key's certificate, in \EFI\chatcomputer-own on the partition Windows starts from.
-    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate)
+    # The signed start-up file, the key's certificate and the settings, in \EFI\chatcomputer-own on the partition
+    # Windows starts from. $ApiKey: the Claude API key to put in the settings ('' keeps the one there, if any).
+    # Returns whether the settings have a Claude API key.
+    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate,
+          [AllowEmptyString()][string]$ApiKey = '')
     $esp = Get-WindowsEsp
     if (-not $esp) { throw 'Windows could not find the partition this PC starts from.' }
     $m = Mount-EspPartition $esp
@@ -142,7 +202,14 @@ function Install-OwnFiles {
         Copy-Item -LiteralPath $Signed -Destination $file -Force
         Copy-Item -LiteralPath $Certificate -Destination (Join-Path $dir $Script:OwnCert) -Force
         if ((Get-OwnSha256 $file) -ne (Get-OwnSha256 $Signed)) { throw 'The copy on the start-up partition is not the same as the original.' }
-        Write-SetupLog ('Copied to ' + $dir)
+        $settings = Join-Path $dir $Script:OwnSettings
+        if (-not $ApiKey -and (Test-Path -LiteralPath $settings)) {
+            $ApiKey = Get-OwnSettingsKey ([IO.File]::ReadAllText($settings))
+        }
+        $text = New-OwnSettingsText -Key $ApiKey -ClockOffsetMinutes (Get-ClockOffsetMinutes)
+        [IO.File]::WriteAllText($settings, $text, [Text.Encoding]::ASCII)
+        Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($ApiKey) { 'with' } else { 'without' }) + ' a Claude API key')
+        return [bool]$ApiKey
     } finally {
         Dismount-EspPartition $m
     }
@@ -314,6 +381,22 @@ function Start-OwnSystem {
         Copy-Item -LiteralPath $cer -Destination $Out -Force
     }
 
+    Write-Step 'Claude'
+    Write-Line 'On Chat Computer''s own system you talk to Claude (Opus 5.5) with your own Claude API key, over a network'
+    Write-Line 'cable. Make a key just for it at console.anthropic.com (API keys), so you can switch it off there any time.'
+    Write-Line 'It''s kept on the start-up partition as it is, where anyone who can read that partition can read it.'
+    $apiKey = ''
+    if (-not $Unattended) {
+        for ($try = 0; $try -lt 3; $try++) {
+            $pasted = ConvertTo-OwnKey (Read-PastedSecret 'Paste your Claude API key (it won''t show), or press Enter to skip')
+            if (-not $pasted) { break }
+            $problem = Get-OwnKeyProblem $pasted
+            if (-not $problem) { $apiKey = $pasted; break }
+            Write-Warn ($problem + ' Try again, or press Enter to skip.')
+        }
+    }
+    if ($apiKey) { Write-Good 'Got the key.' } else { Write-Line 'No key this time: a key given before stays.' }
+
     $approved = $null
     if ($sb -eq $true) { $approved = Test-OwnKeyApproved -Cert $cert }
     $setupScreen = ($sb -eq $true -and $approved -ne $true)
@@ -321,8 +404,9 @@ function Start-OwnSystem {
     if ($approved -eq $true) { Write-Good 'This PC already trusts Chat Computer''s key.' }
 
     Write-Step 'What changes'
-    Write-Line '  * Chat Computer''s start-up file (signed with this PC''s key) and the key''s certificate go in \EFI\chatcomputer-own'
-    Write-Line '    on the partition this PC starts from (about 250 KB). Windows'' own files there stay as they are.'
+    Write-Line '  * Chat Computer''s start-up file (signed with this PC''s key), the key''s certificate and its settings (your'
+    Write-Line '    Claude API key, and how far this PC''s clock is from UTC) go in \EFI\chatcomputer-own on the partition this'
+    Write-Line '    PC starts from (about 800 KB). Windows'' own files there stay as they are.'
     Write-Line ('  * "' + $Script:OwnEntryName + '" goes at the end of the power-on menu and starts once, at the next restart.')
     Write-Line '    The restart after that starts Windows, as now.'
     if ($bitlocker) {
@@ -332,7 +416,9 @@ function Start-OwnSystem {
         Write-Line 'Nothing was changed.'
         return
     }
-    Install-OwnFiles -Signed $signed -Certificate $cer
+    $hasKey = Install-OwnFiles -Signed $signed -Certificate $cer -ApiKey $apiKey
+    $apiKey = $null
+    if (-not $hasKey) { Write-Line 'There''s no Claude API key in its settings: run this again to give one.' }
     $id = Get-OwnBootEntry
     Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
     Write-Good ('Chat Computer''s own system is on the start-up partition, and "' + $Script:OwnEntryName + '" starts at the next restart, once.')

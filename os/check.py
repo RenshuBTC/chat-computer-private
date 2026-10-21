@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Starts Chat Computer in a virtual PC (QEMU with OVMF, the open-source UEFI firmware) without a window,
 waits until the kernel says it is ready, takes two pictures of the screen a few seconds apart, and
-checks them: the screen is black text on white, and the "Up for" line moved on (so the kernel's own
-timer interrupts work). Pictures and the kernel's log go to out/.
+checks them: the screen is in Chat Computer's colours (black text on the warm off-white, a white message
+box), and the "Up for" line moved on (so the kernel's own timer interrupts work). Pictures and the kernel's
+log go to out/.
 
     ./check.py                       build, start, check
     ./check.py --size 2560x1440 --memory 1024 --cpu qemu64
@@ -12,6 +13,14 @@ timer interrupts work). Pictures and the kernel's log go to out/.
                                      in later, then unplugged; a hub unplugged
     ./check.py --crash page-fault    a kernel that faults on purpose once ready: it must stop cleanly,
                                      with the fault in its log and a message on the screen (also: panic)
+    ./check.py --network             the network: a virtio card (QEMU's virtual network), an address from DHCP,
+                                     a name looked up with DNS, and a TCP conversation with a server on this
+                                     computer
+    ./check.py --claude              a conversation with Claude, typed on the keyboard: with a stand-in for
+                                     Claude's API on this computer (HTTPS, with a certificate authority made for
+                                     the test, which the test build trusts instead of Mozilla's): the request
+                                     (model, effort, the key from the settings file, the conversation so far),
+                                     the answer streamed onto the screen, and a failure shown
     ./check.py --secure-boot         Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
@@ -45,11 +54,13 @@ VARS_MICROSOFT = OVMF / "OVMF_VARS_4M.ms.fd"  # Microsoft's keys enrolled, Secur
 CHATCOMPUTER_KEY_OWNER = "1dd7d236-3557-417b-b0ab-6cf839b24829"  # who added the key, as recorded in db
 
 
-def build(test: str | None = None) -> None:
+def build(test: str | None = None, extra: dict[str, str] | None = None) -> None:
     env = dict(os.environ)
     env.pop("CHATCOMPUTER_TEST", None)
+    env.pop("CHATCOMPUTER_TEST_CA", None)
     if test:
         env["CHATCOMPUTER_TEST"] = test
+    env.update(extra or {})
     subprocess.run([str(HERE / "build.sh")], check=True, env=env, stdout=subprocess.DEVNULL)
 
 
@@ -100,12 +111,16 @@ class VirtualPC:
     """One run of the virtual PC, started from `efi` as \\EFI\\BOOT\\BOOTX64.EFI."""
 
     def __init__(self, efi: Path, *, size: str, memory: str, cpu: str, secure_vars: Path | None = None,
-                 extra: tuple[str, ...] = ()):
+                 extra: tuple[str, ...] = (), settings: str | None = None):
         self.tmp = tempfile.TemporaryDirectory()
         tmp = Path(self.tmp.name)
         esp = tmp / "esp"
         (esp / "EFI/BOOT").mkdir(parents=True)
         shutil.copy(efi, esp / "EFI/BOOT/BOOTX64.EFI")
+        if settings is not None:
+            # Where the Windows setup puts it (own-os.ps1).
+            (esp / "EFI/chatcomputer-own").mkdir(parents=True)
+            (esp / "EFI/chatcomputer-own/settings.txt").write_text(settings)
         vars_fd = tmp / "vars.fd"
         shutil.copy(secure_vars or VARS, vars_fd)
         self.mon = tmp / "monitor.sock"
@@ -155,27 +170,51 @@ class VirtualPC:
         self.tmp.cleanup()
 
 
-def check_screen(a, b, size: str) -> list[str]:
-    from PIL import ImageChops
+# Chat Computer's colours (theme.css): the background, black, your messages' bubbles, the message box.
+GROUND, INK, BUBBLE, PAPER = (248, 245, 240), (0, 0, 0), (231, 228, 221), (255, 255, 255)
 
+
+def colours(image) -> dict:
+    return {c: n for n, c in (image.getcolors(maxcolors=1 << 20) or [])}
+
+
+def check_colours(a, size: str) -> list[str]:
+    """`a` is the size asked for, and in Chat Computer's colours: mostly its background, black text, a white message
+    box, and nothing that isn't a mix of its warm greys (each of which has as much red as green, and as much green
+    as blue, or more)."""
     problems = []
     xres, yres = (int(v) for v in size.split("x"))
     if a.size != (xres, yres):
         problems.append(f"the screen is {a.size[0]}x{a.size[1]}, not {size}")
-    colours = a.getcolors(maxcolors=1 << 16) or []
-    not_grey = [c for _, c in colours if not (c[0] == c[1] == c[2])]
-    if not_grey:
-        problems.append(f"{len(not_grey)} colours that aren't grey, e.g. {not_grey[:3]}")
-    white = sum(n for n, c in colours if c == (255, 255, 255))
-    black = sum(n for n, c in colours if c == (0, 0, 0))
+    seen = colours(a)
     total = a.size[0] * a.size[1]
-    if white < total * 0.9:
-        problems.append(f"only {white * 100 // total}% of the screen is white")
-    if black < 500:
+    foreign = [c for c in seen if not (c[0] >= c[1] >= c[2])]
+    if foreign:
+        problems.append(f"{len(foreign)} colours that aren't Chat Computer's, e.g. {foreign[:3]}")
+    if seen.get(GROUND, 0) < total * 0.6:
+        problems.append(f"only {seen.get(GROUND, 0) * 100 // total}% of the screen is the background")
+    if seen.get(INK, 0) < 500:
         problems.append("almost no black: is there any text?")
+    if seen.get(PAPER, 0) < total * 0.01:
+        problems.append("no message box (hardly any white)")
+    return problems
+
+
+def check_screen(a, b, size: str) -> list[str]:
+    from PIL import ImageChops
+
+    problems = check_colours(a, size)
     if ImageChops.difference(a, b).getbbox() is None:
         problems.append("the screen didn't change in 3 seconds: are timer interrupts working?")
     return problems
+
+
+def box_rows(log: str) -> tuple[int, int] | None:
+    """Where the message box is, as the kernel says in its log."""
+    import re
+
+    m = re.search(r"message box at rows (\d+) to (\d+)", log)
+    return (int(m.group(1)), int(m.group(2))) if m else None
 
 
 def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None = None, expect_secure: bool = False) -> list[str]:
@@ -260,9 +299,13 @@ def keyboard_run(label: str, controller: str, args, plug: bool) -> list[str]:
         if not wait_for(pc.log, (f"typed {TYPED!r}".replace("'", '"'),), 10):
             problems.append(f"{label}: {TYPED!r} didn't come out")
         from PIL import ImageChops
-        changed = ImageChops.difference(before, after).getbbox()
-        if changed is None or changed[3] - changed[1] > before.size[1] // 4:
-            problems.append(f"{label}: the typed line didn't appear on the screen (changed area {changed})")
+        rows = box_rows(pc.text())
+        if rows is None:
+            problems.append(f"{label}: the kernel didn't say where the message box is")
+        else:
+            box = (0, rows[0], before.size[0], rows[1])
+            if ImageChops.difference(before.crop(box), after.crop(box)).getbbox() is None:
+                problems.append(f"{label}: the typed line didn't appear in the message box")
         if plug:
             # Plug a third keyboard in (QEMU then types on it), type on it, and unplug it; then unplug
             # the hub, which takes the keyboard behind it along.
@@ -348,6 +391,218 @@ def keyboard(args) -> list[str]:
     return problems
 
 
+TEST_PORT = 8471
+
+
+def network(args) -> list[str]:
+    """A test build with QEMU's virtual network (its DHCP and DNS, and 10.0.2.2 for this computer) and a virtio card:
+    it must get 10.0.2.15, look up api.anthropic.com, and talk to a server here (which answers its line)."""
+    import socketserver
+    import threading
+
+    heard: list[str] = []
+
+    class Answer(socketserver.StreamRequestHandler):
+        def handle(self):
+            line = self.rfile.readline(200).decode(errors="replace").strip()
+            heard.append(line)
+            self.wfile.write(f"hello, Chat Computer: you said {line!r}\n".encode())
+
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", TEST_PORT), Answer)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    build("network")
+    problems = []
+    try:
+        extra = ("-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0,romfile=")
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
+        try:
+            got = wait_for(pc.log, ("test: the server said", "test: couldn't", "test: no answer", "never opened", "stopped"), args.timeout)
+            time.sleep(1)
+            pc.picture("network")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        if "network: virtio network card" not in text:
+            problems.append("the virtio card wasn't started")
+        if "network: address 10.0.2.15/24, gateway 10.0.2.2, DNS 10.0.2.3" not in text:
+            problems.append("no address from DHCP")
+        if "test: api.anthropic.com is at " not in text:
+            problems.append("api.anthropic.com wasn't found with DNS")
+        if heard != ["hello from Chat Computer"]:
+            problems.append(f"the server heard {heard!r}")
+        if got != "test: the server said" or "you said 'hello from Chat Computer'" not in text:
+            problems.append("the server's answer didn't come back")
+    finally:
+        server.shutdown()
+        build()  # never leave a test build in out/
+    return problems
+
+
+CLAUDE_PORT = 8472  # assistant.rs TEST_PORT
+TEST_KEY = "test-key-for-the-stand-in"
+ANSWER_WORDS = ["Hello from the stand-in", " for Claude's API: ", "your own kernel reached me", " over its own TLS."]
+ANSWER = "".join(ANSWER_WORDS)
+
+
+def answer_events() -> list[tuple[str, dict]]:
+    """A streamed answer as Claude's API sends one (thinking first, which the screen doesn't show)."""
+    text = [("content_block_delta", {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": w}})
+            for w in ANSWER_WORDS]
+    return [
+        ("message_start", {"type": "message_start", "message": {"id": "msg_test", "type": "message", "role": "assistant",
+                                                                "model": "claude-opus-5-5", "content": [], "stop_reason": None}}),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Hm."}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("ping", {"type": "ping"}),
+        ("content_block_start", {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}),
+        *text,
+        ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 20}}),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def claude(args) -> list[str]:
+    """A conversation typed on the keyboard, with a stand-in for Claude's API on this computer (HTTPS on
+    CLAUDE_PORT, as "localhost", with a certificate from an authority made for the test, which the test build trusts
+    instead of Mozilla's). The first question is answered (streamed, a piece at a time); the second gets Claude's
+    API's "overloaded" error, which the screen must show. The stand-in checks what it was sent."""
+    import http.server
+    import json
+    import ssl
+    import threading
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-claude-"))
+
+    def openssl(*a: str) -> None:
+        subprocess.run(["openssl", *a], cwd=tmp, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    p256 = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
+    openssl("req", "-x509", "-nodes", *p256, "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
+            "-subj", "/CN=Chat Computer test authority (not for real use)",
+            "-addext", "basicConstraints=critical,CA:true", "-addext", "keyUsage=critical,keyCertSign")
+    (tmp / "leaf.ext").write_text("subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n"
+                                  "keyUsage=critical,digitalSignature\nbasicConstraints=critical,CA:false\n")
+    openssl("req", "-nodes", *p256, "-keyout", "leaf.key", "-out", "leaf.csr", "-subj", "/CN=localhost")
+    openssl("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "leaf.pem",
+            "-days", "2", "-extfile", "leaf.ext")
+    openssl("x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der")
+
+    requests: list[dict] = []
+
+    class Api(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers.get("content-length", "0")))
+            try:
+                data = json.loads(body)
+            except ValueError:
+                data = None
+            requests.append({"path": self.path, "key": self.headers.get("x-api-key"),
+                             "version": self.headers.get("anthropic-version"), "body": data})
+            if len(requests) == 1:
+                self.send_response(200)
+                self.send_header("content-type", "text/event-stream")
+                self.send_header("transfer-encoding", "chunked")
+                self.end_headers()
+                for event, payload in answer_events():
+                    chunk = f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                    self.wfile.flush()
+                    time.sleep(0.25)
+                self.wfile.write(b"0\r\n\r\n")
+            else:
+                error = json.dumps({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}).encode()
+                self.send_response(529)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(error)))
+                self.end_headers()
+                self.wfile.write(error)
+            self.wfile.flush()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", CLAUDE_PORT), Api)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.load_cert_chain(tmp / "leaf.pem", tmp / "leaf.key")
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    problems: list[str] = []
+    try:
+        extra = ("-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0,romfile=")
+        # As Chat Computer Own System writes it on Windows (New-OwnSettingsText): notes, Windows' line breaks.
+        settings = ("# Chat Computer's settings, read by its own system when it starts. Written by Chat Computer Own System.\r\n"
+                    "# The Claude API key is kept here as it is: anyone who can read this partition can read it.\r\n"
+                    f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\n")
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings)
+        first = second = None
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            if not wait_for(pc.log, ("network: address",), 60):
+                problems.append("no network address")
+            time.sleep(1)
+            pc.picture("claude-0")
+            monitor_many(pc.mon, ["sendkey h", "sendkey i", "sendkey ret"])
+            first = wait_for(pc.log, ("test: Claude said", "Claude: failed", "stopped"), args.timeout)
+            time.sleep(1.5)
+            answered = pc.picture("claude-1")
+            monitor_many(pc.mon, [f"sendkey {k}" for k in "again"] + ["sendkey ret"])
+            second = wait_for(pc.log, ("Claude: failed", "stopped"), 60)
+            time.sleep(1.5)
+            pc.picture("claude-2")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        if "clock: " not in text or "(local time, offset from the settings)" not in text:
+            problems.append("the clock offset in the settings wasn't used")
+        if "Claude: connected (TLS 1.3" not in text:
+            problems.append("no secure connection to the stand-in")
+        if first != "test: Claude said" or f"test: Claude said {json.dumps(ANSWER)}" not in text:
+            problems.append(f"the answer didn't come back whole (the log says {first!r})")
+        if second != "Claude: failed" or "Claude is very busy right now (Overloaded)" not in text:
+            problems.append("the second question's failure wasn't reported")
+        if TEST_KEY in text:
+            problems.append("the API key is in the log")
+        if len(requests) != 2:
+            problems.append(f"the stand-in got {len(requests)} requests, not 2")
+        else:
+            r = requests[0]
+            body = r["body"] or {}
+            wanted = {"model": "claude-opus-5-5", "max_tokens": 64000, "stream": True, "output_config": {"effort": "max"}}
+            for k, v in wanted.items():
+                if body.get(k) != v:
+                    problems.append(f"the request's {k} was {body.get(k)!r}, not {v!r}")
+            if (r["path"], r["key"], r["version"]) != ("/v1/messages", TEST_KEY, "2023-06-01"):
+                problems.append(f"the request went to {r['path']!r} with key {r['key'] == TEST_KEY} and version {r['version']!r}")
+            if "plain text" not in str(body.get("system")):
+                problems.append("the request didn't say the screen shows plain text")
+            if body.get("messages") != [{"role": "user", "content": "hi"}]:
+                problems.append(f"the first request's messages were {body.get('messages')!r}")
+            later = (requests[1]["body"] or {}).get("messages")
+            if later != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": ANSWER},
+                         {"role": "user", "content": "again"}]:
+                problems.append(f"the second request's messages were {later!r}")
+        if first == "test: Claude said":
+            problems += check_colours(answered, args.size)
+            if colours(answered).get(BUBBLE, 0) < 1000:
+                problems.append("no bubble for what was typed")
+    finally:
+        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
 def secure_vars_with(cert: Path, where: Path) -> Path:
     """Firmware settings like a shop PC's (Microsoft's keys, Secure Boot on), plus `cert` in db."""
     pem = where / "cert.pem"
@@ -412,6 +667,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=240)
     ap.add_argument("--crash", choices=["page-fault", "panic"])
     ap.add_argument("--keyboard", action="store_true", help="USB keyboards: on a port, behind a hub, plugged in and out")
+    ap.add_argument("--network", action="store_true", help="a virtio network card: DHCP, DNS and a TCP conversation")
+    ap.add_argument("--claude", action="store_true", help="a conversation with a stand-in for Claude's API, over HTTPS")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
@@ -421,6 +678,10 @@ def main() -> int:
         problems = crash(args.crash, args)
     elif args.keyboard:
         problems = keyboard(args)
+    elif args.network:
+        problems = network(args)
+    elif args.claude:
+        problems = claude(args)
     else:
         if not args.no_build:
             build()

@@ -18,9 +18,35 @@ name = "chatcomputer-kernel"
 version = "0.1.0"
 dependencies = [
  "bootinfo",
+ "claude",
+ "crypto",
  "font",
+ "net",
+ "tls",
 ]
+
+[[package]]
+name = "claude"
+version = "0.1.0"
+dependencies = [
+ "tls",
+]
+
+[[package]]
+name = "crypto"
+version = "0.1.0"
 
 [[package]]
 name = "font"
 version = "0.1.0"
+
+[[package]]
+name = "net"
+version = "0.1.0"
+
+[[package]]
+name = "tls"
+version = "0.1.0"
+dependencies = [
+ "crypto",
+]

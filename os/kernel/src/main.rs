@@ -14,7 +14,12 @@ extern crate alloc;
 mod serial;
 mod acpi;
 mod apic;
+mod assistant;
+mod chat;
+mod clock;
 mod cpu;
+mod dma;
+mod draw;
 mod gdt;
 mod heap;
 mod idt;
@@ -22,15 +27,18 @@ mod iommu;
 mod keyboard;
 mod layout;
 mod memory;
+mod netcard;
+mod network;
 mod paging;
 mod pci;
 mod ps2;
+mod random;
 mod screen;
+mod settings;
 mod sync;
 mod text;
 mod time;
 mod usb;
-mod welcome;
 #[path = "../../shared/mem.rs"]
 mod mem;
 
@@ -64,6 +72,19 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     log!("Chat Computer kernel: own page tables in use");
     let heap = heap::init();
     log!("Chat Computer kernel: heap of {} MiB", heap >> 20);
+    // The settings file and the clock, as the start-up stage read them (the key in the settings is never logged).
+    let settings = settings::parse(info.settings());
+    log!(
+        "Chat Computer kernel: settings: {}{}",
+        match (info.settings_len, &settings.claude_api_key, settings.key_problem) {
+            (0, _, _) => "none",
+            (_, Some(_), _) => "a Claude API key",
+            (_, None, Some(_)) => "a Claude API key that can't be used",
+            _ => "no Claude API key",
+        },
+        if settings.not_understood > 0 { alloc::format!(", {} lines not understood", settings.not_understood) } else { String::new() }
+    );
+    log!("Chat Computer kernel: clock: {}", clock::init(info.time, info.time_zone, settings.clock_offset_minutes));
 
     // The screen comes next, so that if anything after this stops the kernel, the screen says so.
     let brand = cpu::brand();
@@ -72,7 +93,7 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     match screen::Screen::new(&info.framebuffer) {
         Some(screen) => {
             let (w, h) = (screen.width, screen.height);
-            let layout = welcome::Welcome::show(screen, size_mm, &cpu_name, info.secure_boot);
+            let layout = chat::Chat::show(screen, size_mm, &cpu_name, info.secure_boot);
             log!(
                 "Chat Computer kernel: screen {w}x{h}, monitor size {:?} mm, viewed from about {} cm{}: drawn at {}%, text {}.{} px",
                 size_mm,
@@ -125,6 +146,11 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
 
     cpu::enable_interrupts();
     usb::start();
+    let cards = network::init();
+    if cards == 0 {
+        log!("Chat Computer kernel: network: no card Chat Computer has a driver for");
+    }
+    assistant::init(settings.claude_api_key, settings.key_problem);
     log!("Chat Computer: ready");
 
     // Tests of the crash path, built in only when asked for (CHATCOMPUTER_TEST=page-fault ./build.sh).
@@ -140,17 +166,21 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     let mut keyboards_shown = u64::MAX;
     loop {
         cpu::wait_for_interrupt();
+        network::work();
+        for event in assistant::work() {
+            chat::claude(event);
+        }
         usb::work();
         ps2::poll();
         keyboard::repeat();
         while let Some(press) = keyboard::take() {
-            welcome::typed(press);
+            chat::typed(press);
         }
         if usb::changes() != keyboards_shown {
             keyboards_shown = usb::changes();
-            welcome::keyboards(&usb::status(), ps2::present().then_some(ps2_name));
+            chat::keyboards(&usb::status(), ps2::present().then_some(ps2_name));
         }
-        welcome::tick();
+        chat::tick();
     }
 }
 
@@ -159,6 +189,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     cpu::disable_interrupts();
     serial::write_anyway(format_args!("\nChat Computer kernel stopped: {info}\n"));
     let place = info.location().map_or(("?", 0), |l| (l.file(), l.line()));
-    welcome::show_stop("an internal error", format_args!("{} ({}, line {}).", info.message(), place.0, place.1));
+    chat::show_stop("an internal error", format_args!("{} ({}, line {}).", info.message(), place.0, place.1));
     cpu::stop()
 }

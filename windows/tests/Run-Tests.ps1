@@ -734,6 +734,24 @@ Assert-Equal 0 $Script:BcdCalls.Count 'own entry: nothing added when it is there
 Assert-Equal 0 (Get-SetupBootEntries).Count 'own entry: not the installer''s entry'
 Assert-Equal 1 (Get-ChatComputerBootEntries).Count 'own entry: not Linux Chat Computer''s entry'
 Remove-Item Function:\bcdedit.exe
+# Its settings: the Claude API key and the clock, as the kernel reads them (os/kernel/src/settings.rs).
+$fakeKey = 'sk-ant-api03-' + ('A' * 40) + '_-x9'
+Assert-Equal $fakeKey (ConvertTo-OwnKey ('  ' + $fakeKey.Substring(0, 30) + "`r`n" + $fakeKey.Substring(30) + "`r`n")) 'own settings: a key pasted over two lines is read whole'
+Assert-Equal $fakeKey (ConvertTo-OwnKey ('"' + $fakeKey + '"')) 'own settings: quotes around it go'
+Assert-Equal '' (ConvertTo-OwnKey $null) 'own settings: nothing pasted'
+Assert-Equal '' (Get-OwnKeyProblem $fakeKey) 'own settings: an API key is fine'
+Assert-True ((Get-OwnKeyProblem ('sk-ant-oat01-' + ('B' * 40))) -like '*sign-in code*') 'own settings: a Claude Code sign-in code is refused, saying why'
+Assert-True ((Get-OwnKeyProblem 'hello there') -ne '') 'own settings: something else is refused'
+$ownText = New-OwnSettingsText -Key $fakeKey -ClockOffsetMinutes 480
+Assert-True ($ownText -match ('(?m)^claude-api-key = ' + [regex]::Escape($fakeKey) + '\r$')) 'own settings: the key on a line of its own'
+Assert-True ($ownText -match '(?m)^clock-offset-minutes = 480\r$') 'own settings: the clock offset'
+Assert-Equal $fakeKey (Get-OwnSettingsKey $ownText) 'own settings: the key read back'
+$noKey = New-OwnSettingsText -Key '' -ClockOffsetMinutes -300
+Assert-True ($noKey -notmatch 'claude-api-key') 'own settings: no key line without a key'
+Assert-True ($noKey -match '(?m)^clock-offset-minutes = -300\r$') 'own settings: a clock behind UTC'
+Assert-Equal '' (Get-OwnSettingsKey $noKey) 'own settings: no key read back'
+Assert-Equal $ownText ([Text.Encoding]::ASCII.GetString([Text.Encoding]::ASCII.GetBytes($ownText))) 'own settings: plain ASCII'
+Assert-True ((Get-ClockOffsetMinutes) -is [int]) 'own settings: the clock offset is a number of minutes'
 
 # ------------------------------------------------------------------ files from a disc image
 # On a real PC, grub.cfg copied from the mounted Ubuntu image kept the image's read-only mark, and setup

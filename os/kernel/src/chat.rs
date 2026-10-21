@@ -1,0 +1,864 @@
+//! What the screen shows: the conversation with Claude, laid out as Chat Computer's own screen is (chat.css,
+//! theme.css): Claude's words on the left in one column, black on the warm off-white background; yours on the
+//! right in a light grey bubble; the message box at the bottom, a white card with a soft shadow, "Type anything"
+//! in it while it's empty, and its send button, grey until there's something to send. What you send goes to the
+//! top of the screen, with the answer coming in under it (and the screen following the answer down); Page Up and
+//! Page Down, or the arrow keys, scroll. Esc clears the box, or stops an answer.
+//!
+//! Before the first message, the column says what this PC is, how long Chat Computer has been running on it
+//! (counted by the kernel's own timer), which keyboards it found, whether Claude can be reached, and how to get
+//! back to Windows. If the kernel ever stops, the same place says so, with details to pass on.
+
+use crate::assistant::{self, Event, Ready};
+use crate::draw::{Canvas, Rect, BUBBLE, DIM, GROUND, INK, PAPER};
+use crate::keyboard::{Key, Press};
+use crate::layout::{self, Layout};
+use crate::screen::Screen;
+use crate::sync::SpinLock;
+use crate::text::{Ink, Style, Type};
+use crate::{heap, memory, time, usb};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use bootinfo::{SECURE_BOOT_OFF, SECURE_BOOT_ON};
+use claude::api::Role;
+use core::fmt;
+use core::ops::Range;
+use font::raster::ONE;
+
+const BACK_TO_WINDOWS: &str = "To go back to Windows, hold the power button until the PC turns off, then turn it on \
+                               again. Chat Computer doesn't write to your disks, so this is safe.";
+
+/// The longest message that can be typed.
+const TYPED_MAX: usize = 4000;
+/// The most lines the message box grows to; past that it scrolls.
+const BOX_LINES: usize = 6;
+/// The soft shadow under the message box: CSS 0 0.3rem 1.4rem, black at 9%.
+const SHADOW: u32 = 23;
+/// Big redraws (more than a quarter of the screen) at most this often, so a fast answer doesn't take all the time.
+const BIG_REDRAW_MS: u64 = 40;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The start screen's first line, larger.
+    Title,
+    /// The start screen's other paragraphs.
+    Text,
+    /// What you sent.
+    You,
+    /// Claude's answer.
+    Claude,
+    /// Chat Computer itself saying something: what went wrong, mostly.
+    Note,
+}
+
+/// What a start-screen paragraph is, for the ones that change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Live {
+    No,
+    Uptime,
+    Keyboards,
+    Claude,
+}
+
+struct Line {
+    text: String,
+    /// From the column's left edge, and from the block's top, in pixels.
+    x: i32,
+    y: i32,
+    ink: Option<Ink>,
+}
+
+struct Block {
+    kind: Kind,
+    live: Live,
+    text: String,
+    lines: Vec<Line>,
+    /// Where it is in the whole conversation (from its top), and how tall, in pixels.
+    top: i32,
+    height: i32,
+    /// Your message's bubble, from the column's left edge and the block's top.
+    bubble: Rect,
+    /// Claude's answer with no words yet: the pulsing dot.
+    thinking: bool,
+    /// Its text changed since it was laid out.
+    changed: bool,
+}
+
+impl Block {
+    fn new(kind: Kind, live: Live, text: String) -> Block {
+        Block { kind, live, text, lines: Vec::new(), top: 0, height: 0, bubble: Rect::default(), thinking: false, changed: true }
+    }
+}
+
+/// Sizes, in pixels (the text's own sizes in 1/256 pixel), from the text size this screen gets (layout.rs).
+#[derive(Clone, Copy)]
+struct Metrics {
+    rem: f64,
+    body: Style,
+    title: Style,
+    line: i32,
+    column_x: i32,
+    column_w: i32,
+}
+
+impl Metrics {
+    fn px(&self, rem: f64) -> i32 {
+        (rem * self.rem + 0.5) as i32
+    }
+}
+
+/// The message box, as laid out for what's typed.
+#[derive(Clone, Default)]
+struct BoxLayout {
+    /// The white card, on the screen.
+    card: Rect,
+    /// Where the typed lines start.
+    text_x: i32,
+    text_y: i32,
+    lines: Vec<Range<usize>>,
+    /// The first line shown (when there are more than fit), and how many are shown.
+    first: usize,
+    shown: usize,
+    /// The send button's centre and radius, in 1/8 pixel.
+    send: (i32, i32, i32),
+}
+
+pub struct Chat {
+    screen: Screen,
+    canvas: Canvas,
+    ty: Type,
+    layout: Layout,
+    m: Metrics,
+    blocks: Vec<Block>,
+    /// Whether the conversation has begun (the start screen is gone).
+    started: bool,
+    /// The kernel stopped: the screen says so, and there's no message box.
+    stopped: bool,
+    /// What Claude is sent: the exchanges so far.
+    history: Vec<(Role, String)>,
+    /// The block Claude's answer is going into.
+    asking: Option<usize>,
+    typed: String,
+    /// Where in `typed` the caret is (a byte index on a character boundary).
+    cursor: usize,
+    composer: BoxLayout,
+    /// Where the latest thing you sent starts (the screen keeps it in view), in pixels from the conversation's top.
+    anchor: i32,
+    /// Where the person scrolled to (the conversation's top line on the screen's top), or None: following.
+    scroll: Option<i32>,
+    /// The part of the screen to draw again.
+    dirty: Rect,
+    /// Blocks need laying out again.
+    relayout: bool,
+    last_big_redraw: u64,
+    uptime_shown: Option<u64>,
+    claude_checked: u64,
+    dot_alpha: u32,
+}
+
+static CHAT: SpinLock<Option<Chat>> = SpinLock::new(None);
+
+fn fx(px: f64) -> i32 {
+    (px * ONE as f64) as i32
+}
+
+fn plural(n: u64, word: &str) -> String {
+    if n == 1 { format!("1 {word}") } else { format!("{n} {word}s") }
+}
+
+fn uptime_text(seconds: u64) -> String {
+    let (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if h > 0 {
+        format!("Up for {} and {}.", plural(h, "hour"), plural(m, "minute"))
+    } else if m > 0 {
+        format!("Up for {} and {}.", plural(m, "minute"), plural(s, "second"))
+    } else {
+        format!("Up for {}.", plural(s, "second"))
+    }
+}
+
+fn memory_text(bytes: u64) -> String {
+    let mib = (bytes + (1 << 19)) >> 20;
+    if mib < 1024 {
+        return format!("{mib} MB");
+    }
+    let tenths = (bytes * 10 + (1 << 29)) >> 30;
+    if tenths < 100 { format!("{}.{} GB", tenths / 10, tenths % 10) } else { format!("{} GB", (tenths + 5) / 10) }
+}
+
+/// What the start screen says about Claude.
+fn claude_text(ready: Ready) -> String {
+    match ready {
+        Ready::Yes => String::from("Claude is here. Type anything below and press Enter."),
+        Ready::NoKey => format!("{} {}", assistant::NO_KEY, assistant::GIVE_KEY),
+        Ready::BadKey(p) => format!("{}. {}", assistant::sentence(p), assistant::GIVE_KEY),
+        Ready::NoClock => String::from("This PC's clock couldn't be read, so Claude can't be reached safely."),
+        Ready::NoCard => String::from(assistant::NO_CARD),
+        Ready::NoCable => String::from("Claude is on the internet: plug in a network cable to reach Claude."),
+        Ready::NoAddress => String::from("Connecting to the network\u{2026}"),
+    }
+}
+
+/// Claude's words as this screen shows them: plain text, without Markdown's marks (Claude is asked not to use
+/// them, but may): headings' #s, the ** around bold words and the ` around code go, as do the ``` lines around
+/// code blocks; a line starting with "- " or "* " starts with a bullet instead.
+fn plain(text: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.split('\n') {
+        let rest = line.trim_start();
+        let indent = &line[..line.len() - rest.len()];
+        if rest.starts_with("```") {
+            continue;
+        }
+        let mut rest = rest;
+        let hashes = rest.bytes().take_while(|&b| b == b'#').count();
+        if (1..=6).contains(&hashes) && rest[hashes..].starts_with(' ') {
+            rest = &rest[hashes + 1..];
+        }
+        let mut out = String::from(indent);
+        if let Some(r) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* ")).or_else(|| rest.strip_prefix("+ ")) {
+            out.push_str("\u{2022} ");
+            rest = r;
+        }
+        out.push_str(&rest.replace("**", "").replace('`', ""));
+        lines.push(out);
+    }
+    lines.join("\n")
+}
+
+/// How opaque the thinking dot is `ms` into its pulse (as chat.css: 0.35 to 1 and back in 1.2 s, easing), of 255.
+fn pulse(ms: u64) -> u32 {
+    let p = (ms % 1200) as i64; // 0..1200
+    let tri = 1000 - (2 * p * 1000 / 1200 - 1000).abs(); // 0..1000..0
+    let smooth = tri * tri * (3000 - 2 * tri) / 1_000_000; // smoothstep, 0..1000
+    (255 * (350 + 650 * smooth / 1000) / 1000) as u32
+}
+
+impl Chat {
+    fn metrics(layout: &Layout, width: usize) -> Metrics {
+        let rem = layout.font_px;
+        let line = (rem * 1.5 + 0.5) as i32;
+        let title_line = (rem * 1.5 * 1.3 + 0.5) as i32;
+        let column_w = layout.column_px as i32;
+        Metrics {
+            rem,
+            body: Style { size: fx(rem), line_height: line * ONE },
+            title: Style { size: fx(rem * 1.5), line_height: title_line * ONE },
+            line,
+            column_x: (width as i32 - column_w) / 2,
+            column_w,
+        }
+    }
+
+    /// The start screen.
+    pub fn show(screen: Screen, size_mm: Option<(u32, u32)>, cpu: &str, secure_boot: u32) -> Layout {
+        let layout = layout::compute(screen.width as u32, screen.height as u32, size_mm);
+        let m = Self::metrics(&layout, screen.width);
+        let article = if cpu.starts_with(['A', 'E', 'I', 'O', 'a', 'e', 'i', 'o']) { "an" } else { "a" };
+        let size = if layout.size_known {
+            format!("{}-inch, {} by {}", (layout.diagonal_in + 0.5) as u32, screen.width, screen.height)
+        } else {
+            format!("{} by {}", screen.width, screen.height)
+        };
+        let memory = memory_text(memory::stats().total_ram);
+        let secure = match secure_boot {
+            SECURE_BOOT_ON => " Secure Boot is on.",
+            SECURE_BOOT_OFF => " Secure Boot is off.",
+            _ => "",
+        };
+        let facts = format!("This PC has {article} {cpu}, {memory} of memory and a {size} screen.{secure}");
+        let blocks = alloc::vec![
+            Block::new(Kind::Title, Live::No, String::from("Chat Computer is running on its own kernel.")),
+            Block::new(Kind::Text, Live::No, facts),
+            Block::new(Kind::Text, Live::Uptime, uptime_text(0)),
+            Block::new(Kind::Text, Live::Keyboards, String::from("Looking for keyboards.")),
+            Block::new(Kind::Text, Live::Claude, String::from("Looking for a network\u{2026}")),
+            Block::new(Kind::Text, Live::No, String::from(BACK_TO_WINDOWS)),
+        ];
+        let canvas = Canvas::new(screen.width, screen.height);
+        let mut c = Chat {
+            screen,
+            canvas,
+            ty: Type::atkinson(),
+            layout,
+            m,
+            blocks,
+            started: false,
+            stopped: false,
+            history: Vec::new(),
+            asking: None,
+            typed: String::new(),
+            cursor: 0,
+            composer: BoxLayout::default(),
+            anchor: 0,
+            scroll: None,
+            dirty: Rect::default(),
+            relayout: true,
+            last_big_redraw: 0,
+            uptime_shown: Some(0),
+            claude_checked: 0,
+            dot_alpha: 0,
+        };
+        c.lay_out_box();
+        let card = c.composer.card;
+        crate::log!("Chat Computer kernel: message box at rows {} to {}", card.y, card.bottom());
+        c.draw(true);
+        *CHAT.lock() = Some(c);
+        layout
+    }
+
+    // ------------------------------------------------------------------------------------------- laying out
+
+    fn style(&self, kind: Kind) -> Style {
+        if kind == Kind::Title { self.m.title } else { self.m.body }
+    }
+
+    /// The message box for what's typed now. Changes `dirty` if its size changed.
+    fn lay_out_box(&mut self) {
+        let m = self.m;
+        let border = 2;
+        let (pad_top, pad_left, pad_right, gap) = (m.px(0.6), m.px(1.0), m.px(0.7), m.px(0.5));
+        let send_d = m.px(1.5);
+        let text_w = m.column_w - 2 * border - pad_left - pad_right - gap - send_d;
+        let lines = self.ty.breaks(&self.typed, m.body.size, text_w * ONE);
+        let shown = lines.len().clamp(1, BOX_LINES);
+        let caret_line = self.caret_line(&lines);
+        let first = (caret_line + 1).saturating_sub(shown).min(lines.len().saturating_sub(shown));
+        let h = 2 * border + 2 * pad_top + shown as i32 * m.line;
+        let y = self.screen.height as i32 - m.px(0.75) - h;
+        let card = Rect::new(m.column_x, y, m.column_w, h);
+        let row_bottom = y + border + pad_top + shown as i32 * m.line;
+        let send = (
+            (card.right() - border - pad_right) * 8 - send_d * 4,
+            row_bottom * 8 - send_d * 4,
+            send_d * 4,
+        );
+        if card != self.composer.card && self.composer.card != Rect::default() {
+            self.relayout = true; // the conversation's room changed
+        }
+        self.composer = BoxLayout { card, text_x: m.column_x + border + pad_left, text_y: y + border + pad_top, lines, first, shown, send };
+    }
+
+    /// Which line of the box the caret is on.
+    fn caret_line(&self, lines: &[Range<usize>]) -> usize {
+        lines.iter().rposition(|l| l.start <= self.cursor).unwrap_or(0)
+    }
+
+    /// The bottom of the part of the screen the conversation shows in (the message box and its margin below).
+    fn log_bottom(&self) -> i32 {
+        self.composer.card.y - self.m.px(0.5)
+    }
+
+    /// How far down the conversation's last words may come when following it.
+    fn view_bottom(&self) -> i32 {
+        self.log_bottom() - self.m.px(1.25)
+    }
+
+    fn lay_out_block(ty: &Type, m: &Metrics, style: Style, b: &mut Block) {
+        let shown = if b.kind == Kind::Claude { plain(&b.text) } else { b.text.clone() };
+        let mut old = core::mem::take(&mut b.lines);
+        let mut lines = Vec::new();
+        let mut reuse = |text: &str, x: i32, y: i32, i: usize| -> Line {
+            let ink = match old.get_mut(i) {
+                Some(l) if l.text == text => l.ink.take(),
+                _ => None,
+            };
+            Line { text: String::from(text), x, y, ink }
+        };
+        b.thinking = b.kind == Kind::Claude && shown.trim().is_empty();
+        let line = style.line_height / ONE;
+        if b.kind == Kind::You {
+            let (pad_x, pad_y) = (m.px(0.9), m.px(0.5));
+            let inner = m.column_w * 85 / 100 - 2 * pad_x;
+            let ranges = ty.breaks(&shown, style.size, inner * ONE);
+            let widest = ranges.iter().map(|r| (ty.width(&shown[r.clone()], style.size) + ONE - 1) / ONE).max().unwrap_or(0);
+            let w = widest + 2 * pad_x;
+            let x = m.column_w - w;
+            for (i, r) in ranges.iter().enumerate() {
+                lines.push(reuse(&shown[r.clone()], x + pad_x, pad_y + i as i32 * line, i));
+            }
+            b.height = ranges.len() as i32 * line + 2 * pad_y;
+            b.bubble = Rect::new(x, 0, w, b.height);
+        } else if b.thinking {
+            b.height = line;
+        } else {
+            let ranges = ty.breaks(&shown, style.size, m.column_w * ONE);
+            let mut y = 0;
+            for r in &ranges {
+                let text = &shown[r.clone()];
+                if text.trim().is_empty() {
+                    // A blank line between paragraphs: their usual space (1 em), not a whole line.
+                    y += m.px(1.0);
+                    continue;
+                }
+                let i = lines.len();
+                lines.push(reuse(text, 0, y, i));
+                y += line;
+            }
+            b.height = y.max(line);
+        }
+        b.lines = lines;
+        b.changed = false;
+    }
+
+    /// Lays the blocks out: the start screen in the middle of the room above the message box; the conversation
+    /// from the top.
+    fn lay_out(&mut self) {
+        let m = self.m;
+        for i in 0..self.blocks.len() {
+            if self.blocks[i].changed {
+                let style = self.style(self.blocks[i].kind);
+                Self::lay_out_block(&self.ty, &m, style, &mut self.blocks[i]);
+            }
+        }
+        if self.started {
+            let mut top = m.px(2.0);
+            for b in &mut self.blocks {
+                b.top = top;
+                top += b.height + m.px(1.25);
+            }
+        } else {
+            // As Chat Computer's welcome screen: the first line, a quarter of its size below it, then paragraphs
+            // 1 em apart.
+            let gaps: Vec<i32> = self
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(i, b)| match i {
+                    0 => 0,
+                    _ if self.blocks[i - 1].kind == Kind::Title => (m.rem * 1.5 * 0.25 + 0.5) as i32,
+                    _ => m.px(1.0) + if b.kind == Kind::Title { m.px(0.5) } else { 0 },
+                })
+                .collect();
+            let total: i32 = self.blocks.iter().map(|b| b.height).sum::<i32>() + gaps.iter().sum::<i32>();
+            let room = if self.stopped { self.screen.height as i32 } else { self.log_bottom() };
+            let mut top = ((room - total) / 2).max(m.px(1.0));
+            for (b, gap) in self.blocks.iter_mut().zip(gaps) {
+                top += gap;
+                b.top = top;
+                top += b.height;
+            }
+        }
+        self.relayout = false;
+    }
+
+    /// Where the screen's top is in the conversation.
+    fn view_top(&self) -> i32 {
+        if !self.started {
+            return 0;
+        }
+        let end = self.blocks.last().map_or(0, |b| b.top + b.height);
+        let follow = (end - self.view_bottom()).max(self.anchor).max(0);
+        match self.scroll {
+            Some(t) => t.clamp(0, follow),
+            None => follow,
+        }
+    }
+
+    fn scroll_by(&mut self, delta: i32) {
+        if !self.started {
+            return;
+        }
+        let end = self.blocks.last().map_or(0, |b| b.top + b.height);
+        let follow = (end - self.view_bottom()).max(self.anchor).max(0);
+        let to = (self.view_top() + delta).max(0);
+        self.scroll = if to >= follow { None } else { Some(to) };
+        self.dirty = self.dirty.union(&self.canvas.whole());
+    }
+
+    // ---------------------------------------------------------------------------------------------- drawing
+
+    /// Draws `clip` of the screen into the canvas: the background, the conversation (or start screen), and the
+    /// message box.
+    fn render(&mut self, clip: Rect) {
+        let view_top = self.view_top();
+        let log = Rect::new(0, 0, self.screen.width as i32, if self.stopped { self.screen.height as i32 } else { self.log_bottom() });
+        let m = self.m;
+        let now = time::uptime_ms();
+        let Chat { canvas, blocks, ty, .. } = self;
+        canvas.set_clip(clip);
+        canvas.fill(clip, GROUND);
+        canvas.set_clip(clip.intersect(&log));
+        let area = canvas.clip();
+        let screen_h = canvas.height as i32;
+        for b in blocks.iter_mut() {
+            let y = b.top - view_top;
+            if y + b.height < -screen_h || y > 2 * screen_h {
+                // Far off the screen: its lines' ink can go (it's drawn again if it comes back).
+                for l in &mut b.lines {
+                    l.ink = None;
+                }
+                continue;
+            }
+            if y + b.height <= area.y || y >= area.bottom() {
+                continue;
+            }
+            let style = if b.kind == Kind::Title { m.title } else { m.body };
+            if b.kind == Kind::You {
+                let r = Rect::new(m.column_x + b.bubble.x, y + b.bubble.y, b.bubble.w, b.bubble.h);
+                canvas.round_rect(r, m.px(1.1), BUBBLE);
+            }
+            let line_h = style.line_height / ONE;
+            for l in &mut b.lines {
+                let ly = y + l.y;
+                if ly + line_h <= area.y || ly >= area.bottom() {
+                    continue;
+                }
+                let ink = l.ink.get_or_insert_with(|| ty.ink(&l.text, style, 0));
+                canvas.ink(m.column_x + l.x - ink.left as i32, ly, ink, INK);
+            }
+            if b.thinking {
+                let d = m.px(0.5);
+                let baseline = ty.baseline(m.body) / ONE;
+                canvas.circle((m.column_x * 2 + d) * 4, (y + baseline) * 8 - d * 4, d * 4, INK, pulse(now));
+            }
+        }
+        if !self.stopped {
+            self.canvas.set_clip(clip);
+            self.render_box();
+        }
+    }
+
+    /// The message box: its shadow, the white card, what's typed (or the hint) and the caret, the send button.
+    fn render_box(&mut self) {
+        let m = self.m;
+        let b = &self.composer;
+        let canvas = &mut self.canvas;
+        canvas.shadow(b.card, m.px(0.3), m.px(1.4), SHADOW);
+        canvas.round_rect(b.card, m.px(1.1), PAPER);
+        let caret_w = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
+        if self.typed.is_empty() {
+            let hint = if assistant::busy() { "Esc stops the answer" } else { "Type anything" };
+            let ink = self.ty.ink(hint, m.body, 0);
+            canvas.ink(b.text_x - ink.left as i32, b.text_y, &ink, DIM);
+        }
+        for (i, r) in b.lines.iter().enumerate().skip(b.first).take(b.shown) {
+            let text = &self.typed[r.clone()];
+            if text.is_empty() {
+                continue;
+            }
+            let ink = self.ty.ink(text, m.body, 0);
+            canvas.ink(b.text_x - ink.left as i32, b.text_y + (i - b.first) as i32 * m.line, &ink, INK);
+        }
+        // The caret.
+        let li = b.lines.iter().rposition(|l| l.start <= self.cursor).unwrap_or(0);
+        if (b.first..b.first + b.shown).contains(&li) {
+            let start = b.lines.get(li).map_or(0, |l| l.start);
+            let end = self.cursor.min(b.lines.get(li).map_or(0, |l| l.end)).max(start);
+            let x = b.text_x + self.ty.width(&self.typed[start..end], m.body.size) / ONE;
+            let y = b.text_y + (li - b.first) as i32 * m.line;
+            canvas.fill(Rect::new(x, y + m.line * 18 / 100, caret_w, m.line * 64 / 100), INK);
+        }
+        // The send button: a circle with an arrow up (chat.html's, drawn at 62% of the button).
+        let (cx, cy, r) = b.send;
+        let ready = !self.typed.trim().is_empty() && !assistant::busy();
+        canvas.circle(cx, cy, r, if ready { INK } else { DIM }, 255);
+        let unit = r * 2 * 62 / 100; // the icon's size, in 1/8 pixel; its drawing is 24 units across
+        let at = |u: i32, v: i32| (cx - unit / 2 + u * unit / 240, cy - unit / 2 + v * unit / 240);
+        let segments = [(at(120, 190), at(120, 50)), (at(55, 115), at(120, 50)), (at(120, 50), at(185, 115))];
+        canvas.strokes(&segments, unit * 26 / 240, GROUND);
+    }
+
+    /// Draws what changed (everything if `all`) and puts it on the screen.
+    fn draw(&mut self, all: bool) {
+        if self.relayout {
+            self.lay_out();
+            self.dirty = self.canvas.whole();
+        }
+        if all {
+            self.dirty = self.canvas.whole();
+        }
+        let dirty = self.dirty.intersect(&self.canvas.whole());
+        if dirty.is_empty() {
+            return;
+        }
+        let now = time::uptime_ms();
+        let big = dirty.w as i64 * dirty.h as i64 * 4 > self.canvas.width as i64 * self.canvas.height as i64;
+        if big && !all && now.saturating_sub(self.last_big_redraw) < BIG_REDRAW_MS {
+            return; // soon
+        }
+        if big {
+            self.last_big_redraw = now;
+        }
+        self.dirty = Rect::default();
+        self.render(dirty);
+        let width = self.canvas.width;
+        self.screen.copy(dirty.x as usize, dirty.y as usize, dirty.w as usize, dirty.h as usize, self.canvas.pixels(), width);
+    }
+
+    /// The part of the screen a block takes now.
+    fn block_area(&self, i: usize) -> Rect {
+        let b = &self.blocks[i];
+        Rect::new(0, b.top - self.view_top(), self.screen.width as i32, b.height)
+    }
+
+    /// The message box's part of the screen, shadow and all.
+    fn box_area(&self) -> Rect {
+        let reach = self.m.px(2.2);
+        let card = self.composer.card;
+        Rect::new(card.x - reach, card.y - reach, card.w + 2 * reach, self.screen.height as i32 - (card.y - reach))
+    }
+
+    // ------------------------------------------------------------------------------------------- what happens
+
+    fn tick(&mut self) {
+        if self.stopped {
+            return;
+        }
+        let now = time::uptime_ms();
+        if !self.started {
+            let seconds = now / 1000;
+            if self.uptime_shown != Some(seconds) {
+                self.uptime_shown = Some(seconds);
+                self.set_live(Live::Uptime, uptime_text(seconds));
+            }
+            if now.saturating_sub(self.claude_checked) >= 500 {
+                self.claude_checked = now;
+                self.set_live(Live::Claude, claude_text(assistant::ready()));
+            }
+        }
+        if let Some(i) = self.asking
+            && self.blocks.get(i).is_some_and(|b| b.thinking)
+        {
+            let alpha = pulse(now);
+            if alpha.abs_diff(self.dot_alpha) >= 8 {
+                self.dot_alpha = alpha;
+                let area = self.block_area(i);
+                self.dirty = self.dirty.union(&Rect::new(area.x, area.y, area.w, self.m.line));
+            }
+        }
+        self.draw(false);
+    }
+
+    /// A start-screen paragraph that changes: its new words.
+    fn set_live(&mut self, live: Live, text: String) {
+        let Some(i) = self.blocks.iter().position(|b| b.live == live) else { return };
+        if self.blocks[i].text == text {
+            return;
+        }
+        let before = self.blocks[i].lines.len();
+        self.blocks[i].text = text;
+        let style = self.style(self.blocks[i].kind);
+        Self::lay_out_block(&self.ty, &self.m, style, &mut self.blocks[i]);
+        if self.blocks[i].lines.len() == before {
+            let area = self.block_area(i);
+            self.dirty = self.dirty.union(&area);
+        } else {
+            self.relayout = true; // it took more or fewer lines: everything moves
+        }
+    }
+
+    fn show_keyboards(&mut self, status: &usb::Status, other: Option<&str>) {
+        let mut all: Vec<&str> = status.keyboards.iter().map(|k| k.as_str()).collect();
+        all.extend(other);
+        // Keyboards of the same name once, with how many: "QEMU USB Keyboard (2)".
+        let mut names: Vec<(&str, usize)> = Vec::new();
+        for k in &all {
+            match names.iter_mut().find(|(n, _)| n == k) {
+                Some((_, count)) => *count += 1,
+                None => names.push((k, 1)),
+            }
+        }
+        let named: Vec<String> =
+            names.iter().map(|(n, count)| if *count > 1 { format!("{n} ({count})") } else { String::from(*n) }).collect();
+        let text = match all.as_slice() {
+            [] if status.controllers == 0 => String::from("No keyboard Chat Computer can use was found, so typing doesn't work yet."),
+            [] if status.running == 0 => String::from("The USB controllers didn't start, so typing doesn't work yet."),
+            [] => String::from("Plug in a USB keyboard to type."),
+            [one] => format!("Type with the {one}."),
+            _ => format!("Type with any keyboard: {}.", named.join(", ")),
+        };
+        self.set_live(Live::Keyboards, text);
+    }
+
+    fn edit(&mut self, p: Press) {
+        let before = |s: &str, at: usize| s[..at].chars().next_back().map_or(at, |c| at - c.len_utf8());
+        let after = |s: &str, at: usize| s[at..].chars().next().map_or(at, |c| at + c.len_utf8());
+        let page = (self.view_bottom() * 8 / 10).max(self.m.line);
+        match p.key {
+            Key::Char(c) if !p.ctrl && !p.alt && !p.logo => {
+                if self.typed.chars().count() < TYPED_MAX {
+                    self.typed.insert(self.cursor, c);
+                    self.cursor += c.len_utf8();
+                }
+            }
+            Key::Backspace if self.cursor > 0 => {
+                let from = before(&self.typed, self.cursor);
+                self.typed.replace_range(from..self.cursor, "");
+                self.cursor = from;
+            }
+            Key::Delete if self.cursor < self.typed.len() => {
+                let to = after(&self.typed, self.cursor);
+                self.typed.replace_range(self.cursor..to, "");
+            }
+            Key::Left => self.cursor = before(&self.typed, self.cursor),
+            Key::Right => self.cursor = after(&self.typed, self.cursor),
+            Key::Home => self.cursor = 0,
+            Key::End => self.cursor = self.typed.len(),
+            Key::Enter => return self.send(),
+            Key::Escape => {
+                if !self.typed.is_empty() {
+                    self.typed.clear();
+                    self.cursor = 0;
+                } else if self.asking.is_some() {
+                    assistant::stop();
+                    self.answer_over(Some(String::from("Stopped.")));
+                    return;
+                }
+            }
+            Key::PageUp => return self.scroll_by(-page),
+            Key::PageDown => return self.scroll_by(page),
+            Key::Up => return self.scroll_by(-3 * self.m.line),
+            Key::Down => return self.scroll_by(3 * self.m.line),
+            _ => return,
+        }
+        self.lay_out_box();
+        let area = self.box_area();
+        self.dirty = self.dirty.union(&area);
+    }
+
+    /// Enter: what's typed goes to Claude.
+    fn send(&mut self) {
+        // A test build of the keyboard (check.py --keyboard) writes the line in the log instead, so the test can
+        // check what reached the screen; no other build ever logs what's typed.
+        if option_env!("CHATCOMPUTER_TEST") == Some("keyboard") {
+            crate::log!("Chat Computer kernel: test: typed {:?}", self.typed);
+            self.typed.clear();
+            self.cursor = 0;
+            self.lay_out_box();
+            let area = self.box_area();
+            self.dirty = self.dirty.union(&area);
+            return;
+        }
+        let text = String::from(self.typed.trim());
+        if text.is_empty() || self.asking.is_some() {
+            return;
+        }
+        self.typed.clear();
+        self.cursor = 0;
+        if !self.started {
+            self.started = true;
+            self.blocks.clear();
+        }
+        self.blocks.push(Block::new(Kind::You, Live::No, text.clone()));
+        let you = self.blocks.len() - 1;
+        self.history.push((Role::User, text));
+        match assistant::ask(&self.history) {
+            Ok(()) => {
+                self.blocks.push(Block::new(Kind::Claude, Live::No, String::new()));
+                self.asking = Some(self.blocks.len() - 1);
+            }
+            Err(why) => {
+                self.history.pop();
+                self.blocks.push(Block::new(Kind::Note, Live::No, why));
+            }
+        }
+        self.lay_out_box();
+        self.lay_out();
+        self.anchor = self.blocks[you].top - self.m.px(2.0);
+        self.scroll = None;
+        self.dirty = self.canvas.whole();
+    }
+
+    /// The answer is over: complete (None), or not (why).
+    fn answer_over(&mut self, failed: Option<String>) {
+        let Some(i) = self.asking.take() else { return };
+        let words = self.blocks[i].text.trim().is_empty();
+        match failed {
+            None if !words => {
+                let text = self.blocks[i].text.clone();
+                self.history.push((Role::Assistant, text));
+            }
+            why => {
+                // Claude's API isn't sent a question left unanswered (or answered by nothing).
+                self.history.pop();
+                let why = why.unwrap_or_else(|| String::from("Claude didn't say anything."));
+                if words {
+                    self.blocks[i] = Block::new(Kind::Note, Live::No, why);
+                } else {
+                    self.blocks.push(Block::new(Kind::Note, Live::No, why));
+                }
+            }
+        }
+        self.relayout = true;
+        self.lay_out_box(); // (the send button and the hint change)
+    }
+
+    fn claude(&mut self, e: Event) {
+        match e {
+            Event::Text(s) => {
+                let Some(i) = self.asking else { return };
+                let top_before = self.view_top();
+                let old = self.block_area(i);
+                self.blocks[i].text.push_str(&s);
+                self.blocks[i].changed = true;
+                self.lay_out();
+                let new = self.block_area(i);
+                if self.view_top() != top_before {
+                    let log = Rect::new(0, 0, self.screen.width as i32, self.log_bottom());
+                    self.dirty = self.dirty.union(&log).union(&self.box_area());
+                } else {
+                    self.dirty = self.dirty.union(&old.union(&new)).union(&self.box_area());
+                }
+            }
+            Event::Done => self.answer_over(None),
+            Event::Failed(why) => self.answer_over(Some(why)),
+        }
+    }
+
+    /// Replaces everything with what stopped the kernel, the details, and how to go back.
+    fn stop(&mut self, what: &str, details: &str) {
+        self.stopped = true;
+        self.started = false;
+        self.blocks = alloc::vec![
+            Block::new(Kind::Title, Live::No, format!("Chat Computer stopped: {what}.")),
+            Block::new(Kind::Text, Live::No, format!("Details: {details}")),
+            Block::new(Kind::Text, Live::No, String::from(BACK_TO_WINDOWS)),
+        ];
+        self.relayout = true;
+        self.draw(true);
+    }
+}
+
+/// Called after every interrupt: the start screen's live lines, the thinking dot, and whatever changed.
+pub fn tick() {
+    if let Some(c) = CHAT.lock().as_mut() {
+        c.tick();
+    }
+}
+
+/// Says which keyboards there are: USB ones, and `other` (found another way), by name.
+pub fn keyboards(status: &usb::Status, other: Option<&str>) {
+    if let Some(c) = CHAT.lock().as_mut() {
+        c.show_keyboards(status, other);
+    }
+}
+
+/// A key was typed.
+pub fn typed(p: Press) {
+    if let Some(c) = CHAT.lock().as_mut() {
+        c.edit(p);
+    }
+}
+
+/// Something came of the question to Claude.
+pub fn claude(e: Event) {
+    if let Some(c) = CHAT.lock().as_mut() {
+        c.claude(e);
+    }
+}
+
+/// The last words on the screen after a crash. Drawing needs the heap, so if the crash happened while the heap
+/// was busy (or the screen was being drawn), only the log gets them.
+pub fn show_stop(what: &str, details: fmt::Arguments) {
+    if heap::busy() {
+        return;
+    }
+    let details = format!("{details}");
+    if let Some(mut guard) = CHAT.try_lock()
+        && let Some(c) = guard.as_mut()
+    {
+        c.stop(what, &details);
+    }
+}

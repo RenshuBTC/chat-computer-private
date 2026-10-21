@@ -3,6 +3,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::ops::Range;
 use font::raster::{Pen, Raster, ONE};
 use font::Font;
 
@@ -49,7 +50,60 @@ impl Type {
         self.scale(text.chars().map(|c| self.advance_units(c)).sum(), size)
     }
 
+    /// Where `text` breaks into lines no wider than `max` (at `size`): at spaces, inside a word only if it's
+    /// longer than a line, and after every line break ('\n', not part of any line). One pass, however long.
+    pub fn breaks(&self, text: &str, size: i32, max: i32) -> Vec<Range<usize>> {
+        let upem = self.font.metrics.units_per_em as i64;
+        let max = (max.max(0) as i64 * upem / size.max(1) as i64) as i32; // in the font's units
+        let mut lines = Vec::new();
+        let mut start = 0;
+        let mut width = 0; // of text[start..here], in font units
+        // The last space on this line: where it is, and the width up to just after it.
+        let mut space: Option<(usize, i32)> = None;
+        for (i, c) in text.char_indices() {
+            if c == '\n' {
+                lines.push(start..i);
+                start = i + 1;
+                width = 0;
+                space = None;
+                continue;
+            }
+            let w = self.advance_units(c);
+            if c == ' ' {
+                width += w;
+                space = Some((i, width));
+                continue;
+            }
+            if width + w > max && i > start {
+                match space {
+                    Some((at, after)) if at > start => {
+                        lines.push(start..at);
+                        start = at + 1;
+                        width -= after;
+                    }
+                    _ => {
+                        lines.push(start..i);
+                        start = i;
+                        width = 0;
+                    }
+                }
+                space = None;
+            }
+            width += w;
+        }
+        lines.push(start..text.len());
+        lines
+    }
+
+    /// Where the baseline is, below the top of a line box in `style`, in 1/256 pixel.
+    pub fn baseline(&self, style: Style) -> i32 {
+        let m = self.font.metrics;
+        let content = self.scale(m.ascender as i32 - m.descender as i32, style.size);
+        (style.line_height - content) / 2 + self.scale(m.ascender as i32, style.size)
+    }
+
     /// Splits `text` into lines no wider than `max`, breaking at spaces.
+    #[allow(dead_code)]
     pub fn wrap<'t>(&self, text: &'t str, size: i32, max: i32) -> Vec<&'t str> {
         let mut lines = Vec::new();
         let mut start = 0; // where the current line starts

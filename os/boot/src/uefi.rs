@@ -131,11 +131,11 @@ const _: () = {
     assert!(core::mem::size_of::<ConfigurationTable>() == 24);
 };
 
-/// EFI_RUNTIME_SERVICES: only GetVariable is used, and only before ExitBootServices.
+/// EFI_RUNTIME_SERVICES: only GetTime and GetVariable are used, and only before ExitBootServices.
 #[repr(C)]
 pub struct RuntimeServices {
     pub hdr: TableHeader,
-    get_time: usize,
+    pub get_time: unsafe extern "efiapi" fn(*mut Time, *mut c_void) -> Status,
     set_time: usize,
     get_wakeup_time: usize,
     set_wakeup_time: usize,
@@ -145,6 +145,69 @@ pub struct RuntimeServices {
 }
 
 const _: () = assert!(offset_of!(RuntimeServices, get_variable) == 72);
+
+/// EFI_TIME: the PC's clock.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Time {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub _pad1: u8,
+    pub nanosecond: u32,
+    /// Minutes from UTC (the specification's versions disagree on which way), or 2047 when the clock doesn't know.
+    pub time_zone: i16,
+    pub daylight: u8,
+    pub _pad2: u8,
+}
+
+pub const UNSPECIFIED_TIMEZONE: i16 = 0x07FF;
+
+pub const LOADED_IMAGE: Guid = Guid(0x5B1B31A1, 0x9562, 0x11d2, [0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B]);
+pub const SIMPLE_FILE_SYSTEM: Guid = Guid(0x964e5b22, 0x6459, 0x11d2, [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b]);
+
+/// EFI_LOADED_IMAGE_PROTOCOL: which disk this start-up program was read from.
+#[repr(C)]
+pub struct LoadedImage {
+    pub revision: u32,
+    pub parent_handle: Handle,
+    pub system_table: *mut SystemTable,
+    pub device_handle: Handle,
+    pub file_path: *mut c_void,
+    reserved: *mut c_void,
+    pub load_options_size: u32,
+    pub load_options: *mut c_void,
+    pub image_base: *mut c_void,
+    pub image_size: u64,
+    pub image_code_type: u32,
+    pub image_data_type: u32,
+    unload: usize,
+}
+
+const _: () = assert!(offset_of!(LoadedImage, device_handle) == 24);
+const _: () = assert!(offset_of!(LoadedImage, image_size) == 72);
+
+/// EFI_SIMPLE_FILE_SYSTEM_PROTOCOL.
+#[repr(C)]
+pub struct SimpleFileSystem {
+    pub revision: u64,
+    pub open_volume: unsafe extern "efiapi" fn(*mut SimpleFileSystem, *mut *mut File) -> Status,
+}
+
+/// EFI_FILE_PROTOCOL: only opening, reading and closing.
+#[repr(C)]
+pub struct File {
+    pub revision: u64,
+    pub open: unsafe extern "efiapi" fn(*mut File, *mut *mut File, *const u16, u64, u64) -> Status,
+    pub close: unsafe extern "efiapi" fn(*mut File) -> Status,
+    delete: usize,
+    pub read: unsafe extern "efiapi" fn(*mut File, *mut usize, *mut c_void) -> Status,
+}
+
+pub const FILE_MODE_READ: u64 = 1;
 
 /// The UEFI global variables' owner (EFI_GLOBAL_VARIABLE), e.g. "SecureBoot".
 pub const GLOBAL_VARIABLE: Guid = Guid(0x8be4df61, 0x93ca, 0x11d2, [0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c]);

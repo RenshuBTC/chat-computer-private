@@ -183,6 +183,8 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
         }
         info.uefi_revision = (*st).hdr.revision;
         info.secure_boot = secure_boot(st);
+        (info.time, info.time_zone) = clock(st);
+        info.settings_len = settings(bs, image, &mut info.settings) as u32;
     }
 
     // Last call: the final memory map, then ExitBootServices. If something (a timer event, say) changed
@@ -284,6 +286,69 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
             options(noreturn)
         );
     }
+}
+
+/// The PC's clock, in seconds since 1970 as if it were UTC, and its time zone as the firmware gives it; 0 if it
+/// can't be read.
+unsafe fn clock(st: *mut SystemTable) -> (i64, i32) {
+    let rt = unsafe { (*st).runtime_services };
+    if rt.is_null() {
+        return (0, uefi::UNSPECIFIED_TIMEZONE as i32);
+    }
+    let mut t = uefi::Time::default();
+    if unsafe { ((*rt).get_time)(&mut t, null_mut()) } != SUCCESS
+        || t.year < 1970
+        || !(1..=12).contains(&t.month)
+        || !(1..=31).contains(&t.day)
+        || t.hour > 23
+        || t.minute > 59
+        || t.second > 59
+    {
+        return (0, uefi::UNSPECIFIED_TIMEZONE as i32);
+    }
+    let (y, m, d) = (t.year as i64, t.month as i64, t.day as i64);
+    // Days from 1970 (days_from_civil).
+    let yy = if m <= 2 { y - 1 } else { y };
+    let era = yy.div_euclid(400);
+    let yoe = yy - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    (days * 86_400 + t.hour as i64 * 3600 + t.minute as i64 * 60 + t.second as i64, t.time_zone as i32)
+}
+
+/// Chat Computer's settings file, from the partition this program was started from: how many bytes went into
+/// `out` (0 if there's no such file).
+unsafe fn settings(bs: &BootServices, image: Handle, out: &mut [u8]) -> usize {
+    const PATH: &str = "\\EFI\\chatcomputer-own\\settings.txt";
+    let mut loaded: *mut core::ffi::c_void = null_mut();
+    if unsafe { (bs.handle_protocol)(image, &uefi::LOADED_IMAGE, &mut loaded) } != SUCCESS || loaded.is_null() {
+        return 0;
+    }
+    let device = unsafe { (*(loaded as *mut uefi::LoadedImage)).device_handle };
+    let mut fs: *mut core::ffi::c_void = null_mut();
+    if unsafe { (bs.handle_protocol)(device, &uefi::SIMPLE_FILE_SYSTEM, &mut fs) } != SUCCESS || fs.is_null() {
+        return 0;
+    }
+    let fs = fs as *mut uefi::SimpleFileSystem;
+    let mut root: *mut uefi::File = null_mut();
+    if unsafe { ((*fs).open_volume)(fs, &mut root) } != SUCCESS || root.is_null() {
+        return 0;
+    }
+    let mut name = [0u16; 64];
+    for (i, c) in PATH.encode_utf16().enumerate() {
+        name[i] = c;
+    }
+    let mut file: *mut uefi::File = null_mut();
+    let mut got = 0;
+    if unsafe { ((*root).open)(root, &mut file, name.as_ptr(), uefi::FILE_MODE_READ, 0) } == SUCCESS && !file.is_null() {
+        let mut size = out.len();
+        if unsafe { ((*file).read)(file, &mut size, out.as_mut_ptr() as *mut core::ffi::c_void) } == SUCCESS {
+            got = size.min(out.len());
+        }
+        unsafe { ((*file).close)(file) };
+    }
+    unsafe { ((*root).close)(root) };
+    got
 }
 
 fn halt() -> ! {

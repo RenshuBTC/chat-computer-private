@@ -229,6 +229,25 @@ impl Address {
         None
     }
 
+    /// Every capability of `id` in the configuration (a device can have several: virtio has one per region).
+    pub fn capabilities(self, id: u8) -> Vec<u16> {
+        let mut found = Vec::new();
+        if self.read16(STATUS) & STATUS_CAPABILITIES == 0 {
+            return found;
+        }
+        let mut at = (self.read8(CAPABILITIES) & !3) as u16;
+        for _ in 0..48 {
+            if at < 0x40 {
+                break;
+            }
+            if self.read8(at) == id {
+                found.push(at);
+            }
+            at = (self.read8(at + 1) & !3) as u16;
+        }
+        found
+    }
+
     /// Has the device interrupt at `vector` on the processor core whose interrupt controller is
     /// `apic_id`, by message: MSI-X (its first entry) if it can, else MSI. The device must not be
     /// running yet. Returns which, or `Signal::None` if it can do neither.
@@ -318,6 +337,11 @@ pub fn init(acpi: &Acpi) -> (usize, &'static str) {
     let count = found.len();
     *FUNCTIONS.lock() = found;
     (count, if acpi.pci_window.is_some() { "through the PCI Express window" } else { "through the old ports" })
+}
+
+/// Every device function of a class (0x02: network controllers), whatever its subclass.
+pub fn of_class(class: u8) -> Vec<Function> {
+    FUNCTIONS.lock().iter().filter(|f| f.class == class).copied().collect()
 }
 
 /// The device functions of one kind (class, subclass, programming interface).

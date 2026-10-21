@@ -39,14 +39,22 @@ chat-computer/
   os/                       Chat Computer's own operating system, from scratch (Rust, no outside code); see os/README.md
     boot/                   UEFI start-up stage (BOOTX64.EFI) that carries the kernel
     kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards), PS/2
-                            keyboards, the first screen with a line to type on
+                            keyboards, network cards (virtio so far), the settings (the Claude API key) and the
+                            clock from the start-up stage, Claude (assistant.rs), and the conversation screen
+                            (chat.rs, drawn in memory: draw.rs)
+    net/                    Own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
+    crypto/                 Own cryptography: SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305, X25519, ECDSA, RSA
+    tls/                    Own TLS 1.3 client and certificate checks, against Mozilla's authorities (roots.txt)
+    claude/                 Claude's Messages API, streamed: the request (Opus 5.5, effort max), HTTP/1.1, JSON
     font/                   Own TrueType reader and rasterizer
     build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced,
-                            and typing on PS/2 and USB keyboards)
+                            typing on PS/2 and USB keyboards, the network, and a conversation with a stand-in
+                            for Claude's API over HTTPS)
     release/chatcomputer.efi  The reproducible build Windows uses (CI checks it matches the source)
   windows/own-os.ps1        "Chat Computer Own System.cmd": signs os/release with a key Windows makes on the PC
-                            (CurrentUser\My, not exportable), copies it to \EFI\chatcomputer-own on Windows' EFI
-                            partition with ChatComputer.cer, adds "Chat Computer (own system)" last in the power-on
+                            (CurrentUser\My, not exportable), asks for a Claude API key (hidden, never logged),
+                            copies it to \EFI\chatcomputer-own on Windows' EFI partition with ChatComputer.cer and
+                            settings.txt (the key, the clock's offset from UTC), adds "Chat Computer (own system)" last in the power-on
                             menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
                             guides approving it (db Append) or turning Secure Boot off, then shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime

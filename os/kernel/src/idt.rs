@@ -15,6 +15,7 @@ pub const SPURIOUS_VECTOR: u8 = 0xFF;
 /// Vectors for devices' interrupt messages, each with its driver's handler.
 pub const DEVICE_VECTORS: core::ops::Range<u8> = 0x40..0x50;
 pub const USB_VECTOR: u8 = 0x40;
+pub const NET_VECTOR: u8 = 0x41;
 
 static DEVICE_HANDLERS: [AtomicUsize; 16] = [const { AtomicUsize::new(0) }; 16];
 
@@ -241,7 +242,7 @@ fn exception(f: &Frame) -> ! {
         f.rbp, f.r8, f.r9, f.r10, f.r11, f.r12, f.r13, f.r14, f.r15,
         crate::cpu::cr2()
     ));
-    crate::welcome::show_stop(
+    crate::chat::show_stop(
         name,
         format_args!("vector {}, error {:#x}, at {:#x}, address {:#x}.", f.vector, f.error, f.rip, crate::cpu::cr2()),
     );

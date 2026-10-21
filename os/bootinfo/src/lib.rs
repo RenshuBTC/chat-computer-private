@@ -7,7 +7,7 @@ pub mod edid;
 /// "ChatComp" in ASCII: the first field of [`BootInfo`], so the kernel can tell it got the real thing.
 pub const MAGIC: u64 = u64::from_le_bytes(*b"ChatComp");
 /// Raised whenever [`BootInfo`] changes shape.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// All of physical memory is visible to the kernel at this virtual address: physical address `p` is at
 /// `PHYS_OFFSET + p`. It is the start of the upper half of the address space (page-map slot 256).
@@ -134,7 +134,20 @@ pub struct BootInfo {
     /// `SECURE_BOOT_` values.
     pub secure_boot: u32,
     pub _reserved: u32,
+    /// The PC's clock when the start-up stage read it, in seconds since 1970 as if it were UTC (whether it is
+    /// depends on the time zone; Windows keeps it in local time); 0 if it couldn't be read.
+    pub time: i64,
+    /// The clock's time zone as the firmware gave it: EFI_TIME's TimeZone, in minutes, or 2047 when the firmware
+    /// doesn't know (most PCs). Versions of the UEFI specification disagree on its sign.
+    pub time_zone: i32,
+    /// How many bytes of `settings` there are: Chat Computer's settings file (\EFI\chatcomputer-own\settings.txt
+    /// on the start-up partition), as it was; 0 if there's none.
+    pub settings_len: u32,
+    pub settings: [u8; SETTINGS_MAX],
 }
+
+/// The most of the settings file that's passed on.
+pub const SETTINGS_MAX: usize = 2048;
 
 pub const SECURE_BOOT_OFF: u32 = 0;
 pub const SECURE_BOOT_ON: u32 = 1;
@@ -155,5 +168,9 @@ impl BootInfo {
 
     pub fn edid(&self) -> &[u8] {
         &self.edid[..(self.edid_len as usize).min(self.edid.len())]
+    }
+
+    pub fn settings(&self) -> &[u8] {
+        &self.settings[..(self.settings_len as usize).min(SETTINGS_MAX)]
     }
 }

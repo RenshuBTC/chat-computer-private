@@ -200,3 +200,102 @@ fn glyph_ink_matches_its_area() {
         assert!((ink - want).abs() < want * 0.005, "{c:?}: ink {ink:.1} px, expected {want:.1}");
     }
 }
+
+/// An outline's control box (every point, on the curve or off it), in font units × 64.
+#[derive(Default)]
+struct Bounds {
+    min: (i32, i32),
+    max: (i32, i32),
+    any: bool,
+}
+
+impl Bounds {
+    fn add(&mut self, x: i32, y: i32) {
+        if !self.any {
+            (self.min, self.max, self.any) = ((x, y), (x, y), true);
+        }
+        self.min = (self.min.0.min(x), self.min.1.min(y));
+        self.max = (self.max.0.max(x), self.max.1.max(y));
+    }
+}
+
+impl Outline for Bounds {
+    fn move_to(&mut self, x: i32, y: i32) {
+        self.add(x, y);
+    }
+    fn line_to(&mut self, x: i32, y: i32) {
+        self.add(x, y);
+    }
+    fn quad_to(&mut self, cx: i32, cy: i32, x: i32, y: i32) {
+        self.add(cx, cy);
+        self.add(x, y);
+    }
+    fn close(&mut self) {}
+}
+
+// (weight, character, advance, control box: x min, y min, x max, y max) as fontTools' own reading of the variable
+// font has them (TTFont.getGlyphSet(location=...) with a ControlBoundsPen, fontTools 4.65). 250, 300 and 600 fall
+// inside the font's regions, 700 is bold, 800 its heaviest; é is a composite, and the variations of %, o, E, ? and Ů
+// leave points out (their deltas inferred from their neighbours').
+#[rustfmt::skip]
+const VARIED: [(i32, char, f64, [f64; 4]); 32] = [
+    (250, 'A', 592.485, [10.0, 0.0, 582.48, 668.0]),
+    (250, 'g', 540.073, [39.12, -187.32, 466.96, 505.56]),
+    (250, '&', 731.779, [62.9, -11.22, 716.44, 681.22]),
+    (250, 'é', 525.529, [39.12, -12.0, 490.18, 698.21]),
+    (250, '%', 880.029, [39.12, -12.0, 840.91, 680.0]),
+    (250, 'ß', 560.956, [81.12, -12.78, 525.06, 680.0]),
+    (600, 'A', 662.001, [7.19, 0.0, 654.81, 668.0]),
+    (600, 'g', 582.188, [31.5, -198.19, 522.88, 507.94]),
+    (600, '€', 673.563, [9.37, -12.0, 640.06, 680.0]),
+    (600, '0', 655.875, [51.56, -12.0, 604.31, 680.87]),
+    (600, 'R', 638.751, [65.62, 0.0, 621.75, 668.0]),
+    (600, 'w', 722.813, [15.0, 0.0, 707.81, 496.0]),
+    (700, 'A', 678.0, [5.94, 0.0, 672.06, 668.0]),
+    (700, 'g', 592.937, [29.5, -200.94, 538.37, 509.69]),
+    (700, '&', 725.313, [44.38, -12.81, 715.56, 700.69]),
+    (700, 'é', 563.187, [29.5, -12.0, 545.31, 722.25]),
+    (700, '%', 968.562, [29.5, -12.0, 939.06, 680.0]),
+    (700, 'w', 740.062, [15.0, 0.0, 725.06, 496.0]),
+    (700, 'ß', 621.0, [60.13, -12.0, 597.94, 680.0]),
+    (800, 'A', 702.0, [4.0, 0.0, 698.0, 668.0]),
+    (800, 'g', 610.0, [28.0, -205.0, 563.0, 512.0]),
+    (800, 'é', 576.0, [28.0, -12.0, 561.0, 731.0]),
+    (800, 'R', 668.0, [54.0, 0.0, 661.0, 668.0]),
+    (800, 'ß', 640.0, [54.0, -13.0, 621.0, 680.0]),
+    (300, 'o', 536.823, [38.24, -12.0, 498.59, 505.12]),
+    (300, 'E', 553.911, [80.24, 0.0, 514.79, 668.0]),
+    (300, '?', 455.411, [33.35, -12.0, 437.09, 681.12]),
+    (300, 'Ů', 679.941, [78.24, -12.0, 601.71, 878.5]),
+    (700, 'o', 575.625, [29.5, -12.0, 546.12, 508.87]),
+    (700, 'E', 597.437, [60.13, 0.0, 562.69, 668.0]),
+    (700, '?', 546.625, [20.25, -12.0, 526.62, 680.0]),
+    (700, 'Ů', 685.938, [58.94, -12.0, 627.0, 914.81]),
+];
+
+#[test]
+fn bold_and_light_come_from_the_same_font() {
+    let data = atkinson();
+    let f = Font::parse(&data).unwrap();
+    assert!(f.instance(b"wdth", 100).is_none(), "an axis the font doesn't have");
+    for (weight, c, advance, bounds) in VARIED {
+        let at = f.instance(b"wght", weight).unwrap();
+        let g = f.glyph_index(c);
+        let got = f.advance_at(g, &at) as f64;
+        assert!((got - advance).abs() <= 0.5 + 1e-9, "{c:?} at {weight}: advance {got}, fontTools {advance}");
+        let mut b = Bounds::default();
+        assert!(f.outline_at(g, &at, &mut b));
+        let got = [b.min.0, b.min.1, b.max.0, b.max.1].map(|v| v as f64 / 64.0);
+        for k in 0..4 {
+            assert!((got[k] - bounds[k]).abs() <= 0.05, "{c:?} at {weight}: control box {got:?}, fontTools {bounds:?}");
+        }
+    }
+    // The default weight is the font as it is; past the ends, the ends.
+    let regular = f.instance(b"wght", 400).unwrap();
+    assert_eq!(regular.coords(), &[0]);
+    assert_eq!(f.instance(b"wght", 2000).unwrap().coords(), &[16384]);
+    assert_eq!(f.instance(b"wght", 0).unwrap().coords(), &[-16384]);
+    for (c, _, advance) in GLYPHS.iter().filter(|g| g.1 != 0) {
+        assert_eq!(f.advance_at(f.glyph_index(*c), &regular), *advance, "{c:?} at the default weight");
+    }
+}

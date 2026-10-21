@@ -15,8 +15,8 @@ use crate::keyboard::{Key, Press};
 use crate::layout::{self, Layout};
 use crate::screen::Screen;
 use crate::sync::SpinLock;
-use crate::text::{Ink, Style, Type};
-use crate::{heap, memory, time, usb};
+use crate::text::{Face, Ink, Style, Type};
+use crate::{heap, memory, rich, time, usb};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -71,8 +71,11 @@ enum Live {
     Claude,
 }
 
+/// A line of a block, or (in Claude's answers) one run of words in one face on a line.
 struct Line {
     text: String,
+    face: Face,
+    style: Style,
     /// From the column's left edge, and from the block's top, in pixels.
     x: i32,
     y: i32,
@@ -84,6 +87,9 @@ struct Block {
     live: Live,
     text: String,
     lines: Vec<Line>,
+    /// Lines and frames in Claude's answers (rules, code blocks' frames, quotes' bars, tables' lines, underlines),
+    /// from the column's left edge and the block's top.
+    marks: Vec<Rect>,
     /// Where it is in the whole conversation (from its top), and how tall, in pixels.
     top: i32,
     height: i32,
@@ -104,6 +110,7 @@ impl Block {
             live,
             text,
             lines: Vec::new(),
+            marks: Vec::new(),
             top: 0,
             height: 0,
             bubble: Rect::default(),
@@ -224,33 +231,6 @@ fn claude_text(ready: Ready) -> String {
     }
 }
 
-/// Claude's words as this screen shows them: plain text, without Markdown's marks (Claude is asked not to use
-/// them, but may): headings' #s, the ** around bold words and the ` around code go, as do the ``` lines around
-/// code blocks; a line starting with "- " or "* " starts with a bullet instead.
-fn plain(text: &str) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    for line in text.split('\n') {
-        let rest = line.trim_start();
-        let indent = &line[..line.len() - rest.len()];
-        if rest.starts_with("```") {
-            continue;
-        }
-        let mut rest = rest;
-        let hashes = rest.bytes().take_while(|&b| b == b'#').count();
-        if (1..=6).contains(&hashes) && rest[hashes..].starts_with(' ') {
-            rest = &rest[hashes + 1..];
-        }
-        let mut out = String::from(indent);
-        if let Some(r) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* ")).or_else(|| rest.strip_prefix("+ ")) {
-            out.push_str("\u{2022} ");
-            rest = r;
-        }
-        out.push_str(&rest.replace("**", "").replace('`', ""));
-        lines.push(out);
-    }
-    lines.join("\n")
-}
-
 /// How opaque the thinking dot is `ms` into its pulse (as chat.css: 0.35 to 1 and back in 1.2 s, easing), of 255.
 fn pulse(ms: u64) -> u32 {
     let p = (ms % 1200) as i64; // 0..1200
@@ -339,6 +319,11 @@ impl Chat {
         if kind == Kind::Title { self.m.title } else { self.m.body }
     }
 
+    /// One of the theme's pixels (its CSS px) on this screen, at least one: the width of its thin lines.
+    fn hair(&self) -> i32 {
+        ((self.layout.scale + 0.5) as i32).max(1)
+    }
+
     /// The message box for what's typed now. Changes `dirty` if its size changed.
     fn lay_out_box(&mut self) {
         let m = self.m;
@@ -380,20 +365,31 @@ impl Chat {
         self.log_bottom() - self.m.px(1.25)
     }
 
-    fn lay_out_block(ty: &Type, m: &Metrics, style: Style, b: &mut Block) {
-        let shown = if b.kind == Kind::Claude { plain(&b.text) } else { b.text.clone() };
+    /// Lays a block out. `hair`: one of the theme's pixels on this screen (its thin lines).
+    fn lay_out_block(ty: &Type, m: &Metrics, style: Style, hair: i32, b: &mut Block) {
+        let shown = b.text.clone();
         let mut old = core::mem::take(&mut b.lines);
         let mut lines = Vec::new();
-        let mut reuse = |text: &str, x: i32, y: i32, i: usize| -> Line {
+        // (A line drawn before, the same words in the same face and size, keeps its ink.)
+        let mut reuse = |text: &str, face: Face, style: Style, x: i32, y: i32, i: usize| -> Line {
             let ink = match old.get_mut(i) {
-                Some(l) if l.text == text => l.ink.take(),
+                Some(l) if l.text == text && l.face == face && l.style == style => l.ink.take(),
                 _ => None,
             };
-            Line { text: String::from(text), x, y, ink }
+            Line { text: String::from(text), face, style, x, y, ink }
         };
         b.thinking = b.kind == Kind::Claude && shown.trim().is_empty();
+        b.marks.clear();
         let line = style.line_height / ONE;
-        if b.kind == Kind::You {
+        if b.kind == Kind::Claude && !b.thinking {
+            // Claude's words, as Markdown (rich.rs).
+            let laid = rich::lay_out(ty, &shown, m.rem, style, m.column_w, hair);
+            for (i, run) in laid.runs.into_iter().enumerate() {
+                lines.push(reuse(&run.text, run.face, run.style, run.x, run.y, i));
+            }
+            b.marks = laid.marks;
+            b.height = laid.height.max(line);
+        } else if b.kind == Kind::You {
             let (pad_x, pad_y) = (m.px(0.9), m.px(0.5));
             let inner = m.column_w * 85 / 100 - 2 * pad_x;
             let ranges = ty.breaks(&shown, style.size, inner * ONE);
@@ -401,7 +397,7 @@ impl Chat {
             let w = widest + 2 * pad_x;
             let x = m.column_w - w;
             for (i, r) in ranges.iter().enumerate() {
-                lines.push(reuse(&shown[r.clone()], x + pad_x, pad_y + i as i32 * line, i));
+                lines.push(reuse(&shown[r.clone()], Face::Regular, style, x + pad_x, pad_y + i as i32 * line, i));
             }
             b.height = ranges.len() as i32 * line + 2 * pad_y;
             b.bubble = Rect::new(x, 0, w, b.height);
@@ -419,7 +415,7 @@ impl Chat {
                     continue;
                 }
                 let i = lines.len();
-                lines.push(reuse(text, 0, y, i));
+                lines.push(reuse(text, Face::Regular, style, 0, y, i));
                 y += line;
             }
             b.height = y.max(line);
@@ -432,10 +428,11 @@ impl Chat {
     /// from the top.
     fn lay_out(&mut self) {
         let m = self.m;
+        let hair = self.hair();
         for i in 0..self.blocks.len() {
             if self.blocks[i].changed {
                 let style = self.style(self.blocks[i].kind);
-                Self::lay_out_block(&self.ty, &m, style, &mut self.blocks[i]);
+                Self::lay_out_block(&self.ty, &m, style, hair, &mut self.blocks[i]);
             }
         }
         if self.started {
@@ -521,7 +518,6 @@ impl Chat {
             if y + b.height <= area.y || y >= area.bottom() {
                 continue;
             }
-            let style = if b.kind == Kind::Title { m.title } else { m.body };
             if b.kind == Kind::You {
                 let r = Rect::new(m.column_x + b.bubble.x, y + b.bubble.y, b.bubble.w, b.bubble.h);
                 canvas.round_rect(r, m.px(1.1), BUBBLE);
@@ -529,13 +525,15 @@ impl Chat {
             if b.kind == Kind::Divider {
                 canvas.fill(Rect::new(m.column_x, y, m.column_w, rule), LINE);
             }
-            let line_h = style.line_height / ONE;
+            for r in &b.marks {
+                canvas.fill(Rect::new(m.column_x + r.x, y + r.y, r.w, r.h), INK);
+            }
             for l in &mut b.lines {
                 let ly = y + l.y;
-                if ly + line_h <= area.y || ly >= area.bottom() {
+                if ly + l.style.line_height / ONE <= area.y || ly >= area.bottom() {
                     continue;
                 }
-                let ink = l.ink.get_or_insert_with(|| ty.ink(&l.text, style, 0));
+                let ink = l.ink.get_or_insert_with(|| ty.ink_in(&l.text, l.face, l.style, 0));
                 canvas.ink(m.column_x + l.x - ink.left as i32, ly, ink, INK);
             }
             if b.thinking {
@@ -673,8 +671,8 @@ impl Chat {
         }
         let before = self.blocks[i].lines.len();
         self.blocks[i].text = text;
-        let style = self.style(self.blocks[i].kind);
-        Self::lay_out_block(&self.ty, &self.m, style, &mut self.blocks[i]);
+        let (style, hair) = (self.style(self.blocks[i].kind), self.hair());
+        Self::lay_out_block(&self.ty, &self.m, style, hair, &mut self.blocks[i]);
         if self.blocks[i].lines.len() == before {
             let area = self.block_area(i);
             self.dirty = self.dirty.union(&area);

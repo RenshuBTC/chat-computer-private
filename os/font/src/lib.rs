@@ -1,13 +1,17 @@
 //! Chat Computer's own TrueType font reader: which glyph a character uses, how wide it is, and its outline.
 //!
 //! It reads 'glyf' outlines (made of straight lines and quadratic curves), including glyphs built from
-//! other glyphs (é = e + ´). It ignores the hinting programs fonts carry: Chat Computer never runs code that
-//! comes inside a font. Everything is bounds-checked; a damaged font gives `None`, never a crash.
+//! other glyphs (é = e + ´), and a variable font's other instances (bold, from the same file: vary.rs). It
+//! ignores the hinting programs fonts carry: Chat Computer never runs code that comes inside a font.
+//! Everything is bounds-checked; a damaged font gives `None`, never a crash.
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
 pub mod raster;
+mod vary;
+
+pub use vary::Instance;
 
 use alloc::vec::Vec;
 
@@ -62,8 +66,23 @@ pub struct Font<'a> {
     h_metrics: u16,
     glyphs: u16,
     cmap: Option<Cmap>,
+    /// A variable font's axes, avar mapping and glyph variations.
+    fvar: Option<&'a [u8]>,
+    avar: Option<&'a [u8]>,
+    gvar: Option<&'a [u8]>,
     pub metrics: Metrics,
 }
+
+/// One part of a composite glyph: which glyph, its flags, its 2×2 matrix (2.14) and its offset arguments.
+struct Component {
+    glyph: u16,
+    flags: u16,
+    m: Transform,
+    a: i64,
+    b: i64,
+}
+
+const XY_VALUES: u16 = 0x0002;
 
 /// A 2×2 matrix in 2.14 fixed point plus an offset in font units × 64.
 #[derive(Clone, Copy)]
@@ -152,10 +171,89 @@ impl<'a> Font<'a> {
             h_metrics: u16_at(hhea, 34)?,
             glyphs: u16_at(maxp, 4)?,
             cmap: None,
+            fvar: find(b"fvar"),
+            avar: find(b"avar"),
+            gvar: find(b"gvar"),
             metrics,
         };
         font.cmap = find(b"cmap").and_then(|c| font.pick_cmap(c));
         Some(font)
+    }
+
+    /// A variable font's instance: `value` (in the axis's own units: 700 is bold on 'wght') on the axis `tag`, the
+    /// others at their defaults. None if the font has no such axis.
+    pub fn instance(&self, tag: &[u8; 4], value: i32) -> Option<Instance> {
+        let fvar = self.fvar?;
+        let (axes_at, count, size) = (u16_at(fvar, 4)? as usize, u16_at(fvar, 8)? as usize, u16_at(fvar, 10)? as usize);
+        let mut coords = alloc::vec![0; count];
+        let mut found = false;
+        for (i, c) in coords.iter_mut().enumerate() {
+            let r = axes_at + i * size;
+            if fvar.get(r..r + 4)? != tag {
+                continue;
+            }
+            found = true;
+            let fixed = |o: usize| u32_at(fvar, r + o).map(|v| v as i32 as i64);
+            let (min, default, max) = (fixed(4)?, fixed(8)?, fixed(12)?);
+            if !(min <= default && default <= max) {
+                return None;
+            }
+            *c = vary::avar_map(&self.avar_segments(i), vary::normalize((value as i64) << 16, min, default, max));
+        }
+        found.then_some(Instance { coords })
+    }
+
+    /// Axis `axis`'s avar segment map (from, to pairs in 2.14; empty: none).
+    fn avar_segments(&self, axis: usize) -> Vec<(i32, i32)> {
+        let Some(avar) = self.avar else { return Vec::new() };
+        let mut at = 8;
+        for k in 0..=axis {
+            let Some(n) = u16_at(avar, at) else { return Vec::new() };
+            let n = n as usize;
+            if k == axis {
+                return (0..n)
+                    .map_while(|j| Some((i16_at(avar, at + 2 + 4 * j)? as i32, i16_at(avar, at + 4 + 4 * j)? as i32)))
+                    .collect();
+            }
+            at += 2 + 4 * n;
+        }
+        Vec::new()
+    }
+
+    /// The glyph's advance at `instance`, in font units: the default one moved by its phantom points' deltas.
+    pub fn advance_at(&self, glyph: u16, instance: &Instance) -> u16 {
+        let base = self.advance(glyph) as i64;
+        let Some(gvar) = self.gvar else { return base as u16 };
+        let Some(points) = self.point_count(glyph) else { return base as u16 };
+        match vary::deltas(gvar, glyph, &instance.coords, points + 4, None) {
+            Some((dx, _)) => {
+                let moved = base * 64 + dx[points + 1] - dx[points];
+                ((moved + 32).div_euclid(64)).clamp(0, u16::MAX as i64) as u16
+            }
+            None => base as u16,
+        }
+    }
+
+    /// How many points a glyph's variations count before its phantom points: an outline's points, or a
+    /// composite's parts.
+    fn point_count(&self, glyph: u16) -> Option<usize> {
+        let g = self.glyph_data(glyph)?;
+        if g.is_empty() {
+            return Some(0);
+        }
+        let contours = i16_at(g, 0)?;
+        if contours > 0 {
+            return Some(u16_at(g, 10 + 2 * (contours as usize - 1))? as usize + 1);
+        }
+        if contours == 0 {
+            return Some(0);
+        }
+        Some(self.components(g)?.len())
+    }
+
+    /// Sends the glyph's outline at `instance` to `out`. False if the glyph data is damaged.
+    pub fn outline_at(&self, glyph: u16, instance: &Instance, out: &mut dyn Outline) -> bool {
+        self.outline_with(glyph, &Transform::IDENTITY, 0, Some(instance), out).is_some()
     }
 
     /// The best Unicode character map: full Unicode (format 12) if present, else the basic plane
@@ -183,6 +281,11 @@ impl<'a> Font<'a> {
             }
         }
         best.map(|(_, c)| c)
+    }
+
+    /// How many glyphs the font has.
+    pub fn glyph_count(&self) -> u16 {
+        self.glyphs
     }
 
     /// The glyph for a character (0, the "missing" glyph, if the font doesn't have it).
@@ -273,10 +376,10 @@ impl<'a> Font<'a> {
 
     /// Sends the glyph's outline to `out`. False if the glyph data is damaged.
     pub fn outline(&self, glyph: u16, out: &mut dyn Outline) -> bool {
-        self.outline_with(glyph, &Transform::IDENTITY, 0, out).is_some()
+        self.outline_with(glyph, &Transform::IDENTITY, 0, None, out).is_some()
     }
 
-    fn outline_with(&self, glyph: u16, t: &Transform, depth: u32, out: &mut dyn Outline) -> Option<()> {
+    fn outline_with(&self, glyph: u16, t: &Transform, depth: u32, at: Option<&Instance>, out: &mut dyn Outline) -> Option<()> {
         if depth > 8 {
             return None; // a glyph made of itself, or nested too deep
         }
@@ -285,14 +388,36 @@ impl<'a> Font<'a> {
             return Some(()); // e.g. the space
         }
         let contours = i16_at(g, 0)?;
+        // At another instance, the variations' deltas (1/64 unit) for its points and then its 4 phantom points;
+        // the first phantom point is the glyph's origin, so a delta there moves the outline the other way (for the
+        // glyph as a whole, not for a part of a composite).
+        let varied = |points: usize, outline: Option<(&[i32], &[i32], &[usize])>| -> Option<(Vec<i64>, Vec<i64>)> {
+            let (gvar, instance) = (self.gvar?, at?);
+            let (mut dx, dy) = vary::deltas(gvar, glyph, &instance.coords, points + 4, outline)?;
+            if depth == 0 {
+                let origin = dx[points];
+                for d in dx.iter_mut() {
+                    *d -= origin;
+                }
+            }
+            Some((dx, dy))
+        };
         if contours >= 0 {
-            self.simple(g, contours as usize, t, out)
+            self.simple(g, contours as usize, t, &varied, out)
         } else {
-            self.composite(g, t, depth, out)
+            self.composite(g, t, depth, at, &varied, out)
         }
     }
 
-    fn simple(&self, g: &[u8], contours: usize, t: &Transform, out: &mut dyn Outline) -> Option<()> {
+    #[allow(clippy::type_complexity)]
+    fn simple(
+        &self,
+        g: &[u8],
+        contours: usize,
+        t: &Transform,
+        varied: &dyn Fn(usize, Option<(&[i32], &[i32], &[usize])>) -> Option<(Vec<i64>, Vec<i64>)>,
+        out: &mut dyn Outline,
+    ) -> Option<()> {
         if contours == 0 {
             return Some(());
         }
@@ -342,14 +467,19 @@ impl<'a> Font<'a> {
             ys.push(v);
         }
 
+        // In 1/64 unit, moved by the variations' deltas at another instance (the untouched points' inferred from
+        // the outline's own contours, in font units).
+        let ends: Vec<usize> = (0..contours).map(|c| u16_at(g, 10 + 2 * c).map(|e| e as usize)).collect::<Option<_>>()?;
+        let (dx, dy) = varied(points, Some((&xs, &ys, &ends))).unwrap_or_default();
+        let x64 = |i: usize| xs[i] as i64 * 64 + dx.get(i).copied().unwrap_or(0);
+        let y64 = |i: usize| ys[i] as i64 * 64 + dy.get(i).copied().unwrap_or(0);
         let mut first = 0;
-        for c in 0..contours {
-            let last = u16_at(g, 10 + 2 * c)? as usize;
+        for &last in &ends {
             if last < first || last >= points {
                 return None;
             }
             let point = |i: usize| -> (i32, i32, bool) {
-                let (x, y) = t.apply(xs[i] as i64 * 64, ys[i] as i64 * 64);
+                let (x, y) = t.apply(x64(i), y64(i));
                 (x, y, flags[i] & 0x01 != 0)
             };
             contour(first, last, &point, out);
@@ -358,14 +488,14 @@ impl<'a> Font<'a> {
         Some(())
     }
 
-    fn composite(&self, g: &[u8], t: &Transform, depth: u32, out: &mut dyn Outline) -> Option<()> {
+    /// A composite glyph's parts.
+    fn components(&self, g: &[u8]) -> Option<Vec<Component>> {
         const WORDS: u16 = 0x0001;
-        const XY_VALUES: u16 = 0x0002;
         const SCALE: u16 = 0x0008;
         const MORE: u16 = 0x0020;
         const XY_SCALE: u16 = 0x0040;
         const TWO_BY_TWO: u16 = 0x0080;
-        const SCALED_OFFSET: u16 = 0x0800;
+        let mut parts = Vec::new();
         let mut p = 10;
         loop {
             let flags = u16_at(g, p)?;
@@ -398,21 +528,46 @@ impl<'a> Font<'a> {
                 m.yy = i16_at(g, p + 6)? as i64;
                 p += 8;
             }
+            parts.push(Component { glyph, flags, m, a, b });
+            if flags & MORE == 0 || parts.len() > 256 {
+                return Some(parts);
+            }
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn composite(
+        &self,
+        g: &[u8],
+        t: &Transform,
+        depth: u32,
+        at: Option<&Instance>,
+        varied: &dyn Fn(usize, Option<(&[i32], &[i32], &[usize])>) -> Option<(Vec<i64>, Vec<i64>)>,
+        out: &mut dyn Outline,
+    ) -> Option<()> {
+        const SCALED_OFFSET: u16 = 0x0800;
+        let parts = self.components(g)?;
+        // At another instance, each part's offset is a point the variations move.
+        let (vx, vy) = varied(parts.len(), None).unwrap_or_default();
+        for (i, part) in parts.iter().enumerate() {
+            let mut m = part.m;
             // Offsets given as point numbers (matching points) are rare and not supported: the part is
-            // placed at the origin instead.
-            let (dx, dy) = if flags & XY_VALUES != 0 { (a, b) } else { (0, 0) };
-            let (dx, dy) = if flags & SCALED_OFFSET != 0 {
+            // placed at the origin instead. (Offsets in 1/64 unit from here.)
+            let (dx, dy) = if part.flags & XY_VALUES != 0 {
+                (part.a * 64 + vx.get(i).copied().unwrap_or(0), part.b * 64 + vy.get(i).copied().unwrap_or(0))
+            } else {
+                (0, 0)
+            };
+            let (dx, dy) = if part.flags & SCALED_OFFSET != 0 {
                 ((m.xx * dx + m.xy * dy) >> 14, (m.yx * dx + m.yy * dy) >> 14)
             } else {
                 (dx, dy)
             };
-            m.dx = dx * 64;
-            m.dy = dy * 64;
-            self.outline_with(glyph, &t.after(&m), depth + 1, out)?;
-            if flags & MORE == 0 {
-                return Some(());
-            }
+            m.dx = dx;
+            m.dy = dy;
+            self.outline_with(part.glyph, &t.after(&m), depth + 1, at, out)?;
         }
+        Some(())
     }
 }
 

@@ -45,13 +45,15 @@ chat-computer/
                             settings (the Claude API key, the memory file's id) and the clock from the
                             start-up stage, Claude (assistant.rs) with tools on the computer (its status:
                             system.rs; the text size; a restart, or turning off by ACPI S5: power.rs; a new conversation), the conversation
-                            kept across restarts (keep.rs; at most ~600 KB of it sent), and the conversation screen (chat.rs, drawn in memory: draw.rs)
+                            kept across restarts (keep.rs; at most ~600 KB of it sent), and the conversation screen (chat.rs, drawn in memory: draw.rs;
+                            Claude's answers laid out from their Markdown: rich.rs)
     net/                    Own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
     crypto/                 Own cryptography: SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305, X25519, ECDSA, RSA
     tls/                    Own TLS 1.3 client and certificate checks, against Mozilla's authorities (roots.txt)
     claude/                 Claude's Messages API, streamed: the request (Opus 5.5, effort max, automatic prompt
                             caching), HTTP/1.1, JSON
-    font/                   Own TrueType reader and rasterizer
+    font/                   Own TrueType reader and rasterizer, variable fonts too (fvar/avar/gvar: the bold, from the same file)
+    markdown/               Claude's Markdown read by md.js's rules (tested against md.js itself: markdown/gen/gen.js)
     fat/                    Own FAT12/16/32 reader: a file's blocks on the start-up partition
     remember/               The memory file's format (memory.bin): 512-byte chunks tagged "CCMEMORY" + file id
                             (u32 LE) + chunk number (u32 LE), 496 data bytes each; two halves written in turn, each

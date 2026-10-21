@@ -35,6 +35,7 @@ mod pci;
 mod power;
 mod ps2;
 mod random;
+mod rich;
 mod screen;
 mod settings;
 mod storage;

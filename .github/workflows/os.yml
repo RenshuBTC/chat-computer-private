@@ -1,7 +1,8 @@
 # Chat Computer's own operating system (os/).
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
-#   engine's tests; starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a
-#   crash stops it cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts),
+#   engine's, Markdown reader's and memory file's tests; starts it in virtual PCs (QEMU with OVMF) and checks the
+#   screen and the clock; checks that a crash stops it cleanly; starts it with Secure Boot enforced (signed with a
+#   test key the firmware trusts),
 #   checking the firmware refuses it unsigned; and types on PS/2 and USB keyboards (on ports, behind a hub,
 #   plugged in and out), checking what comes out.
 # - windows: signs the release file on real Windows, the way "Chat Computer Own System" does on a PC, and (when the
@@ -36,8 +37,8 @@ jobs:
           sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil sbsigntool
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
-      - name: Font engine tests
-        run: cargo test -p font
+      - name: Font engine, Markdown reader and memory file tests
+        run: cargo test -p font -p markdown -p remember
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh

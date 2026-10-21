@@ -647,7 +647,12 @@ def claude(args) -> list[str]:
                 "encrypted_index": "Eo8B=", "cited_text": "Sunny all day."}
     r_search = [("thinking", "sig-s"), ("server_tool_use", "srvtoolu_1", "web_search", ['{"query": ', '"weather"}']),
                 ("wait", 4), ("result", search_result), ("text", ["It's ", "sunny."], [citation])]
-    r_more = [("text", ["Enjoy the day."])]
+    # The rest of that answer in Markdown, as Claude writes: a heading, bold and italic, a list, a table, a quote and
+    # code, which the screen lays out (its picture: claude-search.png).
+    more = ("## Today\n\n**Sunny** all day, with *light* wind and ~~no~~ little cloud:\n\n- Morning: `12 °C`\n"
+            "- Afternoon: 18 °C\n\n| Time | Sky | Wind |\n|---|---|---|\n| 9:00 | Clear | 5 km/h |\n"
+            "| 15:00 | **Sunny** | 10 km/h |\n\n> Enjoy the day.\n\n```\nforecast --today\n```")
+    r_more = [("text", [more[:40], more[40:]])]
     r5 = [("thinking", "sig-5"), ("tool_use", "toolu_5", "restart_computer", ["{}"])]
     r6 = [("text", ["Restarting now: see you in Windows."])]
 
@@ -776,7 +781,8 @@ def claude(args) -> list[str]:
             problems.append("asking to restart didn't reach the restart tool")
         elif not restarted or not ended:
             problems.append(f"the PC didn't restart (the kernel said so: {restarted}; the virtual PC ended: {ended})")
-        if searched != "Enjoy the day" or 'test: Claude said "It\'s sunny.\\n\\nEnjoy the day."' not in text:
+        after_search = "It's sunny.\n\n" + more
+        if searched != "Enjoy the day" or f"test: Claude said {json.dumps(after_search, ensure_ascii=False)}" not in text:
             problems.append(f"the answer after a web search didn't come whole (the log says {searched!r})")
         if "Claude: searches the web" not in text:
             problems.append("the web search wasn't noticed")
@@ -798,8 +804,8 @@ def claude(args) -> list[str]:
                 problems.append("the system prompt changed from one request to the next, or doesn't give the date")
             if (r["path"], r["key"], r["version"]) != ("/v1/messages", TEST_KEY, "2023-06-01"):
                 problems.append(f"the request went to {r['path']!r} with key {r['key'] == TEST_KEY} and version {r['version']!r}")
-            if "plain text" not in str(body.get("system")):
-                problems.append("the request didn't say the screen shows plain text")
+            if "shows Markdown formatted" not in str(body.get("system")):
+                problems.append("the request didn't say how the screen shows answers")
             if body.get("messages") != [{"role": "user", "content": "hi"}]:
                 problems.append(f"the first request's messages were {body.get('messages')!r}")
             tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])

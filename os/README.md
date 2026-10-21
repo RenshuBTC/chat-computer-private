@@ -137,7 +137,9 @@ NVMe and SATA drivers.
   Before the first message it says what the PC is, how long Chat Computer has been running (by the kernel's own
   timer), which keyboards it found and whether Claude can be reached. Type, press Enter, and the message goes
   to Claude: the name looked up, a connection made, the certificate checked, the conversation so far sent, and
-  the answer shown as it streams in, with a pulsing dot while Claude thinks. Esc stops an answer; Page Up and
+  the answer shown as it streams in, with a pulsing dot while Claude thinks. Claude's answers are Markdown, laid
+  out as the main screen shows them (`rich.rs`): headings, bold, italics, lists and tasks, code in the code font,
+  quotes, tables and rules. Esc stops an answer; Page Up and
   Page Down scroll. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat work, in the US
   layout. Nothing typed or answered is written to the log.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
@@ -153,7 +155,12 @@ NVMe and SATA drivers.
   Anthropic runs), HTTP/1.1, JSON and the streamed answer's events, put back together into whole content blocks
   (thinking, words and their citations, tool calls, web searches and their results) to send back.
 * `font/` is Chat Computer's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
-  integer arithmetic only. It's tested against fontTools' reading of the same font.
+  integer arithmetic only. It reads variable fonts too (fvar, avar and gvar: deltas, intermediate regions and
+  inferred deltas), so the bold comes from the same font file as the regular. It's tested against fontTools'
+  reading of the same font, at the default weight and at others.
+* `markdown/` reads the Markdown Claude writes into blocks and styled words, by the same rules as the main
+  screen's renderer (`chatcomputer/ui/assets/md.js`). Its test runs md.js on each case (`markdown/gen/`) and
+  checks the two read it the same way.
 * `fat/` is Chat Computer's own reader of FAT12, FAT16 and FAT32 (the file system of every PC's start-up
   partition), long names included: it finds a file's blocks. Tested against volumes made by `mkfs.vfat` and
   filled by mtools, fragmented files among them.
@@ -167,12 +174,12 @@ NVMe and SATA drivers.
 The screen follows Chat Computer's look (`chatcomputer/ui/assets/theme.css` and `chat.css`):
 * black text on the warm off-white background, your messages in light grey bubbles on the right, the
   message box a white card with a soft shadow at the bottom;
-* Atkinson Hyperlegible Next;
+* Atkinson Hyperlegible Next (its regular and bold), and Atkinson Hyperlegible Mono for code;
 * text sized by the same 0.3° x-height rule as `chatcomputer/ui/layout.py`, from the monitor's real size;
 * a column at most 30 em wide.
 
-Claude is asked to write plain text there, as the screen doesn't show Markdown yet (marks it uses anyway, like
-`**`, are taken out).
+Italics are the regular or bold glyphs slanted 12° (as browsers do for a font without its italic), which keeps
+the italic font file out.
 
 ## Starting it on a PC
 
@@ -223,10 +230,11 @@ fetches it. To try it you also need QEMU, OVMF and Pillow (`apt install qemu-sys
 python3-pil`).
 
 ```
-./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 750 KB)
-cargo test -p font -p net -p crypto -p tls -p claude -p fat -p remember
+./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 1.1 MB)
+cargo test -p font -p net -p crypto -p tls -p claude -p fat -p remember -p markdown
                                  # the font engine, network stack, cryptography, TLS (needs openssl), Claude
-                                 # API client, FAT reader (needs dosfstools and mtools) and memory file
+                                 # API client, FAT reader (needs dosfstools and mtools), memory file and
+                                 # Markdown reader
 cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
@@ -337,8 +345,8 @@ PC.
    subscription sign-in is for Claude Code and its own apps
    ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)), and the own kernel doesn't
    run the Claude Code program (a Linux program), so it uses an API key.
-9. The conversation screen: ✓ the conversation, wrapping and scrolling. To do: kerning, and the formatting
-   Claude's answers use (Markdown).
+9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting Claude's answers use
+   (Markdown, with bold from the variable font). To do: kerning.
 10. Sound and AirPods: Bluetooth (HCI over USB, L2CAP, A2DP and HFP, SBC and mSBC).
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
 12. Power: ✓ restart, ✓ turning off (ACPI's S5, without the firmware's AML). To do: sleep; on laptops the battery

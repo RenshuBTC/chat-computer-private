@@ -276,6 +276,16 @@ impl Address {
                 return Signal::MsiX;
             }
         }
+        self.signal_msi(vector, apic_id)
+    }
+
+    /// Has the device interrupt at `vector` by MSI only (for devices whose MSI-X needs more setting up than
+    /// one message for everything). Returns `Signal::Msi`, or `Signal::None` if it can't.
+    pub fn signal_msi(self, vector: u8, apic_id: u32) -> Signal {
+        if apic_id > 255 {
+            return Signal::None;
+        }
+        let address = 0xFEE0_0000 | apic_id << 12;
         if let Some(cap) = self.capability(CAP_MSI) {
             let control = self.read16(cap + 2);
             let wide = control & (1 << 7) != 0;

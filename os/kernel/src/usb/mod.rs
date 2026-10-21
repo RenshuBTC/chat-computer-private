@@ -1,11 +1,13 @@
 //! USB: Chat Computer's own drivers for the PC's USB controllers and what is plugged into them. So far:
-//! keyboards, and the hubs they may be behind (a monitor's, a dock's, or one inside the PC).
+//! keyboards, network adapters and phones sharing their connection (net.rs), and the hubs they may be behind (a
+//! monitor's, a dock's, or one inside the PC).
 //!
 //! The controllers' events are handled in their interrupt, or, on a controller that can't send
 //! interrupt messages, whenever the kernel wakes. Work that has to wait for a device (finding out what
 //! was just plugged in, setting a keyboard's lights) runs in the kernel's main loop, in `work`.
 
 mod device;
+mod net;
 mod xhci;
 
 use crate::sync::SpinLock;
@@ -291,7 +293,63 @@ pub fn status() -> Status {
     Status { controllers: controllers.len(), running: controllers.iter().filter(|c| c.host.running).count(), keyboards }
 }
 
-/// Changes whenever the list of keyboards may have changed.
+/// Changes whenever the list of keyboards (or network adapters) may have changed.
 pub fn changes() -> u64 {
     CHANGES.load(Ordering::Relaxed)
+}
+
+/// A USB network adapter, as the network side knows it.
+pub struct NetAdapter {
+    pub hc: usize,
+    pub slot: u8,
+    pub id: u64,
+    pub mac: [u8; 6],
+    pub name: String,
+    pub kind: &'static str,
+    pub speed: &'static str,
+}
+
+/// The network adapters plugged in.
+pub fn net_adapters() -> Vec<NetAdapter> {
+    let controllers = CONTROLLERS.lock();
+    let mut found = Vec::new();
+    for (hc, c) in controllers.iter().enumerate().filter(|(_, c)| c.host.running) {
+        for d in c.devices.iter().flatten() {
+            if let Role::Net(n) = &d.role {
+                let kind = match n.kind {
+                    net::Kind::Ecm => "USB CDC ECM",
+                    net::Kind::Ncm => "USB CDC NCM",
+                    net::Kind::Rndis => "RNDIS",
+                };
+                found.push(NetAdapter { hc, slot: d.slot, id: n.id, mac: n.mac, name: d.name.clone(), kind, speed: d.speed_name() });
+            }
+        }
+    }
+    found
+}
+
+/// Runs `f` on adapter `id` in `slot` of controller `hc`, if it's still plugged in.
+fn with_net<R>(hc: usize, slot: u8, id: u64, f: impl FnOnce(&mut net::Net, &mut Vec<Option<xhci::Ring>>, xhci::Doorbell) -> R) -> Option<R> {
+    let mut controllers = CONTROLLERS.lock();
+    let c = controllers.get_mut(hc)?;
+    if !c.host.running {
+        return None;
+    }
+    let db = c.host.doorbell();
+    let d = c.devices.get_mut(slot as usize)?.as_mut()?;
+    let (rings, role) = d.rings_and_role();
+    match role {
+        Role::Net(n) if n.id == id => Some(f(n, rings, db)),
+        _ => None,
+    }
+}
+
+/// The frames that have arrived at an adapter, and whether its link is up. None: it was unplugged.
+pub fn net_take(hc: usize, slot: u8, id: u64) -> Option<(Vec<Vec<u8>>, bool)> {
+    with_net(hc, slot, id, |n, _, _| (n.frames.drain(..).collect(), n.link))
+}
+
+/// Sends a frame. None: the adapter was unplugged; false: no room just now.
+pub fn net_send(hc: usize, slot: u8, id: u64, frame: &[u8]) -> Option<bool> {
+    with_net(hc, slot, id, |n, rings, db| n.send(rings, db, slot, frame))
 }

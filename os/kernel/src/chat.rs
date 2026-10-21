@@ -21,7 +21,6 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use bootinfo::{SECURE_BOOT_OFF, SECURE_BOOT_ON};
-use claude::api::Role;
 use core::fmt;
 use core::ops::Range;
 use font::raster::ONE;
@@ -135,8 +134,9 @@ pub struct Chat {
     started: bool,
     /// The kernel stopped: the screen says so, and there's no message box.
     stopped: bool,
-    /// What Claude is sent: the exchanges so far.
-    history: Vec<(Role, String)>,
+    /// The monitor's size, and the text size asked for (percent of the size chosen for this screen).
+    size_mm: Option<(u32, u32)>,
+    percent: u32,
     /// The block Claude's answer is going into.
     asking: Option<usize>,
     typed: String,
@@ -286,7 +286,8 @@ impl Chat {
             blocks,
             started: false,
             stopped: false,
-            history: Vec::new(),
+            size_mm,
+            percent: 100,
             asking: None,
             typed: String::new(),
             cursor: 0,
@@ -743,16 +744,12 @@ impl Chat {
         }
         self.blocks.push(Block::new(Kind::You, Live::No, text.clone()));
         let you = self.blocks.len() - 1;
-        self.history.push((Role::User, text));
-        match assistant::ask(&self.history) {
+        match assistant::ask(&text) {
             Ok(()) => {
                 self.blocks.push(Block::new(Kind::Claude, Live::No, String::new()));
                 self.asking = Some(self.blocks.len() - 1);
             }
-            Err(why) => {
-                self.history.pop();
-                self.blocks.push(Block::new(Kind::Note, Live::No, why));
-            }
+            Err(why) => self.blocks.push(Block::new(Kind::Note, Live::No, why)),
         }
         self.lay_out_box();
         self.lay_out();
@@ -764,25 +761,40 @@ impl Chat {
     /// The answer is over: complete (None), or not (why).
     fn answer_over(&mut self, failed: Option<String>) {
         let Some(i) = self.asking.take() else { return };
-        let words = self.blocks[i].text.trim().is_empty();
+        let empty = self.blocks[i].text.trim().is_empty();
         match failed {
-            None if !words => {
-                let text = self.blocks[i].text.clone();
-                self.history.push((Role::Assistant, text));
+            Some(why) if empty => self.blocks[i] = Block::new(Kind::Note, Live::No, why),
+            Some(why) => self.blocks.push(Block::new(Kind::Note, Live::No, why)),
+            None if empty => {
+                self.blocks.remove(i);
             }
-            why => {
-                // Claude's API isn't sent a question left unanswered (or answered by nothing).
-                self.history.pop();
-                let why = why.unwrap_or_else(|| String::from("Claude didn't say anything."));
-                if words {
-                    self.blocks[i] = Block::new(Kind::Note, Live::No, why);
-                } else {
-                    self.blocks.push(Block::new(Kind::Note, Live::No, why));
-                }
+            None => {
+                // The conversation stays as it is: only the message box changes (its hint and send button).
+                self.lay_out_box();
+                let area = self.box_area();
+                self.dirty = self.dirty.union(&area);
+                return;
             }
         }
         self.relayout = true;
         self.lay_out_box(); // (the send button and the hint change)
+    }
+
+    /// The text `percent` of the size chosen for this screen: everything laid out again.
+    fn set_text_size(&mut self, percent: u32) {
+        self.percent = percent.clamp(50, 300);
+        let (w, h) = (self.screen.width as u32, self.screen.height as u32);
+        let base = layout::compute(w, h, self.size_mm);
+        self.layout = layout::scaled(base, w, self.percent as f64 / 100.0);
+        self.m = Self::metrics(&self.layout, self.screen.width);
+        for b in &mut self.blocks {
+            b.lines.clear();
+            b.changed = true;
+        }
+        self.composer = BoxLayout::default();
+        self.lay_out_box();
+        self.relayout = true;
+        crate::log!("Chat Computer kernel: text size {}%: {:.1} px", self.percent, self.layout.font_px);
     }
 
     fn claude(&mut self, e: Event) {
@@ -804,6 +816,11 @@ impl Chat {
             }
             Event::Done => self.answer_over(None),
             Event::Failed(why) => self.answer_over(Some(why)),
+            Event::TextSize(percent) => self.set_text_size(percent),
+            Event::Restarting(seconds) => {
+                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Restarting in {seconds} seconds\u{2026}")));
+                self.relayout = true;
+            }
         }
     }
 

@@ -15,9 +15,11 @@ everywhere, and PCs move to the own kernel as its drivers grow (see "Reaching ev
 
 You type to Claude on it: Opus 5.5 at its highest effort, with your own Claude API key, through Chat Computer's own
 network stack, its own encryption and its own TLS 1.3, and the answer streams onto a screen that looks like Chat
-Computer's. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF, the
-open-source UEFI firmware), where it reaches the internet through the virtual network card; on a real PC it
-needs a driver for that PC's network chip first (step 6, below).
+Computer's. Claude can also act on the computer through tools: see how it's doing, make the text bigger or smaller,
+and restart it. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF, the
+open-source UEFI firmware). It reaches the internet through a virtual machine's network card, Intel's gigabit
+chips, a USB network adapter or an Android phone sharing its connection over USB; other network chips need their
+drivers first (step 6, below).
 
 * `boot/` is the start-up stage, a UEFI program (`\EFI\BOOT\BOOTX64.EFI`) that carries the kernel inside
   it.
@@ -47,7 +49,9 @@ needs a driver for that PC's network chip first (step 6, below).
   * a timer ticking 100 times a second. Its speed is measured against the ACPI power-management timer,
     else the HPET, else the old PIT. Every wait gives up after a few seconds, and a measurement that
     makes no sense is thrown away. The processor's time-stamp counter is measured at the same time; it
-    gives drivers short waits that work with interrupts off;
+    gives drivers short waits that work with interrupts off, and counts the time since start-up when it runs at
+    one speed in every power state (an "invariant" one, as processors of the last 15 years or so have), since
+    ticks are lost while interrupts are off;
   * IOMMUs (Intel VT-d, AMD-Vi) the firmware left on are switched off. Chat Computer doesn't use them yet, and
     a firmware that protects itself from devices this way would otherwise keep them from Chat Computer's
     memory, and drop their interrupts;
@@ -65,10 +69,27 @@ needs a driver for that PC's network chip first (step 6, below).
     * hubs, up to five in a row. This includes the USB 2 side of USB 3 hubs, where keyboards appear, and
       the "transaction translator" fields that slow devices behind fast hubs need;
     * keyboards, in the boot protocol every keyboard supports, with their Caps Lock light;
+    * network adapters: the configuration that offers a standard way to carry Ethernet, its bulk endpoints, and the
+      way's own framing (`usb/net.rs`);
     * devices plugged in and out at any time. Unplugging a hub lets go of everything behind it.
-  * the network cards there are drivers for (so far virtio's, the virtual machines' card: its rings of
-    buffers, interrupts by MSI-X), and Chat Computer's own network stack on the first (`net/`);
-  * Claude, with the API key from the settings and Mozilla's certificate authorities (`assistant.rs`).
+  * the network cards there are drivers for (`netcard/`), and Chat Computer's own network stack on the first
+    (`net/`): virtio's (virtual machines'), and Intel's gigabit cards with the e1000 interface (the 82540EM that
+    QEMU, VirtualBox and VMware give virtual machines, QEMU's 82574L, and the I217, I218 and I219 built into Intel's
+    chipsets, not yet tried on real hardware). Without one, a USB network adapter plugged in at any time takes over
+    (USB CDC ECM and NCM, the USB standard's, and RNDIS, which most Android phones use to share their connection
+    over USB);
+  * Claude, with the API key from the settings and Mozilla's certificate authorities (`assistant.rs`), and the
+    tools Claude may use on this computer:
+    * `computer_status`: what the computer is and how it's doing (processor, screen, firmware, Secure Boot,
+      memory, how long it has been running, the date and time, the network, the keyboards) and what the own system
+      can't do yet (`system.rs`);
+    * `set_text_size`: the text 50% to 300% of the size chosen for this monitor;
+    * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
+      reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
+      keyboard controller's reset line (`power.rs`).
+
+    Claude may use tools up to 8 times for one message. Its answers go back into the conversation whole, thinking
+    blocks exactly as they came, as the API asks.
 
   Then the screen is the conversation (`chat.rs`), drawn in memory and copied to the screen where it changed.
   Before the first message it says what the PC is, how long Chat Computer has been running (by the kernel's own
@@ -86,8 +107,9 @@ needs a driver for that PC's network chip first (step 6, below).
 * `tls/` is Chat Computer's own TLS 1.3 client, with its own certificate checks (chains, names, dates, what
   each certificate may be used for, name constraints) against Mozilla's certificate authorities. Tested against
   OpenSSL's server with every cipher and kind of key, and against the chain the real api.anthropic.com sends.
-* `claude/` talks to Claude's Messages API: the request (Opus 5.5, effort "max"), HTTP/1.1, JSON and the
-  streamed answer's events.
+* `claude/` talks to Claude's Messages API: the request (Opus 5.5, effort "max", the tools), HTTP/1.1, JSON and
+  the streamed answer's events, put back together into whole content blocks (thinking, words, tool calls) to
+  send back with the tools' results.
 * `font/` is Chat Computer's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It's tested against fontTools' reading of the same font.
 * `bootinfo/` defines what the start-up stage hands the kernel, once for both.
@@ -128,9 +150,11 @@ Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
 Bluetooth comes at step 10.
 
-Claude needs the internet, and so far the own kernel has a driver only for virtual machines' network card. On
-a real PC it shows what it found, and says Claude can't be reached yet, until its network chip's driver comes
-(step 6). The list of parts in `pc.txt` says which chip that is.
+Claude needs the internet. Of real PCs' network chips, the own kernel so far has drivers for Intel's gigabit ones
+(the I217, I218 and I219 in many Intel PCs and laptops: written to Intel's manuals, but not yet tried on one). On
+any PC, a USB network adapter (one that follows the USB standard) or an Android phone sharing its connection over
+USB ("USB tethering") works instead. Otherwise it shows what it found and says Claude can't be reached yet, until
+that network chip's driver comes (step 6); the list of parts in `pc.txt` says which chip that is.
 
 To go back to Windows, hold the power button until the PC turns off. Chat Computer doesn't write to any disk yet.
 Running the script again with `-Remove` (or choosing Remove) takes the file and the entry off again, and
@@ -157,9 +181,11 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
 ./check.py --keyboard            # typing on a PS/2 keyboard, then USB keyboards on a port and behind a
                                  # hub (MSI-X, MSI, no interrupts), with Intel's and AMD's IOMMUs
                                  # present, plugged in and out
-./check.py --network            # the virtual network card, DHCP, DNS and a TCP conversation
+./check.py --network            # each kind of network card (virtio, Intel's e1000e and e1000, a USB adapter
+                                 # by CDC ECM, plugged in and out, and by RNDIS): DHCP, DNS and a TCP conversation
 ./check.py --claude              # typing to a stand-in for Claude's API (HTTPS, with a test certificate
-                                 # authority): the request, the streamed answer on the screen, a failure
+                                 # authority): the request, the streamed answer on the screen, Claude's tools
+                                 # (the computer's status, a bigger text size, a restart), a failure
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
 ./release.sh                     # updates release/chatcomputer.efi
@@ -240,9 +266,10 @@ PC.
    Checked in virtual PCs; on the real PC with step 2.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
 5. Storage: NVMe and SATA, and Chat Computer's own file system for settings, memory and logs.
-6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP, and the virtual machines' card (virtio). To do: the internet
-   over a USB cable (a phone's tethering, USB Ethernet adapters: standard, so one driver covers most), then the
-   common wired chips (Realtek's and Intel's), then IPv6.
+6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e); Intel's gigabit
+   chips (not yet tried on real hardware); the internet over a USB cable (USB Ethernet adapters and Android phones'
+   tethering: CDC ECM, NCM and RNDIS). To do: Realtek's chips (most AMD PCs'), Intel's 2.5-gigabit ones, then
+   IPv6.
 7. ✓ Encryption: SHA-2, HMAC and HKDF, X25519, AES-GCM, ChaCha20-Poly1305, ECDSA and RSA signatures,
    certificate checks against Mozilla's authorities, and TLS 1.3.
 8. ✓ Claude: HTTPS and the conversation itself, streamed, with an API key (billed per use). Anthropic says
@@ -253,7 +280,7 @@ PC.
    Claude's answers use (Markdown).
 10. Sound and AirPods: Bluetooth (HCI over USB, L2CAP, A2DP and HFP, SBC and mSBC).
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
-12. Power: shut down, restart and sleep; on laptops the battery and the lid. These need an AML
+12. Power: ✓ restart. To do: shut down and sleep; on laptops the battery and the lid. These need an AML
     interpreter.
 13. Updates: signed, with a way back.
 14. Later: Wi-Fi (Intel's and MediaTek's chips, which most laptops have), touchpads, graphics

@@ -38,10 +38,12 @@ chat-computer/
   "Chat Computer Setup.command"  Double-click entry point for Mac setup (runs mac/setup.sh)
   os/                       Chat Computer's own operating system, from scratch (Rust, no outside code); see os/README.md
     boot/                   UEFI start-up stage (BOOTX64.EFI) that carries the kernel
-    kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards), PS/2
-                            keyboards, network cards (virtio so far), the settings (the Claude API key) and the
-                            clock from the start-up stage, Claude (assistant.rs), and the conversation screen
-                            (chat.rs, drawn in memory: draw.rs)
+    kernel/                 The kernel: memory, interrupts, timer, PCI, USB (xHCI, hubs, keyboards, network
+                            adapters: CDC ECM and NCM, RNDIS), PS/2 keyboards, network cards (netcard/: virtio,
+                            Intel's e1000 family), the settings (the Claude API key) and the clock from the
+                            start-up stage, Claude (assistant.rs) with tools on the computer (its status:
+                            system.rs; the text size; a restart: power.rs), and the conversation screen (chat.rs,
+                            drawn in memory: draw.rs)
     net/                    Own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
     crypto/                 Own cryptography: SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305, X25519, ECDSA, RSA
     tls/                    Own TLS 1.3 client and certificate checks, against Mozilla's authorities (roots.txt)

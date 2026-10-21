@@ -4,6 +4,11 @@
 //! (its certificate, against Mozilla's authorities), send the conversation, and pass the answer's words on as they
 //! come. Nothing of the conversation goes in the log; a test build logs the answer, which a test checks.
 //!
+//! Claude can act on this computer through tools (`TOOLS`): see how it's doing, change the text size, restart it.
+//! When an answer calls them, they run here, and their results go back in a new request with the answer as it
+//! came (its thinking included, unchanged, as the API requires), until Claude has finished. The conversation (every
+//! turn, as the API had it) is kept here.
+//!
 //! A test build (CHATCOMPUTER_TEST=claude, by check.py --claude) talks to a stand-in on the computer running the
 //! virtual PC instead (10.0.2.2, as "localhost"), and trusts only that test's own certificate authority.
 
@@ -14,7 +19,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use claude::api::{self, Role, Stream};
+use claude::api::{self, Content, Role, Stream, ToolUse, Turn};
+use claude::json::Json;
 use net::tcp::Socket;
 use net::{Ipv4, Stack, TcpState};
 use tls::Cert;
@@ -27,6 +33,10 @@ pub enum Event {
     Done,
     /// It failed: why, for the person.
     Failed(String),
+    /// Claude set the text size (percent of the size chosen for this screen).
+    TextSize(u32),
+    /// Claude is restarting the PC, in this many seconds.
+    Restarting(u64),
 }
 
 /// Whether Claude can be asked now, and if not, why not.
@@ -46,7 +56,8 @@ pub const GIVE_KEY: &str =
     "On Windows, double-click \u{201C}Chat Computer Own System\u{201D} and give it your Claude API key when it asks.";
 pub const NO_KEY: &str = "To talk to Claude here, Chat Computer needs your Claude API key.";
 pub const NO_CARD: &str = "Claude is on the internet, and this PC's network chip isn't one Chat Computer has a driver \
-                           for yet.";
+                           for yet. A USB network adapter works instead, or an Android phone sharing its connection \
+                           over USB (USB tethering).";
 const NO_CLOCK: &str = "This PC's clock couldn't be read, so Chat Computer can't check it's really talking to Claude.";
 
 /// Waiting for a network address; finding Claude's, and connecting; the secure connection being set up.
@@ -62,10 +73,36 @@ const ADDRESS_MS: u64 = 300_000;
 const CLOSING_MS: u64 = 30_000;
 
 const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
-conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, but you \
-can't yet use tools, the web or the computer's files. This screen shows plain text only, so write without Markdown: \
-no asterisks, pound signs, backticks or tables. Separate paragraphs with a blank line, and start list items with a \
-bullet (\u{2022}) or a number.";
+conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, and look \
+after this computer with the tools you have (its status, the text size, restarting it), but you can't yet use the web \
+or the computer's files. This screen shows plain text only, so write without Markdown: no asterisks, pound signs, \
+backticks or tables. Separate paragraphs with a blank line, and start list items with a bullet (\u{2022}) or a number.";
+
+/// What Claude can do on this computer.
+const TOOLS: [api::Tool; 3] = [
+    api::Tool {
+        name: "computer_status",
+        description: "What this computer is and how it's doing: its processor, memory, screen, how long Chat Computer's \
+                      own system has been running, the date and time by its clock, its network connection and its \
+                      keyboards.",
+        input_schema: r#"{"type":"object","properties":{}}"#,
+    },
+    api::Tool {
+        name: "set_text_size",
+        description: "Makes the text on the screen bigger or smaller. 100 is the size Chat Computer chose for this \
+                      screen and how far away it's likely seen from; 150 is half as big again.",
+        input_schema: r#"{"type":"object","properties":{"percent":{"type":"integer","minimum":50,"maximum":300,"description":"The new size, in percent of the size chosen for this screen."}},"required":["percent"]}"#,
+    },
+    api::Tool {
+        name: "restart_computer",
+        description: "Restarts this PC a few seconds after you finish answering. Chat Computer's own system was started \
+                      just once, so the PC then starts what it normally does (Windows, usually), and this conversation \
+                      ends. Use it only when the person asks to restart, or to go back to Windows.",
+        input_schema: r#"{"type":"object","properties":{}}"#,
+    },
+];
+/// Rounds of tool calls in one answer, at most.
+const TOOL_ROUNDS: u32 = 8;
 
 fn test_build() -> bool {
     option_env!("CHATCOMPUTER_TEST") == Some("claude")
@@ -105,8 +142,15 @@ struct Talk {
     /// Whether the request has been handed to TLS.
     sent: bool,
     chars: usize,
-    /// The answer, kept only by a test build, for its log.
-    text: String,
+    /// The whole answer, once it has come.
+    answer: Option<Answer>,
+}
+
+/// An answer that came whole: its content blocks, why it stopped, and the tools it called.
+struct Answer {
+    content: Vec<Json>,
+    stop: Option<String>,
+    calls: Vec<ToolUse>,
 }
 
 enum Phase {
@@ -121,6 +165,16 @@ struct Job {
     /// The request, key and all, until it's handed to TLS (then wiped).
     request: Vec<u8>,
     phase: Phase,
+    /// How long the conversation was before this question (a failed question is taken back out).
+    base: usize,
+    rounds: u32,
+    /// Whether any words have been shown, and whether the next ones start a new paragraph (after tools ran).
+    said: bool,
+    separate: bool,
+    /// Restart the PC once the answer is over.
+    restart: bool,
+    /// The answer's words, kept only by a test build, for its log.
+    text: String,
 }
 
 struct Assistant {
@@ -132,6 +186,8 @@ struct Assistant {
     closing: Vec<(Socket, u64)>,
     /// api.anthropic.com's address, and when it was found.
     address: Option<(Ipv4, u64)>,
+    /// The conversation, as the API has it.
+    history: Vec<Turn>,
 }
 
 static ASSISTANT: SpinLock<Option<Assistant>> = SpinLock::new(None);
@@ -147,7 +203,7 @@ pub fn init(key: Option<String>, key_problem: Option<&'static str>) {
         roots.len(),
         if test_build() { " (the test's own)" } else { " (Mozilla's)" }
     );
-    *ASSISTANT.lock() = Some(Assistant { key, key_problem, roots, job: None, closing: Vec::new(), address: None });
+    *ASSISTANT.lock() = Some(Assistant { key, key_problem, roots, job: None, closing: Vec::new(), address: None, history: Vec::new() });
 }
 
 pub fn ready() -> Ready {
@@ -172,31 +228,38 @@ pub fn busy() -> bool {
     ASSISTANT.lock().as_ref().is_some_and(|a| a.job.is_some())
 }
 
-/// Asks Claude to answer `conversation` (oldest first, the person's newest message last). The answer comes from
-/// `work`. Err: why it can't be asked, for the person.
-pub fn ask(conversation: &[(Role, String)]) -> Result<(), String> {
+/// Asks Claude to answer what the person typed (after the conversation so far). The answer comes from `work`.
+/// Err: why it can't be asked, for the person.
+pub fn ask(text: &str) -> Result<(), String> {
     let mut guard = ASSISTANT.lock();
     let Some(a) = guard.as_mut() else { return Err(format!("{NO_KEY} {GIVE_KEY}")) };
     if a.job.is_some() {
         return Err(String::from("Claude is still answering."));
     }
-    let key = match (&a.key, a.key_problem) {
-        (Some(k), _) => k,
+    match (&a.key, a.key_problem) {
+        (Some(_), _) => {}
         (None, Some(p)) => return Err(format!("{}. {GIVE_KEY}", sentence(p))),
         (None, None) => return Err(format!("{NO_KEY} {GIVE_KEY}")),
-    };
+    }
     if clock::now().is_none() {
         return Err(String::from(NO_CLOCK));
     }
     if !network::status().card {
         return Err(String::from(NO_CARD));
     }
-    let mut system = String::from(SYSTEM);
-    if let Some(now) = clock::now_text() {
-        system.push_str(&format!(" The computer's clock says it is {now}."));
-    }
-    let request = api::request(host(), key, &system, conversation);
-    a.job = Some(Job { request, phase: Phase::Network(time::uptime_ms()) });
+    let base = a.history.len();
+    a.history.push(Turn::text(Role::User, text));
+    let request = a.request();
+    a.job = Some(Job {
+        request,
+        phase: Phase::Network(time::uptime_ms()),
+        base,
+        rounds: 0,
+        said: false,
+        separate: false,
+        restart: false,
+        text: String::new(),
+    });
     Ok(())
 }
 
@@ -206,6 +269,7 @@ pub fn stop() {
     let Some(a) = guard.as_mut() else { return };
     let Some(mut job) = a.job.take() else { return };
     wipe(&mut job.request);
+    a.history.truncate(job.base);
     let socket = match job.phase {
         Phase::Connecting(s, _) => Some(s),
         Phase::Talking(t) => Some(t.socket),
@@ -226,20 +290,61 @@ pub fn work() -> Vec<Event> {
     if a.job.is_none() && a.closing.is_empty() {
         return events;
     }
+    let mut over = None;
     let ran = network::with(|stack| {
         a.tidy(now, stack);
         if let Some(mut job) = a.job.take() {
-            if !a.step(now, stack, &mut job, &mut events) {
-                a.job = Some(job);
+            if a.step(now, stack, &mut job, &mut events) {
+                over = Some(job);
             } else {
-                wipe(&mut job.request);
+                a.job = Some(job);
             }
         }
     });
-    if ran.is_none() && a.job.take().is_some() {
+    if ran.is_none()
+        && let Some(job) = a.job.take()
+    {
+        a.history.truncate(job.base);
         events.push(Event::Failed(String::from(NO_CARD)));
     }
+    if let Some(mut job) = over {
+        wipe(&mut job.request);
+        let answer = match &mut job.phase {
+            Phase::Talking(t) => t.answer.take(),
+            _ => None,
+        };
+        match answer {
+            Some(answer) => a.answered(now, job, answer, &mut events),
+            None => a.history.truncate(job.base), // it failed (and said why)
+        }
+    }
     events
+}
+
+/// Runs a tool Claude called: its result for Claude, and whether that's an error.
+fn run_tool(call: &ToolUse, job: &mut Job, events: &mut Vec<Event>) -> (String, bool) {
+    crate::log!("Chat Computer kernel: Claude: uses {}", call.name);
+    match call.name.as_str() {
+        "computer_status" => (crate::system::status(), false),
+        "set_text_size" => {
+            let percent = call.input.get("percent").and_then(|p| match p {
+                Json::Num(n) => n.split('.').next().and_then(|n| n.parse::<i64>().ok()),
+                _ => None,
+            });
+            match percent {
+                Some(p) if (50..=300).contains(&p) => {
+                    events.push(Event::TextSize(p as u32));
+                    (format!("The text is now {p}% of the size chosen for this screen."), false)
+                }
+                _ => (String::from("percent must be a whole number from 50 to 300"), true),
+            }
+        }
+        "restart_computer" => {
+            job.restart = true;
+            (String::from("The PC restarts a few seconds after your answer: tell the person."), false)
+        }
+        other => (format!("There's no tool called {other}."), true),
+    }
 }
 
 /// `s` with a capital first letter.
@@ -308,6 +413,55 @@ fn suite_name(s: Option<tls::Suite>) -> &'static str {
 }
 
 impl Assistant {
+    /// The request for the conversation so far.
+    fn request(&self) -> Vec<u8> {
+        let mut system = String::from(SYSTEM);
+        if let Some(now) = clock::now_text() {
+            system.push_str(&format!(" The computer's clock says it is {now}."));
+        }
+        api::request(host(), self.key.as_deref().unwrap_or(""), &system, &self.history, &TOOLS)
+    }
+
+    /// An answer came whole: kept in the conversation; if it called tools, they run and their results go back in a new
+    /// request; else it's over.
+    fn answered(&mut self, now: u64, mut job: Job, answer: Answer, events: &mut Vec<Event>) {
+        let has_words = answer.content.iter().any(|b| b.get("type").and_then(|t| t.str()) == Some("text"));
+        let calls = answer.stop.as_deref() == Some("tool_use") && !answer.calls.is_empty();
+        if !has_words && !calls && !job.said {
+            self.history.truncate(job.base);
+            fail(events, String::from("Claude didn't say anything."));
+            return;
+        }
+        self.history.push(Turn { role: Role::Assistant, content: Content::Blocks(answer.content) });
+        if !calls {
+            if test_build() {
+                crate::log!("Chat Computer kernel: test: Claude said {:?}", job.text);
+            }
+            events.push(Event::Done);
+            if job.restart {
+                events.push(Event::Restarting(5));
+                crate::power::restart_in(5000);
+            }
+            return;
+        }
+        if job.rounds >= TOOL_ROUNDS {
+            self.history.truncate(job.base);
+            fail(events, String::from("Claude kept on using tools, so Chat Computer stopped it."));
+            return;
+        }
+        let mut results = Vec::new();
+        for call in &answer.calls {
+            let (text, error) = run_tool(call, &mut job, events);
+            results.push(api::tool_result(&call.id, &text, error));
+        }
+        self.history.push(Turn { role: Role::User, content: Content::Blocks(results) });
+        job.rounds += 1;
+        job.separate = job.said;
+        job.request = self.request();
+        job.phase = Phase::Network(now);
+        self.job = Some(job);
+    }
+
     /// Lets go of closed connections; breaks off ones that won't close.
     fn tidy(&mut self, now: u64, stack: &mut Stack) {
         self.closing.retain(|&(s, since)| match stack.state(s) {
@@ -391,7 +545,7 @@ impl Assistant {
                                 out,
                                 sent: false,
                                 chars: 0,
-                                text: String::new(),
+                                answer: None,
                             }));
                         }
                         TcpState::Closed => {
@@ -406,13 +560,40 @@ impl Assistant {
                         _ => return false,
                     }
                 }
-                Phase::Talking(t) => return self.talk(now, stack, t, &mut job.request, events),
+                Phase::Talking(t) => {
+                    let mut words = Vec::new();
+                    let over = self.talk(now, stack, t, &mut job.request, &mut words, events);
+                    for w in words {
+                        if job.separate && !w.is_empty() {
+                            job.separate = false;
+                            if test_build() {
+                                job.text.push_str("\n\n");
+                            }
+                            events.push(Event::Text(String::from("\n\n")));
+                        }
+                        job.said |= !w.trim().is_empty();
+                        if test_build() {
+                            job.text.push_str(&w);
+                        }
+                        events.push(Event::Text(w));
+                    }
+                    return over;
+                }
             }
         }
     }
 
-    /// The connection is open: the secure connection's set-up, the request, and the answer.
-    fn talk(&mut self, now: u64, stack: &mut Stack, t: &mut Talk, request: &mut Vec<u8>, events: &mut Vec<Event>) -> bool {
+    /// The connection is open: the secure connection's set-up, the request, and the answer (its words go in
+    /// `words`; when it's whole, in `t.answer`).
+    fn talk(
+        &mut self,
+        now: u64,
+        stack: &mut Stack,
+        t: &mut Talk,
+        request: &mut Vec<u8>,
+        words: &mut Vec<String>,
+        events: &mut Vec<Event>,
+    ) -> bool {
         let mut buf = vec![0u8; 16 * 1024];
         loop {
             let n = stack.recv(t.socket, &mut buf);
@@ -441,14 +622,11 @@ impl Assistant {
                 break;
             }
             for e in t.stream.feed(&buf[..n]) {
-                if let api::Event::Text(s) = &e {
-                    t.chars += s.chars().count();
-                    if test_build() {
-                        t.text.push_str(s);
-                    }
-                }
                 match e {
-                    api::Event::Text(s) => events.push(Event::Text(s)),
+                    api::Event::Text(s) => {
+                        t.chars += s.chars().count();
+                        words.push(s);
+                    }
                     e => {
                         over = Some(e);
                         break 'reading;
@@ -459,22 +637,27 @@ impl Assistant {
         if over.is_none() && (stack.finished(t.socket) || t.tls.finished()) {
             for e in t.stream.closed() {
                 match e {
-                    api::Event::Text(s) => events.push(Event::Text(s)),
+                    api::Event::Text(s) => words.push(s),
                     e => over = Some(e),
                 }
             }
         }
         match over {
             Some(api::Event::Done) => {
-                crate::log!("Chat Computer kernel: Claude: answered ({} characters)", t.chars);
-                if test_build() {
-                    crate::log!("Chat Computer kernel: test: Claude said {:?}", t.text);
-                }
+                crate::log!(
+                    "Chat Computer kernel: Claude: answered ({} characters, {})",
+                    t.chars,
+                    t.stream.stop_reason().unwrap_or("no reason given")
+                );
+                t.answer = Some(Answer {
+                    content: t.stream.content(),
+                    stop: t.stream.stop_reason().map(String::from),
+                    calls: t.stream.tool_uses(),
+                });
                 t.tls.close();
                 t.out.extend(t.tls.outgoing());
                 stack.send(t.socket, &t.out);
                 self.close(now, stack, t.socket);
-                events.push(Event::Done);
                 return true;
             }
             Some(api::Event::Failed(m)) => {

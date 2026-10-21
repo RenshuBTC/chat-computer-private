@@ -101,7 +101,10 @@ pub const SHORT_PACKET: u8 = 13;
 pub const WRONG_STATE: u8 = 19;
 
 /// Endpoint types in an endpoint context.
+pub const EP_BULK_OUT: u32 = 2;
+pub const EP_INTERRUPT_OUT: u32 = 3;
 pub const EP_CONTROL: u32 = 4;
+pub const EP_BULK_IN: u32 = 6;
 pub const EP_INTERRUPT_IN: u32 = 7;
 
 const RING_TRBS: usize = PAGE_SIZE as usize / 16;
@@ -428,7 +431,7 @@ impl Host {
             }
             let head = read32(self.cap + at);
             match head & 0xFF {
-                1 => self.from_firmware(self.cap + at),
+                1 => self.claim_from_firmware(self.cap + at),
                 2 => {
                     let major = (head >> 24) as u8;
                     let ports = read32(self.cap + at + 8);
@@ -449,7 +452,7 @@ impl Host {
 
     /// The firmware hand-off: set "the OS owns it", wait for the firmware to let go (it may take a
     /// moment to finish what it was doing), and switch off the firmware's interrupts from it.
-    fn from_firmware(&self, legacy: u64) {
+    fn claim_from_firmware(&self, legacy: u64) {
         const FIRMWARE_OWNS: u32 = 1 << 16;
         const OS_OWNS: u32 = 1 << 24;
         let v = read32(legacy);

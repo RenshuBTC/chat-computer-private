@@ -1,12 +1,13 @@
 //! What is plugged into a USB controller. When something is plugged in, Chat Computer gives it a slot and
 //! an address, asks it what it is (its descriptors), and sets it up if it is something Chat Computer uses:
-//! a keyboard, or a hub with more devices behind it. Unplugged devices (and everything behind an
-//! unplugged hub) give their slots back.
+//! a keyboard, a hub with more devices behind it, or a network adapter (net.rs). Unplugged devices (and
+//! everything behind an unplugged hub) give their slots back.
 //!
 //! Requests to a device go on its control endpoint (endpoint 0) as a setup packet, an optional data
 //! stage and a status stage. Keyboards and hubs also send small reports on an interrupt endpoint,
 //! which the controller collects from them a few hundred times a second.
 
+use super::net::{self, Net};
 use super::xhci::{self, Doorbell, Page, Ring, Trb};
 use super::{changed, sleep, wait, with, Speed};
 use crate::keyboard;
@@ -25,6 +26,7 @@ pub enum Role {
     Other,
     Keyboard(Keyboard),
     Hub(Hub),
+    Net(alloc::boxed::Box<Net>),
 }
 
 pub struct Keyboard {
@@ -66,6 +68,7 @@ pub struct Device {
     rings: Vec<Option<Ring>>,
     /// Events on endpoint 0 since its last request.
     events: Vec<Trb>,
+    pub(super) low: bool,
     /// An interrupt endpoint that stopped after an error (to restart in the main loop).
     pub stopped: Option<u8>,
     pub name: String,
@@ -95,24 +98,25 @@ impl Place {
 
 /// A request on the control endpoint.
 #[derive(Clone, Copy)]
-struct Request {
-    kind: u8,
-    request: u8,
-    value: u16,
-    index: u16,
-    length: u16,
+pub(super) struct Request {
+    pub kind: u8,
+    pub request: u8,
+    pub value: u16,
+    pub index: u16,
+    pub length: u16,
 }
 
 impl Request {
     fn get_descriptor(kind: u8, index: u8, language: u16, length: u16) -> Request {
         Request { kind: 0x80, request: 6, value: (kind as u16) << 8 | index as u16, index: language, length }
     }
-    fn to_class(kind: u8, request: u8, value: u16, index: u16) -> Request {
+    pub(super) fn to_class(kind: u8, request: u8, value: u16, index: u16) -> Request {
         Request { kind, request, value, index, length: 0 }
     }
 }
 
 const SET_CONFIGURATION: u8 = 9;
+pub(super) const SET_INTERFACE: u8 = 11;
 const HID_SET_REPORT: u8 = 0x09;
 const HID_SET_IDLE: u8 = 0x0A;
 const HID_SET_PROTOCOL: u8 = 0x0B;
@@ -125,7 +129,7 @@ const C_PORT_CONNECTION: u16 = 16;
 const C_PORT_RESET: u16 = 20;
 
 #[derive(Debug)]
-enum Error {
+pub(super) enum Error {
     /// The device answered with this completion code.
     Code(u8),
     NoAnswer,
@@ -134,7 +138,7 @@ enum Error {
 }
 
 impl Error {
-    fn say(&self) -> String {
+    pub(super) fn say(&self) -> String {
         match self {
             Error::Code(c) => format!("it answered \"{}\"", xhci::code_name(*c)),
             Error::NoAnswer => "it didn't answer".to_string(),
@@ -144,11 +148,11 @@ impl Error {
     }
 }
 
-fn dword(page: &Page, at: usize) -> u32 {
+pub(super) fn dword(page: &Page, at: usize) -> u32 {
     unsafe { read_volatile(page.at::<u32>(at)) }
 }
 
-fn set_dword(page: &Page, at: usize, v: u32) {
+pub(super) fn set_dword(page: &Page, at: usize, v: u32) {
     unsafe { write_volatile(page.at::<u32>(at), v) }
 }
 
@@ -169,6 +173,7 @@ impl Device {
             ep0: Ring::new(low)?,
             rings: (0..32).map(|_| None).collect(),
             events: Vec::new(),
+            low,
             stopped: None,
             name: String::new(),
             role: Role::Other,
@@ -196,15 +201,34 @@ impl Device {
         set_dword(&self.input, ep + 16, 8);
     }
 
+    /// Asks again for what its endpoints bring in (after it was set up, or after an endpoint was restarted).
     fn queue_interrupt(&mut self, db: Doorbell) {
-        let (dci, size) = match &self.role {
+        let (dci, size) = match &mut self.role {
             Role::Keyboard(k) => (k.dci, k.size),
             Role::Hub(h) => (h.dci, h.size),
-            Role::Other => return,
+            Role::Net(_) | Role::Other => return,
         };
         if let Some(Some(ring)) = self.rings.get_mut(dci as usize) {
             ring.push(Trb::new(xhci::TRB_NORMAL, self.data.phys, size as u32, xhci::ON_COMPLETION | xhci::SHORT_OK));
             db.ring(self.slot, dci);
+        }
+    }
+
+    /// For the network side: its rings and its role, at once.
+    pub(super) fn rings_and_role(&mut self) -> (&mut Vec<Option<Ring>>, &mut Role) {
+        (&mut self.rings, &mut self.role)
+    }
+
+    pub(super) fn speed_name(&self) -> &'static str {
+        self.speed.name()
+    }
+
+    /// After endpoint `dci` was restarted: what it brings in is asked for again.
+    fn endpoint_restarted(&mut self, db: Doorbell, dci: u8) {
+        if let Role::Net(n) = &mut self.role {
+            n.restarted(&mut self.rings, db, self.slot, dci);
+        } else {
+            self.queue_interrupt(db);
         }
     }
 
@@ -214,6 +238,12 @@ impl Device {
         if dci == 1 {
             if self.events.len() < 16 {
                 self.events.push(e);
+            }
+            return;
+        }
+        if let Role::Net(n) = &mut self.role {
+            if !n.transfer_event(&mut self.rings, db, self.slot, e) {
+                self.stopped = Some(dci);
             }
             return;
         }
@@ -248,7 +278,7 @@ impl Device {
 }
 
 /// Runs a command and waits for it. Returns the slot the completion names.
-fn command(hc: usize, issue: impl FnOnce(&mut xhci::Host) -> Option<u64>) -> Result<u8, Error> {
+pub(super) fn command(hc: usize, issue: impl FnOnce(&mut xhci::Host) -> Option<u64>) -> Result<u8, Error> {
     let at = with(hc, |c| issue(&mut c.host)).ok_or(Error::Gone)?;
     match wait(hc, 5000, |c| match c.host.command_done {
         Some((p, code, slot)) if p == at => Some((code, slot)),
@@ -261,7 +291,7 @@ fn command(hc: usize, issue: impl FnOnce(&mut xhci::Host) -> Option<u64>) -> Res
 }
 
 /// A request on endpoint 0, with `out` as its data if it sends any. Returns the data received.
-fn control(hc: usize, slot: u8, r: Request, out: &[u8]) -> Result<Vec<u8>, Error> {
+pub(super) fn control(hc: usize, slot: u8, r: Request, out: &[u8]) -> Result<Vec<u8>, Error> {
     let input = r.kind & 0x80 != 0;
     let len = (r.length as usize).min(CONTROL_MAX);
     let trbs = with(hc, |c| {
@@ -346,18 +376,18 @@ pub fn restart_endpoint(hc: usize, slot: u8, dci: u8) {
         with(hc, |c| {
             let db = c.host.doorbell();
             if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
-                d.queue_interrupt(db);
+                d.endpoint_restarted(db, dci);
             }
         });
     }
 }
 
-fn descriptor(hc: usize, slot: u8, kind: u8, index: u8, language: u16, length: u16) -> Result<Vec<u8>, Error> {
+pub(super) fn descriptor(hc: usize, slot: u8, kind: u8, index: u8, language: u16, length: u16) -> Result<Vec<u8>, Error> {
     control(hc, slot, Request::get_descriptor(kind, index, language, length), &[])
 }
 
 /// A string descriptor, as text.
-fn string(hc: usize, slot: u8, index: u8, language: u16) -> Option<String> {
+pub(super) fn string(hc: usize, slot: u8, index: u8, language: u16) -> Option<String> {
     if index == 0 {
         return None;
     }
@@ -372,35 +402,50 @@ fn string(hc: usize, slot: u8, index: u8, language: u16) -> Option<String> {
     (!s.is_empty()).then(|| s.to_string())
 }
 
-struct Interface {
-    number: u8,
-    class: u8,
-    subclass: u8,
-    protocol: u8,
-    endpoints: Vec<Endpoint>,
+/// One alternate setting of an interface, with its endpoints and its class's own descriptors (a network
+/// adapter's say what it is and where its address is).
+pub(super) struct Interface {
+    pub number: u8,
+    pub alt: u8,
+    pub class: u8,
+    pub subclass: u8,
+    pub protocol: u8,
+    pub endpoints: Vec<Endpoint>,
+    pub extra: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Copy)]
-struct Endpoint {
-    address: u8,
-    attributes: u8,
-    max_packet: u16,
-    interval: u8,
+pub(super) struct Endpoint {
+    pub address: u8,
+    pub attributes: u8,
+    pub max_packet: u16,
+    pub interval: u8,
+    /// A USB 3 endpoint's burst (from its companion descriptor): packets sent back to back, less one.
+    pub burst: u8,
 }
 
 impl Endpoint {
-    fn interrupt_in(&self) -> bool {
+    pub(super) fn interrupt_in(&self) -> bool {
         self.address & 0x80 != 0 && self.attributes & 3 == 3
+    }
+    pub(super) fn bulk_in(&self) -> bool {
+        self.address & 0x80 != 0 && self.attributes & 3 == 2
+    }
+    pub(super) fn bulk_out(&self) -> bool {
+        self.address & 0x80 == 0 && self.attributes & 3 == 2
+    }
+    /// Its device context index.
+    pub(super) fn dci(&self) -> u8 {
+        (self.address & 0xF) * 2 + (self.address >> 7)
     }
 }
 
-/// A configuration descriptor's value and interfaces (their first alternate setting).
+/// A configuration descriptor's value and interfaces: every alternate setting, in order.
 fn parse_configuration(d: &[u8]) -> Option<(u8, Vec<Interface>)> {
     if d.len() < 9 || d[1] != 2 {
         return None;
     }
     let mut interfaces: Vec<Interface> = Vec::new();
-    let mut first_setting = false;
     let mut i = 0;
     while i + 2 <= d.len() {
         let len = d[i] as usize;
@@ -409,16 +454,32 @@ fn parse_configuration(d: &[u8]) -> Option<(u8, Vec<Interface>)> {
         }
         let e = &d[i..i + len];
         match e[1] {
-            4 if len >= 9 => {
-                first_setting = e[3] == 0;
-                if first_setting {
-                    interfaces.push(Interface { number: e[2], class: e[5], subclass: e[6], protocol: e[7], endpoints: Vec::new() });
-                }
-            }
-            5 if len >= 7 && first_setting => {
+            4 if len >= 9 => interfaces.push(Interface {
+                number: e[2],
+                alt: e[3],
+                class: e[5],
+                subclass: e[6],
+                protocol: e[7],
+                endpoints: Vec::new(),
+                extra: Vec::new(),
+            }),
+            5 if len >= 7 => {
                 if let Some(interface) = interfaces.last_mut() {
                     let max_packet = u16::from_le_bytes([e[4], e[5]]);
-                    interface.endpoints.push(Endpoint { address: e[2], attributes: e[3], max_packet, interval: e[6] });
+                    interface.endpoints.push(Endpoint { address: e[2], attributes: e[3], max_packet, interval: e[6], burst: 0 });
+                }
+            }
+            0x30 if len >= 6 => {
+                // A USB 3 endpoint's companion: its burst.
+                if let Some(ep) = interfaces.last_mut().and_then(|f| f.endpoints.last_mut()) {
+                    ep.burst = e[2].min(15);
+                }
+            }
+            0x24 => {
+                if let Some(interface) = interfaces.last_mut()
+                    && interface.endpoints.is_empty()
+                {
+                    interface.extra.push(e.to_vec());
                 }
             }
             _ => {}
@@ -540,18 +601,39 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
     let (maker_index, product_index) = (d[14], d[15]);
     let language = descriptor(hc, slot, 3, 0, 0, 4).ok().filter(|l| l.len() >= 4).map_or(0x0409, |l| u16::from_le_bytes([l[2], l[3]]));
     let name = string(hc, slot, product_index, language).or_else(|| string(hc, slot, maker_index, language));
-    let head = descriptor(hc, slot, 2, 0, 0, 9)?;
-    if head.len() < 9 {
-        return Err(Error::Bad("its configuration descriptor was too short"));
+    // Its configurations: the first, unless another is a network adapter's (adapters often offer a maker's own
+    // way first and a standard one second; phones offer the standard ones only when sharing their connection).
+    let count = d[17].clamp(1, 8);
+    let mut chosen: Option<(u8, Vec<Interface>, Option<net::Kind>)> = None;
+    for index in 0..count {
+        let head = descriptor(hc, slot, 2, index, 0, 9)?;
+        if head.len() < 9 {
+            return Err(Error::Bad("its configuration descriptor was too short"));
+        }
+        let total = u16::from_le_bytes([head[2], head[3]]).max(9);
+        let config = descriptor(hc, slot, 2, index, 0, total)?;
+        let (value, interfaces) = parse_configuration(&config).ok_or(Error::Bad("its configuration descriptor didn't make sense"))?;
+        let kind = net::kind(&interfaces);
+        let better = match (&chosen, kind) {
+            (None, _) => true,
+            (Some((_, _, None)), Some(_)) => true,
+            (Some((_, _, Some(old))), Some(new)) => net::preference(new) > net::preference(*old),
+            _ => false,
+        };
+        if better {
+            chosen = Some((value, interfaces, kind));
+        }
     }
-    let total = u16::from_le_bytes([head[2], head[3]]).max(9);
-    let config = descriptor(hc, slot, 2, 0, 0, total)?;
-    let (value, interfaces) = parse_configuration(&config).ok_or(Error::Bad("its configuration descriptor didn't make sense"))?;
+    let Some((value, interfaces, net_kind)) = chosen else { return Err(Error::Bad("it has no configuration")) };
     control(hc, slot, Request::to_class(0x00, SET_CONFIGURATION, value as u16, 0), &[])?;
 
-    let keyboard = interfaces.iter().find(|i| i.class == 3 && i.subclass == 1 && i.protocol == 1);
-    let hub = interfaces.iter().find(|i| i.class == 9).filter(|_| class == 9 || class == 0);
-    let what = if let Some(i) = hub {
+    let first: Vec<&Interface> = interfaces.iter().filter(|i| i.alt == 0).collect();
+    let keyboard = first.iter().find(|i| i.class == 3 && i.subclass == 1 && i.protocol == 1).copied();
+    let hub = first.iter().find(|i| i.class == 9).filter(|_| class == 9 || class == 0).copied();
+    let what = if let Some(kind) = net_kind {
+        net::set_up(hc, slot, speed, kind, &interfaces)?;
+        net::describe(kind)
+    } else if let Some(i) = hub {
         if matches!(speed, Speed::Super | Speed::SuperPlus) {
             "a USB 3 hub (keyboards behind it show up on its USB 2 side)"
         } else {
@@ -567,6 +649,7 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
     let name = name.unwrap_or_else(|| match what {
         "a keyboard" => "USB keyboard".to_string(),
         "a hub" => "USB hub".to_string(),
+        _ if net_kind.is_some() => "USB network adapter".to_string(),
         _ => format!("USB device {vendor:04x}:{product:04x}"),
     });
     log_port(
@@ -580,9 +663,62 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
             d.name = name;
         }
     });
-    if is_keyboard {
+    if is_keyboard || net_kind.is_some() {
         changed();
     }
+    Ok(())
+}
+
+/// Adds endpoints (bulk or interrupt, either way) to a configured device, each with a ring of its own.
+pub(super) fn add_endpoints(hc: usize, slot: u8, speed: Speed, eps: &[Endpoint]) -> Result<(), Error> {
+    let input = with(hc, |c| {
+        let (context, low) = (c.host.context_size, c.host.low);
+        let d = c.devices.get_mut(slot as usize)?.as_mut()?;
+        d.input.zero();
+        let mut add = 1u32;
+        let mut highest = 0u32;
+        for ep in eps {
+            add |= 1 << ep.dci();
+            highest = highest.max(ep.dci() as u32);
+        }
+        set_dword(&d.input, 4, add);
+        for i in 0..4 {
+            set_dword(&d.input, context + 4 * i, dword(&d.output, 4 * i));
+        }
+        let entries = ((dword(&d.output, 0) >> 27) & 0x1F).max(highest);
+        set_dword(&d.input, context, (dword(&d.output, 0) & !(0x1F << 27)) | entries << 27);
+        set_dword(&d.input, context + 12, 0);
+        for ep in eps {
+            let dci = ep.dci();
+            let ring = Ring::new(low)?;
+            let mps = (ep.max_packet & 0x7FF) as u32;
+            let (kind, high_burst) = match (ep.attributes & 3, ep.address & 0x80 != 0) {
+                (2, false) => (xhci::EP_BULK_OUT, 0),
+                (2, true) => (xhci::EP_BULK_IN, 0),
+                (_, true) => (xhci::EP_INTERRUPT_IN, ((ep.max_packet >> 11) & 3) as u32),
+                (_, false) => (xhci::EP_INTERRUPT_OUT, ((ep.max_packet >> 11) & 3) as u32),
+            };
+            let burst = match speed {
+                Speed::Super | Speed::SuperPlus => ep.burst as u32,
+                Speed::High => high_burst,
+                _ => 0,
+            };
+            let at = context * (dci as usize + 1);
+            let start = ring.start();
+            let interval = if ep.attributes & 3 == 3 { interval(speed, ep.interval) } else { 0 };
+            set_dword(&d.input, at, interval << 16);
+            set_dword(&d.input, at + 4, 3 << 1 | kind << 3 | burst << 8 | mps << 16);
+            set_dword(&d.input, at + 8, start as u32);
+            set_dword(&d.input, at + 12, (start >> 32) as u32);
+            let average = if ep.attributes & 3 == 2 { 1024 } else { mps };
+            let esit = if ep.attributes & 3 == 3 { mps * (burst + 1) } else { 0 };
+            set_dword(&d.input, at + 16, average | esit << 16);
+            d.rings[dci as usize] = Some(ring);
+        }
+        Some(d.input.phys)
+    })
+    .ok_or(Error::Bad("out of memory"))?;
+    command(hc, |h| h.configure_endpoint(slot, input))?;
     Ok(())
 }
 
@@ -800,7 +936,7 @@ fn detach(hc: usize, slot: u8) {
         detach(hc, child);
     }
     let (name, was_keyboard) = with(hc, |c| match c.devices.get(slot as usize) {
-        Some(Some(d)) => (d.name.clone(), matches!(d.role, Role::Keyboard(_))),
+        Some(Some(d)) => (d.name.clone(), matches!(d.role, Role::Keyboard(_) | Role::Net(_))),
         _ => (String::new(), false),
     });
     let _ = command(hc, |h| h.disable_slot(slot));

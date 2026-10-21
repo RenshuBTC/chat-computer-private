@@ -36,6 +36,69 @@ impl Json {
         }
         Some(v)
     }
+
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Json> {
+        match self {
+            Json::Obj(fields) => fields.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
+    /// Sets an object's field (added at the end if it isn't there).
+    pub fn set(&mut self, key: &str, value: Json) {
+        if let Json::Obj(fields) = self {
+            match fields.iter_mut().find(|(k, _)| k == key) {
+                Some((_, v)) => *v = value,
+                None => fields.push((String::from(key), value)),
+            }
+        }
+    }
+
+    /// Adds text to a string field (making it if it isn't there).
+    pub fn append(&mut self, key: &str, more: &str) {
+        match self.get_mut(key) {
+            Some(Json::Str(s)) => s.push_str(more),
+            _ => self.set(key, Json::Str(String::from(more))),
+        }
+    }
+
+    /// As JSON text again: what was read comes out the same (numbers as they were written).
+    pub fn write(&self) -> String {
+        let mut out = String::new();
+        self.write_to(&mut out);
+        out
+    }
+
+    fn write_to(&self, out: &mut String) {
+        match self {
+            Json::Null => out.push_str("null"),
+            Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Json::Num(n) => out.push_str(n),
+            Json::Str(s) => out.push_str(&quote(s)),
+            Json::Arr(items) => {
+                out.push('[');
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    v.write_to(out);
+                }
+                out.push(']');
+            }
+            Json::Obj(fields) => {
+                out.push('{');
+                for (i, (k, v)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&quote(k));
+                    out.push(':');
+                    v.write_to(out);
+                }
+                out.push('}');
+            }
+        }
+    }
 }
 
 struct Reader<'a> {

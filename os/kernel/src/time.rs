@@ -4,7 +4,9 @@
 //! and a measurement that makes no sense is thrown away.
 //!
 //! The processor's time-stamp counter is measured at the same time. It gives drivers short waits and
-//! microsecond time that work even while interrupts are off.
+//! microsecond time that work even while interrupts are off, and when it runs at one speed whatever the processor
+//! does (an "invariant" one, as processors of the last 15 years or so have), it counts the time since start-up too:
+//! ticks are lost while interrupts are off (as they are while a lock is held), and the time-stamp counter loses none.
 
 use crate::acpi::{Acpi, PmTimer};
 use crate::apic;
@@ -35,6 +37,12 @@ const ASSUMED_TSC_PER_US: u64 = 2_000;
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
 static TSC_PER_US: AtomicU64 = AtomicU64::new(0);
+/// The time-stamp counter's counts a millisecond as measured (0: not measured).
+static MEASURED_TSC_PER_MS: AtomicU64 = AtomicU64::new(0);
+/// When the time-stamp counter counts the uptime: its counts a millisecond, and its count when the timer started
+/// (0: the uptime is counted in ticks).
+static UPTIME_TSC_PER_MS: AtomicU64 = AtomicU64::new(0);
+static UPTIME_TSC_START: AtomicU64 = AtomicU64::new(0);
 
 pub fn tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
@@ -42,7 +50,20 @@ pub fn tick() {
 
 /// Time since the timer started, in milliseconds.
 pub fn uptime_ms() -> u64 {
-    TICKS.load(Ordering::Relaxed) * 1000 / HZ
+    match UPTIME_TSC_PER_MS.load(Ordering::Relaxed) {
+        0 => TICKS.load(Ordering::Relaxed) * 1000 / HZ,
+        per_ms => rdtsc().wrapping_sub(UPTIME_TSC_START.load(Ordering::Relaxed)) / per_ms,
+    }
+}
+
+/// Whether the time-stamp counter runs at one speed in every power state (CPUID 0x80000007, EDX bit 8).
+fn invariant_tsc() -> bool {
+    cpuid(0x8000_0000, 0).0 >= 0x8000_0007 && cpuid(0x8000_0007, 0).3 & (1 << 8) != 0
+}
+
+/// What counts the time since start-up.
+pub fn uptime_by() -> &'static str {
+    if UPTIME_TSC_PER_MS.load(Ordering::Relaxed) != 0 { "the time-stamp counter" } else { "the timer's ticks" }
 }
 
 fn tsc_per_us() -> u64 {
@@ -151,6 +172,7 @@ fn measure(wait: impl FnOnce() -> bool) -> Option<u64> {
     let tsc_per_us = tsc / (MEASURE_MS * 1000);
     if finished && PLAUSIBLE_TSC.contains(&tsc_per_us) {
         TSC_PER_US.store(tsc_per_us, Ordering::Relaxed);
+        MEASURED_TSC_PER_MS.store(tsc / MEASURE_MS, Ordering::Relaxed);
     }
     (finished && PLAUSIBLE.contains(&per_second)).then_some(per_second)
 }
@@ -193,5 +215,10 @@ pub fn init(acpi: &Acpi) -> (u64, &'static str) {
     let (per_second, how) = found.unwrap_or_else(unmeasured);
     apic::write(apic::LVT_TIMER, TIMER_VECTOR as u32 | 1 << 17); // periodic
     apic::write(apic::TIMER_INITIAL, (per_second / HZ) as u32);
+    let tsc_per_ms = MEASURED_TSC_PER_MS.load(Ordering::Relaxed);
+    if tsc_per_ms != 0 && invariant_tsc() {
+        UPTIME_TSC_START.store(rdtsc(), Ordering::Relaxed);
+        UPTIME_TSC_PER_MS.store(tsc_per_ms, Ordering::Relaxed);
+    }
     (per_second, how)
 }

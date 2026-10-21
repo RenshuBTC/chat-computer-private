@@ -1,8 +1,13 @@
-//! Network cards: Chat Computer's own drivers for them. So far: virtio's (virtual machines). The rest of the
-//! PC's network chips are named in the log, with their maker's and the chip's numbers, so drivers can be
-//! written for exactly those.
+//! Network cards: Chat Computer's own drivers for them. So far: virtio's (virtual machines), Intel's e1000 family
+//! (virtual machines' e1000 and e1000e, and Intel's gigabit chips), and USB network adapters and phones sharing
+//! their connection (usbnet.rs, over the USB driver). The rest of the PC's network chips are named in the log,
+//! with their maker's and the chip's numbers, so drivers can be written for exactly those.
 
+mod e1000;
+mod usbnet;
 mod virtio;
+
+pub use usbnet::UsbNet;
 
 use crate::{idt, pci};
 use alloc::boxed::Box;
@@ -21,6 +26,10 @@ pub trait Card: Send {
     fn send(&mut self, frame: &[u8]) -> bool;
     /// Hands each frame that has arrived to `took`. Returns how many.
     fn receive(&mut self, took: &mut dyn FnMut(&[u8])) -> usize;
+    /// Whether it's still there (a USB adapter can be unplugged).
+    fn present(&self) -> bool {
+        true
+    }
 }
 
 /// Who makes the chips most PCs and laptops have, for the log.
@@ -54,6 +63,11 @@ pub fn find() -> Vec<Box<dyn Card>> {
             match virtio::Virtio::start(&f, idt::NET_VECTOR) {
                 Ok(card) => cards.push(Box::new(card)),
                 Err(why) => crate::log!("Chat Computer kernel: network card at {}: couldn't start it: {why}", f.at),
+            }
+        } else if let Some(name) = e1000::model(&f) {
+            match e1000::E1000::start(&f, idt::NET_VECTOR) {
+                Ok(card) => cards.push(Box::new(card)),
+                Err(why) => crate::log!("Chat Computer kernel: Intel {name} network card at {}: couldn't start it: {why}", f.at),
             }
         } else {
             let name = format!("{} {kind} chip {:04x}:{:04x}", maker(f.vendor), f.vendor, f.device);

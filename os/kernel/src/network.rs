@@ -1,6 +1,6 @@
-//! The network: the first card that started, and Chat Computer's own stack on it (the `net` crate: ARP, IPv4,
-//! DHCP, DNS, TCP), run from the kernel's main loop: the frames that arrived go in, the time moves on, the
-//! frames to send go out.
+//! The network: the first card that started (or, without one, a USB network adapter plugged in, at any time), and
+//! Chat Computer's own stack on it (the `net` crate: ARP, IPv4, DHCP, DNS, TCP), run from the kernel's main loop: the
+//! frames that arrived go in, the time moves on, the frames to send go out.
 
 use crate::netcard::{self, Card};
 use crate::sync::SpinLock;
@@ -8,6 +8,7 @@ use crate::{random, time};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use net::{Ipv4, Mac, Stack};
 
 struct Network {
@@ -19,11 +20,15 @@ struct Network {
 }
 
 static NETWORK: SpinLock<Option<Network>> = SpinLock::new(None);
+/// USB's count of changes when its network adapters were last looked at.
+static USB_SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
 
 /// What the screen says about the network.
 pub struct Status {
     /// Whether there's a card Chat Computer can use.
     pub card: bool,
+    /// What it is.
+    pub describe: Option<String>,
     pub link: bool,
     pub address: Option<Ipv4>,
 }
@@ -45,8 +50,30 @@ pub fn init() -> usize {
     count
 }
 
+/// A USB network adapter plugged in or unplugged: without another card, the network moves to the first there is.
+fn usb_adapters() {
+    let changes = crate::usb::changes();
+    let changed = USB_SEEN.swap(changes, Ordering::Relaxed) != changes;
+    let mut guard = NETWORK.lock();
+    let gone = guard.as_ref().is_some_and(|n| !n.card.present());
+    if gone {
+        crate::log!("Chat Computer kernel: network: the USB network adapter was unplugged");
+        *guard = None;
+    }
+    if guard.is_some() || !(changed || gone) {
+        return;
+    }
+    if let Some(a) = crate::usb::net_adapters().first() {
+        let card: Box<dyn Card> = Box::new(netcard::UsbNet::new(a));
+        crate::log!("Chat Computer kernel: network: {}", card.describe());
+        let stack = Stack::new(Mac(card.mac()), random::u64(), true);
+        *guard = Some(Network { card, stack, shown: 0, link: None, test: Test::Start });
+    }
+}
+
 /// From the main loop: takes what arrived, does what's due, sends what's ready.
 pub fn work() {
+    usb_adapters();
     let now = time::uptime_ms();
     let mut guard = NETWORK.lock();
     let Some(n) = guard.as_mut() else { return };
@@ -97,8 +124,13 @@ pub fn with<R>(f: impl FnOnce(&mut Stack) -> R) -> Option<R> {
 
 pub fn status() -> Status {
     match NETWORK.lock().as_ref() {
-        Some(n) => Status { card: true, link: n.link.unwrap_or(false), address: n.stack.config().map(|c| c.address) },
-        None => Status { card: false, link: false, address: None },
+        Some(n) => Status {
+            card: true,
+            describe: Some(n.card.describe()),
+            link: n.link.unwrap_or(false),
+            address: n.stack.config().map(|c| c.address),
+        },
+        None => Status { card: false, describe: None, link: false, address: None },
     }
 }
 

@@ -1,8 +1,11 @@
-//! Claude's Messages API (POST /v1/messages), streamed: the request, and the answer's text as it comes, from the
-//! server-sent events (event: and data: lines, a blank line after each).
+//! Claude's Messages API (POST /v1/messages), streamed: the request, and the answer as it comes, from the
+//! server-sent events (event: and data: lines, a blank line after each). The answer's words come out as they
+//! arrive; the whole answer (its content blocks: thinking, words, tool calls) is kept, to go back in the
+//! conversation, and when Claude calls tools, to go back with their results. The API asks for thinking blocks to come
+//! back complete and unmodified, so they are kept exactly as they came.
 
 use crate::http::{self, Response};
-use crate::json;
+use crate::json::{self, Json};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -20,24 +23,82 @@ pub enum Role {
     Assistant,
 }
 
+/// What a turn of the conversation says.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Content {
+    /// Words.
+    Text(String),
+    /// Content blocks, as JSON objects: an answer as it came (thinking, words, tool calls), or tools' results.
+    Blocks(Vec<Json>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Turn {
+    pub role: Role,
+    pub content: Content,
+}
+
+impl Turn {
+    pub fn text(role: Role, text: &str) -> Turn {
+        Turn { role, content: Content::Text(String::from(text)) }
+    }
+}
+
+/// A tool Claude may call: its name, what it does, and its input's JSON schema (as JSON text).
+pub struct Tool {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub input_schema: &'static str,
+}
+
+/// A tool's result, to go back to Claude.
+pub fn tool_result(id: &str, content: &str, is_error: bool) -> Json {
+    Json::Obj(alloc::vec![
+        (String::from("type"), Json::Str(String::from("tool_result"))),
+        (String::from("tool_use_id"), Json::Str(String::from(id))),
+        (String::from("content"), Json::Str(String::from(content))),
+        (String::from("is_error"), Json::Bool(is_error)),
+    ])
+}
+
 /// The whole request, ready to send: the conversation so far, newest last.
-pub fn request(host: &str, key: &str, system: &str, conversation: &[(Role, String)]) -> Vec<u8> {
+pub fn request(host: &str, key: &str, system: &str, conversation: &[Turn], tools: &[Tool]) -> Vec<u8> {
     let mut body = format!(
-        "{{\"model\":{},\"max_tokens\":{},\"stream\":true,\"output_config\":{{\"effort\":{}}},\"system\":{},\"messages\":[",
+        "{{\"model\":{},\"max_tokens\":{},\"stream\":true,\"output_config\":{{\"effort\":{}}},\"system\":{}",
         json::quote(MODEL),
         MAX_TOKENS,
         json::quote(EFFORT),
         json::quote(system)
     );
-    for (i, (role, text)) in conversation.iter().enumerate() {
+    if !tools.is_empty() {
+        body.push_str(",\"tools\":[");
+        for (i, t) in tools.iter().enumerate() {
+            if i > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!(
+                "{{\"name\":{},\"description\":{},\"input_schema\":{}}}",
+                json::quote(t.name),
+                json::quote(t.description),
+                t.input_schema
+            ));
+        }
+        body.push(']');
+    }
+    body.push_str(",\"messages\":[");
+    for (i, turn) in conversation.iter().enumerate() {
         if i > 0 {
             body.push(',');
         }
-        let role = match role {
+        let role = match turn.role {
             Role::User => "user",
             Role::Assistant => "assistant",
         };
-        body.push_str(&format!("{{\"role\":\"{role}\",\"content\":{}}}", json::quote(text)));
+        let content = match &turn.content {
+            Content::Text(text) => json::quote(text),
+            Content::Blocks(blocks) => Json::Arr(blocks.clone()).write(),
+        };
+        body.push_str(&format!("{{\"role\":\"{role}\",\"content\":{content}}}"));
     }
     body.push_str("]}");
     http::request(
@@ -60,10 +121,18 @@ pub fn request(host: &str, key: &str, system: &str, conversation: &[(Role, Strin
 pub enum Event {
     /// More of the answer's words.
     Text(String),
-    /// The answer is complete.
+    /// The answer is complete (`Stream::stop_reason` says why it stopped: "tool_use" when Claude called tools).
     Done,
     /// It failed: why, in Anthropic's words or ours.
     Failed(String),
+}
+
+/// A tool call in an answer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolUse {
+    pub id: String,
+    pub name: String,
+    pub input: Json,
 }
 
 /// Reads one streamed answer.
@@ -75,6 +144,10 @@ pub struct Stream {
     data: String,
     error_body: Vec<u8>,
     finished: bool,
+    /// The answer's content blocks so far, by their index, and the tool calls' input as it comes (JSON text).
+    blocks: Vec<Option<Json>>,
+    inputs: Vec<String>,
+    stop_reason: Option<String>,
 }
 
 impl Stream {
@@ -89,6 +162,30 @@ impl Stream {
     /// The HTTP status the API answered with, once it has.
     pub fn status(&self) -> Option<u16> {
         self.http.status()
+    }
+
+    /// Why the answer stopped ("end_turn", "tool_use", "max_tokens"...), once it has.
+    pub fn stop_reason(&self) -> Option<&str> {
+        self.stop_reason.as_deref()
+    }
+
+    /// The answer's content blocks, as they came: to go back to the API in the next request.
+    pub fn content(&self) -> Vec<Json> {
+        self.blocks.iter().flatten().cloned().collect()
+    }
+
+    /// The tools the answer called.
+    pub fn tool_uses(&self) -> Vec<ToolUse> {
+        self.blocks
+            .iter()
+            .flatten()
+            .filter(|b| b.get("type").and_then(|t| t.str()) == Some("tool_use"))
+            .map(|b| ToolUse {
+                id: String::from(b.get("id").and_then(|v| v.str()).unwrap_or("")),
+                name: String::from(b.get("name").and_then(|v| v.str()).unwrap_or("")),
+                input: b.get("input").cloned().unwrap_or(Json::Obj(Vec::new())),
+            })
+            .collect()
     }
 
     /// Bytes from the connection; the events they complete.
@@ -177,15 +274,75 @@ impl Stream {
         }
     }
 
+    fn block(&mut self, index: usize) -> Option<&mut Json> {
+        self.blocks.get_mut(index).and_then(|b| b.as_mut())
+    }
+
     fn dispatch(&mut self, event: &str, data: &str, out: &mut Vec<Event>) {
         let Some(j) = json::parse(data) else { return };
         let kind = j.get("type").and_then(|t| t.str()).unwrap_or(event);
+        let index = j.get("index").and_then(|i| match i {
+            Json::Num(n) => n.parse::<usize>().ok(),
+            _ => None,
+        });
         match kind {
-            "content_block_delta" => {
-                if j.path(&["delta", "type"]).and_then(|t| t.str()) == Some("text_delta")
-                    && let Some(text) = j.path(&["delta", "text"]).and_then(|t| t.str())
+            "content_block_start" => {
+                if let (Some(i), Some(block)) = (index, j.get("content_block"))
+                    && i < 4096
                 {
-                    out.push(Event::Text(String::from(text)));
+                    if self.blocks.len() <= i {
+                        self.blocks.resize(i + 1, None);
+                        self.inputs.resize(i + 1, String::new());
+                    }
+                    self.blocks[i] = Some(block.clone());
+                }
+            }
+            "content_block_delta" => {
+                let Some(delta) = j.get("delta") else { return };
+                let text = |key: &str| delta.get(key).and_then(|t| t.str()).unwrap_or("");
+                match delta.get("type").and_then(|t| t.str()) {
+                    Some("text_delta") => {
+                        let words = String::from(text("text"));
+                        if let Some(b) = index.and_then(|i| self.block(i)) {
+                            b.append("text", &words);
+                        }
+                        out.push(Event::Text(words));
+                    }
+                    Some("thinking_delta") => {
+                        let more = String::from(text("thinking"));
+                        if let Some(b) = index.and_then(|i| self.block(i)) {
+                            b.append("thinking", &more);
+                        }
+                    }
+                    Some("signature_delta") => {
+                        let more = String::from(text("signature"));
+                        if let Some(b) = index.and_then(|i| self.block(i)) {
+                            b.append("signature", &more);
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        let more = String::from(text("partial_json"));
+                        if let Some(input) = index.and_then(|i| self.inputs.get_mut(i)) {
+                            input.push_str(&more);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                if let Some(i) = index {
+                    let input = self.inputs.get(i).cloned().unwrap_or_default();
+                    if let Some(b) = self.block(i)
+                        && b.get("type").and_then(|t| t.str()) == Some("tool_use")
+                    {
+                        let parsed = if input.trim().is_empty() { Some(Json::Obj(Vec::new())) } else { json::parse(&input) };
+                        b.set("input", parsed.unwrap_or(Json::Obj(Vec::new())));
+                    }
+                }
+            }
+            "message_delta" => {
+                if let Some(reason) = j.path(&["delta", "stop_reason"]).and_then(|r| r.str()) {
+                    self.stop_reason = Some(String::from(reason));
                 }
             }
             "message_stop" => {
@@ -197,8 +354,7 @@ impl Stream {
                 let message = j.path(&["error", "message"]).and_then(|m| m.str()).unwrap_or("Claude's API reported an error");
                 out.push(Event::Failed(String::from(message)));
             }
-            _ => {} // message_start, content_block_start/stop (thinking too), message_delta, ping
+            _ => {} // message_start, ping
         }
     }
 }
-

@@ -116,3 +116,15 @@ pub fn compute(width_px: u32, height_px: u32, reported_mm: Option<(u32, u32)>) -
         size_known: known,
     }
 }
+
+/// `base` with its text `factor` times the size (the person asked for bigger or smaller), and the column to match.
+pub fn scaled(base: Layout, width_px: u32, factor: f64) -> Layout {
+    let font_px = base.font_px * factor;
+    let px_w = width_px as f64;
+    Layout {
+        font_px,
+        column_px: (COLUMN_REM * font_px).min((px_w - 2.0 * MARGIN_REM * font_px).max(200.0)),
+        scale: base.scale * factor,
+        ..base
+    }
+}

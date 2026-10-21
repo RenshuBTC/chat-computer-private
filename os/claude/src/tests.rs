@@ -1,7 +1,7 @@
 //! JSON, HTTP and the streamed answer, with what Claude's API really sends (its event stream, chunked, cut
 //! anywhere), and its errors.
 
-use super::api::{self, Event, Role, Stream};
+use super::api::{self, Content, Event, Role, Stream, Tool, ToolUse, Turn};
 use super::http::{self, Response};
 use super::json::{self, Json};
 
@@ -23,7 +23,7 @@ fn json_reads_what_the_api_sends_and_writes_strings_safely() {
 
 #[test]
 fn the_request_is_opus_at_max_effort_streamed() {
-    let r = api::request("api.anthropic.com", "sk-ant-test", "Be brief.", &[(Role::User, "Hi \"Claude\"".into())]);
+    let r = api::request("api.anthropic.com", "sk-ant-test", "Be brief.", &[Turn::text(Role::User, "Hi \"Claude\"")], &[]);
     let text = String::from_utf8(r).unwrap();
     let (head, body) = text.split_once("\r\n\r\n").unwrap();
     assert!(head.starts_with("POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\n"));
@@ -34,6 +34,92 @@ fn the_request_is_opus_at_max_effort_streamed() {
     assert_eq!(j.path(&["output_config", "effort"]).and_then(|m| m.str()), Some("max"));
     assert_eq!(j.get("stream"), Some(&Json::Bool(true)));
     assert_eq!(j.get("messages").map(|m| format!("{m:?}")).unwrap().matches("Hi \\\"Claude\\\"").count(), 1);
+    assert!(j.get("tools").is_none());
+}
+
+#[test]
+fn json_comes_out_as_it_went_in() {
+    let text = r#"{"type":"thinking","thinking":"","signature":"Eq+/=","n":1.50e3,"list":[true,null,{"a":"\u00e9\n"}]}"#;
+    let j = json::parse(text).unwrap();
+    assert_eq!(json::parse(&j.write()).unwrap(), j);
+    assert!(j.write().contains("1.50e3"), "numbers stay as written");
+    let mut b = j.clone();
+    b.append("thinking", "more");
+    b.set("signature", Json::Str("x".into()));
+    assert_eq!(b.get("thinking").and_then(|t| t.str()), Some("more"));
+    assert_eq!(b.get("signature").and_then(|t| t.str()), Some("x"));
+}
+
+#[test]
+fn tools_and_whole_answers_go_in_the_request_unchanged() {
+    let tools = [Tool { name: "computer_status", description: "What this computer is.", input_schema: r#"{"type":"object","properties":{}}"# }];
+    let thinking = json::parse(r#"{"type":"thinking","thinking":"","signature":"sig/+="}"#).unwrap();
+    let call = json::parse(r#"{"type":"tool_use","id":"toolu_1","name":"computer_status","input":{}}"#).unwrap();
+    let conversation = [
+        Turn::text(Role::User, "how's my PC?"),
+        Turn { role: Role::Assistant, content: Content::Blocks(vec![thinking.clone(), call.clone()]) },
+        Turn { role: Role::User, content: Content::Blocks(vec![api::tool_result("toolu_1", "8 GB of memory", false)]) },
+    ];
+    let r = api::request("api.anthropic.com", "k", "s", &conversation, &tools);
+    let text = String::from_utf8(r).unwrap();
+    let (_, body) = text.split_once("\r\n\r\n").unwrap();
+    let j = json::parse(body).unwrap();
+    assert_eq!(j.path(&["tools"]).map(|t| t.write()), Some(r#"[{"name":"computer_status","description":"What this computer is.","input_schema":{"type":"object","properties":{}}}]"#.into()));
+    let Some(Json::Arr(messages)) = j.get("messages") else { panic!() };
+    assert_eq!(messages[1].get("content"), Some(&Json::Arr(vec![thinking, call])));
+    assert_eq!(messages[2].path(&["content"]).map(|c| c.write()),
+               Some(r#"[{"type":"tool_result","tool_use_id":"toolu_1","content":"8 GB of memory","is_error":false}]"#.into()));
+}
+
+/// An answer that calls a tool: its thinking left out (as Opus 5.5 does unless asked), a few words, then the call,
+/// its input in pieces.
+fn tool_answer() -> Vec<u8> {
+    let events = [
+        r#"{"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","content":[]}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EqQBCgIYAh+/="}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Let me look."}}"#,
+        r#"{"type":"content_block_stop","index":1}"#,
+        r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_9","name":"set_text_size","input":{}}}"#,
+        r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":""}}"#,
+        r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"perc"}}"#,
+        r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"ent\": 125}"}}"#,
+        r#"{"type":"content_block_stop","index":2}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":40}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+    let mut sse = String::new();
+    for d in events {
+        sse.push_str(&format!("data: {d}\n\n"));
+    }
+    let mut r = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n", sse.len()).into_bytes();
+    r.extend_from_slice(sse.as_bytes());
+    r
+}
+
+#[test]
+fn a_tool_call_comes_out_whole_with_its_thinking_kept_as_it_came() {
+    for cut in [1, 5, 33, 100_000] {
+        let mut s = Stream::new();
+        let mut events = Vec::new();
+        for piece in tool_answer().chunks(cut) {
+            events.extend(s.feed(piece));
+        }
+        assert_eq!(events, vec![Event::Text("Let me look.".into()), Event::Done], "cut {cut}");
+        assert_eq!(s.stop_reason(), Some("tool_use"));
+        let content = s.content();
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[0].write(), r#"{"type":"thinking","thinking":"","signature":"EqQBCgIYAh+/="}"#);
+        assert_eq!(content[1].write(), r#"{"type":"text","text":"Let me look."}"#);
+        assert_eq!(content[2].write(), r#"{"type":"tool_use","id":"toolu_9","name":"set_text_size","input":{"percent":125}}"#);
+        assert_eq!(
+            s.tool_uses(),
+            vec![ToolUse { id: "toolu_9".into(), name: "set_text_size".into(), input: json::parse(r#"{"percent":125}"#).unwrap() }]
+        );
+    }
 }
 
 /// A streamed answer as the API sends it: thinking first (its text left out), then the words.

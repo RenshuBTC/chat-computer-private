@@ -48,6 +48,17 @@ pub struct Acpi {
     pub intel_iommu_count: usize,
     pub amd_iommus: [u64; 8],
     pub amd_iommu_count: usize,
+    /// How the firmware says to restart the PC (the FADT's reset register), if it says.
+    pub reset: Option<ResetRegister>,
+}
+
+/// A register to write a value to, to restart the PC.
+#[derive(Clone, Copy, Debug)]
+pub struct ResetRegister {
+    /// 0: memory, 1: I/O port.
+    pub space: u8,
+    pub address: u64,
+    pub value: u8,
 }
 
 fn u8_at(t: &[u8], o: usize) -> u8 {
@@ -216,6 +227,13 @@ impl Acpi {
         }
         if port != 0 && port <= 0xFFFF {
             self.pm_timer = Some(PmTimer { port: port as u16, wide });
+        }
+        // The reset register (ACPI 2.0+): a generic address at 116 and the value at 128, if flag 10 says so.
+        if t.len() >= 129 && u32_at(t, 112) & (1 << 10) != 0 {
+            let (space, address) = (u8_at(t, 116), u64_at(t, 120));
+            if matches!(space, 0 | 1) && address != 0 {
+                self.reset = Some(ResetRegister { space, address, value: u8_at(t, 128) });
+            }
         }
     }
 }

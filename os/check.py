@@ -13,14 +13,17 @@ log go to out/.
                                      in later, then unplugged; a hub unplugged
     ./check.py --crash page-fault    a kernel that faults on purpose once ready: it must stop cleanly,
                                      with the fault in its log and a message on the screen (also: panic)
-    ./check.py --network             the network: a virtio card (QEMU's virtual network), an address from DHCP,
-                                     a name looked up with DNS, and a TCP conversation with a server on this
-                                     computer
+    ./check.py --network             the network, with each kind of card there's a driver for (virtio, Intel's
+                                     e1000e and e1000, a USB network adapter by CDC ECM, plugged in once the
+                                     kernel is running and then unplugged, and by RNDIS): an address from DHCP, a
+                                     name looked up with DNS, and a TCP conversation with a server on this computer
     ./check.py --claude              a conversation with Claude, typed on the keyboard: with a stand-in for
                                      Claude's API on this computer (HTTPS, with a certificate authority made for
                                      the test, which the test build trusts instead of Mozilla's): the request
                                      (model, effort, the key from the settings file, the conversation so far),
-                                     the answer streamed onto the screen, and a failure shown
+                                     the answer streamed onto the screen, Claude's tools (the computer's status,
+                                     a bigger text size, a restart, which ends the virtual PC), the answers'
+                                     thinking sent back unchanged, and a failure shown
     ./check.py --secure-boot         Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
@@ -34,6 +37,7 @@ virt-fw-vars (pip install virt-firmware).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import socket
@@ -159,6 +163,16 @@ class VirtualPC:
         image = Image.open(ppm).convert("RGB")
         image.save(OUT / f"{name}.png")
         ppm.unlink()
+        return image
+
+    def settled_picture(self, name: str, tries: int = 8):
+        """A picture once the screen has stopped changing (two in a row the same), or the last one taken."""
+        last = None
+        for _ in range(tries):
+            image = self.picture(name)
+            if last is not None and image.tobytes() == last.tobytes():
+                break
+            last = image
         return image
 
     def stop(self) -> None:
@@ -394,9 +408,25 @@ def keyboard(args) -> list[str]:
 TEST_PORT = 8471
 
 
+# The network cards `network` tries: a name, QEMU's devices for it, how the kernel's log names it, what the test
+# build needs to know (QEMU's USB adapter offers both CDC ECM and RNDIS; a build told so prefers RNDIS), and a
+# device plugged in once the kernel is running (then unplugged), if any.
+USB_ADAPTER = "usb-net,netdev=n0,bus=xhci.0,id=usbnet"
+CARDS = [
+    ("virtio", ("-device", "virtio-net-pci,netdev=n0,romfile="), "virtio network card", None, None),
+    ("e1000e", ("-device", "e1000e,netdev=n0,romfile="), "Intel 82574L network card", None, None),  # QEMU's e1000e
+    ("e1000", ("-device", "e1000,netdev=n0,romfile="), "Intel 82540EM network card", None, None),  # VirtualBox's, VMware's
+    ("usb-ecm", ("-device", "qemu-xhci,id=xhci"), "USB network adapter \"RNDIS/QEMU USB Network Device\" (USB CDC ECM",
+     None, USB_ADAPTER),
+    ("usb-rndis", ("-device", "qemu-xhci,id=xhci", "-device", USB_ADAPTER),
+     "USB network adapter \"RNDIS/QEMU USB Network Device\" (RNDIS", {"CHATCOMPUTER_TEST_USB_NET": "rndis"}, None),
+]
+
+
 def network(args) -> list[str]:
-    """A test build with QEMU's virtual network (its DHCP and DNS, and 10.0.2.2 for this computer) and a virtio card:
-    it must get 10.0.2.15, look up api.anthropic.com, and talk to a server here (which answers its line)."""
+    """A test build with QEMU's virtual network (its DHCP and DNS, and 10.0.2.2 for this computer), once with each
+    card in CARDS: it must get 10.0.2.15, look up api.anthropic.com, and talk to a server here (which answers its
+    line)."""
     import socketserver
     import threading
 
@@ -411,29 +441,45 @@ def network(args) -> list[str]:
     server = socketserver.ThreadingTCPServer(("127.0.0.1", TEST_PORT), Answer)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    build("network")
     problems = []
+    built = None
     try:
-        extra = ("-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0,romfile=")
-        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
-        try:
-            got = wait_for(pc.log, ("test: the server said", "test: couldn't", "test: no answer", "never opened", "stopped"), args.timeout)
-            time.sleep(1)
-            pc.picture("network")
-        finally:
-            pc.stop()
-        text = pc.text()
-        print(text)
-        if "network: virtio network card" not in text:
-            problems.append("the virtio card wasn't started")
-        if "network: address 10.0.2.15/24, gateway 10.0.2.2, DNS 10.0.2.3" not in text:
-            problems.append("no address from DHCP")
-        if "test: api.anthropic.com is at " not in text:
-            problems.append("api.anthropic.com wasn't found with DNS")
-        if heard != ["hello from Chat Computer"]:
-            problems.append(f"the server heard {heard!r}")
-        if got != "test: the server said" or "you said 'hello from Chat Computer'" not in text:
-            problems.append("the server's answer didn't come back")
+        for device, devices, named, env, later in CARDS:
+            print(f"--- {device}")
+            if built != (env or {}):
+                build("network", env)
+                built = env or {}
+            heard.clear()
+            extra = ("-netdev", "user,id=n0", *devices)
+            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
+            unplugged = None
+            try:
+                if later:
+                    if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) == "Chat Computer: ready":
+                        monitor(pc.mon, f"device_add {later}")
+                got = wait_for(pc.log, ("test: the server said", "test: couldn't", "test: no answer", "never opened", "stopped"),
+                               args.timeout)
+                time.sleep(1)
+                pc.picture(f"network-{device}")
+                if later:
+                    monitor(pc.mon, "device_del usbnet")
+                    unplugged = wait_for(pc.log, ("network adapter was unplugged",), 30)
+            finally:
+                pc.stop()
+            text = pc.text()
+            print(text)
+            if f"network: {named}" not in text:
+                problems.append(f"{device}: the card wasn't started")
+            if "network: address 10.0.2.15/24, gateway 10.0.2.2, DNS 10.0.2.3" not in text:
+                problems.append(f"{device}: no address from DHCP")
+            if "test: api.anthropic.com is at " not in text:
+                problems.append(f"{device}: api.anthropic.com wasn't found with DNS")
+            if heard != ["hello from Chat Computer"]:
+                problems.append(f"{device}: the server heard {heard!r}")
+            if got != "test: the server said" or "you said 'hello from Chat Computer'" not in text:
+                problems.append(f"{device}: the server's answer didn't come back")
+            if later and not unplugged:
+                problems.append(f"{device}: unplugging the adapter wasn't noticed")
     finally:
         server.shutdown()
         build()  # never leave a test build in out/
@@ -442,36 +488,57 @@ def network(args) -> list[str]:
 
 CLAUDE_PORT = 8472  # assistant.rs TEST_PORT
 TEST_KEY = "test-key-for-the-stand-in"
-ANSWER_WORDS = ["Hello from the stand-in", " for Claude's API: ", "your own kernel reached me", " over its own TLS."]
-ANSWER = "".join(ANSWER_WORDS)
+FIRST_WORDS = "Let me look."
 
 
-def answer_events() -> list[tuple[str, dict]]:
-    """A streamed answer as Claude's API sends one (thinking first, which the screen doesn't show)."""
-    text = [("content_block_delta", {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": w}})
-            for w in ANSWER_WORDS]
-    return [
-        ("message_start", {"type": "message_start", "message": {"id": "msg_test", "type": "message", "role": "assistant",
-                                                                "model": "claude-opus-5-5", "content": [], "stop_reason": None}}),
-        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Hm."}}),
-        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        ("ping", {"type": "ping"}),
-        ("content_block_start", {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}),
-        *text,
-        ("content_block_stop", {"type": "content_block_stop", "index": 1}),
-        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 20}}),
-        ("message_stop", {"type": "message_stop"}),
-    ]
+def stream(blocks: list[tuple], stop: str) -> list[tuple[str, dict]]:
+    """An answer as Claude's API streams one: each block ("thinking", signature) (its words left out, as Opus 5.5 does
+    unless asked), ("text", [words...]) or ("tool_use", id, name, [pieces of its input's JSON]), then why it stopped."""
+    events = [("message_start", {"type": "message_start", "message": {"id": "msg_test", "type": "message", "role": "assistant",
+                                                                       "model": "claude-opus-5-5", "content": [], "stop_reason": None}})]
+    for i, b in enumerate(blocks):
+        def delta(d: dict) -> tuple[str, dict]:
+            return "content_block_delta", {"type": "content_block_delta", "index": i, "delta": d}
+        if b[0] == "thinking":
+            events += [("content_block_start", {"type": "content_block_start", "index": i,
+                                                "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+                       delta({"type": "thinking_delta", "thinking": ""}), delta({"type": "signature_delta", "signature": b[1]})]
+        elif b[0] == "text":
+            events.append(("content_block_start", {"type": "content_block_start", "index": i, "content_block": {"type": "text", "text": ""}}))
+            events += [delta({"type": "text_delta", "text": w}) for w in b[1]]
+        else:
+            events.append(("content_block_start", {"type": "content_block_start", "index": i,
+                                                   "content_block": {"type": "tool_use", "id": b[1], "name": b[2], "input": {}}}))
+            events += [delta({"type": "input_json_delta", "partial_json": piece}) for piece in b[3]]
+        events.append(("content_block_stop", {"type": "content_block_stop", "index": i}))
+        if i == 0:
+            events.append(("ping", {"type": "ping"}))
+    events.append(("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"output_tokens": 20}}))
+    events.append(("message_stop", {"type": "message_stop"}))
+    return events
+
+
+def blocks_as_sent(blocks: list[tuple]) -> list[dict]:
+    """The same blocks as the answer's content, which must come back unchanged in the next request."""
+    out = []
+    for b in blocks:
+        if b[0] == "thinking":
+            out.append({"type": "thinking", "thinking": "", "signature": b[1]})
+        elif b[0] == "text":
+            out.append({"type": "text", "text": "".join(b[1])})
+        else:
+            out.append({"type": "tool_use", "id": b[1], "name": b[2], "input": json.loads("".join(b[3]) or "{}")})
+    return out
 
 
 def claude(args) -> list[str]:
     """A conversation typed on the keyboard, with a stand-in for Claude's API on this computer (HTTPS on
     CLAUDE_PORT, as "localhost", with a certificate from an authority made for the test, which the test build trusts
-    instead of Mozilla's). The first question is answered (streamed, a piece at a time); the second gets Claude's
+    instead of Mozilla's). The first question is answered with tools: the stand-in has Claude look at the computer's
+    status, then make the text bigger, then answer with what the status said (streamed, a piece at a time); each
+    answer, thinking included, must come back unchanged with the tool's result. The second question gets Claude's
     API's "overloaded" error, which the screen must show. The stand-in checks what it was sent."""
     import http.server
-    import json
     import ssl
     import threading
 
@@ -492,6 +559,19 @@ def claude(args) -> list[str]:
     openssl("x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der")
 
     requests: list[dict] = []
+    r1 = [("thinking", "sig-1/+="), ("text", ["Let me ", "look."]), ("tool_use", "toolu_1", "computer_status", [])]
+    r2 = [("thinking", "sig-2"), ("tool_use", "toolu_2", "set_text_size", ['{"percent"', ': 125}'])]
+    final: list[str] = []
+    r5 = [("thinking", "sig-5"), ("tool_use", "toolu_5", "restart_computer", ["{}"])]
+    r6 = [("text", ["Restarting now: see you in Windows."])]
+
+    def r3() -> list[tuple]:
+        # What the status said (the processor), in the answer: the tool's result came back.
+        messages = (requests[-1]["body"] or {}).get("messages") or []
+        result = str((((messages[2:3] or [{}])[0].get("content") or [{}])[0]).get("content", ""))
+        processor = next((line[len("Processor: "):] for line in result.splitlines() if line.startswith("Processor: ")), "?")
+        final.append(f"I see {processor}, and the text is bigger now.")
+        return [("thinking", "sig-3"), ("text", [final[0][:10], final[0][10:]])]
 
     class Api(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -507,16 +587,19 @@ def claude(args) -> list[str]:
                 data = None
             requests.append({"path": self.path, "key": self.headers.get("x-api-key"),
                              "version": self.headers.get("anthropic-version"), "body": data})
-            if len(requests) == 1:
+            script = {1: (r1, "tool_use"), 2: (r2, "tool_use"), 5: (r5, "tool_use"), 6: (r6, "end_turn")}.get(len(requests))
+            if len(requests) == 3:
+                script = (r3(), "end_turn")
+            if script:
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream")
                 self.send_header("transfer-encoding", "chunked")
                 self.end_headers()
-                for event, payload in answer_events():
+                for event, payload in stream(*script):
                     chunk = f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                     self.wfile.flush()
-                    time.sleep(0.25)
+                    time.sleep(0.1)
                 self.wfile.write(b"0\r\n\r\n")
             else:
                 error = json.dumps({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}).encode()
@@ -536,13 +619,15 @@ def claude(args) -> list[str]:
     build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
     problems: list[str] = []
     try:
-        extra = ("-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0,romfile=")
+        # (Intel's card here; --network tries every kind.)
+        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
         # As Chat Computer Own System writes it on Windows (New-OwnSettingsText): notes, Windows' line breaks.
         settings = ("# Chat Computer's settings, read by its own system when it starts. Written by Chat Computer Own System.\r\n"
                     "# The Claude API key is kept here as it is: anyone who can read this partition can read it.\r\n"
                     f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\n")
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings)
-        first = second = None
+        first = second = third = None
+        restarted = ended = False
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
@@ -553,12 +638,20 @@ def claude(args) -> list[str]:
             pc.picture("claude-0")
             monitor_many(pc.mon, ["sendkey h", "sendkey i", "sendkey ret"])
             first = wait_for(pc.log, ("test: Claude said", "Claude: failed", "stopped"), args.timeout)
-            time.sleep(1.5)
-            answered = pc.picture("claude-1")
+            answered = pc.settled_picture("claude-1")
             monitor_many(pc.mon, [f"sendkey {k}" for k in "again"] + ["sendkey ret"])
             second = wait_for(pc.log, ("Claude: failed", "stopped"), 60)
-            time.sleep(1.5)
-            pc.picture("claude-2")
+            pc.settled_picture("claude-2")
+            # Asked to restart: Claude's answer, then a restart (which ends a virtual PC started with -no-reboot).
+            monitor_many(pc.mon, [f"sendkey {k}" for k in "restart"] + ["sendkey ret"])
+            third = wait_for(pc.log, ("Restarting now", "Claude: failed", "stopped"), 60)
+            pc.settled_picture("claude-3")
+            restarted = wait_for(pc.log, ("kernel: restarting",), 30) is not None
+            try:
+                pc.qemu.wait(timeout=20)
+                ended = True
+            except subprocess.TimeoutExpired:
+                ended = False
         finally:
             pc.stop()
         text = pc.text()
@@ -567,14 +660,23 @@ def claude(args) -> list[str]:
             problems.append("the clock offset in the settings wasn't used")
         if "Claude: connected (TLS 1.3" not in text:
             problems.append("no secure connection to the stand-in")
-        if first != "test: Claude said" or f"test: Claude said {json.dumps(ANSWER)}" not in text:
+        said = FIRST_WORDS + "\n\n" + (final[0] if final else "?")
+        if first != "test: Claude said" or f"test: Claude said {json.dumps(said)}" not in text:
             problems.append(f"the answer didn't come back whole (the log says {first!r})")
+        if "Claude: uses computer_status" not in text or "Claude: uses set_text_size" not in text:
+            problems.append("the tools weren't used")
+        if "text size 125%" not in text:
+            problems.append("the text wasn't made bigger")
         if second != "Claude: failed" or "Claude is very busy right now (Overloaded)" not in text:
             problems.append("the second question's failure wasn't reported")
         if TEST_KEY in text:
             problems.append("the API key is in the log")
-        if len(requests) != 2:
-            problems.append(f"the stand-in got {len(requests)} requests, not 2")
+        if third is None or "Claude: uses restart_computer" not in text:
+            problems.append("asking to restart didn't reach the restart tool")
+        elif not restarted or not ended:
+            problems.append(f"the PC didn't restart (the kernel said so: {restarted}; the virtual PC ended: {ended})")
+        if len(requests) != 6:
+            problems.append(f"the stand-in got {len(requests)} requests, not 6")
         else:
             r = requests[0]
             body = r["body"] or {}
@@ -588,10 +690,22 @@ def claude(args) -> list[str]:
                 problems.append("the request didn't say the screen shows plain text")
             if body.get("messages") != [{"role": "user", "content": "hi"}]:
                 problems.append(f"the first request's messages were {body.get('messages')!r}")
-            later = (requests[1]["body"] or {}).get("messages")
-            if later != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": ANSWER},
-                         {"role": "user", "content": "again"}]:
-                problems.append(f"the second request's messages were {later!r}")
+            if sorted(t.get("name") for t in body.get("tools") or []) != ["computer_status", "restart_computer", "set_text_size"]:
+                problems.append(f"the request offered the tools {body.get('tools')!r}")
+            m2 = (requests[1]["body"] or {}).get("messages") or []
+            if m2[:2] != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(r1)}]:
+                problems.append(f"the first answer didn't come back unchanged: {m2[:2]!r}")
+            result = ((m2[2:3] or [{}])[0].get("content") or [{}])[0] if len(m2) == 3 else {}
+            if (result.get("type"), result.get("tool_use_id"), result.get("is_error")) != ("tool_result", "toolu_1", False) \
+                    or "Processor: " not in str(result.get("content")) or "Memory: " not in str(result.get("content")):
+                problems.append(f"the computer's status didn't come back as the tool's result: {result!r}")
+            m3 = (requests[2]["body"] or {}).get("messages") or []
+            if m3[:3] != m2 or m3[3:4] != [{"role": "assistant", "content": blocks_as_sent(r2)}] or len(m3) != 5:
+                problems.append(f"the second round's request wasn't the first's plus the answer and result: {m3[3:]!r}")
+            m4 = (requests[3]["body"] or {}).get("messages") or []
+            if len(m4) != 7 or m4[:5] != m3 or m4[6] != {"role": "user", "content": "again"} \
+                    or m4[5] != {"role": "assistant", "content": blocks_as_sent([("thinking", "sig-3"), ("text", final[:1])])}:
+                problems.append(f"the second question's messages were {m4!r}")
         if first == "test: Claude said":
             problems += check_colours(answered, args.size)
             if colours(answered).get(BUBBLE, 0) < 1000:

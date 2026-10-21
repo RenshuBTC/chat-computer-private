@@ -31,11 +31,13 @@ mod netcard;
 mod network;
 mod paging;
 mod pci;
+mod power;
 mod ps2;
 mod random;
 mod screen;
 mod settings;
 mod sync;
+mod system;
 mod text;
 mod time;
 mod usb;
@@ -90,10 +92,28 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     let brand = cpu::brand();
     let cpu_name: String = String::from_utf8_lossy(&brand).split_whitespace().collect::<alloc::vec::Vec<_>>().join(" ");
     let size_mm = bootinfo::edid::parse(info.edid()).and_then(|e| e.size_mm());
+    let firmware: String = char::decode_utf16(info.firmware_vendor.iter().copied().take_while(|&c| c != 0))
+        .map(|c| c.unwrap_or('\u{FFFD}'))
+        .collect();
+    let mut facts = system::Facts {
+        cpu: cpu_name.clone(),
+        screen: (info.framebuffer.width as usize, info.framebuffer.height as usize),
+        diagonal_in: None,
+        secure_boot: match info.secure_boot {
+            bootinfo::SECURE_BOOT_ON => Some(true),
+            bootinfo::SECURE_BOOT_OFF => Some(false),
+            _ => None,
+        },
+        firmware,
+        ps2_keyboard: None,
+    };
     match screen::Screen::new(&info.framebuffer) {
         Some(screen) => {
             let (w, h) = (screen.width, screen.height);
             let layout = chat::Chat::show(screen, size_mm, &cpu_name, info.secure_boot);
+            if layout.size_known {
+                facts.diagonal_in = Some((layout.diagonal_in + 0.5) as u32);
+            }
             log!(
                 "Chat Computer kernel: screen {w}x{h}, monitor size {:?} mm, viewed from about {} cm{}: drawn at {}%, text {}.{} px",
                 size_mm,
@@ -106,8 +126,10 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         }
         None => log!("Chat Computer kernel: no screen to draw on"),
     }
+    system::set(facts);
 
     let acpi = acpi::Acpi::read(info.rsdp);
+    power::init(&acpi);
     log!(
         "Chat Computer kernel: ACPI {} from {}: {} processor cores, {} I/O APICs, timer {:?}",
         acpi.revision,
@@ -125,7 +147,11 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     let (speed, how) = time::init(&acpi);
     log!("Chat Computer kernel: timer speed {how}: {speed} counts a second, {} ticks a second", time::HZ);
     let (tsc, measured) = time::tsc_mhz();
-    log!("Chat Computer kernel: time-stamp counter {tsc} MHz{}", if measured { "" } else { " (assumed)" });
+    log!(
+        "Chat Computer kernel: time-stamp counter {tsc} MHz{}; time since start-up counted by {}",
+        if measured { "" } else { " (assumed)" },
+        time::uptime_by()
+    );
 
     let (iommus, left_on) = iommu::take_over(&acpi);
     if iommus > 0 {
@@ -142,6 +168,7 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     // After the USB controllers: a firmware that made a USB keyboard look like a PS/2 one has stopped.
     let ps2_name = if acpi.portable { "built-in keyboard" } else { "PS/2 keyboard" };
     let ps2 = ps2::init();
+    system::set_ps2(ps2.then_some(ps2_name));
     log!("Chat Computer kernel: PS/2 keyboard {}", if ps2 { "found" } else { "not found" });
 
     cpu::enable_interrupts();
@@ -181,6 +208,7 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
             chat::keyboards(&usb::status(), ps2::present().then_some(ps2_name));
         }
         chat::tick();
+        power::due();
     }
 }
 

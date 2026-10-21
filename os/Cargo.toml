@@ -2,7 +2,7 @@
 # See README.md. Each crate is built for its own target by ./build.sh (cargo can't mix targets in one build).
 [workspace]
 resolver = "3"
-members = ["bootinfo", "boot", "kernel", "font"]
+members = ["bootinfo", "boot", "kernel", "font", "net", "crypto", "tls", "claude"]
 
 [workspace.package]
 version = "0.1.0"

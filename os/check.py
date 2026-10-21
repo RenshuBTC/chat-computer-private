@@ -49,6 +49,10 @@ log go to out/.
                                      box (a wrong one refused), the key reaching neither Claude nor the disk; and
                                      read at once when BitLocker keeps its key in the clear (also needs
                                      python3-cryptography)
+    ./check.py --drives              the PC's other drives: a second NVMe SSD (GPT), a SATA drive partitioned the old
+                                     way (MBR) and another (GPT), each with an NTFS volume, read by the letters
+                                     Windows' registry gives them (one Windows hasn't seen given the next free one;
+                                     also needs ntfs-3g's mkntfs)
     ./check.py --sound               sound: a build that rings the timer's chime once it's ready, on each kind of
                                      HD Audio QEMU has (the ICH6's and ICH9's controllers; codecs with a line out,
                                      a line out and in, and a speaker and microphone), recorded: the chime's two
@@ -198,7 +202,7 @@ class VirtualPC:
         if disk is None:
             drive = ("-drive", f"format=raw,file=fat:rw:{esp}")
         elif disk[1] == "nvme":
-            drive = ("-drive", f"if=none,id=d0,format=raw,file={disk[0]}", "-device", "nvme,serial=ccmemory1,drive=d0")
+            drive = ("-drive", f"if=none,id=d0,format=raw,file={disk[0]}", "-device", "nvme,serial=ccmemory1,drive=d0,bootindex=0")
         else:
             drive = ("-drive", f"if=none,id=d0,format=raw,file={disk[0]}", "-device", "ide-hd,drive=d0,bus=ide.0")
         vars_fd = tmp / "vars.fd"
@@ -1220,6 +1224,13 @@ def fnv1a(data: bytes) -> int:
     return h
 
 
+# The partitions Windows' registry in the test volume (registry/tests/make.py's SYSTEM hive) gives drive letters:
+# C: and D: by their GPT partitions' own GUIDs, E: by its MBR disk's signature and where it starts.
+WINDOWS_PARTITION = "b0e1f3a2-5c4d-4e6f-8a9b-0c1d2e3f4a5b"
+DATA_PARTITION = "c1f2a4b3-6d5e-4f70-9bac-1d2e3f4a5b6c"
+MBR_SIGNATURE, MBR_OFFSET = 0x5EEDCAFE, 1 << 20
+
+
 def windows_volume() -> bytes:
     """The ntfs crate's test volume: Windows' folders, a person's in Users, and more."""
     return subprocess.run(["xz", "-dc", str(HERE / "ntfs/tests/small.img.xz")], check=True, capture_output=True).stdout
@@ -1233,8 +1244,8 @@ def windows_disk(path: Path, efi: Path, settings: str, memory_id: int, volume: b
     with open(path, "r+b") as f:
         f.truncate((96 << 20) + len(volume) + (4 << 20))
     subprocess.run(["sgdisk", "-e", str(path)], check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["sgdisk", "-n", f"2:0:+{len(volume) >> 20}M", "-t", "2:0700", "-c", "2:Windows", str(path)], check=True,
-                   stdout=subprocess.DEVNULL)
+    subprocess.run(["sgdisk", "-n", f"2:0:+{len(volume) >> 20}M", "-t", "2:0700", "-c", "2:Windows", "-u", f"2:{WINDOWS_PARTITION}",
+                    str(path)], check=True, stdout=subprocess.DEVNULL)
     info = subprocess.run(["sgdisk", "-i", "2", str(path)], check=True, capture_output=True, text=True).stdout
     first = int(next(line for line in info.splitlines() if line.startswith("First sector:")).split()[2])
     with open(path, "r+b") as f:
@@ -1336,7 +1347,7 @@ def files_check(args) -> list[str]:
             last = ((r.get("messages") or [{}])[-1]).get("content")
             if isinstance(last, list) and last and last[0].get("type") == "tool_result":
                 results[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
-        if "files: Windows' drive (C:, NTFS, 33.5 MB), read only" not in text:
+        if "files: C: Windows' drive (NTFS, 33.5 MB), read only" not in text:
             problems.append("Windows' drive wasn't found as it should be")
         missing = [q for q in calls if q not in results]
         if missing:
@@ -1445,8 +1456,158 @@ def files_check(args) -> list[str]:
             problems.append(f"the long file's first part wasn't 60,000 bytes and where to go on: {big[-200:]!r}")
         if "The file goes on" in more or len(more.split(":\n", 1)[1]) != size - 60_000:
             problems.append(f"the long file's second part wasn't the rest of it: {more[-200:]!r}")
-        if "Files: Windows' drive (C:, NTFS, 33.5 MB), read only" not in said["status"]:
+        if "Files: C: Windows' drive (NTFS, 33.5 MB), read only" not in said["status"]:
             problems.append("computer_status didn't say what files it can read")
+    finally:
+        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
+def gpt_disk(path: Path, volume: bytes, guid: str | None = None) -> None:
+    """A disk with a GPT and one basic data partition (its own GUID `guid`, else a random one) holding `volume`."""
+    with open(path, "wb") as f:
+        f.truncate(len(volume) + (2 << 20))
+    unique = ["-u", f"1:{guid}"] if guid else []
+    subprocess.run(["sgdisk", "-n", f"1:2048:+{len(volume) >> 20}M", "-t", "1:0700", *unique, str(path)], check=True,
+                   stdout=subprocess.DEVNULL)
+    with open(path, "r+b") as f:
+        f.seek(2048 * 512)
+        f.write(volume)
+
+
+def mbr_disk(path: Path, volume: bytes, signature: int) -> None:
+    """A disk as older PCs partition one: an MBR with the disk's signature, and one NTFS partition (type 7) from 1 MiB
+    holding `volume`."""
+    import struct
+
+    sectors = len(volume) // 512
+    mbr = bytearray(512)
+    mbr[0x1B8:0x1BC] = struct.pack("<I", signature)
+    mbr[0x1BE:0x1CE] = bytes([0, 0xFE, 0xFF, 0xFF, 0x07, 0xFE, 0xFF, 0xFF]) + struct.pack("<II", 2048, sectors)
+    mbr[510:512] = b"\x55\xAA"
+    with open(path, "wb") as f:
+        f.write(mbr)
+        f.seek(2048 * 512)
+        f.write(volume)
+
+
+def empty_ntfs(tmp: Path, label: str, mib: int) -> bytes:
+    """An empty NTFS volume of `mib` MiB named `label`, made by mkntfs."""
+    img = tmp / f"{label}.ntfs"
+    with open(img, "wb") as f:
+        f.truncate(mib << 20)
+    subprocess.run(["mkntfs", "-F", "-Q", "-q", "-L", label, "-s", "512", "-c", "4096", str(img)], check=True,
+                   stderr=subprocess.DEVNULL)
+    data = img.read_bytes()
+    img.unlink()
+    return data
+
+
+def drives_check(args) -> list[str]:
+    """The PC's other drives, read: Windows' drive on the start-up NVMe SSD, a second NVMe SSD (GPT) with the ntfs
+    crate's other test volume, a SATA drive partitioned the old way (MBR) with an empty volume named Photos, and a
+    second SATA drive (GPT) with one named Spare. Windows' registry (the SYSTEM hive in Windows' test volume) names the
+    first three C:, D: and E:, by their partitions; it gives F: to a USB stick, so the fourth, which Windows hasn't
+    seen, gets G:. A stand-in for Claude asks for the computer's status (each drive, its letter and its name), lists
+    D:'s and E:'s folders, reads a file on D:, searches D:, and asks for a drive there isn't."""
+    import http.server
+    import re
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-drives-"))
+    test_authority(tmp)
+    requests: list[dict] = []
+    calls = {
+        "status": ("computer_status", {}),
+        "dlist": ("list_files", {"path": "D:\\"}),
+        "dread": ("read_file", {"path": "d:/hello.txt"}),
+        "elist": ("list_files", {"path": "E:"}),
+        "dfind": ("find_files", {"words": "hello again", "in": "D:\\"}),
+        "cread": ("read_file", {"path": "Users\\Sam\\Documents\\Shopping list.txt"}),
+        "nodrive": ("read_file", {"path": "Z:\\note.txt"}),
+    }
+
+    class Api(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
+            requests.append(body)
+            asked = ((body.get("messages") or [{}])[-1]).get("content")
+            if isinstance(asked, str) and asked in calls:
+                name, inp = calls[asked]
+                send_stream(self, [("thinking", "sig-d"), ("tool_use", f"toolu_{asked}", name, [json.dumps(inp)])], "tool_use")
+            else:
+                send_stream(self, [("text", ["Done."])], "end_turn")
+
+    server = serve_https(Api, tmp)
+    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    problems: list[str] = []
+    try:
+        settings = f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
+        disk = tmp / "pc.img"
+        windows_disk(disk, BUILT, settings, MEMORY_ID)
+        data = subprocess.run(["xz", "-dc", str(HERE / "ntfs/tests/big-sectors.img.xz")], check=True, capture_output=True).stdout
+        gpt_disk(tmp / "data.img", data, DATA_PARTITION)
+        mbr_disk(tmp / "photos.img", empty_ntfs(tmp, "Photos", 16), MBR_SIGNATURE)
+        gpt_disk(tmp / "spare.img", empty_ntfs(tmp, "Spare", 8))
+        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=",
+                 "-drive", f"if=none,id=d1,format=raw,file={tmp / 'data.img'}", "-device", "nvme,serial=ccdata1,drive=d1",
+                 "-drive", f"if=none,id=d2,format=raw,file={tmp / 'photos.img'}", "-device", "ide-hd,drive=d2,bus=ide.1",
+                 "-drive", f"if=none,id=d3,format=raw,file={tmp / 'spare.img'}", "-device", "ide-hd,drive=d3,bus=ide.3")
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            wait_for(pc.log, ("network: address",), 60)
+            time.sleep(1)
+            for n, question in enumerate(calls):
+                monitor_many(pc.mon, keys_for(question) + ["sendkey ret"])
+                end = time.time() + 60
+                while time.time() < end and pc.text().count("Claude: answered (5 characters") < n + 1:
+                    time.sleep(0.5)
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        results = {}
+        for r in requests:
+            last = ((r.get("messages") or [{}])[-1]).get("content")
+            if isinstance(last, list) and last and last[0].get("type") == "tool_result":
+                results[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
+        missing = [q for q in calls if q not in results]
+        if missing:
+            return [f"no tool result came back for {missing}"]
+        said = {q: str(r.get("content")[0]["text"] if isinstance(r.get("content"), list) else r.get("content")) for q, r in results.items()}
+        drives = ("C: Windows' drive (NTFS, 33.5 MB); D: \u201cbig-sectors\u201d (NTFS, 67.1 MB); E: \u201cPhotos\u201d (NTFS, "
+                  "16.7 MB); G: \u201cSpare\u201d (NTFS, 8.3 MB, its letter given here, as Windows hasn't named it), read only")
+        if f"files: {drives}" not in text:
+            problems.append("the log didn't list the drives as they are")
+        if not re.search(r"other drives: NVMe SSD .*; SATA drive .* on port 1 .*; SATA drive .* on port 3 ", text):
+            problems.append("the other drives weren't started")
+        day = r"\d{4}-\d\d-\d\d"
+        # D:'s first folder, as ntfs-3g left it: its folders, and its files (links among them).
+        top = [line.split("\t") for line in (HERE / "ntfs/tests/big-sectors.txt").read_text().splitlines() if "/" not in line.split("\t")[0]]
+        folders, files = sum(1 for t in top if t[1] == "dir"), sum(1 for t in top if t[1] != "dir")
+        want = {
+            "status": rf"(?s).*Files: {re.escape(drives)}\n.*",
+            "dlist": rf"(?s)D:\\: {folders} folders, {files} files\n.*hello\.txt \(17 bytes, .*",
+            "dread": rf"D:\\hello\.txt \(17 bytes, changed {day}\):\nHello from NTFS\.\n",
+            "elist": r"E:\\: 0 folders, 0 files",
+            "dfind": rf"Under D:\\, 1 found:\nD:\\Documents\\hello again\.txt \(17 bytes, {day}\)\n\[Looked in \d+ folders: all of them\.\]",
+            "cread": rf"C:\\Users\\Sam\\Documents\\Shopping list\.txt \(43 bytes, changed {day}\):\nMilk, eggs, tea — and café au lait\.\r\n",
+            "nodrive": r"There's no drive Z: here \(its drives are C:, D:, E:, G:\)",
+        }
+        for q, pattern in want.items():
+            if not re.fullmatch(pattern, said[q]):
+                problems.append(f"{q}: {said[q][:600]!r}")
+        if not results["nodrive"].get("is_error"):
+            problems.append("asking for a drive there isn't wasn't an error")
     finally:
         server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1559,7 +1720,7 @@ def bitlocker_check(args) -> list[str]:
             if not wait_for(pc.log, ("files: That recovery key doesn't unlock",), 120):
                 problems.append("a wrong recovery key typed wasn't refused")
             monitor_many(pc.mon, keys_for("here it is: " + right.replace("-", " ")) + ["sendkey ret"])
-            if not wait_for(pc.log, ("files: Windows' drive is unlocked",), 120):
+            if not wait_for(pc.log, ("files: C: (Windows' drive) is unlocked",), 120):
                 problems.append("the right recovery key didn't unlock the drive")
             pc.settled_picture("bitlocker-unlocked")
             for question in ("list", "read", "photo", "status"):
@@ -1576,10 +1737,9 @@ def bitlocker_check(args) -> list[str]:
             return problems
         said = {q: said_in(r) for q, r in results.items()}
         day = r"\d{4}-\d\d-\d\d"
-        locked = (r"Chat Computer's own system can't read this computer's files: Windows' drive is encrypted with "
-                  r"BitLocker\. To read it here, the person types its recovery key in the message box: 48 digits, .*; its "
-                  rf"key ID starts {key_id}\. Chat Computer's own system unlocks the drive with the key itself: it isn't "
-                  r"sent to Claude, or kept, so it's typed again after a restart")
+        locked = (r"C: is encrypted with BitLocker\. To read it here, the person types its recovery key in the message "
+                  rf"box: 48 digits, .*; its key ID starts {key_id}\. Chat Computer's own system unlocks the drive with "
+                  r"the key itself: it isn't sent to Claude, or kept, so it's typed again after a restart")
         want = {
             "locked": locked,
             "list": rf"C:\\Users\\Sam\\Documents: 1 folder, 3 files\nLetter\.docx \(4 KB, {day}\)\n"
@@ -1593,11 +1753,11 @@ def bitlocker_check(args) -> list[str]:
                 problems.append(f"{q}: {said[q][:500]!r}")
         if not results["locked"].get("is_error"):
             problems.append("the locked drive's listing wasn't an error")
-        if f"files: none: Windows' drive is encrypted with BitLocker. To read it here" not in text:
+        if f"files: C: encrypted with BitLocker, locked ({size}; its recovery key's ID starts {key_id}), read only. To read a locked drive" not in text:
             problems.append("the log didn't say Windows' drive is locked with BitLocker")
-        if f"files: That recovery key doesn't unlock Windows' drive. The key that does has the ID starting {key_id}" not in text:
+        if f"files: That recovery key doesn't unlock a drive here. The keys that do have IDs starting {key_id} (C:)" not in text:
             problems.append("the wrong key's refusal didn't name the right key's ID")
-        unlocked = f"Files: Windows' drive (C:, NTFS, {size}, encrypted with BitLocker: unlocked with its recovery key until Chat Computer restarts), read only"
+        unlocked = f"Files: C: Windows' drive (NTFS, {size}, encrypted with BitLocker: unlocked with its recovery key until Chat Computer restarts), read only"
         if unlocked not in said["status"]:
             problems.append(f"computer_status didn't say the drive was unlocked: {said['status'][:600]!r}")
         listing = {line.split("\t")[0]: line.split("\t") for line in (HERE / "ntfs/tests/small.txt").read_text().splitlines()}
@@ -1635,7 +1795,7 @@ def bitlocker_check(args) -> list[str]:
         finally:
             pc.stop()
         text = pc.text()
-        clear = (f"files: Windows' drive (C:, NTFS, {size}, encrypted with BitLocker, which keeps its key in the clear: "
+        clear = (f"files: C: Windows' drive (NTFS, {size}, encrypted with BitLocker, which keeps its key in the clear: "
                  "suspended, or not switched on yet), read only")
         if clear not in text:
             problems.append("with BitLocker's key in the clear, the drive wasn't read at once")
@@ -1847,6 +2007,7 @@ def main() -> int:
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
     ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by Claude's file tools")
     ap.add_argument("--bitlocker", action="store_true", help="Windows' drive encrypted with BitLocker, unlocked")
+    ap.add_argument("--drives", action="store_true", help="the PC's other drives (NVMe and SATA) read, by Windows' letters")
     ap.add_argument("--secure-boot", action="store_true")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
@@ -1868,6 +2029,8 @@ def main() -> int:
         problems = files_check(args)
     elif args.bitlocker:
         problems = bitlocker_check(args)
+    elif args.drives:
+        problems = drives_check(args)
     else:
         if not args.no_build:
             build()

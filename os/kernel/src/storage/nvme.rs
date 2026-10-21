@@ -1,8 +1,8 @@
 //! NVMe SSDs (the NVM Express base specification): the standard interface of every PC's SSD that plugs into an M.2
-//! socket's PCI Express lanes, so one driver covers them all. Chat Computer uses one, the one its start-up partition
-//! is on, and only a little: a few blocks of its own memory file read and written now and then, so this driver keeps
-//! it simple: one queue of commands (and the administration queue to set it up), one 4 KiB page a command, and the
-//! answers waited for (polled) rather than interrupting.
+//! socket's PCI Express lanes, so one driver covers them all. Chat Computer uses them only a little: a few blocks of
+//! its own memory file on the one its start-up partition is on, read and written now and then, and Windows' files
+//! read, on that one and the others; so this driver keeps it simple: one queue of commands (and the administration
+//! queue to set it up), one 4 KiB page a command, and the answers waited for (polled) rather than interrupting.
 //!
 //! The controller is reset first: the firmware's driver used it until the start-up stage ended the firmware's
 //! services, and a reset is the specification's way to take a controller over. Before the PC restarts, it's told to
@@ -75,6 +75,19 @@ pub struct Nvme {
     pub model: String,
     /// A page for data going to and from the drive.
     data: Page,
+    /// Switched on with this driver's queues (so switched off again if it's dropped: only a drive that didn't
+    /// start is).
+    enabled: bool,
+}
+
+impl Drop for Nvme {
+    fn drop(&mut self) {
+        if self.enabled {
+            // (Off, so it no longer uses this driver's memory, which is given back.)
+            self.w32(CC, self.r32(CC) & !CC_ENABLE);
+            self.wait(|d| d.r32(CSTS) & CSTS_READY == 0);
+        }
+    }
 }
 
 unsafe impl Send for Nvme {}
@@ -184,6 +197,7 @@ impl Nvme {
             blocks: 0,
             model: String::new(),
             data,
+            enabled: false,
         };
         let cap = d.r64(CAP);
         if cap == !0 {
@@ -215,6 +229,7 @@ impl Nvme {
         d.w64(ASQ, d.admin.sq.phys);
         d.w64(ACQ, d.admin.cq.phys);
         d.w32(CC, CC_QUEUE_SIZES | CC_ENABLE);
+        d.enabled = true;
         if !d.wait(|d| d.r32(CSTS) & (CSTS_READY | CSTS_FATAL) != 0) || d.r32(CSTS) & CSTS_FATAL != 0 {
             return Err(String::from("it didn't start"));
         }

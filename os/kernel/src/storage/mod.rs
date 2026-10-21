@@ -1,5 +1,6 @@
 //! Storage: the drive Chat Computer's start-up partition is on, and Chat Computer's memory file in that partition
-//! (`\EFI\chatcomputer-own\memory.bin`), where the conversation is kept across restarts.
+//! (`\EFI\chatcomputer-own\memory.bin`), where the conversation is kept across restarts; and the PC's other drives
+//! (NVMe and SATA), for Windows' other drives (D:...), only ever read.
 //!
 //! The start-up stage says which drive and partition it was started from (the firmware's device path for it: the
 //! PCI devices on the way to the controller, the NVMe namespace or SATA port, the partition's first block). The
@@ -60,6 +61,11 @@ fn follow(d: &StartDisk) -> Result<pci::Function, String> {
 static START: SpinLock<Option<Box<dyn Disk>>> = SpinLock::new(None);
 /// What it is (for the computer's status), or why it couldn't be started.
 static START_SAID: SpinLock<Option<Result<String, String>>> = SpinLock::new(None);
+/// The start-up drive's controller, and its port (SATA), so it isn't started a second time as another drive.
+static START_IS: SpinLock<Option<(pci::Address, Option<u32>)>> = SpinLock::new(None);
+/// The PC's other drives, started (`open_others`): read (files.rs), never written. Taken out of their lock while
+/// they're used, as the start-up drive is.
+static OTHERS: SpinLock<Vec<Option<Box<dyn Disk>>>> = SpinLock::new(Vec::new());
 
 /// Starts the drive the start-up partition is on. Says which, or why it couldn't, for the log.
 pub fn open_start(d: &StartDisk) -> Result<String, String> {
@@ -89,14 +95,74 @@ pub fn with_start<T>(f: impl FnOnce(&mut dyn Disk) -> T) -> Option<T> {
     Some(result)
 }
 
-/// Before the PC restarts or turns off: the start-up drive writes what it has cached. (Not if it's in use: a crash
-/// in the middle of a save.)
+/// How many drives there are to read: the start-up drive (0) and the others (1 on).
+pub fn drives() -> usize {
+    1 + OTHERS.lock().len()
+}
+
+/// Runs `f` with drive `i` (0: the start-up drive; 1 on: the others), nothing locked meanwhile (None if there's no
+/// such drive, or it isn't started).
+pub fn with_drive<T>(i: usize, f: impl FnOnce(&mut dyn Disk) -> T) -> Option<T> {
+    if i == 0 {
+        return with_start(f);
+    }
+    let mut disk = OTHERS.lock().get_mut(i - 1)?.take()?;
+    let result = f(disk.as_mut());
+    OTHERS.lock()[i - 1] = Some(disk);
+    Some(result)
+}
+
+/// Starts the PC's other drives: every NVMe controller's first namespace, and every SATA controller's ports with a
+/// drive on them, but the start-up drive. Says what it found, for the log.
+pub fn open_others() -> String {
+    let start = *START_IS.lock();
+    let mut found: Vec<Option<Box<dyn Disk>>> = Vec::new();
+    let mut said: Vec<String> = Vec::new();
+    for f in pci::find(0x01, 0x08, 0x02) {
+        // (The start-up drive's controller's other namespaces, which PCs' SSDs don't have, aren't read.)
+        if start.is_some_and(|(at, _)| at == f.at) {
+            continue;
+        }
+        match nvme::Nvme::start(&f, 0) {
+            Ok(d) => {
+                said.push(d.describe());
+                found.push(Some(Box::new(d)));
+            }
+            Err(why) => said.push(format!("the NVMe controller at {} didn't start: {why}", f.at)),
+        }
+    }
+    for f in pci::find(0x01, 0x06, 0x01) {
+        let ports = ahci::ports_in_use(&f);
+        for port in (0..32).filter(|p| ports & 1 << p != 0) {
+            if start == Some((f.at, Some(port))) {
+                continue;
+            }
+            match ahci::Ahci::start(&f, port) {
+                Ok(d) => {
+                    said.push(d.describe());
+                    found.push(Some(Box::new(d)));
+                }
+                Err(why) => said.push(format!("port {port} of the SATA controller at {} didn't start: {why}", f.at)),
+            }
+        }
+    }
+    *OTHERS.lock() = found;
+    if said.is_empty() { String::from("other drives: none") } else { format!("other drives: {}", said.join("; ")) }
+}
+
+/// Before the PC restarts or turns off: the start-up drive writes what it has cached, and every drive is told (an
+/// NVMe SSD counts being switched off without being told). (Not a drive in use: a crash in the middle of a save.)
 pub fn shut_down() {
     if let Some(mut guard) = START.try_lock()
         && let Some(disk) = guard.as_mut()
     {
         let _ = disk.flush();
         disk.shut_down();
+    }
+    if let Some(mut guard) = OTHERS.try_lock() {
+        for disk in guard.iter_mut().flatten() {
+            disk.shut_down();
+        }
     }
 }
 
@@ -105,12 +171,14 @@ fn start_disk(d: &StartDisk) -> Result<Box<dyn Disk>, String> {
     let f = follow(d)?;
     match d.kind {
         bootinfo::DISK_NVME if (f.class, f.subclass, f.interface) == (0x01, 0x08, 0x02) => {
+            *START_IS.lock() = Some((f.at, None));
             Ok(Box::new(nvme::Nvme::start(&f, d.nvme_namespace)?))
         }
         bootinfo::DISK_SATA if (f.class, f.subclass, f.interface) == (0x01, 0x06, 0x01) => {
             if d.sata_multiplier != 0xFFFF && d.sata_multiplier != 0 {
                 return Err(String::from("the drive is behind a port multiplier"));
             }
+            *START_IS.lock() = Some((f.at, Some(d.sata_port as u32)));
             Ok(Box::new(ahci::Ahci::start(&f, d.sata_port as u32)?))
         }
         bootinfo::DISK_NVME | bootinfo::DISK_SATA => Err(format!("the device at {} isn't the controller expected", f.at)),

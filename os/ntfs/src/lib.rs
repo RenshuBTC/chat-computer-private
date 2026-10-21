@@ -84,6 +84,7 @@ const DATA: u32 = 0x80;
 const INDEX_ROOT: u32 = 0x90;
 const INDEX_ALLOCATION: u32 = 0xA0;
 const REPARSE_POINT: u32 = 0xC0;
+const VOLUME_NAME: u32 = 0x60;
 const END: u32 = 0xFFFF_FFFF;
 /// Attribute flags.
 const COMPRESSED: u16 = 0x0001;
@@ -111,6 +112,8 @@ const DOS_ONLY: u8 = 2;
 const FIRST_USER_RECORD: u64 = 16;
 /// The root folder's record.
 pub const ROOT: u64 = 5;
+/// $Volume: the volume's name and version.
+const VOLUME: u64 = 3;
 const UPCASE: u64 = 10;
 /// The most runs, attributes and index levels believed (so damaged numbers can't make it loop or use all memory).
 const MOST_RUNS: usize = 1 << 20;
@@ -811,6 +814,20 @@ impl Volume {
 
 /// "$I30", the name of a folder's index.
 const I30: [u16; 4] = [b'$' as u16, b'I' as u16, b'3' as u16, b'0' as u16];
+
+impl Volume {
+    /// The volume's name, as File Explorer shows it beside the drive's letter ("Data"; "" if it hasn't one).
+    pub fn label(&self, disk: &mut impl Disk) -> Result<String, Error> {
+        let names = self.attributes(disk, VOLUME, VOLUME_NAME)?;
+        Ok(match names.first().map(|a| &a.value) {
+            Some(Value::Resident(b)) => {
+                let units = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]));
+                char::decode_utf16(units).map(|c| c.unwrap_or('\u{FFFD}')).collect()
+            }
+            _ => String::new(),
+        })
+    }
+}
 
 /// The root folder, as an entry (it isn't in a folder).
 pub fn root() -> Entry {

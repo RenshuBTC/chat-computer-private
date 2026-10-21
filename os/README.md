@@ -106,10 +106,16 @@ NVMe and SATA drivers.
     JSON: `{"notes": [...], "messages": [...]}`) after every answer, and read back at start-up, so a restart carries
     on the same conversation. Only the memory file's own blocks are
     ever written, each read and checked first: never the file system, Windows' files or any other partition.
-    Before a restart, the drive is told to write what it has cached;
-  * Windows' drive, C:, read and never changed (`files.rs`, by Chat Computer's own NTFS reader, `ntfs/`): of the
-    start-up drive's basic data partitions, the NTFS one with Windows' folders. Claude reads the person's files there
-    through its tools (below). Links are followed on C: (a junction such as "My Documents", a symbolic link);
+    Before a restart, the drive is told to write what it has cached. The PC's other drives are started too, to be
+    read: every NVMe controller's first namespace, and every SATA port with a disk on it (an optical drive left
+    alone); each told before a restart too (an SSD counts being switched off without being told);
+  * Windows' drives, read and never changed (`files.rs`, by Chat Computer's own NTFS reader, `ntfs/`): every NTFS
+    volume in the basic data partitions of every drive (GPT, or an older PC's MBR), with the letter Windows gives it:
+    C:, Windows' own (the one with Windows' folders), and the others as Windows' registry names them (SYSTEM's
+    MountedDevices, read by `registry/` from C:, by each partition's GUID, or its disk's signature and where it
+    starts); a drive Windows hasn't seen gets the next letter no drive has, as Windows would give it. The computer's
+    status lists them, with their names. Claude reads the person's files there through its tools (below). Links are
+    followed within a drive (a junction such as "My Documents", a symbolic link);
     OneDrive's files are read when they're downloaded to the PC, and said to be online only when they aren't. Word,
     Excel and PowerPoint files are read as their words (`office/`, through Chat Computer's own ZIP and DEFLATE
     reader, `zip/`); pictures and PDFs go to Claude whole, as the API takes them, for Claude to see, and a picture
@@ -120,9 +126,9 @@ NVMe and SATA drivers.
     at once if BitLocker keeps its key in the clear (suspended, or not switched on yet), else once the person types
     its recovery key in the message box (48 digits, from their Microsoft account at aka.ms/myrecoverykey). The key
     is taken out of the message there and never sent to Claude, shown or kept (so it's typed again after a restart);
-    a wrong one is refused, naming the key ID that unlocks the drive. Not yet: a drive Windows is still encrypting
-    as it's written to, files Windows compressed itself ("Compact OS", mostly its own), other drives (D:), and
-    Office's files from before 2007;
+    a wrong one is refused, naming the key ID that unlocks the drive (each locked drive is tried). Not yet: a drive
+    Windows is still encrypting as it's written to, files Windows compressed itself ("Compact OS", mostly its own),
+    USB drives, and Office's files from before 2007;
   * the sound controller (`sound/hda.rs`): HD Audio, Intel's High Definition Audio, which nearly every PC's chipset
     has, Intel's and AMD's alike. It's reset and its codecs found on its link; the first codec with an audio function
     that has outputs is used (a graphics card's controller has only its screens' digital ones). Each codec
@@ -146,22 +152,22 @@ NVMe and SATA drivers.
       every 4 seconds for a minute (an alarm every 6 for ten minutes) until a key is pressed; a reminder rings once.
       They count the kernel's own time, so a clock that's out doesn't move them, and last until the PC restarts;
     * `set_volume`: how loud the chimes are, 0 to 100%;
-    * `list_files`, `read_file` and `find_files`: a folder's files and folders on Windows' drive (with their sizes and
-      when they changed; Windows' hidden system files, such as desktop.ini, left out as File Explorer leaves them
-      out), a file's text (UTF-8, or UTF-16 as Notepad saves it, 60,000 bytes at a time, from any point), and the
-      files and folders whose names have some words in them, from the person's folders (Users) down by default,
-      hidden folders such as AppData passed by. A Word, Excel or PowerPoint file (or OpenDocument's) comes back as
-      its words: a document's paragraphs with Markdown's headings, lists and tables; a workbook's sheets as CSV with
-      each row's number and each column's letter, dates as dates, formulas after their values; a presentation's
-      slides with their notes. A picture (JPEG, PNG, GIF or WebP) or a PDF (up to 20 MB) goes to Claude in the tool's
-      result, so Claude sees it (a PDF's pages as words and as pictures): a picture whole if the API shows it to Claude
-      as it is, else a JPEG made the size Claude sees (WebP pictures, which aren't made smaller yet, whole up to 7.4 MB
-      and 8,000 pixels each way). The newest of them are sent with each question, up to 28 MB and 20 of them; older ones are taken out,
-      a line saying each was there, and the memory file keeps the conversation without them. A ZIP archive's files are
-      listed. Anything else is said to be the kind it is;
-    * `show_picture`: a photo, a screenshot or a drawing on Windows' drive (JPEG, PNG or GIF), shown to the person in
-      the conversation where Claude's answer is, as wide as the column at most (and two thirds of its height), its
-      corners rounded, turned the way the camera says (`picture/`). The last 12 shown keep their pixels;
+    * `list_files`, `read_file` and `find_files`: a folder's files and folders on one of Windows' drives (C:, D:...)
+      (with their sizes and when they changed; Windows' hidden system files, such as desktop.ini, left out as File
+      Explorer leaves them out), a file's text (UTF-8, or UTF-16 as Notepad saves it, 60,000 bytes at a time, from any
+      point), and the files and folders whose names have some words in them, from the person's folders (Users) down by
+      default, hidden folders such as AppData passed by. A Word, Excel or PowerPoint file (or OpenDocument's) comes
+      back as its words: a document's paragraphs with Markdown's headings, lists and tables; a workbook's sheets as
+      CSV with each row's number and each column's letter, dates as dates, formulas after their values; a
+      presentation's slides with their notes. A picture (JPEG, PNG, GIF or WebP) or a PDF (up to 20 MB) goes to Claude
+      in the tool's result, so Claude sees it (a PDF's pages as words and as pictures): a picture whole if the API
+      shows it to Claude as it is, else a JPEG made the size Claude sees (WebP pictures, which aren't made smaller
+      yet, whole up to 7.4 MB and 8,000 pixels each way). The newest of them are sent with each question, up to 28 MB
+      and 20 of them; older ones are taken out, a line saying each was there, and the memory file keeps the
+      conversation without them. A ZIP archive's files are listed. Anything else is said to be the kind it is;
+    * `show_picture`: a photo, a screenshot or a drawing on one of Windows' drives (JPEG, PNG or GIF), shown to the
+      person in the conversation where Claude's answer is, as wide as the column at most (and two thirds of its
+      height), its corners rounded, turned the way the camera says (`picture/`). The last 12 shown keep their pixels;
     * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
       keyboard controller's reset line (`power.rs`);
@@ -228,16 +234,16 @@ NVMe and SATA drivers.
 * `fat/` is Chat Computer's own reader of FAT12, FAT16 and FAT32 (the file system of every PC's start-up
   partition), long names included: it finds a file's blocks. Tested against volumes made by `mkfs.vfat` and
   filled by mtools, fragmented files among them.
-* `ntfs/` is Chat Computer's own reader of NTFS, the file system of Windows' drive, which it never changes: the
-  master file table's records (put back together from their update sequences, attributes kept in them or in runs
-  of clusters, and in other records, through an attribute list, for a file in hundreds of pieces), folders' indexes
-  (B-trees of names, compared in capitals as the volume's own table makes them, as Windows compares them), long and
-  8.3 names, hard links, sparse files, compressed files (LZNT1), and reparse points: links (where they go), and
-  placeholders, such as OneDrive's (whether the file's bytes are on the PC). Encrypted files (EFS) and files Windows
-  compressed itself are recognized, not read; a volume BitLocker encrypts is read through `bitlocker/`. Every number read from the disk is
-  checked first, so a damaged volume gives an error, not a crash. Tested against volumes made by Linux's
-  `mkntfs` and filled by ntfs-3g (`ntfs/tests/make.py`), with 512-byte and 4 KiB sectors, 4 KiB and 64 KiB
-  clusters: every file's bytes, against a hash of what ntfs-3g wrote, and every byte of the volume's first records
+* `ntfs/` is Chat Computer's own reader of NTFS, the file system of Windows' drive, which it never changes: the master
+  file table's records (put back together from their update sequences, attributes kept in them or in runs of clusters,
+  and in other records, through an attribute list, for a file in hundreds of pieces), folders' indexes (B-trees of
+  names, compared in capitals as the volume's own table makes them, as Windows compares them), long and 8.3 names,
+  hard links, sparse files, compressed files (LZNT1), the volume's name, and reparse points: links (where they go),
+  and placeholders, such as OneDrive's (whether the file's bytes are on the PC). Encrypted files (EFS) and files
+  Windows compressed itself are recognized, not read; a volume BitLocker encrypts is read through `bitlocker/`. Every
+  number read from the disk is checked first, so a damaged volume gives an error, not a crash. Tested against volumes
+  made by Linux's `mkntfs` and filled by ntfs-3g (`ntfs/tests/make.py`), with 512-byte and 4 KiB sectors, 4 KiB and 64
+  KiB clusters: every file's bytes, against a hash of what ntfs-3g wrote, and every byte of the volume's first records
   changed in turn.
 * `bitlocker/` reads a drive BitLocker encrypts, never writing it: its metadata (the first of its three copies
   whose CRC is right), its key protectors, the volume master key opened with the recovery key (stretched by a
@@ -251,6 +257,12 @@ NVMe and SATA drivers.
   each decrypting to exactly the SHA-256 cryptsetup's decryption gives, To Go's FAT volumes and 4 KiB sectors
   among them; reads of every size anywhere; wrong keys, damaged metadata copies, and metadata changed but its CRCs
   made right. `bitlocker/tests/encrypt.py` makes volumes for the virtual PCs' check.
+* `registry/` reads Windows' registry: a hive file (as Windows keeps them in Windows\System32\config), its keys
+  and their values, cell by cell as they're needed (a hive of tens of megabytes isn't read whole): keys' lists of
+  subkeys of every kind, values of every type, data in pieces past 16 KB, names whatever their case. From SYSTEM's
+  MountedDevices, which drive has which letter. Tested against a hive hivex wrote (`registry/tests/make.py`) and one
+  with data in pieces as Windows keeps it, every key and value as hivex reads them back, and every byte read changed
+  in turn.
 * `zip/` is Chat Computer's own reader of ZIP archives (ZIP64 too) and DEFLATE, and zlib's wrapping of it (for
   PNG, later): what Word, Excel and PowerPoint files are made of. Its decoder works as zlib's "puff" does, with a
   table for short codes; what comes out is capped, so a "zip bomb" stops. Tested against zlib at every level and
@@ -350,13 +362,13 @@ python3-pil`).
 
 ```
 ./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 2.8 MB)
-cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p ntfs -p zip -p office -p picture -p bitlocker -p remember -p markdown -p chime -p hid
+cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p remember -p markdown -p chime -p hid
                                  # the font engine and text setting, network stack, cryptography, TLS (needs
                                  # openssl), Claude API client, FAT reader (needs dosfstools and mtools), NTFS
                                  # reader (needs xz), ZIP, Office and picture readers (need python3 and Pillow),
                                  # BitLocker reader (needs curl, xz and python3-cryptography; BITLOCKER_IMAGES
-                                 # names the test volumes' archive if it's here already), memory file, Markdown
-                                 # reader, chimes and HID descriptors
+                                 # names the test volumes' archive if it's here already), registry reader (needs
+                                 # xz), memory file, Markdown reader, chimes and HID descriptors
 cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
@@ -383,6 +395,9 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # followed, OneDrive's files on the PC and online only, Word, Excel and
                                  # PowerPoint files as words, a photo and a PDF sent whole, a search, and a
                                  # photo shown on the screen (needs xz and gdisk)
+./check.py --drives              # the PC's other drives: a second NVMe SSD (GPT) and two SATA drives (MBR and
+                                 # GPT), read by the letters Windows' registry gives them, one Windows hasn't seen
+                                 # given the next free letter (needs ntfs-3g's mkntfs too)
 ./check.py --bitlocker           # the same drive encrypted with BitLocker: locked; a wrong recovery key typed
                                  # refused, the right one unlocking it, its files read; neither key reaching
                                  # Claude or the disk; and read at once with BitLocker's key in the clear (needs
@@ -469,10 +484,10 @@ PC.
 5. Storage: ✓ NVMe and SATA (the drive the PC started from), ✓ the conversation kept across restarts in a file on
    the start-up partition, ✓ Windows' drive read (NTFS), for Claude to read the person's files. Checked in virtual
    PCs. ✓ Word, Excel and PowerPoint files' words, and pictures and PDFs for Claude to see. ✓ A drive BitLocker
-   encrypts, with its recovery key. To do: a drive still being encrypted as it's written to, unlocking with the
-   PC's TPM (for Chat Computer's own start-up, measured), files Windows compressed itself (XPRESS and LZX), other
-   drives, Office's files from before 2007, Chat Computer's own file system for memory and logs, and keeping them
-   encrypted.
+   encrypts, with its recovery key. ✓ The PC's other drives (NVMe and SATA), by Windows' letters. To do: USB drives,
+   a drive still being encrypted as it's written to, unlocking with the PC's TPM (for Chat Computer's own start-up,
+   measured), files Windows compressed itself (XPRESS and LZX), Office's files from before 2007, Chat Computer's own
+   file system for memory and logs, and keeping them encrypted.
 6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e, igb); the internet over
    a USB cable (USB Ethernet adapters and Android phones' tethering: CDC ECM, NCM and RNDIS); written, not yet tried
    on a real PC: Intel's I219, I210, I211, I225 and I226, and Realtek's RTL8111/8168 and RTL8125. To do: trying those

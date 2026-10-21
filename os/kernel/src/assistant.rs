@@ -89,14 +89,14 @@ const SYSTEM: &str = "You are Claude, talking with a person on Chat Computer: a 
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, search the \
 web and read web pages, and look after this computer with the tools you have (its status, the text size, timers and \
 reminders, how loud their chimes are, restarting it or turning it off, starting a new conversation), and read (not \
-change) the files on its Windows drive. The conversation is \
+change) the files on its drives (Windows' C: and the others). The conversation is \
 kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, quotes and simple \
 tables. Nothing can be opened from it (no links), and the only pictures it shows are the ones you show with \
 show_picture, so write an address out in full when the person needs it.";
 const SYSTEM_NO_WEB: &str = "You are Claude, talking with a person on Chat Computer: a computer whose screen is a \
 conversation with you. It is running Chat Computer's own operating system, which is new: here you can talk, and look \
 after this computer with the tools you have (its status, the text size, timers and reminders, how loud their chimes \
-are, restarting it or turning it off, starting a new conversation, reading the files on its Windows drive), but you \
+are, restarting it or turning it off, starting a new conversation, reading the files on its drives), but you \
 can't use the web here (it isn't enabled for this API key). The \
 conversation is kept across restarts, and you can note things about the person to remember in later ones. This screen shows Markdown formatted: headings, bold and italic, lists, code, \
 quotes and simple tables. Nothing can be opened from it (no links), and the only pictures it shows are the ones you \
@@ -189,8 +189,9 @@ const TOOLS: [api::Tool; 13] = [
     },
     api::Tool {
         name: "list_files",
-        description: "Lists a folder on this computer's Windows drive (C:): its folders, and its files with their size \
-                      and when each was last changed. The person's own folders are in C:\\Users\\<their name> \
+        description: "Lists a folder on one of this computer's drives (C:, where Windows is, and its others, D: and on, \
+                      as computer_status lists them): its folders, and its files with their size and when each was \
+                      last changed. The person's own folders are in C:\\Users\\<their name> \
                       (Desktop, Documents, Downloads, Pictures...); where OneDrive backs them up, their Desktop, \
                       Documents and Pictures are in C:\\Users\\<their name>\\OneDrive instead, and a file that's \
                       online only (not downloaded to this PC) can't be read here. Links are followed. Read only: \
@@ -199,18 +200,19 @@ const TOOLS: [api::Tool; 13] = [
     },
     api::Tool {
         name: "read_file",
-        description: "Reads a file on this computer's Windows drive (C:). A text file (.txt, .md, .csv, code...) as it \
+        description: "Reads a file on one of this computer's drives (C:, D:...). A text file (.txt, .md, .csv, code...) as it \
                       is; a Word, Excel or PowerPoint file (or OpenDocument's) as its words: a document's paragraphs, \
                       headings, lists and tables, a workbook's sheets as CSV with row numbers and column letters \
                       (formulas after their values), a presentation's slides with their notes. Up to 60,000 bytes at \
-                      a time (offset reads further on). A picture (JPEG, PNG, GIF or WebP, up to 7.4 MB) or a PDF (up \
-                      to 20 MB) comes to you whole, for you to see. A ZIP archive's files are listed. Office's files \
+                      a time (offset reads further on). A picture (JPEG, PNG, GIF or WebP) or a PDF (up to 20 MB) \
+                      comes to you, for you to see (a picture bigger than you'd see it made smaller). A ZIP archive's \
+                      files are listed. Office's files \
                       from before 2007 (.doc, .xls, .ppt) and HEIC pictures can't be read yet.",
         input_schema: r#"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0,"description":"Where to start, in bytes (0: the start)."}},"required":["path"]}"#,
     },
     api::Tool {
         name: "show_picture",
-        description: "Shows the person a picture from this computer's Windows drive (C:) on the screen, in the \
+        description: "Shows the person a picture from one of this computer's drives (C:, D:...) on the screen, in the \
                       conversation where your answer is: a photo, a screenshot, a drawing (JPEG, PNG or GIF). Use it \
                       when they ask to see a picture, or when seeing one helps them. It shows the picture to the \
                       person, not to you: read_file shows it to you.",
@@ -218,7 +220,7 @@ const TOOLS: [api::Tool; 13] = [
     },
     api::Tool {
         name: "find_files",
-        description: "Finds the files and folders on this computer's Windows drive whose names have all of these words \
+        description: "Finds the files and folders on one of this computer's drives whose names have all of these words \
                       in them, from a folder down: by default C:\\Users, where the person's files are (hidden folders \
                       like AppData are left out). It looks in a few thousand folders at most.",
         input_schema: r#"{"type":"object","properties":{"words":{"type":"string"},"in":{"type":"string","description":"The folder to search from (default C:\\Users)."}},"required":["words"]}"#,

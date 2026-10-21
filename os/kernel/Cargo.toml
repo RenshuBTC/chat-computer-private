@@ -22,6 +22,7 @@ zip = { path = "../zip" }
 office = { path = "../office" }
 picture = { path = "../picture" }
 bitlocker = { path = "../bitlocker" }
+registry = { path = "../registry" }
 remember = { path = "../remember" }
 markdown = { path = "../markdown" }
 hid = { path = "../hid" }

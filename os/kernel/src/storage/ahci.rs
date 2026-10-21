@@ -1,9 +1,10 @@
 //! SATA drives through AHCI (Intel's Serial ATA AHCI specification 1.3.1): the standard interface of every PC's SATA
-//! controller, so one driver covers them all. As with NVMe, Chat Computer uses one drive (the one its start-up
-//! partition is on) and only a little: one command at a time, one 4 KiB page a command, its end waited for.
+//! controller, so one driver covers them all. As with NVMe, Chat Computer uses its drives only a little (the start-up
+//! one for its memory file; the others, Windows' other drives, read): one command at a time, one 4 KiB page a
+//! command, its end waited for.
 //!
-//! The controller is taken from the firmware first where it asks for that (the BIOS/OS hand-off), then only the one
-//! port is touched: stopped, given this driver's command list, started again.
+//! The controller is taken from the firmware first where it asks for that (the BIOS/OS hand-off), then only the
+//! drive's own port is touched: stopped, given this driver's command list, started again.
 
 use crate::dma::Page;
 use crate::paging::{self, Cache};
@@ -31,8 +32,13 @@ const PX_IS: u64 = 0x10;
 const PX_CMD: u64 = 0x18;
 const PX_TFD: u64 = 0x20;
 const PX_SSTS: u64 = 0x28;
+const PX_SIG: u64 = 0x24;
 const PX_SERR: u64 = 0x30;
 const PX_CI: u64 = 0x38;
+/// What's on a port, by the signature it sent: a disk (ATA), or not known yet (others are optical drives, port
+/// multipliers and enclosures).
+const SIG_ATA: u32 = 0x0000_0101;
+const SIG_UNKNOWN: u32 = 0xFFFF_FFFF;
 const CMD_START: u32 = 1 << 0;
 const CMD_SPIN_UP: u32 = 1 << 1;
 const CMD_POWER_ON: u32 = 1 << 2;
@@ -67,9 +73,36 @@ pub struct Ahci {
     pub block_size: u32,
     pub blocks: u64,
     pub model: String,
+    /// Its port given this driver's memory (so stopped again if it's dropped: only a drive that didn't start is).
+    configured: bool,
 }
 
 unsafe impl Send for Ahci {}
+
+impl Drop for Ahci {
+    fn drop(&mut self) {
+        if self.configured {
+            // (Stopped, so the port no longer uses this driver's memory, which is given back.)
+            self.pw(PX_CMD, self.pr(PX_CMD) & !(CMD_START | CMD_FIS_RECEIVE));
+            self.wait(500, |d| d.pr(PX_CMD) & (CMD_LIST_RUNNING | CMD_FIS_RUNNING) == 0);
+        }
+    }
+}
+
+/// The ports of the controller at `f` with a drive connected (by their status: a device there, talking; and not an
+/// optical drive's, or anything else that says it isn't a disk), as bits.
+pub fn ports_in_use(f: &pci::Function) -> u32 {
+    let Some(bar) = f.at.memory_bar(5).filter(|b| b.size >= 0x180) else { return 0 };
+    f.at.enable(true);
+    let regs = paging::map_device(bar.phys, bar.size.min(0x2000), Cache::Uncached);
+    let r = |reg: u64| unsafe { read_volatile((regs + reg) as *const u32) };
+    let ports = r(PI);
+    (0..32u32)
+        .filter(|&p| ports & 1 << p != 0 && bar.size >= 0x100 + 0x80 * (p as u64 + 1))
+        .filter(|&p| r(0x100 + 0x80 * p as u64 + PX_SSTS) & 0xF == 3)
+        .filter(|&p| matches!(r(0x100 + 0x80 * p as u64 + PX_SIG), SIG_ATA | SIG_UNKNOWN))
+        .fold(0, |bits, p| bits | 1 << p)
+}
 
 impl Ahci {
     fn r(&self, reg: u64) -> u32 {
@@ -111,7 +144,7 @@ impl Ahci {
         let (Some(commands), Some(data)) = (Page::new(true), Page::new(true)) else {
             return Err(String::from("out of memory"));
         };
-        let mut d = Ahci { at: f.at, regs, port, commands, data, block_size: 512, blocks: 0, model: String::new() };
+        let mut d = Ahci { at: f.at, regs, port, commands, data, block_size: 512, blocks: 0, model: String::new(), configured: false };
 
         // The firmware hands the controller over, where it says it takes part in that; then AHCI mode.
         if d.r(CAP2) & CAP2_HANDOFF != 0 && d.r(BOHC) & BOHC_BIOS_OWNED != 0 {
@@ -140,6 +173,7 @@ impl Ahci {
         d.pw(PX_CLB + 4, ((base + LIST as u64) >> 32) as u32);
         d.pw(PX_FB, (base + RECEIVED as u64) as u32);
         d.pw(PX_FB + 4, ((base + RECEIVED as u64) >> 32) as u32);
+        d.configured = true;
         d.pw(PX_SERR, !0);
         d.pw(PX_IS, !0);
         d.pw(PX_CMD, d.pr(PX_CMD) | CMD_FIS_RECEIVE | CMD_SPIN_UP | CMD_POWER_ON);

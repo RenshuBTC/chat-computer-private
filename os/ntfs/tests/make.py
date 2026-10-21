@@ -218,6 +218,9 @@ def fill(mnt: Path, big_cluster: bool) -> None:
     (mnt / "Users/Sam/Desktop/Shopping list.txt").write_bytes(b"")
     os.setxattr(mnt / "Users/Sam/Desktop/Shopping list.txt", "system.ntfs_reparse_data",
                 struct.pack("<IHH", 0xA000000C, len(body), 0) + body)
+    # Windows' registry: its SYSTEM hive, which says which drive has which letter (the registry crate's test hive,
+    # with the partitions check.py's disks have). Last, so the files before are laid out as they were without it.
+    put("Windows/System32/config/SYSTEM", lzma.decompress((HERE.parent.parent / "registry/tests/system.hiv.xz").read_bytes()))
 
 
 def tag(mnt: Path) -> dict[str, str]:

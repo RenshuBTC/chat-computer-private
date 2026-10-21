@@ -681,7 +681,7 @@ Users/Sam/Documents/Work/Old letter.doc	file	4008	21e322186a549b7b
 Users/Sam/Documents/Work/Receipt.pdf	file	600	a06c4b8247168e54
 Users/Sam/Documents/Work/Talk.pptx	file	34883	4d55a2926899c648
 Users/Sam/Downloads	dir	0	0
-Users/Sam/Downloads/photos.zip	file	3020	229b48eb6671626f
+Users/Sam/Downloads/photos.zip	file	3020	15d23feddf885c81
 Users/Sam/My Documents	link	0	0
 Users/Sam/OneDrive	dir	0	0
 Users/Sam/OneDrive/Documents	dir	0	0
@@ -698,6 +698,8 @@ Users/Sam/Pictures/Panorama.png	file	1460	780451ff00e9ea81
 Users/Sam/Pictures/Screenshot.png	file	1187	2437f38f861df328
 Windows	dir	0	0
 Windows/System32	dir	0	0
+Windows/System32/config	dir	0	0
+Windows/System32/config/SYSTEM	file	3084288	34d87fc2e78fd5cd
 Windows/System32/drivers	dir	0	0
 Windows/System32/drivers/etc	dir	0	0
 Windows/System32/drivers/etc/hosts	file	40	be435b33cab523e4

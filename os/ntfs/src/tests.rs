@@ -115,6 +115,8 @@ fn has_what_windows_drives_have() {
     let mut disk = image("small");
     let v = open(&mut disk).unwrap();
     assert_eq!((v.bytes_per_sector, v.cluster_size), (512, 4096));
+    // Its name, as mkntfs was given it.
+    assert_eq!(v.label(&mut disk).unwrap(), "small");
     // Found whatever the case, by / or \.
     let a = v.find(&mut disk, "documents\\TAXES/letter FROM iras (march).TXT").unwrap();
     assert!(!a.folder && a.name == "Letter from IRAS (March).txt" && a.size == 6000);

@@ -1264,7 +1264,7 @@
   function cleanName(s) { return String(s || "").replace(/[^\p{L}\p{M}'’ .-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 40); }
   function person() { return cleanName(store(NAME_KEY)); }
   // The name and which model answers, for the next greeting (a visit, or the conversation cleared).
-  function greetWith() { call("settings", person() || computerName, localReady() ? local.label : ""); }
+  function greetWith() { call("settings", person() || computerName, own ? ownName() : localReady() ? local.label : ""); }
   var computerName = "";                 // (in the app: the first name of this computer's account, unless one's given)
   function nameOf(t) {
     var m = NAME_IS.exec(t), n = m ? cleanName(m[1]) : "";
@@ -1631,7 +1631,7 @@
   function ask(text, shown) {
     var you = uid("u"), uts = now(), id = "a" + (++turns), since = acted;
     call("user", you, shown || text, true);
-    if (localReady()) { localTurn(text, you, uts, id, since); return; }
+    if (own || localReady()) { localTurn(text, you, uts, id, since); return; }
     var r = answer(text);
     if (!LOOK_IT_UP.test(text)) lastAsked = text;              // what "look it up" means next
     if (r.ai) r = fallback(text);
@@ -1923,8 +1923,11 @@
       "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
         "most other sites can't show inside the page, so it's a link; on a Chat Computer any site opens right here and you use it), " +
         "open their messages and files (open_message, open_file), ";
-    return "You are Chat Computer: you run a whole computer for the person, with your own model, an open model of Qwen's that runs " +
-      "on this computer (no account, and nothing they say leaves it). People talk, type or touch, and you do things for them. " +
+    var mind = own ? "You are Chat Computer: you run a whole computer for the person. Right now you think with " + own.model + ", through " +
+      ownName() + ", on the person's own account (they signed in with it): what they say goes to " + ownName() + ". " :
+      "You are Chat Computer: you run a whole computer for the person, with your own model, an open model of Qwen's that runs " +
+      "on this computer (no account, and nothing they say leaves it). ";
+    return mind + "People talk, type or touch, and you do things for them. " +
       where + " The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
       "there), and in the middle the conversation, or what you open in its place, with the message box under it. While " +
       "something is open the conversation is out of sight: a reply that's only words brings it back, putting what's open " +
@@ -2199,6 +2202,12 @@
   // (No answer at all: on the website, the app isn't running any more; in the app, its engine stopped, and the app
   // starts it again, saying so: chatcomputerApp({model}).)
   function localTrouble(err) {
+    if (own) {
+      if (err.status === 401 || err.status === 403) return ownName() + " didn't take your key any more: press the spark beside + to sign in again.";
+      if (err.status === 402) return ownName() + " says your account has no credit left for " + own.model + ".";
+      if (err.status === 429) return ownName() + " says it's had too many questions just now (free models have limits): ask again in a little while.";
+      return err.status ? ownName() + " couldn't answer that: " + err.message : "I can't reach " + ownName() + ": is the internet on?";
+    }
     if (!err.status) {
       if (!APP) {
         local.state = "off";
@@ -2212,10 +2221,23 @@
   }
   // One request, streamed: its words as they come, and the whole message (its words, thinking and tool calls).
   function localMessage(onText) {
-    var body = { model: "chat-computer", stream: true, think: false, max_tokens: 4096, tools: localTools(),
-                 messages: [{ role: "system", content: local.system || systemPrompt() }].concat(local.talk) };
-    return fetch(localBase() + "/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
-                                                         body: JSON.stringify(body) }).then(function (res) {
+    var messages = [{ role: "system", content: local.system || systemPrompt() }].concat(local.talk), url, headers;
+    var body = { model: "chat-computer", stream: true, think: false, max_tokens: 4096, tools: localTools(), messages: messages };
+    if (own) {                                 // (your own AI: its model; none of the engine's own options)
+      body = { model: own.model, stream: true, tools: localTools(), messages: messages.map(function (m) {
+        if (!m.reasoning_content) return m;
+        var c = {};
+        for (var k in m) if (k !== "reasoning_content") c[k] = m[k];
+        return c;
+      }) };
+      url = ownBase() + "/chat/completions";
+      headers = ownHeaders(own.provider, own.key);
+      headers["content-type"] = "application/json";
+    } else {
+      url = localBase() + "/v1/chat/completions";
+      headers = { "content-type": "application/json" };
+    }
+    return fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) }).then(function (res) {
       if (!res.ok) {
         return res.text().then(function (t) {
           var msg = t;
@@ -2270,6 +2292,190 @@
         })();
       });
     }, function (e) { var x = new Error(e && e.message || "no connection"); x.status = 0; throw x; });
+  }
+
+  // ------------------------------------------------------------------ your own AI
+  // Beside the box's +, the spark: sign in with an AI you already use, and it answers instead of Chat Computer's own
+  // model, on your own account, with the same tools. On the website: OpenRouter, signing in on its own page (it gives
+  // this page a key of its own, which you can take back on its site; its free models cost nothing), or a key of your
+  // own from OpenAI, Google (Gemini), OpenRouter or any other AI that answers as OpenAI's chat completions do. (ChatGPT's
+  // own sign-in, with your ChatGPT plan, is only for apps on your own computer: OpenAI doesn't offer it to websites.)
+  // What you say then goes to that AI; the key stays in this browser, until you sign out (the spark again).
+  var OWN_KEY = "chatcomputer-own-ai", OR_VERIFIER = "chatcomputer-openrouter-verifier";
+  var AIS = {
+    openrouter: { name: "OpenRouter", base: "https://openrouter.ai/api/v1", site: "openrouter.ai", keys: "openrouter.ai/settings/keys" },
+    openai: { name: "OpenAI", base: "https://api.openai.com/v1", site: "openai.com", keys: "platform.openai.com/api-keys" },
+    gemini: { name: "Gemini", base: "https://generativelanguage.googleapis.com/v1beta/openai", site: "gemini.google.com",
+              keys: "aistudio.google.com/apikey" },
+    other: { name: "", base: "", site: "", keys: "" }
+  };
+  var OTHER_BASE = /^(https:\/\/[^\s/?#]+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?)(\/[^\s?#]*)?$/;
+  var own = (function () {
+    var o = store(OWN_KEY);
+    if (!o || typeof o !== "object" || !AIS[o.provider] || typeof o.key !== "string" || !o.key || typeof o.model !== "string" || !o.model) return null;
+    if (o.provider === "other" && !OTHER_BASE.test(String(o.base || ""))) return null;
+    return o;
+  })();
+  function ownName() { return !own ? "" : own.provider === "other" ? hostOf(own.base) || "Your AI" : AIS[own.provider].name; }
+  function ownBase() { return own.provider === "other" ? String(own.base).replace(/\/+$/, "") : AIS[own.provider].base; }
+  // The spark beside +: shown, and which AI answers (its own icon, through DuckDuckGo's icon service, as Messages').
+  function ownShow() {
+    var site = own && (own.provider === "other" ? hostOf(own.base) : AIS[own.provider].site);
+    call("ownAi", own ? { name: ownName(), model: own.model, icon: site ? "https://icons.duckduckgo.com/ip3/" + site + ".ico" : "" } : null);
+  }
+  function ownSet(o, done) {
+    own = o;
+    store(OWN_KEY, o);
+    local.system = "";                         // (said anew, with which AI answers)
+    ownShow();
+    status();
+    greetWith();
+    if (done) did(done);
+  }
+  function ownMenu() {
+    if (own) {
+      call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: [
+        ownName() + " answers now, with " + own.model + ", on your own account: what you say goes to " + ownName() + ".",
+        "Its key stays in this browser. Signed out, Chat Computer's own model answers again" + (APP ? "." : " (where the app runs on this computer).")],
+        choices: [{ label: "Choose its model", value: "ai:models" }, { label: "Sign out of " + ownName(), value: "ai:out" }] });
+      return;
+    }
+    var text = [APP ? "Chat Computer answers with its own model, free, on this computer." :
+      "On this page Chat Computer answers from what's written here, or, where the app runs on this computer, with its model.",
+      "Or sign in with an AI you already use, and it answers instead, on your own account: what you say then goes to it."];
+    var choices = APP || TABS ? [] : [{ label: "Continue with OpenRouter", value: "ai:openrouter" }];
+    call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: text,
+      choices: choices.concat([{ label: "Use a key", value: "ai:keys" }]) });
+  }
+  function ownChoice(v) {
+    if (v === "openrouter") { openRouterSignIn(); return; }
+    if (v === "keys") {
+      call("accountForm", { id: "own-ai", title: "Use a key", ok: "", text: ["Whose key is it? Each makes keys on its own site."],
+        choices: [{ label: "OpenAI", value: "ai:key:openai" }, { label: "Google (Gemini)", value: "ai:key:gemini" },
+                  { label: "OpenRouter", value: "ai:key:openrouter" }, { label: "Another", value: "ai:key:other" }] });
+      return;
+    }
+    if (v.indexOf("key:") === 0 && AIS[v.slice(4)]) { keyForm(v.slice(4), ""); return; }
+    if (v === "models" && own) { modelsForm(); return; }
+    if (v.indexOf("model:") === 0 && own) {
+      var o = {};
+      for (var k in own) o[k] = own[k];
+      o.model = v.slice(6);
+      call("accountForm", null);
+      ownSet(o, ownName() + " answers with " + o.model);
+      return;
+    }
+    if (v === "out" && own) { var was = ownName(); call("accountForm", null); ownSet(null, "Signed out of " + was); }
+  }
+  function keyForm(p, error) {
+    var a = AIS[p], other = p === "other";
+    call("accountForm", { id: "own-key-" + p, title: other ? "Another AI's key" : a.name + " key", ok: "Sign in", error: error,
+      text: [other ? "Any AI that answers as OpenAI's chat completions do: its address (ending /v1, as a rule), the model " +
+             "to use, and your key." : "Make one at " + a.keys + " and paste it here.",
+             "It stays in this browser, and goes only to " + (other ? "that address" : a.name) + "."],
+      fields: (other ? [{ name: "base", label: "Its address" }, { name: "model", label: "Its model" }] : [])
+        .concat([{ name: "key", label: "Key", type: "password" }]) });
+  }
+  function apiError(t) {
+    try { var j = JSON.parse(t); return String((j.error && (j.error.message || j.error)) || j.message || "").slice(0, 200); } catch (e) { return ""; }
+  }
+  function ownHeaders(p, key) {
+    var h = { authorization: "Bearer " + key };
+    if (p === "openrouter") { h["HTTP-Referer"] = "https://chatcomputer.ai"; h["X-Title"] = "Chat Computer"; }
+    return h;
+  }
+  // The models that AI offers, best first: OpenRouter's free ones that use tools (the newest first); OpenAI's and
+  // Gemini's chat models, newest first.
+  function ownModels(p, base, key) {
+    return fetch(base + "/models", { headers: ownHeaders(p, key) }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(apiError(t) || "it said " + r.status); });
+      return r.json();
+    }).then(function (j) {
+      var list = (j && j.data) || [];
+      if (p === "openrouter") {
+        return list.filter(function (m) {
+          return m && m.pricing && +m.pricing.prompt === 0 && +m.pricing.completion === 0 && (m.supported_parameters || []).indexOf("tools") >= 0;
+        }).sort(function (a, b) { return (b.created || 0) - (a.created || 0); }).map(function (m) { return String(m.id); });
+      }
+      if (p === "openai") {
+        return list.filter(function (m) { return m && /^gpt-\d/.test(m.id) && !/audio|realtime|transcribe|tts|image|search|instruct|codex/.test(m.id); })
+          .sort(function (a, b) { return (b.created || 0) - (a.created || 0); }).map(function (m) { return String(m.id); });
+      }
+      if (p === "gemini") {
+        var rank = function (id) { var v = /^gemini-(\d+(?:\.\d+)?)/.exec(id); return (v ? +v[1] * 100 : 0) + (/-flash$/.test(id) ? 10 : /-pro$/.test(id) ? 5 : 0); };
+        return list.map(function (m) { return String(m && m.id || "").replace(/^models\//, ""); })
+          .filter(function (id) { return /^gemini-\d/.test(id) && !/image|tts|audio|live|embedding|vision/.test(id); })
+          .sort(function (a, b) { return rank(b) - rank(a); });
+      }
+      return list.map(function (m) { return String(m && m.id || ""); }).filter(Boolean);
+    });
+  }
+  function ownKey(p, v) {
+    var key = String(v.key || "").trim(), other = p === "other";
+    var base = other ? String(v.base || "").trim().replace(/\/+$/, "") : AIS[p].base, model = other ? String(v.model || "").trim() : "";
+    if (!key) { keyForm(p, "Paste the key first."); return; }
+    if (other && !OTHER_BASE.test(base)) { keyForm(p, "Its address starts with https (or, for one on this computer, with http and localhost)."); return; }
+    if (other && !model) { keyForm(p, "Say which of its models to use."); return; }
+    var got = other ? Promise.resolve([model]) : ownModels(p, base, key);
+    got.then(function (models) {
+      if (!models.length) throw new Error(p === "openrouter" ? "it has no free model that uses tools just now" : "it lists no model to chat with");
+      var o = { provider: p, key: key, model: models[0] };
+      if (other) o.base = base;
+      call("accountForm", null);
+      ownSet(o, "Signed in with " + (other ? hostOf(base) : AIS[p].name) + " (" + o.model + ")");
+    }).catch(function (e) { keyForm(p, "That didn't work: " + clip(e && e.message || "no answer", 160) + "."); });
+  }
+  function modelsForm() {
+    if (own.provider === "other") { keyForm("other", ""); return; }
+    ownModels(own.provider, ownBase(), own.key).then(function (models) {
+      call("accountForm", { id: "own-ai", title: ownName() + "'s models", ok: "",
+        text: [own.provider === "openrouter" ? "Its free models that use tools, newest first. It answers with " + own.model + " now." :
+               "Newest first. It answers with " + own.model + " now."],
+        choices: models.slice(0, 12).map(function (m) { return { label: m, value: "ai:model:" + m }; }) });
+    }, function (e) {
+      call("accountForm", { id: "own-ai-failed", title: ownName(), ok: "OK", text: ["Its models couldn't be listed: " +
+        clip(e && e.message || "no answer", 160) + "."] });
+    });
+  }
+  // OpenRouter's own sign-in (OAuth with PKCE): its page, then back here with a code, which this page trades for a key.
+  function b64url(bytes) {
+    var s = "";
+    for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function openRouterSignIn() {
+    var v = new Uint8Array(32);
+    crypto.getRandomValues(v);
+    var verifier = b64url(v);
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)).then(function (h) {
+      try { sessionStorage.setItem(OR_VERIFIER, verifier); } catch (e) {}
+      var back = location.href.split("#")[0].split("?")[0];
+      location.assign("https://openrouter.ai/auth?callback_url=" + encodeURIComponent(back) + "&code_challenge=" +
+                      b64url(new Uint8Array(h)) + "&code_challenge_method=S256");
+    });
+  }
+  function openRouterBack() {
+    var q, code, verifier = null;
+    try { q = new URLSearchParams(location.search); code = q.get("code"); } catch (e) { return; }
+    try { verifier = sessionStorage.getItem(OR_VERIFIER); sessionStorage.removeItem(OR_VERIFIER); } catch (e) {}
+    if (!code || !verifier) return;
+    q.delete("code");
+    try { history.replaceState(null, "", location.pathname + (q.toString() ? "?" + q : "") + location.hash); } catch (e) {}
+    fetch("https://openrouter.ai/api/v1/auth/keys", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: code, code_verifier: verifier, code_challenge_method: "S256" }) }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(apiError(t) || "it said " + r.status); });
+      return r.json();
+    }).then(function (j) {
+      var key = j && j.key;
+      if (typeof key !== "string" || !key) throw new Error("no key came back");
+      return ownModels("openrouter", AIS.openrouter.base, key).then(function (models) {
+        if (!models.length) throw new Error("it has no free model that uses tools just now");
+        ownSet({ provider: "openrouter", key: key, model: models[0] }, "Signed in with OpenRouter (" + models[0] + ")");
+      });
+    }).catch(function (e) {
+      call("accountForm", { id: "own-ai-failed", title: "OpenRouter", ok: "OK", text: ["Signing in with OpenRouter didn't work: " +
+        clip(e && e.message || "no answer", 160) + "."] });
+    });
   }
 
   // ------------------------------------------------------------------ AirPods: talking
@@ -2982,6 +3188,8 @@
         call("openInPage", !APP);              // (in the app, a site is laid over the page, as on a Chat Computer)
         call("pickFiles", true);               // + under the box: this browser's own file picker
         layout();
+        ownShow();                             // the spark beside +: your own AI, if you've signed in with one
+        openRouterBack();                      // (back from OpenRouter's sign-in: its code, for a key)
         greetWith();                           // for the greeting: the name you go by, which model answers,
         sayHere();                             // and where you are, with its weather
         if (APP) {                             // (in the app, the name this computer knows you by, where you've given none)
@@ -3059,7 +3267,9 @@
       case "panels": store("chatcomputer-demo-panels", { left: !!msg.left, right: !!msg.right }); break;
       case "open_chat": openChat(String(msg.id || "")); break;
       case "new_chat": newChat(); break;
+      case "ai_menu": ownMenu(); break;
       case "add_account":
+        if (typeof msg.provider === "string" && msg.provider.indexOf("ai:") === 0) { ownChoice(msg.provider.slice(3)); break; }
         if (APP && msg.provider) {
           var pv = String(msg.provider), off = pv.indexOf("forget:") === 0 ? pv.slice(7) : "";
           call("accountForm", null);
@@ -3087,6 +3297,7 @@
         if (msg.form === "talk") { call("accountForm", null); startTalking(); break; }
         if (msg.form === "heart") { call("accountForm", null); heartChosen(true); break; }
         if (msg.form === "heart-remove") { call("accountForm", null); heartRemove(); break; }
+        if (String(msg.form).indexOf("own-key-") === 0 && AIS[String(msg.form).slice(8)]) { ownKey(String(msg.form).slice(8), values); break; }
         call("accountForm", null);
         break;
       }

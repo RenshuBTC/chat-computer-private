@@ -40,10 +40,16 @@ def test_what_s_typed_stays_on_this_computer():
     for call in ("XMLHttpRequest", "sendBeacon", "WebSocket", "EventSource", "navigator.geolocation"):
         assert call not in host, call
     # What answers for real is Chat Computer's own model, on this computer: the app's engine at 127.0.0.1 (on the
-    # website, where the app runs here and the visitor chose it), and nowhere else; no account, no key.
+    # website, where the app runs here and the visitor chose it); or, once the visitor signs in with an AI of their
+    # own (the spark beside +), that AI, on their account: OpenRouter (its own sign-in), or their key for OpenAI,
+    # Google's Gemini, OpenRouter or another that answers as OpenAI's chat completions do. No other.
     assert 'function localBase() { return "http://127.0.0.1:" + local.port; }' in host
     for gone in ("api.anthropic.com", "x-api-key", "sk-ant", "languagemodel", "gemma", "gemini nano", "connect claude"):
         assert gone not in host.lower(), gone
+    assert 'openrouter: { name: "OpenRouter", base: "https://openrouter.ai/api/v1"' in host
+    assert 'openai: { name: "OpenAI", base: "https://api.openai.com/v1"' in host
+    assert 'base: "https://generativelanguage.googleapis.com/v1beta/openai"' in host
+    assert 'url = ownBase() + "/chat/completions";' in host and 'url = localBase() + "/v1/chat/completions";' in host
     # From elsewhere: a map when asked, and YouTube's player for a video. For a place's map, weather or air,
     # Open-Meteo, sent only the place's name (then its latitude and longitude). What's looked up ("look it up", a
     # question of fact, the news, the model's web_search) goes to Wikipedia: only the words looked up. Google's own
@@ -58,7 +64,8 @@ def test_what_s_typed_stays_on_this_computer():
         "https://geocoding-api.open-meteo.com", "https://api.open-meteo.com", "https://air-quality-api.open-meteo.com",
         "https://en.wikipedia.org", "https://open-meteo.com",
         "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com",
-        "https://cdn.jsdelivr.net", "https://huggingface.co", "https://icons.duckduckgo.com"}
+        "https://cdn.jsdelivr.net", "https://huggingface.co", "https://icons.duckduckgo.com", "https://openrouter.ai",
+        "https://api.openai.com", "https://generativelanguage.googleapis.com", "https://chatcomputer.ai"}
     assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
     # Messages: each service's own icon (as its pages give it), through DuckDuckGo's icon service, sent only the
     # service's address.
@@ -66,9 +73,10 @@ def test_what_s_typed_stays_on_this_computer():
     assert host.count("import(") == 1 and "import(HEART.library)" in host
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("localBase(")) == [
-        '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search', "url", "url"], fetches
-    assert 'fetch(localBase() + "/health"' in host and 'fetch(localBase() + "/v1/chat/completions"' in host
-    assert len([f for f in fetches if f.startswith("localBase(")]) == 2
+        '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search',
+        '"https://openrouter.ai/api/v1/auth/keys"', 'base + "/models"', "url", "url", "url"], fetches
+    assert 'fetch(localBase() + "/health"' in host and len([f for f in fetches if f.startswith("localBase(")]) == 1
+    assert 'fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) })' in host
     # (getJSON's, and Heart's big file, a piece at a time, from Hugging Face: only which bytes are asked for)
     assert 'pieceFetch(heartFile(), HEART_PARTS' in host
     assert host.count("pieceFetch(") == 2 and 'fetch(url, { headers: { Range: "bytes=" + from + "-" + to }' in host
@@ -155,12 +163,14 @@ def test_the_demo_works_in_a_browser():
     assert first["logo"] is None
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
     assert first["typing_in"] == "input" and first["hint"] == "Type anything"
-    assert first["hint_weight"] == "400" and first["buttons"] == ["add", "mic"]
-    (add, ax, ay), (mic, mx, my) = first["tools"]
-    assert (add, mic) == ("Add files", "Talk") and ax < mx < first["send_at"][0] and abs(ay - my) < 1
+    assert first["hint_weight"] == "400" and first["buttons"] == ["add", "ai", "mic"]
+    # In the box, under the words: +, then the spark (your own AI), at the left; the microphone by the send arrow.
+    (add, ax, ay), (own, ox, oy), (mic, mx, my) = first["tools"]
+    assert (add, own, mic) == ("Add files", "Sign in with your own AI", "Talk")
+    assert ax < ox < ax + 50 < mx < first["send_at"][0] and abs(ay - my) < 1 and abs(ay - oy) < 1
     assert ay > first["input_top"] and abs(my - first["send_at"][1]) < 1           # on the row under the words
-    (aw, ah, around, afill, _), (mw, mh, mround, mfill, mright) = first["tools_round"]
-    assert (aw, ah, around, afill) == (mw, mh, mround, mfill) == (32, 32, "50%", "rgb(65, 65, 65)")
+    (aw, ah, around, afill, _), (ow, oh, oround, ofill, _), (mw, mh, mround, mfill, mright) = first["tools_round"]
+    assert (aw, ah, around, afill) == (ow, oh, oround, ofill) == (mw, mh, mround, mfill) == (32, 32, "50%", "rgb(65, 65, 65)")
     assert first["send_size"] == [32, 32]
     box_left, box_right = first["box_at"]
     assert ax - box_left < 16 and 0 < first["send_at"][0] - mright < 12 and box_right - first["send_at"][0] < 50
@@ -323,6 +333,27 @@ def test_the_demo_works_in_a_browser():
     sw = res["switches"]
     assert len(set(sw["centres"])) == 1 and 0 < sw["left_gap"] < 20 and 0 < sw["right_gap"] < 20, sw
     assert sw["connect"] == "none"
+    # Your own AI (the spark beside +): OpenRouter's own sign-in (PKCE: a SHA-256 challenge, the verifier given only
+    # when trading the code for a key), back to this page, the code gone from its address; the newest free model that
+    # uses tools chosen; then it answers, on that key, with the page's tools and none of the engine's own options, told
+    # who it is; signed out, nothing kept. A key of one's own (OpenAI's): an empty one said so; then its newest chat model.
+    assert res["own_menu"] == {"title": "Your own AI", "choices": ["Continue with OpenRouter", "Use a key"]}
+    auth = res["own_auth"]
+    assert auth["back"].startswith("file://") and auth["back"].endswith("/docs/index.html") and auth["method"] == "S256"
+    assert auth["challenge"] == 43 and res["own_traded"] == {"code": "test-code", "method": "S256", "verifier": 43}
+    own_in = res["own_in"]
+    assert own_in["search"] == "" and own_in["title"] == "OpenRouter (new/free-model:free) answers. Press to change"
+    assert own_in["kept"] == {"provider": "openrouter", "key": "test-openrouter-key", "model": "new/free-model:free"}
+    (asked,) = res["own_asked"]
+    assert asked["auth"] == "Bearer test-openrouter-key" and asked["title"] == "Chat Computer" and asked["model"] == "new/free-model:free"
+    assert asked["stream"] and not asked["think"] and not asked["max"] and asked["tools"] > 5
+    assert "Right now you think with new/free-model:free, through OpenRouter" in asked["system"]
+    assert asked["last"]["role"] == "user" and asked["last"]["content"].endswith("hi there")
+    assert res["own_menu_in"] == {"title": "Your own AI", "choices": ["Choose its model", "Sign out of OpenRouter"]}
+    assert res["own_out"]["title"] == "Sign in with your own AI" and res["own_out"]["kept"] is None
+    assert res["own_out"]["done"] == ["Signed in with OpenRouter (new/free-model:free)", "Signed out of OpenRouter"]
+    assert res["own_empty"] == "Paste the key first."
+    assert res["own_key"] == {"title": "OpenAI (gpt-9) answers. Press to change", "sheet": False, "type": "password"}   # (typed hidden)
     now = res["mic_now"]
     assert not now["sheet"] and now["pressed"] == "true" and now["title"] == "Stop listening"
     assert now["bar"] == "block" and now["icon"] == "none" and now["live"] == "live"
@@ -411,7 +442,7 @@ def test_the_demo_works_in_a_browser():
     # A phone: no sidebars and no switches; in the box the words, + and the microphone, and the arrow, and it works.
     phone = res["phone_opening"]
     assert phone["first_ai"] == "hello, world" and phone["logo"] is None and phone["toggles"] == [False, False]
-    assert phone["buttons"] == ["add", "mic"]
+    assert phone["buttons"] == ["add", "ai", "mic"]
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
     # As the Claude app is on a phone (measured on an iPhone): text a eighteenth of the screen's width (390px: 21.7px),
     # never under 16px, so the browser doesn't zoom in on the box; the box 0.77rem from the screen's sides and 4.77rem

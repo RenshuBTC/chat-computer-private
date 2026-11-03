@@ -23,10 +23,6 @@ The fonts themselves are unchanged. Only the file names were changed, to names w
 The fonts are licensed under the SIL Open Font License 1.1. The licences are in `OFL-Lora.txt` and
 `OFL-AtkinsonHyperlegibleMono.txt`.
 
-`AtkinsonHyperlegibleNext.ttf` (the font before Lora, from google/fonts at commit
-`47d54ca1ebb14fd864695f1d39dc734f39017c33`; its licence `OFL-AtkinsonHyperlegibleNext.txt`) is here only for Chat
-Computer's own system (`os/text`), until its screen moves to Lora too.
-
 SHA-256:
 
 ```

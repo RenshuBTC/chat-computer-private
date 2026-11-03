@@ -859,6 +859,85 @@ async function ask(page, text, meanwhile) {
     return { shown: row.classList.contains("shown"), opacity: getComputedStyle(row).opacity }; });
   await thumbs.close();
 
+  // Your own AI (the spark beside +): signing in with OpenRouter (its pages standing in: its sign-in, which comes back
+  // with a code; the code traded for a key; its models, the newest free one that uses tools chosen), then its answers,
+  // on the visitor's key, with the page's tools and none of the engine's own options; signed out, gone. And a key
+  // of the visitor's own (OpenAI's, standing in), checked against its models.
+  const ownCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  const orSeen = { auth: null, traded: null, asked: [] };
+  await ownCtx.route(/icons\.duckduckgo\.com/, (route) => route.fulfill({ status: 404, body: "" }));
+  await ownCtx.route("https://openrouter.ai/auth**", (route) => {
+    orSeen.auth = Object.fromEntries(new URL(route.request().url()).searchParams);
+    return route.fulfill({ status: 200, contentType: "text/html", body: "<title>OpenRouter</title>Sign in" });
+  });
+  await ownCtx.route("https://openrouter.ai/api/v1/auth/keys", (route) => {
+    orSeen.traded = JSON.parse(route.request().postData() || "{}");
+    return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+                           body: JSON.stringify({ key: "test-openrouter-key" }) });
+  });
+  await ownCtx.route("https://openrouter.ai/api/v1/models", (route) => route.fulfill({ status: 200, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ data: [
+      { id: "old/free-model:free", created: 100, pricing: { prompt: "0", completion: "0" }, supported_parameters: ["tools"] },
+      { id: "new/paid-model", created: 300, pricing: { prompt: "0.000001", completion: "0.000002" }, supported_parameters: ["tools"] },
+      { id: "new/free-model:free", created: 200, pricing: { prompt: "0", completion: "0" }, supported_parameters: ["tools", "temperature"] },
+      { id: "newest/free-no-tools:free", created: 400, pricing: { prompt: "0", completion: "0" }, supported_parameters: ["temperature"] }] }) }));
+  await ownCtx.route("https://openrouter.ai/api/v1/chat/completions", (route) => {
+    const req = route.request(), body = JSON.parse(req.postData() || "{}");
+    orSeen.asked.push({ auth: req.headers()["authorization"], title: req.headers()["x-title"], model: body.model, stream: body.stream,
+                        think: "think" in body, max: "max_tokens" in body, tools: (body.tools || []).length,
+                        system: String((body.messages[0] || {}).content || "").slice(0, 160), last: body.messages[body.messages.length - 1] });
+    return route.fulfill({ status: 200, contentType: "text/event-stream", headers: { "access-control-allow-origin": "*" },
+                           body: textTurn(["Hello from ", "OpenRouter."]) });
+  });
+  const ownPage = await ownCtx.newPage();
+  ownPage.on("pageerror", (e) => errors.push(String(e)));
+  await ownPage.goto(page_url);
+  await ownPage.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  await ownPage.click("#ai");
+  await ownPage.waitForFunction(() => document.body.classList.contains("sheet"));
+  const sheetOf = (pg) => pg.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
+    choices: Array.from(document.querySelectorAll("#sheet-fields .choices button")).map((b) => b.textContent) }));
+  out.own_menu = await sheetOf(ownPage);
+  await ownPage.click("#sheet-fields .choices button:has-text('Continue with OpenRouter')");
+  await ownPage.waitForURL(/openrouter\.ai\/auth/);
+  await ownPage.goto(page_url + "?code=test-code");                  // (OpenRouter sends the visitor back with a code)
+  await ownPage.waitForFunction(() => document.getElementById("ai").classList.contains("on"), null, { timeout: 10000 });
+  out.own_in = await ownPage.evaluate(() => ({ title: document.getElementById("ai").title, search: location.search,
+    kept: JSON.parse(localStorage.getItem("chatcomputer-own-ai")) }));
+  out.own_auth = orSeen.auth && { back: orSeen.auth.callback_url, method: orSeen.auth.code_challenge_method,
+                                  challenge: (orSeen.auth.code_challenge || "").length };
+  out.own_traded = orSeen.traded && { code: orSeen.traded.code, method: orSeen.traded.code_challenge_method,
+                                      verifier: (orSeen.traded.code_verifier || "").length };
+  await ownPage.fill("#input", "hi there");
+  await ownPage.keyboard.press("Enter");
+  await ownPage.waitForFunction(() => /Hello from OpenRouter\./.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
+    null, { timeout: 10000 });
+  out.own_asked = orSeen.asked;
+  await ownPage.click("#ai");
+  await ownPage.waitForFunction(() => document.body.classList.contains("sheet"));
+  out.own_menu_in = await sheetOf(ownPage);
+  await ownPage.click("#sheet-fields .choices button:has-text('Sign out of OpenRouter')");
+  await ownPage.waitForFunction(() => !document.getElementById("ai").classList.contains("on"));
+  out.own_out = await ownPage.evaluate(() => ({ title: document.getElementById("ai").title, kept: localStorage.getItem("chatcomputer-own-ai"),
+    done: Array.from(document.querySelectorAll("#done-list .done-what")).map((d) => d.textContent).filter((t) => /OpenRouter/.test(t)) }));
+  // A key of one's own: OpenAI's (standing in), its chat models listed, the newest chosen; an empty key, said so.
+  await ownCtx.route("https://api.openai.com/v1/models", (route) => route.fulfill({ status: 200, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ data: [
+      { id: "whisper-1", created: 900 }, { id: "gpt-4.1", created: 100 }, { id: "gpt-9", created: 500 }, { id: "gpt-9-realtime", created: 600 }] }) }));
+  await ownPage.click("#ai");
+  await ownPage.click("#sheet-fields .choices button:has-text('Use a key')");
+  await ownPage.click("#sheet-fields .choices button:has-text('OpenAI')");
+  await ownPage.waitForFunction(() => document.getElementById("sheet-title").textContent === "OpenAI key");
+  await ownPage.click("#sheet-ok");
+  await ownPage.waitForFunction(() => document.getElementById("sheet-error").textContent !== "");
+  out.own_empty = await ownPage.evaluate(() => document.getElementById("sheet-error").textContent);
+  await ownPage.fill("#sheet-fields input[name=key]", "test-openai-key");
+  await ownPage.click("#sheet-ok");
+  await ownPage.waitForFunction(() => document.getElementById("ai").classList.contains("on"), null, { timeout: 10000 });
+  out.own_key = await ownPage.evaluate(() => ({ title: document.getElementById("ai").title, sheet: document.body.classList.contains("sheet"),
+    type: (document.querySelector("#sheet-fields input[name=key]") || {}).type }));
+  await ownCtx.close();
+
   // Connect AirPods on an iPhone, with stand-ins for Safari's listening and speaking, the microphone and the wake lock:
   // one thing heard at a time; what's heard said once it stops changing, though Safari never calls it final; heard
   // twice over, asked once; the answer read out (the tap having let it speak), then listening again; the screen kept

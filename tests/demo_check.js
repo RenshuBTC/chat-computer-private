@@ -50,6 +50,58 @@ function toolTurn(id, name, args) {
 function textTurn(words) {
   return chunk({ role: "assistant" }) + words.map((w) => chunk({ content: w })).join("") + chunk({ content: "" }, "stop") + "data: [DONE]\n\n";
 }
+// An AI's first answer to "a timer for 20 minutes": its thinking (Mistral's as pieces of its words), then a call of
+// the page's make_timer, carrying what that AI puts on a call (Gemini: its signature); then, once the timer's made,
+// its words.
+function keyedToolTurn(k) {
+  const call = { index: 0, id: "call_k1", type: "function", function: { name: "make_timer", arguments: '{"minutes": 20}' } };
+  if (k.extra) call.extra_content = k.extra;
+  const thinking = k.mistral ? chunk({ content: [{ type: "thinking", thinking: [{ type: "text", text: "Thinking it over." }] }] }) :
+    chunk({ reasoning_content: "Thinking it over." });
+  return chunk({ role: "assistant" }) + thinking + chunk({ tool_calls: [call] }) + chunk({ content: "" }, "tool_calls") + "data: [DONE]\n\n";
+}
+// OpenAI's Responses API, standing in: a call of make_timer, then words.
+function responsesSSE(events) { return events.map((e) => "event: " + e.type + "\ndata: " + JSON.stringify(e) + "\n\n").join(""); }
+const RESPONSES_CALL = responsesSSE([
+  { type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: "fc_1", call_id: "call_o1", name: "make_timer", arguments: "" } },
+  { type: "response.function_call_arguments.delta", output_index: 0, delta: '{"minutes": 20}' },
+  { type: "response.output_item.done", output_index: 0, item: { type: "function_call", id: "fc_1", call_id: "call_o1", name: "make_timer", arguments: '{"minutes": 20}' } },
+  { type: "response.completed", response: {} }]);
+const RESPONSES_WORDS = responsesSSE([{ type: "response.output_text.delta", output_index: 0, delta: "Hello from " },
+  { type: "response.output_text.delta", output_index: 0, delta: "OpenAI." }, { type: "response.completed", response: {} }]);
+// Every AI in the panel, with a key, each standing in at its own address: what it lists (null: no list there), and
+// how it answers. (Kimi's key is one from its other site: its first address says no.)
+const KEYED_AIS = {
+  Gemini: { base: "https://generativelanguage.googleapis.com/v1beta/openai", extra: { google: { thought_signature: "sig-1" } },
+            models: [{ id: "models/gemini-3.8-flash" }, { id: "models/gemini-4-argon" }, { id: "models/gemini-embedding-2" }, { id: "models/gemini-nano-banana-2.1" }] },
+  Claude: { base: "https://api.anthropic.com/v1", models: [{ id: "claude-haiku-5-5", created_at: "2026-10-01T00:00:00Z" },
+            { id: "claude-opus-5-5", created_at: "2026-09-01T00:00:00Z" }, { id: "claude-sonnet-5-5", created_at: "2026-09-15T00:00:00Z" }] },
+  OpenAI: { base: "https://api.openai.com/v1", responses: true, models: [{ id: "gpt-6.1-sol-pro", created: 30 }, { id: "gpt-6.1-sol", created: 20 },
+            { id: "gpt-6-astra", created: 10 }, { id: "gpt-image-2", created: 40 }] },
+  Meta: { base: "https://api.meta.ai/v1", models: [{ id: "muse-spark-1.3-contributor", created: 30 }, { id: "muse-spark-1.3", created: 20 },
+          { id: "muse-wonder-1.0", created: 10 }, { id: "muse-image-1", created: 40 }] },
+  Kimi: { base: "https://api.moonshot.ai/v1", alt: "https://api.moonshot.cn/v1", models: [{ id: "kimi-k3.1-pro-highspeed", created: 20 },
+          { id: "kimi-k3.1-pro", created: 10 }, { id: "kimi-k2.6", created: 5 }] },
+  Grok: { base: "https://api.x.ai/v1", models: [{ id: "grok-imagine-video", created: 30 }, { id: "grok-4.7", created: 20 }, { id: "grok-4.6", created: 10 }] },
+  Qwen: { base: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", models: [{ id: "qwen3.8-flash" }, { id: "qwen3.8-max" },
+          { id: "qwen-image-2" }, { id: "text-embedding-v4" }] },
+  DeepSeek: { base: "https://api.deepseek.com", models: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] },
+  GLM: { base: "https://api.z.ai/api/paas/v4", models: null },
+  MiMo: { base: "https://api.xiaomimimo.com/v1", models: [{ id: "mimo-v2.6-flash" }, { id: "mimo-v2.6-pro-ultraspeed" }, { id: "mimo-v2.6-pro" }, { id: "mimo-v2.6-asr" }] },
+  MiniMax: { base: "https://api.minimax.io/v1", words: ["<thi", "nk>pondering</th", "ink>Hello from ", "MiniMax."],
+             models: [{ id: "MiniMax-M3", created: 10 }, { id: "MiniMax-M3.1-Flash", created: 20 }, { id: "speech-3.0", created: 30 }] },
+  Mistral: { base: "https://api.mistral.ai/v1", mistral: true, models: [
+    { id: "mistral-large-4", created: 20, capabilities: { completion_chat: true, function_calling: true } },
+    { id: "mistral-ocr-3", created: 30, capabilities: { completion_chat: false } },
+    { id: "mistral-medium-3-5", created: 10, capabilities: { completion_chat: true, function_calling: true } }] },
+};
+// OpenRouter's models, standing in: free ones, and makers' paid ones (the best of each to be offered).
+const OPENROUTER_MODELS = [["a/free:free", 0, 100], ["b/free-two:free", 0, 200], ["google/gemini-3.8-flash", 1, 60], ["google/gemini-4-argon", 1, 50],
+  ["anthropic/claude-haiku-5.5", 1, 20], ["anthropic/claude-opus-5.5", 1, 10], ["openai/gpt-6.1-sol-pro", 1, 40], ["openai/gpt-6.1-sol", 1, 39],
+  ["openai/gpt-6-astra", 1, 30], ["meta/muse-spark-1.3-contributor", 1, 30], ["meta/muse-wonder", 1, 25], ["x-ai/grok-4.7", 1, 20],
+  ["x-ai/grok-4.7:batch", 1, 20], ["deepseek/deepseek-v4.1-flash-1017", 1, 50], ["deepseek/deepseek-v4-pro-0813", 1, 30], ["deepseek/deepseek-v4-pro", 1, 5],
+  ["stepfun/step-5-preview", 1, 10], ["inclusionai/ling-3.1-flash", 1, 10], ["mistralai/mistral-large-4-0", 1, 10]].map(([id, paid, created]) =>
+  ({ id: id, created: created, pricing: { prompt: paid ? "0.000001" : "0", completion: paid ? "0.000002" : "0" }, supported_parameters: ["tools"] }));
 const MAP_TURN = toolTurn("call_1", "show_map", '{"place": "Tokyo", "west": 139.55, "south": 35.55, "east": 139.95, "north": 35.8}');
 const VIDEO_TURN = toolTurn("call_2", "play_youtube", '{"video_id": "aBcDeFgHiJk", "title": "A test video"}');
 const VOLUME_TURN = toolTurn("call_3", "set_volume", '{"percent": 30}');
@@ -1000,8 +1052,8 @@ async function ask(page, text, meanwhile) {
     headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ data: [
       { id: "whisper-1", created: 900 }, { id: "gpt-4.1", created: 100 }, { id: "gpt-9", created: 500 }, { id: "gpt-9-realtime", created: 600 }] }) }));
   await ownPage.click("#ai");
-  await ownPage.click("#sheet-fields .choices button:has-text('OpenAI key')");
-  await ownPage.waitForFunction(() => document.getElementById("sheet-title").textContent === "OpenAI key");
+  await ownPage.click('#sheet-fields .choices button:text-is("OpenAI")');
+  await ownPage.waitForFunction(() => document.getElementById("sheet-title").textContent === "OpenAI");
   await ownPage.click("#sheet-ok");
   await ownPage.waitForFunction(() => document.getElementById("sheet-error").textContent !== "");
   out.own_empty = await ownPage.evaluate(() => document.getElementById("sheet-error").textContent);
@@ -1010,7 +1062,103 @@ async function ask(page, text, meanwhile) {
   await ownPage.waitForFunction(() => document.getElementById("ai").classList.contains("on"), null, { timeout: 10000 });
   out.own_key = await ownPage.evaluate(() => ({ title: document.getElementById("ai").title, sheet: document.body.classList.contains("sheet"),
     type: (document.querySelector("#sheet-fields input[name=key]") || {}).type }));
+  // OpenRouter's models to choose from: its free ones, then the best of each maker in the panel (on your credits).
+  await ownCtx.unroute("https://openrouter.ai/api/v1/models");
+  await ownCtx.route("https://openrouter.ai/api/v1/models", (route) => route.fulfill({ status: 200, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ data: OPENROUTER_MODELS }) }));
+  await ownPage.evaluate(() => { localStorage.setItem("chatcomputer-own-ai", JSON.stringify({ provider: "openrouter", key: "k", model: "a/free:free" })); });
+  await ownPage.reload();
+  await ownPage.waitForFunction(() => window.CO && document.getElementById("ai").classList.contains("on"));
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+  await ownCtx.route(/icons\.duckduckgo\.com/, (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
+  await ownPage.click("#ai");
+  await ownPage.click("#sheet-fields .choices button:has-text('Choose its model')");
+  await ownPage.waitForFunction(() => /models$/.test(document.getElementById("sheet-title").textContent));
+  out.or_models = await ownPage.evaluate(() => Array.from(document.querySelectorAll("#sheet-fields .choices > *")).map((e) =>
+    e.tagName === "P" ? "~ " + e.textContent : e.textContent + (e.querySelector("img") ? " @" + new URL(e.querySelector("img").src).pathname.slice(5) : "")));
   await ownCtx.close();
+
+  // Every AI in the panel, on a key (each at its own address, standing in): its models listed with the key, the best
+  // chat model chosen (where there's no list, its best by name; a key from its other site, at that site's address);
+  // asked there, streamed, with the page's tools; its call of make_timer run, and asked again with the timer's
+  // answer (its thinking sent back only to an AI that wants it; Gemini's signature on the call, only to Gemini;
+  // Mistral's thinking as Mistral gave it); its words shown (any <think> in them taken out); signed out. A key one
+  // refuses (Google's way: a 400), said so. And the page that makes a key, in a new tab.
+  const kCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  await kCtx.route(/icons\.duckduckgo\.com/, (route) => route.fulfill({ status: 404, body: "" }));
+  await kCtx.route("https://platform.claude.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>Keys</title>" }));
+  const kSeen = {}, CORS = { "access-control-allow-origin": "*" };
+  for (const [name, k] of Object.entries(KEYED_AIS)) {
+    kSeen[name] = { models: [], asked: [] };
+    const answers = k.alt || k.base;
+    for (const base of [k.base].concat(k.alt ? [k.alt] : [])) {
+      await kCtx.route(base + "/models**", (route) => {
+        const h = route.request().headers();
+        kSeen[name].models.push({ base: base, key: h["authorization"] });
+        if (/bad-key/.test(h["authorization"] || "")) return route.fulfill({ status: 400, contentType: "application/json", headers: CORS,
+          body: JSON.stringify([{ error: { code: 400, message: "API key not valid. Please pass a valid API key.", status: "INVALID_ARGUMENT" } }][0]) });
+        if (base !== answers) return route.fulfill({ status: 401, contentType: "application/json", headers: CORS, body: '{"error":{"message":"Incorrect API key provided"}}' });
+        if (!k.models) return route.fulfill({ status: 404, contentType: "application/json", headers: CORS, body: '{"error":{"message":"Not found"}}' });
+        return route.fulfill({ status: 200, contentType: "application/json", headers: CORS, body: JSON.stringify({ object: "list", data: k.models }) });
+      });
+    }
+    await kCtx.route(answers + (k.responses ? "/responses" : "/chat/completions"), (route) => {
+      const req = route.request(), body = JSON.parse(req.postData() || "{}");
+      kSeen[name].asked.push({ url: req.url(), headers: req.headers(), body: body });
+      const again = k.responses ? body.input[body.input.length - 1].type === "function_call_output" : body.messages[body.messages.length - 1].role === "tool";
+      return route.fulfill({ status: 200, contentType: "text/event-stream", headers: CORS, body: k.responses ? (again ? RESPONSES_WORDS : RESPONSES_CALL) :
+        again ? textTurn(k.words || ["Hello from ", name + "."]) : keyedToolTurn(k) });
+    });
+  }
+  const kp = await kCtx.newPage();
+  kp.on("pageerror", (e) => errors.push(String(e)));
+  await kp.goto(page_url);
+  await kp.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  out.keyed = {};
+  for (const name of Object.keys(KEYED_AIS)) {
+    await kp.click("#ai");
+    await kp.click(`#sheet-fields .choices button:text-is("${name}")`);
+    await kp.waitForFunction((n) => document.getElementById("sheet-title").textContent === n, name);
+    if (name === "Gemini") {
+      await kp.fill("#sheet-fields input[name=key]", "bad-key");
+      await kp.click("#sheet-ok");
+      await kp.waitForFunction(() => document.getElementById("sheet-error").textContent !== "");
+      out.key_refused = await kp.evaluate(() => document.getElementById("sheet-error").textContent);
+    }
+    await kp.fill("#sheet-fields input[name=key]", "key-of-" + name);
+    await kp.click("#sheet-ok");
+    await kp.waitForFunction(() => document.getElementById("ai").classList.contains("on"), null, { timeout: 10000 });
+    await kp.fill("#input", "a timer for 20 minutes");
+    await kp.keyboard.press("Enter");
+    await kp.waitForFunction((n) => ((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || "").indexOf("Hello from " + n + ".") >= 0,
+      name, { timeout: 10000 });
+    const said = await kp.evaluate(() => (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent);
+    const seen = kSeen[name], [first, second] = seen.asked, h = first.headers, kept = await kp.evaluate(() => JSON.parse(localStorage.getItem("chatcomputer-own-ai")));
+    const r = { model: first.body.model, kept_base: kept.base || null, at: first.url, stream: first.body.stream, tools: (first.body.tools || []).length,
+      key: h["authorization"] || null, models: seen.models.map((m) => m.base + " " + m.key), asked: seen.asked.length, said: said,
+      browser: h["anthropic-dangerous-direct-browser-access"] || null, version: h["anthropic-version"] || null };
+    if (KEYED_AIS[name].responses) {
+      const last = second.body.input[second.body.input.length - 1];
+      Object.assign(r, { store: first.body.store, input: second.body.input.map((i) => i.type || i.role), result: last.output.slice(0, 20) });
+    } else {
+      const back = second.body.messages.filter((m) => m.role === "assistant" && m.tool_calls).pop();
+      Object.assign(r, { max: first.body.max_tokens || null, split: first.body.reasoning_split || null, thinking_back: back.reasoning_content || null,
+        content_back: Array.isArray(back.content) ? back.content.map((c) => c.type) : back.content, extra_back: back.tool_calls[0].extra_content || null,
+        result: second.body.messages[second.body.messages.length - 1].content.slice(0, 20) });
+    }
+    out.keyed[name] = r;
+    await kp.click("#ai");
+    await kp.click("#sheet-fields .choices button:has-text('Sign out of')");
+    await kp.waitForFunction(() => !document.getElementById("ai").classList.contains("on"));
+  }
+  // (Get a key: the page that makes one, in a new tab.)
+  await kp.click("#ai");
+  await kp.click('#sheet-fields .choices button:text-is("Claude")');
+  await kp.waitForFunction(() => document.getElementById("sheet-title").textContent === "Claude");
+  const [keyTab] = await Promise.all([kCtx.waitForEvent("page"), kp.click("#sheet-fields .choices button:has-text('Get a key')")]);
+  await keyTab.waitForURL(/platform\.claude\.com/).catch(() => {});
+  out.key_tab = { url: keyTab.url(), still: await kp.evaluate(() => document.getElementById("sheet-title").textContent) };
+  await kCtx.close();
 
   // Connect AirPods on an iPhone, with stand-ins for Safari's listening and speaking, the microphone and the wake lock:
   // one thing heard at a time; what's heard said once it stops changing, though Safari never calls it final; heard

@@ -2218,7 +2218,8 @@
     if (own) {
       if (err.status === 401 || err.status === 403) return ownName() + " didn't take your key any more: press the spark beside + to sign in again.";
       if (err.status === 402) return ownName() + " says your account has no credit left for " + own.model + ".";
-      if (err.status === 429) return ownName() + " says it's had too many questions just now (free models have limits): ask again in a little while.";
+      if (err.status === 429) return ownName() + " says it's had too many questions just now" + (own.provider === "openrouter" ?
+        " (free models have limits)" : "") + ": ask again in a little while.";
       return err.status ? ownName() + " couldn't answer that: " + err.message : "I can't reach " + ownName() + ": is the internet on?";
     }
     if (!err.status) {
@@ -2233,117 +2234,280 @@
     return "My model couldn't answer that: " + err.message;
   }
   // One request, streamed: its words as they come, and the whole message (its words, thinking and tool calls).
+  // Chat Computer's engine, and most AIs, as OpenAI's chat completions; OpenAI's own through its Responses API (its
+  // best models use tools only there); ChatGPT's, the app's.
   function localMessage(onText) {
-    var messages = [{ role: "system", content: local.system || systemPrompt() }].concat(local.talk), url, headers;
+    var messages = [{ role: "system", content: local.system || systemPrompt() }].concat(local.talk);
     if (own && own.provider === "chatgpt") return chatgptMessage(messages, localTools(), onText);
-    var body = { model: "chat-computer", stream: true, think: false, max_tokens: 4096, tools: localTools(), messages: messages };
-    if (own) {                                 // (your own AI: its model; none of the engine's own options)
-      body = { model: own.model, stream: true, tools: localTools(), messages: messages.map(function (m) {
-        if (!m.reasoning_content) return m;
-        var c = {};
-        for (var k in m) if (k !== "reasoning_content") c[k] = m[k];
-        return c;
-      }) };
-      url = ownBase() + "/chat/completions";
-      headers = ownHeaders(own.provider, own.key);
-      headers["content-type"] = "application/json";
-    } else {
-      url = localBase() + "/v1/chat/completions";
-      headers = { "content-type": "application/json" };
+    var headers = { "content-type": "application/json" };
+    if (!own) {
+      return chatMessage(localBase() + "/v1/chat/completions", headers,
+        { model: "chat-computer", stream: true, think: false, max_tokens: 4096, tools: localTools(), messages: messages }, onText, {});
     }
-    return fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) }).then(function (res) {
-      if (!res.ok) {
-        return res.text().then(function (t) {
-          var msg = t;
-          try { var j = JSON.parse(t); msg = (j.error && j.error.message) || t; } catch (x) {}
-          var e = new Error(clip(msg || "HTTP " + res.status, 200));
-          e.status = res.status;
-          throw e;
-        });
+    var p = own.provider, a = AIS[p] || {}, h = ownHeaders(p, own.key);
+    for (var k in h) headers[k] = h[k];
+    if (a.responses) return responsesMessage(ownBase() + "/responses", headers, responsesBody(messages, localTools()), onText);
+    // (Your own AI: its model, none of the engine's own options. Its thinking goes back only to an AI that wants it;
+    // Gemini's signatures on its tool calls, only to Gemini; Mistral's thinking, as Mistral gave it, only to Mistral.)
+    var body = { model: own.model, stream: true, tools: localTools(), messages: messages.map(function (m) {
+      var c = {};
+      for (var x in m) if (x !== "chunks") c[x] = m[x];
+      if (m.chunks && p === "mistral") c.content = m.chunks;
+      if (c.reasoning_content != null && !a.think) delete c.reasoning_content;
+      if (c.tool_calls && p !== "gemini") c.tool_calls = c.tool_calls.map(function (t) { return { id: t.id, type: t.type, function: t.function }; });
+      return c;
+    }) };
+    for (var e in a.extra || {}) body[e] = a.extra[e];
+    return chatMessage(ownBase() + "/chat/completions", headers, body, onText, { unthink: a.unthink, chunks: p === "mistral" });
+  }
+  function noConnection(e) { var x = new Error(e && e.message || "no connection"); x.status = 0; throw x; }
+  function httpError(res) {
+    return res.text().then(function (t) {
+      var e = new Error(clip(apiError(t) || "HTTP " + res.status, 200));
+      e.status = res.status === 400 && keyRefused(e.message) ? 401 : res.status;
+      throw e;
+    });
+  }
+  // A streamed answer's events, as they come: each one's data to `on`; done at the end of the stream.
+  function readEvents(res, on) {
+    var reader = res.body.getReader(), dec = new TextDecoder(), buf = "";
+    function event(chunk) {
+      var data = chunk.split("\n").filter(function (l) { return l.indexOf("data:") === 0; })
+        .map(function (l) { return l.slice(5).trim(); }).join("");
+      if (data && data !== "[DONE]") on(data);
+    }
+    return new Promise(function (resolve, reject) {
+      (function pump() {
+        reader.read().then(function (r) {
+          if (!r.done) {
+            buf += dec.decode(r.value, { stream: true }).replace(/\r\n/g, "\n");
+            for (var i = buf.indexOf("\n\n"); i >= 0; i = buf.indexOf("\n\n")) { event(buf.slice(0, i)); buf = buf.slice(i + 2); }
+            pump();
+            return;
+          }
+          if (buf.trim()) event(buf);
+          resolve();
+        }, function (e) { var x = new Error(e && e.message || "the connection broke"); x.status = 0; reject(x); });
+      })();
+    });
+  }
+  // Words with any <think>…</think> taken out of them (some AIs think out loud in their words): the rest to `out`,
+  // the thinking to `think`; a tag cut between two pieces held back until it's whole.
+  function thinkFilter(out, think) {
+    var inside = false, held = "";
+    function feed(t) {
+      t = held + t;
+      held = "";
+      while (t) {
+        var tag = inside ? "</think>" : "<think>", at = t.indexOf(tag);
+        if (at < 0) {
+          var keep = 0;
+          for (var n = Math.min(tag.length - 1, t.length); n > 0; n--) if (tag.indexOf(t.slice(t.length - n)) === 0) { keep = n; break; }
+          if (t.length > keep) (inside ? think : out)(t.slice(0, t.length - keep));
+          held = t.slice(t.length - keep);
+          return;
+        }
+        if (at) (inside ? think : out)(t.slice(0, at));
+        t = t.slice(at + tag.length);
+        inside = !inside;
       }
-      var reader = res.body.getReader(), dec = new TextDecoder(), buf = "", content = "", thinking = "", calls = [], failed = null;
-      function event(chunk) {
-        var data = chunk.split("\n").filter(function (l) { return l.indexOf("data:") === 0; })
-          .map(function (l) { return l.slice(5).trim(); }).join("");
-        if (!data || data === "[DONE]") return;
+    }
+    feed.end = function () { if (held) (inside ? think : out)(held); held = ""; };
+    return feed;
+  }
+  // Chat completions, streamed (Chat Computer's engine's, and most AIs'): words (a string, or, from Mistral's
+  // thinking models, pieces: its thinking, then its words), thinking (reasoning_content), and tool calls (with
+  // Gemini's signature on them, extra_content).
+  function chatMessage(url, headers, body, onText, how) {
+    return fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) }).then(function (res) {
+      if (!res.ok) return httpError(res);
+      var content = "", thinking = "", calls = [], failed = null;
+      function said(t) { content += t; onText(t); }
+      function thought(t) { thinking += t; }
+      var words = how.unthink ? thinkFilter(said, thought) : said;
+      return readEvents(res, function (data) {
         var ev;
-        try { ev = JSON.parse(data); } catch (e) { return; }
-        if (ev.error) { failed = new Error(clip((ev.error && ev.error.message) || "the model stopped", 200)); failed.status = 500; return; }
+        try { ev = JSON.parse(data); } catch (x) { return; }
+        if (ev.error) { failed = new Error(clip(apiError(data) || "the model stopped", 200)); failed.status = 500; return; }
         var d = (ev.choices && ev.choices[0] && ev.choices[0].delta) || {};
-        if (d.reasoning_content) thinking += d.reasoning_content;
-        if (d.content) { content += d.content; onText(d.content); }
+        if (typeof d.reasoning_content === "string") thinking += d.reasoning_content;
+        (typeof d.content === "string" ? [{ type: "text", text: d.content }] : Array.isArray(d.content) ? d.content : []).forEach(function (c) {
+          if (c && c.type === "text" && c.text) words(c.text);
+          else if (c && c.type === "thinking") (Array.isArray(c.thinking) ? c.thinking : []).forEach(function (t) { if (t && t.text) thought(t.text); });
+        });
         (d.tool_calls || []).forEach(function (c) {
           var i = c.index || 0, f = c.function || {};
           var cur = calls[i] = calls[i] || { id: "", name: "", args: "" };
           if (c.id) cur.id = c.id;
           if (f.name) cur.name += f.name;
           if (f.arguments) cur.args += f.arguments;
+          if (c.extra_content) cur.extra = c.extra_content;
         });
-      }
-      return new Promise(function (resolve, reject) {
-        (function pump() {
-          reader.read().then(function (r) {
-            if (!r.done) {
-              buf += dec.decode(r.value, { stream: true }).replace(/\r\n/g, "\n");
-              for (var i = buf.indexOf("\n\n"); i >= 0; i = buf.indexOf("\n\n")) { event(buf.slice(0, i)); buf = buf.slice(i + 2); }
-              pump();
-              return;
-            }
-            if (buf.trim()) event(buf);
-            if (failed) { reject(failed); return; }
-            var list = calls.filter(Boolean).map(function (c, k) {
-              var input = {};
-              try { if (c.args) input = JSON.parse(c.args); } catch (e) { input = {}; }
-              return { id: c.id || "call_" + k, name: c.name, input: input, args: c.args || "{}" };
-            });
-            var message = { role: "assistant", content: content };
-            if (thinking) message.reasoning_content = thinking;
-            if (list.length) {
-              message.tool_calls = list.map(function (c) { return { id: c.id, type: "function", function: { name: c.name, arguments: c.args } }; });
-            }
-            resolve({ message: message, calls: list });
-          }, function (e) { var x = new Error(e && e.message || "the connection broke"); x.status = 0; reject(x); });
-        })();
+      }).then(function () {
+        if (words.end) words.end();
+        if (failed) throw failed;
+        calls = calls.filter(Boolean);
+        var list = calls.map(function (c, k) {
+          var input = {};
+          try { if (c.args) input = JSON.parse(c.args); } catch (x) { input = {}; }
+          return { id: c.id || "call_" + k, name: c.name, input: input, args: c.args || "{}" };
+        });
+        var message = { role: "assistant", content: content };
+        if (how.chunks && thinking) message.chunks = [{ type: "thinking", thinking: [{ type: "text", text: thinking }] }]
+          .concat(content ? [{ type: "text", text: content }] : []);
+        else if (thinking) message.reasoning_content = thinking;
+        if (list.length) {
+          message.tool_calls = list.map(function (c, k) {
+            var t = { id: c.id, type: "function", function: { name: c.name, arguments: c.args } };
+            if (calls[k].extra) t.extra_content = calls[k].extra;
+            return t;
+          });
+        }
+        return { message: message, calls: list };
       });
-    }, function (e) { var x = new Error(e && e.message || "no connection"); x.status = 0; throw x; });
+    }, noConnection);
+  }
+  // OpenAI's Responses API, streamed: its words to `onText` as they come, and the whole message (words and tool
+  // calls) in the same shape as the others'. (ChatGPT's too, through the app.)
+  function responsesReader(onText) {
+    var content = "", calls = [], failed = null, done = false;
+    function event(data) {
+      var ev;
+      try { ev = JSON.parse(data); } catch (e) { return; }
+      var t = ev.type || "", i = ev.output_index || 0, item = ev.item || {};
+      if (t === "response.output_text.delta" && ev.delta) { content += ev.delta; onText(ev.delta); }
+      else if (t === "response.output_item.added" && item.type === "function_call") {
+        calls[i] = { id: item.call_id || item.id || "call_" + i, name: item.name || "", args: item.arguments || "" };
+      } else if (t === "response.function_call_arguments.delta" && calls[i]) calls[i].args += ev.delta || "";
+      else if (t === "response.function_call_arguments.done" && calls[i] && typeof ev.arguments === "string") calls[i].args = ev.arguments;
+      else if (t === "response.output_item.done" && item.type === "function_call") {
+        calls[i] = calls[i] || { id: item.call_id || item.id || "call_" + i, name: item.name || "", args: "" };
+        if (typeof item.arguments === "string") calls[i].args = item.arguments;
+      } else if (t === "response.completed" || t === "response.incomplete") done = true;
+      else if (t === "response.failed" || t === "error") {
+        var er = (ev.response && ev.response.error) || ev.error || ev;
+        failed = new Error(clip(er.message || "it stopped", 200));
+        failed.status = /limit|quota/i.test(String(er.code || er.message || "")) ? 429 : 500;
+      }
+    }
+    function result() {
+      if (failed) throw failed;
+      var list = calls.filter(Boolean).map(function (c, k) {
+        var input = {};
+        try { if (c.args) input = JSON.parse(c.args); } catch (x) { input = {}; }
+        return { id: c.id || "call_" + k, name: c.name, input: input, args: c.args || "{}" };
+      });
+      var message = { role: "assistant", content: content };
+      if (list.length) message.tool_calls = list.map(function (c) { return { id: c.id, type: "function", function: { name: c.name, arguments: c.args } }; });
+      return { message: message, calls: list, done: done };
+    }
+    return { event: event, result: result };
+  }
+  function responsesMessage(url, headers, body, onText) {
+    var read = responsesReader(onText);
+    return fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) }).then(function (res) {
+      if (!res.ok) return httpError(res);
+      return readEvents(res, read.event).then(read.result);
+    }, noConnection);
   }
 
   // ------------------------------------------------------------------ your own AI
   // Beside the box's +, the spark: sign in with an AI you already use, and it answers instead of Chat Computer's own
   // model, on your own account, with the same tools. On the website: OpenRouter, signing in on its own page (it gives
-  // this page a key of its own, which you can take back on its site; its free models cost nothing), or a key of your
-  // own from OpenAI, Google (Gemini), OpenRouter or any other AI that answers as OpenAI's chat completions do. (ChatGPT's
-  // own sign-in, with your ChatGPT plan, is only for apps on your own computer: OpenAI doesn't offer it to websites.)
+  // this page a key of its own, which you can take back on its site): its free models cost nothing, and the best
+  // model of each maker at the top of Artificial Analysis's Intelligence Index is there too, on your OpenRouter
+  // credits. Or a key of yours from each of those makers, asked straight from this page (each lets a web page ask
+  // it: checked from chatcomputer.ai, November 2026); or from any other AI that answers as OpenAI's chat completions do.
   // What you say then goes to that AI; the key stays in this browser, until you sign out (the spark again).
   // In the app: ChatGPT too, on your ChatGPT plan (OpenAI's "Sign in with ChatGPT", for apps on your own computer):
   // you sign in on OpenAI's page in your own browser, the app keeps the tokens (apps/desktop: chatgpt.rs) and asks
-  // OpenAI's Responses API for this page; nothing of the sign-in is kept here but which model answers.
+  // OpenAI's Responses API for this page; nothing of the sign-in is kept here but which model answers. (ChatGPT's own
+  // sign-in isn't offered to websites; OpenRouter's, which comes back to a web page, is the website's.)
   var OWN_KEY = "chatcomputer-own-ai", OR_VERIFIER = "chatcomputer-openrouter-verifier";
+  // The makers of the models at the top of Artificial Analysis's Intelligence Index (artificialanalysis.ai, as it
+  // stood on 3 November 2026), in the order of each one's best model there, and how each is asked (its own API
+  // documentation, read the same day):
+  //   name, by: what it's called, and its maker where that's another name;  site: whose logo it shows (through
+  //   DuckDuckGo's icon service, as Messages' are);  keys: the page where you make a key;
+  //   base: its API (chat completions in OpenAI's shape, or, for OpenAI's, its Responses API: its best models use
+  //   tools only there);  alt: its API for keys made on its other site (China's), tried when the first says no;
+  //   model: its best model, for when it doesn't list them;  best: its models best first (the first matching one of
+  //   these answers; among those, the newest);  chat: which of its models chat;  skip: which don't, or don't here;
+  //   think: it wants its own thinking back, in every message after (DeepSeek's rule, and Kimi's, Z.ai's, Xiaomi's,
+  //   MiniMax's; the others aren't sent it);  extra: what's added to each question;  unthink: thinking may come
+  //   inside its words, between <think> and </think>, and is taken out of them;  or: its models' names on OpenRouter.
+  //   (StepFun's and Ant Group's (Ling) don't let a web page ask them, so they're on OpenRouter only.)
   var AIS = {
-    openrouter: { name: "OpenRouter", base: "https://openrouter.ai/api/v1", site: "openrouter.ai", keys: "openrouter.ai/settings/keys" },
-    openai: { name: "OpenAI", base: "https://api.openai.com/v1", site: "openai.com", keys: "platform.openai.com/api-keys" },
-    gemini: { name: "Gemini", base: "https://generativelanguage.googleapis.com/v1beta/openai", site: "gemini.google.com",
-              keys: "aistudio.google.com/apikey" },
-    other: { name: "", base: "", site: "", keys: "" },
+    openrouter: { name: "OpenRouter", base: "https://openrouter.ai/api/v1", site: "openrouter.ai", keys: "https://openrouter.ai/settings/keys",
+                  unthink: true },
+    gemini: { name: "Gemini", by: "Google", base: "https://generativelanguage.googleapis.com/v1beta/openai", site: "gemini.google.com",
+              keys: "https://aistudio.google.com/apikey", model: "gemini-4-argon", chat: /^gemini-\d/,
+              skip: /nano-banana|lyria|robotics|antigravity|deep-research|translate/,
+              best: [/^gemini-4-carbon/, /^gemini-4-argon/, /^gemini-\d+(\.\d+)?-pro/, /^gemini-\d+(\.\d+)?-flash(?!-lite)/], or: "google/" },
+    anthropic: { name: "Claude", by: "Anthropic", base: "https://api.anthropic.com/v1", site: "claude.ai",
+                 keys: "https://platform.claude.com/settings/keys", model: "claude-opus-5-5", chat: /^claude-/,
+                 best: [/^claude-opus/, /^claude-sonnet/, /^claude-fable/, /^claude-haiku/], extra: { max_tokens: 32000 }, or: "anthropic/" },
+    openai: { name: "OpenAI", base: "https://api.openai.com/v1", site: "openai.com", responses: true,
+              keys: "https://platform.openai.com/settings/organization/api-keys", model: "gpt-6-astra", chat: /^(gpt-\d|o\d)/,
+              skip: /-pro\b|codex|deep-research|-search|cyber|rosalind|instruct|chat-latest|gpt-live/,
+              best: [/^gpt-6-astra/, /^gpt-6\.1-sol/, /^gpt-6\.1-terra/, /^gpt-\d/], or: "openai/" },
+    meta: { name: "Meta", base: "https://api.meta.ai/v1", site: "dev.meta.ai", keys: "https://dev.meta.ai/", model: "muse-wonder-1.0",
+            chat: /^muse-/, skip: /contributor|glimmer/, best: [/^muse-wonder/, /^muse-spark-\d/, /^muse-spark/], or: "meta/" },
+    kimi: { name: "Kimi", by: "Moonshot AI", base: "https://api.moonshot.ai/v1", alt: ["https://api.moonshot.cn/v1"], site: "platform.kimi.ai",
+            keys: "https://platform.kimi.ai/console/api-keys", model: "kimi-k3.1-pro", chat: /^kimi-/, think: true,
+            best: [/^kimi-k3\.1-pro$/, /^kimi-k3\.1/, /^kimi-k3/, /^kimi-k\d/], or: "moonshotai/" },
+    grok: { name: "Grok", by: "xAI", base: "https://api.x.ai/v1", site: "grok.com", keys: "https://console.x.ai/team/default/api-keys",
+            model: "grok-4.7", chat: /^grok-/, skip: /imagine|build|multi-agent/, best: [/^grok-4\.7$/, /^grok-\d/], or: "x-ai/" },
+    qwen: { name: "Qwen", by: "Alibaba Cloud", base: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", site: "qwen.ai",
+            keys: "https://modelstudio.console.alibabacloud.com/ap-southeast-1/settings/api-key", model: "qwen3.8-max", chat: /^qwen/,
+            skip: /-mt-|coder|math|-character/, best: [/^qwen3\.8-max$/, /^qwen3\.8-max/, /^qwen\d(\.\d+)?-max/, /^qwen-max/, /-plus/],
+            or: "qwen/" },
+    deepseek: { name: "DeepSeek", base: "https://api.deepseek.com", site: "deepseek.com", keys: "https://platform.deepseek.com/api_keys",
+                model: "deepseek-v4-pro", chat: /^deepseek-/, think: true,
+                best: [/^deepseek-v4-pro/, /^deepseek-flash$/, /^deepseek-v\d+(\.\d+)?-flash/, /^deepseek-/], or: "deepseek/" },
+    glm: { name: "GLM", by: "Z.ai", base: "https://api.z.ai/api/paas/v4", site: "docs.z.ai", keys: "https://z.ai/manage-apikey/apikey-list",
+           model: "glm-5.3", chat: /^glm-/, skip: /legal/, think: true, best: [/^glm-5\.3$/, /^glm-5\.3/, /^glm-\d/], or: "z-ai/" },
+    mimo: { name: "MiMo", by: "Xiaomi", base: "https://api.xiaomimimo.com/v1", site: "mi.com", keys: "https://platform.xiaomimimo.com/#/console/api-keys",
+            model: "mimo-v2.6-pro", chat: /^mimo-/i, think: true, best: [/^mimo-v2\.6-pro$/i, /^mimo-v[\d.]+-pro$/i, /^mimo-/i], or: "xiaomi/" },
+    stepfun: { name: "StepFun", site: "stepfun.ai", best: [/^step-5/, /^step-\d/], or: "stepfun/", keyless: true },
+    minimax: { name: "MiniMax", base: "https://api.minimax.io/v1", alt: ["https://api.minimaxi.com/v1"], site: "minimax.io",
+               keys: "https://platform.minimax.io/user-center/basic-information/interface-key", model: "MiniMax-M3.1-Flash",
+               chat: /^minimax-/i, skip: /-her\b|hailuo|-h\d/i, think: true, unthink: true, extra: { reasoning_split: true },
+               best: [/^minimax-m3\.1/i, /^minimax-m3/i, /^minimax-m\d/i], or: "minimax/" },
+    ling: { name: "Ling", by: "Ant Group", site: "ant-ling.com", best: [/^ling-3\.1/, /^ling-/], or: "inclusionai/", keyless: true },
+    mistral: { name: "Mistral", by: "Mistral AI", base: "https://api.mistral.ai/v1", site: "mistral.ai",
+               keys: "https://console.mistral.ai/home?profile_dialog=api-keys", model: "mistral-large-4",
+               chat: /^(mistral|magistral|devstral|codestral|ministral)/, skip: /shieldstral|voxtral|timestral/,
+               best: [/^mistral-large-4/, /^mistral-large/, /^mistral-medium/, /^magistral-medium/], or: "mistralai/" },
+    other: { name: "", base: "", site: "", keys: "", unthink: true },
     chatgpt: { name: "ChatGPT", base: "", site: "chatgpt.com", keys: "" }
   };
+  // In the index's order; and those you can use with a key of yours, from this page.
+  var MAKERS = ["gemini", "anthropic", "openai", "meta", "kimi", "grok", "qwen", "deepseek", "glm", "mimo", "stepfun", "minimax", "ling", "mistral"];
+  var KEYED = MAKERS.filter(function (p) { return !AIS[p].keyless; });
+  // (Models that don't chat: drawing, speaking, listening, reading pictures of text, embedding, checking.)
+  var NOT_CHAT = /embed|rerank|moderat|whisper|transcri|\btts\b|-tts|speech|audio|realtime|image|imagine|dall-e|sora|veo|imagen|video|ocr|guard|computer-use|-vl\b|vision|omni|asr|-live|^live/i;
   var PLAN_USAGE = "https://chatgpt.com/#settings/Usage", PLAN_TOLD = "chatcomputer-chatgpt-plan-told";
   var OTHER_BASE = /^(https:\/\/[^\s/?#]+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?)(\/[^\s?#]*)?$/;
   var own = (function () {
-    var o = store(OWN_KEY);
-    if (!o || typeof o !== "object" || !AIS[o.provider] || typeof o.key !== "string" || !o.key || typeof o.model !== "string" || !o.model) return null;
+    var o = store(OWN_KEY), a = o && AIS[o.provider];
+    if (!o || typeof o !== "object" || !a || a.keyless || typeof o.key !== "string" || !o.key || typeof o.model !== "string" || !o.model) return null;
     if (o.provider === "other" && !OTHER_BASE.test(String(o.base || ""))) return null;
+    if (o.provider !== "other" && o.base && (a.alt || []).indexOf(o.base) < 0) return null;
     if (o.provider === "chatgpt" && !APP) return null;          // (ChatGPT's sign-in lives in the app)
     return o;
   })();
   function ownName() { return !own ? "" : own.provider === "other" ? hostOf(own.base) || "Your AI" : AIS[own.provider].name; }
-  function ownBase() { return own.provider === "other" ? String(own.base).replace(/\/+$/, "") : AIS[own.provider].base; }
-  // The spark beside +: shown, and which AI answers (its own icon, through DuckDuckGo's icon service, as Messages').
+  function ownBase() { return own.base ? String(own.base).replace(/\/+$/, "") : AIS[own.provider].base; }
+  function logo(site) { return site ? "https://icons.duckduckgo.com/ip3/" + site + ".ico" : ""; }
+  // The spark beside +: shown, and which AI answers (its own logo).
   function ownShow() {
     var site = own && (own.provider === "other" ? hostOf(own.base) : AIS[own.provider].site);
-    call("ownAi", own ? { name: ownName(), model: own.model, icon: site ? "https://icons.duckduckgo.com/ip3/" + site + ".ico" : "" } : null);
+    call("ownAi", own ? { name: ownName(), model: own.model, icon: logo(site) } : null);
   }
   function ownSet(o, done) {
+    // (Another AI starts the conversation afresh: each keeps its own kind of record of what it thought and did.)
+    if ((own && own.provider) !== (o && o.provider)) local.talk = [];
     own = o;
     store(OWN_KEY, o);
     local.system = "";                         // (said anew, with which AI answers)
@@ -2364,24 +2528,30 @@
     if (own) {
       call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: [
         ownName() + " answers now, with " + own.model + ", on your own account: what you say goes to " + ownName() + ".",
-        "Its key stays in this browser. Signed out, Chat Computer's own model answers again" + (APP ? "." : " (where the app runs on this computer).")],
+        "Its key stays " + (APP ? "in the app" : "in this browser") + ". Signed out, Chat Computer's own model answers again" +
+        (APP ? "." : " (where the app runs on this computer).")],
         choices: [{ label: "Choose its model", value: "ai:models" }, { label: "Sign out of " + ownName(), value: "ai:out" }] });
       return;
     }
-    // (All the ways in, in one panel: its own sign-in, and a key of each kind.)
-    var choices = APP && APP.channel ? [{ label: "Continue with ChatGPT", value: "ai:chatgpt" }] :
-      TABS ? [] : [{ label: "Continue with OpenRouter", value: "ai:openrouter" }];
-    call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: [
-      "Sign in with an AI you already use, and it answers instead of Chat Computer's own model, on your own account: " +
-      "what you say then goes to it. Or use a key of yours (each AI makes them on its own site)."],
-      choices: choices.concat([{ label: "OpenAI key", value: "ai:key:openai" }, { label: "Gemini key", value: "ai:key:gemini" },
-                               { label: "OpenRouter key", value: "ai:key:openrouter" }, { label: "Another AI's key", value: "ai:key:other" }]) });
+    // (Every way in, in one panel, each AI once: its own sign-in, where there's one here (ChatGPT's in the app,
+    // OpenRouter's on the website), then a key of yours from each.)
+    var signIn = APP && APP.channel ? "chatgpt" : TABS ? "" : "openrouter";
+    var choices = signIn ? [{ label: "Continue with " + AIS[signIn].name, value: "ai:" + signIn, icon: logo(AIS[signIn].site) }] : [];
+    choices.push({ note: signIn ? "Or with your key from:" : "With your key from:" });
+    KEYED.concat(signIn === "openrouter" ? [] : ["openrouter"]).forEach(function (p) {
+      choices.push({ label: AIS[p].name, value: "ai:key:" + p, icon: logo(AIS[p].site) });
+    });
+    choices.push({ label: "Another AI", value: "ai:key:other" });
+    call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", choices: choices, text: [
+      "An AI you already use answers instead of Chat Computer's own model, on your own account: what you say then goes to it."] });
   }
   function ownChoice(v) {
+    var p = v.slice(v.indexOf(":") + 1);
     if (v === "openrouter") { openRouterSignIn(); return; }
     if (v === "chatgpt" && APP) { chatgptSignIn(); return; }
     if (v === "usage") { call("accountForm", null); show({ src: PLAN_USAGE, title: "chatgpt.com" }); return; }
-    if (v.indexOf("key:") === 0 && AIS[v.slice(4)]) { keyForm(v.slice(4), ""); return; }
+    if (v.indexOf("key:") === 0 && AIS[p] && !AIS[p].keyless) { keyForm(p, ""); return; }
+    if (v.indexOf("open:") === 0 && AIS[p] && AIS[p].keys) { newTab(AIS[p].keys); return; }
     if (v === "models" && own) { modelsForm(); return; }
     if (v.indexOf("model:") === 0 && own) {
       var o = {};
@@ -2398,71 +2568,139 @@
       ownSet(null, "Signed out of " + was);
     }
   }
+  // A key: pasted, with a button that opens the page that makes one (in a new tab; in the app, its address is said).
   function keyForm(p, error) {
-    var a = AIS[p], other = p === "other";
-    call("accountForm", { id: "own-key-" + p, title: other ? "Another AI's key" : a.name + " key", ok: "Sign in", error: error,
+    var a = AIS[p], other = p === "other", maker = a.by || a.name;
+    call("accountForm", { id: "own-key-" + p, title: other ? "Another AI" : a.name, ok: "Sign in", error: error,
       text: [other ? "Any AI that answers as OpenAI's chat completions do: its address (ending /v1, as a rule), the model " +
-             "to use, and your key." : "Make one at " + a.keys + " and paste it here.",
-             "It stays in this browser, and goes only to " + (other ? "that address" : a.name) + "."],
+             "to use, and your key." : "Paste an API key from your " + maker + " account" + (APP ? ": make one at " +
+             a.keys.replace(/^https:\/\//, "").replace(/\/$/, "") + "." : ". Get a key opens the page that makes one."),
+             "It stays " + (APP ? "in the app" : "in this browser") + ", and goes only to " + (other ? "that address" : maker) + "."],
       fields: (other ? [{ name: "base", label: "Its address" }, { name: "model", label: "Its model" }] : [])
-        .concat([{ name: "key", label: "Key", type: "password" }]) });
+        .concat([{ name: "key", label: "Key", type: "password" }]),
+      choices: other || APP ? [] : [{ label: "Get a key", value: "ai:open:" + p }] });
   }
+  // (A key refused, in an answer's own words: Google's says so with a 400.)
+  function keyRefused(why) { return /api.?key|unauthori[sz]ed|authenticat|credential/i.test(String(why || "")); }
   function apiError(t) {
-    try { var j = JSON.parse(t); return String((j.error && (j.error.message || j.error)) || j.message || "").slice(0, 200); } catch (e) { return ""; }
+    try {
+      var j = JSON.parse(t), e = j.error || j;
+      return String((typeof e === "string" ? e : e.message || e.detail || j.message || j.detail) || "").slice(0, 200);
+    } catch (x) { return String(t || "").slice(0, 200); }
   }
+  // How each AI takes the key: as a bearer token; Anthropic's with its API's version, and told that this page asks
+  // it itself; OpenRouter's with this page's name.
   function ownHeaders(p, key) {
     var h = { authorization: "Bearer " + key };
+    if (p === "anthropic") { h["anthropic-version"] = "2023-06-01"; h["anthropic-dangerous-direct-browser-access"] = "true"; }
     if (p === "openrouter") { h["HTTP-Referer"] = "https://chatcomputer.ai"; h["X-Title"] = "Chat Computer"; }
     return h;
   }
-  // The models that AI offers, best first: OpenRouter's free ones that use tools (the newest first); OpenAI's and
-  // Gemini's chat models, newest first.
-  function ownModels(p, base, key) {
-    return fetch(base + "/models", { headers: ownHeaders(p, key) }).then(function (r) {
-      if (!r.ok) return r.text().then(function (t) { throw new Error(apiError(t) || "it said " + r.status); });
-      return r.json();
+  // Which of two model names is the newer, by the numbers in them (5.5 after 5.1, and a date after none).
+  function newer(a, b) {
+    var x = String(a).match(/\d+/g) || [], y = String(b).match(/\d+/g) || [];
+    for (var i = 0; i < Math.max(x.length, y.length); i++) {
+      var d = (+y[i] || 0) - (+x[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  }
+  // An AI's models that chat (and, where it says, use tools), its best first, then the newest.
+  function bestFirst(p, list) {
+    var a = AIS[p] || {}, best = a.best || [];
+    function place(id) { for (var i = 0; i < best.length; i++) if (best[i].test(id)) return i; return best.length; }
+    return list.filter(function (m) {
+      var c = m && m.capabilities;
+      return !(c && (c.completion_chat === false || c.function_calling === false));
+    }).map(function (m) {
+      var id = String(m && (m.id || m.model || m.name) || "").replace(/^models\//, "");
+      var t = m ? +m.created || (Date.parse(m.created_at || "") / 1000) || 0 : 0;
+      return { id: id, t: t };
+    }).filter(function (m) { return m.id && !NOT_CHAT.test(m.id) && (!a.chat || a.chat.test(m.id)) && !(a.skip && a.skip.test(m.id)); })
+      .sort(function (x, y) { return place(x.id) - place(y.id) || newer(x.id, y.id) || y.t - x.t; })
+      .map(function (m) { return m.id; })
+      .filter(function (id, i, all) { return all.indexOf(id) === i; });
+  }
+  // OpenRouter's: its free models that use tools (the newest first), and the best of each maker above that uses them
+  // (on your OpenRouter credits).
+  function openRouterModels(list) {
+    var tools = list.filter(function (m) { return m && typeof m.id === "string" && (m.supported_parameters || []).indexOf("tools") >= 0; });
+    var free = tools.filter(function (m) { return m.pricing && +m.pricing.prompt === 0 && +m.pricing.completion === 0; })
+      .sort(function (a, b) { return (b.created || 0) - (a.created || 0); }).map(function (m) { return m.id; });
+    var best = [];
+    MAKERS.forEach(function (p) {
+      var maker = AIS[p].or;
+      var mine = tools.filter(function (m) { return m.id.indexOf(maker) === 0 && m.id.indexOf(":") < 0; })
+        .map(function (m) { return { id: m.id.slice(maker.length), created: m.created }; });
+      var top = bestFirst(p, mine)[0];
+      if (top) best.push({ id: maker + top, maker: p });
+    });
+    return { free: free, best: best };
+  }
+  // The models that AI offers, best first (OpenRouter's: its free ones that use tools, the newest first). Where it
+  // doesn't list them (its list isn't there, or isn't what was expected), its best model; a key it doesn't take, said.
+  function ownModels(p, base, key, all) {
+    var a = AIS[p] || {};
+    return fetch(base + "/models" + (p === "anthropic" ? "?limit=100" : ""), { headers: ownHeaders(p, key) }).then(function (r) {
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          var bad = r.status === 401 || r.status === 403 || keyRefused(apiError(t));
+          if (a.model && !bad) return null;
+          var e = new Error(apiError(t) || "it said " + r.status);
+          e.status = bad ? 401 : r.status;
+          throw e;
+        });
+      }
+      return r.json().catch(function () { return null; });
     }).then(function (j) {
-      var list = (j && j.data) || [];
-      if (p === "openrouter") {
-        return list.filter(function (m) {
-          return m && m.pricing && +m.pricing.prompt === 0 && +m.pricing.completion === 0 && (m.supported_parameters || []).indexOf("tools") >= 0;
-        }).sort(function (a, b) { return (b.created || 0) - (a.created || 0); }).map(function (m) { return String(m.id); });
-      }
-      if (p === "openai") {
-        return list.filter(function (m) { return m && /^gpt-\d/.test(m.id) && !/audio|realtime|transcribe|tts|image|search|instruct|codex/.test(m.id); })
-          .sort(function (a, b) { return (b.created || 0) - (a.created || 0); }).map(function (m) { return String(m.id); });
-      }
-      if (p === "gemini") {
-        var rank = function (id) { var v = /^gemini-(\d+(?:\.\d+)?)/.exec(id); return (v ? +v[1] * 100 : 0) + (/-flash$/.test(id) ? 10 : /-pro$/.test(id) ? 5 : 0); };
-        return list.map(function (m) { return String(m && m.id || "").replace(/^models\//, ""); })
-          .filter(function (id) { return /^gemini-\d/.test(id) && !/image|tts|audio|live|embedding|vision/.test(id); })
-          .sort(function (a, b) { return rank(b) - rank(a); });
-      }
-      return list.map(function (m) { return String(m && m.id || ""); }).filter(Boolean);
+      var list = (j && (j.data || j.models || (j.output && j.output.models))) || [];
+      if (p === "openrouter") { var or = openRouterModels(list); return all ? or : or.free; }
+      if (p === "other") return list.map(function (m) { return String(m && m.id || ""); }).filter(Boolean);
+      var got = bestFirst(p, list);
+      return got.length || !a.model ? got : [a.model];
     });
   }
+  // Signing in with a key: its models listed with it (at its other site's address too, where it has one, if the
+  // first says no), the best chosen.
   function ownKey(p, v) {
-    var key = String(v.key || "").trim(), other = p === "other";
-    var base = other ? String(v.base || "").trim().replace(/\/+$/, "") : AIS[p].base, model = other ? String(v.model || "").trim() : "";
+    var key = String(v.key || "").trim(), other = p === "other", a = AIS[p];
+    var base = other ? String(v.base || "").trim().replace(/\/+$/, "") : a.base, model = other ? String(v.model || "").trim() : "";
     if (!key) { keyForm(p, "Paste the key first."); return; }
     if (other && !OTHER_BASE.test(base)) { keyForm(p, "Its address starts with https (or, for one on this computer, with http and localhost)."); return; }
     if (other && !model) { keyForm(p, "Say which of its models to use."); return; }
-    var got = other ? Promise.resolve([model]) : ownModels(p, base, key);
-    got.then(function (models) {
-      if (!models.length) throw new Error(p === "openrouter" ? "it has no free model that uses tools just now" : "it lists no model to chat with");
-      var o = { provider: p, key: key, model: models[0] };
-      if (other) o.base = base;
+    var bases = other ? [base] : [a.base].concat(a.alt || []);
+    function at(i) {
+      return (other ? Promise.resolve([model]) : ownModels(p, bases[i], key)).then(function (models) { return { base: bases[i], models: models }; },
+        function (e) { if (e && (e.status === 401 || e.status === 403) && i + 1 < bases.length) return at(i + 1); throw e; });
+    }
+    at(0).then(function (got) {
+      if (!got.models.length) throw new Error(p === "openrouter" ? "it has no free model that uses tools just now" : "it lists no model to chat with");
+      var o = { provider: p, key: key, model: got.models[0] };
+      if (other || got.base !== a.base) o.base = got.base;
       call("accountForm", null);
-      ownSet(o, "Signed in with " + (other ? hostOf(base) : AIS[p].name) + " (" + o.model + ")");
-    }).catch(function (e) { keyForm(p, "That didn't work: " + clip(e && e.message || "no answer", 160) + "."); });
+      ownSet(o, "Signed in with " + (other ? hostOf(base) : a.name) + " (" + o.model + ")");
+    }).catch(function (e) {
+      keyForm(p, e && (e.status === 401 || e.status === 403) ? (other ? "It" : a.by || a.name) + " didn't take that key." :
+        "That didn't work: " + clip(e && e.message || "no answer", 160) + ".");
+    });
   }
   function modelsForm() {
     if (own.provider === "other") { keyForm("other", ""); return; }
-    (own.provider === "chatgpt" ? chatgptModels() : ownModels(own.provider, ownBase(), own.key)).then(function (models) {
-      call("accountForm", { id: "own-ai", title: ownName() + "'s models", ok: "",
-        text: [own.provider === "openrouter" ? "Its free models that use tools, newest first. It answers with " + own.model + " now." :
-               "Newest first. It answers with " + own.model + " now."],
-        choices: models.slice(0, 12).map(function (m) { return { label: m, value: "ai:model:" + m }; }) });
+    var p = own.provider;
+    (p === "chatgpt" ? chatgptModels() : ownModels(p, ownBase(), own.key, true)).then(function (models) {
+      var choices, text;
+      if (p === "openrouter") {
+        text = "It answers with " + own.model + " now. Its free models cost nothing; the best of each maker are on your OpenRouter credits.";
+        choices = [{ note: "Free, the newest first:" }].concat(models.free.slice(0, 6).map(function (m) { return { label: m, value: "ai:model:" + m }; }));
+        if (models.best.length) {
+          choices.push({ note: "The best of each maker, on your credits:" });
+          models.best.forEach(function (m) { choices.push({ label: m.id, value: "ai:model:" + m.id, icon: logo(AIS[m.maker].site) }); });
+        }
+      } else {
+        text = (p === "chatgpt" ? "" : "The best first. ") + "It answers with " + own.model + " now.";
+        choices = models.slice(0, 12).map(function (m) { return { label: m, value: "ai:model:" + m }; });
+      }
+      call("accountForm", { id: "own-ai", title: ownName() + "'s models", ok: "", text: [text], choices: choices });
     }, function (e) {
       call("accountForm", { id: "own-ai-failed", title: ownName(), ok: "OK", text: ["Its models couldn't be listed: " +
         clip(e && e.message || "no answer", 160) + "."] });
@@ -2532,28 +2770,11 @@
   // One answer from ChatGPT: its words to `onText` as they come, and the whole message (words and tool calls), in
   // the same shape as the other AIs' (localMessage).
   function chatgptMessage(messages, tools, onText) {
-    var buf = "", content = "", calls = [], failed = null, done = false;
+    var buf = "", read = responsesReader(onText);
     function event(chunk) {
       var data = chunk.split("\n").filter(function (l) { return l.indexOf("data:") === 0; })
         .map(function (l) { return l.slice(5).trim(); }).join("");
-      if (!data || data === "[DONE]") return;
-      var ev;
-      try { ev = JSON.parse(data); } catch (e) { return; }
-      var t = ev.type || "", i = ev.output_index || 0, item = ev.item || {};
-      if (t === "response.output_text.delta" && ev.delta) { content += ev.delta; onText(ev.delta); }
-      else if (t === "response.output_item.added" && item.type === "function_call") {
-        calls[i] = { id: item.call_id || item.id || "call_" + i, name: item.name || "", args: item.arguments || "" };
-      } else if (t === "response.function_call_arguments.delta" && calls[i]) calls[i].args += ev.delta || "";
-      else if (t === "response.function_call_arguments.done" && calls[i] && typeof ev.arguments === "string") calls[i].args = ev.arguments;
-      else if (t === "response.output_item.done" && item.type === "function_call") {
-        calls[i] = calls[i] || { id: item.call_id || item.id || "call_" + i, name: item.name || "", args: "" };
-        if (typeof item.arguments === "string") calls[i].args = item.arguments;
-      } else if (t === "response.completed" || t === "response.incomplete") done = true;
-      else if (t === "response.failed" || t === "error") {
-        var er = (ev.response && ev.response.error) || ev.error || ev;
-        failed = new Error(clip(er.message || "ChatGPT stopped", 200));
-        failed.status = /limit|quota/i.test(String(er.code || er.message || "")) ? 429 : 500;
-      }
+      if (data && data !== "[DONE]") read.event(data);
     }
     return chatgptAsk("responses", responsesBody(messages, tools), function (t) {
       buf += t.replace(/\r\n/g, "\n");
@@ -2565,15 +2786,7 @@
         throw e;
       }
       if (buf.trim()) event(buf);
-      if (failed) throw failed;
-      var list = calls.filter(Boolean).map(function (c, k) {
-        var input = {};
-        try { if (c.args) input = JSON.parse(c.args); } catch (x) { input = {}; }
-        return { id: c.id || "call_" + k, name: c.name, input: input, args: c.args || "{}" };
-      });
-      var message = { role: "assistant", content: content };
-      if (list.length) message.tool_calls = list.map(function (c) { return { id: c.id, type: "function", function: { name: c.name, arguments: c.args } }; });
-      return { message: message, calls: list, done: done };
+      return read.result();
     }, function (e) { var x = new Error(e && e.message || String(e || "no answer")); x.status = 0; throw x; });
   }
   // OpenRouter's own sign-in (OAuth with PKCE): its page, then back here with a code, which this page trades for a key.

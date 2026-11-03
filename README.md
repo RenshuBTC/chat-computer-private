@@ -8,8 +8,11 @@ right, and whatever Chat Computer puts there for you: websites, YouTube, documen
 It thinks with an open model that runs on the computer itself (one of Qwen's, chosen for the computer's memory,
 run by Chat Computer's own engine): there's no account, no sign-in and nothing to pay, and what you say stays on
 the computer. If you'd rather it used an AI you already have, the spark beside the message box's + signs in with
-it: your ChatGPT plan (in the app, as T3 Code does), OpenRouter, or a key of your own; then what you say goes to
-that AI, on your account.
+it: your ChatGPT plan (in the app, as T3 Code does), OpenRouter (whose free models cost nothing, and which has the
+best model of every maker below), or a key of your own from any maker at the top of
+[Artificial Analysis's Intelligence Index](https://artificialanalysis.ai/leaderboards/models): Google (Gemini),
+Anthropic (Claude), OpenAI, Meta, Moonshot (Kimi), xAI (Grok), Alibaba (Qwen), DeepSeek, Z.ai (GLM), Xiaomi
+(MiMo), MiniMax or Mistral, each answering with its best model; then what you say goes to that AI, on your account.
 
 **[Try it in your browser](https://chatcomputer.ai)**: Chat Computer's own screen (see
 [The demo](#the-demo)).

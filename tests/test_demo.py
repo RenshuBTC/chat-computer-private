@@ -41,15 +41,25 @@ def test_what_s_typed_stays_on_this_computer():
         assert call not in host, call
     # What answers for real is Chat Computer's own model, on this computer: the app's engine at 127.0.0.1 (on the
     # website, where the app runs here and the visitor chose it); or, once the visitor signs in with an AI of their
-    # own (the spark beside +), that AI, on their account: OpenRouter (its own sign-in), or their key for OpenAI,
-    # Google's Gemini, OpenRouter or another that answers as OpenAI's chat completions do. No other.
+    # own (the spark beside +), that AI, on their account: OpenRouter (its own sign-in), or their key for one of the
+    # makers at the top of Artificial Analysis's Intelligence Index (its own API, below), or another that answers as
+    # OpenAI's chat completions do. No other; no key of anyone's in the page, and no browser's built-in model.
     assert 'function localBase() { return "http://127.0.0.1:" + local.port; }' in host
-    for gone in ("api.anthropic.com", "x-api-key", "sk-ant", "languagemodel", "gemma", "gemini nano", "connect claude"):
+    for gone in ("x-api-key", "sk-ant", "sk-or-", "languagemodel", "gemma", "gemini nano", "connect claude"):
         assert gone not in host.lower(), gone
     assert 'openrouter: { name: "OpenRouter", base: "https://openrouter.ai/api/v1"' in host
     assert 'openai: { name: "OpenAI", base: "https://api.openai.com/v1"' in host
     assert 'base: "https://generativelanguage.googleapis.com/v1beta/openai"' in host
-    assert 'url = ownBase() + "/chat/completions";' in host and 'url = localBase() + "/v1/chat/completions";' in host
+    assert 'chatMessage(ownBase() + "/chat/completions"' in host and 'chatMessage(localBase() + "/v1/chat/completions"' in host
+    assert 'responsesMessage(ownBase() + "/responses"' in host
+    # (Each maker's API, asked only with the visitor's own key for it; and the page where each makes a key, opened
+    # only when the visitor presses Get a key.)
+    apis = {"https://api.anthropic.com", "https://api.meta.ai", "https://api.moonshot.ai", "https://api.moonshot.cn", "https://api.x.ai",
+            "https://dashscope-intl.aliyuncs.com", "https://api.deepseek.com", "https://api.z.ai", "https://api.xiaomimimo.com",
+            "https://api.minimax.io", "https://api.minimaxi.com", "https://api.mistral.ai"}
+    keys = {"https://aistudio.google.com", "https://platform.claude.com", "https://platform.openai.com", "https://dev.meta.ai",
+            "https://platform.kimi.ai", "https://console.x.ai", "https://modelstudio.console.alibabacloud.com", "https://platform.deepseek.com",
+            "https://z.ai", "https://platform.xiaomimimo.com", "https://platform.minimax.io", "https://console.mistral.ai"}
     # From elsewhere: a map when asked, and YouTube's player for a video. For a place's map, weather or air,
     # Open-Meteo, sent only the place's name (then its latitude and longitude). What's looked up ("look it up", a
     # question of fact, the news, the model's web_search) goes to Wikipedia: only the words looked up. Google's own
@@ -66,7 +76,7 @@ def test_what_s_typed_stays_on_this_computer():
         "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com",
         "https://cdn.jsdelivr.net", "https://huggingface.co", "https://icons.duckduckgo.com", "https://openrouter.ai",
         "https://api.openai.com", "https://generativelanguage.googleapis.com", "https://chatcomputer.ai",
-        "https://ssl.gstatic.com", "https://chatgpt.com"}
+        "https://ssl.gstatic.com", "https://chatgpt.com"} | apis | keys
     assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
     # Messages: each service's own icon (as its pages give it), through DuckDuckGo's icon service, sent only the
     # service's address.
@@ -76,7 +86,7 @@ def test_what_s_typed_stays_on_this_computer():
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("localBase(")) == [
         '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search',
-        '"https://openrouter.ai/api/v1/auth/keys"', 'base + "/models"', "url", "url", "url"], fetches
+        '"https://openrouter.ai/api/v1/auth/keys"', 'base + "/models" + (p === "anthropic" ', "url", "url", "url", "url"], fetches
     assert 'fetch(localBase() + "/health"' in host and len([f for f in fetches if f.startswith("localBase(")]) == 1
     assert 'fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) })' in host
     # (getJSON's, and Heart's big file, a piece at a time, from Hugging Face: only which bytes are asked for)
@@ -340,9 +350,10 @@ def test_the_demo_works_in_a_browser():
     # when trading the code for a key), back to this page, the code gone from its address; the newest free model that
     # uses tools chosen; then it answers, on that key, with the page's tools and none of the engine's own options, told
     # who it is; signed out, nothing kept. A key of one's own (OpenAI's): an empty one said so; then its newest chat model.
-    # (In one panel: OpenRouter's own sign-in, and a key of each kind.)
-    assert res["own_menu"] == {"title": "Your own AI", "choices": ["Continue with OpenRouter", "OpenAI key", "Gemini key",
-                                                                   "OpenRouter key", "Another AI's key"]}
+    # (In one panel, each AI once: OpenRouter's own sign-in, then a key from each maker at the top of Artificial
+    # Analysis's Intelligence Index that lets a web page ask it, in the index's order; and any other AI.)
+    assert res["own_menu"] == {"title": "Your own AI", "choices": ["Continue with OpenRouter", "Gemini", "Claude", "OpenAI", "Meta", "Kimi",
+                                                                   "Grok", "Qwen", "DeepSeek", "GLM", "MiMo", "MiniMax", "Mistral", "Another AI"]}
     auth = res["own_auth"]
     assert auth["back"].startswith("file://") and auth["back"].endswith("/docs/index.html") and auth["method"] == "S256"
     assert auth["challenge"] == 43 and res["own_traded"] == {"code": "test-code", "method": "S256", "verifier": 43}
@@ -359,12 +370,55 @@ def test_the_demo_works_in_a_browser():
     assert res["own_out"]["done"] == ["Signed in with OpenRouter (new/free-model:free)", "Signed out of OpenRouter"]
     assert res["own_empty"] == "Paste the key first."
     assert res["own_key"] == {"title": "OpenAI (gpt-9) answers. Press to change", "sheet": False, "type": "password"}   # (typed hidden)
+    # OpenRouter's models to choose from: its free ones (newest first), then the best of each maker in the index's
+    # order, each with its logo (on your OpenRouter credits): no "pro" or batch versions, nor a maker's lesser models.
+    assert res["or_models"] == ["~ Free, the newest first:", "b/free-two:free", "a/free:free", "~ The best of each maker, on your credits:",
+                                "google/gemini-4-argon @gemini.google.com.ico", "anthropic/claude-opus-5.5 @claude.ai.ico",
+                                "openai/gpt-6-astra @openai.com.ico", "meta/muse-wonder @dev.meta.ai.ico", "x-ai/grok-4.7 @grok.com.ico",
+                                "deepseek/deepseek-v4-pro-0813 @deepseek.com.ico", "stepfun/step-5-preview @stepfun.ai.ico",
+                                "inclusionai/ling-3.1-flash @ant-ling.com.ico", "mistralai/mistral-large-4-0 @mistral.ai.ico"]
+    # Every AI in the panel, on a key: each one's best model chosen from its list (Gemini 4 Carbon isn't offered to
+    # keys; no list at Z.ai's: GLM-5.3 by name); the key as a bearer token, to its own address (Kimi's, from its other
+    # site, at that site's); the page's tools, streamed; its call of make_timer run and asked again with the answer.
+    keyed = res["keyed"]
+    assert {n: r["model"] for n, r in keyed.items()} == {
+        "Gemini": "gemini-4-argon", "Claude": "claude-opus-5-5", "OpenAI": "gpt-6-astra", "Meta": "muse-wonder-1.0", "Kimi": "kimi-k3.1-pro",
+        "Grok": "grok-4.7", "Qwen": "qwen3.8-max", "DeepSeek": "deepseek-v4-pro", "GLM": "glm-5.3", "MiMo": "mimo-v2.6-pro",
+        "MiniMax": "MiniMax-M3.1-Flash", "Mistral": "mistral-large-4"}
+    for n, r in keyed.items():
+        assert r["key"] == "Bearer key-of-" + n and r["stream"] is True and r["tools"] > 5 and r["asked"] == 2, (n, r)
+        assert r["result"].startswith("A 20-minute timer") and "Hello from " + n + "." in r["said"], (n, r)
+        assert "think" not in r["said"] and "pondering" not in r["said"] and "Thinking" not in r["said"], (n, r)
+    assert res["key_refused"] == "Google didn't take that key."
+    assert keyed["Gemini"]["models"] == ["https://generativelanguage.googleapis.com/v1beta/openai Bearer bad-key",
+                                         "https://generativelanguage.googleapis.com/v1beta/openai Bearer key-of-Gemini"]
+    # (Anthropic's: told the page asks it itself, with its API's version, and room to answer.)
+    assert keyed["Claude"]["browser"] == "true" and keyed["Claude"]["version"] == "2023-06-01" and keyed["Claude"]["max"] == 32000
+    assert all(r["browser"] is None and r["version"] is None for n, r in keyed.items() if n != "Claude")
+    # (OpenAI's best use tools only through its Responses API: asked there, not kept by OpenAI.)
+    assert keyed["OpenAI"]["at"] == "https://api.openai.com/v1/responses" and keyed["OpenAI"]["store"] is False
+    assert keyed["OpenAI"]["input"] == ["user", "function_call", "function_call_output"]
+    assert keyed["Kimi"]["kept_base"] == "https://api.moonshot.cn/v1" and keyed["Kimi"]["at"] == "https://api.moonshot.cn/v1/chat/completions"
+    assert keyed["Kimi"]["models"] == ["https://api.moonshot.ai/v1 Bearer key-of-Kimi", "https://api.moonshot.cn/v1 Bearer key-of-Kimi"]
+    assert all(r["kept_base"] is None for n, r in keyed.items() if n != "Kimi")
+    # (Its thinking back only to the AIs that want it; Gemini's signature only to Gemini; Mistral's thinking as it
+    # gave it, a piece of its words; MiniMax told to keep its thinking apart, and any <think> taken out of its words.)
+    assert {n for n, r in keyed.items() if r.get("thinking_back")} == {"Kimi", "DeepSeek", "GLM", "MiMo", "MiniMax"}
+    assert keyed["DeepSeek"]["thinking_back"] == "Thinking it over."
+    assert keyed["Gemini"]["extra_back"] == {"google": {"thought_signature": "sig-1"}}
+    assert all(r.get("extra_back") is None for n, r in keyed.items() if n != "Gemini")
+    assert keyed["Mistral"]["content_back"] == ["thinking"] and keyed["Mistral"]["thinking_back"] is None
+    assert keyed["MiniMax"]["split"] is True and all(r.get("split") is None for n, r in keyed.items() if n != "MiniMax")
+    assert all(r.get("max") is None for n, r in keyed.items() if n != "Claude")
+    # (Get a key: the page that makes one, in a new tab; the key's panel still there for it.)
+    assert res["key_tab"]["url"].startswith("https://platform.claude.com/settings/keys") and res["key_tab"]["still"] == "Claude"
     # ChatGPT, on your plan, in the app (a stand-in for it): offered there, not on the website; signed in through the
     # app, the plan's notice the first time (OpenAI's guidelines), its listed model chosen; an answer that calls the
     # page's make_timer and then says so, asked as the Responses API takes it (instructions, the conversation in
     # order, the page's tools as functions, store false, streamed); signed in with ChatGPT's own list (Manage usage
     # first); signed out, the app told.
-    assert res["gpt_menu"] == ["Continue with ChatGPT", "OpenAI key", "Gemini key", "OpenRouter key", "Another AI's key"]
+    assert res["gpt_menu"] == ["Continue with ChatGPT", "Gemini", "Claude", "OpenAI", "Meta", "Kimi", "Grok", "Qwen", "DeepSeek", "GLM",
+                               "MiMo", "MiniMax", "Mistral", "OpenRouter", "Another AI"]
     told = res["gpt_told"]
     assert told["ok"] == "Got it" and "on your ChatGPT plan" in told["text"]
     assert told["spark"] == "ChatGPT (gpt-9-plan) answers. Press to change"

@@ -1085,12 +1085,26 @@
       fields.appendChild(label);
       if (!firstInput && !fd.value) firstInput = inp;
     });
+    // (Choices: buttons, each with its own logo where it has one (c.icon, as Messages' are); a note between them
+    // (c.note) starts a new row.)
     if (f.choices && f.choices.length) {
       var row = el("choices");
       f.choices.forEach(function (c) {
+        if (c.note) { var n = document.createElement("p"); n.className = "choices-note"; n.textContent = c.note; row.appendChild(n); return; }
         var b = document.createElement("button");
         b.type = "button";
-        b.textContent = c.label;
+        var url = typeof c.icon === "string" && /^https:\/\//.test(c.icon) && !iconFailed[c.icon] ? c.icon : "";
+        if (url) {
+          var img = document.createElement("img");
+          img.className = "choice-icon";
+          img.alt = "";
+          img.decoding = "async";
+          img.referrerPolicy = "no-referrer";
+          img.addEventListener("error", function () { iconFailed[url] = true; if (img.parentNode) img.parentNode.removeChild(img); });
+          img.src = url;
+          b.appendChild(img);
+        }
+        b.appendChild(document.createTextNode(c.label));
         b.addEventListener("click", function () { post({ type: "add_account", provider: c.value }); });
         row.appendChild(b);
       });

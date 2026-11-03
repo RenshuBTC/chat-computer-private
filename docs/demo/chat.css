@@ -408,6 +408,9 @@ body.sheet #sheet { display: flex; }
   padding: 0.45em 1em; border: 2px solid var(--line); border-radius: 0.6em; background: var(--ground); cursor: pointer;
 }
 #sheet-fields .choices button:hover { border-color: var(--ink); }
+#sheet-fields .choices button:has(.choice-icon) { display: inline-flex; align-items: center; gap: 0.5em; padding-left: 0.75em; }
+#sheet-fields .choice-icon { flex: none; width: 1.05em; height: 1.05em; border-radius: 0.2em; object-fit: contain; }
+#sheet-fields .choices-note { flex-basis: 100%; margin: 0.5em 0 0; color: var(--muted); }
 #sheet-error { margin: 0.9em 0 0; font-weight: bold; }
 #sheet-error:empty { display: none; }
 #sheet-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 1.25em; margin-top: 1.5em; }

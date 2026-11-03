@@ -237,7 +237,7 @@ MESSAGES_JS = r"""(function () {
     T.fire('touchend', log, [], [T.t(log, 1, c[0], c[1])]);
     out[name] = {shown: shown, hiddenAfter: !document.body.classList.contains('show-messages')};
   }
-  CO.toggleFull();                       // Escape: the sidebars put away, the middle filling the screen
+  CO.toggleFull();                       // the sidebars put away (as a page's host can), the middle filling the screen
   pull('full');
   CO.toggleFull();
   document.body.classList.remove('panel');   // a screen too narrow for them

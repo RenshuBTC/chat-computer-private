@@ -530,8 +530,8 @@
   }
   $("frame-close").addEventListener("click", function () { post({ type: "close_content", pause: true }); });
   // To start with, Messages and Actions show at the middle's sides (where there's room for them), as the person
-  // asked. Escape puts them away, the middle (what's open with the message box under it, or the conversation)
-  // filling the screen; Escape again brings them back.
+  // asked; only their switches put them away and bring them back (not Escape: that's for what's in the middle).
+  // toggleFull puts them both away, the middle filling the screen, for a page's host that asks.
   function toggleFull(on) {
     full = on == null ? !full : !!on;
     body.classList.toggle("full", full);
@@ -663,16 +663,22 @@
   }, true);
   // Escape: a sheet cancelled (one with nothing to type in has no keys of its own; a sign-in form's Escape is its
   // own: Cancel), or what can be done with a held message put away, or Select text, or Messages (where it comes over
-  // the conversation), or the "/" list, or else Messages and Actions come in at the sides, and go again.
-  document.addEventListener("keydown", function (e) {
-    if (e.key !== "Escape" || e.isComposing || e.defaultPrevented || locked) return;
-    e.preventDefault();
+  // the conversation), or the "/" list; or else what's in the middle (a message, a site, a file, what something in
+  // Actions opened) closed, back to the conversation, as its x does; or, with the conversation scrolled back (to
+  // where something in Actions was asked), back down to its latest. The sidebars stay: their switches are for them.
+  function escape() {
     if (body.classList.contains("sheet")) cancelForm();
     else if (holdMsg) closeHold();
     else if (body.classList.contains("reading")) closeReader();
     else if (body.classList.contains("show-messages")) hideMessages();
     else if (searching) { input.value = ""; fitInput(); }
-    else toggleFull();
+    else if (mode === "content") post({ type: "close_content", pause: true });
+    else if (!stick) jumpDown();
+  }
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || e.isComposing || e.defaultPrevented || locked) return;
+    e.preventDefault();
+    escape();
   });
   document.addEventListener("mouseup", function () {
     var sel = window.getSelection();
@@ -743,7 +749,7 @@
     var col = parseFloat(rootStyle.getPropertyValue("--co-column")) || 57.75 * rem;
     var w = window.innerWidth;
     body.classList.toggle("panel", w - 35 * rem - 3 * rem >= 0.55 * col);
-    fitHint();                                   // ("Esc" in the hint only where there's room for the sidebars)
+    fitHint();                                   // (the box's width, and so its hint's room, changes with them)
   }
   // The sidebars' switches: Messages (left) and Actions (right), each switched off and on again with its switch,
   // or by asking Chat Computer (the settings left_panel and right_panel). Chat Computer keeps the choice: the page tells
@@ -1111,6 +1117,8 @@
     showForm(null);
   }
   $("sheet-cancel").addEventListener("click", cancelForm);
+  // (A click beside the panel, on the dimmed screen: Cancel.)
+  $("sheet").addEventListener("mousedown", function (e) { if (e.target === $("sheet")) cancelForm(); });
   $("sheet").addEventListener("keydown", function (e) { if (e.key === "Escape") { e.preventDefault(); cancelForm(); } });
 
   // ------------------------------------------------------------------ the lock screen
@@ -1610,7 +1618,9 @@
     hint: function (text) { hintNow = String(text || ""); fitHint(); },
     // What's open is called something else now (its page's title, once it's loaded).
     title: function (t) { if (mode === "content") $("frame-title").textContent = t || ""; },
-    // Escape pressed where this page doesn't have the keys (what's open has them): the sidebars come in, or go.
+    // Escape pressed where this page doesn't have the keys (what's open has them): as here (what's open closed).
+    escape: function () { escape(); },
+    // The sidebars both put away (the middle filling the screen), or back.
     toggleFull: function () { toggleFull(); },
     // What's open is drawn in this page (the browser demo), not laid over it by the window.
     openInPage: function (on) { openInPage = !!on; lastHole = ""; reportHole(); },

@@ -194,12 +194,13 @@ def test_the_demo_works_in_a_browser():
     # "/": the list is in front of what's open; Escape ends the search (and only that).
     assert res["over"] and res["over_view"] == v
     assert res["unslashed"]["content"] and not res["unslashed"]["full"] and res["unslashed"]["view"] == v
-    # Escape: the middle fills the screen (the sidebars and their switches gone, the message box still under it),
-    # and Escape again brings them back.
-    full = res["full"]
-    assert full["full"] and full["sides"] == [False, False] and full["toggles"] == [False, False] and full["composer"]
-    assert full["view"][0] < 40 and full["view"][2] > 1500 and full["view"][1] == v[1] and full["view"][3] == v[3]
-    assert not res["full_back"]["full"] and res["full_back"]["view"] == v and res["full_back"]["sides"] == [True, True]
+    # Escape again: what's open is closed, the conversation back in the middle, the sidebars still there (only their
+    # switches put them away); and with nothing open, Escape leaves them be.
+    esc = res["escaped"]
+    assert not esc["content"] and esc["view"] is None and esc["column_shown"] and not esc["full"]
+    assert esc["sides"] == [True, True] and esc["toggles"] == ["true", "true"] and esc["composer"]
+    again = res["escaped_again"]
+    assert not again["full"] and again["sides"] == [True, True] and again["toggles"] == ["true", "true"]
     # The x closes it: the conversation is back.
     assert not res["closed"]["content"] and res["closed"]["view"] is None and res["closed"]["column_shown"]
     # "/": the demo's files; Enter opens one.

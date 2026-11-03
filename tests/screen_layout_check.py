@@ -3,8 +3,8 @@ Actions at the right, against the screen's edges; something opened (a website) i
 frame with its name and a
 close button, from the top down to the message box, the conversation put away; "/" searching, its list in front (the
 page ends above it); the sidebars' switches; the website has the keys (typing goes into its box), and Page Down in the
-message box scrolls it; Escape makes the middle fill the screen and back (from the page, and from the message box);
-the x closes it; Escape in the conversation too.
+message box scrolls it; the x closes it; opened again, Escape from the page closes it too (the sidebars staying); and
+Escape in the conversation leaves the sidebars be.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, clicks and presses keys with xdotool, prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1920x1080x24" python tests/screen_layout_check.py [shot-prefix]
@@ -233,44 +233,36 @@ def step_type_in_page() -> None:
     """A click on the website's box, and typing goes there (not into the message box)."""
     v = out["sides_on"]["content_view"]
     act([["windowfocus", "--sync", wid()], ["mousemove", "--window", wid(), str(v[0] + 60), str(v[1] + 120)],
-         ["click", "1"], ["sleep", "0.3"], ["type", "--delay", "60", "abc"]], lambda: read("typed_in_page", step_page_full))
-
-
-def step_page_full() -> None:
-    act([["key", "Escape"]], lambda: (shot("full"), read("page_full", step_page_back)))
-
-
-def step_page_back() -> None:
-    act([["key", "Escape"]], lambda: read("page_back", step_page_down))
+         ["click", "1"], ["sleep", "0.3"], ["type", "--delay", "60", "abc"]], lambda: read("typed_in_page", step_page_down))
 
 
 def step_page_down() -> None:
     """Page Down in the (empty) message box scrolls what's open."""
-    box = out["page_back"]["input"]
+    box = out["typed_in_page"]["input"]
     act([["mousemove", "--window", wid(), str(box[0]), str(box[1])], ["click", "1"], ["sleep", "0.3"], ["key", "Page_Down"]],
-        lambda: read("paged", step_box_full))
-
-
-def step_box_full() -> None:
-    act([["key", "Escape"]], lambda: read("box_full", step_box_back))
-
-
-def step_box_back() -> None:
-    act([["key", "Escape"]], lambda: read("box_back", step_close))
+        lambda: read("paged", step_close))
 
 
 def step_close() -> None:
-    x = out["box_back"]["close"]
+    x = out["paged"]["close"]
     act([["mousemove", "--window", wid(), str(x[0]), str(x[1])], ["click", "1"]],
-        lambda: (shot("chat"), read("closed", step_chat_full)))
+        lambda: (shot("chat"), read("closed", step_reopen)))
 
 
-def step_chat_full() -> None:
-    act([["windowfocus", "--sync", wid()], ["key", "Escape"]], lambda: read("chat_full", step_chat_back))
+def step_reopen() -> None:
+    """The website again, and a click in it: Escape from the page closes it, as the x does."""
+    asyncio.run_coroutine_threadsafe(screen.show_url(site.as_uri()), loop)
+    later(2500, lambda: read("reopened", step_page_escape))
 
 
-def step_chat_back() -> None:
-    act([["key", "Escape"]], lambda: read("chat_back", finish))
+def step_page_escape() -> None:
+    v = out["reopened"]["content_view"]
+    act([["windowfocus", "--sync", wid()], ["mousemove", "--window", wid(), str(v[0] + 60), str(v[1] + 120)],
+         ["click", "1"], ["sleep", "0.3"], ["key", "Escape"]], lambda: read("page_escaped", step_chat_escape))
+
+
+def step_chat_escape() -> None:
+    act([["windowfocus", "--sync", wid()], ["key", "Escape"]], lambda: read("chat_escaped", finish))
 
 
 def finish() -> None:

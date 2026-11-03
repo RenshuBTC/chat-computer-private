@@ -177,8 +177,8 @@ Chat Computer is made to be touched first, as an iPad is (the gestures are the i
 * **Swipe up from the bottom edge** for Home: what's open closes and the conversation is back.
 * **Swipe in from the left edge** (or right along the bottom edge) to go back; from the right edge (or left
   along the bottom) to go forward.
-* **Swipe down from the top centre** for Messages, when it isn't showing (a screen too narrow for it, or before
-  Escape has brought the sidebars in).
+* **Swipe down from the top centre** for Messages, when it isn't showing (a screen too narrow for it, or with its
+  switch off).
 * **Three fingers:** pinch closed to copy, twice to cut, pinch open to paste; swipe left to undo, right to
   redo. **Four or five fingers:** pinch closed for Home, swipe to go back or forward.
 * **Text:** double-tap a word to select it, triple-tap for its paragraph, and hold a message to select all

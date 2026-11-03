@@ -1,6 +1,6 @@
 """The message box on the conversation screen: what's typed goes into it (a real text box, typed into with real
 key presses), Shift+Enter starts a new line and the box grows, Enter sends, typing after a click elsewhere still
-goes into it, Escape puts the sidebars away (they show from the start), keeping what's typed, and brings them back,
+goes into it, Escape leaves the sidebars (they show from the start) and what's typed be, twice,
 and the page reports how long letters took to reach the screen.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, types with xdotool, and prints JSON.

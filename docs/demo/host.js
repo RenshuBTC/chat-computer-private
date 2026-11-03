@@ -286,8 +286,8 @@
   // ------------------------------------------------------------------ what's open in the middle
   // On Chat Computer a second browser view, laid over the frame the conversation page draws for it ("hole"); here an
   // iframe, a new one each time (a site can leave one blank for good). It's a page like any other: it scrolls, and
-  // once clicked it has the keys (Google's search box, a map), until the message box is clicked. Its x closes it;
-  // Escape makes the middle fill the screen (chat.js), here too while a page of the demo's own has the keys.
+  // once clicked it has the keys (Google's search box, a map), until the message box is clicked. Its x closes it,
+  // and so does Escape (chat.js), here too while a page of the demo's own has the keys.
   var view = null, open = false, hole = null;
   var acted = 0;        // how many times what's open changed (shown, closed, the volume): see wordsOnly
   function frame() {
@@ -535,7 +535,7 @@
   // them. Only one thing has the middle at a time.
   function wordsOnly(since) { if (open && acted === since) putAway(); }
   function keys(e) {
-    if (e.key === "Escape" && open && !e.isComposing) { e.preventDefault(); call("toggleFull"); }
+    if (e.key === "Escape" && open && !e.isComposing) { e.preventDefault(); call("escape"); }
   }
   // Page Up and Down (and the arrow keys, Home and End while the message box is empty) scroll what's open, when
   // it's a page of the demo's own (another site's page can't be reached from here: a click on it, and it scrolls).
@@ -660,7 +660,7 @@
   function piano() {
     show({ html: page("Now playing", '<article><h1 class="title">Calm piano</h1><p>On Chat Computer this is YouTube, playing ' +
       "what you asked for. Here, your browser plays a few soft chords.</p><p><button id=\"play\" class=\"b\">Play</button></p>" +
-      "<p>The \u00d7 above closes it (so does a swipe up from the bottom edge); Escape makes it fill the screen.</p></article>",
+      "<p>The \u00d7 above closes it (so do Escape and a swipe up from the bottom edge).</p></article>",
       ".b{font:inherit;padding:0.4em 1.2em;border:2px solid var(--ink);border-radius:0.6em;background:var(--ground);color:var(--ink);cursor:pointer}",
       "var vol=" + player.volume / 100 + ";" + MUSIC) });
   }

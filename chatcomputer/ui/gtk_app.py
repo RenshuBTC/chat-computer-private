@@ -1561,10 +1561,10 @@ class GtkScreen(Screen):
                 self.chat.grab_focus()        # every key is for the lock screen's PIN box
             return False
         if name == "Escape" and self.mode == "content" and not self._fullscreen and not self.chat.has_focus():
-            # Escape while what's open has the keys: the middle fills the screen, or the sidebars come back, as on
-            # the conversation page (chat.js, which has Escape otherwise). A full-screen video leaves full screen
-            # first, as anywhere.
-            self._chat_run("CO.toggleFull()", "transient")
+            # Escape while what's open has the keys: it's closed, the conversation back, as on the conversation page
+            # (chat.js, which has Escape otherwise). The sidebars stay (their switches are for them). A full-screen
+            # video leaves full screen first, as anywhere.
+            self._chat_run("CO.escape()", "transient")
             return True
         if self.mode == "chat" and not self.chat.has_focus():
             self.chat.grab_focus()      # typing goes into the conversation's message box (chat.js), whatever has focus

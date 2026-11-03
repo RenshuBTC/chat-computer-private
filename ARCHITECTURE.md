@@ -574,12 +574,13 @@ retrying with backoff, then starts listening.
   its bar (`#frame-bar`: the name, `CO.mode("content", title)` then `CO.title` as the page's title comes, and a
   close button that posts `close_content`). The conversation (`#column`) is hidden while something is open: the
   screen is only ever three parts side by side, Messages, the middle and Actions. The sidebars show from the start
-  (as the person asked); Escape makes the middle fill the screen (`body.full`: no sidebars or switches,
-  `--left`/`--panel` 0, the frame or the conversation and the message box across the width), and brings them back
-  again: chat.js has it when
-  the conversation page has the keys, the window
-  (`_on_key`, calling `CO.toggleFull()`) when what's open has them, except a full-screen video's Escape, which
-  leaves full screen. A website gets the keys when it's shown (typing and the keys that scroll are its own) and a
+  (as the person asked), and only their switches put them away ("esc no longer removes the sidebars, one must click
+  to do that"). Escape closes what's in the middle (a message, a site, a file, what something in Actions opened), back
+  to the conversation, as its x does ("esc is to remove whats occupying the middle section"), or, with the
+  conversation scrolled back, takes it down to its latest: chat.js has it when the conversation page has the keys,
+  the window (`_on_key`, calling `CO.escape()`) when what's open has them, except a full-screen video's Escape, which
+  leaves full screen. (`CO.toggleFull()`, `body.full`: no sidebars or switches, the middle across the width, stays
+  for a page's host that asks for it.) A website gets the keys when it's shown (typing and the keys that scroll are its own) and a
   page of Chat Computer's own (`native_uris`) leaves them in the message box; Page Up and Down there, and the
   arrow keys, Home and End while it's empty, scroll what's open (`scroll_open`, `__CO.scroll`). A question typed
   here and answered in words alone, with something open, brings the conversation back to show the answer

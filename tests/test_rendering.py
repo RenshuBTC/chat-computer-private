@@ -76,7 +76,7 @@ def test_the_conversation_reads_and_scrolls_like_a_chat():
                     reason="xvfb-run or xdotool not available")
 def test_whats_done_takes_you_back_to_where_it_was_asked():
     import re
-    # No sidebars to start with; Escape brings them in. A panel at the right, a sixth of the screen as in the Claude
+    # The sidebars from the start. A panel at the right, a sixth of the screen as in the Claude
     # app, grouped by day. Clicking an item (a real click: the AirTouch layer over everything used to take every
     # click) scrolls back to the message that asked for it; one from yesterday puts yesterday's messages back first.
     # Typing stays in the message box.
@@ -154,7 +154,7 @@ def test_the_conversation_comes_back_after_its_renderer_stops():
 def test_the_message_box_works_like_the_claude_apps():
     # A real text box at the bottom, typed into with real key presses: Shift+Enter starts a new line and the box
     # grows, Enter sends it all, and typing after a click elsewhere still goes into it. The middle fills the screen to
-    # start with; Escape brings the sidebars in, keeping what's typed, and Escape again puts them away. Each letter's
+    # start with; Escape leaves the sidebars and what's typed be (it's for what's in the middle). Each letter's
     # time to reach the screen is reported (logged once a minute, see GtkScreen._watch_speed).
     import json
     import subprocess
@@ -180,7 +180,7 @@ def test_the_message_box_works_like_the_claude_apps():
     assert res["sent_text"] == ["hi there\nsecond line"]
     assert sent["value"] == "" and sent["box_h"] == typed["box_h"] and not sent["drafting"]
     assert res["after_blur"]["value"] == "abc" and res["after_blur"]["focused"]
-    assert res["escaped"]["value"] == "abc" and res["escaped"]["full"] and res["escaped"]["focused"]
+    assert res["escaped"]["value"] == "abc" and not res["escaped"]["full"] and res["escaped"]["focused"]
     assert res["escaped_again"]["value"] == "abc" and not res["escaped_again"]["full"]
     assert len(res["typed_ms"]) >= 15 and all(0 <= ms < 2000 for ms in res["typed_ms"])
 
@@ -188,14 +188,13 @@ def test_the_message_box_works_like_the_claude_apps():
 
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
                     reason="xvfb-run or xdotool not available")
-def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
+def test_what_is_open_fills_the_middle_and_escape_closes_it():
     # The sidebars from the start (where there's room for them): Messages at the left and Actions at the right, each
     # against its edge of the screen from top to bottom, 17.5 rem wide, as the Claude app's sidebar. Something opened
     # (a website) takes the conversation's place in the middle: a rounded frame between them, 0.75 rem from them and
     # from the top, down to the message box, with its name and a close button (x) at the top. There's no other part. The website has the keys (typing goes into its box); Page Down in the message box scrolls it.
-    # Escape makes the middle fill the screen, the sidebars gone, and Escape again brings them back, whether the
-    # page or the message box has the keys; in the conversation too. The x closes it. A message can be pinned (it
-    # goes to the top) and opened, with real clicks.
+    # The x closes it; opened again, Escape closes it too (from the page), the sidebars staying: only their switches
+    # put them away. A message can be pinned (it goes to the top) and opened, with real clicks.
     import json
     import subprocess
     import sys
@@ -254,24 +253,18 @@ def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
     # The website has the keys: clicked, its box gets what's typed, not the message box.
     t = res["typed_in_page"]
     assert t["keys_in_page"] and t["page"]["typed"] == "abc" and t["box"] == ""
-    # Escape from the page: the middle fills the screen (the sidebars and their switches gone), the message box
-    # still under it; Escape again: back.
-    full, back = res["page_full"], res["page_back"]
-    assert full["full"] and full["sides"] == [False, False] and not full["toggles"]["left"]["shown"] and full["composer"]
-    fv = full["content_view"]
-    assert fv[0] <= gap + 10 and fv[2] >= w - gap - 10 and fv[1] == v[1] and fv[3] == v[3] and full["page"]["typed"] == "abc"
-    assert not back["full"] and back["sides"] == [True, True] and back["content_view"] == v
-    # Page Down in the empty message box scrolls the page; Escape there fills the screen too, and back.
+    # Page Down in the empty message box scrolls the page.
     assert res["paged"]["page"]["y"] > 300 and not res["paged"]["keys_in_page"]
-    assert res["box_full"]["full"] and res["box_full"]["content_view"] == fv and res["box_full"]["box"] == ""
-    assert not res["box_back"]["full"] and res["box_back"]["content_view"] == v
     # The x: closed, back to the conversation.
     closed = res["closed"]
     assert closed["mode"] == "chat" and closed["content_view"] == [] and not closed["content"] and res["closed_called"]
     assert closed["column_shown"] and not closed["full"]
-    # Escape in the conversation: it fills the screen; again, the sidebars are back.
-    assert res["chat_full"]["full"] and res["chat_full"]["sides"] == [False, False] and res["chat_full"]["column_shown"]
-    assert not res["chat_back"]["full"] and res["chat_back"]["sides"] == [True, True]
+    # Opened again: Escape from the page closes it too, back to the conversation, the sidebars staying (only their
+    # switches put them away); Escape in the conversation leaves them be.
+    assert res["reopened"]["content"] and res["reopened"]["content_view"] == v
+    esc = res["page_escaped"]
+    assert esc["mode"] == "chat" and not esc["content"] and esc["column_shown"] and not esc["full"] and esc["sides"] == [True, True]
+    assert not res["chat_escaped"]["full"] and res["chat_escaped"]["sides"] == [True, True] and res["chat_escaped"]["column_shown"]
 
 
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),

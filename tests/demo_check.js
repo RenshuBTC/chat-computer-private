@@ -2,8 +2,8 @@
 // tried in Chromium with Playwright: it opens on the word logo, which fades away after a second, and then Chat
 // Computer's first words come in as if just typed (hello, world; none when something's said first), the cursor in
 // the box; the sidebars' switches; music (made by the browser), in the middle in the conversation's place; "/" lists
-// the files in front of what's open; the sidebars from the start, Escape puts them away and brings them back; the x
-// closes it; a message opened as its whole conversation; an answer in words alone bringing the conversation back;
+// the files in front of what's open; the sidebars from the start (only their switches put them away); Escape closes
+// what's open, and so does the x; a message opened as its whole conversation; an answer in words alone bringing the conversation back;
 // Google, for real, typed into; this computer's model, where the Chat Computer app runs here (a stand-in for its
 // engine; tools used: a map, a YouTube video, which closes when it ends, with a stand-in for YouTube's player;
 // answers streamed); the app itself (a stand-in), its model getting ready and then answering with the app's own
@@ -253,18 +253,16 @@ async function ask(page, text, meanwhile) {
   out.over_view = (await state(page)).view;
   await page.keyboard.press("Escape");                     // ends the search
   out.unslashed = await state(page);
-  // Escape: the sidebars go, the middle filling the screen (what's open and the message box), and come back.
+  // Escape again: what's open is closed, the conversation back in the middle; the sidebars stay (their switches
+  // are for them).
   await page.keyboard.press("Escape");
-  await page.waitForTimeout(200);
-  out.full = await state(page);
-  if (shot) await page.screenshot({ path: shot + "-full.png" });
-  await page.keyboard.press("Escape");
-  await page.waitForTimeout(200);
-  out.full_back = await state(page);
-  // Its x: closed, the conversation back.
-  await page.click("#frame-close");
   await page.waitForFunction(() => !document.body.classList.contains("content"));
-  out.closed = await state(page);
+  out.escaped = await state(page);
+  if (shot) await page.screenshot({ path: shot + "-escaped.png" });
+  // With nothing open, Escape leaves the sidebars as they are.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(200);
+  out.escaped_again = await state(page);
   await page.click("#input");
   await page.keyboard.type("/pack", { delay: 40 });
   await page.waitForSelector("#results .res");
@@ -274,7 +272,10 @@ async function ask(page, text, meanwhile) {
   await page.waitForTimeout(400);
   out.opened = await state(page);
   out.opened_view = await viewText(page);
+  // Its x: closed, the conversation back.
   await page.click("#frame-close");
+  await page.waitForFunction(() => !document.body.classList.contains("content"));
+  out.closed = await state(page);
   // A message: its whole conversation, in the middle, the conversation with Chat Computer put away.
   // Each message with its service's own icon (from DuckDuckGo's icon service, standing in), or Chat Computer's own
   // where there's none (LinkedIn's, here).

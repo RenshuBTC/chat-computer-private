@@ -1,7 +1,9 @@
 //! Getting files from the web by Chat Computer's own HTTPS: its own TLS 1.3 (os/tls, with its own cryptography and
 //! Mozilla's authorities) over this computer's TCP, and HTTP/1.1 written and read here. It follows redirects (a
 //! model's file on Hugging Face is sent from its storage), asks for the rest of a file from where it stopped
-//! (Range), and goes through a proxy where one is set (HTTPS_PROXY), as other programs do. A proxy that reads what
+//! (Range), and goes through a proxy where one is set (HTTPS_PROXY), as other programs do. It also sends a request
+//! with a body (`request`: a POST, its answer read as it comes), for the desktop app's sign-in with ChatGPT and its
+//! questions to it (apps/desktop/src-tauri/src/chatgpt.rs, which builds this same file in). A proxy that reads what
 //! passes through it (a company's, or a test machine's) is trusted with CHATCOMPUTER_EXTRA_CA: a PEM file of its
 //! authority.
 //!
@@ -289,7 +291,32 @@ impl Chunks {
 /// pieces, and stops it by returning false. `random` fills buffers with hard-to-guess bytes (for TLS).
 pub fn get(url: &str, from: u64, random: &mut dyn FnMut(&mut [u8]), on: &mut dyn FnMut(Part) -> Result<bool, String>)
     -> Result<(), String> {
+    exchange("GET", url, &[], b"", from, random, on)
+}
+
+/// Sends `body` to `url` (`method`: POST, as a rule), with `headers` besides Host and Content-Length, and hands `on`
+/// what comes back as `get` does, its body as it streams in. Not redirected: an answer that says go elsewhere is
+/// given to `on` as it is.
+#[allow(dead_code)]
+pub fn request(method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], random: &mut dyn FnMut(&mut [u8]),
+               on: &mut dyn FnMut(Part) -> Result<bool, String>) -> Result<(), String> {
+    exchange(method, url, headers, body, 0, random, on)
+}
+
+fn exchange(method: &str, url: &str, extra: &[(&str, &str)], body: &[u8], from: u64, random: &mut dyn FnMut(&mut [u8]),
+            on: &mut dyn FnMut(Part) -> Result<bool, String>) -> Result<(), String> {
     let mut url = Url::parse(url)?;
+    let token = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if !token(method) {
+        return Err(format!("not a method: {method:?}"));
+    }
+    let mut more_headers = String::new();
+    for (k, v) in extra {
+        if !token(k) || v.contains(['\r', '\n']) {
+            return Err(format!("not a header to send: {k:?}"));
+        }
+        more_headers.push_str(&format!("{k}: {v}\r\n"));
+    }
     for _ in 0..=REDIRECTS {
         let mut conn = match Conn::open(&url, random, &[Suite::ChaCha20Poly1305]) {
             Ok(c) => c,
@@ -301,12 +328,17 @@ pub fn get(url: &str, from: u64, random: &mut dyn FnMut(&mut [u8]), on: &mut dyn
         };
         let range = if from > 0 { format!("Range: bytes={from}-\r\n") } else { String::new() };
         let host = if url.port == 443 { url.host.clone() } else { format!("{}:{}", url.host, url.port) };
+        let length = if method == "GET" && body.is_empty() { String::new() } else { format!("Content-Length: {}\r\n", body.len()) };
+        let accept = if extra.iter().any(|(k, _)| k.eq_ignore_ascii_case("accept")) { "" } else { "Accept: */*\r\n" };
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: ChatComputer/1.0\r\nAccept: */*\r\nAccept-Encoding: identity\r\n\
-             {range}Connection: close\r\n\r\n",
+            "{method} {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: ChatComputer/1.0\r\n{accept}Accept-Encoding: identity\r\n\
+             {range}{more_headers}{length}Connection: close\r\n\r\n",
             url.path
         );
         conn.tls.write(request.as_bytes());
+        if !body.is_empty() {
+            conn.tls.write(body);
+        }
         conn.send()?;
         // The head.
         let mut head = Vec::new();
@@ -342,7 +374,7 @@ pub fn get(url: &str, from: u64, random: &mut dyn FnMut(&mut [u8]), on: &mut dyn
             .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
             .collect();
         let header = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
-        if matches!(status, 301 | 302 | 303 | 307 | 308) {
+        if method == "GET" && matches!(status, 301 | 302 | 303 | 307 | 308) {
             url = url.join(header("location").ok_or_else(|| format!("{}: a redirect without where to", url.host))?)?;
             continue;
         }

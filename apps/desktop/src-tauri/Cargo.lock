@@ -326,12 +326,15 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 name = "chat-computer"
 version = "1.0.0"
 dependencies = [
+ "crypto",
+ "getrandom 0.3.4",
  "open",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tiny_http",
+ "tls",
  "whoami",
 ]
 
@@ -445,6 +448,10 @@ name = "crossbeam-utils"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
+
+[[package]]
+name = "crypto"
+version = "0.1.0"
 
 [[package]]
 name = "crypto-common"
@@ -3432,6 +3439,13 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "tls"
+version = "0.1.0"
+dependencies = [
+ "crypto",
+]
 
 [[package]]
 name = "tokio"

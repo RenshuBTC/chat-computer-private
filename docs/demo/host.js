@@ -43,7 +43,8 @@
     if (tauri && typeof tauri.invoke === "function") {
       var mac = /Mac/i.test(navigator.platform || "") || /Macintosh/.test(navigator.userAgent || "");
       return { kind: "app", computer: mac ? "Mac" : "PC", name: "the Chat Computer app on their " + (mac ? "Mac" : "Windows PC"),
-               app: function (command, args) { return tauri.invoke(command, args || {}); } };
+               app: function (command, args) { return tauri.invoke(command, args || {}); },
+               channel: function (on) { var c = new tauri.Channel(); c.onmessage = on; return c; } };
     }
     return null;
   })();
@@ -1926,7 +1927,9 @@
       "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
         "most other sites can't show inside the page, so it's a link; on a Chat Computer any site opens right here and you use it), " +
         "open their messages and files (open_message, open_file), ";
-    var mind = own ? "You are Chat Computer: you run a whole computer for the person. Right now you think with " + own.model + ", through " +
+    var mind = own && own.provider === "chatgpt" ? "You are Chat Computer: you run a whole computer for the person. Right now you think " +
+      "with " + own.model + ", on the person's own ChatGPT plan (they signed in with ChatGPT): what they say goes to OpenAI. " :
+      own ? "You are Chat Computer: you run a whole computer for the person. Right now you think with " + own.model + ", through " +
       ownName() + ", on the person's own account (they signed in with it): what they say goes to " + ownName() + ". " :
       "You are Chat Computer: you run a whole computer for the person, with your own model, an open model of Qwen's that runs " +
       "on this computer (no account, and nothing they say leaves it). ";
@@ -2205,6 +2208,13 @@
   // (No answer at all: on the website, the app isn't running any more; in the app, its engine stopped, and the app
   // starts it again, saying so: chatcomputerApp({model}).)
   function localTrouble(err) {
+    if (own && own.provider === "chatgpt") {
+      if (err.status === 429) return "You've reached your ChatGPT plan's limit for now. [Manage usage](" + PLAN_USAGE + ") shows when it resets.";
+      if (err.status === 401 || err.status === 403 || /sign in again|isn't signed in/.test(err.message)) {
+        return "ChatGPT's sign-in has run out: press the spark beside + to sign in again.";
+      }
+      return err.status ? "ChatGPT couldn't answer that: " + err.message : "I can't reach ChatGPT: " + err.message;
+    }
     if (own) {
       if (err.status === 401 || err.status === 403) return ownName() + " didn't take your key any more: press the spark beside + to sign in again.";
       if (err.status === 402) return ownName() + " says your account has no credit left for " + own.model + ".";
@@ -2225,6 +2235,7 @@
   // One request, streamed: its words as they come, and the whole message (its words, thinking and tool calls).
   function localMessage(onText) {
     var messages = [{ role: "system", content: local.system || systemPrompt() }].concat(local.talk), url, headers;
+    if (own && own.provider === "chatgpt") return chatgptMessage(messages, localTools(), onText);
     var body = { model: "chat-computer", stream: true, think: false, max_tokens: 4096, tools: localTools(), messages: messages };
     if (own) {                                 // (your own AI: its model; none of the engine's own options)
       body = { model: own.model, stream: true, tools: localTools(), messages: messages.map(function (m) {
@@ -2304,19 +2315,25 @@
   // own from OpenAI, Google (Gemini), OpenRouter or any other AI that answers as OpenAI's chat completions do. (ChatGPT's
   // own sign-in, with your ChatGPT plan, is only for apps on your own computer: OpenAI doesn't offer it to websites.)
   // What you say then goes to that AI; the key stays in this browser, until you sign out (the spark again).
+  // In the app: ChatGPT too, on your ChatGPT plan (OpenAI's "Sign in with ChatGPT", for apps on your own computer):
+  // you sign in on OpenAI's page in your own browser, the app keeps the tokens (apps/desktop: chatgpt.rs) and asks
+  // OpenAI's Responses API for this page; nothing of the sign-in is kept here but which model answers.
   var OWN_KEY = "chatcomputer-own-ai", OR_VERIFIER = "chatcomputer-openrouter-verifier";
   var AIS = {
     openrouter: { name: "OpenRouter", base: "https://openrouter.ai/api/v1", site: "openrouter.ai", keys: "openrouter.ai/settings/keys" },
     openai: { name: "OpenAI", base: "https://api.openai.com/v1", site: "openai.com", keys: "platform.openai.com/api-keys" },
     gemini: { name: "Gemini", base: "https://generativelanguage.googleapis.com/v1beta/openai", site: "gemini.google.com",
               keys: "aistudio.google.com/apikey" },
-    other: { name: "", base: "", site: "", keys: "" }
+    other: { name: "", base: "", site: "", keys: "" },
+    chatgpt: { name: "ChatGPT", base: "", site: "chatgpt.com", keys: "" }
   };
+  var PLAN_USAGE = "https://chatgpt.com/#settings/Usage", PLAN_TOLD = "chatcomputer-chatgpt-plan-told";
   var OTHER_BASE = /^(https:\/\/[^\s/?#]+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?)(\/[^\s?#]*)?$/;
   var own = (function () {
     var o = store(OWN_KEY);
     if (!o || typeof o !== "object" || !AIS[o.provider] || typeof o.key !== "string" || !o.key || typeof o.model !== "string" || !o.model) return null;
     if (o.provider === "other" && !OTHER_BASE.test(String(o.base || ""))) return null;
+    if (o.provider === "chatgpt" && !APP) return null;          // (ChatGPT's sign-in lives in the app)
     return o;
   })();
   function ownName() { return !own ? "" : own.provider === "other" ? hostOf(own.base) || "Your AI" : AIS[own.provider].name; }
@@ -2336,6 +2353,14 @@
     if (done) did(done);
   }
   function ownMenu() {
+    if (own && own.provider === "chatgpt") {
+      call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: [
+        "Using your ChatGPT plan: " + own.model + " answers" + (own.email ? ", as " + own.email : "") + ". What you say goes to OpenAI.",
+        "Your plan's usage is shared with ChatGPT's own: see it in Manage usage. Signed out, Chat Computer's own model answers again."],
+        choices: [{ label: "Manage usage", value: "ai:usage" }, { label: "Choose its model", value: "ai:models" },
+                  { label: "Sign out of ChatGPT", value: "ai:out" }] });
+      return;
+    }
     if (own) {
       call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: [
         ownName() + " answers now, with " + own.model + ", on your own account: what you say goes to " + ownName() + ".",
@@ -2346,12 +2371,15 @@
     var text = [APP ? "Chat Computer answers with its own model, free, on this computer." :
       "On this page Chat Computer answers from what's written here, or, where the app runs on this computer, with its model.",
       "Or sign in with an AI you already use, and it answers instead, on your own account: what you say then goes to it."];
-    var choices = APP || TABS ? [] : [{ label: "Continue with OpenRouter", value: "ai:openrouter" }];
+    var choices = APP && APP.channel ? [{ label: "Continue with ChatGPT", value: "ai:chatgpt" }] :
+      TABS ? [] : [{ label: "Continue with OpenRouter", value: "ai:openrouter" }];
     call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: text,
       choices: choices.concat([{ label: "Use a key", value: "ai:keys" }]) });
   }
   function ownChoice(v) {
     if (v === "openrouter") { openRouterSignIn(); return; }
+    if (v === "chatgpt" && APP) { chatgptSignIn(); return; }
+    if (v === "usage") { call("accountForm", null); show({ src: PLAN_USAGE, title: "chatgpt.com" }); return; }
     if (v === "keys") {
       call("accountForm", { id: "own-ai", title: "Use a key", ok: "", text: ["Whose key is it? Each makes keys on its own site."],
         choices: [{ label: "OpenAI", value: "ai:key:openai" }, { label: "Google (Gemini)", value: "ai:key:gemini" },
@@ -2368,7 +2396,12 @@
       ownSet(o, ownName() + " answers with " + o.model);
       return;
     }
-    if (v === "out" && own) { var was = ownName(); call("accountForm", null); ownSet(null, "Signed out of " + was); }
+    if (v === "out" && own) {
+      var was = ownName();
+      call("accountForm", null);
+      if (own.provider === "chatgpt") APP.app("chatgpt_sign_out").catch(noop);
+      ownSet(null, "Signed out of " + was);
+    }
   }
   function keyForm(p, error) {
     var a = AIS[p], other = p === "other";
@@ -2430,7 +2463,7 @@
   }
   function modelsForm() {
     if (own.provider === "other") { keyForm("other", ""); return; }
-    ownModels(own.provider, ownBase(), own.key).then(function (models) {
+    (own.provider === "chatgpt" ? chatgptModels() : ownModels(own.provider, ownBase(), own.key)).then(function (models) {
       call("accountForm", { id: "own-ai", title: ownName() + "'s models", ok: "",
         text: [own.provider === "openrouter" ? "Its free models that use tools, newest first. It answers with " + own.model + " now." :
                "Newest first. It answers with " + own.model + " now."],
@@ -2439,6 +2472,114 @@
       call("accountForm", { id: "own-ai-failed", title: ownName(), ok: "OK", text: ["Its models couldn't be listed: " +
         clip(e && e.message || "no answer", 160) + "."] });
     });
+  }
+
+  // ChatGPT, on your plan (in the app): signing in (OpenAI's page, in your browser; the app waits for it to come
+  // back), the models your plan has, and an answer from OpenAI's Responses API, asked by the app for this page and
+  // streamed back through a channel: its words, and the page's tools it calls, as the other AIs give them.
+  function chatgptSignIn() {
+    call("accountForm", { id: "own-ai", title: "Continue with ChatGPT", ok: "", text: [
+      "Sign in on OpenAI's page, which opens in your browser, and let Chat Computer use your ChatGPT plan. Then come back here.",
+      "Chat Computer keeps the sign-in on this computer, and asks ChatGPT for you; OpenAI sees what you say to it."] });
+    APP.app("chatgpt_sign_in").then(function (st) {
+      return chatgptModels().then(function (models) {
+        if (!models.length) throw new Error("your plan lists no model Chat Computer can use");
+        ownSet({ provider: "chatgpt", key: "app", model: models[0], email: st && st.email || "" },
+               "Signed in with ChatGPT (" + models[0] + ")");
+        // (OpenAI's guidelines: the first time, say whose plan answers.)
+        if (!store(PLAN_TOLD)) {
+          store(PLAN_TOLD, true);
+          call("accountForm", { id: "own-ai-plan", title: "You're using your ChatGPT plan", ok: "Got it", text: [
+            "ChatGPT answers in Chat Computer now, on your ChatGPT plan: what it does here counts towards your plan's usage, " +
+            "as in ChatGPT. Manage usage (the spark, beside +) shows it."] });
+        } else call("accountForm", null);
+      });
+    }).catch(function (e) {
+      call("accountForm", { id: "own-ai-failed", title: "ChatGPT", ok: "OK", text: [clip(String(e && e.message || e || "It didn't work."), 300)] });
+    });
+  }
+  // Asks the app to ask ChatGPT: what comes back, whole (its status and text), or piece by piece to `piece`.
+  function chatgptAsk(path, body, piece) {
+    var text = "";
+    var ch = APP.channel(function (t) { text += t; if (piece) piece(t); });
+    return APP.app("chatgpt_ask", { path: path, body: body == null ? null : JSON.stringify(body), events: ch }).then(function (status) {
+      return { status: +status || 0, text: text };
+    });
+  }
+  function chatgptModels() {
+    return chatgptAsk("models", null).then(function (r) {
+      if (r.status !== 200) throw new Error(apiError(r.text) || "ChatGPT said " + r.status);
+      var j = JSON.parse(r.text || "{}"), list = j.models || j.data || [];
+      return list.filter(function (m) { return m && (m.visibility == null || m.visibility === "list"); })
+        .map(function (m) { return String(m.slug || m.id || ""); }).filter(Boolean);
+    });
+  }
+  // The conversation as the Responses API takes it: what it's told (instructions), then each message, each tool
+  // call and each tool's answer, in order; the page's tools as functions. Not kept by OpenAI (store: false).
+  function responsesBody(messages, tools) {
+    var input = [], told = [];
+    messages.forEach(function (m) {
+      if (m.role === "system") { told.push(String(m.content || "")); return; }
+      if (m.role === "user") { input.push({ role: "user", content: [{ type: "input_text", text: String(m.content || "") }] }); return; }
+      if (m.role === "assistant") {
+        if (m.content) input.push({ role: "assistant", content: [{ type: "output_text", text: String(m.content) }] });
+        (m.tool_calls || []).forEach(function (c) {
+          input.push({ type: "function_call", call_id: c.id, name: c.function.name, arguments: c.function.arguments || "{}" });
+        });
+        return;
+      }
+      if (m.role === "tool") input.push({ type: "function_call_output", call_id: m.tool_call_id, output: String(m.content || "") });
+    });
+    return { model: own.model, instructions: told.join("\n\n"), input: input, stream: true, store: false,
+             tools: tools.map(function (t) { return { type: "function", name: t.function.name, description: t.function.description,
+                                                     parameters: t.function.parameters }; }) };
+  }
+  // One answer from ChatGPT: its words to `onText` as they come, and the whole message (words and tool calls), in
+  // the same shape as the other AIs' (localMessage).
+  function chatgptMessage(messages, tools, onText) {
+    var buf = "", content = "", calls = [], failed = null, done = false;
+    function event(chunk) {
+      var data = chunk.split("\n").filter(function (l) { return l.indexOf("data:") === 0; })
+        .map(function (l) { return l.slice(5).trim(); }).join("");
+      if (!data || data === "[DONE]") return;
+      var ev;
+      try { ev = JSON.parse(data); } catch (e) { return; }
+      var t = ev.type || "", i = ev.output_index || 0, item = ev.item || {};
+      if (t === "response.output_text.delta" && ev.delta) { content += ev.delta; onText(ev.delta); }
+      else if (t === "response.output_item.added" && item.type === "function_call") {
+        calls[i] = { id: item.call_id || item.id || "call_" + i, name: item.name || "", args: item.arguments || "" };
+      } else if (t === "response.function_call_arguments.delta" && calls[i]) calls[i].args += ev.delta || "";
+      else if (t === "response.function_call_arguments.done" && calls[i] && typeof ev.arguments === "string") calls[i].args = ev.arguments;
+      else if (t === "response.output_item.done" && item.type === "function_call") {
+        calls[i] = calls[i] || { id: item.call_id || item.id || "call_" + i, name: item.name || "", args: "" };
+        if (typeof item.arguments === "string") calls[i].args = item.arguments;
+      } else if (t === "response.completed" || t === "response.incomplete") done = true;
+      else if (t === "response.failed" || t === "error") {
+        var er = (ev.response && ev.response.error) || ev.error || ev;
+        failed = new Error(clip(er.message || "ChatGPT stopped", 200));
+        failed.status = /limit|quota/i.test(String(er.code || er.message || "")) ? 429 : 500;
+      }
+    }
+    return chatgptAsk("responses", responsesBody(messages, tools), function (t) {
+      buf += t.replace(/\r\n/g, "\n");
+      for (var k = buf.indexOf("\n\n"); k >= 0; k = buf.indexOf("\n\n")) { event(buf.slice(0, k)); buf = buf.slice(k + 2); }
+    }).then(function (r) {
+      if (r.status !== 200) {
+        var e = new Error(apiError(r.text) || "ChatGPT said " + r.status);
+        e.status = r.status;
+        throw e;
+      }
+      if (buf.trim()) event(buf);
+      if (failed) throw failed;
+      var list = calls.filter(Boolean).map(function (c, k) {
+        var input = {};
+        try { if (c.args) input = JSON.parse(c.args); } catch (x) { input = {}; }
+        return { id: c.id || "call_" + k, name: c.name, input: input, args: c.args || "{}" };
+      });
+      var message = { role: "assistant", content: content };
+      if (list.length) message.tool_calls = list.map(function (c) { return { id: c.id, type: "function", function: { name: c.name, arguments: c.args } }; });
+      return { message: message, calls: list, done: done };
+    }, function (e) { var x = new Error(e && e.message || String(e || "no answer")); x.status = 0; throw x; });
   }
   // OpenRouter's own sign-in (OAuth with PKCE): its page, then back here with a code, which this page trades for a key.
   function b64url(bytes) {
@@ -3192,6 +3333,9 @@
         call("pickFiles", true);               // + under the box: this browser's own file picker
         layout();
         ownShow();                             // the spark beside +: your own AI, if you've signed in with one
+        if (own && own.provider === "chatgpt") {
+          APP.app("chatgpt_status").then(function (st) { if (!st || !st.signed_in) ownSet(null, ""); }, noop);
+        }
         openRouterBack();                      // (back from OpenRouter's sign-in: its code, for a key)
         greetWith();                           // for the greeting: the name you go by, which model answers,
         sayHere();                             // and where you are, with its weather

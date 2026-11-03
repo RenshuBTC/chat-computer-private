@@ -22,7 +22,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build_apps  # noqa: E402
 
 COMMANDS = ["show_site", "place_site", "hide_site", "unhide_site", "close_site", "site_media", "search_files", "open_file", "about",
-            "connect_service", "forget_service", "open_service_item", "model_status"]
+            "connect_service", "forget_service", "open_service_item", "model_status",
+            "chatgpt_status", "chatgpt_sign_in", "chatgpt_sign_out", "chatgpt_ask"]
 # What a connected service's own pages may ask (what its reader read there), and nothing else.
 SERVICE_COMMANDS = ["messages_found"]
 SERVICES = ["gmail", "outlook", "telegram", "whatsapp", "wechat", "discord"]

@@ -16,6 +16,10 @@
     "allow-connect-service",
     "allow-forget-service",
     "allow-open-service-item",
-    "allow-model-status"
+    "allow-model-status",
+    "allow-chatgpt-status",
+    "allow-chatgpt-sign-in",
+    "allow-chatgpt-sign-out",
+    "allow-chatgpt-ask"
   ]
 }

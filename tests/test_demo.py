@@ -66,7 +66,7 @@ def test_what_s_typed_stays_on_this_computer():
         "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com",
         "https://cdn.jsdelivr.net", "https://huggingface.co", "https://icons.duckduckgo.com", "https://openrouter.ai",
         "https://api.openai.com", "https://generativelanguage.googleapis.com", "https://chatcomputer.ai",
-        "https://ssl.gstatic.com"}
+        "https://ssl.gstatic.com", "https://chatgpt.com"}
     assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
     # Messages: each service's own icon (as its pages give it), through DuckDuckGo's icon service, sent only the
     # service's address.
@@ -356,6 +356,28 @@ def test_the_demo_works_in_a_browser():
     assert res["own_out"]["done"] == ["Signed in with OpenRouter (new/free-model:free)", "Signed out of OpenRouter"]
     assert res["own_empty"] == "Paste the key first."
     assert res["own_key"] == {"title": "OpenAI (gpt-9) answers. Press to change", "sheet": False, "type": "password"}   # (typed hidden)
+    # ChatGPT, on your plan, in the app (a stand-in for it): offered there, not on the website; signed in through the
+    # app, the plan's notice the first time (OpenAI's guidelines), its listed model chosen; an answer that calls the
+    # page's make_timer and then says so, asked as the Responses API takes it (instructions, the conversation in
+    # order, the page's tools as functions, store false, streamed); signed in with ChatGPT's own list (Manage usage
+    # first); signed out, the app told.
+    assert res["gpt_menu"] == ["Continue with ChatGPT", "Use a key"]
+    told = res["gpt_told"]
+    assert told["ok"] == "Got it" and "on your ChatGPT plan" in told["text"]
+    assert told["spark"] == "ChatGPT (gpt-9-plan) answers. Press to change"
+    assert told["kept"] == {"provider": "chatgpt", "key": "app", "model": "gpt-9-plan", "email": "ren@example.com"}
+    first, second = res["gpt_asked"]
+    assert first["model"] == "gpt-9-plan" and first["store"] is False and first["stream"] is True
+    assert first["told"].startswith("You are Chat Computer: you run a whole computer for the person. Right now you think with gpt-9-plan, "
+                                    "on the person's own ChatGPT plan")
+    assert first["input"] == ["user"] and first["tools"][0][0] == "function" and first["tools"][0][2]
+    assert first["last"]["content"][0]["type"] == "input_text" and first["last"]["content"][0]["text"].endswith("a timer for 20 minutes")
+    assert second["input"] == ["user", "function_call", "function_call_output"]
+    assert second["last"]["call_id"] == "call_g1" and second["last"]["output"].startswith("A 20-minute timer is on the screen")
+    assert res["gpt_done"][-1] == "Made a timer", res["gpt_done"]
+    assert res["gpt_menu_in"]["choices"] == ["Manage usage", "Choose its model", "Sign out of ChatGPT"]
+    assert res["gpt_menu_in"]["text"].startswith("Using your ChatGPT plan: gpt-9-plan answers, as ren@example.com.")
+    assert res["gpt_calls"] == ["chatgpt_sign_in", "chatgpt_ask", "chatgpt_ask", "chatgpt_ask", "chatgpt_sign_out"]
     now = res["mic_now"]
     assert not now["sheet"] and now["pressed"] == "true" and now["title"] == "Stop listening"
     assert now["bar"] == "block" and now["icon"] == "none" and now["live"] == "live"

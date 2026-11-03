@@ -502,6 +502,79 @@ async function ask(page, text, meanwhile) {
   out.app_done = (await state(app)).done;
   await appCtx.close();
 
+  // Your ChatGPT plan, in the app (a stand-in for it: its sign-in, which waits for OpenAI's page, and its asking OpenAI,
+  // streamed through a channel as the Responses API's events): "Continue with ChatGPT" in the spark's list; signed in,
+  // the plan's own notice the first time; then an answer that calls one of the page's tools and, given its result,
+  // says words; the request as the Responses API takes it (instructions, the conversation, the page's tools as
+  // functions, nothing kept by OpenAI); its plan's list (Manage usage first); signed out, the app told.
+  const gptCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  await gptCtx.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*" }, body: "{}" }));
+  await gptCtx.route(/icons\.duckduckgo\.com|ssl\.gstatic\.com/, (route) => route.fulfill({ status: 404, body: "" }));
+  await gptCtx.addInitScript(() => {
+    window.__gpt = { calls: [], asked: [] };
+    const sse = (events) => events.map((e) => "event: " + e.type + "\ndata: " + JSON.stringify(e) + "\n\n").join("");
+    function Channel() { window.__gpt.channel = this; }
+    window.__TAURI__ = { core: { Channel, invoke: (command, args) => {
+      window.__gpt.calls.push(command);
+      if (command === "about") return Promise.resolve({ name: "" });
+      if (command === "model_status") return Promise.resolve({ state: "none", label: "", preparing: "", stage: "", done: 0, total: 0, port: 8765, detail: "x" });
+      if (command === "chatgpt_sign_in") return new Promise((r) => setTimeout(() => r({ signed_in: true, email: "ren@example.com" }), 200));
+      if (command === "chatgpt_status") return Promise.resolve({ signed_in: true, email: "ren@example.com" });
+      if (command === "chatgpt_sign_out") return Promise.resolve({ signed_in: false, email: null });
+      if (command === "chatgpt_ask") {
+        const send = (t) => args.events.onmessage(t);
+        if (args.path === "models") {
+          send(JSON.stringify({ models: [{ slug: "gpt-hidden", visibility: "hide" }, { slug: "gpt-9-plan", display_name: "GPT-9", visibility: "list" }] }));
+          return Promise.resolve(200);
+        }
+        const body = JSON.parse(args.body), last = body.input[body.input.length - 1];
+        window.__gpt.asked.push(body);
+        const text = last.type === "function_call_output" ?
+          sse([{ type: "response.output_text.delta", output_index: 0, delta: "A 20-minute " }, { type: "response.output_text.delta", output_index: 0, delta: "timer is on." },
+               { type: "response.completed", response: {} }]) :
+          sse([{ type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: "fc_1", call_id: "call_g1", name: "make_timer", arguments: "" } },
+               { type: "response.function_call_arguments.delta", output_index: 0, delta: "{\"minu" },
+               { type: "response.function_call_arguments.delta", output_index: 0, delta: "tes\": 20}" },
+               { type: "response.output_item.done", output_index: 0, item: { type: "function_call", id: "fc_1", call_id: "call_g1", name: "make_timer", arguments: "{\"minutes\": 20}" } },
+               { type: "response.completed", response: {} }]);
+        // (In pieces, one cut inside an event, as a stream comes.)
+        send(text.slice(0, 37)); send(text.slice(37, 120)); send(text.slice(120));
+        return Promise.resolve(200);
+      }
+      return Promise.resolve(null);
+    } } };
+  });
+  const gpt = await gptCtx.newPage();
+  gpt.on("pageerror", (e) => errors.push(String(e)));
+  await gpt.goto(page_url);
+  await gpt.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  await gpt.click("#ai");
+  await gpt.waitForFunction(() => document.body.classList.contains("sheet"));
+  out.gpt_menu = await gpt.evaluate(() => Array.from(document.querySelectorAll("#sheet-fields .choices button")).map((b) => b.textContent));
+  await gpt.click("#sheet-fields .choices button:has-text('Continue with ChatGPT')");
+  await gpt.waitForFunction(() => document.getElementById("sheet-title").textContent === "You're using your ChatGPT plan", null, { timeout: 10000 });
+  out.gpt_told = await gpt.evaluate(() => ({ text: document.getElementById("sheet-text").innerText, ok: document.getElementById("sheet-ok").textContent,
+    spark: document.getElementById("ai").title, kept: JSON.parse(localStorage.getItem("chatcomputer-own-ai")) }));
+  await gpt.click("#sheet-ok");
+  await gpt.waitForFunction(() => !document.body.classList.contains("sheet"));
+  await gpt.fill("#input", "a timer for 20 minutes");
+  await gpt.keyboard.press("Enter");
+  await gpt.waitForFunction(() => /A 20-minute timer is on\./.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
+    null, { timeout: 10000 });
+  out.gpt_asked = await gpt.evaluate(() => window.__gpt.asked.map((b) => ({ model: b.model, store: b.store, stream: b.stream,
+    told: b.instructions.slice(0, 160), input: b.input.map((i) => i.type || i.role), tools: b.tools.slice(0, 2).map((t) => [t.type, t.name, !!t.parameters]),
+    last: b.input[b.input.length - 1] })));
+  out.gpt_done = (await state(gpt)).done;
+  await gpt.click("#ai");
+  await gpt.waitForFunction(() => document.body.classList.contains("sheet"));
+  out.gpt_menu_in = await gpt.evaluate(() => ({ choices: Array.from(document.querySelectorAll("#sheet-fields .choices button")).map((b) => b.textContent),
+    text: document.getElementById("sheet-text").innerText }));
+  await gpt.click("#sheet-fields .choices button:has-text('Sign out of ChatGPT')");
+  await gpt.waitForFunction(() => !document.getElementById("ai").classList.contains("on"));
+  out.gpt_calls = await gpt.evaluate(() => window.__gpt.calls.filter((c) => c.startsWith("chatgpt_")));
+  await gptCtx.close();
+
   // Read aloud's voice, where the graphics chip can make Heart's (WebGPU; a stand-in for kokoro-js, and the browser's
   // voices standing in too). The first time Read aloud is pressed, Heart is offered: closed, the browser's best voice
   // reads (Edge's natural Ava before Google's and the usual one, never a novelty voice), and Heart isn't offered that

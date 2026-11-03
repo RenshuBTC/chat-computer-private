@@ -10,12 +10,15 @@
 //!   a view of its own, put together in Messages (messages.rs).
 //! - The model that answers, on this computer: Chat Computer's own engine, which comes with the app, gets the model
 //!   this computer runs well ready and serves it to the page (engine.rs). No account, and nothing sent anywhere.
+//! - Or, if you sign in with ChatGPT (the spark beside +), your ChatGPT plan answers: the app signs in on OpenAI's
+//!   page and keeps the tokens, and asks OpenAI for the page (chatgpt.rs).
 //!
 //! Only the app's own page (the webview called "main") can ask for these: the sites shown in the middle can't
 //! (capabilities/, and each command checks who's asking). A connected service's own pages may hand the app what's
 //! read there, and nothing else.
 #![cfg_attr(test, allow(dead_code))]
 
+mod chatgpt;
 mod engine;
 mod files;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -425,6 +428,59 @@ fn open_file(webview: Webview, found: tauri::State<'_, Found>, path: String) -> 
     Ok(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(path))
 }
 
+// ---------------------------------------------------------------------------- your ChatGPT plan (chatgpt.rs)
+fn chatgpt_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_data_dir().map_err(|e| format!("The app's folder: {e}"))
+}
+
+/// Whether the app is signed in with ChatGPT, and as whom.
+#[tauri::command]
+fn chatgpt_status(app: AppHandle, webview: Webview) -> Result<chatgpt::Status, String> {
+    from_main(&webview)?;
+    Ok(chatgpt::status(&chatgpt_dir(&app)?))
+}
+
+/// Signs in with ChatGPT: OpenAI's page in the person's own browser, and back to the app; done when it's back.
+#[tauri::command]
+async fn chatgpt_sign_in(app: AppHandle, webview: Webview) -> Result<chatgpt::Status, String> {
+    from_main(&webview)?;
+    let dir = chatgpt_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        chatgpt::sign_in(&dir, &|url: &str| {
+            // (Only OpenAI's own sign-in page is opened from here.)
+            if !url.starts_with("https://auth.openai.com/") {
+                return Err("That isn't ChatGPT's sign-in.".into());
+            }
+            open::that_detached(url).map_err(|e| format!("Your browser couldn't be opened ({e})."))
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn chatgpt_sign_out(app: AppHandle, webview: Webview) -> Result<chatgpt::Status, String> {
+    from_main(&webview)?;
+    let dir = chatgpt_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || chatgpt::sign_out(&dir)).await.map_err(|e| e.to_string())
+}
+
+/// Asks ChatGPT on your plan for the page ("responses": an answer, streamed to `events` as it comes; "models": the
+/// models your plan has); returns OpenAI's status.
+#[tauri::command]
+async fn chatgpt_ask(app: AppHandle, webview: Webview, path: String, body: Option<String>, events: tauri::ipc::Channel<String>)
+    -> Result<u16, String> {
+    from_main(&webview)?;
+    let dir = chatgpt_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        chatgpt::ask(&dir, &path, body.as_deref(), &mut |t: &str| {
+            let _ = events.send(t.to_string());
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Who this computer says you are (your account's full name), for the greeting; and which computer it is.
 #[tauri::command]
 fn about(webview: Webview) -> Result<serde_json::Value, String> {
@@ -465,7 +521,8 @@ pub fn run() {
         .manage(engine)
         .invoke_handler(tauri::generate_handler![
             show_site, place_site, hide_site, unhide_site, close_site, site_media, search_files, open_file, about,
-            connect_service, forget_service, open_service_item, model_status, messages_found
+            connect_service, forget_service, open_service_item, model_status, messages_found, chatgpt_status,
+            chatgpt_sign_in, chatgpt_sign_out, chatgpt_ask
         ])
         .setup(move |app| {
             // (A build for testing, pointed at the tests' own pages for the services: those may hand over what's

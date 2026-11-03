@@ -2,7 +2,7 @@
 name = "chat-computer"
 version = "1.0.0"
 description = "Chat Computer for Windows and Mac"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [lib]
@@ -18,6 +18,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 open = "5"
 whoami = "1"
+# Signing in with ChatGPT (src/chatgpt.rs): Chat Computer's own TLS and cryptography (os/), and the system's random
+# bytes (a crate the app already has).
+tls = { path = "../../../os/tls" }
+crypto = { path = "../../../os/crypto" }
+getrandom = "0.3"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 tiny_http = "0.12"

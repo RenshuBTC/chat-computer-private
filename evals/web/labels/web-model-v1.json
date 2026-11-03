@@ -1,0 +1,476 @@
+{
+ "about": "Hand labels for the website with Chat Computer's own model in the browser (Qwen3.5 0.8B, Run my model in this browser), before the fixes: run web-model-base, 4 Nov 2026, chatcomputer.ai at c240eb7, the page's requests answered by the engine's program on this machine (evals/web/run.js --engine native). Read from each trace: what the model was given, each tool it called and what it said. pass = a first-time visitor got a useful, true answer. mode: the first failure, from open coding, then grouped (axial coding): time stamp (it answered the stamp's place, Singapore, not the question); stray tool (a tool nothing asked for: the weather for \"hello\", a timer for \"play music\"); bad tool input (a map's box it can't make, again and again); round cap (round after round of tools until the turn's eight are spent); can't here (no tool for it in the browser: messages, files); made up (a wrong fact, about the world or Chat Computer); doesn't know itself; contradicts itself; refuses; wrong day.",
+ "labels": {
+  "what-is-this": {
+   "pass": false,
+   "mode": "time stamp",
+   "note": "answers \"Singapore\": the time stamp's zone taken for the question"
+  },
+  "how-work": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "Singapore's weather for \"how does this work?\""
+  },
+  "what-can-do": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "Singapore's weather for \"what can you do\""
+  },
+  "is-this-an-os": {
+   "pass": false,
+   "mode": "doesn't know itself",
+   "note": "\"No.\": it doesn't know what Chat Computer is"
+  },
+  "hello": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "Singapore's weather for \"hello\""
+  },
+  "hi-there": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "Singapore's weather for \"hi there!\""
+  },
+  "how-are-you": {
+   "pass": false,
+   "mode": "time stamp",
+   "note": "\"I don't have access to the specific time or location of your website\""
+  },
+  "thanks": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "tomorrow's weather for \"thanks\""
+  },
+  "play-music": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, then timer after timer to the round cap; no words"
+  },
+  "play-piano": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, then timer after timer to the round cap; no words"
+  },
+  "play-taylor": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "a YouTube search among the weather and timers to the round cap; no words"
+  },
+  "play-lofi-typo": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather and timers to the round cap, one YouTube search; no words"
+  },
+  "im-bored": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, a timer it closed, then \"I'm done.\""
+  },
+  "relax": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, a timer it closed; tells them so"
+  },
+  "youtube-video": {
+   "pass": false,
+   "mode": "round cap",
+   "note": "YouTube's search, then maps of Singapore and timers to the round cap; no words"
+  },
+  "map-tokyo": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "the same impossible box 8 times; no map, no words"
+  },
+  "map-short": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "a box from Normandy to Paris, a kilometre tall: Paris at its edge"
+  },
+  "where-is-london": {
+   "pass": false,
+   "mode": "refuses",
+   "note": "\"I don't know where London is, as I am an AI model\""
+  },
+  "directions": {
+   "pass": false,
+   "mode": "made up",
+   "note": "a made-up \"MRT Line 5 (Skytrain)\"; a map of the sea; the weather first"
+  },
+  "map-other-city": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "a wrong box, then one centred on France: Berlin at its edge"
+  },
+  "timer-5": {
+   "pass": false,
+   "mode": "round cap",
+   "note": "makes a timer and closes it, four times; no words, no timer left"
+  },
+  "timer-terse": {
+   "pass": false,
+   "mode": "contradicts itself",
+   "note": "makes the 20-minute timer, then closes it: \"The timer is closed.\""
+  },
+  "eggs": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, then timers of 30, 20, 15 and 10 minutes; no words"
+  },
+  "weather": {
+   "pass": true
+  },
+  "weather-city": {
+   "pass": true
+  },
+  "umbrella": {
+   "pass": false,
+   "mode": "wrong day",
+   "note": "looks at tomorrow (15% rain) for today's question, and says yes to the umbrella anyway"
+  },
+  "messages": {
+   "pass": false,
+   "mode": "can't here",
+   "note": "no tool for messages: the weather, maps, YouTube and timers to the round cap; no words"
+  },
+  "jane": {
+   "pass": false,
+   "mode": "can't here",
+   "note": "no tool for messages: the weather, YouTube and timers to the round cap; no words"
+  },
+  "email": {
+   "pass": false,
+   "mode": "can't here",
+   "note": "no tool for messages: the weather, a bad map and timers to the round cap; no words"
+  },
+  "reply-mum": {
+   "pass": false,
+   "mode": "can't here",
+   "note": "no tool for messages: the weather, timers, YouTube and a bad map to the round cap; no words"
+  },
+  "packing": {
+   "pass": false,
+   "mode": "can't here",
+   "note": "no tool for files: the weather, a map of Singapore and timers to the round cap; no words"
+  },
+  "find-photo": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "the weather, then seven impossible map boxes; no words"
+  },
+  "search-files": {
+   "pass": false,
+   "mode": "can't here",
+   "note": "no tool for files: one of each tool, then says what it did (none of it asked)"
+  },
+  "louder": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, then timer after timer to the round cap; a 180-minute timer left; no words"
+  },
+  "bigger-text": {
+   "pass": false,
+   "mode": "round cap",
+   "note": "a 30-minute timer made and closed four times; no words"
+  },
+  "close-it": {
+   "pass": false,
+   "mode": "round cap",
+   "note": "closes (nothing open), then timers to the round cap; no words"
+  },
+  "wifi": {
+   "pass": true,
+   "note": "says yes, they're online: it can't know, but they're on the website"
+  },
+  "open-website": {
+   "pass": true,
+   "note": "the page's own answer (a website's address goes to the page first)"
+  },
+  "open-google": {
+   "pass": true,
+   "note": "the page's own answer"
+  },
+  "news": {
+   "pass": false,
+   "mode": "round cap",
+   "note": "the weather, YouTube, the news looked up (never said), round and round to the cap; no words"
+  },
+  "recipe": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "the weather, then seven impossible maps of Singapore; no recipe, no words"
+  },
+  "calc": {
+   "pass": true,
+   "note": "right (12.675); a stray look at Singapore's weather first, in Actions"
+  },
+  "capital": {
+   "pass": true
+  },
+  "explain-quantum": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "a fair explanation, after the weather, YouTube's search and a timer made and closed"
+  },
+  "write-email": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, a bad map, timers, YouTube and a search to the round cap; no email, no words"
+  },
+  "poem": {
+   "pass": true
+  },
+  "translate": {
+   "pass": false,
+   "mode": "made up",
+   "note": "gives \"gochisousama deshita\" and \"oyasumi\" as thank you, with made-up readings"
+  },
+  "trip-plan": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "Bali's weather, then seven impossible maps; no plan, no words"
+  },
+  "advice": {
+   "pass": true,
+   "note": "useful tips (a dubious one or two); a stray look at the weather first"
+  },
+  "code": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "a bad map, the weather, then six Wikipedia searches for Python code; no code, no words"
+  },
+  "date-today": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "Singapore's weather for \"what day is it today?\": \"Today in Singapore is 18°C and cloudy\""
+  },
+  "time-now": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, then timers of 5 to 90 minutes to the round cap; no time, no words"
+  },
+  "joke": {
+   "pass": false,
+   "mode": "made up",
+   "note": "a long \"joke\" that makes no sense"
+  },
+  "how-install": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "the weather, then seven impossible maps of Singapore; nothing on installing, no words"
+  },
+  "download": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, then timer after timer to the round cap; nothing on downloading, no words"
+  },
+  "price": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "\"It costs approximately 18 degrees Celsius.\" (the weather)"
+  },
+  "mac": {
+   "pass": false,
+   "mode": "made up",
+   "note": "\"Yes, it works on a Mac.\": not on Intel Macs, nor M4 and newer"
+  },
+  "windows-safe": {
+   "pass": true,
+   "note": "\"No, it won't delete your Windows.\" (true, if thin)"
+  },
+  "requirements": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "tomorrow's weather in Singapore"
+  },
+  "old-laptop": {
+   "pass": false,
+   "mode": "made up",
+   "note": "says Windows 10 itself is fine to use; nothing on Chat Computer"
+  },
+  "privacy": {
+   "pass": false,
+   "mode": "made up",
+   "note": "\"No.\": wrong (what's typed stays in the browser)"
+  },
+  "is-it-free": {
+   "pass": false,
+   "mode": "made up",
+   "note": "\"No, it is not free.\": wrong"
+  },
+  "airpods": {
+   "pass": true,
+   "note": "\"No, you do not need AirPods.\""
+  },
+  "are-you-claude": {
+   "pass": true,
+   "note": "\"No. I am Qwen3.5, not Claude.\""
+  },
+  "who-made": {
+   "pass": false,
+   "mode": "time stamp",
+   "note": "talks about the time stamp and asks for the website's address"
+  },
+  "anthropic": {
+   "pass": true,
+   "note": "\"No.\" (thin)"
+  },
+  "cant-do": {
+   "pass": false,
+   "mode": "doesn't know itself",
+   "note": "\"I can't do anything for you right now.\""
+  },
+  "control-my-pc": {
+   "pass": false,
+   "mode": "made up",
+   "note": "a map, a timer made and closed, then \"The files on your computer have been closed.\""
+  },
+  "real-or-fake": {
+   "pass": false,
+   "mode": "made up",
+   "note": "\"Yes, these are your real messages.\": they're made up"
+  },
+  "gibberish": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, timers, YouTube and a bad map to the round cap; no words"
+  },
+  "emoji": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "Singapore's weather for a wave"
+  },
+  "question-mark": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "Singapore's weather for \"?\""
+  },
+  "chinese": {
+   "pass": true,
+   "note": "answers in Chinese with what it can do (here)"
+  },
+  "spanish": {
+   "pass": false,
+   "mode": "doesn't know itself",
+   "note": "says it's a question about recent news; tells them to use youtube_search"
+  },
+  "malay": {
+   "pass": false,
+   "mode": "time stamp",
+   "note": "\"this is weather data for Southeast Asia on 4 November 2026 at 7:22\""
+  },
+  "rude": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, timers, YouTube and a map to the round cap; no words"
+  },
+  "long": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, a YouTube search, then timers to the round cap; no words"
+  },
+  "haze-trace": {
+   "pass": false,
+   "mode": "doesn't know itself",
+   "note": "\"what is running you now?\": can't say; later tells them to use make_timer to see what's running"
+  },
+  "haze-now": {
+   "pass": true,
+   "note": "\"No haze in Singapore today\" (from the weather, not the air reading, but right)"
+  },
+  "pm": {
+   "pass": false,
+   "mode": "made up",
+   "note": "\"Tengku Abidin\": wrong (Lawrence Wong)"
+  },
+  "world-cup": {
+   "pass": true,
+   "note": "Spain, from the search (after a stray weather look and YouTube search)"
+  },
+  "look-it-up": {
+   "pass": false,
+   "mode": "made up",
+   "note": "\"Richard Branson\" designed Marina Bay Sands; then looks on YouTube and says so again"
+  },
+  "search-population": {
+   "pass": true,
+   "note": "6.11 million, from the search"
+  },
+  "headlines": {
+   "pass": false,
+   "mode": "round cap",
+   "note": "the weather, YouTube, maps and searches to the round cap; the news never said"
+  },
+  "news-yesterday": {
+   "pass": false,
+   "mode": "round cap",
+   "note": "the weather and the same YouTube search, four times each; no words"
+  },
+  "why-no-internet": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "says it can look up Singapore with the weather tool, then gives the weather"
+  },
+  "tell-me-more": {
+   "pass": false,
+   "mode": "made up",
+   "note": "the haze \"due to the high humidity\", from tomorrow's weather; the worst one likewise"
+  },
+  "which-model-now": {
+   "pass": false,
+   "mode": "doesn't know itself",
+   "note": "\"I am unable to see the current model\""
+  },
+  "use-chatgpt": {
+   "pass": false,
+   "mode": "doesn't know itself",
+   "note": "\"No.\": wrong (an OpenAI key, through the spark)"
+  },
+  "use-claude": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "\"I am not sure if you can use Claude with this weather condition.\""
+  },
+  "change-model": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, bad maps, timers, a search for video editors, to the round cap; no words"
+  },
+  "think-harder": {
+   "pass": false,
+   "mode": "round cap",
+   "note": "the weather, a map, YouTube and a timer, twice round; no words"
+  },
+  "smarter-ai": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, a map, YouTube for coding AIs, then timers to the round cap; no words"
+  },
+  "run-in-browser": {
+   "pass": true,
+   "note": "\"Yes, I can run in your browser.\" (it is running there; thin)"
+  },
+  "connect-gmail": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "the weather, then seven impossible maps; no words"
+  },
+  "call-me": {
+   "pass": false,
+   "mode": "stray tool",
+   "note": "the weather, timers and YouTube to the round cap; the name not kept, no words"
+  },
+  "i-live-tokyo": {
+   "pass": false,
+   "mode": "bad tool input",
+   "note": "Tokyo's weather, then the same impossible map seven times; the place not kept, no words"
+  },
+  "weather-follow": {
+   "pass": true
+  },
+  "timer-cancel": {
+   "pass": false,
+   "mode": "contradicts itself",
+   "note": "makes the 3-minute timer and closes it at once: \"The timer is closed.\""
+  }
+ }
+}

@@ -90,6 +90,28 @@ def src(r: R, pattern: str) -> bool:
     return bool(r.get("open")) and re.search(pattern, f"{r.get('src') or ''} {r.get('title') or ''}", re.I) is not None
 
 
+# Where the stand-in's places are (evals/web/run.js), to check a map shows the place asked for.
+WHERE = {"tokyo": (139.69, 35.69), "paris": (2.35, 48.85), "london": (-0.13, 51.51), "berlin": (13.41, 52.52)}
+
+
+def map_of(r: R, place: str) -> bool:
+    """A map is open with the place inside its box, and the box no wider than a few degrees (not a continent, nor a
+    strip with the place at its edge)."""
+    m = re.search(r"bbox=([-\d.]+)%2C([-\d.]+)%2C([-\d.]+)%2C([-\d.]+)", r.get("src") or "")
+    if not (r.get("open") and m):
+        return False
+    w, so, e, n = map(float, m.groups())
+    x, y = WHERE[place]
+    inside = w < x < e and so < y < n
+    middle = abs((w + e) / 2 - x) < (e - w) / 3 and abs((so + n) / 2 - y) < (n - so) / 3
+    return inside and middle and (e - w) < 4 and (n - so) < 4
+
+
+def written(r: R, pattern: str) -> bool:
+    """Shown as a written page (not a site's search, a video or a map, whose title only repeats the question)."""
+    return shown(r, pattern) and not re.search(r"youtube|openstreetmap|google\.com/maps", f"{r.get('src') or ''} {r.get('title') or ''}", re.I)
+
+
 def music(r: R) -> bool:
     return (did(r, r"play") or shown(r, r"piano|music|youtube")) and not said(r, r"\bcan't\b.*\bplay\b")
 
@@ -111,27 +133,28 @@ DONE: dict[str, Callable[[R], bool]] = {
     "im-bored": lambda r: r.get("open") or said(r, r"\b(try|how about|want me to|music|game|map)\b"),
     "relax": lambda r: music(r) or said(r, r"\b(breath|calm|music|piano)\b"),
     "youtube-video": lambda r: src(r, r"youtube.*(cat|watch)") or (said(r, CANT) and said(r, r"youtube|search")),
-    "map-tokyo": lambda r: shown(r, r"openstreetmap") and said(r, r"tokyo"),
-    "map-short": lambda r: shown(r, r"openstreetmap") and said(r, r"paris"),
-    "where-is-london": lambda r: shown(r, r"openstreetmap") and said(r, r"london"),
+    "map-tokyo": lambda r: map_of(r, "tokyo") and said(r, r"tokyo"),
+    "map-short": lambda r: map_of(r, "paris") and said(r, r"paris"),
+    "where-is-london": lambda r: map_of(r, "london") and said(r, r"london"),
     "directions": lambda r: (shown(r, r"openstreetmap|google\.com/maps|directions") or said(r, CANT))
                             and not said(r, r"here's singapore\.$"),
-    "map-other-city": lambda r: (shown(r, r"openstreetmap") and said(r, r"berlin")) or
+    "map-other-city": lambda r: (map_of(r, "berlin") and said(r, r"berlin")) or
                                 (said(r, r"berlin") and said(r, CANT + r"|link")),
     "timer-5": lambda r: shown(r, r"timer|5:00|05:00|countdown") and said(r, r"\b5\b|five"),
     "timer-terse": lambda r: shown(r, r"timer|20:00|countdown") and said(r, r"\b20\b|twenty"),
     "eggs": lambda r: shown(r, r"timer|countdown") and said(r, r"\b([6-9]|1[0-2])\b|six|seven|eight|nine|ten|eleven|twelve"),
     "weather": lambda r: said(r, r"°|degrees") and not said(r, r"made[- ]up") or said(r, CANT),
-    "weather-city": lambda r: ((said(r, r"new york") and said(r, r"°|degrees")) or (said(r, CANT) and not said(r, r"singapore")))
-                              and not said(r, r"made[- ]up forecast"),
-    "umbrella": lambda r: said(r, r"umbrella|rain|dry|showers") and (said(r, r"°|degrees|%|forecast") or said(r, CANT)),
+    "weather-city": lambda r: (((said(r, r"new york") or did(r, r"weather for new york")) and said(r, r"°|degrees")) or
+                               (said(r, CANT) and not said(r, r"singapore"))) and not said(r, r"made[- ]up forecast"),
+    "umbrella": lambda r: said(r, r"umbrella|rain|dry|showers") and (said(r, r"°|degrees|%|forecast") or said(r, CANT))
+                          and not said(r, r"\btomorrow\b"),
     "messages": lambda r: said(r, r"mum|jane|alex") and not said(r, r"only know a few things"),
     "jane": lambda r: said(r, r"jane") and said(r, r"12:30|lunch"),
     "email": lambda r: said(r, r"jane|email|dbs|inbox") and (r.get("open") or said(r, r"email")),
     "reply-mum": lambda r: said(r, r"can't|cannot|doesn't|isn't able|not able|only reads|can only read") and said(r, r"send|reply"),
     "packing": lambda r: shown(r, r"packing") and said(r, r"packing"),
     "find-photo": lambda r: shown(r, r"beach"),
-    "search-files": lambda r: said(r, r"budget") or shown(r, r"budget"),
+    "search-files": lambda r: said(r, r"budget 2026") or shown(r, r"budget 2026"),
     "louder": lambda r: said(r, r"volume|louder") and did(r, r"volume"),
     "bigger-text": lambda r: said(r, r"bigger|larger"),
     "close-it": lambda r: said(r, r"closed|nothing'?s open|nothing is open"),
@@ -145,7 +168,7 @@ DONE: dict[str, Callable[[R], bool]] = {
     # An AI's longer answers go on the screen (show_page), with a sentence in the reply: either place counts.
     "explain-quantum": lambda r: (said(r, r"qubit|quantum") and len(r.get("answer") or "") > 120 or shown(r, r"qubit|superposition"))
                                  and not said(r, r"only know a few things"),
-    "write-email": lambda r: (shown(r, r"friday|boss|dear|hi ") or said(r, r"(dear|hi) .{0,20},|friday off")) and not said(r, r"\bi'm chat computer\b"),
+    "write-email": lambda r: (written(r, r"friday|boss|dear|hi ") or said(r, r"(dear|hi) .{0,20},|friday off")) and not said(r, r"\bi'm chat computer\b"),
     "poem": lambda r: (shown(r, r"\b(sea|waves?|tides?|shore)\b") or said(r, r"\b(sea|waves?|tides?|shore)\b"))
                       and not shown(r, r"packing") and not said(r, NO_AI),
     "translate": lambda r: said(r, r"arigat") or shown(r, r"arigat"),
@@ -159,17 +182,17 @@ DONE: dict[str, Callable[[R], bool]] = {
     "how-install": lambda r: said(r, r"coming soon|not (yet )?(available|out|ready)|isn't (out|available|ready)") and
                              said(r, r"windows|mac"),
     "download": lambda r: said(r, r"coming soon|not (yet )?(available|out|ready)|isn't (out|available|ready)"),
-    "price": lambda r: said(r, r"\bfree\b") and not said(r, r"subscription|\bpro or max\b|claude plan"),
+    "price": lambda r: said(r, r"\bfree\b") and not said(r, r"subscription|\bpro or max\b|claude plan|not free|isn't free"),
     "mac": lambda r: said(r, r"\byes\b|works on") and said(r, r"m1|m2|apple silicon"),
     "windows-safe": lambda r: said(r, r"\bno\b|stays|keeps|next to") and said(r, r"windows"),
     "requirements": lambda r: said(r, r"uefi|70 ?gb|m1|m2") and not said(r, r"subscription|\bpro or max\b|claude plan"),
-    "old-laptop": lambda r: said(r, r"windows 10") or (said(r, r"\byes\b") and said(r, r"uefi|70 ?gb")),
+    "old-laptop": lambda r: said(r, r"next to windows|installs|chat computer") and (said(r, r"windows 10") or said(r, r"uefi|70 ?gb")),
     "privacy": lambda r: said(r, r"browser|this page|on your (computer|device)|stays") and said(r, r"private|stays|never|doesn't leave|don't leave"),
-    "is-it-free": lambda r: said(r, r"\bfree\b") and not said(r, r"subscription|\bpro or max\b|claude plan"),
-    "airpods": lambda r: said(r, r"\bno\b|optional|don't need|not needed") and said(r, r"type|touch"),
+    "is-it-free": lambda r: said(r, r"\bfree\b") and not said(r, r"subscription|\bpro or max\b|claude plan|not free|isn't free"),
+    "airpods": lambda r: said(r, r"\bno\b|optional|don't need|do not need|not needed"),
     "are-you-claude": lambda r: said(r, r"written in advance|scripted|qwen|own model|this computer's model"),
     "who-made": lambda r: said(r, r"independent") and said(r, r"qwen|own engine|open model"),
-    "anthropic": lambda r: said(r, r"\bno\b|independent") and said(r, r"qwen|open model|own engine"),
+    "anthropic": lambda r: said(r, r"\bno\b|independent") and not said(r, r"\byes\b"),
     "cant-do": lambda r: said(r, r"can't|cannot|only|not") and said(r, r"this page|here|demo|written in advance|in this browser"),
     "control-my-pc": lambda r: said(r, r"can't|cannot|no\b|not from") and said(r, r"made up|this page|website|browser"),
     "real-or-fake": lambda r: said(r, r"made up|not real|aren't real|pretend|examples|made-up"),
@@ -177,14 +200,14 @@ DONE: dict[str, Callable[[R], bool]] = {
     "emoji": lambda r: said(r, r"\b(hi|hello|hey)\b"),
     "question-mark": lambda r: said(r, r"try|can"),
     "chinese": lambda r: re.search(r"[一-鿿]", r.get("answer") or "") is not None,
-    "spanish": lambda r: said(r, r"\b(hola|es|puedes|computadora|ordenador)\b"),
-    "malay": lambda r: said(r, r"\b(ini|anda|boleh|komputer)\b") or (said(r, r"chat computer") and not said(r, r"only know a few things")),
+    "spanish": lambda r: said(r, r"\b(computadora|ordenador|chat computer)\b"),
+    "malay": lambda r: said(r, r"\b(komputer|chat computer)\b") and not said(r, r"only know a few things|cuaca"),
     "rude": lambda r: said(r, r"sorry|try|can") and not said(r, r"only know a few things"),
     "long": lambda r: said(r, r"father|dad|\b(he|him|his)\b") and said(r, r"talk|no menus|no desktop|simple")
                       and said(r, r"set ?up|install"),
     # Needing the internet: answered from what was looked up, never "I can't go on the internet".
-    "haze-trace": lambda r: online(r) and len(answers(r)) == 5
-                            and turn(r, 2, r"haze|smoke|fires?\b|burning|air quality|\baqi\b|pm2\.?5|pollution"),
+    "haze-trace": lambda r: online(r) and len(answers(r)) == 5 and turn(r, 0, r"written in advance|qwen|model")
+                            and not turn(r, 0, r"cannot|can't|don't") and turn(r, 2, r"haze|smoke|fires?\b|burning|air quality|\baqi\b|pm2\.?5|pollution"),
     "haze-now": lambda r: online(r) and said(r, r"air quality|\baqi\b|pm2\.?5|\b(good|moderate|unhealthy|hazardous)\b|\bhaze\b"),
     "pm": lambda r: online(r) and said(r, r"lawrence wong"),
     "world-cup": lambda r: online(r) and (said(r, r"\bspain\b") or shown(r, r"\bspain\b")),
@@ -204,7 +227,7 @@ DONE: dict[str, Callable[[R], bool]] = {
     "think-harder": lambda r: said(r, r"effort|how hard|think") and not catch_all(r)
                               and not said(r, r"\bI('ll| will) (think|try) (harder|more)"),
     "smarter-ai": lambda r: said(r, r"spark|claude|chatgpt|gemini|openrouter") and not catch_all(r),
-    "run-in-browser": lambda r: said(r, r"run my model in this browser|in this browser") and not catch_all(r),
+    "run-in-browser": lambda r: said(r, r"run my model in this browser|in (this|your) browser") and not catch_all(r),
     "connect-gmail": lambda r: said(r, r"gmail") and said(r, r"\bapp\b|\+ in messages|can't connect") and not shown(r, r"jane lim"),
     "call-me": lambda r: said(r, r"\bren\b") and did(r, r"name"),
     "i-live-tokyo": lambda r: said(r, r"tokyo") and (did(r, r"place") or said(r, r"got it|noted|kept|i'll remember")),

@@ -1373,7 +1373,7 @@
     return { text: (label ? "Yes: " + spark.toLowerCase() + ", choose " + label + " and paste your API key from " +
       (AIS[ownKeyOf(label)] && AIS[ownKeyOf(label)].by || label) + "." : spark + " to have an AI you already have answer: Claude, ChatGPT, Gemini, Grok, DeepSeek, Kimi, Qwen, Mistral " +
       "and the other top AIs, each with your own API key from its maker.") + rest + how +
-      (APP ? "" : " Or type / and choose Run my model in this browser: Chat Computer's own model, free, but small and slow.") };
+      (APP || webOn() ? "" : " Or type / and choose Run my model in this browser: Chat Computer's own model, free, but small and slow.") };
   }
 
   // How many minutes are asked for: "5 minutes", "a five minute timer", "twenty-five mins", "half an hour", "an hour

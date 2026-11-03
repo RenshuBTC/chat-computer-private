@@ -568,9 +568,13 @@ for each, the line that says what it is; no video):
   Fedora Asahi Remix on a Mac), and `chatcomputer/` Chat Computer itself.
 * `os/` is Chat Computer's own operating system, being written from scratch to replace the Linux base. Its
   README says what runs so far, what no operating system can own on a PC, and the steps ahead.
-* `evals/` says whether a change made things better. `evals/os` gives Chat Computer everyday requests on a
+* `evals/` says whether a change made things better, the way Hamel Husain's evals FAQ describes: read real traces
+  first, note each one's first failure, group those into the failure modes that keep coming up, write a pass/fail
+  check for each, and keep the checks honest against hand labels (`labels/`; `evaluate.py --labels` gives how
+  many failures they catch and passes they leave alone). `evals/os` gives Chat Computer everyday requests on a
   simulated computer, each in its own sandbox, answered by its own model (`python -m evals.os.run OUT_DIR --models
-  DIR`, the models made ready in DIR), and
-  `evals/web` types a first-time visitor's questions into the website (`node evals/web/run.js OUT.json`). Each
-  has pass/fail checks (`evaluate.py`), written from reading the answers and kept honest against hand labels
-  (`labels/`).
+  DIR`, the models made ready in DIR/llm). `evals/web` types a first-time visitor's questions into the website
+  (`node evals/web/run.js OUT.json`): with the page's written answers, or with Chat Computer's model in the browser
+  (`--model web`, and `--engine native:PORT` to have the engine's program answer the page's requests, a few times
+  faster). `evals/tools` prints traces to read (`show_web.py`, `show_os.py`) and `review.html` opens them to label
+  each one pass or fail, with why.

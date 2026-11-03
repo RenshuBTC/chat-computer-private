@@ -1,5 +1,5 @@
 //! On a Mac, the app's own page comes from a small server only this computer can reach (127.0.0.1): a Mac's web
-//! view doesn't count Tauri's own scheme as secure, and a page that isn't gets no WebGPU (Gemma), no microphone
+//! view doesn't count Tauri's own scheme as secure, and a page that isn't gets no WebGPU (Heart), no microphone
 //! and no browser cache. It serves the files bundled into the app, and nothing else; it answers only requests
 //! addressed to it by that name (not another name pointed at this computer).
 use tauri::{AssetResolver, Runtime};

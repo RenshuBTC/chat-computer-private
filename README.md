@@ -436,13 +436,13 @@ You won't need it day to day; it's only for repairs.
 ## The demo
 
 **https://chatcomputer.ai** is Chat Computer's screen in a browser, for trying it before
-installing it: the word logo for a second, then Chat Computer saying `hello, world` and a greeting, and the message box with the cursor in it. It is the same page
+installing it: the word logo for a second, then Chat Computer saying `hello, world`, and the message box with the cursor in it. It is the same page
 and code as on a Chat Computer (`docs/index.html`: `scripts/build_demo.py` copies them, and
 `tests/test_demo.py` checks the copy is current), with `docs/demo/host.js` standing in for the computer. The
 messages and files there are made up. Everyone gets answers, free:
 
-* **Written answers**, in `host.js`: what Chat Computer is, what it needs and costs (it's free, on a Claude Pro
-  or Max plan; the download is coming soon), and what the page can show: music (a few soft chords the browser
+* **Written answers**, in `host.js`: what Chat Computer is, what it needs and costs (it's free: its own model runs
+  on your computer, with no account; the download is coming soon), and what the page can show: music (a few soft chords the browser
   makes), maps, the weather and the air, timers, sums, the date and time, the news (Wikipedia's Current events),
   Wikipedia's article for a question of fact or "look up …", the made-up messages and files. Google (its search,
   for what Wikipedia hasn't got too), Google Maps' directions and Wikipedia open for real in the middle, to scroll
@@ -451,53 +451,36 @@ messages and files there are made up. Everyone gets answers, free:
   opens it, as a browser's address bar would, whichever of these answers: Google and Wikipedia in the middle, a
   YouTube video's address in YouTube's player there, and any other site at once in a new tab beside the page (most
   sites don't let another page show them; on a Chat Computer every site opens in the middle). Asked for something
-  only an AI can do (a recipe, a poem, a translation), it says so, and how to get one.
-* **The browser's own AI**, where there is one: Chrome on a computer has Gemini Nano built in, and Edge
-  Phi-4-mini, running on the device itself. Typing **/** lists **Download Gemini** (in Edge, Download Phi-4-mini)
-  while the browser can download it; Chrome downloads it once, after it's chosen, and keeps it for every site.
-  Then it answers what the written answers can't, and can put a page it writes, a map
-  or a timer on the screen; its answers, long ones too, are in the conversation. It can't reach the internet
-  itself, so the page looks things up for it: when a question
-  needs something recent or that it isn't sure of, or they say "look it up", it says what to look up, the page
-  searches Wikipedia, the day's news (Wikipedia's Current events) and, for haze or pollution, the air
-  (Open-Meteo), and it answers from what was found, saying where it's from. The page's own answers go into its
-  conversation too, so a follow-up ("the haze?" after the weather) makes sense to it.
-* **Google's Gemma**, where the browser has no AI of its own (a phone, Safari, Firefox: Gemini Nano is only in
-  Chrome on a computer) but can run one on the device's graphics chip (WebGPU: Safari on iOS 26, iPadOS 26 and
-  macOS 26, Chrome on Android and on computers). Typing **/** lists **Download Gemma**: Gemma 3 with 1 billion
-  parameters, Google's small open model, about 0.8 GB (0.9 GB where the graphics chip can't do half precision),
-  downloaded once from Hugging Face by Transformers.js (a fixed version, from jsDelivr) and kept by the browser. It
-  runs on the device, so what's typed doesn't leave it; it answers what the written answers can't, in words, as
-  they come, and looks things up as Gemini Nano does (only the words looked up go to Wikipedia). On later visits
-  it starts from the browser's copy the first time it's needed ("Starting Gemma…"), and is never downloaded again
-  unasked; if the page stopped while it was starting (a phone short of memory closes the page), it waits to be
-  chosen again (Start Gemma). **Remove Gemma** in the list frees the room. It's far smaller than Claude: fine for
-  everyday questions and writing, and it can get things wrong.
+  only its model can do (a recipe, a poem, a translation), it says so, and how to get it.
+* **This computer's model**, where the Chat Computer app runs on the same computer: typing **/** lists **Use this
+  computer's model**. Chosen, the page talks to the app's engine at 127.0.0.1 (the browser may ask once whether
+  chatcomputer.ai can reach other programs on the device: allowed, it can), and Chat Computer's own model answers
+  for real, its words streaming in, and does things on the screen: plays YouTube videos (YouTube's player between
+  the panels; when the video ends, the conversation has the middle again) or shows YouTube's search, plays calm
+  piano, shows maps and pages it writes, says the weather, opens the made-up messages and files, makes timers, and
+  looks things up (Wikipedia, the day's news, the air: only the words looked up leave the computer). Browsers let a
+  page play sound by itself only after a click, tap or key on the site, so a video starts without sound if there
+  hasn't been one yet, and the first click, tap or key (on the video too) turns it on. What's typed goes only to
+  the app, on that computer. Chosen once, it's used on later visits while the app runs; when the app stops, the
+  page says so and the written answers are back; **Stop using this computer's model** puts it away.
 * **Heart, a warmer voice** for Read aloud (and for answers read out while talking): Kokoro's `af_heart`, the voice
   Chat Computer itself speaks with, made on the device by its graphics chip (WebGPU) with kokoro-js (a fixed
   version, from jsDelivr). The first time Read aloud is pressed where it can run, a sheet offers it, with its size
-  (about 330 MB, downloaded once from Hugging Face in pieces, as Gemma is, and kept by the browser); it then reads
+  (about 330 MB, downloaded once from Hugging Face in pieces of 16 MB, each kept as it comes, so a page left part
+  way carries on where it stopped, and kept by the browser); it then reads
   what was asked. Closed, the browser's own voice reads, and Heart stays in the **/** list (**Download Heart**,
   later **Remove Heart**). Otherwise the browser's best voice reads: natural, neural or premium voices first
   (Edge's Ava), then Google's, then the usual one, never a novelty voice. Safari lets pages use only an iPhone's
   built-in voices, which sound robotic, so on an iPhone Heart is the warm one. Where there's no WebGPU it isn't
   offered: a phone's processor alone makes it more slowly than it speaks.
 
-What's typed stays in the browser, except a place's name asked about for a map, the weather or the air, which goes
+What's typed stays on the computer (in the browser, or with the app's model), except a place's name asked about
+for a map, the weather or the air, which goes
 to Open-Meteo's free geocoding and forecasts (as does, for the greeting's weather, your time zone's city or where
 you said you live, at most once every half hour; the map itself comes from OpenStreetMap), the words looked up on
 Wikipedia, Google's pages when asked for (as on google.com), and with what else the **/** list connects (there are
 no buttons beside the message box):
 
-* **Connect Claude**: paste an API key from Claude Console, and Claude (Opus 5.5, as on a Chat Computer, but at
-  the API's own effort, medium, rather than max, for quicker answers) answers for real and does things on the screen: plays YouTube videos (YouTube's player between the panels;
-  when the video ends, the conversation has the middle again), shows maps and pages it writes, opens the
-  made-up messages and files, makes timers, searches the web. Browsers let a page play sound by itself only
-  after a click, tap or key on the site, so a video starts without sound if there hasn't been one yet, and the
-  first click, tap or key (on the video too) turns it on. Requests go from the browser straight to
-  Anthropic's API; the key stays in that browser, and what's used is billed to it. A Claude Pro or Max plan
-  can't be used: Anthropic doesn't allow other developers' apps to sign in with one. (Sign in with ChatGPT
-  would let visitors use a ChatGPT plan, but OpenAI offers it to hosted sites only after approval.)
 * **Connect AirPods**: you talk and the answers are read out. The browser listens through whatever microphone
   the device uses (your AirPods, once they're paired in its Bluetooth settings: a website can't pair them) and
   turns speech into text itself (Chrome does it on Google's servers). Chrome, Edge and Safari can; Firefox
@@ -515,7 +498,8 @@ dims the screen behind it and brings up what can be done with it: Copy, Send to 
 Select text (the message alone, its words to select as anywhere on the phone), and Edit for yours or Read aloud
 for Chat Computer's.
 
-Chat Computer is an independent project, not made by Anthropic. It has no icon: the tab shows the browser's own.
+Chat Computer is an independent project. It thinks with Qwen, an open model from Alibaba, run on your computer by
+Chat Computer's own engine. It has no icon: the tab shows the browser's own.
 
 GitHub Pages serves it from the `docs` folder (Settings, Pages, branch `main`, folder `/docs`; a private
 repository needs GitHub Pro) at chatcomputer.ai: `docs/CNAME` names the domain, and its DNS points at GitHub
@@ -538,19 +522,27 @@ for each, the line that says what it is; no video):
   that refuse to show inside another page, most of them, open too, as on a Chat Computer), and the same view is
   used each time, so sign-ins stay; a link that would open a new window opens there; downloads go to Downloads.
   "/" finds files on the computer by name (Desktop, Documents, Downloads, Pictures, Music, Videos, OneDrive), and
-  the one chosen opens with its own app; programs, scripts and anything "/" didn't find aren't opened. Connected
-  Claude can do the same (find_files, open_file). Messages brings together your own Gmail, Outlook (Outlook.com,
+  the one chosen opens with its own app; programs, scripts and anything "/" didn't find aren't opened. Its model
+  can do the same (find_files, open_file), and read and open your messages (read_messages, open_message). Messages
+  brings together your own Gmail, Outlook (Outlook.com,
   Hotmail, Live and Microsoft 365), Telegram, WhatsApp, WeChat and Discord: + in Messages (or Connect email, Connect
   chat apps) opens the one chosen in the middle, on its own page, where you sign in yourself (a code or a QR code
   from your phone, as on its website); it then stays signed in, out of sight, and what its list of conversations
   shows comes into Messages, newest first (who, what, when, unread). Tapping one opens it there, at that
   conversation. Nothing is sent anywhere: the app reads the service's page as you'd see it, and only that page can
   hand it over. (WeChat's web version isn't open to every account; Google sometimes refuses sign-ins in an app's
-  browser view.) The greeting has the name the computer knows you by. Gemma's
-  code comes with the app; only Google's model is downloaded. Only the app's own page can ask the app for these
+  browser view.) The greeting has the name the computer knows you by. The model comes with the app: Chat
+  Computer's own engine (`os/model`, beside the app's program) picks the one this computer runs well, by its memory
+  and the room on its disk (from Qwen3.5 0.8B up to Qwen3.8 27B), downloads it once from Qwen's own files over
+  Chat Computer's own HTTPS (each file checked against its pinned SHA-256; a download that stops carries on where
+  it stopped), makes it ready to run, takes its refusals out, and serves it on 127.0.0.1 to the app's page (and to
+  chatcomputer.ai, where it's chosen there): free, with no account, and nothing sent anywhere. Meanwhile the empty
+  box says how far it's got, and a smaller one that's here already answers. It gets ready at a lower priority,
+  ends with the app, and is started again should it stop by itself. Heart's code comes with the app too. Only the
+  app's own page can ask the app for these
   (its capabilities, and each command checks); a site in the middle gets nothing. On a Mac the page comes from
   the app's own server at 127.0.0.1 (a Mac's web view doesn't count Tauri's own scheme as secure, and then there's
-  no WebGPU for Gemma, no microphone and no browser cache), which answers only to that name. GitHub builds them
+  no WebGPU for Heart, no microphone and no browser cache), which answers only to that name. GitHub builds them
   (`.github/workflows/apps.yml`): an installer for Windows (for your account, no administrator needed), and a disk
   image for Macs with Apple silicon or Intel. They aren't signed with a paid certificate yet, so the first time,
   Windows says it protected your PC (choose More info, then Run anyway) and macOS says it can't check the app

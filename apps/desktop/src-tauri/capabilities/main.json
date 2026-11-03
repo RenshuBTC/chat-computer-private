@@ -15,6 +15,7 @@
     "allow-about",
     "allow-connect-service",
     "allow-forget-service",
-    "allow-open-service-item"
+    "allow-open-service-item",
+    "allow-model-status"
   ]
 }

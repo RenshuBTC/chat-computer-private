@@ -2,25 +2,26 @@
 
    The screen here is Chat Computer's own, the same page and code as on a Chat Computer (chat.html, chat.js,
    chat.css: copied here by scripts/build_demo.py). This file stands in for the computer behind it. On Chat Computer,
-   what you type (or say, or type in the Claude app on your phone) goes to Claude, which opens websites, plays
-   music, reads your messages and looks after your files. Here, Claude's answers to a few things are written in
-   advance, the messages and files are made up, and everything stays in your browser: nothing typed here is sent
-   anywhere, unless you choose one of the two that "/" in the message box lists:
-   - Connect Claude: with your own Claude API key, Claude answers for real and does things on this screen. What you
-     type goes from your browser straight to Anthropic; the key stays in this browser.
+   what you type (or say) goes to its own model, an open model of Qwen's running on the computer itself, which opens
+   websites, plays music, reads your messages and looks after your files. Here, its answers to a few things are
+   written in advance, the messages and files are made up, and everything stays in your browser: nothing typed here
+   is sent anywhere, unless you choose one of the two that "/" in the message box lists:
+   - Use this computer's model: where the Chat Computer app runs on this computer, its model answers for real and
+     does things on this screen. What you type goes from your browser to the app, on this computer, and no further.
    - Connect AirPods: you talk, and the answers are read out. Your browser turns what you say into text (Chrome
      does it on Google's servers).
    Fetched from elsewhere: a map from OpenStreetMap when you ask for one, the weather and the air from Open-Meteo
    (the weather where you are, too, for the greeting: your time zone's city, or where you said you live; its name
-   goes there, then its position, at most once every half hour), YouTube's player when connected Claude plays a
-   video, and, when the browser's own AI looks something up for an
-   answer (or you ask for the news), Wikipedia's articles and its Current events: only the words looked up go there.
-   Google's own pages (its search, Google Maps' directions) and Wikipedia's show in the middle when asked for: of the
-   sites that might be asked for, they're the ones that let another page show them.
+   goes there, then its position, at most once every half hour), YouTube's player when the model plays a video,
+   and, when the model looks something up (or you ask for the news), Wikipedia's articles and its Current events:
+   only the words looked up go there. Google's own pages (its search, Google Maps' directions) and Wikipedia's show
+   in the middle when asked for: of the sites that might be asked for, they're the ones that let another page show
+   them.
    In Chrome's side panel (the Chat Computer extension, apps/chrome: this page in its frame, ?app=chrome), sites
    open in real Chrome tabs instead, which the extension opens. In the Chat Computer app for Windows and Mac
-   (apps/desktop: this page, bundled into the app), any site opens right here, in the app's own browser view laid
-   over the middle, "/" finds the computer's real files, and nothing here is made up: SHELL, below. */
+   (apps/desktop: this page, bundled into the app), the model comes with the app and answers once the app has it
+   ready, any site opens right here, in the app's own browser view laid over the middle, "/" finds the computer's
+   real files, Messages has your own accounts', and nothing here is made up: SHELL, below. */
 (function () {
   "use strict";
   var START = Date.now() / 1000;
@@ -93,7 +94,7 @@
       window.CO.chats(c.list.map(function (x) { return { id: x.id, title: x.title, ts: x.ts }; }), c.current);
     }
   }
-  // What the page is told to show, kept in the chat on the screen: your words (final), Claude's as they come.
+  // What the page is told to show, kept in the chat on the screen: your words (final), the answers as they come.
   function keepInChat(name, args) {
     if (name !== "user" && name !== "ai" && name !== "aiDone") return;
     var chat = chatOnScreen();
@@ -349,7 +350,7 @@
   // In the app, a site goes in its own browser view (where every site shows: none can refuse it, as they refuse
   // being framed in a page), laid over the frame (hole), and moved with it. The same view each time: sign-ins stay.
   // What it's at and called comes back from the app (chatcomputerApp, below), and a sheet over the screen (Connect
-  // Claude) or a message held puts it out of sight meanwhile: the app's view would be in front of them.
+  // email, say) or a message held puts it out of sight meanwhile: the app's view would be in front of them.
   // (view: which of the app's views it is: "site", or a connected service's, "msg-gmail"...)
   var site = { on: false, hidden: false, url: "", view: "" };
   function showSite(page) {
@@ -400,6 +401,7 @@
   window.chatcomputerApp = function (m) {
     if (!APP || !m || typeof m !== "object") return;
     if (m.messages && typeof m.messages === "object") { serviceMessages(m.messages); return; }
+    if (m.model && typeof m.model === "object") { localFrom(m.model); return; }
     var mine = !m.view || m.view === site.view;        // (what a view out of sight says isn't for the frame)
     if (typeof m.title === "string" && mine && site.on && open && m.title.trim()) call("mode", "content", clip(m.title, 80));
     if (typeof m.url === "string" && mine && site.on) site.url = m.url;
@@ -647,8 +649,8 @@
       "var vol=" + player.volume / 100 + ";" + MUSIC) });
   }
 
-  // ------------------------------------------------------------------ YouTube, when Claude plays a video
-  // On Chat Computer, a video is YouTube's own page between the sidebars. Here, when connected Claude plays one,
+  // ------------------------------------------------------------------ YouTube, when the model plays a video
+  // On Chat Computer, a video is YouTube's own page between the sidebars. Here, when the model plays one,
   // it's YouTube's player in the same place, and the conversation comes back when the video ends. Browsers let a
   // page play sound by itself only after you've clicked, tapped or typed on the site (or, in Chrome, played its
   // videos with sound often enough): so a video starts with sound when the browser allows it and otherwise
@@ -777,36 +779,35 @@
   });
 
   // ------------------------------------------------------------------ answers written in advance
-  // Without Claude (Connect Claude) or Chrome's built-in AI (below), the page answers from what's written here: what
-  // Chat Computer is and how to get it, what this page can show, and honest answers about what it can't do without an
-  // AI. The facts are README.md's, in one place, for the written answers and for Chrome's AI.
-  // The browser's own AI: Chrome's is Gemini Nano, from Google; Edge has the same, with Microsoft's Phi-4-mini.
-  var EDGE = /\bEdg\//.test(navigator.userAgent || "");
-  var AI = { browser: EDGE ? "Edge" : "Chrome", model: EDGE ? "Phi-4-mini" : "Gemini Nano", short: EDGE ? "Phi-4-mini" : "Gemini",
-             maker: EDGE ? "Microsoft" : "Google" };
+  // Without the model (the app's, on this computer), the page answers from what's written here: what Chat Computer
+  // is and how to get it, what this page can show, and honest answers about what it can't do without its model. The
+  // facts are README.md's, in one place.
   var FACTS = {
-    what: "Chat Computer is Claude, made by Anthropic, running a whole computer: there's no desktop and no apps to learn. " +
-      "You talk, type or touch the screen, and it does what you ask: opens websites, plays music and videos, reads your " +
-      "messages, looks after your files and settings.",
+    what: "Chat Computer runs a whole computer for you: there's no desktop and no apps to learn. You talk, type or touch " +
+      "the screen, and it does what you ask: opens websites, plays music and videos, reads your messages, looks after your " +
+      "files and settings.",
     soon: "Chat Computer isn't out yet: the download is coming soon.",
-    free: "Chat Computer itself is free. It runs on your own Claude Pro or Max plan, which is where Claude comes from.",
+    free: "Chat Computer is free, for good: it thinks with an open model (Qwen's) that runs on your own computer, so there's " +
+      "no account, no sign-in and nothing to pay.",
     pc: "On a Windows PC it installs next to Windows, on free space: Windows, your apps and your files stay, one restart " +
       "away, and you can remove Chat Computer any time. The PC must start in UEFI mode (every PC from the last ten years " +
       "does) and have about 70 GB free.",
     mac: "On a Mac with Apple silicon it installs next to macOS the same way: M1 and M2 Macs work fully, M3 Macs with some " +
       "limits for now, and Intel Macs or M4 and newer can't run it yet. The Mac version is the newest: it hasn't been " +
       "tried on a real Mac yet.",
-    use: "You can touch the screen, type on a keyboard or in the Claude app on your phone, or talk through AirPods.",
-    private: "On Chat Computer your files stay on your computer, and speech is turned into text on the computer itself. " +
-      "What you ask goes to Claude through your own Claude account, as in the Claude app.",
-    indie: "Chat Computer is an independent project, not made by Anthropic. It runs on Claude, which Anthropic makes."
+    use: "You can touch the screen, type on a keyboard, or talk through AirPods.",
+    private: "On Chat Computer your files stay on your computer, speech is turned into text on the computer itself, and the " +
+      "model that answers runs there too: what you say doesn't leave it.",
+    indie: "Chat Computer is an independent project. It thinks with Qwen, an open model from Alibaba, run on your computer by " +
+      "Chat Computer's own engine."
   };
   var CITIES = { singapore: [103.6, 1.2, 104.1, 1.47], london: [-0.35, 51.38, 0.15, 51.62], "new york": [-74.1, 40.6, -73.8, 40.85],
                  tokyo: [139.55, 35.55, 139.95, 35.8], paris: [2.22, 48.8, 2.47, 48.92], sydney: [151.0, -33.98, 151.35, -33.78] };
   var TRY = APP ? "Try “play some piano music”, “show me a map of Tokyo”, “weather”, “open bbc.com” or “set a timer for " +
     "5 minutes”. Type / and a name to find a file on this computer." : "Try “play some piano music”, “show me a map of Tokyo”, “weather in London”, " +
             "“set a timer for 5 minutes” or “what did Jane say?”. Type / to search the files.";
-  var REAL = "Type / and choose Connect Claude, and Claude answers for real, with your own API key.";
+  var REAL = APP ? "My model comes with this app, and runs on this computer." : "Where the Chat Computer app runs on this " +
+    "computer, type / and choose Use this computer's model, and its model answers for real.";
   function map(b, name) {
     show({ src: "https://www.openstreetmap.org/export/embed.html?bbox=" + b.join("%2C") + "&layer=mapnik",
            title: name ? "Map of " + name : "Map" });
@@ -851,8 +852,8 @@
   }
   // A typed address, as in a browser's address bar: a site's address typed alone (or after "open", "go to" or
   // "visit"; with or without https:// and a path; its ending a known one, or a country's two letters but for those
-  // more often a file's, as notes.md) opens the site, whatever answers here (the written answers, the
-  // browser's AI or Claude), and whatever the site: right here when it lets another page show it (Google, Google
+  // more often a file's, as notes.md) opens the site, whatever answers here (the written answers or the model), and
+  // whatever the site: right here when it lets another page show it (Google, Google
   // Maps, Wikipedia; a YouTube video, in YouTube's player), and otherwise at once in a new tab beside this page (most
   // sites forbid being shown inside another page; on a Chat Computer every site opens right here). Where the browser
   // stops the new tab, the site is a click away on the screen instead.
@@ -1052,8 +1053,8 @@
     return { text: shown + " is " + (r === exact ? r : r + " (" + exact + ")") + "." };
   }
   // ------------------------------------------------------------------ looking things up on the web
-  // The browser's built-in AI runs on the device and can't reach the internet by itself, so this page looks things up
-  // for it, from the browser, in sources that let a page ask them directly and need no key: Wikipedia (the opening of
+  // The model runs on the computer and can't reach the internet by itself, so this page looks things up for it
+  // (web_search), from the browser, in sources that let a page ask them directly and need no key: Wikipedia (the opening of
   // its articles), Wikipedia's Current events (the day's news, a sentence or two each, with its sources) and Open-Meteo
   // (the air: haze, pollution). Only the words looked up go to them. The written answers use them too: the news, the
   // air, "look it up", and a question of fact (Wikipedia's article on it).
@@ -1210,11 +1211,11 @@
                "Why did the computer go to the doctor? It had a virus, and a terrible case of bytes.",
                "I'd tell you a joke about Wi-Fi, but I'm not sure you'd get the connection."];
   var OTHER = {
-    zh: "你好！这是 Chat Computer 的屏幕：Claude 来操作整台电脑，你只要说话、打字或触摸屏幕，它就替你完成。这个页面的回答是预先写好的，而且目前只用英文。试试输入 “play some piano music”。",
-    ja: "こんにちは！これは Chat Computer の画面です。Claude がコンピューター全体を動かし、話す・打つ・触るだけで何でもしてくれます。このページでは今のところ英語でお試しください。",
-    es: "¡Hola! Esto es Chat Computer: Claude maneja todo el ordenador, y tú solo hablas, escribes o tocas la pantalla. " +
+    zh: "你好！这是 Chat Computer 的屏幕：它替你操作整台电脑，你只要说话、打字或触摸屏幕。这个页面的回答是预先写好的，而且目前只用英文。试试输入 “play some piano music”。",
+    ja: "こんにちは！これは Chat Computer の画面です。話す・打つ・触るだけで、コンピューター全体を動かしてくれます。このページでは今のところ英語でお試しください。",
+    es: "¡Hola! Esto es Chat Computer: maneja todo el ordenador por ti, y tú solo hablas, escribes o tocas la pantalla. " +
         "Por ahora esta página responde en inglés: prueba “play some piano music” o “show me a map of Tokyo”.",
-    ms: "Hai! Ini Chat Computer: Claude menjalankan seluruh komputer, dan anda hanya bercakap, menaip atau menyentuh skrin. " +
+    ms: "Hai! Ini Chat Computer: ia menjalankan seluruh komputer untuk anda, dan anda hanya bercakap, menaip atau menyentuh skrin. " +
         "Buat masa ini halaman ini menjawab dalam bahasa Inggeris: cuba “play some piano music”."
   };
   function language(t) {
@@ -1224,8 +1225,8 @@
     if (/\b(apa (ini|itu|khabar)|boleh|awak|anda|terima kasih|saya)\b/i.test(t)) return "ms";
     return "";
   }
-  // Asked to write, explain or translate something: only an AI can (Chrome's built-in one when there is one, else an
-  // honest note, see fallback), whatever else the words mention ("write an email to my boss" isn't about Jane's).
+  // Asked to write, explain or translate something: only the model can (else an honest note, see fallback), whatever
+  // else the words mention ("write an email to my boss" isn't about Jane's).
   var OPEN_ENDED = /\b(write|draft|compose|poem|story|essay|explain|summari[sz]e|translate|how do you say|in (japanese|french|spanish|german|chinese|korean|italian)|recipe for|how (do i|to) (make|cook|bake)|plan (a|my)|itinerary|advice|tips|capital of|python|javascript)\b/i;
   // What was asked for, for the honest note: "I can't write a recipe on this page without an AI".
   var WANTS = [[/recipe|cook|bake/i, "write a recipe"], [/poem/i, "write a poem"], [/story/i, "write a story"],
@@ -1233,8 +1234,8 @@
                [/translate|how do you say|in (japanese|french|spanish|german|chinese|korean|italian)/i, "translate"],
                [/explain|summari/i, "explain that"], [/plan|itinerary|trip/i, "plan that"], [/advice|tips/i, "give advice"]];
   // The name you go by, kept in this browser: the greeting under "hello, world" says it, as the Claude app's says
-  // the name you give it ("What should Claude call you?"). "Call me Ren" or "my name is Ren" sets it (Claude, when
-  // connected, with set_name); "what's my name?" says it; "forget my name" forgets it. "Call me back" isn't a name.
+  // the name you give it. "Call me Ren" or "my name is Ren" sets it (the model, with set_name); "what's my name?" says
+  // it; "forget my name" forgets it. "Call me back" isn't a name.
   var NAME_KEY = "chatcomputer-demo-name";
   var NAME_IS = /^\s*(?:(?:please|pls|just|you can|you may|from now on,?)\s+)*(?:call me|my name(?:'s| is))\s+([\p{L}][\p{L}\p{M}'’.-]*(?:\s+[\p{L}][\p{L}\p{M}'’.-]*){0,2}?)\s*(?:,?\s*(?:please|pls|thanks|thank you))?\s*[.!]*\s*$/iu;
   var NOT_A_NAME = /^(back|later|tomorrow|tonight|today|now|soon|again|anytime|whenever|maybe|sometime|sometimes|asap|please|a|an|the|when|if|at|on|in|by|after|before|crazy|that|this|it|him|her|them|you|me|what|anything|whatever|out|up|ok|okay|not|never|no|yes)$/i;
@@ -1250,8 +1251,8 @@
   }
   function cleanName(s) { return String(s || "").replace(/[^\p{L}\p{M}'’ .-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 40); }
   function person() { return cleanName(store(NAME_KEY)); }
-  // The name and whether Claude answers, for the next greeting (a visit, or the conversation cleared).
-  function greetWith() { call("settings", person() || computerName, claude.key ? MODEL_NAME : ""); }
+  // The name and which model answers, for the next greeting (a visit, or the conversation cleared).
+  function greetWith() { call("settings", person() || computerName, localReady() ? local.label : ""); }
   var computerName = "";                 // (in the app: the first name of this computer's account, unless one's given)
   function nameOf(t) {
     var m = NAME_IS.exec(t), n = m ? cleanName(m[1]) : "";
@@ -1313,21 +1314,14 @@
         act: function () { return volumeTo(up ? 60 : 40); } };
     }],
     // Who's answering, and who made it.
-    [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|ai|real|human|bot|model)\b|^(who are you|are you real)\b|\bwhat('s| is) (running|powering|behind) (you|this)\b|\bwho('s| is) (answering|talking|running this)\b|\bpowered by\b|\bwhat powers (you|this|it)\b|\bwhat (are you|is this|is it) (running|built|based) on\b|\bwhat('s| is) your (model|engine|brain|ai)\b/i, function () {
-      var now = nano.state === "available" && nano.session ? AI.browser + "'s built-in AI, " + AI.model + ", on this " + deviceWord() :
-        gemma.state === "available" ? "Google's " + GEMMA.name + ", free, on this " + deviceWord() : "";
-      return { text: (now ? "Right now, " + now + "." : "Here, answers written in advance.") + " Chat Computer itself runs on Claude, " +
-        "by Anthropic" + (now ? "." : ": type / and choose Connect Claude to try it.") };
+    [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|qwen|ai|real|human|bot|model)\b|^(who are you|are you real)\b|\bwhat('s| is) (running|powering|behind) (you|this)\b|\bwho('s| is) (answering|talking|running this)\b|\bpowered by\b|\bwhat powers (you|this|it)\b|\bwhat (are you|is this|is it) (running|built|based) on\b|\bwhat('s| is) your (model|engine|brain|ai)\b/i, function () {
+      return { text: localReady() ? "Right now, " + local.label + ", Chat Computer's own model, on this computer: no account, " +
+        "and nothing you say leaves it." : "Here, answers written in advance. " + FACTS.indie + " " + nextStep() };
     }],
-    // Whether the free AI is coming ("are you stuck downloading?"): where its download is.
-    [/\b(stuck|still|how long|how much longer|progress|done|finished|ready|working)\b.*\b(download(ing|ed)?|gemma|gemini|phi)\b|\b(download(ing)?|gemma|gemini)\b.*\b(stuck|slow|done|ready|finished|working|progress)\b/i, function () {
-      if (gemma.state === "downloading") return { text: GEMMA.name + " is downloading: " + (gemma.progress || 0) + "% so far. If it stops (the page closed, " +
-        "the phone locked), it carries on from there." };
-      if (gemma.state === "starting") return { text: GEMMA.name + " is here, and starting: a moment." };
-      if (gemma.state === "available" || (nano.state === "available" && nano.session)) return { text: "It's here: ask me anything." };
-      if (nano.state === "downloading") return { text: AI.short + " is downloading" + (nano.progress ? ": " + nano.progress + "% so far" : "") + "." };
-      if (gemma.state === "downloadable") return { text: "Nothing's downloading. Type / and choose " + (gemma.cached ? "Start " : "Download ") + GEMMA.name + "." };
-      return { text: "Nothing's downloading." };
+    // Whether the model is coming ("are you stuck downloading?"): how far the app has got with it.
+    [/\b(stuck|still|how long|how much longer|progress|done|finished|ready|working)\b.*\b(download(ing|ed)?|model|qwen)\b|\b(download(ing)?|model|qwen)\b.*\b(stuck|slow|done|ready|finished|working|progress)\b/i, function () {
+      if (localReady()) return { text: "It's here: ask me anything." };
+      return { text: nextStep() };
     }],
     // Whether it can go on the internet ("why can't you look things up?"): it can, through this page.
     [/^(?!.*\b(files?|photos?|pictures?|documents?)\b).*\b(can|do|could|are|why can'?t|why don'?t|why won'?t)\s+you\b.*\b(internet|online|the web|search|google|look (things|it|stuff|that|this) up|browse)\b/i, function () {
@@ -1338,8 +1332,8 @@
       return { text: (/\banthropic\b/i.test(t) && /\bis (this|it)|made by\b/i.test(t) ? "No. " : "") + FACTS.indie };
     }],
     [/\b(real|my real|actual)\b.*\bmessages?\b|\bmessages?\b.*\b(real|fake|made up)\b|\bare these (mine|real)\b/i, function () {
-      return { text: APP ? "There are none here: the app doesn't connect your accounts yet (open them as sites instead, like “open gmail.com”). " +
-        "On Chat Computer itself, Messages shows yours, from the email and chat accounts you connect." :
+      return { text: APP ? "Yes: Messages shows yours, from the accounts you connect with + in Messages (Gmail, Outlook, Telegram, " +
+        "WhatsApp, WeChat and Discord), each signed in on its own page here." :
         "No, they're made up for this page. On a Chat Computer, Messages shows yours, from the email and chat accounts you connect." };
     }],
     [/\b(my (actual|real|own) (computer|files|pc)|on my (computer|pc|laptop)|control my (pc|computer))\b/i, function () {
@@ -1350,10 +1344,9 @@
     }],
     [/\bwhat (can'?t|can not|cannot) you do\b|\byour limits\b|\bwhat don'?t you do\b/i, function () {
       return { text: "On this page I can only show a few things: music the browser makes, maps, timers, the weather, the news, " +
-        "Wikipedia's articles and the made-up messages and files. Real answers need Claude (type / for Connect Claude) or the AI built into " +
-        "Chrome and Edge. On a Chat Computer, Claude does " +
-        "most of what a computer does, by talking; it doesn't run Windows or Mac apps (it uses websites instead), and " +
-        "Windows stays one restart away." };
+        "Wikipedia's articles and the made-up messages and files. Real answers need Chat Computer's model, which runs on your own " +
+        "computer (" + (APP ? "this app's" : "the app's") + "). On a Chat Computer, it does most of what a computer does, by talking; " +
+        "it doesn't run Windows or Mac apps (it uses websites instead), and Windows stays one restart away." };
     }],
     // Getting it: what it needs, what it costs, whether it's safe.
     [/\b(install|download|get it|get this|buy|where (can|do) i get|how (do|can) i (get|try|use) (it|this|chat ?computer)|sign ?up|waitlist)\b|^download\b/i, function () {
@@ -1369,12 +1362,13 @@
     }],
     [/\b(requirements?|what do i need|system requirements|specs|minimum|need to (run|use|install))\b/i, function () {
       return { text: "A Windows PC that starts in UEFI mode (any from the last ten years) with about 70 GB free, or a Mac with " +
-        "M1, M2 or M3; the internet; and a Claude Pro or Max plan. " + FACTS.use + " " + FACTS.soon };
+        "M1, M2 or M3; 8 GB of memory or more (16 GB or more for a smarter model); and the internet, to get it and its model " +
+        "once. " + FACTS.use + " " + FACTS.soon };
     }],
     [/\b(privacy|private|my data|data|secure|security|safe to use|track|spy|listening to me)\b/i, function () {
-      return { text: "On this page, what you type stays in your browser, unless you connect Claude (then it goes to Anthropic). " +
-        "For a map or the weather only the place's name goes out (to Open-Meteo), and when the AI built into Chrome and Edge, which " +
-        "runs on your device, looks something up or you ask for the news, only the words looked up go out (to Wikipedia). " +
+      return { text: "On this page, what you type stays in your browser (or, with this computer's model, goes to the app, on this " +
+        "computer). For a map or the weather only the place's name goes out (to Open-Meteo), and when the model looks something " +
+        "up or you ask for the news, only the words looked up go out (to Wikipedia). " +
         "Google's own pages show here when you open Google, ask for directions or look up something Wikipedia hasn't got: " +
         "those words go to Google, as they would on google.com. " +
         FACTS.private };
@@ -1384,7 +1378,7 @@
     }],
     // What it is.
     [/\b(operating system|an os|is (this|it) an? (os|operating))\b/i, function () {
-      return { text: "Yes, in a way: Chat Computer runs the whole computer, with Claude in charge instead of a desktop. Underneath, " +
+      return { text: "Yes, in a way: Chat Computer runs the whole computer, with its own model in charge instead of a desktop. Underneath, " +
         "it uses Linux (Ubuntu on a PC) for Wi-Fi, sound and the screen, next to Windows or macOS. This page shows its screen. " + TRY };
     }],
     // Someone choosing for a parent: whether it fits them, and what setting it up takes (README's "Installing").
@@ -1396,14 +1390,14 @@
       return { text: "Chat Computer is made for that: there's no desktop, no menus and no apps to learn. " + p + ", like the news " +
         "or a YouTube video, and it does it, on a big, plain screen. Video calls are the " +
         "exception: it can't make them yet.\n\nSetting it up takes a keyboard and mouse, once: on the Windows PC you run Chat " +
-        "Computer Setup and sign in to Claude, and it makes room and installs itself next to Windows, usually in well under an " +
+        "Computer Setup, and it makes room and installs itself next to Windows, usually in well under an " +
         "hour; Windows stays. The PC must start in UEFI mode (any from the last ten years) and have about 70 GB free. " +
         FACTS.free + " " + FACTS.soon };
     }],
-    [/^\s*(hi|hello|hey|hiya|yo|good (morning|afternoon|evening)|\u{1F44B}|help)( there| claude| chat ?computer| everyone| all)?[\s!.,?]*$|\bwhat can you do\b|\bhow does (this|it) work\b|\bwhat is (this|chat ?computer)\b|^what('?s| is) this\b|^\?+$/iu, function () {
-      return { text: "Hi! I'm Chat Computer: Claude, running the whole computer. You talk, type or touch, and I do it: open websites, " +
-        "play music, read your messages, look after your files and settings.\n\nOn this page my answers are written in advance " +
-        "(or, in Chrome and Edge, come from their built-in AI), and what you type stays in your browser. " + REAL + " " + FACTS.indie + " " + TRY };
+    [/^\s*(hi|hello|hey|hiya|yo|good (morning|afternoon|evening)|\u{1F44B}|help)( there| chat ?computer| everyone| all)?[\s!.,?]*$|\bwhat can you do\b|\bhow does (this|it) work\b|\bwhat is (this|chat ?computer)\b|^what('?s| is) this\b|^\?+$/iu, function () {
+      return { text: "Hi! I'm Chat Computer: I run the whole computer for you. You talk, type or touch, and I do it: open websites, " +
+        "play music, read your messages, look after your files and settings.\n\n" + (APP ? REAL + " " + nextStep() :
+        "On this page my answers are written in advance, and what you type stays in your browser. " + REAL) + " " + FACTS.indie + " " + TRY };
     }],
     [/^\s*(how are you|how'?s it going|how do you do)\b/i, function () { return { text: "I'm good, thanks! What would you like to try? " + TRY }; }],
     [/\b(useless|stupid|dumb|rubbish|sucks?|hate you)\b|\b(you'?re|you are|this is|that'?s|it'?s) (so )?(terrible|awful|the worst)\b/i, function () {
@@ -1435,7 +1429,7 @@
         done: ["Made a timer"], act: function () { show({ html: timer(mins) }); return shown(); } };
     }],
     [/\b(weather|rain|raining|forecast|temperature|umbrella|sunny|hot|cold) ?(today|tomorrow|outside|like|in|now)?\b/i, weather],
-    // The news: looked up (and, with the browser's AI on, told in its words).
+    // The news: looked up.
     [/\b(news|headlines)\b/i, function () { return { search: "news", news: true, later: newsAnswer }; }],
     // A website named first, with more said after it ("open youtube.com for me"): the site, as a typed address opens
     // one (an address alone never gets here: visit).
@@ -1531,18 +1525,22 @@
   // A question only an AI can answer, with none here: a question of fact gets Wikipedia's article on it (the news, for
   // the news); the rest an honest note, and how to get an AI.
   var FACTUAL = /^\s*(who|what|when|where|which|whose|why|how (many|much|old|tall|big|far|long|does|do|did|is|are|was|were)|tell me about|explain|define)\b/i;
-  // No good answer here (only an AI could answer it, and there's none): a line, short (a phone's screen is small),
-  // and what gets one: the free AI this browser can download, the one already coming, or else the app or Claude.
+  // No good answer here (only the model could answer it, and it isn't here): a line, short (a phone's screen is
+  // small), and how to get it: the app's, on this computer.
   function noAnswer(want) { return "I can't " + (want ? want[1] : "answer that") + " yet. " + nextStep(); }
   function nextStep() {
-    if (gemma.state === "downloading") return GEMMA.name + " is downloading (" + (gemma.progress || 0) + "%): ask me again once it's here.";
-    if (gemma.state === "starting") return GEMMA.name + " is starting: ask me again in a moment.";
-    if (nano.state === "downloading") return AI.short + " is downloading" + (nano.progress ? " (" + nano.progress + "%)" : "") + ": ask me again once it's here.";
-    if (nano.state === "downloadable") return "Type / and choose Download " + AI.short + ": it's free, and then I can.";
-    if (gemma.state === "downloadable") return "Type / and choose " + (gemma.cached ? "Start " : "Download ") + GEMMA.name + ": it's free, and then I can.";
-    // Nothing that answers can run in this browser: Claude, or (where there's one for it) the app.
-    return APP || iOS() ? "Type / and choose Connect Claude, and Claude can." :
-      "Get the Chat Computer app at chatcomputer.ai/get, or type / and choose Connect Claude.";
+    if (APP) {
+      if (local.state === "preparing") return "My model is getting ready on this computer: " + localWords() + ". Ask me again once it's here.";
+      if (local.state === "none") return "My model can't run here" + (local.detail ? ": " + local.detail : "") + ".";
+      if (local.state === "failed") {
+        return "My model couldn't get ready on this computer" + (local.detail ? ": " + local.detail : "") + ". Opening the app again tries " +
+          "again, from where it stopped.";
+      }
+      if (localReady()) return "";
+      return "My model is starting: ask me again in a moment.";
+    }
+    return "My model comes with the Chat Computer app (coming soon). Where the app runs on this computer, type / and choose " +
+      "Use this computer's model.";
   }
   function iOS() { return /iPhone|iPad|iPod/.test(navigator.userAgent || "") || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
   function fallback(text) {
@@ -1562,547 +1560,9 @@
     return note;
   }
 
-  // ------------------------------------------------------------------ the browser's built-in AI (Gemini Nano), free
-  // Chrome on a computer (Windows, macOS, Linux) has a small AI built in, Gemini Nano, that runs on the device itself:
-  // nothing typed leaves it. Where it's there (LanguageModel, Chrome's Prompt API), it answers what the written answers
-  // can't, free, and its answer can also show something on the screen (a page it writes, a map, a timer...); it looks
-  // things up on the web through this page (lookup, above). It has to be downloaded once, which Chrome does only after a
-  // click: the "Download Gemini" button. Edge has the same with Phi-4-mini ("Download Phi-4-mini").
-  var nano = { state: "none", session: null, creating: null, progress: 0 };
-  var NANO_LANG = { expectedInputs: [{ type: "text", languages: ["en"] }], expectedOutputs: [{ type: "text", languages: ["en"] }] };
-  function nanoCheck() {
-    if (typeof LanguageModel === "undefined" || !LanguageModel.availability) return Promise.resolve();
-    return LanguageModel.availability(NANO_LANG).then(function (a) {
-      nano.state = a;
-      if (a === "available") nanoSession().catch(function () {});
-      status();
-    }, function () { nano.state = "unavailable"; });
-  }
-  // What it's told: who it is and where; that it can look things up (the page does it for it, see lookup); how to
-  // answer; Chat Computer's facts; and what it can do on the screen.
-  function nanoSystem() {
-    return "You answer on Chat Computer's website (chatcomputer.ai), a demo of Chat Computer's screen. You are " + AI.model + ", " +
-      AI.browser + "'s built-in AI, running on the visitor's device: you are not Claude. It's " + clock() + ".\n\n" +
-      "You can look things up on the web: the page searches Wikipedia and the day's news for you and gives you what it finds. " +
-      "Look up anything recent or that changes (news, events, sport, prices, who has a job now), anything after your training, " +
-      "and facts you aren't sure of, and always when they ask you to look something up: action search, with a short query. " +
-      "Then answer from what's found, and say where it's from. Never say you can't go on the internet or look things up. " +
-      "Answer what you know well (explanations, writing, advice, maths, history) straight away.\n\n" +
-      "Answer in the conversation, in English: in a sentence or two for a simple question, and in full when they ask for " +
-      "more (a recipe, a plan, an email, a poem, code, an explanation), with a little Markdown where it helps (a list, a " +
-      "code block). Links can't be clicked here: don't add any.\n\n" +
-      "Facts about Chat Computer: " + FACTS.what + " " + FACTS.indie + " " + FACTS.free + " " + FACTS.soon + " " + FACTS.pc + " " +
-      FACTS.mac + " Never make up facts about Chat Computer beyond these.\n\n" +
-      "Actions: none; search (query); show_map (place); play_music (soft piano the browser plays); " +
-      "youtube_search (query: a link to YouTube's search); open_website (url); open_message (id: m1 Mum on WhatsApp about dinner " +
-      "at 7, m2 Jane about lunch on Friday, m3 Alex with the slides); open_file (name: Packing list.md, Beach.jpg, Budget " +
-      "2026.xlsx, Taxes 2025.pdf, Recipes.txt, Resume.docx); make_timer (minutes); set_volume (percent); close. Their " +
-      "messages and files are made up for the demo.";
-  }
-  // What the page tells it it found, for the question asked (the same words in its examples, below).
-  function nanoFound(asked, q, list) {
-    var lines = [], size = 0;
-    list.forEach(function (x) {
-      var line = (lines.length + 1) + ". " + x.source + (x.title ? ", " + x.title : "") + ": " + clip(x.text, x.air ? 300 : x.links ? 260 : 700);
-      if (size + line.length <= 3600) { lines.push(line); size += line.length; }
-    });
-    return "The question: " + asked + "\nWhat the page found on the web for “" + q + "”, just now:\n" +
-      (lines.length ? lines.join("\n") : "Nothing.") + "\n\nAnswer the question from this, briefly unless they asked for more, " +
-      "and say where it's from (like “according to Wikipedia”). If it doesn't answer it, say what it does say, or that " +
-      "nothing was found.";
-  }
-  // Examples, for a small model: one it knows, one it looks up and answers from what's found, one it writes.
-  var NANO_EXAMPLES = [
-    ["What's the capital of Japan?", { reply: "Tokyo.", action: "none" }],
-    ["How tall is Mount Everest now? Didn't it change?", { reply: "Let me look that up.", action: "search", query: "Mount Everest height" }],
-    [nanoFound("How tall is Mount Everest now? Didn't it change?", "Mount Everest height", [{ source: "Wikipedia", title: "Mount Everest",
-      text: "Mount Everest is Earth's highest mountain above sea level. It lies in the Mahalangur Himal sub-range of the Himalayas. Its " +
-      "elevation (snow height) of 8,848.86 m was most recently established in 2020 by the Chinese and Nepali authorities." }]),
-     { reply: "It's 8,849 metres, measured again in 2020 by China and Nepal, according to Wikipedia.", action: "none" }],
-    ["write a haiku about coffee", { reply: "Dark cup in my hands,\nsteam curling into morning,\nthe day starts with you.", action: "none" }]
-  ];
-  function nanoSession(monitor) {
-    if (nano.session) return Promise.resolve(nano.session);
-    if (!nano.creating) {
-      var opts = { initialPrompts: [{ role: "system", content: nanoSystem() }] };
-      NANO_EXAMPLES.forEach(function (e) {
-        opts.initialPrompts.push({ role: "user", content: e[0] }, { role: "assistant", content: JSON.stringify(e[1]) });
-      });
-      for (var k in NANO_LANG) opts[k] = NANO_LANG[k];
-      if (monitor) opts.monitor = monitor;
-      nano.creating = LanguageModel.create(opts).then(function (s) {
-        nano.session = s;
-        nano.state = "available";
-        status();
-        return s;
-      }, function (e) { nano.creating = null; throw e; });
-    }
-    return nano.creating;
-  }
-  function nanoButton() {
-    if (nano.state === "available" || nano.state === "downloading" && nano.creating) return;
-    call("accountForm", { id: "nano", title: "Download " + AI.short, ok: "Download it", text: [
-      AI.browser + " has a small AI built in, " + AI.model + ", that can answer here for free, and look things up on Wikipedia for " +
-      "you. It runs on this computer: what you type doesn't leave it, only the words it looks up.",
-      AI.browser + " downloads it once (a few gigabytes, from " + AI.maker + ") and keeps it for every site that uses it. The written answers " +
-      "work meanwhile.",
-      "For answers from Claude itself, type / and choose Connect Claude instead."] });
-  }
-  function nanoDownload() {
-    call("accountForm", null);
-    nano.state = "downloading";
-    status();
-    nanoSession(function (m) {
-      m.addEventListener("downloadprogress", function (e) { nano.progress = Math.round((e.loaded || 0) * 100); status(); });
-    }).then(function () { did("Turned on " + AI.browser + "'s built-in AI"); }, function (e) {
-      nano.state = "downloadable";
-      status();
-      call("accountForm", { id: "nano-no", title: AI.browser + "'s AI didn't start", ok: "OK", text: [
-        AI.browser + " said: " + clip(e && e.message || "it couldn't", 160) + ".",
-        "It needs " + AI.browser + " on a computer with enough room and memory (see " + AI.browser + "'s built-in AI requirements). " +
-        "The written answers still work."] });
-    });
-  }
-  var NANO_SCHEMA = { type: "object", properties: {
-    reply: { type: "string" },
-    action: { type: "string", enum: ["none", "search", "show_map", "play_music", "youtube_search", "open_website",
-                                     "open_message", "open_file", "make_timer", "set_volume", "close"] },
-    title: { type: "string" }, markdown: { type: "string" }, place: { type: "string" }, query: { type: "string" },
-    url: { type: "string" }, id: { type: "string" }, name: { type: "string" }, minutes: { type: "integer" },
-    percent: { type: "integer" } }, required: ["reply", "action"] };
-  // Its answer from what was found, in the conversation (no looking up again, nothing else done).
-  var NANO_ANSWER = { type: "object", properties: { reply: { type: "string" }, action: { type: "string", enum: ["none"] } },
-    required: ["reply", "action"] };
-  // What its answer says to show, done here (the same as the written answers do), and what to add to its words.
-  function nanoAct(r, you, uts) {
-    var a = r.action;
-    if (a === "show_page" && r.markdown) {
-      show({ html: doc(clip(r.title || "Page", 80), String(r.markdown), "Written by " + AI.browser + "'s built-in AI, on this device.") });
-      did("Showed “" + clip(r.title || "a page", 60) + "”", you, uts);
-    } else if (a === "show_map" && r.place) {
-      return Promise.resolve(mapOf("map of " + r.place)).then(function (m) { return m.later ? m.later() : m; })
-        .then(function (m) { if (m.act) m.act(); (m.done || []).forEach(function (d) { did(d, you, uts); }); return ""; });
-    } else if (a === "play_music") { piano(); did("Played some calm piano", you, uts); }
-    else if (a === "youtube_search" && r.query) { var y = youtubeSearch(r.query); y.act(); y.done.forEach(function (d) { did(d, you, uts); }); }
-    else if (a === "open_website" && /^https?:\/\/[^\s]+$/i.test(r.url || "")) {
-      var host = r.url.replace(/^https?:\/\/(www\.)?/i, "").split(/[/?#]/)[0];
-      if (!framed(r.url) && TABS && newTab(r.url)) did("Opened " + host + " in a new tab", you, uts);
-      else {
-        show(site(r.url, host, "On Chat Computer, " + host + " opens right here. Most sites can't show inside this page."));
-        did((framed(r.url) ? "Opened " : "Showed a link to ") + host, you, uts);
-      }
-    } else if (a === "open_message" && THREADS[r.id]) openMessage(r.id);
-    else if (a === "open_file") {
-      var f = FILES.filter(function (x) { return x.name.toLowerCase() === String(r.name || "").toLowerCase(); })[0];
-      if (f) { show({ html: PAGES[f.page]() }); did("Opened " + f.name, you, uts); }
-    } else if (a === "make_timer") {
-      var mins = Math.max(1, Math.min(180, parseInt(r.minutes, 10) || 10));
-      show({ html: timer(mins) });
-      did("Made a timer", you, uts, shown());
-    } else if (a === "set_volume" && r.percent != null) {
-      var back = volumeTo(Number(r.percent));
-      did("Set the volume to " + player.volume + "%", you, uts, back);
-    }
-    else if (a === "close") close();
-    return Promise.resolve("");
-  }
-  // The session's turns, one at a time and in order: its own, and the written answers it's told about (nanoNote).
-  function nanoDo(f) {
-    var next = (nano.queue || Promise.resolve()).then(function () { return nanoSession(); }).then(f);
-    nano.queue = next.catch(function () {});
-    return next;
-  }
-  function nanoPrompt(input, schema) {
-    return nanoDo(function (s) {
-      return s.prompt(input, { responseConstraint: schema }).catch(function (e) {
-        if (e && /quota|context|too (long|large)/i.test(e.name + " " + e.message)) {       // the conversation's grown too long:
-          try { s.destroy(); } catch (x) {}                                                // start it again
-          nano.session = null;
-          nano.creating = null;
-          return nanoSession().then(function (s2) { return s2.prompt(input, { responseConstraint: schema }); });
-        }
-        throw e;
-      });
-    }).then(function (raw) {
-      try { return JSON.parse(raw); } catch (e) { return { reply: String(raw || ""), action: "none" }; }
-    });
-  }
-  // A written answer goes into its conversation as if it had said it, so what's asked next makes sense to it ("the
-  // haze?" after the weather).
-  function nanoNote(asked, said) {
-    if (nano.state !== "available" || !said) return;
-    nanoDo(function (s) {
-      if (typeof s.append !== "function") return null;
-      return s.append([{ role: "user", content: asked }, { role: "assistant", content: JSON.stringify({ reply: said, action: "none" }) }]);
-    }).catch(function () {});
-  }
-  // One turn: it answers, or says what to look up; then the page looks it up (in Actions) and it answers from what
-  // was found. wants: what the written answers know already: that it's a search (query: for what), or the news.
-  function nanoTurn(text, you, uts, id, wants, since) {
-    wants = wants || {};
-    call("aiStart", id);
-    var looked = null;            // what was found, once looked up
-    (wants.news ? Promise.resolve({ action: "search", query: wants.query }) : nanoPrompt(text, NANO_SCHEMA)).then(function (r) {
-      // Its own words for what to look up know the conversation ("Singapore haze", for "the haze?"); else the page's.
-      var q = r.action === "search" || wants.search ? r.query || wants.query || topicOf(text) : "";
-      if (!q) return r;
-      q = clip(String(q), 100);
-      return lookup(q, text).then(function (got) {
-        looked = got;
-        got.told.forEach(function (d) { did(d, you, uts); });
-        // Chrome's model sometimes fails on what was found (an "unknown error"): again with less of it, in Latin letters.
-        return nanoPrompt(nanoFound(text, q, got.list), NANO_ANSWER).catch(function () {
-          var less = got.list.slice(0, 3).map(function (x) {
-            return { source: x.source, title: x.title, air: x.air, links: x.links, text: clip(x.text.replace(/[^\u0000-ɏ‘-”…°µ³]+/g, " "), 300) };
-          });
-          return nanoPrompt(nanoFound(text, q, less), NANO_ANSWER);
-        }).catch(function () { return fromFound(got, q); });
-      });
-    }).then(function (r) {
-      if (r.written) { deliver(r.written, id, you, uts, since); return; }
-      // Its words go in the conversation as they are, Markdown and all (a JSON copy of its answer in them is dropped).
-      var words = String(r.reply || "").replace(/```json[\s\S]*?(```|$)/g, "").trim();
-      // Where it's from, only when it was looked up: from memory, it doesn't say "according to Wikipedia".
-      if (!looked) words = unsourced(words);
-      words = words || "Done.";
-      return Promise.resolve(nanoAct(r, you, uts)).then(function () {
-        if (since != null) wordsOnly(since);
-        stream(id, words, function () { say(words); });
-      });
-    }).catch(function () {
-      var f = fallback(text);
-      Promise.resolve(f.later ? f.later() : f).then(function (a) { deliver(a, id, you, uts, since); });
-    });
-  }
-  function unsourced(s) {
-    var t = s.replace(/^\s*(according to|from|per) (wikipedia|the news|wikipedia's current events|open-?meteo)[^,]*,\s*/i, "")
-      .replace(/,?\s*(according to|from|per|as reported by) (wikipedia|the news|wikipedia's current events|open-?meteo)[^.!?]*/gi, "");
-    return t.charAt(0).toUpperCase() + t.slice(1);
-  }
-  // Its answer failed: the page says what was found itself (the air, the news, or Wikipedia's article).
-  function fromFound(got, q) {
-    var air_ = got.list.filter(function (x) { return x.air; })[0], news_ = got.list.filter(function (x) { return x.links; }),
-        wiki = got.list.filter(function (x) { return x.source === "Wikipedia"; });
-    var a = air_ ? { text: air_.text + " (Open-Meteo's estimate, from the Copernicus forecast.)" }
-      : news_.length ? { text: newsWords(news_) }
-      : wiki.length ? { text: wikiWords(wiki[0]) }
-      : null;
-    if (!a) throw new Error("nothing found");
-    return { written: a };
-  }
-
-  // ------------------------------------------------------------------ Google's Gemma, on this device, free
-  // Where the browser has no AI of its own (a phone, Safari, Firefox: Chrome's Gemini Nano is only on computers), a
-  // small open AI from Google, Gemma 3 (1 billion parameters), can answer here instead, free. It's offered in the "/"
-  // list ("Download Gemma") where the browser can run it on the device's graphics chip (WebGPU: Safari on iOS 26 and
-  // macOS 26, Chrome on Android and on computers). Transformers.js (a fixed version, from jsDelivr) downloads it once
-  // from Hugging Face, about 0.8 GB, and the browser keeps it; it runs on the device: what's typed doesn't leave it,
-  // only the words it looks up (on Wikipedia, as Gemini Nano does: lookup, above). It answers in words, as they come;
-  // the written answers still do what they do (maps, music, timers, sites). Once it's downloaded, it's started the
-  // first time it's needed on a visit ("Starting Gemma…" in the empty box), from the browser's copy, and never
-  // downloaded again unasked. "Remove Gemma" in the list frees the room.
-  var LM_LIBRARY = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";
-  // In the app, the same version comes with the app, with ONNX Runtime's WebAssembly (demo/lm/, scripts/build_apps.py):
-  // nothing that runs in the app's own page comes from elsewhere. Only Google's model is downloaded, from Hugging Face.
+  // (Heart's code comes with the app, in demo/lm/: scripts/build_apps.py.)
   var LM_HERE = APP ? new URL("demo/lm/", location.href).href : "";
-  if (APP) LM_LIBRARY = LM_HERE + "transformers.min.js";
-  var GEMMA = { model: "onnx-community/gemma-3-1b-it-ONNX", name: "Gemma", full: "Gemma 3, Google's small open AI" };
-  // Its files for each precision: half (q4f16) where the graphics chip has it (shader-f16), else full (q4).
-  var GEMMA_BYTES = { q4f16: 784e6, q4: 880e6 }, GEMMA_STARTING = "chatcomputer-demo-gemma-starting";
-  var gemma = { state: "none", checked: false, dtype: "", cached: false, stopped: false, gen: null, lib: null, loading: null,
-                progress: 0, talk: [], queue: null };
   function deviceWord() { return onPhone() ? "phone" : "device"; }         // "on this phone"
-  function gemmaSize() { return (GEMMA_BYTES[gemma.dtype] / 1e9).toFixed(1) + " GB"; }
-  function gemmaFile(ext) { return "https://huggingface.co/" + GEMMA.model + "/resolve/main/onnx/model_" + gemma.dtype + ext; }
-  // Whether this browser has its copy: the model's two files, in Transformers.js' own store (named by their address).
-  function gemmaKept() {
-    return caches.open("transformers-cache").then(function (c) {
-      return Promise.all([c.match(gemmaFile(".onnx")), c.match(gemmaFile(".onnx_data"))]);
-    }).then(function (r) { return !!(r[0] && r[1]); }, function () { return false; });
-  }
-  // Offered where there's no AI in the browser and a graphics chip it can use. If the page stopped while it was
-  // starting last time (a phone out of memory closes the page), it's not started by itself again: it's offered.
-  // (checked: known either way, for the written answers to say when this browser can't run one.)
-  function gemmaCheck() {
-    if (nano.state !== "none" && nano.state !== "unavailable") return Promise.resolve();
-    var gpu = navigator.gpu && navigator.gpu.requestAdapter && window.caches ? navigator.gpu.requestAdapter() : Promise.resolve(null);
-    return gpu.then(function (a) {
-      if (!a || gemma.state !== "none") return;
-      gemma.dtype = a.features && a.features.has("shader-f16") ? "q4f16" : "q4";
-      return gemmaKept().then(function (kept) {
-        gemma.cached = kept;
-        gemma.stopped = !!store(GEMMA_STARTING);
-        store(GEMMA_STARTING, null);
-        gemma.state = kept && !gemma.stopped ? "ready" : "downloadable";
-        status();
-      });
-    }).catch(function () {}).then(function () { gemma.checked = true; });
-  }
-  function gemmaButton() {
-    if (gemma.state !== "downloadable") return;
-    var how = gemma.cached ? "Start" : "Download";
-    call("accountForm", { id: "gemma", title: how + " " + GEMMA.name, ok: gemma.cached ? "Start it" : "Download it", text: [
-      GEMMA.full + ", can answer here for free, and look things up on Wikipedia for you. It runs on this " + deviceWord() +
-      ": what you type doesn't leave it, only the words it looks up.",
-      gemma.stopped ? "Last time, this page stopped while Gemma was starting: this " + deviceWord() + " may not have enough memory " +
-        "free for it. Closing other apps can help." :
-      gemma.cached ? "This browser has it already." :
-      "It's about " + gemmaSize() + ", downloaded once from Hugging Face and kept by this browser (Wi-Fi is best). The written " +
-        "answers work meanwhile.",
-      "It's much smaller than Claude: good for everyday questions, writing and explaining, but it can get things wrong. For " +
-      "Claude itself, type / and choose Connect Claude."] });
-  }
-  // Started: downloaded the first time (its progress in the empty box, and in the list), from this browser's copy after.
-  // asked: chosen in the list (its trouble then gets a sheet; when a question started it, the written answer says).
-  function gemmaStart(asked) {
-    if (gemma.gen) return Promise.resolve(gemma.gen);
-    if (gemma.loading) return gemma.loading;
-    var download = !gemma.cached;
-    gemma.state = download ? "downloading" : "starting";
-    gemma.progress = 0;
-    status();
-    // While it's being put in memory (once downloaded): if the page stops then, it's not started by itself next time.
-    if (!download) store(GEMMA_STARTING, true);
-    var files = {};
-    // From the browser's copy only while it has one (Transformers.js takes what it keeps first): checked again here,
-    // so a copy the browser has since cleared isn't downloaded again unasked.
-    if (download && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
-    gemma.loading = (download ? gemmaFetch(files).then(function (how) {
-      if (how !== "unranged") store(GEMMA_STARTING, true);       // (here: it's being put in memory next)
-      return true;
-    }) : gemmaKept()).then(function (kept) {
-      if (!kept) throw new Error("this browser no longer has its copy of " + GEMMA.name);
-      return import(LM_LIBRARY);
-    }).then(function (lm) {
-      gemma.lib = lm;
-      if (LM_HERE) lm.env.backends.onnx.wasm.wasmPaths = { mjs: LM_HERE + "ort-wasm-simd-threaded.asyncify.mjs",
-                                                            wasm: LM_HERE + "ort-wasm-simd-threaded.asyncify.wasm" };
-      return lm.pipeline("text-generation", GEMMA.model, { device: "webgpu", dtype: gemma.dtype,
-        progress_callback: function (p) {
-          if (download && p.status === "done" && /\.onnx_data$/.test(p.file || "")) store(GEMMA_STARTING, true);
-          if (!download || p.status !== "progress" || !p.file || !p.total) return;
-          files[p.file] = [p.loaded || 0, p.total];
-          var got = 0, all = 0;
-          for (var f in files) { got += files[f][0]; all += files[f][1]; }
-          var pct = Math.min(99, Math.floor(got / Math.max(all, GEMMA_BYTES[gemma.dtype]) * 100));
-          if (pct !== gemma.progress) { gemma.progress = pct; status(); }
-        } });
-    }).then(function (gen) {
-      gemma.gen = gen;
-      gemma.loading = null;
-      gemma.cached = true;
-      gemma.stopped = false;
-      gemma.state = "available";
-      store(GEMMA_STARTING, null);
-      status();
-      if (download) did("Turned on " + GEMMA.name + ", on this " + deviceWord());
-      return gen;
-    }, function (e) {
-      gemma.loading = null;
-      store(GEMMA_STARTING, null);
-      return gemmaKept().then(function (kept) {
-        gemma.cached = kept;
-        gemma.state = "downloadable";
-        status();
-        if (asked) call("accountForm", { id: "gemma-no", title: GEMMA.name + " didn't start", ok: "OK", text: [
-          "The browser said: " + clip(e && e.message || "it couldn't", 160) + ".",
-          "It needs about " + gemmaSize() + " of room and enough memory; on a phone, closing other apps can help. The written " +
-          "answers still work."] });
-        throw e;
-      });
-    });
-    return gemma.loading;
-  }
-  // The model's big file (about 0.76 GB), in pieces (pieceFetch, below), counted with Transformers.js' own progress for
-  // the small files.
-  var GEMMA_PARTS = "chatcomputer-gemma-parts";
-  function gemmaFetch(files) {
-    var name = "onnx/model_" + gemma.dtype + ".onnx_data";
-    return pieceFetch(gemmaFile(".onnx_data"), GEMMA_PARTS, function (got, total) {
-      files[name] = [got, total || GEMMA_BYTES[gemma.dtype]];
-      var all = 0, sum = 0;
-      for (var f in files) { sum += files[f][0]; all += files[f][1]; }
-      var pct = Math.min(99, Math.floor(sum / Math.max(all, GEMMA_BYTES[gemma.dtype]) * 100));
-      if (pct !== gemma.progress) { gemma.progress = pct; status(); }
-    });
-  }
-  // A big file (Gemma's, Heart's) comes in pieces of 16 MB (Range requests, which Hugging Face's servers allow from any
-  // page), each kept as it arrives (the browser's store, under `parts`): a phone that leaves the page, locks itself or
-  // loses its signal loses only the piece it was on, and the download goes on from there. A piece that stops coming
-  // for 20 seconds, or that was cut off while the page was out of sight, is asked for again; an offline phone waits
-  // to be online. Once all are here they're put together in Transformers.js' own store, under the file's address,
-  // where it finds it, and the pieces are thrown away. The screen is kept on meanwhile where the browser can.
-  // report(bytes so far, the file's size once known). "unranged": the server sent the whole file instead (then
-  // Transformers.js downloads it, as before).
-  var PIECE = 16 * 1024 * 1024, fetching = [];
-  function pieceFetch(url, parts, report) {
-    var wake = null, mine = null;
-    try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (l) { wake = l; }, noop); } catch (e) {}
-    function done() { try { if (wake) wake.release(); } catch (e) {} fetching = fetching.filter(function (f) { return f !== mine; }); }
-    return Promise.all([caches.open(parts), caches.open("transformers-cache")]).then(function (cs) {
-      var pieces = cs[0], kept = cs[1], total = 0, have = {};
-      function key(i) { return url + "?piece=" + i; }        // (not #: the store ignores what follows a #)
-      function shown(now) {
-        var got = now || 0;
-        for (var i in have) got += have[i];
-        report(got, total);
-      }
-      // One piece: asked for again when it stalls, up to 8 times.
-      function piece(i, tries) {
-        var from = i * PIECE, to = total ? Math.min(total, from + PIECE) - 1 : from + PIECE - 1;
-        var stop = new AbortController(), last = Date.now(), timer = 0, size = 0, chunks = [], want = 0;
-        fetching = fetching.filter(function (f) { return f !== mine; });
-        fetching.push(mine = { last: function () { return last; }, abort: function () { stop.abort(); } });
-        timer = setInterval(function () { if (Date.now() - last > 20000) stop.abort(); }, 2000);
-        return fetch(url, { headers: { Range: "bytes=" + from + "-" + to }, signal: stop.signal, cache: "no-store" }).then(function (res) {
-          if (res.status === 200) { stop.abort(); throw { unranged: true }; }
-          if (res.status !== 206 || !res.body) throw new Error("the server said " + res.status);
-          var range = /bytes (\d+)-(\d+)\/(\d+)/.exec(res.headers.get("Content-Range") || "");
-          if (!range) throw new Error("the server didn't say which part it sent");
-          want = +range[2] - +range[1] + 1;
-          if (!total) { total = +range[3]; pieces.put(url + "?size", new Response(String(total))).catch(noop); }
-          var reader = res.body.getReader();
-          return (function read() {
-            return reader.read().then(function (r) {
-              if (r.done) return;
-              chunks.push(r.value);
-              size += r.value.byteLength;
-              last = Date.now();
-              shown(size);
-              return read();
-            });
-          })();
-        }).then(function () {
-          clearInterval(timer);
-          if (size !== want) throw new Error("a piece came short");
-          return pieces.put(key(i), new Response(new Blob(chunks))).then(function () { have[i] = size; shown(0); });
-        }, function (e) {
-          clearInterval(timer);
-          if (e && e.unranged) throw e;
-          if ((tries || 0) >= 8) throw new Error("the download kept stopping (" + (e && e.message || e) + ")");
-          return (navigator.onLine === false ? new Promise(function (go) { window.addEventListener("online", go, { once: true }); })
-            : new Promise(function (go) { setTimeout(go, Math.min(30000, 1000 * Math.pow(2, tries || 0))); }))
-            .then(function () { return piece(i, (tries || 0) + 1); });
-        });
-      }
-      return kept.match(url).then(function (already) {
-        if (already) return "kept";
-        return pieces.match(url + "?size").then(function (r) { return r ? r.text() : ""; }).then(function (t) {
-          total = +t || 0;
-          return pieces.keys();
-        }).then(function (keys) {
-          return Promise.all(keys.map(function (r) {
-            var m = /\?piece=(\d+)$/.exec(r.url);
-            if (!m || r.url.indexOf(url + "?") !== 0) return null;
-            return pieces.match(r).then(function (res) { return res.blob(); }).then(function (b) { have[+m[1]] = b.size; });
-          }));
-        }).then(function () {
-          shown(0);
-          var i = 0;
-          return (function next() {
-            if (total && i * PIECE >= total) return null;
-            if (have[i] != null) { i++; return next(); }
-            return piece(i).then(function () { i++; return next(); });
-          })();
-        }).then(function () {
-          var n = Math.ceil(total / PIECE), blobs = [];
-          return (function each(i) {
-            if (i >= n) return null;
-            return pieces.match(key(i)).then(function (r) {
-              if (!r) throw new Error("a piece of the download went missing");
-              return r.blob();
-            }).then(function (b) { blobs.push(b); return each(i + 1); });
-          })(0).then(function () {
-            var whole = new Blob(blobs, { type: "application/octet-stream" });
-            if (whole.size !== total) throw new Error("the download came out the wrong size");
-            return kept.put(url, new Response(whole, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(total) } }));
-          }).then(function () { return caches.delete(parts); }).then(function () { return "fetched"; });
-        });
-      });
-    }).then(function (how) { done(); return how; }, function (e) {
-      done();
-      if (e && e.unranged) return "unranged";
-      throw e;
-    });
-  }
-  // Back on the page after a while away: a piece that was being downloaded is asked for again at once.
-  document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState !== "visible") return;
-    fetching.forEach(function (f) { if (Date.now() - f.last() > 4000) f.abort(); });
-  });
-  function gemmaRemoveButton() {
-    call("accountForm", { id: "gemma-remove", title: "Remove " + GEMMA.name, ok: "Remove it", text: [
-      "This frees about " + gemmaSize() + " on this " + deviceWord() + ". You can download " + GEMMA.name + " again any time: type / " +
-      "and choose Download " + GEMMA.name + "."] });
-  }
-  function gemmaRemove() {
-    var gen = gemma.gen;
-    gemma.gen = null;
-    gemma.talk = [];
-    if (gen && gen.dispose) gen.dispose().catch(function () {});
-    return caches.open("transformers-cache").then(function (c) {
-      return c.keys().then(function (keys) {
-        return Promise.all(keys.filter(function (r) { return r.url.indexOf(GEMMA.model) >= 0; }).map(function (r) { return c.delete(r); }));
-      });
-    }).then(function () { return caches.delete(GEMMA_PARTS); }).catch(function () {}).then(function () {
-      gemma.cached = false;
-      gemma.state = "downloadable";
-      status();
-      did("Removed " + GEMMA.name + " from this " + deviceWord());
-    });
-  }
-  function gemmaSystem() {
-    return "You are " + GEMMA.name + ", a small AI made by Google, answering on Chat Computer's website (chatcomputer.ai), a demo " +
-      "of Chat Computer's screen, in the visitor's browser: you are not Claude. It's " + clock() + ". Answer in English: in a " +
-      "sentence or two for a simple question, in full when they ask for more (a recipe, an email, a poem, code), with a little " +
-      "Markdown where it helps. Don't add links. If you aren't sure of a fact, say so. Facts about Chat Computer: " + FACTS.what +
-      " " + FACTS.indie + " " + FACTS.free + " " + FACTS.soon + " Never make up facts about Chat Computer beyond these.";
-  }
-  // What was said, for what's asked next to make sense to it (its own answers, and the written ones): the last few.
-  function gemmaNote(asked, said) {
-    if (!said) return;
-    gemma.talk.push({ role: "user", content: clip(asked, 600) }, { role: "assistant", content: clip(said, 800) });
-    gemma.talk = gemma.talk.slice(-6);
-  }
-  // One answer: what's looked up first, where the written answers know it's a question of fact or the news; then its
-  // words, streamed into the conversation as they come. One at a time, in order.
-  function gemmaTurn(text, you, uts, id, wants, since) {
-    wants = wants || {};
-    call("aiStart", id);
-    var q = wants.search ? clip(String(wants.query || topicOf(text)), 100) : "";
-    var run = function () {
-      return gemmaStart(false).then(function () {
-        return q ? lookup(q, text) : null;
-      }).then(function (got) {
-        if (got) got.told.forEach(function (d) { did(d, you, uts); });
-        var said = "", started = false;
-        var messages = [{ role: "system", content: gemmaSystem() }].concat(gemma.talk,
-          [{ role: "user", content: got ? nanoFound(text, q, got.list) : text }]);
-        var streamer = new gemma.lib.TextStreamer(gemma.gen.tokenizer, { skip_prompt: true, skip_special_tokens: true,
-          callback_function: function (piece) {
-            if (!piece) return;
-            if (!started) { started = true; if (since != null) wordsOnly(since); }
-            said += piece;
-            call("ai", id, piece);
-          } });
-        return gemma.gen(messages, { max_new_tokens: 512, do_sample: false, repetition_penalty: 1.1, streamer: streamer })
-          .catch(function (e) { if (!said.trim()) throw e; })                     // cut short: what it said stands
-          .then(function () {
-            said = said.trim();
-            if (!said) throw new Error("no words");
-            gemmaNote(text, said);
-            call("aiDone", id);
-            say(got ? said : unsourced(said));
-          });
-      });
-    };
-    var next = (gemma.queue || Promise.resolve()).then(run);
-    gemma.queue = next.catch(function () {});
-    next.catch(function () {
-      var f = fallback(text);
-      Promise.resolve(f.later ? f.later() : f).then(function (a) { deliver(a, id, you, uts, since); });
-    });
-  }
 
   function setScale(s) {
     scale = Math.max(0.6, Math.min(2.2, s));
@@ -2159,27 +1619,15 @@
   function ask(text, shown) {
     var you = uid("u"), uts = now(), id = "a" + (++turns), since = acted;
     call("user", you, shown || text, true);
-    if (claude.key) { claudeTurn(text, you, uts, id, since); return; }
-    var r = answer(text), ai = nano.state === "available";
-    var lm = !ai && (gemma.state === "ready" || gemma.state === "starting" || gemma.state === "available");
+    if (localReady()) { localTurn(text, you, uts, id, since); return; }
+    var r = answer(text);
     if (!LOOK_IT_UP.test(text)) lastAsked = text;              // what "look it up" means next
-    // The browser's AI (or Gemma) answers what only an AI can, and what's looked up (in its words, from what's found).
-    if ((ai || lm) && (r.ai || r.search)) {
-      setTimeout(function () {
-        (ai ? nanoTurn : gemmaTurn)(text, you, uts, id, r.search ? { search: true, query: r.search, news: r.news } : null, since);
-      }, 120);
-      return;
-    }
     if (r.ai) r = fallback(text);
     setTimeout(function () {
       call("aiStart", id);
       var waited = Date.now();
       Promise.resolve(r.later ? r.later() : r).then(function (a) {
-        setTimeout(function () {
-          deliver(a, id, you, uts, since);
-          if (ai) nanoNote(text, a.text);
-          else if (lm) gemmaNote(text, a.text);
-        }, Math.max(0, 600 - (Date.now() - waited)));
+        setTimeout(function () { deliver(a, id, you, uts, since); }, Math.max(0, 600 - (Date.now() - waited)));
       });
     }, 120);
   }
@@ -2335,23 +1783,106 @@
     });
   }
 
-  // ------------------------------------------------------------------ real Claude, with your own API key
-  // "Connect Claude", in the "/" list: with a Claude API key (from Claude Console), what you type
-  // goes to Claude itself, from this browser straight to Anthropic, and Claude answers and does things on this
-  // screen: plays YouTube, shows maps and pages, opens the made-up messages and files, searches the web. The key
-  // stays in this browser (localStorage), and what's used is billed to it. (Anthropic doesn't let other apps sign
-  // in with a Claude Pro or Max plan, so a key it is.)
-  var API = "https://api.anthropic.com/v1/";
-  // The model a Chat Computer uses (chatcomputer/config.py), but at the API's own effort (medium) rather than the
-  // computer's max, for quicker answers. It always thinks first, and max_tokens counts the thinking too.
-  var MODEL = "claude-opus-5-5", MODEL_NAME = "Opus 5.5", MAX_TOKENS = 16000;
-  var KEY = "chatcomputer-demo-claude-key";
-  // talk: the conversation, as sent; system: its system prompt, made when it starts and kept as it is, as the
-  // thinking Claude sends back is only valid while the system prompt, the tools and the messages before it don't change.
-  var claude = { key: store(KEY) || "", talk: [], system: "", search: true };
-  function headers(key) {
-    return { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json",
-             "anthropic-dangerous-direct-browser-access": "true" };
+  // ------------------------------------------------------------------ Chat Computer's own model
+  // What answers for real: Chat Computer's own engine (os/model) running an open model of Qwen's on this computer
+  // itself, free, with no account: what's typed goes to it and no further. In the app it comes with the app, which
+  // gets the model ready the first time (downloading it once, from Qwen's own files) and tells this page how that's
+  // going (chatcomputerApp({model}); the line in the empty box says it). On the website it's the app's, where the app
+  // runs on this computer: "/" lists Use this computer's model (the browser may ask once whether chatcomputer.ai can
+  // reach other programs on this device); chosen once, it's used on later visits too, while the app runs. Its answers
+  // stream in (OpenAI's chat completions API, on 127.0.0.1), and it uses the tools below.
+  var LOCAL_KEY = "chatcomputer-local-model";
+  // talk: the conversation, as sent; system: its system prompt, made when it starts and kept as it is (the engine
+  // reads only what's new, so the start of the conversation is never sent different).
+  var local = { state: APP ? "starting" : "off", port: 8765, label: "", preparing: "", stage: "", done: 0, total: 0, detail: "",
+                talk: [], system: "" };
+  function localReady() { return local.state === "ready"; }
+  function localBase() { return "http://127.0.0.1:" + local.port; }
+  // How getting it ready is going, in words: "downloading it (1.2 of 9.0 GB, 13%)".
+  function localWords() {
+    var pct = local.total ? Math.floor(100 * Math.min(local.done, local.total) / local.total) + "%" : "";
+    if (local.stage === "downloading") {
+      return "downloading it" + (local.total ? " (" + (local.done / 1e9).toFixed(1) + " of " + (local.total / 1e9).toFixed(1) +
+        " GB, " + pct + ")" : "");
+    }
+    if (local.stage === "converting") return "making it ready to run" + (pct ? " (" + pct + ")" : "");
+    if (local.stage === "uncensoring") return "taking its refusals out, so it answers whatever you ask" + (pct ? " (" + pct + ")" : "");
+    return "starting";
+  }
+  // A model's file name as it's called: qwen3.5-9b, Qwen3.5 9B.
+  function modelName(stem) {
+    return String(stem || "").replace(/^qwen([\d.]+)-/i, "Qwen$1 ").replace(/(\d)b\b/gi, "$1B").replace(/-a(\d+)B/g, "-A$1B");
+  }
+  // What the app says about it, at the start and as it changes.
+  function localFrom(m) {
+    if (!m || typeof m !== "object") return;
+    var was = local.state;
+    local.state = String(m.state || "starting");
+    local.port = +m.port || local.port;
+    local.label = String(m.label || "");
+    local.preparing = String(m.preparing || "");
+    local.stage = String(m.stage || "");
+    local.done = +m.done || 0;
+    local.total = +m.total || 0;
+    local.detail = String(m.detail || "");
+    if (localReady() !== (was === "ready")) greetWith();
+    status();
+  }
+  // On the website: whether the app's model answers on this computer.
+  function localProbe() {
+    var ctl = typeof AbortController === "function" ? new AbortController() : null;
+    var late = setTimeout(function () { if (ctl) ctl.abort(); }, 4000);
+    return fetch(localBase() + "/health", ctl ? { signal: ctl.signal } : undefined).then(function (r) {
+      clearTimeout(late);
+      return r.ok ? r.json() : null;
+    }).then(function (h) {
+      if (!h || !h.ok) throw new Error("no model");
+      local.state = "ready";
+      local.label = modelName(h.model) || "Chat Computer's model";
+      status();
+      greetWith();
+      return true;
+    }).catch(function () {
+      clearTimeout(late);
+      local.state = "off";
+      status();
+      return false;
+    });
+  }
+  function localButton() {
+    if (localReady()) {
+      local.state = "off";
+      local.talk = [];
+      store(LOCAL_KEY, null);
+      status();
+      greetWith();
+      did("Stopped using this computer's model");
+      return;
+    }
+    localForm("");
+  }
+  function localForm(error) {
+    call("accountForm", { id: "local", title: "Use this computer's model", ok: "Use it", error: error, text: [
+      "Where the Chat Computer app runs on this computer, its own model can answer here too: free, with no account, and what " +
+      "you type goes only to the app, on this computer.",
+      "Your browser may ask whether chatcomputer.ai can reach other programs on this device: allow it."] });
+  }
+  function modelSheet() {
+    var text = localReady() ? [local.label + " answers you: an open model of Qwen's (Apache 2.0), run on this computer by Chat " +
+        "Computer's own engine. There's no account, and nothing you say leaves this computer."] :
+      local.state === "preparing" ? ["My model" + (local.preparing ? ", " + local.preparing + "," : "") + " is getting ready on this " +
+        "computer: " + localWords() + ". That happens once; after it, it answers from the start."] : [nextStep() || "My model is starting."];
+    if (localReady() && local.preparing) text.push("A bigger one, " + local.preparing + ", is getting ready meanwhile: " + localWords() + ".");
+    call("accountForm", { id: "model", title: "Chat Computer's model", ok: "OK", text: text });
+  }
+  function localChosen() {
+    localProbe().then(function (ok) {
+      if (!ok) { localForm("The app isn't answering on this computer: is it running? (Or, if your browser asked, allow it.)"); return; }
+      store(LOCAL_KEY, true);
+      local.talk = [];
+      call("accountForm", null);
+      did("Using this computer's model (" + local.label + ")");
+    });
   }
   function inbox() {
     return MESSAGES.map(function (m) {
@@ -2367,20 +1898,20 @@
                                                minute: "2-digit" }) + (zone ? ", " + zone : "");
   }
   function systemPrompt() {
-    var where = APP ? "Right now you're in " + APP.name + " (Chat Computer's screen in a window of its own), with the person's own " +
-        "Claude API key." :
-      TABS ? "Right now you're in the Chat Computer extension, Chat Computer's demo website (chatcomputer.ai) in " + SHELL.name +
-        ", with the person's own Claude API key." : "Right now you're in Chat Computer's demo website (chatcomputer.ai), in the " +
-        "person's web browser, with their own Claude API key.";
+    var where = APP ? "Right now you're in " + APP.name + " (Chat Computer's screen in a window of its own)." :
+      TABS ? "Right now you're in the Chat Computer extension: Chat Computer's website (chatcomputer.ai) in " + SHELL.name + "." :
+      "Right now you're in Chat Computer's website (chatcomputer.ai), in the person's web browser.";
     var sites = APP ? "any site, right here in the middle, in the app's own browser view, for them to use: you can't see or use " +
         "it from here), find their files by name and open them with their own apps (find_files, then open_file: " +
-        "documents, pictures, music, videos and folders; never programs or scripts), " :
+        "documents, pictures, music, videos and folders; never programs or scripts), read and open their messages (read_messages, " +
+        "open_message), " :
       TABS ? "any site, in a new Chrome tab; on a Chat Computer any site opens right here and you use it), open their " +
         "messages and files (open_message, open_file), " :
       "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
-        "most other sites can't show inside the demo, so it's a link; on a Chat Computer any site opens right here and you use it), " +
+        "most other sites can't show inside the page, so it's a link; on a Chat Computer any site opens right here and you use it), " +
         "open their messages and files (open_message, open_file), ";
-    return "You are Chat Computer: Claude, running a whole computer. People talk, type or touch, and you do things for them. " +
+    return "You are Chat Computer: you run a whole computer for the person, with your own model, an open model of Qwen's that runs " +
+      "on this computer (no account, and nothing they say leaves it). People talk, type or touch, and you do things for them. " +
       where + " The screen is Chat Computer's: Messages at the left, Actions at the right (each thing you do is listed " +
       "there), and in the middle the conversation, or what you open in its place, with the message box under it. While " +
       "something is open the conversation is out of sight: a reply that's only words brings it back, putting what's open " +
@@ -2389,29 +1920,28 @@
       "plan, code), with a little Markdown where it helps (a list, a table, a code block; " +
       (APP ? "a link clicked opens in the middle" : "links can't be clicked here") + "). " +
       "When they talk to you (through their AirPods) it's read aloud too, so keep it to a few sentences then. Do things " +
-      "rather than describe them, and don't announce a tool before using it.\n\n" +
-      "Here you can: play YouTube videos (play_youtube; use web_search to find a video's address when you don't know its " +
-      "ID for certain), show maps (show_map), show a page you write when they ask for one on the screen (show_page), open a website (open_website: " +
-      sites + "make a timer (make_timer), set the volume of what's playing (set_volume), close what's open (close), and " +
-      "search the web. " + (APP ? "Their messages from the accounts they've connected in Messages (Gmail, Outlook, Telegram, " +
-        "WhatsApp, WeChat, Discord) are yours to read (read_messages) and open (open_message): what each service's list shows, " +
-        "not whole conversations. Chat Computer itself, installed in place of a desktop, also changes settings and uses their " +
-        "AirPods; when they ask for something only it can do, say so in a sentence." :
-      "On a real Chat Computer you also use any website, " +
-      "their real files, apps and settings, and their AirPods; when they ask for something only a Chat Computer can do, " +
-      "say so in a sentence.") + "\n\n" +
+      "rather than describe them, and don't announce a tool before using it. Don't make things up: what you don't know, " +
+      "look up (web_search), and say where it's from.\n\n" +
+      "Here you can: play YouTube videos (play_youtube, with a video's ID you know for certain; otherwise youtube_search shows " +
+      "YouTube's search for it), play some calm piano (play_piano), show maps (show_map), say the weather (weather), look things " +
+      "up (web_search: Wikipedia, the day's news, the air), show a page you write when they ask for one on the screen (show_page), " +
+      "open a website (open_website: " + sites + "make a timer (make_timer), set the volume of what's playing (set_volume), close " +
+      "what's open (close). " + (APP ? "Chat Computer itself, installed in place of a desktop, also changes settings and uses " +
+        "their AirPods; when they ask for something only it can do, say so in a sentence." :
+      "On a real Chat Computer you also use any website, their real files, apps and settings, and their AirPods; when they ask " +
+      "for something only a Chat Computer can do, say so in a sentence.") + "\n\n" +
       (person() ? "They go by " + person() + ". " : computerName ? "This computer says they're " + computerName + ". " : "") +
       (homeName() ? "They live in " + homeName() + ". " : "") +
       "When they tell you what to call them, or where they live, keep it (set_name, set_place): the greeting that opens " +
-      "each conversation (under “hello, world”) says their name and the weather where they are, as the Claude app's does." +
+      "each conversation (under “hello, world”) says their name and the weather where they are." +
       (APP ? "" : "\n\nTheir messages and files here are made up for the demo:\n" + inbox() + "\n\nFiles:\n" +
-        FILES.map(function (f) { return "- " + f.name + ", in " + f.where; }).join("\n") +
-        "\n\nEach of their messages starts with the date and time it was sent, in brackets.");
+        FILES.map(function (f) { return "- " + f.name + ", in " + f.where; }).join("\n")) +
+      "\n\nEach of their messages starts with the date and time it was sent, in brackets.";
   }
   function obj(props, required) { return { type: "object", properties: props, required: required || [] }; }
   var TOOLS = [
-    { name: "play_youtube", description: "Play a YouTube video between the sidebars. The demo can't search YouTube itself: find the " +
-      "video's address with web_search unless you know its ID for certain.", input_schema: obj({ video_id: { type: "string", description: "The 11-character ID, as in youtube.com/watch?v=ID" },
+    { name: "play_youtube", description: "Play a YouTube video between the sidebars, by its ID (only one you know for certain: " +
+      "otherwise youtube_search).", input_schema: obj({ video_id: { type: "string", description: "The 11-character ID, as in youtube.com/watch?v=ID" },
       title: { type: "string", description: "The video's title, for Actions" }, start: { type: "integer", description: "Seconds in to start at" } }, ["video_id", "title"]) },
     { name: "show_map", description: "Show a map (OpenStreetMap) between the sidebars, of the area in the box given in degrees.",
       input_schema: obj({ place: { type: "string" }, west: { type: "number" }, south: { type: "number" }, east: { type: "number" },
@@ -2432,6 +1962,15 @@
       input_schema: obj({ minutes: { type: "integer", minimum: 1, maximum: 180 } }, ["minutes"]) },
     { name: "set_volume", description: "Set the volume of what's playing, from 0 to 100.", input_schema: obj({ percent: { type: "integer", minimum: 0, maximum: 100 } }, ["percent"]) },
     { name: "close", description: "Close what's open between the sidebars (a video stops).", input_schema: obj({}) },
+    { name: "youtube_search", description: "Show YouTube's search for something, between the sidebars (when you don't know a " +
+      "video's ID for certain).", input_schema: obj({ query: { type: "string" } }, ["query"]) },
+    { name: "play_piano", description: "Play some calm piano music between the sidebars (the browser makes it).", input_schema: obj({}) },
+    { name: "weather", description: "The weather today or tomorrow (Open-Meteo): somewhere, or where they live.",
+      input_schema: obj({ place: { type: "string", description: "A town or city; leave it out for where they live" },
+                          tomorrow: { type: "boolean" } }) },
+    { name: "web_search", description: "Look something up: Wikipedia's articles, the day's news (Wikipedia's Current events) and, " +
+      "for haze or pollution, the air (Open-Meteo). For anything recent, or that you aren't sure of.",
+      input_schema: obj({ query: { type: "string", description: "What to look up, in a few words" } }, ["query"]) },
     { name: "set_name", description: "Keep the name they want to be called (empty: forget it), for greeting them by it.",
       input_schema: obj({ name: { type: "string" } }, ["name"]) },
     { name: "set_place", description: "Keep the town or city they live in (empty: forget it; then their time zone's city is used), " +
@@ -2452,10 +1991,13 @@
       "own page, at that conversation, for them to read and answer there.", input_schema: obj({ id: { type: "string" } }, ["id"]) }
   ];
   function tools() {
-    var list = APP ? TOOLS.filter(function (t) { return t.name !== "open_message" && t.name !== "open_file"; }).concat(APP_TOOLS) : TOOLS;
-    return claude.search ? list.concat([{ type: "web_search_20250305", name: "web_search", max_uses: 3 }]) : list;
+    return APP ? TOOLS.filter(function (t) { return t.name !== "open_message" && t.name !== "open_file"; }).concat(APP_TOOLS) : TOOLS;
   }
-  // What a client tool does here, and what Claude is told about it.
+  // As OpenAI's chat completions API has them (the engine's).
+  function localTools() {
+    return tools().map(function (t) { return { type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } }; });
+  }
+  // What a tool does here, and what the model is told about it.
   function run(u, you, uts) {
     var a = u.input || {}, n = u.name;
     if (n === "play_youtube") {
@@ -2494,7 +2036,7 @@
           host + " opened in a new tab beside this page (most sites can't show inside it): they're looking at it there.";
       }
       show({ html: page(host, '<article><h1 class="title">' + esc(a.title || host) + '</h1><p class="demo-note">On Chat Computer, ' + esc(host) +
-        " opens right here, and Claude uses it for you. Most sites can't show inside this demo, so here's the link.</p><p><a href=\"" + esc(url) +
+        " opens right here, and Chat Computer uses it for you. Most sites can't show inside this demo, so here's the link.</p><p><a href=\"" + esc(url) +
         '" target="_blank" rel="noopener noreferrer">Open ' + esc(host) + " in a new tab</a></p></article>", NOTE_CSS) });
       did("Showed a link to " + host, you, uts);
       return "A link to " + host + " is on the screen (it opens in a new tab).";
@@ -2548,7 +2090,35 @@
       did("Set the volume to " + player.volume + "%", you, uts, back);
       return "The volume is " + player.volume + "%.";
     }
-    if (n === "close") { var was = !!view; close(); return was ? "Closed." : "Nothing was open."; }
+    if (n === "close") { var was = !!view || site.on; close(); return was ? "Closed." : "Nothing was open."; }
+    if (n === "youtube_search") {
+      var yq = clip(String(a.query || ""), 80);
+      if (!yq) return "What to search YouTube for?";
+      var yurl = "https://www.youtube.com/results?search_query=" + encodeURIComponent(yq);
+      if (APP) show({ src: yurl, title: "YouTube: " + yq });
+      else youtubeSearch(yq).act();
+      did("Searched YouTube for \u201c" + clip(yq, 40) + "\u201d", you, uts);
+      return APP ? "YouTube's search for it is in the middle: they choose a video there." : "A link to YouTube's search for it is on the screen.";
+    }
+    if (n === "play_piano") {
+      did("Played some calm piano", you, uts, piano() || null);
+      return "Calm piano is playing between the sidebars.";
+    }
+    if (n === "weather") {
+      var wt = weather("weather" + (a.place ? " in " + clip(String(a.place), 60) : "") + (a.tomorrow ? " tomorrow" : ""));
+      return wt.later().then(function (r) { (r.done || []).forEach(function (d) { did(d, you, uts); }); return r.text; });
+    }
+    if (n === "web_search") {
+      var wq = clip(String(a.query || ""), 100);
+      if (!wq) return "What to look up?";
+      return lookup(wq, wq).then(function (got) {
+        got.told.forEach(function (d) { did(d, you, uts); });
+        if (!got.list.length) return "Nothing was found for " + wq + ".";
+        return JSON.stringify(got.list.slice(0, 6).map(function (x) {
+          return { source: x.source, title: x.title, url: x.url, text: clip(x.text, 900) };
+        }));
+      });
+    }
     if (n === "set_name") {
       var nm = cleanName(a.name);
       setName(nm);
@@ -2563,11 +2133,11 @@
     }
     return "There's no tool called " + n + " here.";
   }
-  // One turn: Claude's answer streams in, its tools run here, and it goes on until it's done (at most 8 rounds).
-  function claudeTurn(text, you, uts, id, since) {
+  // One turn: the model's answer streams in, its tools run here, and it goes on until it's done (at most 8 rounds).
+  function localTurn(text, you, uts, id, since) {
     var said = "", gap = false, rounds = 0, asked = { role: "user", content: "[" + clock() + "] " + text };
-    if (!claude.talk.length) claude.system = systemPrompt();
-    claude.talk.push(asked);
+    if (!local.talk.length) local.system = systemPrompt();
+    local.talk.push(asked);
     trimTalk();
     call("aiStart", id);
     function onText(t) {
@@ -2580,29 +2150,26 @@
     (function round() {
       if (++rounds > 8) { finish(); return; }
       gap = true;
-      message(onText, you, uts, claude.talk.indexOf(asked)).then(function (msg) {
-        claude.talk.push({ role: "assistant", content: msg.content });
-        if (msg.stop === "pause_turn") { round(); return; }
-        var uses = msg.content.filter(function (b) { return b.type === "tool_use"; });
-        if (msg.stop === "tool_use" && uses.length) {
-          // Each tool's answer, some later (the app's, a promise), in the order asked.
-          Promise.all(uses.map(function (u) {
+      localMessage(onText).then(function (msg) {
+        local.talk.push(msg.message);
+        if (msg.calls.length) {
+          // Each tool's answer, some later (a promise), in the order asked.
+          Promise.all(msg.calls.map(function (c) {
             var out;
-            try { out = run(u, you, uts); } catch (e) { out = "That didn't work: " + e.message; }
+            try { out = run({ name: c.name, input: c.input, id: c.id }, you, uts); } catch (e) { out = "That didn't work: " + e.message; }
             return Promise.resolve(out).then(String, function (e) { return "That didn't work: " + (e && e.message || e); })
-              .then(function (text) { return { type: "tool_result", tool_use_id: u.id, content: text }; });
+              .then(function (t) { return { role: "tool", tool_call_id: c.id, content: t }; });
           })).then(function (results) {
-            claude.talk.push({ role: "user", content: results });
+            results.forEach(function (r) { local.talk.push(r); });
             round();
           });
           return;
         }
         finish();
       }, function (err) {
-        if (err.noSearch && claude.search) { claude.search = false; rounds--; round(); return; }
-        var at = claude.talk.indexOf(asked);
-        if (at >= 0) claude.talk.length = at;                             // the turn didn't happen
-        onText((said ? "\n\n" : "") + trouble(err));
+        var at = local.talk.indexOf(asked);
+        if (at >= 0) local.talk.length = at;                              // the turn didn't happen
+        onText((said ? "\n\n" : "") + localTrouble(err));
         call("aiDone", id);
         say(said);
       });
@@ -2611,79 +2178,58 @@
   }
   // At most 40 messages back, starting at something they said.
   function trimTalk() {
-    while (claude.talk.length > 40) {
-      claude.talk.shift();
-      while (claude.talk.length && typeof claude.talk[0].content !== "string") claude.talk.shift();
+    while (local.talk.length > 40) {
+      local.talk.shift();
+      while (local.talk.length && local.talk[0].role !== "user") local.talk.shift();
     }
   }
-  function trouble(err) {
-    if (err.status === 401 || err.status === 403) {
-      forget();
-      return "Anthropic didn't accept your Claude API key (" + err.message + "), so I've disconnected it. Type / and choose Connect Claude to connect a working key.";
+  // (No answer at all: on the website, the app isn't running any more; in the app, its engine stopped, and the app
+  // starts it again, saying so: chatcomputerApp({model}).)
+  function localTrouble(err) {
+    if (!err.status) {
+      if (!APP) {
+        local.state = "off";
+        status();
+        greetWith();
+        return "I can't reach the Chat Computer app on this computer any more: is it still running?";
+      }
+      return "My model stopped answering, and is starting again: ask me again in a moment.";
     }
-    if (err.status === 429) return "Claude's limit for your key was reached for now (" + err.message + "). Try again in a minute.";
-    if (err.status === 529 || err.status === 503) return "Claude is busy right now. Try again in a moment.";
-    if (!err.status) return "I couldn't reach Anthropic from this browser (" + err.message + ").";
-    return "Claude said: " + err.message;
+    return "My model couldn't answer that: " + err.message;
   }
-  function apiError(status, raw) {
-    var msg = raw, e;
-    try { var j = JSON.parse(raw); msg = (j.error && j.error.message) || raw; } catch (x) {}
-    e = new Error(clip(msg || ("HTTP " + status), 200));
-    e.status = status;
-    e.noSearch = status === 400 && /web.?search/i.test(msg || "");
-    return e;
-  }
-  // The conversation as sent: the thinking of turns already over is left out (allowed outside a turn's tool use, and
-  // still right after older turns are trimmed away); this turn's, from its question on, goes back as it came.
-  function sent(from) {
-    return claude.talk.map(function (m, i) {
-      if (i >= from || m.role !== "assistant" || typeof m.content === "string") return m;
-      var c = m.content.filter(function (b) { return b.type !== "thinking" && b.type !== "redacted_thinking"; });
-      return { role: "assistant", content: c.length ? c : [{ type: "text", text: "\u2026" }] };
-    });
-  }
-  // One request, streamed: text as it comes, and the whole message (its blocks, cleaned) at the end.
-  function message(onText, you, uts, from) {
-    var body = { model: MODEL, max_tokens: MAX_TOKENS, stream: true,
-                 system: [{ type: "text", text: claude.system || systemPrompt(), cache_control: { type: "ephemeral" } }],
-                 tools: tools(), messages: sent(from) };
-    return fetch(API + "messages", { method: "POST", headers: headers(claude.key), body: JSON.stringify(body) }).then(function (res) {
-      if (!res.ok) return res.text().then(function (t) { throw apiError(res.status, t); });
-      var reader = res.body.getReader(), dec = new TextDecoder(), buf = "", blocks = [], stop = null, failed = null;
+  // One request, streamed: its words as they come, and the whole message (its words, thinking and tool calls).
+  function localMessage(onText) {
+    var body = { model: "chat-computer", stream: true, think: false, max_tokens: 4096, tools: localTools(),
+                 messages: [{ role: "system", content: local.system || systemPrompt() }].concat(local.talk) };
+    return fetch(localBase() + "/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
+                                                         body: JSON.stringify(body) }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (t) {
+          var msg = t;
+          try { var j = JSON.parse(t); msg = (j.error && j.error.message) || t; } catch (x) {}
+          var e = new Error(clip(msg || "HTTP " + res.status, 200));
+          e.status = res.status;
+          throw e;
+        });
+      }
+      var reader = res.body.getReader(), dec = new TextDecoder(), buf = "", content = "", thinking = "", calls = [], failed = null;
       function event(chunk) {
         var data = chunk.split("\n").filter(function (l) { return l.indexOf("data:") === 0; })
           .map(function (l) { return l.slice(5).trim(); }).join("");
-        if (!data) return;
+        if (!data || data === "[DONE]") return;
         var ev;
         try { ev = JSON.parse(data); } catch (e) { return; }
-        if (ev.type === "content_block_start") {
-          var b = ev.content_block || {};
-          if (b.type === "text") blocks[ev.index] = { type: "text", text: b.text || "" };
-          else if (b.type === "tool_use" || b.type === "server_tool_use") blocks[ev.index] = { type: b.type, id: b.id, name: b.name, input: b.input || {}, json: "" };
-          else if (b.type === "thinking") blocks[ev.index] = { type: "thinking", thinking: b.thinking || "", signature: b.signature || "" };
-          else blocks[ev.index] = b;          // a search's results, redacted thinking: kept whole, for the next round
-          if (b.type === "text" && b.text) onText(b.text);
-        } else if (ev.type === "content_block_delta") {
-          var bl = blocks[ev.index], dl = ev.delta || {};
-          if (!bl) return;
-          if (dl.type === "text_delta") { bl.text += dl.text; onText(dl.text); }
-          else if (dl.type === "input_json_delta") bl.json += dl.partial_json || "";
-          else if (dl.type === "thinking_delta") bl.thinking += dl.thinking || "";
-          else if (dl.type === "signature_delta") bl.signature += dl.signature || "";
-        } else if (ev.type === "content_block_stop") {
-          var bk = blocks[ev.index];
-          if (bk && "json" in bk) {
-            try { if (bk.json) bk.input = JSON.parse(bk.json); } catch (e) { bk.input = {}; }
-            delete bk.json;
-            if (bk.type === "server_tool_use" && bk.input && bk.input.query) did("Searched the web for \u201c" + clip(bk.input.query, 60) + "\u201d", you, uts);
-          }
-        } else if (ev.type === "message_delta") {
-          if (ev.delta && ev.delta.stop_reason) stop = ev.delta.stop_reason;
-        } else if (ev.type === "error") {
-          failed = apiError(529, JSON.stringify(ev));
-          if (ev.error && ev.error.type !== "overloaded_error") failed.status = 500;
-        }
+        if (ev.error) { failed = new Error(clip((ev.error && ev.error.message) || "the model stopped", 200)); failed.status = 500; return; }
+        var d = (ev.choices && ev.choices[0] && ev.choices[0].delta) || {};
+        if (d.reasoning_content) thinking += d.reasoning_content;
+        if (d.content) { content += d.content; onText(d.content); }
+        (d.tool_calls || []).forEach(function (c) {
+          var i = c.index || 0, f = c.function || {};
+          var cur = calls[i] = calls[i] || { id: "", name: "", args: "" };
+          if (c.id) cur.id = c.id;
+          if (f.name) cur.name += f.name;
+          if (f.arguments) cur.args += f.arguments;
+        });
       }
       return new Promise(function (resolve, reject) {
         (function pump() {
@@ -2696,55 +2242,21 @@
             }
             if (buf.trim()) event(buf);
             if (failed) { reject(failed); return; }
-            resolve({ content: blocks.filter(function (b) { return b && (b.type !== "text" || b.text); }), stop: stop });
+            var list = calls.filter(Boolean).map(function (c, k) {
+              var input = {};
+              try { if (c.args) input = JSON.parse(c.args); } catch (e) { input = {}; }
+              return { id: c.id || "call_" + k, name: c.name, input: input, args: c.args || "{}" };
+            });
+            var message = { role: "assistant", content: content };
+            if (thinking) message.reasoning_content = thinking;
+            if (list.length) {
+              message.tool_calls = list.map(function (c) { return { id: c.id, type: "function", function: { name: c.name, arguments: c.args } }; });
+            }
+            resolve({ message: message, calls: list });
           }, function (e) { var x = new Error(e && e.message || "the connection broke"); x.status = 0; reject(x); });
         })();
       });
     }, function (e) { var x = new Error(e && e.message || "no connection"); x.status = 0; throw x; });
-  }
-  function claudeButton() {
-    if (claude.key) {
-      call("accountForm", { id: "claude-off", title: "Claude is connected", ok: "Disconnect", text: [
-        "What you type goes to Claude (" + MODEL_NAME + "), with your API key, from this browser straight to Anthropic.",
-        "Disconnecting removes the key from this browser, and the demo's written answers come back."] });
-      return;
-    }
-    keyForm("");
-  }
-  function keyForm(error, key) {
-    call("accountForm", { id: "claude", title: "Connect Claude", ok: "Connect", error: error, text: [
-      "Paste an API key from Claude Console (platform.claude.com), and Claude answers here for real, and does things on this " +
-      "screen, instead of the demo's written answers.",
-      "The key stays in this browser and goes only to Anthropic. What you use is billed to your Console account.",
-      "A Claude Pro or Max plan can't be used here: Anthropic doesn't let other apps sign in with one."],
-      fields: [{ name: "key", label: "API key", type: "password", value: key || "" }] });
-  }
-  function connectClaude(key) {
-    if (/^sk-ant-oat/.test(key)) { keyForm("That's a sign-in token for a Claude plan, which other apps may not use. An API key from Claude Console starts with sk-ant-api."); return; }
-    if (!/^sk-ant-/.test(key)) { keyForm("That doesn't look like a Claude API key: they start with sk-ant-.", key); return; }
-    // A one-word question tells whether Anthropic takes the key (and costs a fraction of a cent).
-    fetch(API + "messages", { method: "POST", headers: headers(key),
-                              body: JSON.stringify({ model: MODEL, max_tokens: 1, messages: [{ role: "user", content: "Hi" }] }) }).then(function (res) {
-      if (res.ok) {
-        claude.key = key;
-        claude.talk = [];
-        claude.search = true;
-        store(KEY, key);
-        call("accountForm", null);
-        status();
-        greetWith();
-        did("Connected Claude (" + MODEL_NAME + ")");
-        return;
-      }
-      return res.text().then(function (t) { keyForm("Anthropic didn't accept that key: " + apiError(res.status, t).message, key); });
-    }, function () { keyForm("I couldn't reach Anthropic from this browser. Check the connection, and try again.", key); });
-  }
-  function forget() {
-    claude.key = "";
-    claude.talk = [];
-    store(KEY, null);
-    status();
-    greetWith();
   }
 
   // ------------------------------------------------------------------ AirPods: talking
@@ -2934,7 +2446,7 @@
   // use only an iPhone's built-in voices, which sound robotic: Heart is the warm voice there.)
   var HEART = { name: "Heart", library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js",
                 model: "onnx-community/Kokoro-82M-v1.0-ONNX", voice: "af_heart", size: "330 MB" };
-  if (APP) HEART.library = LM_HERE + "kokoro.web.js";       // (in the app, its code comes with it, as Gemma's does)
+  if (APP) HEART.library = LM_HERE + "kokoro.web.js";       // (in the app, its code comes with it)
   var HEART_PARTS = "chatcomputer-heart-parts", HEART_NO = "chatcomputer-demo-heart-no", HEART_STARTING = "chatcomputer-demo-heart-starting";
   // state: none (it can't run here), downloadable, downloading, starting, ready (downloaded), available (started).
   var heart = { state: "none", cached: false, tts: null, loading: null, progress: 0, ctx: null, turn: 0, playing: null,
@@ -2944,6 +2456,110 @@
     return caches.open("transformers-cache").then(function (c) { return c.match(heartFile()); })
       .then(function (r) { return !!r; }, function () { return false; });
   }
+  // Heart's big file comes in pieces of 16 MB (Range requests, which Hugging Face's servers allow from any page), each
+  // kept as it arrives (the browser's store, under `parts`): a phone that leaves the page, locks itself or loses its
+  // signal loses only the piece it was on, and the download goes on from there. A piece that stops coming for 20
+  // seconds, or that was cut off while the page was out of sight, is asked for again; an offline phone waits to be
+  // online. Once all are here they're put together in Transformers.js' own store, under the file's address, where it
+  // finds it, and the pieces are thrown away. The screen is kept on meanwhile where the browser can.
+  // report(bytes so far, the file's size once known). "unranged": the server sent the whole file instead (then
+  // Transformers.js downloads it, as before).
+  var PIECE = 16 * 1024 * 1024, fetching = [];
+  function pieceFetch(url, parts, report) {
+    var wake = null, mine = null;
+    try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (l) { wake = l; }, noop); } catch (e) {}
+    function done() { try { if (wake) wake.release(); } catch (e) {} fetching = fetching.filter(function (f) { return f !== mine; }); }
+    return Promise.all([caches.open(parts), caches.open("transformers-cache")]).then(function (cs) {
+      var pieces = cs[0], kept = cs[1], total = 0, have = {};
+      function key(i) { return url + "?piece=" + i; }        // (not #: the store ignores what follows a #)
+      function shown(now) {
+        var got = now || 0;
+        for (var i in have) got += have[i];
+        report(got, total);
+      }
+      // One piece: asked for again when it stalls, up to 8 times.
+      function piece(i, tries) {
+        var from = i * PIECE, to = total ? Math.min(total, from + PIECE) - 1 : from + PIECE - 1;
+        var stop = new AbortController(), last = Date.now(), timer = 0, size = 0, chunks = [], want = 0;
+        fetching = fetching.filter(function (f) { return f !== mine; });
+        fetching.push(mine = { last: function () { return last; }, abort: function () { stop.abort(); } });
+        timer = setInterval(function () { if (Date.now() - last > 20000) stop.abort(); }, 2000);
+        return fetch(url, { headers: { Range: "bytes=" + from + "-" + to }, signal: stop.signal, cache: "no-store" }).then(function (res) {
+          if (res.status === 200) { stop.abort(); throw { unranged: true }; }
+          if (res.status !== 206 || !res.body) throw new Error("the server said " + res.status);
+          var range = /bytes (\d+)-(\d+)\/(\d+)/.exec(res.headers.get("Content-Range") || "");
+          if (!range) throw new Error("the server didn't say which part it sent");
+          want = +range[2] - +range[1] + 1;
+          if (!total) { total = +range[3]; pieces.put(url + "?size", new Response(String(total))).catch(noop); }
+          var reader = res.body.getReader();
+          return (function read() {
+            return reader.read().then(function (r) {
+              if (r.done) return;
+              chunks.push(r.value);
+              size += r.value.byteLength;
+              last = Date.now();
+              shown(size);
+              return read();
+            });
+          })();
+        }).then(function () {
+          clearInterval(timer);
+          if (size !== want) throw new Error("a piece came short");
+          return pieces.put(key(i), new Response(new Blob(chunks))).then(function () { have[i] = size; shown(0); });
+        }, function (e) {
+          clearInterval(timer);
+          if (e && e.unranged) throw e;
+          if ((tries || 0) >= 8) throw new Error("the download kept stopping (" + (e && e.message || e) + ")");
+          return (navigator.onLine === false ? new Promise(function (go) { window.addEventListener("online", go, { once: true }); })
+            : new Promise(function (go) { setTimeout(go, Math.min(30000, 1000 * Math.pow(2, tries || 0))); }))
+            .then(function () { return piece(i, (tries || 0) + 1); });
+        });
+      }
+      return kept.match(url).then(function (already) {
+        if (already) return "kept";
+        return pieces.match(url + "?size").then(function (r) { return r ? r.text() : ""; }).then(function (t) {
+          total = +t || 0;
+          return pieces.keys();
+        }).then(function (keys) {
+          return Promise.all(keys.map(function (r) {
+            var m = /\?piece=(\d+)$/.exec(r.url);
+            if (!m || r.url.indexOf(url + "?") !== 0) return null;
+            return pieces.match(r).then(function (res) { return res.blob(); }).then(function (b) { have[+m[1]] = b.size; });
+          }));
+        }).then(function () {
+          shown(0);
+          var i = 0;
+          return (function next() {
+            if (total && i * PIECE >= total) return null;
+            if (have[i] != null) { i++; return next(); }
+            return piece(i).then(function () { i++; return next(); });
+          })();
+        }).then(function () {
+          var n = Math.ceil(total / PIECE), blobs = [];
+          return (function each(i) {
+            if (i >= n) return null;
+            return pieces.match(key(i)).then(function (r) {
+              if (!r) throw new Error("a piece of the download went missing");
+              return r.blob();
+            }).then(function (b) { blobs.push(b); return each(i + 1); });
+          })(0).then(function () {
+            var whole = new Blob(blobs, { type: "application/octet-stream" });
+            if (whole.size !== total) throw new Error("the download came out the wrong size");
+            return kept.put(url, new Response(whole, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(total) } }));
+          }).then(function () { return caches.delete(parts); }).then(function () { return "fetched"; });
+        });
+      });
+    }).then(function (how) { done(); return how; }, function (e) {
+      done();
+      if (e && e.unranged) return "unranged";
+      throw e;
+    });
+  }
+  // Back on the page after a while away: a piece that was being downloaded is asked for again at once.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") return;
+    fetching.forEach(function (f) { if (Date.now() - f.last() > 4000) f.abort(); });
+  });
   function heartCheck() {
     var can = navigator.gpu && navigator.gpu.requestAdapter && window.caches && (window.AudioContext || window.webkitAudioContext);
     return (can ? navigator.gpu.requestAdapter() : Promise.resolve(null)).then(function (a) {
@@ -3233,31 +2849,25 @@
 
   // ------------------------------------------------------------------ "/": connecting things
   // Nothing beside the message box (it stays clean): "/" typed in it lists, above it, what can be connected or turned
-  // on here, before the files it searches (as "/" does on a Chat Computer): Connect Claude (with an API key), Connect
-  // AirPods (talking), and the free AI on this device where there's one to download (Chrome's Gemini Nano, else
-  // Google's Gemma; Remove Gemma once it's here). Words after the "/" narrow them down. Chosen (Enter, a click or a
-  // tap), each does what it says; the empty box says meanwhile what's going on (status: listening, a download's
-  // progress, Gemma starting).
+  // on here, before the files it searches (as "/" does on a Chat Computer): Use this computer's model (the app's, on
+  // the website; in the app, its model and how it's going), Connect AirPods (talking), and Heart, the warmer voice.
+  // Words after the "/" narrow them down. Chosen (Enter, a click or a tap), each does what it says; the empty box says
+  // meanwhile what's going on (status: listening, the model getting ready, a download's progress).
   function commands() {
-    var list = [claude.key ?
-      { command: "claude", icon: "i-key", name: "Disconnect Claude", where: "Claude (" + MODEL_NAME + ") answers now, with your API key" } :
-      { command: "claude", icon: "i-key", name: "Connect Claude", where: "Real Claude here, with your own API key" }];
+    var list = [];
+    if (APP) {
+      list.push({ command: "model", icon: "i-spark", name: localReady() ? local.label : "Chat Computer's model",
+                  where: localReady() ? "Answers now, on this computer" + (local.preparing ? " (" + local.preparing + " is getting ready)" : "") :
+                    local.state === "preparing" ? "Getting " + (local.preparing || "it") + " ready: " + localWords() :
+                    local.state === "failed" || local.state === "none" ? "It couldn't get ready" : "Starting" });
+    } else {
+      list.push(localReady() ?
+        { command: "local", icon: "i-spark", name: "Stop using this computer's model", where: local.label + " answers now, on this computer" } :
+        { command: "local", icon: "i-spark", name: "Use this computer's model", where: "Where the Chat Computer app runs here: its own model, free" });
+    }
     list.push(ears.on ?
       { command: "airpods", icon: "i-pods", name: "Stop talking", where: ears.device ? "Your AirPods are on" : "Listening now" } :
       { command: "airpods", icon: "i-pods", name: "Connect AirPods", where: "Talk through your AirPods, and hear the answers" });
-    if (!claude.key && (nano.state === "downloadable" || nano.state === "downloading")) {
-      list.push({ command: "gemini", icon: "i-spark", name: nano.state === "downloading" ?
-        "Downloading " + AI.short + (nano.progress ? " (" + nano.progress + "%)" : "") : "Download " + AI.short,
-        where: AI.browser + "'s built-in AI: free answers, on this device" });
-    }
-    if (!claude.key && (gemma.state === "downloadable" || gemma.state === "downloading")) {
-      list.push({ command: "gemma", icon: "i-spark", name: gemma.state === "downloading" ?
-        "Downloading " + GEMMA.name + (gemma.progress ? " (" + gemma.progress + "%)" : "") : (gemma.cached ? "Start " : "Download ") + GEMMA.name,
-        where: "Google's small AI: free answers, on this " + deviceWord() + (gemma.cached ? "" : " (" + gemmaSize() + ")") });
-    }
-    if (gemma.state === "ready" || gemma.state === "available") {
-      list.push({ command: "gemma-remove", icon: "i-spark", name: "Remove " + GEMMA.name, where: "Frees " + gemmaSize() + " on this " + deviceWord() });
-    }
     if (heart.state === "downloadable" || heart.state === "downloading") {
       list.push({ command: "heart", icon: "i-voice", name: heart.state === "downloading" ?
         "Downloading Heart" + (heart.progress ? " (" + heart.progress + "%)" : "") : (heart.cached ? "Start Heart" : "Download Heart"),
@@ -3276,11 +2886,9 @@
     });
   }
   function slashCommand(id) {
-    if (id === "claude") claudeButton();
+    if (id === "local") localButton();
+    else if (id === "model") modelSheet();
     else if (id === "airpods") talkButton();
-    else if (id === "gemini") nanoButton();
-    else if (id === "gemma") gemmaButton();
-    else if (id === "gemma-remove") gemmaRemoveButton();
     else if (id === "heart") heartButton(null);
     else if (id === "heart-remove") heartRemoveButton();
   }
@@ -3288,9 +2896,8 @@
     var h = "";
     call("listening", ears.on);                // the microphone button under the box, pressed while it listens
     if (ears.on) h = ears.device ? "AirPods on: talk, or type" : "Listening: talk, or type";
-    else if (nano.state === "downloading") h = "Downloading " + AI.short + (nano.progress ? " (" + nano.progress + "%)" : "") + "…";
-    else if (gemma.state === "downloading") h = "Downloading " + GEMMA.name + (gemma.progress ? " (" + gemma.progress + "%)" : "") + "…";
-    else if (gemma.state === "starting") h = "Starting " + GEMMA.name + "…";
+    else if (APP && local.state === "preparing") h = "Getting my model ready: " + localWords() + "…";
+    else if (APP && local.state === "starting") h = "Starting my model…";
     else if (heart.state === "downloading") h = "Downloading Heart" + (heart.progress ? " (" + heart.progress + "%)" : "") + "…";
     else if (heart.state === "starting") h = "Starting Heart…";
     call("hint", h);
@@ -3310,7 +2917,7 @@
         call("openInPage", !APP);              // (in the app, a site is laid over the page, as on a Chat Computer)
         call("pickFiles", true);               // + under the box: this browser's own file picker
         layout();
-        greetWith();                           // for the greeting: the name you go by, whether Claude answers,
+        greetWith();                           // for the greeting: the name you go by, which model answers,
         sayHere();                             // and where you are, with its weather
         if (APP) {                             // (in the app, the name this computer knows you by, where you've given none)
           APP.app("about").then(function (a) {
@@ -3333,7 +2940,9 @@
         } else call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
         startChat();
         status();
-        nanoCheck().then(gemmaCheck);          // the browser's own AI, else Gemma where it can run
+        // The model: in the app, how it is (the app says as it changes); on the website, the app's, when it was chosen before.
+        if (APP) APP.app("model_status").then(localFrom, noop);
+        else if (store(LOCAL_KEY)) localProbe();
         heartCheck();                          // and Heart, the warmer voice, where it can
         break;
       case "send": {
@@ -3409,12 +3018,8 @@
         break;
       case "account": {
         var values = msg.values || {};
-        if (msg.form === "claude") { connectClaude(String(values.key || "").trim()); break; }
-        if (msg.form === "claude-off") { forget(); call("accountForm", null); did("Disconnected Claude"); break; }
+        if (msg.form === "local") { localChosen(); break; }
         if (msg.form === "talk") { call("accountForm", null); startTalking(); break; }
-        if (msg.form === "nano") { nanoDownload(); break; }
-        if (msg.form === "gemma") { call("accountForm", null); gemmaStart(true).catch(function () {}); break; }
-        if (msg.form === "gemma-remove") { call("accountForm", null); gemmaRemove(); break; }
         if (msg.form === "heart") { call("accountForm", null); heartChosen(true); break; }
         if (msg.form === "heart-remove") { call("accountForm", null); heartRemove(); break; }
         call("accountForm", null);

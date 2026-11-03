@@ -1,7 +1,7 @@
 """Builds the browser demo in docs/ (for GitHub Pages): Chat Computer's own conversation screen, the same page and code
 as on a Chat Computer (chatcomputer/ui/assets), with docs/demo/host.js standing in for the computer behind it (and
-"/" in its message box listing what can be connected there, Connect Claude and Connect AirPods). No icon: the tab shows the
-browser's own.
+"/" in its message box listing what can be used there: this computer's model, where the Chat Computer app runs on it,
+and Connect AirPods). No icon: the tab shows the browser's own.
 
 Run it after changing the screen:  python scripts/build_demo.py
 tests/test_demo.py checks that docs/ is what this makes, so the demo is always Chat Computer's real screen.
@@ -25,8 +25,8 @@ FONTS = ["AtkinsonHyperlegibleNext.ttf", "AtkinsonHyperlegibleNext-Italic.ttf", 
          "README.md"]
 TITLE = "Chat Computer"
 DOMAIN = "chatcomputer.ai"                 # where GitHub Pages serves docs/
-DESCRIPTION = ("Chat Computer is Claude running a whole computer: you talk, type or touch, and it does things for you. "
-               "Try its screen here, in your browser.")
+DESCRIPTION = ("Chat Computer runs a whole computer for you, free, with its own model on your computer: you talk, type "
+               "or touch, and it does things for you. Try its screen here, in your browser.")
 
 
 

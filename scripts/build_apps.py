@@ -7,12 +7,13 @@
 The same bytes each time (fixed dates in the zip), so tests/test_apps.py can check docs/get is what this makes.
 Run it after changing apps/:  python scripts/build_apps.py
 
-And the page the Windows and Mac app bundles (apps/desktop/frontend, not kept in git), before building the app
-(.github/workflows/apps.yml does both):  python scripts/build_apps.py desktop
-It's the website's page (docs/index.html, docs/demo/), with Gemma's and Heart's code beside it (demo/lm/:
-Transformers.js, kokoro-js and ONNX Runtime's WebAssembly, the versions the website loads from jsDelivr, fetched with
-npm, which checks them against the registry's checksums), so nothing that runs in the app's own page comes from
-elsewhere.
+And the page the Windows and Mac app bundles (apps/desktop/frontend, not kept in git), and the model's engine it
+brings (apps/desktop/src-tauri/binaries, not kept in git either), before building the app (.github/workflows/apps.yml
+does both):  python scripts/build_apps.py desktop;  python scripts/build_apps.py engine [--target TRIPLE]
+It's the website's page (docs/index.html, docs/demo/), with Heart's code beside it (demo/lm/: kokoro-js and the ONNX
+Runtime WebAssembly its Transformers.js loads, the versions the website loads from jsDelivr, fetched with npm, which
+checks them against the registry's checksums), so nothing that runs in the app's own page comes from elsewhere. The
+model that answers isn't in the page: it's the engine's, beside the app's program.
 """
 from __future__ import annotations
 
@@ -32,12 +33,9 @@ CHROME_FILES = ["manifest.json", "background.js", "panel.html", "panel.css", "pa
 CHROME_FOLDER = "Chat Computer"
 DOCS = ROOT / "docs"
 FRONTEND = APPS / "desktop" / "frontend"
-# Gemma's code, and Heart's (the warmer voice: kokoro-js, and the ONNX Runtime its Transformers.js loads), as
-# docs/demo/host.js loads them on the website: npm package, and the files taken from it (to demo/lm/).
+# Heart's code (the warmer voice: kokoro-js, and the ONNX Runtime its Transformers.js loads), as docs/demo/host.js
+# loads it on the website: npm package, and the files taken from it (to demo/lm/).
 LM = {
-    "@huggingface/transformers@4.3.1": ["dist/transformers.min.js"],
-    "onnxruntime-web@1.31.0-dev.20260914-8d85527a0": ["dist/ort-wasm-simd-threaded.asyncify.mjs",
-                                                      "dist/ort-wasm-simd-threaded.asyncify.wasm"],
     "kokoro-js@1.2.1": ["dist/kokoro.web.js"],
     "@huggingface/transformers@3.5.1": ["dist/ort-wasm-simd-threaded.jsep.mjs", "dist/ort-wasm-simd-threaded.jsep.wasm"],
 }
@@ -60,7 +58,7 @@ def files() -> dict[Path, bytes]:
 
 
 def desktop_frontend(lm: bool = True) -> Path:
-    """apps/desktop/frontend: the website's page, and (unless lm is False) Gemma's code beside it."""
+    """apps/desktop/frontend: the website's page, and (unless lm is False) Heart's code beside it."""
     shutil.rmtree(FRONTEND, ignore_errors=True)
     FRONTEND.mkdir(parents=True)
     shutil.copy2(DOCS / "index.html", FRONTEND / "index.html")
@@ -69,7 +67,7 @@ def desktop_frontend(lm: bool = True) -> Path:
         (FRONTEND / "demo" / "lm").mkdir()
         npm = shutil.which("npm")
         if not npm:
-            raise SystemExit("npm is needed to fetch Gemma's and Heart's code (or: build_apps.py desktop --no-lm)")
+            raise SystemExit("npm is needed to fetch Heart's code (or: build_apps.py desktop --no-lm)")
         with tempfile.TemporaryDirectory() as tmp:
             for spec, wanted in LM.items():
                 out = subprocess.run([npm, "pack", spec, "--silent"], cwd=tmp, capture_output=True, text=True, check=True)
@@ -80,9 +78,46 @@ def desktop_frontend(lm: bool = True) -> Path:
     return FRONTEND
 
 
+BINARIES = APPS / "desktop" / "src-tauri" / "binaries"
+
+
+def host_triple() -> str:
+    out = subprocess.run(["rustc", "-vV"], cwd=ROOT / "os", capture_output=True, text=True, check=True).stdout
+    return next(line.split(": ", 1)[1] for line in out.splitlines() if line.startswith("host: "))
+
+
+def desktop_engine(target: str | None = None) -> Path:
+    """The model's engine (os/model's chat-computer-model), built for the app's target, where Tauri takes what the
+    app brings with it (src-tauri/binaries/chat-computer-model-<target>, its externalBin). A Mac's app for Apple
+    silicon and Intel at once (universal-apple-darwin) gets one program for both; Windows', built elsewhere than on
+    Windows, is built with cargo-xwin."""
+    target = target or host_triple()
+    BINARIES.mkdir(parents=True, exist_ok=True)
+    out = BINARIES / f"chat-computer-model-{target}{'.exe' if 'windows' in target else ''}"
+    parts = ["aarch64-apple-darwin", "x86_64-apple-darwin"] if target == "universal-apple-darwin" else [target]
+    built = []
+    for t in parts:
+        cmd = ["cargo", "build", "--release", "-p", "model", "--features", "std", "--bin", "chat-computer-model", "--target", t]
+        if "windows-msvc" in t and sys.platform != "win32":
+            cmd[1:2] = ["xwin", "build"]
+        subprocess.run(cmd, cwd=ROOT / "os", check=True)
+        built.append(ROOT / "os" / "target" / t / "release" / f"chat-computer-model{'.exe' if 'windows' in t else ''}")
+    if len(built) > 1:
+        subprocess.run(["lipo", "-create", "-output", str(out), *map(str, built)], check=True)
+        for t, b in zip(parts, built):              # (and each on its own, for a build for one of them: its tests)
+            shutil.copy2(b, BINARIES / f"chat-computer-model-{t}")
+    else:
+        shutil.copy2(built[0], out)
+    return out
+
+
 def main() -> None:
     if sys.argv[1:2] == ["desktop"]:
         print("wrote", desktop_frontend(lm="--no-lm" not in sys.argv).relative_to(ROOT))
+        return
+    if sys.argv[1:2] == ["engine"]:
+        target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else None
+        print("wrote", desktop_engine(target).relative_to(ROOT))
         return
     for path, data in files().items():
         path.parent.mkdir(parents=True, exist_ok=True)

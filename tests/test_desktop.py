@@ -1,6 +1,7 @@
 """The Chat Computer app for Windows and Mac (apps/desktop): the website's page bundled into a window of its own
 (scripts/build_apps.py desktop), with what a website can't do (any site in the middle, in the app's own view; "/"
-finding the computer's files). Only the app's own page may ask the app for those: its capabilities say so, and so
+finding the computer's files; the model, on this computer: Chat Computer's own engine, which comes with the app,
+scripts/build_apps.py engine). Only the app's own page may ask the app for those: its capabilities say so, and so
 does each command. Where it's built here for Linux (tauri build --debug --no-bundle) and WebDriver for it is there
 (tauri-driver, WebKitWebDriver), it's tried for real (tests/desktop_check.py)."""
 import json
@@ -21,7 +22,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build_apps  # noqa: E402
 
 COMMANDS = ["show_site", "place_site", "hide_site", "unhide_site", "close_site", "site_media", "search_files", "open_file", "about",
-            "connect_service", "forget_service", "open_service_item"]
+            "connect_service", "forget_service", "open_service_item", "model_status"]
 # What a connected service's own pages may ask (what its reader read there), and nothing else.
 SERVICE_COMMANDS = ["messages_found"]
 SERVICES = ["gmail", "outlook", "telegram", "whatsapp", "wechat", "discord"]
@@ -34,14 +35,11 @@ def test_the_app_s_page_is_the_website_s(tmp_path, monkeypatch):
     for f in (ROOT / "docs" / "demo").rglob("*"):
         if f.is_file():
             assert (out / "demo" / f.relative_to(ROOT / "docs" / "demo")).read_bytes() == f.read_bytes(), f
-    # Gemma's code, the same version as the website's (from jsDelivr there; with the app, from npm, here).
+    # Heart's code (the warmer voice), the same version as the website's (from jsDelivr there; with the app, from
+    # npm, here): kokoro-js, and the ONNX Runtime its Transformers.js loads. (The model that answers isn't in the
+    # page: it's the engine's, beside the app's program.)
     host = (ROOT / "docs" / "demo" / "host.js").read_text()
-    assert '"@huggingface/transformers@4.3.1"' in (ROOT / "scripts" / "build_apps.py").read_text()
-    assert 'var LM_LIBRARY = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";' in host
-    assert 'if (APP) LM_LIBRARY = LM_HERE + "transformers.min.js";' in host
-    assert list(build_apps.LM) == ["@huggingface/transformers@4.3.1", "onnxruntime-web@1.31.0-dev.20260914-8d85527a0",
-                                   "kokoro-js@1.2.1", "@huggingface/transformers@3.5.1"]
-    # And Heart's (the warmer voice): kokoro-js, the website's version, and the ONNX Runtime its Transformers.js loads.
+    assert list(build_apps.LM) == ["kokoro-js@1.2.1", "@huggingface/transformers@3.5.1"]
     assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
     assert 'if (APP) HEART.library = LM_HERE + "kokoro.web.js";' in host and "if (LM_HERE && k.env) k.env.wasmPaths = LM_HERE;" in host
 
@@ -100,6 +98,31 @@ def test_how_it_s_made_and_signed():
     assert "Chat-Computer-Windows.exe" in flow and "Chat-Computer-Mac.dmg" in flow and "@tauri-apps/cli@2.12.3" in flow
     assert "python scripts/build_apps.py desktop" in flow and "cargo test --locked" in flow
     assert (TAURI / "Cargo.lock").is_file()
+    # The model's engine comes with the app, beside its program (Tauri's externalBin, built for the app's target by
+    # build_apps.py engine, before the app is built: binaries/ isn't kept in git).
+    assert b["externalBin"] == ["binaries/chat-computer-model"]
+    assert "python scripts/build_apps.py engine" in flow and flow.index("build_apps.py engine") < flow.index("cargo test --locked")
+    assert "apps/desktop/src-tauri/binaries/" in (ROOT / ".gitignore").read_text()
+
+
+def test_the_model_runs_on_this_computer_and_ends_with_the_app():
+    """engine.rs: the engine beside the app's program, its processes holding nothing once the app has gone (each
+    started with --exit-with-stdin, the app holding their standard input), getting the model ready at a lower
+    priority; the models in the app's own folder, and another folder or catalogue only in a build for testing; the
+    page told how it goes; started again should it stop by itself."""
+    engine = (TAURI / "src" / "engine.rs").read_text()
+    lib = (TAURI / "src" / "lib.rs").read_text()
+    assert 'format!("chat-computer-model{}", std::env::consts::EXE_SUFFIX)' in engine
+    assert '.arg("--exit-with-stdin").stdin(Stdio::piped())' in engine
+    assert "BELOW_NORMAL_PRIORITY_CLASS" in engine and "CREATE_NO_WINDOW" in engine and '"/usr/bin/nice"' in engine
+    assert engine.count("stdin.take()") == 3             # (models, serve and prepare: each held)
+    assert 'app.path().app_local_data_dir()?.join("models")' in lib
+    assert 'if cfg!(debug_assertions) {\n        if let Some(d) = std::env::var_os("CHATCOMPUTER_MODELS_DIR")' in lib
+    assert 'std::env::var_os("CHATCOMPUTER_ENGINE_CATALOGUE").filter(|_| cfg!(debug_assertions))' in lib
+    assert 'tell_main(&told, serde_json::json!({ "model": s }))' in lib and "stopping.stop();" in lib
+    assert "fn watch(" in engine and "if again == 3" in engine
+    model_status = re.search(r"fn model_status\(([^)]*)\)[^{]*\{(.*?)\n\}", lib, re.S).group(2)
+    assert "from_main(&webview)?" in model_status
 
 
 BINARY = TAURI / "target" / "debug" / "chat-computer"
@@ -125,6 +148,15 @@ def test_the_app_works(loopback):
     # The app's own page: from Tauri's scheme, or (as on a Mac) the app's own server.
     assert res["page"] == ("http://127.0.0.1:42851" if loopback else "tauri://localhost") and res["secure"] is True
     assert res["greeting"] == "hello, world" and res["about"]["ok"]["system"] == "linux"
+    # The model: the one here (a tiny one, of random weights) served by the engine beside the app, on this computer;
+    # the page told, "/" names it, and it answers what's asked (words of no sense: its weights are random); when the
+    # app closes, the engine ends with it.
+    m = res["model"]
+    assert (m["state"], m["label"], m["preparing"]) == ("ready", "Tiny", "") and 8765 <= m["port"] < 8775
+    assert res["model_slash"] == "Tiny"
+    answer = res["model_answer"]
+    assert answer and not answer.startswith(("My model stopped", "My model couldn't", "I can't")), answer
+    assert res["engine_left"] == 0
     # "/": in the usual folders, by name; opened with the system's opener; what "/" didn't find, and programs, not.
     assert sorted(res["found"]) == [["Taxes", "~/Documents", "folder"], ["Taxes 2025.pdf", "~/Documents/Taxes", "document"]]
     assert res["open_found"] == {"ok": "Taxes 2025.pdf"} and res["opened"] and res["opened"][-1].endswith("Taxes 2025.pdf")
@@ -132,7 +164,7 @@ def test_the_app_works(loopback):
     assert "Programs and scripts aren't opened from here" in res["open_program"]["no"]
     assert res["slash"] == "Beach.jpg"
     # A site in the middle, in the app's own view: what it's at and called come back; it can't ask the app.
-    assert res["site_url"] == "http://127.0.0.1:8765/a.html"
+    assert res["site_url"] == "http://127.0.0.1:8790/a.html"
     assert res["site_title"] in ("A test page: no app", "A test page: the app said no")
     assert res["content"] == [True, res["content"][1]] and res["content"][1].startswith("A test page")
     # The page sent elsewhere comes back, with that address in the middle; closed, the conversation again.

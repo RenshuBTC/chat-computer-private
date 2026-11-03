@@ -3,6 +3,11 @@ WebKitWebDriver), with a pretend home folder and a small website of its own on t
 
     python tests/desktop_check.py <the app's binary> [loopback]
 
+The model: the engine that comes with the app (beside its program) serves the model that's here (a tiny one with
+random weights, tests/data/tiny-model.ccm, in a folder of models and a catalogue of this check's own: a build for
+testing takes CHATCOMPUTER_MODELS_DIR and CHATCOMPUTER_ENGINE_CATALOGUE), the page hears it's ready, "/" names it,
+and something asked is answered by it; when the app closes, the engine ends with it.
+
 What it does, as the app's own page would: starts with the greeting; is told the computer's name; "/" finds files
 in Documents and opens one (with a stand-in for the system's opener); refuses a file "/" didn't find, and a program;
 shows a site in the middle, in the app's own view, which hears its title and where it is; a site there can't ask the
@@ -16,6 +21,7 @@ site in the middle can't hand over messages; a service disconnected goes from Me
 """
 from __future__ import annotations
 
+import hashlib
 import http.server
 import json
 import os
@@ -32,7 +38,8 @@ from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.common.options import ArgOptions
 
-SITE_PORT = 8765
+SITE_PORT = 8790
+TINY = Path(__file__).resolve().parent / "data" / "tiny-model.ccm"
 PAGES = {
     "/a.html": "<!doctype html><title>A test page</title><p>A test page</p><script>"
                "var t = window.__TAURI__ && window.__TAURI__.core;"
@@ -94,6 +101,13 @@ def wait_port(port: int, s: float = 20) -> None:
     raise RuntimeError(f"nothing on port {port}")
 
 
+def _exe(pid: str) -> str:
+    try:
+        return os.path.realpath(f"/proc/{pid}/exe")
+    except OSError:
+        return ""
+
+
 def main() -> None:
     binary, loopback = os.path.abspath(sys.argv[1]), "loopback" in sys.argv[2:]
     out: dict = {"loopback": loopback}
@@ -120,6 +134,16 @@ def main() -> None:
     if loopback:
         env["CHATCOMPUTER_LOOPBACK"] = "1"
     env["CHATCOMPUTER_SERVICES_AT"] = f"http://127.0.0.1:{SITE_PORT}/"      # (the services: this check's own pages)
+    # The models: a tiny one, here already (nothing to download), in a catalogue of its own.
+    models = work / "models"
+    models.mkdir()
+    shutil.copy2(TINY, models / "tiny.ccm")
+    (work / "models.json").write_text(json.dumps({"models": [{
+        "name": "tiny", "label": "Tiny", "repo": "Qwen/Tiny", "revision": "0" * 40, "memory_gb": 0, "bits": 8,
+        "files": [{"name": "model.safetensors", "size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}]}]}))
+    env["CHATCOMPUTER_MODELS_DIR"] = str(models)
+    env["CHATCOMPUTER_ENGINE_CATALOGUE"] = str(work / "models.json")
+    engine = os.path.realpath(os.path.join(os.path.dirname(binary), "chat-computer-model"))
     xvfb = None
     if not os.environ.get("DISPLAY"):
         xvfb = subprocess.Popen(["Xvfb", ":97", "-screen", "0", "1440x900x24", "-nolisten", "tcp"], stderr=subprocess.DEVNULL)
@@ -164,6 +188,20 @@ def main() -> None:
         out["secure"] = js("return window.isSecureContext")          # (WebGPU, the microphone and the cache need it)
         out["greeting"] = js("return document.querySelector('#log > .ai.hello')._said.split('\\n')[0]")
         out["about"] = invoke("about")
+        # The model: served by the engine beside the app (the one here), the page told; "/" names it.
+        end = time.time() + 90
+        while time.time() < end:
+            out["model"] = invoke("model_status").get("ok") or {}
+            if out["model"].get("state") in ("ready", "failed", "none"):
+                break
+            time.sleep(0.5)
+        until("document.getElementById('input').placeholder === 'Type anything'", 10)
+        # (Searched by its name: "/" alone would list the files too, and a file listed may be opened.)
+        js("var i = document.getElementById('input'); i.focus(); i.value = '/tiny'; i.dispatchEvent(new Event('input', {bubbles: true}));")
+        try:
+            out["model_slash"] = until("(document.querySelector('#results .res .res-name') || {}).textContent")
+        finally:
+            js("var i = document.getElementById('input'); i.value = ''; i.dispatchEvent(new Event('input', {bubbles: true}));")
         # "/": the files in the pretend home folder; one opened; what wasn't found, and a program, refused.
         found = invoke("search_files", {"query": "taxes"})
         out["found"] = [(h["name"], h["where"], h["kind"]) for h in found.get("ok", [])] if "ok" in found else found
@@ -242,6 +280,18 @@ def main() -> None:
         js("Array.from(document.querySelectorAll('#sheet-fields .choices button')).filter(function (b) {"
            " return b.textContent === 'Disconnect Outlook'; })[0].click()")
         out["after_disconnect"] = until("!" + msgs + ".some(function (m) { return m[0] === 'Sam Lee'; }) && " + msgs, 10)
+        # Asked something, the model answers (last: its weights are random, and so may be what it does).
+        js("document.getElementById('frame-close').click()")
+        said = js("return document.querySelectorAll('#log > .ai').length")
+        js("var i = document.getElementById('input'); i.value = 'hi'; i.dispatchEvent(new Event('input', {bubbles: true}));"
+           "document.getElementById('send').click();")
+        until("document.querySelectorAll('#log > .ai').length > %d && !document.querySelector('#log > .ai.thinking')" % said, 30)
+        last, same, end = None, 0, time.time() + 60          # (its words stream in: until they stop coming)
+        while time.time() < end and same < 8:
+            now = js("return Array.from(document.querySelectorAll('#log > .ai')).pop().textContent")
+            same, last = (same + 1 if now == last else 0), now
+            time.sleep(0.25)
+        out["model_answer"] = last
         if loopback:
             port = int(out["page"].rsplit(":", 1)[1])
             req = urllib.request.Request(f"http://127.0.0.1:{port}/index.html", headers={"Host": "evil.example"})
@@ -259,6 +309,13 @@ def main() -> None:
             except Exception:  # noqa: BLE001
                 pass
         td.terminate()
+        # The engine ends with the app.
+        end = time.time() + 10
+        while time.time() < end:
+            out["engine_left"] = sum(1 for d in os.listdir("/proc") if d.isdigit() and _exe(d) == engine)
+            if not out["engine_left"]:
+                break
+            time.sleep(0.25)
         server.shutdown()
         if xvfb:
             xvfb.terminate()

@@ -1,16 +1,15 @@
 // The browser demo (docs/index.html: Chat Computer's own screen, with docs/demo/host.js standing in for the computer),
 // tried in Chromium with Playwright: it opens on the word logo, which fades away after a second, and then Chat
-// Computer's first words come in as if just typed (hello, world and a greeting, another on another visit; none when
-// something's said first), the cursor in the box; the
-// sidebars' switches; music (made by the browser), in the middle in the conversation's place; "/" lists the files in
-// front of what's open; the sidebars from the start, Escape puts them away and brings them back; the x closes it; a message opened as its whole
-// conversation; an answer in words alone bringing the conversation back; Google, for real, typed into; Connect
-// Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
-// when it ends, with a stand-in for YouTube's player; answers streamed; thinking first, as Opus 5.5 always does);
-// Connect AirPods' sheet; Chrome's built-in AI, with a stand-in (Download Gemini: its sheet, the download, then it
-// answers); a phone, laid out as the Claude app is there (the keyboard down after sending, a held message's menu,
-// nothing zooming; music turned down, then stopped); and Connect AirPods on an iPhone, with stand-ins for Safari's
-// listening and speaking.
+// Computer's first words come in as if just typed (hello, world; none when something's said first), the cursor in
+// the box; the sidebars' switches; music (made by the browser), in the middle in the conversation's place; "/" lists
+// the files in front of what's open; the sidebars from the start, Escape puts them away and brings them back; the x
+// closes it; a message opened as its whole conversation; an answer in words alone bringing the conversation back;
+// Google, for real, typed into; this computer's model, where the Chat Computer app runs here (a stand-in for its
+// engine; tools used: a map, a YouTube video, which closes when it ends, with a stand-in for YouTube's player;
+// answers streamed); the app itself (a stand-in), its model getting ready and then answering with the app's own
+// tools; Connect AirPods' sheet; Heart, the warmer voice (a stand-in), downloaded in pieces; a phone, laid out as the
+// Claude app is there (the keyboard down after sending, a held message's menu, nothing zooming; music turned down,
+// then stopped); and Connect AirPods on an iPhone, with stand-ins for Safari's listening and speaking.
 // Prints JSON.  Run: node tests/demo_check.js [shot-prefix]
 const path = require("path");
 const { chromium, devices } = require("playwright");
@@ -35,37 +34,34 @@ window.end = function () { send({ event: "onStateChange", info: 0 }); };
 const GOOGLE = `<!doctype html><title>Google</title><body style="margin:0"><input id="q" aria-label="Search"
   style="position:absolute;left:30px;top:40px;width:300px;height:36px"></body>`;
 
-// Anthropic's API, standing in: the key check; a map of Tokyo asked for (show_map), a video (play_youtube), or
-// it quieter (set_volume); then
-// the answer, once the tool's result is back. A tool's turn starts with thinking, as the real one's do: its text
-// left out (display "omitted"), only its signature.
-function sse(events) { return events.map((e) => "event: " + e.type + "\ndata: " + JSON.stringify(e) + "\n\n").join(""); }
-const START = { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", content: [], model: "claude-sonnet-5-5",
-  stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } };
-function toolTurn(id, name, json) {
-  const half = Math.floor(json.length / 2);
-  return sse([START,
-    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } },
-    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-" + id } },
-    { type: "content_block_stop", index: 0 },
-    { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: id, name: name, input: {} } },
-    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: json.slice(0, half) } },
-    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: json.slice(half) } },
-    { type: "content_block_stop", index: 1 },
-    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 30 } },
-    { type: "message_stop" }]);
+// Chat Computer's engine (os/model), standing in: OpenAI's chat completions API, its answers streamed as the engine
+// streams them ("data:" events, then "data: [DONE]"): a tool's call (a map of Tokyo, a video, the volume; its
+// arguments here in two pieces), or words.
+function chunk(delta, finish) {
+  return "data: " + JSON.stringify({ id: "chatcmpl-1", object: "chat.completion.chunk", created: 1, model: "qwen3.5-9b",
+    choices: [{ index: 0, delta: delta, finish_reason: finish || null }] }) + "\n\n";
+}
+function toolTurn(id, name, args) {
+  const half = Math.floor(args.length / 2);
+  return chunk({ role: "assistant" }) +
+    chunk({ tool_calls: [{ index: 0, id: id, type: "function", function: { name: name, arguments: args.slice(0, half) } }] }) +
+    chunk({ tool_calls: [{ index: 0, function: { arguments: args.slice(half) } }] }) + chunk({ content: "" }, "tool_calls") + "data: [DONE]\n\n";
 }
 function textTurn(words) {
-  return sse([START,
-    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }]
-    .concat(words.map((w) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: w } })))
-    .concat([{ type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
-      { type: "message_stop" }]));
+  return chunk({ role: "assistant" }) + words.map((w) => chunk({ content: w })).join("") + chunk({ content: "" }, "stop") + "data: [DONE]\n\n";
 }
-const MAP_TURN = toolTurn("toolu_1", "show_map", '{"place": "Tokyo", "west": 139.55, "south": 35.55, "east": 139.95, "north": 35.8}');
-const VIDEO_TURN = toolTurn("toolu_2", "play_youtube", '{"video_id": "aBcDeFgHiJk", "title": "A test video"}');
-const VOLUME_TURN = toolTurn("toolu_3", "set_volume", '{"percent": 30}');
+const MAP_TURN = toolTurn("call_1", "show_map", '{"place": "Tokyo", "west": 139.55, "south": 35.55, "east": 139.95, "north": 35.8}');
+const VIDEO_TURN = toolTurn("call_2", "play_youtube", '{"video_id": "aBcDeFgHiJk", "title": "A test video"}');
+const VOLUME_TURN = toolTurn("call_3", "set_volume", '{"percent": 30}');
+const HEALTH = JSON.stringify({ ok: true, model: "qwen3.5-9b", style: "qwen3.5",
+  uncensored: { taken_out: true, checked: 24, refused_before: 18, refused_after: 0 } });
+// What the page asked the engine for.
+function asked(route) {
+  const req = route.request(), body = JSON.parse(req.postData() || "{}");
+  return { method: req.method(), path: new URL(req.url()).pathname, model: body.model, stream: body.stream, think: body.think,
+           max_tokens: body.max_tokens, tools: (body.tools || []).map((t) => t.type + " " + (t.function || {}).name),
+           messages: body.messages || [] };
+}
 
 async function state(page) {
   return page.evaluate(() => {
@@ -160,7 +156,7 @@ async function ask(page, text, meanwhile) {
 (async () => {
   const out = {};
   const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+  const page = await (await browser.newContext({ viewport: { width: 1600, height: 900 } })).newPage();    // (later visits too)
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.route(/youtube/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: PLAYER }));      // no network needed
@@ -168,22 +164,6 @@ async function ask(page, text, meanwhile) {
   // Wikipedia finds nothing here (a question of fact then gets the page's honest note, as with no AI).
   await page.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
     headers: { "access-control-allow-origin": "*" }, body: "{}" }));
-  const api = [];
-  await page.route("https://api.anthropic.com/**", (route) => {
-    const req = route.request(), body = JSON.parse(req.postData() || "{}");
-    api.push({ url: req.url(), key: req.headers()["x-api-key"], direct: req.headers()["anthropic-dangerous-direct-browser-access"],
-               version: req.headers()["anthropic-version"], model: body.model, stream: !!body.stream, max_tokens: body.max_tokens,
-               system: body.system ? body.system[0].text : null, thinking: body.thinking || null, effort: body.output_config || null,
-               tools: (body.tools || []).map((t) => t.name), last: JSON.stringify((body.messages || []).slice(-1)),
-               all: JSON.stringify(body.messages || []) });
-    if (!body.stream) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "msg_0", type: "message",
-      role: "assistant", content: [{ type: "text", text: "Hi" }], stop_reason: "max_tokens", usage: { input_tokens: 8, output_tokens: 1 } }) });
-    const last = JSON.stringify(body.messages.slice(-1));
-    const turn = /toolu_1/.test(last) ? textTurn(["Here's ", "Tokyo."]) : /toolu_2/.test(last) ? textTurn(["Playing ", "it."])
-      : /toolu_3/.test(last) ? textTurn(["Quieter ", "now."]) : /quieter/.test(last) ? VOLUME_TURN
-      : /video/.test(last) ? VIDEO_TURN : MAP_TURN;
-    return route.fulfill({ status: 200, contentType: "text/event-stream", body: turn });
-  });
   await page.goto(page_url);
   // It opens on the word logo alone; after a second it fades away (over half a second), and then Chat Computer's
   // first words come in as its answers do, as if just typed: a moment's thinking, then the words a few letters at a
@@ -315,236 +295,137 @@ async function ask(page, text, meanwhile) {
   await page.click("#frame-close");
   await page.click("#input");
 
-  // Connect Claude ("/"): its sheet, a key, and then Claude (a stand-in) answers, using a tool of the demo's.
-  await slash(page, "Connect Claude");
-  out.claude_sheet = await state(page);
-  await page.keyboard.type("sk-ant-api03-demo-test-key");
-  await page.keyboard.press("Enter");
+  // This computer's model, where the Chat Computer app runs here: a stand-in for its engine at 127.0.0.1:8765. "/"
+  // lists Use this computer's model: chosen while the app isn't running, its sheet says so; with it running, the
+  // model answers, using the page's tools (a map; a YouTube video, with a stand-in for YouTube's player, which closes
+  // when it ends; the volume); on a later visit it's used again by itself; when the app stops, the page says so and
+  // the written answers are back; Stop using it.
+  const engine = { up: false, asked: [], health: 0 };
+  await page.context().route("http://127.0.0.1:8765/**", (route) => {
+    if (!engine.up) return route.abort("connectionrefused");
+    if (new URL(route.request().url()).pathname === "/health") {
+      engine.health++;
+      return route.fulfill({ status: 200, contentType: "application/json", body: HEALTH });
+    }
+    const a = asked(route), last = a.messages[a.messages.length - 1] || {};
+    engine.asked.push(a);
+    const said = String((a.messages.filter((m) => m.role === "user").pop() || {}).content || "");
+    const turn = last.role === "tool" ? textTurn(last.tool_call_id === "call_1" ? ["Here's ", "Tokyo."] : last.tool_call_id === "call_2" ?
+      ["Playing ", "it."] : ["Quieter ", "now."]) : /quieter/.test(said) ? VOLUME_TURN : /video/.test(said) ? VIDEO_TURN :
+      /Tokyo/.test(said) ? MAP_TURN : textTurn(["Hello ", "from ", "Qwen."]);
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body: turn });
+  });
+  await slash(page, "Use this computer");
+  out.local_sheet = await state(page);
+  out.local_sheet_text = await page.evaluate(() => document.getElementById("sheet-text").innerText);
+  await page.click("#sheet-ok");
+  await page.waitForFunction(() => document.getElementById("sheet-error").textContent !== "");
+  out.local_refused = await page.evaluate(() => ({ sheet: document.body.classList.contains("sheet"),
+    error: document.getElementById("sheet-error").textContent }));
+  engine.up = true;
+  await page.click("#sheet-ok");
   await page.waitForFunction(() => !document.body.classList.contains("sheet"));
-  out.claude_on = await state(page);
-  out.claude_on_slash = await slash(page);
-  out.stored = await page.evaluate(() => localStorage.getItem("chatcomputer-demo-claude-key"));
+  out.local_on = await state(page);
+  out.local_on_slash = await slash(page);
+  out.local_stored = await page.evaluate(() => localStorage.getItem("chatcomputer-local-model"));
   await ask(page, "show me Tokyo");
-  out.claude_map = await state(page);
-  if (shot) await page.screenshot({ path: shot + "-claude.png" });
-  // A video, played by Claude: YouTube's player (a stand-in) between the sidebars; when it ends, the conversation.
+  out.local_map = await state(page);
+  if (shot) await page.screenshot({ path: shot + "-local.png" });
+  // A video, played by the model: YouTube's player (a stand-in) between the sidebars; when it ends, the conversation.
   await ask(page, "play a video");
-  out.claude_video = await state(page);
+  out.local_video = await state(page);
   await page.waitForTimeout(300);
-  // Turned down by Claude (set_volume): YouTube's player is told, and the video stays.
+  // Turned down by the model (set_volume): YouTube's player is told, and the video stays.
   await ask(page, "a bit quieter");
-  out.claude_quieter = { ...(await state(page)), player: await player(page).evaluate(() => window.commands) };
+  out.local_quieter = { ...(await state(page)), player: await player(page).evaluate(() => window.commands) };
   await player(page).evaluate(() => window.end());
   await page.waitForFunction(() => !document.body.classList.contains("content"));
   out.video_ended = await state(page);
-  out.api = api;
-  await slash(page, "Disconnect Claude");
-  out.claude_off_sheet = await state(page);
-  await page.click("#sheet-ok");
-  await page.waitForFunction(() => !document.body.classList.contains("sheet"));
-  out.claude_off = await state(page);
-  out.claude_off_slash = await slash(page);
-  out.stored_after = await page.evaluate(() => localStorage.getItem("chatcomputer-demo-claude-key"));
+  out.asked = engine.asked.splice(0);
+  // A later visit: used again by itself (the app still running).
+  const later = await page.context().newPage();
+  later.on("pageerror", (e) => errors.push(String(e)));
+  const probes = engine.health;
+  await later.goto(page_url);
+  await greeted(later);
+  for (let t = Date.now(); engine.health === probes; ) {
+    if (Date.now() - t > 8000) throw new Error("the later visit didn't look for the model");
+    await new Promise((ok) => setTimeout(ok, 100));
+  }
+  await later.waitForTimeout(200);
+  out.local_later_slash = await slash(later);
+  out.local_later = await ask(later, "hello there");
+  out.local_later_asked = engine.asked.splice(0).map((a) => a.messages.slice(1).map((m) => [m.role, m.content]));
+  // The app stops: said so; the written answers are back, and "/" offers it again.
+  engine.up = false;
+  out.local_gone = await ask(later, "what's new?");
+  out.local_gone_slash = await slash(later);
+  out.local_gone_after = await ask(later, "hello");
+  // Back, and then Stop using it: Actions says so, and the browser forgets it.
+  engine.up = true;
+  await slash(later, "Use this computer");
+  await later.click("#sheet-ok");
+  await later.waitForFunction(() => !document.body.classList.contains("sheet"));
+  await slash(later, "Stop using");
+  out.local_stopped = { done: (await state(later)).done, slash: await slash(later),
+    stored: await later.evaluate(() => localStorage.getItem("chatcomputer-local-model")) };
+  await later.close();
   // Connect AirPods ("/"): what it does, before the microphone is asked for.
   await slash(page, "Connect AirPods");
   out.talk_sheet = await state(page);
   await page.keyboard.press("Escape");
 
-  // Chrome's built-in AI, standing in: it can be downloaded; "Download Gemini", its sheet, the download (its progress on
-  // the button), then it answers what the written answers can't, with a page on the screen. Written answers still
-  // answer what they can (music).
-  const ai = await browser.newPage({ viewport: { width: 1600, height: 900 } });
-  ai.on("pageerror", (e) => errors.push(String(e)));
-  await ai.addInitScript(() => {
-    window.__ai = { created: [], prompts: [] };
-    let ready = false;
-    window.LanguageModel = {
-      availability: () => Promise.resolve(ready ? "available" : "downloadable"),
-      create: (o) => {
-        window.__ai.created.push({ system: o.initialPrompts && o.initialPrompts[0].role === "system" && o.initialPrompts[0].content,
-                                   inputs: o.expectedInputs, monitored: typeof o.monitor === "function" });
-        const m = new EventTarget();
-        if (o.monitor) o.monitor(m);
-        return new Promise((ok) => {
-          const step = (loaded) => { const e = new Event("downloadprogress"); e.loaded = loaded; m.dispatchEvent(e); };
-          setTimeout(() => step(0.5), 100);
-          window.__ai.half = () => { step(1); ready = true; ok({
-            prompt: (text, opts) => { window.__ai.prompts.push({ text, schema: !!(opts && opts.responseConstraint) });
-              return Promise.resolve(JSON.stringify({ reply: "Here's a short poem about the sea.", action: "show_page", title: "The sea",
-                                                       markdown: "The tide comes in on silver feet." })); },
-            destroy: () => {} }); };
-        });
-      },
-    };
+  // In the app (a stand-in for it: Tauri's invoke, and what the app tells the page), the model comes with it: while
+  // it gets ready, the empty box says how it's going, and so do "/" (its sheet) and an answer it can't give yet; then
+  // it answers, on the port the app says, with the app's own tools (the files on this computer).
+  const appCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  const appEngine = { asked: [] };
+  await appCtx.route("http://127.0.0.1:8766/**", (route) => {
+    if (new URL(route.request().url()).pathname === "/health") return route.fulfill({ status: 200, contentType: "application/json", body: HEALTH });
+    const a = asked(route), last = a.messages[a.messages.length - 1] || {};
+    appEngine.asked.push(a);
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body: last.role === "tool" ?
+      textTurn(["It's ", "in Documents."]) : toolTurn("call_9", "find_files", '{"query": "tax"}') });
   });
-  await ai.goto(page_url);
-  await ai.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
-  await ai.waitForTimeout(400);
-  out.ai_opening = await slash(ai);
-  await slash(ai, "Download Gemini");
-  out.ai_sheet = await state(ai);
-  await ai.click("#sheet-ok");
-  await ai.waitForFunction(() => /50%/.test(document.getElementById("input").placeholder));
-  out.ai_downloading = await state(ai);
-  out.ai_downloading_slash = await slash(ai);
-  await ai.evaluate(() => window.__ai.half());
-  await ai.waitForFunction(() => !/Downloading/.test(document.getElementById("input").placeholder));
-  out.ai_on = await state(ai);
-  out.ai_on_slash = await slash(ai);
-  await ai.click("#input");
-  await ask(ai, "write a short poem about the sea");
-  out.ai_poem = await state(ai);
-  out.ai_poem_view = await viewText(ai);
-  await ask(ai, "play some piano music");
-  out.ai_music = await state(ai);
-  out.ai_calls = await ai.evaluate(() => window.__ai);
-  if (shot) await ai.screenshot({ path: shot + "-ai.png" });
-
-  // Google's Gemma where the browser has no AI of its own but a graphics chip it can use (WebGPU), with a stand-in
-  // for Transformers.js (from jsDelivr): "Download Gemma" in the "/" list, its sheet, the download's progress, then it
-  // answers what the written answers can't, its words streamed, knowing what was said before; the written answers
-  // still answer what they can. On a later visit it's there (kept by the browser: the stand-in keeps its files where
-  // Transformers.js does) and starts when it's first needed, from the browser's copy; a page that stopped while it
-  // was starting doesn't start it again by itself; Remove Gemma frees the room.
-  const LM = `export class TextStreamer { constructor(tokenizer, o) { this.o = o; } }
-export async function pipeline(task, model, opts) {
-  const lm = window.__lm, base = "https://huggingface.co/" + model + "/resolve/main/";
-  const files = [["onnx/model_" + opts.dtype + ".onnx", 461341], ["tokenizer.json", 20323013]];
-  const c0 = await caches.open("transformers-cache"), data = await c0.match(base + "onnx/model_" + opts.dtype + ".onnx_data");
-  const kept = !!(await c0.match(base + files[0][0])) && !!data;
-  lm.loads.push({ task, model, device: opts.device, dtype: opts.dtype, kept, data: data ? (await data.blob()).size : 0 });
-  if (kept) await new Promise((ok) => setTimeout(ok, 400));       // started from the browser's copy, as Transformers.js does
-  else {
-    files.forEach(([file, total]) => opts.progress_callback({ status: "progress", file, loaded: total / 2, total }));
-    await new Promise((ok) => { lm.finish = ok; });
-    const c = await caches.open("transformers-cache");
-    for (const [file, total] of files) {
-      opts.progress_callback({ status: "progress", file, loaded: total, total });
-      opts.progress_callback({ status: "done", file });
-      await c.put(base + file, new Response("x"));
-    }
-  }
-  const gen = async (messages, o) => {
-    lm.asked.push(messages);
-    for (const w of lm.words) { await new Promise((r) => setTimeout(r, 15)); o.streamer.o.callback_function(w); }
-    return [];
-  };
-  gen.tokenizer = {};
-  gen.dispose = async () => { lm.disposed = true; };
-  return gen;
-}`;
-  const lmCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
-  const DATA = 40 * 1024 * 1024, ranges = [], hub = { hold: true, fail: 0, held: null };
-  await lmCtx.route(/^https:\/\/huggingface\.co\/.*\.onnx_data$/, async (route) => {
-    const req = route.request();
-    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*",
-      "access-control-allow-headers": "range", "access-control-allow-methods": "GET" } });
-    const range = req.headers()["range"] || "", m = /bytes=(\d+)-(\d+)/.exec(range);
-    ranges.push(range);
-    if (!m) return route.fulfill({ status: 200, body: Buffer.alloc(16) });
-    const from = +m[1], to = Math.min(+m[2], DATA - 1);
-    if (from >= 32 * 1024 * 1024 && hub.hold) { hub.held = route; return; }       // the third piece: never comes
-    if (from >= 32 * 1024 * 1024 && hub.fail > 0) { hub.fail--; return route.abort("connectionreset"); }   // cut off once
-    return route.fulfill({ status: 206, headers: { "access-control-allow-origin": "*", "access-control-expose-headers": "*",
-      "content-range": "bytes " + from + "-" + to + "/" + DATA, "content-type": "application/octet-stream" },
-      body: Buffer.alloc(to - from + 1, from >> 24) });
-  });
-  await lmCtx.addInitScript(() => {
-    window.__lm = { loads: [], asked: [], words: ["Dark cup ", "in my hands, ", "the day ", "starts with you."] };
-    Object.defineProperty(navigator, "gpu", { value: { requestAdapter: () => Promise.resolve({ features: new Set(["shader-f16"]) }) } });
-  });
-  await lmCtx.route("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1", (route) => route.fulfill({ status: 200,
-    contentType: "text/javascript", headers: { "access-control-allow-origin": "*" }, body: LM }));
-  await lmCtx.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
+  await appCtx.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
     headers: { "access-control-allow-origin": "*" }, body: "{}" }));
-  const lm = await lmCtx.newPage();
-  lm.on("pageerror", (e) => errors.push(String(e)));
-  await lm.goto(page_url);
-  await greeted(lm);
-  out.lm_opening = await slash(lm);
-  await lm.click("#input");
-  await ask(lm, "write a haiku about coffee");
-  out.lm_before = (await state(lm)).last;
-  await slash(lm, "Download Gemma");
-  out.lm_sheet = await state(lm);
-  await lm.click("#sheet-ok");
-  const kept = (p) => p.evaluate(() => caches.open("chatcomputer-gemma-parts").then((c) => c.keys()).then((k) => k.map((r) => r.url.split("?")[1]).sort()));
-  // (asked again until so: waitForFunction takes a promise for a yes)
-  for (let t = Date.now(); (await kept(lm)).length < 3; ) {
-    if (Date.now() - t > 20000) throw new Error("the pieces never came");
-    await new Promise((ok) => setTimeout(ok, 100));
-  }
-  await lm.waitForFunction(() => /\(\d+%\)/.test(document.getElementById("input").placeholder), null, { timeout: 5000 });
-  out.lm_downloading = await state(lm);
-  out.lm_downloading_slash = await slash(lm);
-  await lm.click("#input");
-  out.lm_stuck = await ask(lm, "are you stuck downloading?");
-  out.lm_pieces_kept = await kept(lm);
-  out.lm_ranges_first = ranges.splice(0);
-  await lm.close();                                         // (left mid-download: the third piece never came)
-  hub.hold = false;
-  hub.fail = 1;
-  const lm1 = await lmCtx.newPage();
-  lm1.on("pageerror", (e) => errors.push(String(e)));
-  await lm1.goto(page_url);
-  await greeted(lm1);
-  out.lm_again_slash = await slash(lm1);
-  await slash(lm1, "Download Gemma");
-  await lm1.click("#sheet-ok");
-  await lm1.waitForFunction(() => window.__lm.loads.length === 1, null, { timeout: 20000 });
-  out.lm_ranges_again = ranges.splice(0);
-  out.lm_pieces_after = await kept(lm1);
-  await lm1.evaluate(() => window.__lm.finish());
-  await lm1.waitForFunction(() => !/Downloading/.test(document.getElementById("input").placeholder));
-  out.lm_on = await state(lm1);
-  out.lm_on_slash = await slash(lm1);
-  await lm1.click("#input");
-  await ask(lm1, "write a haiku about coffee");
-  out.lm_haiku = await state(lm1);
-  await ask(lm1, "play some piano music");
-  out.lm_music = (await state(lm1)).last;
-  await lm1.evaluate(() => { window.__lm.words = ["Here's ", "a longer one."]; });
-  await ask(lm1, "make it longer");
-  out.lm_calls = await lm1.evaluate(() => ({ loads: window.__lm.loads, asked: window.__lm.asked.map((m) => m.map((x) => [x.role, x.content])) }));
-  await lm1.close();
-  // A later visit: it's here, started (from the browser's copy) when it's first needed.
-  const lm2 = await lmCtx.newPage();
-  lm2.on("pageerror", (e) => errors.push(String(e)));
-  await lm2.goto(page_url);
-  await greeted(lm2);
-  out.lm_later_slash = await slash(lm2);
-  await lm2.click("#input");
-  await ask(lm2, "write a haiku about tea", async () => {
-    out.lm_starting = await (await lm2.waitForFunction(() => { const h = document.getElementById("input").placeholder;
-      return /Starting/.test(h) && h; }, null, { polling: "raf", timeout: 5000 })).jsonValue();
+  await appCtx.addInitScript(() => {
+    window.__app = { calls: [] };
+    window.__TAURI__ = { core: { invoke: (command, args) => {
+      window.__app.calls.push([command, args || {}]);
+      if (command === "about") return Promise.resolve({ name: "Ren Shu" });
+      if (command === "model_status") return Promise.resolve({ state: "preparing", label: "", preparing: "Qwen3.5 9B",
+        stage: "downloading", done: 1.2e9, total: 9e9, port: 8765, detail: "" });
+      if (command === "search_files") return Promise.resolve([{ name: "Taxes 2025.pdf", where: "Documents", kind: "pdf",
+        ts: 1760000000, path: "/home/ren/Documents/Taxes 2025.pdf" }]);
+      return Promise.resolve(null);
+    } } };
   });
-  out.lm_later = await lm2.evaluate(() => ({ last: (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent,
-    loads: window.__lm.loads }));
-  await lm2.close();
-  // The page stopped while it was starting (out of memory): offered again rather than started by itself; removed.
-  const lm3 = await lmCtx.newPage();
-  lm3.on("pageerror", (e) => errors.push(String(e)));
-  await lm3.addInitScript(() => localStorage.setItem("chatcomputer-demo-gemma-starting", "true"));
-  await lm3.goto(page_url);
-  await greeted(lm3);
-  out.lm_stopped_slash = await slash(lm3);
-  await slash(lm3, "Start Gemma");
-  out.lm_stopped_sheet = await lm3.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
+  const app = await appCtx.newPage();
+  app.on("pageerror", (e) => errors.push(String(e)));
+  await app.goto(page_url);
+  await greeted(app);
+  await app.waitForFunction(() => /Getting my model ready/.test(document.getElementById("input").placeholder));
+  out.app_preparing = await state(app);
+  out.app_slash = await slash(app);
+  await slash(app, "Chat Computer's model");
+  out.app_sheet = await app.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
     text: document.getElementById("sheet-text").innerText, ok: document.getElementById("sheet-ok").textContent }));
-  await lm3.keyboard.press("Escape");
-  await lm3.waitForFunction(() => !document.body.classList.contains("sheet"));
-  await slash(lm3, "Start Gemma");
-  await lm3.click("#sheet-ok");
-  await lm3.waitForFunction(() => window.__lm.loads.length === 1);
-  await lm3.waitForFunction(() => !/Starting/.test(document.getElementById("input").placeholder));
-  out.lm_restarted = await lm3.evaluate(() => window.__lm.loads);
-  await slash(lm3, "Remove Gemma");
-  out.lm_remove_sheet = await state(lm3);
-  await lm3.click("#sheet-ok");
-  await lm3.waitForFunction(() => /Removed Gemma/.test(document.getElementById("done").textContent));
-  out.lm_removed = { slash: await slash(lm3), disposed: await lm3.evaluate(() => !!window.__lm.disposed),
-    kept: await lm3.evaluate(() => caches.open("transformers-cache").then((c) => c.keys()).then((k) => k.length)) };
-  await lmCtx.close();
+  await app.click("#sheet-ok");
+  await app.waitForFunction(() => !document.body.classList.contains("sheet"));
+  out.app_before = await ask(app, "write a haiku about coffee");
+  await app.evaluate(() => window.chatcomputerApp({ model: { state: "preparing", label: "", preparing: "Qwen3.5 9B",
+    stage: "uncensoring", done: 30, total: 120, port: 8765, detail: "" } }));
+  out.app_uncensoring = (await state(app)).hint;
+  await app.evaluate(() => window.chatcomputerApp({ model: { state: "ready", label: "Qwen3.5 9B", preparing: "",
+    stage: "", done: 0, total: 0, port: 8766, detail: "" } }));
+  out.app_ready = await state(app);
+  out.app_ready_slash = await slash(app);
+  out.app_answer = await ask(app, "find my tax return");
+  out.app_asked = appEngine.asked;
+  out.app_calls = await app.evaluate(() => window.__app.calls);
+  out.app_done = (await state(app)).done;
+  await appCtx.close();
 
   // Read aloud's voice, where the graphics chip can make Heart's (WebGPU; a stand-in for kokoro-js, and the browser's
   // voices standing in too). The first time Read aloud is pressed, Heart is offered: closed, the browser's best voice
@@ -563,7 +444,7 @@ export async function pipeline(task, model, opts) {
     } };
   }
 }`;
-  const VDATA = 20 * 1024 * 1024, vranges = [], vhub = { hold: false, held: null };
+  const VDATA = 20 * 1024 * 1024, vranges = [], vhub = { hold: false, held: null, fail: 0 };
   function fulfilPiece(route, from, to) {
     return route.fulfill({ status: 206, headers: { "access-control-allow-origin": "*", "access-control-expose-headers": "*",
       "content-range": "bytes " + from + "-" + to + "/" + VDATA, "content-type": "application/octet-stream" }, body: Buffer.alloc(to - from + 1, 7) });
@@ -579,6 +460,7 @@ export async function pipeline(task, model, opts) {
       if (!m) return route.fulfill({ status: 200, body: Buffer.alloc(16) });
       const from = +m[1], to = Math.min(+m[2], VDATA - 1);
       if (from > 0 && vhub.hold) { vhub.held = () => fulfilPiece(route, from, to); return; }   // the second piece: when let go
+      if (from > 0 && vhub.fail > 0) { vhub.fail--; return route.abort("connectionreset"); }   // cut off once
       return fulfilPiece(route, from, to);
     });
     await ctx.route("https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js", (route) => route.fulfill({ status: 200,
@@ -632,7 +514,9 @@ export async function pipeline(task, model, opts) {
   out.voice_again = await v1b.evaluate(() => ({ sheet: document.body.classList.contains("sheet"), spoken: window.__spoken.length }));
   out.voice_again_slash = await slash(v1b);
   await vc1.close();
-  // Chosen: downloaded (the second piece held a moment: its progress shown), then the answer read in Heart.
+  // Chosen: downloading (its progress shown), when the page is left, the second piece never having come; on the next
+  // visit, chosen again, only that piece is asked for (cut off once, and asked for again); then the answer is read
+  // in Heart.
   const vc2 = await voiceContext();
   const v2 = await answered(vc2);
   vhub.hold = true;
@@ -645,16 +529,24 @@ export async function pipeline(task, model, opts) {
   }
   await v2.waitForFunction(() => /\(\d+%\)/.test(document.getElementById("input").placeholder), null, { timeout: 5000 });
   out.voice_downloading = { hint: await v2.evaluate(() => document.getElementById("input").placeholder), slash: await slash(v2) };
+  out.voice_parts_kept = await parts(v2);
+  out.voice_ranges_first = vranges.splice(0);
+  await v2.close();
   vhub.hold = false;
-  await vhub.held();
-  await v2.waitForFunction(() => window.__heart.said.length >= 1, null, { timeout: 20000 });
-  out.voice_heart = await v2.evaluate(() => ({ loads: window.__heart.loads, said: window.__heart.said.slice(), spoken: window.__spoken.length,
+  vhub.held = null;
+  vhub.fail = 1;
+  const v2b = await answered(vc2);
+  await speakLast(v2b);
+  await v2b.waitForFunction(() => document.body.classList.contains("sheet"));
+  await v2b.click("#sheet-ok");
+  await v2b.waitForFunction(() => window.__heart.said.length >= 1, null, { timeout: 20000 });
+  out.voice_heart = await v2b.evaluate(() => ({ loads: window.__heart.loads, said: window.__heart.said.slice(), spoken: window.__spoken.length,
     answer: Array.from(document.querySelectorAll("#log > .ai")).pop().textContent, done: document.getElementById("done").textContent,
     hint: document.getElementById("input").placeholder }));
   out.voice_ranges = vranges.splice(0);
-  out.voice_parts_after = await parts(v2);
-  out.voice_on_slash = await slash(v2);
-  await v2.close();
+  out.voice_parts_after = await parts(v2b);
+  out.voice_on_slash = await slash(v2b);
+  await v2b.close();
   // A later visit: from the browser's copy (nothing downloaded), in Heart; then removed.
   const v3 = await answered(vc2);
   await speakLast(v3);

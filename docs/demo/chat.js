@@ -1536,7 +1536,7 @@
     searchResults: function (n, q, items, note) { if (searching && n === searchN) drawResults(q || "", items, note); },
     // "content" while something is open in the middle (with its name, for the top of its frame), "chat" otherwise.
     mode: function (m, title) { setMode(m === "content" ? "content" : "chat", title); },
-    // What the empty box says for a while ("Listening", "Downloading Gemini… 40%"); nothing: its own hint again.
+    // What the empty box says for a while ("Listening", "Getting my model ready: …"); nothing: its own hint again.
     hint: function (text) { hintNow = String(text || ""); fitHint(); },
     // What's open is called something else now (its page's title, once it's loaded).
     title: function (t) { if (mode === "content") $("frame-title").textContent = t || ""; },

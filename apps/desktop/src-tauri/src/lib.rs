@@ -8,18 +8,22 @@
 //! - The greeting has the name this computer knows you by.
 //! - Messages from your own Gmail, Outlook, Telegram, WhatsApp, WeChat and Discord, each signed in on its own page in
 //!   a view of its own, put together in Messages (messages.rs).
+//! - The model that answers, on this computer: Chat Computer's own engine, which comes with the app, gets the model
+//!   this computer runs well ready and serves it to the page (engine.rs). No account, and nothing sent anywhere.
 //!
 //! Only the app's own page (the webview called "main") can ask for these: the sites shown in the middle can't
 //! (capabilities/, and each command checks who's asking). A connected service's own pages may hand the app what's
 //! read there, and nothing else.
 #![cfg_attr(test, allow(dead_code))]
 
+mod engine;
 mod files;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod loopback;
 mod messages;
 
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl};
@@ -316,6 +320,29 @@ fn open_service_item(app: AppHandle, webview: Webview, service: String, item: St
     }
 }
 
+/// How the model is: answering (on which port of this computer), being got ready (how far), or not here.
+#[tauri::command]
+fn model_status(webview: Webview, engine: tauri::State<'_, Arc<engine::Engine>>) -> Result<engine::Status, String> {
+    from_main(&webview)?;
+    let s = engine.status.lock().map_err(err)?.clone();
+    Ok(s)
+}
+
+/// Where the models go: the app's own folder (or, only in a build for testing, CHATCOMPUTER_MODELS_DIR), and the
+/// catalogue the engine has built in (or, only for testing, CHATCOMPUTER_ENGINE_CATALOGUE's).
+fn models_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if cfg!(debug_assertions) {
+        if let Some(d) = std::env::var_os("CHATCOMPUTER_MODELS_DIR") {
+            return Ok(PathBuf::from(d));
+        }
+    }
+    Ok(app.path().app_local_data_dir()?.join("models"))
+}
+
+fn test_catalogue() -> Option<PathBuf> {
+    std::env::var_os("CHATCOMPUTER_ENGINE_CATALOGUE").filter(|_| cfg!(debug_assertions)).map(PathBuf::from)
+}
+
 /// What a service's reader read on its page, for Messages: only from a service's own view, on its own pages.
 #[tauri::command]
 fn messages_found(app: AppHandle, webview: Webview, items: Vec<messages::Item>, unread: Option<u32>) -> Result<(), String> {
@@ -412,8 +439,8 @@ fn about(webview: Webview) -> Result<serde_json::Value, String> {
 
 /// The address of the app's own page: Tauri's own scheme; on a Mac, a server only this computer can reach, at
 /// 127.0.0.1 (a Mac's web view doesn't treat Tauri's scheme as secure, and without that there's no WebGPU for
-/// Gemma, no microphone and no browser cache). The same port each time where it's free, so what the page keeps
-/// (your name, Claude's key, Gemma) is there next time.
+/// Heart, no microphone and no browser cache). The same port each time where it's free, so what the page keeps
+/// (your name, your Actions, Heart) is there next time.
 fn home_url(app: &tauri::App) -> Result<WebviewUrl, Box<dyn std::error::Error>> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
@@ -427,14 +454,17 @@ fn home_url(app: &tauri::App) -> Result<WebviewUrl, Box<dyn std::error::Error>> 
 }
 
 pub fn run() {
+    let engine = Arc::new(engine::Engine::default());
+    let (starting, stopping) = (engine.clone(), engine.clone());
     tauri::Builder::default()
         .manage(Found::default())
         .manage(Middle::default())
+        .manage(engine)
         .invoke_handler(tauri::generate_handler![
             show_site, place_site, hide_site, unhide_site, close_site, site_media, search_files, open_file, about,
-            connect_service, forget_service, open_service_item, messages_found
+            connect_service, forget_service, open_service_item, model_status, messages_found
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // (A build for testing, pointed at the tests' own pages for the services: those may hand over what's
             // read there too.)
             if let Some(base) = test_services() {
@@ -464,6 +494,14 @@ pub fn run() {
                 }
             };
             app.manage(Home(home.clone()));
+            // The model, on this computer: served (and got ready, where it isn't yet), for the page, which hears how
+            // it goes (chatcomputerApp({model})). The page's own origin may use it (on a Mac, the app's server's).
+            let dir = models_dir(app)?;
+            let origins = if home.scheme() == "http" { vec![home.origin().ascii_serialization()] } else { Vec::new() };
+            let told = app.handle().clone();
+            let tell: Arc<dyn Fn(&engine::Status) + Send + Sync> =
+                Arc::new(move |s| tell_main(&told, serde_json::json!({ "model": s })));
+            std::thread::spawn(move || starting.run(dir, test_catalogue(), origins, tell));
             let (back, opener, guard) = (home.clone(), app.handle().clone(), app.handle().clone());
             let opening = Mutex::new(std::env::var("CHATCOMPUTER_OPEN").ok().filter(|u| web_url(u).is_ok()));
             let main = WebviewBuilder::new(MAIN, url)
@@ -515,8 +553,14 @@ pub fn run() {
             window.add_child(main, LogicalPosition::new(0.0, 0.0), size)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("Chat Computer couldn't start");
+        .build(tauri::generate_context!())
+        .expect("Chat Computer couldn't start")
+        .run(move |_, event| {
+            // (The model's engine ends with the app.)
+            if let tauri::RunEvent::Exit = event {
+                stopping.stop();
+            }
+        });
 }
 
 #[cfg(test)]

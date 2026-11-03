@@ -101,6 +101,9 @@ def test_the_chrome_extension_is_small_and_asks_for_little():
     panel = (ROOT / "apps" / "chrome" / "panel.html").read_text()
     assert re.findall(r"<script[^>]*>", panel) == ['<script src="panel.js">']
     assert 'src="https://chatcomputer.ai/?app=chrome"' in panel
+    # The website in the panel may reach the Chat Computer app's model on this computer (Chrome asks once: its Local
+    # Network Access, delegated to the frame by name, the current one and the one before it).
+    assert 'allow="loopback-network; local-network-access;' in panel and "language-model" not in panel
     js = (ROOT / "apps" / "chrome" / "panel.js").read_text()
     # Only Chat Computer's own page can ask for a tab, and only for a web address.
     assert 'const SITE = "https://chatcomputer.ai";' in js and "e.origin !== SITE" in js

@@ -18,10 +18,11 @@
     "targets": ["nsis", "dmg", "app"],
     "publisher": "Chat Computer",
     "category": "Productivity",
-    "shortDescription": "Chat Computer: talk, type or touch, and Claude does the rest.",
-    "longDescription": "Chat Computer's screen in a window of its own: free answers on this computer with Google's Gemma, or Claude with your own API key; any site opens right in the middle; \"/\" finds your files.",
-    "copyright": "Chat Computer is an independent project, not made by Anthropic.",
+    "shortDescription": "Chat Computer: talk, type or touch, and it does the rest.",
+    "longDescription": "Chat Computer's screen in a window of its own, with its own model on this computer: free, with no account, and nothing sent anywhere; any site opens right in the middle; Messages from your own accounts; \"/\" finds your files.",
+    "copyright": "Chat Computer is an independent project.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "externalBin": ["binaries/chat-computer-model"],
     "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-"

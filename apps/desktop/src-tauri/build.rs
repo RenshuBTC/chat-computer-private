@@ -14,6 +14,7 @@ fn main() {
         "connect_service",
         "forget_service",
         "open_service_item",
+        "model_status",
         "messages_found",
     ])))
     .expect("tauri-build couldn't run");

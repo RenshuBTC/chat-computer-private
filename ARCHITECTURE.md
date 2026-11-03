@@ -106,7 +106,9 @@ chat-computer/
                             own view, signed in by you and kept aside, read by reader.js for messages.rs;
                             capabilities/ giving only the app's own page its commands, and the services' own
                             pages only messages_found), frontend/ (made by
-                            build_apps.py desktop: the website's page, with Gemma's and Heart's code), smoke/ (a site for
+                            build_apps.py desktop: the website's page, with Heart's code), binaries/ (made by
+                            build_apps.py engine: os/model's engine, which comes with the app; engine.rs runs
+                            it), smoke/ (a site for
                             CI's real start-up pictures); .github/workflows/apps.yml builds both on GitHub;
                             tests/test_desktop.py checks it, driving a Linux build with WebDriver where there is one
   apps/android/             The Android app: chatcomputer.ai full screen in Chrome (a Trusted Web Activity, Google's
@@ -118,9 +120,9 @@ chat-computer/
 ## The Windows and Mac app
 
 The website's page (docs/index.html and docs/demo/, copied by `scripts/build_apps.py desktop`) is bundled into the
-app, so the app's own page (the webview `main`) never runs code from elsewhere: even Gemma's Transformers.js, Heart's
-kokoro-js (the warmer voice) and ONNX Runtime's WebAssembly come with it (`demo/lm/`, the website's versions, from
-npm), and only the models are downloaded. host.js sees the app (Tauri's `window.__TAURI__`, `SHELL.kind == "app"`) and then:
+app, so the app's own page (the webview `main`) never runs code from elsewhere: even Heart's kokoro-js (the warmer
+voice) and ONNX Runtime's WebAssembly come with it (`demo/lm/`, the website's versions, from npm), and only Heart's
+model is downloaded by the page. The model that answers is the engine's (below). host.js sees the app (Tauri's `window.__TAURI__`, `SHELL.kind == "app"`) and then:
 
 * A site goes in the app's own browser view, the webview `site` (`show_site`), laid over the frame chat.js draws,
   moved with it (`place_site`), put out of sight while the conversation has the middle or a sheet or a held message
@@ -134,8 +136,20 @@ npm), and only the models are downloaded. host.js sees the app (Tauri's `window.
 * "/" finds the computer's files by name (`search_files`: Desktop, Documents, Downloads, Pictures, Music, Videos
   and OneDrive, skipping hidden folders, programs' own folders and app bundles; at most 8, best first), and the
   one chosen opens with its own app (`open_file`), only if a search found it and it's a document, picture, music,
-  video, archive or folder, never a program or a script. Connected Claude has the same (`find_files`,
-  `open_file`); the website's made-up messages, files and earlier conversations aren't in the app.
+  video, archive or folder, never a program or a script. The model has the same (`find_files`, `open_file`),
+  and your messages (`read_messages`, `open_message`); the website's made-up messages, files and earlier
+  conversations aren't in the app.
+* The model, on this computer (`engine.rs`): Chat Computer's own engine (`os/model`'s chat-computer-model, Tauri's
+  externalBin, beside the app's program) says which model this computer runs well (`models`: by its memory and
+  the room on its disk), serves the best one that's here (`serve`, on 127.0.0.1:8765 or the next free port, for the
+  app's page and chatcomputer.ai only) and, while the one chosen isn't here, gets it ready (`prepare`: downloaded
+  over the engine's own HTTPS, checked against the SHA-256s in models.json, converted, its refusals taken out) at
+  a lower priority, then serves that one. The page asks how it is (`model_status`) and hears each change
+  (`chatcomputerApp({model})`): the empty box says how far it's got. Each of the engine's processes is started
+  with `--exit-with-stdin`, the app holding its standard input, so none outlives the app, even one that crashed;
+  should the one serving stop by itself, it's started again (three times at most). The models are in the app's
+  own folder (a build for testing alone takes another, CHATCOMPUTER_MODELS_DIR, and another catalogue,
+  CHATCOMPUTER_ENGINE_CATALOGUE).
 * The greeting has the first name of the computer's account (`about`), unless one was given ("call me ...").
 * A link clicked in the page opens in the middle; the page sent elsewhere is taken back (on Windows the main
   frame's navigation is stopped; on a Mac and Linux, where frames ask too, the page is loaded again) and the

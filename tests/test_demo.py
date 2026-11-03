@@ -1,7 +1,7 @@
 """The browser demo in docs/ (for GitHub Pages): Chat Computer's own screen, with docs/demo/host.js standing in for the
 computer. It must be the real screen as it is now (scripts/build_demo.py makes it from chatcomputer/ui/assets), keep
-what's typed in the browser unless the visitor connects Claude (then it goes only to Anthropic), and work: tried in
-Chromium when Playwright is there."""
+what's typed on this computer (in the browser, or with the Chat Computer app's model, on this computer too), and
+work: tried in Chromium when Playwright is there."""
 import json
 import os
 import re
@@ -35,37 +35,41 @@ def test_the_demo_is_chatcomputer_s_real_screen_as_it_is_now():
     assert 'enterkeyhint="send"' in page
 
 
-def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
+def test_what_s_typed_stays_on_this_computer():
     host = (ROOT / "docs" / "demo" / "host.js").read_text()
     for call in ("XMLHttpRequest", "sendBeacon", "WebSocket", "EventSource", "navigator.geolocation"):
         assert call not in host, call
-    # From elsewhere: a map when asked, and with the visitor's own key (Connect Claude) Anthropic's API, where every
-    # request goes, and YouTube's player for a video Claude plays. For a place's map, weather or air, Open-Meteo, sent
-    # only the place's name (then its latitude and longitude). What's looked up (by the browser's AI, "look it up", a
-    # question of fact, the news) goes to Wikipedia: only the words looked up. Google's own pages show in the middle
-    # when asked for (Google, its search for what Wikipedia hasn't got, Google Maps' directions: the addresses Google
-    # lets other pages show, igu=1 and output=embed). YouTube's search and BBC News are only links, opened by the
-    # visitor in a new tab (open-meteo.com too: the air's source, named). Gemma, when the visitor downloads it:
-    # Transformers.js, a fixed version, from jsDelivr, and Google's model from Hugging Face (where the browser keeps
-    # its copy, by that address); it runs on the device, so nothing typed is sent anywhere.
+    # What answers for real is Chat Computer's own model, on this computer: the app's engine at 127.0.0.1 (on the
+    # website, where the app runs here and the visitor chose it), and nowhere else; no account, no key.
+    assert 'function localBase() { return "http://127.0.0.1:" + local.port; }' in host
+    for gone in ("api.anthropic.com", "x-api-key", "sk-ant", "languagemodel", "gemma", "gemini nano", "connect claude"):
+        assert gone not in host.lower(), gone
+    # From elsewhere: a map when asked, and YouTube's player for a video. For a place's map, weather or air,
+    # Open-Meteo, sent only the place's name (then its latitude and longitude). What's looked up ("look it up", a
+    # question of fact, the news, the model's web_search) goes to Wikipedia: only the words looked up. Google's own
+    # pages show in the middle when asked for (Google, its search for what Wikipedia hasn't got, Google Maps'
+    # directions: the addresses Google lets other pages show, igu=1 and output=embed). YouTube's search and BBC News
+    # are only links, opened by the visitor in a new tab (open-meteo.com too: the air's source, named). Heart, the
+    # warmer voice, when the visitor downloads it: kokoro-js, a fixed version, from jsDelivr, and its model from
+    # Hugging Face (where the browser keeps its copy, by that address); it runs on the device, so nothing read aloud
+    # is sent anywhere.
     assert set(re.findall(r"https?://[^/\"' ]+", host)) == {
-        "https://www.youtube-nocookie.com", "https://www.openstreetmap.org", "https://api.anthropic.com",
+        "http://127.0.0.1:", "https://www.youtube-nocookie.com", "https://www.openstreetmap.org",
         "https://geocoding-api.open-meteo.com", "https://api.open-meteo.com", "https://air-quality-api.open-meteo.com",
         "https://en.wikipedia.org", "https://open-meteo.com",
         "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com",
         "https://cdn.jsdelivr.net", "https://huggingface.co"}
-    assert 'var LM_LIBRARY = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";' in host
-    # (and Heart, the warmer voice, when the visitor downloads it: kokoro-js, a fixed version, from jsDelivr, and its
-    # model from Hugging Face; it too runs on the device, so nothing read aloud is sent anywhere)
     assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
-    assert host.count("import(") == 2 and "import(LM_LIBRARY)" in host and "import(HEART.library)" in host
+    assert host.count("import(") == 1 and "import(HEART.library)" in host
     fetches = re.findall(r"fetch\(([^,)]+)", host)
-    assert sorted(f.split("?")[0] for f in fetches if not f.startswith("API +")) == [
+    assert sorted(f.split("?")[0] for f in fetches if not f.startswith("localBase(")) == [
         '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search', "url", "url"], fetches
-    # (getJSON's, and Gemma's and Heart's big files, a piece at a time, from Hugging Face: only which bytes are asked for)
-    assert 'pieceFetch(gemmaFile(".onnx_data"), GEMMA_PARTS' in host and 'pieceFetch(heartFile(), HEART_PARTS' in host
-    assert host.count("pieceFetch(") == 3 and 'fetch(url, { headers: { Range: "bytes=" + from + "-" + to }' in host
-    assert "huggingface.co/\" + GEMMA.model + \"/resolve/main/" in host and "huggingface.co/\" + HEART.model + \"/resolve/main/" in host
+    assert 'fetch(localBase() + "/health"' in host and 'fetch(localBase() + "/v1/chat/completions"' in host
+    assert len([f for f in fetches if f.startswith("localBase(")]) == 2
+    # (getJSON's, and Heart's big file, a piece at a time, from Hugging Face: only which bytes are asked for)
+    assert 'pieceFetch(heartFile(), HEART_PARTS' in host
+    assert host.count("pieceFetch(") == 2 and 'fetch(url, { headers: { Range: "bytes=" + from + "-" + to }' in host
+    assert "huggingface.co/\" + HEART.model + \"/resolve/main/" in host
     assert [f for f in fetches if "open-meteo" in f][0].endswith("&name=\" + encodeURIComponent(name")
     # getJSON(url): Wikipedia's API (search, or a day's Current events), and the air where a place is.
     gets = re.findall(r"getJSON\(([^,)]+)", host)
@@ -77,7 +81,10 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
             line = host[host.rfind("\n", 0, at):host.find("\n", at)]
             before = host[host.rfind("\n", 0, host.rfind("\n", 0, at)):host.rfind("\n", 0, at)]
             # (in the app, a video is YouTube's own page, in the app's own view: never on the website)
-            assert "var url = " in line or "link(" in line or ("watch?v=" in line and "if (APP)" in before), line
+            assert ("var url = " in line or "link(" in line or ("watch?v=" in line and "if (APP)" in before)
+                    or "var yurl = " in line), line
+    # (YouTube's search, asked for by the model: in the app, in the middle; on the website, a link)
+    assert "if (APP) show({ src: yurl" in host and "else youtubeSearch(yq).act();" in host
     for site in ("https://www.google.com/", "https://maps.google.com/"):
         for at in [m.start() for m in re.finditer(re.escape(site), host)]:
             line = host[host.rfind("\n", 0, at):host.find("\n", at)]
@@ -86,10 +93,7 @@ def test_what_s_typed_stays_in_the_browser_unless_claude_is_connected():
     # with no way back to this page (a link where the browser stops the tab).
     assert "function framed(url)" in host and "wikipedia\\.org$" in host
     assert 'window.open("", "_blank")' in host and "tab.opener = null" in host
-    assert host.count("x-api-key") == 1 and "anthropic-dangerous-direct-browser-access" in host
-    assert "not made by Anthropic" in host and "written in advance" in host
-    # Claude Pro or Max sign-ins aren't for other apps: a sign-in token is turned away, and the sheet says why.
-    assert "sk-ant-oat" in host and "Anthropic doesn't let other apps sign in with one" in host
+    assert "written in advance" in host and "Chat Computer is an independent project" in host
 
 
 def test_no_two_functions_share_a_name():
@@ -137,7 +141,7 @@ def test_the_demo_works_in_a_browser():
     assert all(g.startswith("and ") for g in options["time"] + options["here"]), options
     # Then: nothing open, no sheet, the cursor in the box under the dimmed hint; under the words, as in the Claude app,
     # + (add files) and the microphone at the left, each doing just that (no menus), and the arrow at the right.
-    # "/" lists what can be connected (Claude, AirPods), then the files.
+    # "/" lists what can be used here (this computer's model, AirPods), then the files.
     assert not first["content"] and not first["sheet"] and first["view"] is None
     # The sidebars show from the start (where there's room for them), with their switches pressed.
     assert not first["full"] and first["sides"] == [True, True] and first["toggles"] == ["true", "true"] and not first["bottom_toggle"]
@@ -151,7 +155,7 @@ def test_the_demo_works_in_a_browser():
     (add, ax, ay), (mic, mx, my) = first["tools"]
     assert (add, mic) == ("Add files", "Talk") and ax < mx < first["send_at"][0] and abs(ay - my) < 1
     assert ay > first["input_top"] and abs(my - first["send_at"][1]) < 12          # on the row under the words
-    assert res["slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Packing list.md" in res["slash"][2:]
+    assert res["slash"][:2] == ["Use this computer's model", "Connect AirPods"] and "Packing list.md" in res["slash"][2:]
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
     assert res["sides_off"]["sides"] == [False, False] and res["sides_off"]["toggles"][:2] == ["false", "false"]
     assert json.loads(res["kept"]) == {"left": False, "right": False}
@@ -191,9 +195,9 @@ def test_the_demo_works_in_a_browser():
     # conversation has the middle again, the answer in it in full (no "more").
     long = res["fallback"]
     assert not long["content"] and long["column_shown"] and long["view"] is None and long["more"] == 0
-    # No good answer: a line, short enough for a phone, and the one thing that gets one (here, where the browser can't
-    # run a free AI, no WebGPU: the app, or Claude).
-    assert long["last"] == "I can't answer that yet. Get the Chat Computer app at chatcomputer.ai/get, or type / and choose Connect Claude."
+    # No good answer: a few short lines, and the one thing that gets one (Chat Computer's own model: with the app).
+    assert long["last"] == ("I can't answer that yet. My model comes with the Chat Computer app (coming soon). Where the app runs "
+                            "on this computer, type / and choose Use this computer's model.")
     # Google, for real, in the middle: its own address for being shown in another page; a click on its box, and
     # typing goes there, not into the message box.
     g = res["google"]
@@ -208,20 +212,65 @@ def test_the_demo_works_in_a_browser():
     video = res["typed_video"]
     assert video["content"] and video["src"].startswith("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?") and "&start=65" in video["src"]
     assert video["done"][-1] == "Played a video on YouTube"
-    # Connect Claude: a key, checked with Anthropic; then Claude answers and does things here (a map, as asked).
-    assert res["claude_sheet"]["sheet"] and res["claude_sheet"]["sheet_title"] == "Connect Claude"
-    assert not res["claude_on"]["sheet"] and res["claude_on_slash"][0] == "Disconnect Claude"
-    assert json.loads(res["stored"]) == "sk-ant-api03-demo-test-key"
-    m = res["claude_map"]
+    # This computer's model, where the Chat Computer app runs here: chosen while the app isn't running, the sheet
+    # says so (and what it is, before anything is reached); with it running, it's used (said in Actions, kept for
+    # later visits), and it answers and does things here (a map, as asked), its words streamed in.
+    assert res["local_sheet"]["sheet"] and res["local_sheet"]["sheet_title"] == "Use this computer's model"
+    assert "free, with no account, and what you type goes only to the app, on this computer" in res["local_sheet_text"]
+    assert res["local_refused"] == {"sheet": True, "error": "The app isn't answering on this computer: is it running? "
+                                                            "(Or, if your browser asked, allow it.)"}
+    on = res["local_on"]
+    assert not on["sheet"] and on["done"][-1] == "Using this computer's model (Qwen3.5 9B)"
+    assert res["local_on_slash"][:2] == ["Stop using this computer's model", "Connect AirPods"]
+    assert json.loads(res["local_stored"]) is True
+    m = res["local_map"]
     assert m["last"] == "Here's Tokyo." and "openstreetmap.org/export/embed.html?bbox=139.55%2C35.55%2C139.95%2C35.8" in m["src"]
     assert m["done"][-1] == "Opened openstreetmap.org" and m["frame_title"] == "Map of Tokyo" and not m["column_shown"]
-    # A video Claude plays: YouTube's player between the sidebars, Actions says so, and when it ends the
+    # A video the model plays: YouTube's player between the sidebars, Actions says so, and when it ends the
     # conversation has the middle again.
-    cv = res["claude_video"]
+    cv = res["local_video"]
     assert cv["content"] and "youtube-nocookie.com/embed/aBcDeFgHiJk?autoplay=1" in cv["src"] and cv["last"] == "Playing it."
-    assert cv["done"][-1] == "Played \u201cA test video\u201d on YouTube" and cv["frame_title"] == "A test video"
-    # Claude turns it down: YouTube's player is told (it once wasn't: a second function of the same name took its
+    assert cv["done"][-1] == "Played “A test video” on YouTube" and cv["frame_title"] == "A test video"
+    # The model turns it down: YouTube's player is told (it once wasn't: a second function of the same name took its
     # messages), and the video stays on the screen.
+    q = res["local_quieter"]
+    assert q["content"] and q["last"] == "Quieter now." and q["done"][-1] == "Set the volume to 30%" and "setVolume" in q["player"]
+    assert not res["video_ended"]["content"] and res["video_ended"]["view"] is None
+    # What the page asked the engine: OpenAI's chat completions, streamed, without thinking first (an answer at once),
+    # with the page's tools; the system prompt the same all conversation (the engine reads only what's new: the time
+    # is in each message instead); each tool's call and its result go back as they came, and the whole conversation
+    # with the next question.
+    asked = res["asked"]
+    assert len(asked) == 6 and all((a["method"], a["path"], a["model"], a["stream"], a["think"], a["max_tokens"]) ==
+                                   ("POST", "/v1/chat/completions", "chat-computer", True, False, 4096) for a in asked)
+    assert asked[0]["tools"] == ["function " + n for n in ("play_youtube", "show_map", "show_page", "open_website", "open_message",
+        "open_file", "make_timer", "set_volume", "close", "youtube_search", "play_piano", "weather", "web_search", "set_name", "set_place")]
+    system = {a["messages"][0]["content"] for a in asked}
+    assert len(system) == 1 and all(a["messages"][0]["role"] == "system" for a in asked)
+    system = system.pop()
+    assert system.startswith("You are Chat Computer: you run a whole computer for the person, with your own model, an open model "
+                             "of Qwen's that runs on this computer")
+    assert "Right now you're in Chat Computer's website" in system and "Jane Lim" in system and "It's " not in system
+    assert re.fullmatch(r"\[\w+day \d{1,2} \w+ 20\d\d.*\] show me Tokyo", asked[0]["messages"][1]["content"])
+    call, result = asked[1]["messages"][-2:]
+    assert call == {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {
+        "name": "show_map", "arguments": '{"place": "Tokyo", "west": 139.55, "south": 35.55, "east": 139.95, "north": 35.8}'}}]}
+    assert result == {"role": "tool", "tool_call_id": "call_1", "content": "The map of Tokyo is on the screen."}
+    assert [m["role"] for m in asked[2]["messages"]] == ["system", "user", "assistant", "tool", "assistant", "user"]
+    assert asked[2]["messages"][4] == {"role": "assistant", "content": "Here's Tokyo."}
+    assert asked[5]["messages"][-1]["content"] == "The volume is 30%."
+    # A later visit: it's used again by itself (a fresh conversation); when the app stops, the page says so, the
+    # written answers are back and "/" offers it again; Stop using it, and the browser forgets it.
+    assert res["local_later_slash"][0] == "Stop using this computer's model"
+    assert res["local_later"] == "Hello from Qwen."
+    assert len(res["local_later_asked"]) == 1 and res["local_later_asked"][0][0][0] == "user"
+    assert res["local_later_asked"][0][0][1].endswith("] hello there") and len(res["local_later_asked"][0]) == 1
+    assert res["local_gone"] == "I can't reach the Chat Computer app on this computer any more: is it still running?"
+    assert res["local_gone_slash"][0] == "Use this computer's model"
+    assert res["local_gone_after"].startswith("Hi! I'm Chat Computer")
+    stopped = res["local_stopped"]
+    assert stopped["done"][-2:] == ["Using this computer's model (Qwen3.5 9B)", "Stopped using this computer's model"]
+    assert stopped["slash"][0] == "Use this computer's model" and stopped["stored"] is None
     # The greeting is off for now: hello, world alone, in the evening and in the morning, and nothing is looked up
     # for it (no Open-Meteo); the greetings it would choose from for the time of day still have the name you go by.
     ev = res["greet_evening"]
@@ -248,97 +297,35 @@ def test_the_demo_works_in_a_browser():
                                    "Forgot your name"]
     # Penang found once, and its forecast when asked for (nothing for a greeting).
     assert res["greet_meteo"] == ["geocoding-api penang", "api"]
-    q = res["claude_quieter"]
-    assert q["content"] and q["last"] == "Quieter now." and q["done"][-1] == "Set the volume to 30%" and "setVolume" in q["player"]
-    assert not res["video_ended"]["content"] and res["video_ended"]["view"] is None
-    api = res["api"]
-    assert len(api) == 7 and all(a["url"] == "https://api.anthropic.com/v1/messages" for a in api)
-    assert all(a["key"] == "sk-ant-api03-demo-test-key" and a["direct"] == "true" and a["model"] == "claude-opus-5-5" for a in api)
-    assert not api[0]["stream"] and api[1]["stream"] and "show_map" in api[1]["tools"] and "web_search" in api[1]["tools"]
-    assert "tool_result" in api[2]["last"] and "toolu_1" in api[2]["last"]
-    # Opus 5.5 always thinks first, within max_tokens: room for it, at the API's own effort (nothing sent for either).
-    assert all(a["max_tokens"] == 16000 and a["thinking"] is None and a["effort"] is None for a in api[1:])
-    # Its thinking is only valid while the system prompt, the tools and the messages before it stay the same: the
-    # system prompt is the same all conversation (the time is in each question instead), the turn's own thinking
-    # goes back with the tool's result as it came, and a finished turn's is left out after.
-    assert len({a["system"] for a in api[1:]}) == 1 and "It's " not in api[1]["system"]
-    first_q = json.loads(api[1]["all"])[0]["content"]
-    assert re.fullmatch(r"\[\w+day \d{1,2} \w+ 20\d\d.*\] show me Tokyo", first_q), first_q
-    assert '"signature":"sig-toolu_1"' in api[2]["all"] and "sig-toolu_1" not in api[3]["all"] and "toolu_1" in api[3]["all"]
-    assert '"signature":"sig-toolu_2"' in api[4]["all"]
-    # Disconnecting: the key leaves the browser, and the written answers are back.
-    assert res["claude_off_sheet"]["sheet_title"] == "Claude is connected"
-    assert res["claude_off_slash"][0] == "Connect Claude" and res["stored_after"] is None
     # Connect AirPods says what it does before the microphone is asked for.
     assert res["talk_sheet"]["sheet"] and res["talk_sheet"]["sheet_title"] == "Talk through your AirPods"
-    # Chrome's built-in AI, where Chrome has it: "Download Gemini" in the "/" list; its sheet says what it is before
-    # anything is downloaded; the download's progress in the empty box (and the list); then it answers what the
-    # written answers can't (a page on the screen, said in Actions), from a session told what Chat Computer is, and the
-    # written answers still answer what they can.
-    assert res["ai_opening"][:3] == ["Connect Claude", "Connect AirPods", "Download Gemini"]
-    assert res["ai_sheet"]["sheet"] and res["ai_sheet"]["sheet_title"] == "Download Gemini"
-    assert not res["ai_downloading"]["sheet"] and res["ai_downloading"]["hint"] == "Downloading Gemini (50%)\u2026"
-    assert res["ai_downloading_slash"][2] == "Downloading Gemini (50%)"
-    on = res["ai_on"]
-    assert on["hint"] == "Type anything" and on["done"][-1] == "Turned on Chrome's built-in AI"
-    assert res["ai_on_slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Download Gemini" not in res["ai_on_slash"]
-    poem = res["ai_poem"]
-    assert poem["content"] and poem["last"] == "Here's a short poem about the sea." and poem["done"][-1] == "Showed \u201cThe sea\u201d"
-    assert "The tide comes in on silver feet." in res["ai_poem_view"] and "Written by Chrome's built-in AI" in res["ai_poem_view"]
-    assert res["ai_music"]["last"] == "Playing some calm piano."
-    calls = res["ai_calls"]
-    assert len(calls["created"]) == 1 and calls["created"][0]["monitored"] and "Gemini Nano" in calls["created"][0]["system"]
-    assert calls["prompts"] == [{"text": "write a short poem about the sea", "schema": True}]
-    # Google's Gemma where the browser has no AI of its own but can use the graphics chip (WebGPU; a stand-in for
-    # Transformers.js): "Download Gemma" in the "/" list, and the written answers say so meanwhile; its sheet says what
-    # it is (and how big) before anything's downloaded; the download's progress in the empty box and the list.
-    assert res["lm_opening"][:3] == ["Connect Claude", "Connect AirPods", "Download Gemma"]
-    assert res["lm_before"] == "I can't answer that yet. Type / and choose Download Gemma: it's free, and then I can."
-    sheet = res["lm_sheet"]
-    assert sheet["sheet"] and sheet["sheet_title"] == "Download Gemma"
-    pct = re.fullmatch(r"Downloading Gemma \((\d+)%\)…", res["lm_downloading"]["hint"])
-    assert pct and res["lm_downloading_slash"][2] == "Downloading Gemma (" + pct.group(1) + "%)"
-    assert res["lm_stuck"] == "Gemma is downloading: " + pct.group(1) + "% so far. If it stops (the page closed, the phone locked), it carries on from there."
-    # Its big file comes in pieces, each kept as it comes: the page left after two of the three, the next visit asks
-    # only for the third (cut off once, asked for again), puts them together where Transformers.js finds the file, and
-    # throws the pieces away.
-    assert res["lm_ranges_first"] == ["bytes=0-16777215", "bytes=16777216-33554431", "bytes=33554432-41943039"]
-    assert res["lm_pieces_kept"] == ["piece=0", "piece=1", "size"]
-    assert res["lm_again_slash"][2] == "Download Gemma"
-    assert res["lm_ranges_again"] == ["bytes=33554432-41943039", "bytes=33554432-41943039"] and res["lm_pieces_after"] == []
-    # Then it's on (said in Actions), Remove Gemma in the list, and it answers what the written answers can't, its
-    # words streamed in, told who it is; the written answers still answer what they can, and what was said (theirs
-    # too) goes with the next question.
-    on = res["lm_on"]
-    assert on["hint"] == "Type anything" and on["done"][-1] == "Turned on Gemma, on this device"
-    assert res["lm_on_slash"][:3] == ["Connect Claude", "Connect AirPods", "Remove Gemma"] and "Download Gemma" not in res["lm_on_slash"]
-    assert res["lm_haiku"]["last"] == "Dark cup in my hands, the day starts with you." and res["lm_music"] == "Playing some calm piano."
-    calls = res["lm_calls"]
-    assert calls["loads"] == [{"task": "text-generation", "model": "onnx-community/gemma-3-1b-it-ONNX", "device": "webgpu",
-                               "dtype": "q4f16", "kept": False, "data": 40 * 1024 * 1024}]
-    first_q, second_q = calls["asked"]
-    assert first_q[0][0] == "system" and first_q[0][1].startswith("You are Gemma, a small AI made by Google")
-    assert first_q[1:] == [["user", "write a haiku about coffee"]]
-    assert second_q[1:] == [["user", "write a haiku about coffee"], ["assistant", "Dark cup in my hands, the day starts with you."],
-                            ["user", "play some piano music"], ["assistant", "Playing some calm piano."], ["user", "make it longer"]]
-    # A later visit: it's here (Remove Gemma; nothing to download), and starts when it's first needed, from the
-    # browser's copy (nothing downloaded).
-    assert res["lm_later_slash"][2] == "Remove Gemma" and "Download Gemma" not in res["lm_later_slash"]
-    assert res["lm_starting"] == "Starting Gemma…"
-    assert res["lm_later"]["last"] == "Dark cup in my hands, the day starts with you." and [x["kept"] for x in res["lm_later"]["loads"]] == [True]
-    # The page stopped while it was starting (a phone out of memory): it isn't started by itself again; it's offered,
-    # saying why, and starts from the browser's copy when chosen. Remove Gemma frees the room: Download Gemma again.
-    assert res["lm_stopped_slash"][2] == "Start Gemma"
-    st = res["lm_stopped_sheet"]
-    assert st["title"] == "Start Gemma" and st["ok"] == "Start it" and "Last time, this page stopped while Gemma was starting" in st["text"]
-    assert [x["kept"] for x in res["lm_restarted"]] == [True]
-    assert res["lm_remove_sheet"]["sheet_title"] == "Remove Gemma"
-    gone = res["lm_removed"]
-    assert gone["slash"][2] == "Download Gemma" and gone["disposed"] and gone["kept"] == 0
+    # In the app (a stand-in for it), the model comes with it. While it gets ready, the empty box says how it's going
+    # (downloading, then taking its refusals out), and so do "/" and its sheet, and an answer it can't give yet; then
+    # it answers (named in "/"), on the port the app says, with the app's own tools (the files on this computer:
+    # found by the app, the model told what was found).
+    prep = res["app_preparing"]
+    assert prep["hint"] == "Getting my model ready: downloading it (1.2 of 9.0 GB, 13%)…" and prep["messages"] == 0
+    assert res["app_slash"][:2] == ["Chat Computer's model", "Connect AirPods"]
+    assert res["app_sheet"] == {"title": "Chat Computer's model", "ok": "OK", "text": "My model, Qwen3.5 9B, is getting ready on "
+        "this computer: downloading it (1.2 of 9.0 GB, 13%). That happens once; after it, it answers from the start."}
+    assert res["app_before"] == ("I can't answer that yet. My model is getting ready on this computer: downloading it (1.2 of 9.0 GB, "
+                                 "13%). Ask me again once it's here.")
+    assert res["app_uncensoring"] == "Getting my model ready: taking its refusals out, so it answers whatever you ask (25%)…"
+    assert res["app_ready"]["hint"] == "Type anything" and res["app_ready_slash"][:2] == ["Qwen3.5 9B", "Connect AirPods"]
+    assert res["app_answer"] == "It's in Documents."
+    app_asked = res["app_asked"]
+    assert len(app_asked) == 2 and [t.split()[1] for t in app_asked[0]["tools"]][-4:] == ["find_files", "open_file", "read_messages", "open_message"]
+    assert "function open_message" in app_asked[0]["tools"] and app_asked[0]["tools"].count("function open_file") == 1
+    assert "Right now you're in the Chat Computer app on their" in app_asked[0]["messages"][0]["content"]
+    assert "Jane Lim" not in app_asked[0]["messages"][0]["content"]          # (no made-up messages in the app)
+    found = app_asked[1]["messages"][-1]
+    assert found["role"] == "tool" and json.loads(found["content"])[0]["path"] == "/home/ren/Documents/Taxes 2025.pdf"
+    calls = [c for c in res["app_calls"] if c[0] != "search_files" or c[1]["query"]]
+    assert calls == [["about", {}], ["model_status", {}], ["search_files", {"query": "tax"}]]
     # Read aloud's voice where the graphics chip can make Heart's (WebGPU): offered the first time Read aloud is pressed
     # (nothing said yet), with its size; closed, the browser's best voice reads the answer (Edge's natural Ava, not
     # Google's, the usual Samantha or a novelty voice), and on another visit it reads straight away, Heart in the list.
-    assert res["voice_slash"][:4] == ["Connect Claude", "Connect AirPods", "Download Gemma", "Download Heart"]
+    assert res["voice_slash"][:3] == ["Use this computer's model", "Connect AirPods", "Download Heart"]
     vs = res["voice_sheet"]
     assert vs["title"] == "A warmer voice" and vs["ok"] == "Download it" and vs["spoken"] == 0
     assert "the one Chat Computer itself speaks with" in vs["text"] and "about 330 MB" in vs["text"]
@@ -348,17 +335,20 @@ def test_the_demo_works_in_a_browser():
     assert system["answer"].startswith(system["spoken"][0]["text"]) and len(system["spoken"]) > 1    # (a sentence or so at a time)
     assert res["voice_again"]["sheet"] is False and res["voice_again"]["spoken"] > 0
     assert "Download Heart" in res["voice_again_slash"]
-    # Chosen: its progress in the box and the list; downloaded in two pieces (kept as they came, thrown away after),
-    # started on the graphics chip from Transformers.js' store, and then the answer read in Heart (af_heart), not by
-    # the browser's voice; Actions says so; Remove Heart in the list.
+    # Chosen: its progress in the box and the list; downloaded in two pieces, each kept as it came: the page left
+    # after the first, the next visit asks only for the second (cut off once, asked for again), puts them together
+    # where Transformers.js finds the file, and throws the pieces away; started on the graphics chip from that store,
+    # and then the answer read in Heart (af_heart), not by the browser's voice; Actions says so; Remove Heart in the list.
     dl = res["voice_downloading"]
     pct = re.fullmatch(r"Downloading Heart \((\d+)%\)…", dl["hint"])
     assert pct and "Downloading Heart (" + pct.group(1) + "%)" in dl["slash"]
+    assert res["voice_ranges_first"] == ["bytes=0-16777215", "bytes=16777216-20971519"]
+    assert res["voice_parts_kept"] == ["piece=0", "size"]
     h = res["voice_heart"]
     assert h["loads"] == [{"model": "onnx-community/Kokoro-82M-v1.0-ONNX", "dtype": "fp32", "device": "webgpu", "data": 20 * 1024 * 1024}]
     assert h["said"][0]["voice"] == "af_heart" and h["answer"].startswith(h["said"][0]["text"]) and h["spoken"] == 0
     assert "Turned on the Heart voice, on this device" in h["done"] and not h["hint"].startswith("Downloading")
-    assert res["voice_ranges"] == ["bytes=0-16777215", "bytes=16777216-20971519"] and res["voice_parts_after"] == []
+    assert res["voice_ranges"] == ["bytes=16777216-20971519", "bytes=16777216-20971519"] and res["voice_parts_after"] == []
     assert "Remove Heart" in res["voice_on_slash"] and not any(n.startswith("Download Heart") for n in res["voice_on_slash"])
     # A later visit: started from the browser's copy (nothing downloaded), no sheet, in Heart; Remove Heart frees it.
     later = res["voice_later"]
@@ -418,7 +408,7 @@ def test_the_demo_works_in_a_browser():
     assert res["phone_hold_you"] == {"holding": True, "held": "you enter held", "items": ["Copy", "Select text", "Edit"], "selected": ""}
     assert res["phone_edit"] == {"holding": False, "box": "hello", "typing_in": "input"}
     assert res["phone_hold_ai"]["items"] == ["Copy", "Select text", "Read aloud"] and "held" in res["phone_hold_ai"]["held"]
-    assert res["phone_select"] == {"reading": True, "text": "Hi! I'm Chat Computer: Claude, running t", "select": "text"}
+    assert res["phone_select"] == {"reading": True, "text": "Hi! I'm Chat Computer: I run the whole c", "select": "text"}
     assert res["phone_put_away"] is False and res["phone_put_away_too"] is False
     assert res["phone_shade"]["blur"] == "none" and res["phone_shade"]["menu_blur"].startswith("blur(")
     # The buttons under messages with a finger: with the keyboard up, Read aloud and Good still do what they say (the

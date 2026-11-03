@@ -26,7 +26,7 @@
    "intent": "orientation",
    "phrasing": "sentence",
    "query": "what is this?",
-   "expect": "Says what Chat Computer is (a computer you talk to, Claude running it, installs next to Windows or macOS) and what to try."
+   "expect": "Says what Chat Computer is (a computer you talk to, run by its own model, installs next to Windows or macOS) and what to try."
   },
   {
    "id": "how-work",
@@ -96,7 +96,7 @@
    "intent": "try",
    "phrasing": "sentence",
    "query": "Play Taylor Swift",
-   "expect": "That artist plays, or an honest note that this page can't search YouTube without Claude, with what it can do."
+   "expect": "That artist plays, or an honest note that this page can't search YouTube without its model, with what it can do."
   },
   {
    "id": "play-lofi-typo",
@@ -124,7 +124,7 @@
    "intent": "try",
    "phrasing": "sentence",
    "query": "show me a funny cat video on youtube",
-   "expect": "A cat video plays, or honest that searching YouTube needs Claude."
+   "expect": "A cat video plays, or honest that searching YouTube needs its model."
   },
   {
    "id": "map-tokyo",
@@ -411,7 +411,7 @@
    "intent": "get it",
    "phrasing": "sentence",
    "query": "how much does it cost?",
-   "expect": "Chat Computer itself is free; it needs a Claude Pro or Max subscription."
+   "expect": "Chat Computer is free: its own model runs on your computer, with no account or subscription."
   },
   {
    "id": "mac",
@@ -432,7 +432,7 @@
    "intent": "get it",
    "phrasing": "sentence",
    "query": "what do I need to run it?",
-   "expect": "A Windows PC (UEFI, ~70 GB free) or an M1-M3 Mac, internet, a Claude Pro/Max subscription."
+   "expect": "A Windows PC (UEFI, ~70 GB free) or an M1-M3 Mac; no account or subscription."
   },
   {
    "id": "old-laptop",
@@ -446,14 +446,14 @@
    "intent": "get it",
    "phrasing": "sentence",
    "query": "is my data private?",
-   "expect": "Accurate: what's typed here stays in the browser (or goes only where it says); on Chat Computer, files stay on the computer, Claude is Anthropic's."
+   "expect": "Accurate: what's typed here stays in the browser (or goes only where it says); on Chat Computer, files stay on the computer, and its model runs there."
   },
   {
    "id": "is-it-free",
    "intent": "get it",
    "phrasing": "terse",
    "query": "is it free",
-   "expect": "Free itself; needs a Claude subscription."
+   "expect": "Free, for good: no account, no subscription."
   },
   {
    "id": "airpods",
@@ -467,21 +467,21 @@
    "intent": "limits",
    "phrasing": "sentence",
    "query": "are you Claude?",
-   "expect": "Accurate about who answers here (written answers, or the free on-device model, or Claude with a key)."
+   "expect": "Accurate about who answers here (written answers, or Chat Computer's own model where its app runs: Qwen, not Claude)."
   },
   {
    "id": "who-made",
    "intent": "limits",
    "phrasing": "sentence",
    "query": "who made this?",
-   "expect": "An independent project, not made by Anthropic."
+   "expect": "An independent project; it thinks with Qwen, an open model, run by its own engine."
   },
   {
    "id": "anthropic",
    "intent": "limits",
    "phrasing": "sentence",
    "query": "Is this made by Anthropic?",
-   "expect": "No, an independent project; it uses Claude."
+   "expect": "No: an independent project, thinking with Qwen, an open model."
   },
   {
    "id": "cant-do",

@@ -5,9 +5,7 @@
 // few places are, one made-up forecast and air reading; Wikipedia's with a few made-up articles and a day's news;
 // the rest with an empty page). The visitor is in Singapore's time zone.
 //
-//   NODE_PATH=$(npm root -g) node evals/web/run.js OUT.json [--only id,id] [--jobs 4] [--nano stub.js]
-//
-// --nano: a script run in the page before its own, standing in for the browser's built-in AI (LanguageModel).
+//   NODE_PATH=$(npm root -g) node evals/web/run.js OUT.json [--only id,id] [--jobs 4]
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
@@ -19,7 +17,6 @@ const out = args[0];
 const opt = (k, d) => { const i = args.indexOf(k); return i > 0 ? args[i + 1] : d; };
 const only = (opt("--only", "") || "").split(",").filter(Boolean);
 const jobs = +opt("--jobs", "4");
-const nano = opt("--nano", "");
 const data = JSON.parse(fs.readFileSync(path.join(__dirname, "cases.json"), "utf8"));
 const cases = data.cases.filter((c) => !only.length || only.includes(c.id));
 
@@ -80,9 +77,8 @@ async function visit(browser, c) {
                                    body: JSON.stringify(om) });
     route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>elsewhere</title>" });
   });
-  if (nano) await page.addInitScript({ path: nano });
   await page.goto(PAGE);
-  await page.waitForFunction(() => document.getElementById("demo-tools"));
+  await page.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
   await page.waitForTimeout(300);
   const before = await page.evaluate(() => document.querySelectorAll("#done .done-what").length);
   const t0 = Date.now(), turns = c.turns || [c.query], answers = [], firsts = [];

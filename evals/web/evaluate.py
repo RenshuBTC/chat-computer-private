@@ -32,11 +32,11 @@ def did(r: R, pattern: str) -> bool:
         if r.get("done_added") else False
 
 
-# The page can't look things up (no search, no YouTube search) without Claude or an AI: saying so, and what it can
-# do instead, is a pass for a request it can't do.
-CANT = r"can't|cannot|isn't able|not able|only (know|show|do)|unable|no way to|needs? (claude|an ai)|(on|in) (a|the real) chat computer|when you connect|connect claude|without claude"
+# The page can't look things up (no search, no YouTube search) without its model: saying so, and what it can do
+# instead, is a pass for a request it can't do.
+CANT = r"can't|cannot|isn't able|not able|only (know|show|do)|unable|no way to|needs? (its|my|the) model|(on|in) (a|the real) chat computer|use this computer's model|chat computer app"
 MUSIC = r"piano|music|chords|playing|lofi|jazz"
-NOT_STUCK = r"try|connect claude|you can|say|type"
+NOT_STUCK = r"try|use this computer's model|you can|say|type"
 NO_AI = r"without an ai|written in advance"     # the page's honest note when only an AI could answer
 
 
@@ -143,17 +143,17 @@ DONE: dict[str, Callable[[R], bool]] = {
     "how-install": lambda r: said(r, r"coming soon|not (yet )?(available|out|ready)|isn't (out|available|ready)") and
                              said(r, r"windows|mac"),
     "download": lambda r: said(r, r"coming soon|not (yet )?(available|out|ready)|isn't (out|available|ready)"),
-    "price": lambda r: said(r, r"\bfree\b") and said(r, r"pro|max|claude (plan|subscription)"),
+    "price": lambda r: said(r, r"\bfree\b") and not said(r, r"subscription|\bpro or max\b|claude plan"),
     "mac": lambda r: said(r, r"\byes\b|works on") and said(r, r"m1|m2|apple silicon"),
     "windows-safe": lambda r: said(r, r"\bno\b|stays|keeps|next to") and said(r, r"windows"),
-    "requirements": lambda r: said(r, r"uefi|70 ?gb|m1|m2") and said(r, r"pro|max|claude (plan|subscription)"),
+    "requirements": lambda r: said(r, r"uefi|70 ?gb|m1|m2") and not said(r, r"subscription|\bpro or max\b|claude plan"),
     "old-laptop": lambda r: said(r, r"windows 10") or (said(r, r"\byes\b") and said(r, r"uefi|70 ?gb")),
     "privacy": lambda r: said(r, r"browser|this page|on your (computer|device)|stays") and said(r, r"private|stays|never|doesn't leave|don't leave"),
-    "is-it-free": lambda r: said(r, r"\bfree\b") and said(r, r"pro|max|claude (plan|subscription)"),
+    "is-it-free": lambda r: said(r, r"\bfree\b") and not said(r, r"subscription|\bpro or max\b|claude plan"),
     "airpods": lambda r: said(r, r"\bno\b|optional|don't need|not needed") and said(r, r"type|touch"),
-    "are-you-claude": lambda r: said(r, r"written in advance|scripted|gemini|chrome'?s (built-in )?ai|on your device|your own (api )?key|connect claude"),
-    "who-made": lambda r: said(r, r"independent") and said(r, r"not (made|built) by anthropic|isn't anthropic"),
-    "anthropic": lambda r: said(r, r"\bno\b|independent|not made by anthropic") and said(r, r"claude"),
+    "are-you-claude": lambda r: said(r, r"written in advance|scripted|qwen|own model|this computer's model"),
+    "who-made": lambda r: said(r, r"independent") and said(r, r"qwen|own engine|open model"),
+    "anthropic": lambda r: said(r, r"\bno\b|independent") and said(r, r"qwen|open model|own engine"),
     "cant-do": lambda r: said(r, r"can't|cannot|only|not") and said(r, r"this page|here|demo"),
     "control-my-pc": lambda r: said(r, r"can't|cannot|no\b|not from") and said(r, r"made up|this page|website|browser"),
     "real-or-fake": lambda r: said(r, r"made up|not real|aren't real|pretend|examples|made-up"),

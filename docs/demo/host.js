@@ -870,6 +870,7 @@
   // name goes to Open-Meteo (then its position, for the weather), at most once every half hour; kept in this browser.
   var HERE_KEY = "chatcomputer-demo-here";
   function sayHere() {
+    if (window.CO && window.CO.greets === false) return;     // no greeting for now: nothing to look up for it
     var place = homeName() || hereName(), kept = store(HERE_KEY) || {};
     if (!place) { call("here", {}); return; }
     if (kept.place !== place) kept = { place: place };
@@ -1162,12 +1163,12 @@
       var n = nameOf(t);
       if (!n) return null;
       setName(n);
-      return { text: "Nice to meet you, " + n + "! I'll greet you by name from now on.", done: ["Set your name to " + n] };
+      return { text: "Nice to meet you, " + n + "! I'll call you that from now on.", done: ["Set your name to " + n] };
     }],
     [WHO_AM_I, function () {
       var n = person();
       return { text: n ? "You're " + n + ". (To change it, say “call me” and the name you'd like.)" :
-        "I don't know your name yet. Say “call me” and your name, and I'll greet you with it." };
+        "I don't know your name yet. Say “call me” and your name, and I'll call you that." };
     }],
     [FORGET_NAME, function () {
       var had = !!person();
@@ -1183,8 +1184,8 @@
           var shown = p.name.toLowerCase() === asked.toLowerCase() || asked === asked.toLowerCase() && p.name.toLowerCase().indexOf(asked.toLowerCase()) === 0 ?
             p.name : asked === asked.toLowerCase() ? title(asked) : asked;
           setPlace({ name: shown, lat: p.lat, lon: p.lon });
-          return { text: "Got it: you live in " + shown + (p.country && p.country !== shown ? ", " + p.country : "") + ". I'll greet you " +
-            "with the weather there, and say “weather” for its forecast.", done: ["Set your place to " + shown] };
+          return { text: "Got it: you live in " + shown + (p.country && p.country !== shown ? ", " + p.country : "") + ". Say " +
+            "“weather” for its forecast.", done: ["Set your place to " + shown] };
         }, function () { return { text: "I couldn't find " + asked + " on the map. Which city is it in, or near?" }; });
       } };
     }],

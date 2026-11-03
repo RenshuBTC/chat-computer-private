@@ -579,8 +579,9 @@ retrying with backoff, then starts listening.
   then Chat Computer's first words come in as its answers do, as if just typed (`greet()` in chat.js: an
   `.ai.hello` message the page adds itself, not part of the transcript, a moment's thinking and then a few
   letters at a time through `CO.ai`, so they fade in; none if something was said first): `hello, world`, lower
-  case with its comma as in Kernighan's C tutorial and K&R, always first, and under it the rest of the same
-  greeting, a line going on from it ("and ...": one greeting, not two), as the Claude app's are: in the manner of
+  case with its comma as in Kernighan's C tutorial and K&R, alone for now (as the person asked: `GREETING` in
+  chat.js is off, and with it the look-up of the weather for it, `CO.greets`; the website's host and the runtime
+  look nothing up). With it on: under it the rest of the same greeting, a line going on from it ("and ...": one greeting, not two), as the Claude app's are: in the manner of
   its own (as claude.ai's code has them: each for a time of day, from 6, 12, 17 and 21 o'clock, some for a day of
   the week, "coffee and computer time?" only where a model answers), said on from hello, world ("and good evening
   to you, Ren"), with the name from `CO.settings` (on a Chat Computer `user_name`'s first word; on the website the

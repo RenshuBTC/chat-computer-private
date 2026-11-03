@@ -152,7 +152,9 @@ def main(argv: list[str] | None = None) -> int:
                               airtouch=not (getattr(args, "no_airtouch", False) or getattr(args, "fake", False)),
                               offer_headphones=not getattr(args, "fake", False),
                               offer_updates=not getattr(args, "fake", False),
-                              weather=not getattr(args, "fake", False))
+                              # The weather is only for the greeting under "hello, world", which is off for now
+                              # (chat.js: GREETING): nothing is looked up.
+                              weather=False)
         return run_app(paths, settings, make_controller, windowed=getattr(args, "windowed", False))
     ap.print_help()
     return 2

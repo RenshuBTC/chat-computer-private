@@ -117,6 +117,9 @@
   // what's said is the conversation.
   var LOGO_MS = 1000, LOGO_FADE_MS = 500, THINK_MS = 600;
   var HELLO = "hello, world";
+  // The greeting under it (below): off for now, as the person asked: "hello, world" alone. Its code stays, to turn on
+  // again; while it's off, nothing is looked up for it (CO.greets says so to the computer behind the page).
+  var GREETING = false;
   // Under it, always after it, the rest of the same greeting: one line that goes on from "hello, world" ("and ..."),
   // warm and personal as the Claude app's greetings are. Theirs (as claude.ai's code has them) are by the time of day
   // (from 6 in the morning, 12, 5 in the evening, 9 at night), some by the day of the week, with the name you go by
@@ -224,6 +227,7 @@
   // One of them, never the one shown last time (kept in this browser, where it can be): half the time one for where
   // you are, where there's one.
   function greeting() {
+    if (!GREETING) return HELLO;
     var at = new Date(), time = greetings(at), local = hereGreetings(at), last = "";
     try { last = localStorage.getItem("chatcomputer-greeting") || ""; } catch (e) {}
     var from = local.length && Math.random() < 0.5 ? local : time;
@@ -256,7 +260,7 @@
       introLater(THINK_MS, function step() {
         if (ai.hello !== m) return;
         // While the weather is being looked up (CO.here: pending), a little longer, up to a second and a half.
-        if (!text && here.pending && waited < 1500) { waited += 100; introLater(100, step); return; }
+        if (!text && GREETING && here.pending && waited < 1500) { waited += 100; introLater(100, step); return; }
         if (!text) text = greeting();
         var to = Math.min(text.length, at + 3 + Math.floor(Math.random() * 6));
         window.CO.ai("hello", text.slice(at, to));
@@ -1562,6 +1566,8 @@
     },
     // The greetings there are to choose from now: those for the time and day, and those for where you are.
     greetingsNow: function () { var at = new Date(); return { time: greetings(at), here: hereGreetings(at) }; },
+    // Whether a greeting goes under "hello, world" (when it doesn't, there's no need to look up where you are).
+    greets: GREETING,
     // Which sidebars show: {left, right} (Chat Computer keeps the choice; see "the sidebars' switches").
     panels: function (s) {
       ["left", "right"].forEach(function (k) { if (s && k in s) shown[k] = !!s[k]; });

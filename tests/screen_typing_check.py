@@ -1,7 +1,7 @@
 """The message box on the conversation screen: what's typed goes into it (a real text box, typed into with real
 key presses), Shift+Enter starts a new line and the box grows, Enter sends, typing after a click elsewhere still
-goes into it, Escape brings the sidebars in (the middle fills the screen to start with), keeping what's typed, and
-puts them away again, and the page reports how long letters took to reach the screen.
+goes into it, Escape puts the sidebars away (they show from the start), keeping what's typed, and brings them back,
+and the page reports how long letters took to reach the screen.
 
 Runs a real Chat Computer window (GTK + WebKit) on a virtual display, types with xdotool, and prints JSON.
 Run:  xvfb-run -a -s "-screen 0 1280x800x24" python tests/screen_typing_check.py

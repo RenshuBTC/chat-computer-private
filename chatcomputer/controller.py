@@ -955,6 +955,14 @@ class Controller:
         if kind == "open_chat":
             self._spawn(self._open_chat(str(msg.get("id") or "")))
             return
+        if kind == "mic_toggle":
+            # The microphone button under the message box: listening (awake) or not (asleep: only the wake word, an
+            # AirPod's press or typing wakes it), as asked.
+            if self.asleep:
+                self.wake()
+            else:
+                self._spawn(self._sleep_when_quiet())
+            return
         if kind == "panels":
             # A sidebar's switch pressed: kept for the next start.
             changed = [f"{k}_panel" for k in ("left", "right")

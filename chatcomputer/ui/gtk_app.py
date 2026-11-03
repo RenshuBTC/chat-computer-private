@@ -112,7 +112,19 @@ PAGE_EVENTS = {"pin", "revert", "open_message", "add_account", "account", "accou
                "search", "open_file",           # "/" in the message box: searching this computer, opening a file
                "text_scale",                    # two fingers pinched on the conversation: its text bigger or smaller
                "unlock",                        # the PIN typed on the lock screen
-               "speak", "feedback"}             # under a message: read it aloud; good or bad (feedback.jsonl)
+               "speak", "feedback",             # under a message: read it aloud; good or bad (feedback.jsonl)
+               "mic_toggle"}                    # the microphone button under the message box: listen, or stop
+
+
+def with_files(text: str, paths: list[str]) -> str:
+    """A typed message with the files added to it (+): each named on a line of its own after the words, so the model
+    knows where they are and reads them."""
+    if not paths:
+        return text
+    lines = "\n".join(f"[Added: {p}]" for p in paths)
+    if not text:
+        text = "Here's the file I added." if len(paths) == 1 else "Here are the files I added."
+    return text + "\n\n" + lines
 
 
 def use_cpu_rendering(environ: Any = os.environ) -> bool:
@@ -552,6 +564,25 @@ class GtkScreen(Screen):
         else:
             self.chat_backlog.append(script)
 
+    def _pick_files(self) -> None:
+        """+ under the message box: this computer's file picker (several at once), from the home folder; the files
+        chosen are added to the message (CO.attach)."""
+        if self._locked:
+            return
+        chooser = Gtk.FileChooserNative.new("Add files", self.win, Gtk.FileChooserAction.OPEN, "Add", "Cancel")
+        chooser.set_select_multiple(True)
+        chooser.set_current_folder(os.path.expanduser("~"))
+
+        def done(dialog: Any, response: int) -> None:
+            paths = list(dialog.get_filenames() or []) if response == Gtk.ResponseType.ACCEPT else []
+            dialog.destroy()
+            files = [{"name": os.path.basename(p), "path": p} for p in paths if os.path.isfile(p)]
+            if files:
+                self._chat_run(f"CO.attach({json.dumps(files)})", "transient")
+        chooser.connect("response", done)
+        self._chooser = chooser          # (kept while it's open)
+        chooser.show()
+
     def _on_chat_message(self, ucm: Any, result: Any) -> None:
         try:
             val = result.get_js_value() if hasattr(result, "get_js_value") else result
@@ -562,10 +593,16 @@ class GtkScreen(Screen):
         if self._locked and kind not in ("unlock", "ready", "hole", "keys", "keyboard"):
             return              # locked: only the PIN (the page shows nothing else to use)
         if kind == "send":
-            # Enter in the message box.
+            # Enter in the message box; with the files added to it (+), named after the words, for the model to read.
             text = str(msg.get("text") or "").strip()
+            files = [str(f.get("path")) for f in msg.get("files") or [] if isinstance(f, dict) and f.get("path")]
+            text = with_files(text, files[:20])
             if text and self.loop:
                 self.loop.call_soon_threadsafe(self.on_typed, text)
+            return
+        if kind == "add_files":
+            # + under the message box: this computer's own file picker; what's chosen is added to the message.
+            self._pick_files()
             return
         if kind == "goto":
             # An item of Actions was tapped whose message isn't on the page any more.

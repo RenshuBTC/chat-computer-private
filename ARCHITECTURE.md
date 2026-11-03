@@ -557,9 +557,10 @@ retrying with backoff, then starts listening.
   between the two sidebar cards, from the top down to the message box, inside a rounded frame (`#frame`) under
   its bar (`#frame-bar`: the name, `CO.mode("content", title)` then `CO.title` as the page's title comes, and a
   close button that posts `close_content`). The conversation (`#column`) is hidden while something is open: the
-  screen is only ever three parts side by side, Messages, the middle and Actions. To start with, the middle fills
-  the screen (`body.full`: no sidebars or switches, `--left`/`--panel` 0, the frame or the conversation and the
-  message box across the width); Escape brings the sidebars in, and puts them away again: chat.js has it when
+  screen is only ever three parts side by side, Messages, the middle and Actions. The sidebars show from the start
+  (as the person asked); Escape makes the middle fill the screen (`body.full`: no sidebars or switches,
+  `--left`/`--panel` 0, the frame or the conversation and the message box across the width), and brings them back
+  again: chat.js has it when
   the conversation page has the keys, the window
   (`_on_key`, calling `CO.toggleFull()`) when what's open has them, except a full-screen video's Escape, which
   leaves full screen. A website gets the keys when it's shown (typing and the keys that scroll are its own) and a

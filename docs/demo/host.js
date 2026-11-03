@@ -2026,9 +2026,38 @@
   }
 
   var turns = 0;
-  function ask(text) {
+  // + under the box: files picked with this browser's own picker (chat.js: CO.picked). Text files' words are read
+  // here (up to 100 KB each) and go with the message to the AI; anything else goes by its name alone. Nothing is
+  // uploaded anywhere by this page.
+  var added = {};
+  var TEXTISH = /\.(txt|md|markdown|csv|tsv|json|xml|html?|css|js|ts|py|rs|go|java|c|cc|cpp|h|hpp|sh|ps1|ya?ml|toml|ini|log|sql|rtf)$/i;
+  function pickedFiles() {
+    var files = (window.CO && window.CO.picked) || [];
+    files.forEach(function (f) {
+      var id = uid("f"), item = { name: f.name, size: f.size, text: null };
+      added[id] = item;
+      if ((/^text\//.test(f.type) || TEXTISH.test(f.name)) && f.size <= 100000 && f.text) {
+        f.text().then(function (t) { item.text = t; }, noop);
+      }
+      call("attach", [{ name: f.name, id: id }]);
+    });
+  }
+  function askWithFiles(said, files) {
+    var names = [], parts = [];
+    files.forEach(function (f) {
+      var a = f && f.id && added[f.id];
+      if (!a) return;
+      names.push(a.name);
+      parts.push(a.text != null ? "File \u201c" + a.name + "\u201d:\n" + a.text :
+        "File \u201c" + a.name + "\u201d (" + Math.max(1, Math.round(a.size / 1024)) + " KB; only its name can be read here)");
+      delete added[f.id];
+    });
+    var shown = (said ? said + "\n\n" : "") + "Added: " + names.join(", ");
+    ask((said || "Here " + (names.length === 1 ? "is a file" : "are some files") + ".") + "\n\n" + parts.join("\n\n"), shown);
+  }
+  function ask(text, shown) {
     var you = uid("u"), uts = now(), id = "a" + (++turns), since = acted;
-    call("user", you, text, true);
+    call("user", you, shown || text, true);
     if (claude.key) { claudeTurn(text, you, uts, id, since); return; }
     var r = answer(text), ai = nano.state === "available";
     var lm = !ai && (gemma.state === "ready" || gemma.state === "starting" || gemma.state === "available");
@@ -3136,6 +3165,7 @@
   }
   function status() {
     var h = "";
+    call("listening", ears.on);                // the microphone button under the box, pressed while it listens
     if (ears.on) h = ears.device ? "AirPods on: talk, or type" : "Listening: talk, or type";
     else if (nano.state === "downloading") h = "Downloading " + AI.short + (nano.progress ? " (" + nano.progress + "%)" : "") + "…";
     else if (gemma.state === "downloading") h = "Downloading " + GEMMA.name + (gemma.progress ? " (" + gemma.progress + "%)" : "") + "…";
@@ -3157,6 +3187,7 @@
     switch (msg.type) {
       case "ready":
         call("openInPage", !APP);              // (in the app, a site is laid over the page, as on a Chat Computer)
+        call("pickFiles", true);               // + under the box: this browser's own file picker
         layout();
         greetWith();                           // for the greeting: the name you go by, whether Claude answers,
         sayHere();                             // and where you are, with its weather
@@ -3182,10 +3213,14 @@
         heartCheck();                          // and Heart, the warmer voice, where it can
         break;
       case "send": {
-        var said = String(msg.text || ""), typed = address(said);      // an address opens its site, as a browser's would
+        var said = String(msg.text || ""), files = msg.files || [];
+        if (files.length) { askWithFiles(said, files); break; }
+        var typed = address(said);                                     // an address opens its site, as a browser's would
         if (typed) visit(said, typed); else ask(said);
         break;
       }
+      case "files_picked": pickedFiles(); break;
+      case "mic_toggle": talkButton(); break;
       case "hole": hole = { x: msg.x, y: msg.y, w: msg.w, h: msg.h }; place(); break;
       case "close_content": close(); break;
       case "scroll_open": scrollOpen(msg.how); break;

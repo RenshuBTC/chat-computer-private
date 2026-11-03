@@ -107,8 +107,9 @@ Nothing you say leaves the computer; only websites you open and web searches use
   conversation starts with its name, **Chat Computer**, alone in the middle; after a second it fades away, and
   Chat Computer's first words come in as if just typed, as its answers do: the classic `hello, world`, alone.
   The empty message box, white on the off-white screen as the Claude app's is, says, dimmed, "Type anything", with
-  the cursor already blinking in it (a "/" first in it searches your files; Escape brings in Messages and Actions at
-  the sides, which aren't there to start with). A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
+  the cursor already blinking in it (a "/" first in it searches your files; Escape puts Messages and Actions at
+  the sides away, and brings them back). Under the words, as in the Claude app, **+** adds files to your message
+  (Chat Computer reads them) and the **microphone** starts or stops listening; neither has a menu. A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
   in the middle, as a browser's address bar would. The round button at its right sends: grey while there's
   nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
   the mouse wheel, Page Up) to read back.
@@ -237,8 +238,8 @@ and say "pair my keyboard" (or "my mouse"). A keyboard may want a code typed on 
 and says it. Type it on the keyboard, then press Enter.
 
 * On the conversation screen, typing goes into the message box at the bottom: Enter sends, Shift+Enter
-  starts a new line, and the cursor, selecting and pasting work as anywhere else; Escape brings Messages and
-  Actions in at the sides (and puts them away again). The answer is written, not spoken, and questions like "Go ahead?" are answered by
+  starts a new line, and the cursor, selecting and pasting work as anywhere else; Escape puts Messages and
+  Actions at the sides away (and brings them back). The answer is written, not spoken, and questions like "Go ahead?" are answered by
   typing yes or no. On a website, typing goes into the website, into the box you're in.
 * The mouse's arrow shows when you move the mouse and hides once it has been still for 3 seconds. Each screen
   runs at the fastest refresh rate it offers (as most are set in Windows), so the arrow moves as smoothly as

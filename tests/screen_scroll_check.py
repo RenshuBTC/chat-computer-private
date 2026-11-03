@@ -65,7 +65,7 @@ def streamer(tid, text, then):
     return step
 
 
-LONG = "The forecast says " + "clear skies and a light breeze from the sea all day long, " * 40    # past a screenful
+LONG = "The forecast says " + "clear skies and a light breeze from the sea all day long, " * 80    # past a screenful
 
 
 def scroll_up():
@@ -86,5 +86,5 @@ def finish():
 
 GLib.timeout_add(3000, lambda: read("filled", lambda: GLib.timeout_add(
     15, streamer("live", LONG, lambda: read("streamed", scroll_up) and False))) and False)
-GLib.timeout_add(60000, lambda: (print(json.dumps({"timeout": True, **out})), Gtk.main_quit()) and False)
+GLib.timeout_add(100000, lambda: (print(json.dumps({"timeout": True, **out})), Gtk.main_quit()) and False)
 Gtk.main()

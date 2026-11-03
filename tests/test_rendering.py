@@ -92,7 +92,7 @@ def test_whats_done_takes_you_back_to_where_it_was_asked():
     res = json.loads(lines[-1])
     assert "timeout" not in res, res
     start, today, earlier = res["start"], res["today"], res["earlier"]
-    assert res["first"]["full"] and res["first"]["panel"] and res["first"]["display"] == "none"
+    assert not res["first"]["full"] and res["first"]["panel"] and res["first"]["display"] == "flex"     # from the start
     assert not start["full"] and start["panel"] and start["display"] == "flex" and start["title"] == "Actions"
     # Down the right edge of the screen from top to bottom, 17.5 rem wide, as the Claude app's sidebar is.
     rem = start["rem"]
@@ -172,15 +172,16 @@ def test_the_message_box_works_like_the_claude_apps():
     assert empty["focused"] and empty["value"] == "" and empty["send"] == "rgb(145, 143, 138)"
     # Nothing under the box (or above it while awake), and in it just the dimmed hint ("Esc" in it only where Escape
     # has sidebars to bring in: a screen with room for them).
-    assert empty["words"] == "" and empty["hint"] == "Type anything" and empty["full"]
-    assert empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
+    assert empty["words"] == "" and empty["hint"] == "Type anything" and not empty["full"]
+    # (Under it, the Claude app's room: 2.4375 rem, 34 px on this screen.)
+    assert empty["wake"] == "none" and 25 < empty["below_box"] < 45 and empty["above_box"] < 14
     assert typed["value"] == "hi there" and typed["drafting"] and typed["send"] == "rgb(0, 0, 0)"
-    assert two["value"] == "hi there\nsecond line" and two["box_h"] > typed["box_h"] + 20
+    assert two["value"] == "hi there\nsecond line" and two["box_h"] > typed["box_h"] + 15        # a line taller
     assert res["sent_text"] == ["hi there\nsecond line"]
     assert sent["value"] == "" and sent["box_h"] == typed["box_h"] and not sent["drafting"]
     assert res["after_blur"]["value"] == "abc" and res["after_blur"]["focused"]
-    assert res["escaped"]["value"] == "abc" and not res["escaped"]["full"] and res["escaped"]["focused"]
-    assert res["escaped_again"]["value"] == "abc" and res["escaped_again"]["full"]
+    assert res["escaped"]["value"] == "abc" and res["escaped"]["full"] and res["escaped"]["focused"]
+    assert res["escaped_again"]["value"] == "abc" and not res["escaped_again"]["full"]
     assert len(res["typed_ms"]) >= 15 and all(0 <= ms < 2000 for ms in res["typed_ms"])
 
 
@@ -188,11 +189,10 @@ def test_the_message_box_works_like_the_claude_apps():
 @pytest.mark.skipif(not __import__("shutil").which("xvfb-run") or not __import__("shutil").which("xdotool"),
                     reason="xvfb-run or xdotool not available")
 def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
-    # No sidebars to start with: the middle fills the screen, and Escape brings them in (where there's room for
-    # them): Messages at the left and Actions at the right, as rounded cards inset from the screen's edges. Something
-    # opened (a website) takes the conversation's place in the middle: a rounded frame between the cards, the same
-    # space apart, from the top down to the message box, with its name and a close button (x) at the top. There's no
-    # other part. The website has the keys (typing goes into its box); Page Down in the message box scrolls it.
+    # The sidebars from the start (where there's room for them): Messages at the left and Actions at the right, each
+    # against its edge of the screen from top to bottom, 17.5 rem wide, as the Claude app's sidebar. Something opened
+    # (a website) takes the conversation's place in the middle: a rounded frame between them, 0.75 rem from them and
+    # from the top, down to the message box, with its name and a close button (x) at the top. There's no other part. The website has the keys (typing goes into its box); Page Down in the message box scrolls it.
     # Escape makes the middle fill the screen, the sidebars gone, and Escape again brings them back, whether the
     # page or the message box has the keys; in the conversation too. The x closes it. A message can be pinned (it
     # goes to the top) and opened, with real clicks.
@@ -208,13 +208,13 @@ def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
     res = json.loads(lines[-1])
     assert "timeout" not in res, res
     first, start, pinned, content = res["first"], res["start"], res["pinned"], res["content"]
-    assert first["full"] and first["sides"] == [False, False] and not first["toggles"]["left"]["shown"]
-    assert not first["toggles"]["right"]["shown"] and first["hint"] == "Type anything"
+    assert not first["full"] and first["sides"] == [True, True] and first["toggles"]["left"]["shown"]
+    assert first["toggles"]["right"]["shown"] and first["hint"] == "Type anything"
     assert not start["full"] and start["sides"] == [True, True]
     w, h = start["view"]
-    gap = start["messages"][0]                                  # the cards' space from the screen's edges
-    assert 10 < gap < 30 and start["messages"][1] == gap and h - start["messages"][3] == gap
-    assert w - start["done"][2] == gap and float(start["radius"][:-2]) > 10
+    assert start["messages"][:2] == [0, 0] and start["messages"][3] == h and start["done"][1:] == [0, w, h]
+    assert start["messages"][2] == w - start["done"][0] and 260 <= start["messages"][2] <= 300 and start["radius"] == "0px"
+    gap = 12                                                    # the frame's space from the sidebars and the top
     # Newest first; pinned ones above, without being cut off; each with its kind's icon.
     assert [i["who"] for i in start["list"] if "msg" in i["cls"]] == ["Mum", "Jane from the bank", "Alex"]
     assert [i["who"] for i in start["pinned"]] == ["sam.k"]
@@ -228,7 +228,7 @@ def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
     tl, tr = start["toggles"]["left"], start["toggles"]["right"]
     assert tl["shown"] and tr["shown"] and tl["x"] < start["messages"][0] + 60 and tr["x"] > start["done"][2] - 60
     # Open: the conversation is put away, and the page is in the frame, named after its title, which is between the
-    # cards (the same space apart) from the top down to the message box, the same space above it.
+    # sidebars (0.75 rem from them) from the top down to the message box, the same space above it.
     assert content["mode"] == "content" and content["content"] and not content["column_shown"]
     assert content["frame_title"] == "A website" and content["keys_in_page"]
     f, v, box = content["frame"], content["content_view"], content["box_rect"]
@@ -259,7 +259,7 @@ def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
     full, back = res["page_full"], res["page_back"]
     assert full["full"] and full["sides"] == [False, False] and not full["toggles"]["left"]["shown"] and full["composer"]
     fv = full["content_view"]
-    assert fv[0] < gap + 20 and fv[2] > w - gap - 20 and fv[1] == v[1] and fv[3] == v[3] and full["page"]["typed"] == "abc"
+    assert fv[0] <= gap + 10 and fv[2] >= w - gap - 10 and fv[1] == v[1] and fv[3] == v[3] and full["page"]["typed"] == "abc"
     assert not back["full"] and back["sides"] == [True, True] and back["content_view"] == v
     # Page Down in the empty message box scrolls the page; Escape there fills the screen too, and back.
     assert res["paged"]["page"]["y"] > 300 and not res["paged"]["keys_in_page"]
@@ -340,7 +340,7 @@ def test_the_touchscreen_works_as_an_ipad_s():
     p = res["pinch"]
     assert p["zoomBlocked"] and abs(float(p["size1"][:-2]) / float(p["size0"][:-2]) - 1.5) < 0.02
     assert res["page_events"] == [{"type": "text_scale", "factor": 1.5}]
-    # A sidebar item swiped left shows Pin (once Escape has brought the sidebars in); holding a message selects it;
+    # A sidebar item swiped left shows Pin (the sidebars show from the start); holding a message selects it;
     # a double tap selects a word.
     assert res["swipe"] == {**res["swipe"], "swiped": True, "label": '"Pin"', "visible": "visible"}
     assert res["hold"]["selected"].strip() == "Hi Ren. The weather is lovely today." and res["hold"]["tapPrevented"]

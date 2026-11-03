@@ -1,4 +1,4 @@
-"""Actions, at the right of the conversation once Escape has brought the sidebars in (there are none to start with):
+"""Actions, at the right of the conversation (the sidebars show from the start):
 a sixth of the screen wide, grouped by day; tapping an item scrolls back to the message that asked for it, and for
 one from an earlier day, puts that day's messages back first (from the transcript). Typing stays in the message box.
 An item that can be reverted shows Revert beside its pin, under the pointer; clicking it asks the computer, and the
@@ -140,15 +140,10 @@ EVENTS_JS = """window.__ev = []; ["mousedown", "click"].forEach(function (t) {
 
 
 def start() -> None:
-    """No sidebars to start with; Escape brings them in."""
+    """The sidebars show from the start."""
     screen.chat.evaluate_javascript(EVENTS_JS, -1, None, None, None, None, None)
-    wid = str(screen.win.get_window().get_xid())
-
-    def escape() -> None:
-        subprocess.run(["xdotool", "windowfocus", "--sync", wid, "key", "Escape"], timeout=20)
-        GLib.timeout_add(800, lambda: read("start", lambda: click(item("Searched")["x"], item("Searched")["y"],
-                                                                  lambda: read("today", go_earlier))) and False)
-    read("first", lambda: threading.Thread(target=escape, daemon=True).start())
+    read("first", lambda: read("start", lambda: click(item("Searched")["x"], item("Searched")["y"],
+                                                      lambda: read("today", go_earlier))))
 
 
 def go_earlier() -> None:

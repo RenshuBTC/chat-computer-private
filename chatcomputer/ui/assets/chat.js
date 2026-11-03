@@ -13,7 +13,7 @@
   var MAX_ITEMS = 400;                // messages, and the row under each
   var ai = {};          // id -> {el, md, text, raf, cut, tail}
   var mode = "chat";    // "content" while something is open in the middle (a website, a video, a message...)
-  var full = true;      // no sidebars: the middle fills the screen, until Escape brings Messages and Actions in
+  var full = false;     // no sidebars, the middle filling the screen (Escape); to start with, Messages and Actions show
   var shown = { left: true, right: true };    // the sidebars (see "the panels' switches")
   // A touchscreen alone (a phone or a tablet, no mouse): its keyboard comes up only for the box, and goes down after
   // sending. A phone (a screen under 600px across, either way round) is laid out as the Claude app is there
@@ -519,9 +519,9 @@
     else { lastHole = ""; jumpDown(); }
   }
   $("frame-close").addEventListener("click", function () { post({ type: "close_content", pause: true }); });
-  // The middle fills the screen (what's open with the message box under it, or the conversation) to start with:
-  // no sidebars. Escape brings Messages and Actions in at its sides (where there's room for them); Escape again puts
-  // them away.
+  // To start with, Messages and Actions show at the middle's sides (where there's room for them), as the person
+  // asked. Escape puts them away, the middle (what's open with the message box under it, or the conversation)
+  // filling the screen; Escape again brings them back.
   function toggleFull(on) {
     full = on == null ? !full : !!on;
     body.classList.toggle("full", full);
@@ -539,17 +539,19 @@
   function fitInput() {
     input.style.height = "auto";
     input.style.height = input.scrollHeight + "px";
-    body.classList.toggle("drafting", input.value.trim() !== "");
+    body.classList.toggle("drafting", input.value.trim() !== "" || !!(attached && attached.length));
     body.classList.toggle("typed", input.value !== "");
     checkSearch();
   }
   function sendNow() {
     if (searching) { openResult(); return; }        // "/": Enter opens what's chosen
     var text = input.value.trim();
-    if (!text) return;
+    if (!text && !attached.length) return;
     input.value = "";
     fitInput();
-    post({ type: "send", text: text });
+    post(attached.length ? { type: "send", text: text, files: attached } : { type: "send", text: text });
+    attached = [];
+    drawAttached();
     stick = true;                    // it goes to the top of the screen when it's shown (CO.user)
     doneTyping();
   }
@@ -573,6 +575,58 @@
     if (k.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) measure(e.timeStamp);
   });
   $("send").addEventListener("click", sendNow);
+  // ------------------------------------------------------------------ + and the microphone
+  // Under what's typed, as in the Claude app, each doing just its one thing (no menus): + adds files to the message
+  // (the computer behind the page shows its own file picker; where that's this page's browser, CO.pickFiles, the
+  // browser's), and the microphone starts or stops listening. Neither takes the keys from the box.
+  var attached = [], pickHere = false, picker = null;
+  ["add", "mic"].forEach(function (id) { $(id).addEventListener("mousedown", function (e) { e.preventDefault(); }); });
+  $("add").addEventListener("click", function () {
+    if (!pickHere) { post({ type: "add_files" }); return; }
+    if (!picker) {
+      picker = document.createElement("input");
+      picker.type = "file";
+      picker.multiple = true;
+      picker.hidden = true;
+      picker.addEventListener("change", function () {
+        var files = Array.prototype.slice.call(picker.files || []);
+        picker.value = "";
+        if (!files.length) return;
+        window.CO.picked = files;          // (for the page's host, which reads them: it's in this same page)
+        post({ type: "files_picked", files: files.map(function (f) { return { name: f.name, size: f.size, kind: f.type }; }) });
+      });
+      document.body.appendChild(picker);
+    }
+    picker.click();
+  });
+  $("mic").addEventListener("click", function () { post({ type: "mic_toggle" }); });
+  function micPressed(on) {
+    var m = $("mic");
+    m.setAttribute("aria-pressed", on ? "true" : "false");
+    m.title = on ? "Stop listening" : "Talk";
+    m.setAttribute("aria-label", m.title);
+  }
+  // The files added to the message: a chip each, above what's typed, with an x to take it off again.
+  function drawAttached() {
+    var box = $("attached");
+    box.textContent = "";
+    attached.forEach(function (f, i) {
+      var chip = el("chip"), name = document.createElement("span"), x = document.createElement("button");
+      chip.title = f.path || f.name;
+      name.textContent = f.name;
+      x.type = "button";
+      x.tabIndex = -1;
+      x.setAttribute("aria-label", "Take " + f.name + " off");
+      x.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>';
+      x.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      x.addEventListener("click", function () { attached.splice(i, 1); drawAttached(); });
+      chip.appendChild(name);
+      chip.appendChild(x);
+      box.appendChild(chip);
+    });
+    body.classList.toggle("attaching", attached.length > 0);
+    body.classList.toggle("drafting", input.value.trim() !== "" || attached.length > 0);
+  }
   // Anywhere in the box (around the words, beside its buttons) is somewhere to type, as in the Claude app.
   $("box").addEventListener("click", function (e) {
     if (!(e.target.closest && e.target.closest("button, #results, #input"))) focusBox(true);
@@ -1454,10 +1508,28 @@
       ["listening", "sleeping", "offline", "thinking", "speaking", "muted", "resting"].forEach(function (s) {
         body.classList.toggle(s, s === name);
       });
+      // The microphone button, pressed while Chat Computer listens (awake: listening, thinking or speaking).
+      micPressed(name === "listening" || name === "thinking" || name === "speaking");
     },
+    // The microphone button pressed or not, where the page's host listens some other way (the website).
+    listening: function (on) { micPressed(!!on); },
     // Whether the microphone is on. (Not shown: the screen is the conversation; Chat Computer says so when it can't
     // hear.)
     mic: function (on) {},
+    // Files added to the message by the computer's own file picker ({name, path}), and whether + uses this page's
+    // browser's picker instead (the website and the app: CO.picked holds what was picked there).
+    attach: function (files) {
+      (files || []).forEach(function (f) {
+        if (!f || !f.name) return;
+        var key = f.path || f.id || f.name;
+        if (!attached.some(function (a) { return (a.path || a.id || a.name) === key; })) {
+          attached.push({ name: String(f.name), path: f.path ? String(f.path) : undefined, id: f.id ? String(f.id) : undefined });
+        }
+      });
+      drawAttached();
+      focusBox(true);
+    },
+    pickFiles: function (on) { pickHere = !!on; },
     // Messages pulled down from the top of the screen (the touchscreen's Notification Center).
     showMessages: showMessages,
     // "/": what on this computer matches (n says which search it answers: older answers are ignored).

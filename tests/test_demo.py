@@ -135,18 +135,22 @@ def test_the_demo_works_in_a_browser():
     options = res["greeting_options"]
     assert "and greetings to you, whoever you are" in options["time"] and not any("{" in g for g in options["time"])
     assert all(g.startswith("and ") for g in options["time"] + options["here"]), options
-    # Then: nothing open, no sheet, no button to press, the cursor in the box under the dimmed hint, and nothing else
-    # in or beside the box but its arrow: "/" lists what can be connected (Claude, AirPods), then the files.
+    # Then: nothing open, no sheet, the cursor in the box under the dimmed hint; under the words, as in the Claude app,
+    # + (add files) and the microphone at the left, each doing just that (no menus), and the arrow at the right.
+    # "/" lists what can be connected (Claude, AirPods), then the files.
     assert not first["content"] and not first["sheet"] and first["view"] is None
-    # No sidebars to start with (the middle fills the screen), though there's room for them; Escape brings them in.
-    assert first["full"] and first["sides"] == [False, False] and first["toggles"] == [False, False] and not first["bottom_toggle"]
+    # The sidebars show from the start (where there's room for them), with their switches pressed.
+    assert not first["full"] and first["sides"] == [True, True] and first["toggles"] == ["true", "true"] and not first["bottom_toggle"]
     ins = res["sides_in"]
     assert not ins["full"] and ins["sides"] == [True, True] and ins["toggles"] == ["true", "true"]
     assert first["first_ai"] == res["greeting"] and first["last"] == res["greeting"].replace("\n", "") and first["said"] == 1
     assert first["logo"] is None
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
     assert first["typing_in"] == "input" and first["hint"] == "Type anything"
-    assert first["hint_weight"] == "400" and first["buttons"] == 0
+    assert first["hint_weight"] == "400" and first["buttons"] == ["add", "mic"]
+    (add, ax, ay), (mic, mx, my) = first["tools"]
+    assert (add, mic) == ("Add files", "Talk") and ax < mx < first["send_at"][0] and abs(ay - my) < 1
+    assert ay > first["input_top"] and abs(my - first["send_at"][1]) < 12          # on the row under the words
     assert res["slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Packing list.md" in res["slash"][2:]
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
     assert res["sides_off"]["sides"] == [False, False] and res["sides_off"]["toggles"][:2] == ["false", "false"]
@@ -384,10 +388,10 @@ def test_the_demo_works_in_a_browser():
     assert fb["on"] == ["good"] and [(k["good"], k["on"], k["prompt"]) for k in fb["kept"]] == [(True, True, "is it free")]
     assert res["edit"] == {"box": "is it free", "focused": "input"}
     assert res["retry"] == {"yous": ["is it free", "is it free"], "last": 1}
-    # A phone: no sidebars and no switches; nothing in the box but the words and the arrow, and it works.
+    # A phone: no sidebars and no switches; in the box the words, + and the microphone, and the arrow, and it works.
     phone = res["phone_opening"]
     assert phone["first_ai"] == "hello, world" and phone["logo"] is None and phone["toggles"] == [False, False]
-    assert phone["buttons"] == 0
+    assert phone["buttons"] == ["add", "mic"]
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
     # As the Claude app is on a phone (measured on an iPhone): text a eighteenth of the screen's width (390px: 21.7px),
     # never under 16px, so the browser doesn't zoom in on the box; the box 0.77rem from the screen's sides and 4.77rem

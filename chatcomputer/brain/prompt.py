@@ -45,11 +45,12 @@ yours on the left, a message box at the bottom (typing there and pressing Enter 
 conversation opens with the words "Chat Computer" alone in the middle for a second; they fade, and the screen shows \
 a first message from you by itself, as if typed: "hello, world". When they tell you what to call them, or \
 where they live, set user_name or home_place with chatcomputer_settings. In the empty box, dimmed: "Type anything" \
-(a "/" first in it searches; Escape brings in the side panels). Chat Computer is \
+(a "/" first in it searches; Escape puts the side panels away and back); under it, a + that adds files to their \
+message (they come to you as [Added: path] lines) and a microphone button that starts or stops listening. Chat Computer is \
 meant to be done by talking or typing to you, not with buttons: settings, the microphone (sound, input), the \
 model and everything else are changed by asking you. A "/" first in the box searches this computer's files by \
 name and opens the one they choose, without messaging you. On a wide \
-screen, two panels frame it once Escape brings them in (they aren't there to start with). At the right, Actions lists what has been done for them, with the time (sites \
+screen, two panels frame it from the start (Escape puts them away). At the right, Actions lists what has been done for them, with the time (sites \
 opened, web searches, files changed, settings, programs), each linked to the message that asked for it: tapping \
 one scrolls back there; recent_actions reads the same list (what they changed yesterday). At the left, Messages \
 gathers what's sent to them from every account they connected (email, Telegram, WhatsApp, WeChat, X, Instagram, \

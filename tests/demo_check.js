@@ -3,7 +3,7 @@
 // Computer's first words come in as if just typed (hello, world and a greeting, another on another visit; none when
 // something's said first), the cursor in the box; the
 // sidebars' switches; music (made by the browser), in the middle in the conversation's place; "/" lists the files in
-// front of what's open; no sidebars until Escape brings them in, and Escape puts them away again; the x closes it; a message opened as its whole
+// front of what's open; the sidebars from the start, Escape puts them away and brings them back; the x closes it; a message opened as its whole
 // conversation; an answer in words alone bringing the conversation back; Google, for real, typed into; Connect
 // Claude, with a stand-in for Anthropic (tools used: a map, a YouTube video, which closes
 // when it ends, with a stand-in for YouTube's player; answers streamed; thinking first, as Opus 5.5 always does);
@@ -100,7 +100,10 @@ async function state(page) {
       typing_in: document.activeElement && document.activeElement.id,
       hint: document.getElementById("input").value === "" ? document.getElementById("input").placeholder : null,
       hint_weight: getComputedStyle(document.getElementById("input")).fontWeight,
-      buttons: document.querySelectorAll("#demo-tools, #box button:not(#send)").length,     // none but the arrow
+      buttons: Array.from(document.querySelectorAll("#demo-tools, #box button:not(#send)")).map((b) => b.id || b.className),
+      tools: Array.from(document.querySelectorAll("#tools button")).map((b) => [b.getAttribute("aria-label"), b.getBoundingClientRect().left, b.getBoundingClientRect().top]),
+      send_at: [document.getElementById("send").getBoundingClientRect().left, document.getElementById("send").getBoundingClientRect().top],
+      input_top: document.getElementById("input").getBoundingClientRect().top,
       more: document.querySelectorAll(".more").length,
     };
   });
@@ -217,9 +220,7 @@ async function ask(page, text, meanwhile) {
   // "/": what can be connected here, then the files.
   out.slash = await slash(page);
   if (shot) await page.screenshot({ path: shot + "-opening.png" });
-  // No sidebars to start with; Escape brings Messages and Actions in.
-  await page.keyboard.press("Escape");
-  await page.waitForTimeout(200);
+  // The sidebars show from the start.
   out.sides_in = await state(page);
   // The sidebars' switches: off, and on again (and the choice kept).
   await page.click("#toggle-left");
@@ -997,8 +998,6 @@ export async function pipeline(task, model, opts) {
   rv.on("pageerror", (e) => errors.push(String(e)));
   await rv.goto(page_url);
   await greeted(rv);
-  await rv.keyboard.press("Escape");                         // the sidebars in
-  await rv.waitForTimeout(200);
   const acts = () => rv.evaluate(() => Array.from(document.querySelectorAll("#done-list > li.done-item")).map((li) => ({
     id: li.dataset.id, text: li.querySelector(".done-what").textContent, button: !!li.querySelector(".revert"),
     marks: ["revertable", "reverted", "reverting"].filter((c) => li.classList.contains(c)),

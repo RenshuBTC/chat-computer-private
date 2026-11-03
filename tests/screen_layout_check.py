@@ -1,6 +1,6 @@
-"""The screen's layout: no sidebars to start with, and Escape brings both in: Messages at the left (newest first,
-pins, opening one) and Actions at the right, as rounded cards; something opened (a website) in the middle between
-them, in a frame with its name and a
+"""The screen's layout: both sidebars from the start: Messages at the left (newest first, pins, opening one) and
+Actions at the right, against the screen's edges; something opened (a website) in the middle between them, in a
+frame with its name and a
 close button, from the top down to the message box, the conversation put away; "/" searching, its list in front (the
 page ends above it); the sidebars' switches; the website has the keys (typing goes into its box), and Page Down in the
 message box scrolls it; Escape makes the middle fill the screen and back (from the page, and from the message box);
@@ -170,8 +170,8 @@ def act(cmds: list, then, wait_ms: int = 900) -> None:
 
 
 def step_start() -> None:
-    """No sidebars to start with: the middle fills the screen. Escape brings them in."""
-    read("first", lambda: act([["windowfocus", "--sync", wid()], ["key", "Escape"]], lambda: read("start", step_pin)))
+    """The sidebars show from the start."""
+    read("first", lambda: act([["windowfocus", "--sync", wid()]], lambda: read("start", step_pin)))
 
 
 def step_pin() -> None:

@@ -194,7 +194,6 @@ PINCH_JS = r"""(function () {
 })()"""
 
 SWIPE_JS = r"""(function () {
-  CO.toggleFull();                       // Escape: the sidebars in (there are none to start with)
   var T = window.__T, li = document.querySelector('#messages-list .item'), c = T.centre(li);
   T.fire('touchstart', li, [T.t(li, 1, c[0], c[1])]);
   T.fire('touchmove', li, [T.t(li, 1, c[0] - 30, c[1] + 2)]);
@@ -238,7 +237,7 @@ MESSAGES_JS = r"""(function () {
     T.fire('touchend', log, [], [T.t(log, 1, c[0], c[1])]);
     out[name] = {shown: shown, hiddenAfter: !document.body.classList.contains('show-messages')};
   }
-  CO.toggleFull();                       // Escape again: the sidebars put away, the middle filling the screen
+  CO.toggleFull();                       // Escape: the sidebars put away, the middle filling the screen
   pull('full');
   CO.toggleFull();
   document.body.classList.remove('panel');   // a screen too narrow for them

@@ -124,8 +124,8 @@ body.content #column { display: none; }
 }
 #frame-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
 #frame-close { width: 1.75rem; height: 1.75rem; }
-/* No sidebars to start with: the middle fills the screen (body.full), whatever is in it, the message box included.
-   Escape brings the sidebars and their switches in, and puts them away again. */
+/* The sidebars show from the start; Escape makes the middle fill the screen (body.full), whatever is in it, the
+   message box included, the sidebars and their switches put away, and brings them back again. */
 body.full { --left: 0px !important; --panel: 0px !important; }
 body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.full .toggle { display: none !important; }
 
@@ -146,7 +146,36 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
   position: relative; border: 1px solid var(--line); border-radius: 1rem; background: var(--paper);
   padding: 0.6875rem 0.75rem 0.6875rem 0.9375rem; box-shadow: 0 0.25rem 1.25rem color-mix(in srgb, var(--ink) 5%, transparent);
 }
-#row { position: relative; display: flex; align-items: flex-end; gap: 0.5rem; }
+/* The box, as the Claude app's: what's typed across the top; under it, at the left, + (add files) and the microphone
+   (talk), each doing just that, no menus; at the right, the send button. */
+#row {
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "icon input input" "tools tools send"; align-items: center; gap: 0.55rem 0;
+}
+#input { grid-area: input; }
+#send { grid-area: send; }
+#tools { grid-area: tools; display: flex; align-items: center; gap: 0.2rem; margin-left: -0.35rem; }
+.tool {
+  display: flex; align-items: center; justify-content: center; width: 1.9em; height: 1.9em; margin: 0; padding: 0;
+  border: 0; border-radius: 0.55em; background: none; color: var(--ink); cursor: pointer;
+}
+.tool:hover { background: var(--bubble); }
+.tool svg { display: block; width: 1.15em; height: 1.15em; }
+#mic .fill { fill: none; }
+#mic[aria-pressed="true"] { background: var(--bubble); }
+#mic[aria-pressed="true"] .fill { fill: currentColor; }
+/* Files added to the message: one chip each, above what's typed, with an x to take it off again. */
+#attached { display: none; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.55rem; }
+body.attaching #attached { display: flex; }
+.chip {
+  display: flex; align-items: center; gap: 0.35em; max-width: 100%; padding: 0.25em 0.3em 0.25em 0.65em;
+  border: 1px solid var(--line); border-radius: 0.6em; font-size: 0.875em; background: var(--ground);
+}
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip button { flex: none; width: 1.4em; height: 1.4em; margin: 0; padding: 0.15em; border: 0; border-radius: 0.4em;
+  background: none; color: var(--ink); cursor: pointer; }
+.chip button:hover { background: var(--bubble); }
+.chip svg { display: block; width: 100%; height: 100%; }
 /* The empty box's hint, where typing starts: "Type anything", dimmed (--dim, the one grey text on
    the screen). It's the box's own placeholder,
    so the cursor blinks just before its first letter in every browser (a hint laid over the box can't line up with
@@ -175,7 +204,7 @@ body.sleeping #wake, body.resting #wake { display: block; }
 /* "/" first in the message box: it searches this computer. What matches shows in a list above the box (as a
    search box's suggestions), in front of everything, even what's open: the arrow keys choose, Enter or a click
    opens it between the sidebars, and the last line asks Chat Computer instead. */
-#search-icon { display: none; flex: none; width: 1.2em; height: 1.375em; }
+#search-icon { display: none; flex: none; width: 1.2em; height: 1.375em; grid-area: icon; margin-right: 0.5rem; }
 body.searching #search-icon { display: block; }
 #results {
   position: absolute; left: -1px; right: -1px; bottom: calc(100% + 0.5rem); display: none;
@@ -292,7 +321,7 @@ body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #ch
 .item.swiped .revert::after { content: attr(data-label); font-weight: bold; }
 @media (any-pointer: coarse) { .item { padding-top: 0.55em; padding-bottom: 0.55em; } }
 /* Messages pulled down from the top where the sidebars aren't showing (a screen too narrow for them, or the middle
-   filling the screen, as it does to start with), over the conversation: the iPad's Notification Center. */
+   filling the screen after Escape), over the conversation: the iPad's Notification Center. */
 body.show-messages:not(.panel) #messages, body.full.show-messages #messages {
   display: flex; z-index: 30; width: min(24rem, 100vw - 1.5rem);
 }
@@ -345,8 +374,8 @@ body.sheet-busy #sheet-ok { visibility: hidden; }
 
 /* The sidebars' switches, like the Claude app's sidebar button: Messages' at the top left, Actions' at the top
    right. Each icon is the screen with its sidebar marked, filled in while the sidebar shows. Switched off, a
-   sidebar leaves a narrow margin with just its switch. Only where the sidebars fit (body.panel), and only once
-   Escape has brought them in (not while the middle fills the screen, body.full, as it does to start with). */
+   sidebar leaves a narrow margin with just its switch. Only where the sidebars fit (body.panel), and not while the
+   middle fills the screen (body.full, after Escape). */
 .toggle {
   position: fixed; z-index: 7; display: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.15rem;
   border: 0; border-radius: 0.4rem; background: none; color: var(--ink); cursor: pointer;
@@ -379,13 +408,9 @@ body.phone .ai { max-width: none; }
 body.phone #composer { padding: 0.3rem 0 0.5rem; }
 body.phone #box, body.phone #wake { width: min(var(--co-column, 30rem), 100% - 1.54rem); }
 body.phone #box { padding: 0.49rem 0.29rem 0.27rem 0.58rem; border: 2px solid var(--paper); border-radius: 1.25rem; }
-body.phone #row {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "icon input input" "tools tools send";
-  align-items: center; gap: 0.6rem 0;               /* (no gap between the columns: the words start 14px in) */
-}
-body.phone #search-icon { grid-area: icon; margin-right: 0.5rem; }
-body.phone #input { grid-area: input; height: 1.5em; line-height: 1.5; }
-body.phone #send { grid-area: send; width: 1.73rem; height: 1.73rem; }
+body.phone #row { gap: 0.6rem 0; }                 /* (no gap between the columns: the words start 14px in) */
+body.phone #input { height: 1.5em; line-height: 1.5; }
+body.phone #send, body.phone .tool { width: 1.73rem; height: 1.73rem; }   /* (+ and the microphone no taller) */
 body.phone .you { padding: 0.5rem 0.77rem; border-radius: 1.1rem; }
 body.phone #log { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 

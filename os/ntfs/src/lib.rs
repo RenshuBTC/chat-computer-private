@@ -24,6 +24,7 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -60,6 +61,8 @@ pub enum Error {
     Online(u32),
     /// Compressed by Windows itself ("Compact OS"), which isn't read yet.
     Compacted,
+    /// A folder with more in it than one listing holds (`MOST_LISTING_BYTES` of entries: millions of files).
+    TooMany,
 }
 
 /// Reparse tags. Bit 29 marks a "name surrogate": a link to another file or folder. Others are about the file's own
@@ -121,6 +124,19 @@ const MOST_LEVELS: u32 = 32;
 /// The most index nodes one folder is listed from: a crafted index whose entries point back at their own blocks would
 /// otherwise fan out for ever (each level multiplies the reads).
 const MOST_INDEX_NODES: u32 = 1 << 20;
+/// The most memory one folder's listing takes, its entries and their names: a folder of two or three million files,
+/// more than any Windows makes. Without it, an index whose nodes all point at the same few nodes (or whose runs put
+/// many nodes on the same clusters) lists the same entries over and over until memory runs out, long before the
+/// nodes' budget is spent.
+const MOST_LISTING_BYTES: usize = 256 << 20;
+
+/// What one folder's listing has spent: index nodes read, each at most once (a valid index is a tree: no node is
+/// reached twice), and memory.
+struct Walk {
+    nodes: u32,
+    seen: BTreeSet<u64>,
+    bytes: usize,
+}
 
 /// A reparse point's value: its tag, and its data (after the 8-byte header). A value shorter than the header, or
 /// than the length it gives, is damaged (slicing from 8 would panic on a 6- or 7-byte one).
@@ -726,8 +742,8 @@ impl Volume {
         let block_size = u32_at(root, 8).ok_or(Error::Damaged)? as usize;
         let alloc = self.attributes_in(disk, folder, &own, INDEX_ALLOCATION)?.into_iter().find(|a| a.name == I30);
         let mut out = Vec::new();
-        let mut budget = MOST_INDEX_NODES;
-        self.walk_node(disk, root, 16, alloc.as_ref(), block_size, 0, &mut out, &mut budget)?;
+        let mut walk = Walk { nodes: MOST_INDEX_NODES, seen: BTreeSet::new(), bytes: 0 };
+        self.walk_node(disk, root, 16, alloc.as_ref(), block_size, 0, &mut out, &mut walk)?;
         // (Windows keeps each reparse point's tag in its folder's index too; were one not there, its record has it.)
         for e in out.iter_mut().filter(|e| e.attributes & REPARSE != 0 && e.tag == 0) {
             if let Ok(Some((tag, _))) = self.reparse(disk, e.record) {
@@ -741,11 +757,11 @@ impl Volume {
     /// The entries of one index node (its header at `header` in `block`), with its sub-nodes' before each of them.
     #[allow(clippy::too_many_arguments)]
     fn walk_node(&self, disk: &mut impl Disk, block: &[u8], header: usize, alloc: Option<&Attribute>, block_size: usize,
-                 depth: u32, out: &mut Vec<Entry>, budget: &mut u32) -> Result<(), Error> {
-        if depth > MOST_LEVELS || *budget == 0 {
+                 depth: u32, out: &mut Vec<Entry>, walk: &mut Walk) -> Result<(), Error> {
+        if depth > MOST_LEVELS || walk.nodes == 0 {
             return Err(Error::Damaged);
         }
-        *budget -= 1;
+        walk.nodes -= 1;
         let first = header + u32_at(block, header).ok_or(Error::Damaged)? as usize;
         let end = (header + u32_at(block, header + 4).ok_or(Error::Damaged)? as usize).min(block.len());
         let mut at = first;
@@ -758,8 +774,11 @@ impl Volume {
             }
             if flags & SUBNODE != 0 {
                 let vcn = u64_at(block, at + len - 8).ok_or(Error::Damaged)?;
+                if !walk.seen.insert(vcn) {
+                    return Err(Error::Damaged);
+                }
                 let child = self.index_block(disk, alloc.ok_or(Error::Damaged)?, block_size, vcn)?;
-                self.walk_node(disk, &child, 0x18, alloc, block_size, depth + 1, out, budget)?;
+                self.walk_node(disk, &child, 0x18, alloc, block_size, depth + 1, out, walk)?;
             }
             if flags & LAST != 0 {
                 break;
@@ -767,6 +786,10 @@ impl Volume {
             if key_len >= 66
                 && let Some(e) = entry(&block[at..at + len], key_len)
             {
+                walk.bytes += core::mem::size_of::<Entry>() + e.name.len();
+                if walk.bytes > MOST_LISTING_BYTES {
+                    return Err(Error::TooMany);
+                }
                 out.push(e);
             }
             at += len;

@@ -1103,6 +1103,7 @@ fn error_text(e: ntfs::Error, what: &str) -> String {
         ntfs::Error::Online(tag) => format!("{what}: Windows keeps this file's bytes elsewhere, not on this drive (reparse tag {tag:#010X})"),
         ntfs::Error::Compacted => format!("{what}: Windows compressed this file itself (Compact OS), which Chat Computer's own system can't read yet"),
         ntfs::Error::Damaged => format!("{what}: the drive's file system doesn't add up there"),
+        ntfs::Error::TooMany => format!("{what}: this folder has more in it than Chat Computer's own system lists (millions of files)"),
         ntfs::Error::Read => format!("{what}: the drive couldn't be read"),
         _ => format!("{what}: {e:?}"),
     }

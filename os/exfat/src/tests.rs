@@ -109,6 +109,37 @@ fn finds_names_whatever_their_case() {
 }
 
 #[test]
+fn a_folder_is_read_to_its_end_whatever_its_length_says() {
+    let good = image("usb");
+    let v = open(&mut Image { bytes: good.bytes.clone() }).unwrap();
+    let root_at = (v.heap + (v.root as u64 - 2) * v.cluster_size as u64) as usize;
+    // "Many" with no length in its stream extension (as the root never has one): still its 600 files, to its
+    // end-of-folder entry.
+    let mut disk = Image { bytes: good.bytes.clone() };
+    let entries = &disk.bytes[root_at..root_at + v.cluster_size as usize];
+    let name: Vec<u8> = "Many".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let set = (0..entries.len() / 32).find(|&i| entries[i * 32] == NAME && entries[i * 32 + 2..i * 32 + 10] == name[..]).unwrap();
+    let stream = root_at + (set - 1) * 32;
+    assert_eq!(disk.bytes[stream], STREAM);
+    assert_eq!(disk.bytes[stream + 1] & 2, 0, "Many's clusters are a chain in the FAT");
+    disk.bytes[stream + 8..stream + 16].fill(0);
+    disk.bytes[stream + 24..stream + 32].fill(0);
+    let many = v.find(&mut disk, "Many").unwrap();
+    assert_eq!(many.size, 0);
+    assert_eq!(v.list(&mut disk, &many).unwrap().len(), 600);
+    // A volume that says it has four billion clusters, and a root folder whose chain loops on itself: read as far as a
+    // folder's entries go (the loop was only caught after four billion steps, and 16 GB of cluster numbers).
+    let mut disk = Image { bytes: good.bytes.clone() };
+    disk.bytes[92..96].copy_from_slice(&0xFFFF_FFF5u32.to_le_bytes());
+    let fat_entry = v.fat as usize + 4 * v.root as usize;
+    disk.bytes[fat_entry..fat_entry + 4].copy_from_slice(&v.root.to_le_bytes());
+    let started = std::time::Instant::now();
+    let looped = open(&mut disk).unwrap();
+    assert_eq!(looped.list(&mut disk, &looped.root()).unwrap().len(), v.list(&mut Image { bytes: good.bytes.clone() }, &v.root()).unwrap().len());
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+}
+
+#[test]
 fn damaged_volumes_give_errors() {
     let good = image("usb");
     assert_eq!(open(&mut Image { bytes: std::vec![0; 4096] }).err(), Some(Error::NotExfat));

@@ -241,9 +241,12 @@ impl Volume {
     }
 
     /// `count` of a file's or folder's clusters, in order, from its `skip`th: in one run (`contiguous`), or along its
-    /// chain in the FAT, which mustn't end sooner, loop or leave the volume. `count` None: to the chain's end (the
-    /// root folder, whose size isn't kept).
+    /// chain in the FAT, which mustn't end sooner, loop or leave the volume. `count` None: a folder's, to the chain's
+    /// end (the root folder, whose size isn't kept, or another without one), but no further than the most entries a
+    /// folder is read for: a chain that loops is otherwise only caught after as many steps as the volume says it has
+    /// clusters, which it can say is four billion (16 GB of cluster numbers, from a stick of any size).
     fn clusters_of(&self, disk: &mut impl Disk, e: &Entry, skip: u64, count: Option<u64>) -> Result<Vec<u32>, Error> {
+        let most = MOST_ENTRIES * 32 / self.cluster_size as u64 + 1;
         if e.first == 0 {
             return Ok(Vec::new());
         }
@@ -265,7 +268,7 @@ impl Volume {
         loop {
             if steps >= skip {
                 out.push(c);
-                if count.is_some_and(|n| out.len() as u64 == n) {
+                if count.is_some_and(|n| out.len() as u64 == n) || count.is_none() && out.len() as u64 >= most {
                     return Ok(out);
                 }
             }

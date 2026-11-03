@@ -237,3 +237,73 @@ fn xml_as_office_writes_it() {
     assert_eq!(resolve("xl", "/xl/worksheets/sheet2.xml"), "xl/worksheets/sheet2.xml");
     assert_eq!(resolve("", "word/document.xml"), "word/document.xml");
 }
+
+/// A ZIP of `files`, stored as they are (not compressed), as a test makes one.
+fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let (mut out, mut directory) = (Vec::new(), Vec::new());
+    for (name, data) in files {
+        let at = out.len() as u32;
+        let header = |sig: u32, central: bool| {
+            let mut h = sig.to_le_bytes().to_vec();
+            if central {
+                h.extend_from_slice(&20u16.to_le_bytes()); // made by
+            }
+            for v in [20u16, 0, 0, 0, 0] {
+                h.extend_from_slice(&v.to_le_bytes()); // needed, flags, stored, time, date
+            }
+            for v in [zip::crc32(data), data.len() as u32, data.len() as u32] {
+                h.extend_from_slice(&v.to_le_bytes());
+            }
+            h.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            h.extend_from_slice(&0u16.to_le_bytes()); // extra
+            if central {
+                h.extend_from_slice(&[0; 6]); // comment, disk, internal attributes
+                h.extend_from_slice(&0u32.to_le_bytes()); // external attributes
+                h.extend_from_slice(&at.to_le_bytes());
+            }
+            h.extend_from_slice(name.as_bytes());
+            h
+        };
+        out.extend(header(0x0403_4B50, false));
+        out.extend_from_slice(data);
+        directory.extend(header(0x0201_4B50, true));
+    }
+    let (start, size, n) = (out.len() as u32, directory.len() as u32, files.len() as u16);
+    out.extend(directory);
+    out.extend_from_slice(&0x0605_4B50u32.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    for v in [n, n] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [size, start] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&[0; 2]);
+    out
+}
+
+#[test]
+fn repeated_cells_cant_ask_for_all_memory() {
+    // A cell with a word, repeated a hundred times (past that, only the column moves on), a hundred of them in a row
+    // repeated a hundred times: a million cells from 9 KB of XML, and 120 such rows four GB of them. The document's
+    // cells are held to MOST_CELL_BYTES, and a table is shown MOST_COLUMNS wide.
+    let cell = r#"<table:table-cell table:number-columns-repeated="100"><text:p>x</text:p></table:table-cell>"#;
+    let row = format!(r#"<table:table-row table:number-rows-repeated="100">{}</table:table-row>"#, cell.repeat(100));
+    for (kind, body) in [("spreadsheet", "office:spreadsheet"), ("text", "office:text")] {
+        let content = format!(
+            r#"<?xml version="1.0"?><office:document-content><office:body><{body}><table:table table:name="T"><table:table-row><table:table-cell><text:p>first</text:p></table:table-cell></table:table-row>{}</table:table></{body}></office:body></office:document-content>"#,
+            row.repeat(120)
+        );
+        let mimetype = format!("application/vnd.oasis.opendocument.{kind}");
+        let file = stored_zip(&[("mimetype", mimetype.as_bytes()), ("content.xml", content.as_bytes())]);
+        let started = std::time::Instant::now();
+        let (_, text) = read(&file).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+        assert!(started.elapsed().as_secs() < 20, "{kind}: {:?}", started.elapsed());
+        assert!(text.contains("first"), "{kind}");
+        assert!(text.len() <= MOST_TEXT + 200, "{kind}: {} bytes", text.len());
+        // Every row shown is the table's width at most, and fewer rows are kept than the XML repeats.
+        let rows: Vec<&str> = text.lines().filter(|l| l.contains(",x,") || l.starts_with("| x")).collect();
+        assert!(!rows.is_empty() && rows.len() < 12_000, "{kind}: {} rows", rows.len());
+        assert!(rows.iter().all(|r| r.matches('x').count() <= MOST_COLUMNS), "{kind}");
+    }
+}

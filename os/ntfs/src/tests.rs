@@ -239,6 +239,60 @@ fn a_reparse_point_shorter_than_its_header_is_damaged_not_a_crash() {
 }
 
 #[test]
+fn an_index_that_reaches_a_node_twice_is_damaged() {
+    // A big folder's index is a tree: each entry with a sub-node leads to a node of its own. Two that lead to the same
+    // node would list its files twice, and an index made so at every level multiplies the reads, and the entries kept,
+    // level by level. "Many" (600 files) has nodes with sub-nodes: in the first, the second such entry is made to lead
+    // where the first does.
+    let mut disk = image("small");
+    let v = open(&mut disk).unwrap();
+    let many = v.find(&mut disk, "Many").unwrap().record;
+    assert_eq!(v.list(&mut disk, many).unwrap().len(), 600);
+    let base = v.record(&mut disk, many).unwrap();
+    let own = attributes_of(&base).unwrap();
+    let alloc = v.attributes_in(&mut disk, many, &own, INDEX_ALLOCATION).unwrap().into_iter().find(|a| a.name == I30).unwrap();
+    let Value::Clusters { runs, .. } = &alloc.value else { panic!("a resident index allocation") };
+    let cs = v.cluster_size as u64;
+    let blocks: Vec<u64> = runs
+        .iter()
+        .filter_map(|r| r.lcn.map(|lcn| (lcn, r.len)))
+        .flat_map(|(lcn, len)| (0..len * cs / 4096).map(move |i| lcn * cs + i * 4096))
+        .collect();
+    let mut patched = false;
+    'blocks: for at in blocks {
+        let mut b = disk.bytes[at as usize..at as usize + 4096].to_vec();
+        if fix_up(&mut b, b"INDX").is_err() {
+            continue;
+        }
+        let (first, end) = (0x18 + u32_at(&b, 0x18).unwrap() as usize, 0x18 + u32_at(&b, 0x1C).unwrap() as usize);
+        let mut leads = Vec::new(); // where each sub-node's VCN is
+        let mut e = first;
+        while e + 16 <= end {
+            let len = u16_at(&b, e + 8).unwrap() as usize;
+            if u16_at(&b, e + 12).unwrap() & SUBNODE != 0 {
+                leads.push(e + len - 8);
+            }
+            if len == 0 {
+                break;
+            }
+            e += len;
+        }
+        // (Not over a sector's last two bytes, which on the disk hold the update sequence number, not the VCN's.)
+        for pair in leads.windows(2) {
+            if (pair[1]..pair[1] + 8).any(|i| i % 512 >= 510) {
+                continue;
+            }
+            let vcn = b[pair[0]..pair[0] + 8].to_vec();
+            disk.bytes[at as usize + pair[1]..at as usize + pair[1] + 8].copy_from_slice(&vcn);
+            patched = true;
+            break 'blocks;
+        }
+    }
+    assert!(patched, "no index node with two sub-nodes in Many");
+    assert_eq!(v.list(&mut disk, many).unwrap_err(), Error::Damaged);
+}
+
+#[test]
 fn decompresses_lznt1() {
     // A chunk with a literal run, then copies near and far (as Windows writes them).
     let plain: Vec<u8> = b"abcabcabcabcabcabc hello hello hello".to_vec();

@@ -13,6 +13,12 @@ use zip::Archive;
 
 /// The most times a repeated row or cell with something in it is repeated (an empty one only moves the place on).
 const MOST_REPEATS: u32 = 100;
+/// The most memory a document's table cells take, their words and places, all its tables together: a cell repeated a
+/// hundred times in a row repeated a hundred times is ten thousand cells from a hundred bytes of XML, so a small file
+/// could otherwise ask for gigabytes. Many times the text made from them (MOST_TEXT): a cell past it is left out.
+const MOST_CELL_BYTES: usize = 64 << 20;
+/// What a kept cell costs, besides its words.
+const CELL_COST: usize = core::mem::size_of::<(usize, String)>();
 
 /// A table being read: its name, and its rows (each its number, and its cells' columns and words).
 struct Table {
@@ -33,6 +39,8 @@ pub fn read(archive: &Archive) -> Result<String, Error> {
     // Paragraphs being read (a frame's can be inside another's): each its words and what it is.
     let mut paras: Vec<(String, u8, bool)> = Vec::new();
     let mut tables: Vec<Table> = Vec::new();
+    // What the document's table cells take so far (MOST_CELL_BYTES).
+    let mut spent = 0usize;
     let mut lists = 0usize;
     let mut skip = 0usize;
     let (mut page, mut in_notes) = (0usize, false);
@@ -111,7 +119,7 @@ pub fn read(archive: &Archive) -> Result<String, Error> {
                         table.row_repeats = t.attr("table:number-rows-repeated").and_then(|r| r.parse().ok()).unwrap_or(1).max(1);
                         table.rows.push((table.row, Vec::new()));
                         if t.empty {
-                            end_row(table);
+                            end_row(table, &mut spent);
                         }
                     }
                 }
@@ -120,7 +128,7 @@ pub fn read(archive: &Archive) -> Result<String, Error> {
                         table.cell_repeats = t.attr("table:number-columns-repeated").and_then(|r| r.parse().ok()).unwrap_or(1).max(1);
                         table.cell = Some(String::new());
                         if t.empty {
-                            end_cell(table);
+                            end_cell(table, &mut spent);
                         }
                     }
                 }
@@ -170,12 +178,12 @@ pub fn read(archive: &Archive) -> Result<String, Error> {
                 }
                 "table:table-cell" | "table:covered-table-cell" => {
                     if let Some(table) = tables.last_mut() {
-                        end_cell(table);
+                        end_cell(table, &mut spent);
                     }
                 }
                 "table:table-row" => {
                     if let Some(table) = tables.last_mut() {
-                        end_row(table);
+                        end_row(table, &mut spent);
                     }
                 }
                 "table:table" => {
@@ -231,32 +239,47 @@ fn push(paras: &mut [(String, u8, bool)], s: &str) {
     }
 }
 
-/// A cell ends: its words in its row, as many times as it repeats (an empty one just moves the column on).
-fn end_cell(table: &mut Table) {
+/// A cell ends: its words in its row, as many times as it repeats (an empty one just moves the column on), while the
+/// document's cells are within MOST_CELL_BYTES (`spent`).
+fn end_cell(table: &mut Table, spent: &mut usize) {
     let words = table.cell.take().unwrap_or_default();
     let repeats = table.cell_repeats as usize;
     if !words.is_empty()
         && let Some((_, cells)) = table.rows.last_mut()
     {
+        let cost = words.len() + CELL_COST;
         for k in 0..repeats.min(MOST_REPEATS as usize) {
+            if *spent + cost > MOST_CELL_BYTES {
+                break;
+            }
+            *spent += cost;
             cells.push((table.column + k, words.clone()));
         }
     }
     table.column = table.column.saturating_add(repeats);
 }
 
-/// A row ends: repeated as many times as it says (if it has anything in it; else only the row number moves on).
-fn end_row(table: &mut Table) {
+/// A row ends: repeated as many times as it says, if it has anything in it (and while the document's cells are within
+/// MOST_CELL_BYTES); a row with nothing in it isn't kept, only its number moves on.
+fn end_row(table: &mut Table, spent: &mut usize) {
     let repeats = table.row_repeats;
     table.row_repeats = 1;
+    if table.rows.last().is_some_and(|(_, cells)| cells.is_empty()) {
+        table.rows.pop();
+        table.row = table.row.saturating_add(repeats - 1);
+        return;
+    }
     if repeats <= 1 {
         return;
     }
     let Some((n, cells)) = table.rows.last().cloned() else { return };
-    if !cells.is_empty() {
-        for k in 1..repeats.min(MOST_REPEATS) {
-            table.rows.push((n + k, cells.clone()));
+    let cost: usize = cells.iter().map(|(_, w)| w.len() + CELL_COST).sum();
+    for k in 1..repeats.min(MOST_REPEATS) {
+        if *spent + cost > MOST_CELL_BYTES {
+            break;
         }
+        *spent += cost;
+        table.rows.push((n + k, cells.clone()));
     }
     table.row = n.saturating_add(repeats - 1);
 }

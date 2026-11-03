@@ -60,7 +60,9 @@ chat-computer/
                             the model's file format, its converter from Qwen's published files, the tokenizer, each
                             model's chat template as code, tool calls, sessions that read only what's new; the
                             program chat-computer-model (serve: OpenAI's chat completions API on 127.0.0.1, for
-                            this computer's programs and Chat Computer's own pages only; convert), built for Linux
+                            this computer's programs and Chat Computer's own pages only; convert; find-refusal: the
+                            direction the model refuses along, measured, kept beside its file and taken out as it
+                            runs, so it answers what it's asked), built for Linux
                             by release.sh into chatcomputer/brain/bin (x86-64 and ARM, static, reproducible: CI
                             checks them). See its README.md. In place of Claude, everywhere: the Linux runtime
                             thinks with it now; the apps and the own system next
@@ -168,7 +170,7 @@ addresses.
 | Model download command (run as the user) | `/opt/chatcomputer/venv/bin/python -m chatcomputer models --download` |
 | Health check command | `/opt/chatcomputer/venv/bin/python -m chatcomputer doctor` (prints JSON, exit 0 if usable) |
 | User data (owned by the user) | `/home/<user>/ChatComputer/` |
-| The model (Chat Computer's own file of it) | `/home/<user>/ChatComputer/models/llm/<name>.ccm`, made from Qwen's files when first needed (`chatcomputer/brain/models.py`); the system prompt's reading kept in `models/llm/cache/` |
+| The model (Chat Computer's own file of it) | `/home/<user>/ChatComputer/models/llm/<name>.ccm`, made from Qwen's files when first needed (`chatcomputer/brain/models.py`), and `<name>.refusal` beside it (its refusal direction, taken out as it runs); the system prompt's reading kept in `models/llm/cache/` |
 | The model's engine | `/opt/chatcomputer/app/chatcomputer/brain/bin/chat-computer-model-<machine>` (built reproducibly from `os/model`; run from a copy in `models/llm/` when an update left it not runnable); serves `127.0.0.1:8765` |
 | Initial settings from Windows setup | `/home/<user>/ChatComputer/settings.json` (JSON; keys below) |
 | Voice models | `/home/<user>/ChatComputer/models/` (layout owned by `chatcomputer.voice.models`) |
@@ -421,9 +423,13 @@ retrying with backoff, then starts listening.
   revision of Qwen's repository on Hugging Face with every file's size and SHA-256 (`scripts/model_manifest.py`
   writes it). On first need (`ModelService.prepare_in_background`) the files are downloaded (a download that
   stops carries on with a Range request), each checked against its SHA-256, converted by the engine
-  (`chat-computer-model convert ... --bits 4` or 8) into `models/llm/<name>.ccm`, and the downloads removed. Until
-  it's ready the controller answers what it can by itself (Wi-Fi, volume, switching systems) and says how far
-  along the model is.
+  (`chat-computer-model convert ... --bits 4` or 8) into `models/llm/<name>.ccm`, and the downloads removed; before
+  it takes that name, the engine finds its refusal direction (`chat-computer-model find-refusal`, at a lower
+  priority: minutes for the small models, up to about half an hour for the biggest) into `models/llm/<name>.refusal`,
+  which the server reads and takes out as the model runs, so it answers whatever it's asked (`os/model/README.md`).
+  A model got ready before that has it found in the background while it answers (`ModelService.uncensor_in_background`),
+  and its server starts again with it. Until it's ready the controller answers what it can by itself (Wi-Fi, volume,
+  switching systems) and says how far along the model is.
 * The model's server (`brain/server.py`): Chat Computer's own engine, `os/model` (no outside code: the model's
   file format, the tokenizer, each model's chat template as code, int8 kernels for AVX2 and VNNI), started as
   `chat-computer-model serve <file> --port 8765 --cache models/llm/cache` in its own process group. It speaks

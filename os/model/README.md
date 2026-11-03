@@ -38,13 +38,18 @@ Qwen3.5-0.8B is the one the checks use.
   tokens it chose.
 - `convert.rs` and the program's `convert` command: the model's file from Qwen's published files (config.json,
   tokenizer.json, the chat template, the safetensors weights), a weight at a time.
+- `refusal.rs` and the program's `find-refusal` command: the direction the model refuses along, found and measured
+  (below), kept beside the model's file and taken out as the model runs (`net.rs`: `Ablation`).
 - `src/bin/chat-computer-model`: the program: `serve` answers this computer's programs over HTTP on 127.0.0.1 as
-  OpenAI's chat completions API (streamed or whole, tool calls, the thinking as `reasoning_content`); `convert`.
+  OpenAI's chat completions API (streamed or whole, tool calls, the thinking as `reasoning_content`); `convert`;
+  `find-refusal`.
 
 ## The program
 
     chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]
+    chat-computer-model find-refusal MODEL.ccm [--out FILE] [--threads N]
     chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]...
+                                        [--refusal FILE | --no-refusal]
 
 `--cache DIR` keeps the reading of a conversation's first message (the system prompt and the tools: about 10,000
 tokens for Chat Computer) on disk, named by the model and those tokens, so a restart picks it up instead of reading
@@ -60,12 +65,45 @@ pointed here by a DNS trick), from programs on it or from Chat Computer's own pa
 app's page, and origins given with `--allow-origin`, such as the Chrome extension's); any other page a browser shows is
 refused, so no site can use the model behind the person's back. The model only writes: it runs and opens nothing.
 
+## Answering what it's asked
+
+The open models are trained to refuse some requests. Chat Computer's model is the person's own tool, on their own
+computer, so each model has its refusals taken out (Chat Computer does this when it gets a model ready). How a model
+refuses is written along one direction in what it thinks with (its residual stream), and taking that direction out
+as the model runs takes the refusing out with it (Arditi et al., 2024, "Refusal in language models is mediated by a
+single direction"; done to published models, it's called abliteration). The weights stay as they were: the direction
+is kept in a file beside the model's (`MODEL.refusal`, "CCREFUS1", with the model file's mark, so it's used only with
+that file), and `serve` takes it out of what the model thinks with after its embedding and after each part of every
+layer.
+
+`find-refusal` finds and measures it (`refusal.rs`): 64 requests these models are trained to refuse and 64 everyday
+requests alike in form and subject (none about hurting oneself, or about children), each list split three ways.
+
+1. The model reads the first 40 of each (up to where its answer starts, not thinking first); at each layer, the mean
+   of what it thinks with there over the refused ones less the mean over the everyday ones is a direction to try.
+2. The next 12 of each choose among them: for the directions from a fifth to four fifths of the way through the
+   layers, taken out at every layer, how likely the model still is to start a refusal (with the words its own
+   refusals start with), and how much its first word to an everyday request changes (KL divergence, kept under 0.1).
+3. The last 12 of each, used for nothing else, measure the one chosen: the model's answers (their first 24 tokens)
+   with it taken out and without, counting refusals by their words ("I can't", "I'm sorry", "抱歉"...).
+
+Qwen3.5-0.8B (8 bits; 6 minutes on this repository's 2-core test machine): the direction from layer 13 of 24. Of the
+12 held-out requests, it refused 9 as it is and none with the direction taken out. Of the 12 held-out everyday
+ones, none was refused and 4 answers began with the same 16 tokens as before (its first token's distribution, on the
+choosing requests, changed by a KL of 0.027). Asked ten more everyday questions (writing, advice, a sum, code, a
+capital, a translation), it gave the same kind of answers in other words, but for one: "good morning" in French
+came back as "Bon matin", where it had said "Bonjour". Each model is measured the same way when Chat Computer gets it
+ready, and the numbers are kept in its file (`serve` says them as it starts, and in `/health`). What's counted is a
+refusal's first words: an answer that starts to comply and then refuses, or complies badly, isn't counted.
+
 ## Checks
 
 `cargo test -p model --features std`: on two small models made with random weights (one with experts: `testing.rs`),
 reading many tokens at once gives exactly the scores of reading them one at a time; a snapshot goes back exactly; a
 session reads only what's new and answers exactly as a new session does; the first message's reading kept on disk
-reads back exactly; the kernels (plain, AVX2, AVX-VNNI, AVX-512 VNNI) agree; the chat template's rules; NFC; JSON.
+reads back exactly; the kernels (plain, AVX2, AVX-VNNI, AVX-512 VNNI) agree; the chat template's rules; NFC; JSON;
+a direction taken out is in nothing the model thinks with, at any layer (and with strength 0, nothing changes); the
+refusal search runs through, the same each time; its file reads back only for its model.
 
 Getting a model ready as Chat Computer does (`chatcomputer/brain/models.py`: Qwen3.5-0.8B's files downloaded from the
 pinned revision, each checked against its SHA-256, converted by the program in `chatcomputer/brain/bin`) made a file

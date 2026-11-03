@@ -32,9 +32,11 @@ class NotReady(RuntimeError):
 
 class ModelServer:
     def __init__(self, program: str, model: str, port: int = PORT, threads: int | None = None,
-                 log_file: str | None = None, cache: str | None = None) -> None:
+                 log_file: str | None = None, cache: str | None = None, uncensored: bool = False) -> None:
         self.program, self.model, self.port, self.threads = program, model, port, threads
         self.log_file, self.cache = log_file, cache
+        # (Whether the model's refusal direction was there to take out when it started: the engine reads it then.)
+        self.uncensored = uncensored
         self.proc: subprocess.Popen | None = None
         self._lock = asyncio.Lock()
 
@@ -168,7 +170,10 @@ class ModelService:
     in the background) and its server. on_progress is told how getting it ready goes (from another thread).
 
     While the chosen model is being got ready, one already on this computer that the memory runs answers instead
-    (the biggest), if there is one: a bigger model chosen later doesn't leave Chat Computer without one meanwhile."""
+    (the biggest), if there is one: a bigger model chosen later doesn't leave Chat Computer without one meanwhile.
+
+    Every model answers with its refusals taken out (models.Store.uncensor): one got ready before that was done
+    has them found in the background, while it answers, and its server starts again with them taken out."""
 
     def __init__(self, paths: Any, settings: Any, on_progress: Callable[[models.Progress], None] | None = None,
                  port: int = PORT, threads: int | None = None) -> None:
@@ -180,6 +185,8 @@ class ModelService:
         self.server: ModelServer | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._uncensoring: threading.Thread | None = None
+        self._uncensor_tried: set[str] = set()     # (once a run: one that didn't work isn't tried again until the next)
 
     def serving(self) -> models.Model | None:
         """The model that answers now: the chosen one once it's here, else the biggest one here that the memory
@@ -217,22 +224,43 @@ class ModelService:
         self._thread = threading.Thread(target=work, name="model-prepare", daemon=True)
         self._thread.start()
 
+    def uncensor_in_background(self, m: models.Model) -> None:
+        """Has a model that's here, whose refusals haven't been looked for, have them found (in the background)."""
+        busy = any(t and t.is_alive() for t in (self._thread, self._uncensoring))
+        f = self.store.ready(m)
+        if busy or not f or m.name in self._uncensor_tried or self.store.uncensored(m):
+            return
+        self._uncensor_tried.add(m.name)
+        self._stop.clear()
+
+        def work() -> None:
+            try:
+                self.store.uncensor(m, f, models.Progress(), self._stop)
+            except Exception as exc:
+                log.warning("%s's refusals couldn't be looked for: %s", m.label, exc)
+        self._uncensoring = threading.Thread(target=work, name="model-uncensor", daemon=True)
+        self._uncensoring.start()
+
     async def ensure(self) -> int:
         """The server's port, once it's running with the model; NotReady while the model is being got ready (and no
         other is here to answer meanwhile)."""
         if not self.store.ready(self.model):
             self.prepare_in_background()
         f = self.file()
-        if not f:
+        m = self.serving()
+        if not f or m is None:
             raise NotReady(self.progress.words())
         program = models.engine_program(self.paths.models)
         if not program:
             raise NotReady("Chat Computer's model engine isn't installed")
-        if self.server is None or self.server.model != f:
+        uncensored = self.store.uncensored(m)
+        if not uncensored:
+            self.uncensor_in_background(m)
+        if self.server is None or self.server.model != f or self.server.uncensored != uncensored:
             if self.server:
                 await self.server.stop()
             self.server = ModelServer(program, f, self.port, self.threads, log_file=str(self.paths.logs / "model.log"),
-                                      cache=str(self.store.root / "cache"))
+                                      cache=str(self.store.root / "cache"), uncensored=uncensored)
         await self.server.start()
         return self.server.port
 

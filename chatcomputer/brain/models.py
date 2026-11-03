@@ -4,7 +4,9 @@ The models are Qwen's open ones (Apache 2.0), run by Chat Computer's own engine 
 chat-computer-model). models.json pins each to one revision of Qwen's own repository on Hugging Face, with every
 file's size and SHA-256 (scripts/model_manifest.py writes it). Getting one ready: its files are downloaded from
 there (a download that stops carries on where it stopped), each checked against its pinned SHA-256, then the
-engine converts them into its own file (the weights in 4 or 8 bits) and the downloads are removed.
+engine converts them into its own file (the weights in 4 or 8 bits) and the downloads are removed. Last, the engine
+finds the direction the model refuses along, kept beside its file, and takes it out as the model runs: the model
+answers what it's asked (os/model/src/refusal.rs; a model got ready before that has it found when it's next used).
 
 Which one: as big as this computer's memory runs well and its disk has room to get ready (pick).
 """
@@ -15,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -32,6 +35,7 @@ BUILT = Path(__file__).resolve().parents[2] / "os" / "target" / "release" / "cha
 HUB = "https://huggingface.co"
 CHUNK = 1 << 20
 ROOM_LEFT = 4 << 30       # the disk space left for everything else once a model is ready (when choosing one)
+REFUSAL_METHOD = 1        # the engine's way of finding refusals (refusal.rs METHOD): one found another way is redone
 
 
 @dataclass(frozen=True)
@@ -150,9 +154,11 @@ def engine_program(models_dir: Path | None = None) -> str | None:
 @dataclass
 class Progress:
     """How getting a model ready is going (for the screen)."""
-    stage: str = "waiting"        # waiting | downloading | converting | ready | failed
+    stage: str = "waiting"        # waiting | downloading | converting | uncensoring | ready | failed
     done_bytes: int = 0
     total_bytes: int = 0
+    step: int = 0                 # (uncensoring: steps done of about how many)
+    steps: int = 0
     detail: str = ""
 
     def words(self) -> str:
@@ -161,6 +167,9 @@ class Progress:
                     f"({100 * self.done_bytes // self.total_bytes}%)")
         if self.stage == "converting":
             return "making it ready to run (a few minutes)"
+        if self.stage == "uncensoring":
+            done = f" ({100 * self.step // self.steps}%)" if self.steps else ""
+            return f"taking its refusals out, so it answers whatever you ask{done}"
         if self.stage == "failed":
             return "it couldn't be got ready: " + self.detail
         return self.stage
@@ -182,6 +191,62 @@ class Store:
 
     def downloads(self, m: Model) -> Path:
         return self.root / f"download-{m.name}"
+
+    def refusal_path(self, m: Model) -> Path:
+        """Where the engine keeps the direction the model refuses along (beside its file: the engine looks there)."""
+        return self.root / f"{m.name}.refusal"
+
+    def uncensored(self, m: Model) -> bool:
+        """Whether its refusals have been looked for (and taken out, if it had any), the engine's current way."""
+        try:
+            with open(self.refusal_path(m), "rb") as f:
+                head = f.read(20)
+        except OSError:
+            return False
+        return len(head) == 20 and head[:8] == b"CCREFUS1" and int.from_bytes(head[16:20], "little") == REFUSAL_METHOD
+
+    def uncensor(self, m: Model, model_file: Path, progress: Progress, stop: threading.Event | None = None,
+                 on_change: Callable[[Progress], None] | None = None, program: str | None = None,
+                 threads: int | None = None) -> bool:
+        """Has the engine find the direction the model refuses along and keep it beside its file (find-refusal);
+        whether that worked. From a few minutes for the small models to half an hour or so for the biggest, at a
+        lower priority than everything else (Chat Computer may be answering meanwhile)."""
+        stop = stop or threading.Event()
+        tell = on_change or (lambda p: None)
+        program = program or engine_program(self.root.parent)
+        if not program:
+            return False
+        progress.stage, progress.step, progress.steps = "uncensoring", 0, 0
+        tell(progress)
+        args = [program, "find-refusal", str(model_file), "--out", str(self.refusal_path(m))]
+        if threads:
+            args += ["--threads", str(threads)]
+        nice = {"preexec_fn": lambda: os.nice(10)} if hasattr(os, "nice") else {}
+        try:
+            proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, **nice)
+        except OSError as exc:
+            log.warning("couldn't look for %s's refusals: %s", m.label, exc)
+            return False
+        last, said = time.monotonic(), ""
+        assert proc.stderr is not None and proc.stdout is not None
+        for line in proc.stderr:
+            said = line.strip() or said
+            if stop.is_set():
+                proc.terminate()
+                break
+            step = re.match(r"(\d+)/(\d+) ", line)
+            if step:
+                progress.step, progress.steps = int(step[1]), int(step[2])
+                if time.monotonic() - last > 1:
+                    last = time.monotonic()
+                    tell(progress)
+        result = proc.stdout.read().strip()
+        if proc.wait() != 0 or stop.is_set():
+            log.warning("looking for %s's refusals stopped: %s", m.label, "stopped" if stop.is_set() else said)
+            return False
+        log.info("%s's refusals: %s", m.label, result)
+        return True
 
     def free_bytes(self) -> int:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -231,6 +296,11 @@ class Store:
                                capture_output=True, text=True)
             if r.returncode != 0:
                 raise RuntimeError("converting it failed: " + (r.stderr.strip().splitlines() or ["?"])[-1])
+            # Its refusals found before it's ready, so it never answers with them (if this doesn't work, it's
+            # tried again when the model is next used).
+            self.uncensor(m, tmp, progress, stop, tell, program)
+            if stop.is_set():
+                raise RuntimeError("stopped")
             os.replace(tmp, out)
             shutil.rmtree(d, ignore_errors=True)
             progress.stage = "ready"

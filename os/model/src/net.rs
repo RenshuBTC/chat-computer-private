@@ -199,6 +199,17 @@ struct Layer<'a> {
     ffn: Ffn<'a>,
 }
 
+/// A direction taken out of what the model thinks with (its residual stream), at every layer and every token: a
+/// model's refusals are written along one direction, and taking that out as the model runs is the same as taking it
+/// out of every weight that writes there (Arditi et al., 2024, "Refusal in language models is mediated by a single
+/// direction"). The weights themselves stay as they were.
+pub struct Ablation {
+    /// Unit length, as long as the model is wide.
+    pub direction: Vec<f32>,
+    /// How much of the direction's part goes: 1, all of it.
+    pub strength: f32,
+}
+
 /// The model, over its file's bytes.
 pub struct Model<'a> {
     pub settings: Settings,
@@ -209,6 +220,8 @@ pub struct Model<'a> {
     layers: Vec<Layer<'a>>,
     /// The rotary frequencies (one per pair of rotated numbers).
     inv_freq: Vec<f64>,
+    /// A direction taken out as it runs (refusal.rs finds it), if any.
+    pub ablation: Option<Ablation>,
 }
 
 fn vector(file: &File, name: &str) -> Result<Vec<f32>, Error> {
@@ -332,7 +345,7 @@ impl<'a> Model<'a> {
             .map(|i| 1.0 / math::powf64(s.rope_theta, (2 * i) as f64 / s.rotary_dim as f64))
             .collect();
         let tokenizer = crate::load_tokenizer(file)?;
-        Ok(Model { settings: s, tokenizer, embed, head, norm, layers, inv_freq })
+        Ok(Model { settings: s, tokenizer, embed, head, norm, layers, inv_freq, ablation: None })
     }
 
     /// A new conversation's state (nothing seen yet).
@@ -360,17 +373,44 @@ impl<'a> Model<'a> {
 
     /// Feeds tokens (from the state's next position on), many at a time: each weight is read once for all of
     /// them, which is what makes reading a long prompt fast. With `logits`, the scores after the last.
-    pub fn forward(&self, st: &mut State, tokens: &[u32], mut logits: Option<&mut [f32]>, pool: &dyn Pool) {
+    pub fn forward(&self, st: &mut State, tokens: &[u32], logits: Option<&mut [f32]>, pool: &dyn Pool) {
+        self.forward_with(st, tokens, logits, None, pool);
+    }
+
+    /// Feeds tokens as forward does, and gives what the model thinks with (the residual stream) after the last of
+    /// them: as each layer starts (one for each layer), and after the last (one more).
+    pub fn residuals(&self, st: &mut State, tokens: &[u32], pool: &dyn Pool) -> Vec<Vec<f32>> {
+        let mut out = Vec::new();
+        self.forward_with(st, tokens, None, Some(&mut out), pool);
+        out
+    }
+
+    fn forward_with(&self, st: &mut State, tokens: &[u32], mut logits: Option<&mut [f32]>,
+                    mut capture: Option<&mut Vec<Vec<f32>>>, pool: &dyn Pool) {
         // (With experts, more at once: each expert is chosen by few of the tokens.)
         let batch = if self.settings.experts > 0 { 4 * BATCH } else { BATCH };
         let chunks = tokens.len().div_ceil(batch).max(1);
         for (i, chunk) in tokens.chunks(batch).enumerate() {
             let last = i + 1 == chunks;
-            self.batch(st, chunk, if last { logits.as_deref_mut() } else { None }, pool);
+            let (l, c) = if last { (logits.as_deref_mut(), capture.as_deref_mut()) } else { (None, None) };
+            self.batch(st, chunk, l, c, pool);
         }
     }
 
-    fn batch(&self, st: &mut State, tokens: &[u32], logits: Option<&mut [f32]>, pool: &dyn Pool) {
+    /// The direction's part taken out of each token's row (x: n rows, each as wide as the model).
+    fn ablate(&self, x: &mut [f32], n: usize) {
+        let Some(a) = &self.ablation else { return };
+        let h = self.settings.hidden;
+        for row in x[..n * h].chunks_exact_mut(h) {
+            let along: f32 = row.iter().zip(&a.direction).map(|(v, d)| v * d).sum::<f32>() * a.strength;
+            for (v, d) in row.iter_mut().zip(&a.direction) {
+                *v -= along * d;
+            }
+        }
+    }
+
+    fn batch(&self, st: &mut State, tokens: &[u32], logits: Option<&mut [f32]>, mut capture: Option<&mut Vec<Vec<f32>>>,
+             pool: &dyn Pool) {
         let s = &self.settings;
         let (h, n) = (s.hidden, tokens.len());
         if n == 0 {
@@ -380,11 +420,15 @@ impl<'a> Model<'a> {
         for (t, &tok) in tokens.iter().enumerate() {
             self.embed.row((tok as usize).min(s.vocab - 1), &mut x[t * h..(t + 1) * h]);
         }
+        self.ablate(&mut x, n);
         let mut normed = vec![0.0f32; n * h];
         let mut out = vec![0.0f32; n * h];
         let (mut li, mut fi) = (0, 0);
         let pos = st.pos;
         for layer in &self.layers {
+            if let Some(c) = capture.as_deref_mut() {
+                c.push(x[(n - 1) * h..].to_vec());
+            }
             let xs = prepare_norm(&x, &layer.norm1, s.eps, n, &mut normed);
             match &layer.mixer {
                 Mixer::Linear(lin) => {
@@ -399,11 +443,16 @@ impl<'a> Model<'a> {
             for (a, b) in x.iter_mut().zip(&out) {
                 *a += b;
             }
+            self.ablate(&mut x, n);
             let xs = prepare_norm(&x, &layer.norm2, s.eps, n, &mut normed);
             self.ffn(&layer.ffn, &xs, &mut out, pool);
             for (a, b) in x.iter_mut().zip(&out) {
                 *a += b;
             }
+            self.ablate(&mut x, n);
+        }
+        if let Some(c) = capture {
+            c.push(x[(n - 1) * h..].to_vec());
         }
         st.pos += n;
         if let Some(logits) = logits {

@@ -2,8 +2,13 @@
 //! desktop app's page, its Chrome extension) over HTTP on 127.0.0.1, as OpenAI's chat completions API, and makes
 //! model files from the published ones.
 //!
-//!     chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--allow-origin ORIGIN]...
+//!     chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]...
+//!                                         [--refusal FILE | --no-refusal]
 //!     chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]
+//!     chat-computer-model find-refusal MODEL.ccm [--out FILE] [--threads N]
+//!
+//! find-refusal finds the direction the model refuses along (the library's refusal.rs), and keeps it beside the
+//! model's file (MODEL.refusal); serve then takes it out as the model runs, so the model answers what it's asked.
 //!
 //! Only this computer can reach it (it listens on 127.0.0.1), and of web pages only Chat Computer's own (its site
 //! and its app, and any origin given with --allow-origin, such as the Chrome extension's): any other page a browser
@@ -20,6 +25,7 @@ use model::net::Pool;
 use model::sample::Sampling;
 use model::session::{Ended, Request, Session};
 use model::threads::Threads;
+use model::refusal::{self, Found};
 use model::{File, Model};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
@@ -42,6 +48,8 @@ struct Server {
     fingerprint: u64,
     name: String,
     style_name: String,
+    /// What's taken out as the model runs (its refusals), if anything.
+    uncensored: Option<Found>,
     origins: Vec<String>,
     port: u16,
     ids: AtomicU64,
@@ -50,24 +58,129 @@ struct Server {
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]...\n\
-                   chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]");
+        eprintln!("chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]... \
+                   [--refusal FILE | --no-refusal]\n\
+                   chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]\n\
+                   chat-computer-model find-refusal MODEL.ccm [--out FILE] [--threads N]");
         std::process::exit(2);
     }
     let command = args.remove(0);
     let code = match command.as_str() {
         "serve" => serve(args),
         "convert" => convert::main_with(args),
+        "find-refusal" => find_refusal(args),
         other => {
-            eprintln!("no command \"{other}\" (serve or convert)");
+            eprintln!("no command \"{other}\" (serve, convert or find-refusal)");
             2
         }
     };
     std::process::exit(code);
 }
 
+/// Where a model's refusal direction is kept: beside its file, as MODEL.refusal.
+fn refusal_path(model: &str) -> std::path::PathBuf {
+    std::path::Path::new(model).with_extension("refusal")
+}
+
+/// The model file, mapped and read: the file's table, and the model (whose weights stay in the file's bytes).
+fn open(path: &str, command: &str) -> Result<(&'static File<'static>, Model<'static>), i32> {
+    let bytes = map::map(path).map_err(|e| {
+        eprintln!("{command}: {e}");
+        1
+    })?;
+    let file: &'static File = Box::leak(Box::new(File::open(bytes).map_err(|e| {
+        eprintln!("{command}: {path} isn't a model file ({e:?})");
+        1
+    })?));
+    let model = Model::load(file).map_err(|e| {
+        eprintln!("{command}: the model in {path} can't be run ({e:?})");
+        1
+    })?;
+    Ok((file, model))
+}
+
+fn style_of(file: &File) -> Result<(String, Style), i32> {
+    let config = file.config().ok();
+    let name = config.as_ref().and_then(|c| c.str("chat.style")).unwrap_or("qwen3.5").to_string();
+    match Style::named(&name) {
+        Some(style) => Ok((name, style)),
+        None => {
+            eprintln!("the model's chat style \"{name}\" isn't one this program knows");
+            Err(1)
+        }
+    }
+}
+
+fn find_refusal(args: Vec<String>) -> i32 {
+    let (mut path, mut out, mut threads) = (None, None, None);
+    let mut i = 0;
+    while i < args.len() {
+        let value = args.get(i + 1).cloned().unwrap_or_default();
+        match args[i].as_str() {
+            "--out" => out = Some(std::path::PathBuf::from(value)),
+            "--threads" => threads = value.parse().ok(),
+            p if path.is_none() && !p.starts_with("--") => {
+                path = Some(p.to_string());
+                i += 1;
+                continue;
+            }
+            other => {
+                eprintln!("find-refusal: {other}?");
+                return 2;
+            }
+        }
+        i += 2;
+    }
+    let Some(path) = path else {
+        eprintln!("find-refusal: which model file?");
+        return 2;
+    };
+    let out = out.unwrap_or_else(|| refusal_path(&path));
+    let (file, mut model) = match open(&path, "find-refusal") {
+        Ok(m) => m,
+        Err(code) => return code,
+    };
+    let style = match style_of(file) {
+        Ok((_, s)) => s,
+        Err(code) => return code,
+    };
+    let pool = match threads {
+        Some(n) => Threads::new(usize::max(n, 1) - 1),
+        None => Threads::for_this_computer(),
+    };
+    let started = std::time::Instant::now();
+    let mut last = String::new();
+    let found = refusal::find(&mut model, style, &pool, &mut |done, total, what| {
+        // (A line a step: what the step is, and how far it's got.)
+        if what != last || done == total || done % 8 == 0 {
+            eprintln!("{done}/{total} {what}");
+            last = what.to_string();
+        }
+    });
+    let found = match found {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("find-refusal: {e}");
+            return 1;
+        }
+    };
+    let part = out.with_extension("refusal.part");
+    if let Err(e) = std::fs::write(&part, found.to_bytes(file.fingerprint())).and_then(|_| std::fs::rename(&part, &out)) {
+        eprintln!("find-refusal: couldn't keep it in {}: {e}", out.display());
+        return 1;
+    }
+    println!(
+        "{{\"layer\":{},\"strength\":{},\"checked\":{},\"refused_before\":{},\"refused_after\":{},\"kl\":{:.4},\
+         \"everyday\":{},\"everyday_same\":{},\"everyday_refused\":{},\"seconds\":{:.0}}}",
+        found.layer + 1, found.strength, found.checked, found.before, found.after, found.kl, found.everyday, found.same,
+        found.everyday_refused, started.elapsed().as_secs_f64()
+    );
+    0
+}
+
 fn serve(args: Vec<String>) -> i32 {
     let (mut path, mut port, mut threads, mut extra, mut cache) = (None, 8765u16, None, Vec::new(), None);
+    let mut refusal_file: Option<Option<std::path::PathBuf>> = None;
     let mut i = 0;
     while i < args.len() {
         let value = args.get(i + 1).cloned().unwrap_or_default();
@@ -76,6 +189,12 @@ fn serve(args: Vec<String>) -> i32 {
             "--threads" => threads = value.parse().ok(),
             "--allow-origin" => extra.push(value),
             "--cache" => cache = Some(std::path::PathBuf::from(value)),
+            "--refusal" => refusal_file = Some(Some(std::path::PathBuf::from(value))),
+            "--no-refusal" => {
+                refusal_file = Some(None);
+                i += 1;
+                continue;
+            }
             p if path.is_none() && !p.starts_with("--") => {
                 path = Some(p.to_string());
                 i += 1;
@@ -93,33 +212,36 @@ fn serve(args: Vec<String>) -> i32 {
         return 2;
     };
     let started = std::time::Instant::now();
-    let bytes = match map::map(&path) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("serve: {e}");
-            return 1;
-        }
+    let (file, mut model) = match open(&path, "serve") {
+        Ok(m) => m,
+        Err(code) => return code,
     };
-    let file: &'static File = Box::leak(Box::new(match File::open(bytes) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("serve: {path} isn't a model file ({e:?})");
-            return 1;
-        }
-    }));
-    let model: &'static Model<'static> = match Model::load(file) {
-        Ok(m) => Box::leak(Box::new(m)),
-        Err(e) => {
-            eprintln!("serve: the model in {path} can't be run ({e:?})");
-            return 1;
-        }
+    let (style_name, style) = match style_of(file) {
+        Ok(s) => s,
+        Err(code) => return code,
     };
-    let config = file.config().ok();
-    let style_name = config.as_ref().and_then(|c| c.str("chat.style")).unwrap_or("qwen3.5").to_string();
-    let Some(style) = Style::named(&style_name) else {
-        eprintln!("serve: the model's chat style \"{style_name}\" isn't one this program knows");
-        return 1;
-    };
+    // Its refusals taken out, where they've been found (beside the model's file, unless told otherwise). What's
+    // kept on disk of a conversation is kept for the model as it runs: with them taken out or not.
+    let mark = file.fingerprint();
+    let mut fingerprint = mark;
+    let mut uncensored = None;
+    if let Some(at) = refusal_file.unwrap_or_else(|| Some(refusal_path(&path))) {
+        match std::fs::read(&at) {
+            Ok(b) => match Found::from_bytes(&b, mark, model.settings.hidden) {
+                Ok(f) => {
+                    model.ablation = f.ablation();
+                    if model.ablation.is_some() {
+                        fingerprint = model::file::fnv(mark, &b);
+                    }
+                    uncensored = Some(f);
+                }
+                Err(e) => eprintln!("serve: {} isn't used: {e}", at.display()),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("serve: {}: {e}", at.display()),
+        }
+    }
+    let model: &'static Model<'static> = Box::leak(Box::new(model));
     let name = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let pool = match threads {
         Some(n) => Threads::new(usize::max(n, 1) - 1),
@@ -134,7 +256,6 @@ fn serve(args: Vec<String>) -> i32 {
     };
     let mut origins: Vec<String> = ORIGINS.iter().map(|s| s.to_string()).collect();
     origins.extend(extra);
-    let fingerprint = fingerprint(bytes);
     let mut session = Session::new(model, style);
     let mut kept = 0;
     if let Some(dir) = &cache
@@ -149,13 +270,20 @@ fn serve(args: Vec<String>) -> i32 {
         fingerprint,
         name,
         style_name,
+        uncensored,
         origins,
         port,
         ids: AtomicU64::new(1),
     }));
     eprintln!(
-        "serving {} ({} layers, {} wide, {:?}) on http://127.0.0.1:{port}, ready in {:.1} s",
-        server.name, model.settings.layers, model.settings.hidden, model::cpu::level(), started.elapsed().as_secs_f64()
+        "serving {} ({} layers, {} wide, {:?}{}) on http://127.0.0.1:{port}, ready in {:.1} s",
+        server.name, model.settings.layers, model.settings.hidden, model::cpu::level(),
+        match &server.uncensored {
+            Some(f) if model.ablation.is_some() => format!(", its refusals taken out: {} of {} refused, was {}", f.after, f.checked, f.before),
+            Some(_) => ", nothing to take out".to_string(),
+            None => String::new(),
+        },
+        started.elapsed().as_secs_f64()
     );
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
@@ -205,7 +333,18 @@ fn handle(server: &Server, mut stream: TcpStream) -> std::io::Result<()> {
             http::respond(&mut stream, 200, "application/json", body.as_bytes(), cors)
         }
         ("GET", "/health") => {
-            let body = format!("{{\"ok\":true,\"model\":{},\"style\":{}}}", quoted(&server.name), quoted(&server.style_name));
+            // (Uncensored: whether its refusals were looked for, and then how it measured.)
+            let uncensored = match &server.uncensored {
+                Some(f) => format!(
+                    "{{\"taken_out\":{},\"checked\":{},\"refused_before\":{},\"refused_after\":{}}}",
+                    f.ablation().is_some(), f.checked, f.before, f.after
+                ),
+                None => "null".to_string(),
+            };
+            let body = format!(
+                "{{\"ok\":true,\"model\":{},\"style\":{},\"uncensored\":{uncensored}}}",
+                quoted(&server.name), quoted(&server.style_name)
+            );
             http::respond(&mut stream, 200, "application/json", body.as_bytes(), cors)
         }
         ("POST", "/v1/chat/completions") => complete(server, &mut stream, &req, cors),
@@ -292,24 +431,9 @@ fn complete(server: &Server, stream: &mut TcpStream, req: &http::Request, cors: 
     done
 }
 
-/// The model file's own mark: FNV-1a over its table (every entry's name, type, shape and place) and its length.
-fn fingerprint(bytes: &[u8]) -> u64 {
-    let table = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
-    for &b in bytes[..12 + table].iter().chain(&(bytes.len() as u64).to_le_bytes()) {
-        h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
-    }
-    h
-}
-
 fn hash_tokens(t: &[u32]) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
-    for &x in t {
-        for b in x.to_le_bytes() {
-            h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
-        }
-    }
-    h
+    let bytes: Vec<u8> = t.iter().flat_map(|x| x.to_le_bytes()).collect();
+    model::file::fnv(0xcbf2_9ce4_8422_2325, &bytes)
 }
 
 const STATE_MAGIC: &[u8; 8] = b"CCSTATE1";

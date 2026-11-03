@@ -1,7 +1,8 @@
 """Chat Computer's own model: which one a computer gets (models.pick), getting it ready (models.Store: downloaded from
 the pinned revision, each file checked against its SHA-256, carried on after a break, converted, the downloads
-removed), the engine's program that comes with Chat Computer, and the model's server (server.py) run by the real
-engine with a tiny model of random weights (tests/data/tiny-model.ccm, written by os/model's example tiny_model)."""
+removed, its refusals found and taken out), the engine's program that comes with Chat Computer, and the model's
+server (server.py) run by the real engine with a tiny model of random weights (tests/data/tiny-model.ccm, written by
+os/model's example tiny_model)."""
 import asyncio
 import hashlib
 import http.server
@@ -172,9 +173,18 @@ def _model(files, bits=8):
 
 
 def _converter(tmp_path):
-    """A stand-in for the engine's convert: writes what it was given (the folder's files' names and the bits)."""
+    """A stand-in for the engine's convert (writes what it was given: the folder's files' names and the bits) and
+    find-refusal (says how far it's got, and writes a refusal file's head: nothing to take out)."""
     prog = tmp_path / "convert.py"
     prog.write_text("#!/usr/bin/env python3\nimport os, sys\n"
+                    "if sys.argv[1] == 'find-refusal':\n"
+                    "    _, cmd, model, flag, out = sys.argv\n"
+                    "    assert flag == '--out' and os.path.isfile(model) and not os.path.exists(model[:-5])\n"
+                    "    for i in range(1, 5):\n"
+                    "        print(f'{i}/4 trying layer {i}', file=sys.stderr, flush=True)\n"
+                    "    open(out, 'wb').write(b'CCREFUS1' + bytes(8) + (1).to_bytes(4, 'little') + bytes(40))\n"
+                    "    print('{}')\n"
+                    "    sys.exit(0)\n"
                     "_, cmd, folder, out, flag, bits = sys.argv\n"
                     "assert cmd == 'convert' and flag == '--bits'\n"
                     "open(out, 'w').write(' '.join(sorted(os.listdir(folder))) + ' bits=' + bits)\n")
@@ -201,6 +211,9 @@ def test_a_model_is_downloaded_checked_and_converted(tmp_path, monkeypatch, hub)
     assert out.read_text() == "config.json model.safetensors tokenizer.json bits=8"
     assert p.stage == "ready" and p.done_bytes == m.download_bytes
     assert "downloading" in seen and "converting" in seen and seen[-1] == "ready"
+    # Its refusals were looked for before it was ready (on the converted file, before it took its name).
+    assert seen.index("converting") < seen.index("uncensoring") < seen.index("ready")
+    assert store.uncensored(m) and store.refusal_path(m) == tmp_path / "models" / "llm" / "tiny.refusal"
     assert not store.downloads(m).exists()                                 # the downloads went once it was made
     assert all(path.startswith("/Qwen/Tiny/resolve/" + "0" * 40 + "/") for path, _ in hub.asked)
     # Ready: nothing is downloaded again.
@@ -247,6 +260,21 @@ def test_progress_reads_as_words():
     p = models.Progress("downloading", 2_500_000_000, 10_000_000_000)
     assert p.words() == "downloading it: 2.5 of 10.0 GB (25%)"
     assert "a few minutes" in models.Progress("converting").words()
+    u = models.Progress("uncensoring", step=110, steps=440)
+    assert u.words() == "taking its refusals out, so it answers whatever you ask (25%)"
+
+
+def test_refusals_looked_for_another_way_are_looked_for_again(tmp_path):
+    store = models.Store(tmp_path / "models")
+    m = _model({"config.json": b"{}"})
+    f = store.refusal_path(m)
+    f.parent.mkdir(parents=True)
+    assert not store.uncensored(m)
+    for head, current in [(b"CCREFUS1" + bytes(8) + (1).to_bytes(4, "little"), True),
+                          (b"CCREFUS1" + bytes(8) + (2).to_bytes(4, "little"), False),
+                          (b"CCMODEL1" + bytes(8) + (1).to_bytes(4, "little"), False), (b"CCREFUS1", False)]:
+        f.write_bytes(head + bytes(40))
+        assert store.uncensored(m) is current, head
 
 
 # ------------------------------------------------------------------ its server, with the real engine
@@ -355,3 +383,74 @@ def test_the_model_service_starts_its_server_once_the_model_is_ready(tmp_path, m
     status, health = asyncio.run(run())
     assert status == 200 and health["ok"] is True
     assert (tmp_path / "model.log").read_text().startswith("serving tiny")
+
+
+def test_the_engine_finds_a_models_refusals_and_serves_it_with_them_taken_out(tmp_path):
+    """The real engine's find-refusal on the tiny model (its random words refuse nothing: there's nothing to take
+    out, and the file says so), then serving it: the file beside the model's is read."""
+    prog, port = _engine(), _free_port()
+    store = models.Store(tmp_path / "models")
+    tiny = models.Model("tiny", "Tiny", "Qwen/Tiny", "0" * 40, 0, 8, ())
+    f = store.path(tiny)
+    f.parent.mkdir(parents=True)
+    f.write_bytes(TINY.read_bytes())
+    p, seen = models.Progress(), []
+    assert store.uncensor(tiny, f, p, on_change=lambda pr: seen.append((pr.step, pr.steps)), program=prog, threads=1)
+    assert store.uncensored(tiny) and p.stage == "uncensoring" and p.step == p.steps > 0
+    head = store.refusal_path(tiny).read_bytes()
+    assert head[:8] == b"CCREFUS1" and len(head) == 60                    # its head only: no direction
+    number = [int.from_bytes(head[i:i + 4], "little") for i in range(16, 60, 4)]
+    assert number[:5] == [1, 0, 0, 0, 12]       # this way of finding them, no direction, strength 0, 12 measured
+
+    async def run():
+        srv = S.ModelServer(prog, str(f), port, threads=1, log_file=str(tmp_path / "model.log"), uncensored=True)
+        try:
+            await srv.start()
+            return json.loads((await S.request(port, "GET", "/health"))[1])
+        finally:
+            await srv.stop()
+    health = asyncio.run(run())
+    assert health["uncensored"] == {"taken_out": False, "checked": 12, "refused_before": 0, "refused_after": 0}
+    assert "nothing to take out" in (tmp_path / "model.log").read_text()
+    # One found for another model file isn't used.
+    other = tmp_path / "models" / "llm" / "other.ccm"
+    other.write_bytes(TINY.read_bytes() + bytes(64))
+    other.with_suffix(".refusal").write_bytes(head)
+    log = tmp_path / "other.log"
+
+    async def run_other():
+        srv = S.ModelServer(prog, str(other), port, threads=1, log_file=str(log))
+        try:
+            await srv.start()
+            return json.loads((await S.request(port, "GET", "/health"))[1])
+        finally:
+            await srv.stop()
+    assert asyncio.run(run_other())["uncensored"] is None
+    assert "isn't used: found for another model file" in log.read_text()
+
+
+def test_a_model_got_ready_before_has_its_refusals_found_while_it_answers(tmp_path, monkeypatch):
+    prog, port = _engine(), _free_port()
+    monkeypatch.setenv("CHATCOMPUTER_MODEL_BIN", prog)
+    paths = SimpleNamespace(models=tmp_path / "models", logs=tmp_path)
+    tiny = models.Model("tiny", "Tiny", "Qwen/Tiny", "0" * 40, 0, 8, ())
+    monkeypatch.setattr(models, "chosen", lambda setting, store=None: tiny)
+    svc = S.ModelService(paths, SimpleNamespace(model="auto"), port=port, threads=1)
+    f = svc.store.path(tiny)
+    f.parent.mkdir(parents=True)
+    f.write_bytes(TINY.read_bytes())
+
+    async def run():
+        try:
+            assert await svc.ensure() == port and svc.server.uncensored is False    # it answers meanwhile
+            first = svc.server
+            svc._uncensoring.join(60)
+            assert svc.store.uncensored(tiny)
+            assert await svc.ensure() == port and svc.server is not first and svc.server.uncensored is True
+            health = json.loads((await S.request(port, "GET", "/health"))[1])
+            again = svc.server
+            assert await svc.ensure() == port and svc.server is again                # (once is enough)
+            return health
+        finally:
+            await svc.stop()
+    assert asyncio.run(run())["uncensored"]["checked"] == 12

@@ -88,6 +88,12 @@ The download is turned into Chat Computer's own smaller file (4 bits a weight) a
 another one, ask ("use the 4B model"). While a bigger one is being got ready, the one already there answers.
 Nothing you say leaves the computer; only websites you open and web searches use the internet.
 
+The model answers whatever you ask: Qwen's models are trained to refuse some requests, and Chat Computer takes
+that out of each one as it gets it ready (it finds the direction the model refuses along, and the engine takes it
+out as the model runs; the model's own files stay as Qwen published them). On Qwen3.5 0.8B, of 12 such requests
+kept aside to measure it, the model refused 9 as published and none after (see
+[os/model/README.md](os/model/README.md#answering-what-its-asked)).
+
 ## Using Chat Computer
 
 * **Touch, type or talk.** Touch the screen (see [The touchscreen](#the-touchscreen)), type on a keyboard, or

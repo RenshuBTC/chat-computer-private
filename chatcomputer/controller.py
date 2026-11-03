@@ -304,6 +304,9 @@ class Controller:
         if m is None:
             return {}
         out = {"model": m.label, "ready": m.ready, "runs_on": "this computer (Chat Computer's own engine)"}
+        serving = m.serving()
+        if serving is not None:
+            out["refusals_taken_out"] = m.store.uncensored(serving)
         if m.serving() != m.model:
             out["getting_ready"] = f"{m.model.label}: {m.progress.words()}"
         return out

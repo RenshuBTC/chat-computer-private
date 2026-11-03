@@ -90,6 +90,13 @@ impl<'a> File<'a> {
         self.entries.iter().find(|e| e.name == name)
     }
 
+    /// The file's own mark: FNV-1a over its table (every entry's name, type, shape and place) and its length.
+    /// What's kept for a model file beside it (a state read, a refusal direction) is used only with the same file.
+    pub fn fingerprint(&self) -> u64 {
+        let table = u32::from_le_bytes(self.bytes[8..12].try_into().unwrap()) as usize;
+        fnv(0xcbf2_9ce4_8422_2325, self.bytes[..12 + table].iter().chain(&(self.bytes.len() as u64).to_le_bytes()))
+    }
+
     pub fn data(&self, e: &Entry) -> &'a [u8] {
         &self.bytes[e.at..e.at + e.size]
     }
@@ -100,6 +107,14 @@ impl<'a> File<'a> {
         let text = core::str::from_utf8(self.data(e)).map_err(|_| Error::Damaged)?;
         Ok(Config { text })
     }
+}
+
+/// FNV-1a, 64 bits, from `h` on over the bytes.
+pub fn fnv<'b>(mut h: u64, bytes: impl IntoIterator<Item = &'b u8>) -> u64 {
+    for &b in bytes {
+        h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+    }
+    h
 }
 
 /// The model's settings, read by name.

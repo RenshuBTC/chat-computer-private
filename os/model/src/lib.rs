@@ -7,7 +7,9 @@
 //! - net: the network itself, a token or many at a time;
 //! - token, unicode and nfc: words into tokens and back;
 //! - chat: a conversation as the model reads it, and what it says back (words, thinking, tool calls);
-//! - sample: the next token; session: a conversation kept going, reading only what's new.
+//! - sample: the next token; session: a conversation kept going, reading only what's new;
+//! - refusal: the direction the model refuses along, found, measured and taken out as it runs, so it answers what
+//!   it's asked.
 //!
 //! It needs no standard library (Chat Computer's own kernel runs it), only memory; where there is one, a
 //! processor pool runs its arithmetic on every core (threads), and the program in src/bin serves it. See README.md.
@@ -26,6 +28,7 @@ pub mod net;
 pub mod nfc;
 mod nfc_table;
 pub mod quant;
+pub mod refusal;
 pub mod sample;
 pub mod session;
 #[doc(hidden)]

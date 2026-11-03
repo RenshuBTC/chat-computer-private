@@ -14,7 +14,9 @@
    (the weather where you are, too, for the greeting: your time zone's city, or where you said you live; its name
    goes there, then its position, at most once every half hour), YouTube's player when the model plays a video,
    and, when the model looks something up (or you ask for the news), Wikipedia's articles and its Current events:
-   only the words looked up go there. Google's own pages (its search, Google Maps' directions) and Wikipedia's show
+   only the words looked up go there. Messages shows each service's own icon (WhatsApp's, Gmail's...), as its own
+   pages give it, through DuckDuckGo's icon service: only the service's address goes there. Google's own pages (its
+   search, Google Maps' directions) and Wikipedia's show
    in the middle when asked for: of the sites that might be asked for, they're the ones that let another page show
    them.
    In Chrome's side panel (the Chat Computer extension, apps/chrome: this page in its frame, ?app=chrome), sites
@@ -171,6 +173,16 @@
   } } } };
 
   // ------------------------------------------------------------------ made-up messages, things done, files
+  // Each service's own icon, beside its messages: the one its own pages give (a browser tab shows it), from its own
+  // site through DuckDuckGo's icon service (which keeps no record of who asks); where it can't be had, Chat
+  // Computer's own for that kind of message (chat.js: msgIcon).
+  var SITES = { whatsapp: "web.whatsapp.com", gmail: "mail.google.com", outlook: "outlook.live.com", telegram: "web.telegram.org",
+                instagram: "www.instagram.com", x: "x.com", linkedin: "www.linkedin.com", wechat: "web.wechat.com",
+                discord: "discord.com" };
+  function siteIcon(name) {
+    var site = SITES[String(name || "").toLowerCase()];
+    return site ? "https://icons.duckduckgo.com/ip3/" + site + ".ico" : "";
+  }
   var MESSAGES = APP ? [] : [
     { id: "m1", source: "whatsapp", label: "WhatsApp", who: "Mum", text: "Dinner at 7 tonight? Bring the photos from the trip!", ts: START - 240, unread: true },
     { id: "m2", source: "email", label: "Gmail", who: "Jane Lim", text: "Re: Lunch on Friday? 12:30 at the usual place works for me.", ts: START - 3100, unread: true },
@@ -476,11 +488,11 @@
       var ts = typeof it.ts === "number" && it.ts > 0 ? it.ts : last - 1;
       last = Math.min(last, ts);
       return { id: k + "-" + String(it.id || ""), service: k, item: String(it.id || ""), source: s.source, label: s.label,
-               who: clip(it.who, 80) || s.label, text: clip(it.text, 300), ts: ts, unread: !!it.unread };
+               icon: siteIcon(k), who: clip(it.who, 80) || s.label, text: clip(it.text, 300), ts: ts, unread: !!it.unread };
     });
     var unread = +m.unread || 0;
     if (!items.length && unread > 0) {
-      items = [{ id: k + "-unread", service: k, item: "", source: s.source, label: s.label, who: s.label,
+      items = [{ id: k + "-unread", service: k, item: "", source: s.source, label: s.label, icon: siteIcon(k), who: s.label,
                  text: unread + (unread === 1 ? " unread message" : " unread messages"), ts: now, unread: true }];
     }
     MESSAGES = MESSAGES.filter(function (x) { return x.service !== k; }).concat(items);
@@ -1755,6 +1767,7 @@
   function withPin(m) {
     var pins = (store("chatcomputer-demo-pins") || {}).messages || {}, out = {};
     for (var k in m) out[k] = m[k];
+    if (!out.icon) out.icon = siteIcon(m.label);                // (its service's own icon: Gmail's, Outlook's...)
     if (pins[m.id]) out.pinned = pins[m.id];
     return out;
   }
@@ -2278,15 +2291,17 @@
   var ONE_AT_A_TIME = IOS || SAFARI || /Android/.test(UA);
   var QUIET_MS = 1400, DEAD_MS = 20000;
   var ears = { on: false, starting: false, rec: null, speaking: false, device: "", told: false, lock: null, said: null, waiting: 0 };
-  function talkButton() {
-    if (ears.on) { stopTalking(); return; }
+  // The microphone button starts listening at once (the browser asks to use the microphone the first time); "/"'s
+  // Connect AirPods says first, once, how AirPods are paired (explain).
+  function talkButton(explain) {
+    if (ears.on || ears.starting) { stopTalking(); return; }
     if (!Recognition || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       call("accountForm", { id: "talk-no", title: "Talking", ok: "OK", text: [IOS ?
         "On an iPhone or iPad, Safari turns speech into text: open chatcomputer.ai in Safari." :
         "This browser can't turn speech into text. Chrome, Edge and Safari can."] });
       return;
     }
-    if (ears.told) { startTalking(); return; }
+    if (ears.told || !explain) { startTalking(); return; }
     call("accountForm", { id: "talk", title: "Talk through your AirPods", ok: "Start talking", text: [
       "Pair your AirPods with this phone or computer first, in its Bluetooth settings: a website can't pair them.",
       "Then talk: what you say goes in the message box's place, and the answers are read out. To stop, type / and choose Stop talking.",
@@ -2299,7 +2314,10 @@
     keepAwake(true);
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
       var track = stream.getAudioTracks()[0], label = track && track.label || "";
-      stream.getTracks().forEach(function (t) { t.stop(); });
+      if (!ears.starting) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }   // (stopped meanwhile)
+      // On a computer, kept open to show how loud it is (the button's bar); on a phone, where a page holding the
+      // microphone can stop its own listening, let go of (the bar follows the listening instead).
+      if (ONE_AT_A_TIME) { stream.getTracks().forEach(function (t) { t.stop(); }); meterStart(null); } else meterStart(stream);
       ears.starting = false;
       ears.device = /airpods/i.test(label) ? label : "";
       ears.on = true;
@@ -2312,7 +2330,7 @@
       keepAwake(false);
       call("accountForm", { id: "talk-no", title: "The microphone is off", ok: "OK", text: [
         "Your browser didn't let this page use the microphone (" + (err && err.name || "refused") + ").",
-        "Allow it for chatcomputer.ai in the browser's site settings, then type / and choose Connect AirPods again."] });
+        "Allow it for chatcomputer.ai in the browser's site settings, then press the microphone again."] });
     });
   }
   // Safari can hear a thing said twice over ("what time is it what time is it"): once. (Only something longer than
@@ -2345,10 +2363,12 @@
       if (at) visit(text, at); else ask(text);
       try { r.stop(); } catch (x) {}
     }
-    r.onstart = r.onaudiostart = r.onspeechstart = function () { alive = Date.now(); };
+    r.onstart = r.onaudiostart = function () { alive = Date.now(); };
+    r.onspeechstart = function () { alive = Date.now(); bump(0.6); };
     r.onresult = function (e) {
       if (ears.rec !== r) return;
       alive = Date.now();
+      bump(0.9);
       if (!ONE_AT_A_TIME) {           // Chrome and Edge on a computer: listening on, each thing said final in turn
         var partial = "", final = "";
         for (var i = e.resultIndex; i < e.results.length; i++) {
@@ -2407,6 +2427,7 @@
   function stopTalking() {
     ears.on = false;
     ears.starting = false;
+    meterStop();
     clearTimeout(ears.waiting);
     ears.waiting = 0;
     if (ears.rec) { try { ears.rec.abort(); } catch (x) {} ears.rec = null; }
@@ -2416,6 +2437,50 @@
     keepAwake(false);
     call("partial", "");
     status();
+  }
+  // While listening, how loud it is: the microphone button's one bar. On a computer, measured from the microphone
+  // (in this page only: nothing of it goes anywhere); on a phone, from the listening itself: up as speech is heard,
+  // and as each word of it comes in, down again when it stops. Up at once, down gently; none while an answer's read
+  // out (not listening then).
+  var meter = { stream: null, ctx: null, raf: 0, level: 0, shown: -1 };
+  function meterStart(stream) {
+    meterStop();
+    var measure = null, AC = window.AudioContext || window.webkitAudioContext;
+    if (stream && AC) {
+      try {
+        var ctx = new AC(), an = ctx.createAnalyser(), buf = new Float32Array(1024);
+        an.fftSize = 1024;
+        ctx.createMediaStreamSource(stream).connect(an);
+        meter.ctx = ctx;
+        measure = function () {
+          an.getFloatTimeDomainData(buf);
+          var sum = 0;
+          for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+          // Quiet room about -60 dB, speaking about -30 to -10 dB: -55 to -15 dB fills the bar.
+          var db = 20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-9);
+          return Math.max(0, Math.min(1, (db + 55) / 40));
+        };
+      } catch (x) { measure = null; }
+    }
+    meter.stream = stream;
+    (function tick() {
+      meter.raf = requestAnimationFrame(tick);
+      var x = ears.speaking ? 0 : measure ? measure() : 0;
+      meter.level = x > meter.level ? x : meter.level * 0.9 + x * 0.1;
+      if (Math.abs(meter.level - meter.shown) < 0.01) return;
+      meter.shown = meter.level;
+      call("level", meter.level);
+    })();
+  }
+  function bump(x) { if (!meter.ctx && !ears.speaking) meter.level = Math.max(meter.level, x); }
+  function meterStop() {
+    cancelAnimationFrame(meter.raf);
+    meter.raf = 0;
+    if (meter.stream) meter.stream.getTracks().forEach(function (t) { t.stop(); });
+    if (meter.ctx) { try { meter.ctx.close(); } catch (x) {} }
+    meter.stream = meter.ctx = null;
+    meter.level = 0;
+    meter.shown = -1;
   }
   // While talking, the screen stays on (where the browser can keep it on: most can).
   function keepAwake(on) {
@@ -2888,7 +2953,7 @@
   function slashCommand(id) {
     if (id === "local") localButton();
     else if (id === "model") modelSheet();
-    else if (id === "airpods") talkButton();
+    else if (id === "airpods") talkButton(true);
     else if (id === "heart") heartButton(null);
     else if (id === "heart-remove") heartRemoveButton();
   }

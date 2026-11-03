@@ -159,7 +159,8 @@ async function ask(page, text, meanwhile) {
 
 (async () => {
   const out = {};
-  const browser = await chromium.launch();
+  // (Chromium's own stand-in microphone: a tone, for the microphone button's bar.)
+  const browser = await chromium.launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
   const page = await (await browser.newContext({ viewport: { width: 1600, height: 900 } })).newPage();    // (later visits too)
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -168,6 +169,15 @@ async function ask(page, text, meanwhile) {
   // Wikipedia finds nothing here (a question of fact then gets the page's honest note, as with no AI).
   await page.route(/en\.wikipedia\.org/, (route) => route.fulfill({ status: 200, contentType: "application/json",
     headers: { "access-control-allow-origin": "*" }, body: "{}" }));
+  // DuckDuckGo's icon service, standing in: a small picture for each service's icon, but none for LinkedIn's (its
+  // messages then show Chat Computer's own icon).
+  const ICON_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const iconsAsked = [];
+  await page.route(/icons\.duckduckgo\.com/, (route) => {
+    const u = route.request().url();
+    iconsAsked.push(u.replace("https://icons.duckduckgo.com/ip3/", ""));
+    return /linkedin/.test(u) ? route.fulfill({ status: 404, body: "" }) : route.fulfill({ status: 200, contentType: "image/png", body: ICON_PNG });
+  });
   await page.goto(page_url);
   // It opens on the word logo alone; after a second it fades away (over half a second), and then Chat Computer's
   // first words come in as its answers do, as if just typed: a moment's thinking, then the words a few letters at a
@@ -254,6 +264,17 @@ async function ask(page, text, meanwhile) {
   out.opened_view = await viewText(page);
   await page.click("#frame-close");
   // A message: its whole conversation, in the middle, the conversation with Chat Computer put away.
+  // Each message with its service's own icon (from DuckDuckGo's icon service, standing in), or Chat Computer's own
+  // where there's none (LinkedIn's, here).
+  await page.waitForFunction(() => Array.from(document.querySelectorAll("#messages .msg-top")).every((t) =>
+    t.querySelector("svg") || (t.querySelector("img") && t.querySelector("img").complete)), null, { timeout: 10000 });
+  await page.waitForTimeout(300);
+  out.msg_icons = await page.evaluate(() => Array.from(document.querySelectorAll("#messages .msg")).map((m) => {
+    const img = m.querySelector(".msg-top img");
+    return [m.querySelector(".msg-src").textContent.replace(/: $/, ""), img ? img.getAttribute("src").replace("https://icons.duckduckgo.com/ip3/", "") :
+      m.querySelector(".msg-top svg") ? "own" : "none", img ? img.referrerPolicy : ""];
+  }));
+  out.icons_asked = Array.from(new Set(iconsAsked)).sort();
   await page.click("#messages .msg:has-text('Jane')");
   await page.waitForTimeout(400);
   out.jane = await viewText(page);
@@ -378,6 +399,44 @@ async function ask(page, text, meanwhile) {
   await slash(page, "Connect AirPods");
   out.talk_sheet = await state(page);
   await page.keyboard.press("Escape");
+
+  // The microphone button: listening at once (no sheet), with Chromium's own stand-in microphone (a real stream, its
+  // tone heard) and a stand-in for the browser's listening; the button's one bar rising and falling with what's
+  // heard; pressed again, stopped, the microphone let go of.
+  const micCtx = await browser.newContext({ viewport: { width: 1280, height: 800 }, permissions: ["microphone"] });
+  await micCtx.addInitScript(() => {
+    window.recs = [];
+    function Rec() { window.recs.push(this); }
+    Rec.prototype.start = function () { this.started = true; };
+    Rec.prototype.stop = Rec.prototype.abort = function () { this.ended = true; const r = this; setTimeout(() => r.onend && r.onend(), 5); };
+    window.SpeechRecognition = window.webkitSpeechRecognition = Rec;
+    const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    window.streams = [];
+    navigator.mediaDevices.getUserMedia = (c) => real(c).then((s) => { window.streams.push(s); return s; });
+  });
+  const mic = await micCtx.newPage();
+  mic.on("pageerror", (e) => errors.push(String(e)));
+  await mic.goto(page_url);
+  await mic.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  await mic.click("#mic");
+  await mic.waitForFunction(() => window.recs.length === 1 && window.recs[0].started, null, { timeout: 10000 });
+  const levels = [];
+  for (let i = 0; i < 25; i++) {
+    levels.push(await mic.evaluate(() => +getComputedStyle(document.getElementById("mic")).getPropertyValue("--level") || 0));
+    await mic.waitForTimeout(80);
+  }
+  out.mic_now = await mic.evaluate(() => ({ sheet: document.body.classList.contains("sheet"),
+    pressed: document.getElementById("mic").getAttribute("aria-pressed"), title: document.getElementById("mic").title,
+    bar: getComputedStyle(document.querySelector("#mic .level")).display, icon: getComputedStyle(document.querySelector("#mic svg")).display,
+    live: window.streams.length && window.streams[0].getAudioTracks()[0].readyState }));
+  out.mic_now.low = Math.min(...levels);
+  out.mic_now.high = Math.max(...levels);
+  await mic.click("#mic");
+  await mic.waitForTimeout(200);
+  out.mic_stopped = await mic.evaluate(() => ({ pressed: document.getElementById("mic").getAttribute("aria-pressed"),
+    bar: getComputedStyle(document.querySelector("#mic .level")).display,
+    live: window.streams[0].getAudioTracks()[0].readyState, aborted: !!window.recs[0].ended }));
+  await micCtx.close();
 
   // In the app (a stand-in for it: Tauri's invoke, and what the app tells the page), the model comes with it: while
   // it gets ready, the empty box says how it's going, and so do "/" (its sheet) and an answer it can't give yet; then

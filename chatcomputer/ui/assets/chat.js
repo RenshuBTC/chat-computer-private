@@ -615,6 +615,7 @@
     m.setAttribute("aria-pressed", on ? "true" : "false");
     m.title = on ? "Stop listening" : "Talk";
     m.setAttribute("aria-label", m.title);
+    if (!on) m.style.removeProperty("--level");
   }
   // The files added to the message: a chip each, above what's typed, with an x to take it off again.
   function drawAttached() {
@@ -937,12 +938,36 @@
   // pinned ones above. Unread: who in bold. Tapping one opens it between the sidebars.
   var msgs = {}, accounts = [], MSG_MAX = 400;
   var ICON = { email: "i-email", telegram: "i-telegram", whatsapp: "i-chat", wechat: "i-chat", discord: "i-chat" };
+  // Beside each message, its service's own icon (m.icon, a link to it from the computer behind the page: the icon
+  // the service itself gives its pages, as a browser tab shows), or, where there's none or it can't be had, Chat
+  // Computer's own for that kind of message.
+  var iconFailed = {};
+  function ownIcon(m) {
+    var s = document.createElement("span");
+    s.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#' + (ICON[m.source] || "i-social") + '"/></svg>';
+    return s.firstChild;
+  }
+  function msgIcon(m) {
+    var url = typeof m.icon === "string" && /^(https:\/\/|data:image\/)/.test(m.icon) ? m.icon : "";
+    if (!url || iconFailed[url]) return ownIcon(m);
+    var img = document.createElement("img");
+    img.className = "msg-icon";
+    img.alt = "";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    img.addEventListener("error", function () {
+      iconFailed[url] = true;
+      if (img.parentNode) img.parentNode.replaceChild(ownIcon(m), img);
+    });
+    img.src = url;
+    return img;
+  }
   function msgItem(m) {
     var li = document.createElement("li");
     li.className = "item msg" + (m.unread ? " unread" : "") + (m.pinned ? " pinned" : "");
     li.dataset.id = m.id;
     var top = el("msg-top");
-    top.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#' + (ICON[m.source] || "i-social") + '"/></svg>';
+    top.appendChild(msgIcon(m));
     top.appendChild(el("msg-who", m.who || ""));
     top.appendChild(el("msg-when", clock(m.ts)));
     var text = el("msg-text");
@@ -1523,6 +1548,11 @@
     },
     // The microphone button pressed or not, where the page's host listens some other way (the website).
     listening: function (on) { micPressed(!!on); },
+    // How loud what the microphone hears is, from 0 (quiet) to 1, while listening: the button's one bar.
+    level: function (x) {
+      x = Math.max(0, Math.min(1, +x || 0));
+      $("mic").style.setProperty("--level", (0.18 + 0.82 * x).toFixed(3));
+    },
     // Whether the microphone is on. (Not shown: the screen is the conversation; Chat Computer says so when it can't
     // hear.)
     mic: function (on) {},

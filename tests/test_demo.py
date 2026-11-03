@@ -58,8 +58,11 @@ def test_what_s_typed_stays_on_this_computer():
         "https://geocoding-api.open-meteo.com", "https://api.open-meteo.com", "https://air-quality-api.open-meteo.com",
         "https://en.wikipedia.org", "https://open-meteo.com",
         "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com",
-        "https://cdn.jsdelivr.net", "https://huggingface.co"}
+        "https://cdn.jsdelivr.net", "https://huggingface.co", "https://icons.duckduckgo.com"}
     assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
+    # Messages: each service's own icon (as its pages give it), through DuckDuckGo's icon service, sent only the
+    # service's address.
+    assert 'return site ? "https://icons.duckduckgo.com/ip3/" + site + ".ico" : "";' in host
     assert host.count("import(") == 1 and "import(HEART.library)" in host
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("localBase(")) == [
@@ -305,6 +308,22 @@ def test_the_demo_works_in_a_browser():
     assert res["greet_meteo"] == ["geocoding-api penang", "api"]
     # Connect AirPods says what it does before the microphone is asked for.
     assert res["talk_sheet"]["sheet"] and res["talk_sheet"]["sheet_title"] == "Talk through your AirPods"
+    # The microphone button listens at once (no sheet), the microphone becoming one bar that moves with what it hears
+    # (Chromium's stand-in microphone: a tone); pressed again, it stops and lets go of the microphone.
+    # Messages: each with its service's own icon, from DuckDuckGo's icon service (standing in), sent no page address;
+    # where it can't be had (LinkedIn's, there), Chat Computer's own.
+    assert res["msg_icons"] == [
+        ["WhatsApp", "web.whatsapp.com.ico", "no-referrer"], ["Gmail", "mail.google.com.ico", "no-referrer"],
+        ["Telegram", "web.telegram.org.ico", "no-referrer"], ["Instagram", "www.instagram.com.ico", "no-referrer"],
+        ["Outlook", "outlook.live.com.ico", "no-referrer"], ["X", "x.com.ico", "no-referrer"], ["LinkedIn", "own", ""]], res["msg_icons"]
+    assert res["icons_asked"] == ["mail.google.com.ico", "outlook.live.com.ico", "web.telegram.org.ico", "web.whatsapp.com.ico",
+                                  "www.instagram.com.ico", "www.linkedin.com.ico", "x.com.ico"]
+    now = res["mic_now"]
+    assert not now["sheet"] and now["pressed"] == "true" and now["title"] == "Stop listening"
+    assert now["bar"] == "block" and now["icon"] == "none" and now["live"] == "live"
+    assert now["low"] >= 0.18 and now["high"] > now["low"] + 0.2, now
+    stopped = res["mic_stopped"]
+    assert stopped == {"pressed": "false", "bar": "none", "live": "ended", "aborted": True}
     # In the app (a stand-in for it), the model comes with it. While it gets ready, the empty box says how it's going
     # (downloading, then taking its refusals out), and so do "/" and its sheet, and an answer it can't give yet; then
     # it answers (named in "/"), on the port the app says, with the app's own tools (the files on this computer:

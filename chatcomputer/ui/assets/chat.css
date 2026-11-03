@@ -170,7 +170,15 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
 .tool svg { display: block; width: 1.15em; height: 1.15em; }
 #mic .fill { fill: none; }
 #mic[aria-pressed="true"] { background: color-mix(in srgb, var(--knob) 75%, var(--ink)); }
-#mic[aria-pressed="true"] .fill { fill: currentColor; }
+/* Listening, the microphone becomes one bar that rises and falls with what it hears (--level, chat.js: level), so
+   you can see it's working as you speak: short when it's quiet, tall when you talk. */
+#mic .level {
+  display: none; width: 0.2em; height: 1.05em; border-radius: 0.1em; background: currentColor;
+  transform: scaleY(var(--level, 0.18)); transition: transform 90ms linear;
+}
+#mic[aria-pressed="true"] svg { display: none; }
+#mic[aria-pressed="true"] .level { display: block; }
+@media (prefers-reduced-motion: reduce) { #mic .level { transition: none; } }
 /* Files added to the message: one chip each, above what's typed, with an x to take it off again. */
 #attached { display: none; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.55rem; }
 body.attaching #attached { display: flex; }
@@ -345,6 +353,8 @@ body.show-messages:not(.panel) #messages, body.full.show-messages #messages {
 /* A message: where it came from (a small icon), who, when; then the words, two lines at most. Unread: who in bold. */
 .msg-top { display: flex; align-items: center; gap: 0.4em; }
 .msg-top svg { flex: none; width: 1.1em; height: 1.1em; }
+/* A service's own icon (chat.js: msgIcon): as big as Chat Computer's own, a little rounded, as a browser tab's. */
+.msg-top .msg-icon { flex: none; width: 1.1em; height: 1.1em; border-radius: 0.2em; object-fit: contain; }
 .msg-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg.unread .msg-who { font-weight: bold; }
 .msg-when { flex: none; }

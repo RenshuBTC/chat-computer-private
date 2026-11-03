@@ -213,3 +213,22 @@ fn decoding_keeps_to_its_memory() {
     assert_eq!(decode_within(&progressive.data, w / 8, h / 8, BACKGROUND, 2 * wh).err(), Some(Error::TooBig));
     assert!(decode_within(&progressive.data, w / 8, h / 8, BACKGROUND, 8 * wh).is_ok());
 }
+
+#[test]
+fn a_frames_size_is_bounded_by_the_memory_budget() {
+    // 25 bytes: a 1x1 screen, then a frame that says it is 65535x65535 and holds no pixels. Decoded by the frame's
+    // size that would be 4.29 GB, whatever the screen's own budget says.
+    let mut gif = std::vec![0u8; 0];
+    gif.extend_from_slice(b"GIF89a");
+    gif.extend_from_slice(&1u16.to_le_bytes());              // screen width
+    gif.extend_from_slice(&1u16.to_le_bytes());              // screen height
+    gif.extend_from_slice(&[0, 0, 0]);                       // no global colours, background 0, no aspect ratio
+    gif.push(0x2C);                                          // an image descriptor
+    gif.extend_from_slice(&0u16.to_le_bytes());              // left
+    gif.extend_from_slice(&0u16.to_le_bytes());              // top
+    gif.extend_from_slice(&0xFFFFu16.to_le_bytes());         // frame width
+    gif.extend_from_slice(&0xFFFFu16.to_le_bytes());         // frame height
+    gif.extend_from_slice(&[0, 2, 0]);                       // no local colours, LZW code size 2, no image data
+    assert_eq!(gif.len(), 25);
+    assert_eq!(decode_within(&gif, 1, 1, BACKGROUND, 1000).err(), Some(Error::TooBig));
+}

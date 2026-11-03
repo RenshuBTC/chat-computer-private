@@ -214,13 +214,18 @@ impl Hive {
         let list = self.cell(src, key.subkeys)?;
         match list.get(..2) {
             Some(b"ri") => {
-                for i in 0..u16_at(&list, 2).ok_or(Error::Damaged)? as usize {
+                let n = u16_at(&list, 2).ok_or(Error::Damaged)? as usize;
+                for i in 0..n {
                     let sub = u32_at(&list, 4 + 4 * i).ok_or(Error::Damaged)?;
                     let inner = self.cell(src, sub)?;
                     if inner.get(..2) == Some(b"ri") {
                         return Err(Error::Damaged); // (a list of lists of lists isn't made)
                     }
                     Self::list_entries(&inner, &mut out)?;
+                    // Checked here too: 65,535 lists of 65,535 entries each would be 17 GB before the check after the loop.
+                    if out.len() > MOST_ENTRIES {
+                        return Err(Error::Damaged);
+                    }
                 }
             }
             _ => Self::list_entries(&list, &mut out)?,

@@ -286,7 +286,10 @@ impl Volume {
         if folder.size > MOST_ENTRIES * 32 {
             return Err(Error::Damaged);
         }
-        let count = if folder.first == self.root && folder.size == 0 { None } else { Some(folder.size.div_ceil(self.cluster_size as u64)) };
+        // A folder is a chain of clusters ending at its end-of-directory entry, not a length: its DataLength is 0 for the
+        // root (which has no stream entry) and can be 0 for any folder. Only a folder with a length stops at that many
+        // clusters.
+        let count = if folder.folder && folder.size == 0 { None } else { Some(folder.size.div_ceil(self.cluster_size as u64)) };
         let mut out = Vec::new();
         for c in self.clusters_of(disk, folder, 0, count)? {
             let at = out.len();

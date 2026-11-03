@@ -221,6 +221,24 @@ fn refuses_what_isnt_ntfs_or_is_damaged() {
 }
 
 #[test]
+fn a_reparse_point_shorter_than_its_header_is_damaged_not_a_crash() {
+    // Its header is a tag (4 bytes) and the length of what follows (2): a 6- or 7-byte value once indexed past its
+    // end. Every value too short to slice is an error.
+    for len in 0..8 {
+        assert_eq!(reparse_value(&std::vec![0u8; len]).unwrap_err(), Error::Damaged, "{len} bytes");
+    }
+    // A well-formed one: the tag, its data's length, then the data (of which only what's there is kept).
+    let mut v = std::vec![0u8; 13];
+    v[0..4].copy_from_slice(&0xA000_000Cu32.to_le_bytes());
+    v[4..6].copy_from_slice(&3u16.to_le_bytes());
+    v[8..11].copy_from_slice(b"abc");
+    assert_eq!(reparse_value(&v).unwrap(), (0xA000_000C, b"abc".to_vec()));
+    // A length that reaches past the value is cut to it.
+    v[4..6].copy_from_slice(&999u16.to_le_bytes());
+    assert_eq!(reparse_value(&v).unwrap().1.len(), 5);
+}
+
+#[test]
 fn decompresses_lznt1() {
     // A chunk with a literal run, then copies near and far (as Windows writes them).
     let plain: Vec<u8> = b"abcabcabcabcabcabc hello hello hello".to_vec();

@@ -118,6 +118,20 @@ const UPCASE: u64 = 10;
 /// The most runs, attributes and index levels believed (so damaged numbers can't make it loop or use all memory).
 const MOST_RUNS: usize = 1 << 20;
 const MOST_LEVELS: u32 = 32;
+/// The most index nodes one folder is listed from: a crafted index whose entries point back at their own blocks would
+/// otherwise fan out for ever (each level multiplies the reads).
+const MOST_INDEX_NODES: u32 = 1 << 20;
+
+/// A reparse point's value: its tag, and its data (after the 8-byte header). A value shorter than the header, or
+/// than the length it gives, is damaged (slicing from 8 would panic on a 6- or 7-byte one).
+fn reparse_value(value: &[u8]) -> Result<(u32, Vec<u8>), Error> {
+    let tag = u32_at(value, 0).ok_or(Error::Damaged)?;
+    if value.len() < 8 {
+        return Err(Error::Damaged);
+    }
+    let len = (u16_at(value, 4).ok_or(Error::Damaged)? as usize).min(value.len() - 8);
+    Ok((tag, value[8..8 + len].to_vec()))
+}
 
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?))
@@ -588,9 +602,7 @@ impl Volume {
                 b
             }
         };
-        let tag = u32_at(&value, 0).ok_or(Error::Damaged)?;
-        let len = (u16_at(&value, 4).ok_or(Error::Damaged)? as usize).min(value.len().saturating_sub(8));
-        Ok(Some((tag, value[8..8 + len].to_vec())))
+        Ok(Some(reparse_value(&value)?))
     }
 
     /// Where link `n` goes, as it says: "C:\Users\Sam\Documents" (a junction's, or a symbolic link's to a path from
@@ -714,7 +726,8 @@ impl Volume {
         let block_size = u32_at(root, 8).ok_or(Error::Damaged)? as usize;
         let alloc = self.attributes_in(disk, folder, &own, INDEX_ALLOCATION)?.into_iter().find(|a| a.name == I30);
         let mut out = Vec::new();
-        self.walk_node(disk, root, 16, alloc.as_ref(), block_size, 0, &mut out)?;
+        let mut budget = MOST_INDEX_NODES;
+        self.walk_node(disk, root, 16, alloc.as_ref(), block_size, 0, &mut out, &mut budget)?;
         // (Windows keeps each reparse point's tag in its folder's index too; were one not there, its record has it.)
         for e in out.iter_mut().filter(|e| e.attributes & REPARSE != 0 && e.tag == 0) {
             if let Ok(Some((tag, _))) = self.reparse(disk, e.record) {
@@ -728,10 +741,11 @@ impl Volume {
     /// The entries of one index node (its header at `header` in `block`), with its sub-nodes' before each of them.
     #[allow(clippy::too_many_arguments)]
     fn walk_node(&self, disk: &mut impl Disk, block: &[u8], header: usize, alloc: Option<&Attribute>, block_size: usize,
-                 depth: u32, out: &mut Vec<Entry>) -> Result<(), Error> {
-        if depth > MOST_LEVELS {
+                 depth: u32, out: &mut Vec<Entry>, budget: &mut u32) -> Result<(), Error> {
+        if depth > MOST_LEVELS || *budget == 0 {
             return Err(Error::Damaged);
         }
+        *budget -= 1;
         let first = header + u32_at(block, header).ok_or(Error::Damaged)? as usize;
         let end = (header + u32_at(block, header + 4).ok_or(Error::Damaged)? as usize).min(block.len());
         let mut at = first;
@@ -745,7 +759,7 @@ impl Volume {
             if flags & SUBNODE != 0 {
                 let vcn = u64_at(block, at + len - 8).ok_or(Error::Damaged)?;
                 let child = self.index_block(disk, alloc.ok_or(Error::Damaged)?, block_size, vcn)?;
-                self.walk_node(disk, &child, 0x18, alloc, block_size, depth + 1, out)?;
+                self.walk_node(disk, &child, 0x18, alloc, block_size, depth + 1, out, budget)?;
             }
             if flags & LAST != 0 {
                 break;
@@ -767,7 +781,8 @@ impl Volume {
             return Err(Error::Damaged);
         }
         // (A block's VCN counts clusters, or, where blocks are smaller than clusters, 512s.)
-        let offset = if block_size as u32 >= self.cluster_size { vcn * self.cluster_size as u64 } else { vcn * 512 };
+        let step = if block_size as u32 >= self.cluster_size { self.cluster_size as u64 } else { 512 };
+        let offset = vcn.checked_mul(step).ok_or(Error::Damaged)?;
         let mut b = vec![0u8; block_size];
         self.read_runs(disk, runs, *initialized, offset, &mut b)?;
         fix_up(&mut b, b"INDX")?;

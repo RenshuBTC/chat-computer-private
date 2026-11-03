@@ -271,3 +271,20 @@ def test_the_same_tool_asked_for_again_and_again_stops(clean_env):
             await rig.brain.close()
             rig.mock.stop()
     asyncio.run(go())
+
+
+@pytest.mark.timeout(60)
+def test_a_turn_that_does_something_and_says_nothing_says_so(clean_env):
+    """A small model can do what was asked and end without a word (evals/os: the tax letter shown, nothing said): the
+    reply says it's done, rather than nothing."""
+    async def go():
+        rig = Rig(clean_env, [])
+        (clean_env / "notes.txt").write_text("one\ntwo\n")
+        script(rig.mock, {"count": [call("Bash", command="wc -l notes.txt", description="Count the lines")]}, after_tool="")
+        try:
+            res = await rig.say("count the lines in my notes")
+            assert res.ok and res.text == "Done." and rig.text() == "Done."
+        finally:
+            await rig.brain.close()
+            rig.mock.stop()
+    asyncio.run(go())

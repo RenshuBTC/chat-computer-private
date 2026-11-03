@@ -378,6 +378,14 @@ class Brain:
             else:
                 t.res.ok, t.res.error_kind = False, "other"
                 t.res.error_text = f"it was still going after {MOST_STEPS} steps, so it was stopped"
+            # (Done, with no word said: what was shown is there, but they'd hear nothing, or see an empty reply.
+            # evals/os: Qwen3.5 0.8B found the tax letter and showed it, and said nothing.)
+            if t.res.ok and t.res.tools and not t.res.text.strip():
+                shown = any(n.split("__")[-1].startswith("show_") for n in t.res.tools[-2:])
+                words = "It's on the screen." if shown else "Done."
+                t.res.text = words
+                self.ev.on_text(t.tid, words)
+                conv.messages.append({"role": "assistant", "content": words})
         except asyncio.CancelledError:
             t.res.interrupted = True
             if conv is not None and conv.messages and conv.messages[-1].get("role") != "user":

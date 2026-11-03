@@ -55,6 +55,13 @@ chat-computer/
     tls/                    Own TLS 1.3 client and certificate checks, against Mozilla's authorities (roots.txt)
     claude/                 Claude's Messages API, streamed: the request (Opus 5.5, effort max, automatic prompt
                             caching), HTTP/1.1, JSON
+    model/                  Chat Computer's own model engine (no outside code; its core needs no standard library):
+                            Qwen's open models (3.5, 3.6, 3.8; Apache 2.0) on the PC's own processor, AVX2 and VNNI;
+                            the model's file format, its converter from Qwen's published files, the tokenizer, each
+                            model's chat template as code, tool calls, sessions that read only what's new; the
+                            program chat-computer-model (serve: OpenAI's chat completions API on 127.0.0.1, for
+                            this computer's programs and Chat Computer's own pages only; convert). See its README.md.
+                            On its way in, in place of Claude, everywhere
     font/                   Own TrueType reader and rasterizer, variable fonts too (fvar/avar/gvar: the bold, from the same file)
     fonts/                  Fallback fonts for what Atkinson Hyperlegible lacks (arrows, maths, Greek, Cyrillic, emoji,
                             box drawing), cut and merged from Noto fonts by build.py

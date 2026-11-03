@@ -1,7 +1,8 @@
 # Chat Computer's own operating system (os/).
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
 #   engine's, text setting's, chimes', FAT, exFAT, NTFS, ZIP, Office, picture, BitLocker and registry readers',
-#   Markdown reader's, memory file's, HID descriptors' and AML interpreter's tests (the last against ACPICA's acpiexec);
+#   Markdown reader's, memory file's, HID descriptors' and AML interpreter's tests (the last against ACPICA's acpiexec),
+#   and the model engine's;
 #   starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a crash stops it
 #   cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts), checking the
 #   firmware refuses it unsigned; types on PS/2 and USB keyboards (on ports, behind a hub, plugged in and out),
@@ -43,6 +44,8 @@ jobs:
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
       - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, picture, BitLocker and registry readers, Markdown, memory file, HID and AML tests
         run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p markdown -p remember -p hid -p aml
+      - name: The model engine's tests (on small models with random weights)
+        run: cargo test -p model --features std
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh

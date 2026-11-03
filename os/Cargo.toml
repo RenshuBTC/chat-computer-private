@@ -2,7 +2,7 @@
 # See README.md. Each crate is built for its own target by ./build.sh (cargo can't mix targets in one build).
 [workspace]
 resolver = "3"
-members = ["bootinfo", "boot", "kernel", "font", "text", "chime", "net", "crypto", "tls", "claude", "fat", "exfat", "ntfs", "zip", "office", "picture", "bitlocker", "registry", "remember", "markdown", "hid", "aml"]
+members = ["bootinfo", "boot", "kernel", "font", "text", "chime", "net", "crypto", "tls", "claude", "fat", "exfat", "ntfs", "zip", "office", "picture", "bitlocker", "registry", "remember", "markdown", "hid", "aml", "model"]
 
 [workspace.package]
 version = "0.1.0"
@@ -20,6 +20,13 @@ opt-level = 1
 opt-level = 3
 
 [profile.dev.package.crypto]
+opt-level = 3
+
+# The model's arithmetic: its tests read hundreds of tokens through small models, and it's the engine's whole speed.
+[profile.dev.package.model]
+opt-level = 3
+
+[profile.release.package.model]
 opt-level = 3
 
 [profile.release]

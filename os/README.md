@@ -563,6 +563,10 @@ PC.
    subscription sign-in is for Claude Code and its own apps
    ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)), and the own kernel doesn't
    run the Claude Code program (a Linux program), so it uses an API key.
+   ✓ Chat Computer's own model engine (model/, see its README.md): Qwen's open models on the PC's own processor,
+   checked against the reference implementation, with nothing from elsewhere, so Chat Computer needs no account and
+   no internet to think. To do: the kernel running it in place of Claude: every core, each core's AVX registers kept,
+   and the model's file read from Windows' drive.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting Claude's answers use
    (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the
    conversation (JPEG, PNG, GIF). To do: accents

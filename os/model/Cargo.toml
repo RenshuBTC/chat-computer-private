@@ -1,0 +1,41 @@
+[package]
+name = "model"
+description = "Chat Computer's own model engine: runs an open model (Qwen 3.5's family) on the PC's own processor, with nothing else"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Threads for the arithmetic, and the program that serves the model (where there's an operating system: Chat
+# Computer on Linux, the desktop app).
+std = []
+
+[[bin]]
+name = "chat-computer-model"
+path = "src/bin/chat-computer-model/main.rs"
+required-features = ["std"]
+
+[[example]]
+name = "run"
+required-features = ["std"]
+
+[[example]]
+name = "chat_check"
+required-features = ["std"]
+
+[[example]]
+name = "tok_check"
+required-features = ["std"]
+
+[[example]]
+name = "nfc_check"
+required-features = ["std"]
+
+[[example]]
+name = "session_check"
+required-features = ["std"]
+
+[[example]]
+name = "bench_mm"
+required-features = ["std"]

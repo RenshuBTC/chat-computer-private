@@ -64,6 +64,16 @@ command -v plymouth >/dev/null 2>&1 && plymouth quit >/dev/null 2>&1
 mkdir -p "$P" 2>/dev/null
 say "Setting up Chat Computer on this Mac."
 
+# Chat Computer has no SSH server and no cockpit (linux/install-chatcomputer.sh disables both): nothing of the kind
+# may listen while this first start runs, since the finish-install service needs the network and can take 20-40
+# minutes, and this start is also where a kernel older than CVE-2026-98432's fix would be exposed. Fedora's Minimal
+# image ships sshd and cockpit, so they are masked (a link to /dev/null) before anything else, on every try and on
+# the way back to Fedora's own start.
+mkdir -p "$T/etc/systemd/system" 2>/dev/null || true
+for unit in sshd.service sshd.socket cockpit.service cockpit.socket; do
+  ln -sf /dev/null "$T/etc/systemd/system/$unit" || fail "couldn't turn off $unit"
+done
+
 [ -f "$P/setup.env" ] || fail "its settings (chatcomputer/setup.env) are missing"
 [ -f "$P/app.tar.gz" ] || fail "Chat Computer itself (chatcomputer/app.tar.gz) is missing"
 

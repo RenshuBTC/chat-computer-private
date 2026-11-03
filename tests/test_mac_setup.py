@@ -514,6 +514,11 @@ def test_first_start_on_the_mac(tmp_path):
     assert (root / "etc/chatcomputer/mac-files-partuuid").read_text() == "4b1e2f3a-0000-4000-8000-00000000c0de\n"
     unit = root / "etc/systemd/system/multi-user.target.wants/chatcomputer-finish-install.service"
     assert os.readlink(unit) == "/etc/systemd/system/chatcomputer-finish-install.service"
+    # Nothing of Fedora's may listen while the finish-install service runs (Chat Computer has no SSH server or cockpit).
+    for name in ("sshd.service", "sshd.socket", "cockpit.service", "cockpit.socket"):
+        mask = root / "etc/systemd/system" / name
+        assert mask.is_symlink(), name
+        assert os.readlink(mask) == "/dev/null", name
     assert os.readlink(root / "etc/localtime") == "../usr/share/zoneinfo/Asia/Singapore"
     assert (root / "etc/hostname").read_text() == "chatcomputer\n"
     # Fedora's own first-start questions are off, its usual start is back, and no sign-in copies are left.
@@ -531,6 +536,8 @@ def test_first_start_tries_again_then_falls_back_to_fedora(tmp_path):
     assert r.returncode == 1
     assert (esp / "EFI/fedora/grub.cfg").read_text() == "Chat Computer first start\n"  # tries again next start
     assert (esp / "chatcomputer/tries").read_text().strip() == "1"
+    for name in ("sshd.service", "sshd.socket", "cockpit.service", "cockpit.socket"):
+        assert os.readlink(root / "etc/systemd/system" / name) == "/dev/null", name   # masked before anything fails
     assert (root / "etc/reconfigSys").exists()                                       # Fedora's questions still on
     assert (esp / "chatcomputer/setup.env").exists() and (esp / "chatcomputer/secrets/claude_token").exists()  # for the retry
     (esp / "chatcomputer/tries").write_text("2\n")

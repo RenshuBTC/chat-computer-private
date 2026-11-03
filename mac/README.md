@@ -12,7 +12,7 @@ downloads, checks and runs. How to use it is in `../README.md` ("Chat Computer o
 | `installer_data.json` | The Asahi installer's list of systems: Chat Computer, with Fedora's own partitions and Chat Computer's icon |
 | `drive-installer.exp` | Answers the Asahi installer's questions (expect); the person types only their Mac's password |
 | `esp/grub-firststart.cfg` | Put in place of Fedora's `EFI/fedora/grub.cfg` for one start: runs `firstboot.sh` instead of Fedora's first-start questions |
-| `esp/firstboot.sh` | Chat Computer's first start on the Mac: the account, Wi-Fi, Chat Computer itself, then Fedora's usual start back |
+| `esp/firstboot.sh` | Chat Computer's first start on the Mac: Fedora's SSH and cockpit masked, the account, Wi-Fi, Chat Computer itself, then Fedora's usual start back |
 | `chatcomputer.icns`, `make_icon.py` | The icon in the Mac's startup options |
 
 Updating the pinned versions: change `manifest.sh`, `installer_data.json` (the package name and Fedora's

@@ -13,11 +13,13 @@
    (17.5rem). */
 html { scrollbar-width: none; }
 ::-webkit-scrollbar { display: none; }
-body.panel { --left: 17.5rem; --panel: 17.5rem; --rail: 2.75rem; }
-/* A sidebar switched off leaves a narrow margin with just its switch (see "The panels' switches" below). */
+body.panel { --left: 17.5rem; --panel: 17.5rem; --rail: 2.75rem; --mid-left: 17.5rem; --mid-right: 17.5rem; }
+/* A sidebar switched off leaves a narrow margin with just its switch (see "The panels' switches" below); what's in
+   the middle (the conversation, the word logo, the message box, what's open) stays where it was, as the person
+   asked: it's placed between where the sidebars are when they show (--mid-left, --mid-right), either way. */
 body.panel.hide-left { --left: var(--rail); }
 body.panel.hide-right { --panel: var(--rail); }
-body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
+body { padding-left: var(--mid-left, 0px); padding-right: var(--mid-right, 0px); }
 #column {
   display: flex; flex-direction: column;
   width: min(var(--co-column, 57.75rem), 100% - 3rem); margin: 0 auto;
@@ -101,16 +103,21 @@ body.hearing #live { display: block; }
   background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* A conversation starts with the word logo alone in the middle of the screen (body.intro, from the first moment);
-   after a second it fades away, over half a second, and Chat Computer's first words come in (chat.js: greet).
-   Something said first fades it away at once. */
+/* A conversation starts with the word logo in the middle of the screen (body.intro, from the first moment), and it
+   stays until something's said (body.has-log); under it, one line of greeting (chat.js: greet), fading in once it's
+   chosen. Something said fades them away. */
 #welcome {
-  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); top: 0; bottom: calc(var(--composer-h, 5rem) + var(--kb, 0px));
-  display: flex; align-items: center; justify-content: center; margin: 0; pointer-events: none;
-  opacity: 0; visibility: hidden; transition: opacity 500ms ease, visibility 0s linear 500ms;
+  position: fixed; left: var(--mid-left, 0px); right: var(--mid-right, 0px); top: 0; bottom: calc(var(--composer-h, 5rem) + var(--kb, 0px));
+  display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0; padding: 0 1rem;
+  pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 500ms ease, visibility 0s linear 500ms;
 }
 #wordmark { font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin: 0; }
-body.intro:not(.has-you) #welcome { opacity: 1; visibility: visible; transition: none; }
+#greeting {
+  max-width: 100%; margin: 0.7em 0 0; color: var(--muted); line-height: 1.4; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; opacity: 0; transition: opacity 400ms ease;
+}
+#greeting.shown { opacity: 1; }
+body.intro:not(.has-log) #welcome { opacity: 1; visibility: visible; transition: none; }
 body.content #welcome { display: none; }
 
 /* Something open (body.content): a website, a video, a map, a conversation from Messages, a file. It fills the
@@ -129,7 +136,7 @@ body.content #column { display: none; }
 #frame-close { width: 1.75rem; height: 1.75rem; }
 /* The sidebars show from the start; Escape makes the middle fill the screen (body.full), whatever is in it, the
    message box included, the sidebars and their switches put away, and brings them back again. */
-body.full { --left: 0px !important; --panel: 0px !important; }
+body.full { --left: 0px !important; --panel: 0px !important; --mid-left: 0px !important; --mid-right: 0px !important; }
 body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.full .toggle { display: none !important; }
 
 /* The message box, as in the Claude app: a rounded box lifted off the middle (--paper, with a thin line round it
@@ -141,7 +148,7 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
    Asleep, a line above it says how to wake Chat Computer. A phone's keyboard never covers it: it's lifted to sit
    just above the keyboard (--kb, chat.js: fitKeyboard). */
 #composer {
-  position: fixed; left: var(--left, 0px); right: var(--panel, 0px); bottom: var(--kb, 0px); z-index: 6;
+  position: fixed; left: var(--mid-left, 0px); right: var(--mid-right, 0px); bottom: var(--kb, 0px); z-index: 6;
   padding: 0.5rem 0 2.4375rem; background: var(--ground);
 }
 #box, #wake { width: min(60.125rem, 100% - 2rem); margin: 0 auto; }
@@ -287,19 +294,6 @@ body.panel .side { display: flex; }
 .side-empty { margin: 0; }
 body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #chats-empty { display: none; }
 .side-empty .text-button { display: block; margin-top: 0.6em; }
-/* Messages' buttons to connect what brings messages in: email, chat apps and social media, each with its own list
-   to choose from; rows as the Claude app's sidebar's are, an icon then the words. Out of sight until + (beside
-   Messages) is pressed, which turns to an x while they show; pressed again, or one chosen, they go. */
-.connect { flex: none; display: none; flex-direction: column; margin: 0 0 0.75rem; }
-#messages.connecting .connect { display: flex; }
-#add-account svg { transition: transform 150ms cubic-bezier(0.32, 0.72, 0, 1); }
-#add-account[aria-expanded="true"] svg { transform: rotate(45deg); }
-.connect-row {
-  display: flex; align-items: center; gap: 0.6em; width: 100%; margin: 0; padding: 0.5em 0.4em;
-  border: 0; border-radius: 0.5em; background: none; font: inherit; line-height: 1.4; text-align: left; cursor: pointer;
-}
-.connect-row svg { flex: none; width: 1.15em; height: 1.15em; }
-.connect-row:hover { background: var(--chosen); }
 /* The right sidebar in two halves of the same height, a line between them: Actions at the top, and under them
    Chats, each task's chat, newest first, the one on the screen marked, as the Claude app's sidebar lists its chats
    (one line each). */
@@ -395,7 +389,13 @@ body.sheet #sheet { display: flex; }
   border: 1px solid var(--line); border-radius: 1rem; background: var(--side);
   box-shadow: 0 0.6rem 2rem color-mix(in srgb, var(--shade) 60%, transparent);
 }
-#sheet-title { font-size: 1.25rem; line-height: 1.3; margin: 0 0 0.5em; }
+/* Its top: the title, a back arrow before it where the panel came from another (f.back), and an x at the right that
+   closes it (as Cancel did). */
+#sheet-head { display: flex; align-items: center; gap: 0.4em; margin: -0.3rem -0.6rem 0.5em 0; }
+#sheet-title { flex: 1; font-size: 1.25rem; line-height: 1.3; margin: 0; }
+#sheet-back, #sheet-cancel { width: 2rem; height: 2rem; padding: 0.35rem; }
+#sheet-back { display: none; margin-left: -0.6rem; }
+body.sheet-back #sheet-back { display: block; }
 #sheet-text p { margin: 0 0 0.75em; }
 #sheet-fields label { display: block; margin: 0.9em 0 0.25em; }
 #sheet-fields input, #sheet-fields select {
@@ -411,6 +411,8 @@ body.sheet #sheet { display: flex; }
 #sheet-fields .choices button:has(.choice-icon) { display: inline-flex; align-items: center; gap: 0.5em; padding-left: 0.75em; }
 #sheet-fields .choice-icon { flex: none; width: 1.05em; height: 1.05em; border-radius: 0.2em; object-fit: contain; }
 #sheet-fields .choices-note { flex-basis: 100%; margin: 0.5em 0 0; color: var(--muted); }
+#sheet-fields .choices-note:empty { margin: 0; }
+#sheet-fields .choices button.on { border-color: var(--ink); background: var(--chosen); }
 #sheet-error { margin: 0.9em 0 0; font-weight: bold; }
 #sheet-error:empty { display: none; }
 #sheet-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 1.25em; margin-top: 1.5em; }

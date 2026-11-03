@@ -1,4 +1,4 @@
-"""Where the person is and its weather, for the greeting under "hello, world" (chatcomputer/here.py, chat.js's
+"""Where the person is and its weather, for the greeting under the word logo (chatcomputer/here.py, chat.js's
 CO.here): the place they said they live in, else their time zone's city; its position looked up once, the weather
 again after half an hour; offline, the place alone. The controller tells the screen."""
 import asyncio

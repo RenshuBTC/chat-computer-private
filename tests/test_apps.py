@@ -134,8 +134,9 @@ def test_the_chrome_extension_works_in_chromium():
     assert res["errors"] == []
     # Its side panel is Chat Computer, the website in its frame, at a side panel's text size (no Escape there).
     o = res["opening"]
-    assert o == {"url": "https://chatcomputer.ai/?app=chrome", "rem": "16px", "hint": "Type anything",
-                 "greeting": "hello, world"}
+    greeting = o.pop("greeting")
+    assert o == {"url": "https://chatcomputer.ai/?app=chrome", "rem": "16px", "hint": "Type anything", "logo": "Chat Computer"}
+    assert greeting and not greeting.startswith("and ")                       # (one line under the word logo)
     # A site's address typed: a real tab with it, at once, without a click.
     tabs = res["typed"]["tabs"]
     assert len(tabs) == 1 and re.match(r"https://(www\.)?bbc\.co\.uk/", tabs[0]) and res["typed"]["said"] == "Opened bbc.co.uk in a new tab."

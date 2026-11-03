@@ -54,6 +54,7 @@ def test_light_words_on_claude_s_dark():
     assert COLOR.findall(_declarations(chat)) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
     sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--kb", "--side-gap",
+             "--mid-left", "--mid-right",   # (where the middle is, between the sidebars as they are when they show)
              "--level"}       # (and the microphone's bar: how loud it hears)
     assert used - sizes == {"--ground", "--ink", "--bubble", "--chosen", "--line", "--muted", "--dim", "--paper", "--knob",
                             "--box-ink", "--box-line", "--box-ground", "--box-chosen", "--side", "--shade", "--text", "--mono"}
@@ -69,7 +70,8 @@ def test_light_words_on_claude_s_dark():
 
 def test_your_words_are_in_a_bubble_not_grey_text():
     # Like the Claude app: your messages on the right in a bubble, upright, in the same white. Grey words only for
-    # what matters less, as on Claude's PC app: a list's days, the times, and what Chat Computer is doing.
+    # what matters less, as on Claude's PC app: a list's days, the times, what Chat Computer is doing, the greeting
+    # under the word logo, and a panel's notes between its buttons.
     chat = _code(_asset("chat.css"))
     assert re.search(r"\.you \{[^}]*align-self: flex-end;[^}]*background: var\(--bubble\);", chat)
     assert "italic" not in chat
@@ -81,7 +83,8 @@ def test_your_words_are_in_a_bubble_not_grey_text():
     rules = [r.strip() for r in re.findall(r"([^{}]*::placeholder[^{}]*\{[^}]*\})", chat)]
     assert rules == ["#input::placeholder { color: var(--dim); opacity: 1; }"]
     muted = [m.strip() for m in re.findall(r"([^{}]+)\{[^}]*color: var\(--muted\)", chat)]
-    assert muted == [".ai .activity", ".acts .when", ".side-day", ".done-when", ".msg-when"], muted
+    assert muted == [".ai .activity", ".acts .when", "#greeting", ".side-day", ".done-when", ".msg-when",
+                     "#sheet-fields .choices-note"], muted
 
 
 def test_fonts_come_with_chatcomputer():

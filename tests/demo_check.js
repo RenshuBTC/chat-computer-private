@@ -1,7 +1,6 @@
 // The browser demo (docs/index.html: Chat Computer's own screen, with docs/demo/host.js standing in for the computer),
-// tried in Chromium with Playwright: it opens on the word logo, which fades away after a second, and then Chat
-// Computer's first words come in as if just typed (hello, world; none when something's said first), the cursor in
-// the box; the sidebars' switches; music (made by the browser), in the middle in the conversation's place; "/" lists
+// tried in Chromium with Playwright: it opens on the word logo, with a greeting under it, both there until
+// something's said, the cursor in the box; the sidebars' switches; music (made by the browser), in the middle in the conversation's place; "/" lists
 // the files in front of what's open; the sidebars from the start (only their switches put them away); Escape closes
 // what's open, and so does the x; a message opened as its whole conversation; an answer in words alone bringing the conversation back;
 // Google, for real, typed into; this computer's model, where the Chat Computer app runs here (a stand-in for its
@@ -69,28 +68,49 @@ const RESPONSES_CALL = responsesSSE([
   { type: "response.completed", response: {} }]);
 const RESPONSES_WORDS = responsesSSE([{ type: "response.output_text.delta", output_index: 0, delta: "Hello from " },
   { type: "response.output_text.delta", output_index: 0, delta: "OpenAI." }, { type: "response.completed", response: {} }]);
+// Anthropic's Messages API, standing in: its thinking (signed) and a call of make_timer, its input in two pieces; then words.
+function claudeSSE(events) { return events.map((e) => "event: " + e.type + "\ndata: " + JSON.stringify(e) + "\n\n").join(""); }
+const CLAUDE_CALL = claudeSSE([
+  { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", content: [] } },
+  { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } },
+  { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Thinking it over." } },
+  { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-claude" } },
+  { type: "content_block_stop", index: 0 },
+  { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "make_timer", input: {} } },
+  { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"minu' } },
+  { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: 'tes": 20}' } },
+  { type: "content_block_stop", index: 1 }, { type: "message_delta", delta: { stop_reason: "tool_use" } }, { type: "message_stop" }]);
+const CLAUDE_WORDS = claudeSSE([
+  { type: "message_start", message: { id: "msg_2", type: "message", role: "assistant", content: [] } },
+  { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+  { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello from " } },
+  { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Claude." } },
+  { type: "content_block_stop", index: 0 }, { type: "message_delta", delta: { stop_reason: "end_turn" } }, { type: "message_stop" }]);
 // Every AI in the panel, with a key, each standing in at its own address: what it lists (null: no list there), and
 // how it answers. (Kimi's key is one from its other site: its first address says no.)
 const KEYED_AIS = {
-  Gemini: { base: "https://generativelanguage.googleapis.com/v1beta/openai", extra: { google: { thought_signature: "sig-1" } },
+  Gemini: { base: "https://generativelanguage.googleapis.com/v1beta/openai", extra: { google: { thought_signature: "sig-1" } }, effort: "High",
             models: [{ id: "models/gemini-3.8-flash" }, { id: "models/gemini-4-argon" }, { id: "models/gemini-embedding-2" }, { id: "models/gemini-nano-banana-2.1" }] },
-  Claude: { base: "https://api.anthropic.com/v1", models: [{ id: "claude-haiku-5-5", created_at: "2026-10-01T00:00:00Z" },
-            { id: "claude-opus-5-5", created_at: "2026-09-01T00:00:00Z" }, { id: "claude-sonnet-5-5", created_at: "2026-09-15T00:00:00Z" }] },
-  OpenAI: { base: "https://api.openai.com/v1", responses: true, models: [{ id: "gpt-6.1-sol-pro", created: 30 }, { id: "gpt-6.1-sol", created: 20 },
+  Claude: { base: "https://api.anthropic.com/v1", claude: true, effort: "Max", models: [{ id: "claude-haiku-5-5", created_at: "2026-10-01T00:00:00Z" },
+            { id: "claude-opus-5-5", display_name: "Claude Opus 5.5", created_at: "2026-09-01T00:00:00Z", capabilities: { effort: { supported: true,
+              low: { supported: true }, medium: { supported: true }, high: { supported: true }, xhigh: null, max: { supported: true } } } },
+            { id: "claude-sonnet-5-5", created_at: "2026-09-15T00:00:00Z" }] },
+  OpenAI: { base: "https://api.openai.com/v1", responses: true, effort: "Max", models: [{ id: "gpt-6.1-sol-pro", created: 30 }, { id: "gpt-6.1-sol", created: 20 },
             { id: "gpt-6-astra", created: 10 }, { id: "gpt-image-2", created: 40 }] },
-  Meta: { base: "https://api.meta.ai/v1", models: [{ id: "muse-spark-1.3-contributor", created: 30 }, { id: "muse-spark-1.3", created: 20 },
+  Meta: { base: "https://api.meta.ai/v1", effort: "Max", models: [{ id: "muse-spark-1.3-contributor", created: 30 }, { id: "muse-spark-1.3", created: 20 },
           { id: "muse-wonder-1.0", created: 10 }, { id: "muse-image-1", created: 40 }] },
-  Kimi: { base: "https://api.moonshot.ai/v1", alt: "https://api.moonshot.cn/v1", models: [{ id: "kimi-k3.1-pro-highspeed", created: 20 },
+  Kimi: { base: "https://api.moonshot.ai/v1", alt: "https://api.moonshot.cn/v1", effort: "Low", models: [{ id: "kimi-k3.1-pro-highspeed", created: 20 },
           { id: "kimi-k3.1-pro", created: 10 }, { id: "kimi-k2.6", created: 5 }] },
-  Grok: { base: "https://api.x.ai/v1", models: [{ id: "grok-imagine-video", created: 30 }, { id: "grok-4.7", created: 20 }, { id: "grok-4.6", created: 10 }] },
-  Qwen: { base: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", models: [{ id: "qwen3.8-flash" }, { id: "qwen3.8-max" },
+  Grok: { base: "https://api.x.ai/v1", effort: "Extra high", models: [{ id: "grok-imagine-video", created: 30 }, { id: "grok-4.7", created: 20 }, { id: "grok-4.6", created: 10 }] },
+  Qwen: { base: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", effort: "Off", models: [{ id: "qwen3.8-flash" }, { id: "qwen3.8-max" },
           { id: "qwen-image-2" }, { id: "text-embedding-v4" }] },
-  DeepSeek: { base: "https://api.deepseek.com", models: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] },
-  GLM: { base: "https://api.z.ai/api/paas/v4", models: null },
-  MiMo: { base: "https://api.xiaomimimo.com/v1", models: [{ id: "mimo-v2.6-flash" }, { id: "mimo-v2.6-pro-ultraspeed" }, { id: "mimo-v2.6-pro" }, { id: "mimo-v2.6-asr" }] },
-  MiniMax: { base: "https://api.minimax.io/v1", words: ["<thi", "nk>pondering</th", "ink>Hello from ", "MiniMax."],
+  DeepSeek: { base: "https://api.deepseek.com", effort: "Max", models: [{ id: "deepseek-flash" },
+              { id: "deepseek-v4-pro", effort: { supported_levels: ["low", "high", "max"], default_level: "high" } }] },
+  GLM: { base: "https://api.z.ai/api/paas/v4", effort: "Low", models: null },
+  MiMo: { base: "https://api.xiaomimimo.com/v1", effort: "Off", models: [{ id: "mimo-v2.6-flash" }, { id: "mimo-v2.6-pro-ultraspeed" }, { id: "mimo-v2.6-pro" }, { id: "mimo-v2.6-asr" }] },
+  MiniMax: { base: "https://api.minimax.io/v1", effort: "High", words: ["<thi", "nk>pondering</th", "ink>Hello from ", "MiniMax."],
              models: [{ id: "MiniMax-M3", created: 10 }, { id: "MiniMax-M3.1-Flash", created: 20 }, { id: "speech-3.0", created: 30 }] },
-  Mistral: { base: "https://api.mistral.ai/v1", mistral: true, models: [
+  Mistral: { base: "https://api.mistral.ai/v1", mistral: true, effort: "High", models: [
     { id: "mistral-large-4", created: 20, capabilities: { completion_chat: true, function_calling: true } },
     { id: "mistral-ocr-3", created: 30, capabilities: { completion_chat: false } },
     { id: "mistral-medium-3-5", created: 10, capabilities: { completion_chat: true, function_calling: true } }] },
@@ -115,6 +135,7 @@ function asked(route) {
            messages: body.messages || [] };
 }
 
+const ERRORS = [];
 async function state(page) {
   return page.evaluate(() => {
     const v = document.getElementById("demo-view");
@@ -180,15 +201,17 @@ async function slash(page, name, tap) {
 
 async function viewText(page) {
   const f = page.frameLocator("#demo-view");
-  return (await f.locator("body").innerText({ timeout: 5000 })).replace(/\s+/g, " ").trim();
+  return (await f.locator("body").innerText({ timeout: 15000 })).replace(/\s+/g, " ").trim();
 }
 function player(page) { return page.frames().find((f) => /youtube/.test(f.url())); }
 
 // Chat Computer's first words, once they've all come in (after a second of the word logo, its fade, and a moment's
 // thinking).
+// The greeting under the word logo, once it's chosen.
 async function greeted(page) {
-  await page.waitForFunction(() => { const h = document.querySelector("#log > .ai.hello"); return h && h._said; }, null, { timeout: 8000 });
-  return page.evaluate(() => String(document.querySelector("#log > .ai.hello")._said).trim());
+  await page.waitForFunction(() => { const g = document.getElementById("greeting"); return g && g.classList.contains("shown") && g.textContent; },
+    null, { timeout: 8000 });
+  return page.evaluate(() => document.getElementById("greeting").textContent);
 }
 
 async function ask(page, text, meanwhile) {
@@ -214,7 +237,7 @@ async function ask(page, text, meanwhile) {
   // (Chromium's own stand-in microphone: a tone, for the microphone button's bar.)
   const browser = await chromium.launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
   const page = await (await browser.newContext({ viewport: { width: 1600, height: 900 } })).newPage();    // (later visits too)
-  const errors = [];
+  const errors = ERRORS;
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.route(/youtube/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: PLAYER }));      // no network needed
   await page.route(/www\.google\.com/, (route) => route.fulfill({ status: 200, contentType: "text/html", body: GOOGLE }));
@@ -232,27 +255,19 @@ async function ask(page, text, meanwhile) {
     return /linkedin/.test(u) ? route.fulfill({ status: 404, body: "" }) : route.fulfill({ status: 200, contentType: "image/png", body: ICON_PNG });
   });
   await page.goto(page_url);
-  // It opens on the word logo alone; after a second it fades away (over half a second), and then Chat Computer's
-  // first words come in as its answers do, as if just typed: a moment's thinking, then the words a few letters at a
-  // time, fading in. The cursor in the box, under the hint.
+  // It opens on the word logo, and under it, once it's chosen, one line of greeting, fading in; nothing said, and
+  // both stay (three seconds on, still there). The cursor in the box, under the hint.
   await page.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
   out.intro = await state(page);
-  const look = async (f) => (await page.waitForFunction(f, null, { polling: "raf", timeout: 6000 })).jsonValue();
-  out.intro_fading = await look(() => {
-    const s = getComputedStyle(document.getElementById("welcome"));
-    return +s.opacity > 0 && +s.opacity < 1 && { fade: s.transitionDuration.split(",")[0].trim(), said: document.querySelectorAll("#log > .ai").length };
-  });
-  out.greeting_thinking = await look(() => {
-    const h = document.querySelector("#log > .ai.hello.thinking");
-    return h && { logo_gone: +getComputedStyle(document.getElementById("welcome")).opacity < 0.05, words: h.textContent };
-  });
-  out.greeting_typing = await look(() => {
-    const h = document.querySelector("#log > .ai.hello"), t = h && h.textContent;
-    return t && t.length < 12 && { words: t, fading: !!h.querySelector(".fresh") };
-  });
   out.greeting = await greeted(page);
   out.greeting_options = await page.evaluate(() => window.CO.greetingsNow());
+  await page.waitForTimeout(3000);
   out.opening = await state(page);
+  out.greeting_line = await page.evaluate(() => {
+    const g = document.getElementById("greeting"), w = document.getElementById("wordmark"), r = g.getBoundingClientRect();
+    return { below: r.top > w.getBoundingClientRect().bottom, one_line: r.height < 2 * parseFloat(getComputedStyle(g).lineHeight),
+             opacity: getComputedStyle(g).opacity, logo: getComputedStyle(document.getElementById("welcome")).opacity };
+  });
   // The sidebars' switches: each at the top of its sidebar on the edge nearest the middle, centred on the same line
   // as the sidebar's title (and Messages' +); Messages' connect rows out of sight until + is pressed.
   out.switches = await page.evaluate(() => {
@@ -262,7 +277,7 @@ async function ask(page, text, meanwhile) {
     return { centres: [mid(L), mid(document.querySelector("#messages .side-title")), mid(document.getElementById("add-account")),
                        mid(R), mid(document.getElementById("done-title"))],
              left_gap: Math.round(box(M).right - box(L).right), right_gap: Math.round(box(R).left - box(D).left),
-             connect: getComputedStyle(document.getElementById("connect")).display };
+             connect: !!document.getElementById("connect") };
   });
   // Two visits in the same browser: a different greeting each time.
   const visits = await browser.newContext({ viewport: { width: 1600, height: 900 } });
@@ -275,15 +290,41 @@ async function ask(page, text, meanwhile) {
     await v.close();
   }
   await visits.close();
+  // Messages' +: everything that can be connected, in one panel, by kind, each with its own logo; one chosen, said it
+  // can't be here (the app connects it); closed with its x, at its top right (no back arrow: it came from no panel).
+  await page.click("#add-account");
+  await page.waitForFunction(() => document.body.classList.contains("sheet"));
+  const sheetNow = () => page.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
+    items: Array.from(document.querySelectorAll("#sheet-fields .choices > *")).map((e) => e.tagName === "P" ? "~ " + e.textContent :
+      e.textContent + (e.classList.contains("on") ? " *" : "") + (e.querySelector("img") ? " @" : "")).filter((t) => t !== "~ "),
+    error: document.getElementById("sheet-error").textContent, ok: getComputedStyle(document.getElementById("sheet-buttons")).display,
+    back: getComputedStyle(document.getElementById("sheet-back")).display,
+    x: (() => { const x = document.getElementById("sheet-cancel").getBoundingClientRect(), f = document.getElementById("sheet-form").getBoundingClientRect();
+      return { label: document.getElementById("sheet-cancel").getAttribute("aria-label"), top_right: x.top - f.top < 40 && f.right - x.right < 40,
+               text: document.getElementById("sheet-cancel").textContent }; })() }));
+  out.connect_panel = await sheetNow();
+  await page.click('#sheet-fields .choices button:text-is("Gmail")');
+  await page.waitForFunction(() => document.getElementById("sheet-error").textContent !== "");
+  out.connect_gmail = await sheetNow();
+  await page.click("#sheet-cancel");
+  await page.waitForFunction(() => !document.body.classList.contains("sheet"));
   // "/": what can be connected here, then the files.
   out.slash = await slash(page);
   if (shot) await page.screenshot({ path: shot + "-opening.png" });
   // The sidebars show from the start.
   out.sides_in = await state(page);
-  // The sidebars' switches: off, and on again (and the choice kept).
+  // The sidebars' switches: off, and on again (and the choice kept). What's in the middle stays where it was.
+  const middle = () => page.evaluate(() => ["column", "box", "wordmark"].map((id) => {
+    const r = document.getElementById(id).getBoundingClientRect();
+    return [Math.round(r.left), Math.round(r.right)];
+  }));
+  out.middle_in = await middle();
   await page.click("#toggle-left");
+  await page.waitForTimeout(100);
+  out.middle_left_off = await middle();
   await page.click("#toggle-right");
   await page.waitForTimeout(200);
+  out.middle_off = await middle();
   out.sides_off = await state(page);
   out.kept = await page.evaluate(() => localStorage.getItem("chatcomputer-demo-panels"));
   await page.click("#toggle-left");
@@ -578,7 +619,8 @@ async function ask(page, text, meanwhile) {
       if (command === "chatgpt_ask") {
         const send = (t) => args.events.onmessage(t);
         if (args.path === "models") {
-          send(JSON.stringify({ models: [{ slug: "gpt-hidden", visibility: "hide" }, { slug: "gpt-9-plan", display_name: "GPT-9", visibility: "list" }] }));
+          send(JSON.stringify({ models: [{ slug: "gpt-hidden", visibility: "hide" }, { slug: "gpt-9-plan", display_name: "GPT-9", visibility: "list",
+            supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }], default_reasoning_level: "medium" }] }));
           return Promise.resolve(200);
         }
         const body = JSON.parse(args.body), last = body.input[body.input.length - 1];
@@ -690,7 +732,7 @@ async function ask(page, text, meanwhile) {
     page.on("pageerror", (e) => errors.push(String(e)));
     await page.goto(page_url);
     await greeted(page);
-    await page.waitForFunction(() => document.querySelector("#log > .ai.hello") && window.CO);
+    await page.waitForFunction(() => window.CO);
     await page.click("#input");
     await ask(page, "what is chat computer");
     return page;
@@ -796,7 +838,7 @@ async function ask(page, text, meanwhile) {
   await rows.waitForFunction(() => document.querySelectorAll("#log > .acts.theirs").length === 2);
   out.retry = await rows.evaluate(() => ({ yous: Array.from(document.querySelectorAll("#log > .you")).map((y) => y.textContent),
     last: Array.from(document.querySelectorAll("#log > .acts")).filter((r) => r.classList.contains("last")).length }));
-  out.rows_hello = await rows.evaluate(() => document.querySelectorAll("#log > .ai.hello").length);
+  out.rows_hello = await rows.evaluate(() => ({ first: (document.querySelector("#log > *") || {}).className, logo: document.body.classList.contains("has-log") }));
   if (shot) await rows.screenshot({ path: shot + "-rows.png" });
 
   // The text's size, asked for in words: the way asked ("increase the font size" bigger, "decrease" smaller); "font"
@@ -1053,7 +1095,7 @@ async function ask(page, text, meanwhile) {
       { id: "whisper-1", created: 900 }, { id: "gpt-4.1", created: 100 }, { id: "gpt-9", created: 500 }, { id: "gpt-9-realtime", created: 600 }] }) }));
   await ownPage.click("#ai");
   await ownPage.click('#sheet-fields .choices button:text-is("OpenAI")');
-  await ownPage.waitForFunction(() => document.getElementById("sheet-title").textContent === "OpenAI");
+  await ownPage.waitForSelector("#sheet-fields input[name=key]");
   await ownPage.click("#sheet-ok");
   await ownPage.waitForFunction(() => document.getElementById("sheet-error").textContent !== "");
   out.own_empty = await ownPage.evaluate(() => document.getElementById("sheet-error").textContent);
@@ -1072,11 +1114,97 @@ async function ask(page, text, meanwhile) {
   const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
   await ownCtx.route(/icons\.duckduckgo\.com/, (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
   await ownPage.click("#ai");
-  await ownPage.click("#sheet-fields .choices button:has-text('Choose its model')");
-  await ownPage.waitForFunction(() => /models$/.test(document.getElementById("sheet-title").textContent));
+  await ownPage.waitForFunction(() => /The best of each maker/.test(document.getElementById("sheet-fields").textContent));
   out.or_models = await ownPage.evaluate(() => Array.from(document.querySelectorAll("#sheet-fields .choices > *")).map((e) =>
-    e.tagName === "P" ? "~ " + e.textContent : e.textContent + (e.querySelector("img") ? " @" + new URL(e.querySelector("img").src).pathname.slice(5) : "")));
+    e.tagName === "P" ? "~ " + e.textContent : e.textContent + (e.classList.contains("on") ? " *" : "") +
+    (e.querySelector("img") ? " @" + new URL(e.querySelector("img").src).pathname.slice(5) : "")).filter((t) => t !== "~ "));
   await ownCtx.close();
+
+  // Chat Computer's model in this browser (docs/demo/engine's API, standing in): offered with / and when an answer
+  // needs a model; chosen, its download said as it goes, its short instructions (the same every visit, with its few
+  // tools) read ahead while it gets ready; then it answers, calling its tools; a later visit starts it from the
+  // browser's copy without asking or downloading; stopped; removed (the browser's copy deleted).
+  const wCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  await wCtx.route(/icons\.duckduckgo\.com/, (route) => route.fulfill({ status: 404, body: "" }));
+  await wCtx.addInitScript(() => {
+    let kept = !!localStorage.getItem("fake-engine-kept");
+    const log = window.__engine = [];
+    const fake = {
+      supported: () => ({ ok: true, why: "" }),
+      status: () => Promise.resolve({ name: "qwen3.5-0.8b", label: "Qwen3.5 0.8B", download: 1759777953, kept: kept, loaded: false }),
+      prepare: (on) => {
+        log.push(kept ? "load" : "download");
+        if (!kept) on({ stage: "downloading", done: 880000000, total: 1759777953 });
+        return new Promise((r) => setTimeout(() => {
+          on({ stage: "loading" });
+          kept = true;
+          localStorage.setItem("fake-engine-kept", "1");
+          setTimeout(() => r({ label: "Qwen3.5 0.8B", layers: 24 }), 200);
+        }, kept ? 50 : 600));
+      },
+      ahead: (req, onReading) => { log.push({ ahead: req }); onReading(40, 100); return new Promise((r) => setTimeout(r, 300)); },
+      chat: (req, onChunk) => {
+        log.push({ chat: req });
+        const last = req.messages[req.messages.length - 1];
+        if (last.role === "tool") { onChunk({ content: "Your timer " }); onChunk({ content: "is on." }); return Promise.resolve({ role: "assistant", content: "Your timer is on." }); }
+        const call = { id: "call_w1", type: "function", function: { name: "make_timer", arguments: '{"minutes": 5}' } };
+        onChunk({ tool_calls: [{ index: 0, id: call.id, type: "function", function: call.function }] });
+        return Promise.resolve({ role: "assistant", content: "", tool_calls: [call] });
+      },
+      stop: () => {},
+      forget: () => { log.push("forget"); kept = false; localStorage.removeItem("fake-engine-kept"); return Promise.resolve(); },
+    };
+    // (engine.js, loaded after, sets its own: this one stays.)
+    Object.defineProperty(window, "ChatComputerEngine", { get: () => fake, set: () => {}, configurable: false });
+  });
+  const wp = await wCtx.newPage();
+  wp.on("pageerror", (e) => errors.push(String(e)));
+  await wp.goto(page_url);
+  await wp.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
+  out.web_slash = await slash(wp);
+  await wp.fill("#input", "write a poem about the sea");
+  await wp.keyboard.press("Enter");
+  await wp.waitForFunction(() => /an AI you already have\.$/.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
+    null, { timeout: 10000 });
+  out.web_offer = await wp.evaluate(() => (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent);
+  await slash(wp, "Run my model in this browser");
+  await wp.waitForFunction(() => document.body.classList.contains("sheet"));
+  out.web_form = await wp.evaluate(() => ({ title: document.getElementById("sheet-title").textContent, ok: document.getElementById("sheet-ok").textContent,
+    text: document.getElementById("sheet-text").innerText }));
+  await wp.click("#sheet-ok");
+  await wp.waitForFunction(() => /downloading/.test(document.getElementById("input").placeholder));
+  out.web_getting = await wp.evaluate(() => document.getElementById("input").placeholder);
+  out.web_getting_slash = await slash(wp);
+  await wp.waitForFunction(() => /Using my model in this browser/.test(document.getElementById("done-list").textContent), null, { timeout: 10000 });
+  await wp.fill("#input", "a five minute timer");
+  await wp.keyboard.press("Enter");
+  await wp.waitForFunction(() => /Your timer is on\./.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
+    null, { timeout: 10000 });
+  out.web_asked = await wp.evaluate(() => window.__engine.filter((e) => e.chat || e.ahead).map((e) => {
+    const r = e.chat || e.ahead;
+    return { kind: e.chat ? "chat" : "ahead", think: r.think, max: r.max_tokens, tools: r.tools.map((t) => t.function.name),
+             system: r.messages[0].content.slice(0, 120), roles: r.messages.map((m) => m.role), last: String(r.messages[r.messages.length - 1].content || "").slice(-60) };
+  }));
+  out.web_on_slash = await slash(wp);
+  out.web_log = await wp.evaluate(() => window.__engine.filter((e) => typeof e === "string"));
+  // A later visit: started from the browser's copy, at once, nothing downloaded.
+  await wp.reload();
+  await wp.waitForFunction(() => window.CO && (window.__engine || []).some((e) => e.ahead), null, { timeout: 20000, polling: 100 }).catch(async (e) => {
+    throw new Error(e.message + " " + JSON.stringify(await wp.evaluate(() => ({ log: (window.__engine || []).map((x) => typeof x === "string" ? x : Object.keys(x)[0]),
+      ls: Object.fromEntries(Object.keys(localStorage).filter((k) => /web|fake|own|local/.test(k)).map((k) => [k, localStorage.getItem(k).slice(0, 80)])),
+      placeholder: document.getElementById("input").placeholder }))));
+  });
+  await wp.waitForFunction(() => document.getElementById("input").placeholder === "Type anything", null, { timeout: 20000, polling: 100 });
+  out.web_later = await wp.evaluate(() => ({ log: window.__engine.filter((e) => typeof e === "string"),
+    done: Array.from(document.querySelectorAll("#done-list .done-what")).map((d) => d.textContent).filter((t) => /browser/.test(t)) }));
+  out.web_later_slash = await slash(wp);
+  await slash(wp, "Stop using my model in this browser");
+  out.web_stopped = await slash(wp);
+  await slash(wp, "Remove my model from this browser");
+  await wp.waitForFunction(() => window.__engine.indexOf("forget") >= 0);
+  await wp.waitForTimeout(200);
+  out.web_removed = { slash: await slash(wp), kept: await wp.evaluate(() => [localStorage.getItem("chatcomputer-web-kept"), localStorage.getItem("chatcomputer-web-model")]) };
+  await wCtx.close();
 
   // Every AI in the panel, on a key (each at its own address, standing in): its models listed with the key, the best
   // chat model chosen (where there's no list, its best by name; a key from its other site, at that site's address);
@@ -1102,12 +1230,13 @@ async function ask(page, text, meanwhile) {
         return route.fulfill({ status: 200, contentType: "application/json", headers: CORS, body: JSON.stringify({ object: "list", data: k.models }) });
       });
     }
-    await kCtx.route(answers + (k.responses ? "/responses" : "/chat/completions"), (route) => {
+    await kCtx.route(answers + (k.responses ? "/responses" : k.claude ? "/messages" : "/chat/completions"), (route) => {
       const req = route.request(), body = JSON.parse(req.postData() || "{}");
       kSeen[name].asked.push({ url: req.url(), headers: req.headers(), body: body });
-      const again = k.responses ? body.input[body.input.length - 1].type === "function_call_output" : body.messages[body.messages.length - 1].role === "tool";
+      const last = k.responses ? body.input[body.input.length - 1] : body.messages[body.messages.length - 1];
+      const again = k.responses ? last.type === "function_call_output" : k.claude ? last.content.some((b) => b.type === "tool_result") : last.role === "tool";
       return route.fulfill({ status: 200, contentType: "text/event-stream", headers: CORS, body: k.responses ? (again ? RESPONSES_WORDS : RESPONSES_CALL) :
-        again ? textTurn(k.words || ["Hello from ", name + "."]) : keyedToolTurn(k) });
+        k.claude ? (again ? CLAUDE_WORDS : CLAUDE_CALL) : again ? textTurn(k.words || ["Hello from ", name + "."]) : keyedToolTurn(k) });
     });
   }
   const kp = await kCtx.newPage();
@@ -1118,7 +1247,12 @@ async function ask(page, text, meanwhile) {
   for (const name of Object.keys(KEYED_AIS)) {
     await kp.click("#ai");
     await kp.click(`#sheet-fields .choices button:text-is("${name}")`);
-    await kp.waitForFunction((n) => document.getElementById("sheet-title").textContent === n, name);
+    await kp.waitForSelector("#sheet-fields input[name=key]");
+    if (name === "Gemini") out.key_panel = await kp.evaluate(() => ({ title: document.getElementById("sheet-title").textContent,
+      on: Array.from(document.querySelectorAll("#sheet-fields .choices button.on")).map((b) => b.textContent),
+      field: document.querySelector("#sheet-fields label").textContent, ok: document.getElementById("sheet-ok").textContent,
+      more: Array.from(document.querySelectorAll("#sheet-fields .choices")).pop().textContent,
+      order: Array.from(document.getElementById("sheet-fields").children).map((e) => e.tagName + (e.className ? "." + e.className : "")) }));
     if (name === "Gemini") {
       await kp.fill("#sheet-fields input[name=key]", "bad-key");
       await kp.click("#sheet-ok");
@@ -1128,21 +1262,37 @@ async function ask(page, text, meanwhile) {
     await kp.fill("#sheet-fields input[name=key]", "key-of-" + name);
     await kp.click("#sheet-ok");
     await kp.waitForFunction(() => document.getElementById("ai").classList.contains("on"), null, { timeout: 10000 });
+    await kp.click("#ai");
+    await kp.waitForFunction(() => document.body.classList.contains("sheet"));
+    const panel = await kp.evaluate(() => Array.from(document.querySelectorAll("#sheet-fields .choices > *")).map((e) =>
+      e.tagName === "P" ? "~ " + e.textContent : e.textContent + (e.classList.contains("on") ? " *" : "")).filter((t) => t !== "~ "));
+    await kp.click(`#sheet-fields .choices button:text-is("${KEYED_AIS[name].effort}")`);
+    await kp.waitForFunction((e) => Array.from(document.querySelectorAll("#sheet-fields .choices button.on")).some((b) => b.textContent === e),
+      KEYED_AIS[name].effort);
+    const spark = await kp.evaluate(() => document.getElementById("ai").title);
+    await kp.click("#sheet-cancel");
     await kp.fill("#input", "a timer for 20 minutes");
     await kp.keyboard.press("Enter");
     await kp.waitForFunction((n) => ((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || "").indexOf("Hello from " + n + ".") >= 0,
       name, { timeout: 10000 });
     const said = await kp.evaluate(() => (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent);
     const seen = kSeen[name], [first, second] = seen.asked, h = first.headers, kept = await kp.evaluate(() => JSON.parse(localStorage.getItem("chatcomputer-own-ai")));
-    const r = { model: first.body.model, kept_base: kept.base || null, at: first.url, stream: first.body.stream, tools: (first.body.tools || []).length,
+    const r = { panel: panel, spark: spark, model: first.body.model, kept_base: kept.base || null, at: first.url, stream: first.body.stream, tools: (first.body.tools || []).length,
       key: h["authorization"] || null, models: seen.models.map((m) => m.base + " " + m.key), asked: seen.asked.length, said: said,
       browser: h["anthropic-dangerous-direct-browser-access"] || null, version: h["anthropic-version"] || null };
     if (KEYED_AIS[name].responses) {
       const last = second.body.input[second.body.input.length - 1];
-      Object.assign(r, { store: first.body.store, input: second.body.input.map((i) => i.type || i.role), result: last.output.slice(0, 20) });
+      Object.assign(r, { store: first.body.store, input: second.body.input.map((i) => i.type || i.role), result: last.output.slice(0, 20),
+        effort: first.body.reasoning || null, told: first.body.instructions });
+    } else if (KEYED_AIS[name].claude) {
+      const msgs = second.body.messages, back = msgs[msgs.length - 2], last = msgs[msgs.length - 1];
+      Object.assign(r, { max: first.body.max_tokens, effort: first.body.output_config || null, told: first.body.system, roles: msgs.map((m) => m.role),
+        back: back.content.map((b) => b.type + (b.signature ? ":" + b.signature : "") + (b.input ? ":" + JSON.stringify(b.input) : "")),
+        result_first: last.content[0].type, result: String(last.content[0].content).slice(0, 20), tool_names: first.body.tools.slice(0, 1).map((t) => [t.name, !!t.input_schema]) });
     } else {
       const back = second.body.messages.filter((m) => m.role === "assistant" && m.tool_calls).pop();
-      Object.assign(r, { max: first.body.max_tokens || null, split: first.body.reasoning_split || null, thinking_back: back.reasoning_content || null,
+      Object.assign(r, { effort: first.body.reasoning_effort || first.body.thinking || null, told: first.body.messages[0].content,
+        max: first.body.max_tokens || null, split: first.body.reasoning_split || null, thinking_back: back.reasoning_content || null,
         content_back: Array.isArray(back.content) ? back.content.map((c) => c.type) : back.content, extra_back: back.tool_calls[0].extra_content || null,
         result: second.body.messages[second.body.messages.length - 1].content.slice(0, 20) });
     }
@@ -1151,10 +1301,33 @@ async function ask(page, text, meanwhile) {
     await kp.click("#sheet-fields .choices button:has-text('Sign out of')");
     await kp.waitForFunction(() => !document.getElementById("ai").classList.contains("on"));
   }
+  // Another AI's key: its address, model and key, in the same panel; signed in, Change asks for them again, with a
+  // back arrow to the panel it came from.
+  await kp.click("#ai");
+  await kp.click('#sheet-fields .choices button:text-is("Another AI")');
+  await kp.waitForSelector("#sheet-fields input[name=base]");
+  await kp.fill("#sheet-fields input[name=base]", "https://ai.example.com/v1");
+  await kp.fill("#sheet-fields input[name=model]", "its-model-2");
+  await kp.fill("#sheet-fields input[name=key]", "key-of-another");
+  await kp.click("#sheet-ok");
+  await kp.waitForFunction(() => document.getElementById("ai").classList.contains("on"));
+  await kp.click("#ai");
+  await kp.waitForFunction(() => document.body.classList.contains("sheet"));
+  await kp.click('#sheet-fields .choices button:text-is("Change")');
+  await kp.waitForSelector("#sheet-fields input[name=base]");
+  out.other_change = await kp.evaluate(() => ({ back: getComputedStyle(document.getElementById("sheet-back")).display,
+    on: Array.from(document.querySelectorAll("#sheet-fields .choices button.on")).map((b) => b.textContent) }));
+  await kp.click("#sheet-back");
+  await kp.waitForFunction(() => /Sign out of/.test(document.getElementById("sheet-fields").textContent));
+  out.other_back = await kp.evaluate(() => ({ back: getComputedStyle(document.getElementById("sheet-back")).display,
+    items: Array.from(document.querySelectorAll("#sheet-fields .choices button")).map((b) => b.textContent),
+    spark: document.getElementById("ai").title }));
+  await kp.click('#sheet-fields .choices button:has-text("Sign out of")');
+  await kp.waitForFunction(() => !document.getElementById("ai").classList.contains("on"));
   // (Get a key: the page that makes one, in a new tab.)
   await kp.click("#ai");
   await kp.click('#sheet-fields .choices button:text-is("Claude")');
-  await kp.waitForFunction(() => document.getElementById("sheet-title").textContent === "Claude");
+  await kp.waitForSelector("#sheet-fields input[name=key]");
   const [keyTab] = await Promise.all([kCtx.waitForEvent("page"), kp.click("#sheet-fields .choices button:has-text('Get a key')")]);
   await keyTab.waitForURL(/platform\.claude\.com/).catch(() => {});
   out.key_tab = { url: keyTab.url(), still: await kp.evaluate(() => document.getElementById("sheet-title").textContent) };
@@ -1316,4 +1489,4 @@ async function ask(page, text, meanwhile) {
   out.errors = errors;
   await browser.close();
   console.log(JSON.stringify(out));
-})().catch((e) => { console.log(JSON.stringify({ failed: String(e && e.stack || e) })); process.exit(1); });
+})().catch((e) => { console.log(JSON.stringify({ failed: String(e && e.stack || e) + (ERRORS.length ? "\npage errors: " + ERRORS.join("\n") : "") })); process.exit(1); });

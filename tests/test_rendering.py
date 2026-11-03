@@ -222,10 +222,12 @@ def test_what_is_open_fills_the_middle_and_escape_closes_it():
     assert not any(i["clipped"] or i["title"] for i in pinned["pinned"] + pinned["list"])
     assert res["events"] == [{"type": "pin", "list": "messages", "id": "m2", "on": True},
                              {"type": "open_message", "id": "m1"}]
-    # Only the sidebars' two switches, at the top corners, filled in while their sidebar shows.
+    # Only the sidebars' two switches, at the top of each, on its edge nearest the middle (Messages' at its right,
+    # Actions' at its left), filled in while their sidebar shows.
     assert not start["bottom_toggle"] and set(start["toggles"]) == {"left", "right"}
     tl, tr = start["toggles"]["left"], start["toggles"]["right"]
-    assert tl["shown"] and tr["shown"] and tl["x"] < start["messages"][0] + 60 and tr["x"] > start["done"][2] - 60
+    assert tl["shown"] and tr["shown"] and start["messages"][2] - 60 < tl["x"] < start["messages"][2]
+    assert start["done"][0] < tr["x"] < start["done"][0] + 60
     # Open: the conversation is put away, and the page is in the frame, named after its title, which is between the
     # sidebars (0.75 rem from them) from the top down to the message box, the same space above it.
     assert content["mode"] == "content" and content["content"] and not content["column_shown"]
@@ -243,11 +245,11 @@ def test_what_is_open_fills_the_middle_and_escape_closes_it():
     assert sl["content_view"][3] <= sl["results"][1] and sl["content_view"][1] == v[1]
     un = res["unslashed"]
     assert not un["searching"] and un["content_view"] == v and not un["full"]
-    # Both sidebars off: the page spreads into their room, leaving a narrow margin with each switch; on again.
+    # Both sidebars off (each leaving a narrow margin with its switch): what's open stays where it was, as the
+    # person asked of the middle; on again.
     off = res["sides_off"]
     assert off["sides"] == [False, False] and off["toggles"]["left"]["pressed"] == "false"
-    ov = off["content_view"]
-    assert ov[0] < v[0] - 100 and ov[2] > v[2] + 100 and ov[0] > tl["x"] and ov[2] < tr["x"]
+    assert off["content_view"] == v
     assert [(e["left"], e["right"]) for e in res["panel_events"]] == [(False, True), (False, False)]
     assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["content_view"] == v
     # The website has the keys: clicked, its box gets what's typed, not the message box.

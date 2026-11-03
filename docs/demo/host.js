@@ -53,6 +53,7 @@
   function now() { return Date.now() / 1000; }
   function call(name) {
     var args = Array.prototype.slice.call(arguments, 1);
+    if (name === "accountForm") sheetNow = args[0] && args[0].id || "";
     keepInChat(name, args);
     if (window.CO && typeof window.CO[name] === "function") window.CO[name].apply(null, args);
   }
@@ -180,7 +181,8 @@
   // file Gmail's pages name (its site's own icon is Google's G). Where one can't be had, Chat Computer's own for that
   // kind of message (chat.js: msgIcon).
   var SITES = { whatsapp: "whatsapp.com", outlook: "outlook.live.com", telegram: "web.telegram.org", instagram: "www.instagram.com",
-                x: "x.com", linkedin: "www.linkedin.com", wechat: "web.wechat.com", discord: "discord.com" };
+                x: "x.com", linkedin: "www.linkedin.com", wechat: "web.wechat.com", discord: "discord.com", icloud: "www.icloud.com",
+                yahoo: "mail.yahoo.com", facebook: "www.facebook.com", tiktok: "www.tiktok.com" };
   var GMAIL_ICON = "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico";
   function siteIcon(name) {
     var key = String(name || "").toLowerCase(), site = SITES[key];
@@ -503,18 +505,36 @@
     drawAppMessages();
   }
   // Connect email or chat apps: which, to sign in to (one connected already opens again, or is disconnected).
-  function appConnectForm(group) {
-    var ids = Object.keys(SERVICES).filter(function (k) { return !group || SERVICES[k].group === group; }), on = connected();
-    var text = ["Choose one and sign in on its own page, right here. It stays signed in in this app, and its messages " +
-      "come into Messages, newest first. Nothing leaves your computer."];
-    if (ids.indexOf("wechat") >= 0) text.push("WeChat's web version isn't open to every account: if it says yours can't use " +
-      "it, WeChat can't come into Messages here.");
-    return { id: "accounts", title: group === "email" ? "Connect email" : group === "chat" ? "Connect chat apps" :
-      "Connect an account", ok: "", text: text,
-      choices: ids.map(function (k) { return { label: (on.indexOf(k) >= 0 ? "Open " : "") + SERVICES[k].label, value: k }; })
-        .concat(ids.filter(function (k) { return on.indexOf(k) >= 0; })
-          .map(function (k) { return { label: "Disconnect " + SERVICES[k].label, value: "forget:" + k }; })) };
+  // Messages' +: everything that can be connected, in one panel, by kind, each with its own logo. In the app, each
+  // signs in on its own page, right here (those connected: opened, or disconnected); on the website, none can be.
+  var CONNECTABLE = [["Email", [["gmail", "Gmail"], ["outlook", "Outlook"], ["icloud", "iCloud Mail"], ["yahoo", "Yahoo Mail"]]],
+                     ["Chat apps", [["telegram", "Telegram"], ["whatsapp", "WhatsApp"], ["wechat", "WeChat"], ["discord", "Discord"]]],
+                     ["Social media", [["x", "X"], ["instagram", "Instagram"], ["facebook", "Facebook"], ["tiktok", "TikTok"], ["linkedin", "LinkedIn"]]]];
+  function connectForm(pick) {
+    var choices = [], on = APP ? connected() : [], name = "";
+    CONNECTABLE.forEach(function (g) {
+      var here = g[1].filter(function (s) { return !APP || SERVICES[s[0]]; });
+      if (!here.length) return;
+      choices.push({ note: g[0] + ":" });
+      here.forEach(function (s) {
+        if (s[0] === pick) name = s[1];
+        choices.push({ label: (on.indexOf(s[0]) >= 0 ? "Open " : "") + s[1], value: APP ? s[0] : "connect:" + s[0], icon: siteIcon(s[0]),
+                       on: s[0] === pick });
+      });
+    });
+    if (on.length) {
+      choices.push({ note: "" });
+      on.forEach(function (k) { choices.push({ label: "Disconnect " + SERVICES[k].label, value: "forget:" + k }); });
+    }
+    var text = APP ? ["Choose one and sign in on its own page, right here. It stays signed in in this app, and its messages " +
+      "come into Messages, newest first. Nothing leaves your computer."] :
+      ["On Chat Computer, these connect here, and their messages come into Messages, newest first. Sign-ins stay on your computer."];
+    if (APP) text.push("WeChat's web version isn't open to every account: if it says yours can't use it, WeChat can't come " +
+      "into Messages here. Social media: open them as sites, right here (say \u201copen instagram.com\u201d).");
+    return { id: "accounts", title: "Connect an account", ok: "", text: text, choices: choices,
+      error: name ? name + " can't be connected on the website: the Chat Computer app connects it (coming soon)." : "" };
   }
+  function appConnectForm() { return connectForm(""); }
   function appInbox() {
     return MESSAGES.slice().sort(function (a, b) { return b.ts - a.ts; }).slice(0, 40).map(function (m) {
       return { id: m.id, from: m.label, who: m.who, when: when(m.ts), unread: m.unread, says: m.text };
@@ -984,7 +1004,7 @@
   // city (hereName), as "Singapore" for Asia/Singapore.
   var PLACE_KEY = "chatcomputer-demo-place";
   function homeName() { var h = store(PLACE_KEY); return h && typeof h.place === "string" ? h.place : ""; }
-  // Where you are and the weather there now, for the greeting under "hello, world" (chat.js: CO.here): the place's
+  // Where you are and the weather there now, for the greeting under the word logo (chat.js: CO.here): the place's
   // name goes to Open-Meteo (then its position, for the weather), at most once every half hour; kept in this browser.
   var HERE_KEY = "chatcomputer-demo-here";
   function sayHere() {
@@ -1249,7 +1269,7 @@
                [/email|letter/i, "write an email"], [/python|javascript|code|function/i, "write code"],
                [/translate|how do you say|in (japanese|french|spanish|german|chinese|korean|italian)/i, "translate"],
                [/explain|summari/i, "explain that"], [/plan|itinerary|trip/i, "plan that"], [/advice|tips/i, "give advice"]];
-  // The name you go by, kept in this browser: the greeting under "hello, world" says it, as the Claude app's says
+  // The name you go by, kept in this browser: the greeting under the word logo says it, as the Claude app's says
   // the name you give it. "Call me Ren" or "my name is Ren" sets it (the model, with set_name); "what's my name?" says
   // it; "forget my name" forgets it. "Call me back" isn't a name.
   var NAME_KEY = "chatcomputer-demo-name";
@@ -1555,8 +1575,14 @@
       if (localReady()) return "";
       return "My model is starting: ask me again in a moment.";
     }
+    if (local.kind === "web" && local.state === "preparing") return "My model is getting ready in this browser: " + localWords() + ". Ask me again once it's here.";
+    if (webCan()) {
+      return (local.kind === "web" && local.state === "failed" ? "My model couldn't get ready in this browser" + (local.detail ? ": " + local.detail : "") +
+        ". " : "") + "My model can run in this browser: type / and choose Run my model in this browser (free; " + WEB_SIZE +
+        ", once). Or press the spark beside + to use an AI you already have.";
+    }
     return "My model comes with the Chat Computer app (coming soon). Where the app runs on this computer, type / and choose " +
-      "Use this computer's model.";
+      "Use this computer's model. Or press the spark beside + to use an AI you already have.";
   }
   function iOS() { return /iPhone|iPad|iPod/.test(navigator.userAgent || "") || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
   function fallback(text) {
@@ -1812,7 +1838,7 @@
   // talk: the conversation, as sent; system: its system prompt, made when it starts and kept as it is (the engine
   // reads only what's new, so the start of the conversation is never sent different).
   var local = { state: APP ? "starting" : "off", port: 8765, label: "", preparing: "", stage: "", done: 0, total: 0, detail: "",
-                talk: [], system: "" };
+                talk: [], system: "", kind: APP ? "app" : "", webKept: !APP && !!store("chatcomputer-web-kept") };
   function localReady() { return local.state === "ready"; }
   function localBase() { return "http://127.0.0.1:" + local.port; }
   // How getting it ready is going, in words: "downloading it (1.2 of 9.0 GB, 13%)".
@@ -1824,6 +1850,7 @@
     }
     if (local.stage === "converting") return "making it ready to run" + (pct ? " (" + pct + ")" : "");
     if (local.stage === "uncensoring") return "taking its refusals out, so it answers whatever you ask" + (pct ? " (" + pct + ")" : "");
+    if (local.stage === "reading") return "reading its instructions" + (pct ? " (" + pct + ")" : "");
     return "starting";
   }
   // A model's file name as it's called: qwen3.5-9b, Qwen3.5 9B.
@@ -1854,6 +1881,7 @@
       return r.ok ? r.json() : null;
     }).then(function (h) {
       if (!h || !h.ok) throw new Error("no model");
+      local.kind = "app";
       local.state = "ready";
       local.label = modelName(h.model) || "Chat Computer's model";
       status();
@@ -1861,14 +1889,16 @@
       return true;
     }).catch(function () {
       clearTimeout(late);
+      if (local.kind === "web") return false;      // (this browser's model answers meanwhile)
       local.state = "off";
       status();
       return false;
     });
   }
   function localButton() {
-    if (localReady()) {
+    if (localReady() && local.kind === "app") {
       local.state = "off";
+      local.kind = "";
       local.talk = [];
       store(LOCAL_KEY, null);
       status();
@@ -1885,10 +1915,11 @@
       "Your browser may ask whether chatcomputer.ai can reach other programs on this device: allow it."] });
   }
   function modelSheet() {
-    var text = localReady() ? [local.label + " answers you: an open model of Qwen's (Apache 2.0), run on this computer by Chat " +
-        "Computer's own engine. There's no account, and nothing you say leaves this computer."] :
-      local.state === "preparing" ? ["My model" + (local.preparing ? ", " + local.preparing + "," : "") + " is getting ready on this " +
-        "computer: " + localWords() + ". That happens once; after it, it answers from the start."] : [nextStep() || "My model is starting."];
+    var here = local.kind === "web" ? "in this browser" : "on this computer";
+    var text = localReady() ? [local.label + " answers you: an open model of Qwen's (Apache 2.0), run " + here + " by Chat " +
+        "Computer's own engine. There's no account, and nothing you say leaves " + (local.kind === "web" ? "this browser." : "this computer.")] :
+      local.state === "preparing" ? ["My model" + (local.preparing ? ", " + local.preparing + "," : "") + " is getting ready " + here +
+        ": " + localWords() + ". That happens once; after it, it answers from the start."] : [nextStep() || "My model is starting."];
     if (localReady() && local.preparing) text.push("A bigger one, " + local.preparing + ", is getting ready meanwhile: " + localWords() + ".");
     call("accountForm", { id: "model", title: "Chat Computer's model", ok: "OK", text: text });
   }
@@ -1896,10 +1927,124 @@
     localProbe().then(function (ok) {
       if (!ok) { localForm("The app isn't answering on this computer: is it running? (Or, if your browser asked, allow it.)"); return; }
       store(LOCAL_KEY, true);
+      store(WEB_KEY, null);
       local.talk = [];
       call("accountForm", null);
       did("Using this computer's model (" + local.label + ")");
     });
+  }
+
+  // ------------------------------------------------------------------ Chat Computer's model, in this browser
+  // On the website, Chat Computer's own model can run in the visitor's browser (docs/demo/engine: its own engine,
+  // os/model, as WebAssembly, in a worker): Qwen3.5 0.8B, downloaded once from Qwen's own repository at the revision
+  // Chat Computer pins (each file checked against its size and SHA-256) and kept by the browser; it runs on the
+  // visitor's own processor, free, with no account, and nothing typed leaves the page. A browser runs it slowly (one
+  // thread), so it's told less: a short system prompt, the same every visit, and the tools it's most use for. Those it
+  // reads once, while it gets ready, and the browser keeps that reading with the model: a later visit starts at once.
+  // (Whether it was chosen, and whether the browser keeps it, are remembered here too: nothing's started to find out.)
+  var ENGINE = window.ChatComputerEngine || null, WEB_KEY = "chatcomputer-web-model", WEB_KEPT = "chatcomputer-web-kept", WEB_SIZE = "1.8 GB";
+  var WEB_TOOLS = ["web_search", "weather", "show_map", "youtube_search", "make_timer", "close"];
+  var WEB_SYSTEM = "You are Chat Computer: you run a whole computer for the person. Right now you're on Chat Computer's " +
+    "website (chatcomputer.ai), thinking with Qwen3.5 0.8B, Chat Computer's own model, in their web browser: nothing they " +
+    "say leaves it. Answer briefly and plainly, in the language they use. Use your tools when they help: web_search to " +
+    "look something up (never make up facts: look them up, or say you don't know), weather, show_map for a place, " +
+    "youtube_search for videos, make_timer, and close to put away what's open. Each of their messages starts with the " +
+    "time, in brackets.";
+  function webCan() { return !APP && !!ENGINE && ENGINE.supported().ok; }
+  function webOn() { return local.kind === "web" && localReady(); }
+  function webTools() { return localTools().filter(function (t) { return WEB_TOOLS.indexOf(t.function.name) >= 0; }); }
+  function webRequest(messages) { return { think: false, max_tokens: 1024, tools: webTools(), messages: messages }; }
+  // Getting it ready: downloaded (or, on a later visit, from the browser's copy), loaded, its instructions read.
+  function webStart(chosen) {
+    if (local.kind === "web" && (local.state === "preparing" || localReady())) return;
+    local.kind = "web";
+    local.state = "preparing";
+    local.stage = "starting";
+    local.done = local.total = 0;
+    local.detail = "";
+    status();
+    ENGINE.prepare(function (p) {
+      local.stage = p.stage === "downloading" ? "downloading" : p.stage === "keeping" ? "converting" : "starting";
+      local.done = +p.done || 0;
+      local.total = +p.total || 0;
+      status();
+    }).then(function (m) {
+      local.label = (m && m.label) || "Qwen3.5 0.8B";
+      local.webKept = true;
+      store(WEB_KEPT, true);
+      local.stage = "reading";
+      local.done = local.total = 0;
+      status();
+      return ENGINE.ahead(webRequest([{ role: "system", content: WEB_SYSTEM }]), function (done, total) {
+        local.done = +done || 0;
+        local.total = +total || 0;
+        status();
+      });
+    }).then(function () {
+      store(WEB_KEY, true);
+      store(LOCAL_KEY, null);
+      local.state = "ready";
+      local.stage = "";
+      local.talk = [];
+      local.system = "";
+      status();
+      greetWith();
+      if (chosen) did("Using my model in this browser (" + local.label + ")");
+    }).catch(function (e) {
+      local.state = "failed";
+      local.detail = clip(e && e.message || "it stopped", 160);
+      status();
+    });
+  }
+  function webForm(error) {
+    var kept = !!local.webKept;
+    call("accountForm", { id: "web", title: "Run my model in this browser", ok: kept ? "Start it" : "Download it", error: error, text: [
+      "Chat Computer's own model can answer here, in this browser: Qwen3.5 0.8B, an open model of Qwen's (Apache 2.0), run by " +
+      "Chat Computer's own engine on this " + deviceWord() + "'s processor. It's free, there's no account, and nothing you " +
+      "type leaves this browser.",
+      kept ? "This browser has it already." : "It downloads " + WEB_SIZE + " once, from Qwen's own repository, and the browser keeps " +
+      "it (0.8 GB). Getting it ready takes a few minutes, and it answers slowly: a browser runs it on one of the processor's cores."] });
+  }
+  function webButton() {
+    if (webOn()) { webStop(); return; }
+    if (local.kind === "web" && local.state === "preparing") { modelSheet(); return; }
+    ENGINE.status().then(function (st) { local.webKept = !!(st && st.kept); store(WEB_KEPT, local.webKept || null); }, noop)
+      .then(function () { webForm(""); });
+  }
+  function webStop() {
+    local.state = "off";
+    local.kind = "";
+    local.talk = [];
+    local.system = "";
+    store(WEB_KEY, null);
+    status();
+    greetWith();
+    did("Stopped using my model in this browser");
+  }
+  function webRemove() {
+    if (local.kind === "web") { local.state = "off"; local.kind = ""; local.talk = []; local.system = ""; }
+    store(WEB_KEY, null);
+    ENGINE.forget().then(function () {
+      local.webKept = false;
+      store(WEB_KEPT, null);
+      status();
+      greetWith();
+      did("Removed my model from this browser");
+    },
+      function (e) { call("accountForm", { id: "web-failed", title: "My model", ok: "OK", text: ["It couldn't be removed: " +
+        clip(e && e.message || "no answer", 160) + "."] }); });
+  }
+  // One answer from it: its words to `onText` as they come, and the whole message (words and tool calls), as the
+  // other engines' are.
+  function webMessage(messages, onText) {
+    return ENGINE.chat(webRequest(messages), function (d) { if (d && d.content) onText(d.content); }).then(function (message) {
+      var calls = (message.tool_calls || []).map(function (c, k) {
+        var input = {};
+        try { input = JSON.parse(c.function.arguments || "{}"); } catch (e) { input = {}; }
+        return { id: c.id || "call_" + k, name: c.function.name, input: input, args: c.function.arguments || "{}" };
+      });
+      return { message: message, calls: calls };
+    }, function (e) { var x = new Error(e && e.message || "it stopped"); x.status = 500; throw x; });
   }
   function inbox() {
     return MESSAGES.map(function (m) {
@@ -1927,10 +2072,15 @@
       "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
         "most other sites can't show inside the page, so it's a link; on a Chat Computer any site opens right here and you use it), " +
         "open their messages and files (open_message, open_file), ";
+    var effort = own && (own.levels || []).length ? " Your effort (how hard you think before answering) is " +
+      effortName(own.effort || own.dflt || "") + (own.effort ? "" : own.dflt ? " (its default)" : "its default") + "; the person " +
+      "can change it, and the model, with the spark beside + (" + own.levels.map(effortName).join(", ") + ")." : "";
     var mind = own && own.provider === "chatgpt" ? "You are Chat Computer: you run a whole computer for the person. Right now you think " +
-      "with " + own.model + ", on the person's own ChatGPT plan (they signed in with ChatGPT): what they say goes to OpenAI. " :
-      own ? "You are Chat Computer: you run a whole computer for the person. Right now you think with " + own.model + ", through " +
-      ownName() + ", on the person's own account (they signed in with it): what they say goes to " + ownName() + ". " :
+      "with " + (own.name || own.model) + " (" + own.model + "), on the person's own ChatGPT plan (they signed in with ChatGPT): " +
+      "what they say goes to OpenAI." + effort + " " :
+      own ? "You are Chat Computer: you run a whole computer for the person. Right now you think with " + (own.name || own.model) +
+      " (" + own.model + "), through " + ownName() + ", on the person's own account (they signed in with it): what they say goes " +
+      "to " + ownName() + "." + effort + " " :
       "You are Chat Computer: you run a whole computer for the person, with your own model, an open model of Qwen's that runs " +
       "on this computer (no account, and nothing they say leaves it). ";
     return mind + "People talk, type or touch, and you do things for them. " +
@@ -1955,7 +2105,7 @@
       (person() ? "They go by " + person() + ". " : computerName ? "This computer says they're " + computerName + ". " : "") +
       (homeName() ? "They live in " + homeName() + ". " : "") +
       "When they tell you what to call them, or where they live, keep it (set_name, set_place): the greeting that opens " +
-      "each conversation (under “hello, world”) says their name and the weather where they are." +
+      "each conversation (under the Chat Computer logo) says their name and the weather where they are." +
       (APP ? "" : "\n\nTheir messages and files here are made up for the demo:\n" + inbox() + "\n\nFiles:\n" +
         FILES.map(function (f) { return "- " + f.name + ", in " + f.where; }).join("\n")) +
       "\n\nEach of their messages starts with the date and time it was sent, in brackets.";
@@ -2158,7 +2308,7 @@
   // One turn: the model's answer streams in, its tools run here, and it goes on until it's done (at most 8 rounds).
   function localTurn(text, you, uts, id, since) {
     var said = "", gap = false, rounds = 0, asked = { role: "user", content: "[" + clock() + "] " + text };
-    if (!local.talk.length) local.system = systemPrompt();
+    if (!local.talk.length) local.system = !own && local.kind === "web" ? WEB_SYSTEM : systemPrompt();
     local.talk.push(asked);
     trimTalk();
     call("aiStart", id);
@@ -2218,6 +2368,7 @@
     if (own) {
       if (err.status === 401 || err.status === 403) return ownName() + " didn't take your key any more: press the spark beside + to sign in again.";
       if (err.status === 402) return ownName() + " says your account has no credit left for " + own.model + ".";
+      if (err.status === 529) return ownName() + " is overloaded just now: ask again in a moment.";
       if (err.status === 429) return ownName() + " says it's had too many questions just now" + (own.provider === "openrouter" ?
         " (free models have limits)" : "") + ": ask again in a little while.";
       return err.status ? ownName() + " couldn't answer that: " + err.message : "I can't reach " + ownName() + ": is the internet on?";
@@ -2237,9 +2388,10 @@
   // Chat Computer's engine, and most AIs, as OpenAI's chat completions; OpenAI's own through its Responses API (its
   // best models use tools only there); ChatGPT's, the app's.
   function localMessage(onText) {
-    var messages = [{ role: "system", content: local.system || systemPrompt() }].concat(local.talk);
+    var messages = [{ role: "system", content: local.system || (!own && local.kind === "web" ? WEB_SYSTEM : systemPrompt()) }].concat(local.talk);
     if (own && own.provider === "chatgpt") return chatgptMessage(messages, localTools(), onText);
     var headers = { "content-type": "application/json" };
+    if (!own && local.kind === "web") return webMessage(messages, onText);
     if (!own) {
       return chatMessage(localBase() + "/v1/chat/completions", headers,
         { model: "chat-computer", stream: true, think: false, max_tokens: 4096, tools: localTools(), messages: messages }, onText, {});
@@ -2247,6 +2399,7 @@
     var p = own.provider, a = AIS[p] || {}, h = ownHeaders(p, own.key);
     for (var k in h) headers[k] = h[k];
     if (a.responses) return responsesMessage(ownBase() + "/responses", headers, responsesBody(messages, localTools()), onText);
+    if (p === "anthropic") return claudeMessage(ownBase() + "/messages", headers, claudeBody(messages, localTools()), onText);
     // (Your own AI: its model, none of the engine's own options. Its thinking goes back only to an AI that wants it;
     // Gemini's signatures on its tool calls, only to Gemini; Mistral's thinking, as Mistral gave it, only to Mistral.)
     var body = { model: own.model, stream: true, tools: localTools(), messages: messages.map(function (m) {
@@ -2255,9 +2408,12 @@
       if (m.chunks && p === "mistral") c.content = m.chunks;
       if (c.reasoning_content != null && !a.think) delete c.reasoning_content;
       if (c.tool_calls && p !== "gemini") c.tool_calls = c.tool_calls.map(function (t) { return { id: t.id, type: t.type, function: t.function }; });
+      delete c.blocks;
       return c;
     }) };
     for (var e in a.extra || {}) body[e] = a.extra[e];
+    var how = effortBody(p, own);
+    for (var f in how) body[f] = how[f];
     return chatMessage(ownBase() + "/chat/completions", headers, body, onText, { unthink: a.unthink, chunks: p === "mistral" });
   }
   function noConnection(e) { var x = new Error(e && e.message || "no connection"); x.status = 0; throw x; }
@@ -2403,6 +2559,85 @@
     }
     return { event: event, result: result };
   }
+  // Claude, through Anthropic's own Messages API (its effort can be set only there): what it's told (system), then the
+  // conversation as its blocks: Claude's own messages as it gave them (its thinking with them, as Anthropic asks
+  // within a turn that uses tools), its tool calls as tool_use, and the tools' answers as tool_result, first in the
+  // message after; streamed back as its blocks.
+  function claudeBody(messages, tools) {
+    var told = [], out = [];
+    function add(role, blocks) {
+      if (!blocks.length) return;
+      var last = out[out.length - 1];
+      if (last && last.role === role) last.content = last.content.concat(blocks);
+      else out.push({ role: role, content: blocks });
+    }
+    messages.forEach(function (m) {
+      if (m.role === "system") { told.push(String(m.content || "")); return; }
+      if (m.role === "user") { add("user", [{ type: "text", text: String(m.content || "") || " " }]); return; }
+      if (m.role === "tool") { add("user", [{ type: "tool_result", tool_use_id: m.tool_call_id, content: String(m.content || "") || " " }]); return; }
+      if (m.role !== "assistant") return;
+      if (m.blocks) { add("assistant", m.blocks.filter(function (b) { return !(b.type === "text" && !b.text); })); return; }
+      var b = m.content ? [{ type: "text", text: String(m.content) }] : [];
+      (m.tool_calls || []).forEach(function (c) {
+        var input = {};
+        try { input = JSON.parse(c.function.arguments || "{}"); } catch (e) { input = {}; }
+        b.push({ type: "tool_use", id: c.id, name: c.function.name, input: input });
+      });
+      add("assistant", b);
+    });
+    var body = { model: own.model, max_tokens: 32000, system: told.join("\n\n"), messages: out, stream: true,
+                 tools: tools.map(function (t) { return { name: t.function.name, description: t.function.description, input_schema: t.function.parameters }; }) };
+    if (own.effort) body.output_config = { effort: own.effort };
+    return body;
+  }
+  function claudeMessage(url, headers, body, onText) {
+    return fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) }).then(function (res) {
+      if (!res.ok) return httpError(res);
+      var blocks = [], failed = null;
+      return readEvents(res, function (data) {
+        var ev;
+        try { ev = JSON.parse(data); } catch (x) { return; }
+        if (ev.type === "content_block_start") {
+          var b = ev.content_block || {}, cur = { type: b.type };
+          if (b.type === "text") cur.text = b.text || "";
+          else if (b.type === "tool_use") { cur.id = b.id; cur.name = b.name; cur.json = ""; }
+          else if (b.type === "thinking") { cur.thinking = b.thinking || ""; cur.signature = b.signature || ""; }
+          else cur.whole = b;                                     // (redacted thinking, and the like: given back as it came)
+          blocks[ev.index || 0] = cur;
+        } else if (ev.type === "content_block_delta") {
+          var c = blocks[ev.index || 0], d = ev.delta || {};
+          if (!c) return;
+          if (d.type === "text_delta" && d.text) { c.text += d.text; onText(d.text); }
+          else if (d.type === "input_json_delta") c.json += d.partial_json || "";
+          else if (d.type === "thinking_delta") c.thinking += d.thinking || "";
+          else if (d.type === "signature_delta") c.signature += d.signature || "";
+        } else if (ev.type === "error") {
+          var er = ev.error || {};
+          failed = new Error(clip(er.message || "Claude stopped", 200));
+          failed.status = er.type === "overloaded_error" ? 529 : er.type === "rate_limit_error" ? 429 : 500;
+        }
+      }).then(function () {
+        if (failed) throw failed;
+        var mine = blocks.filter(Boolean).map(function (c) {
+          if (c.type === "text") return { type: "text", text: c.text };
+          if (c.type === "tool_use") {
+            var input = {};
+            try { input = c.json ? JSON.parse(c.json) : {}; } catch (x) { input = {}; }
+            return { type: "tool_use", id: c.id, name: c.name, input: input };
+          }
+          if (c.type === "thinking") return { type: "thinking", thinking: c.thinking, signature: c.signature };
+          return c.whole;
+        });
+        var calls = mine.filter(function (b) { return b.type === "tool_use"; }).map(function (u) {
+          return { id: u.id, name: u.name, input: u.input, args: JSON.stringify(u.input) };
+        });
+        var message = { role: "assistant", content: mine.filter(function (b) { return b.type === "text"; }).map(function (b) { return b.text; }).join(""),
+                        blocks: mine };
+        if (calls.length) message.tool_calls = calls.map(function (c) { return { id: c.id, type: "function", function: { name: c.name, arguments: c.args } }; });
+        return { message: message, calls: calls };
+      });
+    }, noConnection);
+  }
   function responsesMessage(url, headers, body, onText) {
     var read = responsesReader(onText);
     return fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) }).then(function (res) {
@@ -2429,8 +2664,8 @@
   // documentation, read the same day):
   //   name, by: what it's called, and its maker where that's another name;  site: whose logo it shows (through
   //   DuckDuckGo's icon service, as Messages' are);  keys: the page where you make a key;
-  //   base: its API (chat completions in OpenAI's shape, or, for OpenAI's, its Responses API: its best models use
-  //   tools only there);  alt: its API for keys made on its other site (China's), tried when the first says no;
+  //   base: its API (chat completions in OpenAI's shape; OpenAI's own through its Responses API, as its best models use
+  //   tools only there; Anthropic's through its Messages API, as its effort can be set only there);  alt: its API for keys made on its other site (China's), tried when the first says no;
   //   model: its best model, for when it doesn't list them;  best: its models best first (the first matching one of
   //   these answers; among those, the newest);  chat: which of its models chat;  skip: which don't, or don't here;
   //   think: it wants its own thinking back, in every message after (DeepSeek's rule, and Kimi's, Z.ai's, Xiaomi's,
@@ -2446,7 +2681,7 @@
               best: [/^gemini-4-carbon/, /^gemini-4-argon/, /^gemini-\d+(\.\d+)?-pro/, /^gemini-\d+(\.\d+)?-flash(?!-lite)/], or: "google/" },
     anthropic: { name: "Claude", by: "Anthropic", base: "https://api.anthropic.com/v1", site: "claude.ai",
                  keys: "https://platform.claude.com/settings/keys", model: "claude-opus-5-5", chat: /^claude-/,
-                 best: [/^claude-opus/, /^claude-sonnet/, /^claude-fable/, /^claude-haiku/], extra: { max_tokens: 32000 }, or: "anthropic/" },
+                 best: [/^claude-opus/, /^claude-sonnet/, /^claude-fable/, /^claude-haiku/], or: "anthropic/" },
     openai: { name: "OpenAI", base: "https://api.openai.com/v1", site: "openai.com", responses: true,
               keys: "https://platform.openai.com/settings/organization/api-keys", model: "gpt-6-astra", chat: /^(gpt-\d|o\d)/,
               skip: /-pro\b|codex|deep-research|-search|cyber|rosalind|instruct|chat-latest|gpt-live/,
@@ -2482,6 +2717,104 @@
     other: { name: "", base: "", site: "", keys: "", unthink: true },
     chatgpt: { name: "ChatGPT", base: "", site: "chatgpt.com", keys: "" }
   };
+  // How hard each AI's models think before answering ("effort"), as each one's documentation says (3 November 2026):
+  // the levels each takes, least first, and its own default ("": it decides). Where its list of models says (Anthropic's
+  // capabilities, xAI's, DeepSeek's, OpenRouter's), what it says comes first. "off"/"on": thinking only switched.
+  var EFFORTS = [
+    ["anthropic", /^claude-(opus|haiku)/, ["low", "medium", "high", "xhigh", "max"], "medium"],
+    ["anthropic", /^claude-/, ["low", "medium", "high", "xhigh", "max"], "high"],
+    ["openai", /^gpt-6\.1-terra/, ["none", "low", "medium", "high", "xhigh", "max"], "medium"],
+    ["openai", /^gpt-6/, ["low", "medium", "high", "xhigh", "max"], "medium"],
+    ["gemini", /^gemini-4/, ["low", "medium", "high"], "medium"],
+    ["meta", /contributor/, ["minimal", "low", "medium", "high", "xhigh"], ""],
+    ["meta", /^muse-/, ["minimal", "low", "medium", "high", "xhigh", "max"], ""],
+    ["kimi", /^kimi-k3/, ["low", "high", "max"], "max"],
+    ["grok", /^grok-4\.7/, ["low", "medium", "high", "xhigh"], "high"],
+    ["qwen", /^qwen3\.8/, ["none", "low", "medium", "xhigh"], "xhigh"],
+    ["deepseek", /^deepseek-/, ["none", "low", "high", "max"], "high"],
+    ["glm", /^glm-5/, ["low", "high", "max"], "max"],
+    ["mimo", /^mimo-/i, ["off", "on"], "on"],
+    ["minimax", /^minimax-m3\.1-flash/i, ["low", "medium", "high", "xhigh", "max"], "max"],
+    ["minimax", /^minimax-m\d/i, ["off", "on"], "on"],
+    ["mistral", /^mistral-large-4/, ["low", "medium", "high"], ""]
+  ];
+  var EFFORT_NAMES = { none: "Off", off: "Off", on: "On", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+  function effortName(v) { return EFFORT_NAMES[v] || String(v || ""); }
+  // What each model is called, and the efforts it takes, as its AI's list of models said (kept here as they're listed).
+  var MODEL_INFO = {};
+  var CASED = { gpt: "GPT", glm: "GLM", deepseek: "DeepSeek", minimax: "MiniMax", mimo: "MiMo", qwen: "Qwen", openai: "OpenAI" };
+  // A model's name as it's written: claude-opus-5-5 is Claude Opus 5.5, gpt-6.1-sol GPT-6.1 Sol, kimi-k3.1-pro Kimi K3.1 Pro
+  // (OpenRouter's maker/ and :free left out: its list says those).
+  function prettyModel(id) {
+    var bare = String(id || "").replace(/^models\//, ""), maker = "";
+    if (bare.indexOf("/") > 0) { maker = bare.slice(0, bare.indexOf("/") + 1); bare = bare.slice(maker.length); }
+    var out = [];
+    bare.replace(/:free$/, "").split("-").forEach(function (w) {
+      var prev = out[out.length - 1];
+      if (/^\d{8}$/.test(w)) return;                                  // (a date: left out)
+      if (/^\d$/.test(w) && prev && /\d$/.test(prev) && !/\./.test(prev)) { out[out.length - 1] = prev + "." + w; return; }
+      var low = w.toLowerCase(), name = CASED[low] || (/^o\d/.test(low) && !out.length ? low :
+        /^[a-z]\d/.test(low) ? low.toUpperCase() : low.charAt(0).toUpperCase() + w.slice(1));
+      if (/^\d/.test(w) && prev && /^(GPT|GLM)$/.test(prev)) { out[out.length - 1] = prev + "-" + w; return; }
+      out.push(name);
+    });
+    return out.join(" ");
+  }
+  function modelInfo(p, id) {
+    var info = MODEL_INFO[p + "|" + id] || {}, e = null;
+    for (var i = 0; i < EFFORTS.length && !info.levels; i++) {
+      if (EFFORTS[i][0] === p && EFFORTS[i][1].test(id)) e = EFFORTS[i];
+      if (e) break;
+    }
+    return { name: info.name || prettyModel(id), levels: info.levels || (e ? e[2] : []), dflt: info.levels ? info.dflt || "" : e ? e[3] : "" };
+  }
+  // A model chosen: what it's called and the efforts it takes, kept with it (the effort chosen stays, where it takes it).
+  function withModel(o, id) {
+    var i = modelInfo(o.provider, id);
+    o.model = id;
+    o.name = i.name;
+    o.levels = i.levels;
+    o.dflt = i.dflt;
+    if (o.effort && i.levels.indexOf(o.effort) < 0) o.effort = "";
+    return o;
+  }
+  // What a model's list says of it (Anthropic's display name and efforts; xAI's, DeepSeek's and OpenRouter's efforts;
+  // ChatGPT's reasoning levels), kept.
+  function noteModel(p, m) {
+    var id = String(m && (m.id || m.slug || m.model || m.name) || "").replace(/^models\//, ""), c = m && m.capabilities || {}, levels = null, dflt = "";
+    if (!id) return;
+    var ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+    if (c.effort && typeof c.effort === "object") {
+      levels = ORDER.filter(function (l) { return c.effort[l] && c.effort[l].supported; });
+    } else if (Array.isArray(c.reasoning_effort)) { levels = c.reasoning_effort.map(String); dflt = String(c.default_reasoning_effort || ""); }
+    else if (m.effort && Array.isArray(m.effort.supported_levels)) {
+      levels = ["none"].concat(m.effort.supported_levels.map(String));
+      dflt = String(m.effort.default_level || "");
+    } else if (p === "openrouter" && m.reasoning && typeof m.reasoning === "object") {
+      levels = Array.isArray(m.reasoning.supported_efforts) ? m.reasoning.supported_efforts.map(String).reverse() :
+        ["minimal", "low", "medium", "high", "xhigh", "max"];
+      if (!m.reasoning.mandatory && levels.indexOf("none") < 0) levels.unshift("none");
+      if (m.reasoning.mandatory) levels = levels.filter(function (l) { return l !== "none"; });
+      dflt = String(m.reasoning.default_effort || "");
+    } else if (p === "openrouter") levels = (m.supported_parameters || []).indexOf("reasoning") >= 0 ? ["none", "low", "medium", "high"] : [];
+    else if (Array.isArray(m.supported_reasoning_levels)) {
+      levels = m.supported_reasoning_levels.map(function (l) { return String(l && (l.effort || l) || ""); }).filter(Boolean);
+      dflt = String(m.default_reasoning_level || "");
+    }
+    if (levels && p === "anthropic") dflt = modelInfo(p, id).dflt;
+    var name = m.display_name || (p === "openrouter" && m.name ? String(m.name).replace(/^[^:]+:\s*/, "") : "");
+    MODEL_INFO[p + "|" + id] = { name: name || "", levels: levels, dflt: dflt };
+    if (!name) delete MODEL_INFO[p + "|" + id].name;
+  }
+  // The effort chosen, as each AI's request takes it.
+  function effortBody(p, o) {
+    var v = o && o.effort;
+    if (!v) return {};
+    if (p === "openrouter") return { reasoning: { effort: v } };
+    if (v === "off" || v === "on") return { thinking: { type: v === "off" ? "disabled" : "enabled" } };
+    return { reasoning_effort: v };
+  }
+
   // In the index's order; and those you can use with a key of yours, from this page.
   var MAKERS = ["gemini", "anthropic", "openai", "meta", "kimi", "grok", "qwen", "deepseek", "glm", "mimo", "stepfun", "minimax", "ling", "mistral"];
   var KEYED = MAKERS.filter(function (p) { return !AIS[p].keyless; });
@@ -2495,16 +2828,26 @@
     if (o.provider === "other" && !OTHER_BASE.test(String(o.base || ""))) return null;
     if (o.provider !== "other" && o.base && (a.alt || []).indexOf(o.base) < 0) return null;
     if (o.provider === "chatgpt" && !APP) return null;          // (ChatGPT's sign-in lives in the app)
+    if (!Array.isArray(o.levels)) withModel(o, o.model);           // (kept before efforts were)
     return o;
   })();
   function ownName() { return !own ? "" : own.provider === "other" ? hostOf(own.base) || "Your AI" : AIS[own.provider].name; }
   function ownBase() { return own.base ? String(own.base).replace(/\/+$/, "") : AIS[own.provider].base; }
   function logo(site) { return site ? "https://icons.duckduckgo.com/ip3/" + site + ".ico" : ""; }
   // The spark beside +: shown, and which AI answers (its own logo).
+  // What's said of the model answering: Claude Opus 5.5, at Max effort.
+  function ownModelWords() {
+    if (!own) return "";
+    var e = own.effort || own.dflt;
+    return (own.name || own.model) + (e && (own.levels || []).length ? ", " + (e === "off" || e === "none" ? "not thinking first" :
+      e === "on" ? "thinking first" : "at " + effortName(e) + " effort") : "");
+  }
   function ownShow() {
     var site = own && (own.provider === "other" ? hostOf(own.base) : AIS[own.provider].site);
-    call("ownAi", own ? { name: ownName(), model: own.model, icon: logo(site) } : null);
+    call("ownAi", own ? { name: ownName(), model: ownModelWords(), icon: logo(site) } : null);
   }
+  var sheetNow = "";
+  function sheetIs(id) { return sheetNow === id; }
   function ownSet(o, done) {
     // (Another AI starts the conversation afresh: each keeps its own kind of record of what it thought and did.)
     if ((own && own.provider) !== (o && o.provider)) local.talk = [];
@@ -2516,49 +2859,106 @@
     greetWith();
     if (done) did(done);
   }
-  function ownMenu() {
-    if (own && own.provider === "chatgpt") {
-      call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: [
-        "Using your ChatGPT plan: " + own.model + " answers" + (own.email ? ", as " + own.email : "") + ". What you say goes to OpenAI.",
-        "Your plan's usage is shared with ChatGPT's own: see it in Manage usage. Signed out, Chat Computer's own model answers again."],
-        choices: [{ label: "Manage usage", value: "ai:usage" }, { label: "Choose its model", value: "ai:models" },
-                  { label: "Sign out of ChatGPT", value: "ai:out" }] });
-      return;
-    }
+  // Your own AI, all in one panel. Not signed in: its own sign-in where there's one here (ChatGPT's in the app,
+  // OpenRouter's on the website), then each AI once; one chosen (pick), what it needs typed shows under them, in the
+  // same panel (its key; for another AI, its address and model too), with Get a key. Signed in: which model answers
+  // (its models, the one answering marked), how hard it thinks (each level it takes, its default said), and signing out.
+  function ownMenu(pick, error, back) {
     if (own) {
-      call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: [
-        ownName() + " answers now, with " + own.model + ", on your own account: what you say goes to " + ownName() + ".",
-        "Its key stays " + (APP ? "in the app" : "in this browser") + ". Signed out, Chat Computer's own model answers again" +
-        (APP ? "." : " (where the app runs on this computer).")],
-        choices: [{ label: "Choose its model", value: "ai:models" }, { label: "Sign out of " + ownName(), value: "ai:out" }] });
+      var gpt = own.provider === "chatgpt";
+      call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", choices: ownChoices(), text: gpt ? [
+        "Using your ChatGPT plan" + (own.email ? ", as " + own.email : "") + ": what you say goes to OpenAI. Your plan's usage is " +
+        "shared with ChatGPT's own (Manage usage shows it). Signed out, Chat Computer's own model answers again."] : [
+        ownName() + " answers now, on your own account: what you say goes to " + (AIS[own.provider].by || ownName()) + ". Its key " +
+        "stays " + (APP ? "in the app" : "in this browser") + ". Signed out, Chat Computer's own model answers again."] });
+      if (!own.models) ownList();                // (kept before its models were: listed now, and shown)
       return;
     }
-    // (Every way in, in one panel, each AI once: its own sign-in, where there's one here (ChatGPT's in the app,
-    // OpenRouter's on the website), then a key of yours from each.)
     var signIn = APP && APP.channel ? "chatgpt" : TABS ? "" : "openrouter";
     var choices = signIn ? [{ label: "Continue with " + AIS[signIn].name, value: "ai:" + signIn, icon: logo(AIS[signIn].site) }] : [];
     choices.push({ note: signIn ? "Or with your key from:" : "With your key from:" });
     KEYED.concat(signIn === "openrouter" ? [] : ["openrouter"]).forEach(function (p) {
-      choices.push({ label: AIS[p].name, value: "ai:key:" + p, icon: logo(AIS[p].site) });
+      choices.push({ label: AIS[p].name, value: "ai:key:" + p, icon: logo(AIS[p].site), on: p === pick });
     });
-    choices.push({ label: "Another AI", value: "ai:key:other" });
-    call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", choices: choices, text: [
-      "An AI you already use answers instead of Chat Computer's own model, on your own account: what you say then goes to it."] });
+    choices.push({ label: "Another AI", value: "ai:key:other", on: pick === "other" });
+    var a = pick && AIS[pick], other = pick === "other", maker = a && (a.by || a.name);
+    var text = ["An AI you already use answers instead of Chat Computer's own model, on your own account: what you say then goes to it."];
+    if (a) text.push(other ? "Another AI: any that answers as OpenAI's chat completions do. Its key stays " + (APP ? "in the app" : "in this browser") +
+      ", and goes only to its address." : "Your " + maker + " key stays " + (APP ? "in the app" : "in this browser") + ", and goes only to " + maker +
+      (APP ? ". Make one at " + a.keys.replace(/^https:\/\//, "").replace(/\/$/, "") + "." : "."));
+    call("accountForm", { id: a ? "own-key-" + pick : "own-ai", title: "Your own AI", ok: a ? "Sign in" : "", error: error || "",
+      first: true, choices: choices, text: text, back: back || "",
+      fields: !a ? [] : (other ? [{ name: "base", label: "Its address (ending /v1, as a rule)" }, { name: "model", label: "Its model" }] : [])
+        .concat([{ name: "key", label: other ? "Its key" : "Your " + maker + " API key", type: "password" }]),
+      more: a && !other && !APP ? [{ label: "Get a key", value: "ai:open:" + pick }] : [] });
+  }
+  function ownChoices() {
+    var p = own.provider, c = [{ note: "Model:" }];
+    function one(id, icon) { return { label: modelInfo(p, id).name, value: "ai:model:" + id, icon: icon, on: id === own.model }; }
+    var models = (own.models || []).slice();
+    if (models.indexOf(own.model) < 0) models.unshift(own.model);
+    if (p === "openrouter") {
+      c[0] = { note: "Model (free, the newest first):" };
+      models.forEach(function (m) { c.push(one(m)); });
+      if ((own.best || []).length) {
+        c.push({ note: "The best of each maker, on your OpenRouter credits:" });
+        own.best.forEach(function (m) { c.push(one(m.id, logo(AIS[m.maker].site))); });
+      }
+    } else if (p === "other") {
+      c.push(one(own.model));
+      c.push({ label: "Change", value: "ai:key:other" });
+    } else models.forEach(function (m) { c.push(one(m)); });
+    if ((own.levels || []).length) {
+      var on = own.effort || own.dflt;
+      c.push({ note: own.levels.join() === "off,on" ? "Thinking before it answers:" : "Effort: how hard it thinks before answering" +
+        (own.dflt ? " (" + effortName(own.dflt) + " is its default)" : "") + ":" });
+      own.levels.forEach(function (l) { c.push({ label: effortName(l), value: "ai:effort:" + l, on: l === on }); });
+    }
+    c.push({ note: "" });
+    if (p === "chatgpt") c.push({ label: "Manage usage", value: "ai:usage" });
+    c.push({ label: "Sign out of " + ownName(), value: "ai:out" });
+    return c;
+  }
+  // Its models, kept with it to choose from: the best first (OpenRouter's: its free ones, and the best of each maker).
+  function keepModels(o, got) {
+    if (o.provider === "openrouter") { o.models = got.free.slice(0, 6); o.best = got.best; }
+    else o.models = got.slice(0, 8);
+    return o;
+  }
+  // (Listed again, where they weren't kept: the panel shows them once they're here, if it's still open.)
+  function ownList() {
+    var p = own.provider, was = own;
+    if (p === "other") { own.models = [own.model]; return; }
+    (p === "chatgpt" ? chatgptModels() : ownModels(p, ownBase(), own.key, true)).then(function (got) {
+      if (own !== was) return;
+      keepModels(own, got);
+      store(OWN_KEY, own);
+      if (document.body.classList.contains("sheet") && sheetIs("own-ai")) ownMenu();
+    }, noop);
   }
   function ownChoice(v) {
     var p = v.slice(v.indexOf(":") + 1);
+    if (v.indexOf("effort:") === 0 && own && (own.levels || []).indexOf(p) >= 0) {
+      var e = {};
+      for (var k0 in own) e[k0] = own[k0];
+      e.effort = p === e.dflt ? "" : p;
+      ownSet(e, ownName() + (p === "off" || p === "none" ? " doesn't think before answering" : p === "on" ? " thinks before answering" :
+        "'s effort set to " + effortName(p)));
+      ownMenu();
+      return;
+    }
+    if (v === "menu") { ownMenu(); return; }                     // (back, from a panel that came from this one)
     if (v === "openrouter") { openRouterSignIn(); return; }
     if (v === "chatgpt" && APP) { chatgptSignIn(); return; }
     if (v === "usage") { call("accountForm", null); show({ src: PLAN_USAGE, title: "chatgpt.com" }); return; }
     if (v.indexOf("key:") === 0 && AIS[p] && !AIS[p].keyless) { keyForm(p, ""); return; }
     if (v.indexOf("open:") === 0 && AIS[p] && AIS[p].keys) { newTab(AIS[p].keys); return; }
-    if (v === "models" && own) { modelsForm(); return; }
     if (v.indexOf("model:") === 0 && own) {
       var o = {};
       for (var k in own) o[k] = own[k];
-      o.model = v.slice(6);
-      call("accountForm", null);
-      ownSet(o, ownName() + " answers with " + o.model);
+      withModel(o, v.slice(6));
+      ownSet(o, ownName() + " answers with " + o.name);
+      ownMenu();
       return;
     }
     if (v === "out" && own) {
@@ -2568,17 +2968,10 @@
       ownSet(null, "Signed out of " + was);
     }
   }
-  // A key: pasted, with a button that opens the page that makes one (in a new tab; in the app, its address is said).
+  // A key asked for (or said wrong): in the same panel. (Another AI's, signed in: changed there, signed out first.)
   function keyForm(p, error) {
-    var a = AIS[p], other = p === "other", maker = a.by || a.name;
-    call("accountForm", { id: "own-key-" + p, title: other ? "Another AI" : a.name, ok: "Sign in", error: error,
-      text: [other ? "Any AI that answers as OpenAI's chat completions do: its address (ending /v1, as a rule), the model " +
-             "to use, and your key." : "Paste an API key from your " + maker + " account" + (APP ? ": make one at " +
-             a.keys.replace(/^https:\/\//, "").replace(/\/$/, "") + "." : ". Get a key opens the page that makes one."),
-             "It stays " + (APP ? "in the app" : "in this browser") + ", and goes only to " + (other ? "that address" : maker) + "."],
-      fields: (other ? [{ name: "base", label: "Its address" }, { name: "model", label: "Its model" }] : [])
-        .concat([{ name: "key", label: "Key", type: "password" }]),
-      choices: other || APP ? [] : [{ label: "Get a key", value: "ai:open:" + p }] });
+    if (own && p === "other") { var was = own; own = null; ownMenu(p, error, "ai:menu"); own = was; return; }
+    ownMenu(p, error);
   }
   // (A key refused, in an answer's own words: Google's says so with a 400.)
   function keyRefused(why) { return /api.?key|unauthori[sz]ed|authenticat|credential/i.test(String(why || "")); }
@@ -2654,6 +3047,7 @@
       return r.json().catch(function () { return null; });
     }).then(function (j) {
       var list = (j && (j.data || j.models || (j.output && j.output.models))) || [];
+      list.forEach(function (m) { noteModel(p, m); });
       if (p === "openrouter") { var or = openRouterModels(list); return all ? or : or.free; }
       if (p === "other") return list.map(function (m) { return String(m && m.id || ""); }).filter(Boolean);
       var got = bestFirst(p, list);
@@ -2670,55 +3064,34 @@
     if (other && !model) { keyForm(p, "Say which of its models to use."); return; }
     var bases = other ? [base] : [a.base].concat(a.alt || []);
     function at(i) {
-      return (other ? Promise.resolve([model]) : ownModels(p, bases[i], key)).then(function (models) { return { base: bases[i], models: models }; },
+      return (other ? Promise.resolve([model]) : ownModels(p, bases[i], key, true)).then(function (got) {
+        return { base: bases[i], models: p === "openrouter" ? got.free : got, all: got };
+      },
         function (e) { if (e && (e.status === 401 || e.status === 403) && i + 1 < bases.length) return at(i + 1); throw e; });
     }
     at(0).then(function (got) {
       if (!got.models.length) throw new Error(p === "openrouter" ? "it has no free model that uses tools just now" : "it lists no model to chat with");
-      var o = { provider: p, key: key, model: got.models[0] };
+      var o = keepModels(withModel({ provider: p, key: key }, got.models[0]), got.all);
       if (other || got.base !== a.base) o.base = got.base;
       call("accountForm", null);
-      ownSet(o, "Signed in with " + (other ? hostOf(base) : a.name) + " (" + o.model + ")");
+      ownSet(o, "Signed in with " + (other ? hostOf(base) : a.name) + " (" + o.name + ")");
     }).catch(function (e) {
       keyForm(p, e && (e.status === 401 || e.status === 403) ? (other ? "It" : a.by || a.name) + " didn't take that key." :
         "That didn't work: " + clip(e && e.message || "no answer", 160) + ".");
     });
   }
-  function modelsForm() {
-    if (own.provider === "other") { keyForm("other", ""); return; }
-    var p = own.provider;
-    (p === "chatgpt" ? chatgptModels() : ownModels(p, ownBase(), own.key, true)).then(function (models) {
-      var choices, text;
-      if (p === "openrouter") {
-        text = "It answers with " + own.model + " now. Its free models cost nothing; the best of each maker are on your OpenRouter credits.";
-        choices = [{ note: "Free, the newest first:" }].concat(models.free.slice(0, 6).map(function (m) { return { label: m, value: "ai:model:" + m }; }));
-        if (models.best.length) {
-          choices.push({ note: "The best of each maker, on your credits:" });
-          models.best.forEach(function (m) { choices.push({ label: m.id, value: "ai:model:" + m.id, icon: logo(AIS[m.maker].site) }); });
-        }
-      } else {
-        text = (p === "chatgpt" ? "" : "The best first. ") + "It answers with " + own.model + " now.";
-        choices = models.slice(0, 12).map(function (m) { return { label: m, value: "ai:model:" + m }; });
-      }
-      call("accountForm", { id: "own-ai", title: ownName() + "'s models", ok: "", text: [text], choices: choices });
-    }, function (e) {
-      call("accountForm", { id: "own-ai-failed", title: ownName(), ok: "OK", text: ["Its models couldn't be listed: " +
-        clip(e && e.message || "no answer", 160) + "."] });
-    });
-  }
-
   // ChatGPT, on your plan (in the app): signing in (OpenAI's page, in your browser; the app waits for it to come
   // back), the models your plan has, and an answer from OpenAI's Responses API, asked by the app for this page and
   // streamed back through a channel: its words, and the page's tools it calls, as the other AIs give them.
   function chatgptSignIn() {
-    call("accountForm", { id: "own-ai", title: "Continue with ChatGPT", ok: "", text: [
+    call("accountForm", { id: "own-ai", title: "Continue with ChatGPT", ok: "", back: "ai:menu", text: [
       "Sign in on OpenAI's page, which opens in your browser, and let Chat Computer use your ChatGPT plan. Then come back here.",
       "Chat Computer keeps the sign-in on this computer, and asks ChatGPT for you; OpenAI sees what you say to it."] });
     APP.app("chatgpt_sign_in").then(function (st) {
       return chatgptModels().then(function (models) {
         if (!models.length) throw new Error("your plan lists no model Chat Computer can use");
-        ownSet({ provider: "chatgpt", key: "app", model: models[0], email: st && st.email || "" },
-               "Signed in with ChatGPT (" + models[0] + ")");
+        var o = keepModels(withModel({ provider: "chatgpt", key: "app", email: st && st.email || "" }, models[0]), models);
+        ownSet(o, "Signed in with ChatGPT (" + o.name + ")");
         // (OpenAI's guidelines: the first time, say whose plan answers.)
         if (!store(PLAN_TOLD)) {
           store(PLAN_TOLD, true);
@@ -2728,7 +3101,7 @@
         } else call("accountForm", null);
       });
     }).catch(function (e) {
-      call("accountForm", { id: "own-ai-failed", title: "ChatGPT", ok: "OK", text: [clip(String(e && e.message || e || "It didn't work."), 300)] });
+      call("accountForm", { id: "own-ai-failed", title: "ChatGPT", ok: "OK", back: "ai:menu", text: [clip(String(e && e.message || e || "It didn't work."), 300)] });
     });
   }
   // Asks the app to ask ChatGPT: what comes back, whole (its status and text), or piece by piece to `piece`.
@@ -2743,6 +3116,7 @@
     return chatgptAsk("models", null).then(function (r) {
       if (r.status !== 200) throw new Error(apiError(r.text) || "ChatGPT said " + r.status);
       var j = JSON.parse(r.text || "{}"), list = j.models || j.data || [];
+      list.forEach(function (m) { if (m) noteModel("chatgpt", m); });
       return list.filter(function (m) { return m && (m.visibility == null || m.visibility === "list"); })
         .map(function (m) { return String(m.slug || m.id || ""); }).filter(Boolean);
     });
@@ -2763,9 +3137,11 @@
       }
       if (m.role === "tool") input.push({ type: "function_call_output", call_id: m.tool_call_id, output: String(m.content || "") });
     });
-    return { model: own.model, instructions: told.join("\n\n"), input: input, stream: true, store: false,
-             tools: tools.map(function (t) { return { type: "function", name: t.function.name, description: t.function.description,
-                                                     parameters: t.function.parameters }; }) };
+    var body = { model: own.model, instructions: told.join("\n\n"), input: input, stream: true, store: false,
+                 tools: tools.map(function (t) { return { type: "function", name: t.function.name, description: t.function.description,
+                                                         parameters: t.function.parameters }; }) };
+    if (own.effort) body.reasoning = { effort: own.effort };
+    return body;
   }
   // One answer from ChatGPT: its words to `onText` as they come, and the whole message (words and tool calls), in
   // the same shape as the other AIs' (localMessage).
@@ -2820,12 +3196,13 @@
     }).then(function (j) {
       var key = j && j.key;
       if (typeof key !== "string" || !key) throw new Error("no key came back");
-      return ownModels("openrouter", AIS.openrouter.base, key).then(function (models) {
-        if (!models.length) throw new Error("it has no free model that uses tools just now");
-        ownSet({ provider: "openrouter", key: key, model: models[0] }, "Signed in with OpenRouter (" + models[0] + ")");
+      return ownModels("openrouter", AIS.openrouter.base, key, true).then(function (got) {
+        if (!got.free.length) throw new Error("it has no free model that uses tools just now");
+        var o = keepModels(withModel({ provider: "openrouter", key: key }, got.free[0]), got);
+        ownSet(o, "Signed in with OpenRouter (" + o.name + ")");
       });
     }).catch(function (e) {
-      call("accountForm", { id: "own-ai-failed", title: "OpenRouter", ok: "OK", text: ["Signing in with OpenRouter didn't work: " +
+      call("accountForm", { id: "own-ai-failed", title: "OpenRouter", ok: "OK", back: "ai:menu", text: ["Signing in with OpenRouter didn't work: " +
         clip(e && e.message || "no answer", 160) + "."] });
     });
   }
@@ -3484,9 +3861,17 @@
                     local.state === "preparing" ? "Getting " + (local.preparing || "it") + " ready: " + localWords() :
                     local.state === "failed" || local.state === "none" ? "It couldn't get ready" : "Starting" });
     } else {
-      list.push(localReady() ?
+      list.push(localReady() && local.kind === "app" ?
         { command: "local", icon: "i-spark", name: "Stop using this computer's model", where: local.label + " answers now, on this computer" } :
         { command: "local", icon: "i-spark", name: "Use this computer's model", where: "Where the Chat Computer app runs here: its own model, free" });
+      if (webCan()) {
+        list.push(webOn() ? { command: "web", icon: "i-spark", name: "Stop using my model in this browser", where: local.label + " answers now, in this browser" } :
+          local.kind === "web" && local.state === "preparing" ? { command: "web", icon: "i-spark", name: "Getting my model ready", where: localWords() } :
+          { command: "web", icon: "i-spark", name: "Run my model in this browser", where: "Chat Computer's own model, free, with no account (" + WEB_SIZE + ", once)" });
+        if (local.webKept && !(local.kind === "web" && local.state === "preparing")) {
+          list.push({ command: "web-remove", icon: "i-spark", name: "Remove my model from this browser", where: "Frees 0.8 GB on this " + deviceWord() });
+        }
+      }
     }
     list.push(ears.on ?
       { command: "airpods", icon: "i-pods", name: "Stop talking", where: ears.device ? "Your AirPods are on" : "Listening now" } :
@@ -3510,6 +3895,8 @@
   }
   function slashCommand(id) {
     if (id === "local") localButton();
+    else if (id === "web") webButton();
+    else if (id === "web-remove") webRemove();
     else if (id === "model") modelSheet();
     else if (id === "airpods") talkButton(true);
     else if (id === "heart") heartButton(null);
@@ -3519,19 +3906,12 @@
     var h = "";
     call("listening", ears.on);                // the microphone button under the box, pressed while it listens
     if (ears.on) h = ears.device ? "AirPods on: talk, or type" : "Listening: talk, or type";
-    else if (APP && local.state === "preparing") h = "Getting my model ready: " + localWords() + "…";
+    else if ((APP || local.kind === "web") && local.state === "preparing") h = "Getting my model ready: " + localWords() + "…";
     else if (APP && local.state === "starting") h = "Starting my model…";
     else if (heart.state === "downloading") h = "Downloading Heart" + (heart.progress ? " (" + heart.progress + "%)" : "") + "…";
     else if (heart.state === "starting") h = "Starting Heart…";
     call("hint", h);
   }
-
-  // What each of Messages' connect buttons offers.
-  var GROUPS = {
-    email: { title: "Connect email", names: "Gmail, Outlook and Hotmail, iCloud Mail, Yahoo Mail and any other email", site: "gmail.com" },
-    chat: { title: "Connect chat apps", names: "Telegram, WhatsApp and WeChat", site: "web.whatsapp.com" },
-    social: { title: "Connect social media", names: "X, Instagram, Facebook, TikTok and LinkedIn", site: "instagram.com" }
-  };
 
   // ------------------------------------------------------------------ what the page says
   function handle(msg) {
@@ -3571,6 +3951,14 @@
         // The model: in the app, how it is (the app says as it changes); on the website, the app's, when it was chosen before.
         if (APP) APP.app("model_status").then(localFrom, noop);
         else if (store(LOCAL_KEY)) localProbe();
+        else if (webCan() && store(WEB_KEY) && !own) {   // (this browser's, when it was chosen before and it's still kept)
+          ENGINE.status().then(function (st) {
+            local.webKept = !!(st && st.kept);
+            store(WEB_KEPT, local.webKept || null);
+            if (local.webKept) webStart(false);
+            else store(WEB_KEY, null);
+          }, noop);
+        }
         heartCheck();                          // and Heart, the warmer voice, where it can
         break;
       case "send": {
@@ -3625,6 +4013,10 @@
       case "ai_menu": ownMenu(); break;
       case "add_account":
         if (typeof msg.provider === "string" && msg.provider.indexOf("ai:") === 0) { ownChoice(msg.provider.slice(3)); break; }
+        if (!APP && typeof msg.provider === "string" && msg.provider.indexOf("connect:") === 0) {
+          call("accountForm", connectForm(msg.provider.slice(8)));
+          break;
+        }
         if (APP && msg.provider) {
           var pv = String(msg.provider), off = pv.indexOf("forget:") === 0 ? pv.slice(7) : "";
           call("accountForm", null);
@@ -3632,23 +4024,12 @@
           else if (SERVICES[pv]) { connectService(pv, true); did("Opened " + SERVICES[pv].label + " to connect it"); }
           break;
         }
-        if (APP && msg.group !== "social") { call("accountForm", appConnectForm(msg.group && GROUPS[msg.group] ? msg.group : "")); break; }
-        if (msg.group && GROUPS[msg.group]) {
-          var g = GROUPS[msg.group];
-          call("accountForm", { id: "accounts", title: g.title, ok: "OK", text: [
-            "On Chat Computer, " + g.names + " connect here, and their messages come into Messages, newest first. " +
-            "Sign-ins stay on your computer.", APP ? "The app doesn't connect these yet: open them as sites, right here (say \u201copen " +
-            g.site + "\u201d)." : "The demo can't connect accounts."] });
-          break;
-        }
-        call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
-          "On Chat Computer, Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, WeChat, X, Instagram, Facebook, TikTok and LinkedIn " +
-          "connect here, and their messages come into Messages, newest first. Sign-ins stay on your computer.",
-          "The demo can't connect accounts."] });
+        call("accountForm", connectForm(""));
         break;
       case "account": {
         var values = msg.values || {};
         if (msg.form === "local") { localChosen(); break; }
+        if (msg.form === "web") { call("accountForm", null); webStart(true); break; }
         if (msg.form === "talk") { call("accountForm", null); startTalking(); break; }
         if (msg.form === "heart") { call("accountForm", null); heartChosen(true); break; }
         if (msg.form === "heart-remove") { call("accountForm", null); heartRemove(); break; }

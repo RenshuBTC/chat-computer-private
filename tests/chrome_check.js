@@ -43,10 +43,11 @@ const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/cs
     for (let i = 0; i < 100 && !frame(); i++) await panel.waitForTimeout(100);
     const f = frame();
     f.on && f.on("pageerror", (e) => errors.push(String(e)));
-    await f.waitForFunction(() => { const h = document.querySelector("#log > .ai.hello"); return h && h._said; }, null, { timeout: 15000 });
+    await f.waitForFunction(() => document.getElementById("greeting").classList.contains("shown"), null, { timeout: 15000 });
     if (process.argv[2]) await panel.screenshot({ path: process.argv[2] + "-panel.png" });
     out.opening = await f.evaluate(() => ({ url: location.href, rem: getComputedStyle(document.documentElement).fontSize,
-      hint: document.getElementById("input").placeholder, greeting: document.querySelector("#log > .ai.hello")._said.split("\n")[0] }));
+      hint: document.getElementById("input").placeholder, greeting: document.getElementById("greeting").textContent,
+      logo: document.getElementById("wordmark").textContent }));
     // A site's address, typed: a new tab with it, at once.
     const tabs = () => ctx.pages().map((p) => p.url()).filter((u) => /^https?:/.test(u));
     await site.locator("#input").click();

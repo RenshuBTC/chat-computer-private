@@ -39,7 +39,8 @@ def index_html() -> str:
         ('<link rel="stylesheet" href="theme.css">', '<link rel="stylesheet" href="demo/theme.css">'),
         ('<link rel="stylesheet" href="chat.css">',
          '<link rel="stylesheet" href="demo/chat.css">'),
-        ('<script src="md.js"></script>', '<script src="demo/host.js"></script>\n<script src="demo/md.js"></script>'),
+        ('<script src="md.js"></script>',
+         '<script src="demo/engine/engine.js"></script>\n<script src="demo/host.js"></script>\n<script src="demo/md.js"></script>'),
         ('<script src="chat.js"></script>', '<script src="demo/chat.js"></script>'),
     ]
     for old, new in swaps:

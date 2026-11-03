@@ -86,7 +86,7 @@ def test_what_s_typed_stays_on_this_computer():
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("localBase(")) == [
         '"https://api.open-meteo.com/v1/forecast', '"https://geocoding-api.open-meteo.com/v1/search',
-        '"https://openrouter.ai/api/v1/auth/keys"', 'base + "/models" + (p === "anthropic" ', "url", "url", "url", "url"], fetches
+        '"https://openrouter.ai/api/v1/auth/keys"', 'base + "/models" + (p === "anthropic" ', "url", "url", "url", "url", "url"], fetches
     assert 'fetch(localBase() + "/health"' in host and len([f for f in fetches if f.startswith("localBase(")]) == 1
     assert 'fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) })' in host
     # (getJSON's, and Heart's big file, a piece at a time, from Hugging Face: only which bytes are asked for)
@@ -148,20 +148,17 @@ def test_the_demo_works_in_a_browser():
     res = json.loads(lines[-1])
     assert "failed" not in res, res["failed"]
     assert res["errors"] == []
-    # It opens on the word logo alone; after a second it fades away, over half a second, and then Chat Computer's
-    # first words come in as its answers do, as if just typed: a moment's thinking (the logo gone), then the words a
-    # few letters at a time, fading in: hello, world, alone (the greeting under it is off for now, as asked).
+    # It opens on the word logo, and under it one line of greeting, as warm and personal as the Claude app's (for the
+    # time of day and the day, with the name you go by, or for where you are and its weather), fading in once chosen;
+    # nothing is said, and both stay until something is (three seconds on, still there). A different one each visit.
     intro, first = res["intro"], res["opening"]
     assert intro["logo"] == "Chat Computer" and intro["said"] == 0
-    assert res["intro_fading"] == {"fade": "0.5s", "said": 0}
-    assert res["greeting_thinking"] == {"logo_gone": True, "words": ""}
-    typing = res["greeting_typing"]
-    assert "hello, world".startswith(typing["words"]) and typing["fading"]
-    assert res["greeting"] == "hello, world" and res["visits"] == ["hello, world", "hello, world"]
-    # (The greetings it would choose from, were it on, still go on from it: "and ...".)
     options = res["greeting_options"]
-    assert "and greetings to you, whoever you are" in options["time"] and not any("{" in g for g in options["time"])
-    assert all(g.startswith("and ") for g in options["time"] + options["here"]), options
+    assert res["greeting"] in options["time"] + options["here"]
+    assert "Greetings, whoever you are" in options["time"] and not any("{" in g for g in options["time"] + options["here"])
+    assert not any(g.startswith("and ") or "hello, world" in g for g in options["time"] + options["here"]), options
+    assert res["greeting_line"] == {"below": True, "one_line": True, "opacity": "1", "logo": "1"}
+    assert len(res["visits"]) == 2 and res["visits"][0] != res["visits"][1]
     # Then: nothing open, no sheet, the cursor in the box under the dimmed hint; under the words, as in the Claude app,
     # + (add files) at the left, and at the right the microphone beside the arrow, each doing just that (no menus),
     # + and the microphone each in a circle of its own, as big as the arrow's.
@@ -171,8 +168,7 @@ def test_the_demo_works_in_a_browser():
     assert not first["full"] and first["sides"] == [True, True] and first["toggles"] == ["true", "true"] and not first["bottom_toggle"]
     ins = res["sides_in"]
     assert not ins["full"] and ins["sides"] == [True, True] and ins["toggles"] == ["true", "true"]
-    assert first["first_ai"] == res["greeting"] and first["last"] == res["greeting"].replace("\n", "") and first["said"] == 1
-    assert first["logo"] is None
+    assert first["first_ai"] == "" and first["said"] == 0 and first["logo"] == "Chat Computer"
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
     assert first["typing_in"] == "input" and first["hint"] == "Type anything"
     assert first["hint_weight"] == "400" and first["buttons"] == ["add", "ai", "mic"]
@@ -186,19 +182,33 @@ def test_the_demo_works_in_a_browser():
     assert first["send_size"] == [32, 32]
     box_left, box_right = first["box_at"]
     assert ax - box_left < 16 and 0 < first["send_at"][0] - mright < 12 and box_right - first["send_at"][0] < 50
-    assert res["slash"][:2] == ["Use this computer's model", "Connect AirPods"] and "Packing list.md" in res["slash"][2:]
+    # Messages' +: one panel of everything that can be connected, by kind, each with its own logo; one chosen, it's
+    # said it can't be on the website (the app connects it). Its x at its top right, and no back arrow (it came from
+    # no other panel); no button at its foot.
+    cp = res["connect_panel"]
+    assert cp["title"] == "Connect an account" and cp["items"] == [
+        "~ Email:", "Gmail @", "Outlook @", "iCloud Mail @", "Yahoo Mail @", "~ Chat apps:", "Telegram @", "WhatsApp @", "WeChat @", "Discord @",
+        "~ Social media:", "X @", "Instagram @", "Facebook @", "TikTok @", "LinkedIn"]      # (LinkedIn's logo can't be had, here)
+    assert cp["x"] == {"label": "Close", "top_right": True, "text": ""} and cp["back"] == "none" and cp["ok"] == "none" and cp["error"] == ""
+    assert res["connect_gmail"]["items"][1] == "Gmail * @"
+    assert res["connect_gmail"]["error"] == "Gmail can't be connected on the website: the Chat Computer app connects it (coming soon)."
+    # The sidebars switched off, one then both: what's in the middle (the conversation, the box, the word logo) stays
+    # where it was.
+    assert res["middle_in"] == res["middle_left_off"] == res["middle_off"]
+    assert res["slash"][:3] == ["Use this computer's model", "Run my model in this browser", "Connect AirPods"]
+    assert "Packing list.md" in res["slash"][3:]
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
     assert res["sides_off"]["sides"] == [False, False] and res["sides_off"]["toggles"][:2] == ["false", "false"]
     assert json.loads(res["kept"]) == {"left": False, "right": False}
-    assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["first_ai"] == res["greeting"]
-    assert res["sides_on"]["logo"] is None
+    assert res["sides_on"]["sides"] == [True, True] and res["sides_on"]["first_ai"] == ""
+    assert res["sides_on"]["logo"] == "Chat Computer"
     # Asked for music: soft piano made by the browser, in the middle in the conversation's place (named at the top
     # of its frame, with the message box under it), and Actions says so.
     music = res["music"]
     assert music["content"] and music["last"] == "Playing some calm piano." and music["done"][-1] == "Played some calm piano"
     assert not music["column_shown"] and music["frame_title"] == "Now playing" and music["composer"]
-    # The first words are still the conversation's first message.
-    assert music["logo"] is None and music["first_ai"] == res["greeting"]
+    # Something said: the word logo and its greeting gone; the answer is the conversation's first message.
+    assert music["logo"] is None and music["first_ai"] == "Playing some calm piano."
     f, v = music["frame"], music["view"]
     assert f[0] < v[0] and f[1] + 30 < v[1] and v[0] + v[2] < f[0] + f[2] and v[1] + v[3] < f[1] + f[3]
     # "/": the list is in front of what's open; Escape ends the search (and only that).
@@ -228,8 +238,8 @@ def test_the_demo_works_in_a_browser():
     long = res["fallback"]
     assert not long["content"] and long["column_shown"] and long["view"] is None and long["more"] == 0
     # No good answer: a few short lines, and the one thing that gets one (Chat Computer's own model: with the app).
-    assert long["last"] == ("I can't answer that yet. My model comes with the Chat Computer app (coming soon). Where the app runs "
-                            "on this computer, type / and choose Use this computer's model.")
+    assert long["last"] == ("I can't answer that yet. My model can run in this browser: type / and choose Run my model in this "
+                            "browser (free; 1.8 GB, once). Or press the spark beside + to use an AI you already have.")
     # Google, for real, in the middle: its own address for being shown in another page; a click on its box, and
     # typing goes there, not into the message box.
     g = res["google"]
@@ -253,7 +263,7 @@ def test_the_demo_works_in_a_browser():
                                                             "(Or, if your browser asked, allow it.)"}
     on = res["local_on"]
     assert not on["sheet"] and on["done"][-1] == "Using this computer's model (Qwen3.5 9B)"
-    assert res["local_on_slash"][:2] == ["Stop using this computer's model", "Connect AirPods"]
+    assert res["local_on_slash"][:3] == ["Stop using this computer's model", "Run my model in this browser", "Connect AirPods"]
     assert json.loads(res["local_stored"]) is True
     m = res["local_map"]
     assert m["last"] == "Here's Tokyo." and "openstreetmap.org/export/embed.html?bbox=139.55%2C35.55%2C139.95%2C35.8" in m["src"]
@@ -303,32 +313,43 @@ def test_the_demo_works_in_a_browser():
     stopped = res["local_stopped"]
     assert stopped["done"][-2:] == ["Using this computer's model (Qwen3.5 9B)", "Stopped using this computer's model"]
     assert stopped["slash"][0] == "Use this computer's model" and stopped["stored"] is None
-    # The greeting is off for now: hello, world alone, in the evening and in the morning, and nothing is looked up
-    # for it (no Open-Meteo); the greetings it would choose from for the time of day still have the name you go by.
+    # The greeting: for the time of day and the day, with the name you go by; or for where you are (your time zone's
+    # city, here Singapore: found once, its weather looked up and kept a while) and its weather: a rainy, warm
+    # Friday evening; a sunny Friday morning, without a name; a cloudy Wednesday before dawn (no "grey skies" in the
+    # dark, nor "a warm night" in the morning).
     ev = res["greet_evening"]
-    assert ev["said"] == "hello, world" and ev["meteo"] == [] and ev["now"]["here"] == []
-    assert ev["now"]["time"] == ["and look who's back: Ren!", "and good evening to you, Ren", "and to you, Ren: how was your day?"]
+    assert ev["meteo"] == ["geocoding-api Singapore", "api"]
+    assert ev["now"]["time"] == ["Look who's back: Ren!", "Good evening, Ren", "How was your day, Ren?"]
+    assert ev["now"]["here"] == ["Good evening in Singapore, Ren", "Hello, Singapore! How was your day, Ren?",
+                                 "Stay dry in rainy Singapore, Ren", "Hello, rainy Singapore! A cozy evening in, Ren?",
+                                 "Hello, Singapore! A warm night, Ren"]
+    assert ev["said"] in ev["now"]["time"] + ev["now"]["here"]
     mo = res["greet_morning"]
-    assert mo["said"] == "hello, world" and mo["now"]["here"] == []
-    assert mo["now"]["time"] == ["and good morning to you", "and welcome", "and hey there to you", "and a happy Friday to you",
-                                 "and hello to that Friday feeling", "and greetings to you, whoever you are"]
-    assert res["greet_dawn"] == []
+    assert mo["now"]["time"] == ["Good morning", "Welcome", "Hey there", "Happy Friday", "Hello to that Friday feeling",
+                                 "Greetings, whoever you are"]
+    assert mo["now"]["here"] == ["Good morning in Singapore", "Hello, Singapore! How's your morning?",
+                                 "Hello, sunny Singapore! Lovely morning", "Blue skies in Singapore today"]
+    assert mo["said"] in mo["now"]["time"] + mo["now"]["here"]
+    assert res["greet_dawn"] == ["Good morning in Singapore", "Hello, Singapore! How's your morning?",
+                                 "Hello, cloudy Singapore! How's your morning?"]
     # The name you go by: asked, given ("call me", in your words, capitalised), not taken from "call me back later",
     # and forgotten; where you live: found on the map (Penang, in your word for it), its weather in the greeting and
     # when you ask for the weather.
     assert res["name_asked"] == "You're Ren. (To change it, say \u201ccall me\u201d and the name you'd like.)"
     assert res["name_given"]["said"] == "Nice to meet you, Ren Shu! I'll call you that from now on."
-    assert res["name_given"]["time"][1] == "and good evening to you, Ren Shu"
+    assert res["name_given"]["time"][1] == "Good evening, Ren Shu"
     assert not res["name_not"].startswith("Nice to meet you")
     assert res["place_given"]["said"] == "Got it: you live in Penang, Malaysia. Say \u201cweather\u201d for its forecast."
-    assert res["place_given"]["here"] == []
+    assert res["place_given"]["here"] and all("Penang" in g for g in res["place_given"]["here"])
     assert res["place_weather"].startswith("Today in Penang: light rain, 26\u00b0 to 31\u00b0")
     forgot = res["name_forgotten"]
-    assert forgot["said"] == "Done: I've forgotten your name." and "and greetings to you, whoever you are" in forgot["time"]
+    assert forgot["said"] == "Done: I've forgotten your name." and "Greetings, whoever you are" in forgot["time"]
     assert forgot["done"][-4:] == ["Set your name to Ren Shu", "Set your place to Penang", "Looked up the weather for Penang",
                                    "Forgot your name"]
-    # Penang found once, and its forecast when asked for (nothing for a greeting).
-    assert res["greet_meteo"] == ["geocoding-api penang", "api"]
+    # Singapore found once, and its weather, for the greeting; then Penang, and its weather, for the greeting and when
+    # asked for.
+    assert res["greet_meteo"][:2] == ["geocoding-api Singapore", "api"] and "geocoding-api penang" in res["greet_meteo"]
+    assert res["greet_meteo"].count("geocoding-api penang") == 1
     # Connect AirPods says what it does before the microphone is asked for.
     assert res["talk_sheet"]["sheet"] and res["talk_sheet"]["sheet_title"] == "Talk through your AirPods"
     # The microphone button listens at once (no sheet), the microphone becoming one bar that moves with what it hears
@@ -339,13 +360,15 @@ def test_the_demo_works_in_a_browser():
         ["WhatsApp", "whatsapp.com.ico", "no-referrer"], ["Gmail", "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico", "no-referrer"],
         ["Telegram", "web.telegram.org.ico", "no-referrer"], ["Instagram", "www.instagram.com.ico", "no-referrer"],
         ["Outlook", "outlook.live.com.ico", "no-referrer"], ["X", "x.com.ico", "no-referrer"], ["LinkedIn", "own", ""]], res["msg_icons"]
-    assert res["icons_asked"] == ["outlook.live.com.ico", "web.telegram.org.ico", "whatsapp.com.ico",
-                                  "www.instagram.com.ico", "www.linkedin.com.ico", "x.com.ico"]
+    # (Messages' services' logos, and those of everything + can connect: only their addresses.)
+    assert res["icons_asked"] == ["discord.com.ico", "mail.yahoo.com.ico", "outlook.live.com.ico", "web.telegram.org.ico",
+                                  "web.wechat.com.ico", "whatsapp.com.ico", "www.facebook.com.ico", "www.icloud.com.ico",
+                                  "www.instagram.com.ico", "www.linkedin.com.ico", "www.tiktok.com.ico", "x.com.ico"]
     # The sidebars' switches on the edges nearest the middle (Messages' at its right, Actions' at its left), each
     # centred on its sidebar's title's line; Messages' connect rows only once + is pressed.
     sw = res["switches"]
     assert len(set(sw["centres"])) == 1 and 0 < sw["left_gap"] < 20 and 0 < sw["right_gap"] < 20, sw
-    assert sw["connect"] == "none"
+    assert sw["connect"] is False                      # (no rows under Messages: + opens a panel)
     # Your own AI (the spark beside +): OpenRouter's own sign-in (PKCE: a SHA-256 challenge, the verifier given only
     # when trading the code for a key), back to this page, the code gone from its address; the newest free model that
     # uses tools chosen; then it answers, on that key, with the page's tools and none of the engine's own options, told
@@ -358,25 +381,53 @@ def test_the_demo_works_in_a_browser():
     assert auth["back"].startswith("file://") and auth["back"].endswith("/docs/index.html") and auth["method"] == "S256"
     assert auth["challenge"] == 43 and res["own_traded"] == {"code": "test-code", "method": "S256", "verifier": 43}
     own_in = res["own_in"]
-    assert own_in["search"] == "" and own_in["title"] == "OpenRouter (new/free-model:free) answers. Press to change"
-    assert own_in["kept"] == {"provider": "openrouter", "key": "test-openrouter-key", "model": "new/free-model:free"}
+    assert own_in["search"] == "" and own_in["title"] == "OpenRouter (Free Model) answers. Press to change"
+    assert own_in["kept"] == {"provider": "openrouter", "key": "test-openrouter-key", "model": "new/free-model:free", "name": "Free Model",
+                              "levels": [], "dflt": "", "models": ["new/free-model:free", "old/free-model:free"], "best": []}
     (asked,) = res["own_asked"]
     assert asked["auth"] == "Bearer test-openrouter-key" and asked["title"] == "Chat Computer" and asked["model"] == "new/free-model:free"
     assert asked["stream"] and not asked["think"] and not asked["max"] and asked["tools"] > 5
-    assert "Right now you think with new/free-model:free, through OpenRouter" in asked["system"]
+    assert "Right now you think with Free Model (new/free-model:free), through OpenRouter" in asked["system"]
     assert asked["last"]["role"] == "user" and asked["last"]["content"].endswith("hi there")
-    assert res["own_menu_in"] == {"title": "Your own AI", "choices": ["Choose its model", "Sign out of OpenRouter"]}
+    # (Signed in, the same panel: its models to choose from, and signing out.)
+    assert res["own_menu_in"] == {"title": "Your own AI", "choices": ["Free Model", "Free Model", "Sign out of OpenRouter"]}
     assert res["own_out"]["title"] == "Sign in with your own AI" and res["own_out"]["kept"] is None
-    assert res["own_out"]["done"] == ["Signed in with OpenRouter (new/free-model:free)", "Signed out of OpenRouter"]
+    assert res["own_out"]["done"] == ["Signed in with OpenRouter (Free Model)", "Signed out of OpenRouter"]
     assert res["own_empty"] == "Paste the key first."
-    assert res["own_key"] == {"title": "OpenAI (gpt-9) answers. Press to change", "sheet": False, "type": "password"}   # (typed hidden)
+    assert res["own_key"] == {"title": "OpenAI (GPT-9) answers. Press to change", "sheet": False, "type": "password"}   # (typed hidden)
     # OpenRouter's models to choose from: its free ones (newest first), then the best of each maker in the index's
     # order, each with its logo (on your OpenRouter credits): no "pro" or batch versions, nor a maker's lesser models.
-    assert res["or_models"] == ["~ Free, the newest first:", "b/free-two:free", "a/free:free", "~ The best of each maker, on your credits:",
-                                "google/gemini-4-argon @gemini.google.com.ico", "anthropic/claude-opus-5.5 @claude.ai.ico",
-                                "openai/gpt-6-astra @openai.com.ico", "meta/muse-wonder @dev.meta.ai.ico", "x-ai/grok-4.7 @grok.com.ico",
-                                "deepseek/deepseek-v4-pro-0813 @deepseek.com.ico", "stepfun/step-5-preview @stepfun.ai.ico",
-                                "inclusionai/ling-3.1-flash @ant-ling.com.ico", "mistralai/mistral-large-4-0 @mistral.ai.ico"]
+    assert res["or_models"] == ["~ Model (free, the newest first):", "Free Two", "Free *", "~ The best of each maker, on your OpenRouter credits:",
+                                "Gemini 4 Argon @gemini.google.com.ico", "Claude Opus 5.5 @claude.ai.ico", "GPT-6 Astra @openai.com.ico",
+                                "Muse Wonder @dev.meta.ai.ico", "Grok 4.7 @grok.com.ico", "DeepSeek V4 Pro 0813 @deepseek.com.ico",
+                                "Step 5 Preview @stepfun.ai.ico", "Ling 3.1 Flash @ant-ling.com.ico", "Mistral Large 4.0 @mistral.ai.ico",
+                                "Sign out of OpenRouter"]
+    # Chat Computer's model in this browser (its engine standing in): offered with "/" and when an answer needs a
+    # model; chosen, what it is and what it costs said first; its download said as it goes; its short instructions
+    # (the same every visit) and its few tools read ahead while it gets ready; then it answers, its tools run; a later
+    # visit starts it from the browser's copy at once, nothing downloaded; stopped; removed (nothing kept of it).
+    assert res["web_slash"][:3] == ["Use this computer's model", "Run my model in this browser", "Connect AirPods"]
+    assert res["web_offer"] == ("I can't write a poem yet. My model can run in this browser: type / and choose Run my model in this "
+                                "browser (free; 1.8 GB, once). Or press the spark beside + to use an AI you already have.")
+    form = res["web_form"]
+    assert form["title"] == "Run my model in this browser" and form["ok"] == "Download it"
+    assert "It downloads 1.8 GB once, from Qwen's own repository" in form["text"] and "nothing you type leaves this browser" in form["text"]
+    assert res["web_getting"].startswith("Getting my model ready: downloading it (0.9 of 1.8 GB, 50%)"), res["web_getting"]
+    assert "Getting my model ready" in res["web_getting_slash"]
+    ahead, first, second = res["web_asked"]
+    tools = sorted(["web_search", "weather", "show_map", "youtube_search", "make_timer", "close"])
+    assert ahead["kind"] == "ahead" and ahead["roles"] == ["system"] and ahead["think"] is False and ahead["max"] == 1024
+    assert sorted(ahead["tools"]) == tools
+    assert ahead["system"].startswith("You are Chat Computer: you run a whole computer for the person. Right now you're on")
+    assert first["kind"] == "chat" and first["system"] == ahead["system"] and first["tools"] == ahead["tools"]
+    assert first["roles"] == ["system", "user"] and first["last"].endswith("a five minute timer")
+    assert second["roles"] == ["system", "user", "assistant", "tool"] and second["last"].startswith("A 5-minute timer is on the screen")
+    assert res["web_on_slash"][:3] == ["Use this computer's model", "Stop using my model in this browser", "Remove my model from this browser"]
+    assert res["web_log"] == ["download"]
+    assert res["web_later"]["log"] == ["load"] and res["web_later_slash"][1] == "Stop using my model in this browser"
+    assert res["web_stopped"][:3] == ["Use this computer's model", "Run my model in this browser", "Remove my model from this browser"]
+    assert res["web_removed"]["slash"][:3] == ["Use this computer's model", "Run my model in this browser", "Connect AirPods"]
+    assert res["web_removed"]["kept"] == [None, None]
     # Every AI in the panel, on a key: each one's best model chosen from its list (Gemini 4 Carbon isn't offered to
     # keys; no list at Z.ai's: GLM-5.3 by name); the key as a bearer token, to its own address (Kimi's, from its other
     # site, at that site's); the page's tools, streamed; its call of make_timer run and asked again with the answer.
@@ -392,7 +443,38 @@ def test_the_demo_works_in_a_browser():
     assert res["key_refused"] == "Google didn't take that key."
     assert keyed["Gemini"]["models"] == ["https://generativelanguage.googleapis.com/v1beta/openai Bearer bad-key",
                                          "https://generativelanguage.googleapis.com/v1beta/openai Bearer key-of-Gemini"]
-    # (Anthropic's: told the page asks it itself, with its API's version, and room to answer.)
+    # (One panel: an AI chosen, its key asked for under the others, in the same panel, with Get a key under it.)
+    assert res["key_panel"] == {"title": "Your own AI", "on": ["Gemini"], "field": "Your Google API key", "ok": "Sign in",
+                                "more": "Get a key", "order": ["DIV.choices", "LABEL", "DIV.choices"]}
+    # Signed in, the same panel says which model answers and how hard it thinks, each to choose (the one now marked,
+    # its default said): from what its list of models says (Anthropic's display names and efforts, DeepSeek's
+    # efforts), or as its documentation has them; and the effort chosen goes to it as it takes it, said in its
+    # instructions and on the spark.
+    assert keyed["Claude"]["panel"] == ["~ Model:", "Claude Opus 5.5 *", "Claude Sonnet 5.5", "Claude Haiku 5.5",
+                                        "~ Effort: how hard it thinks before answering (Medium is its default):",
+                                        "Low", "Medium *", "High", "Max", "Sign out of Claude"]
+    assert keyed["DeepSeek"]["panel"] == ["~ Model:", "DeepSeek V4 Pro *", "DeepSeek Flash",
+                                          "~ Effort: how hard it thinks before answering (High is its default):",
+                                          "Off", "Low", "High *", "Max", "Sign out of DeepSeek"]
+    assert keyed["MiMo"]["panel"][-4:] == ["~ Thinking before it answers:", "Off", "On *", "Sign out of MiMo"]
+    assert keyed["Mistral"]["panel"][-5:] == ["~ Effort: how hard it thinks before answering:", "Low", "Medium", "High", "Sign out of Mistral"]
+    for n, r in keyed.items():
+        assert r["panel"][0] == "~ Model:" and r["panel"][1].endswith(" *"), (n, r["panel"])
+    assert {n: r["effort"] for n, r in keyed.items()} == {
+        "Gemini": "high", "Claude": {"effort": "max"}, "OpenAI": {"effort": "max"}, "Meta": "max", "Kimi": "low", "Grok": "xhigh",
+        "Qwen": "none", "DeepSeek": "max", "GLM": "low", "MiMo": {"type": "disabled"}, "MiniMax": "high", "Mistral": "high"}
+    assert keyed["Claude"]["spark"] == "Claude (Claude Opus 5.5, at Max effort) answers. Press to change"
+    assert keyed["Grok"]["spark"] == "Grok (Grok 4.7, at Extra high effort) answers. Press to change"
+    assert keyed["MiMo"]["spark"] == "MiMo (MiMo V2.6 Pro, not thinking first) answers. Press to change"
+    assert "Right now you think with Claude Opus 5.5 (claude-opus-5-5), through Claude" in keyed["Claude"]["told"]
+    assert "Your effort (how hard you think before answering) is Max;" in keyed["Claude"]["told"]
+    assert "Your effort (how hard you think before answering) is Low;" in keyed["Kimi"]["told"]
+    # (Claude, through Anthropic's own Messages API, where its effort can be set: told what it's told apart (system),
+    # its own thinking (signed) and tool call given back as it gave them, the tool's answer first in the message after;
+    # told the page asks it itself, with its API's version, and room to answer.)
+    assert keyed["Claude"]["at"] == "https://api.anthropic.com/v1/messages" and keyed["Claude"]["roles"] == ["user", "assistant", "user"]
+    assert keyed["Claude"]["back"] == ["thinking:sig-claude", 'tool_use:{"minutes":20}'] and keyed["Claude"]["result_first"] == "tool_result"
+    assert keyed["Claude"]["tool_names"][0][1] is True
     assert keyed["Claude"]["browser"] == "true" and keyed["Claude"]["version"] == "2023-06-01" and keyed["Claude"]["max"] == 32000
     assert all(r["browser"] is None and r["version"] is None for n, r in keyed.items() if n != "Claude")
     # (OpenAI's best use tools only through its Responses API: asked there, not kept by OpenAI.)
@@ -410,8 +492,13 @@ def test_the_demo_works_in_a_browser():
     assert keyed["Mistral"]["content_back"] == ["thinking"] and keyed["Mistral"]["thinking_back"] is None
     assert keyed["MiniMax"]["split"] is True and all(r.get("split") is None for n, r in keyed.items() if n != "MiniMax")
     assert all(r.get("max") is None for n, r in keyed.items() if n != "Claude")
-    # (Get a key: the page that makes one, in a new tab; the key's panel still there for it.)
-    assert res["key_tab"]["url"].startswith("https://platform.claude.com/settings/keys") and res["key_tab"]["still"] == "Claude"
+    # (Another AI, signed in: Change asks for its address, model and key again, with a back arrow to the panel it came
+    # from; back, that panel.)
+    assert res["other_change"] == {"back": "block", "on": ["Another AI"]}
+    assert res["other_back"]["back"] == "none" and res["other_back"]["items"] == ["Its Model 2", "Change", "Sign out of ai.example.com"]
+    assert res["other_back"]["spark"] == "ai.example.com (Its Model 2) answers. Press to change"
+    # (Get a key: the page that makes one, in a new tab; the panel still there for the key.)
+    assert res["key_tab"]["url"].startswith("https://platform.claude.com/settings/keys") and res["key_tab"]["still"] == "Your own AI"
     # ChatGPT, on your plan, in the app (a stand-in for it): offered there, not on the website; signed in through the
     # app, the plan's notice the first time (OpenAI's guidelines), its listed model chosen; an answer that calls the
     # page's make_timer and then says so, asked as the Responses API takes it (instructions, the conversation in
@@ -421,19 +508,20 @@ def test_the_demo_works_in_a_browser():
                                "MiMo", "MiniMax", "Mistral", "OpenRouter", "Another AI"]
     told = res["gpt_told"]
     assert told["ok"] == "Got it" and "on your ChatGPT plan" in told["text"]
-    assert told["spark"] == "ChatGPT (gpt-9-plan) answers. Press to change"
-    assert told["kept"] == {"provider": "chatgpt", "key": "app", "model": "gpt-9-plan", "email": "ren@example.com"}
+    assert told["spark"] == "ChatGPT (GPT-9, at Medium effort) answers. Press to change"
+    assert told["kept"] == {"provider": "chatgpt", "key": "app", "model": "gpt-9-plan", "email": "ren@example.com", "name": "GPT-9",
+                            "levels": ["low", "medium", "high"], "dflt": "medium", "models": ["gpt-9-plan"]}
     first, second = res["gpt_asked"]
     assert first["model"] == "gpt-9-plan" and first["store"] is False and first["stream"] is True
-    assert first["told"].startswith("You are Chat Computer: you run a whole computer for the person. Right now you think with gpt-9-plan, "
-                                    "on the person's own ChatGPT plan")
+    assert first["told"].startswith("You are Chat Computer: you run a whole computer for the person. Right now you think with GPT-9 "
+                                    "(gpt-9-plan), on the person's own ChatGPT plan")
     assert first["input"] == ["user"] and first["tools"][0][0] == "function" and first["tools"][0][2]
     assert first["last"]["content"][0]["type"] == "input_text" and first["last"]["content"][0]["text"].endswith("a timer for 20 minutes")
     assert second["input"] == ["user", "function_call", "function_call_output"]
     assert second["last"]["call_id"] == "call_g1" and second["last"]["output"].startswith("A 20-minute timer is on the screen")
     assert res["gpt_done"][-1] == "Made a timer", res["gpt_done"]
-    assert res["gpt_menu_in"]["choices"] == ["Manage usage", "Choose its model", "Sign out of ChatGPT"]
-    assert res["gpt_menu_in"]["text"].startswith("Using your ChatGPT plan: gpt-9-plan answers, as ren@example.com.")
+    assert res["gpt_menu_in"]["choices"] == ["GPT-9", "Low", "Medium", "High", "Manage usage", "Sign out of ChatGPT"]
+    assert res["gpt_menu_in"]["text"].startswith("Using your ChatGPT plan, as ren@example.com: what you say goes to OpenAI.")
     assert res["gpt_calls"] == ["chatgpt_sign_in", "chatgpt_ask", "chatgpt_ask", "chatgpt_ask", "chatgpt_sign_out"]
     now = res["mic_now"]
     assert not now["sheet"] and now["pressed"] == "true" and now["title"] == "Stop listening"
@@ -467,7 +555,7 @@ def test_the_demo_works_in_a_browser():
     # Read aloud's voice where the graphics chip can make Heart's (WebGPU): offered the first time Read aloud is pressed
     # (nothing said yet), with its size; closed, the browser's best voice reads the answer (Edge's natural Ava, not
     # Google's, the usual Samantha or a novelty voice), and on another visit it reads straight away, Heart in the list.
-    assert res["voice_slash"][:3] == ["Use this computer's model", "Connect AirPods", "Download Heart"]
+    assert res["voice_slash"][:4] == ["Use this computer's model", "Run my model in this browser", "Connect AirPods", "Download Heart"]
     vs = res["voice_sheet"]
     assert vs["title"] == "A warmer voice" and vs["ok"] == "Download it" and vs["spoken"] == 0
     assert "the one Chat Computer itself speaks with" in vs["text"] and "about 330 MB" in vs["text"]
@@ -505,7 +593,7 @@ def test_the_demo_works_in_a_browser():
         {"kind": "mine", "last": False, "when": "just now", "acts": ["Ask again", "Edit", "Copy"], "shown": "0", "after": "you"},
         {"kind": "theirs", "last": True, "when": "just now", "acts": ["Copy", "Read aloud", "Good answer", "Bad answer", "Ask again"],
          "shown": "1", "after": "ai"}]
-    assert res["rows_hello"] == 0                     # (something said straight away: no first words before it)
+    assert res["rows_hello"]["first"].split()[0] == "you" and res["rows_hello"]["logo"]   # (what's said starts it; the logo gone)
     # The text's size asked for in words goes the way asked: "Increase font size" bigger (it went smaller before);
     # "font" alone asks which way, changing nothing; "decrease" and "smaller" smaller; what the font is, named; and
     # back to the usual size.
@@ -522,7 +610,7 @@ def test_the_demo_works_in_a_browser():
     assert res["retry"] == {"yous": ["is it free", "is it free"], "last": 1}
     # A phone: no sidebars and no switches; in the box the words, + and the microphone, and the arrow, and it works.
     phone = res["phone_opening"]
-    assert phone["first_ai"] == "hello, world" and phone["logo"] is None and phone["toggles"] == [False, False]
+    assert phone["first_ai"] == "" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False]
     assert phone["buttons"] == ["add", "ai", "mic"]
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
     # As the Claude app is on a phone (measured on an iPhone): text a eighteenth of the screen's width (390px: 21.7px),

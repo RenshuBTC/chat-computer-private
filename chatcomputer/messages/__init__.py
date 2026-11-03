@@ -342,10 +342,13 @@ class Inbox:
 
     # ================================================================ connecting an account
     def _form(self, provider: str, **form: Any) -> None:
-        """Shows a sign-in form (kept as shown, to show again with what went wrong)."""
+        """Shows a sign-in form (kept as shown, to show again with what went wrong). One for an account (not the list
+        of them) has a back arrow at its top, to the list (chat.js: f.back; "accounts" asks for the list again)."""
         self._drop_forms()
         self._form_n += 1
         fid = f"{provider}-{self._form_n}"
+        if provider != "choose":
+            form.setdefault("back", "accounts")
         self.forms[fid] = {"provider": provider, "_shown": form}
         self.screen.account_form({"id": fid, **form})
 
@@ -364,6 +367,8 @@ class Inbox:
         aliases = {"hotmail": "outlook", "live": "outlook", "outlook.com": "outlook", "google": "gmail",
                    "twitter": "x", "messenger": "facebook", "email": "imap", "mail": "imap", "apple": "icloud"}
         provider = aliases.get(provider, provider)
+        if provider == "accounts":                  # (back, from one account's form: the list of them)
+            provider = ""
         if not provider and group in GROUPS:
             title, values = GROUPS[group]
             self._form("choose", title=title, text=["Which one?"], ok="",

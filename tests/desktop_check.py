@@ -183,10 +183,10 @@ def main() -> None:
                " var was = window.chatcomputerApp; window.chatcomputerApp = function (m) { window.__seen.push(m); was(m); }; }")
 
         # The app's own page, from the app: the greeting.
-        until("window.CO && document.querySelector('#log > .ai.hello') && document.querySelector('#log > .ai.hello')._said")
+        until("window.CO && document.getElementById('greeting').classList.contains('shown')")
         out["page"] = js("return location.origin")
         out["secure"] = js("return window.isSecureContext")          # (WebGPU, the microphone and the cache need it)
-        out["greeting"] = js("return document.querySelector('#log > .ai.hello')._said.split('\\n')[0]")
+        out["greeting"] = js("return document.getElementById('greeting').textContent")
         out["about"] = invoke("about")
         # The model: served by the engine beside the app (the one here), the page told; "/" names it.
         end = time.time() + 90
@@ -237,14 +237,13 @@ def main() -> None:
         # Closed: the page has the middle again.
         js("document.getElementById('frame-close').click()")
         out["closed"] = until("!document.body.classList.contains('content') && 'yes'", 10)
-        # Messages: Gmail, WhatsApp and Outlook connected from + in Messages (then Connect email, or Connect chat
-        # apps), each in the middle to sign in (here, already in), then out of sight, read; a site in the middle can't
-        # hand over messages.
-        def kind(group):
+        # Messages: Gmail, WhatsApp and Outlook connected from + in Messages (one panel of everything that can be
+        # connected), each in the middle to sign in (here, already in), then out of sight, read; a site in the middle
+        # can't hand over messages.
+        def kind(group=None):
             js("document.getElementById('add-account').click()")
-            js("document.querySelector('.connect-row[data-group=\"' + arguments[0] + '\"]').click()", group)
         def connect(name):
-            kind({"Gmail": "email", "Outlook": "email", "WhatsApp": "chat"}[name])
+            kind()
             until("document.body.classList.contains('sheet') && document.querySelector('#sheet-fields .choices button')")
             js("var want = arguments[0]; Array.from(document.querySelectorAll('#sheet-fields .choices button')).filter(function (b) {"
                " return b.textContent === want; })[0].click()", name)

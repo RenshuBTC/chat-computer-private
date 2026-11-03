@@ -593,9 +593,8 @@ retrying with backoff, then starts listening.
   Computer, every half hour; the website's host, at most once every half hour), and the greeting is chosen once
   the moment's thinking is over, so a weather looked up meanwhile can be in it. Never the one shown last time
   (`localStorage`, where there is one); again when the conversation is cleared. The empty
-  message box (white, `--paper`, with a soft shadow) shows its placeholder, "Type anything or “/” or press “Esc”",
-  dimmed (`--dim`; without "or press “Esc”" where there's no room for the sidebars or no keyboard, and just "Type anything"
-  where the box is narrow; gone once something is typed, `body.typed`), the cursor is in
+  message box (white, `--paper`, with a soft shadow) shows its placeholder, "Type anything", as the person asked
+  (dimmed, `--dim`; gone once something is typed, `body.typed`), the cursor is in
   the box from the start, and its round send button is `--dim` until there's something to send, then black. No buttons beyond the sidebars' items,
   the sidebars' switches and what's open's close button: settings, the microphone (sound tool, `input`) and the
   model are changed by asking.

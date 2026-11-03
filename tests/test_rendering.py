@@ -172,8 +172,7 @@ def test_the_message_box_works_like_the_claude_apps():
     assert empty["focused"] and empty["value"] == "" and empty["send"] == "rgb(145, 143, 138)"
     # Nothing under the box (or above it while awake), and in it just the dimmed hint ("Esc" in it only where Escape
     # has sidebars to bring in: a screen with room for them).
-    esc = " or press \u201cEsc\u201d" if empty["panel"] else ""
-    assert empty["words"] == "" and empty["hint"] == "Type anything or \u201c/\u201d" + esc and empty["full"]
+    assert empty["words"] == "" and empty["hint"] == "Type anything" and empty["full"]
     assert empty["wake"] == "none" and empty["below_box"] < 20 and empty["above_box"] < 14
     assert typed["value"] == "hi there" and typed["drafting"] and typed["send"] == "rgb(0, 0, 0)"
     assert two["value"] == "hi there\nsecond line" and two["box_h"] > typed["box_h"] + 20
@@ -210,7 +209,7 @@ def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
     assert "timeout" not in res, res
     first, start, pinned, content = res["first"], res["start"], res["pinned"], res["content"]
     assert first["full"] and first["sides"] == [False, False] and not first["toggles"]["left"]["shown"]
-    assert not first["toggles"]["right"]["shown"] and first["hint"] == "Type anything or \u201c/\u201d or press \u201cEsc\u201d"
+    assert not first["toggles"]["right"]["shown"] and first["hint"] == "Type anything"
     assert not start["full"] and start["sides"] == [True, True]
     w, h = start["view"]
     gap = start["messages"][0]                                  # the cards' space from the screen's edges
@@ -237,7 +236,7 @@ def test_what_is_open_fills_the_middle_and_escape_fills_the_screen():
     assert abs(f[1] - gap) <= 1 and abs(box[1] - f[3] - gap) <= 2
     assert f[0] < v[0] and f[1] + 30 < v[1] and v[2] < f[2] and v[3] < f[3]          # under its bar, inside
     assert content["close"][0] > v[2] - 60 and f[1] < content["close"][1] < v[1]       # the x: top right, in the bar
-    assert content["hint"] == "Type anything or \u201c/\u201d or press \u201cEsc\u201d"
+    assert content["hint"] == "Type anything"
     # "/": its list shows in front. The window lays the page over this one, so the page ends above the list; it
     # comes back down when the search ends (Escape, which ends the search rather than filling the screen).
     sl = res["slash"]

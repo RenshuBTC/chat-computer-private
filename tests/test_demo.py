@@ -145,7 +145,7 @@ def test_the_demo_works_in_a_browser():
     assert first["first_ai"] == res["greeting"] and first["last"] == res["greeting"].replace("\n", "") and first["said"] == 1
     assert first["logo"] is None
     assert first["messages"] == 7 and first["panel"] and len(first["done"]) == 4
-    assert first["typing_in"] == "input" and first["hint"] == "Type anything or \u201c/\u201d or press \u201cEsc\u201d"
+    assert first["typing_in"] == "input" and first["hint"] == "Type anything"
     assert first["hint_weight"] == "400" and first["buttons"] == 0
     assert res["slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Packing list.md" in res["slash"][2:]
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
@@ -276,7 +276,7 @@ def test_the_demo_works_in_a_browser():
     assert not res["ai_downloading"]["sheet"] and res["ai_downloading"]["hint"] == "Downloading Gemini (50%)\u2026"
     assert res["ai_downloading_slash"][2] == "Downloading Gemini (50%)"
     on = res["ai_on"]
-    assert on["hint"] == "Type anything or \u201c/\u201d or press \u201cEsc\u201d" and on["done"][-1] == "Turned on Chrome's built-in AI"
+    assert on["hint"] == "Type anything" and on["done"][-1] == "Turned on Chrome's built-in AI"
     assert res["ai_on_slash"][:2] == ["Connect Claude", "Connect AirPods"] and "Download Gemini" not in res["ai_on_slash"]
     poem = res["ai_poem"]
     assert poem["content"] and poem["last"] == "Here's a short poem about the sea." and poem["done"][-1] == "Showed \u201cThe sea\u201d"
@@ -306,7 +306,7 @@ def test_the_demo_works_in_a_browser():
     # words streamed in, told who it is; the written answers still answer what they can, and what was said (theirs
     # too) goes with the next question.
     on = res["lm_on"]
-    assert on["hint"] == "Type anything or “/” or press “Esc”" and on["done"][-1] == "Turned on Gemma, on this device"
+    assert on["hint"] == "Type anything" and on["done"][-1] == "Turned on Gemma, on this device"
     assert res["lm_on_slash"][:3] == ["Connect Claude", "Connect AirPods", "Remove Gemma"] and "Download Gemma" not in res["lm_on_slash"]
     assert res["lm_haiku"]["last"] == "Dark cup in my hands, the day starts with you." and res["lm_music"] == "Playing some calm piano."
     calls = res["lm_calls"]
@@ -448,7 +448,7 @@ def test_the_demo_works_in_a_browser():
     assert res["talk_twice"] == "What time is it in Tokyo"
     refused = res["talk_refused"]
     assert refused["title"] == "Talking stopped" and "Siri or Dictation" in refused["text"]
-    assert refused["hint"] == "Type anything or \u201c/\u201d" and refused["awake"] == 0      # (no Escape on a phone)
+    assert refused["hint"] == "Type anything" and refused["awake"] == 0
     # Revert, in Actions: on what can be taken back (yesterday's volume, the saved file), under the pointer, beside its
     # pin; not on what only looked or opened a site. The saved file taken away (struck through, "/" no longer lists
     # it, and the revert listed, revertable itself; typing still in the box); that revert reverted: the file back, and

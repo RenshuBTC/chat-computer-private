@@ -131,7 +131,7 @@ def test_the_chrome_extension_works_in_chromium():
     assert res["errors"] == []
     # Its side panel is Chat Computer, the website in its frame, at a side panel's text size (no Escape there).
     o = res["opening"]
-    assert o == {"url": "https://chatcomputer.ai/?app=chrome", "rem": "16px", "hint": "Type anything or “/”",
+    assert o == {"url": "https://chatcomputer.ai/?app=chrome", "rem": "16px", "hint": "Type anything",
                  "greeting": "hello, world"}
     # A site's address typed: a real tab with it, at once, without a click.
     tabs = res["typed"]["tabs"]

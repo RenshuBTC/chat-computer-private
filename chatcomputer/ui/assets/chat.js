@@ -639,15 +639,14 @@
     onScreen.addEventListener("resize", fitKeyboard);
     onScreen.addEventListener("scroll", fitKeyboard);
   }
-  // The empty box's hint (its placeholder): "Type anything or “/” or press “Esc”" where Escape brings the sidebars in
-  // (a screen with room for them, and a keyboard), else "Type anything or “/”"; just "Type anything" in a box too
-  // narrow for more. Or, for a while, what's going on (CO.hint: "Listening", a download's progress).
-  var HINTS = [input.placeholder, input.placeholder.replace(/ or press “Esc”$/, ""), input.placeholder.replace(/ or .*$/, "")];
+  // The empty box's hint (its placeholder): "Type anything", as the person asked (no more about "/" or Escape).
+  // Or, for a while, what's going on (CO.hint: "Listening", a download's progress), as much as fits.
+  var HINTS = [input.placeholder];
   var ruler = document.createElement("canvas").getContext("2d"), hintNow = "";
   function fitHint() {
     var cs = getComputedStyle(input), room = input.clientWidth - 2;
     ruler.font = cs.fontStyle + " " + cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily;
-    var options = hintNow ? [hintNow] : body.classList.contains("panel") && !touchOnly() ? HINTS : HINTS.slice(1);
+    var options = hintNow ? [hintNow] : HINTS;
     var want = options[options.length - 1];
     for (var i = 0; i < options.length; i++) if (ruler.measureText(options[i]).width <= room) { want = options[i]; break; }
     if (input.placeholder !== want) input.placeholder = want;

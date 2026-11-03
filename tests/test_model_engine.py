@@ -9,6 +9,7 @@ import http.server
 import json
 import os
 import platform
+import shutil
 import socketserver
 import threading
 from pathlib import Path
@@ -454,3 +455,134 @@ def test_a_model_got_ready_before_has_its_refusals_found_while_it_answers(tmp_pa
         finally:
             await svc.stop()
     assert asyncio.run(run())["uncensored"]["checked"] == 12
+
+
+# ------------------------------------------------------------------ the engine gets a model ready itself
+def _https_hub(tmp_path, files):
+    """A stand-in for Hugging Face over HTTPS (a test authority's certificate for localhost): a file asked for at
+    /<repo>/resolve/<revision>/<name> is sent from /storage/<name>, as Hugging Face sends its files from its storage;
+    Range requests; it can break off a download partway (once)."""
+    import ssl
+    import subprocess
+    if not shutil.which("openssl"):
+        pytest.skip("no openssl to make the test's certificates")
+    d = tmp_path / "pki"
+    d.mkdir()
+    run = lambda *a: subprocess.run(a, cwd=d, check=True, capture_output=True)  # noqa: E731
+    run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "ca.key",
+        "-out", "ca.pem", "-days", "2", "-subj", "/CN=Chat Computer test authority",
+        "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
+    run("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "key.pem",
+        "-out", "req.csr", "-subj", "/CN=localhost")
+    (d / "ext.cnf").write_text("subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\n")
+    run("openssl", "x509", "-req", "-in", "req.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+        "-out", "cert.pem", "-days", "2", "-extfile", "ext.cnf")
+    hub = SimpleNamespace(files=files, asked=[], break_after=None, ca=str(d / "ca.pem"))
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            hub.asked.append((self.path, self.headers.get("Range")))
+            name = self.path.rsplit("/", 1)[-1]
+            if "/resolve/" in self.path:
+                self.send_response(302)
+                self.send_header("Location", f"https://localhost:{hub.port}/storage/{name}?sig=1")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            data = hub.files.get(name.split("?")[0])
+            if data is None:
+                self.send_error(404)
+                return
+            start = 0
+            rng = self.headers.get("Range")
+            if rng and rng.startswith("bytes="):
+                start = int(rng[6:].split("-")[0])
+            body = data[start:]
+            self.send_response(206 if start else 200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if hub.break_after is not None and len(body) > hub.break_after:
+                cut, hub.break_after = hub.break_after, None
+                self.wfile.write(body[:cut])
+                self.wfile.flush()
+                self.connection.shutdown(2)
+                return
+            self.wfile.write(body)
+
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+    httpd.daemon_threads = True
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.load_cert_chain(d / "cert.pem", d / "key.pem")
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    hub.port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    hub.stop = lambda: (httpd.shutdown(), httpd.server_close())
+    return hub
+
+
+def _prepare(prog, hub, tmp_path, files, *extra):
+    import subprocess
+    cat = tmp_path / "models.json"
+    cat.write_text(json.dumps({"models": [{
+        "name": "tiny", "label": "Tiny", "repo": "Qwen/Tiny", "revision": "0" * 40, "memory_gb": 0, "bits": 8,
+        "files": [{"name": n, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()} for n, b in files.items()]}]}))
+    env = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy", "all_proxy")}
+    env.update(CHATCOMPUTER_HUB=f"https://localhost:{hub.port}", CHATCOMPUTER_EXTRA_CA=hub.ca)
+    return subprocess.run([prog, "prepare", str(tmp_path / "models"), "--catalogue", str(cat), "--model", "tiny", *extra],
+                          capture_output=True, text=True, timeout=120, env=env)
+
+
+def test_the_engine_downloads_a_model_over_its_own_https(tmp_path):
+    """The engine's own prepare: each file over Chat Computer's own TLS (the test's authority trusted as a company's
+    proxy's would be), following the hub's redirect to its storage, carried on where it broke off, checked against
+    its SHA-256; then converting (these files aren't a model: it says so, and the downloads are kept)."""
+    prog = _engine()
+    files = {"config.json": b'{"x": 1}', "tokenizer.json": b"{}" * 10, "model.safetensors": os.urandom(400_000)}
+    hub = _https_hub(tmp_path, files)
+    try:
+        hub.break_after = 150_000
+        r = _prepare(prog, hub, tmp_path, files)
+    finally:
+        hub.stop()
+    lines = r.stderr.strip().splitlines()
+    assert r.returncode == 1 and lines[-2] == "converting" and "the engine doesn't run" in lines[-1], r.stderr[-800:]
+    d = tmp_path / "models" / "download-tiny"
+    assert {p.name: p.read_bytes() for p in d.iterdir()} == files
+    weights = [rng for path, rng in hub.asked if path.startswith("/storage/model.safetensors")]
+    assert weights[0] is None and weights[1] == "bytes=150000-"                 # carried on where it broke off
+    assert all(path.startswith("/Qwen/Tiny/resolve/" + "0" * 40 + "/") or path.startswith("/storage/") for path, _ in hub.asked)
+    assert "downloading" in r.stderr and "converting" in r.stderr and not (tmp_path / "models" / "tiny.ccm").exists()
+
+
+def test_a_file_that_comes_down_different_is_not_used(tmp_path):
+    prog = _engine()
+    files = {"config.json": b'{"x": 1}', "model.safetensors": os.urandom(50_000)}
+    served = dict(files, **{"model.safetensors": b"x" * 50_000})                # not what was pinned
+    hub = _https_hub(tmp_path, served)
+    try:
+        r = _prepare(prog, hub, tmp_path, files)
+    finally:
+        hub.stop()
+    assert r.returncode == 1 and "came down different from what Chat Computer pinned" in r.stderr
+    d = tmp_path / "models" / "download-tiny"
+    assert not (d / "model.safetensors").exists() and not (d / "model.safetensors.part").exists()
+
+
+def test_without_the_hubs_authority_nothing_comes(tmp_path):
+    """A server whose certificate no trusted authority signed: refused (Mozilla's authorities don't include the
+    test's)."""
+    prog = _engine()
+    files = {"config.json": b'{"x": 1}'}
+    hub = _https_hub(tmp_path, files)
+    hub.ca = str(tmp_path / "none.pem")
+    try:
+        r = _prepare(prog, hub, tmp_path, files)
+    finally:
+        hub.stop()
+    assert r.returncode != 0 and "certificate" in r.stderr.lower() and hub.asked == []

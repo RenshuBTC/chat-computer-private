@@ -6,9 +6,16 @@
 //!                                         [--refusal FILE | --no-refusal]
 //!     chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]
 //!     chat-computer-model find-refusal MODEL.ccm [--out FILE] [--threads N]
+//!     chat-computer-model models DIR [--catalogue FILE]
+//!     chat-computer-model prepare DIR [--model NAME|auto] [--catalogue FILE] [--threads N]
 //!
 //! find-refusal finds the direction the model refuses along (the library's refusal.rs), and keeps it beside the
 //! model's file (MODEL.refusal); serve then takes it out as the model runs, so the model answers what it's asked.
+//! models and prepare choose the model for this computer and get it ready: downloaded over Chat Computer's own
+//! HTTPS, checked, converted and uncensored (prepare.rs).
+//!
+//! With --exit-with-stdin (any command), the program ends when its standard input closes: an app that starts it
+//! keeps that open, so a model left running by an app that quit, or crashed, doesn't keep its memory and its port.
 //!
 //! Only this computer can reach it (it listens on 127.0.0.1), and of web pages only Chat Computer's own (its site
 //! and its app, and any origin given with --allow-origin, such as the Chrome extension's): any other page a browser
@@ -17,8 +24,11 @@
 
 mod api;
 mod convert;
+mod fetch;
 mod http;
 mod map;
+mod prepare;
+mod sys;
 
 use model::chat::Style;
 use model::net::Pool;
@@ -27,9 +37,13 @@ use model::session::{Ended, Request, Session};
 use model::threads::Threads;
 use model::refusal::{self, Found};
 use model::{File, Model};
+use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// Whether it ends with its standard input (--exit-with-stdin): what it starts of itself does too.
+pub static WITH_STDIN: AtomicBool = AtomicBool::new(false);
 
 /// Pages that may use the model: Chat Computer's site, and its desktop app's own page (Tauri's origins).
 const ORIGINS: [&str; 5] = ["https://chatcomputer.ai", "https://www.chatcomputer.ai", "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
@@ -61,16 +75,32 @@ fn main() {
         eprintln!("chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]... \
                    [--refusal FILE | --no-refusal]\n\
                    chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]\n\
-                   chat-computer-model find-refusal MODEL.ccm [--out FILE] [--threads N]");
+                   chat-computer-model find-refusal MODEL.ccm [--out FILE] [--threads N]\n\
+                   chat-computer-model models DIR [--catalogue FILE]\n\
+                   chat-computer-model prepare DIR [--model NAME|auto] [--catalogue FILE] [--threads N]");
         std::process::exit(2);
     }
     let command = args.remove(0);
+    if let Some(i) = args.iter().position(|a| a == "--exit-with-stdin") {
+        args.remove(i);
+        WITH_STDIN.store(true, Ordering::Relaxed);
+        std::thread::spawn(|| {
+            let (mut b, mut input) = ([0u8; 256], std::io::stdin());
+            loop {
+                if matches!(input.read(&mut b), Ok(0) | Err(_)) {
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
     let code = match command.as_str() {
         "serve" => serve(args),
         "convert" => convert::main_with(args),
         "find-refusal" => find_refusal(args),
+        "models" => prepare::models_main(args),
+        "prepare" => prepare::prepare_main(args),
         other => {
-            eprintln!("no command \"{other}\" (serve, convert or find-refusal)");
+            eprintln!("no command \"{other}\" (serve, convert, find-refusal, models or prepare)");
             2
         }
     };

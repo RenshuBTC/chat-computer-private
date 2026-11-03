@@ -42,7 +42,8 @@ Qwen3.5-0.8B is the one the checks use.
   (below), kept beside the model's file and taken out as the model runs (`net.rs`: `Ablation`).
 - `src/bin/chat-computer-model`: the program: `serve` answers this computer's programs over HTTP on 127.0.0.1 as
   OpenAI's chat completions API (streamed or whole, tool calls, the thinking as `reasoning_content`); `convert`;
-  `find-refusal`.
+  `find-refusal`; `models` and `prepare`, which get the model this computer runs well ready, downloaded over Chat
+  Computer's own HTTPS (`fetch.rs`: os/tls and os/crypto, no other library), checked, converted and uncensored.
 
 ## The program
 
@@ -50,6 +51,24 @@ Qwen3.5-0.8B is the one the checks use.
     chat-computer-model find-refusal MODEL.ccm [--out FILE] [--threads N]
     chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]...
                                         [--refusal FILE | --no-refusal]
+    chat-computer-model models DIR [--catalogue FILE]
+    chat-computer-model prepare DIR [--model NAME|auto] [--catalogue FILE] [--threads N]
+
+`models` says (JSON) which models there are (Chat Computer's `chatcomputer/brain/models.json`, built in), which are
+in DIR, and which this computer gets: the biggest its memory runs well that its disk has room to get ready.
+`prepare` gets one ready: each of its files downloaded from Qwen's repository at the pinned revision, checked
+against its pinned SHA-256 (a download that broke off carries on where it stopped), converted, its refusals found,
+and the downloads removed; the model's file takes its name last, so a model is ready only once it's whole. The
+downloads use Chat Computer's own HTTPS: TLS 1.3 by `os/tls` with `os/crypto`, offering ChaCha20-Poly1305 alone
+(the own AES-GCM is the constant-time kind without the processor's AES instructions: 1 MB/s on this machine, where
+ChaCha20-Poly1305 does 200), and all three ciphers to a server without it; through the proxy in `HTTPS_PROXY`, if
+there is one (a proxy that decrypts what passes, a company's, is trusted with `CHATCOMPUTER_EXTRA_CA`, a PEM
+file). How it goes is said on stderr a line at a time, for the app showing it. With `--exit-with-stdin`, any command
+ends when its standard input closes, as when the app that started it quits or crashes.
+
+On this repository's test machine (through its proxy), `prepare` got Qwen3.5-0.8B ready in 8 minutes (1.76 GB in
+about 20 s at 90 MB/s, converting in a minute, the refusal search in 6), and its file came out byte for byte the
+same as the one made from the same files before; its refusal file the same as find-refusal's alone.
 
 `--cache DIR` keeps the reading of a conversation's first message (the system prompt and the tools: about 10,000
 tokens for Chat Computer) on disk, named by the model and those tokens, so a restart picks it up instead of reading

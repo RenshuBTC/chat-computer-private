@@ -88,6 +88,10 @@ version = "0.1.0"
 [[package]]
 name = "model"
 version = "0.1.0"
+dependencies = [
+ "crypto",
+ "tls",
+]
 
 [[package]]
 name = "net"

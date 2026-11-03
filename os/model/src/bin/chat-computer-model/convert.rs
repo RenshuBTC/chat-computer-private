@@ -47,7 +47,7 @@ pub fn main_with(args: Vec<String>) -> i32 {
     }
 }
 
-fn run(folder: &Path, out: &Path, bits: u32) -> Result<(), String> {
+pub fn run(folder: &Path, out: &Path, bits: u32) -> Result<(), String> {
     let read = |n: &str| fs::read_to_string(folder.join(n)).map_err(|e| format!("{n}: {e}"));
     let config = model::json::parse(&read("config.json")?).ok_or("config.json isn't JSON")?;
     let mut settings = convert::settings(&config)?;

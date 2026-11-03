@@ -8,8 +8,12 @@ license.workspace = true
 
 [features]
 # Threads for the arithmetic, and the program that serves the model (where there's an operating system: Chat
-# Computer on Linux, the desktop app).
-std = []
+# Computer on Linux, the desktop app), which also gets a model ready over Chat Computer's own HTTPS.
+std = ["dep:tls", "dep:crypto"]
+
+[dependencies]
+tls = { path = "../tls", optional = true }
+crypto = { path = "../crypto", optional = true }
 
 [[bin]]
 name = "chat-computer-model"

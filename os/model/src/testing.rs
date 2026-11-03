@@ -72,7 +72,7 @@ pub fn tiny(experts: bool) -> Vec<u8> {
     let specials: String = SPECIALS.iter().enumerate().map(|(i, s)| format!("{} {s}\n", 256 + i)).collect();
     w.add("tokenizer.specials", Dtype::Blob, &[specials.len()], specials.as_bytes());
     let matrix = |w: &mut Writer, name: &str, rows: usize, cols: usize, r: &mut Rng| {
-        let v = r.vec(rows * cols, 1.0 / (cols as f32).sqrt() * 1.7);
+        let v = r.vec(rows * cols, 1.0 / crate::math::sqrt(cols as f32) * 1.7);
         let mut q = Vec::new();
         quant::quantize_q8(&v, &mut q);
         w.add(name, Dtype::Q8, &[rows, cols], &q);
@@ -100,7 +100,7 @@ pub fn tiny(experts: bool) -> Vec<u8> {
             matrix(&mut w, &p("a"), 4, h, &mut r);
             let conv = r.vec(128 * 4, 0.3);
             w.add(&p("conv"), Dtype::F32, &[128, 4], &f32s(&conv));
-            vector(&mut w, &p("a_log"), (0..4).map(|i| (1.0 + i as f32 * 3.0).ln()).collect());
+            vector(&mut w, &p("a_log"), (0..4).map(|i| crate::math::ln(1.0 + i as f32 * 3.0)).collect());
             vector(&mut w, &p("dt_bias"), r.vec(4, 0.5));
             vector(&mut w, &p("linear_norm"), r.vec(16, 0.1).iter().map(|v| 1.0 + v).collect());
             matrix(&mut w, &p("out"), h, 64, &mut r);

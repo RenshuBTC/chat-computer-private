@@ -20,7 +20,7 @@ name: Own OS test
 on:
   push:
     branches: [main]
-    paths: ['os/**', 'chatcomputer/ui/assets/fonts/**', 'chatcomputer/brain/bin/**', 'tests/data/tiny-model.ccm',
+    paths: ['os/**', 'chatcomputer/ui/assets/fonts/**', 'chatcomputer/brain/bin/**', 'chatcomputer/brain/models.json', 'tests/data/tiny-model.ccm',
             'windows/own-os.ps1', 'windows/lib/OwnOs.ps1', 'windows/lib/Startup.ps1', 'tests/win_ci/own-os.ps1',
             '.github/workflows/os.yml']
   workflow_dispatch:

@@ -120,9 +120,14 @@ fn serve(dir: &Path, suite: &str) -> Server {
 
 /// A conversation: the handshake, then `request`; everything the server sends back, or what went wrong.
 fn talk(port: u16, host: &str, roots: &'static [Cert<'static>], when: i64, request: &[u8]) -> Result<(Vec<u8>, Suite), Error> {
+    talk_offering(port, host, roots, when, request, &[Suite::ChaCha20Poly1305, Suite::Aes128Gcm, Suite::Aes256Gcm])
+}
+
+fn talk_offering(port: u16, host: &str, roots: &'static [Cert<'static>], when: i64, request: &[u8], suites: &[Suite])
+    -> Result<(Vec<u8>, Suite), Error> {
     let mut sock = TcpStream::connect(("127.0.0.1", port)).unwrap();
     sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    let mut c = Client::new(host, when, roots, &mut urandom);
+    let mut c = Client::offering(host, when, roots, &mut urandom, suites);
     let (mut sent, mut got) = (false, Vec::new());
     let mut buf = vec![0u8; 32768];
     loop {
@@ -185,6 +190,20 @@ fn every_cipher_with_ecdsa_rsa_and_a_chain() {
         assert!(text.starts_with("HTTP/1.0 200 ok") && text.ends_with("hello, Chat Computer\n"), "{name} {suite}: {text:?}");
         assert_eq!(used, want);
     }
+}
+
+#[test]
+fn only_the_ciphers_offered() {
+    let dir = pki("offer", "p256", None, "p256", "DNS:localhost");
+    std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+    let chacha = [Suite::ChaCha20Poly1305];
+    let server = serve(&dir, "TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256");
+    let (_, used) = talk_offering(server.port, "localhost", trusting(&dir), now(), b"GET /a.txt HTTP/1.0\r\n\r\n", &chacha).unwrap();
+    assert_eq!(used, Suite::ChaCha20Poly1305);
+    // A server without it says so (handshake_failure), rather than using another.
+    let server = serve(&dir, "TLS_AES_128_GCM_SHA256");
+    let got = talk_offering(server.port, "localhost", trusting(&dir), now(), b"GET /a.txt HTTP/1.0\r\n\r\n", &chacha);
+    assert!(matches!(got, Err(Error::Alert(40))), "{got:?}");
 }
 
 #[test]

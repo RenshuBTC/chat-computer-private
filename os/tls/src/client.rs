@@ -75,6 +75,14 @@ impl Suite {
         }
     }
 
+    fn code(self) -> u16 {
+        match self {
+            Suite::Aes128Gcm => 0x1301,
+            Suite::Aes256Gcm => 0x1302,
+            Suite::ChaCha20Poly1305 => 0x1303,
+        }
+    }
+
     fn sha384(self) -> bool {
         self == Suite::Aes256Gcm
     }
@@ -222,6 +230,8 @@ pub struct Client {
     session_id: [u8; 32],
     transcript: Vec<u8>,
     suite: Option<Suite>,
+    /// The ciphers offered, in the order preferred.
+    offered: Vec<Suite>,
     handshake_secret: Vec<u8>,
     shared: Option<Vec<u8>>,
     client_secret: Vec<u8>,
@@ -265,6 +275,13 @@ impl Client {
     /// Starts a connection to `host` (the name checked against its certificate), at `now` (seconds since 1970),
     /// trusting `roots`. `random` fills buffers with hard-to-guess bytes. ClientHello is then in `outgoing`.
     pub fn new(host: &str, now: i64, roots: &'static [Cert<'static>], random: &mut dyn FnMut(&mut [u8])) -> Client {
+        Client::offering(host, now, roots, random, &[Suite::ChaCha20Poly1305, Suite::Aes128Gcm, Suite::Aes256Gcm])
+    }
+
+    /// The same, offering only these ciphers, in this order (a download that's to be fast offers ChaCha20-Poly1305
+    /// alone: AES here is the constant-time kind written without the processor's AES instructions, and slow).
+    pub fn offering(host: &str, now: i64, roots: &'static [Cert<'static>], random: &mut dyn FnMut(&mut [u8]),
+                    suites: &[Suite]) -> Client {
         let mut c = Client {
             host: String::from(host),
             now,
@@ -275,6 +292,7 @@ impl Client {
             session_id: [0; 32],
             transcript: Vec::new(),
             suite: None,
+            offered: suites.to_vec(),
             handshake_secret: Vec::new(),
             shared: None,
             client_secret: Vec::new(),
@@ -305,7 +323,10 @@ impl Client {
         body.extend_from_slice(random);
         body.push(32);
         body.extend_from_slice(&self.session_id);
-        body.extend_from_slice(&[0, 6, 0x13, 0x03, 0x13, 0x01, 0x13, 0x02]); // ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM
+        body.extend_from_slice(&((2 * self.offered.len()) as u16).to_be_bytes());
+        for s in &self.offered {
+            body.extend_from_slice(&s.code().to_be_bytes());
+        }
         body.extend_from_slice(&[1, 0]);
         let mut ext = Vec::new();
         let mut add = |kind: u16, data: &[u8]| {
@@ -656,7 +677,9 @@ impl Client {
             return Err(Error::Protocol("the session id came back different"));
         }
         let at = 35 + sid_len;
-        let suite = Suite::from_code(u16_at(b, at).ok_or(bad)?).ok_or(Error::Protocol("a cipher we didn't offer"))?;
+        let suite = Suite::from_code(u16_at(b, at).ok_or(bad)?)
+            .filter(|s| self.offered.contains(s))
+            .ok_or(Error::Protocol("a cipher we didn't offer"))?;
         if b.get(at + 2) != Some(&0) {
             return Err(bad);
         }

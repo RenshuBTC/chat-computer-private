@@ -4,7 +4,7 @@
 //! notes in the text and tracked changes' deleted words are left out.
 
 use crate::xml::{self, Reader, Token};
-use crate::{Error, Out, markdown_table, part, sheet_csv};
+use crate::{Error, MOST_COLUMNS, Out, markdown_table, part, sheet_csv};
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
@@ -190,10 +190,14 @@ pub fn read(archive: &Archive) -> Result<String, Error> {
                             .iter()
                             .filter(|(_, cells)| !cells.is_empty())
                             .map(|(_, cells)| {
-                                let width = cells.iter().map(|(c, _)| c + 1).max().unwrap_or(0);
+                                // A cell repeated 4,000,000,000 times moves the column on that far: don't size a row
+                                // by it (and a cell past the cap is left out).
+                                let width = cells.iter().map(|(c, _)| c + 1).max().unwrap_or(0).min(MOST_COLUMNS);
                                 let mut row = alloc::vec![String::new(); width];
                                 for (c, w) in cells {
-                                    row[*c] = w.clone();
+                                    if *c < width {
+                                        row[*c] = w.clone();
+                                    }
                                 }
                                 row
                             })

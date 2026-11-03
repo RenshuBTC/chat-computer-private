@@ -69,7 +69,12 @@ pub fn decode(data: &[u8], background: [u8; 3], most: u64) -> Result<Picture, Er
         lzw.extend_from_slice(data.get(at..at + n).ok_or(Error::Damaged)?);
         at += n;
     }
-    let indexes = decompress(&lzw, min_code, fw * fh)?;
+    // The frame's own size is what's decoded (it can be larger than the screen): it must fit the same budget.
+    let frame_pixels = (fw as u64).saturating_mul(fh as u64);
+    if frame_pixels > most {
+        return Err(Error::TooBig);
+    }
+    let indexes = decompress(&lzw, min_code, frame_pixels as usize)?;
     let mut rgb = Vec::with_capacity(w * h * 3);
     for _ in 0..w * h {
         rgb.extend_from_slice(&background);

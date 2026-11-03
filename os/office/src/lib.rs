@@ -236,8 +236,8 @@ fn column_name(mut c: usize) -> String {
     String::from_utf8(s).unwrap_or_default()
 }
 
-/// The most columns a sheet is shown with.
-const MOST_COLUMNS: usize = 200;
+/// The most columns a sheet or a text's table is shown with.
+pub(crate) const MOST_COLUMNS: usize = 200;
 
 /// A sheet's rows as CSV: a first line naming the columns (A, B, C...), then each row with something in it, its
 /// number first ("row,A,B" / "4,Total,1612.5").

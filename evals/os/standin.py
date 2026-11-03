@@ -3,7 +3,7 @@ real Chat Computer's would say about the same machine. Each is a tiny script in 
 
     python /opt/chatcomputer/app/evals/os/standin.py COMMAND ARGS...
 
-Only the parts of each command people (and Claude) commonly use are here; anything else answers as the real
+Only the parts of each command people (and models) commonly use are here; anything else answers as the real
 command does to an option it doesn't know."""
 from __future__ import annotations
 

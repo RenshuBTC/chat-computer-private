@@ -16,7 +16,7 @@
 //!   when the firmware says they changed (Notify), and every so often anyway.
 //!
 //! What comes of it: pressing the power button turns the PC off, the way Windows does by default on a desktop (with
-//! the conversation kept); the battery and the rest are in the computer's status Claude reads; a note says when the PC
+//! the conversation kept); the battery and the rest are in the computer's status the model reads; a note says when the PC
 //! is plugged in or out, when its battery is low, and when it's nearly empty or the PC too hot (it's turned off then,
 //! as Windows would); and turning off runs the firmware's _TTS and _PTS first, as it expects.
 //!

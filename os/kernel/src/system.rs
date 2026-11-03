@@ -1,4 +1,4 @@
-//! What this computer is, as the kernel found it at start-up, and how it's doing now: for Claude's
+//! What this computer is, as the kernel found it at start-up, and how it's doing now: for the model's
 //! `computer_status` tool (assistant.rs).
 
 use crate::sync::SpinLock;
@@ -89,10 +89,12 @@ pub fn status() -> String {
     lines.push(crate::schedule::status());
     lines.push(crate::files::status());
     lines.push(crate::keep::status());
+    lines.push(crate::assistant::status());
     lines.push(String::from(
-        "Not yet in Chat Computer's own system: changing files (it reads Windows' drives and USB drives, and writes only \
-         its own memory file), Office's files from before 2007, sound other than its chimes (no speech, music or microphones), Wi-Fi, \
-         Bluetooth, sleep (it can turn off), the screen's brightness, and the other processor cores",
+        "Not yet in Chat Computer's own system: the web, changing files (it reads Windows' drives and USB drives, and \
+         writes only its own memory file), seeing pictures and reading PDFs, Office's files from before 2007, sound \
+         other than its chimes (no speech, music or microphones), Wi-Fi, Bluetooth, sleep (it can turn off), the \
+         screen's brightness, and the other processor cores",
     ));
     lines.join("\n")
 }

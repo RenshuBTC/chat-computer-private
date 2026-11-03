@@ -533,8 +533,9 @@ class LinuxPlatform(Platform):
 
     # ------------------------------------------------------------------ network
     def internet_ok(self) -> bool:
+        # (Hugging Face: where the model's files come from, and what Chat Computer reaches most.)
         try:
-            with socket.create_connection(("api.anthropic.com", 443), timeout=3):
+            with socket.create_connection(("huggingface.co", 443), timeout=3):
                 return True
         except OSError:
             return False

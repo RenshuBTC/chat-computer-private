@@ -1,36 +1,9 @@
 //! Hard-to-guess numbers, from the processor: RDSEED or RDRAND where it has them (every PC processor since
-//! about 2013), mixed with the time-stamp counter's jitter. Used directly for network port numbers and the first
-//! numbers of connections; encryption keys come from a generator seeded here (`fill`).
+//! about 2013), mixed with the time-stamp counter's jitter. Used for network port numbers and the first numbers of
+//! connections, and for the model's choices among its likeliest words.
 
 use crate::cpu;
-use crate::sync::SpinLock;
 use core::arch::asm;
-use crypto::drbg::Drbg;
-
-/// The generator for keys, and how many times it has been used since it was last given fresh bytes.
-static KEYS: SpinLock<Option<(Drbg, u32)>> = SpinLock::new(None);
-
-/// 512 bits from the processor.
-fn seed() -> [u8; 64] {
-    let mut s = [0u8; 64];
-    for chunk in s.chunks_mut(8) {
-        chunk.copy_from_slice(&u64().to_le_bytes());
-    }
-    s
-}
-
-/// Fills `out` with bytes for keys: from a ChaCha20 generator (crypto::drbg, whose own key changes after every
-/// use) seeded with 512 bits from the processor, and given 512 more every 16 uses.
-pub fn fill(out: &mut [u8]) {
-    let mut guard = KEYS.lock();
-    let (drbg, uses) = guard.get_or_insert_with(|| (Drbg::new(&seed()), 0));
-    if *uses >= 16 {
-        drbg.reseed(&seed());
-        *uses = 0;
-    }
-    *uses += 1;
-    drbg.fill(out);
-}
 
 fn has_rdrand() -> bool {
     cpu::cpuid(1, 0).2 & (1 << 30) != 0

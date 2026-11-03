@@ -43,18 +43,19 @@ chat-computer/
                             network cards (netcard/: virtio,
                             Intel's e1000 and igb families and I225/I226, Realtek's RTL8111/8168 and
                             RTL8125), the drive the PC started from (storage/: NVMe, SATA by AHCI), the
-                            settings (the Claude API key, the memory file's id) and the clock from the
-                            start-up stage, Claude (assistant.rs) with tools on the computer (its status:
-                            system.rs; the text size; a restart, or turning off by ACPI S5: power.rs; a new conversation;
-                            notes about the person: remember and forget), the conversation and the notes kept across
-                            restarts (keep.rs, as JSON {"notes": [...], "messages": [...]}; at most ~600 KB of the
-                            conversation sent), and the conversation screen (chat.rs, drawn in memory: draw.rs;
-                            Claude's answers laid out from their Markdown: rich.rs)
+                            settings (a model's file, the memory file's id) and the clock from the start-up stage,
+                            a heap that grows into its own addresses (heap.rs: the model's file is one piece), SSE
+                            and AVX kept across interrupts, Chat Computer's own model (assistant.rs: the file the app
+                            got ready on Windows, read from Windows' drive; run by model/ a step at a time from the
+                            main loop; its instructions read ahead; tools.json) with tools on the computer (its
+                            status: system.rs; the text size; a restart, or turning off by ACPI S5: power.rs; a new
+                            conversation; notes about the person: remember and forget), the conversation and the
+                            notes kept across restarts (keep.rs, as JSON {"notes": [...], "chat": [...]}), and the
+                            conversation screen (chat.rs, drawn in memory: draw.rs; the model's answers laid out
+                            from their Markdown: rich.rs)
     net/                    Own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
     crypto/                 Own cryptography: SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305, X25519, ECDSA, RSA
     tls/                    Own TLS 1.3 client and certificate checks, against Mozilla's authorities (roots.txt)
-    claude/                 Claude's Messages API, streamed: the request (Opus 5.5, effort max, automatic prompt
-                            caching), HTTP/1.1, JSON
     model/                  Chat Computer's own model engine (no outside code; its core needs no standard library):
                             Qwen's open models (3.5, 3.6, 3.8; Apache 2.0) on the PC's own processor, AVX2 and VNNI;
                             the model's file format, its converter from Qwen's published files, the tokenizer, each
@@ -64,12 +65,12 @@ chat-computer/
                             direction the model refuses along, measured, kept beside its file and taken out as it
                             runs, so it answers what it's asked), built for Linux
                             by release.sh into chatcomputer/brain/bin (x86-64 and ARM, static, reproducible: CI
-                            checks them). See its README.md. In place of Claude, everywhere: the Linux runtime
-                            thinks with it now; the apps and the own system next
+                            checks them). See its README.md. Chat Computer thinks with it everywhere: the Linux
+                            runtime, the apps (and through them the website and the extension) and the own system
     font/                   Own TrueType reader and rasterizer, variable fonts too (fvar/avar/gvar: the bold, from the same file)
     fonts/                  Fallback fonts for what Atkinson Hyperlegible lacks (arrows, maths, Greek, Cyrillic, emoji,
                             box drawing), cut and merged from Noto fonts by build.py
-    markdown/               Claude's Markdown read by md.js's rules (tested against md.js itself: markdown/gen/gen.js)
+    markdown/               The model's Markdown read by md.js's rules (tested against md.js itself: markdown/gen/gen.js)
     fat/                    Own FAT12/16/32 reader: a file's blocks on the start-up partition
     hid/                    USB HID report descriptors: where a mouse's buttons, movement and wheel are in its reports
     remember/               The memory file's format (memory.bin): 512-byte chunks tagged "CCMEMORY" + file id
@@ -77,14 +78,15 @@ chat-computer/
                             headed "CCMEMDAT" + version + sequence + length + FNV-1a 64 (header written last); a
                             sector is written only after all its tags are read back and match
     build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced,
-                            typing on PS/2 and USB keyboards, USB mice's wheels, the network, a conversation with a
-                            stand-in for Claude's API over HTTPS, and the conversation kept across a restart on NVMe
-                            and SATA)
+                            typing on PS/2 and USB keyboards, USB mice's wheels, the network, the own model (a tiny
+                            one, its answer the engine's on Linux), a conversation answered by a test's script, and
+                            the conversation kept across a restart on NVMe and SATA)
     release/chatcomputer.efi  The reproducible build Windows uses (CI checks it matches the source)
   windows/own-os.ps1        "Chat Computer Own System.cmd": signs os/release with a key Windows makes on the PC
-                            (CurrentUser\My, not exportable), asks for a Claude API key (hidden, never logged),
-                            copies it to \EFI\chatcomputer-own on Windows' EFI partition with ChatComputer.cer,
-                            settings.txt (the key, the clock's offset from UTC, memory-id = <8 hex digits>) and
+                            (CurrentUser\My, not exportable), says which model the own system will answer with (the
+                            app's, in %LOCALAPPDATA%\ai.chatcomputer.desktop\models), copies it to
+                            \EFI\chatcomputer-own on Windows' EFI partition with ChatComputer.cer, settings.txt (the
+                            clock's offset from UTC, memory-id = <8 hex digits>, a model = path kept if set) and
                             memory.bin (made at full size, 4 MiB, else 1 MiB, only if 16 MiB stay free; kept when
                             its first and last tags carry the settings' id), adds "Chat Computer (own system)" last in the power-on
                             menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
@@ -284,7 +286,7 @@ offered on the screen, answered by typing or saying yes or no. Yes runs `chatcom
    `app.next` becomes `app`, and `/var/lib/chatcomputer/update-pending` is written.
 
 Chat Computer then exits with code 3 and the session starts the new version. After it has run 45 s, Chat Computer calls
-`update-done`; if it keeps crashing before that, the session calls `update-undo`. Claude can read the update
+`update-done`; if it keeps crashing before that, the session calls `update-undo`. The model can read the update
 folder but not change it: the permission gate denies edits there and in `/opt/chatcomputer`, shell commands that
 change something and name it or `cd` into it, and moving, copying into or trashing it with Chat Computer's own file
 tools.
@@ -325,9 +327,8 @@ No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Instal
     space next to existing partitions (the installer's default storage version 1 sees none on a disk with
     partitions);
   * `/chatcomputer/app/`: a copy of this repo, without `windows/`, `mac/`, `.venv` or caches;
-  * `/chatcomputer/secrets/claude_login.json`: the full sign-in from `claude auth login --claudeai` (Claude Code's
-    `.credentials.json`), which setup picks up by itself; or, when the person pasted a code instead,
-    `/chatcomputer/secrets/claude_token`, a one-year token from `claude setup-token`;
+  * `/chatcomputer/secrets/bitlocker-key`: Chat Computer's own recovery password for C:, when Windows' drive is
+    encrypted (`finish.sh` gives it to the installed system, root only, to open Windows' drive with);
   * `/chatcomputer/settings.json`: initial settings (keys above);
   * `/chatcomputer/update-source`: where setup runs from, for updates (see "Updating Chat Computer");
   * `/chatcomputer/guard.sh`, `network.sh`, `finish.sh`: copied from `windows/installer/`, with LF line endings.
@@ -359,13 +360,6 @@ No USB stick: setup puts the installer on the PC's own disk (`windows/lib/Instal
   be moved while Windows runs: below the minimum, setup stops, undoes, and says what to do. The PC this was
   built for had 272 GiB free on C:, which could shrink by nothing: a restore point, then the journal twice,
   then `$Mft::$BITMAP` were in the way, and the rounds above made 63 GiB.
-* **Signing in** (`windows/lib/ClaudeSignIn.ps1`). `claude auth login --claudeai` runs in a window of its own,
-  opened through `explorer.exe` so it runs as the person without administrator rights, in Windows Terminal when
-  `wt.exe` is there, from the home folder, with a throwaway `CLAUDE_CONFIG_DIR` under `%TEMP%`. Setup polls for
-  the `.credentials.json` it saves, takes it, and deletes the folder. Run from setup's administrator console
-  instead, the same program showed nothing at all on a real PC (twice), while it worked at once in an ordinary
-  Windows Terminal window. Fallback: a code from `claude setup-token`, run in an ordinary window and pasted
-  into setup with a right-click.
 
 Storage is always `layout: {name: direct, mode: use_gap, match: {install-media: true}}`: the largest free
 area on the disk the installer is on, which is Chat Computer's space right before the installer partition. The
@@ -385,9 +379,9 @@ disk holding the partition mounted at `/cdrom`.)
   message, and nothing is written.
 * `late-commands`: `sh /cdrom/chatcomputer/finish.sh <user> <install-id>`. It:
   1. copies the app to `/target/opt/chatcomputer/app` (root-owned, files 0644, `#!` files 0755);
-  2. copies the token (0600) and settings into `/target/home/<user>/ChatComputer/`, owned by the user, and the
-     full sign-in for the phone, if setup made one (`secrets/claude_login.json`), to
-     `~/ChatComputer/.engine/.credentials.json` (0600; `.engine` 0700), where Claude Code reads and refreshes it;
+  2. copies the settings into `/target/home/<user>/ChatComputer/`, owned by the user (with its private `secrets`
+     folder, 0700), and Chat Computer's BitLocker key for Windows' drive, if setup made one, to
+     `/etc/chatcomputer/bitlocker-recovery-key` (root's, 0600);
   3. writes the marker `/EFI/chatcomputer/installed-<install-id>` to the ESP: `id=<install-id>` and
      `root=<PARTUUID>` (Chat Computer's root partition, from `findmnt` + `blkid`), which "Remove Chat Computer" in
      Chat Computer Setup uses to delete exactly that partition;
@@ -410,7 +404,7 @@ disk holding the partition mounted at `/cdrom`.)
 
 "Remove Chat Computer from this PC" (Windows) also deletes installer partitions with a mark, the "Chat Computer setup"
 entries and `\EFI\chatcomputer-setup`, so it cleans up an install that never finished too. Right after the typed
-REMOVE it asks whether to keep the downloads (the Ubuntu ISO and the Agent SDK wheel, about 4 GB; default no):
+REMOVE it asks whether to keep the downloads (the Ubuntu ISO, about 3 GB; default no):
 kept, installing again finds them by their SHA-256 and doesn't download them again.
 
 Tested end to end in QEMU (OVMF with Secure Boot and Microsoft's keys, an NVMe disk laid out as setup leaves a
@@ -422,10 +416,9 @@ and its first start deletes the installer partition, grows Chat Computer's parti
 pip), before later steps depend on it (for example handing networking to NetworkManager). On success it
 writes `/var/lib/chatcomputer/base-installed` and removes the safety net's link.
 
-Re-signing in later: Chat Computer Setup's "Sign Chat Computer in to Claude again" writes
-`C:\Users\<you>\ChatComputer\claude_token` and, for the phone, `claude_login.json`. Chat Computer imports them at
-start, before the file index runs, and deletes the Windows copies. Any file named `claude_token`, and the
-engine's `.credentials.json`, are unreadable to Claude's tools.
+There is no sign-in: Chat Computer thinks with its own model on the PC. Files named `claude_token` or
+`claude_login.json` that an earlier version (which thought with Claude) left are still unreadable to the model's tools,
+and "Remove Chat Computer" deletes the copies it left on Windows.
 
 First start: if the voice models are missing, Chat Computer downloads them in the background (about 600 MB),
 retrying with backoff, then starts listening.
@@ -841,12 +834,11 @@ drive both systems open.
 | Installer | Asahi installer v0.9.2 (`cdn.asahilinux.org`, SHA-256 pinned), run locally: `REPO_BASE` is setup's work folder (`os/<package>`), `installer_data.json` is Chat Computer's (one OS, Fedora's partitions exactly: EFI 500 MiB FAT32 with Fedora's volume id, Boot 1 GiB, Root expanding), `DISTRO=Chat Computer` |
 | Partitions | macOS's container (shrunk), the start-up volume's container (`Chat Computer`, 2.5 GB, made by the installer), EFI (`EFI - CHAT`), Boot, Root, then the Chat Computer drive (exFAT, `Chat Computer`) in the space left |
 | The drive macOS shares | `~/Mac` in Chat Computer: fstab `PARTUUID=<id> exfat uid,gid,umask=077,nofail`; the id (GPT partition GUID, diskutil's `DiskUUID`) is in `/etc/chatcomputer/mac-files-partuuid` |
-| Sign-in left by "Sign in again" | `.chatcomputer/` on the Chat Computer drive; imported at start and deleted, like `C:\Users\<you>\ChatComputer` on a PC |
 
 ### Setup (`mac/setup.sh`, in macOS)
 
-Menu: Install Chat Computer on this Mac, Send more files to Chat Computer, Sign Chat Computer in to Claude again, Choose
-what starts when the Mac turns on, Remove Chat Computer from this Mac. Written for macOS's bash 3.2.
+Menu: Install Chat Computer on this Mac, Send more files to Chat Computer, Choose what starts when the Mac turns on,
+Remove Chat Computer from this Mac. Written for macOS's bash 3.2.
 
 Install:
 
@@ -860,35 +852,30 @@ Install:
 3. The space, as the installer works it out: macOS keeps what it uses plus 38 GB, never less than diskutil's
    `MinimumSizePreferred`, plus 1 GB. Chat Computer gets 60 GB when there's room (at least 30 GB); the Chat Computer
    drive gets the folders plus 10 % plus 10 GB. Plan-only stops after this.
-4. Sign-in: the official Claude program from the `claude-agent-sdk` macOS wheel (pinned), `claude setup-token`
-   in a throwaway config dir, the pasted token read with bracketed paste (it can span lines); optionally
-   `claude auth login --claudeai` for the phone.
-5. Wi-Fi: the network in use (`networksetup`, `ipconfig getsummary`), its password typed or taken from the
+4. Wi-Fi: the network in use (`networksetup`, `ipconfig getsummary`), its password typed or taken from the
    keychain (`security find-generic-password -D 'AirPort network password'`).
-6. "Go ahead?", then: download and check the installer and the image; add `chatcomputer.icns` to the image's zip
+5. "Go ahead?", then: download and check the installer and the image; add `chatcomputer.icns` to the image's zip
    with the installer's own Python (its new SHA-256 is noted next to it, so a second run doesn't download it
    again; if the icon can't be added, the copy of `installer_data.json` loses its `icon` line); run the
    installer under `expect` (`mac/drive-installer.exp`), which answers each question a second after it
    appears (the installer clears typed-ahead input before each one) and lets the person type their password
    to it. Exit codes: 2 resize failed, 3 not enough space, 4 a question it can't answer, 5 macOS too old, 6
    failed. The partitions it made come from its `installer.log`.
-7. The Chat Computer drive: `diskutil addPartition <Root> ExFAT Chat Computer 0` (the space left), Spotlight off; the
+6. The Chat Computer drive: `diskutil addPartition <Root> ExFAT Chat Computer 0` (the space left), Spotlight off; the
    folders copied with `rsync -rt` and `COPYFILE_DISABLE=1`, without `.DS_Store`, `*.photoslibrary` or
    extended attributes (no `._` files).
-8. The first start, on Chat Computer's EFI partition (`chatcomputer/`): `app.tar.gz` (`chatcomputer/`, `linux/`, the
+7. The first start, on Chat Computer's EFI partition (`chatcomputer/`): `app.tar.gz` (`chatcomputer/`, `linux/`, the
    requirements and docs; `--no-xattrs`), `firstboot.sh`, `setup.env` (base64 values: account, name,
-   recovery password, time zone, install id, the drive's id, Wi-Fi name and password), `secrets/` (token,
-   phone sign-in), `settings.json`; Fedora's `EFI/fedora/grub.cfg` kept as `chatcomputer/fedora-grub.cfg` and
+   recovery password, time zone, install id, the drive's id, Wi-Fi name and password), `settings.json`; Fedora's `EFI/fedora/grub.cfg` kept as `chatcomputer/fedora-grub.cfg` and
    replaced by `esp/grub-firststart.cfg` with the kernel and ids filled in.
-9. The recovery password to `~/Documents/Chat Computer recovery password.txt`; the downloads deleted; the one step
+8. The recovery password to `~/Documents/Chat Computer recovery password.txt`; the downloads deleted; the one step
    Apple requires (choosing Chat Computer in the startup options and finishing the installer's second step in
    1TR), shown to be photographed; shutdown.
 
 Remove: copies the drive's files to `~/Chat Computer files` first if asked, typed REMOVE, `bless --setBoot` on
 macOS's volume (`--stdinpass`), `diskutil apfs deleteContainer` on the start-up volume's container, `diskutil
 eraseVolume free free` on the EFI, Boot, Root and drive partitions, then `diskutil apfs resizeContainer <macOS's>
-0`. Choose what starts: `bless --setBoot --device` on Chat Computer's or macOS's volume. Sign in again: the token
-and phone sign-in to the drive's `.chatcomputer/`.
+0`. Choose what starts: `bless --setBoot --device` on Chat Computer's or macOS's volume.
 
 ### First start (`mac/esp/firstboot.sh`)
 
@@ -899,11 +886,11 @@ in an emulated Mac: the whole argument is in double quotes (GRUB passes it on in
 removes; quotes inside it would reach systemd as `\"`, which it doesn't read as quotes), and `systemd.unit` names
 the target outright (systemd-run-generator's own `default.target` loses to the one Fedora's image has in /etc). firstboot.sh (POSIX sh, as root, SELinux enforcing): hostname `chatcomputer`;
 the account (`useradd --groups wheel`, its password the recovery password, through `chpasswd`); time zone and
-`LANG`; a NetworkManager keyfile for the Wi-Fi (0600); Chat Computer to `/opt/chatcomputer/app` (root-owned); the token,
-phone sign-in and settings into `~/ChatComputer`; `/etc/chatcomputer/install-user`, `install-id`,
+`LANG`; a NetworkManager keyfile for the Wi-Fi (0600); Chat Computer to `/opt/chatcomputer/app` (root-owned); the
+settings into `~/ChatComputer` (with its private `secrets` folder); `/etc/chatcomputer/install-user`, `install-id`,
 `mac-files-partuuid`; `chatcomputer-finish-install.service` enabled; `restorecon` on all of it. Only then: Fedora's
 first-start questions off (`/etc/reconfigSys`, `initial-setup.service`), Fedora's `grub.cfg` back, and the
-sign-in copies deleted from the EFI partition (FAT: readable by anyone who starts the Mac). On failure it counts
+setup files with the Wi-Fi password deleted from the EFI partition (FAT: readable by anyone who starts the Mac). On failure it counts
 tries in `chatcomputer/tries`; at the third it puts Fedora's start back, so the Mac never loops.
 
 The next start is Fedora's usual one: `chatcomputer-finish-install.service` runs `install-chatcomputer.sh --user <user>
@@ -934,7 +921,7 @@ and `restorecon` at the end.
 * An emulated Mac (QEMU `virt`, `-cpu neoverse-n1` for 16K pages, UEFI), its disk built from the real Fedora
   package with setup's own `write_first_start`: Fedora's 16K kernel starts, the first start runs and restarts,
   `chatcomputer-finish-install` installs everything (dnf, then pip on Python 3.14) and restarts, and Chat Computer's
-  screen comes up, with SELinux enforcing and no denials. On 16K pages the Claude program runs and GTK,
+  screen comes up, with SELinux enforcing and no denials. On 16K pages GTK,
   WebKit, numpy, onnxruntime, CTranslate2 and the voice packages load. It also found what the pretend tests
   couldn't: the first-start quoting, the default target, Fedora Asahi Remix's os-release ID, kokoro-onnx's
   Python bound, and GTK's cairo typelib (in `gobject-introspection`, only a weak dependency). (QEMU 8.2's

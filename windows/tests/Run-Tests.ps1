@@ -125,26 +125,8 @@ $net = New-NetworkYaml -WifiSsid 'Home "5G"' -WifiPassword 'secret' -WifiAuth 'W
 Assert-True ($net.Contains('key-management: sae')) 'wpa3 uses sae'
 Assert-True (-not (New-NetworkYaml).Contains('wifis')) 'no wifi section without a network'
 
-# ------------------------------------------------------------------ a key pasted over several lines
-# A long key copied from a page that wraps it; the rest of a paste is already waiting in the console.
+# ------------------------------------------------------------------ secrets in the log
 $key = 'sk-ant-api03-' + ('Ab9_-' * 20)
-$origReadSecret = ${function:Read-Secret}
-$origReadSecretLine = ${function:Read-SecretLine}
-$origInputWaiting = ${function:Test-InputWaiting}
-$Script:PasteLines = @()
-$Script:PasteIndex = 0
-${function:Read-Secret} = { param($Prompt) $Script:PasteIndex = 1; return $Script:PasteLines[0] }
-${function:Read-SecretLine} = { $v = $Script:PasteLines[$Script:PasteIndex]; $Script:PasteIndex++; return $v }
-${function:Test-InputWaiting} = { return ($Script:PasteIndex -lt $Script:PasteLines.Count) }
-$Script:PasteLines = @($key.Substring(0, 70), $key.Substring(70))
-Assert-Equal $key (Read-PastedSecret 'Paste' -SettleMs 1) 'a key pasted over two lines is read whole'
-$Script:PasteLines = @($key.Substring(0, 40), $key.Substring(40, 40), $key.Substring(80), '')
-Assert-Equal $key (Read-PastedSecret 'Paste' -SettleMs 1) 'three lines, then the Enter after them'
-$Script:PasteLines = @($key)
-Assert-Equal $key (Read-PastedSecret 'Paste' -SettleMs 1) 'a key on one line'
-${function:Read-Secret} = $origReadSecret
-${function:Read-SecretLine} = $origReadSecretLine
-${function:Test-InputWaiting} = $origInputWaiting
 Assert-Equal 'key sk-ant-(hidden) end' (Protect-SetupText ('key ' + $key + ' end')) 'a key is never logged'
 
 # ------------------------------------------------------------------ folders, and short (8.3) folder names
@@ -605,32 +587,45 @@ Assert-Equal 0 $Script:BcdCalls.Count 'own entry: nothing added when it is there
 Assert-Equal 0 (Get-SetupBootEntries).Count 'own entry: not the installer''s entry'
 Assert-Equal 1 (Get-ChatComputerBootEntries).Count 'own entry: not Linux Chat Computer''s entry'
 Remove-Item Function:\bcdedit.exe
-# Its settings: the Claude API key and the clock, as the kernel reads them (os/kernel/src/settings.rs).
-$fakeKey = 'sk-ant-api03-' + ('A' * 40) + '_-x9'
-Assert-Equal $fakeKey (ConvertTo-OwnKey ('  ' + $fakeKey.Substring(0, 30) + "`r`n" + $fakeKey.Substring(30) + "`r`n")) 'own settings: a key pasted over two lines is read whole'
-Assert-Equal $fakeKey (ConvertTo-OwnKey ('"' + $fakeKey + '"')) 'own settings: quotes around it go'
-Assert-Equal '' (ConvertTo-OwnKey $null) 'own settings: nothing pasted'
-Assert-Equal '' (Get-OwnKeyProblem $fakeKey) 'own settings: an API key is fine'
-Assert-True ((Get-OwnKeyProblem ('sk-ant-oat01-' + ('B' * 40))) -like '*sign-in code*') 'own settings: a Claude Code sign-in code is refused, saying why'
-Assert-True ((Get-OwnKeyProblem 'hello there') -ne '') 'own settings: something else is refused'
-$ownText = New-OwnSettingsText -Key $fakeKey -ClockOffsetMinutes 480
-Assert-True ($ownText -match ('(?m)^claude-api-key = ' + [regex]::Escape($fakeKey) + '\r$')) 'own settings: the key on a line of its own'
+# Its model: the one Chat Computer's app got ready, picked as the kernel picks (os/kernel/src/assistant.rs).
+function New-FakeModel([string]$Name, [int64]$Length) { [pscustomobject]@{ Name = $Name; Length = $Length; FullName = ('C:\m\' + $Name) } }
+Assert-Equal 'Qwen3.5 4B' (Get-OwnModelLabel 'qwen3.5-4b.ccm') 'own model: its name'
+Assert-Equal 'Qwen3.6 35B-A3B' (Get-OwnModelLabel 'qwen3.6-35b-a3b.ccm') 'own model: a mixture of experts'' name'
+$picked = Select-OwnModel @((New-FakeModel 'qwen3.5-9b.ccm' 5600000000), (New-FakeModel 'qwen3.5-4b.ccm' 2700000000), (New-FakeModel 'qwen3.5-0.8b.ccm' 600000000))
+Assert-Equal 'C:\m\qwen3.5-4b.ccm' $picked.Path 'own model: the biggest quick enough on one processor core'
+Assert-Equal 'Qwen3.5 4B' $picked.Label 'own model: its name, picked'
+Assert-Equal ([int64]2700000000) $picked.Bytes 'own model: its size'
+Assert-Equal 'C:\m\qwen3.5-9b.ccm' (Select-OwnModel @((New-FakeModel 'qwen3.8-27b.ccm' 16000000000), (New-FakeModel 'qwen3.5-9b.ccm' 5600000000))).Path 'own model: else the smallest'
+Assert-Equal $null (Select-OwnModel @()) 'own model: none'
+Assert-Equal $null (Find-OwnModel -Dir (Join-Path ([IO.Path]::GetTempPath()) ('no-models-' + [guid]::NewGuid()))) 'own model: none where there''s no folder'
+$modelDir = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ('models-' + [guid]::NewGuid())) -Force
+[IO.File]::WriteAllBytes((Join-Path $modelDir.FullName 'qwen3.5-0.8b.ccm'), (New-Object byte[] 3))
+[IO.File]::WriteAllBytes((Join-Path $modelDir.FullName 'qwen3.5-0.8b.refusal'), (New-Object byte[] 9))
+[IO.File]::WriteAllBytes((Join-Path $modelDir.FullName 'qwen3.5-4b.ccm'), (New-Object byte[] 5))
+Assert-Equal 'Qwen3.5 4B' (Find-OwnModel -Dir $modelDir.FullName).Label 'own model: found in the app''s folder, the biggest'
+Remove-Item -LiteralPath $modelDir.FullName -Recurse -Force
+# Its settings: the clock, a model named by hand, as the kernel reads them (os/kernel/src/settings.rs).
+$ownText = New-OwnSettingsText -Model '' -ClockOffsetMinutes 480
 Assert-True ($ownText -match '(?m)^clock-offset-minutes = 480\r$') 'own settings: the clock offset'
-Assert-Equal $fakeKey (Get-OwnSettingsKey $ownText) 'own settings: the key read back'
-$noKey = New-OwnSettingsText -Key '' -ClockOffsetMinutes -300
-Assert-True ($noKey -notmatch 'claude-api-key') 'own settings: no key line without a key'
-Assert-True ($noKey -match '(?m)^clock-offset-minutes = -300\r$') 'own settings: a clock behind UTC'
-Assert-Equal '' (Get-OwnSettingsKey $noKey) 'own settings: no key read back'
+Assert-True ($ownText -notmatch '(?m)^model') 'own settings: no model named unless one was'
+Assert-True ($ownText -notmatch 'claude') 'own settings: no Claude API key'
+Assert-Equal '' (Get-OwnSettingsModel $ownText) 'own settings: no model read back'
+$named = 'D:\Models\my model.ccm'
+$withModel = New-OwnSettingsText -Model $named -ClockOffsetMinutes -300
+Assert-True ($withModel -match ('(?m)^model = ' + [regex]::Escape($named) + '\r$')) 'own settings: a model named, on a line of its own'
+Assert-True ($withModel -match '(?m)^clock-offset-minutes = -300\r$') 'own settings: a clock behind UTC'
+Assert-Equal $named (Get-OwnSettingsModel $withModel) 'own settings: the model read back, spaces and all'
+Assert-Equal '' (Get-OwnSettingsModel "claude-api-key = sk-ant-api03-old`r`nclock-offset-minutes = 0`r`n") 'own settings: an older setup''s key isn''t a model'
 Assert-Equal $ownText ([Text.Encoding]::ASCII.GetString([Text.Encoding]::ASCII.GetBytes($ownText))) 'own settings: plain ASCII'
 Assert-True ((Get-ClockOffsetMinutes) -is [int]) 'own settings: the clock offset is a number of minutes'
 Assert-True ($ownText -notmatch 'memory-id') 'own settings: no memory id without a memory file'
 Assert-Equal $null (Get-OwnSettingsMemoryId $ownText) 'own settings: no memory id read back'
-$withMemory = New-OwnSettingsText -Key $fakeKey -ClockOffsetMinutes 0 -MemoryId ([uint32]0x0A1B2C3D)
+$withMemory = New-OwnSettingsText -Model $named -ClockOffsetMinutes 0 -MemoryId ([uint32]0x0A1B2C3D)
 Assert-True ($withMemory -match '(?m)^memory-id = 0a1b2c3d\r$') 'own settings: the memory id, in hex as the kernel reads it'
 Assert-Equal ([uint32]0x0A1B2C3D) (Get-OwnSettingsMemoryId $withMemory) 'own settings: the memory id read back'
-Assert-Equal ([uint32]4294967295) (Get-OwnSettingsMemoryId (New-OwnSettingsText -Key '' -ClockOffsetMinutes 0 -MemoryId ([uint32]::MaxValue))) 'own settings: the biggest memory id'
+Assert-Equal ([uint32]4294967295) (Get-OwnSettingsMemoryId (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -MemoryId ([uint32]::MaxValue))) 'own settings: the biggest memory id'
 Assert-Equal $null (Get-OwnSettingsMemoryId "memory-id = 0`r`n") 'own settings: a memory id of 0 is none'
-Assert-Equal $fakeKey (Get-OwnSettingsKey $withMemory) 'own settings: the key read back next to a memory id'
+Assert-Equal $named (Get-OwnSettingsModel $withMemory) 'own settings: the model read back next to a memory id'
 
 # Its memory file, as Chat Computer's own system reads it (os/remember: 512-byte chunks, each tagged with "CCMEMORY",
 # the file's id and the chunk's number).

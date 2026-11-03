@@ -3,16 +3,18 @@
 Inside a case's sandbox the computer looks like a Chat Computer's: the person is an ordinary user (uid 1000) with
 their files in /home/ren, Chat Computer is in /opt/chatcomputer/app with its Python in /opt/chatcomputer/venv, the
 commands are those a real one has (machine.py), and there's a display (Xvfb). Everything else of this machine is
-read-only or hidden (/home, /root, /opt, /mnt), and the environment holds only what reaching Claude needs: no other
-tools or connections of the session running the evals reach the Chat Computer under test.
+read-only or hidden (/home, /root, /opt, /mnt), and the environment holds only what the web tools need (the network's
+proxy): no other tools or connections of the session running the evals reach the Chat Computer under test.
 
-    python -m evals.os.run OUT_DIR [--only id,id] [--area printing] [--jobs 6] [--app DIR]
-                                   [--model claude-opus-5-5] [--effort max]
+    python -m evals.os.run OUT_DIR [--only id,id] [--area printing] [--jobs 2] [--app DIR]
+                                   [--models DIR] [--model auto] [--effort medium]
 
-Traces go to OUT_DIR/traces/<id>.json. Claude signs in with the access of the session running this (an Anthropic
-model only, as on a real Chat Computer): Opus 5.5 at max effort unless told otherwise. --app runs another version of
-Chat Computer (a folder with its code, such as an export of an earlier commit) with these same cases, harness and
-simulated machine, to compare before and after."""
+Traces go to OUT_DIR/traces/<id>.json. Chat Computer thinks as it does on a real one: with its own model, run by its
+own engine on this computer, from --models (a folder of models made ready, NAME.ccm with its NAME.refusal, as Chat
+Computer leaves them in ~/ChatComputer/models; that folder unless told otherwise), the one it picks by this
+computer's memory unless --model names one. --app runs another version of Chat Computer (a folder with its code, such
+as an export of an earlier commit) with these same cases, harness and simulated machine, to compare before and
+after."""
 from __future__ import annotations
 
 import argparse
@@ -28,11 +30,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 VENV = Path(sys.prefix)
-# Format-valid stand-in so Chat Computer starts its brain; case.py keeps it away from the engine.
-PLACEHOLDER = "sk-ant-oat01-" + "evals" * 8
 INSIDE = "/tmp/.ev"           # the case's own files, inside its sandbox
-# What reaching Claude through this session needs (and the network's proxy): nothing else goes in.
-PASS_ENV = ("ANTHROPIC_BASE_URL", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy")
+# What the web tools need (the network's proxy): nothing else goes in.
+PASS_ENV = ("HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy")
+MODELS = Path.home() / "ChatComputer" / "models"
 CA_ENV = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE")
 
 
@@ -46,9 +47,9 @@ def cases(path: Path) -> tuple[dict, list[dict]]:
     return data, out
 
 
-def sandbox(work: Path, binfolder: Path, display: int = 120, app: Path = REPO) -> tuple[list[str], dict[str, str]]:
+def sandbox(work: Path, binfolder: Path, display: int = 120, app: Path = REPO, models: Path = MODELS) -> tuple[list[str], dict[str, str]]:
     env = {"EVAL_DISPLAY": str(display), "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/home/ren", "USER": "ren", "LANG": "en_GB.UTF-8",
-           "TZ": ":" + INSIDE + "/io/localtime", "CHATCOMPUTER_HOME": "/home/ren/ChatComputer", "CHATCOMPUTER_TOKEN": PLACEHOLDER,
+           "TZ": ":" + INSIDE + "/io/localtime", "CHATCOMPUTER_HOME": "/home/ren/ChatComputer",
            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/opt/chatcomputer/app"}
     for k in PASS_ENV:
         if os.environ.get(k):
@@ -63,14 +64,9 @@ def sandbox(work: Path, binfolder: Path, display: int = 120, app: Path = REPO) -
             "--ro-bind", str(VENV), "/opt/chatcomputer/venv",
             "--ro-bind", str(binfolder), "/opt/evals/bin",
             "--bind", str(work / "io"), INSIDE + "/io"]
-    # The session's sign-in, where the engine looks for it (beside its ingress file), read-only; nothing else of
-    # that folder.
-    token = os.environ.get("CLAUDE_SESSION_INGRESS_TOKEN_FILE")
-    if token and os.path.exists(token):
-        for f in sorted(Path(token).parent.iterdir()):
-            if f.is_file() and f.name.startswith(".") and f.name.endswith("_token"):
-                args += ["--ro-bind", str(f), str(f)]
-        env["CLAUDE_SESSION_INGRESS_TOKEN_FILE"] = token
+    # The models made ready, where Chat Computer keeps them (read-only: each case uses them as they are).
+    if models.is_dir():
+        args += ["--ro-bind", str(models), "/home/ren/ChatComputer/models"]
     ca = next((os.environ[k] for k in CA_ENV if os.environ.get(k) and os.path.exists(os.environ[k])), None)
     if ca:
         args += ["--ro-bind", ca, INSIDE + "/ca.crt"]
@@ -96,7 +92,7 @@ def user_files(out: Path) -> None:
 
 
 def run_case(case: dict, out: Path, model: str, effort: str, binfolder: Path, display: int,
-             app: Path = REPO) -> tuple[str, float, str]:
+             app: Path = REPO, models: Path = MODELS) -> tuple[str, float, str]:
     work = out / "work" / case["id"]
     shutil.rmtree(work, ignore_errors=True)
     (work / "home").mkdir(parents=True)
@@ -104,7 +100,7 @@ def run_case(case: dict, out: Path, model: str, effort: str, binfolder: Path, di
     (work / "io" / "case.json").write_text(json.dumps({**case, "model": model, "effort": effort}))
     # The sandbox's time zone (TZ=:/tmp/.ev/io/localtime): Singapore, until Chat Computer changes it (world.py).
     shutil.copyfile("/usr/share/zoneinfo/" + case["state"].get("timezone", "Asia/Singapore"), work / "io" / "localtime")
-    args, _ = sandbox(work, binfolder, display, app)
+    args, _ = sandbox(work, binfolder, display, app, models)
     cmd = args + ["/opt/chatcomputer/venv/bin/python", "-m", "evals.os.case",
                   INSIDE + "/io/case.json", INSIDE + "/io/trace.json"]
     t0 = time.time()
@@ -128,9 +124,10 @@ def main() -> None:
     ap.add_argument("--cases", default=str(HERE / "cases.json"))
     ap.add_argument("--only", default="")
     ap.add_argument("--area", default="")
-    ap.add_argument("--jobs", type=int, default=6)
-    ap.add_argument("--model", default="claude-opus-5-5")
-    ap.add_argument("--effort", default="max")
+    ap.add_argument("--jobs", type=int, default=2, help="cases at a time (each runs a model: as many as the memory holds)")
+    ap.add_argument("--models", default=str(MODELS), help="the folder of models made ready")
+    ap.add_argument("--model", default="auto", help="the model's name (models.json), or auto: Chat Computer's own pick")
+    ap.add_argument("--effort", default="medium")
     ap.add_argument("--app", default=str(REPO))
     a = ap.parse_args()
     out = Path(a.out).resolve()
@@ -138,7 +135,10 @@ def main() -> None:
     if not (app / "evals").is_dir():
         sys.exit(f"{app} needs an evals folder (it can be empty): this harness is put there.")
     (out / "traces").mkdir(parents=True, exist_ok=True)
-    (out / "run.json").write_text(json.dumps({"app": str(app), "model": a.model, "effort": a.effort,
+    models = Path(a.models).expanduser().resolve()
+    if not any(models.glob("*.ccm")):
+        sys.exit(f"No model made ready in {models}: Chat Computer (or the engine's prepare command) makes one ready there.")
+    (out / "run.json").write_text(json.dumps({"app": str(app), "model": a.model, "effort": a.effort, "models": str(models),
                                              "started": time.strftime("%Y-%m-%d %H:%M:%S")}))
     missing = build_bin(out / "bin", app)
     user_files(out)
@@ -153,7 +153,7 @@ def main() -> None:
         todo = [c for c in todo if c["area"] == a.area]
     print(f"{len(todo)} cases, {a.jobs} at a time, Chat Computer from {app} on {a.model} at {a.effort} effort", flush=True)
     with concurrent.futures.ThreadPoolExecutor(a.jobs) as pool:
-        futs = [pool.submit(run_case, c, out, a.model, a.effort, out / "bin", 120 + i, app) for i, c in enumerate(todo)]
+        futs = [pool.submit(run_case, c, out, a.model, a.effort, out / "bin", 120 + i, app, models) for i, c in enumerate(todo)]
         for f in concurrent.futures.as_completed(futs):
             try:
                 cid, secs, status = f.result()

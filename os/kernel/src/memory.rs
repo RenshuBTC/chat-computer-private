@@ -79,6 +79,15 @@ pub fn alloc_contiguous(count: usize) -> Option<u64> {
     FRAMES.lock().as_mut()?.alloc(count)
 }
 
+/// Frames in a block of 2 MiB.
+pub const BLOCK_FRAMES: usize = 512;
+
+/// One free block of 2 MiB, starting on a 2 MiB boundary (so it can be mapped as one big page), not zeroed. The
+/// highest free one: memory below 4 GiB is left for devices that can't reach higher.
+pub fn alloc_block() -> Option<u64> {
+    FRAMES.lock().as_mut()?.alloc_block()
+}
+
 /// One free frame below `limit` (for devices that can't reach all of memory), filled with zeros.
 pub fn alloc_zeroed_below(limit: u64) -> Option<u64> {
     let frame = FRAMES.lock().as_mut()?.alloc_below(limit)?;
@@ -138,6 +147,22 @@ impl Frames {
             if frame < frames {
                 self.mark(frame, true);
                 return Some(frame as u64 * PAGE_SIZE);
+            }
+        }
+        None
+    }
+
+    /// A block's 512 frames are 8 whole words of the list: all clear, it's free.
+    fn alloc_block(&mut self) -> Option<u64> {
+        let words = BLOCK_FRAMES / 64;
+        for b in (0..self.frames / BLOCK_FRAMES).rev() {
+            let first = b * words;
+            if (first..first + words).all(|w| unsafe { *self.bits.add(w) } == 0) {
+                for w in first..first + words {
+                    unsafe { *self.bits.add(w) = u64::MAX };
+                }
+                self.free -= BLOCK_FRAMES;
+                return Some((b * BLOCK_FRAMES) as u64 * PAGE_SIZE);
             }
         }
         None

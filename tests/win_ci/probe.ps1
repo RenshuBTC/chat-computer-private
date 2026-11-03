@@ -1,4 +1,4 @@
-# What real Windows says about the things Chat Computer Setup relies on when it makes room and signs in.
+# What real Windows says about the things Chat Computer Setup relies on when it makes room.
 # Run by .github/workflows/windows.yml on GitHub's Windows machines (Windows PowerShell 5.1, as an
 # administrator). Saves what it saw into -Out; prints a short summary. Changes only that throwaway machine.
 # ASCII-only file (Windows PowerShell 5.1 reads files without a BOM as ANSI).
@@ -72,7 +72,7 @@ Unblock-File -LiteralPath $f
 $afterStreams = @(Get-Item -LiteralPath $f -Stream * | ForEach-Object { $_.Stream })
 Save 'unblock.txt' ('streams before: ' + ($before -join ', ') + "`nstreams after: " + ($afterStreams -join ', '))
 Remove-Item -LiteralPath $f -Force
-# 7. Programs setup's sign-in window uses.
+# 7. Programs setup opens windows with.
 Save 'programs.txt' (@('explorer.exe: ' + (Test-Path -LiteralPath (Join-Path $env:WINDIR 'explorer.exe')),
                       'wt.exe: ' + [string](Get-Command wt.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source),
                       'TEMP: ' + [IO.Path]::GetTempPath()))
@@ -92,23 +92,5 @@ $child = "Set-StrictMode -Version 2.0; . '" + (Join-Path $repo 'windows\lib\Comm
          "`$r = Disable-ConsoleQuickEdit; Set-Content -LiteralPath '" + $qe + "' -Value ('Disable-ConsoleQuickEdit: ' + `$r)"
 Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', $child) -Wait -WindowStyle Minimized
 if (-not (Test-Path -LiteralPath $qe)) { Save 'quickedit.txt' 'the console window did not run' }
-# The sign-in window's .cmd, run as setup would have it run, with a stand-in for Claude that saves a sign-in.
-$signDir = Join-Path $env:TEMP ('chatcomputer-signin-probe')
-New-Item -ItemType Directory -Path (Join-Path $signDir 'config') -Force | Out-Null
-$fake = Join-Path $signDir 'fake claude.cmd'
-Set-Content -LiteralPath $fake -Encoding ASCII -Value @('@echo off', 'echo args: %*',
-    '>"%CLAUDE_CONFIG_DIR%\.credentials.json" echo {"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}')
-$text = New-SignInWindowScript -ClaudeExe (ConvertTo-CmdPath $fake) -ConfigDir (ConvertTo-CmdPath (Join-Path $signDir 'config'))
-[IO.File]::WriteAllText((Join-Path $signDir 'signin.cmd'), $text, [Text.Encoding]::ASCII)
-$ran = & cmd.exe /c ('cd /d "' + $signDir + '" && signin.cmd here < nul') 2>&1
-$saved = Join-Path $signDir 'config\.credentials.json'
-Save 'signin-cmd.txt' (@(('script:'), $text, ('ran:'), ($ran | Out-String), ('saved a sign-in: ' + (Test-Path -LiteralPath $saved)),
-                        ('setup reads it: ' + [bool](Wait-ClaudeSignIn -File $saved -Seconds 2))))
-Remove-Item -LiteralPath $saved -Force -ErrorAction SilentlyContinue
-# Opened through File Explorer, as setup opens it (no desktop here, so this may not run at all).
-$opened = Start-SignInWindow -ClaudeExe $fake -Folder $signDir
-$got = $null
-if ($opened) { $got = Wait-ClaudeSignIn -File $saved -Seconds 45 }
-Save 'signin-explorer.txt' ('opened: ' + $opened + '; sign-in saved through it: ' + [bool]$got)
 Write-Host 'probe done'
 

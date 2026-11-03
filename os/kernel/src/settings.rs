@@ -2,22 +2,24 @@
 //! \EFI\chatcomputer-own\settings.txt, which the start-up stage passes on. One setting a line, "name = value";
 //! lines starting with # are notes.
 //!
-//!     claude-api-key = sk-ant-...       the key Chat Computer talks to Claude with (from console.anthropic.com)
+//!     model = C:\Users\Sam\AppData\Local\ai.chatcomputer.desktop\models\qwen3.5-4b.ccm
+//!                                       the model's file (without it, the one Chat Computer's app got ready is used)
 //!     clock-offset-minutes = 480        how far the PC's clock is ahead of UTC (Windows keeps it in local time)
 //!     memory-id = 1a2b3c4d              the memory file's id (its tags carry it: remember crate), in hex
 //!     firmware-programs = off           don't run the firmware's own programs (ACPI's AML: firmware.rs), for a PC
 //!                                       whose firmware does something odd with them
 //!
-//! The key is never written to the log or shown on the screen.
+//! A Claude API key an older setup put there (claude-api-key) is no longer used, nor logged.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
 #[derive(Default)]
 pub struct Settings {
-    pub claude_api_key: Option<String>,
-    /// Why the key that's there can't be used, if it can't.
-    pub key_problem: Option<&'static str>,
+    /// The model's file, as Windows names it.
+    pub model: Option<String>,
+    /// An older setup's Claude API key is there (it isn't used).
+    pub old_key: bool,
     pub clock_offset_minutes: Option<i32>,
     pub memory_id: Option<u32>,
     /// Run the firmware's own programs (on unless the settings say off).
@@ -50,19 +52,13 @@ pub fn parse(bytes: &[u8]) -> Settings {
         let name = name.trim().to_ascii_lowercase();
         let value = value.trim().trim_matches('"').trim();
         match name.as_str() {
-            "claude-api-key" => {
-                s.claude_api_key = None;
-                s.key_problem = None;
-                if value.is_empty() {
-                    s.key_problem = Some("the Claude API key in the settings is empty");
-                } else if value.len() > 512 || !value.bytes().all(|b| b.is_ascii_graphic()) {
-                    // (A key is letters, digits, - and _: anything else, a space or a line break above all, would
-                    // break the request it goes in.)
-                    s.key_problem = Some("the Claude API key in the settings has characters a key doesn't have");
-                } else {
-                    s.claude_api_key = Some(String::from(value));
+            "model" => {
+                s.model = (!value.is_empty() && value.len() <= 1024).then(|| String::from(value));
+                if s.model.is_none() {
+                    s.not_understood += 1;
                 }
             }
+            "claude-api-key" => s.old_key = true,
             "clock-offset-minutes" => {
                 s.clock_offset_minutes = value.parse::<i32>().ok().filter(|m| (-1440..=1440).contains(m));
                 if s.clock_offset_minutes.is_none() {

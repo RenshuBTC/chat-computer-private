@@ -1,14 +1,14 @@
-//! What the screen shows: the conversation with Claude, laid out as Chat Computer's own screen is (chat.css,
-//! theme.css): Claude's words on the left in one column, light on the dark background (Claude's dark mode's);
+//! What the screen shows: the conversation with Chat Computer's model, laid out as Chat Computer's own screen is
+//! (chat.css, theme.css): its words on the left in one column, light on the dark background (Claude's dark mode's);
 //! yours on the right in a bubble; the message box at the bottom, a card lifted off the middle with a thin line
 //! round it and a soft shadow, "Type anything" in it while it's empty, and its send button, grey until there's something to send. Sizes
-//! are the Claude app's (layout.rs): 16px words on 22px lines at 100%, Claude's up to 865px across, yours in bubbles
+//! are the Claude app's (layout.rs): 16px words on 22px lines at 100%, the model's up to 865px across, yours in bubbles
 //! up to 85% of the 924px conversation, the box 962px wide and 46px high for a line, 39px above the screen's bottom. What you send goes to the
 //! top of the screen, with the answer coming in under it (and the screen following the answer down); Page Up and
 //! Page Down, the arrow keys, or a mouse's wheel scroll. Esc clears the box, or stops an answer.
 //!
 //! Before the first message, the column says what this PC is, how long Chat Computer has been running on it
-//! (counted by the kernel's own timer), which keyboards it found, whether Claude can be reached, and how to get
+//! (counted by the kernel's own timer), which keyboards it found, how its model is getting ready, and how to get
 //! back to Windows. If the kernel ever stops, the same place says so, with details to pass on.
 
 use crate::assistant::{self, Event, Ready};
@@ -27,10 +27,10 @@ use core::fmt;
 use core::ops::Range;
 use font::raster::ONE;
 
-const BACK_TO_WINDOWS: &str = "To go back to Windows, ask Claude to restart the PC, or turn it off with its power button \
+const BACK_TO_WINDOWS: &str = "To go back to Windows, ask Chat Computer to restart the PC, or turn it off with its power button \
                                (holding it down if a press doesn't) and on again. Chat Computer writes nothing on your \
                                disks but its own memory file, so either is safe.";
-/// The same, once Chat Computer has stopped (Claude can't be asked).
+/// The same, once Chat Computer has stopped (nothing can be asked).
 const BACK_TO_WINDOWS_STOPPED: &str = "To go back to Windows, hold the power button until the PC turns off, then turn \
                                        it on again. Chat Computer writes nothing on your disks but its own memory \
                                        file, so this is safe.";
@@ -45,8 +45,8 @@ const SHADOW: u32 = 89;
 const BIG_REDRAW_MS: u64 = 40;
 /// Under a conversation brought back after a restart.
 const RESTARTED: &str = "Chat Computer started again; the conversation above was kept.";
-/// After Claude starts a new conversation.
-const NEW_CONVERSATION: &str = "A new conversation starts here: Claude no longer sees what's above, and it won't be kept.";
+/// After the model starts a new conversation.
+const NEW_CONVERSATION: &str = "A new conversation starts here: Chat Computer no longer sees what's above, and it won't be kept.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -56,13 +56,13 @@ enum Kind {
     Text,
     /// What you sent.
     You,
-    /// Claude's answer.
-    Claude,
+    /// The model's answer.
+    Answer,
     /// Chat Computer itself saying something: what went wrong, mostly.
     Note,
     /// A line across, then words: where the conversation was picked up after a restart, or a new one starts.
     Divider,
-    /// A picture Claude showed (show_picture).
+    /// A picture the model showed (show_picture).
     Picture,
 }
 
@@ -77,10 +77,10 @@ enum Live {
     No,
     Uptime,
     Keyboards,
-    Claude,
+    Model,
 }
 
-/// A line of a block, or (in Claude's answers) one run of words in one face on a line.
+/// A line of a block, or (in the model's answers) one run of words in one face on a line.
 struct Line {
     text: String,
     face: Face,
@@ -96,7 +96,7 @@ struct Block {
     live: Live,
     text: String,
     lines: Vec<Line>,
-    /// Lines and frames in Claude's answers (rules, code blocks' frames, quotes' bars, tables' lines, underlines),
+    /// Lines and frames in the model's answers (rules, code blocks' frames, quotes' bars, tables' lines, underlines),
     /// from the column's left edge and the block's top.
     marks: Vec<Rect>,
     /// Where it is in the whole conversation (from its top), and how tall, in pixels.
@@ -104,10 +104,10 @@ struct Block {
     height: i32,
     /// Your message's bubble, from the column's left edge and the block's top.
     bubble: Rect,
-    /// Claude's answer with no words yet: the pulsing dot.
+    /// The model's answer with no words yet: the pulsing dot.
     thinking: bool,
-    /// What Claude is doing while it thinks ("Searching the web"), shown by the dot.
-    activity: Option<&'static str>,
+    /// What the model is doing before it answers ("Reading a file"), shown by the dot.
+    activity: Option<String>,
     /// Its text changed since it was laid out.
     changed: bool,
     /// A picture's pixels.
@@ -142,7 +142,7 @@ struct Metrics {
     line: i32,
     column_x: i32,
     column_w: i32,
-    /// How wide Claude's words (and the start screen's) go, from the column's left edge.
+    /// How wide the model's words (and the start screen's) go, from the column's left edge.
     text_w: i32,
     /// The message box: its left edge and width.
     box_x: i32,
@@ -185,7 +185,7 @@ pub struct Chat {
     /// The monitor's size, and the text size asked for (percent of the size chosen for this screen).
     size_mm: Option<(u32, u32)>,
     percent: u32,
-    /// The block Claude's answer is going into.
+    /// The block the model's answer is going into.
     asking: Option<usize>,
     typed: String,
     /// Where in `typed` the caret is (a byte index on a character boundary).
@@ -201,7 +201,7 @@ pub struct Chat {
     relayout: bool,
     last_big_redraw: u64,
     uptime_shown: Option<u64>,
-    claude_checked: u64,
+    model_checked: u64,
     dot_alpha: u32,
 }
 
@@ -235,16 +235,15 @@ fn memory_text(bytes: u64) -> String {
     if tenths < 100 { format!("{}.{} GB", tenths / 10, tenths % 10) } else { format!("{} GB", (tenths + 5) / 10) }
 }
 
-/// What the start screen says about Claude.
-fn claude_text(ready: Ready) -> String {
+/// What the start screen says about the model.
+fn model_text(ready: Ready) -> String {
     match ready {
-        Ready::Yes => String::from("Claude is here. Type anything below and press Enter."),
-        Ready::NoKey => format!("{} {}", assistant::NO_KEY, assistant::GIVE_KEY),
-        Ready::BadKey(p) => format!("{}. {}", assistant::sentence(p), assistant::GIVE_KEY),
-        Ready::NoClock => String::from("This PC's clock couldn't be read, so Claude can't be reached safely."),
-        Ready::NoCard => String::from(assistant::NO_CARD),
-        Ready::NoCable => String::from("Claude is on the internet: plug in a network cable to reach Claude."),
-        Ready::NoAddress => String::from("Connecting to the network\u{2026}"),
+        Ready::Yes(name) => format!(
+            "Chat Computer's own model, {name}, is ready, here on this PC: nothing you type leaves it. Type anything below \
+             and press Enter."
+        ),
+        Ready::Getting(how) => how,
+        Ready::No(why) => why,
     }
 }
 
@@ -298,7 +297,7 @@ impl Chat {
             Block::new(Kind::Text, Live::No, facts),
             Block::new(Kind::Text, Live::Uptime, uptime_text(0)),
             Block::new(Kind::Text, Live::Keyboards, String::from("Looking for keyboards.")),
-            Block::new(Kind::Text, Live::Claude, String::from("Looking for a network\u{2026}")),
+            Block::new(Kind::Text, Live::Model, String::from("Looking for Chat Computer's model\u{2026}")),
             Block::new(Kind::Text, Live::No, String::from(BACK_TO_WINDOWS)),
         ];
         let canvas = Canvas::new(screen.width, screen.height);
@@ -325,7 +324,7 @@ impl Chat {
             relayout: true,
             last_big_redraw: 0,
             uptime_shown: Some(0),
-            claude_checked: 0,
+            model_checked: 0,
             dot_alpha: 0,
         };
         c.lay_out_box();
@@ -401,7 +400,7 @@ impl Chat {
             };
             Line { text: String::from(text), face, style, x, y, ink }
         };
-        b.thinking = b.kind == Kind::Claude && shown.trim().is_empty();
+        b.thinking = b.kind == Kind::Answer && shown.trim().is_empty();
         b.marks.clear();
         let line = style.line_height / ONE;
         if let Some(p) = b.picture.as_mut() {
@@ -410,8 +409,8 @@ impl Chat {
                 *p = picture::shrink(p, m.column_w.max(1) as u32, p.height);
             }
             b.height = p.height as i32;
-        } else if b.kind == Kind::Claude && !b.thinking {
-            // Claude's words, as Markdown (rich.rs).
+        } else if b.kind == Kind::Answer && !b.thinking {
+            // The model's words, as Markdown (rich.rs).
             let laid = rich::lay_out(ty, &shown, m.rem, style, m.text_w, hair);
             for (i, run) in laid.runs.into_iter().enumerate() {
                 lines.push(reuse(&run.text, run.face, run.style, run.x, run.y, i));
@@ -573,7 +572,7 @@ impl Chat {
                 let d = m.px(0.5);
                 let baseline = ty.baseline(m.body) / ONE;
                 canvas.circle((m.column_x * 2 + d) * 4, (y + baseline) * 8 - d * 4, d * 4, INK, pulse(now));
-                if let Some(doing) = b.activity {
+                if let Some(doing) = &b.activity {
                     let ink = ty.ink(doing, m.body, 0);
                     canvas.ink(m.column_x + d + m.px(0.6) - ink.left as i32, y, &ink, DIM);
                 }
@@ -683,9 +682,9 @@ impl Chat {
                 self.uptime_shown = Some(seconds);
                 self.set_live(Live::Uptime, uptime_text(seconds));
             }
-            if now.saturating_sub(self.claude_checked) >= 500 {
-                self.claude_checked = now;
-                self.set_live(Live::Claude, claude_text(assistant::ready()));
+            if now.saturating_sub(self.model_checked) >= 500 {
+                self.model_checked = now;
+                self.set_live(Live::Model, model_text(assistant::ready()));
             }
         }
         if let Some(i) = self.asking
@@ -788,7 +787,7 @@ impl Chat {
         self.dirty = self.dirty.union(&area);
     }
 
-    /// Enter: what's typed goes to Claude.
+    /// Enter: what's typed goes to the model.
     fn send(&mut self) {
         // A test build of the keyboard (check.py --keyboard) writes the line in the log instead, so the test can
         // check what reached the screen; no other build ever logs what's typed.
@@ -808,19 +807,19 @@ impl Chat {
             self.started = true;
             self.blocks.clear();
         }
-        // A BitLocker recovery key unlocks Windows' drive here (files::work): it isn't shown, sent to Claude or kept,
-        // nor is anything typed with it.
+        // A BitLocker recovery key unlocks Windows' drive here (files::work): it isn't shown, given to the model or
+        // kept, nor is anything typed with it.
         if let Some(key) = bitlocker::find_recovery_key(&self.typed) {
             let alone = key.len() == self.typed.trim().len();
             files::unlock_later(String::from(key));
             files::wipe(&mut self.typed);
             self.cursor = 0;
             let note = if alone {
-                "A BitLocker recovery key: Chat Computer unlocks Windows' drive with it here, without sending it to Claude \
-                 or keeping it. Unlocking\u{2026}"
+                "A BitLocker recovery key: Chat Computer unlocks Windows' drive with it here, without giving it to the \
+                 model or keeping it. Unlocking\u{2026}"
             } else {
-                "Your message has a BitLocker recovery key in it, so it wasn't sent to Claude: Chat Computer unlocks \
-                 Windows' drive with the key here instead, and doesn't keep it. Unlocking\u{2026}"
+                "Your message has a BitLocker recovery key in it, so it wasn't given to the model: Chat Computer \
+                 unlocks Windows' drive with the key here instead, and doesn't keep it. Unlocking\u{2026}"
             };
             self.blocks.push(Block::new(Kind::Note, Live::No, String::from(note)));
             self.lay_out_box();
@@ -838,7 +837,7 @@ impl Chat {
         let you = self.blocks.len() - 1;
         match assistant::ask(&text) {
             Ok(()) => {
-                self.blocks.push(Block::new(Kind::Claude, Live::No, String::new()));
+                self.blocks.push(Block::new(Kind::Answer, Live::No, String::new()));
                 self.asking = Some(self.blocks.len() - 1);
             }
             Err(why) => self.blocks.push(Block::new(Kind::Note, Live::No, why)),
@@ -889,7 +888,7 @@ impl Chat {
         crate::log!("Chat Computer kernel: text size {}%: {:.1} px", self.percent, self.layout.font_px);
     }
 
-    fn claude(&mut self, e: Event) {
+    fn answer(&mut self, e: Event) {
         match e {
             Event::Text(s) => {
                 let Some(i) = self.asking else { return };
@@ -925,12 +924,12 @@ impl Chat {
                 self.relayout = true;
             }
             Event::Noted(note) => {
-                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Claude will remember: {note}")));
+                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Chat Computer will remember: {note}")));
                 self.relayout = true;
             }
             Event::Forgot(n) => {
                 let what = if n == 1 { String::from("a note") } else { format!("{n} notes") };
-                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Claude forgot {what}.")));
+                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Chat Computer forgot {what}.")));
                 self.relayout = true;
             }
             Event::NewConversation => {
@@ -940,7 +939,7 @@ impl Chat {
         }
     }
 
-    /// A picture Claude shows: where the answer is, before its words if it hasn't any yet, else after them (and the
+    /// A picture the model shows: where the answer is, before its words if it hasn't any yet, else after them (and the
     /// answer goes on below it). Only the last `MOST_PICTURES` keep their pixels.
     fn show_picture(&mut self, p: picture::Picture) {
         let Some(i) = self.asking else { return };
@@ -951,7 +950,7 @@ impl Chat {
             self.asking = Some(i + 1);
         } else {
             self.blocks.insert(i + 1, block);
-            self.blocks.insert(i + 2, Block::new(Kind::Claude, Live::No, String::new()));
+            self.blocks.insert(i + 2, Block::new(Kind::Answer, Live::No, String::new()));
             self.asking = Some(i + 2);
         }
         let mut kept = 0;
@@ -980,7 +979,7 @@ impl Chat {
         self.started = true;
         self.blocks.clear();
         for (you, text) in turns {
-            self.blocks.push(Block::new(if *you { Kind::You } else { Kind::Claude }, Live::No, text.clone()));
+            self.blocks.push(Block::new(if *you { Kind::You } else { Kind::Answer }, Live::No, text.clone()));
         }
         self.blocks.push(Block::new(Kind::Divider, Live::No, String::from(RESTARTED)));
         self.lay_out_box();
@@ -1060,10 +1059,10 @@ pub fn note(text: String) {
     }
 }
 
-/// Something came of the question to Claude.
-pub fn claude(e: Event) {
+/// Something came of the question to the model.
+pub fn answer(e: Event) {
     if let Some(c) = CHAT.lock().as_mut() {
-        c.claude(e);
+        c.answer(e);
     }
 }
 

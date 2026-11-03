@@ -1,11 +1,11 @@
-//! The PC's drives and USB drives, read and never changed: the person's files, for Claude (its list_files, read_file,
-//! find_files and show_picture tools), as the main Chat Computer can read them. Every volume in the partitions the
-//! drives' GPTs (or old MBRs) list as basic data is found: NTFS (ntfs/), exFAT (exfat/) or FAT (fat/). The one with
-//! Windows' own folders ("Windows" and "Users") is C:, and Windows' registry there (SYSTEM's MountedDevices, through
-//! registry/) says which letter each other partition has, by its GUID or its disk's signature and where it starts. A
-//! drive Windows hasn't seen gets the next letter no drive has, as Windows would give it. Links (a junction such as
-//! "My Documents", a symbolic link) are followed, within a drive; OneDrive's files are read when they're on the PC,
-//! and said to be online only when they aren't.
+//! The PC's drives and USB drives, read and never changed: the person's files, for Chat Computer's model (its
+//! list_files, read_file, find_files and show_picture tools), as the main Chat Computer can read them, and the model's
+//! own file. Every volume in the partitions the drives' GPTs (or old MBRs) list as basic data is found: NTFS (ntfs/),
+//! exFAT (exfat/) or FAT (fat/). The one with Windows' own folders ("Windows" and "Users") is C:, and Windows'
+//! registry there (SYSTEM's MountedDevices, through registry/) says which letter each other partition has, by its
+//! GUID or its disk's signature and where it starts. A drive Windows hasn't seen gets the next letter no drive has, as
+//! Windows would give it. Links (a junction such as "My Documents", a symbolic link) are followed, within a drive;
+//! OneDrive's files are read when they're on the PC, and said to be online only when they aren't.
 //!
 //! USB drives (usb/storage.rs: sticks, external disks, the cards in a card reader) are read as they come and go: a
 //! drive plugged in, or a card put in, has its volumes found and given letters (Windows' for a USB stick, by its
@@ -16,12 +16,11 @@
 //! A drive BitLocker encrypts (bitlocker/; a USB drive's "BitLocker To Go" too) is read decrypted: unlocked at once if
 //! BitLocker keeps its key in the clear (suspended, or waiting to be switched on, as a new PC's device encryption does
 //! until its owner signs in), else once the person types its recovery key in the message box (each locked drive
-//! tried). chat.rs hands the key here and never to Claude, and it isn't kept: after a restart it's typed again.
+//! tried). chat.rs hands the key here and never to the model, and it isn't kept: after a restart it's typed again.
 //!
-//! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); a
-//! ZIP archive as the list of what's in it; and pictures (JPEG, PNG, GIF, WebP) and PDFs whole, for Claude to see
-//! (the API takes them as they are: Claude reads a PDF's pages as words and as pictures). A picture bigger than the
-//! API shows Claude goes made smaller, as a JPEG.
+//! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); and
+//! a ZIP archive as the list of what's in it. Pictures and PDFs are said to be what they are (the model reads words
+//! only); show_picture puts a picture on the screen for the person.
 
 use crate::storage::{self, Disk, Drive};
 use crate::sync::SpinLock;
@@ -44,33 +43,10 @@ const MOST_FOLDERS: usize = 4_000;
 const SEARCH_MS: u64 = 5_000;
 /// The most links followed on the way to a file (a link to a link to...), so links in a circle end.
 const MOST_LINKS: usize = 8;
-/// The biggest picture sent to Claude as it is (the API takes 10 MB of base64: 7.5 MB), and its most pixels each way.
-const MOST_PICTURE: u64 = 7_400_000;
-const MOST_PIXELS: u32 = 8_000;
-/// What Claude's API shows Claude of a picture (Opus 4.7 and later): at most 2576 pixels on its long edge, and 4784
-/// "visual tokens" of 28 × 28 pixels. A picture bigger than that, or than the API takes, is sent the size Claude sees
-/// it, as a JPEG written here (picture::encode_jpeg): a phone's photo of several megabytes becomes a few hundred
-/// kilobytes, so more of them fit in what's sent with each question.
-const SEEN_EDGE: u32 = 2576;
-const SEEN_TOKENS: u32 = 4784;
-/// The JPEG quality a picture made smaller is written at.
-const QUALITY: u8 = 90;
-/// The biggest PDF (the API takes a request of 32 MB, the conversation and the PDF's base64 together), and Office
-/// file or ZIP archive, read.
-const MOST_PDF: u64 = 20_000_000;
+/// The biggest Office file or ZIP archive read.
 const MOST_OFFICE: u64 = 64_000_000;
-
-/// What read_file gives Claude: words, and perhaps a picture or a PDF to see.
-pub struct Read {
-    pub text: String,
-    pub attachment: Option<Attachment>,
-}
-
-pub enum Attachment {
-    /// A picture's type ("image/jpeg") and bytes.
-    Picture(&'static str, Vec<u8>),
-    Pdf(Vec<u8>),
-}
+/// How much of a picture is read to find how big it is (its header: a JPEG's may come after a photo's details).
+const PICTURE_HEAD: u64 = 65_536;
 
 /// What a file is, from its first bytes (and, for a ZIP, its name's extension).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -675,15 +651,15 @@ fn open_partition(disk: &mut dyn Disk, start: u64, blocks: u64, unlocked: Option
 }
 
 /// Whether a partition is the one Chat Computer started from (on the start-up drive, or, if that isn't one started
-/// here, on a USB drive): its files are Chat Computer's own (its settings, the Claude API key among them), not a
-/// drive's to read.
+/// here, on a USB drive): its files are Chat Computer's own (its settings and memory file), not a drive's to
+/// read.
 fn start_up_partition(drive: Drive, start: u64, blocks: u64) -> bool {
     let (s_start, s_blocks, on_start) = storage::start_partition();
     s_blocks != 0 && (start, blocks) == (s_start, s_blocks) && if on_start { drive == Drive::Start } else { matches!(drive, Drive::Usb { .. }) }
 }
 
-/// The folder of Chat Computer's own files (its settings, with the Claude API key, and its memory file), which is
-/// never read, wherever it is.
+/// The folder of Chat Computer's own files (its settings and its memory file), which is never read, wherever it
+/// is.
 const OWN_FOLDER: &str = "efi\\chatcomputer-own";
 
 /// Whether a path from a volume's root is Chat Computer's own folder, or in it.
@@ -825,7 +801,7 @@ fn said_of(volumes: &[Volume], registry_read: bool) -> String {
     if volumes.iter().any(|v| matches!(v.state, State::Locked(_))) {
         said += ". To read a locked drive, the person types its recovery key in the message box (48 digits, from \
                   https://aka.ms/myrecoverykey or wherever they saved it): Chat Computer's own system unlocks the drive \
-                  itself, and the key isn't sent to Claude, or kept";
+                  itself, and the key isn't given to the model, or kept";
     }
     said
 }
@@ -863,7 +839,7 @@ fn locked_why(letter: char, v: &bitlocker::Volume) -> String {
         "{letter}: is encrypted with BitLocker. To read it here, the person types its recovery key in the message box: \
          48 digits, which Windows keeps in their Microsoft account (https://aka.ms/myrecoverykey) if they signed in with \
          one, or which they saved or printed; its key ID starts {}. Chat Computer's own system unlocks the drive with the \
-         key itself: it isn't sent to Claude, or kept, so it's typed again after a restart",
+         key itself: it isn't given to the model, or kept, so it's typed again after a restart",
         id.join(" or ")
     )
 }
@@ -920,7 +896,7 @@ fn arrived(v: &[&Volume], name: &str, bytes: u64) -> String {
         })
         .collect();
     let readable = v.iter().any(|v| matches!(v.state, State::Open { .. }));
-    format!("USB drive \u{201C}{name}\u{201D}: {}.{}", all.join(", "), if readable { " Claude can read its files." } else { "" })
+    format!("USB drive \u{201C}{name}\u{201D}: {}.{}", all.join(", "), if readable { " Its files can be read." } else { "" })
 }
 
 /// The USB drives' media now: those gone forgotten, with their volumes; those new looked at, and their volumes given
@@ -997,7 +973,7 @@ fn unlock_in(volumes: &mut Vec<Volume>, typed: &str) -> String {
         *SAID.lock() = Some(said_of(volumes, LETTERS.lock().is_some()));
         let v = volumes.iter().find(|v| v.drive == drive && v.start == start).unwrap();
         let what = if v.windows { String::from(" (Windows' drive)") } else if v.label.is_empty() { String::new() } else { format!(" (\u{201C}{}\u{201D})", v.label) };
-        return format!("{}:{what} is unlocked: Claude can read its files now, until Chat Computer restarts.", v.letter);
+        return format!("{}:{what} is unlocked: its files can be read now, until Chat Computer restarts.", v.letter);
     }
     let ids: Vec<String> = volumes
         .iter()
@@ -1023,7 +999,7 @@ fn windows_letter() -> char {
     VOLUMES.lock().iter().find(|v| v.windows).map_or('C', |v| v.letter)
 }
 
-/// Runs `f` with the file system of drive letter `letter` (Err if there's none to read: the reason, for Claude).
+/// Runs `f` with the file system of drive letter `letter` (Err if there's none to read: the reason, for the model).
 fn with<T>(letter: char, f: impl FnOnce(&Fs, &mut Partition) -> T) -> Result<T, String> {
     let volumes = core::mem::take(&mut *VOLUMES.lock());
     let result = match volumes.iter().find(|v| v.letter == letter) {
@@ -1053,7 +1029,7 @@ fn with<T>(letter: char, f: impl FnOnce(&Fs, &mut Partition) -> T) -> Result<T, 
     result
 }
 
-/// A path as Claude gives it ("C:\Users\Ren", "d:/Photos", "/Users/Ren", "Users\Ren"): its drive's letter (Windows'
+/// A path as the model gives it ("C:\Users\Ren", "d:/Photos", "/Users/Ren", "Users\Ren"): its drive's letter (Windows'
 /// drive's if it has none), and the path in that volume from its root.
 fn inside(path: &str) -> (char, String) {
     let p = path.trim().trim_matches('"');
@@ -1238,69 +1214,35 @@ pub fn list(path: &str) -> Result<String, String> {
 }
 
 /// A file (read_file), from byte `from`: text as it is (UTF-8, or UTF-16 as Notepad saves it); an Office file's
-/// words (`from` counts in them); a ZIP archive's list; a picture or a PDF whole, for Claude to see. A file of another
-/// kind is said to be one.
-pub fn read(path: &str, from: u64) -> Result<Read, String> {
+/// words (`from` counts in them); a ZIP archive's list. A picture, a PDF or a file of another kind is said to be
+/// one.
+pub fn read(path: &str, from: u64) -> Result<String, String> {
     let (letter, rel) = inside(path);
     with(letter, |fs, p| {
         let (e, rel, link) = found(fs, p, letter, &rel)?;
         let f = fs.open_file(p, &e).map_err(|err| error_text(err, &shown(letter, &rel)))?;
-        let said = |text: String| Ok(Read { text, attachment: None });
+        let said = |text: String| Ok(text);
         let fail = |err: ntfs::Error| error_text(err, &shown(letter, &rel));
         let name = format!("{}{}", shown(letter, &rel), by_way_of(&link));
         let mut head = [0u8; 32];
         let n = fs.read(p, &f, 0, &mut head).map_err(fail)?;
         match kind_of(&head[..n], &rel) {
             Kind::Picture(media) => {
-                if f.size > MOST_SHOWN {
-                    return said(format!("{name} is a picture of {}: too big for Chat Computer's own system to open.", size(f.size)));
-                }
-                let data = whole(fs, p, &f, MOST_SHOWN).map_err(fail)?;
-                let pixels = dimensions(media, &data);
-                let head = format!(
-                    "{name} ({}{}, changed {})",
+                let mut head = vec![0u8; f.size.min(PICTURE_HEAD) as usize];
+                let n = fs.read(p, &f, 0, &mut head).map_err(fail)?;
+                let pixels = dimensions(media, &head[..n]).map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default();
+                said(format!(
+                    "{name} ({}{pixels}, changed {}) is a picture. Chat Computer's own model can't see pictures yet; \
+                     show_picture shows it to the person.",
                     size(f.size),
-                    pixels.map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default(),
                     date(e.modified)
-                );
-                // As it is, if the API takes it and shows it to Claude as it is (a WebP picture, which isn't made
-                // smaller here, if the API takes it).
-                let takes = f.size <= MOST_PICTURE && pixels.is_some_and(|(w, h)| w <= MOST_PIXELS && h <= MOST_PIXELS);
-                let as_it_is = pixels.is_some_and(|(w, h)| seen_edge(w, h) == w.max(h));
-                if takes && (as_it_is || media == "image/webp") {
-                    return Ok(Read { text: format!("{head}: the picture is below."), attachment: Some(Attachment::Picture(media, data)) });
-                }
-                if media == "image/webp" {
-                    return said(format!("{head} is a WebP picture too big for Claude to see, and Chat Computer's own system can't make WebP pictures smaller yet."));
-                }
-                let Some((w, h)) = pixels.or_else(|| picture::size(&data)) else {
-                    return said(format!("{head}: it seems to be damaged, so it can't be made smaller for Claude to see."));
-                };
-                let edge = seen_edge(w, h);
-                match picture::decode_within(&data, edge, edge, [255, 255, 255], decoding_room()) {
-                    Ok(pic) => {
-                        let jpeg = picture::encode_jpeg(&pic, QUALITY);
-                        let text = format!(
-                            "{head}: the picture is below, made smaller ({}×{} pixels, {}) as Claude's API would.",
-                            pic.width,
-                            pic.height,
-                            size(jpeg.len() as u64)
-                        );
-                        Ok(Read { text, attachment: Some(Attachment::Picture("image/jpeg", jpeg)) })
-                    }
-                    Err(picture::Error::TooBig) => said(format!("{head}: too many pixels for Chat Computer's own system to make it smaller for Claude.")),
-                    Err(picture::Error::Unsupported(what)) => said(format!("{head} is a {what}, which Chat Computer's own system can't make smaller for Claude.")),
-                    Err(_) => said(format!("{head}: it seems to be damaged, so it can't be made smaller for Claude to see.")),
-                }
+                ))
             }
-            Kind::Pdf => {
-                if f.size > MOST_PDF {
-                    return said(format!("{name} is a PDF of {}: too big to send to Claude (at most {}).", size(f.size), size(MOST_PDF)));
-                }
-                let data = whole(fs, p, &f, MOST_PDF).map_err(fail)?;
-                let text = format!("{name} ({}, changed {}): the PDF is below, its pages' words and pictures.", size(f.size), date(e.modified));
-                Ok(Read { text, attachment: Some(Attachment::Pdf(data)) })
-            }
+            Kind::Pdf => said(format!(
+                "{name} ({}, changed {}) is a PDF, which Chat Computer's own model can't read yet.",
+                size(f.size),
+                date(e.modified)
+            )),
             Kind::Office | Kind::Zip if f.size > MOST_OFFICE => {
                 said(format!("{name} is {}: too big for Chat Computer's own system to open.", size(f.size)))
             }
@@ -1338,7 +1280,7 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
                     format!("{name} ({}) is in Office's format from before 2007 (.doc, .xls, .ppt), which Chat Computer's own system can't read inside yet.", size(f.size))
                 })
             }
-            Kind::Media(what) => said(format!("{name} ({}) is {what}, which Chat Computer's own system can't show Claude yet.", size(f.size))),
+            Kind::Media(what) => said(format!("{name} ({}) is {what}, which Chat Computer's own system can't open yet.", size(f.size))),
             Kind::Other => {
                 if from >= f.size && f.size > 0 {
                     return said(format!("{} is {} long: nothing from byte {from}.", shown(letter, &rel), size(f.size)));
@@ -1364,26 +1306,13 @@ pub fn read(path: &str, from: u64) -> Result<Read, String> {
     })?
 }
 
-/// The biggest picture file shown on the screen, or made smaller for Claude.
+/// The biggest picture file shown on the screen.
 const MOST_SHOWN: u64 = 64_000_000;
 
 /// The memory a picture may take as it's decoded: half the biggest piece of the kernel's heap that's free (a bigger
 /// picture is said to be too big, rather than the heap running out).
 fn decoding_room() -> u64 {
     crate::heap::largest_free() as u64 / 2
-}
-
-/// The long edge Claude's API shows a `w` × `h` picture to Claude at (its own, if it's no bigger).
-fn seen_edge(w: u32, h: u32) -> u32 {
-    let mut edge = w.max(h).min(SEEN_EDGE);
-    while edge > 28 {
-        let (a, b) = picture::fitted(w, h, edge, edge);
-        if a.div_ceil(28) * b.div_ceil(28) <= SEEN_TOKENS {
-            break;
-        }
-        edge -= 1;
-    }
-    edge
 }
 
 /// A picture on Windows' drive for the screen (show_picture): what was shown, and its pixels, made to fit `w` × `h`
@@ -1517,4 +1446,111 @@ pub fn find(words: &str, from: &str) -> Result<String, String> {
         }
         Ok(out)
     })?
+}
+
+// ------------------------------------------------------------------------------------------------ the model's file
+
+/// A file opened to be read a part at a time (the model's file, which is gigabytes): where it is, and its size.
+pub struct Opened {
+    letter: char,
+    /// The volume it's on (so a drive given the same letter since isn't read instead).
+    drive: Drive,
+    start: u64,
+    file: File,
+    pub size: u64,
+    /// Its path, as Windows writes it.
+    pub path: String,
+}
+
+/// Opens a file to read a part at a time (`read_at`). Err: why it can't be, for the person.
+pub fn open(path: &str) -> Result<Opened, String> {
+    let (letter, rel) = inside(path);
+    let (drive, start) = {
+        let volumes = VOLUMES.lock();
+        match volumes.iter().find(|v| v.letter == letter) {
+            Some(v) => (v.drive, v.start),
+            None => (Drive::Start, 0), // (`with` says why there's nothing to read)
+        }
+    };
+    with(letter, |fs, p| {
+        let (e, rel, _) = found(fs, p, letter, &rel)?;
+        let file = fs.open_file(p, &e).map_err(|err| error_text(err, &shown(letter, &rel)))?;
+        Ok(Opened { letter, drive, start, size: file.size, file, path: shown(letter, &rel) })
+    })?
+}
+
+/// `buf.len()` bytes of an opened file from byte `offset` (fewer at its end): how many were read.
+pub fn read_at(o: &Opened, offset: u64, buf: &mut [u8]) -> Result<usize, String> {
+    let same = VOLUMES.lock().iter().any(|v| v.letter == o.letter && v.drive == o.drive && v.start == o.start);
+    if !same {
+        return Err(format!("{}: its drive is gone", o.path));
+    }
+    with(o.letter, |fs, p| fs.read(p, &o.file, offset, buf).map_err(|err| error_text(err, &o.path)))?
+}
+
+/// Whether Windows' drive is locked by BitLocker (its recovery key unlocks it): a drive is locked, and none that's
+/// read is Windows'.
+pub fn windows_locked() -> bool {
+    let volumes = VOLUMES.lock();
+    !volumes.iter().any(|v| v.windows) && volumes.iter().any(|v| matches!(v.state, State::Locked(_)))
+}
+
+/// Where Chat Computer's app keeps the models it gets ready on Windows, under each person's folder.
+const APP_MODELS: [&str; 4] = ["AppData", "Local", "ai.chatcomputer.desktop", "models"];
+
+/// The models Chat Computer's app has got ready on this PC (Users\NAME\AppData\Local\ai.chatcomputer.desktop\models\
+/// MODEL.ccm, for each person, on Windows' drive and any other with people's folders): their paths and sizes. Where
+/// the own system looks for a model when its settings name none. Err: why no drive can be read.
+pub fn app_models() -> Result<Vec<(String, u64)>, String> {
+    // Windows' drive first.
+    let mut letters: Vec<(bool, char)> = VOLUMES
+        .lock()
+        .iter()
+        .filter(|v| matches!(v.state, State::Open { .. }))
+        .map(|v| (!v.windows, v.letter))
+        .collect();
+    if letters.is_empty() {
+        // (What there is to say about why: `with` says it.)
+        return with(windows_letter(), |_, _| Vec::new());
+    }
+    letters.sort();
+    let mut out = Vec::new();
+    for (_, letter) in letters {
+        if let Ok(found) = with(letter, |fs, p| models_on(fs, p, letter)) {
+            out.extend(found);
+        }
+    }
+    Ok(out)
+}
+
+/// The models in each person's folder for Chat Computer's app on one volume.
+fn models_on(fs: &Fs, p: &mut Partition, letter: char) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    let root = fs.root();
+    let Ok(users) = fs.child(p, &root, "Users") else { return out };
+    if !users.folder {
+        return out;
+    }
+    let Ok(people) = fs.list(p, &users) else { return out };
+    for person in people.iter().filter(|e| e.folder && !e.link) {
+        let mut at = person.clone();
+        let mut names = Vec::new();
+        for part in APP_MODELS {
+            match fs.child(p, &at, part) {
+                Ok(e) if e.folder && !e.link => {
+                    names.push(e.name.clone());
+                    at = e;
+                }
+                _ => break,
+            }
+        }
+        if names.len() < APP_MODELS.len() {
+            continue;
+        }
+        let Ok(files) = fs.list(p, &at) else { continue };
+        for f in files.iter().filter(|f| !f.folder && f.name.to_ascii_lowercase().ends_with(".ccm")) {
+            out.push((shown(letter, &format!("{}\\{}\\{}\\{}", users.name, person.name, names.join("\\"), f.name)), f.size));
+        }
+    }
+    out
 }

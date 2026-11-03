@@ -1,4 +1,4 @@
-//! Claude's answers laid out as the main screen shows them (theme.css's ".md" rules): the Markdown read by the
+//! The model's answers laid out as the main screen shows them (theme.css's ".md" rules): the Markdown read by the
 //! markdown crate (md.js's rules), then paragraphs, headings, lists, code, quotes, tables and rules placed in the
 //! column, in pixels from the answer's top left. Each run of text in one face is placed on its own; lines and frames
 //! are "marks", filled rectangles in the text's colour.

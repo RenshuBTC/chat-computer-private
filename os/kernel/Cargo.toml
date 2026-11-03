@@ -13,9 +13,6 @@ font = { path = "../font" }
 text = { path = "../text" }
 chime = { path = "../chime" }
 net = { path = "../net" }
-crypto = { path = "../crypto" }
-tls = { path = "../tls" }
-claude = { path = "../claude" }
 fat = { path = "../fat" }
 exfat = { path = "../exfat" }
 ntfs = { path = "../ntfs" }
@@ -28,6 +25,7 @@ remember = { path = "../remember" }
 markdown = { path = "../markdown" }
 hid = { path = "../hid" }
 aml = { path = "../aml" }
+model = { path = "../model" }
 
 [[bin]]
 name = "chatcomputer-kernel"

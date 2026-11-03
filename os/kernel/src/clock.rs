@@ -2,8 +2,8 @@
 //!
 //! The clock keeps UTC on some PCs and local time on others (Windows keeps local time), and the firmware rarely
 //! says which. The Windows setup writes the offset into the settings; without it the time is taken as UTC, give
-//! or take 14 hours (the most any time zone is from UTC). That is close enough for what the time is needed for:
-//! checking that a server's certificate, valid for months, is in date.
+//! or take 14 hours (the most any time zone is from UTC), and only the date is said (each message the model's
+//! given starts with when it was sent; reminders at a time of day need the offset).
 
 use crate::sync::SpinLock;
 use crate::time;
@@ -60,11 +60,6 @@ pub fn error() -> i64 {
     CLOCK.lock().as_ref().map_or(0, |c| c.error)
 }
 
-/// Whether the clock is certainly wrong: earlier than this kernel was written.
-pub fn behind() -> bool {
-    now().is_some_and(|t| t + error() < WRITTEN)
-}
-
 /// (year, month, day, hour, minute) for seconds since 1970 (Howard Hinnant's civil_from_days).
 pub fn civil(t: i64) -> (i64, u32, u32, u32, u32) {
     let days = t.div_euclid(86_400);
@@ -119,11 +114,17 @@ pub fn now_text() -> Option<String> {
     }
 }
 
-/// Today's date, for people: the local date when the settings gave the time zone, else the date in UTC (said so).
-pub fn today_text() -> Option<String> {
-    let t = now()?;
-    match offset() {
-        Some(m) => Some(text(t + m as i64 * 60, i64::MAX)),
-        None => Some(format!("{} (UTC)", text(t, i64::MAX))),
-    }
+/// When `t` (seconds since 1970) was, short, for the note on each message the model's given: "Tue 3 Nov 2026 19:02",
+/// in local time when the settings gave the time zone, else in UTC (said so); the day alone when the clock may be
+/// hours out.
+pub fn short_text(t: i64) -> String {
+    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]; // (1 January 1970 was a Thursday)
+    let (local, zone) = match offset() {
+        Some(m) => (t + m as i64 * 60, ""),
+        None => (t, " UTC"),
+    };
+    let (y, mo, d, h, mi) = civil(local);
+    let day = DAYS[local.div_euclid(86_400).rem_euclid(7) as usize];
+    let month = &MONTHS[(mo as usize).clamp(1, 12) - 1][..3];
+    if error() > 3 * 3600 { format!("{day} {d} {month} {y}") } else { format!("{day} {d} {month} {y} {h:02}:{mi:02}{zone}") }
 }

@@ -3,7 +3,7 @@
 //! snapshots go back exactly, a session's reuse changes no answer, and the arithmetic's kernels agree.
 //! (Against the published models and the reference implementation: tools/refcheck.)
 
-use crate::chat::{Message, Options, Style};
+use crate::chat::{Answer, Message, Options, Style};
 use crate::file::File;
 use crate::net::{Model, Serial};
 use crate::quant::{self, Dtype, Prepared};
@@ -174,6 +174,53 @@ fn the_kernels_agree() {
             }
         }
     }
+}
+
+#[test]
+fn the_system_prompt_read_ahead_is_read_once() {
+    let bytes = tiny(true);
+    let file = File::open(&bytes).unwrap();
+    let m = Model::load(&file).unwrap();
+    let o = Options { think: Some(false), keep_thinking: Some(true), ..Options::default() };
+    let tool = crate::json::parse(r#"{"type":"function","function":{"name":"look","description":"Looks.","parameters":{"type":"object","properties":{}}}}"#).unwrap();
+    let tools = [tool];
+    let system = Message::System("A system prompt read before anything's asked.".into());
+    let mut msgs = vec![system.clone(), Message::User("Hello there".into())];
+    let r = |msgs: &[Message]| -> (Answer, crate::session::Stats, Answer, crate::session::Stats, usize) {
+        let r = Request { tools: &tools, messages: msgs, options: o, sampling: Sampling::GREEDY, max_tokens: 6, seed: 5 };
+        let mut whole = Session::new(&m, Style::QWEN35);
+        let (want, want_st) = whole.ask(&r, &Serial, &mut |_, _| true).unwrap();
+        let mut ahead = Session::new(&m, Style::QWEN35);
+        let first = ahead.ahead(&r).unwrap();
+        let mut calls = 0;
+        while !ahead.read_ahead(&first, 5, &Serial) {
+            calls += 1;
+        }
+        assert_eq!(calls + 1, first.len().div_ceil(5));
+        // Read already: nothing more to do.
+        assert!(ahead.read_ahead(&first, 5, &Serial));
+        let (got, st) = ahead.ask(&r, &Serial, &mut |_, _| true).unwrap();
+        (want, want_st, got, st, first.len())
+    };
+    let (want, want_st, got, st, first) = r(&msgs);
+    assert_eq!(got, want);
+    // Only what follows the system prompt was read for the question.
+    assert_eq!((st.prompt, st.read, want_st.read), (want_st.prompt, want_st.prompt - first, want_st.prompt));
+    // A conversation that goes on, and a new one: the system prompt isn't read again.
+    msgs.push(Message::Assistant(got));
+    msgs.push(Message::User("And again".into()));
+    let (want, _, got, _, _) = r(&msgs);
+    assert_eq!(got, want);
+    fn rq<'a>(tools: &'a [crate::json::Json], msgs: &'a [Message], o: Options) -> Request<'a> {
+        Request { tools, messages: msgs, options: o, sampling: Sampling::GREEDY, max_tokens: 6, seed: 5 }
+    }
+    let mut s = Session::new(&m, Style::QWEN35);
+    let first = s.ahead(&rq(&tools, &msgs, o)).unwrap();
+    while !s.read_ahead(&first, 64, &Serial) {}
+    s.ask(&rq(&tools, &msgs, o), &Serial, &mut |_, _| true).unwrap();
+    let fresh = vec![system, Message::User("Something new".into())];
+    let (_, st) = s.ask(&rq(&tools, &fresh, o), &Serial, &mut |_, _| true).unwrap();
+    assert_eq!(st.read, st.prompt - first.len());
 }
 
 #[test]

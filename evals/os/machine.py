@@ -1,4 +1,4 @@
-"""What the eval's sandbox looks like from the inside, so Claude meets the commands a real Chat Computer has (Ubuntu
+"""What the eval's sandbox looks like from the inside, so the model meets the commands a real Chat Computer has (Ubuntu
 Server 24.04 and the packages that version's linux/install-chatcomputer.sh adds) and not this machine's (no
 ImageMagick, scrot, ffmpeg, Node, compilers...). Commands are linked into a folder that is the whole PATH. A few
 that a real one has and this machine doesn't are stand-ins that answer like a healthy home network and PC would,

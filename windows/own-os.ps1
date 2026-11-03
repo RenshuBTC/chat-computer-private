@@ -5,7 +5,8 @@ Starts Chat Computer's own operating system (os/ in this folder: its own start-u
 scratch) on this PC, without a USB stick:
   1. checks this PC (read-only) and saves a list of its parts, for writing Chat Computer's drivers,
   2. signs Chat Computer's start-up file with a key made on this PC (the key never leaves it),
-  3. asks for your Claude API key, for talking to Claude there (optional; it's never shown or logged),
+  3. says which model it answers with there: the one Chat Computer's app got ready on this PC (free, run on the PC
+     itself, so nothing you type leaves it),
   4. after you confirm, puts the signed file, its settings and its memory file (where it keeps the conversation
      across restarts; kept when this runs again) on the partition the PC starts from (\EFI\chatcomputer-own),
      next to Windows' own files, and adds "Chat Computer (own system)" to the end of the power-on menu, started
@@ -67,8 +68,8 @@ try {
     Write-Line ''
     Write-Host 'Chat Computer''s own system' -ForegroundColor White
     Write-Line 'This starts Chat Computer''s own operating system on this PC: its own start-up and kernel, written from'
-    Write-Line 'scratch, with nothing from Linux or other projects. You type to Claude there, with your own Claude API'
-    Write-Line 'key, over a network cable (on a PC whose network chip it has no driver for yet, it shows what it found).'
+    Write-Line 'scratch, with nothing from Linux or other projects. You type to Chat Computer there, and its own model'
+    Write-Line '(the one Chat Computer''s app gets ready) answers on the PC itself: no account, no internet, nothing to pay.'
     Write-Line 'No USB stick is needed, and Windows isn''t changed: a few small files go on the partition the PC starts'
     Write-Line 'from, next to Windows'' own files.'
     $mode = 0

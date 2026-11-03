@@ -81,17 +81,17 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     paging::init(info);
     log!("Chat Computer kernel: own page tables in use");
     let heap = heap::init();
-    log!("Chat Computer kernel: heap of {} MiB", heap >> 20);
-    // The settings file and the clock, as the start-up stage read them (the key in the settings is never logged).
+    log!("Chat Computer kernel: heap of {} MiB to start with (it grows as it's needed)", heap >> 20);
+    // The settings file and the clock, as the start-up stage read them.
     let settings = settings::parse(info.settings());
     log!(
-        "Chat Computer kernel: settings: {}{}",
-        match (info.settings_len, &settings.claude_api_key, settings.key_problem) {
-            (0, _, _) => "none",
-            (_, Some(_), _) => "a Claude API key",
-            (_, None, Some(_)) => "a Claude API key that can't be used",
-            _ => "no Claude API key",
+        "Chat Computer kernel: settings: {}{}{}",
+        match (info.settings_len, &settings.model) {
+            (0, _) => "none",
+            (_, Some(_)) => "the model's file named",
+            (_, None) => "no model's file named",
         },
+        if settings.old_key { " (and an older setup's Claude API key, no longer used)" } else { "" },
         if settings.not_understood > 0 { alloc::format!(", {} lines not understood", settings.not_understood) } else { String::new() }
     );
     log!("Chat Computer kernel: clock: {}", clock::init(info.time, info.time_zone, settings.clock_offset_minutes));
@@ -199,7 +199,7 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     log!("Chat Computer kernel: {}", keep::init(&info.start_disk, settings.memory_id));
     log!("Chat Computer kernel: {}", storage::open_others());
     log!("Chat Computer kernel: {}", files::init());
-    assistant::init(settings.claude_api_key, settings.key_problem);
+    assistant::init(settings.model);
     chat::restore(&assistant::conversation());
     log!("Chat Computer: ready");
 
@@ -210,17 +210,20 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
             let _ = unsafe { core::ptr::read_volatile(0x10 as *const u64) };
         }
         Some("panic") => panic!("a test of what happens when the kernel stops"),
-        // (A timer, as Claude's reminders tool sets one.)
+        // (A timer, as the model's reminders tool sets one.)
         Some("sound") => log!("Chat Computer kernel: test: {}", schedule::timer(2.0, "tea").unwrap_or_else(|e| e)),
         _ => {}
     }
 
     let mut keyboards_shown = u64::MAX;
     loop {
-        cpu::wait_for_interrupt();
+        // (While the model works, the loop goes straight on: its steps are short, and the rest has its turn between.)
+        if !assistant::working() {
+            cpu::wait_for_interrupt();
+        }
         network::work();
         for event in assistant::work() {
-            chat::claude(event);
+            chat::answer(event);
         }
         assistant::keep();
         usb::work();

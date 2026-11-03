@@ -21,32 +21,32 @@ log go to out/.
                                      kernel is running and then unplugged, and by RNDIS): an address from DHCP, a
                                      name looked up with DNS, and a TCP conversation with a server on this computer
                                      (--card igb: only that one)
-    ./check.py --claude              a conversation with Claude, typed on the keyboard: with a stand-in for
-                                     Claude's API on this computer (HTTPS, with a certificate authority made for
-                                     the test, which the test build trusts instead of Mozilla's): the request
-                                     (model, effort, the key from the settings file, the conversation so far),
-                                     the answer streamed onto the screen, Claude's tools (the computer's status,
-                                     a bigger text size, a restart, which ends the virtual PC), the answers'
-                                     thinking sent back unchanged, a web search (run by Anthropic: its results and
-                                     citations kept as they came, the answer paused and carried on), the web tools
-                                     refused and left out, a failure shown, and the conversation scrolled back and
-                                     forth by a USB mouse's wheel
+    ./check.py --model               Chat Computer's own model: a tiny one (random weights) found where Chat
+                                     Computer's app keeps its models, read into memory, its instructions read
+                                     ahead, a question typed and answered, the answer the same as the engine's on
+                                     Linux; then named by the settings; then a file that isn't a model
+    ./check.py --chat                a conversation typed on the keyboard, answered by a test's script in place of
+                                     the model: what the model's given each round (the conversation so far, the
+                                     tools' results, when each message was sent), its tools (the computer's
+                                     status, a bigger text size, a timer, a restart, which ends the virtual PC),
+                                     the answer on the screen (Markdown laid out), a failure shown, and the
+                                     conversation scrolled back and forth by a USB mouse's wheel
     ./check.py --remember            the conversation kept across a restart: started from a disk laid out like a
                                      PC's (a FAT32 start-up partition with Windows' files and Chat Computer's,
                                      its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
                                      drive; a question answered, the PC restarted, the conversation back on the
-                                     screen and sent with the next question, then a new conversation started (the
-                                     next question sent alone; a note Claude made before the restart still shown
-                                     to it), then the PC turned off (ACPI's S5); the memory
+                                     screen and given with the next question, then a new conversation started (the
+                                     next question given alone; a note the model made before the restart still in
+                                     its instructions), then the PC turned off (ACPI's S5); the memory
                                      file's two copies, and nothing else on the disk changed (fsck.vfat too, so also
                                      needs dosfstools, mtools and gdisk)
     ./check.py --files               Windows' drive read: a disk like a PC's, with Windows' NTFS partition after the
-                                     start-up one (the ntfs crate's test volume), and a stand-in for Claude that
-                                     lists a folder, reads files (UTF-8 and UTF-16, a Word file it can't, a long one
+                                     start-up one (the ntfs crate's test volume), and a test's script in place of
+                                     the model that lists a folder, reads files (UTF-8 and UTF-16, a Word file it can't, a long one
                                      in two parts) and finds one by name (needs xz and sgdisk)
     ./check.py --bitlocker           Windows' drive encrypted with BitLocker (the same volume, encrypted as Windows
                                      10 and 11 do): locked, then unlocked by its recovery key typed in the message
-                                     box (a wrong one refused), the key reaching neither Claude nor the disk; and
+                                     box (a wrong one refused), the key reaching neither the model nor the disk; and
                                      read at once when BitLocker keeps its key in the clear (also needs
                                      python3-cryptography)
     ./check.py --drives              the PC's other drives: a second NVMe SSD (GPT), a SATA drive partitioned the old
@@ -82,7 +82,6 @@ virt-fw-vars (pip install virt-firmware).
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import shutil
@@ -607,265 +606,120 @@ def network(args) -> list[str]:
     return problems
 
 
-CLAUDE_PORT = 8472  # assistant.rs TEST_PORT
-TEST_KEY = "test-key-for-the-stand-in"
-FIRST_WORDS = "Let me look."
+# A Markdown answer, as models write them: a heading, bold and italic, a list, a table, a quote and code, which the
+# screen lays out (its picture: chat-markdown.png); with characters the text and code fonts lack, from the fallback
+# fonts: an arrow, a check mark, Greek and maths, emoji (one with the "as an emoji" selector, which shows nothing
+# itself) and box drawing.
+MARKDOWN = ("## Today\n\n**Sunny** all day, with *light* wind and ~~no~~ little cloud:\n\n- Morning: `12 °C`\n"
+            "- Afternoon: 18 °C → 20 °C ✓\n\n| Time | Sky | Wind |\n|---|---|---|\n| 9:00 | Clear ☀\ufe0f | 5 km/h |\n"
+            "| 15:00 | **Sunny** | 10 km/h (Δ ≈ 5) |\n\n> Enjoy the day. 🙂\n\n```\nforecast --today\n└─ sunny, 20 °C\n```")
+# The settings' first line, as Chat Computer Own System writes them on Windows (New-OwnSettingsText): Windows' line
+# breaks.
+SETTINGS_HEAD = "# Chat Computer's settings, read by its own system when it starts. Written by Chat Computer Own System.\r\n"
+# The note each message the model's given starts with: when it was sent ("[Tue 3 Nov 2026 19:02] ").
+NOTE_TIME = r"\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d\d:\d\d\] "
 
 
-def stream(blocks: list[tuple], stop: str) -> list[tuple[str, dict]]:
-    """An answer as Claude's API streams one: each block ("thinking", signature) (its words left out, as Opus 5.5 does
-    unless asked), ("text", [words...]) or ("text", [words...], [citations...]), ("tool_use", id, name, [pieces of its
-    input's JSON]), ("server_tool_use", id, name, [pieces]) for the tools Anthropic runs, or ("result", block) for
-    their results (which come whole), then why it stopped. ("wait", seconds) is a pause in the stream, as while
-    Anthropic searches the web."""
-    events = [("message_start", {"type": "message_start", "message": {"id": "msg_test", "type": "message", "role": "assistant",
-                                                                       "model": "claude-opus-5-5", "content": [], "stop_reason": None}})]
-    i = -1
-    for b in blocks:
-        if b[0] == "wait":
-            events.append(("wait", {"seconds": b[1]}))
-            continue
-        i += 1
-
-        def delta(d: dict, i: int = i) -> tuple[str, dict]:
-            return "content_block_delta", {"type": "content_block_delta", "index": i, "delta": d}
-        if b[0] == "thinking":
-            events += [("content_block_start", {"type": "content_block_start", "index": i,
-                                                "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
-                       delta({"type": "thinking_delta", "thinking": ""}), delta({"type": "signature_delta", "signature": b[1]})]
-        elif b[0] == "text":
-            events.append(("content_block_start", {"type": "content_block_start", "index": i, "content_block": {"type": "text", "text": ""}}))
-            events += [delta({"type": "text_delta", "text": w}) for w in b[1]]
-            events += [delta({"type": "citations_delta", "citation": c}) for c in (b[2] if len(b) > 2 else [])]
-        elif b[0] == "result":
-            events.append(("content_block_start", {"type": "content_block_start", "index": i, "content_block": b[1]}))
-        else:
-            events.append(("content_block_start", {"type": "content_block_start", "index": i,
-                                                   "content_block": {"type": b[0], "id": b[1], "name": b[2], "input": {}}}))
-            events += [delta({"type": "input_json_delta", "partial_json": piece}) for piece in b[3]]
-        events.append(("content_block_stop", {"type": "content_block_stop", "index": i}))
-        if i == 0:
-            events.append(("ping", {"type": "ping"}))
-    events.append(("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"output_tokens": 20}}))
-    events.append(("message_stop", {"type": "message_stop"}))
-    return events
+def script_build(script: dict, tmp: Path) -> None:
+    """A test build that answers from `script` in place of a model (assistant.rs): for each question (or "else"), the
+    rounds of its answer, each {"text": words, "calls": [[tool, {arguments}], ...]} or {"fail": why}."""
+    path = tmp / "script.json"
+    path.write_text(json.dumps(script, ensure_ascii=False))
+    build("chat", {"CHATCOMPUTER_TEST_SCRIPT": str(path)})
 
 
-def test_authority(tmp: Path) -> None:
-    """A certificate authority made for the test (tmp/ca.der, which a test build trusts instead of Mozilla's), and a
-    certificate from it for "localhost" (tmp/leaf.pem, tmp/leaf.key)."""
-    def openssl(*a: str) -> None:
-        subprocess.run(["openssl", *a], cwd=tmp, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    p256 = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
-    openssl("req", "-x509", "-nodes", *p256, "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
-            "-subj", "/CN=Chat Computer test authority (not for real use)",
-            "-addext", "basicConstraints=critical,CA:true", "-addext", "keyUsage=critical,keyCertSign")
-    (tmp / "leaf.ext").write_text("subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n"
-                                  "keyUsage=critical,digitalSignature\nbasicConstraints=critical,CA:false\n")
-    openssl("req", "-nodes", *p256, "-keyout", "leaf.key", "-out", "leaf.csr", "-subj", "/CN=localhost")
-    openssl("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "leaf.pem",
-            "-days", "2", "-extfile", "leaf.ext")
-    openssl("x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der")
+def tool_script(calls: dict) -> dict:
+    """A script that answers each question by calling its one tool ((name, arguments)), then saying "Done."."""
+    return {q: [{"calls": [[name, inp]]}] for q, (name, inp) in calls.items()}
 
 
-def serve_https(handler, tmp: Path):
-    """The stand-in for Claude's API: `handler` over HTTPS (TLS 1.3, tmp's certificate) on CLAUDE_PORT."""
-    import http.server
-    import ssl
-    import threading
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", CLAUDE_PORT), handler)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_3
-    context.load_cert_chain(tmp / "leaf.pem", tmp / "leaf.key")
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
+def logged(text: str, what: str) -> list:
+    """What a test build logged as `what` ("asked", "tool", "round" or "said"), in order, each read as JSON."""
+    mark = f"kernel: test: {what} "
+    return [json.loads(line.split(mark, 1)[1]) for line in text.splitlines() if mark in line]
 
 
-def send_stream(handler, blocks: list[tuple], stop: str) -> None:
-    """An answer, streamed as Claude's API streams one (see `stream`)."""
-    handler.send_response(200)
-    handler.send_header("content-type", "text/event-stream")
-    handler.send_header("transfer-encoding", "chunked")
-    handler.end_headers()
-    for event, payload in stream(blocks, stop):
-        if event == "wait":
-            time.sleep(payload["seconds"])
-            continue
-        chunk = f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
-        handler.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-        handler.wfile.flush()
-        time.sleep(0.05)
-    handler.wfile.write(b"0\r\n\r\n")
-    handler.wfile.flush()
+def tool_results(text: str, questions: list[str]) -> dict[str, dict]:
+    """What each question's tool said ({"name", "error", "said"}), when each question calls one tool, asked one after
+    another."""
+    return dict(zip(questions, logged(text, "tool")))
 
 
-def blocks_as_sent(blocks: list[tuple]) -> list[dict]:
-    """The same blocks as the answer's content, which must come back unchanged in the next request."""
-    out = []
-    for b in blocks:
-        if b[0] == "wait":
-            continue
-        if b[0] == "thinking":
-            out.append({"type": "thinking", "thinking": "", "signature": b[1]})
-        elif b[0] == "text":
-            out.append({"type": "text", "text": "".join(b[1])} | ({"citations": b[2]} if len(b) > 2 else {}))
-        elif b[0] == "result":
-            out.append(b[1])
-        else:
-            out.append({"type": b[0], "id": b[1], "name": b[2], "input": json.loads("".join(b[3]) or "{}")})
-    return out
+def wait_answered(pc: "VirtualPC", times: int, timeout: float = 60) -> None:
+    """Until a test's script has answered `times` questions with "Done."."""
+    end = time.time() + timeout
+    while time.time() < end and pc.text().count("model: answered (5 characters") < times:
+        time.sleep(0.5)
 
 
-def claude(args) -> list[str]:
-    """A conversation typed on the keyboard, with a stand-in for Claude's API on this computer (HTTPS on
-    CLAUDE_PORT, as "localhost", with a certificate from an authority made for the test, which the test build trusts
-    instead of Mozilla's). The first question is answered with tools: the stand-in has Claude look at the computer's
-    status, then make the text bigger, then answer with what the status said (streamed, a piece at a time); each
-    answer, thinking included, must come back unchanged with the tool's result. The second question gets Claude's
-    API's "overloaded" error, which the screen must show. The third is answered after a web search (which Anthropic
-    runs): its results and the answer's citations must come back as they came, and the answer, paused by the API,
-    must be sent back to go on, the rest joining it. The fourth asks to restart: the API first refuses the web tools
-    (as it does when an organization has switched them off), so the question must be asked again without them;
-    then Claude restarts the PC. The stand-in checks what it was sent. After the third answer, a USB mouse's wheel
-    scrolls the conversation back a notch and forward again."""
-    import http.server
+def plain(messages: list[dict]) -> list[dict]:
+    """The messages the model was given, the note of when each of the person's was sent taken off."""
+    import re
+
+    return [dict(m, content=re.sub("^" + NOTE_TIME, "", m["content"])) if m.get("role") == "user" else m for m in messages]
+
+
+def chat(args) -> list[str]:
+    """A conversation typed on the keyboard, answered by a test build's script in place of the model (assistant.rs), so
+    all that's around the model is checked: what it's given each round, the tools it calls, the answer on the screen.
+    The first question is answered with tools: the script has the model look at the computer's status, then make the
+    text bigger and set a timer (two tools at once), then answer (a few characters at a time); each round must be
+    given the conversation so far, the answers and what the tools said, the same instructions every time, and each of
+    the person's messages with when it was sent. The second question fails, which the screen must show (and which
+    must be taken back out of the conversation). The third is answered in Markdown, laid out on the screen; then a USB
+    mouse's wheel scrolls the conversation back a notch and forward again. The fourth asks to restart: the model's
+    answer, then a restart."""
+    import re
 
     from PIL import ImageChops
 
-    tmp = Path(tempfile.mkdtemp(prefix="cc-claude-"))
-    test_authority(tmp)
-
-    requests: list[dict] = []
-    r1 = [("thinking", "sig-1/+="), ("text", ["Let me ", "look."]), ("tool_use", "toolu_1", "computer_status", [])]
-    # (Two tools at once: the text bigger, and a timer, which rings long after the test.)
-    r2 = [("thinking", "sig-2"), ("tool_use", "toolu_2", "set_text_size", ['{"percent"', ': 125}']),
-          ("tool_use", "toolu_2b", "reminders", ['{"action": "timer", "min', 'utes": 30, "label": "the oven"}'])]
-    final: list[str] = []
-    search_result = {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1",
-                     "content": [{"type": "web_search_result", "title": "Weather", "url": "https://example.com/w",
-                                  "encrypted_content": "EqgfCi+/=", "page_age": None}]}
-    citation = {"type": "web_search_result_location", "url": "https://example.com/w", "title": "Weather",
-                "encrypted_index": "Eo8B=", "cited_text": "Sunny all day."}
-    r_search = [("thinking", "sig-s"), ("server_tool_use", "srvtoolu_1", "web_search", ['{"query": ', '"weather"}']),
-                ("wait", 4), ("result", search_result), ("text", ["It's ", "sunny."], [citation])]
-    # The rest of that answer in Markdown, as Claude writes: a heading, bold and italic, a list, a table, a quote and
-    # code, which the screen lays out (its picture: claude-search.png); with characters the text and code fonts lack,
-    # from the fallback fonts: an arrow, a check mark, Greek and maths, emoji (one with the "as an emoji" selector,
-    # which shows nothing itself) and box drawing.
-    more = ("## Today\n\n**Sunny** all day, with *light* wind and ~~no~~ little cloud:\n\n- Morning: `12 °C`\n"
-            "- Afternoon: 18 °C → 20 °C ✓\n\n| Time | Sky | Wind |\n|---|---|---|\n| 9:00 | Clear ☀\ufe0f | 5 km/h |\n"
-            "| 15:00 | **Sunny** | 10 km/h (Δ ≈ 5) |\n\n> Enjoy the day. 🙂\n\n```\nforecast --today\n└─ sunny, 20 °C\n```")
-    r_more = [("text", [more[:40], more[40:]])]
-    r5 = [("thinking", "sig-5"), ("tool_use", "toolu_5", "restart_computer", ["{}"])]
-    r6 = [("text", ["Restarting now: see you in Windows."])]
-
-    def r3() -> list[tuple]:
-        # What the status said (the processor), in the answer: the tool's result came back.
-        messages = (requests[-1]["body"] or {}).get("messages") or []
-        result = str((((messages[2:3] or [{}])[0].get("content") or [{}])[0]).get("content", ""))
-        processor = next((line[len("Processor: "):] for line in result.splitlines() if line.startswith("Processor: ")), "?")
-        final.append(f"I see {processor}, and the text is bigger now.")
-        return [("thinking", "sig-3"), ("text", [final[0][:10], final[0][10:]])]
-
-    class Api(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def log_message(self, *a) -> None:
-            pass
-
-        def do_POST(self) -> None:
-            body = self.rfile.read(int(self.headers.get("content-length", "0")))
-            try:
-                data = json.loads(body)
-            except ValueError:
-                data = None
-            requests.append({"path": self.path, "key": self.headers.get("x-api-key"),
-                             "version": self.headers.get("anthropic-version"), "body": data})
-            script = {1: (r1, "tool_use"), 2: (r2, "tool_use"), 5: (r_search, "pause_turn"), 6: (r_more, "end_turn"),
-                      8: (r5, "tool_use"), 9: (r6, "end_turn")}.get(len(requests))
-            if len(requests) == 3:
-                script = (r3(), "end_turn")
-            if len(requests) == 7:
-                # As the API answers when an organization has switched web search off for its keys.
-                error = json.dumps({"type": "error", "error": {"type": "invalid_request_error",
-                                                               "message": "web search is not enabled for this organization"}}).encode()
-                self.send_response(400)
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(error)))
-                self.end_headers()
-                self.wfile.write(error)
-            elif script:
-                self.send_response(200)
-                self.send_header("content-type", "text/event-stream")
-                self.send_header("transfer-encoding", "chunked")
-                self.end_headers()
-                for event, payload in stream(*script):
-                    if event == "wait":
-                        time.sleep(payload["seconds"])
-                        continue
-                    chunk = f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
-                    self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                    self.wfile.flush()
-                    time.sleep(0.1)
-                self.wfile.write(b"0\r\n\r\n")
-            else:
-                error = json.dumps({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}).encode()
-                self.send_response(529)
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(error)))
-                self.end_headers()
-                self.wfile.write(error)
-            self.wfile.flush()
-
-    server = serve_https(Api, tmp)
-    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    tmp = Path(tempfile.mkdtemp(prefix="cc-chat-"))
+    final = "I see this computer, and the text is bigger now."
+    script = {
+        "hi": [{"text": "Let me look.", "calls": [["computer_status", {}]]},
+               # (Two tools at once: the text bigger, and a timer, which rings long after the test.)
+               {"calls": [["set_text_size", {"percent": 125}], ["reminders", {"action": "timer", "minutes": 30, "label": "the oven"}]]},
+               {"text": final}],
+        "again": [{"fail": "Chat Computer's model stopped (a test of a failure)."}],
+        "weather": [{"text": "It's sunny.\n\n" + MARKDOWN}],
+        "restart": [{"calls": [["restart_computer", {}]]}, {"text": "Restarting now: see you in Windows."}],
+    }
+    script_build(script, tmp)
     problems: list[str] = []
     try:
-        # (Intel's card here; --network tries every kind.) And a USB mouse, to scroll with.
-        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=",
-                 "-device", "qemu-xhci,id=xhci", "-device", "usb-mouse,bus=xhci.0")
-        # As Chat Computer Own System writes it on Windows (New-OwnSettingsText): notes, Windows' line breaks.
-        settings = ("# Chat Computer's settings, read by its own system when it starts. Written by Chat Computer Own System.\r\n"
-                    "# The Claude API key is kept here as it is: anyone who can read this partition can read it.\r\n"
-                    f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\n")
+        # A USB mouse, to scroll with.
+        extra = ("-device", "qemu-xhci,id=xhci", "-device", "usb-mouse,bus=xhci.0")
+        settings = SETTINGS_HEAD + "clock-offset-minutes = 0\r\n"
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings)
-        first = second = third = searched = searching = None
+        first = second = third = searched = None
+        answered = None
         restarted = ended = False
         scrolled = []
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
                 return ["the kernel didn't say it was ready"]
-            if not wait_for(pc.log, ("network: address",), 60):
-                problems.append("no network address")
             time.sleep(1)
-            pc.picture("claude-0")
+            pc.picture("chat-0")
             monitor_many(pc.mon, ["sendkey h", "sendkey i", "sendkey ret"])
-            first = wait_for(pc.log, ("test: Claude said", "Claude: failed", "stopped"), args.timeout)
-            answered = pc.settled_picture("claude-1")
-            monitor_many(pc.mon, [f"sendkey {k}" for k in "again"] + ["sendkey ret"])
-            second = wait_for(pc.log, ("Claude: failed", "stopped"), 60)
-            pc.settled_picture("claude-2")
-            # A question answered after a web search.
-            monitor_many(pc.mon, [f"sendkey {k}" for k in "weather"] + ["sendkey ret"])
-            if wait_for(pc.log, ("Claude: searches the web",), 60):
-                time.sleep(1)
-                searching = pc.picture("claude-searching")
+            first = wait_for(pc.log, ("test: said", "model: failed", "stopped"), args.timeout)
+            answered = pc.settled_picture("chat-1")
+            monitor_many(pc.mon, keys_for("again") + ["sendkey ret"])
+            second = wait_for(pc.log, ("model: failed", "stopped"), 60)
+            pc.settled_picture("chat-2")
+            monitor_many(pc.mon, keys_for("weather") + ["sendkey ret"])
             searched = wait_for(pc.log, ("Enjoy the day",), 60)
-            at_end = pc.settled_picture("claude-search")
+            at_end = pc.settled_picture("chat-markdown")
             # The wheel a notch away from you: the conversation scrolls back; a notch towards you: forward again.
             if use_mouse(pc.mon, "QEMU HID Mouse"):
                 turn_wheel(pc.mon, [1])
-                back = pc.settled_picture("claude-scrolled")
+                back = pc.settled_picture("chat-scrolled")
                 turn_wheel(pc.mon, [-1])
-                scrolled = [at_end, back, pc.settled_picture("claude-scrolled-forward")]
-            # Asked to restart: Claude's answer, then a restart (which ends a virtual PC started with -no-reboot).
-            monitor_many(pc.mon, [f"sendkey {k}" for k in "restart"] + ["sendkey ret"])
-            third = wait_for(pc.log, ("Restarting now", "Claude: failed", "stopped"), 60)
-            pc.settled_picture("claude-3")
+                scrolled = [at_end, back, pc.settled_picture("chat-scrolled-forward")]
+            # Asked to restart: the model's answer, then a restart (which ends a virtual PC started with -no-reboot).
+            monitor_many(pc.mon, keys_for("restart") + ["sendkey ret"])
+            third = wait_for(pc.log, ("Restarting now", "model: failed", "stopped"), 60)
+            pc.settled_picture("chat-3")
             restarted = wait_for(pc.log, ("kernel: restarting",), 30) is not None
             try:
                 pc.qemu.wait(timeout=20)
@@ -876,109 +730,169 @@ def claude(args) -> list[str]:
             pc.stop()
         text = pc.text()
         print(text)
+        said = logged(text, "said")
         if "clock: " not in text or "(local time, offset from the settings)" not in text:
             problems.append("the clock offset in the settings wasn't used")
-        if "Claude: connected (TLS 1.3" not in text:
-            problems.append("no secure connection to the stand-in")
-        said = FIRST_WORDS + "\n\n" + (final[0] if final else "?")
-        if first != "test: Claude said" or f"test: Claude said {json.dumps(said)}" not in text:
-            problems.append(f"the answer didn't come back whole (the log says {first!r})")
-        if "Claude: uses computer_status" not in text or "Claude: uses set_text_size" not in text:
+        if first != "test: said" or said[:1] != ["Let me look.\n\n" + final]:
+            problems.append(f"the first answer didn't come whole (the log says {first!r}: {said[:1]!r})")
+        if "model: uses computer_status" not in text or "model: uses set_text_size" not in text:
             problems.append("the tools weren't used")
         if "text size 125%" not in text:
             problems.append("the text wasn't made bigger")
-        if second != "Claude: failed" or "Claude is very busy right now (Overloaded)" not in text:
+        if second != "model: failed" or "model: failed: Chat Computer's model stopped (a test of a failure)." not in text:
             problems.append("the second question's failure wasn't reported")
-        if TEST_KEY in text:
-            problems.append("the API key is in the log")
-        if third is None or "Claude: uses restart_computer" not in text:
+        if third is None or "model: uses restart_computer" not in text:
             problems.append("asking to restart didn't reach the restart tool")
         elif not restarted or not ended:
             problems.append(f"the PC didn't restart (the kernel said so: {restarted}; the virtual PC ended: {ended})")
-        after_search = "It's sunny.\n\n" + more
-        # (As the kernel's log writes it: Rust escapes a variation selector.)
-        logged = json.dumps(after_search, ensure_ascii=False).replace("\ufe0f", "\\u{fe0f}")
-        if searched != "Enjoy the day" or f"test: Claude said {logged}" not in text:
-            problems.append(f"the answer after a web search didn't come whole (the log says {searched!r})")
-        if "Claude: searches the web" not in text:
-            problems.append("the web search wasn't noticed")
+        if searched != "Enjoy the day" or said[1:2] != ["It's sunny.\n\n" + MARKDOWN]:
+            problems.append(f"the Markdown answer didn't come whole (the log says {searched!r})")
         if not scrolled:
             problems.append("QEMU has no USB mouse to scroll with")
         elif [ImageChops.difference(scrolled[0], b).getbbox() is None for b in scrolled[1:]] != [False, True]:
             problems.append("the mouse's wheel didn't scroll the conversation back, then forward to where it was")
-        if "the web tools aren't enabled for this API key" not in text:
-            problems.append("the web tools weren't left out once the API refused them")
-        if len(requests) != 9:
-            problems.append(f"the stand-in got {len(requests)} requests, not 9")
-        else:
-            r = requests[0]
-            body = r["body"] or {}
-            wanted = {"model": "claude-opus-5-5", "max_tokens": 64000, "stream": True, "output_config": {"effort": "max"},
-                      "cache_control": {"type": "ephemeral"}}
-            for k, v in wanted.items():
-                if body.get(k) != v:
-                    problems.append(f"the request's {k} was {body.get(k)!r}, not {v!r}")
-            # The same system prompt every time (with the date, not the time), so the API's cache keeps working.
-            systems = {str((q["body"] or {}).get("system")) for q in requests[:7]}
-            if len(systems) != 1 or "Today is " not in systems.pop():
-                problems.append("the system prompt changed from one request to the next, or doesn't give the date")
-            if (r["path"], r["key"], r["version"]) != ("/v1/messages", TEST_KEY, "2023-06-01"):
-                problems.append(f"the request went to {r['path']!r} with key {r['key'] == TEST_KEY} and version {r['version']!r}")
-            if "shows Markdown formatted" not in str(body.get("system")):
-                problems.append("the request didn't say how the screen shows answers")
-            if body.get("messages") != [{"role": "user", "content": "hi"}]:
-                problems.append(f"the first request's messages were {body.get('messages')!r}")
-            tools = sorted((t.get("name"), t.get("type")) for t in body.get("tools") or [])
-            if tools != [("computer_status", None), ("find_files", None), ("forget", None), ("list_files", None),
-                         ("read_file", None), ("remember", None), ("reminders", None), ("restart_computer", None),
-                         ("set_text_size", None), ("set_volume", None), ("show_picture", None),
-                         ("start_new_conversation", None), ("turn_off_computer", None),
-                         ("web_fetch", "web_fetch_20250910"), ("web_search", "web_search_20250305")]:
-                problems.append(f"the request offered the tools {body.get('tools')!r}")
-            m2 = (requests[1]["body"] or {}).get("messages") or []
-            if m2[:2] != [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(r1)}]:
-                problems.append(f"the first answer didn't come back unchanged: {m2[:2]!r}")
-            result = ((m2[2:3] or [{}])[0].get("content") or [{}])[0] if len(m2) == 3 else {}
-            if (result.get("type"), result.get("tool_use_id"), result.get("is_error")) != ("tool_result", "toolu_1", False) \
-                    or "Processor: " not in str(result.get("content")) or "Memory: " not in str(result.get("content")) \
-                    or "Sound: none: no HD Audio controller" not in str(result.get("content")) \
-                    or "Timers and reminders: none set" not in str(result.get("content")):
-                problems.append(f"the computer's status didn't come back as the tool's result: {result!r}")
-            m3 = (requests[2]["body"] or {}).get("messages") or []
-            if m3[:3] != m2 or m3[3:4] != [{"role": "assistant", "content": blocks_as_sent(r2)}] or len(m3) != 5:
-                problems.append(f"the second round's request wasn't the first's plus the answer and result: {m3[3:]!r}")
-            # Both tools' results, in one message, in order: the timer set as asked.
-            results = [(b.get("tool_use_id"), str(b.get("content")), b.get("is_error"))
-                       for b in ((m3[4:5] or [{}])[0].get("content") or [])]
-            if [r[0] for r in results] != ["toolu_2", "toolu_2b"] or any(r[2] for r in results) \
-                    or not results[1][1].startswith("Set a 30-minute timer for the oven (rings in 30 minutes)."):
-                problems.append(f"the two tools' results didn't come back as they should: {results!r}")
-            m4 = (requests[3]["body"] or {}).get("messages") or []
-            if len(m4) != 7 or m4[:5] != m3 or m4[6] != {"role": "user", "content": "again"} \
-                    or m4[5] != {"role": "assistant", "content": blocks_as_sent([("thinking", "sig-3"), ("text", final[:1])])}:
-                problems.append(f"the second question's messages were {m4!r}")
-            # The web search: the paused answer sent back as it came, to go on; then joined by the rest.
-            m5 = (requests[4]["body"] or {}).get("messages") or []
-            if m5 != m4[:6] + [{"role": "user", "content": "weather"}]:
-                problems.append(f"the third question's messages were {m5[5:]!r}")
-            m6 = (requests[5]["body"] or {}).get("messages") or []
-            if m6 != m5 + [{"role": "assistant", "content": blocks_as_sent(r_search)}]:
-                problems.append(f"the paused answer didn't come back as it came: {m6[6:]!r}")
-            m7 = (requests[6]["body"] or {}).get("messages") or []
-            joined = {"role": "assistant", "content": blocks_as_sent(r_search) + blocks_as_sent(r_more)}
-            if m7 != m5 + [joined, {"role": "user", "content": "restart"}]:
-                problems.append(f"the answer after the search wasn't kept whole: {m7[6:]!r}")
-            b8 = requests[7]["body"] or {}
-            if b8.get("messages") != m7:
-                problems.append("the refused question wasn't asked again as it was")
-            if any(t.get("type", "").startswith("web_") for t in b8.get("tools") or []) or "can't use the web" not in str(b8.get("system")):
-                problems.append(f"the question asked again still offered the web tools: {b8.get('tools')!r}")
-        if first == "test: Claude said":
+        # What the model was given, round by round: the same instructions, then the conversation so far.
+        rounds = logged(text, "asked")
+        if len(rounds) != 7:
+            problems.append(f"the model was given {len(rounds)} rounds, not 7: {rounds!r}"[:2000])
+            return problems
+        system = rounds[0][0]
+        if any(r[0] != system for r in rounds) or system.get("role") != "system":
+            problems.append("the instructions changed from one round to the next")
+        for words in ("You are Chat Computer", "nothing they say leaves the computer", "The screen shows Markdown",
+                      "like [Tue 3 Nov 2026 19:02]"):
+            if words not in str(system.get("content")):
+                problems.append(f"the instructions don't say {words!r}")
+        convo = [r[1:] for r in rounds]
+        for r, question in ((0, "hi"), (3, "again"), (4, "weather"), (5, "restart")):
+            if not re.fullmatch(NOTE_TIME + question, convo[r][-1].get("content", "")):
+                problems.append(f"{question!r} wasn't given with when it was sent: {convo[r][-1]!r}")
+        convo = [plain(c) for c in convo]
+        user = lambda t: {"role": "user", "content": t}  # noqa: E731
+        answer = lambda t, *calls: {"role": "assistant", "content": t, "calls": list(calls)}  # noqa: E731
+        status = convo[1][2]["content"] if len(convo[1]) == 3 else ""
+        if convo[0] != [user("hi")]:
+            problems.append(f"the first question was given as {convo[0]!r}")
+        if convo[1][:2] != [user("hi"), answer("Let me look.", {"name": "computer_status", "args": {}})] \
+                or convo[1][2:3] != [{"role": "tool", "content": status}] \
+                or any(w not in status for w in ("Processor: ", "Memory: ", "Sound: none: no HD Audio controller",
+                                                 "Timers and reminders: none set", "Model: a test's script")):
+            problems.append(f"the computer's status didn't come back to the model: {convo[1]!r}"[:2000])
+        both = answer("", {"name": "set_text_size", "args": {"percent": "125"}},
+                      {"name": "reminders", "args": {"action": "timer", "minutes": "30", "label": "the oven"}})
+        results = [m.get("content", "") for m in convo[2][4:]]
+        if convo[2][:4] != convo[1] + [both] or len(results) != 2 or [m.get("role") for m in convo[2][4:]] != ["tool", "tool"] \
+                or not results[0].startswith("The text is now 125%") \
+                or not results[1].startswith("Set a 30-minute timer for the oven (rings in 30 minutes)."):
+            problems.append(f"the two tools' results didn't come back as they should: {convo[2][3:]!r}")
+        if convo[3] != convo[2] + [answer(final), user("again")]:
+            problems.append(f"the second question was given as {convo[3][5:]!r}")
+        # (The question that failed is taken back out.)
+        if convo[4] != convo[3][:-1] + [user("weather")]:
+            problems.append(f"the third question was given as {convo[4][5:]!r}")
+        if convo[5] != convo[4] + [answer("It's sunny.\n\n" + MARKDOWN), user("restart")]:
+            problems.append(f"the fourth question was given as {convo[5][7:]!r}")
+        if convo[6][:-1] != convo[5] + [answer("", {"name": "restart_computer", "args": {}})] or convo[6][-1].get("role") != "tool":
+            problems.append(f"the restart's round was given as {convo[6][9:]!r}")
+        if first == "test: said":
             problems += check_colours(answered, args.size)
             if colours(answered).get(BUBBLE, 0) < 1000:
                 problems.append("no bubble for what was typed")
     finally:
-        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
+# The kernel's names for the engine's arithmetic (assistant.rs), as the engine's kernel_check example takes them.
+LEVELS = {"plain": "plain", "AVX2": "avx2", "AVX-VNNI": "avx-vnni", "AVX-512 VNNI": "avx-512-vnni"}
+TINY = HERE.parent / "tests/data/tiny-model.ccm"
+
+
+def model_check(args) -> list[str]:
+    """Chat Computer's own model, run by the kernel: a tiny model of random weights (tests/data/tiny-model.ccm) where
+    Chat Computer's app keeps its models on Windows (Users\\NAME\\AppData\\Local\\ai.chatcomputer.desktop\\models), on a
+    second drive's FAT32 volume, found there with no setting naming it, read into memory and its instructions read
+    ahead; then a question typed and answered (by a test build, with the model's likeliest tokens), the answer's first
+    round the same as Chat Computer's engine says to what the kernel gave it, on Linux (os/model's kernel_check
+    example, with the arithmetic the kernel used). Then started again with the settings naming the model's file (as
+    Chat Computer Own System writes them), which must be read from there; and once more with a file that isn't a
+    model, which the screen must say."""
+    import re
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-model-"))
+    build("model")
+    problems: list[str] = []
+    try:
+        models = "Users/Test/AppData/Local/ai.chatcomputer.desktop/models"
+        # (FAT32 as a PC writes it: enough clusters, of a sector each, to be FAT32 by the count of them.)
+        volume = fat_volume(tmp, "DATA", 64, 32, 1, {f"{models}/qwen3.5-tiny.ccm": TINY.read_bytes(),
+                                                     "Documents/not a model.ccm": b"CCMODEL1 but not one"})
+        gpt_disk(tmp / "data.img", volume)
+        extra = ("-drive", f"if=none,id=d1,format=raw,file={tmp / 'data.img'}", "-device", "nvme,serial=ccdata1,drive=d1")
+        settings = SETTINGS_HEAD + "clock-offset-minutes = 0\r\n"
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings)
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            if not wait_for(pc.log, ("model: read its instructions ahead", "model: failed", "stopped"), args.timeout):
+                problems.append("the model's instructions weren't read ahead")
+            pc.settled_picture("model-ready")
+            monitor_many(pc.mon, keys_for("hello") + ["sendkey ret"])
+            if wait_for(pc.log, ("model: answered", "model: failed", "stopped"), args.timeout) != "model: answered":
+                problems.append("the model didn't answer")
+            pc.settled_picture("model-answer")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        path = "D:\\Users\\Test\\AppData\\Local\\ai.chatcomputer.desktop\\models\\qwen3.5-tiny.ccm"
+        if f"model: reading Qwen3.5 TINY (1 MB) from {path}" not in text:
+            problems.append("the model's file wasn't found where Chat Computer's app keeps it")
+        ready = re.search(r"model: Qwen3\.5 TINY ready \(1 MB read in [\d.]+ s\), conversations up to (\d+) tokens, its "
+                          r"arithmetic (.+)", text)
+        if not ready:
+            problems.append("the model wasn't made ready")
+        asked, rounds = logged(text, "asked"), logged(text, "round")
+        if not asked or not rounds:
+            problems.append("the model wasn't asked, or didn't answer")
+        elif ready:
+            given = plain(asked[0])
+            if [m["role"] for m in given] != ["system", "user"] or given[1]["content"] != "hello" \
+                    or "You are Chat Computer" not in given[0]["content"] or "(Qwen3.5 TINY, an open model" not in given[0]["content"]:
+                problems.append(f"the model was given {given!r}"[:1000])
+            # (A model test build gives the model no tools, and lets it say 24 tokens: assistant.rs.)
+            (tmp / "asked.json").write_text(json.dumps(asked[0], ensure_ascii=False))
+            (tmp / "tools.json").write_text("[]")
+            engine = subprocess.run(["cargo", "run", "-q", "--release", "-p", "model", "--features", "std", "--example",
+                                     "kernel_check", "--", str(TINY), str(tmp / "asked.json"), "--tools", str(tmp / "tools.json"),
+                                     "--max", "24", "--level", LEVELS.get(ready[2], "plain")],
+                                    cwd=HERE, capture_output=True, text=True)
+            try:
+                want = json.loads(engine.stdout)
+            except ValueError:
+                want = engine.stderr[-2000:]
+            if rounds[0] != want:
+                problems.append(f"the kernel's model said {rounds[0]!r}, the engine on Linux {want!r}"[:3000])
+            else:
+                print(f"The kernel's model said what the engine says ({len(rounds[0]['text'])} characters, "
+                      f"{len(rounds[0]['calls'])} tool calls), with {ready[2]} arithmetic.")
+        # Named by the settings: read from there; and a file that isn't a model.
+        for named, want_words in ((path, "model: Qwen3.5 TINY ready"),
+                                  ("D:\\Documents\\not a model.ccm", "isn't a model Chat Computer's engine can run")):
+            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra,
+                           settings=settings + f"model = {named}\r\n")
+            try:
+                if wait_for(pc.log, (want_words, "stopped"), args.timeout) != want_words:
+                    problems.append(f"with the settings naming {named}, the log didn't say {want_words!r}")
+                if "not a model" in named:
+                    pc.settled_picture("model-not-one")
+            finally:
+                pc.stop()
+            if "settings: the model's file named" not in pc.text():
+                problems.append("the settings' model wasn't read")
+    finally:
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
     return problems
@@ -1082,82 +996,54 @@ def esp_now(path: Path, files: dict[str, bytes]) -> tuple[list[str], bytes]:
 
 def remember(args) -> list[str]:
     """The conversation kept across a restart, with the start-up partition on an NVMe drive, then on a SATA one: a
-    disk like a PC's (memory_disk), a question answered by a stand-in for Claude's API, then the virtual PC started
-    again: the conversation must be on the screen, and in the next question's request, and in the memory file in the
-    format Windows' setup made it for. Before the restart Claude notes something about the person (its remember tool):
-    the note must be shown to Claude after the restart, and after a new conversation (its tool), whose next question
-    must be sent alone, and only the new conversation kept. Last, Claude is asked to turn the PC off. The partition's
-    file system must stay clean and its other files untouched."""
-    import http.server
-
+    disk like a PC's (memory_disk), a question answered by a test build's script in place of the model, then the
+    virtual PC started again: the conversation must be on the screen, and given to the model with the next question,
+    and in the memory file in the format Windows' setup made it for. Before the restart the model notes something
+    about the person (its remember tool): the note must be in the model's instructions after the restart, and after a
+    new conversation (its tool), whose next question must be given alone, and only the new conversation kept. Last,
+    the model is asked to turn the PC off. The partition's file system must stay clean and its other files
+    untouched."""
     tmp = Path(tempfile.mkdtemp(prefix="cc-memory-"))
-    test_authority(tmp)
-    requests: list[dict] = []
-    first_answer = [("thinking", "sig-m1"), ("text", ["Hello! The word is ", "pumpkin."])]
-    new_call = [("thinking", "sig-m2"), ("tool_use", "toolu_new", "start_new_conversation", ["{}"])]
-    off_call = [("thinking", "sig-m3"), ("tool_use", "toolu_off", "turn_off_computer", ["{}"])]
     note = "Their favourite word is pumpkin."
-    note_call = [("thinking", "sig-m4"), ("tool_use", "toolu_note", "remember", ['{"note": ', json.dumps(note) + "}"])]
-    after_tool = {"toolu_off": "Turning off now.", "toolu_new": "Starting afresh.", "toolu_note": "Noted."}
-
-    class Api(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def log_message(self, *a) -> None:
-            pass
-
-        def do_POST(self) -> None:
-            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
-            requests.append(body)
-            asked = ((body.get("messages") or [{}])[-1]).get("content")
-            if asked == "hi":
-                send_stream(self, first_answer, "end_turn")
-            elif asked == "new":
-                send_stream(self, new_call, "tool_use")
-            elif asked == "off":
-                send_stream(self, off_call, "tool_use")
-            elif asked == "note":
-                send_stream(self, note_call, "tool_use")
-            elif isinstance(asked, list):  # a tool's result
-                send_stream(self, [("text", [after_tool.get(asked[0].get("tool_use_id"), "?")])], "end_turn")
-            else:
-                send_stream(self, [("text", ["Pumpkin."])], "end_turn")
+    script = {
+        "hi": [{"text": "Hello! The word is pumpkin."}],
+        "note": [{"calls": [["remember", {"note": note}]]}, {"text": "Noted."}],
+        "new": [{"calls": [["start_new_conversation", {}]]}, {"text": "Starting afresh."}],
+        "off": [{"calls": [["turn_off_computer", {}]]}, {"text": "Turning off now."}],
+        "else": [{"text": "Pumpkin."}],
+    }
 
     def kept_or_failed(log: Path, times: int) -> None:
         end = time.time() + 120
         while time.time() < end:
             text = log.read_text(errors="replace") if log.exists() else ""
-            if text.count("memory: the conversation kept") >= times or "couldn't be kept" in text or "Claude: failed" in text:
+            if text.count("memory: the conversation kept") >= times or "couldn't be kept" in text or "model: failed" in text:
                 return
             time.sleep(0.5)
 
-    server = serve_https(Api, tmp)
-    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    script_build(script, tmp)
     problems: list[str] = []
-    first = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": blocks_as_sent(first_answer)}]
+    user = lambda t: {"role": "user", "content": t}  # noqa: E731
+    answer = lambda t, *calls: {"role": "assistant", "content": t, "calls": list(calls)}  # noqa: E731
     try:
         for kind in ("nvme", "sata"):
-            requests.clear()
             disk = tmp / f"{kind}.img"
-            settings = (f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\n"
-                        f"memory-id = {MEMORY_ID:08x}\r\n")
+            settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
             files = memory_disk(disk, BUILT, settings, MEMORY_ID)
-            extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
             texts = []
             turned_off = False
             for start in (1, 2):
-                pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, kind))
+                pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, kind))
                 try:
                     if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                         print(pc.text())
                         return problems + [f"{kind}, start {start}: the kernel didn't say it was ready"]
-                    wait_for(pc.log, ("network: address",), 60)
                     time.sleep(1)
                     if start == 2:
                         pc.settled_picture(f"memory-{kind}-restored")
                     # The first start: a question, then a note. The second: a question after the restart, then a new
-                    # conversation asked for, then a question in it, then Claude asked to turn the PC off (ACPI's S5,
-                    # which ends the virtual PC).
+                    # conversation asked for, then a question in it, then the model asked to turn the PC off (ACPI's
+                    # S5, which ends the virtual PC).
                     for n, question in enumerate(["hi", "note"] if start == 1 else ["word", "new", "hi", "off"]):
                         monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
                         kept_or_failed(pc.log, n + 1)
@@ -1183,46 +1069,45 @@ def remember(args) -> list[str]:
                     problems.append(f"{kind}, start {start}: {e}")
                     continue
                 # Kept once after each answer, with the note: the conversation, then (the second time) the new one,
-                # which began with "hi" again and ended with Claude turning the PC off.
+                # which began with "hi" again and ended with the model turning the PC off.
                 held = json.loads(kept[1]) if kept else {}
-                messages = held.get("messages") or []
-                said_last = {"role": "assistant", "content": [{"type": "text", "text": "Noted." if start == 1 else "Turning off now."}]}
+                chat = [{k: v for k, v in c.items() if k != "at"} for c in held.get("chat") or []]
+                times = [c.get("at") for c in held.get("chat") or [] if "you" in c]
+                last = [{"you": "note"}, {"said": "Noted."}] if start == 1 else [{"you": "off"}, {"said": "Turning off now."}]
                 if (kept is None or kept[0] != (2 if start == 1 else 6) or held.get("notes") != [note]
-                        or messages[:3] != first + [{"role": "user", "content": "note" if start == 1 else "off"}]
-                        or messages[-1:] != [said_last]):
+                        or chat != [{"you": "hi"}, {"said": "Hello! The word is pumpkin."}] + last
+                        or not all(isinstance(t, int) and t > 1_700_000_000 for t in times)):
                     problems.append(f"{kind}, start {start}: the memory file holds {kept!r}")
             drive = "NVMe SSD" if kind == "nvme" else "SATA drive"
             if f"memory: {drive}" not in texts[0]:
                 problems.append(f"{kind}: the memory file wasn't found on the {drive}")
-            if "the conversation from before the restart (6 turns)" not in texts[1] or "Claude: 1 note from before" not in texts[1]:
+            if "the conversation from before the restart (4 parts)" not in texts[1] or "model: 1 note from before" not in texts[1]:
                 problems.append(f"{kind}: the conversation or the note didn't come back after the restart")
-            asked = [r.get("messages") or [] for r in requests]
-            systems = [str(r.get("system")) for r in requests]
-            if len(asked) != 9:
-                problems.append(f"{kind}: the stand-in got {len(asked)} requests, not 9: {asked!r}")
+            given = [plain(r) for r in logged(texts[0], "asked") + logged(texts[1], "asked")]
+            if len(given) != 9:
+                problems.append(f"{kind}: the model was given {len(given)} rounds, not 9: {given!r}"[:2000])
             else:
-                noted = asked[2] + [{"role": "assistant", "content": [{"type": "text", "text": "Noted."}]}]
-                word = noted + [{"role": "user", "content": "word"}]
-                if asked[3] != word:
-                    problems.append(f"{kind}: the question after the restart wasn't asked with the conversation before it: {asked[3]!r}")
-                elif asked[4] != word + [{"role": "assistant", "content": [{"type": "text", "text": "Pumpkin."}]},
-                                         {"role": "user", "content": "new"}]:
-                    problems.append(f"{kind}: asking for a new conversation wasn't sent with the conversation: {asked[4]!r}")
-                elif asked[6] != [{"role": "user", "content": "hi"}]:
-                    problems.append(f"{kind}: the question after a new conversation began wasn't sent alone: {asked[6]!r}")
-                result = (asked[2][-1].get("content") or [{}])[0]
-                if (result.get("type"), result.get("tool_use_id"), result.get("is_error")) != ("tool_result", "toolu_note", False):
+                systems = [r[0]["content"] for r in given]
+                before = [user("hi"), answer("Hello! The word is pumpkin."), user("note"), answer("Noted.")]
+                if given[3][1:] != before + [user("word")]:
+                    problems.append(f"{kind}: the question after the restart wasn't given with the conversation before it: {given[3]!r}")
+                elif given[4][1:] != before + [user("word"), answer("Pumpkin."), user("new")]:
+                    problems.append(f"{kind}: asking for a new conversation wasn't given with the conversation: {given[4]!r}")
+                elif given[6][1:] != [user("hi")]:
+                    problems.append(f"{kind}: the question after a new conversation began wasn't given alone: {given[6]!r}")
+                result = given[2][-1]
+                if given[2][-2:-1] != [answer("", {"name": "remember", "args": {"note": note}})] or result.get("role") != "tool" \
+                        or not result.get("content", "").startswith("Noted: "):
                     problems.append(f"{kind}: the note's tool result was {result!r}")
-                if note in systems[0] or note not in systems[3] or note not in systems[6]:
-                    problems.append(f"{kind}: the note wasn't shown to Claude after the restart and the new conversation")
-            if "Claude: uses start_new_conversation" not in texts[1] or "Claude: a new conversation starts" not in texts[1]:
+                if note in systems[0] or note in systems[2] or note not in systems[3] or note not in systems[6]:
+                    problems.append(f"{kind}: the note wasn't in the model's instructions after the restart and the new conversation")
+            if "model: uses start_new_conversation" not in texts[1] or "model: a new conversation starts" not in texts[1]:
                 problems.append(f"{kind}: the new conversation didn't start")
             if "turning off: sleep type 0 by the PM1 control registers" not in texts[0]:
                 problems.append(f"{kind}: the way to turn off wasn't found in the firmware's tables")
-            if "Claude: uses turn_off_computer" not in texts[1] or not turned_off:
+            if "model: uses turn_off_computer" not in texts[1] or not turned_off:
                 problems.append(f"{kind}: asked to, the PC didn't turn off (the virtual PC ended: {turned_off})")
     finally:
-        server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
     return problems
@@ -1267,22 +1152,19 @@ def windows_disk(path: Path, efi: Path, settings: str, memory_id: int, volume: b
 
 
 def files_check(args) -> list[str]:
-    """Windows' drive, read: a stand-in for Claude asks for folders, files and a search, each by its tool, and what
-    comes back is checked: a folder listed (a hidden system file left out), files read whatever the case of the path
+    """Windows' drive, read: a test's script in place of the model asks for folders, files and a search, each by its
+    tool, and what comes back is checked: a folder listed (a hidden system file left out), files read whatever the case of the path
     (UTF-8 and UTF-16 text; a Word file said to be one; a long file in two parts), links followed (a junction, "My
     Documents", and a symbolic link on the Desktop), OneDrive's files read when they're on the PC and said to be
     online only when they aren't, a file Windows compressed itself said to be one, and a search that finds the
     shopping list (and the link to it) but not the one in AppData (a hidden folder). Word, Excel and PowerPoint files
-    come back as their words; a photo and a PDF whole, for Claude to see (each byte checked); a ZIP archive as its
-    list; a picture too wide for the API made smaller, as a JPEG; what can't be read (a damaged Word file, one from
-    before 2007, an iPhone's photo) says why. The memory file keeps the conversation without the pictures. computer_status says what the drive is. Last, a
-    photo shown on the screen (show_picture): its sun's yellow must be there in the picture of the screen."""
-    import http.server
+    come back as their words; a ZIP archive as its list; a photo, a PDF and a wide picture as what they are (the model
+    reads words only); what can't be read (a damaged Word file, one from before 2007, an iPhone's photo) says why.
+    computer_status says what the drive is. Last, a photo shown on the screen (show_picture): its sun's yellow must be
+    there in the picture of the screen."""
     import re
 
     tmp = Path(tempfile.mkdtemp(prefix="cc-files-"))
-    test_authority(tmp)
-    requests: list[dict] = []
     calls = {
         "list": ("list_files", {"path": "C:\\Users\\Sam\\Documents"}),
         "read": ("read_file", {"path": "c:/users/sam/documents/SHOPPING LIST.txt"}),
@@ -1313,62 +1195,37 @@ def files_check(args) -> list[str]:
         "showpic": ("show_picture", {"path": "C:\\Users\\Sam\\Pictures\\Beach.jpg"}),
     }
 
-    class Api(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
 
-        def log_message(self, *a) -> None:
-            pass
-
-        def do_POST(self) -> None:
-            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
-            requests.append(body)
-            asked = ((body.get("messages") or [{}])[-1]).get("content")
-            if isinstance(asked, str) and asked in calls:
-                name, inp = calls[asked]
-                send_stream(self, [("thinking", "sig-f"), ("tool_use", f"toolu_{asked}", name, [json.dumps(inp)])], "tool_use")
-            else:
-                send_stream(self, [("text", ["Done."])], "end_turn")
-
-    server = serve_https(Api, tmp)
-    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    script_build(tool_script(calls), tmp)
     problems: list[str] = []
     results: dict[str, dict] = {}
     try:
         disk = tmp / "pc.img"
-        settings = f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
+        settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
         windows_disk(disk, BUILT, settings, MEMORY_ID)
-        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
-        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, "nvme"))
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
                 return ["the kernel didn't say it was ready"]
-            wait_for(pc.log, ("network: address",), 60)
             time.sleep(1)
             for n, question in enumerate(calls):
                 monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
-                end = time.time() + 60
-                while time.time() < end and pc.text().count("Claude: answered (5 characters") < n + 1:
-                    time.sleep(0.5)
+                wait_answered(pc, n + 1)
             pc.settled_picture("files")
         finally:
             pc.stop()
         text = pc.text()
         print(text)
-        for r in requests:
-            last = ((r.get("messages") or [{}])[-1]).get("content")
-            if isinstance(last, list) and last and last[0].get("type") == "tool_result":
-                results[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
+        results = tool_results(text, list(calls))
         if "files: C: Windows' drive (NTFS, 33.5 MB), read only" not in text:
             problems.append("Windows' drive wasn't found as it should be")
         missing = [q for q in calls if q not in results]
         if missing:
             problems.append(f"no tool result came back for {missing}")
             return problems
-        # (A result with a picture or PDF: its words first, then the picture's or PDF's block.)
-        said = {q: str(r.get("content")[0]["text"] if isinstance(r.get("content"), list) else r.get("content"))
-                for q, r in results.items()}
-        errors = {q for q, r in results.items() if r.get("is_error")}
+        said = {q: r["said"] for q, r in results.items()}
+        errors = {q for q, r in results.items() if r["error"]}
         day = r"\d{4}-\d\d-\d\d"
         want = {
             "list": rf"C:\\Users\\Sam\\Documents: 1 folder, 3 files\nLetter\.docx \(4 KB, {day}\)\n"
@@ -1407,17 +1264,18 @@ def files_check(args) -> list[str]:
                     r"## Budget\nrow,A,B,C,D,E,F,G\n.*\n4,Total,1612\.5 \(=SUM\(B2:B3\)\),,,,,\n.*## Notes\n.*",
             "pptx": rf"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx \(a PowerPoint presentation, 35 KB, changed {day}\), its "
                     r"words:\n## Slide 1: Chat Computer\n.*## Slide 2: What it does\n.*Notes: Say hello first\.\n.*",
-            "photo": rf"C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels, changed {day}\): the picture is below\.",
-            "pdf": rf"C:\\Users\\Sam\\Documents\\Work\\Receipt\.pdf \(600 bytes, changed {day}\): the PDF is below, its pages' "
-                   r"words and pictures\.",
+            "photo": rf"C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels, changed {day}\) is a picture\. Chat "
+                     r"Computer's own model can't see pictures yet; show_picture shows it to the person\.",
+            "pdf": rf"C:\\Users\\Sam\\Documents\\Work\\Receipt\.pdf \(600 bytes, changed {day}\) is a PDF, which Chat "
+                   r"Computer's own model can't read yet\.",
             "zip": r"C:\\Users\\Sam\\Downloads\\photos\.zip is a ZIP archive \(4 KB\) of 2 files:\nBeach\.jpg \(10 KB\)\n"
                    r"notes\.txt \(23 bytes\)\n\[What's in it isn't opened here\.\]",
             "olddoc": r"C:\\Users\\Sam\\Documents\\Work\\Old letter\.doc \(5 KB\) is in Office's format from before 2007 "
                       r"\(\.doc, \.xls, \.ppt\), which Chat Computer's own system can't read inside yet\.",
             "heic": r"C:\\Users\\Sam\\Pictures\\IMG_0001\.HEIC \(3 KB\) is a HEIC picture \(as iPhones take them\), which "
-                    r"Chat Computer's own system can't show Claude yet\.",
-            "wide": rf"C:\\Users\\Sam\\Pictures\\Panorama\.png \(\d+ KB, 9000×40 pixels, changed {day}\): the picture is "
-                    r"below, made smaller \(2576×11 pixels, \d+ KB\) as Claude's API would\.",
+                    r"Chat Computer's own system can't open yet\.",
+            "wide": rf"C:\\Users\\Sam\\Pictures\\Panorama\.png \(\d+ KB, 9000×40 pixels, changed {day}\) is a picture\. "
+                    r"Chat Computer's own model can't see pictures yet; show_picture shows it to the person\.",
             "nopic": r"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx isn't a picture this screen shows \(JPEG, PNG or GIF\)\.",
             "showpic": r"Shown on the screen: C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels\)\.",
         }
@@ -1426,29 +1284,6 @@ def files_check(args) -> list[str]:
                 problems.append(f"{q}: {said[q][:400]!r}")
         if errors != {"gone", "plan", "compact", "nopic"}:
             problems.append(f"errors came back for {sorted(errors)}, not just for the files that can't be read")
-        # The photo and the PDF, whole: each a block after the words, its bytes as they are on the drive.
-        listing = {line.split("\t")[0]: line.split("\t") for line in (HERE / "ntfs/tests/small.txt").read_text().splitlines()}
-        for q, path, block, media in [("photo", "Users/Sam/Pictures/Beach.jpg", "image", "image/jpeg"),
-                                      ("pdf", "Users/Sam/Documents/Work/Receipt.pdf", "document", "application/pdf")]:
-            content = results[q].get("content")
-            source = content[1].get("source", {}) if isinstance(content, list) and len(content) == 2 else {}
-            data = base64.b64decode(source.get("data", ""))
-            want = listing[path]
-            if (content[1].get("type"), source.get("type"), source.get("media_type")) != (block, "base64", media) or \
-                    (len(data), f"{fnv1a(data):016x}") != (int(want[2]), want[3]):
-                problems.append(f"{q}: the {block} wasn't sent as it is on the drive: {str(content)[:300]}")
-        # The panorama, too wide for the API: a JPEG of the size Claude sees.
-        from PIL import Image
-        import io
-        content = results["wide"].get("content")
-        source = content[1].get("source", {}) if isinstance(content, list) and len(content) == 2 else {}
-        try:
-            small = Image.open(io.BytesIO(base64.b64decode(source.get("data", ""))))
-            made = (source.get("media_type"), small.format, small.size)
-        except Exception as e:
-            made = (source.get("media_type"), repr(e), None)
-        if made != ("image/jpeg", "JPEG", (2576, 11)):
-            problems.append(f"the panorama wasn't sent made smaller: {made}")
         # The photo on the screen: the sun's yellow (250, 220, 90 as it was drawn), in a good few of its pixels.
         from PIL import Image
         screen = Image.open(HERE / "out" / "files.png").convert("RGB")
@@ -1456,10 +1291,10 @@ def files_check(args) -> list[str]:
         sun = sum(1 for i in range(0, len(px), 3) if abs(px[i] - 250) < 30 and abs(px[i + 1] - 220) < 30 and abs(px[i + 2] - 90) < 40)
         if sun < 2_000:
             problems.append(f"the photo wasn't on the screen: {sun} pixels of its sun's yellow")
-        # The memory file: the conversation, without the pictures and PDF (each a line saying it was there).
+        # The memory file: the conversation's words (not what the tools said).
         kept = [int(m) for m in re.findall(r"memory: the conversation kept \((\d+) bytes\)", text)]
-        if not kept or max(kept) > 300_000:
-            problems.append(f"the memory file kept {kept} bytes: pictures in it?")
+        if not kept or max(kept) > 10_000:
+            problems.append(f"the memory file kept {kept} bytes: the tools' results in it?")
         report = (HERE / "ntfs/tests/small.txt").read_text()
         size = int(next(line for line in report.splitlines() if line.startswith("Documents/Report 2026.txt\t")).split("\t")[2])
         big, more = said["big"], said["more"]
@@ -1471,7 +1306,6 @@ def files_check(args) -> list[str]:
         if "Files: C: Windows' drive (NTFS, 33.5 MB), read only" not in said["status"]:
             problems.append("computer_status didn't say what files it can read")
     finally:
-        server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
     return problems
@@ -1522,14 +1356,11 @@ def drives_check(args) -> list[str]:
     crate's other test volume, a SATA drive partitioned the old way (MBR) with an empty volume named Photos, and a
     second SATA drive (GPT) with one named Spare. Windows' registry (the SYSTEM hive in Windows' test volume) names the
     first three C:, D: and E:, by their partitions; it gives F: to a USB stick, so the fourth, which Windows hasn't
-    seen, gets G:. A stand-in for Claude asks for the computer's status (each drive, its letter and its name), lists
-    D:'s and E:'s folders, reads a file on D:, searches D:, and asks for a drive there isn't."""
-    import http.server
+    seen, gets G:. A test's script in place of the model asks for the computer's status (each drive, its letter and its
+    name), lists D:'s and E:'s folders, reads a file on D:, searches D:, and asks for a drive there isn't."""
     import re
 
     tmp = Path(tempfile.mkdtemp(prefix="cc-drives-"))
-    test_authority(tmp)
-    requests: list[dict] = []
     calls = {
         "status": ("computer_status", {}),
         "dlist": ("list_files", {"path": "D:\\"}),
@@ -1540,35 +1371,18 @@ def drives_check(args) -> list[str]:
         "nodrive": ("read_file", {"path": "Z:\\note.txt"}),
     }
 
-    class Api(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
 
-        def log_message(self, *a) -> None:
-            pass
-
-        def do_POST(self) -> None:
-            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
-            requests.append(body)
-            asked = ((body.get("messages") or [{}])[-1]).get("content")
-            if isinstance(asked, str) and asked in calls:
-                name, inp = calls[asked]
-                send_stream(self, [("thinking", "sig-d"), ("tool_use", f"toolu_{asked}", name, [json.dumps(inp)])], "tool_use")
-            else:
-                send_stream(self, [("text", ["Done."])], "end_turn")
-
-    server = serve_https(Api, tmp)
-    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    script_build(tool_script(calls), tmp)
     problems: list[str] = []
     try:
-        settings = f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
+        settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
         disk = tmp / "pc.img"
         windows_disk(disk, BUILT, settings, MEMORY_ID)
         data = subprocess.run(["xz", "-dc", str(HERE / "ntfs/tests/big-sectors.img.xz")], check=True, capture_output=True).stdout
         gpt_disk(tmp / "data.img", data, DATA_PARTITION)
         mbr_disk(tmp / "photos.img", empty_ntfs(tmp, "Photos", 16), MBR_SIGNATURE)
         gpt_disk(tmp / "spare.img", empty_ntfs(tmp, "Spare", 8))
-        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=",
-                 "-drive", f"if=none,id=d1,format=raw,file={tmp / 'data.img'}", "-device", "nvme,serial=ccdata1,drive=d1",
+        extra = ("-drive", f"if=none,id=d1,format=raw,file={tmp / 'data.img'}", "-device", "nvme,serial=ccdata1,drive=d1",
                  "-drive", f"if=none,id=d2,format=raw,file={tmp / 'photos.img'}", "-device", "ide-hd,drive=d2,bus=ide.1",
                  "-drive", f"if=none,id=d3,format=raw,file={tmp / 'spare.img'}", "-device", "ide-hd,drive=d3,bus=ide.3")
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
@@ -1576,26 +1390,19 @@ def drives_check(args) -> list[str]:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
                 return ["the kernel didn't say it was ready"]
-            wait_for(pc.log, ("network: address",), 60)
             time.sleep(1)
             for n, question in enumerate(calls):
                 monitor_many(pc.mon, keys_for(question) + ["sendkey ret"])
-                end = time.time() + 60
-                while time.time() < end and pc.text().count("Claude: answered (5 characters") < n + 1:
-                    time.sleep(0.5)
+                wait_answered(pc, n + 1)
         finally:
             pc.stop()
         text = pc.text()
         print(text)
-        results = {}
-        for r in requests:
-            last = ((r.get("messages") or [{}])[-1]).get("content")
-            if isinstance(last, list) and last and last[0].get("type") == "tool_result":
-                results[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
+        results = tool_results(text, list(calls))
         missing = [q for q in calls if q not in results]
         if missing:
             return [f"no tool result came back for {missing}"]
-        said = {q: str(r.get("content")[0]["text"] if isinstance(r.get("content"), list) else r.get("content")) for q, r in results.items()}
+        said = {q: r["said"] for q, r in results.items()}
         drives = ("C: Windows' drive (NTFS, 33.5 MB); D: \u201cbig-sectors\u201d (NTFS, 67.1 MB); E: \u201cPhotos\u201d (NTFS, "
                   "16.7 MB); G: \u201cSpare\u201d (NTFS, 8.3 MB, its letter given here, as Windows hasn't named it), read only")
         if f"files: {drives}" not in text:
@@ -1618,10 +1425,9 @@ def drives_check(args) -> list[str]:
         for q, pattern in want.items():
             if not re.fullmatch(pattern, said[q]):
                 problems.append(f"{q}: {said[q][:600]!r}")
-        if not results["nodrive"].get("is_error"):
+        if not results["nodrive"]["error"]:
             problems.append("asking for a drive there isn't wasn't an error")
     finally:
-        server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
     return problems
@@ -1658,14 +1464,12 @@ def usb_check(args) -> list[str]:
     card that has no partition table (G:, the next letter Windows hasn't given), the other empty. Then an exFAT card
     (the exfat crate's SD card volume, in an MBR) is put in the empty slot (H:), and a stick with an NTFS volume of 4
     KiB sectors and no partition table, on a drive of 4 KiB blocks (the ntfs crate's big-sectors volume), is plugged in
-    (I:); then the first stick is unplugged and the exFAT card taken out. A stand-in for Claude asks for the computer's
-    status, lists folders, reads files (Chat Computer's own folder on the stick refused), finds one, all along."""
-    import http.server
+    (I:); then the first stick is unplugged and the exFAT card taken out. A test's script in place of the model asks
+    for the computer's status, lists folders, reads files (Chat Computer's own folder on the stick refused), finds one,
+    all along."""
     import re
 
     tmp = Path(tempfile.mkdtemp(prefix="cc-usb-"))
-    test_authority(tmp)
-    requests: list[dict] = []
     calls = {
         "status": ("computer_status", {}),
         "flist": ("list_files", {"path": "F:\\"}),
@@ -1681,34 +1485,18 @@ def usb_check(args) -> list[str]:
         "status2": ("computer_status", {}),
     }
 
-    class Api(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
 
-        def log_message(self, *a) -> None:
-            pass
-
-        def do_POST(self) -> None:
-            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
-            requests.append(body)
-            asked = ((body.get("messages") or [{}])[-1]).get("content")
-            if isinstance(asked, str) and asked in calls:
-                name, inp = calls[asked]
-                send_stream(self, [("thinking", "sig-u"), ("tool_use", f"toolu_{asked}", name, [json.dumps(inp)])], "tool_use")
-            else:
-                send_stream(self, [("text", ["Done."])], "end_turn")
-
-    server = serve_https(Api, tmp)
-    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    script_build(tool_script(calls), tmp)
     problems: list[str] = []
     try:
-        settings = f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
+        settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
         disk = tmp / "pc.img"
         windows_disk(disk, BUILT, settings, MEMORY_ID)
         stick_files = {
             "hello.txt": b"Hello from a USB stick.\r\n",
             "Documents/Shopping list.txt": "Bread, cheese \u2014 and olives.\r\n".encode(),
             "Photos/Holiday/Notes.txt": b"Sunny.\n",
-            "EFI/chatcomputer-own/settings.txt": b"claude-api-key = not-to-be-read\r\n",
+            "EFI/chatcomputer-own/settings.txt": b"model = not-to-be-read\r\n",
         }
         mbr_disk(tmp / "stick.img", fat_volume(tmp, "MY STICK", 300, 32, 8, stick_files), 0x1234ABCD, 0x0C)
         (tmp / "old.img").write_bytes(fat_volume(tmp, "OLD CARD", 16, 16, 4, {"Notes/todo.txt": b"Buy stamps.\n"}))
@@ -1716,8 +1504,7 @@ def usb_check(args) -> list[str]:
         mbr_disk(tmp / "card.img", sd, 0x5D5D5D5D, 0x07)
         ntfs4k = subprocess.run(["xz", "-dc", str(HERE / "ntfs/tests/big-sectors.img.xz")], check=True, capture_output=True).stdout
         (tmp / "ntfs4k.img").write_bytes(ntfs4k)
-        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=",
-                 "-device", "qemu-xhci,id=xhci",
+        extra = ("-device", "qemu-xhci,id=xhci",
                  "-drive", f"if=none,id=stick,format=raw,file={tmp / 'stick.img'}",
                  "-device", f"usb-storage,bus=xhci.0,port=1,drive=stick,id=stick1,removable=on,serial={STICK_SERIAL}",
                  "-device", "usb-bot,bus=xhci.0,port=2,id=reader",
@@ -1730,8 +1517,8 @@ def usb_check(args) -> list[str]:
         # how soon they're ready.)
         stick = "F: \u201cMY STICK\u201d (FAT32, 314.5 MB"
         old = "G: \u201cOLD CARD\u201d (FAT16, 16.7 MB"
-        card = "files: USB drive \u201cGeneric SD/MMC\u201d: H: \u201cSD CARD\u201d (exFAT, 100.6 MB). Claude can read its files."
-        ssd = "files: USB drive \u201cQEMU QEMU HARDDISK\u201d: I: \u201cbig-sectors\u201d (NTFS, 67.1 MB). Claude can read its files."
+        card = "files: USB drive \u201cGeneric SD/MMC\u201d: H: \u201cSD CARD\u201d (exFAT, 100.6 MB). Its files can be read."
+        ssd = "files: USB drive \u201cQEMU QEMU HARDDISK\u201d: I: \u201cbig-sectors\u201d (NTFS, 67.1 MB). Its files can be read."
         steps: list[tuple[str, str, str]] = [
             ("ask", "status", ""), ("ask", "flist", ""), ("ask", "fread", ""), ("ask", "fown", ""), ("ask", "gread", ""),
             ("do", f"change slot0 {tmp / 'card.img'} raw", card),
@@ -1747,7 +1534,6 @@ def usb_check(args) -> list[str]:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
                 return ["the kernel didn't say it was ready"]
-            wait_for(pc.log, ("network: address",), 60)
             for note in (stick, old):
                 if not wait_for(pc.log, (note,), 30):
                     problems.append(f"no {note!r} in the log")
@@ -1762,24 +1548,18 @@ def usb_check(args) -> list[str]:
                     continue
                 monitor_many(pc.mon, keys_for(what) + ["sendkey ret"])
                 asked += 1
-                end = time.time() + 60
-                while time.time() < end and pc.text().count("Claude: answered (5 characters") < asked:
-                    time.sleep(0.5)
+                wait_answered(pc, asked)
             time.sleep(1)
             pc.picture("usb")
         finally:
             pc.stop()
         text = pc.text()
         print(text)
-        results = {}
-        for r in requests:
-            last = ((r.get("messages") or [{}])[-1]).get("content")
-            if isinstance(last, list) and last and last[0].get("type") == "tool_result":
-                results[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
+        results = tool_results(text, list(calls))
         missing = [q for q in calls if q not in results]
         if missing:
             return problems + [f"no tool result came back for {missing}"]
-        said = {q: str(r.get("content")[0]["text"] if isinstance(r.get("content"), list) else r.get("content")) for q, r in results.items()}
+        said = {q: r["said"] for q, r in results.items()}
         day = r"\d{4}-\d\d-\d\d"
         usb_drive = "on the USB drive \u201c"
         drives = (f"C: Windows' drive (NTFS, 33.5 MB); F: \u201cMY STICK\u201d (FAT32, 314.5 MB, {usb_drive}QEMU QEMU HARDDISK\u201d); "
@@ -1806,12 +1586,11 @@ def usb_check(args) -> list[str]:
             if not re.fullmatch(pattern, said[q]):
                 problems.append(f"{q}: {said[q][:600]!r}")
         for q in ("fown", "gone"):
-            if not results[q].get("is_error"):
+            if not results[q]["error"]:
                 problems.append(f"{q} wasn't an error")
-        if "not-to-be-read" in json.dumps(requests):
-            problems.append("Chat Computer's own settings reached Claude")
+        if "not-to-be-read" in text:
+            problems.append("Chat Computer's own settings reached the model")
     finally:
-        server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
     return problems
@@ -1836,63 +1615,31 @@ def encrypted(volume: bytes, clear: bool) -> tuple[bytes, dict]:
 def bitlocker_check(args) -> list[str]:
     """Windows' drive encrypted with BitLocker (the ntfs crate's test volume, encrypted by bitlocker/tests/encrypt.py
     as Windows 10 and 11 do, with a TPM's protector and a recovery key), as on a PC with device encryption. Locked at
-    first: Claude's file tools say how to unlock it (its recovery key, typed in the message box, and the key's ID). A
-    wrong recovery key typed is refused, naming the key ID that unlocks it; then a message with the right one in it
+    first: the model's file tools say how to unlock it (its recovery key, typed in the message box, and the key's ID).
+    A wrong recovery key typed is refused, naming the key ID that unlocks it; then a message with the right one in it
     (spaces between its groups) unlocks it, and the files read as from an unencrypted drive: a folder listed, a text
-    file, a photo (each of its bytes), the computer's status. Neither key, nor the message with one in it, reaches
-    Claude's API, the screen's log or the disk (the memory file). Then the same drive with BitLocker's key in the clear
+    file, a photo shown on the screen (its colours there), the computer's status. Neither key, nor the message with one
+    in it, reaches the model (a test build logs all it's given), the log or the disk (the memory file). Then the same drive with BitLocker's key in the clear
     (BitLocker suspended): read at once, with nothing typed."""
-    import http.server
     import re
 
     tmp = Path(tempfile.mkdtemp(prefix="cc-bitlocker-"))
-    test_authority(tmp)
-    requests: list[dict] = []
     calls = {
         "locked": ("list_files", {"path": "C:\\Users\\Sam\\Documents"}),
         "list": ("list_files", {"path": "C:\\Users\\Sam\\Documents"}),
         "read": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Shopping list.txt"}),
-        "photo": ("read_file", {"path": "C:\\Users\\Sam\\Pictures\\Beach.jpg"}),
+        "photo": ("show_picture", {"path": "C:\\Users\\Sam\\Pictures\\Beach.jpg"}),
         "status": ("computer_status", {}),
     }
 
-    class Api(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
 
-        def log_message(self, *a) -> None:
-            pass
 
-        def do_POST(self) -> None:
-            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))) or b"null") or {}
-            requests.append(body)
-            asked = ((body.get("messages") or [{}])[-1]).get("content")
-            if isinstance(asked, str) and asked in calls:
-                name, inp = calls[asked]
-                send_stream(self, [("thinking", "sig-b"), ("tool_use", f"toolu_{asked}", name, [json.dumps(inp)])], "tool_use")
-            else:
-                send_stream(self, [("text", ["Done."])], "end_turn")
-
-    def results_of() -> dict[str, dict]:
-        out = {}
-        for r in requests:
-            last = ((r.get("messages") or [{}])[-1]).get("content")
-            if isinstance(last, list) and last and last[0].get("type") == "tool_result":
-                out[last[0]["tool_use_id"][len("toolu_"):]] = last[0]
-        return out
-
-    def said_in(result: dict) -> str:
-        content = result.get("content")
-        return str(content[0]["text"] if isinstance(content, list) else content)
-
-    server = serve_https(Api, tmp)
-    build("claude", {"CHATCOMPUTER_TEST_CA": str(tmp / "ca.der")})
+    script_build(tool_script(calls), tmp)
     problems: list[str] = []
     try:
         ntfs = windows_volume()
         size = f"{(len(ntfs) + (1 << 20)) / 1e6:.1f} MB"
-        settings = f"claude-api-key = {TEST_KEY}\r\nclock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
-        extra = ("-netdev", "user,id=n0", "-device", "e1000e,netdev=n0,romfile=")
-
+        settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
         # Locked, then unlocked with its recovery key.
         volume, info = encrypted(ntfs, clear=False)
         right, key_id = info["recovery_key"], info["recovery_id"][:8]
@@ -1900,22 +1647,21 @@ def bitlocker_check(args) -> list[str]:
         wrong = "-".join(groups[1:] + groups[:1])
         disk = tmp / "pc.img"
         windows_disk(disk, BUILT, settings, MEMORY_ID, volume)
-        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, "nvme"))
         answered = 0
+        asked: list[str] = []
 
         def ask(question: str) -> None:
             nonlocal answered
             answered += 1
+            asked.append(question)
             monitor_many(pc.mon, keys_for(question) + ["sendkey ret"])
-            end = time.time() + 60
-            while time.time() < end and pc.text().count("Claude: answered (5 characters") < answered:
-                time.sleep(0.5)
+            wait_answered(pc, answered)
 
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
                 return ["the kernel didn't say it was ready"]
-            wait_for(pc.log, ("network: address",), 60)
             time.sleep(1)
             ask("locked")
             monitor_many(pc.mon, keys_for(wrong) + ["sendkey ret"])
@@ -1925,35 +1671,36 @@ def bitlocker_check(args) -> list[str]:
             if not wait_for(pc.log, ("files: C: (Windows' drive) is unlocked",), 120):
                 problems.append("the right recovery key didn't unlock the drive")
             pc.settled_picture("bitlocker-unlocked")
-            for question in ("list", "read", "photo", "status"):
+            # (The photo last: a question after it would scroll it up, out of sight.)
+            for question in ("list", "read", "status", "photo"):
                 ask(question)
             pc.settled_picture("bitlocker")
         finally:
             pc.stop()
         text = pc.text()
         print(text)
-        results = results_of()
+        results = tool_results(text, asked)
         missing = [q for q in calls if q not in results]
         if missing:
             problems.append(f"no tool result came back for {missing}")
             return problems
-        said = {q: said_in(r) for q, r in results.items()}
+        said = {q: r["said"] for q, r in results.items()}
         day = r"\d{4}-\d\d-\d\d"
         locked = (r"C: is encrypted with BitLocker\. To read it here, the person types its recovery key in the message "
                   rf"box: 48 digits, .*; its key ID starts {key_id}\. Chat Computer's own system unlocks the drive with "
-                  r"the key itself: it isn't sent to Claude, or kept, so it's typed again after a restart")
+                  r"the key itself: it isn't given to the model, or kept, so it's typed again after a restart")
         want = {
             "locked": locked,
             "list": rf"C:\\Users\\Sam\\Documents: 1 folder, 3 files\nLetter\.docx \(4 KB, {day}\)\n"
                     rf"Old note\.txt \(76 bytes, {day}\)\nShopping list\.txt \(43 bytes, {day}\)\nWork\\",
             "read": rf"C:\\Users\\Sam\\Documents\\Shopping list\.txt \(43 bytes, changed {day}\):\n"
                     r"Milk, eggs, tea — and café au lait\.\r\n",
-            "photo": rf"C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels, changed {day}\): the picture is below\.",
+            "photo": r"Shown on the screen: C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels\)\.",
         }
         for q, pattern in want.items():
             if not re.fullmatch(pattern, said[q], re.S):
                 problems.append(f"{q}: {said[q][:500]!r}")
-        if not results["locked"].get("is_error"):
+        if not results["locked"]["error"]:
             problems.append("the locked drive's listing wasn't an error")
         if f"files: C: encrypted with BitLocker, locked ({size}; its recovery key's ID starts {key_id}), read only. To read a locked drive" not in text:
             problems.append("the log didn't say Windows' drive is locked with BitLocker")
@@ -1962,36 +1709,33 @@ def bitlocker_check(args) -> list[str]:
         unlocked = f"Files: C: Windows' drive (NTFS, {size}, encrypted with BitLocker: unlocked with its recovery key until Chat Computer restarts), read only"
         if unlocked not in said["status"]:
             problems.append(f"computer_status didn't say the drive was unlocked: {said['status'][:600]!r}")
-        listing = {line.split("\t")[0]: line.split("\t") for line in (HERE / "ntfs/tests/small.txt").read_text().splitlines()}
-        content = results["photo"].get("content")
-        source = content[1].get("source", {}) if isinstance(content, list) and len(content) == 2 else {}
-        data = base64.b64decode(source.get("data", ""))
-        if (len(data), f"{fnv1a(data):016x}") != (int(listing["Users/Sam/Pictures/Beach.jpg"][2]), listing["Users/Sam/Pictures/Beach.jpg"][3]):
-            problems.append("the photo didn't come back as it is on the drive")
-        # The keys, as typed and as digits: nowhere but the keyboard.
-        sent = json.dumps(requests)
+        # The photo, decrypted, on the screen: the sun's yellow (250, 220, 90 as it was drawn), in a good few pixels.
+        from PIL import Image
+        px = Image.open(HERE / "out" / "bitlocker.png").convert("RGB").tobytes()
+        sun = sum(1 for i in range(0, len(px), 3) if abs(px[i] - 250) < 30 and abs(px[i + 1] - 220) < 30 and abs(px[i + 2] - 90) < 40)
+        if sun < 2_000:
+            problems.append(f"the photo wasn't on the screen: {sun} pixels of its sun's yellow")
+        # The keys, as typed and as digits: nowhere but the keyboard (the log has all the model was given).
         on_disk = disk.read_bytes()
         for key in (right, wrong):
             for form in {key, key.replace("-", " "), key.replace("-", "")}:
-                for where, what in (("Claude's API", sent), ("the log", text)):
-                    if form in what:
-                        problems.append(f"a recovery key reached {where}")
+                if form in text:
+                    problems.append("a recovery key reached the model, or the log")
                 if form.encode() in on_disk or form.encode("utf-16-le") in on_disk:
                     problems.append("a recovery key was written on the disk")
-        if "here it is" in sent:
-            problems.append("the message with the recovery key in it was sent to Claude")
+        if "here it is" in text:
+            problems.append("the message with the recovery key in it was given to the model")
 
         # The key in the clear: read at once.
         volume, _ = encrypted(ntfs, clear=True)
         windows_disk(disk, BUILT, settings, MEMORY_ID, volume)
-        requests.clear()
-        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, disk=(disk, "nvme"))
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, "nvme"))
         answered = 0
+        asked = []
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
                 return problems + ["the kernel didn't say it was ready, with BitLocker's key in the clear"]
-            wait_for(pc.log, ("network: address",), 60)
             time.sleep(1)
             ask("read")
         finally:
@@ -2001,11 +1745,10 @@ def bitlocker_check(args) -> list[str]:
                  "suspended, or not switched on yet), read only")
         if clear not in text:
             problems.append("with BitLocker's key in the clear, the drive wasn't read at once")
-        results = results_of()
-        if "read" not in results or not re.fullmatch(want["read"], said_in(results["read"]), re.S):
+        results = tool_results(text, asked)
+        if "read" not in results or not re.fullmatch(want["read"], results["read"]["said"], re.S):
             problems.append(f"with BitLocker's key in the clear, the file didn't read: {str(results.get('read'))[:400]}")
     finally:
-        server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
     return problems
@@ -2138,7 +1881,7 @@ def check_chime(name: str, samples: list[int], rate: int) -> list[str]:
 
 
 def sound(args) -> list[str]:
-    """A 2-second timer, set by a test build once it's ready (as Claude's reminders tool sets one), on each HD Audio
+    """A 2-second timer, set by a test build once it's ready (as the model's reminders tool sets one), on each HD Audio
     controller and codec QEMU has: it rings (a line in the conversation, and the timer's chime), and rings again 4
     seconds later until a key is pressed (the first time, after two chimes; then after one). Every chime recorded is
     checked."""
@@ -2172,7 +1915,7 @@ def sound(args) -> list[str]:
             found = next((line for line in text.splitlines() if "kernel: sound" in line), "(no line about sound)")
             print(f"{label}: {found}")
             if "test: Set a 2-second timer for tea (rings in 2 seconds). [1]" not in text:
-                problems.append(f"{label}: the timer wasn't set as Claude's tool sets one")
+                problems.append(f"{label}: the timer wasn't set as the model's tool sets one")
             if got is None or "done" not in got:
                 problems.append(f"{label}: the timer didn't ring ({got or 'nothing said in time'})")
                 continue
@@ -2269,10 +2012,11 @@ def main() -> int:
     ap.add_argument("--keyboard", action="store_true", help="USB keyboards: on a port, behind a hub, plugged in and out")
     ap.add_argument("--network", action="store_true", help="each network card there's a driver for: DHCP, DNS and TCP")
     ap.add_argument("--card", action="append", choices=[c[0] for c in CARDS], help="with --network: only this card")
-    ap.add_argument("--claude", action="store_true", help="a conversation with a stand-in for Claude's API, over HTTPS")
+    ap.add_argument("--model", action="store_true", help="the own model: a tiny one found, read, asked, its answer the engine's")
+    ap.add_argument("--chat", action="store_true", help="a conversation answered by a test's script in place of the model")
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
-    ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by Claude's file tools")
+    ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by the model's file tools")
     ap.add_argument("--bitlocker", action="store_true", help="Windows' drive encrypted with BitLocker, unlocked")
     ap.add_argument("--drives", action="store_true", help="the PC's other drives (NVMe and SATA) read, by Windows' letters")
     ap.add_argument("--usb", action="store_true", help="USB drives (sticks, a card reader) read as they come and go")
@@ -2288,8 +2032,10 @@ def main() -> int:
         problems = keyboard(args)
     elif args.network:
         problems = network(args)
-    elif args.claude:
-        problems = claude(args)
+    elif args.model:
+        problems = model_check(args)
+    elif args.chat:
+        problems = chat(args)
     elif args.remember:
         problems = remember(args)
     elif args.sound:

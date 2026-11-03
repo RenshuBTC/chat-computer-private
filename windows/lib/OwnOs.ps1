@@ -12,26 +12,42 @@ $Script:OwnMemory = 'memory.bin'                # the conversation, kept across 
 $Script:OwnMemorySizes = @(4MB, 1MB)            # the memory file's size: the first that leaves room on the partition
 $Script:OwnEspRoom = 16MB                       # left free on the start-up partition, for Windows' own updates
 
-# ------------------------------------------------------------------ its settings: the Claude API key, the clock
-function ConvertTo-OwnKey {
-    # A pasted API key, without the spaces, line breaks or quotes that come along with pastes.
-    param([AllowNull()][string]$Text)
-    if ($null -eq $Text) { return '' }
-    $t = [regex]::Replace($Text, '[\s"''`]', '')
-    $m = [regex]::Match($t, 'sk-ant-[A-Za-z0-9_\-]+')
-    if ($m.Success) { return $m.Value }
-    return $t
+# ------------------------------------------------------------------ its model, and its settings: the clock
+# Chat Computer's own system answers with the model Chat Computer's app gets ready on Windows (its own engine runs it
+# on the PC itself): it finds it there when it starts (os/kernel/src/assistant.rs), as this does here, to say which.
+$Script:OwnModels = 'ai.chatcomputer.desktop\models'   # under %LOCALAPPDATA%: NAME.ccm, as the app's engine leaves them
+# Bigger models answer too slowly on the one processor core Chat Computer's own system uses yet: of the models there,
+# it picks the biggest file at most this (the smallest, if none is).
+$Script:OwnOneCoreMost = 3600000000
+
+function Get-OwnModelLabel {
+    # A model's name from its file's: "qwen3.5-4b.ccm" is "Qwen3.5 4B" (as the kernel says it).
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $stem = [IO.Path]::GetFileNameWithoutExtension($Name)
+    $at = $stem.IndexOf('-')
+    if ($at -lt 0) { return $stem }
+    $family = $stem.Substring(0, $at)
+    if ($family.StartsWith('qwen')) { $family = 'Qwen' + $family.Substring(4) }
+    return ($family + ' ' + $stem.Substring($at + 1).ToUpperInvariant())
 }
 
-function Get-OwnKeyProblem {
-    # Why a pasted key can't be used ('' if it can). Only API keys work there: the kernel talks to Claude's API.
-    param([AllowNull()][string]$Key)
-    if ([string]::IsNullOrEmpty($Key)) { return 'Nothing was pasted.' }
-    if ($Key -cmatch '^sk-ant-oat') {
-        return 'That is a Claude sign-in code (for Claude Code), not an API key. Make an API key at console.anthropic.com.'
-    }
-    if ($Key -cnotmatch '^sk-ant-[A-Za-z0-9_\-]{20,500}$') { return 'That doesn''t look like a Claude API key (they start with sk-ant-).' }
-    return ''
+function Select-OwnModel {
+    # Which of these model files (objects with Name, Length and FullName) Chat Computer's own system picks: the
+    # biggest at most $Script:OwnOneCoreMost, else the smallest. $null if there are none.
+    param([AllowEmptyCollection()][object[]]$Files)
+    $files = @($Files | Where-Object { $null -ne $_ })
+    if ($files.Count -eq 0) { return $null }
+    $quick = @($files | Where-Object { [int64]$_.Length -le $Script:OwnOneCoreMost } | Sort-Object -Property Length -Descending)
+    $pick = $(if ($quick.Count -gt 0) { $quick[0] } else { @($files | Sort-Object -Property Length)[0] })
+    return [pscustomobject]@{ Path = [string]$pick.FullName; Label = (Get-OwnModelLabel ([string]$pick.Name)); Bytes = [int64]$pick.Length }
+}
+
+function Find-OwnModel {
+    # The model Chat Computer's own system will answer with: of those Chat Computer's app got ready on this PC, the
+    # one it picks (Select-OwnModel). $null if the app hasn't got one ready yet.
+    param([string]$Dir = (Join-Path $env:LOCALAPPDATA $Script:OwnModels))
+    if (-not (Test-Path -LiteralPath $Dir)) { return $null }
+    return (Select-OwnModel @(Get-ChildItem -LiteralPath $Dir -Filter '*.ccm' -File -ErrorAction SilentlyContinue))
 }
 
 function Get-ClockOffsetMinutes {
@@ -46,25 +62,23 @@ function Get-ClockOffsetMinutes {
 }
 
 function New-OwnSettingsText {
-    # The settings file, as the kernel reads it: "name = value" lines, # for notes. $MemoryId: the memory file's id
-    # (0: there's no memory file).
-    param([AllowEmptyString()][string]$Key, [int]$ClockOffsetMinutes, [uint32]$MemoryId = 0)
-    $lines = @(
-        '# Chat Computer''s settings, read by its own system when it starts. Written by Chat Computer Own System.',
-        '# The Claude API key is kept here as it is: anyone who can read this partition can read it.'
-    )
-    if ($Key) { $lines += ('claude-api-key = ' + $Key) }
+    # The settings file, as the kernel reads it: "name = value" lines, # for notes. $Model: a model's file named in
+    # the settings ('': none, and the kernel finds the one Chat Computer's app got ready). $MemoryId: the memory
+    # file's id (0: there's no memory file).
+    param([AllowEmptyString()][string]$Model, [int]$ClockOffsetMinutes, [uint32]$MemoryId = 0)
+    $lines = @('# Chat Computer''s settings, read by its own system when it starts. Written by Chat Computer Own System.')
+    if ($Model) { $lines += ('model = ' + $Model) }
     $lines += ('clock-offset-minutes = ' + $ClockOffsetMinutes)
     if ($MemoryId -ne 0) { $lines += ('memory-id = ' + $MemoryId.ToString('x8')) }
     return (($lines -join "`r`n") + "`r`n")
 }
 
-function Get-OwnSettingsKey {
-    # The key in a settings file's text ('' if none).
+function Get-OwnSettingsModel {
+    # The model's file a settings file's text names ('' if none): one put there by hand, kept when this runs again.
     param([AllowNull()][string]$Text)
     if (-not $Text) { return '' }
     foreach ($line in ($Text -split "`r?`n")) {
-        $m = [regex]::Match($line, '^\s*claude-api-key\s*=\s*(\S+)\s*$')
+        $m = [regex]::Match($line, '^\s*model\s*=\s*(\S.*?)\s*$')
         if ($m.Success) { return $m.Groups[1].Value }
     }
     return ''
@@ -320,10 +334,9 @@ function Get-OwnBootEntry {
 
 function Install-OwnFiles {
     # The signed start-up file, the key's certificate, the settings and the memory file, in \EFI\chatcomputer-own on
-    # the partition Windows starts from. $ApiKey: the Claude API key to put in the settings ('' keeps the one there,
-    # if any). Returns whether the settings have a Claude API key (HasKey) and whether there's a memory file (Memory).
-    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate,
-          [AllowEmptyString()][string]$ApiKey = '')
+    # the partition Windows starts from. The settings are written anew (a model named in them by hand is kept; an
+    # older setup's Claude API key isn't). Returns whether there's a memory file (Memory).
+    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate)
     $esp = Get-WindowsEsp
     if (-not $esp) { throw 'Windows could not find the partition this PC starts from.' }
     $m = Mount-EspPartition $esp
@@ -337,12 +350,12 @@ function Install-OwnFiles {
         $settings = Join-Path $dir $Script:OwnSettings
         $before = ''
         if (Test-Path -LiteralPath $settings) { $before = [IO.File]::ReadAllText($settings) }
-        if (-not $ApiKey) { $ApiKey = Get-OwnSettingsKey $before }
+        $model = Get-OwnSettingsModel $before
         $memoryId = Install-OwnMemory -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before)
-        $text = New-OwnSettingsText -Key $ApiKey -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId
+        $text = New-OwnSettingsText -Model $model -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId
         [IO.File]::WriteAllText($settings, $text, [Text.Encoding]::ASCII)
-        Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($ApiKey) { 'with' } else { 'without' }) + ' a Claude API key')
-        return [pscustomobject]@{ HasKey = [bool]$ApiKey; Memory = ($memoryId -ne 0) }
+        Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($model) { 'naming a model' } else { 'naming no model' }))
+        return [pscustomobject]@{ Memory = ($memoryId -ne 0) }
     } finally {
         Dismount-EspPartition $m
     }
@@ -514,21 +527,16 @@ function Start-OwnSystem {
         Copy-Item -LiteralPath $cer -Destination $Out -Force
     }
 
-    Write-Step 'Claude'
-    Write-Line 'On Chat Computer''s own system you talk to Claude (Opus 5.5) with your own Claude API key, over a network'
-    Write-Line 'cable. Make a key just for it at console.anthropic.com (API keys), so you can switch it off there any time.'
-    Write-Line 'It''s kept on the start-up partition as it is, where anyone who can read that partition can read it.'
-    $apiKey = ''
-    if (-not $Unattended) {
-        for ($try = 0; $try -lt 3; $try++) {
-            $pasted = ConvertTo-OwnKey (Read-PastedSecret 'Paste your Claude API key (it won''t show), or press Enter to skip')
-            if (-not $pasted) { break }
-            $problem = Get-OwnKeyProblem $pasted
-            if (-not $problem) { $apiKey = $pasted; break }
-            Write-Warn ($problem + ' Try again, or press Enter to skip.')
-        }
+    Write-Step 'Its model'
+    $model = Find-OwnModel
+    if ($model) {
+        Write-Good ('It answers with ' + $model.Label + ' (' + (Format-Size $model.Bytes) + '), the model Chat Computer''s app got ready on this PC.')
+        Write-Line 'It runs on the PC itself, with no account and nothing to pay: nothing you type leaves it. Starting up, it'
+        Write-Line 'reads the model into memory, which takes a moment.'
+    } else {
+        Write-Warn 'Chat Computer''s app hasn''t got its model ready on this PC yet. Open the app once (it gets its model by'
+        Write-Warn 'itself, free); Chat Computer''s own system finds it when it starts.'
     }
-    if ($apiKey) { Write-Good 'Got the key.' } else { Write-Line 'No key this time: a key given before stays.' }
 
     $approved = $null
     if ($sb -eq $true) { $approved = Test-OwnKeyApproved -Cert $cert }
@@ -537,11 +545,10 @@ function Start-OwnSystem {
     if ($approved -eq $true) { Write-Good 'This PC already trusts Chat Computer''s key.' }
 
     Write-Step 'What changes'
-    Write-Line '  * Chat Computer''s start-up file (signed with this PC''s key), the key''s certificate, its settings (your'
-    Write-Line '    Claude API key, and how far this PC''s clock is from UTC) and its memory file (where it keeps your'
-    Write-Line '    conversation across restarts) go in \EFI\chatcomputer-own on the partition this PC starts from (about'
-    Write-Line '    5 MB). Windows'' own files there stay as they are. Like the key, the conversation is kept there as it is,'
-    Write-Line '    where anyone who can read that partition can read it.'
+    Write-Line '  * Chat Computer''s start-up file (signed with this PC''s key), the key''s certificate, its settings (how far'
+    Write-Line '    this PC''s clock is from UTC) and its memory file (where it keeps your conversation across restarts) go'
+    Write-Line '    in \EFI\chatcomputer-own on the partition this PC starts from (about 5 MB). Windows'' own files there stay'
+    Write-Line '    as they are. The conversation is kept there as it is, where anyone who can read that partition can read it.'
     Write-Line ('  * "' + $Script:OwnEntryName + '" goes at the end of the power-on menu and starts once, at the next restart.')
     Write-Line '    The restart after that starts Windows, as now.'
     if ($bitlocker) {
@@ -551,9 +558,7 @@ function Start-OwnSystem {
         Write-Line 'Nothing was changed.'
         return
     }
-    $installed = Install-OwnFiles -Signed $signed -Certificate $cer -ApiKey $apiKey
-    $apiKey = $null
-    if (-not $installed.HasKey) { Write-Line 'There''s no Claude API key in its settings: run this again to give one.' }
+    $installed = Install-OwnFiles -Signed $signed -Certificate $cer
     if (-not $installed.Memory) {
         Write-Warn 'Its memory file couldn''t be made on the start-up partition (too little room, or it couldn''t be written), so the conversation won''t be kept across restarts.'
     }

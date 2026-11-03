@@ -1,5 +1,5 @@
-"""One desktop eval case, end to end: the real Chat Computer (controller, tools, permission gate, Claude through the
-Agent SDK) on the simulated computer (platform.py) with a fresh home folder (home.py). It runs inside the case's
+"""One desktop eval case, end to end: the real Chat Computer (controller, tools, permission gate, its own model run by
+its own engine) on the simulated computer (platform.py) with a fresh home folder (home.py). It runs inside the case's
 sandbox (run.py), as the person: HOME is /home/ren, PATH the commands a real Chat Computer has.
 
     python -m evals.os.case CASE.json TRACE.json
@@ -18,7 +18,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-TURN_TIMEOUT_S = 600          # Opus at max effort can think a long while; how long it took is reported
+TURN_TIMEOUT_S = 600          # a model on a processor can take a while; how long it took is reported
 INSTALLED = "/tmp/.ev/installed"      # programs "installed" during the case (platform.py) go on the PATH here
 PATH = INSTALLED + ":/opt/evals/bin"
 
@@ -42,7 +42,6 @@ def _display() -> subprocess.Popen:
 
 
 async def run(case: dict[str, Any]) -> dict[str, Any]:
-    from chatcomputer.brain import agent as A
     from chatcomputer.config import Paths, Settings
     from chatcomputer.controller import Controller
     from . import world
@@ -56,16 +55,6 @@ async def run(case: dict[str, Any]) -> dict[str, Any]:
     time.tzset()
     os.makedirs(INSTALLED, exist_ok=True)
     os.environ["PATH"] = PATH
-
-    # Claude signs in with this session's own access: no Chat Computer token goes to the engine.
-    env_of = A.Brain._env
-
-    def engine_env(self: Any) -> dict[str, str]:
-        e = env_of(self)
-        for k in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-            e.pop(k, None)
-        return e
-    A.Brain._env = engine_env
 
     state = case["state"]
     settings = Settings(user_name="Ren Shu")
@@ -97,7 +86,7 @@ async def run(case: dict[str, Any]) -> dict[str, Any]:
         await asyncio.to_thread(c.index.crawl_once)
         await asyncio.to_thread(c.index.extract_contents)
     if c.brain is None:
-        trace["errors"].append("no brain (not signed in)")
+        trace["errors"].append("no brain (no model ready in ~/ChatComputer/models: see run.py --models)")
         return trace
     before = listing(home)
 
@@ -112,7 +101,7 @@ async def run(case: dict[str, Any]) -> dict[str, Any]:
 
     def end(tid: str, res: Any) -> None:
         trace["turns"].append({"ok": res.ok, "error_kind": res.error_kind, "error_text": res.error_text,
-                               "text": res.text, "cost_usd": res.cost_usd, "tools": res.tools,
+                               "text": res.text, "tools": res.tools,
                                "t": round(time.time() - t0, 1)})
         on_end(tid, res)
         done.set()

@@ -44,7 +44,7 @@ pub fn tiny(experts: bool) -> Vec<u8> {
     let mut config = String::from(
         "arch=qwen3_5\nhidden=64\nlayers=4\nheads=4\nkv_heads=2\nhead_dim=32\nlinear_key_heads=2\nlinear_value_heads=4\n\
          linear_key_dim=16\nlinear_value_dim=16\nconv_kernel=4\nfull_attention_interval=4\nvocab=300\nrope_theta=10000000\n\
-         rotary_dim=8\nrms_eps=0.000001\ncontext=4096\nchat.style=qwen3.5\n",
+         rotary_dim=8\nrms_eps=0.000001\ncontext=262144\nchat.style=qwen3.5\n",
     );
     if experts {
         config.push_str("experts=4\nexperts_used=2\nexpert_intermediate=32\nshared_intermediate=64\n");

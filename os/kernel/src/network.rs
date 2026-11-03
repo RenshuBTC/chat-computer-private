@@ -25,8 +25,6 @@ static USB_SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
 
 /// What the screen says about the network.
 pub struct Status {
-    /// Whether there's a card Chat Computer can use.
-    pub card: bool,
     /// What it is.
     pub describe: Option<String>,
     pub link: bool,
@@ -112,6 +110,7 @@ pub fn work() {
 }
 
 /// Runs `f` with the stack (what talks over the network does so through this), and sends what it queued.
+#[allow(dead_code)] // (Nothing talks over the network yet but the network's own test: the web comes next.)
 pub fn with<R>(f: impl FnOnce(&mut Stack) -> R) -> Option<R> {
     let mut guard = NETWORK.lock();
     let n = guard.as_mut()?;
@@ -125,12 +124,11 @@ pub fn with<R>(f: impl FnOnce(&mut Stack) -> R) -> Option<R> {
 pub fn status() -> Status {
     match NETWORK.lock().as_ref() {
         Some(n) => Status {
-            card: true,
             describe: Some(n.card.describe()),
             link: n.link.unwrap_or(false),
             address: n.stack.config().map(|c| c.address),
         },
-        None => Status { card: false, describe: None, link: false, address: None },
+        None => Status { describe: None, link: false, address: None },
     }
 }
 

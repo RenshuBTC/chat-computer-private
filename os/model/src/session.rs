@@ -8,7 +8,8 @@
 //!
 //! A request is answered all at once (`ask`), or a step at a time (`begin`, `step` until the turn is over, `end`):
 //! a part of the prompt read, or one token written, per step, for a caller with other things to do between them
-//! (Chat Computer's own kernel, whose screen and keyboard go on while the model reads and writes).
+//! (Chat Computer's own kernel, whose screen and keyboard go on while the model reads and writes). Such a caller can
+//! also read the system prompt ahead of the first question (`ahead`, `read_ahead`), while the person is still typing.
 
 use crate::chat::{self, Answer, Message, Options, Problem, Reply, Said as Saying, Style};
 use crate::json::Json;
@@ -101,6 +102,11 @@ impl Turn {
     /// Over: the model ended its turn, ran out of tokens, or was stopped.
     pub fn finished(&self) -> bool {
         self.finished
+    }
+
+    /// How many tokens its prompt is.
+    pub fn prompt_tokens(&self) -> usize {
+        self.prompt.len()
     }
 }
 
@@ -266,6 +272,51 @@ impl<'m> Session<'m> {
         }
         self.answers.push((answer.clone(), t.think, t.generated));
         (answer, stats)
+    }
+
+    /// The tokens of a request's first message (the system prompt, with the tools), to read ahead of the question
+    /// (`read_ahead`); none if the prompt has no end to its first message.
+    pub fn ahead(&self, r: &Request) -> Result<Vec<u32>, Problem> {
+        let mut prompt = self.prompt(r)?;
+        let end = self.model.tokenizer.special("<|im_end|>");
+        let anchor = prompt.iter().position(|&t| Some(t) == end).map_or(0, |i| i + 1);
+        prompt.truncate(anchor);
+        Ok(prompt)
+    }
+
+    /// Reads a request's first message ahead of the question (`ahead`'s tokens), up to `read` more of them a call
+    /// (at least one), for a caller with other things to do between parts; true once it's all read, kept for good
+    /// where it ends (the anchor), so every request that starts the same way reads only what comes after it.
+    pub fn read_ahead(&mut self, tokens: &[u32], read: usize, pool: &dyn Pool) -> bool {
+        if tokens.is_empty() {
+            return true;
+        }
+        let same = self.seen.iter().zip(tokens).take_while(|(a, b)| a == b).count();
+        if same == tokens.len() && self.snapshots.iter().any(|k| k.anchor && k.snap.pos == tokens.len()) {
+            return true;
+        }
+        if same < self.seen.len() {
+            match self.snapshots.iter().rposition(|k| k.snap.pos <= same) {
+                Some(i) => self.back_to(i),
+                None => {
+                    self.state = self.model.state();
+                    self.snapshots.clear();
+                    self.seen.clear();
+                }
+            }
+        }
+        let from = self.seen.len();
+        let to = from.saturating_add(read.max(1)).min(tokens.len());
+        if from < to {
+            self.model.forward(&mut self.state, &tokens[from..to], None, pool);
+            self.seen.extend_from_slice(&tokens[from..to]);
+        }
+        if to < tokens.len() {
+            return false;
+        }
+        self.snapshots.retain(|k| !k.anchor && k.snap.pos <= to);
+        self.snapshots.push(Kept { snap: self.state.snapshot(), logits: Vec::new(), anchor: true });
+        true
     }
 
     /// Brings the state to having read `tokens`, reusing what it has read as far as that's the same; how many

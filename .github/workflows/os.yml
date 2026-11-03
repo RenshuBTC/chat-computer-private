@@ -7,10 +7,12 @@
 #   starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a crash stops it
 #   cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts), checking the
 #   firmware refuses it unsigned; types on PS/2 and USB keyboards (on ports, behind a hub, plugged in and out),
-#   checking what comes out; rings a timer, recording its chime; and has a stand-in for Claude read files on a
-#   Windows drive (NTFS) with its tools, then on one BitLocker encrypts, unlocked with its recovery key, on the PC's
-#   other drives, by the letters Windows' registry gives them, and on USB drives as they come and go; and runs the
-#   firmware's own programs: a battery, an AC adapter and a lid, an event, and the power button turning it off.
+#   checking what comes out; rings a timer, recording its chime; runs its own model (a tiny one, found where the
+#   app keeps its models, its answer the engine's on Linux); has a test's script in place of the model hold a
+#   conversation, keep it across a restart, and read files on a Windows drive (NTFS) with its tools, then on one
+#   BitLocker encrypts, unlocked with its recovery key, on the PC's other drives, by the letters Windows' registry
+#   gives them, and on USB drives as they come and go; and runs the firmware's own programs: a battery, an AC
+#   adapter and a lid, an event, and the power button turning it off.
 # - windows: signs the release file on real Windows, the way "Chat Computer Own System" does on a PC, and (when the
 #   machine starts in UEFI mode) puts it on the start-up partition and in the power-on menu and takes it off again.
 # - secure-boot-windows: starts the file Windows signed in a virtual PC whose firmware trusts only Microsoft's
@@ -73,7 +75,13 @@ jobs:
         run: ./check.py --sound
       - name: Keyboards (PS/2; USB on ports and behind a hub, with MSI-X, MSI and no interrupts; IOMMUs)
         run: ./check.py --keyboard
-      - name: Files (Windows' drive, NTFS, read by Claude's tools; a stand-in for Claude's API over HTTPS)
+      - name: The own model (a tiny one, found, read and asked; its answer the same as the engine's on Linux)
+        run: ./check.py --model
+      - name: A conversation (a test's script in place of the model; its tools, the screen, a mouse's wheel)
+        run: ./check.py --chat
+      - name: The conversation kept across a restart (NVMe and SATA)
+        run: ./check.py --remember
+      - name: Files (Windows' drive, NTFS, read by the model's tools; a test's script asks)
         run: ./check.py --files
       - name: BitLocker (Windows' drive encrypted, unlocked with its recovery key typed, or its key in the clear)
         run: ./check.py --bitlocker

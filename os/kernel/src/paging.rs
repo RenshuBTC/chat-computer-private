@@ -3,7 +3,8 @@
 //! * all RAM at `PHYS_OFFSET` (read and write, never run),
 //! * the kernel at the addresses it was linked for, each part with only the access it needs
 //!   (code: read and run; read-only data: read; data: read and write),
-//! * device memory (screen, interrupt controller, ...) mapped on request, uncached or write-combined.
+//! * device memory (screen, interrupt controller, ...) mapped on request, uncached or write-combined,
+//! * the heap's room to grow into, RAM mapped there as the heap needs it (for the model's file and what it reads).
 //!
 //! Nothing is mapped at low addresses, so a null pointer faults.
 
@@ -26,6 +27,10 @@ const GIB1: u64 = 1 << 30;
 /// Where device memory gets mapped (page-map slot 384).
 const DEVICE_START: u64 = 0xFFFF_C000_0000_0000;
 const DEVICE_END: u64 = 0xFFFF_E000_0000_0000;
+/// Where the heap grows (page-map slots 448 to 479), RAM mapped there as it's needed: one range, however scattered
+/// the RAM behind it (heap.rs).
+pub const HEAP_START: u64 = 0xFFFF_E000_0000_0000;
+pub const HEAP_END: u64 = 0xFFFF_F000_0000_0000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cache {
@@ -203,6 +208,27 @@ pub fn map_device(phys: u64, len: u64, cache: Cache) -> u64 {
     let flags = PRESENT | WRITABLE | t.no_execute | cache.bits();
     t.map(virt, start, end - start, flags, true);
     virt + (phys - start)
+}
+
+/// Maps free RAM at `virt` (on a 2 MiB boundary, between HEAP_START and HEAP_END) for the heap: `len` bytes (whole
+/// 2 MiB blocks), each block one big page where a whole block of RAM is free, else its own 512 frames. The caller
+/// has checked there's the memory.
+pub fn map_heap(virt: u64, len: u64) {
+    assert!(virt.is_multiple_of(MIB2) && len.is_multiple_of(MIB2) && HEAP_START <= virt && virt + len <= HEAP_END);
+    let mut guard = TABLES.lock();
+    let t = guard.as_mut().expect("paging::init first");
+    let flags = PRESENT | WRITABLE | t.no_execute;
+    for v in (virt..virt + len).step_by(MIB2 as usize) {
+        match memory::alloc_block() {
+            Some(phys) => t.map(v, phys, MIB2, flags, true),
+            None => {
+                for page in (v..v + MIB2).step_by(PAGE_SIZE as usize) {
+                    let phys = memory::alloc_contiguous(1).expect("out of memory for the heap");
+                    t.map(page, phys, PAGE_SIZE, flags, false);
+                }
+            }
+        }
+    }
 }
 
 /// Whether `phys` to `phys + len` is RAM, reached at PHYS_OFFSET (the firmware's own RAM too: its ACPI tables' and

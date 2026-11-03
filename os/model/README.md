@@ -35,7 +35,10 @@ Qwen3.5-0.8B is the one the checks use.
 - `sample.rs`: choosing the next token as the models' makers recommend.
 - `session.rs`: a conversation kept going: what was read is reused for the next request as far as it starts the same
   (with snapshots of the linear attention's memories to go back to), and the model's own answers go back in as the
-  tokens it chose.
+  tokens it chose. A request is answered all at once, or a step at a time (part of the prompt read, or one token
+  written, a step) for a caller with other things to do between steps, and the system prompt can be read ahead of
+  the first question: the own system's kernel does both (`os/kernel/src/assistant.rs`), its screen and keyboard
+  going on meanwhile.
 - `convert.rs` and the program's `convert` command: the model's file from Qwen's published files (config.json,
   tokenizer.json, the chat template, the safetensors weights), a weight at a time.
 - `refusal.rs` and the program's `find-refusal` command: the direction the model refuses along, found and measured

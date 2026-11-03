@@ -13,18 +13,18 @@ everywhere, and PCs move to the own kernel as its drivers grow (see "Reaching ev
 
 ## What it does today
 
-You type to Claude on it: Opus 5.5 at its highest effort, with your own Claude API key, through Chat Computer's own
-network stack, its own encryption and its own TLS 1.3, and the answer streams onto a screen that looks like Chat
-Computer's. Claude can search the web and read web pages (Anthropic runs those tools, so no browser is needed here),
-and act on the computer through tools: see how it's doing, make the text bigger or smaller, set timers, read your
-files on Windows' drive, and restart it. The PC's
-UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF, the
-open-source UEFI firmware). It reaches the internet through the wired network chips most PCs have (Intel's
-I219, I210, I211, I225 and I226, Realtek's RTL8111/8168 and RTL8125: written to the makers' datasheets and the
-open-source drivers, not yet tried on a real PC), a USB network adapter, an Android phone sharing its connection
-over USB, or a virtual machine's network card; other network chips need their drivers first (step 6, below). It
-keeps the conversation across restarts, in a file on the PC's start-up partition that it writes through its own
-NVMe and SATA drivers.
+You type to Chat Computer on it, and its own model answers, on the PC itself: an open model of Qwen's, run by Chat
+Computer's own engine (`model/`), from the file Chat Computer's app gets ready on Windows, read into memory as it
+starts. There's no account, no internet needed and nothing to pay, and nothing you type leaves the PC. The answer
+streams onto a screen that looks like Chat Computer's. The model acts on the computer through tools: it sees how it's
+doing, makes the text bigger or smaller, sets timers, reads your files on Windows' drive and USB drives, shows you a
+picture, and restarts it. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF,
+the open-source UEFI firmware). It has its own network stack, with drivers for the wired network chips most PCs have
+(Intel's I219, I210, I211, I225 and I226, Realtek's RTL8111/8168 and RTL8125: written to the makers' datasheets and
+the open-source drivers, not yet tried on a real PC), USB network adapters, Android phones sharing their connection
+over USB, and virtual machines' network cards; the model doesn't use it yet (the web comes next). It keeps the
+conversation across restarts, in a file on the PC's start-up partition that it writes through its own NVMe and SATA
+drivers.
 
 * `boot/` is the start-up stage, a UEFI program (`\EFI\BOOT\BOOTX64.EFI`) that carries the kernel inside
   it.
@@ -44,13 +44,18 @@ NVMe and SATA drivers.
     machine checks;
   * its own interrupt table, with all 256 entries. A fault is written to the log, with every register,
     and shown on the screen;
+  * the processor's floating-point and vector registers (SSE, and AVX where it has them) switched on for the
+    model's arithmetic, the kernel built to use them (`build.sh`), and saved and restored around every interrupt;
   * a record of free memory, one bit per 4 KiB;
   * its own page tables:
     * all RAM at `0xFFFF800000000000`;
     * the kernel's code, read-only data and data, each with only the access it needs;
     * nothing at address 0, so a null pointer faults;
     * device memory uncached, and the framebuffer write-combined;
-  * a heap;
+    * room for the heap to grow into, at `0xFFFFE00000000000`, RAM mapped there as it's needed;
+  * a heap: 16 to 256 MiB to start with, then growing as it's needed into its own range of addresses (in 2 MiB pages
+    where whole blocks of RAM are free), so the model's file, gigabytes, is one piece in memory however scattered the
+    RAM behind it, while 64 MiB is always left for everything else;
   * the first screen, early, so that if anything after it stops the kernel, the screen says so;
   * the ACPI tables: processor cores, interrupt controllers and timers;
   * the local APIC. The old 8259 controllers and all I/O APIC inputs are masked;
@@ -77,7 +82,7 @@ NVMe and SATA drivers.
     firmware's `_Lxx` and `_Exx` methods handle, and the embedded controller's queries (its `_Qxx` methods).
     Batteries (`_BIX` or `_BIF`, and `_BST`), AC adapters (`_PSR`), lids (`_LID`) and thermal zones (`_TMP`,
     `_CRT`) are read when the firmware says they changed, and every so often anyway. They're in the computer's
-    status for Claude, and a note says when the PC is plugged in or out, or its battery is low. A nearly empty
+    status for the model, and a note says when the PC is plugged in or out, or its battery is low. A nearly empty
     battery turns it off a minute later unless it's plugged in, and so does reaching the firmware's critical
     temperature, at once (`firmware.rs`). A method that runs too long is given up, and an embedded controller
     that doesn't answer is left alone for a while. `firmware-programs = off` in the settings file turns all of it
@@ -120,9 +125,10 @@ NVMe and SATA drivers.
   * the drive the PC started from (`storage/`): an NVMe SSD (`nvme.rs`), or a SATA drive on an AHCI controller
     (`ahci.rs`), the kinds nearly every PC starts from. On it, Chat Computer's memory file
     (`\EFI\chatcomputer-own\memory.bin`, which Windows' setup makes), found through Chat Computer's own FAT reader
-    (`fat/`). The conversation and Claude's notes are kept there (`keep.rs`, in the format `remember/` defines, as
-    JSON: `{"notes": [...], "messages": [...]}`) after every answer, and read back at start-up, so a restart carries
-    on the same conversation. Only the memory file's own blocks are
+    (`fat/`). The conversation and the model's notes are kept there (`keep.rs`, in the format `remember/` defines,
+    as JSON: `{"notes": [...], "chat": [{"you": ..., "at": ...}, {"said": ...}, ...]}`: each question, when it was
+    asked, and its answer's words) after every answer, and read back at start-up, so a restart carries on the same
+    conversation (one kept when the own system talked to Claude is read too). Only the memory file's own blocks are
     ever written, each read and checked first: never the file system, Windows' files or any other partition.
     Before a restart, the drive is told to write what it has cached. The PC's other drives are started too, to be
     read: every NVMe controller's first namespace, and every SATA port with a disk on it (an optical drive left
@@ -135,19 +141,19 @@ NVMe and SATA drivers.
     signature and where it starts; a USB stick by its serial number); a drive Windows hasn't seen gets the next
     letter no drive has, as Windows would give it. USB drives come and go: a stick plugged in or a card put in gets
     its letters (the other drives keep theirs), and a line in the conversation says so, as it does when it's gone.
-    The partition Chat Computer starts from, and its own folder (`\EFI\chatcomputer-own`, with its settings and the
-    Claude API key) wherever it is, are never read. The computer's status lists the drives, with their names. Claude reads the person's files there through its tools (below). Links are
+    The partition Chat Computer starts from, and its own folder (`\EFI\chatcomputer-own`, with its settings and
+    memory file) wherever it is, are never read. The computer's status lists the drives, with their names. The model
+    reads the person's files there through its tools (below), and its own file is read from there too. Links are
     followed within a drive (a junction such as "My Documents", a symbolic link);
     OneDrive's files are read when they're downloaded to the PC, and said to be online only when they aren't. Word,
     Excel and PowerPoint files are read as their words (`office/`, through Chat Computer's own ZIP and DEFLATE
-    reader, `zip/`); pictures and PDFs go to Claude whole, as the API takes them, for Claude to see, and a picture
-    bigger than the API shows Claude (2576 pixels on its long edge, 4784 "visual tokens"), or than it takes, goes as a
-    JPEG of the size Claude sees, written by `picture/` (a phone's photo of several megabytes becomes a few hundred
-    kilobytes, so more fit in what's sent with each question). A drive
+    reader, `zip/`); a picture or a PDF is said to be one (the model reads words only), and a picture can be shown to
+    the person. A drive
     BitLocker encrypts (many new laptops have Windows' "device encryption" on) is read decrypted (`bitlocker/`):
     at once if BitLocker keeps its key in the clear (suspended, or not switched on yet), else once the person types
     its recovery key in the message box (48 digits, from their Microsoft account at aka.ms/myrecoverykey). The key
-    is taken out of the message there and never sent to Claude, shown or kept (so it's typed again after a restart);
+    is taken out of the message there and never given to the model, shown or kept (so it's typed again after a
+    restart);
     a wrong one is refused, naming the key ID that unlocks the drive (each locked drive is tried; a USB drive's
     "BitLocker To Go" too). Not yet: a drive Windows is still encrypting as it's written to, files Windows compressed
     itself ("Compact OS", mostly its own), and Office's files from before 2007;
@@ -162,11 +168,23 @@ NVMe and SATA drivers.
     plays whole from memory on the first output stream, 48 kHz in 16 bits, and the stream stops after it. Commands
     go through the command and response rings, one at a time; nothing interrupts. Only QEMU's controllers and codecs
     have played it so far;
-  * Claude, with the API key from the settings and Mozilla's certificate authorities (`assistant.rs`), and the
-    tools Claude may use on this computer:
+  * Chat Computer's own model (`assistant.rs`): the one Chat Computer's app got ready on Windows
+    (`Users\NAME\AppData\Local\ai.chatcomputer.desktop\models\MODEL.ccm`, on Windows' drive or any other with
+    people's folders: of those that fit in memory, the biggest that answers quickly enough on one processor core, at
+    most 3.6 GB, which is Qwen3.5 4B; else the smallest), or the one the settings name (`model = ...`). Its file is read
+    into memory a part at a time (the screen says how far), and its refusal direction beside it (`MODEL.refusal`,
+    which the engine found when it got the model ready), so its refusals are taken out as it runs, as on Windows.
+    Chat Computer's own engine (`model/`, the same code as in the app) runs it on one processor core, with the fastest
+    arithmetic the processor has (AVX2, or AVX-VNNI). It works a step at a time from the main loop: part of what it's
+    asked read, or one token written, a few hundredths of a second each (as the processor allows), so the screen and
+    the keyboard go on meanwhile. Before the first question, it reads its instructions (the system prompt, with its
+    tools) ahead, and keeps that reading for every conversation after. Each message it's given starts with when it
+    was sent; it doesn't think before answering (on one core, thinking would take minutes). It's given as much of the
+    conversation as the memory holds the reading of (up to 16,384 tokens): in a longer one, the oldest questions are
+    left out, a third at a time; they stay on the screen and in the memory file. Its tools:
     * `computer_status`: what the computer is and how it's doing (processor, screen, firmware, Secure Boot,
-      memory, how long it has been running, the date and time, the network, the keyboards and mice, the sound and the
-      timers set) and what the own system can't do yet (`system.rs`);
+      memory, how long it has been running, the date and time, the network, the keyboards and mice, the sound, the
+      timers set, the drives and the model itself) and what the own system can't do yet (`system.rs`);
     * `set_text_size`: the text 50% to 300% of the size chosen for this monitor;
     * `reminders`: timers, reminders and alarms, as the main Chat Computer has them (`schedule.rs`): for a time from
       now, or for a time of day when the settings give the local time's offset. When one is due, a line says so at
@@ -182,48 +200,35 @@ NVMe and SATA drivers.
       default, hidden folders such as AppData passed by. A Word, Excel or PowerPoint file (or OpenDocument's) comes
       back as its words: a document's paragraphs with Markdown's headings, lists and tables; a workbook's sheets as
       CSV with each row's number and each column's letter, dates as dates, formulas after their values; a
-      presentation's slides with their notes. A picture (JPEG, PNG, GIF or WebP) or a PDF (up to 20 MB) goes to Claude
-      in the tool's result, so Claude sees it (a PDF's pages as words and as pictures): a picture whole if the API
-      shows it to Claude as it is, else a JPEG made the size Claude sees (WebP pictures, which aren't made smaller
-      yet, whole up to 7.4 MB and 8,000 pixels each way). The newest of them are sent with each question, up to 28 MB
-      and 20 of them; older ones are taken out, a line saying each was there, and the memory file keeps the
-      conversation without them. A ZIP archive's files are listed. Anything else is said to be the kind it is;
+      presentation's slides with their notes. A ZIP archive's files are listed. A picture (with its size in pixels)
+      or a PDF is said to be one, as is anything else of a kind it can't read;
     * `show_picture`: a photo, a screenshot or a drawing on one of Windows' drives (JPEG, PNG or GIF), shown to the
-      person in the conversation where Claude's answer is, as wide as the column at most (and two thirds of its
+      person in the conversation where the model's answer is, as wide as the column at most (and two thirds of its
       height), its corners rounded, turned the way the camera says (`picture/`). The last 12 shown keep their pixels;
-    * `restart_computer`: a restart a few seconds after Claude's answer, which goes back to Windows. It uses the
+    * `restart_computer`: a restart a few seconds after the model's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
       keyboard controller's reset line (`power.rs`);
-    * `turn_off_computer`: the PC turned off a few seconds after Claude's answer, by ACPI's S5 ("soft off"). First
+    * `turn_off_computer`: the PC turned off a few seconds after the model's answer, by ACPI's S5 ("soft off"). First
       the firmware's own preparation for it runs (its `_TTS` and `_PTS` methods). S5's sleep type, which the
       firmware's `\_S5` gives (or the DSDT's bytes, where it is plain data, when its programs aren't run), is written
       with "sleep enable" to the PM1 control registers (or a hardware-reduced PC's sleep control register). If the
       PC doesn't turn off, the screen says so;
-    * `start_new_conversation`: when the person asks to start over, the conversation ends after Claude's answer. It
-      is no longer sent or kept, and stays on the screen above a line until the next restart;
-    * `remember` and `forget`: Claude's notes about the person (their name, what they like), kept in the memory file
-      with the conversation and shown to Claude in every conversation after, new ones and restarts included. The
-      screen says when Claude notes or forgets something. At most 40 notes, 8,000 characters in all.
+    * `start_new_conversation`: when the person asks to start over, the conversation ends after the model's answer.
+      It is no longer given to the model or kept, and stays on the screen above a line until the next restart;
+    * `remember` and `forget`: the model's notes about the person (their name, what they like), kept in the memory
+      file with the conversation and in its instructions in every conversation after, new ones and restarts included
+      (each conversation's instructions stay as they began, so they're read once). The screen says when the model
+      notes or forgets something. At most 40 notes, 8,000 characters in all.
 
-    And the tools Anthropic runs itself: web search (`web_search`) and reading a web page (`web_fetch`). While Claude
-    uses one, the screen says so by the thinking dot ("Searching the web"). If an organization has switched them off
-    for its keys, the API refuses them, and Chat Computer asks again without them.
-
-    Claude may use tools (or have its answer paused by the API, during a long search) up to 8 times for one message.
-    Its answers go back into the conversation whole, thinking blocks, search results and citations exactly as they
-    came, as the API asks.
-
-    Every request asks for the API's prompt caching. When the next message (or a tool's result) comes within 5
-    minutes, the conversation so far is read from Anthropic's cache, for a twentieth of the price. The system prompt
-    changes at most once a day (it gives the date, not the time) so that the cache keeps matching. At most about
-    600 KB of the conversation is sent; in a longer one the oldest questions are left out, a third at a time. They
-    stay on the screen and in the memory file.
+    The model may use tools up to 8 times for one message. A test build answers from a script in place of the model
+    (`CHATCOMPUTER_TEST=chat`, by `check.py --chat` and the drives' checks), so all that's around it is checked
+    without one, and logs what the model would have been given.
 
   Then the screen is the conversation (`chat.rs`), drawn in memory and copied to the screen where it changed.
   Before the first message it says what the PC is, how long Chat Computer has been running (by the kernel's own
-  timer), which keyboards it found and whether Claude can be reached. Type, press Enter, and the message goes
-  to Claude: the name looked up, a connection made, the certificate checked, the conversation so far sent, and
-  the answer shown as it streams in, with a pulsing dot while Claude thinks. Claude's answers are Markdown, laid
+  timer), which keyboards it found and how its model is getting ready. Type, press Enter, and the model reads the
+  message and answers, its words shown as they're written, with a pulsing dot until the first (and, when it's slow,
+  what it's doing: reading your message, or a file). Its answers are Markdown, laid
   out as the main screen shows them (`rich.rs`): headings, bold, italics, lists and tasks, code in the code font,
   quotes, tables and rules. Esc stops an answer; Page Up and
   Page Down, or a mouse's wheel, scroll. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat
@@ -235,11 +240,11 @@ NVMe and SATA drivers.
   ChaCha20-Poly1305, X25519, ECDSA on P-256 and P-384, RSA (PKCS #1 v1.5 and PSS), and a generator of random
   bytes for keys, seeded from the processor. Tested against the standards' own test vectors and OpenSSL's.
 * `tls/` is Chat Computer's own TLS 1.3 client, with its own certificate checks (chains, names, dates, what
-  each certificate may be used for, name constraints) against Mozilla's certificate authorities. Tested against
-  OpenSSL's server with every cipher and kind of key, and against the chain the real api.anthropic.com sends.
-* `claude/` talks to Claude's Messages API: the request (Opus 5.5, effort "max", the tools, and the web tools
-  Anthropic runs), HTTP/1.1, JSON and the streamed answer's events, put back together into whole content blocks
-  (thinking, words and their citations, tool calls, web searches and their results) to send back.
+  each certificate may be used for, name constraints) against Mozilla's certificate authorities: the engine gets its
+  models ready over it, on Windows and Linux. Tested against OpenSSL's server with every cipher and kind of key, and
+  against a real site's chain.
+* `model/` is Chat Computer's own model engine: Qwen's open models on the PC's own processor (see its README.md).
+  The kernel runs it without the standard library; the same code serves the model on Windows and Linux.
 * `font/` is Chat Computer's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It reads variable fonts too (fvar, avar and gvar: deltas, intermediate regions and
   inferred deltas; HVAR for the advances), so the bold comes from the same font file as the regular. And it reads
@@ -251,7 +256,7 @@ NVMe and SATA drivers.
   Hyperlegible lacks), how wide lines are, where they wrap, and drawing them, with the kerning a browser applies
   (within a run of one font and face). Tested against where HarfBuzz puts each letter, at the regular weight and
   the bold (`text/reference.py`).
-* `markdown/` reads the Markdown Claude writes into blocks and styled words, by the same rules as the main
+* `markdown/` reads the Markdown the model writes into blocks and styled words, by the same rules as the main
   screen's renderer (`chatcomputer/ui/assets/md.js`). Its test runs md.js on each case (`markdown/gen/`) and
   checks the two read it the same way.
 * `fat/` is Chat Computer's own reader of FAT12, FAT16 and FAT32 (the file system of every PC's start-up
@@ -310,8 +315,7 @@ NVMe and SATA drivers.
   its YCbCr arithmetic), a big one at a half, a quarter or an eighth of its size when that's enough, so a phone's
   48-megapixel photo needs a few megabytes; PNG (every colour type and depth, transparency, interlacing); and GIF's
   first frame. Shrunk to fit by averaging, in integers only, and in the memory it's given (the kernel gives half its
-  heap's biggest free piece: a bigger picture is said to be too big). It writes JPEGs too, for pictures made smaller
-  for Claude: baseline, 4:2:0, the standard's tables, exactly as libjpeg writes them (its colour arithmetic, its
+  heap's biggest free piece: a bigger picture is said to be too big). It writes JPEGs too: baseline, 4:2:0, the standard's tables, exactly as libjpeg writes them (its colour arithmetic, its
   rounding as it halves the colour, its edges and dummy blocks, its accurate integer DCT). Tested against Pillow's
   (libjpeg-turbo's) decoding of pictures it wrote (within one level a sample) and PNGs written by its test, every
   depth and colour type (exactly), damaged pictures, and Pillow's JPEGs of the same pixels, which the writer's must
@@ -358,7 +362,8 @@ The screen follows Chat Computer's look (`chatcomputer/ui/assets/theme.css` and 
   from the system's fonts. Chinese, Japanese and Korean show as boxes still;
 * text sized as the Claude app's (16 px at 100%), scaled as `chatcomputer/ui/layout.py` does, from the
   monitor's real size;
-* Claude's words up to 54 em across (865 px at 100%) in a 57.75 em conversation, and a 60 em message box.
+* the model's words up to 54 em across (865 px at 100%, as the Claude app's) in a 57.75 em conversation, and a 60 em
+  message box.
 
 Italics are the regular or bold glyphs slanted 12° (as browsers do for a font without its italic), which keeps
 the italic font file out.
@@ -371,14 +376,14 @@ needed.
 1. It checks the PC (read-only) and saves a list of its parts in `%LOCALAPPDATA%\ChatComputer\own-os\pc.txt`, so
    drivers can be written for exactly those chips.
 2. It signs `release/chatcomputer.efi` with a key that Windows makes on that PC and won't let be copied off.
-3. It asks for your Claude API key (paste it; it isn't shown or logged). Make a key just for this at
-   console.anthropic.com, so you can switch it off there any time.
+3. It says which model the own system will answer with: the one Chat Computer's app got ready on the PC (open the
+   app once first; it gets its model by itself).
 4. After you confirm, it puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
-   next to Windows' own files, with `settings.txt` (the key, how far the PC's clock is from UTC, as Windows
-   keeps that clock in local time, and the memory file's id) and `memory.bin`, the memory file where Chat
-   Computer keeps the conversation across restarts (4 MB, or 1 MB if the partition is short of room; running
-   setup again keeps it, with the conversation in it). The key and the conversation are kept there as they are,
-   so anyone who can read that partition can read them.
+   next to Windows' own files, with `settings.txt` (how far the PC's clock is from UTC, as Windows keeps that
+   clock in local time, and the memory file's id; a model's file named there by hand, `model = ...`, is kept) and
+   `memory.bin`, the memory file where Chat Computer keeps the conversation across restarts (4 MB, or 1 MB if the
+   partition is short of room; running setup again keeps it, with the conversation in it). The conversation is kept
+   there as it is, so anyone who can read that partition can read it.
 5. It adds "Chat Computer (own system)" to the end of the power-on menu and starts it once, at the next restart.
    The restart after that starts Windows.
 
@@ -390,16 +395,13 @@ Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
 Bluetooth comes at step 10.
 
-Claude needs the internet. Of real PCs' network chips, the own kernel so far has drivers for the wired ones most
-desktops and many laptops have: Intel's I219 (built into Intel's chipsets), I210, I211, I225 and I226, and Realtek's
-RTL8111/8168 and RTL8125. They are written to the makers' datasheets and the open-source drivers, but none has been
-tried on a real PC yet. On any PC, a USB network adapter (one that follows the USB standard) or an Android phone
-sharing its connection over USB ("USB tethering") works too. Otherwise it shows what it found and says Claude can't
-be reached yet, until that network chip's driver comes (step 6); the list of parts in `pc.txt` says which chip that
-is.
+The model needs no internet. Starting up, it reads the model's file from Windows' drive into memory, which takes a
+moment (longer if BitLocker encrypts the drive: then type its recovery key when it asks). It runs on one processor
+core for now, so it answers slowly (how fast hasn't been measured on a real PC yet); using every core comes next
+(step 4).
 
-To go back to Windows, press the power button (the PC turns off; hold it if a press doesn't), or ask Claude to restart
-it. The only thing
+To go back to Windows, press the power button (the PC turns off; hold it if a press doesn't), or ask Chat Computer to
+restart it. The only thing
 Chat Computer writes on any disk is its memory file, in place. Running the script again with `-Remove` (or choosing
 Remove) takes the files (the conversation with them) and the entry off again, and deletes the key.
 
@@ -414,16 +416,16 @@ python3-pil`).
 
 ```
 ./build.sh                       # builds out/esp/EFI/BOOT/BOOTX64.EFI (one file, about 3.4 MB)
-cargo test -p font -p text -p net -p crypto -p tls -p claude -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p remember -p markdown -p chime -p hid -p aml
+cargo test -p font -p text -p net -p crypto -p tls -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p remember -p markdown -p chime -p hid -p aml
                                  # the font engine and text setting, network stack, cryptography, TLS (needs
-                                 # openssl), Claude API client, FAT reader (needs dosfstools and mtools), exFAT
+                                 # openssl), FAT reader (needs dosfstools and mtools), exFAT
                                  # and NTFS readers (need xz), ZIP, Office and picture readers (need python3 and
                                  # Pillow),
                                  # BitLocker reader (needs curl, xz and python3-cryptography; BITLOCKER_IMAGES
                                  # names the test volumes' archive if it's here already), registry reader (needs
                                  # xz), memory file, Markdown reader, chimes, HID descriptors and the AML
                                  # interpreter (needs acpica-tools: iasl and acpiexec)
-cargo run -p claude --example ask   # Chat Computer's TLS and API code against the real api.anthropic.com
+cargo test -p model --features std # the model engine (small models of random weights)
 ./check.py                       # starts it in a virtual PC; checks the screen and the clock
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
 ./check.py --crash page-fault    # a kernel that faults on purpose: checks it stops cleanly
@@ -434,21 +436,23 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
 ./check.py --network            # each kind of network card (virtio, Intel's e1000e, e1000 and igb, a USB
                                  # adapter by CDC ECM, plugged in and out, and by RNDIS): DHCP, DNS and a TCP
                                  # conversation (--card igb: just one of them)
-./check.py --claude              # typing to a stand-in for Claude's API (HTTPS, with a test certificate
-                                 # authority): the request, the streamed answer on the screen, Claude's tools
-                                 # (the computer's status, a bigger text size, a restart), a web search with a
-                                 # paused answer, the web tools refused, a failure
-./check.py --remember            # the conversation and Claude's notes kept across a restart, on an NVMe SSD and
-                                 # a SATA drive laid out like a PC's, then a new conversation started (the note
-                                 # still shown to Claude), then the PC turned off;
+./check.py --model               # the own model: a tiny one of random weights found where the app keeps its
+                                 # models, read, its instructions read ahead, a question answered as the engine
+                                 # on Linux answers it; named by the settings; a file that isn't a model
+./check.py --chat                # typing to a test's script in place of the model: what it's given each round,
+                                 # its tools (the computer's status, a bigger text size, a timer, a restart), the
+                                 # answer on the screen (Markdown), a failure, a mouse's wheel scrolling
+./check.py --remember            # the conversation and the model's notes kept across a restart, on an NVMe SSD
+                                 # and a SATA drive laid out like a PC's, then a new conversation started (the
+                                 # note still in the model's instructions), then the PC turned off;
                                  # nothing else on the disk changed (needs dosfstools, mtools and gdisk)
-./check.py --sound               # a timer set by a stand-in for Claude, its chime recorded from each of QEMU's
+./check.py --sound               # a timer set by a test build, its chime recorded from each of QEMU's
                                  # HD Audio controllers and codecs and checked against the chime's own samples
-./check.py --files               # Windows' drive read by Claude's tools (a stand-in for Claude asks): a folder
+./check.py --files               # Windows' drive read by the model's tools (a test's script asks): a folder
                                  # listed, text files read (UTF-8 and UTF-16, a long one in two parts), links
                                  # followed, OneDrive's files on the PC and online only, Word, Excel and
-                                 # PowerPoint files as words, a photo and a PDF sent whole, a search, and a
-                                 # photo shown on the screen (needs xz and gdisk)
+                                 # PowerPoint files as words, a search, and a photo shown on the screen (needs
+                                 # xz and gdisk)
 ./check.py --drives              # the PC's other drives: a second NVMe SSD (GPT) and two SATA drives (MBR and
                                  # GPT), read by the letters Windows' registry gives them, one Windows hasn't seen
                                  # given the next free letter (needs ntfs-3g's mkntfs too)
@@ -463,7 +467,7 @@ cargo run -p claude --example ask   # Chat Computer's TLS and API code against t
                                  # firmware's _TTS and _PTS run first (needs iasl, from acpica-tools)
 ./check.py --bitlocker           # the same drive encrypted with BitLocker: locked; a wrong recovery key typed
                                  # refused, the right one unlocking it, its files read; neither key reaching
-                                 # Claude or the disk; and read at once with BitLocker's key in the clear (needs
+                                 # the model or the disk; and read at once with BitLocker's key in the clear (needs
                                  # python3-cryptography too)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
@@ -530,8 +534,8 @@ Some things are made by others but are not software between the hardware and Cha
 * **Data**, such as the font (Atkinson Hyperlegible Next, by the Braille Institute, under the SIL Open
   Font License), and the list of certificate authorities Chat Computer trusts, which is Mozilla's
   (`tls/roots.txt`). Chat Computer ignores the hinting programs inside the font. Later, speech models' weights
-  will be data of this kind too.
-* **Claude itself**, which runs in Anthropic's cloud.
+  will be data of this kind too, as the model's weights already are (Qwen's, published by Alibaba under the Apache
+  2.0 licence; Chat Computer's own engine runs them).
 
 ## Roadmap
 
@@ -545,8 +549,8 @@ PC.
    Checked in virtual PCs; on the real PC with step 2.
 4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
 5. Storage: ✓ NVMe and SATA (the drive the PC started from), ✓ the conversation kept across restarts in a file on
-   the start-up partition, ✓ Windows' drive read (NTFS), for Claude to read the person's files. Checked in virtual
-   PCs. ✓ Word, Excel and PowerPoint files' words, and pictures and PDFs for Claude to see. ✓ A drive BitLocker
+   the start-up partition, ✓ Windows' drive read (NTFS), for the model to read the person's files (and its own).
+   Checked in virtual PCs. ✓ Word, Excel and PowerPoint files' words. ✓ A drive BitLocker
    encrypts, with its recovery key. ✓ The PC's other drives (NVMe and SATA), by Windows' letters. ✓ USB drives
    (sticks, external disks, card readers) as they come and go, and exFAT and FAT besides NTFS. To do: USB 3 hubs'
    own side (for USB 3 drives behind one), UAS (USB-attached SCSI, faster), memory card
@@ -559,15 +563,13 @@ PC.
    on real PCs, Realtek's PCI Express PHY tuning and PHY firmware, then IPv6.
 7. ✓ Encryption: SHA-2, HMAC and HKDF, X25519, AES-GCM, ChaCha20-Poly1305, ECDSA and RSA signatures,
    certificate checks against Mozilla's authorities, and TLS 1.3.
-8. ✓ Claude: HTTPS and the conversation itself, streamed, with an API key (billed per use). Anthropic says
-   subscription sign-in is for Claude Code and its own apps
-   ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)), and the own kernel doesn't
-   run the Claude Code program (a Linux program), so it uses an API key.
-   ✓ Chat Computer's own model engine (model/, see its README.md): Qwen's open models on the PC's own processor,
+8. ✓ Chat Computer's own model engine (model/, see its README.md): Qwen's open models on the PC's own processor,
    checked against the reference implementation, with nothing from elsewhere, so Chat Computer needs no account and
-   no internet to think. To do: the kernel running it in place of Claude: every core, each core's AVX registers kept,
-   and the model's file read from Windows' drive.
-9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting Claude's answers use
+   no internet to think. ✓ The kernel runs it: the model's file read from Windows' drive into memory, the
+   processor's vector registers (AVX) kept across interrupts, the answer a step at a time beside the screen and the
+   keyboard; checked in a virtual PC against the engine on Linux. To do: every core (step 4), the web (looking
+   things up over its own HTTPS), and pictures and PDFs read.
+9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting the model's answers use
    (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the
    conversation (JPEG, PNG, GIF). To do: accents
    placed over letters typed as two characters (GPOS's mark positioning), and Chinese, Japanese and Korean.

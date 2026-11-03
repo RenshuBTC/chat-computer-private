@@ -361,7 +361,7 @@ fn sense(hc: usize, slot: u8, id: u64, lun: u8) -> Option<(u8, u8, u8)> {
     (d.len() >= 14).then(|| (d[2] & 0x0F, d[12], d[13]))
 }
 
-/// What a sense key and code mean, for the log and for Claude.
+/// What a sense key and code mean, for the log and for the model.
 fn said(key: u8, asc: u8, ascq: u8) -> String {
     match (key, asc) {
         (NOT_READY, MEDIUM_NOT_PRESENT) => String::from("no medium is in it"),

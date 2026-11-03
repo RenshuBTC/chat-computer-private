@@ -563,8 +563,9 @@ for each, the line that says what it is; no video):
   Fedora Asahi Remix on a Mac), and `chatcomputer/` Chat Computer itself.
 * `os/` is Chat Computer's own operating system, being written from scratch to replace the Linux base. Its
   README says what runs so far, what no operating system can own on a PC, and the steps ahead.
-* `evals/` says whether a change made things better. `evals/os` gives Chat Computer's Claude everyday requests on
-  a simulated computer, each in its own sandbox (`python -m evals.os.run OUT_DIR`, Opus 5.5 at max effort), and
+* `evals/` says whether a change made things better. `evals/os` gives Chat Computer everyday requests on a
+  simulated computer, each in its own sandbox, answered by its own model (`python -m evals.os.run OUT_DIR --models
+  DIR`, the models made ready in DIR), and
   `evals/web` types a first-time visitor's questions into the website (`node evals/web/run.js OUT.json`). Each
   has pass/fail checks (`evaluate.py`), written from reading the answers and kept honest against hand labels
   (`labels/`).

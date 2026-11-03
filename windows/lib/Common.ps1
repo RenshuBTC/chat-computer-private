@@ -101,46 +101,6 @@ function Read-Choice {
     }
 }
 
-function Read-Secret {
-    # Reads text without showing it on screen. The value is never logged.
-    param([Parameter(Mandatory = $true)][string]$Prompt)
-    return (ConvertFrom-SecureText (Read-Host -Prompt $Prompt -AsSecureString))
-}
-
-function ConvertFrom-SecureText {
-    param([Parameter(Mandatory = $true)][Security.SecureString]$Secure)
-    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
-    try {
-        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
-    } finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
-    }
-}
-
-function Read-SecretLine {
-    # One more hidden line, without a prompt: the rest of something pasted.
-    return (ConvertFrom-SecureText ($Host.UI.ReadLineAsSecureString()))
-}
-
-function Test-InputWaiting {
-    # True when keys are already waiting in the console window (the rest of a paste).
-    try { return [Console]::KeyAvailable } catch { return $false }
-}
-
-function Read-PastedSecret {
-    # Reads something pasted, hidden, however many lines it has. A long key copied from a page that wraps it can
-    # hold two or more lines. A paste arrives all at once, so the lines already waiting after the first one
-    # belong to it.
-    param([Parameter(Mandatory = $true)][string]$Prompt, [int]$SettleMs = 300)
-    $text = Read-Secret $Prompt
-    for ($more = 0; $more -lt 10; $more++) {
-        Start-Sleep -Milliseconds $SettleMs
-        if (-not (Test-InputWaiting)) { break }
-        $text += Read-SecretLine
-    }
-    return $text
-}
-
 function Get-Prop {
     # Reads a property that may not exist on this version of Windows (safe under StrictMode).
     param($Object, [Parameter(Mandatory = $true)][string]$Name)

@@ -73,8 +73,8 @@ static START_IS: SpinLock<Option<(pci::Address, Option<u32>)>> = SpinLock::new(N
 static OTHERS: SpinLock<Vec<Option<Box<dyn Disk>>>> = SpinLock::new(Vec::new());
 
 /// The start-up partition's first block and size in blocks (0: not known), and whether it's on the start-up drive
-/// started here (else on a drive of another kind: a USB stick's, say). Its files (Chat Computer's settings, the
-/// Claude API key among them) are Chat Computer's own, never read as a drive's (files.rs).
+/// started here (else on a drive of another kind: a USB stick's, say). Its files (Chat Computer's settings and
+/// memory file) are Chat Computer's own, never read as a drive's (files.rs).
 static START_PARTITION: SpinLock<(u64, u64, bool)> = SpinLock::new((0, 0, false));
 
 pub fn start_partition() -> (u64, u64, bool) {

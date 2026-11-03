@@ -263,7 +263,7 @@ body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #ch
 .pin svg { display: block; width: 100%; height: 100%; }
 .item:hover .pin, .item.pinned .pin { visibility: visible; }
 .item.pinned .pin svg { fill: currentColor; }
-.msg-top, .done-when { padding-right: 1.6em; }
+.msg-top { padding-right: 1.6em; }
 /* Revert, beside the pin (under the pointer, as the pin): what it did is taken back, and that's listed after it. One
    reverted is struck through; one being reverted says so where its time was, until it's done. */
 .revert {
@@ -272,7 +272,6 @@ body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #ch
 }
 .revert svg { display: block; width: 100%; height: 100%; }
 .item:hover .revert { visibility: visible; }
-.done-item.revertable .done-when { padding-right: 3.35em; }
 .done-item.reverted .done-what { text-decoration: line-through; }
 /* On a touchscreen, as in the iPad's Mail: an item swiped left shows its Pin (or Unpin) along its right side; a
    touch elsewhere puts it back. Up and down still scroll the list. Fingers get a little more room on each item. */
@@ -297,11 +296,16 @@ body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #ch
 body.show-messages:not(.panel) #messages, body.full.show-messages #messages {
   display: flex; z-index: 30; width: min(24rem, 100vw - 1.5rem);
 }
-/* Something done: when, and under it what. Above the list, today's date and the time now. */
+/* Something done: what, and its time at the right of its first line, as a message's time is. Under the pointer the
+   pin (and Revert) take the time's place; a pinned one keeps its time, left of the pin. Above the list, today's
+   date and the time now. */
 #clock { margin: -0.4rem 0 0.9rem; }
 #clock span { display: block; }
-.done-when { display: block; font-variant-numeric: tabular-nums; }
-.done-what { display: block; }
+.done-item { display: flex; align-items: baseline; gap: 0.6em; }
+.done-what { flex: 1; min-width: 0; }
+.done-when { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.done-item.pinned .done-when { padding-right: 1.6em; }
+.done-item:hover .done-when { visibility: hidden; }
 /* A message: where it came from (a small icon), who, when; then the words, two lines at most. Unread: who in bold. */
 .msg-top { display: flex; align-items: center; gap: 0.4em; }
 .msg-top svg { flex: none; width: 1.1em; height: 1.1em; }

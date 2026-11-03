@@ -94,19 +94,19 @@ def test_whats_done_takes_you_back_to_where_it_was_asked():
     start, today, earlier = res["start"], res["today"], res["earlier"]
     assert res["first"]["full"] and res["first"]["panel"] and res["first"]["display"] == "none"
     assert not start["full"] and start["panel"] and start["display"] == "flex" and start["title"] == "Actions"
-    # A rounded card, inset from the screen's edge, in the right sixth of the screen.
-    rem = (start["view"] - start["left"] - start["width"]) / 0.75           # the card stands 0.75 rem from the edge
-    assert 14 < rem < 40 and abs(start["width"] - (0.17 * start["view"] - rem)) < 2 and start["radius"].endswith("px")
-    assert float(start["radius"][:-2]) > 10
+    # Down the right edge of the screen from top to bottom, 17.5 rem wide, as the Claude app's sidebar is.
+    rem = start["rem"]
+    assert 12 <= rem < 40 and abs(start["left"] + start["width"] - start["view"]) < 1
+    assert abs(start["width"] - 17.5 * rem) < 2 and start["radius"] == "0px"
     assert start["column_right"] <= start["left"] and start["box"][1] <= start["left"]
     assert [(i["cls"], i["text"]) for i in start["items"]] == [
         ("side-day", "Yesterday"), ("done-item", "Opened youtube.com"), ("side-day", "Today"),
         ("done-item", "Searched the web for “trains on Sunday”"), ("done-item revertable", "Saved notes.txt"),
         ("done-item", "Set the volume to 40%")]
-    # Each thing done says when, and under it what (the words get the panel's width); the date and the time now
-    # are above them. No line down the side.
+    # Each thing done says what, and its time at the right of it, on its first line; the date and the time now
+    # are above them. No line down the list's side.
     done = [i for i in start["items"] if i["cls"] == "done-item"]
-    assert all(re.fullmatch(r"[1-9]\d?:\d{2}( [AP]M)?", i["when"]) and i["stacked"] for i in done)
+    assert all(re.fullmatch(r"[1-9]\d?:\d{2}( [AP]M)?", i["when"]) and i["beside"] for i in done)
     assert re.search(r"\d{4}$", start["clock"][0]) and re.fullmatch(r"[1-9]\d?:\d{2}( [AP]M)?", start["clock"][1])
     assert start["line"] == "none"
     assert start["found"] is None and start["focused"]

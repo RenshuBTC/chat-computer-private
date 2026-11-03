@@ -607,7 +607,7 @@ retrying with backoff, then starts listening.
 * Sidebars: Messages at the left (`chatcomputer/messages`), Actions at the right (`done.py`), each a card
   (2 px `--bubble` border, 1.1 rem corners, 0.75 rem from the screen's edges and from the frame), each item
   pressable, and pinnable (`pins.py`, `~/ChatComputer/pins.json`: pinned items first, newest pin first). Actions
-  shows the date and time (`#clock`, each minute) and each item's time above its words.
+  shows the date and time (`#clock`, each minute) and each item's time at the right of its words, on their first line (a pinned one from another day: its day), as a message's is; under the pointer, the pin and Revert take the time's place.
 * Messages (`chatcomputer/messages`): every account's messages in one list, newest first, kept in
   `~/ChatComputer/messages.db` (SQLite: `store.py`); accounts and their sign-ins in `secrets/accounts.json` (0600,
   the model's tools can't read it; `accounts.public()` is what the screen and the model get). Email over IMAP

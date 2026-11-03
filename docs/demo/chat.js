@@ -763,9 +763,11 @@
     li.dataset.id = e.id;
     li.dataset.prompt = e.prompt_id || "";
     li.dataset.ts = String(e.prompt_ts || e.ts);
+    // What, and its time at the right of it (on its first line), as a message's time is. A pinned one from another
+    // day (pinned ones aren't under a day) says its day there instead.
     var pinnedDay = e.pinned && new Date(e.ts * 1000).toDateString() !== new Date().toDateString();
-    li.appendChild(el("done-when", e.reverting ? "Reverting\u2026" : (pinnedDay ? dayLabel(e.ts) + " " : "") + clock(e.ts)));
     li.appendChild(el("done-what", e.text));
+    li.appendChild(el("done-when", e.reverting ? "Reverting\u2026" : pinnedDay ? dayLabel(e.ts) : clock(e.ts)));
     if (e.revert && !e.reverted && !e.reverting) li.appendChild(revertButton());
     li.appendChild(pinButton(e.pinned));
     return li;
@@ -779,8 +781,9 @@
     });
     if (!li) return;
     var fresh = doneItem(e), when = li.querySelector(".done-when"), button = li.querySelector(".revert");
+    var freshWhen = fresh.querySelector(".done-when").textContent;
     li.className = fresh.className;
-    if (when.textContent !== fresh.firstChild.textContent) when.textContent = fresh.firstChild.textContent;
+    if (when.textContent !== freshWhen) when.textContent = freshWhen;
     if (button && !fresh.querySelector(".revert")) li.removeChild(button);
     else if (!button && fresh.querySelector(".revert")) li.insertBefore(revertButton(), li.querySelector(".pin"));
   }

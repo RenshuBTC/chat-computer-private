@@ -95,7 +95,10 @@ STATE_JS = """(function () {
     var what = li.querySelector('.done-what'), when = li.querySelector('.done-when');
     return {cls: li.className.replace(' item', '').replace('item ', ''), text: (what || li).textContent,
             when: when ? when.textContent : '', x: Math.round(b.left + 40), y: Math.round(b.top + b.height / 2),
-            stacked: !!(what && when) && when.getBoundingClientRect().bottom <= what.getBoundingClientRect().top + 1};
+            // its time at the right of its words, on their first line, and at the item's right edge
+            beside: !!(what && when) && when.getBoundingClientRect().left >= what.getBoundingClientRect().right - 1 &&
+              Math.abs(when.getBoundingClientRect().top - what.getBoundingClientRect().top) < 3 &&
+              b.right - when.getBoundingClientRect().right < 12};
   });
   return JSON.stringify({panel: document.body.classList.contains('panel'), display: getComputedStyle(d).display,
     full: document.body.classList.contains('full'),
@@ -106,6 +109,7 @@ STATE_JS = """(function () {
     days: Array.prototype.map.call(document.querySelectorAll('#log > .day'), function (e) { return e.textContent; }),
     focused: document.activeElement === document.getElementById('input'),
     radius: getComputedStyle(d).borderTopLeftRadius, line: getComputedStyle(document.getElementById('done-list')).borderLeftStyle,
+    rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
     clock: [document.getElementById('clock-date').textContent, document.getElementById('clock-time').textContent]});
 })()"""
 

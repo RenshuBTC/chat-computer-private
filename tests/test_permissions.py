@@ -1,4 +1,6 @@
 import asyncio
+import os
+import shutil
 
 import pytest
 
@@ -76,6 +78,23 @@ def test_read_only_commands_are_allowed(cmd):
 ])
 def test_hidden_changes_need_a_yes(cmd):
     assert classify_bash(cmd)[0] == "ask", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "/tmp/x/ls -la",            # a program written there and called ls: it can do anything
+    "./cat notes.txt",
+    "ip -batch commands.txt",   # ip runs the commands in the file, which can change the network
+    "ip -b commands.txt",
+])
+def test_a_program_written_elsewhere_or_read_from_a_file_isnt_read_only(cmd):
+    assert classify_bash(cmd)[0] == "ask", cmd
+
+
+def test_the_system_s_own_program_is_still_read_only():
+    ls = shutil.which("ls") or ""
+    if not os.path.isabs(ls):
+        pytest.skip("no ls on this machine")
+    assert classify_bash(f"{ls} -la /tmp")[0] == "allow"
 
 
 @pytest.mark.parametrize("cmd", [

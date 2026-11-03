@@ -1,7 +1,7 @@
 //! What the screen shows: the conversation with Claude, laid out as Chat Computer's own screen is (chat.css,
-//! theme.css): Claude's words on the left in one column, black on the warm off-white background; yours on the
-//! right in a light grey bubble; the message box at the bottom, a white card with a thin line round it and a soft
-//! shadow, "Type anything" in it while it's empty, and its send button, grey until there's something to send. Sizes
+//! theme.css): Claude's words on the left in one column, light on the dark background (Claude's dark mode's);
+//! yours on the right in a bubble; the message box at the bottom, a card lifted off the middle with a thin line
+//! round it and a soft shadow, "Type anything" in it while it's empty, and its send button, grey until there's something to send. Sizes
 //! are the Claude app's (layout.rs): 16px words on 22px lines at 100%, Claude's up to 865px across, yours in bubbles
 //! up to 85% of the 924px conversation, the box 962px wide and 46px high for a line, 39px above the screen's bottom. What you send goes to the
 //! top of the screen, with the answer coming in under it (and the screen following the answer down); Page Up and
@@ -39,8 +39,8 @@ const BACK_TO_WINDOWS_STOPPED: &str = "To go back to Windows, hold the power but
 const TYPED_MAX: usize = 4000;
 /// The most lines the message box grows to; past that it scrolls.
 const BOX_LINES: usize = 6;
-/// The soft shadow under the message box: CSS 0 0.25rem 1.25rem, black at 5%.
-const SHADOW: u32 = 13;
+/// The soft shadow under the message box: CSS 0 0.25rem 1.25rem, black at 35%.
+const SHADOW: u32 = 89;
 /// Big redraws (more than a quarter of the screen) at most this often, so a fast answer doesn't take all the time.
 const BIG_REDRAW_MS: u64 = 40;
 /// Under a conversation brought back after a restart.
@@ -158,7 +158,7 @@ impl Metrics {
 /// The message box, as laid out for what's typed.
 #[derive(Clone, Default)]
 struct BoxLayout {
-    /// The white card, on the screen.
+    /// The box's card, on the screen.
     card: Rect,
     /// Where the typed lines start.
     text_x: i32,
@@ -585,13 +585,13 @@ impl Chat {
         }
     }
 
-    /// The message box: its shadow, the white card, what's typed (or the hint) and the caret, the send button.
+    /// The message box: its shadow, the card, what's typed (or the hint) and the caret, the send button.
     fn render_box(&mut self) {
         let m = self.m;
         let b = &self.composer;
         let canvas = &mut self.canvas;
         canvas.shadow(b.card, m.px(0.25), m.px(1.25), SHADOW);
-        // (A thin line round it: the card in the line's colour, the white inside it.)
+        // (A thin line round it: the card in the line's colour, the box's own inside it.)
         let hair = ((self.layout.scale + 0.5) as i32).max(1);
         canvas.round_rect(b.card, m.px(1.0), LINE);
         canvas.round_rect(Rect::new(b.card.x + hair, b.card.y + hair, b.card.w - 2 * hair, b.card.h - 2 * hair), m.px(1.0) - hair, PAPER);
@@ -620,7 +620,7 @@ impl Chat {
             let y = b.text_y + (li - b.first) as i32 * m.line;
             canvas.fill(Rect::new(x, y + m.line * 18 / 100, caret_w, m.line * 64 / 100), INK);
         }
-        // The send button: a circle with an arrow up (chat.html's, drawn at 62% of the button).
+        // The send button: a circle with an arrow up (chat.html's arrow), drawn at 62% of the button.
         let (cx, cy, r) = b.send;
         let ready = !self.typed.trim().is_empty() && !assistant::busy();
         canvas.circle(cx, cy, r, if ready { INK } else { DIM }, 255);

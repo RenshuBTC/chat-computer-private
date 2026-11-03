@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Starts Chat Computer in a virtual PC (QEMU with OVMF, the open-source UEFI firmware) without a window,
 waits until the kernel says it is ready, takes two pictures of the screen a few seconds apart, and
-checks them: the screen is in Chat Computer's colours (black text on the warm off-white, a white message
-box), and the "Up for" line moved on (so the kernel's own timer interrupts work). Pictures and the kernel's
+checks them: the screen is in Chat Computer's colours (light words on its dark, its message box), and the
+"Up for" line moved on (so the kernel's own timer interrupts work). Pictures and the kernel's
 log go to out/.
 
     ./check.py                       build, start, check
@@ -276,8 +276,8 @@ class VirtualPC:
         self.tmp.cleanup()
 
 
-# Chat Computer's colours (theme.css): the background, black, your messages' bubbles, the message box.
-GROUND, INK, BUBBLE, PAPER = (248, 245, 240), (0, 0, 0), (231, 228, 221), (255, 255, 255)
+# Chat Computer's colours (theme.css): the background, the words, your messages' bubbles, the message box.
+GROUND, INK, BUBBLE, PAPER = (21, 21, 21), (249, 249, 247), (44, 44, 42), (48, 48, 48)
 
 
 def colours(image) -> dict:
@@ -285,9 +285,9 @@ def colours(image) -> dict:
 
 
 def check_colours(a, size: str) -> list[str]:
-    """`a` is the size asked for, and in Chat Computer's colours: mostly its background, black text, a white message
-    box, and nothing that isn't a mix of its warm greys (each of which has as much red as green, and as much green
-    as blue, or more)."""
+    """`a` is the size asked for, and in Chat Computer's colours: mostly its background, light text, its message
+    box, and nothing that isn't a mix of its greys (each of which has as much red as green, and as much green as
+    blue, or more)."""
     problems = []
     xres, yres = (int(v) for v in size.split("x"))
     if a.size != (xres, yres):
@@ -300,9 +300,9 @@ def check_colours(a, size: str) -> list[str]:
     if seen.get(GROUND, 0) < total * 0.6:
         problems.append(f"only {seen.get(GROUND, 0) * 100 // total}% of the screen is the background")
     if seen.get(INK, 0) < 500:
-        problems.append("almost no black: is there any text?")
+        problems.append("almost no words' white: is there any text?")
     if seen.get(PAPER, 0) < total * 0.01:
-        problems.append("no message box (hardly any white)")
+        problems.append("no message box (hardly any of its grey)")
     return problems
 
 

@@ -350,8 +350,8 @@ NVMe and SATA drivers.
 * `shared/mem.rs` holds Chat Computer's own `memcpy`, `memmove`, `memset` and `memcmp`.
 
 The screen follows Chat Computer's look (`chatcomputer/ui/assets/theme.css` and `chat.css`):
-* black text on the warm off-white background, your messages in light grey bubbles on the right, the
-  message box a white card with a soft shadow at the bottom;
+* light words on the dark background, in the tones of Claude's dark mode, your messages in bubbles on the
+  right, the message box a card lifted off the middle with a soft shadow at the bottom;
 * Atkinson Hyperlegible Next (its regular and bold), and Atkinson Hyperlegible Mono for code. What they lack
   (arrows, check marks, maths, Greek and Cyrillic, emoji in black and white, box drawing in code) comes from two
   fallback fonts made from Google's Noto fonts (`fonts/`, built by `fonts/build.py`), as a browser would take it

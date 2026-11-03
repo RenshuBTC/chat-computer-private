@@ -6,17 +6,20 @@ use text::Ink;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// The background: white made 8% dimmer, faintly warm (theme.css --ground).
-pub const GROUND: u32 = 0xF8F5F0;
-pub const INK: u32 = 0x000000;
+/// The background: Claude's dark mode's middle (theme.css --ground).
+pub const GROUND: u32 = 0x151515;
+/// The words: a white just off pure (theme.css --ink).
+pub const INK: u32 = 0xF9F9F7;
 /// Your messages' bubbles.
-pub const BUBBLE: u32 = 0xE7E4DD;
+pub const BUBBLE: u32 = 0x2C2C2A;
 /// The empty message box's hint, and its send button until there's something to send.
-pub const DIM: u32 = 0x918F8A;
+pub const DIM: u32 = 0x96958D;
 /// Lines between things (theme.css --line).
-pub const LINE: u32 = 0xDDD9D1;
+pub const LINE: u32 = 0x3D3D3C;
 /// The message box.
-pub const PAPER: u32 = 0xFFFFFF;
+pub const PAPER: u32 = 0x303030;
+/// Shadows (theme.css --shade).
+pub const SHADE: u32 = 0x000000;
 
 /// A point, (x, y).
 pub type Point = (i32, i32);
@@ -260,7 +263,7 @@ impl Canvas {
             for (i, &fx) in columns.iter().enumerate() {
                 let a = (fx * fy * strength + (1 << 19)) >> 20;
                 if a != 0 {
-                    self.blend(area.x + i as i32, y, INK, a);
+                    self.blend(area.x + i as i32, y, SHADE, a);
                 }
             }
         }

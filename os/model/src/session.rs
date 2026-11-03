@@ -5,6 +5,10 @@
 //!
 //! The model's own answers are put back in as the very tokens it chose (the same words can be split into tokens in
 //! more than one way, and reading them again in another would mean reading them again at all).
+//!
+//! A request is answered all at once (`ask`), or a step at a time (`begin`, `step` until the turn is over, `end`):
+//! a part of the prompt read, or one token written, per step, for a caller with other things to do between them
+//! (Chat Computer's own kernel, whose screen and keyboard go on while the model reads and writes).
 
 use crate::chat::{self, Answer, Message, Options, Problem, Reply, Said as Saying, Style};
 use crate::json::Json;
@@ -66,6 +70,51 @@ fn same_answer(a: &Answer, b: &Answer) -> bool {
     t(&a.thinking) == t(&b.thinking) && t(&a.text) == t(&b.text) && a.calls == b.calls
 }
 
+/// A turn being answered a step at a time.
+pub struct Turn {
+    prompt: Vec<u32>,
+    anchor: Option<usize>,
+    /// Still reading the prompt (the state has read what `seen` says).
+    reading: bool,
+    think: bool,
+    reply: Reply,
+    said: Said,
+    rng: Random,
+    sampling: Sampling,
+    max_tokens: usize,
+    generated: Vec<u32>,
+    stats: Stats,
+    finished: bool,
+}
+
+impl Turn {
+    /// What it has said so far.
+    pub fn answer(&self) -> &Answer {
+        &self.reply.answer
+    }
+
+    /// Still reading the prompt.
+    pub fn reading(&self) -> bool {
+        self.reading
+    }
+
+    /// Over: the model ended its turn, ran out of tokens, or was stopped.
+    pub fn finished(&self) -> bool {
+        self.finished
+    }
+}
+
+/// What a step did.
+#[derive(Debug)]
+pub enum Step {
+    /// Read more of the prompt: `done` of its `total` tokens are read now.
+    Read { done: usize, total: usize },
+    /// Wrote a token: what it adds (`Said::Done` at the turn's end).
+    Said(Saying),
+    /// Nothing: the turn is over.
+    Over,
+}
+
 /// What to ask.
 pub struct Request<'a> {
     pub tools: &'a [Json],
@@ -103,53 +152,120 @@ impl<'m> Session<'m> {
     /// Reads the prompt (only what wasn't read already), then writes the answer, telling `on` what each token
     /// adds; `on` returning false stops it.
     pub fn ask(&mut self, r: &Request, pool: &dyn Pool, on: &mut dyn FnMut(&Saying, &Answer) -> bool) -> Result<(Answer, Stats), Problem> {
+        let mut t = self.begin(r)?;
+        while t.reading {
+            self.step(&mut t, usize::MAX, pool);
+        }
+        loop {
+            match self.step(&mut t, 0, pool) {
+                Step::Said(s) => {
+                    if t.finished {
+                        on(&s, &t.reply.answer);
+                        break;
+                    }
+                    if !on(&s, &t.reply.answer) {
+                        let s = self.stop(&mut t);
+                        on(&s, &t.reply.answer);
+                        break;
+                    }
+                }
+                Step::Over => break,
+                Step::Read { .. } => {}
+            }
+        }
+        Ok(self.end(t))
+    }
+
+    /// Starts answering a request: its prompt made, the state back to where it last read the same; nothing read.
+    pub fn begin(&mut self, r: &Request) -> Result<Turn, Problem> {
         let think = r.options.think.unwrap_or(self.style.thinks);
         let prompt = self.prompt(r)?;
-        let mut stats = Stats { prompt: prompt.len(), ..Stats::default() };
+        let reply = Reply::new(&self.model.tokenizer, think).map_err(|_| Problem::NoMessages)?;
         // The anchor: where the first message (the system prompt, with the tools) ends.
         let end = self.model.tokenizer.special("<|im_end|>");
         let anchor = prompt.iter().position(|&t| Some(t) == end).map(|i| i + 1);
-        stats.read = self.read_anchored(&prompt, anchor, pool);
-        // Where the prompt ends: the next request starts the same way, then this answer.
-        self.keep_snapshot();
-        let tok = &self.model.tokenizer;
-        let mut reply = Reply::new(tok, think).map_err(|_| Problem::NoMessages)?;
-        let mut said = Said::new(self.model.settings.vocab);
-        let mut rng = Random(r.seed | 1);
-        let mut generated = Vec::new();
-        loop {
-            if generated.len() >= r.max_tokens {
-                stats.ended = Ended::Length;
-                let s = reply.finish();
-                on(&s, &reply.answer);
-                break;
-            }
-            let next = sample::choose(&self.logits, &said, &r.sampling, &mut rng);
-            let s = reply.push(tok, next);
-            if reply.done {
-                // (The turn's end isn't read: the next request has it, then what follows.)
-                on(&s, &reply.answer);
-                break;
-            }
-            said.add(next);
-            generated.push(next);
-            if !on(&s, &reply.answer) {
-                stats.ended = Ended::Stopped;
-                let s = reply.finish();
-                on(&s, &reply.answer);
-                break;
-            }
-            self.model.forward(&mut self.state, &[next], Some(&mut self.logits), pool);
-            self.seen.push(next);
+        let from = self.rewind_for(&prompt);
+        let stats = Stats { prompt: prompt.len(), read: from.map_or(0, |f| prompt.len() - f), ..Stats::default() };
+        if from.is_none() {
+            // Where the prompt ends: the next request starts the same way, then this answer.
+            self.keep_snapshot();
         }
-        stats.generated = generated.len();
-        let answer = reply.answer.clone();
+        Ok(Turn {
+            prompt,
+            anchor,
+            reading: from.is_some(),
+            think,
+            reply,
+            said: Said::new(self.model.settings.vocab),
+            rng: Random(r.seed | 1),
+            sampling: r.sampling,
+            max_tokens: r.max_tokens,
+            generated: Vec::new(),
+            stats,
+            finished: false,
+        })
+    }
+
+    /// One step: up to `read` more of the prompt's tokens read (at least one), or, once it's all read, one token
+    /// written.
+    pub fn step(&mut self, t: &mut Turn, read: usize, pool: &dyn Pool) -> Step {
+        if t.finished {
+            return Step::Over;
+        }
+        if t.reading {
+            let to = self.seen.len().saturating_add(read.max(1)).min(t.prompt.len());
+            self.read_to(&t.prompt, to, t.anchor, pool);
+            if to == t.prompt.len() {
+                t.reading = false;
+                self.keep_snapshot();
+            }
+            return Step::Read { done: to, total: t.prompt.len() };
+        }
+        if t.generated.len() >= t.max_tokens {
+            t.stats.ended = Ended::Length;
+            t.finished = true;
+            return Step::Said(t.reply.finish());
+        }
+        let next = sample::choose(&self.logits, &t.said, &t.sampling, &mut t.rng);
+        let s = t.reply.push(&self.model.tokenizer, next);
+        if t.reply.done {
+            // (The turn's end isn't read: the next request has it, then what follows.)
+            t.finished = true;
+            return Step::Said(s);
+        }
+        t.said.add(next);
+        t.generated.push(next);
+        self.model.forward(&mut self.state, &[next], Some(&mut self.logits), pool);
+        self.seen.push(next);
+        Step::Said(s)
+    }
+
+    /// Stops the turn where it is: what it was saying, finished.
+    pub fn stop(&mut self, t: &mut Turn) -> Saying {
+        if t.finished {
+            return Saying::Nothing;
+        }
+        t.stats.ended = Ended::Stopped;
+        t.finished = true;
+        if t.reading {
+            // (Stopped before a word: the prompt read so far stays read.)
+            t.reading = false;
+            return Saying::Done;
+        }
+        t.reply.finish()
+    }
+
+    /// The turn's answer and how it went; its tokens kept, to put back as they were.
+    pub fn end(&mut self, t: Turn) -> (Answer, Stats) {
+        let mut stats = t.stats;
+        stats.generated = t.generated.len();
+        let answer = t.reply.answer.clone();
         // (However it ended: what was cut short comes back as it was cut, and its tokens are these.)
         if self.answers.len() >= ANSWERS {
             self.answers.remove(0);
         }
-        self.answers.push((answer.clone(), think, generated));
-        Ok((answer, stats))
+        self.answers.push((answer.clone(), t.think, t.generated));
+        (answer, stats)
     }
 
     /// Brings the state to having read `tokens`, reusing what it has read as far as that's the same; how many
@@ -160,18 +276,26 @@ impl<'m> Session<'m> {
 
     /// The same, with a snapshot kept for good where `anchor` is (if the reading passes it).
     pub fn read_anchored(&mut self, tokens: &[u32], anchor: Option<usize>, pool: &dyn Pool) -> usize {
+        let Some(from) = self.rewind_for(tokens) else { return 0 };
+        self.read_to(tokens, tokens.len(), anchor, pool);
+        tokens.len() - from
+    }
+
+    /// Gets the state ready to read `tokens`: back to where it last read the same, as far as that goes. Where the
+    /// reading goes on from; None when there's nothing to read (`tokens` were read, scores and all).
+    fn rewind_for(&mut self, tokens: &[u32]) -> Option<usize> {
         let same = self.seen.iter().zip(tokens).take_while(|(a, b)| a == b).count();
         if tokens.is_empty() {
-            return 0;
+            return None;
         }
         if same == tokens.len() {
             if same == self.seen.len() {
-                return 0;
+                return None;
             }
             // A prompt read before (asked again): back to where it ended, scores and all.
             if let Some(i) = self.snapshots.iter().rposition(|k| k.snap.pos == same && !k.logits.is_empty()) {
                 self.back_to(i);
-                return 0;
+                return None;
             }
         }
         if same < self.seen.len() || same == tokens.len() {
@@ -187,17 +311,25 @@ impl<'m> Session<'m> {
                 }
             }
         }
+        Some(self.seen.len())
+    }
+
+    /// Reads `tokens` on from where the state is, up to `to` (the scores after the last only when that's the
+    /// end), keeping a snapshot for good where `anchor` is if the reading passes it.
+    fn read_to(&mut self, tokens: &[u32], to: usize, anchor: Option<usize>, pool: &dyn Pool) {
         let from = self.seen.len();
-        if let Some(a) = anchor.filter(|&a| from < a && a < tokens.len()) {
+        if let Some(a) = anchor.filter(|&a| from < a && a < tokens.len() && a <= to) {
             self.model.forward(&mut self.state, &tokens[from..a], None, pool);
             self.seen.extend_from_slice(&tokens[from..a]);
             self.snapshots.retain(|k| !k.anchor);
             self.snapshots.push(Kept { snap: self.state.snapshot(), logits: Vec::new(), anchor: true });
         }
         let at = self.seen.len();
-        self.model.forward(&mut self.state, &tokens[at..], Some(&mut self.logits), pool);
-        self.seen.extend_from_slice(&tokens[at..]);
-        tokens.len() - from
+        if at < to {
+            let last = to == tokens.len();
+            self.model.forward(&mut self.state, &tokens[at..to], if last { Some(&mut self.logits) } else { None }, pool);
+            self.seen.extend_from_slice(&tokens[at..to]);
+        }
     }
 
     /// Back to snapshot i (those after it no longer apply).

@@ -67,6 +67,7 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     gdt::init();
     idt::init();
     log!("Chat Computer kernel: own segment and interrupt tables loaded");
+    log!("Chat Computer kernel: AVX {}", if cpu::enable_avx() { "on" } else { "not on this processor" });
     log!(
         "Chat Computer kernel: Secure Boot {}",
         match info.secure_boot {
@@ -251,6 +252,18 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         power::due();
     }
 }
+
+/// The kernel is built for a target with the processor's floating-point registers (its model's arithmetic needs
+/// them), whose prebuilt `alloc` was compiled to unwind on a panic and so names the unwinder's resume and
+/// personality; a panic here stops instead (panic = "abort"), so neither is ever called.
+#[unsafe(no_mangle)]
+pub extern "C" fn _Unwind_Resume() -> ! {
+    cpu::stop()
+}
+
+/// The same `alloc`'s unwinding tables name the personality routine an unwinder would call; nothing unwinds.
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_eh_personality() {}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {

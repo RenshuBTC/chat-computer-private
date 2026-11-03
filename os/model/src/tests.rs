@@ -99,6 +99,52 @@ fn a_session_reads_only_what_is_new_and_answers_the_same() {
 }
 
 #[test]
+fn a_step_at_a_time_answers_as_all_at_once() {
+    use crate::session::Step;
+    let bytes = tiny(true);
+    let file = File::open(&bytes).unwrap();
+    let m = Model::load(&file).unwrap();
+    let o = Options { think: Some(false), keep_thinking: Some(true), ..Options::default() };
+    let mut msgs = vec![Message::System("A system prompt that's read in parts.".into()), Message::User("Hello there".into())];
+    fn r(msgs: &[Message], o: Options) -> Request<'_> {
+        Request { tools: &[], messages: msgs, options: o, sampling: Sampling::GREEDY, max_tokens: 10, seed: 3 }
+    }
+    let mut whole = Session::new(&m, Style::QWEN35);
+    let mut parts = Session::new(&m, Style::QWEN35);
+    for round in 0..2 {
+        let (want, want_st) = whole.ask(&r(&msgs, o), &Serial, &mut |_, _| true).unwrap();
+        let mut t = parts.begin(&r(&msgs, o)).unwrap();
+        let (mut reads, mut said) = (0, 0);
+        loop {
+            match parts.step(&mut t, 7, &Serial) {
+                Step::Read { done, total } => {
+                    reads += 1;
+                    assert!(done <= total);
+                }
+                Step::Said(_) => said += 1,
+                Step::Over => break,
+            }
+        }
+        let (got, st) = parts.end(t);
+        assert_eq!((got.clone(), st.read, st.prompt, st.generated), (want.clone(), want_st.read, want_st.prompt, want_st.generated));
+        assert_eq!(reads, want_st.read.div_ceil(7), "round {round}");
+        assert!(said >= st.generated);
+        msgs.push(Message::Assistant(got));
+        msgs.push(Message::User("And again".into()));
+    }
+    // Stopped part way through reading: nothing said, and the next request reads only what's left.
+    let mut t = parts.begin(&r(&msgs, o)).unwrap();
+    parts.step(&mut t, 2, &Serial);
+    parts.stop(&mut t);
+    assert!(matches!(parts.step(&mut t, 2, &Serial), Step::Over));
+    let (a, st) = parts.end(t);
+    assert_eq!((a.text.as_str(), st.generated), ("", 0));
+    let (b, st) = parts.ask(&r(&msgs, o), &Serial, &mut |_, _| true).unwrap();
+    let (c, _) = whole.ask(&r(&msgs, o), &Serial, &mut |_, _| true).unwrap();
+    assert!(st.read < st.prompt && b == c);
+}
+
+#[test]
 fn the_kernels_agree() {
     use crate::cpu::Level;
     let mut r = Rng(42);

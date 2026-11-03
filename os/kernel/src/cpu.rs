@@ -127,6 +127,24 @@ pub fn brand() -> [u8; 48] {
     out
 }
 
+/// The processor's wider vector registers (AVX's), switched on where it has them, for the model's arithmetic (the
+/// firmware leaves SSE's on): the system says it saves them (CR4.OSXSAVE), and which (XCR0: x87, SSE and AVX's).
+/// Whether AVX is on.
+pub fn enable_avx() -> bool {
+    let (_, _, ecx, _) = cpuid(1, 0);
+    let (xsave, avx) = (ecx & (1 << 26) != 0, ecx & (1 << 28) != 0);
+    if !(xsave && avx) || cpuid(0, 0).0 < 0xD {
+        return false;
+    }
+    unsafe { set_cr4(cr4() | (1 << 18)) };
+    let supported = cpuid(0xD, 0).0 as u64;
+    if supported & 0b111 != 0b111 {
+        return false;
+    }
+    unsafe { asm!("xsetbv", in("ecx") 0u32, in("eax") 0b111u32, in("edx") 0u32, options(nomem, nostack, preserves_flags)) };
+    true
+}
+
 pub fn interrupts_enabled() -> bool {
     let flags: u64;
     unsafe { asm!("pushfq", "pop {}", out(reg) flags, options(nomem, preserves_flags)) };

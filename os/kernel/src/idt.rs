@@ -1,6 +1,8 @@
 //! The kernel's interrupt table: where the processor goes on a fault, a timer tick, or any other
 //! interrupt. All 256 entries lead to one small stub each, which saves the registers and calls
-//! `interrupt_dispatch`.
+//! `interrupt_dispatch`. The kernel is built to use the processor's floating-point and vector registers (the
+//! model's arithmetic needs them, and the compiler uses them anywhere), so the stub saves those too (FXSAVE: the
+//! x87 and SSE registers; a handler, built for SSE2 alone, never touches the upper halves of AVX's).
 
 use crate::gdt;
 use crate::sync::Static;
@@ -64,9 +66,13 @@ interrupt_common:
     pushq %r13
     pushq %r14
     pushq %r15
-    movq %rsp, %rdi
+    subq $512, %rsp
+    fxsave64 (%rsp)
+    leaq 512(%rsp), %rdi
     cld
     call interrupt_dispatch
+    fxrstor64 (%rsp)
+    addq $512, %rsp
     popq %r15
     popq %r14
     popq %r13

@@ -5,8 +5,14 @@
 set -eu
 cd "$(dirname "$0")"
 
-cargo build --release -p chatcomputer-kernel --target x86_64-unknown-none
-CHATCOMPUTER_KERNEL_ELF="$PWD/target/x86_64-unknown-none/release/chatcomputer-kernel" \
+# The kernel uses the processor's floating-point and vector registers (its model's arithmetic needs them), so it's
+# built for a target that has them (x86_64-unknown-none has none), as a program of its own: at a fixed address in
+# the top 2 GiB (kernel/kernel.ld), with no red zone (an interrupt pushes onto the stack it comes on), linked by
+# the toolchain's own linker, in a folder of its own (the flags are its alone).
+lld="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
+RUSTFLAGS="-C relocation-model=static -C code-model=kernel -C no-redzone=yes -C linker=$lld -C linker-flavor=ld.lld" \
+    cargo build --release -p chatcomputer-kernel --target x86_64-unknown-linux-gnu --target-dir target/kernel
+CHATCOMPUTER_KERNEL_ELF="$PWD/target/kernel/x86_64-unknown-linux-gnu/release/chatcomputer-kernel" \
     cargo build --release -p chatcomputer-boot --target x86_64-unknown-uefi
 
 mkdir -p out/esp/EFI/BOOT

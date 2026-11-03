@@ -61,7 +61,7 @@ MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86Audi
               "XF86AudioPrev", "XF86AudioStop"}
 # The window behind the pages is the conversation's dark (theme.css). register_fonts() makes Chat Computer's own copy
 # of its font known to GTK, for AirTouch's keyboard.
-COLORS = {"bg": "#151515", "ink": "#F9F9F7"}
+COLORS = {"bg": "#191919", "ink": "#F0F0F0"}
 
 CSS_TEMPLATE = """
 window {{ background-color: {bg}; }}

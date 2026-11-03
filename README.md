@@ -105,8 +105,8 @@ kept aside to measure it, the model refused 9 as published and none after (see
   yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
   PC's own speakers Chat Computer doesn't greet you out loud.
 * **The screen.** Like the Claude app: your messages on the right in bubbles, Chat Computer's on the left, from
-  the top of the screen down, in the tones of Claude's dark mode (its middle #151515, its sidebar a shade darker,
-  its words #F9F9F7), and a message box at the bottom. What you send moves to the top of the screen with the answer coming in under it, its words fading in as
+  the top of the screen down, in the tones of Claude's dark mode on a PC (its middle #191919, its sidebars a shade
+  lighter, its words #F0F0F0), and a message box at the bottom. What you send moves to the top of the screen with the answer coming in under it, its words fading in as
   they come, so you never scroll down to read it; scroll up for anything earlier. Under each message, as in the
   Claude app: under Chat Computer's, copy, read aloud, thumbs up or down (kept, to make Chat Computer better) and ask
   again; under yours, ask again, edit and copy; with when it was. A

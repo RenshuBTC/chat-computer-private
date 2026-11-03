@@ -55,8 +55,8 @@ def test_sizes_are_the_claude_apps():
 
 
 def test_x_height_is_the_fonts():
-    # X_HEIGHT_EM is Atkinson Hyperlegible Next's own: OS/2 sxHeight over head unitsPerEm.
-    data = (FONTS / "AtkinsonHyperlegibleNext.ttf").read_bytes()
+    # X_HEIGHT_EM is Lora's own: OS/2 sxHeight over head unitsPerEm.
+    data = (FONTS / "Lora.ttf").read_bytes()
     tables = {data[12 + 16 * i:16 + 16 * i]: struct.unpack(">I", data[20 + 16 * i:24 + 16 * i])[0]
               for i in range(struct.unpack(">H", data[4:6])[0])}
     units = struct.unpack(">H", data[tables[b"head"] + 18:tables[b"head"] + 20])[0]

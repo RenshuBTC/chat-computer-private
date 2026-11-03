@@ -59,7 +59,7 @@ def test_the_conversation_reads_and_scrolls_like_a_chat():
     # Your messages on the right in a bubble (Claude's dark bubble), upright; Claude's on the left, on the page's own dark.
     for state in (filled, asked):
         assert abs(state["you"]["right"]) < 1 and state["you"]["left"] > 20
-        assert state["you"]["background"] == "rgb(44, 44, 42)" and state["you"]["style"] == "normal"
+        assert state["you"]["background"] == "rgb(37, 37, 37)" and state["you"]["style"] == "normal"
         assert abs(state["ai"]["left"]) < 1 and state["ai"]["background"] == "rgba(0, 0, 0, 0)"
     # More than a screenful: it can be scrolled. Your latest message is at the top of the screen with its answer under
     # it (as in the Claude app), and an answer longer than the screen is followed down as it comes.
@@ -127,7 +127,7 @@ def test_whats_done_takes_you_back_to_where_it_was_asked():
     # ...then struck through (still white: no text is grey), its time back, and the revert listed last, which can be
     # reverted in turn.
     assert "reverted" in reverted["cls"] and "reverting" not in reverted["cls"] and reverted["struck"] == "line-through"
-    assert reverted["colors"] == ["rgb(249, 249, 247)", "1"] and re.fullmatch(r"\d{1,2}:\d\d(\s?[AP]M)?", reverted["when"])
+    assert reverted["colors"] == ["rgb(240, 240, 240)", "1"] and re.fullmatch(r"\d{1,2}:\d\d(\s?[AP]M)?", reverted["when"])
     assert reverted["revert"] is None and reverted["with_revert"] == ["d5"]
     assert reverted["last"][0] == "d5" and "revertable" in reverted["last"][1]
 

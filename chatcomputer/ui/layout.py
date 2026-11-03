@@ -3,8 +3,8 @@
 The sizes are the Claude app's on a computer, measured from it on a 1920 x 1080 screen at 100% display scaling: its
 words 16 px, on lines 22 px apart; the conversation 924 px wide, Claude's words in it up to 865 px (about 120
 characters a line), yours in bubbles up to 85% of it; the message box 962 px wide, 46 px high for a line; its sidebar
-280 px wide. Atkinson Hyperlegible Next at 16 px is as big as the Claude app's letters are (an x-height of 8 px, 0.496
-of its size), so its lines hold as many characters. The page's style sheet (assets/chat.css) has them in rem, so
+280 px wide. Lora at 16 px is as big as the Claude app's letters are (an x-height of 8 px, half its size), so its
+lines hold about as many characters. The page's style sheet (assets/chat.css) has them in rem, so
 they follow the root size set here.
 
 A computer draws the Claude app bigger on a sharper screen, or one looked at from farther away, by its display
@@ -23,8 +23,8 @@ from typing import Any
 
 REF_PX_PER_MM = 96 / 25.4      # a standard desktop monitor (100% display scaling)...
 REF_DISTANCE_MM = 600.0        # ...at arm's length
-X_HEIGHT_EM = 0.496            # Atkinson Hyperlegible Next's x-height (OS/2 sxHeight 496 / 1000 units)
-AVG_CHAR_EM = 0.43             # Atkinson Hyperlegible Next's average character width in English (WebKit)
+X_HEIGHT_EM = 0.5              # Lora's x-height (OS/2 sxHeight 500 / 1000 units)
+AVG_CHAR_EM = 0.46             # Lora's average character width in English (Chromium: 0.461)
 # The Claude app's sizes at 100% display scaling (see above), as 1 rem and in rem.
 BASE_FONT_PX = 16.0            # its words
 LINE_HEIGHT = 1.375            # its lines, 22 px apart

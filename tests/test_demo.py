@@ -318,6 +318,11 @@ def test_the_demo_works_in_a_browser():
         ["Outlook", "outlook.live.com.ico", "no-referrer"], ["X", "x.com.ico", "no-referrer"], ["LinkedIn", "own", ""]], res["msg_icons"]
     assert res["icons_asked"] == ["mail.google.com.ico", "outlook.live.com.ico", "web.telegram.org.ico", "web.whatsapp.com.ico",
                                   "www.instagram.com.ico", "www.linkedin.com.ico", "x.com.ico"]
+    # The sidebars' switches on the edges nearest the middle (Messages' at its right, Actions' at its left), each
+    # centred on its sidebar's title's line; Messages' connect rows only once + is pressed.
+    sw = res["switches"]
+    assert len(set(sw["centres"])) == 1 and 0 < sw["left_gap"] < 20 and 0 < sw["right_gap"] < 20, sw
+    assert sw["connect"] == "none"
     now = res["mic_now"]
     assert not now["sheet"] and now["pressed"] == "true" and now["title"] == "Stop listening"
     assert now["bar"] == "block" and now["icon"] == "none" and now["live"] == "live"

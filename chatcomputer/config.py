@@ -92,7 +92,7 @@ class Settings:
     release_mic_during_media: str = "auto"  # auto | on | off
     # Screen
     show_activity: bool = False
-    # The screen is always black text on a warm off-white (ui/assets/theme.css); there is no theme to choose.
+    # The screen is always light text on Claude's dark (ui/assets/theme.css); there is no theme to choose.
     # Text size and line width are worked out from the screen's real size (ui/layout.py).
     text_size: int = 0              # 0 = automatic; otherwise a fixed size in pixels
     text_scale: float = 1.0         # "bigger"/"smaller" on top of the automatic size

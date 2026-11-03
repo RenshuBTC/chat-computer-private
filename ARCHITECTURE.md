@@ -590,8 +590,8 @@ retrying with backoff, then starts listening.
   over the page (in the browser demo, which draws what's open in the page itself, `CO.openInPage`, the list just
   overlaps it). The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
   moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
-  through) is on top. A conversation starts with the word logo alone in the middle (`#wordmark`: Atkinson
-  Hyperlegible Next at 800, the words alone: there's no icon anywhere; shown while `body.intro`, which the page
+  through) is on top. A conversation starts with the word logo alone in the middle (`#wordmark`: Lora at
+  700, the words alone: there's no icon anywhere; shown while `body.intro`, which the page
   has from its first moment; after a second it fades away over 0.5 s, at once if something's said first) and
   then Chat Computer's first words come in as its answers do, as if just typed (`greet()` in chat.js: an
   `.ai.hello` message the page adds itself, not part of the transcript, a moment's thinking and then a few
@@ -676,18 +676,22 @@ retrying with backoff, then starts listening.
   holding a message opens `#hold-menu` over `#hold-shade` (the screen dimmed by 20% black, not blurred; the menu
   frosted): Copy, Send to (`navigator.share`, where there is one), Select text (`#reader`: the message alone over
   the screen, selectable as usual), and Edit for yours or Read aloud for Chat Computer's.
-* Look: Claude's dark mode, as the user asked ("similar to Claude Cowork's dark mode"), its colours measured off
-  the Claude app in dark mode: the middle `--ground: #151515`, the sidebars a shade darker (`--side: #111111`), the
-  words `--ink: #F9F9F7` (17.3:1), the message box `--paper: #303030` with its round buttons `--knob: #414141`,
-  lines `--line: #3D3D3C`, shadows black (`--shade`), and nothing else: one look (no light mode beside it), and no
-  grey text but the empty box's hint. The screen's own brightness matters far more than the colour, so dimming
-  stays the screen's (`display`, the night light). The font is Atkinson Hyperlegible Next, with
-  Atkinson Hyperlegible Mono for code. They ship in `ui/assets/fonts` (SIL OFL 1.1, from google/fonts; see
-  its README), and `theme.css` loads them with `@font-face`. Pages written elsewhere get the fonts' file
+* Look: Claude's dark mode, as the user asked ("follow the dark scheme of claude cowork on PC"), its colours
+  measured off the Claude app on a Windows PC in dark mode: the middle `--ground: #191919`, the sidebars a shade
+  lighter (`--side: #1F1F1F`), the words `--ink: #F0F0F0` (15.4:1), what's pointed at or chosen `--chosen: #404040`,
+  lines `--line: #303030`, the words that matter less (a list's days, the times, what Chat Computer is doing)
+  `--muted: #9E9E9E`, shadows black (`--shade`), and nothing else: one look (no light mode beside it). The message box
+  keeps the look it had ("except this, keep this look"): `--paper: #303030` with a line of `--box-line: #3D3D3C`
+  round it, its round buttons `--knob: #414141`, its words `--box-ink: #F9F9F7`, and the empty box's hint
+  `--dim: #96958D`. The screen's own brightness matters far more than the colour, so dimming
+  stays the screen's (`display`, the night light). The font is Lora (Cyreal's serif for reading on screens, as the
+  user asked: "change the font of everything on chat computer to Lora"), with Atkinson Hyperlegible Mono for code (one
+  width for every letter). They ship in `ui/assets/fonts` (SIL OFL 1.1, from google/fonts; see its README), and
+  `theme.css` loads them with `@font-face`. Pages written elsewhere get the fonts' file
   address (`render._theme_css`). `gtk_app.register_fonts` hands the folder to fontconfig (FcConfigAppFontAddDir)
   for the onscreen keyboard. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
   (Noto). Laid out like the Claude app, as the user asked: their words on the right in a bubble (`--bubble:
-  #2C2C2A`, Claude's; white on it is 13.3:1), Chat Computer's flush left in one column, from the top of the screen
+  #252525`, Claude's on a PC; white on it is 13.5:1), Chat Computer's flush left in one column, from the top of the screen
   down. Its words fade in as they come, each new piece from nothing to
   white in 400 ms at an even pace (the Claude app's timing, measured there), and a new message rises 10px into
   place. Under each message a row of what can be done with it, as in the Claude app: under Chat Computer's, copy, read
@@ -701,7 +705,7 @@ retrying with backoff, then starts listening.
   one on the screen marked; + starts a new one: `chats.py`). The column and the box centre in the rest.
 * Size and width: the Claude app's, measured from it on a 1920 x 1080 screen at 100% display scaling: 16 px
   words on lines 22 px apart, a 924 px conversation with Chat Computer's words up to 865 px (about 120 characters) and
-  yours in bubbles up to 85% of it, a 962 x 46 px message box 39 px above the bottom. Atkinson's letters at 16 px
+  yours in bubbles up to 85% of it, a 962 x 46 px message box 39 px above the bottom. Lora's letters at 16 px
   are as big as the Claude app's (an x-height of 8 px). `ui/layout.py` scales this for the monitor's physical
   size (EDID via GDK) and the viewing distance (estimated from the screen size, or set by voice), the way
   display scaling makes the Claude app bigger. Websites get the display-scaling zoom, not the bigger text.

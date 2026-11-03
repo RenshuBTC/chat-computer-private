@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 ASSETS = Path(__file__).resolve().parent / "assets"
-FONTS = ASSETS / "fonts"    # Atkinson Hyperlegible Next and Mono (see fonts/README.md)
+FONTS = ASSETS / "fonts"    # Lora, and Atkinson Hyperlegible Mono for code (see fonts/README.md)
 
 
 def asset(name: str) -> str:

@@ -237,10 +237,14 @@ def main() -> None:
         # Closed: the page has the middle again.
         js("document.getElementById('frame-close').click()")
         out["closed"] = until("!document.body.classList.contains('content') && 'yes'", 10)
-        # Messages: Gmail, WhatsApp and Outlook connected from + in Messages, each in the middle to sign in (here,
-        # already in), then out of sight, read; a site in the middle can't hand over messages.
-        def connect(name):
+        # Messages: Gmail, WhatsApp and Outlook connected from + in Messages (then Connect email, or Connect chat
+        # apps), each in the middle to sign in (here, already in), then out of sight, read; a site in the middle can't
+        # hand over messages.
+        def kind(group):
             js("document.getElementById('add-account').click()")
+            js("document.querySelector('.connect-row[data-group=\"' + arguments[0] + '\"]').click()", group)
+        def connect(name):
+            kind({"Gmail": "email", "Outlook": "email", "WhatsApp": "chat"}[name])
             until("document.body.classList.contains('sheet') && document.querySelector('#sheet-fields .choices button')")
             js("var want = arguments[0]; Array.from(document.querySelectorAll('#sheet-fields .choices button')).filter(function (b) {"
                " return b.textContent === want; })[0].click()", name)
@@ -251,7 +255,7 @@ def main() -> None:
         connect("Gmail")
         out["choices"] = None
         js("document.getElementById('frame-close').click()")
-        js("document.getElementById('add-account').click()")
+        kind("email")
         out["choices"] = until("document.body.classList.contains('sheet') && Array.from(document.querySelectorAll('#sheet-fields .choices "
                                "button')).map(function (b) { return b.textContent; })")
         js("document.getElementById('sheet-cancel').click()")
@@ -275,7 +279,7 @@ def main() -> None:
         out["c_title"] = until("(window.__seen || []).map(function (m) { return m.title; }).filter(function (t) { return /^C page: /.test(t || ''); })[0]")
         js("document.getElementById('frame-close').click()")
         # Disconnected: Outlook's go from Messages.
-        js("document.getElementById('add-account').click()")
+        kind("email")
         until("document.querySelector('#sheet-fields .choices button')")
         js("Array.from(document.querySelectorAll('#sheet-fields .choices button')).filter(function (b) {"
            " return b.textContent === 'Disconnect Outlook'; })[0].click()")

@@ -10,8 +10,7 @@ from chatcomputer.config import Paths, Settings
 from chatcomputer.ui import render
 
 ASSETS = render.ASSETS
-FONT_FILES = ["AtkinsonHyperlegibleNext.ttf", "AtkinsonHyperlegibleNext-Italic.ttf",
-              "AtkinsonHyperlegibleMono.ttf", "AtkinsonHyperlegibleMono-Italic.ttf"]
+FONT_FILES = ["Lora.ttf", "Lora-Italic.ttf", "AtkinsonHyperlegibleMono.ttf", "AtkinsonHyperlegibleMono-Italic.ttf"]
 COLOR = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\b(?:grey|gray|silver)\b|\b(?:white|black)\b(?!-)", re.I)
 
 
@@ -32,25 +31,32 @@ def _code(css: str) -> str:
 def test_light_words_on_claude_s_dark():
     theme, chat = _code(_asset("theme.css")), _code(_asset("chat.css"))
     root = re.search(r":root\s*\{([^}]*)\}", theme).group(1)
-    # Claude's dark mode, as its Cowork shows it (measured off the Claude app; the same as its stylesheet's dark
-    # theme): the middle #151515, the sidebars a shade darker (#111111), as Claude's sidebar is darker than its
-    # middle, and the words #F9F9F7 (17.3:1 on the middle). The browser's own parts (scroll bars, fields) dark too.
-    assert re.search(r"--ground:\s*#151515;", root) and re.search(r"--side:\s*#111111;", root)
-    assert re.search(r"--ink:\s*#F9F9F7;", root) and re.search(r"color-scheme:\s*dark;", root)
-    # Your messages' bubbles, and what's pointed at or chosen (Claude's bubbles); thin lines (the line round Claude's
-    # middle); the message box, lifted off the middle as Claude's is, and its round buttons; and one dimmed grey,
-    # only for the empty box's hint (Claude's) and the send button with nothing to send (as ChatGPT's). Shadows,
-    # and the screen dimmed behind a held message, are black.
-    assert re.search(r"--bubble:\s*#2C2C2A;", root) and re.search(r"--line:\s*#3D3D3C;", root)
+    # Claude's dark mode, as its app shows it on a PC (measured off the Claude app on Windows): the middle #191919,
+    # the sidebars a shade lighter (#1F1F1F), as Claude's are on a PC, and the words #F0F0F0 (15.4:1 on the middle).
+    # The browser's own parts (scroll bars, fields) dark too.
+    assert re.search(r"--ground:\s*#191919;", root) and re.search(r"--side:\s*#1F1F1F;", root)
+    assert re.search(r"--ink:\s*#F0F0F0;", root) and re.search(r"color-scheme:\s*dark;", root)
+    # Your messages' bubbles (Claude's on a PC); what's pointed at or chosen (Claude's chosen chat); thin lines (the
+    # line between Claude's sidebar and middle); the words that matter less (Claude's sidebar's headings). The message
+    # box keeps its own look: lifted off the middle, a line round it, its round buttons, its words, and one dimmed
+    # grey, only for the empty box's hint and the send button with nothing to send (as ChatGPT's). Shadows, and the
+    # screen dimmed behind a held message, are black.
+    assert re.search(r"--bubble:\s*#252525;", root) and re.search(r"--chosen:\s*#404040;", root)
+    assert re.search(r"--line:\s*#303030;", root) and re.search(r"--muted:\s*#9E9E9E;", root)
     assert re.search(r"--paper:\s*#303030;", root) and re.search(r"--knob:\s*#414141;", root)
+    assert re.search(r"--box-ink:\s*#F9F9F7;", root) and re.search(r"--box-line:\s*#3D3D3C;", root)
+    assert re.search(r"--box-ground:\s*#151515;", root) and re.search(r"--box-chosen:\s*#2C2C2A;", root)
     assert re.search(r"--dim:\s*#96958D;", root) and re.search(r"--shade:\s*#000000;", root)
+    assert re.search(r"#box \{\s*--ground: var\(--box-ground\); --ink: var\(--box-ink\); --line: var\(--box-line\); "
+                     r"--chosen: var\(--box-chosen\);", chat)
     # Those are the only colours: everything else uses them.
     assert COLOR.findall(theme.replace(root, "")) == []
     assert COLOR.findall(_declarations(chat)) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
-    sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--kb", "--side-gap"}
-    assert used - sizes == {"--ground", "--ink", "--bubble", "--line", "--dim", "--paper", "--knob", "--side", "--shade",
-                            "--sans", "--mono"}
+    sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--kb", "--side-gap",
+             "--level"}       # (and the microphone's bar: how loud it hears)
+    assert used - sizes == {"--ground", "--ink", "--bubble", "--chosen", "--line", "--muted", "--dim", "--paper", "--knob",
+                            "--box-ink", "--box-line", "--box-ground", "--box-chosen", "--side", "--shade", "--text", "--mono"}
     dims = re.findall(r"([^{}]+)\{[^}]*var\(--dim\)", chat)
     assert [d.strip() for d in dims] == ["#input::placeholder", "#send"]
     # One look: no light mode beside it, and no switch between them.
@@ -62,7 +68,8 @@ def test_light_words_on_claude_s_dark():
 
 
 def test_your_words_are_in_a_bubble_not_grey_text():
-    # Like the Claude app: your messages on the right in a bubble, upright, in the same white; no text is grey.
+    # Like the Claude app: your messages on the right in a bubble, upright, in the same white. Grey words only for
+    # what matters less, as on Claude's PC app: a list's days, the times, and what Chat Computer is doing.
     chat = _code(_asset("chat.css"))
     assert re.search(r"\.you \{[^}]*align-self: flex-end;[^}]*background: var\(--bubble\);", chat)
     assert "italic" not in chat
@@ -73,25 +80,30 @@ def test_your_words_are_in_a_bubble_not_grey_text():
     # The empty box's hint is its placeholder: the one grey text (--dim), only there.
     rules = [r.strip() for r in re.findall(r"([^{}]*::placeholder[^{}]*\{[^}]*\})", chat)]
     assert rules == ["#input::placeholder { color: var(--dim); opacity: 1; }"]
+    muted = [m.strip() for m in re.findall(r"([^{}]+)\{[^}]*color: var\(--muted\)", chat)]
+    assert muted == [".ai .activity", ".acts .when", ".side-day", ".done-when", ".msg-when"], muted
 
 
 def test_fonts_come_with_chatcomputer():
     fonts = ASSETS / "fonts"
     for name in FONT_FILES:
         assert (fonts / name).read_bytes()[:4] == b"\x00\x01\x00\x00", name   # TrueType
-    for licence in ("OFL-AtkinsonHyperlegibleNext.txt", "OFL-AtkinsonHyperlegibleMono.txt"):
+    for licence in ("OFL-Lora.txt", "OFL-AtkinsonHyperlegibleMono.txt"):
         assert "SIL OPEN FONT LICENSE Version 1.1" in (fonts / licence).read_text()
     # The README says where they came from; its checksums are the files'.
     readme = (fonts / "README.md").read_text()
     for name in FONT_FILES:
         assert f"{hashlib.sha256((fonts / name).read_bytes()).hexdigest()}  {name}" in readme
-    # theme.css loads each of them, upright and italic, at every weight they have.
+    # theme.css loads each of them, upright and italic, at every weight they have: Lora for everything (the user
+    # asked: "change the font of everything on chat computer to Lora"), Atkinson Hyperlegible Mono for code.
     theme = _asset("theme.css")
     faces = re.findall(r"@font-face\s*\{([^}]*)\}", theme)
-    assert len(faces) == 4 and all("font-weight: 200 800;" in f for f in faces)
+    assert len(faces) == 4
+    assert ["font-weight: 400 700;" in f for f in faces] == [True, True, False, False]
+    assert ["font-weight: 200 800;" in f for f in faces] == [False, False, True, True]
     urls = [u for f in faces for u in re.findall(r'url\("([^"]+)"\)', f)]
     assert sorted(urls) == sorted(f"fonts/{n}" for n in FONT_FILES)
-    assert '--sans: "Atkinson Hyperlegible Next", sans-serif;' in theme
+    assert '--text: "Lora", serif;' in theme and "body { font-family: var(--text);" in theme
     assert '--mono: "Atkinson Hyperlegible Mono", monospace;' in theme
 
 

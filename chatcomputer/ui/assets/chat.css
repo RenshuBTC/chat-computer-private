@@ -41,7 +41,7 @@ body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
 .you.found { outline: 2px solid var(--ink); outline-offset: 3px; }
 .ai { overflow-wrap: anywhere; max-width: 54.0625rem; }
 /* What Chat Computer is doing (when show_activity is on), in the mono font, above the words it leads to. */
-.ai .activity { display: block; font-family: var(--mono); margin: 0 0 0.5em; }
+.ai .activity { display: block; font-family: var(--mono); margin: 0 0 0.5em; color: var(--muted); }
 .ai.thinking .md:empty::after {
   content: ""; display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%;
   background: var(--ink); animation: pulse 1.2s ease-in-out infinite;
@@ -72,10 +72,10 @@ body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
 @media (hover: hover) {
   .you:hover + .acts, .ai:hover + .acts, .acts:hover { opacity: 1; transition-delay: 0s; }
   .ai:hover + .acts .when, .acts.theirs:hover .when { opacity: 1; }
-  .act:hover { background: var(--bubble); }
+  .act:hover { background: var(--chosen); }
 }
 @media (hover: none) { .acts:not(.last):not(.shown) { pointer-events: none; } }
-.acts .when { padding: 0 0.4rem; white-space: nowrap; }
+.acts .when { padding: 0 0.4rem; white-space: nowrap; color: var(--muted); }
 .acts.theirs .when { opacity: 0; transition: opacity 120ms cubic-bezier(0.32, 0.72, 0, 1); }
 .acts.shown .when { opacity: 1; }
 .act {
@@ -109,7 +109,7 @@ body.hearing #live { display: block; }
   display: flex; align-items: center; justify-content: center; margin: 0; pointer-events: none;
   opacity: 0; visibility: hidden; transition: opacity 500ms ease, visibility 0s linear 500ms;
 }
-#wordmark { font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; margin: 0; }
+#wordmark { font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin: 0; }
 body.intro:not(.has-you) #welcome { opacity: 1; visibility: visible; transition: none; }
 body.content #welcome { display: none; }
 
@@ -145,7 +145,10 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
   padding: 0.5rem 0 2.4375rem; background: var(--ground);
 }
 #box, #wake { width: min(60.125rem, 100% - 2rem); margin: 0 auto; }
+/* The message box keeps its own look, whatever the screen round it (theme.css): its words, the thin line round it,
+   and what's inside it (the files added, "/"'s results) in the tones it was made in. */
 #box {
+  --ground: var(--box-ground); --ink: var(--box-ink); --line: var(--box-line); --chosen: var(--box-chosen);
   position: relative; border: 1px solid var(--line); border-radius: 1rem; background: var(--paper);
   padding: 0.6875rem 0.75rem 0.6875rem 0.9375rem; box-shadow: 0 0.25rem 1.25rem color-mix(in srgb, var(--shade) 35%, transparent);
 }
@@ -161,6 +164,14 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
 /* (+ spans the search icon's column and the words' column, as the words do, so the icon's column is only as wide as
    the icon, and nothing when it's away.) */
 #add { grid-area: add; justify-self: start; margin-left: -0.35rem; }
+/* Beside +, your own AI: Chat Computer's spark (its sign for a model, as in "/"). Pressed, the AIs to sign in with
+   instead of Chat Computer's own model (the page's host lists them); while one of them answers, the button shows
+   that AI's own icon (chat.js: CO.ownAi). Only where the page's host offers it (body.own-ai). */
+#ai { display: none; grid-area: add; justify-self: start; margin-left: calc(2em + 0.1rem); }
+body.own-ai #ai { display: flex; }
+#ai .ai-icon { display: none; width: 1.15em; height: 1.15em; border-radius: 0.25em; object-fit: contain; }
+#ai.has-icon .ai-icon { display: block; }
+#ai.has-icon svg { display: none; }
 #mic { grid-area: mic; margin-right: 0.45rem; }
 .tool {
   display: flex; align-items: center; justify-content: center; width: 2em; height: 2em; margin: 0; padding: 0;
@@ -189,7 +200,7 @@ body.attaching #attached { display: flex; }
 .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip button { flex: none; width: 1.4em; height: 1.4em; margin: 0; padding: 0.15em; border: 0; border-radius: 0.4em;
   background: none; color: var(--ink); cursor: pointer; }
-.chip button:hover { background: var(--bubble); }
+.chip button:hover { background: var(--chosen); }
 .chip svg { display: block; width: 100%; height: 100%; }
 /* The empty box's hint, where typing starts: "Type anything", dimmed (--dim, the one grey text on
    the screen). It's the box's own placeholder,
@@ -245,7 +256,7 @@ button { font: inherit; color: var(--ink); }
   background: none; cursor: pointer;
 }
 .icon-button svg { display: block; width: 100%; height: 100%; }
-.icon-button:hover { background: var(--bubble); }
+.icon-button:hover { background: var(--chosen); }
 .primary {
   margin: 0; padding: 0.45em 1.2em; border: 2px solid var(--ink); border-radius: 0.6em;
   background: var(--ink); color: var(--ground); cursor: pointer;
@@ -253,7 +264,8 @@ button { font: inherit; color: var(--ink); }
 
 /* The two sidebars: Messages at the left (newest first), Actions at the right (oldest at the top, grouped by
    day), as the Claude app's sidebar is: against the screen's edge from top to bottom, no space round it, a shade
-   darker than the middle (--side) and a thin line between them, its words 14px. Each item can be pinned:
+   lighter than the middle (--side), as on a PC, and a thin line between them, its words 14px; the days and the
+   times in the grey of the words that matter less (--muted). Each item can be pinned:
    pinned ones stay at the top, under the title. Tapping a message opens it between the sidebars; tapping something
    done scrolls the conversation back to the message that asked for it. Something done that changed what can be
    changed back (a file, a setting) can be reverted. */
@@ -268,20 +280,26 @@ body.panel .side { display: flex; }
 #done { right: 0; border-left: 1px solid var(--line); }
 /* Words in a sidebar line up with the items' words; an item's grey (under the pointer) reaches a little past them. */
 .side-head, .side-day, .side-empty, #clock { padding-left: 0.4em; }
-.side-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin: 0 0 0.75rem; }
+/* (Each title's row as tall as its buttons, with or without them, so a title and its sidebar's switch, which sits
+   over that row, are centred on the same line.) */
+.side-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 1.6em; margin: 0 0 0.75rem; }
 .side-title { font-size: 1em; font-weight: bold; line-height: 1.3; margin: 0; }
 .side-empty { margin: 0; }
 body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #chats-empty { display: none; }
 .side-empty .text-button { display: block; margin-top: 0.6em; }
 /* Messages' buttons to connect what brings messages in: email, chat apps and social media, each with its own list
-   to choose from; rows as the Claude app's sidebar's are, an icon then the words. */
-.connect { flex: none; display: flex; flex-direction: column; margin: 0 0 0.75rem; }
+   to choose from; rows as the Claude app's sidebar's are, an icon then the words. Out of sight until + (beside
+   Messages) is pressed, which turns to an x while they show; pressed again, or one chosen, they go. */
+.connect { flex: none; display: none; flex-direction: column; margin: 0 0 0.75rem; }
+#messages.connecting .connect { display: flex; }
+#add-account svg { transition: transform 150ms cubic-bezier(0.32, 0.72, 0, 1); }
+#add-account[aria-expanded="true"] svg { transform: rotate(45deg); }
 .connect-row {
   display: flex; align-items: center; gap: 0.6em; width: 100%; margin: 0; padding: 0.5em 0.4em;
   border: 0; border-radius: 0.5em; background: none; font: inherit; line-height: 1.4; text-align: left; cursor: pointer;
 }
 .connect-row svg { flex: none; width: 1.15em; height: 1.15em; }
-.connect-row:hover { background: var(--bubble); }
+.connect-row:hover { background: var(--chosen); }
 /* The right sidebar in two halves of the same height, a line between them: Actions at the top, and under them
    Chats, each task's chat, newest first, the one on the screen marked, as the Claude app's sidebar lists its chats
    (one line each). */
@@ -289,15 +307,15 @@ body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #ch
 #actions { padding-bottom: 0.75rem; }
 #chats { margin: 0 -0.5rem 0 -0.75rem; padding: 0.75rem 0.5rem 0 0.75rem; border-top: 1px solid var(--line); }
 .chat-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0.5em 0.4em; }
-.chat-item.current { background: var(--bubble); }
+.chat-item.current { background: var(--chosen); }
 .side-list, .side-pinned { list-style: none; margin: 0; padding: 0; }
 .side-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
 .side-pinned { flex: none; max-height: 40%; overflow-y: auto; scrollbar-width: none; }
 .side-pinned:not(:empty) { padding-bottom: 0.6em; margin-bottom: 0.6em; border-bottom: 2px solid var(--line); }
-.side-day { font-weight: bold; margin: 1em 0 0.35em; }
+.side-day { font-weight: bold; margin: 1em 0 0.35em; color: var(--muted); }
 .side-day:first-child { margin-top: 0; }
 .item { position: relative; padding: 0.35em 0.4em; border-radius: 0.5em; overflow-wrap: break-word; cursor: pointer; }
-.item:hover { background: var(--bubble); }
+.item:hover { background: var(--chosen); }
 /* The pin: shown on a pinned item, and on any item under the pointer, to pin it. It sits at the end of an item's
    first line, which leaves room for it. */
 .pin {
@@ -330,7 +348,7 @@ body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #ch
 .done-item.swiped .pin { width: 4.6em; padding: 0; }
 .item.swiped .revert {
   visibility: visible; top: 0; right: 4.6em; bottom: 0; width: 5.4em; height: auto; padding: 0;
-  border-radius: 0; background: var(--bubble); color: var(--ink);
+  border-radius: 0; background: var(--chosen); color: var(--ink);
 }
 .item.swiped .revert svg { display: none; }
 .item.swiped .revert::after { content: attr(data-label); font-weight: bold; }
@@ -347,7 +365,7 @@ body.show-messages:not(.panel) #messages, body.full.show-messages #messages {
 #clock span { display: block; }
 .done-item { display: flex; align-items: baseline; gap: 0.6em; }
 .done-what { flex: 1; min-width: 0; }
-.done-when { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.done-when { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
 .done-item.pinned .done-when { padding-right: 1.6em; }
 .done-item:hover .done-when { visibility: hidden; }
 /* A message: where it came from (a small icon), who, when; then the words, two lines at most. Unread: who in bold. */
@@ -357,7 +375,8 @@ body.show-messages:not(.panel) #messages, body.full.show-messages #messages {
 .msg-top .msg-icon { flex: none; width: 1.1em; height: 1.1em; border-radius: 0.2em; object-fit: contain; }
 .msg-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg.unread .msg-who { font-weight: bold; }
-.msg-when { flex: none; }
+.msg-when { flex: none; color: var(--muted); }
+.item:hover .msg-when { color: var(--ink); }
 .msg-text {
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 0.1em;
 }
@@ -389,10 +408,10 @@ body.sheet #sheet { display: flex; }
 #sheet-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 1.25em; margin-top: 1.5em; }
 body.sheet-busy #sheet-ok { visibility: hidden; }
 
-/* The sidebars' switches, like the Claude app's sidebar button: Messages' at the top left, Actions' at the top
-   right. Each icon is the screen with its sidebar marked, filled in while the sidebar shows. Switched off, a
-   sidebar leaves a narrow margin with just its switch. Only where the sidebars fit (body.panel), and not while the
-   middle fills the screen (body.full, after Escape). */
+/* The sidebars' switches, like the Claude app's sidebar button, each at the top of its sidebar on the edge nearest
+   the middle: Messages' at its right edge, Actions' at its left edge. Each icon is the screen with its sidebar
+   marked, filled in while the sidebar shows. Switched off, a sidebar leaves a narrow margin with just its switch.
+   Only where the sidebars fit (body.panel), and not while the middle fills the screen (body.full, after Escape). */
 .toggle {
   position: fixed; z-index: 7; display: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.15rem;
   border: 0; border-radius: 0.4rem; background: none; color: var(--ink); cursor: pointer;
@@ -400,14 +419,14 @@ body.sheet-busy #sheet-ok { visibility: hidden; }
 .toggle svg { display: block; width: 100%; height: 100%; }
 .toggle .fill { fill: currentColor; stroke: none; }
 .toggle[aria-pressed="false"] .fill { display: none; }
-.toggle:hover { background: var(--bubble); }
+.toggle:hover { background: var(--chosen); }
 body.panel #toggle-left, body.panel #toggle-right { display: block; }
 #toggle-left, #toggle-right { top: 0.65rem; }
-#toggle-left { left: 0.6rem; }
-#toggle-right { right: 0.6rem; }
+#toggle-left { left: max(0.6rem, var(--left, 0px) - 2.2rem); }
+#toggle-right { right: max(0.6rem, var(--panel, 0px) - 2.2rem); }
 body.panel.hide-left #messages, body.panel.hide-right #done { display: none; }
-body.panel #messages .side-head { padding-left: 1.95rem; }
-body.panel #actions .side-head { padding-right: 1.95rem; }
+body.panel #messages .side-head { padding-right: 1.95rem; }
+body.panel #actions .side-head { padding-left: 1.95rem; }
 
 /* A phone (body.phone, chat.js: a touchscreen alone, on a screen under 600px across), as the Claude app is there:
    the text a twentieth of the screen's width (docs/demo/host.js), the conversation nearly as wide as the screen and
@@ -514,7 +533,7 @@ body.locked #frame { visibility: hidden; }
   width: 3.8rem; height: 3.8rem; padding: 0; font: inherit; font-size: 1.4rem; color: var(--ink); background: var(--ground);
   border: 2px solid var(--line); border-radius: 50%; cursor: pointer; touch-action: manipulation;
 }
-#lock-pad button:active { background: var(--bubble); }
+#lock-pad button:active { background: var(--chosen); }
 
 /* Sleeping: the conversation and the sidebars go away; the line under the message box says how to wake Chat Computer. */
 body.sleeping #column, body.sleeping .side, body.sleeping .toggle, body.sheet .toggle { visibility: hidden; }

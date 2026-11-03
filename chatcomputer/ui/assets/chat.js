@@ -590,7 +590,10 @@
   // (the computer behind the page shows its own file picker; where that's this page's browser, CO.pickFiles, the
   // browser's), and the microphone starts or stops listening. Neither takes the keys from the box.
   var attached = [], pickHere = false, picker = null;
-  ["add", "mic"].forEach(function (id) { $(id).addEventListener("mousedown", function (e) { e.preventDefault(); }); });
+  ["add", "ai", "mic"].forEach(function (id) { $(id).addEventListener("mousedown", function (e) { e.preventDefault(); }); });
+  // Beside +: your own AI. Pressed, the computer behind the page lists the AIs to sign in with instead of Chat
+  // Computer's own model, and which answers now (CO.ownAi says which: its name, model and own icon).
+  $("ai").addEventListener("click", function () { post({ type: "ai_menu" }); });
   $("add").addEventListener("click", function () {
     if (!pickHere) { post({ type: "add_files" }); return; }
     if (!picker) {
@@ -1011,10 +1014,20 @@
     else { m.unread = false; hideMessages(); post({ type: "open_message", id: m.id }); }
     drawMessages();
   });
-  $("add-account").addEventListener("click", function () { post({ type: "add_account" }); });
-  // Connect email, chat apps or social media: the list of that kind to choose from.
+  // + beside Messages: what can be connected (email, chat apps, social media), in the panel under it; pressed again,
+  // or one chosen, they go. Each opens the list of that kind to choose from.
+  function showConnect(on) {
+    $("messages").classList.toggle("connecting", on);
+    $("add-account").setAttribute("aria-expanded", on ? "true" : "false");
+    $("add-account").title = on ? "Close" : "Connect an account";
+    $("add-account").setAttribute("aria-label", $("add-account").title);
+  }
+  $("add-account").addEventListener("click", function () { showConnect(!$("messages").classList.contains("connecting")); });
   Array.prototype.forEach.call(document.querySelectorAll(".connect-row"), function (b) {
-    b.addEventListener("click", function () { post({ type: "add_account", group: b.getAttribute("data-group") }); });
+    b.addEventListener("click", function () {
+      showConnect(false);
+      post({ type: "add_account", group: b.getAttribute("data-group") });
+    });
   });
 
   // ------------------------------------------------------------------ chats
@@ -1548,6 +1561,23 @@
     },
     // The microphone button pressed or not, where the page's host listens some other way (the website).
     listening: function (on) { micPressed(!!on); },
+    // Which AI answers, for the button beside + (shown once this is called: the page's host offers it): {name, model,
+    // icon} for one signed in with (its own icon, from its own site; the spark where it can't be had), or nothing for
+    // Chat Computer's own model.
+    ownAi: function (who) {
+      var b = $("ai"), img = b.querySelector(".ai-icon"), on = !!(who && who.name);
+      if (!img) { img = document.createElement("img"); img.className = "ai-icon"; img.alt = ""; b.appendChild(img); }
+      body.classList.add("own-ai");
+      b.title = on ? who.name + (who.model ? " (" + who.model + ")" : "") + " answers. Press to change" : "Sign in with your own AI";
+      b.setAttribute("aria-label", b.title);
+      b.classList.toggle("on", on);
+      var url = on && typeof who.icon === "string" && /^https:\/\//.test(who.icon) && !iconFailed[who.icon] ? who.icon : "";
+      b.classList.toggle("has-icon", !!url);
+      if (!url) { img.removeAttribute("src"); return; }
+      img.onerror = function () { iconFailed[url] = true; b.classList.remove("has-icon"); };
+      img.referrerPolicy = "no-referrer";
+      img.src = url;
+    },
     // How loud what the microphone hears is, from 0 (quiet) to 1, while listening: the button's one bar.
     level: function (x) {
       x = Math.max(0, Math.min(1, +x || 0));

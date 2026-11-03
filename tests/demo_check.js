@@ -96,9 +96,9 @@ async function state(page) {
       typing_in: document.activeElement && document.activeElement.id,
       hint: document.getElementById("input").value === "" ? document.getElementById("input").placeholder : null,
       hint_weight: getComputedStyle(document.getElementById("input")).fontWeight,
-      buttons: Array.from(document.querySelectorAll("#demo-tools, #box button:not(#send)")).map((b) => b.id || b.className),
-      tools: Array.from(document.querySelectorAll("#tools button")).map((b) => [b.getAttribute("aria-label"), b.getBoundingClientRect().left, b.getBoundingClientRect().top]),
-      tools_round: Array.from(document.querySelectorAll("#tools button")).map((b) => { const r = b.getBoundingClientRect(), st = getComputedStyle(b);
+      buttons: Array.from(document.querySelectorAll("#demo-tools, #box button:not(#send)")).filter((b) => b.offsetParent).map((b) => b.id || b.className),
+      tools: Array.from(document.querySelectorAll("#tools button")).filter((b) => b.offsetParent).map((b) => [b.getAttribute("aria-label"), b.getBoundingClientRect().left, b.getBoundingClientRect().top]),
+      tools_round: Array.from(document.querySelectorAll("#tools button")).filter((b) => b.offsetParent).map((b) => { const r = b.getBoundingClientRect(), st = getComputedStyle(b);
         return [Math.round(r.width), Math.round(r.height), st.borderRadius, st.backgroundColor, Math.round(r.right)]; }),
       box_at: [document.getElementById("box").getBoundingClientRect().left, document.getElementById("box").getBoundingClientRect().right],
       send_at: [document.getElementById("send").getBoundingClientRect().left, document.getElementById("send").getBoundingClientRect().top],
@@ -200,6 +200,17 @@ async function ask(page, text, meanwhile) {
   out.greeting = await greeted(page);
   out.greeting_options = await page.evaluate(() => window.CO.greetingsNow());
   out.opening = await state(page);
+  // The sidebars' switches: each at the top of its sidebar on the edge nearest the middle, centred on the same line
+  // as the sidebar's title (and Messages' +); Messages' connect rows out of sight until + is pressed.
+  out.switches = await page.evaluate(() => {
+    const box = (e) => e.getBoundingClientRect(), mid = (e) => +((box(e).top + box(e).bottom) / 2).toFixed(1);
+    const L = document.getElementById("toggle-left"), R = document.getElementById("toggle-right");
+    const M = document.getElementById("messages"), D = document.getElementById("done");
+    return { centres: [mid(L), mid(document.querySelector("#messages .side-title")), mid(document.getElementById("add-account")),
+                       mid(R), mid(document.getElementById("done-title"))],
+             left_gap: Math.round(box(M).right - box(L).right), right_gap: Math.round(box(R).left - box(D).left),
+             connect: getComputedStyle(document.getElementById("connect")).display };
+  });
   // Two visits in the same browser: a different greeting each time.
   const visits = await browser.newContext({ viewport: { width: 1600, height: 900 } });
   out.visits = [];

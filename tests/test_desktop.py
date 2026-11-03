@@ -170,9 +170,10 @@ def test_the_app_works(loopback):
     # The page sent elsewhere comes back, with that address in the middle; closed, the conversation again.
     assert res["back_home"] == res["page"] and res["sent_there"] == "B page" and res["closed"] == "yes"
     # Messages: Gmail, WhatsApp and Outlook (this check's own pages, built as theirs are) connected from + in
-    # Messages; their conversations together, newest first; one tapped opens its service at that conversation (and
-    # is read); a site in the middle can't hand over messages; Outlook disconnected, its go.
-    assert res["choices"] == ["Open Gmail", "Outlook", "Telegram", "WhatsApp", "WeChat", "Discord", "Disconnect Gmail"]
+    # Messages, then Connect email or Connect chat apps (each listing only its own); their conversations together,
+    # newest first; one tapped opens its service at that conversation (and is read); a site in the middle can't hand
+    # over messages; Outlook disconnected, its go.
+    assert res["choices"] == ["Open Gmail", "Outlook", "Disconnect Gmail"]
     assert res["accounts"] == ["gmail", "whatsapp", "outlook"]
     got = {m[0]: m[1:] for m in res["messages"]}
     assert got == {"Mum": ["WhatsApp: Dinner at 7 tonight?", True], "Alex": ["WhatsApp: Sent you the slides", False],

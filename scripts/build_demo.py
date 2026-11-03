@@ -20,8 +20,8 @@ ASSETS = ROOT / "chatcomputer" / "ui" / "assets"
 DOCS = ROOT / "docs"
 DEMO = DOCS / "demo"
 COPIED = ["theme.css", "chat.css", "md.js", "chat.js"]
-FONTS = ["AtkinsonHyperlegibleNext.ttf", "AtkinsonHyperlegibleNext-Italic.ttf", "AtkinsonHyperlegibleMono.ttf",
-         "AtkinsonHyperlegibleMono-Italic.ttf", "OFL-AtkinsonHyperlegibleNext.txt", "OFL-AtkinsonHyperlegibleMono.txt",
+FONTS = ["Lora.ttf", "Lora-Italic.ttf", "AtkinsonHyperlegibleMono.ttf",
+         "AtkinsonHyperlegibleMono-Italic.ttf", "OFL-Lora.txt", "OFL-AtkinsonHyperlegibleMono.txt",
          "README.md"]
 TITLE = "Chat Computer"
 DOMAIN = "chatcomputer.ai"                 # where GitHub Pages serves docs/

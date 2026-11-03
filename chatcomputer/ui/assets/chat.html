@@ -11,7 +11,8 @@
 <aside id="messages" class="side" aria-label="Messages">
   <div class="side-head">
     <h2 class="side-title">Messages</h2>
-    <button id="add-account" class="icon-button" type="button" tabindex="-1" aria-label="Connect an account" title="Connect an account">
+    <button id="add-account" class="icon-button" type="button" tabindex="-1" aria-label="Connect an account" title="Connect an account"
+            aria-expanded="false" aria-controls="connect">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
     </button>
   </div>
@@ -20,7 +21,7 @@
     <button type="button" class="connect-row" data-group="chat" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chat"/></svg>Connect chat apps</button>
     <button type="button" class="connect-row" data-group="social" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-social"/></svg>Connect social media</button>
   </div>
-  <p id="messages-empty" class="side-empty">Your email, Telegram, WhatsApp and social media messages show up here, newest first.</p>
+  <p id="messages-empty" class="side-empty">Press + to connect your email, chat apps and social media: their messages show up here, newest first.</p>
   <ol id="messages-pinned" class="side-pinned"></ol>
   <ol id="messages-list" class="side-list"></ol>
 </aside>
@@ -67,6 +68,9 @@
       <div id="tools">
         <button id="add" class="tool" type="button" tabindex="-1" aria-label="Add files" title="Add files">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button id="ai" class="tool" type="button" tabindex="-1" aria-label="Sign in with your own AI" title="Sign in with your own AI">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spark"/></svg>
         </button>
         <button id="mic" class="tool" type="button" tabindex="-1" aria-pressed="false" aria-label="Talk" title="Talk">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect class="fill" x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg>

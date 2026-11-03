@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 
 from chatcomputer.screen import RecordingScreen
 
-FONT = Path(__file__).resolve().parents[2] / "chatcomputer" / "ui" / "assets" / "fonts" / "AtkinsonHyperlegibleNext.ttf"
+FONT = Path(__file__).resolve().parents[2] / "chatcomputer" / "ui" / "assets" / "fonts" / "Lora.ttf"
 W, H = 1920, 1080
 
 

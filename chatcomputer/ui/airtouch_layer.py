@@ -26,7 +26,7 @@ from gi.repository import GLib, Pango, PangoCairo  # noqa: E402
 
 from ..airtouch.keyboard import CORNER, ROWS, UNITS, Keyboard  # noqa: E402
 
-FONT = "Atkinson Hyperlegible Next"
+FONT = "Lora"
 FLASH_MS = 160
 WHITE, BLACK = (1.0, 1.0, 1.0), (0.0, 0.0, 0.0)
 

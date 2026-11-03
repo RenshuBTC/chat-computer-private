@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -230,6 +231,9 @@ def _mount(args: list[str]) -> bool:
 
 
 def _ip(args: list[str]) -> bool:
+    # -batch (or -b) runs the commands in a file, which can change any of it.
+    if any(a in ("-b", "-batch") or a.startswith(("-b=", "-batch=")) for a in args):
+        return False
     return not any(a in ("add", "del", "delete", "set", "flush", "change", "replace", "exec") for a in args)
 
 
@@ -344,10 +348,29 @@ _SPECIAL: dict[str, Callable[[list[str]], bool]] = {
 }
 
 
+# Where the system keeps its own programs. A program of the same name anywhere else (./ls, /tmp/x/cat, or one
+# found first on a PATH with a folder of the person's in it) isn't the one on the read-only list: it may do anything.
+SYSTEM_BIN_DIRS = ("/bin", "/usr/bin", "/sbin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin")
+
+
+def _system_program(word: str) -> bool:
+    """Whether a command word names a program the system keeps: one found on PATH, or one in a system folder."""
+    if "/" in word:
+        path = os.path.realpath(os.path.expanduser(word))
+    else:
+        found = shutil.which(word)
+        if not found:
+            return True         # not installed here, so it can't run: the read-only list still applies to it
+        path = os.path.realpath(found)
+    return any(path.startswith(d + "/") for d in SYSTEM_BIN_DIRS)
+
+
 def _segment_read_only(seg: list[str]) -> bool:
     # Leading VAR=value assignments make the segment not read-only for our purposes.
     if not seg or "=" in seg[0] and not seg[0].startswith("-"):
         return False
+    if not _system_program(seg[0]):
+        return False            # a program written somewhere else, whatever it's called
     cmd = os.path.basename(seg[0])
     args = seg[1:]
     if cmd in _SPECIAL:

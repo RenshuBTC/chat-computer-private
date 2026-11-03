@@ -23,7 +23,9 @@ Qwen3.5-0.8B is the one the checks use.
   64-byte boundary), read in place: the file's bytes are the model.
 - `quant.rs`: weights as 8 bits (Q8: blocks of 32 with an f16 scale, nearly exact) or 4 (Q4); a row times a vector
   with whole-number arithmetic, 32 products at a time with AVX2, or with VNNI's one instruction where the processor
-  has it (`cpu.rs` finds out); four tokens at once, each block of weights read once for the four.
+  has it (`cpu.rs` finds out); four tokens at once, each block of weights read once for the four. In a web page
+  (`os/webengine`, chatcomputer.ai's chat), 16 at a time with WebAssembly's SIMD, giving exactly what the plain
+  arithmetic gives.
 - `net.rs`: the network: Gated DeltaNet (linear attention) in three layers of four, attention with a gate in the
   fourth, SwiGLU or 8 of 256 experts; many tokens at a time (a prompt is read 64 tokens at a time, 256 with experts).
 - `token.rs`, `unicode.rs`, `nfc.rs`: the tokenizer (byte-level BPE, its splitting rule written by hand, text put in

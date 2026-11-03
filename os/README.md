@@ -245,6 +245,10 @@ drivers.
   against a real site's chain.
 * `model/` is Chat Computer's own model engine: Qwen's open models on the PC's own processor (see its README.md).
   The kernel runs it without the standard library; the same code serves the model on Windows and Linux.
+* `webengine/` is the same engine in a web page, for chatcomputer.ai's chat: `model/` as WebAssembly (its 128-bit
+  SIMD, one thread), which gets Qwen3.5 0.8B ready in the visitor's browser (downloaded from Qwen's repository at
+  the pinned revision, checked and converted as it comes, kept by the browser) and answers as the engine's program
+  does, token for token with its plain arithmetic. `scripts/build_web_engine.py` builds it into `docs/demo/engine/`.
 * `font/` is Chat Computer's own TrueType reader and anti-aliased rasterizer. Coverage is exact and uses
   integer arithmetic only. It reads variable fonts too (fvar, avar and gvar: deltas, intermediate regions and
   inferred deltas; HVAR for the advances), so the bold comes from the same font file as the regular. And it reads

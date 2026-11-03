@@ -250,7 +250,7 @@ impl Prepared {
         Prepared { f: x.to_vec(), q, scales, qu }
     }
 }
-
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 /// Row `r` of a `dtype` matrix times each of several prepared vectors (a token's each): out[t] for xs[t]. Four
 /// at a time where the processor can, each block of the row read once for the four.
 pub fn dot_row_many(dtype: Dtype, data: &[u8], cols: usize, r: usize, xs: &[&Prepared], out: &mut [f32]) {
@@ -351,7 +351,7 @@ fn dot_q8(row: &[u8], x: &[u8], xs: &[f32]) -> f32 {
     }
     dot_q8_plain(row, x, xs)
 }
-
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 fn dot_q8_plain(row: &[u8], x: &[u8], xs: &[f32]) -> f32 {
     let mut sum = 0.0f32;
     for ((w, v), &dx) in row.chunks_exact(Q8_BYTES).zip(x.chunks_exact(Q8_BYTES)).zip(xs) {
@@ -373,7 +373,7 @@ fn dot_q4(row: &[u8], x: &[u8], xs: &[f32]) -> f32 {
     }
     dot_q4_plain(row, x, xs)
 }
-
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 fn dot_q4_plain(row: &[u8], x: &[u8], xs: &[f32]) -> f32 {
     let mut sum = 0.0f32;
     for ((w, v), &dx) in row.chunks_exact(Q4_BYTES).zip(x.chunks_exact(Q8_BYTES)).zip(xs) {
@@ -598,5 +598,138 @@ pub fn rms_norm(x: &[f32], w: &[f32], plus_one: bool, eps: f32, out: &mut [f32])
     let r = 1.0 / math::sqrt(ms + eps);
     for ((o, &v), &g) in out.iter_mut().zip(x).zip(w) {
         *o = v * r * if plus_one { 1.0 + g } else { g };
+    }
+}
+
+// In a web page, with WebAssembly's 128-bit SIMD (os/webengine: chatcomputer.ai's chat runs the engine in the
+// visitor's browser), a row times vectors is done by these instead of dot_row_many and the plain row-times-vector
+// functions above: each block's 32 products of whole numbers summed 16 at a time (four tokens' at once, each block of
+// the row read once for the four), then scaled and added up block after block as the plain ones do, so they give
+// exactly what the plain arithmetic gives (a sum of whole numbers is the same in any order). (Their `cfg`s above took
+// the blank lines that were there, so nothing compiled for a PC moved, and it builds to the same bytes.)
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+pub use wasm::dot_row_many;
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+use wasm::{dot_q4_plain, dot_q8_plain};
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+mod wasm {
+    use super::{BLOCK, Dtype, Prepared, Q4_BYTES, Q8_BYTES, dot_row_plain, f16_to_f32};
+    use core::arch::wasm32::*;
+
+    /// A block's products, in four sums: its weights (32 signed bytes, as two halves) times the 32 at `v`. Each
+    /// product, and the sum of two, fits 16 bits (the vector's numbers are within ±127: quantize_q8 keeps them
+    /// there); the rest is summed in 32.
+    ///
+    /// # Safety
+    /// `v` must point at 32 readable bytes.
+    #[inline(always)]
+    unsafe fn products(w0: v128, w1: v128, v: *const u8) -> v128 {
+        unsafe {
+            let (v0, v1) = (v128_load(v as *const v128), v128_load(v.add(16) as *const v128));
+            let p0 = i16x8_add(i16x8_extmul_low_i8x16(w0, v0), i16x8_extmul_high_i8x16(w0, v0));
+            let p1 = i16x8_add(i16x8_extmul_low_i8x16(w1, v1), i16x8_extmul_high_i8x16(w1, v1));
+            i32x4_add(i32x4_extadd_pairwise_i16x8(p0), i32x4_extadd_pairwise_i16x8(p1))
+        }
+    }
+
+    /// A block's sum of products (as `products`).
+    ///
+    /// # Safety
+    /// As `products`.
+    #[inline(always)]
+    unsafe fn block(w0: v128, w1: v128, v: *const u8) -> i32 {
+        let s = unsafe { products(w0, w1, v) };
+        let s = i32x4_add(s, i32x4_shuffle::<2, 3, 0, 1>(s, s));
+        let s = i32x4_add(s, i32x4_shuffle::<1, 0, 3, 2>(s, s));
+        i32x4_extract_lane::<0>(s)
+    }
+
+    /// A block's 32 weights as signed bytes, in two halves: Q8's 32 bytes; or Q4's 16 (the first 16 numbers in their
+    /// low halves, the last 16 in their high halves, each 8 more than it is).
+    ///
+    /// # Safety
+    /// `w` must point at the block's numbers (after its scale): 32 readable bytes for Q8, 16 for Q4.
+    #[inline(always)]
+    unsafe fn weights<const Q4: bool>(w: *const u8) -> (v128, v128) {
+        unsafe {
+            if Q4 {
+                let packed = v128_load(w as *const v128);
+                (i8x16_sub(v128_and(packed, i8x16_splat(15)), i8x16_splat(8)), i8x16_sub(u8x16_shr(packed, 4), i8x16_splat(8)))
+            } else {
+                (v128_load(w as *const v128), v128_load(w.add(16) as *const v128))
+            }
+        }
+    }
+
+    fn dot<const Q4: bool>(row: &[u8], x: &[u8], xs: &[f32]) -> f32 {
+        let bytes = if Q4 { Q4_BYTES } else { Q8_BYTES };
+        let mut sum = 0.0f32;
+        for ((w, v), &dx) in row.chunks_exact(bytes).zip(x.chunks_exact(Q8_BYTES)).zip(xs) {
+            let dw = f16_to_f32(u16::from_le_bytes([w[0], w[1]]));
+            // (Each block is its scale, then its numbers: whole, so the loads stay inside it.)
+            let s = unsafe {
+                let (w0, w1) = weights::<Q4>(w.as_ptr().add(2));
+                block(w0, w1, v.as_ptr().add(2))
+            };
+            sum += dw * dx * s as f32;
+        }
+        sum
+    }
+
+    pub(super) fn dot_q8_plain(row: &[u8], x: &[u8], xs: &[f32]) -> f32 {
+        dot::<false>(row, x, xs)
+    }
+
+    pub(super) fn dot_q4_plain(row: &[u8], x: &[u8], xs: &[f32]) -> f32 {
+        dot::<true>(row, x, xs)
+    }
+
+    /// A row times four vectors: each block's weights read (and its scale made a number) once for the four; the
+    /// four blocks' sums of products made one vector, and scaled and added up as the plain arithmetic does, a lane
+    /// each.
+    fn dot4<const Q4: bool>(row: &[u8], xs: [&Prepared; 4]) -> [f32; 4] {
+        let bytes = if Q4 { Q4_BYTES } else { Q8_BYTES };
+        let (q0, q1, q2, q3) = (xs[0].q.as_ptr(), xs[1].q.as_ptr(), xs[2].q.as_ptr(), xs[3].q.as_ptr());
+        let mut acc = f32x4_splat(0.0);
+        for (i, w) in row.chunks_exact(bytes).enumerate() {
+            let dw = f16_to_f32(u16::from_le_bytes([w[0], w[1]]));
+            let at = i * Q8_BYTES + 2;
+            // (Each vector has as many blocks as the row: dot_row_many checks.)
+            let s = unsafe {
+                let (w0, w1) = weights::<Q4>(w.as_ptr().add(2));
+                let (a, b) = (products(w0, w1, q0.add(at)), products(w0, w1, q1.add(at)));
+                let (c, d) = (products(w0, w1, q2.add(at)), products(w0, w1, q3.add(at)));
+                let ab = i32x4_add(i32x4_shuffle::<0, 4, 1, 5>(a, b), i32x4_shuffle::<2, 6, 3, 7>(a, b));
+                let cd = i32x4_add(i32x4_shuffle::<0, 4, 1, 5>(c, d), i32x4_shuffle::<2, 6, 3, 7>(c, d));
+                i32x4_add(i32x4_shuffle::<0, 1, 4, 5>(ab, cd), i32x4_shuffle::<2, 3, 6, 7>(ab, cd))
+            };
+            let dx = f32x4(xs[0].scales[i], xs[1].scales[i], xs[2].scales[i], xs[3].scales[i]);
+            acc = f32x4_add(acc, f32x4_mul(f32x4_mul(f32x4_splat(dw), dx), f32x4_convert_i32x4(s)));
+        }
+        [f32x4_extract_lane::<0>(acc), f32x4_extract_lane::<1>(acc), f32x4_extract_lane::<2>(acc), f32x4_extract_lane::<3>(acc)]
+    }
+
+    /// Row `r` of a `dtype` matrix times each of several prepared vectors (a token's each): out[t] for xs[t], four at
+    /// a time.
+    pub fn dot_row_many(dtype: Dtype, data: &[u8], cols: usize, r: usize, xs: &[&Prepared], out: &mut [f32]) {
+        let n = xs.len();
+        let mut t = 0;
+        if matches!(dtype, Dtype::Q8 | Dtype::Q4) && cols.is_multiple_of(BLOCK) {
+            let q4 = dtype == Dtype::Q4;
+            let bytes = if q4 { Q4_BYTES } else { Q8_BYTES };
+            let row = &data[r * cols / BLOCK * bytes..(r + 1) * cols / BLOCK * bytes];
+            while t + 4 <= n {
+                let four = [xs[t], xs[t + 1], xs[t + 2], xs[t + 3]];
+                if four.iter().any(|x| x.q.len() != cols / BLOCK * Q8_BYTES) {
+                    break;
+                }
+                out[t..t + 4].copy_from_slice(&if q4 { dot4::<true>(row, four) } else { dot4::<false>(row, four) });
+                t += 4;
+            }
+        }
+        for (o, x) in out[t..n].iter_mut().zip(&xs[t..]) {
+            *o = dot_row_plain(dtype, data, cols, r, x);
+        }
     }
 }

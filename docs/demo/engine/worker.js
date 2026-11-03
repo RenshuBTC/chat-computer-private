@@ -28,6 +28,7 @@ var CHUNK = 64 * 1024 * 1024;            // what's written to or read from the s
 var W = null, broken = "";               // the module's functions; why it stopped, if it did (a panic: it can't go on)
 var manifest = null, info = null;        // the model to get ready (model.json); its settings, once loaded
 var stopped = {}, keptMark = null, queue = Promise.resolve();
+var asking = 0;                          // questions waiting: reading ahead gives way to them
 
 function post(id, type, data) {
   var m = { id: id, type: type };
@@ -38,6 +39,7 @@ function post(id, type, data) {
 self.onmessage = function (e) {
   var m = e.data || {};
   if (m.op === "stop") { stopped[m.of] = true; return; }      // (at once, between the answer's steps)
+  if (m.op === "chat") asking++;
   queue = queue.then(function () { return handle(m); }).then(function (r) {
     post(m.id, "done", { result: r || {} });
   }, function (err) {
@@ -49,7 +51,7 @@ function handle(m) {
   if (m.op === "status") return status();
   if (m.op === "prepare") return prepare(m.id);
   if (m.op === "ahead") return ahead(m.id, m.request || {});
-  if (m.op === "chat") return chat(m.id, m.request || {});
+  if (m.op === "chat") { asking--; return chat(m.id, m.request || {}); }
   if (m.op === "forget") return forget();
   return Promise.reject(new Error("no such thing to do: " + m.op));
 }
@@ -98,11 +100,17 @@ function call(name) {
 // Bytes put in the module's memory for a call: f(ptr, len), the room given back after.
 function withBytes(bytes, f) {
   var p = W.cc_alloc(bytes.length) >>> 0;
-  if (!p) throw new Error("there's no memory left for the engine here");
+  if (!p) throw noMemory("the engine");
   mem(p, bytes.length).set(bytes);
   try { return f(p, bytes.length); } finally { W.cc_free(p, bytes.length); }
 }
 function text(s) { return new TextEncoder().encode(s); }
+// (Short of memory: nothing's wrong with what's kept, which stays.)
+function noMemory(what) {
+  var e = new Error("this browser has no more memory to give " + what + " here");
+  e.memory = true;
+  return e;
+}
 
 // ------------------------------------------------------------------ the browser's store
 // Its private files (the Origin Private File System, written and read in place from a worker), or its cache.
@@ -148,7 +156,7 @@ function readKeptInto(name, size, into, report) {
         try {
           if (h.getSize() !== size) throw new Error("the kept model isn't whole");
           var p = into(size);
-          if (!p) throw new Error("there's no memory left for the model here");
+          if (!p) throw noMemory("the model");
           for (var at = 0; at < size;) {
             var n = h.read(mem(p + at, Math.min(CHUNK, size - at)), { at: at });
             if (n <= 0) throw new Error("the kept model couldn't be read");
@@ -161,7 +169,7 @@ function readKeptInto(name, size, into, report) {
     return cache().then(function (c) { return c.match(cacheKey(name)); }).then(function (r) {
       if (!r || !r.body) throw new Error("the kept model isn't there");
       var p = into(size), at = 0, reader = r.body.getReader();
-      if (!p) throw new Error("there's no memory left for the model here");
+      if (!p) throw noMemory("the model");
       return (function more() {
         return reader.read().then(function (x) {
           if (x.done) { if (at !== size) throw new Error("the kept model isn't whole"); return; }
@@ -236,15 +244,16 @@ function prepare(id) {
   var go = function () {
     return Promise.all([engine(), model()]).then(function (r) {
       var m = r[1], n = names(m);
-      return status().then(function (s) {
+      return Promise.all([status(), refusal(m)]).then(function (k) {
+        var s = k[0], taken = k[1];
         if (s.kept) {
-          return load(id, m, n, s.kept_bytes).catch(function (err) {
-            if (broken) throw err;
+          return load(id, m, n, s.kept_bytes, taken).catch(function (err) {
+            if (broken || err.memory) throw err;
             // (A kept file this engine can't use, or a half-kept one: made again.)
-            return Promise.all([unkeep(n.whole), unkeep(n.model), unkeep(n.anchor)]).then(function () { return fresh(id, m, n); });
+            return Promise.all([unkeep(n.whole), unkeep(n.model), unkeep(n.anchor)]).then(function () { return fresh(id, m, n, taken); });
           });
         }
-        return fresh(id, m, n);
+        return fresh(id, m, n, taken);
       });
     });
   };
@@ -254,16 +263,18 @@ function prepare(id) {
   });
 }
 
-// The kept model, read into the module's memory and loaded; the first message's reading too, if it's kept.
-function load(id, m, n, size) {
+// The kept model, read into the module's memory and loaded (with its refusal direction, if it has one); the first
+// message's reading too, if it's kept.
+function load(id, m, n, size, taken) {
   var last = 0;
   return readKeptInto(n.model, size, function (len) { return W.cc_model_alloc(len) >>> 0; }, function (done, total) {
     if (Date.now() - last > 200 || done === total) { last = Date.now(); post(id, "progress", { stage: "loading", done: done, total: total }); }
-  }).then(function () { return refusal(m); }).then(function (r) { return loaded(m, n, r); });
+  }).then(function () { return loaded(m, n, taken); });
 }
 
 // The model's refusal direction, where Chat Computer gives one beside the engine (as the program finds it:
-// chat-computer-model find-refusal), checked against its pinned SHA-256: taken out as the model runs.
+// chat-computer-model find-refusal), checked against its pinned SHA-256 before anything else is done: taken out as
+// the model runs.
 function refusal(m) {
   if (!m.refusal) return Promise.resolve(null);
   return fetch(HERE + m.refusal.name).then(function (r) {
@@ -300,7 +311,7 @@ function loaded(m, n, refusalBytes) {
 }
 
 // Downloaded, checked, made, kept and loaded.
-function fresh(id, m, n) {
+function fresh(id, m, n, taken) {
   var total = downloadBytes(m), got = 0, last = 0;
   function progress(stage, done, all) {
     if (Date.now() - last > 200 || done === all) { last = Date.now(); post(id, "progress", { stage: stage, done: done, total: all }); }
@@ -322,7 +333,7 @@ function fresh(id, m, n) {
         post(id, "progress", { stage: "not-kept", done: 0, total: 0, why: String(err && err.message || err) });
         return Promise.all([unkeep(n.model), unkeep(n.whole)]);
       });
-  }).then(function () { return refusal(m); }).then(function (r) { return loaded(m, n, r); });
+  }).then(function () { return loaded(m, n, taken); });
 }
 
 // Whether this device has the memory to run the model, and the browser room to keep its file (its own estimate; the
@@ -348,7 +359,7 @@ function gb(b) { return (b / 1e9).toFixed(1) + " GB"; }
 // A file already in the engine's format (Chat Computer's tests give one), straight into the module's memory.
 function fetchModelFile(m, f, counted) {
   var p = W.cc_model_alloc(f.size) >>> 0, h = W.cc_hash_new();
-  if (!p) return Promise.reject(new Error("there's no memory left for the model here"));
+  if (!p) return Promise.reject(noMemory("the model"));
   return stream(fileUrl(m, f), 0, f.size, function (chunk, at) {
     mem(p + at, chunk.length).set(chunk);
     call("cc_hash_update", h, p + at, chunk.length);
@@ -369,7 +380,7 @@ function fetchAndConvert(m, counted) {
     .sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
   if (!weights.length) return Promise.reject(new Error("the model has no weights files"));
   var stage = W.cc_alloc(STAGE) >>> 0;
-  if (!stage) return Promise.reject(new Error("there's no memory left for the engine here"));
+  if (!stage) return Promise.reject(noMemory("the engine"));
   call("cc_convert_new", m.bits);
   // Bytes from the download, through the module: hashed, and (for a weights file) fed to the converter.
   function take(h, file, chunk, at) {
@@ -417,8 +428,11 @@ function fetchAndConvert(m, counted) {
       });
     }, Promise.resolve());
   }).then(function () {
-    call("cc_convert_finish");
     W.cc_free(stage, STAGE);
+    call("cc_convert_finish");
+  }, function (err) {
+    if (!broken) W.cc_free(stage, STAGE);
+    throw err;
   });
 }
 
@@ -467,7 +481,8 @@ function piece(url, from, end, take) {
         last = Date.now();
         var c = r.value.length > want - got ? r.value.subarray(0, want - got) : r.value;
         got += c.length;
-        if (c.length) take(c);
+        // (What's done with the bytes going wrong isn't the network's doing: not asked for again.)
+        try { if (c.length) take(c); } catch (e) { e.fatal = true; throw e; }
         return got < want ? more() : reader.cancel().catch(function () {});
       });
     })();
@@ -491,19 +506,22 @@ function suited(read, ms) { return ms < 60 ? Math.min(64, read * 2) : ms > 250 ?
 
 function requestBytes(r) { return text(JSON.stringify(r)); }
 
-// Reads the first message ahead of the question; kept for later visits once read.
+// Reads the first message ahead of the question; kept for later visits once read. A question asked meanwhile takes
+// over at once: what's read so far stays read, and the question's own reading goes on from there.
 function ahead(id, request) {
   if (!info) return Promise.reject(new Error("the model isn't ready"));
   withBytes(requestBytes(request), function (p, len) { call("cc_ahead", p, len); });
-  var tokens = outJson().tokens, read = 8, done = 0;
+  var tokens = outJson().tokens, read = 8, done = 0, over = false;
   function more() {
+    if (asking > 0) return Promise.resolve();
     var t = Date.now(), r = call("cc_ahead_step", read);
     done = r ? Math.min(tokens, done + read) : tokens;
     post(id, "reading", { done: done, total: tokens });
     read = suited(read, Date.now() - t);
-    return r ? breathe().then(more) : keepAnchor();
+    if (!r) { over = true; return keepAnchor(); }
+    return breathe().then(more);
   }
-  return more().then(function () { return { tokens: tokens }; });
+  return more().then(function () { return { tokens: tokens, read: over }; });
 }
 
 // The first message's reading, kept when it's new (so the next visit starts from it).
@@ -538,7 +556,11 @@ function chat(id, request) {
     delete stopped[id];
     post(id, "delta", { delta: { content: "" }, finish_reason: end.finish_reason, usage: end.usage });
     return keepAnchor().then(function () { return end; });
-  }, function (err) { delete stopped[id]; throw err; });
+  }, function (err) {
+    delete stopped[id];
+    if (!broken) { try { call("cc_stop"); } catch (x) {} }     // (the turn ends here, so the next can begin)
+    throw err;
+  });
 }
 
 // ------------------------------------------------------------------ forgetting

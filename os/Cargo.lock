@@ -129,5 +129,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "webengine"
+version = "0.1.0"
+dependencies = [
+ "crypto",
+ "model",
+]
+
+[[package]]
 name = "zip"
 version = "0.1.0"

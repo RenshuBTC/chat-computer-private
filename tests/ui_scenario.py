@@ -1,5 +1,5 @@
-"""Full Chat Computer run on a virtual display: real window, real WebKit, real Claude Code engine
-(against the mock Claude API), real tools, real speech models with a fake microphone.
+"""Full Chat Computer run on a virtual display: real window, real WebKit, the real brain (its agent loop, against a
+stand-in for the model's server), real tools, real speech models with a fake microphone.
 
 Run:  xvfb-run -s "-screen 0 1920x1080x24" dbus-run-session python tests/ui_scenario.py OUTDIR
 Writes screenshots and result.json to OUTDIR.
@@ -22,7 +22,7 @@ sys.path.insert(0, str(HERE.parent))
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/chatcomputer-ui")
 OUT.mkdir(parents=True, exist_ok=True)
 for k in list(os.environ):
-    if k.startswith(("CLAUDE", "ANTHROPIC")) or k.lower() in ("https_proxy", "http_proxy"):
+    if k.lower() in ("https_proxy", "http_proxy"):
         os.environ.pop(k, None)
 HOME = OUT / "home"
 HOME.mkdir(exist_ok=True)
@@ -31,8 +31,7 @@ os.environ["CHATCOMPUTER_HOME"] = str(HOME / "ChatComputer")
 os.environ.setdefault("CHATCOMPUTER_GPU", "0")
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 
-from mock_anthropic import (MockAnthropic, last_message_is_tool_result, last_user_text, text_block,  # noqa: E402
-                            tool_use_block, tool_results)
+from mock_model import FakeModelService, MockModel, call, last_is_tool_result, last_user_text, tool_results  # noqa: E402
 
 # ------------------------------------------------------------------ a small local "website"
 SITE = OUT / "site"
@@ -57,45 +56,43 @@ httpd = socketserver.TCPServer(("127.0.0.1", 0), lambda *a: Quiet(*a, directory=
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 SITE_URL = f"http://127.0.0.1:{httpd.server_address[1]}/"
 
-# ------------------------------------------------------------------ scripted Claude
-mock = MockAnthropic()
+# ------------------------------------------------------------------ the scripted model
+mock = MockModel()
 mock.start()
 step = {"n": 0}
 
 
 def rule(req):
     said = last_user_text(req).split("\n")[-1]
-    if last_message_is_tool_result(req):
+    if last_is_tool_result(req):
         res = json.dumps(tool_results(req))
         if "Clicked" in res:
-            return [text_block("It's playing now.")]
-        if "elements" in said or "[1]" in res:
-            pass
+            return ["It's playing now."]
         if "Showing: Test Video Site" in res:
-            return [tool_use_block("mcp__chatcomputer__click", {"text": "Calm piano music"})]
+            return [call("click", text="Calm piano music")]
         if "Back to the conversation" in res:
-            return [text_block("Here we are. The piano video is still loaded, so just say play whenever you want "
-                               "it back. Or tell me what else you'd like to do this evening: I can find a recipe, "
-                               "check tomorrow's weather, or put on something else.")]
+            return ["Here we are. The piano video is still loaded, so just say play whenever you want "
+                    "it back. Or tell me what else you'd like to do this evening: I can find a recipe, "
+                    "check tomorrow's weather, or put on something else."]
         if "Showing the document" in res:
-            return [text_block("I've put the plan on the screen.")]
-        return [text_block("Done.")]
+            return ["I've put the plan on the screen."]
+        return ["Done."]
     if "piano" in said.lower():
-        return [text_block("Sure, opening the video site."),
-                tool_use_block("mcp__chatcomputer__show_website", {"url": SITE_URL})]
+        return ["Sure, opening the video site.", call("show_website", url=SITE_URL)]
     if "chat" in said.lower() or "conversation" in said.lower():
-        return [tool_use_block("mcp__chatcomputer__show_conversation", {})]
+        return [call("show_conversation")]
     if "plan" in said.lower():
-        return [tool_use_block("mcp__chatcomputer__show_document", {"title": "Plan for Saturday", "markdown":
+        return [call("show_document", title="Plan for Saturday", markdown=
                 "## Morning\n- Run at **7am** by the river\n- Breakfast at Tiong Bahru\n\n## Afternoon\n"
-                "| Time | What |\n|---|---|\n| 2pm | Library |\n| 5pm | Groceries |\n\nRemember to bring the *library card*."})]
-    return [text_block("Hello! I'm Chat Computer. Tell me what you'd like to do, and I'll handle it.")]
+                "| Time | What |\n|---|---|\n| 2pm | Library |\n| 5pm | Groceries |\n\nRemember to bring the *library card*.")]
+    return ["Hello! I'm Chat Computer. Tell me what you'd like to do, and I'll handle it."]
 
 
 mock.rules.append(rule)
 
 # ------------------------------------------------------------------ Chat Computer
-from chatcomputer.config import Paths, Settings, save_token  # noqa: E402
+import chatcomputer.controller as controller_module  # noqa: E402
+from chatcomputer.config import Paths, Settings  # noqa: E402
 from chatcomputer.controller import Controller  # noqa: E402
 from chatcomputer.platform.fake import FakePlatform  # noqa: E402
 from chatcomputer.platform.linux import LinuxPlatform  # noqa: E402
@@ -105,7 +102,8 @@ from chatcomputer.voice.audio import FakeMic, FakePlayer  # noqa: E402
 paths = Paths().ensure()
 from chatcomputer.journal import setup_logging  # noqa: E402
 setup_logging(paths, verbose=True)
-save_token(paths, "sk-ant-api03-" + "t" * 40)
+# The model's server is the stand-in: the controller's ModelService gives its port.
+controller_module.ModelService = lambda *a, **k: FakeModelService(mock)
 settings = Settings(user_name="Ren Shu", windows_user="rensh", stt_model=os.environ.get("CHATCOMPUTER_TEST_STT", "base.en"))
 # Pretend-monitor size and viewing distance (the virtual display always reports 96 dpi).
 settings.screen_inches = float(os.environ.get("UITEST_INCHES", "0") or 0)
@@ -146,7 +144,7 @@ if (MODELS / "kokoro-v1.0.int8.onnx").exists():
 wd = MODELS / "whisper" / f"faster-whisper-{settings.stt_model}"
 if (wd / "model.bin").exists():
     from chatcomputer.voice.stt import STT
-    stt = STT(str(wd), "en", hint="Claude, Ren Shu, YouTube")
+    stt = STT(str(wd), "en", hint="Computer, Ren Shu, YouTube")
 
 result = {"steps": [], "ok": False}
 holder = {}
@@ -154,7 +152,7 @@ holder = {}
 
 def factory(screen):
     c = Controller(paths, settings, platform, screen, voice=True, mic_factory=lambda cb: mics.append(FakeMic(cb)) or mics[-1],
-                   player=player, stt=stt, tts=tts, index=True, extra_env={"ANTHROPIC_BASE_URL": mock.url}, greet=True)
+                   player=player, stt=stt, tts=tts, index=True, greet=True)
     holder["c"] = c
     return c
 
@@ -164,8 +162,8 @@ def shot(name):
     (OUT / f"{name}.png").write_bytes(png)
 
 
-def chat_log_text(screen):
-    """The conversation as the page shows it."""
+def page_value(screen, js):
+    """What a bit of script gives on the conversation page (as text)."""
     from gi.repository import GLib
     box, done_ev = {}, threading.Event()
 
@@ -175,10 +173,14 @@ def chat_log_text(screen):
         except Exception as exc:
             box["text"] = f"(error: {exc})"
         done_ev.set()
-    GLib.idle_add(lambda: screen.chat.evaluate_javascript(
-        "document.getElementById('log').innerText", -1, None, None, None, done, None) and False)
+    GLib.idle_add(lambda: screen.chat.evaluate_javascript(js, -1, None, None, None, done, None) and False)
     done_ev.wait(10)
     return box.get("text", "")
+
+
+def chat_log_text(screen):
+    """The conversation as the page shows it."""
+    return page_value(screen, "document.getElementById('log').innerText")
 
 
 def speak_into_mic(text):
@@ -211,7 +213,8 @@ def scenario():
         shot("02-website")
         info = asyncio.run_coroutine_threadsafe(c.screen.content_info(), loop).result(10)
         result["steps"].append({"after_voice": info, "requests": len(mock.requests),
-                                "heard": [last_user_text(r)[-60:] for r in mock.requests[:1]]})
+                                # (the first request is the brain's warm-up, which says only ".")
+                                "heard": [last_user_text(r)[-60:] for r in mock.requests[1:2]]})
 
         # 2. Back to the conversation (typed, like an optional keyboard).
         asyncio.run_coroutine_threadsafe(c.handle("go back to the chat"), loop).result(10)
@@ -232,7 +235,7 @@ def scenario():
         time.sleep(4)
         shot("05-sleeping")
         result["steps"].append({"asleep": c.asleep})
-        asyncio.run_coroutine_threadsafe(c.handle("Claude"), loop).result(10)
+        asyncio.run_coroutine_threadsafe(c.handle("Computer"), loop).result(10)
         time.sleep(1)
         result["steps"].append({"awake_after_wake_word": not c.asleep})
 
@@ -246,8 +249,11 @@ def scenario():
         time.sleep(8)
         after = chat_log_text(c.screen)
         shot("06-after-renderer-crash")
-        result["steps"].append({"rebuilt_after_renderer_crash": bool(before.strip()) and after.strip() == before.strip(),
-                                "drawing_with_processor": os.environ.get("WEBKIT_SKIA_ENABLE_CPU_RENDERING") == "1"})
+        # (The page comes back with the conversation's messages; the greeting it started with isn't one of them.)
+        rebuilt = "Play some calm piano music" in after and before.strip().endswith(after.strip())
+        result["steps"].append({"rebuilt_after_renderer_crash": rebuilt,
+                                "drawing_with_processor": os.environ.get("WEBKIT_SKIA_ENABLE_CPU_RENDERING") == "1",
+                                **({} if rebuilt else {"before": before[-800:], "after": after[-800:]})})
         # 6. AirTouch: the keyboard comes up (a beckon), eight dots on it, two keys typed into the conversation.
         class FakeAirTouch:
             keyboards = []
@@ -276,7 +282,7 @@ def scenario():
             time.sleep(0.6)
         time.sleep(1.0)
         shot("08-airtouch-typed")
-        typed = c.screen.typed
+        typed = page_value(c.screen, "document.getElementById('input').value")
         loop.call_soon_threadsafe(c._on_airtouch, ("key",) + key_at("hide keyboard"))
         time.sleep(1.0)
         loop.call_soon_threadsafe(c._on_airtouch, ("dots", [(400.0, 300.0, "point"), (900.0, 320.0, "pinch")]))
@@ -286,7 +292,7 @@ def scenario():
                                 "keyboard_away": not c.keyboard_up and c.airtouch.keyboards[-1] is None})
         c.airtouch = None
         result["spoken_chunks"] = len(player.played)
-        result["tool_results"] = [json.dumps(tool_results(r))[:300] for r in mock.requests if last_message_is_tool_result(r)]
+        result["tool_results"] = [json.dumps(tool_results(r))[:300] for r in mock.requests if last_is_tool_result(r)]
         result["ok"] = True
     except Exception:
         result["error"] = traceback.format_exc()

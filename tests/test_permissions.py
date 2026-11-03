@@ -217,7 +217,7 @@ def test_gate_allows_reads_and_blocks_secrets(tmp_path):
     gate, asked, paths = make_gate(tmp_path, [])
     r = run(gate("Read", {"file_path": str(tmp_path / "x.txt")}))
     assert r.behavior == "allow"
-    r = run(gate("Read", {"file_path": str(paths.token_file)}))
+    r = run(gate("Read", {"file_path": str(paths.secrets / "accounts.json")}))
     assert r.behavior == "deny"
     r = run(gate("Grep", {"pattern": "x", "path": str(paths.secrets)}))
     assert r.behavior == "deny"
@@ -289,7 +289,7 @@ def test_sign_in_files_cant_be_read_with_tools(tmp_path):
     from chatcomputer.journal import Journal
     paths = Paths(tmp_path / "ChatComputer").ensure()
     gate = PermissionGate(paths, Journal(paths), None, {})
-    for f in (paths.login_file, tmp_path / "Users/rensh/ChatComputer/claude_login.json",
+    for f in (paths.engine / ".credentials.json", tmp_path / "Users/rensh/ChatComputer/claude_login.json",
               tmp_path / "Users/rensh/ChatComputer/claude_token"):
         res = asyncio.run(gate("Read", {"file_path": str(f)}))
         assert res.behavior == "deny", f
@@ -298,7 +298,7 @@ def test_sign_in_files_cant_be_read_with_tools(tmp_path):
 def test_commands_cant_reach_the_private_files_by_wildcard_or_search(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     gate, asked, paths = make_gate(tmp_path, [])
-    paths.token_file.write_text("sk-ant-oat01-" + "x" * 40 + "\n")
+    (paths.secrets / "accounts.json").write_text("sk-ant-oat01-" + "x" * 40 + "\n")
     (tmp_path / "Documents").mkdir()
     (tmp_path / "Documents" / "tax.txt").write_text("tax")
     for cmd in ("grep -r sk-ant ~", "grep -ri token .", "rg sk-ant", "rg -e sk-ant ~/ChatComputer",
@@ -315,7 +315,7 @@ def test_commands_cant_reach_the_private_files_by_wildcard_or_search(tmp_path, m
 def test_a_cd_in_one_command_cant_set_up_the_next(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     gate, asked, paths = make_gate(tmp_path, [])
-    paths.token_file.write_text("sk-ant-oat01-" + "x" * 40 + "\n")
+    (paths.secrets / "accounts.json").write_text("sk-ant-oat01-" + "x" * 40 + "\n")
     (tmp_path / "Documents").mkdir()
     assert run(gate("Bash", {"command": "cd ~/Documents"})).behavior == "allow"
     assert run(gate("Bash", {"command": "cat ../ChatComputer/secrets/*"})).behavior == "deny"

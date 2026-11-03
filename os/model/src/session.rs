@@ -27,10 +27,18 @@ pub struct Session<'m> {
     seen: Vec<u32>,
     /// The scores after the last of them.
     logits: Vec<f32>,
-    /// With the scores where each was taken.
-    snapshots: Vec<(Snapshot, Vec<f32>)>,
+    /// With the scores where each was taken (none for the anchor), and whether it's kept for good.
+    snapshots: Vec<Kept>,
     /// The model's recent answers, how it was asked for them (thinking or not), and their tokens.
     answers: Vec<(Answer, bool, Vec<u32>)>,
+}
+
+/// A snapshot kept, with the scores where it was taken (empty when the reading goes on past it), and whether it's
+/// the anchor: where the system prompt ends, which every conversation starts with, kept for good (and on disk).
+struct Kept {
+    snap: Snapshot,
+    logits: Vec<f32>,
+    anchor: bool,
 }
 
 /// How a request went.
@@ -98,7 +106,10 @@ impl<'m> Session<'m> {
         let think = r.options.think.unwrap_or(self.style.thinks);
         let prompt = self.prompt(r)?;
         let mut stats = Stats { prompt: prompt.len(), ..Stats::default() };
-        stats.read = self.read(&prompt, pool);
+        // The anchor: where the first message (the system prompt, with the tools) ends.
+        let end = self.model.tokenizer.special("<|im_end|>");
+        let anchor = prompt.iter().position(|&t| Some(t) == end).map(|i| i + 1);
+        stats.read = self.read_anchored(&prompt, anchor, pool);
         // Where the prompt ends: the next request starts the same way, then this answer.
         self.keep_snapshot();
         let tok = &self.model.tokenizer;
@@ -144,6 +155,11 @@ impl<'m> Session<'m> {
     /// Brings the state to having read `tokens`, reusing what it has read as far as that's the same; how many
     /// tokens it read.
     pub fn read(&mut self, tokens: &[u32], pool: &dyn Pool) -> usize {
+        self.read_anchored(tokens, None, pool)
+    }
+
+    /// The same, with a snapshot kept for good where `anchor` is (if the reading passes it).
+    pub fn read_anchored(&mut self, tokens: &[u32], anchor: Option<usize>, pool: &dyn Pool) -> usize {
         let same = self.seen.iter().zip(tokens).take_while(|(a, b)| a == b).count();
         if tokens.is_empty() {
             return 0;
@@ -153,7 +169,7 @@ impl<'m> Session<'m> {
                 return 0;
             }
             // A prompt read before (asked again): back to where it ended, scores and all.
-            if let Some(i) = self.snapshots.iter().rposition(|(s, _)| s.pos == same) {
+            if let Some(i) = self.snapshots.iter().rposition(|k| k.snap.pos == same && !k.logits.is_empty()) {
                 self.back_to(i);
                 return 0;
             }
@@ -162,7 +178,7 @@ impl<'m> Session<'m> {
             // Back to the last snapshot at or before where they part (at least one token before the end: the
             // scores after the last are needed), or to the start.
             let limit = same.min(tokens.len() - 1);
-            match self.snapshots.iter().rposition(|(s, _)| s.pos <= limit) {
+            match self.snapshots.iter().rposition(|k| k.snap.pos <= limit) {
                 Some(i) => self.back_to(i),
                 None => {
                     self.state = self.model.state();
@@ -172,33 +188,59 @@ impl<'m> Session<'m> {
             }
         }
         let from = self.seen.len();
-        self.model.forward(&mut self.state, &tokens[from..], Some(&mut self.logits), pool);
-        self.seen.extend_from_slice(&tokens[from..]);
+        if let Some(a) = anchor.filter(|&a| from < a && a < tokens.len()) {
+            self.model.forward(&mut self.state, &tokens[from..a], None, pool);
+            self.seen.extend_from_slice(&tokens[from..a]);
+            self.snapshots.retain(|k| !k.anchor);
+            self.snapshots.push(Kept { snap: self.state.snapshot(), logits: Vec::new(), anchor: true });
+        }
+        let at = self.seen.len();
+        self.model.forward(&mut self.state, &tokens[at..], Some(&mut self.logits), pool);
+        self.seen.extend_from_slice(&tokens[at..]);
         tokens.len() - from
     }
 
     /// Back to snapshot i (those after it no longer apply).
     fn back_to(&mut self, i: usize) {
         self.snapshots.truncate(i + 1);
-        let (snap, logits) = &self.snapshots[i];
-        self.state.rewind(snap);
-        self.logits.copy_from_slice(logits);
-        self.seen.truncate(snap.pos);
+        let k = &self.snapshots[i];
+        self.state.rewind(&k.snap);
+        if !k.logits.is_empty() {
+            self.logits.copy_from_slice(&k.logits);
+        }
+        self.seen.truncate(k.snap.pos);
     }
 
     fn keep_snapshot(&mut self) {
-        if self.snapshots.last().is_some_and(|(s, _)| s.pos == self.state.pos) {
+        if self.snapshots.last().is_some_and(|k| k.snap.pos == self.state.pos && !k.logits.is_empty()) {
             return;
         }
-        if self.snapshots.len() >= SNAPSHOTS {
-            self.snapshots.remove(0);
+        if self.snapshots.iter().filter(|k| !k.anchor).count() >= SNAPSHOTS
+            && let Some(oldest) = self.snapshots.iter().position(|k| !k.anchor)
+        {
+            self.snapshots.remove(oldest);
         }
-        self.snapshots.push((self.state.snapshot(), self.logits.clone()));
+        self.snapshots.push(Kept { snap: self.state.snapshot(), logits: self.logits.clone(), anchor: false });
+    }
+
+    /// The anchor, to be kept on disk: the tokens up to it, and the state there (its keys and values are the
+    /// state's own up to there).
+    pub fn anchor(&self) -> Option<(&[u32], &State, &Snapshot)> {
+        let k = self.snapshots.iter().find(|k| k.anchor)?;
+        Some((&self.seen[..k.snap.pos], &self.state, &k.snap))
+    }
+
+    /// Starts from an anchor kept on disk: as if `tokens` had been read (state is the state there).
+    pub fn restore(&mut self, tokens: Vec<u32>, state: State) {
+        let snap = state.snapshot();
+        self.state = state;
+        self.seen = tokens;
+        self.snapshots = vec![Kept { snap, logits: Vec::new(), anchor: true }];
     }
 
     /// The memory the conversation takes (the attention layers' keys and values, and the snapshots).
     pub fn bytes(&self) -> usize {
-        self.state.cache_bytes() + self.snapshots.iter().map(|(s, l)| s.bytes() + 4 * l.len()).sum::<usize>()
+        self.state.cache_bytes() + self.snapshots.iter().map(|k| k.snap.bytes() + 4 * k.logits.len()).sum::<usize>()
     }
 
     /// Forgets everything read.

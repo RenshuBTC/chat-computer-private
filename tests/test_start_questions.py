@@ -103,7 +103,7 @@ def _run(c, coro_fn):
 
 def _offer(**kw):
     return update.Offer(**{"source": Path("/mnt/windows/Users/Ren Shu/Downloads/ChatComputer/ChatComputer"), "changed": 3,
-                           "version": "0.2.0", "needs_setup": False, **kw})
+                           "version": "0.3.0", "needs_setup": False, **kw})
 
 
 # ------------------------------------------------------------------ a new version of Chat Computer
@@ -113,7 +113,7 @@ def test_a_new_version_is_offered_on_screen_and_installed(tmp_path, monkeypatch,
     asked = _answering(c, "yes")
     assert _run(c, c._offer_update) is True
     question, typed = asked[0]
-    assert "new version of Chat Computer (0.2.0)" in question and typed is True  # shown, not said
+    assert "new version of Chat Computer (0.3.0)" in question and typed is True  # shown, not said
     assert _calls(c.platform, "update_app") == [()]
     assert c.exit_code == 3 and ("quit", None) in screen.events                # the session starts it again at once
     assert any("Updated" in n for n in _notices(screen))
@@ -413,17 +413,14 @@ def test_the_tools_that_work_on_what_s_open_are_claude_s_own():
     assert C.SCREEN_TOOLS <= set(re.findall(r'@reg\("([a-z_]+)"', src))
 
 
-def test_typed_text_reaches_claude_as_typed(tmp_path, monkeypatch):
+def test_typed_text_reaches_the_model_as_typed(tmp_path, monkeypatch):
     c, screen = _controller(tmp_path, monkeypatch)
     asks = []
 
     async def ask(text, typed=False):
         asks.append((text, typed))
     c.brain = SimpleNamespace(busy=False, last_activity=0.0, ask=ask, current_origin="here")
-
-    async def online():
-        return True
-    c._online_now = online
+    c.model = SimpleNamespace(ready=True)
 
     async def run():
         c.loop = asyncio.get_running_loop()
@@ -431,7 +428,7 @@ def test_typed_text_reaches_claude_as_typed(tmp_path, monkeypatch):
         await c.handle("what's on today", typed=True)
     asyncio.run(run())
     assert asks and asks[-1][1] is True and not c.asleep
-    # Claude is told it was typed, so it answers like a chat message (see prompt.py).
+    # The model is told it was typed, so it answers like a chat message (see prompt.py).
     note, words = asks[-1][0].split("\n", 1)
     assert note.startswith("[") and note.endswith(" · typed]") and words == "what's on today"
 
@@ -447,17 +444,14 @@ def test_a_web_address_typed_alone_opens_its_site_at_once(tmp_path, monkeypatch)
     assert answers.typed_address("go to github.com/anthropics") == "https://github.com/anthropics"
     for other in ("notes.md", "open main.rs", "what is youtube.com", "e.g.", "3.14", "hello", "youtube", "google.com is slow"):
         assert answers.typed_address(other) is None, other
-    # It opens at once, in the middle, without a turn of Claude's, and Actions says so (linked to the message).
+    # It opens at once, in the middle, without a turn of the model's, and Actions says so (linked to the message).
     c, screen = _controller(tmp_path, monkeypatch)
     asks = []
 
     async def ask(text, typed=False):
         asks.append(text)
     c.brain = SimpleNamespace(busy=False, last_activity=0.0, ask=ask, current_origin="here")
-
-    async def online():
-        return True
-    c._online_now = online
+    c.model = SimpleNamespace(ready=True)
 
     async def run():
         c.loop = asyncio.get_running_loop()

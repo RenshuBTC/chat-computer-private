@@ -28,6 +28,8 @@ mod nfc_table;
 pub mod quant;
 pub mod sample;
 pub mod session;
+#[doc(hidden)]
+pub mod testing;
 #[cfg(feature = "std")]
 pub mod threads;
 pub mod token;

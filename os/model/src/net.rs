@@ -782,4 +782,58 @@ impl State {
     pub fn cache_bytes(&self) -> usize {
         self.full.iter().map(|c| 4 * (c.k.len() + c.v.len())).sum()
     }
+
+    /// The state as it was at `snap` (taken from this state), as bytes: the attention layers' keys and values up to
+    /// there (this state's own, which only adds to them) and the snapshot's linear-attention memories.
+    pub fn export(&self, snap: &Snapshot) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(snap.pos as u64).to_le_bytes());
+        let put = |v: &[f32], out: &mut Vec<u8>| {
+            for x in v {
+                out.extend_from_slice(&x.to_le_bytes());
+            }
+        };
+        for c in &self.full {
+            let per = c.k.len() / self.pos.max(1);
+            put(&c.k[..snap.pos * per], &mut out);
+            put(&c.v[..snap.pos * per], &mut out);
+        }
+        for r in &snap.linear {
+            put(&r.conv, &mut out);
+            put(&r.state, &mut out);
+        }
+        out
+    }
+}
+
+impl Model<'_> {
+    /// A state from what State::export wrote for this same model (None if it doesn't fit it).
+    pub fn import(&self, bytes: &[u8]) -> Option<State> {
+        let mut st = self.state();
+        let pos = u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?) as usize;
+        let s = &self.settings;
+        let kvd = s.kv_heads * s.head_dim;
+        let full = st.full.len();
+        let linear: usize = st.linear.iter().map(|r| r.conv.len() + r.state.len()).sum();
+        let want = pos.checked_mul(kvd)?.checked_mul(2 * full)?.checked_add(linear)?.checked_mul(4)?.checked_add(8)?;
+        if bytes.len() != want || pos > s.context {
+            return None;
+        }
+        let mut at = 8;
+        let mut take = |n: usize| -> Vec<f32> {
+            let v = bytes[at..at + 4 * n].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+            at += 4 * n;
+            v
+        };
+        for c in st.full.iter_mut() {
+            c.k = take(pos * kvd);
+            c.v = take(pos * kvd);
+        }
+        for r in st.linear.iter_mut() {
+            r.conv = take(r.conv.len());
+            r.state = take(r.state.len());
+        }
+        st.pos = pos;
+        Some(st)
+    }
 }

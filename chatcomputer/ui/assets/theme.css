@@ -13,7 +13,7 @@
    Chat Computer dims the screen itself ("brightness", the night light). No dark mode, and no grey text but one: the
    empty message box's hint, dimmed (--dim), with the send button grey in the same shade until there's something
    to send, as in ChatGPT. The other colours are the light grey of your messages' bubbles (black on it is still
-   16.5:1, and it stands off the background as #EDEDED did off white), which sets your words apart from Claude's the
+   16.5:1, and it stands off the background as #EDEDED did off white), which sets your words apart from Chat Computer's the
    way chat apps do, and a little darker grey for lines (--line), as thin lines need more contrast than filled areas
    to show as well. The message box is white (--paper), set off from the background with a thin line and a soft
    shadow, as the Claude app's is; the sidebars are a shade darker than the background (--side, as the Claude app's
@@ -54,7 +54,7 @@ body { font-family: var(--sans); font-size: 1rem; line-height: 1.375; }
 /* Selected text (to copy it) is shown the other way round: white on black. */
 ::selection { background: var(--ink); color: var(--ground); }
 
-/* Claude's words as written (Markdown), in the same font and size as everything else. */
+/* Chat Computer's words as written (Markdown), in the same font and size as everything else. */
 .md p { margin: 0 0 1em; }
 .md p:last-child { margin-bottom: 0; }
 .md h1 { font-size: 1.5rem; }

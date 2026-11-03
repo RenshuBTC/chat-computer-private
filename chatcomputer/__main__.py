@@ -2,9 +2,9 @@
 
   python -m chatcomputer run [--windowed] [--no-voice] [--fake]   start Chat Computer (the session runs this)
   python -m chatcomputer doctor                                   health check (JSON); exit 0 if usable
-  python -m chatcomputer models [--download]                      voice model status / download
+  python -m chatcomputer models [--download]                      the voice's and the thinking model's status /
+                                                                  download (and making the thinking model ready)
   python -m chatcomputer say "text"                               speak a sentence (sound check)
-  python -m chatcomputer signin                                   save a new Claude sign-in token
 """
 from __future__ import annotations
 
@@ -12,24 +12,22 @@ import argparse
 import json
 import os
 import socket
-import subprocess
 import sys
 
 from . import __version__
-from .config import Paths, Settings, has_login, read_token, save_token, token_kind
+from .config import Paths, Settings
 
 
 def _doctor(paths: Paths, settings: Settings) -> int:
     report: dict = {"version": __version__}
     ok = True
     mods = {}
-    for mod in ("claude_agent_sdk", "sounddevice", "faster_whisper", "kokoro_onnx", "onnxruntime", "mss", "PIL", "numpy"):
+    for mod in ("sounddevice", "faster_whisper", "kokoro_onnx", "onnxruntime", "mss", "PIL", "numpy"):
         try:
             __import__(mod)
             mods[mod] = "ok"
         except Exception as exc:
             mods[mod] = f"missing ({exc.__class__.__name__})"
-            ok = ok and mod not in ("claude_agent_sdk",)
     try:
         import gi
         gi.require_version("Gtk", "3.0")
@@ -46,22 +44,15 @@ def _doctor(paths: Paths, settings: Settings) -> int:
     except Exception as exc:
         mods["cairo"] = f"missing ({exc.__class__.__name__}): AirTouch's dots and keyboard can't be drawn"
     report["modules"] = mods
-    try:
-        import claude_agent_sdk
-        cli = os.path.join(os.path.dirname(claude_agent_sdk.__file__), "_bundled", "claude")
-        r = subprocess.run([cli, "--version"], capture_output=True, text=True, timeout=30)
-        report["claude_engine"] = r.stdout.strip() or r.stderr.strip()[:200]
-    except Exception as exc:
-        report["claude_engine"] = f"unavailable ({exc})"
+    from .brain import models as llm
+    program = llm.engine_program()
+    m = llm.chosen(settings.model)
+    ready = llm.Store(paths.models).ready(m)
+    report["model"] = {"engine": program or "missing", "model": m.label,
+                       "ready": bool(ready), "file": str(ready) if ready else None,
+                       "memory_gb": round(llm.memory_bytes() / 2**30, 1)}
+    if not program:
         ok = False
-    kind = token_kind(read_token(paths))
-    if has_login(paths):
-        # The full sign-in Chat Computer Setup gives it (Claude Code's .credentials.json): the phone works too.
-        report["signed_in"] = "yes (Claude subscription, full sign-in)"
-    else:
-        report["signed_in"] = {"subscription": "yes (Claude subscription)", "api_key": "yes (API key)"}.get(kind, "no")
-        if kind == "invalid":
-            ok = False
     from .voice import models as M
     report["voice"] = M.status(paths, settings)
     try:
@@ -77,10 +68,10 @@ def _doctor(paths: Paths, settings: Settings) -> int:
     except Exception as exc:
         report["cameras"] = f"unknown ({exc.__class__.__name__})"
     try:
-        with socket.create_connection(("api.anthropic.com", 443), timeout=4):
+        with socket.create_connection(("huggingface.co", 443), timeout=4):
             report["internet"] = "ok"
     except OSError as exc:
-        report["internet"] = f"no ({exc.__class__.__name__})"
+        report["internet"] = f"no ({exc.__class__.__name__}): only needed to download the model, and for the web"
     report["display"] = os.environ.get("DISPLAY") or "none"
     if os.path.exists("/usr/local/libexec/chatcomputer/chatcomputer-root"):
         from .platform import get_platform
@@ -108,7 +99,6 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--download", action="store_true")
     sy = sub.add_parser("say")
     sy.add_argument("text")
-    sub.add_parser("signin")
     sub.add_parser("version")
     args = ap.parse_args(argv)
     paths = Paths().ensure()
@@ -120,10 +110,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "doctor":
         return _doctor(paths, settings)
     if args.cmd == "models":
+        from .brain import models as llm
         from .voice import models as M
         if args.download:
             M.download(paths, settings)
-        print(json.dumps(M.status(paths, settings), indent=2))
+            m = llm.chosen(settings.model)
+            progress = llm.Progress()
+            llm.Store(paths.models).prepare(m, progress, on_change=lambda p: print(m.label + ": " + p.words(),
+                                                                                    file=sys.stderr))
+        status = M.status(paths, settings)
+        m = llm.chosen(settings.model)
+        status["thinking_model"] = {"model": m.label, "ready": bool(llm.Store(paths.models).ready(m))}
+        print(json.dumps(status, indent=2))
         return 0
     if args.cmd == "say":
         import time
@@ -139,15 +137,6 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(0.1)
         time.sleep(0.3)
         return 0
-    if args.cmd == "signin":
-        print("Paste your Claude sign-in token (from 'claude setup-token' on any computer), then press Enter:")
-        tok = sys.stdin.readline().strip()
-        if token_kind(tok) == "invalid":
-            print("That doesn't look like a Claude token (it starts with sk-ant-).")
-            return 1
-        save_token(paths, tok)
-        print("Saved. Restart Chat Computer.")
-        return 0
     if args.cmd in (None, "run"):
         from .journal import setup_logging
         setup_logging(paths, verbose=getattr(args, "verbose", False))
@@ -157,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         voice = not getattr(args, "no_voice", False)
 
         def make_controller(screen):
-            # Loaded once the window shows (run_app): the controller brings in the Agent SDK, most of a second.
+            # Loaded once the window shows (run_app), so the window comes up first.
             from .controller import Controller
             return Controller(paths, settings, platform, screen, voice=voice,
                               airtouch=not (getattr(args, "no_airtouch", False) or getattr(args, "fake", False)),

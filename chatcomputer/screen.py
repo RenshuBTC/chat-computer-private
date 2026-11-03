@@ -8,7 +8,7 @@ from typing import Any
 class Screen:
     """Async interface to the one Chat Computer window: the conversation and the content layer."""
 
-    # --- content layer (websites, documents, files, pages Claude made)
+    # --- content layer (websites, documents, files, pages the model made)
     async def show_url(self, url: str, title: str | None = None) -> dict[str, Any]:
         """Opens an address in the middle; `title` names it at the top of its frame (else its site's name)."""
         raise NotImplementedError

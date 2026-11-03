@@ -1,9 +1,9 @@
 # Chat Computer architecture (internal contract)
 
-Goal: **hardware → thin Linux drivers (invisible) → Claude (user's subscription, over the internet) → the user
-(touchscreen + keyboard + phone + AirPods)**. Chat Computer is a conversational shell: you touch the screen as an iPad's,
-type (on a keyboard, or in the Claude app on the phone, which is then the keyboard) or talk (AirPods), and it's all
-one conversation.
+Goal: **hardware → thin Linux drivers (invisible) → Chat Computer's own model (one of Qwen's open models, run on the
+computer itself by Chat Computer's own engine: free, and nothing leaves the computer) → the user (touchscreen +
+keyboard + AirPods)**. Chat Computer is a conversational shell: you touch the screen as an iPad's, type or talk
+(AirPods), and it's all one conversation.
 Power on → boot menu ("Chat Computer" default, "Windows") → straight into the full-screen Chat Computer conversation.
 No login screen, no desktop environment, no display manager, no browser UI. Windows stays installed untouched.
 On an Apple silicon Mac (M1, M2, M3) it is the same: a second system next to macOS, on Fedora Asahi Remix instead
@@ -60,8 +60,10 @@ chat-computer/
                             the model's file format, its converter from Qwen's published files, the tokenizer, each
                             model's chat template as code, tool calls, sessions that read only what's new; the
                             program chat-computer-model (serve: OpenAI's chat completions API on 127.0.0.1, for
-                            this computer's programs and Chat Computer's own pages only; convert). See its README.md.
-                            On its way in, in place of Claude, everywhere
+                            this computer's programs and Chat Computer's own pages only; convert), built for Linux
+                            by release.sh into chatcomputer/brain/bin (x86-64 and ARM, static, reproducible: CI
+                            checks them). See its README.md. In place of Claude, everywhere: the Linux runtime
+                            thinks with it now; the apps and the own system next
     font/                   Own TrueType reader and rasterizer, variable fonts too (fvar/avar/gvar: the bold, from the same file)
     fonts/                  Fallback fonts for what Atkinson Hyperlegible lacks (arrows, maths, Greek, Cyrillic, emoji,
                             box drawing), cut and merged from Noto fonts by build.py
@@ -86,10 +88,11 @@ chat-computer/
                             menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
                             guides approving it (db Append) or turning Secure Boot off, then shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime
-  requirements-dev.txt      What its tests need besides those (pytest, the mock Claude API's aiohttp); the runtime's
+  requirements-dev.txt      What its tests need besides those (pytest, the stand-in model server's aiohttp); the runtime's
                             tests run as .github/workflows/python.yml does: a venv with the system's python3-gi and
                             python3-cairo, both requirements files, then pytest --ignore=tests/test_rendering.py
-  tests/                    Python tests for the runtime (+ mock Claude API)
+  tests/                    Python tests for the runtime (+ a stand-in for the model's server: tests/mock_model.py; a
+                            tiny model with random weights for the real engine: tests/data/tiny-model.ccm)
   docs/                     The browser demo (GitHub Pages): Chat Computer's own screen with docs/demo/host.js standing
                             in for the computer; scripts/build_demo.py copies the screen, tests/test_demo.py checks
   docs/get/                 chatcomputer.ai/get: the apps to download (as Annotated's page offers its extension)
@@ -165,7 +168,8 @@ addresses.
 | Model download command (run as the user) | `/opt/chatcomputer/venv/bin/python -m chatcomputer models --download` |
 | Health check command | `/opt/chatcomputer/venv/bin/python -m chatcomputer doctor` (prints JSON, exit 0 if usable) |
 | User data (owned by the user) | `/home/<user>/ChatComputer/` |
-| Claude subscription token | `/home/<user>/ChatComputer/secrets/claude_token` (mode 0600, single line `sk-ant-oat01-...`) |
+| The model (Chat Computer's own file of it) | `/home/<user>/ChatComputer/models/llm/<name>.ccm`, made from Qwen's files when first needed (`chatcomputer/brain/models.py`); the system prompt's reading kept in `models/llm/cache/` |
+| The model's engine | `/opt/chatcomputer/app/chatcomputer/brain/bin/chat-computer-model-<machine>` (built reproducibly from `os/model`; run from a copy in `models/llm/` when an update left it not runnable); serves `127.0.0.1:8765` |
 | Initial settings from Windows setup | `/home/<user>/ChatComputer/settings.json` (JSON; keys below) |
 | Voice models | `/home/<user>/ChatComputer/models/` (layout owned by `chatcomputer.voice.models`) |
 | Windows partition | `/mnt/windows` (rw when NTFS is clean, else ro). A BitLocker drive is opened with Chat Computer's own recovery password (`/etc/chatcomputer/bitlocker-recovery-key`, from setup) as `/dev/mapper/chatcomputer-windows` |
@@ -409,33 +413,36 @@ retrying with backoff, then starts listening.
 
 ## Runtime (chatcomputer package)
 
-* Brain: Claude Agent SDK (`claude-agent-sdk`, bundles the official Claude Code binary) with the user's
-  subscription and an isolated `CLAUDE_CONFIG_DIR` (`~/ChatComputer/.engine`). Two sign-ins (Windows setup gives
-  the full one; a pasted code gives the token):
-  * the one-year token from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`. It can only make model
-    requests;
-  * the full sign-in from `claude auth login` (`.engine/.credentials.json`, refreshed by Claude Code itself),
-    used when present and `phone_access` is on, because Remote Control needs it. In this mode the token
-    variables are blanked and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is not set (Remote Control needs
-    Claude Code's feature flags); telemetry and error reporting stay off, which Claude Code allows Remote
-    Control with on a paid plan (Pro, Max, Team, Enterprise) once it knows the account's organization. If it
-    fails with an auth error, the brain switches to the token for the rest of the run and asks the last
-    question again.
-* Phone (the Claude app, Claude Code's Remote Control): after connecting with the full sign-in, the brain sends
-  the SDK control request `{"subtype": "remote_control", "enabled": true, "name": "Chat Computer (<host>)"}`, the
-  same request Claude Code's own hosts send for `/remote-control`. The Python SDK has no public call for it,
-  so it goes through `client._query._send_control_request`. The bridge session id from the response is
-  kept and offered as `reattach_session_id` next time. A refused request is tried again after 20 s and 60 s:
-  on the engine's first start it looks the account up in the background and refuses Remote Control until it
-  has ("Unable to determine your organization"). Each refusal is logged with the engine's last lines of error
-  output (kept by the brain, sign-ins blanked); the last one becomes a one-time notice on screen.
-  One reader task consumes everything the engine emits. A turn that starts without a local question (a
-  user message with a human or missing origin, or output with no turn open) is a phone turn: shown as
-  the user's words like anything said here, the reply is not spoken, and voice questions are not asked. Turns the engine injects itself
-  (task notifications and the like) belong to the PC. Speaking at the PC interrupts a phone turn. A phone
-  turn silent for 15 minutes is closed. Local questions carry the "[time · screen: ...]" prefix; the system
-  prompt tells Claude that a message without it came from the phone.
-* Chat Computer tools are in-process MCP tools (screen, files, computer control, apps, system, memory, self-made tools).
+* Model: one of Qwen's open models (Apache 2.0), as big as the computer's memory runs well
+  (`brain/models.py` `pick`: 48 GB or more Qwen3.8-27B, 32 GB Qwen3.6-35B-A3B, 16 GB Qwen3.5-9B, 8 GB Qwen3.5-4B,
+  less Qwen3.5-0.8B; the `model` setting can name one instead of `auto`) and its disk has room to get ready (the
+  download and the converted file, with 4 GB to spare; one already there is kept). While the chosen one is got
+  ready, the biggest one already there that the memory runs answers (`ModelService.serving`). `brain/models.json` pins each to one
+  revision of Qwen's repository on Hugging Face with every file's size and SHA-256 (`scripts/model_manifest.py`
+  writes it). On first need (`ModelService.prepare_in_background`) the files are downloaded (a download that
+  stops carries on with a Range request), each checked against its SHA-256, converted by the engine
+  (`chat-computer-model convert ... --bits 4` or 8) into `models/llm/<name>.ccm`, and the downloads removed. Until
+  it's ready the controller answers what it can by itself (Wi-Fi, volume, switching systems) and says how far
+  along the model is.
+* The model's server (`brain/server.py`): Chat Computer's own engine, `os/model` (no outside code: the model's
+  file format, the tokenizer, each model's chat template as code, int8 kernels for AVX2 and VNNI), started as
+  `chat-computer-model serve <file> --port 8765 --cache models/llm/cache` in its own process group. It speaks
+  OpenAI's chat completions API on 127.0.0.1 only, answers only requests whose Host is 127.0.0.1 or localhost and
+  whose Origin, if any, is Chat Computer's own (chatcomputer.ai, the desktop app's), keeps what it has read of a
+  conversation so each request reads only what's new, and keeps the reading of the first message (the system
+  prompt and the tools: about 10,000 tokens) on disk across restarts.
+* Brain (`brain/agent.py`): its own agent loop: the model writes (streamed: words, thinking, tool calls), each
+  tool call goes through the permission gate, runs, and its result goes back, until the model answers without
+  calling a tool (at most 60 calls a turn). Tools: Chat Computer's own (`chatcomputer/tools`, named
+  `mcp__chatcomputer__<name>` for the gate and Actions) and the everyday ones in `brain/builtin.py` (Bash, Read,
+  Write, Edit, Glob, Grep, WebFetch, WebSearch: the names and fields Claude Code's tools had, so the gate's rules
+  apply as they did). Thinking follows the `effort` setting (off, low, medium, high, max). Each conversation is
+  `~/ChatComputer/.engine/conversations/<id>.json`, its system prompt fixed when it starts, so it carries on
+  after a restart and the model's server reuses what it read. Speaking over it stops the turn
+  ("[Request interrupted by user]" is kept, as Claude Code kept it). The model reads text only: a tool's picture
+  reaches it as a line saying there was one.
+* Chat Computer tools are Python functions in the same process (screen, files, computer control, apps, system, memory,
+  self-made tools), given to the model with their JSON schemas.
 * The computer's everyday abilities, as Windows and macOS have them, through Linux's own services and never the
   root helper (`chatcomputer/platform/linux.py`; `tests/test_machine.py`):
   * USB drives and memory cards (`drives`): udisks2 opens a drive when it's plugged in and ejects it (powering a
@@ -467,10 +474,10 @@ retrying with backoff, then starts listening.
     (none on a desktop), what's keeping it busy (each program's processes together, measured over half a second,
     with the names people know them by), and the camera, with the programs that have it open.
 * Typed or said: what's typed on this PC's keyboard is answered in writing only (`Brain.ask(typed=True)`, and the
-  controller doesn't speak that turn), like what's typed on the phone; only what's said out loud gets a spoken
-  answer. Its note ends with "typed" (`[time · screen: ... · typed]`), and the system prompt tells Claude to
+  controller doesn't speak that turn); only what's said out loud gets a spoken
+  answer. Its note ends with "typed" (`[time · screen: ... · typed]`), and the system prompt tells the model to
   answer that like a chat message, without an account of what it's about to do. Questions about a typed request are shown, not said, and end with "(Type yes or no.)", as they do
-  whenever the microphone isn't listening. Things Chat Computer says unasked (the greeting, "not signed in") are said
+  whenever the microphone isn't listening. Things Chat Computer says unasked (the greeting, the model getting ready) are said
   only when sound plays on headphones; on the PC's or the monitor's speakers they are only shown.
 * At the start (not in tests or `--fake`): a new version of Chat Computer to update to, then AirPods. AirPods are
   connected without a question (`Controller._airpods_quietly`, started first): nothing when sound already plays
@@ -478,13 +485,12 @@ retrying with backoff, then starts listening.
   which also brings Windows' name for each device from `BTHPORT\Parameters\Devices\<mac>\Name` and marks it
   trusted, and restarts bluetoothd only when something changed). If they don't answer (in their case), a notice
   says to take them out, and they're tried every 3 s for 2 minutes. Only when no AirPods are known anywhere is
-  "Connect your AirPods?" asked; yes looks for AirPods in pairing mode for a minute and pairs them. Claude's
+  "Connect your AirPods?" asked; yes looks for AirPods in pairing mode for a minute and pairs them. The model's
   `bluetooth` tool has `airpods`, the same in one step ("connect my AirPods"). The update comes first when
   Windows' drive is already mounted (yes restarts Chat Computer); while it is still on its way, the AirPods come
   first.
 * Actions (`chatcomputer/done.py`, `~/ChatComputer/done.jsonl`): the brain reports each tool call when its result
-  comes back (`BrainEvents.on_tool`, from `ToolResultBlock`/`ServerToolResultBlock`, matched to the call by its
-  id); one that worked becomes a past-tense line ("Searched youtube.com for “lofi”", "Saved notes.txt"), unless
+  comes back (`BrainEvents.on_tool`, with the call's id); one that worked becomes a past-tense line ("Searched youtube.com for “lofi”", "Saved notes.txt"), unless
   it only looked at something (read_screen, status) or Chat Computer's own tool said in words that it failed
   ("Failed: ...", "I couldn't ..."). Reading and looking steps are kept but not listed. Each line keeps the
   message that asked for it: its id on the screen and in `transcript.jsonl` (written with the same id and
@@ -492,7 +498,7 @@ retrying with backoff, then starts listening.
   scrolls to that message, or, if it isn't on the page any more, asks for it (`goto` message →
   `Controller.go_back_to` → `History.earlier`: the transcript from that message to where the page starts, at
   most 300 messages) and scrolls there (`CO.earlier`). `recent_actions` reads the same list (words to look for,
-  days back) for Claude.
+  days back) for the model.
 * Revert, on an item in Actions (beside its pin, under the pointer; swiped left on a touchscreen): what that action
   changed is taken back, its last change first, and that is listed as an action of its own ("Reverted “…”"),
   which can be reverted in turn (the action is back, and can be reverted again). Every change that can be taken
@@ -504,8 +510,8 @@ retrying with backoff, then starts listening.
   brightness and the night light; a timer, reminder or alarm set (cancelled); a VPN on or off; the time zone;
   Chat Computer starting first again; Chat Computer's settings; programs installed or removed) or what was
   remembered (`memory_forget`, `memory_restore`). Each record names the
-  tool call that made it: Claude's calls run one at a time, and the permission gate sets `Journal.call` to each
-  one's `tool_use_id` (`ToolPermissionContext.tool_use_id`) just before it runs; a revert names itself
+  tool call that made it: the model's calls run one at a time, and the permission gate sets `Journal.call` to each
+  one's id (`tool_use_id`) just before it runs; a revert names itself
   (`journal.CALL`). Each line in `done.jsonl` keeps its call's records (`changes`), and a revert also the line
   it reverted (`reverts`). Taking a change back never destroys anything: a file it would overwrite is copied
   first, one it would remove goes to the trash; what it does is recorded too, marked as taking that record back
@@ -522,24 +528,21 @@ retrying with backoff, then starts listening.
   demo's saved file can be reverted the same way; the app keeps the marks with its Actions.
 * Logs on Windows' drive (`chatcomputer/logcopy.py`): Chat Computer's own drive can't be opened from Windows, so the end
   of `chatcomputer.log` and `session.log` (1.5 MB each, CRLF line endings, anything like a sign-in, password or key
-  blanked) and `info.json` (the phone link's state and why, voice, microphone, AirTouch) are copied to
+  blanked) and `info.json` (voice, microphone, AirTouch) are copied to
   `C:\Users\<you>\AppData\Local\ChatComputer\from-chatcomputer\`, only when Chat Computer Setup's folder is there: a
   minute after the start, every 10 minutes, just before a restart or shutdown, and when Chat Computer stops. The log
   also says, at the start, which graphics chips and drivers there are and the screens' sizes, and once a minute
   while typing, how long typed letters took to reach the screen (measured by the page: key to two frames later)
   and how often the window was busy for more than a tenth of a second. `session.log` says each screen's refresh
   rate and the X server's driver, cursor and input lines.
-* Every risky action goes through the permission gate → spoken confirmation ("Should I go ahead?"). During a
-  phone turn the confirm callback returns "phone": the action is denied with a message telling Claude to ask
-  in its reply. A "yes" typed on the phone (`classify_answer`) then allows exactly that action (keyed by tool
-  and input; for Bash, the command) once within 10 minutes; "no" drops the question.
+* Every risky action goes through the permission gate → spoken confirmation ("Should I go ahead?").
 * A shell command runs without a question only when every part of it is known to only read
   (`classify_bash`): anything the gate can't analyse with certainty (several lines, substitutions, unusual
   redirections, options that write files or run programs, like `sed`'s `w`/`e` or `sort -o`) is asked about.
   `git` is always asked about: a folder's own git settings can make even `git status` run a program.
-* Chat Computer's private folders (`secrets/`, the engine's `.engine/` with the full sign-in, the browser's `web/`
-  with its logins) can't be read, searched inside, copied, moved, trashed or shown on screen by Chat Computer's tools
-  or Claude Code's file tools, nor can other programs' settings (`/proc/*/environ`). Shell commands that name
+* Chat Computer's private folders (`secrets/` with the accounts' sign-ins, `.engine/` with the conversations, the
+  browser's `web/` with its logins) can't be read, searched inside, copied, moved, trashed or shown on screen by
+  Chat Computer's tools or the file tools, nor can other programs' settings (`/proc/*/environ`). Shell commands that name
   them, reach them with wildcards or `cd`, or search through a folder holding them (`grep -r`, `rg`) are
   blocked, even ones that would otherwise be asked about. The limit: a command the gate can't analyse is asked
   about, and once the person says yes it runs with their rights, which include reading those folders. Closing
@@ -577,11 +580,11 @@ retrying with backoff, then starts listening.
   `.ai.hello` message the page adds itself, not part of the transcript, a moment's thinking and then a few
   letters at a time through `CO.ai`, so they fade in; none if something was said first): `hello, world`, lower
   case with its comma as in Kernighan's C tutorial and K&R, always first, and under it the rest of the same
-  greeting, a line going on from it ("and ...": one greeting, not two), as the Claude app's are: Claude's own (as
-  claude.ai's code has them: each for a time of day, from 6, 12, 17 and 21 o'clock, some for a day of the week,
-  "coffee and Claude time?" only where Claude answers), said on from hello, world ("and good evening to you,
-  Ren"), with the name from `CO.settings` (on a Chat Computer `user_name`'s first word; on the website the name
-  given with "call me ...", or connected Claude's `set_name`), and without it where there's none ("and good
+  greeting, a line going on from it ("and ...": one greeting, not two), as the Claude app's are: in the manner of
+  its own (as claude.ai's code has them: each for a time of day, from 6, 12, 17 and 21 o'clock, some for a day of
+  the week, "coffee and computer time?" only where a model answers), said on from hello, world ("and good evening
+  to you, Ren"), with the name from `CO.settings` (on a Chat Computer `user_name`'s first word; on the website the
+  name given with "call me ..."), and without it where there's none ("and good
   evening to you", "and greetings to you, whoever you are"); and, half the time where there's a place, one for
   the place and its weather now from `CO.here` ({place, code, temp, day}), from the world to the city: "and
   hello, Singapore! How was your day, Ren?", "and to you in rainy Singapore, Ren: stay dry". The place is where they said they live (`home_place`, or the
@@ -607,7 +610,7 @@ retrying with backoff, then starts listening.
   shows the date and time (`#clock`, each minute) and each item's time above its words.
 * Messages (`chatcomputer/messages`): every account's messages in one list, newest first, kept in
   `~/ChatComputer/messages.db` (SQLite: `store.py`); accounts and their sign-ins in `secrets/accounts.json` (0600,
-  Claude's tools can't read it; `accounts.public()` is what the screen and Claude get). Email over IMAP
+  the model's tools can't read it; `accounts.public()` is what the screen and the model get). Email over IMAP
   (`mail.py`: app passwords; Outlook.com through Microsoft's sign-in, OAuth 2 code + PKCE as a public client,
   XOAUTH2, `msauth.py`, which needs `settings.outlook_client_id` from an Entra app registration): read-only
   (`SELECT` read-only, `BODY.PEEK`), Gmail's Primary tab only (`X-GM-RAW "category:primary"`), new mail every
@@ -615,17 +618,17 @@ retrying with backoff, then starts listening.
   2FA password; chats and groups, not channels). WhatsApp and social sites (`web.py`, `assets/sources.js`): their
   own inbox pages in views with their own profile in `~/ChatComputer/sources`, read in an isolated script world
   (WhatsApp stays open; the others are looked at every 10 minutes). Sign-in forms (`CO.accountForm`) send what's
-  typed straight to the Inbox, never to Claude, and come back with what went wrong and what was typed (passwords
+  typed straight to the Inbox, never to the model, and come back with what went wrong and what was typed (passwords
   aside). An email opened shows as the conversation with its sender (`render.thread_html`: the opened one and the
   latest few read in full over one connection, `Mailbox.read_many`).
 * A web address typed or said alone (`answers.typed_address`: "youtube.com", "open bbc.co.uk", a whole link;
   a known ending or a country's two letters, but not those more often a file's, as notes.md) opens its site at
-  once (`Controller._open_address`: `show_url`, Actions), without a turn of Claude's; the next turn's note of the
+  once (`Controller._open_address`: `show_url`, Actions), without a turn of the model's; the next turn's note of the
   screen says what's open. The website does the same (`address()` in host.js), opening in a new tab the sites
   that won't show inside another page.
 * "/" in the message box (`slash_search.py`): the words after it search the file index (`files_index.py`) as
   they're typed; matches show in a list above the box (matching letters bold), the arrow keys choose and Enter
-  opens one between the sidebars (`render.file_view`); the last line asks Claude to look instead.
+  opens one between the sidebars (`render.file_view`); the last line asks Chat Computer to look instead.
 * Touchscreen (`ui/touch.py`, `Gdk.event_handler_set`): every touch passes through `TouchGestures` before GTK
   delivers it. The iPad's system gestures (Apple's iPad User Guide): up from the bottom edge is Home
   (`close_content`); along the bottom or in from the sides, back and forward in the open view; down from the top
@@ -666,10 +669,10 @@ retrying with backoff, then starts listening.
   address (`render._theme_css`). `gtk_app.register_fonts` hands the folder to fontconfig (FcConfigAppFontAddDir)
   for the onscreen keyboard. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
   (Noto). Laid out like the Claude app, as the user asked: their words on the right in a light grey bubble
-  (`--bubble: #E7E4DD`; black on it is 16.5:1; lines are `--line: #DDD9D1`), Claude's flush left in one
-  column, from the top of the screen down. Claude's words fade in as they come, each new piece from nothing to
+  (`--bubble: #E7E4DD`; black on it is 16.5:1; lines are `--line: #DDD9D1`), Chat Computer's flush left in one
+  column, from the top of the screen down. Its words fade in as they come, each new piece from nothing to
   black in 400 ms at an even pace (the Claude app's timing, measured there), and a new message rises 10px into
-  place. Under each message a row of what can be done with it, as in the Claude app: under Claude's, copy, read
+  place. Under each message a row of what can be done with it, as in the Claude app: under Chat Computer's, copy, read
   aloud (`speak`, through the Speaker), good and bad (kept in `feedback.jsonl` with the question, for finding what
   to improve) and ask again, with when; under theirs, when, ask again, edit and copy. Below is a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
   for a new line; no placeholder, since that would be grey text) with nothing under it; while asleep, a line
@@ -679,7 +682,7 @@ retrying with backoff, then starts listening.
   right one is two halves of the same height, Actions above and Chats below (each task's chat, newest first, the
   one on the screen marked; + starts a new one: `chats.py`). The column and the box centre in the rest.
 * Size and width: the Claude app's, measured from it on a 1920 x 1080 screen at 100% display scaling: 16 px
-  words on lines 22 px apart, a 924 px conversation with Claude's words up to 865 px (about 120 characters) and
+  words on lines 22 px apart, a 924 px conversation with Chat Computer's words up to 865 px (about 120 characters) and
   yours in bubbles up to 85% of it, a 962 x 46 px message box 39 px above the bottom. Atkinson's letters at 16 px
   are as big as the Claude app's (an x-height of 8 px). `ui/layout.py` scales this for the monitor's physical
   size (EDID via GDK) and the viewing distance (estimated from the screen size, or set by voice), the way
@@ -687,8 +690,7 @@ retrying with backoff, then starts listening.
   Everything is recomputed when the window, monitor or settings change. Settings: `text_size` (0 = auto), `text_scale`, `viewing_distance_cm`, `screen_inches`
   (0 = reported), `web_zoom` (0 = auto).
 * Voice: PipeWire/AirPods, Silero VAD, faster-whisper (local), Kokoro TTS (local), barge-in.
-* Input, in the order the person uses it: the touchscreen, a keyboard, the Claude app on the phone, the
-  AirPods. AirTouch is off unless asked for (`airtouch: false`; `Controller._settings_moved_on` turned it off once
+* Input, in the order the person uses it: the touchscreen, a keyboard, the AirPods. AirTouch is off unless asked for (`airtouch: false`; `Controller._settings_moved_on` turned it off once
   for those who had it on).
 * AirTouch (`chatcomputer/airtouch`): the hands, seen by the screen's camera, in a process of its own at nice 5
   (`worker.py`). All of it is Chat Computer's own code except the two networks: Google MediaPipe's palm detector
@@ -731,7 +733,7 @@ retrying with backoff, then starts listening.
     squares; pages get the room above it. Keys are typed with xdotool, so they go wherever typing goes: the
     conversation, or a page's box.
   * Pointer: moved with XTEST. Its arrow is hidden with XFIXES while AirTouch moves it, and comes back when
-    something else moves the pointer (a mouse, or a click Claude made); AirTouch then leaves the pointer
+    something else moves the pointer (a mouse, or a click the model made); AirTouch then leaves the pointer
     alone until it has been still for 3 s.
 * Keyboard and mouse: USB ones just work. The arrow shows when the mouse moves (unclutter hides it after 3 s
   still). Clicks reach the page: AirTouch's layer over the window (a GtkDrawingArea in a GtkOverlay) took them
@@ -743,9 +745,8 @@ retrying with backoff, then starts listening.
   agent as KeyboardDisplay, answering its questions: the passkey to type on the keyboard (or a PIN made up
   for an older one) is shown and spoken. Other devices pair as NoInputNoOutput.
 * Speed (`tests/test_speed.py`, and the listener tests in `tests/test_voice.py`):
-  * Start: the window comes first. `run_app` shows it, then makes the controller on the asyncio thread, since
-    loading the Agent SDK takes most of a second (the permission gate imports the SDK only when the engine
-    first asks, so the window module doesn't wait for it). The voice models load side by side and speech
+  * Start: the window comes first. `run_app` shows it, then makes the controller on the asyncio thread (the
+    window module needs only the gate's `is_private`, which doesn't load the brain). The voice models load side by side and speech
     recognition gets a first run on silence right away (its first run is the slowest). The file index's first
     crawl waits 10 s.
   * Listening: an utterance ends after 0.7 s of silence (0.45 s for a yes/no), but its final transcription
@@ -771,25 +772,27 @@ retrying with backoff, then starts listening.
     second, so undo restores the right one.
   * The conversation history shown at the start comes from the last 256 KB of `transcript.jsonl` (it keeps
     every conversation).
-  * A request doesn't wait for an internet check: a recent result, or an older "yes" (checked again in the
-    background), is used; only an older "no" is checked first.
+  * A request doesn't wait for the internet at all: the model is on the computer.
+  * The model reads the system prompt and the tools (about 10,000 tokens) once: the engine keeps that reading
+    on disk, so a restart picks it up in a second or two instead of reading it again (minutes on a small
+    processor), and each request of a conversation reads only what's new since the last.
   * The conversation page scrolls like the Claude app's: what you send glides to the top of the screen and the
     answer comes in under it, so nothing new is ever below the screen (chat.js leaves room under the latest
     exchange, `#room`: the screen's height less what's under your message); an answer longer than the screen is
-    followed down while you're at the end; scrolled up, it stays put until a new message. Claude's words stream in
+    followed down while you're at the end; scrolled up, it stays put until a new message. Chat Computer's words stream in
     as Markdown drawn incrementally: blocks that ended at a blank line
     (outside code) are drawn once, and only the block still being written is drawn again each frame. Captions
     over websites change once per 40 ms flush, not per streamed word.
   * Website steps wait for the page instead of a fixed pause (`Screen.settle`): a page that starts loading is
     waited for, then until nothing on it changed for 0.15 s (content.js's MutationObserver), at most 1.5 s.
-    A fixed pause was too short for a new page (Claude read the old one and had to look again) and too long
+    A fixed pause was too short for a new page (the model read the old one and had to look again) and too long
     for a menu.
   * Typing on the conversation is the page's own text box: no trip through Python per key.
   * Boot: `chatcomputer-windows-mount.service` waits for the disks itself (`udevadm settle` in `ExecStartPre`)
     instead of pulling in `systemd-udev-settle.service`, which comes before `sysinit.target` and so held up the
     whole start. If Windows' drive (or a Mac's shared drive) arrives after Chat Computer has started, Chat Computer takes
-    it in then: a sign-in left there, its files in the search, and the engine starts again when idle to learn
-    where they are (at the start the engine waits up to 10 s for the drive).
+    it in then: its files in the search, and the next conversation's system prompt says where they are (at the
+    start the first conversation waits up to 10 s for the drive).
 
 ## Mac
 

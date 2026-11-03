@@ -1,8 +1,8 @@
-"""Chat Computer's conductor: what you say goes to Claude, Claude's words go to the screen and your
-AirPods, and questions that need your yes or no are asked out loud.
+"""Chat Computer's conductor: what you say goes to the model (on this computer: brain/), its words go to the screen
+and your AirPods, and questions that need your yes or no are asked out loud.
 
 States: listening (awake), sleeping (only the wake word or an AirPods press wakes it),
-thinking (Claude is working), speaking. Saying "stop" or talking over Chat Computer interrupts it.
+thinking (the model is working), speaking. Saying "stop" or talking over Chat Computer interrupts it.
 """
 from __future__ import annotations
 
@@ -19,10 +19,11 @@ from typing import Any, Callable
 
 from . import __version__, answers, logcopy, schedule as sch, slash_search, update
 from .brain.agent import Brain, BrainEvents, TurnResult, friendly_error
+from .brain.models import Progress
 from .brain.permissions import PermissionGate, is_private
 from .brain.prompt import build_system_prompt, turn_prefix
-from .config import (Paths, Settings, State, has_login, login_valid, model_label, read_token, save_login, save_token,
-                     token_kind)
+from .brain.server import ModelService
+from .config import Paths, Settings, State, model_label
 from .chats import Chats
 from .done import FAILED, History, describe as describe_done, for_screen, result_text
 from .files_index import FileIndex
@@ -56,7 +57,7 @@ DRIVE_CHECK_S = 3.0                 # how often to look for a drive (or keyboard
 RING_FOR_S = {"reminder": 0.0, "timer": 60.0, "alarm": 600.0}   # how long each rings unless stopped first
 RING_EVERY_S = {"reminder": 5.0, "timer": 4.0, "alarm": 6.0}
 SNOOZE_S = 9 * 60
-# Claude's tools that show something in the middle or work on what's there: a typed turn that used one leaves what's
+# The tools that show something in the middle or work on what's there: a typed turn that used one leaves what's
 # open on the screen; one answered only in words brings the conversation back to show them (_show_words).
 SCREEN_TOOLS = {"show_website", "read_screen", "click", "type_text", "press_keys", "on_screen_keyboard", "scroll",
                 "look_at_screen", "browser", "media", "show_document", "show_page", "saved_pages", "show_file",
@@ -126,7 +127,6 @@ class Controller:
         self.last_heard = time.time()
         self.media_playing = False
         self.mic_released = False
-        self.rate_warned: str | None = None
         self.current_turn: str | None = None
         self.turn_text: dict[str, str] = {}
         self.ready: asyncio.Event | None = None  # created in start()
@@ -136,18 +136,15 @@ class Controller:
         self.speaker = None
         self.mic = None
         self.index: FileIndex | None = None
-        self.token: str | None = None
+        self.model: ModelService | None = None   # the model that thinks: getting it ready, and its server
+        self._model_told = 0.0                     # when getting the model ready was last shown
         self.exit_code: int | None = None
         self._sleep_after_turn = False
-        self._online_cache: tuple[float, bool] = (0.0, True)
-        self._online_checking = False
         self._headphones: tuple[float, bool] | None = None   # (when checked, sound plays on headphones?)
         self._headphones_checking = False
         self._files_settled: asyncio.Event | None = None   # the other system's drive is there, or won't come
         self._engine_had_files = False                      # the engine started knowing where those files are
-        self.last_asked = ""                  # the last thing said here, to ask again after a sign-in switch
-        self.remote_told = False
-        self._phone_retry_at = 0.0
+        self.last_asked = ""                  # the last thing said here
         self._airpods_start: asyncio.Task | None = None      # the AirPods at the start (_airpods_quietly)
 
     # ================================================================ start / stop
@@ -179,7 +176,6 @@ class Controller:
         # Files: index Linux home + the other system's files (Windows' user folder, or on a Mac the drive
         # with the files sent from macOS) in the background.
         other_files = self._other_os_files()
-        self._import_signin(self._signin_drop())   # before the file index can see it
         self._files_settled = asyncio.Event()
         if self._other_files_pending():
             self._spawn(self._take_in_other_files())
@@ -206,15 +202,17 @@ class Controller:
                                  schedule=self.schedule, on_schedule_changed=self._schedule_changed,
                                  stop_ringing=self._stop_ringing_from_tool, on_night_light=self.apply_night_light,
                                  lock=self.lock_action)
-        server, policies, self.tool_names = T.build(self.ctx)
+        specs, policies, self.tool_names = T.build(self.ctx)
         self.gate = PermissionGate(self.paths, self.journal, self.confirm, policies)
-        self.token = read_token(self.paths)
-        if token_kind(self.token) != "invalid" or has_login(self.paths):
-            self.brain = Brain(self.paths, s, self.state, self.token, server, self.gate, self._system_prompt,
-                               BrainEvents(self._on_turn_start, self._on_text, self._on_activity, self._on_turn_end,
-                                           self._on_rate_limit, self._on_user_text, self._on_remote, self._on_tool),
-                               extra_env=self.extra_env, add_dirs=[d for d in (other_files,) if d])
-            self._spawn(self._warm_up(wait_for_files=True))
+        self.model = ModelService(self.paths, s, on_progress=self._model_progress)
+        self.ctx.model_status = self._model_status
+        self.brain = Brain(self.paths, s, self.state, self.model, specs, self.ctx.tool_fns, self.gate,
+                           self._system_prompt,
+                           BrainEvents(on_turn_start=self._on_turn_start, on_text=self._on_text,
+                                       on_activity=self._on_activity, on_turn_end=self._on_turn_end,
+                                       on_tool=self._on_tool),
+                           env=self.extra_env, resolve=self.ctx.resolve)
+        self._spawn(self._warm_up(wait_for_files=True))
 
         if self.offer_headphones:
             self._airpods_start = self._spawn(self._airpods_quietly())     # first: no question, and quick
@@ -234,11 +232,23 @@ class Controller:
         self.screen.state("listening")
         self.ready.set()
 
-        if self.brain is None:
-            msg = (f"I'm not signed in to Claude yet. Sign in with {self.platform.setup_place}, then start me again. "
-                   f"Until then I can only do simple things like Wi-Fi, volume and switching to {self.platform.other_os}.")
-            self.screen.notice(msg, "warn")
+        if not self.model.ready:
+            m = self.model.model
+            msg = (f"Getting my model ready ({m.label}, which runs on this computer): a one-time download of about "
+                   f"{m.download_bytes / 1e9:.0f} GB from its makers, then a few minutes to set it up. Until then I can "
+                   f"only do simple things like Wi-Fi, volume and switching to {self.platform.other_os}.")
+            self.screen.notice(msg)
             self._spawn(self._say_on_headphones(msg))
+        elif self.model.serving() != self.model.model:
+            # A bigger model than the one here suits this computer: it's got ready in the background, and the one
+            # here answers meanwhile.
+            m = self.model.model
+            self.screen.notice(f"Getting a better model ready in the background ({m.label}, a download of about "
+                               f"{m.download_bytes / 1e9:.0f} GB). {self.model.label} answers until then.")
+            self.model.prepare_in_background()
+            if self.greet and self.voice_enabled and not self.locked:
+                first = (s.user_name or "").split(" ")[0]
+                self._spawn(self._say_on_headphones(f"Hi{' ' + first if first else ''}. I'm listening."))
         elif self.greet and self.voice_enabled and not self.locked:
             first = (s.user_name or "").split(" ")[0]
             self._spawn(self._say_on_headphones(f"Hi{' ' + first if first else ''}. I'm listening."))
@@ -261,15 +271,42 @@ class Controller:
 
     async def _warm_up(self, wait_for_files: bool = False) -> None:
         if wait_for_files:
-            # Claude is told where the other system's files are when its engine starts: give the drive a few
-            # seconds if the computer is still mounting it (if someone talks first, ask() starts the engine).
+            # The system prompt says where the other system's files are: give the drive a few seconds if the
+            # computer is still mounting it (if someone talks first, the conversation starts without waiting).
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._files_settled.wait(), 10)
         self._engine_had_files = self._other_os_files() is not None
         try:
             await self.brain.connect()
         except Exception as exc:
-            log.warning("Claude engine not ready yet: %s", exc)
+            log.info("the model isn't ready yet: %s", exc)
+
+    def _model_progress(self, p: Progress) -> None:
+        """How getting the model ready goes (from its own thread): shown now and then, and when it's done."""
+        if self.loop is None:
+            return
+
+        def show() -> None:
+            now = time.monotonic()
+            if p.stage == "ready":
+                self.screen.notice(f"My model is ready: {self.model.model.label}, on this computer. Ask me anything.")
+                self._spawn(self._warm_up())
+            elif p.stage == "failed":
+                self.screen.notice("I couldn't get my model ready: " + p.detail + ". I'll try again when you next "
+                                   "ask me something.", "warn")
+            elif now - self._model_told > 60:
+                self._model_told = now
+                self.screen.notice(f"Getting my model ready: {p.words()}.")
+        self.loop.call_soon_threadsafe(show)
+
+    def _model_status(self) -> dict[str, Any]:
+        m = self.model
+        if m is None:
+            return {}
+        out = {"model": m.label, "ready": m.ready, "runs_on": "this computer (Chat Computer's own engine)"}
+        if m.serving() != m.model:
+            out["getting_ready"] = f"{m.model.label}: {m.progress.words()}"
+        return out
 
     def _other_files_pending(self) -> bool:
         """Whether the other system's drive may still be on its way: the computer mounts it (Windows' drive, or
@@ -283,8 +320,8 @@ class Controller:
         return bool(self.settings.windows_user) and not os.path.ismount(self.settings.windows_mount)
 
     async def _take_in_other_files(self) -> None:
-        """The other system's drive arrived after Chat Computer started: take in a sign-in left there, add its files
-        to the search, and tell Claude where they are (its engine starts again for that once it's idle)."""
+        """The other system's drive arrived after Chat Computer started: add its files to the search (the next
+        conversation's system prompt says where they are)."""
         while self._other_files_pending():
             await asyncio.sleep(0.5)
         self._files_settled.set()
@@ -292,15 +329,8 @@ class Controller:
         if not other:
             return
         log.info("the other system's files arrived after the start: %s", other)
-        self._import_signin(self._signin_drop())
         if self.index is not None:
             self.index.add_root("mac" if self.platform.name == "mac" else "windows", other)
-        b = self.brain
-        if b is not None:
-            if other not in b.add_dirs:
-                b.add_dirs.append(other)
-            if b.client is not None and not self._engine_had_files:
-                self._spawn(self._restart_brain_when_idle())
 
     async def stop(self) -> None:
         with contextlib.suppress(Exception):
@@ -318,6 +348,8 @@ class Controller:
         if self.brain:
             await self.brain.interrupt()
             await self.brain.close()
+        if self.model:
+            await self.model.stop()
 
     def _voice_models_missing(self) -> bool:
         from .voice import models as M
@@ -370,7 +402,8 @@ class Controller:
             if not (wdir / "model.bin").exists():
                 return None
             from .voice.stt import STT
-            hint = ", ".join(x for x in ("Claude", self.settings.user_name, "YouTube") if x)
+            wake = (self.settings.wake_words or ["computer"])[0].capitalize()
+            hint = ", ".join(x for x in (wake, self.settings.user_name, "YouTube") if x)
             return STT(str(wdir), self.settings.stt_language, hint=hint)
 
         def imports() -> None:
@@ -459,56 +492,6 @@ class Controller:
         self._headphones_checking = False
 
     # ================================================================ helpers
-    def _signin_drop(self) -> str | None:
-        """Where Chat Computer Setup on the other system leaves a new Claude sign-in ("Sign in to Claude again"):
-        C:\\Users\\<you>\\ChatComputer on Windows; on a Mac, a hidden folder on the drive both systems open."""
-        other = self._other_os_files()
-        if not other:
-            return None
-        return os.path.join(other, ".chatcomputer" if self.platform.name == "mac" else "ChatComputer")
-
-    def _import_signin(self, drop: str | None) -> None:
-        """Take a new sign-in left by Chat Computer Setup on the other system: claude_token (the one-year token) and
-        claude_login.json (the full sign-in the Claude app on the phone needs). Keep them private, and remove
-        the copies left there."""
-        if not drop:
-            return
-        other = self.platform.other_os
-        self._import_login(os.path.join(drop, "claude_login.json"))
-        src = os.path.join(drop, "claude_token")
-        try:
-            with open(src, encoding="utf-8-sig") as f:
-                tok = f.read().strip()
-        except OSError:
-            return
-        if token_kind(tok) == "invalid":
-            log.warning("ignoring an invalid sign-in left on %s", other)
-            return
-        if tok != (read_token(self.paths) or ""):
-            save_token(self.paths, tok)
-            self.screen.notice(f"Signed in to Claude with the new sign-in from {other}.")
-        try:
-            os.remove(src)
-        except OSError:
-            log.info("couldn't remove the %s copy of the sign-in (its drive is read-only)", other)
-
-    def _import_login(self, src: str) -> None:
-        other = self.platform.other_os
-        try:
-            with open(src, encoding="utf-8-sig") as f:
-                text = f.read()
-        except OSError:
-            return
-        if not login_valid(text):
-            log.warning("ignoring an invalid full sign-in left on %s", other)
-        else:
-            save_login(self.paths, text)
-            self.screen.notice(f"Signed in again from {other}. You can type to me in the Claude app on your phone.")
-        try:
-            os.remove(src)
-        except OSError:
-            log.info("couldn't remove the %s copy of the full sign-in (its drive is read-only)", other)
-
     def _windows_home(self) -> str | None:
         wu = self.settings.windows_user
         base = os.path.join(self.settings.windows_mount, "Users")
@@ -528,7 +511,8 @@ class Controller:
 
     def _system_prompt(self) -> str:
         return build_system_prompt(self.settings, self.memory.for_prompt(), os.path.expanduser("~"),
-                                   self._other_os_files(), platform=self.platform.name)
+                                   self._other_os_files(), platform=self.platform.name,
+                                   model=self.model.label if self.model else "Qwen")
 
     def _say(self, text: str) -> None:
         if self.speaker:
@@ -602,35 +586,6 @@ class Controller:
         items = [i for i in items if time.time() - i["ts"] < 12 * 3600]
         if items:
             self.screen.history(items)
-
-    def _online(self) -> bool:
-        t, ok = self._online_cache
-        if time.time() - t < 20:
-            return ok
-        try:
-            ok = bool(self.platform.internet_ok())
-        except Exception:
-            ok = True
-        self._online_cache = (time.time(), ok)
-        return ok
-
-    async def _online_now(self) -> bool:
-        """Whether the internet is there, without making each request wait for a check (a connection to Claude's
-        servers, up to 3 s): a recent answer is used as it is, and an older "yes" too, while it's checked again in
-        the background. Only an older "no" is checked first: they may be back online."""
-        t, ok = self._online_cache
-        if ok and time.time() - t >= 20 and not self._online_checking:
-            self._online_checking = True
-
-            async def refresh() -> None:
-                try:
-                    await self.loop.run_in_executor(None, self._online)
-                finally:
-                    self._online_checking = False
-            self._spawn(refresh())
-        if ok:
-            return True
-        return await self.loop.run_in_executor(None, self._online)
 
     def _set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -737,10 +692,11 @@ class Controller:
             self.screen.user_text(uid, text, True)
             if self.speaker:
                 self.speaker.stop()
+            wake = (self.settings.wake_words or ["computer"])[0]
             if typed:
-                self.screen.notice("Okay. Type, or say “Claude”, when you need me.")
+                self.screen.notice(f"Okay. Type, or say “{wake.capitalize()}”, when you need me.")
             else:
-                self._say("Okay. Say Claude when you need me.")
+                self._say(f"Okay. Say {wake} when you need me.")
             await self._sleep_when_quiet()
             return
 
@@ -749,13 +705,10 @@ class Controller:
             await self._open_address(uid, text, address)
             return
 
-        if self.brain is None:
+        if self.brain is None or not (self.model and self.model.ready):
+            # (The model works without the internet: only while it's still being got ready is this needed.)
             self.screen.user_text(uid, text, True)
             await self._offline_command(text, signed_out=True, typed=typed)
-            return
-        if not await self._online_now():
-            self.screen.user_text(uid, text, True)
-            await self._offline_command(text, signed_out=False, typed=typed)
             return
 
         if self.speaker:
@@ -768,7 +721,7 @@ class Controller:
 
     async def _open_address(self, uid: str, text: str, url: str) -> None:
         """A web address typed or said alone ("youtube.com", "open bbc.co.uk"): its site in the middle at once, as a
-        browser's address bar would open it, without a turn of Claude's (the next turn's note of the screen says
+        browser's address bar would open it, without a turn of the model's (the next turn's note of the screen says
         what's open)."""
         prompt = self._prompt(uid, text)
         if self.speaker:
@@ -784,7 +737,7 @@ class Controller:
             self.screen.done(for_screen(entry))
 
     def _prompt(self, uid: str, text: str, via: str | None = None) -> tuple[str, str, float]:
-        """A message that asks Claude for something: on the screen and in the transcript, with the same id and
+        """A message that asks the model for something: on the screen and in the transcript, with the same id and
         time, so what's done for it can be linked back to it (Actions)."""
         ts = time.time()
         self.screen.user_text(uid, text, True)
@@ -1084,19 +1037,15 @@ class Controller:
 
     # ================================================================ brain events
     def _spoken(self, tid: str) -> bool:
-        """Replies to what was typed (on this PC's keyboard, or in the Claude app on the phone) are shown, not
-        spoken. Only what was said out loud gets a spoken answer."""
+        """Replies to what was typed on this PC's keyboard are shown, not spoken. Only what was said out loud gets a
+        spoken answer."""
         if not self.speaker or not self.brain:
             return bool(self.speaker)
-        return self.brain.origin_of(tid) != "phone" and not self.brain.typed_here(tid)
+        return not self.brain.typed_here(tid)
 
     def _typing_now(self) -> bool:
         """The turn under way was typed on this PC's keyboard."""
         return bool(self.brain and self.current_turn and self.brain.typed_here(self.current_turn))
-
-    def _typed(self, tid: str) -> bool:
-        """Typed in the Claude app on the phone (the phone is the keyboard), rather than spoken here."""
-        return bool(self.brain and self.brain.origin_of(tid) == "phone")
 
     def _on_turn_start(self, tid: str) -> None:
         self.current_turn = tid
@@ -1104,42 +1053,13 @@ class Controller:
         self.screen.ai_delta(tid, "")
         if self._spoken(tid):
             self.speaker.begin()
-        if self.asleep and self._typed(tid):
-            # Show the typed conversation on the screen; the microphone stays asleep until "Claude".
-            self.mode = "thinking"
-            self.screen.state("thinking")
-        else:
-            self._set_mode("thinking")
+        self._set_mode("thinking")
 
     def _on_text(self, tid: str, delta: str) -> None:
         self.turn_text[tid] = self.turn_text.get(tid, "") + delta
         self.screen.ai_delta(tid, delta)
         if self._spoken(tid):
             self.speaker.feed(delta)
-
-    def _on_user_text(self, tid: str, text: str) -> None:
-        """Something typed in the Claude app on the phone: shown like anything said here."""
-        uid = "u" + uuid.uuid4().hex[:8]
-        self.last_heard = time.time()
-        self._asked(tid, self._prompt(uid, text, via="phone"))
-        try:
-            self.gate.phone_reply(text)
-        except Exception:
-            log.exception("phone reply")
-
-    def _on_remote(self, state: str, info: Any) -> None:
-        """The link to the Claude app on the phone (Remote Control) came up or failed."""
-        if state == "on" and not self.state.get("phone_told"):
-            self.state.set(phone_told=True)
-            self.screen.notice("To type to me, use the Claude app on your phone: tap Code, then Chat Computer.")
-        elif state == "failed" and not self.remote_told:
-            self.remote_told = True
-            reason = str(info or "") or "no reason given"
-            if "full-scope" in reason or "setup-token" in reason or "subscription" in reason:
-                reason = f"it needs a new sign-in. In {self.platform.setup_place}, choose to sign in again."
-            self.screen.notice("Typing from the Claude app on your phone can't reach me right now: " + reason[:200],
-                               "warn")
-            self._spawn(self._copy_logs())      # so the reason can be read from Windows too
 
     def _show_words(self, tid: str, said: str, res: Any) -> None:
         """A question typed here, answered only in words, while something is open: the answer isn't on the screen
@@ -1158,12 +1078,12 @@ class Controller:
         if self.settings.show_activity:
             self.screen.activity(tid, text)
         else:
-            # What Claude says after using a tool starts a new paragraph.
+            # What the model says after using a tool starts a new paragraph.
             said = self.turn_text.get(tid, "")
             if said and not said.endswith("\n"):
                 self.turn_text[tid] = said + "\n\n"
                 self.screen.ai_delta(tid, "\n\n")
-        # Separate what Claude said before and after a tool, for speech.
+        # Separate what the model said before and after a tool, for speech.
         if self._spoken(tid):
             self.speaker.end()
             self.speaker.begin()
@@ -1174,32 +1094,12 @@ class Controller:
         if spoken:
             self.speaker.end()
         said = self.turn_text.pop(tid, "") or ""
-        self._transcript("assistant", said, via="phone" if self._typed(tid) else None, msg_id=tid)
+        self._transcript("assistant", said, msg_id=tid)
         if self.brain:
             self.chats.session(getattr(self.brain, "session_id", None))   # (what opening this chat again carries on)
         self._show_words(tid, said, res)
-        if (not res.ok and res.error_kind == "auth" and self.brain and self.brain.use_token_instead()):
-            # The full sign-in (for the phone) stopped working; the one-year sign-in still does.
-            self.screen.notice("My sign-in for the Claude app on your phone has expired, so the phone can't reach "
-                               f"me until you sign in again ({self.platform.setup_place}). Everything else works.", "warn")
-            self._spawn(self._ask_again_after_switch(tid))
-            if tid == self.current_turn:
-                self.current_turn = None
-            return
-        default_model = Settings().model
-        if not res.ok and res.error_kind == "model" and self.brain and self.settings.model != default_model:
-            # The model chosen in the settings isn't available: every request would fail, and asking Claude to
-            # change it back would fail too. Go back to the usual model and ask again.
-            bad, self.settings.model = self.settings.model, default_model
-            self.settings.save(self.paths)
-            self._settings_changed(["model"], restart=False)       # asked again below, with the usual one
-            self.screen.notice(f"The Claude model “{bad}” isn't available, so I went back to the usual one.", "warn")
-            self._spawn(self._ask_again_after_switch(tid))
-            if tid == self.current_turn:
-                self.current_turn = None
-            return
         if not res.ok and not res.interrupted:
-            msg = friendly_error(res, self.ctx.rate_limit, self.platform.setup_place)
+            msg = friendly_error(res, self.model.progress.words() if self.model else None)
             self.screen.notice(msg, "warn")
             if spoken:
                 self._say(msg)
@@ -1208,35 +1108,8 @@ class Controller:
         if self._sleep_after_turn:
             self._sleep_after_turn = False
             self._spawn(self._sleep_when_quiet())
-        elif self.asleep and self._typed(tid):
-            self.mode = "resting"
-            self.screen.state("resting")     # the typed conversation stays visible; the microphone sleeps
         elif not (self.speaker and self.speaker.speaking):
             self._set_mode("listening")
-
-    async def _ask_again_after_switch(self, tid: str) -> None:
-        assert self.brain is not None
-        await self.brain.close()
-        if self.brain.origin_of(tid) == "here" and self.last_asked:
-            typed = self.brain.typed_here(tid)
-            info = await self._screen_info()
-            again = await self.brain.ask(turn_prefix(info, self.brain.last_activity, typed=typed) + self.last_asked,
-                                         typed=typed)
-            self._asked(again, self.prompt_of.get(tid) or self._last_prompt)
-        else:
-            await self._warm_up()
-
-    def _on_rate_limit(self, info: dict[str, Any]) -> None:
-        self.ctx.rate_limit = info
-        if info.get("status") == "allowed_warning":
-            key = f"{info.get('type')}:{info.get('resets_at')}"
-            if key != self.rate_warned:
-                self.rate_warned = key
-                pct = info.get("utilization")
-                when = ""
-                if info.get("resets_at"):
-                    when = " until " + time.strftime("%-I:%M %p", time.localtime(info["resets_at"]))
-                self.screen.notice(f"You've used {round(pct * 100) if pct else 'most'}% of your Claude limit{when}.", "warn")
 
     def _on_speaking(self, speaking: bool) -> None:
         if speaking:
@@ -1416,11 +1289,7 @@ class Controller:
     async def confirm(self, question: str, typed: bool | None = None) -> tuple[str, str]:
         """Ask; returns ('yes'|'no'|'unclear'|'timeout', the answer). The question is shown, and said out loud
         unless it belongs to something typed (`typed`, or by default the turn under way). The answer can be said
-        or typed on this PC's keyboard. During a turn from the phone (the Claude app) the answer is typed there:
-        returns ('phone', '') so the question goes in the chat."""
-        if self.brain and self.brain.current_origin == "phone":
-            self.screen.notice("Waiting for your answer in the Claude app: " + question)
-            return "phone", ""
+        or typed on this PC's keyboard."""
         if typed is None:
             typed = self._typing_now()
         hearing = bool(self.listener and self.mic and self.mic.is_open)
@@ -1457,7 +1326,7 @@ class Controller:
                 verdict = answers.classify_answer(said)
                 if verdict != "unclear":
                     return verdict, said
-                if len(said.split()) > 3:  # a real instruction, not a mumble: hand it to Claude
+                if len(said.split()) > 3:  # a real instruction, not a mumble: hand it to the model
                     return "unclear", said
             return "unclear", " / ".join(said_all)
 
@@ -1717,25 +1586,12 @@ class Controller:
             self.last_heard = time.time()
             self.screen.state("listening")
 
-    async def _keep_phone_reachable(self) -> None:
-        """With the phone set up, the engine must be running for the Claude app to reach it: start it again
-        if it stopped (a crash, a lost connection), at most once a minute."""
-        b = self.brain
-        if not b or b.client is not None or b.busy or b.auth_mode != "login" or not self.settings.phone_access:
-            return
-        if time.time() - self._phone_retry_at < 60:
-            return
-        self._phone_retry_at = time.time()
-        await self._warm_up()
-
     async def _copy_logs(self) -> None:
         """A copy of the logs on Windows' drive, for reading from Windows when something goes wrong (logcopy.py)."""
         if self.platform.name == "mac" or self.loop is None:
             return
-        b = self.brain
         info = {
-            "phone": {"link": b.remote if b else "no sign-in", "detail": b.remote_detail if b else "",
-                      "sign_in": b.auth_mode if b else "none", "phone_access": self.settings.phone_access},
+            "model": self._model_status(),
             "voice": bool(self.speaker), "microphone": bool(self.mic and self.mic.is_open),
             "airtouch": self.airtouch_status,
         }
@@ -1775,10 +1631,6 @@ class Controller:
                     await self._copy_logs()
                 except Exception:
                     log.exception("copying the logs to Windows' drive")
-            try:
-                await self._keep_phone_reachable()
-            except Exception:
-                log.exception("keeping the phone link up")
             mins = self.settings.auto_sleep_minutes
             idle = time.time() - self.last_heard
             busy = (self.brain and self.brain.busy) or (self.speaker and self.speaker.speaking) or self.pending_confirm
@@ -1791,8 +1643,8 @@ class Controller:
         return self.pinlock.has_pin()
 
     def lock_now(self) -> bool:
-        """Lock the screen (only with a PIN: without one, anyone could unlock it). Timers and alarms still ring, and
-        the person's phone still reaches Claude; what Claude opens stays off the screen until it's unlocked."""
+        """Lock the screen (only with a PIN: without one, anyone could unlock it). Timers and alarms still ring; what
+        the model opens stays off the screen until it's unlocked."""
         if not self.pinlock.has_pin():
             return False
         if not self.locked:
@@ -1828,7 +1680,7 @@ class Controller:
             form = {"id": "lock_pin", "title": "Choose a PIN" if mode == "set" else "Change the PIN", "ok": "Set PIN",
                     "fields": current + [{"name": "pin", "label": "New PIN", "type": "password"},
                                          {"name": "again", "label": "The same PIN again", "type": "password"}],
-                    "text": ["4 to 12 digits, typed here: the screen asks for it to unlock. Claude never sees it.",
+                    "text": ["4 to 12 digits, typed here: the screen asks for it to unlock. The model never sees it.",
                              "With a PIN, the screen locks when Chat Computer starts and when it goes to sleep."]}
         if error:
             form["error"] = error
@@ -1871,7 +1723,7 @@ class Controller:
             self.screen.notice("PIN set. The screen locks when Chat Computer starts and when it goes to sleep.")
 
     async def lock_action(self, action: str) -> str:
-        """The lock_screen tool. The PIN is only ever typed on the screen, never through Claude."""
+        """The lock_screen tool. The PIN is only ever typed on the screen, never through the model."""
         has = self.pinlock.has_pin()
         if action == "status":
             return (f"The screen is {'locked' if self.locked else 'unlocked'}. " +
@@ -2177,8 +2029,8 @@ class Controller:
             self._say_here()
 
     def _settings_changed(self, keys: list[str], restart: bool = True) -> None:
-        """Settings changed (by Claude's chatcomputer_settings, or here). `restart`: a new model or effort makes the
-        engine start again with it once it's idle (not when that's already being done)."""
+        """Settings changed (by the model's chatcomputer_settings, or here). A new model is got ready (if it isn't
+        yet) and used from the next question; effort applies from the next question by itself."""
         s = self.settings
         if {"text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "user_name", "model"} & set(keys):
@@ -2189,11 +2041,8 @@ class Controller:
             self._say_here(look=True)
         if "airtouch" in keys and self.airtouch_enabled:
             self._spawn(self._start_airtouch() if s.airtouch else self._stop_airtouch())
-        if "phone_access" in keys and self.brain:
-            self.remote_told = False
-            self._spawn(self._restart_brain_when_idle())
-        elif {"model", "effort"} & set(keys) and self.brain and restart:
-            self._spawn(self._restart_brain_when_idle())    # the engine starts with the new one, once it's idle
+        if "model" in keys and self.model and restart:
+            self._spawn(self._switch_model_when_idle())
         if self.speaker and self.speaker.tts is not None:
             if "voice" in keys:
                 self.speaker.tts.voice = s.voice
@@ -2204,17 +2053,20 @@ class Controller:
         s = self.settings
         return {"left": s.left_panel, "right": s.right_panel}
 
-    async def _restart_brain_when_idle(self) -> None:
-        """Apply what the engine reads when it starts (phone access on or off, the model, effort): start it again
-        once this turn is over. The conversation carries on (the session is resumed)."""
-        assert self.brain is not None
+    async def _switch_model_when_idle(self) -> None:
+        """Another model was chosen: once this turn is over, its server stops and the new one is used (got ready
+        first, if it isn't here yet). The conversation carries on."""
+        assert self.brain is not None and self.model is not None
         await self.brain.wait_idle()
-        await self.brain.close()
+        await self.model.switch(self.settings.model)
+        if self.model.serving() != self.model.model:
+            self.model.prepare_in_background()
         await self._warm_up()
 
-    # ================================================================ without Claude
+    # ================================================================ before the model is ready
     async def _offline_command(self, text: str, signed_out: bool, typed: bool = False) -> None:
-        """A few things that must work without Claude: Wi-Fi, volume, power. Typed requests get written answers."""
+        """A few things that work without the model (while it's still being got ready): Wi-Fi, volume, power. Typed
+        requests get written answers."""
         t = answers.normalize(text)
         p = self.platform
         say = (lambda _text: None) if typed else self._say
@@ -2268,12 +2120,12 @@ class Controller:
                 reply = await run(p.power, "restart")
         if reply is None:
             other = self.platform.other_os
-            reply = (f"I'm not signed in to Claude, so I can only help with Wi-Fi, volume, restarting, or switching to {other}."
-                     if signed_out else
-                     "I can't reach the internet right now, so I can only help with Wi-Fi, volume, restarting, "
-                     f"or switching to {other}. Say 'Wi-Fi' to see the networks.")
+            how = self.model.progress.words() if self.model else ""
+            reply = (f"I'm still getting my model ready{': ' + how if how and how != 'waiting' else ''}, so for now I "
+                     f"can only help with Wi-Fi, volume, restarting, or switching to {other}.")
+            if self.model and not self.model.ready:
+                self.model.prepare_in_background()      # (again, if it had stopped)
         qid = "o" + uuid.uuid4().hex[:8]
         self.screen.ai_delta(qid, reply)
         self.screen.ai_done(qid)
         say(reply)
-        self._online_cache = (0.0, False)     # checked again before the next request: they may be back online

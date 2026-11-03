@@ -1,4 +1,4 @@
-"""Paths, settings and the Claude sign-in token.
+"""Paths and settings.
 
 Everything Chat Computer keeps lives in one folder the user owns: ~/ChatComputer (override with
 CHATCOMPUTER_HOME for tests). Settings are a small JSON file; unknown keys are kept so newer
@@ -8,27 +8,21 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-TOKEN_RE = re.compile(r"^sk-ant-(oat01|api03)-[A-Za-z0-9_\-]{20,}$")
-# What Claude Code accepts for --effort (the Agent SDK's EffortLevel), and what a model name looks like (a full id
-# like claude-sonnet-5-5, or an alias like opus). Anything else would stop the engine or fail every request.
-EFFORTS = ("low", "medium", "high", "xhigh", "max")
-MODEL_RE = re.compile(r"^[a-z][a-z0-9.\-]{1,62}(\[1m\])?$")
-_MODEL_NAME = re.compile(r"^(?:claude-)?([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$")
-OLD_CLAUDE = ("claude-sonnet-5-5", "medium")   # the default model and effort until 20 Oct 2026
+# How hard the model thinks before it answers: "off" answers at once (quickest, for a quick question by voice); the
+# rest think first, Qwen 3.8 as hard as said (its reasoning effort), the others as they do.
+EFFORTS = ("off", "low", "medium", "high", "max")
+OLD_CLAUDE_WAKE_WORDS = ["claude", "hey claude", "ok claude", "okay claude"]
 
 
 def model_label(model: str | None) -> str:
-    """The model's name as the Claude app shows it: claude-sonnet-5-5 is "Sonnet 5.5", opus is "Opus"."""
-    m = _MODEL_NAME.match(model or "")
-    if m:
-        return m.group(1).capitalize() + " " + m.group(2) + ("." + m.group(3) if m.group(3) else "")
-    return (model or "").capitalize() if (model or "").isalpha() else (model or "")
+    """The model's name as people read it ("Qwen3.6 35B-A3B"); for "auto", the one this computer gets."""
+    from .brain.models import label
+    return label(model)
 
 
 class Paths:
@@ -38,14 +32,13 @@ class Paths:
         root = root or Path(os.environ.get("CHATCOMPUTER_HOME") or (Path.home() / "ChatComputer"))
         self.root = Path(root)
         self.secrets = self.root / "secrets"
-        self.token_file = self.secrets / "claude_token"
         self.settings_file = self.root / "settings.json"
         self.state_file = self.root / "state.json"
         self.logs = self.root / "logs"
         self.models = self.root / "models"
         self.memory = self.root / "memory"
         self.memory_file = self.memory / "memory.md"
-        self.pages = self.root / "pages"          # pages and apps Claude made for you
+        self.pages = self.root / "pages"          # pages and apps made for you
         self.undo = self.root / "undo"            # backups that make file changes undoable
         self.journal = self.root / "journal.jsonl"  # what Chat Computer did, newest last
         self.transcript = self.root / "transcript.jsonl"
@@ -53,10 +46,7 @@ class Paths:
         self.index = self.root / "index"
         self.web = self.root / "web"              # the built-in browser's logins and cache
         self.sources = self.root / "sources"      # WhatsApp's and the social sites' sign-ins, for Messages
-        self.engine = self.root / ".engine"       # Claude Code's own config for this session
-        # A full Claude sign-in (from `claude auth login`), kept where Claude Code looks for it. Needed for
-        # the Claude app on the phone (Remote Control); the one-year token can't do that.
-        self.login_file = self.engine / ".credentials.json"
+        self.engine = self.root / ".engine"       # the conversations with the model (brain/agent.py)
 
     def ensure(self) -> "Paths":
         for p in (self.root, self.logs, self.models, self.memory, self.pages, self.undo,
@@ -70,7 +60,7 @@ class Paths:
         return self
 
     def is_secret(self, path: str | os.PathLike[str]) -> bool:
-        """True for anything inside the secrets folder (never shown to Claude's tools)."""
+        """True for anything inside the secrets folder (never shown to the model's tools)."""
         try:
             p = Path(os.path.realpath(os.path.expanduser(str(path))))
             s = Path(os.path.realpath(self.secrets))
@@ -86,17 +76,17 @@ class Settings:
     timezone: str = ""
     locale: str = "en_US.UTF-8"
     home_place: str = ""            # the town or city they live in, for the greeting's weather (else the time zone's)
-    # Claude: Opus 5.5 at its most thorough, unless the person picks another (OLD_CLAUDE in load is the one before).
-    model: str = "claude-opus-5-5"
-    effort: str = "max"
-    defaults_version: int = 2       # 2: Settings from after the Claude default became Opus 5.5 at max effort
+    # The model that thinks: Qwen's open models on this computer (brain/models.py); "auto" picks by its memory.
+    model: str = "auto"
+    effort: str = "medium"
+    defaults_version: int = 3       # 3: settings from after Chat Computer's own model replaced Claude
     fresh_session_after_idle_hours: float = 8.0
     # Voice
     voice: str = "af_heart"
     speech_speed: float = 1.05
     stt_model: str = "small.en"
     stt_language: str = "en"
-    wake_words: list[str] = field(default_factory=lambda: ["claude", "hey claude", "ok claude", "okay claude"])
+    wake_words: list[str] = field(default_factory=lambda: ["computer", "hey computer", "ok computer", "okay computer"])
     auto_sleep_minutes: int = 10
     barge_in: str = "auto"                  # auto | on | off
     release_mic_during_media: str = "auto"  # auto | on | off
@@ -120,10 +110,8 @@ class Settings:
     night_light_warmth: int = 50
     # The keyboard's layout (XKB: us, gb, fr, de, fr(azerty)...); "" = as the computer was set up.
     keyboard_layout: str = ""
-    # Typing: the Claude app on the phone is the keyboard (Remote Control); needs the full sign-in
-    phone_access: bool = True
     # AirTouch: the hand, through the screen's camera, as the pointer (chatcomputer/airtouch). Off unless asked for: the
-    # touchscreen, a keyboard, the phone and the AirPods come first.
+    # touchscreen, a keyboard and the AirPods come first.
     airtouch: bool = False
     airtouch_camera: str = ""       # part of the camera's name, or its /dev/video path; "" = the best one
     # Files
@@ -152,9 +140,18 @@ class Settings:
             data["text_size"] = 0   # 28 px was the fixed default before text was sized from the screen
         data.pop("theme", None)     # the old light/dark choice: the screen is black on off-white now
         data.pop("bottom_panel", None)  # the old switch for the conversation under what's open: nothing is under it now
-        if "defaults_version" not in data and (data.get("model"), data.get("effort")) == OLD_CLAUDE:
-            data.pop("model")       # the default from before 20 Oct 2026, never changed: today's default instead
-            data.pop("effort")
+        if int(data.get("defaults_version") or 0) < 3:
+            # Settings from when Claude thought: its model and effort mean nothing to the own model, and its name
+            # was the wake word.
+            from .brain.models import names
+            if data.get("model") not in names():
+                data.pop("model", None)
+            if data.get("effort") not in EFFORTS:
+                data.pop("effort", None)
+            if [str(w).lower() for w in data.get("wake_words") or []] == OLD_CLAUDE_WAKE_WORDS:
+                data.pop("wake_words")
+            data.pop("defaults_version", None)
+        data.pop("phone_access", None)  # the Claude app on the phone, which only Claude's sign-in could reach
         kwargs: dict[str, Any] = {}
         extra: dict[str, Any] = {}
         defaults = cls()
@@ -216,66 +213,6 @@ def atomic_write(path: Path, text: str, mode: int | None = None) -> None:
         except OSError:
             pass
         raise
-
-
-def read_token(paths: Paths) -> str | None:
-    """The Claude sign-in token from `claude setup-token` (or an API key), if present."""
-    env = os.environ.get("CHATCOMPUTER_TOKEN")
-    if env:
-        return env.strip()
-    try:
-        tok = paths.token_file.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return tok or None
-
-
-def token_kind(token: str | None) -> str:
-    """'subscription', 'api_key' or 'invalid'."""
-    if not token or not TOKEN_RE.match(token):
-        return "invalid"
-    return "subscription" if token.startswith("sk-ant-oat01-") else "api_key"
-
-
-def save_token(paths: Paths, token: str) -> None:
-    paths.ensure()
-    atomic_write(paths.token_file, token.strip() + "\n", mode=0o600)
-
-
-def login_valid(text: str | None) -> bool:
-    """True for the contents of a Claude Code `.credentials.json` holding a claude.ai sign-in."""
-    try:
-        data = json.loads(text or "")
-    except ValueError:
-        return False
-    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
-    return isinstance(oauth, dict) and all(isinstance(oauth.get(k), str) and oauth.get(k)
-                                           for k in ("accessToken", "refreshToken"))
-
-
-def has_login(paths: Paths) -> bool:
-    try:
-        return login_valid(paths.login_file.read_text(encoding="utf-8"))
-    except OSError:
-        return False
-
-
-def engine_cli() -> str | None:
-    """The Claude Code engine that comes with the Agent SDK."""
-    try:
-        import claude_agent_sdk
-        p = Path(claude_agent_sdk.__file__).parent / "_bundled" / ("claude.exe" if os.name == "nt" else "claude")
-        return str(p) if p.exists() else None
-    except Exception:
-        return None
-
-
-def save_login(paths: Paths, text: str) -> None:
-    """Store a full sign-in where Claude Code reads (and refreshes) it."""
-    if not login_valid(text):
-        raise ValueError("not a Claude sign-in")
-    paths.ensure()
-    atomic_write(paths.login_file, text.strip() + "\n", mode=0o600)
 
 
 class State:

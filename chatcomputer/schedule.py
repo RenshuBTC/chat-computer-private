@@ -1,5 +1,5 @@
 """Timers, reminders and alarms: what's to ring when, kept in ~/ChatComputer/schedule.json so they last through a
-restart. The controller rings them (Controller._keep_time); Claude sets them with the reminders tool.
+restart. The controller rings them (Controller._keep_time); the model sets them with the reminders tool.
 
 Each item: {"id", "kind": "timer" | "reminder" | "alarm", "at": when it rings (seconds since 1970), "created",
 "label", "repeat": "" | "daily" | "weekdays" | "weekends", and for a timer "duration" (seconds)}."""
@@ -125,7 +125,7 @@ def clock_time(text: str) -> dt.time:
 
 def when(at: str | None = None, date: str | None = None, in_minutes: float | None = None,
          now: float | None = None) -> float:
-    """When something should ring, from what Claude gives: in_minutes from now; or at (a clock time, or
+    """When something should ring, from what the model gives: in_minutes from now; or at (a clock time, or
     'YYYY-MM-DD HH:MM') with an optional date ('YYYY-MM-DD', 'today', 'tomorrow'). A clock time without a date is
     the next time it comes (today if it's still ahead, else tomorrow)."""
     now = time.time() if now is None else now

@@ -75,7 +75,7 @@
           else break;
         }
         var tag = ordered ? "ol" : "ul";
-        // A numbered list that goes on after a blank line (common in Claude's answers) starts where it left off.
+        // A numbered list that goes on after a blank line (common in models' answers) starts where it left off.
         var first = ordered ? parseInt(li[2], 10) : 1;
         out.push("<" + tag + (ordered && first !== 1 ? ' start="' + first + '"' : "") + ">" + items.map(function (t) {
           var cb = t.match(/^\[( |x|X)\]\s+(.*)$/s);

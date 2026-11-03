@@ -27,16 +27,15 @@ def make(tmp_path, clean=True):
     settings = Settings(windows_user="rensh", windows_mount=str(win))
     screen = RecordingScreen()
     ctx = T.ToolContext(paths, settings, FakePlatform(), Journal(paths), screen, Memory(paths), power_delay_s=0.05)
-    server, policies, names = T.build(ctx)
-    return ctx, server, policies, names
+    _, policies, names = T.build(ctx)
+    return ctx, ctx, policies, names
 
 
-def call(server, name, args):
-    """Invoke a tool through the in-process MCP server like Claude Code would."""
-    entry = server["instance"].get_request_handler("tools/call")
-    out = asyncio.get_event_loop().run_until_complete(entry.handler(None, entry.params_type(name=name, arguments=args)))
-    texts = [c.text for c in out.content if getattr(c, "type", "") == "text"]
-    return "\n".join(texts), bool(getattr(out, "is_error", False) or getattr(out, "isError", False))
+def call(ctx, name, args):
+    """Invoke a tool as the brain does (ctx.tool_fns: what each tool does)."""
+    out = asyncio.get_event_loop().run_until_complete(ctx.tool_fns[name](args))
+    texts = [c["text"] for c in out["content"] if c.get("type") == "text"]
+    return "\n".join(texts), bool(out.get("is_error"))
 
 
 @pytest.fixture(autouse=True)
@@ -97,7 +96,7 @@ def test_windows_system_files_cannot_be_trashed(tmp_path):
     win = tmp_path / "windows" / "Windows" / "System32"
     win.mkdir(parents=True)
     assert policies["trash_files"]({"paths": [str(win / "kernel32.dll")]}).startswith("DENY:")
-    assert policies["trash_files"]({"paths": [str(ctx.paths.token_file)]}).startswith("DENY:")
+    assert policies["trash_files"]({"paths": [str(ctx.paths.secrets / "accounts.json")]}).startswith("DENY:")
     assert policies["move_files"]({"items": [{"from": r"C:\Program Files\x", "to": "~/x"}]}).startswith("DENY:")
     # A folder of the person's own that happens to be called Recovery or Boot is theirs.
     q = policies["trash_files"]({"paths": [r"C:\Users\rensh\Documents\Recovery"]})
@@ -301,18 +300,18 @@ def test_table_cells_with_line_breaks_or_bars_stay_in_their_row(tmp_path):
 
 def test_private_sign_in_files_stay_private(tmp_path):
     ctx, server, policies, _ = make(tmp_path)
-    token = ctx.paths.token_file
-    token.write_text("sk-ant-oat01-" + "x" * 40 + "\n")
+    token = ctx.paths.secrets / "accounts.json"         # the messages accounts' sign-ins
+    token.write_text('{"x": {"access_token": "secret"}}\n')
     desk = tmp_path / "home" / "Desktop"
     desk.mkdir()
-    # A copy of the sign-in (or of a folder holding it) would be an ordinary file anyone could read.
-    for src in (token, ctx.paths.login_file, ctx.paths.root, tmp_path / "home"):
+    # A copy of a sign-in (or of a folder holding it) would be an ordinary file anyone could read.
+    for src in (token, ctx.paths.engine / "conversations", ctx.paths.root, tmp_path / "home"):
         q = policies["copy_files"]({"items": [{"from": str(src), "to": str(desk)}]})
         assert q and q.startswith("DENY:"), src
         assert policies["move_files"]({"items": [{"from": str(src), "to": str(desk)}]}).startswith("DENY:"), src
         assert policies["trash_files"]({"paths": [str(src)]}).startswith("DENY:"), src
     assert policies["copy_files"]({"items": [{"from": str(desk), "to": str(ctx.paths.secrets)}]}).startswith("DENY:")
-    # Nor shown on screen, where read_screen would hand it to Claude.
+    # Nor shown on screen, where read_screen would hand it to the model.
     text, err = call(server, "show_file", {"path": str(ctx.paths.engine / ".credentials.json")})
     assert err and "private" in text
     text, err = call(server, "show_website", {"url": token.as_uri()})
@@ -323,7 +322,7 @@ def test_private_sign_in_files_stay_private(tmp_path):
 def test_the_screen_never_opens_a_private_file(tmp_path):
     gtk_app = pytest.importorskip("chatcomputer.ui.gtk_app")
     ctx, *_ = make(tmp_path)
-    assert gtk_app.private_file_uri(ctx.paths, ctx.paths.token_file.as_uri())
+    assert gtk_app.private_file_uri(ctx.paths, (ctx.paths.secrets / "accounts.json").as_uri())
     assert gtk_app.private_file_uri(ctx.paths, (ctx.paths.web / "cookies.sqlite").as_uri())
     assert gtk_app.private_file_uri(ctx.paths, "file:///proc/self/environ")
     assert not gtk_app.private_file_uri(ctx.paths, (ctx.paths.pages / "chart.html").as_uri())
@@ -359,35 +358,39 @@ def test_undo_never_deletes_what_was_there_before(tmp_path, monkeypatch):
     assert (bin_ / "note.txt").read_text() == "changed later"
 
 
-def test_claude_is_opus_5_5_at_max_effort_unless_they_chose_another(tmp_path):
-    assert (Settings().model, Settings().effort) == ("claude-opus-5-5", "max")
+def test_the_model_is_picked_for_the_computer_unless_they_chose_one(tmp_path):
+    assert (Settings().model, Settings().effort) == ("auto", "medium")
     paths = Paths(tmp_path / "ChatComputer").ensure()
-    # A Chat Computer from before: its settings file holds the old default, never changed. It gets today's.
-    paths.settings_file.write_text(json.dumps({"model": "claude-sonnet-5-5", "effort": "medium", "speech_speed": 1.2}))
+    # A Chat Computer from when Claude thought: Claude's model and effort mean nothing now, and its name isn't the
+    # wake word any more; the rest stays.
+    paths.settings_file.write_text(json.dumps({"model": "claude-opus-5-5", "effort": "xhigh", "speech_speed": 1.2,
+                                               "defaults_version": 2, "phone_access": True,
+                                               "wake_words": ["claude", "hey claude", "ok claude", "okay claude"]}))
     s = Settings.load(paths)
-    assert (s.model, s.effort, s.speech_speed) == ("claude-opus-5-5", "max", 1.2)
+    assert (s.model, s.effort, s.speech_speed) == ("auto", "medium", 1.2)
+    assert s.wake_words[0] == "computer" and "phone_access" not in s.extra
     s.save(paths)
-    # Someone who picks Sonnet at medium effort now keeps it.
-    s.set("model", "claude-sonnet-5-5")
-    s.set("effort", "medium")
+    # Someone who picks a model and effort now keeps them.
+    s.set("model", "qwen3.5-9b")
+    s.set("effort", "off")
     s.save(paths)
     s = Settings.load(paths)
-    assert (s.model, s.effort) == ("claude-sonnet-5-5", "medium")
-    # And one who had picked another before keeps theirs.
-    paths.settings_file.write_text(json.dumps({"model": "claude-haiku-5-5", "effort": "low"}))
-    assert (Settings.load(paths).model, Settings.load(paths).effort) == ("claude-haiku-5-5", "low")
+    assert (s.model, s.effort) == ("qwen3.5-9b", "off")
+    # And wake words they chose themselves stay theirs.
+    paths.settings_file.write_text(json.dumps({"wake_words": ["jarvis"], "defaults_version": 2}))
+    assert Settings.load(paths).wake_words == ["jarvis"]
 
 
-def test_settings_that_would_stop_claude_are_refused(tmp_path):
+def test_settings_that_would_stop_the_model_are_refused(tmp_path):
     ctx, server, *_ = make(tmp_path)
-    for key, value in (("effort", "extreme"), ("model", "Claude 5 please"), ("stt_model", "../../x")):
+    for key, value in (("effort", "extreme"), ("model", "claude-opus-5-5"), ("model", "../x"), ("stt_model", "../../x")):
         text, err = call(server, "chatcomputer_settings", {"action": "set", "key": key, "value": value})
         assert err, (key, text)
     assert ctx.settings.effort == Settings().effort and ctx.settings.model == Settings().model
     text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "effort", "value": "high"})
     assert not err and ctx.settings.effort == "high"
-    text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "model", "value": "opus"})
-    assert not err and ctx.settings.model == "opus"
+    text, err = call(server, "chatcomputer_settings", {"action": "set", "key": "model", "value": "qwen3.5-4b"})
+    assert not err and ctx.settings.model == "qwen3.5-4b"
     # Numbers that would break the voice, put Chat Computer back to sleep at once, or forget every conversation.
     for key, value in (("speech_speed", 3), ("speech_speed", "fast"), ("auto_sleep_minutes", -1),
                        ("fresh_session_after_idle_hours", 0)):
@@ -419,11 +422,13 @@ def test_history_still_shows_when_a_line_was_cut_short(tmp_path):
     assert ("history", 2) in screen.events
 
 
-def test_friendly_errors_point_to_this_computers_setup():
+def test_friendly_errors_say_how_far_the_model_is():
     from chatcomputer.brain.agent import TurnResult, friendly_error
-    res = TurnResult(ok=False, error_kind="auth")
-    assert "Chat Computer Setup on Windows" in friendly_error(res)
-    assert "Chat Computer Setup in macOS" in friendly_error(res, None, "Chat Computer Setup in macOS")
+    res = TurnResult(ok=False, error_kind="model_not_ready")
+    assert friendly_error(res, "downloading it: 4.0 of 10.0 GB (40%)") == (
+        "I'm still getting my model ready: downloading it: 4.0 of 10.0 GB (40%). Until then I can only help with "
+        "Wi-Fi, volume and restarting.")
+    assert "say that again" in friendly_error(TurnResult(ok=False, error_kind="engine"))
 
 
 def test_command_output_that_isnt_utf8_is_still_read(tmp_path):

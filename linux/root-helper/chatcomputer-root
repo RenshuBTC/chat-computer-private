@@ -539,7 +539,8 @@ verb_wipe_install_secrets() {
 # runs (this helper, the Bluetooth importer, the system's settings): those change only when Chat Computer is
 # installed again. Before anything is replaced the new files are checked: plain files and folders only (no
 # links that could lead elsewhere), no Python start-up hooks (sitecustomize, usercustomize, .pth files), and
-# the same Python packages as now (requirements-linux.txt). The version before stays in app.prev:
+# no Python package that isn't installed already (requirements-linux.txt: the same ones, or fewer, since an
+# update never installs one). The version before stays in app.prev:
 # update-undo puts it back (the session does that by itself when a new version keeps failing to start while
 # UPDATE_PENDING says it is new), and update-done marks a new version as good.
 # ---------------------------------------------------------------------------
@@ -567,6 +568,12 @@ update_source() {
   printf '%s' "$real"
 }
 
+# packages FILE — the Python packages a requirements-linux.txt names, one a line, sorted: what's after a # left
+# out, spacing made single, blank lines dropped (as chatcomputer/update.py reads them).
+packages() {
+  tr '\r\t\v\f' '    ' < "$1" | LC_ALL=C awk '{ sub(/#.*/, ""); if (NF) { $1 = $1; print } }' | LC_ALL=C sort -u
+}
+
 # not_plain DIR — the first thing under DIR that mustn't be in an update (a link or other special file, or a
 # Python start-up hook), if any.
 not_plain() {
@@ -579,7 +586,8 @@ verb_update_app() {
   [ -f "$BASE_INSTALLED" ] || die "Chat Computer hasn't finished installing yet"
   src=$(update_source) || { printf '%s\n' "$src"; exit 1; }
   [ -d "$app/chatcomputer" ] || die "Chat Computer isn't installed where it should be"
-  if ! cmp -s -- "$src/requirements-linux.txt" "$app/requirements-linux.txt"; then
+  if ! cmp -s -- "$src/requirements-linux.txt" "$app/requirements-linux.txt" \
+     && [ -n "$(LC_ALL=C comm -23 <(packages "$src/requirements-linux.txt") <(packages "$app/requirements-linux.txt"))" ]; then
     die "this version needs other Python packages, so it has to be installed with Chat Computer Setup"
   fi
   for part in "${UPDATE_PARTS[@]}"; do

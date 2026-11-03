@@ -1,0 +1,357 @@
+"""Chat Computer's own model: which one a computer gets (models.pick), getting it ready (models.Store: downloaded from
+the pinned revision, each file checked against its SHA-256, carried on after a break, converted, the downloads
+removed), the engine's program that comes with Chat Computer, and the model's server (server.py) run by the real
+engine with a tiny model of random weights (tests/data/tiny-model.ccm, written by os/model's example tiny_model)."""
+import asyncio
+import hashlib
+import http.server
+import json
+import os
+import platform
+import socketserver
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from chatcomputer.brain import models
+from chatcomputer.brain import server as S
+
+TINY = Path(__file__).resolve().parent / "data" / "tiny-model.ccm"
+GB = 2**30
+
+
+# ------------------------------------------------------------------ which model
+def test_each_model_is_pinned_to_one_revision_with_every_file_checked():
+    ms = models.catalogue()
+    assert [m.name for m in ms] == ["qwen3.8-27b", "qwen3.6-35b-a3b", "qwen3.5-9b", "qwen3.5-4b", "qwen3.5-0.8b"]
+    assert [m.memory_gb for m in ms] == sorted((m.memory_gb for m in ms), reverse=True)    # biggest first
+    for m in ms:
+        assert m.repo.startswith("Qwen/") and len(m.revision) == 40 and int(m.revision, 16) >= 0
+        assert m.bits in (4, 8) and m.download_bytes > 0
+        names = {f["name"] for f in m.files}
+        assert {"config.json", "tokenizer.json"} <= names and any(n.endswith(".safetensors") for n in names)
+        for f in m.files:
+            assert len(f["sha256"]) == 64 and int(f["sha256"], 16) >= 0 and int(f["size"]) > 0
+            # A plain name: each is downloaded into the model's own folder and nowhere else.
+            assert "/" not in f["name"] and "\\" not in f["name"] and not f["name"].startswith(".")
+
+
+@pytest.mark.parametrize("gb, name", [(128, "qwen3.8-27b"), (48, "qwen3.8-27b"), (47, "qwen3.8-27b"),
+                                      (46, "qwen3.6-35b-a3b"), (32, "qwen3.6-35b-a3b"), (31, "qwen3.6-35b-a3b"),
+                                      (24, "qwen3.5-9b"), (16, "qwen3.5-9b"), (15, "qwen3.5-9b"), (12, "qwen3.5-4b"),
+                                      (8, "qwen3.5-4b"), (6, "qwen3.5-0.8b"), (2, "qwen3.5-0.8b")])
+def test_the_biggest_model_the_memory_runs_well(gb, name):
+    # (A computer said to have 32 GB shows a little less: some is the graphics' or the firmware's.)
+    assert models.pick(int(gb * GB)).name == name
+
+
+def test_a_model_the_disk_has_no_room_to_get_ready_gives_way_to_one_it_has(tmp_path, monkeypatch):
+    store = models.Store(tmp_path / "models")
+    monkeypatch.setattr(store, "free_bytes", lambda: 40 * 10**9)
+    # 48 GB of memory runs the 27B model, but getting it ready takes about 72 GB of disk: the 9B fits in 40.
+    assert models.pick(48 * GB).name == "qwen3.8-27b"
+    assert models.pick(48 * GB, store).name == "qwen3.5-9b"
+    # One that's here already is kept, however full the disk is.
+    f = store.path(models.by_name("qwen3.6-35b-a3b"))
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b"x")
+    monkeypatch.setattr(store, "free_bytes", lambda: 10**9)
+    assert models.pick(64 * GB, store).name == "qwen3.6-35b-a3b"
+    assert models.pick(8 * GB, store).name == "qwen3.5-0.8b"      # (the 4B doesn't fit on the disk either)
+
+
+def test_while_the_chosen_model_is_got_ready_one_already_here_answers(tmp_path, monkeypatch):
+    monkeypatch.setattr(models, "memory_bytes", lambda: 64 * GB)
+    svc = S.ModelService(SimpleNamespace(models=tmp_path / "models", logs=tmp_path),
+                         SimpleNamespace(model="qwen3.8-27b"))
+    assert not svc.ready and svc.serving() is None and svc.label == "Qwen3.8 27B"
+    small = svc.store.path(models.by_name("qwen3.5-4b"))
+    small.parent.mkdir(parents=True)
+    small.write_bytes(b"x")
+    assert svc.ready and svc.serving().name == "qwen3.5-4b" and svc.label == "Qwen3.5 4B"
+    assert svc.file() == str(small)
+    svc.store.path(svc.model).write_bytes(b"y")                    # the chosen one is ready: it answers from now
+    assert svc.serving() == svc.model and svc.file() == str(svc.store.path(svc.model))
+
+
+def test_the_setting_names_a_model_or_leaves_it_to_the_memory(monkeypatch):
+    monkeypatch.setattr(models, "memory_bytes", lambda: 16 * GB)
+    assert models.chosen("auto").name == "qwen3.5-9b" and models.chosen(None).name == "qwen3.5-9b"
+    assert models.chosen("qwen3.5-0.8b").name == "qwen3.5-0.8b"
+    assert models.chosen("something-else").name == "qwen3.5-9b"
+    assert models.label("auto") == "Qwen3.5 9B" and models.label("qwen3.8-27b") == "Qwen3.8 27B"
+
+
+# ------------------------------------------------------------------ the engine's program
+def test_the_engine_comes_with_chat_computer_for_each_processor():
+    for arch in ("x86_64", "aarch64"):
+        f = models.BIN / f"chat-computer-model-{arch}"
+        assert f.is_file() and f.read_bytes()[:4] == b"\x7fELF"
+        want = (models.BIN / f"chat-computer-model-{arch}.sha256").read_text().split()[0]
+        assert hashlib.sha256(f.read_bytes()).hexdigest() == want
+
+
+def test_an_engine_that_cant_run_where_it_is_runs_from_a_copy(tmp_path, monkeypatch):
+    # An update leaves the files it brings read-only and not runnable (scripts aside): the program is copied to
+    # the models' folder, made runnable, and kept the same as the one that came.
+    monkeypatch.delenv("CHATCOMPUTER_MODEL_BIN", raising=False)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shipped = bin_dir / f"chat-computer-model-{platform.machine()}"
+    shipped.write_bytes(b"\x7fELF one")
+    shipped.chmod(0o644)
+    monkeypatch.setattr(models, "BIN", bin_dir)
+    monkeypatch.setattr(models, "BUILT", tmp_path / "not-built")
+    mdir = tmp_path / "models"
+    got = models.engine_program(mdir)
+    copy = mdir / "llm" / "chat-computer-model"
+    assert got == str(copy) and copy.read_bytes() == b"\x7fELF one" and os.access(copy, os.X_OK)
+    shipped.write_bytes(b"\x7fELF two")                 # a newer one came with an update
+    assert models.engine_program(mdir) == str(copy) and copy.read_bytes() == b"\x7fELF two"
+    copy.write_bytes(b"something else")                  # the copy changed: put back
+    assert models.engine_program(mdir) == str(copy) and copy.read_bytes() == b"\x7fELF two"
+    monkeypatch.setenv("CHATCOMPUTER_MODEL_BIN", str(copy))
+    assert models.engine_program(mdir) == str(copy)
+
+
+# ------------------------------------------------------------------ getting it ready
+class Hub:
+    """A stand-in for Hugging Face: serves a repository's files at /<repo>/resolve/<revision>/<name>, with Range
+    requests; it can break off a download partway (once) and count what was asked."""
+
+    def __init__(self, files):
+        self.files = files
+        self.asked = []
+        self.break_after = None
+        hub = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                name = self.path.rsplit("/", 1)[-1]
+                data = hub.files.get(name)
+                hub.asked.append((self.path, self.headers.get("Range")))
+                if data is None:
+                    self.send_error(404)
+                    return
+                start = 0
+                rng = self.headers.get("Range")
+                if rng and rng.startswith("bytes="):
+                    start = int(rng[6:].split("-")[0])
+                body = data[start:]
+                self.send_response(206 if start else 200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if hub.break_after is not None and len(body) > hub.break_after:
+                    cut, hub.break_after = hub.break_after, None
+                    self.wfile.write(body[:cut])
+                    self.wfile.flush()
+                    self.connection.shutdown(2)
+                    return
+                self.wfile.write(body)
+
+        self.httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        self.httpd.daemon_threads = True
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def _model(files, bits=8):
+    return models.Model("tiny", "Tiny", "Qwen/Tiny", "0" * 40, 0, bits,
+                        tuple({"name": n, "size": len(d), "sha256": hashlib.sha256(d).hexdigest()}
+                              for n, d in files.items()))
+
+
+def _converter(tmp_path):
+    """A stand-in for the engine's convert: writes what it was given (the folder's files' names and the bits)."""
+    prog = tmp_path / "convert.py"
+    prog.write_text("#!/usr/bin/env python3\nimport os, sys\n"
+                    "_, cmd, folder, out, flag, bits = sys.argv\n"
+                    "assert cmd == 'convert' and flag == '--bits'\n"
+                    "open(out, 'w').write(' '.join(sorted(os.listdir(folder))) + ' bits=' + bits)\n")
+    prog.chmod(0o755)
+    return str(prog)
+
+
+@pytest.fixture
+def hub():
+    files = {"config.json": b'{"x": 1}', "tokenizer.json": b"{}" * 10, "model.safetensors": os.urandom(300_000)}
+    h = Hub(files)
+    yield h
+    h.stop()
+
+
+def test_a_model_is_downloaded_checked_and_converted(tmp_path, monkeypatch, hub):
+    monkeypatch.setattr(models, "HUB", hub.url)
+    m = _model(hub.files)
+    store = models.Store(tmp_path / "models")
+    seen = []
+    p = models.Progress()
+    out = store.prepare(m, p, on_change=lambda pr: seen.append(pr.stage), program=_converter(tmp_path))
+    assert out == tmp_path / "models" / "llm" / "tiny.ccm" and store.ready(m) == out
+    assert out.read_text() == "config.json model.safetensors tokenizer.json bits=8"
+    assert p.stage == "ready" and p.done_bytes == m.download_bytes
+    assert "downloading" in seen and "converting" in seen and seen[-1] == "ready"
+    assert not store.downloads(m).exists()                                 # the downloads went once it was made
+    assert all(path.startswith("/Qwen/Tiny/resolve/" + "0" * 40 + "/") for path, _ in hub.asked)
+    # Ready: nothing is downloaded again.
+    hub.asked.clear()
+    assert store.prepare(m, models.Progress(), program=_converter(tmp_path)) == out and hub.asked == []
+
+
+def test_a_download_that_breaks_off_carries_on_where_it_stopped(tmp_path, monkeypatch, hub):
+    monkeypatch.setattr(models, "HUB", hub.url)
+    monkeypatch.setattr(models.time, "sleep", lambda s: None)
+    m = _model(hub.files)
+    hub.break_after = 100_000
+    store = models.Store(tmp_path / "models")
+    store.prepare(m, models.Progress(), program=_converter(tmp_path))
+    weights = [r for path, r in hub.asked if path.endswith("model.safetensors")]
+    assert weights[0] == "bytes=0-" and weights[1] == "bytes=100000-"      # the second asked only for the rest
+
+
+def test_a_file_that_comes_down_different_is_refused(tmp_path, monkeypatch, hub):
+    monkeypatch.setattr(models, "HUB", hub.url)
+    m = _model(hub.files)
+    hub.files["model.safetensors"] = b"x" * len(hub.files["model.safetensors"])   # not what was pinned
+    store = models.Store(tmp_path / "models")
+    p = models.Progress()
+    with pytest.raises(RuntimeError, match="different from what Chat Computer pinned"):
+        store.prepare(m, p, program=_converter(tmp_path))
+    assert p.stage == "failed" and store.ready(m) is None
+    assert not (store.downloads(m) / "model.safetensors").exists()
+    assert not (store.downloads(m) / "model.safetensors.part").exists()
+
+
+def test_without_room_for_it_nothing_is_downloaded(tmp_path, monkeypatch, hub):
+    monkeypatch.setattr(models, "HUB", hub.url)
+    m = _model(hub.files)
+    store = models.Store(tmp_path / "models")
+    monkeypatch.setattr(store, "free_bytes", lambda: 1000)
+    p = models.Progress()
+    with pytest.raises(RuntimeError, match="free space"):
+        store.prepare(m, p, program=_converter(tmp_path))
+    assert hub.asked == [] and "free space" in p.words()
+
+
+def test_progress_reads_as_words():
+    p = models.Progress("downloading", 2_500_000_000, 10_000_000_000)
+    assert p.words() == "downloading it: 2.5 of 10.0 GB (25%)"
+    assert "a few minutes" in models.Progress("converting").words()
+
+
+# ------------------------------------------------------------------ its server, with the real engine
+def _engine():
+    prog = models.BIN / f"chat-computer-model-{platform.machine()}"
+    if not prog.is_file():
+        pytest.skip(f"no engine for {platform.machine()}")
+    if not os.access(prog, os.X_OK):
+        pytest.skip("the engine's file isn't runnable here")
+    return str(prog)
+
+
+def _free_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+async def _raw(port, head):
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(head.encode())
+    await writer.drain()
+    data = await reader.read()
+    writer.close()
+    return data
+
+
+def test_the_engine_serves_the_model_on_this_computer_only(tmp_path):
+    prog, port = _engine(), _free_port()
+
+    async def run():
+        srv = S.ModelServer(prog, str(TINY), port, threads=1, log_file=str(tmp_path / "model.log"),
+                            cache=str(tmp_path / "cache"))
+        await srv.start()
+        try:
+            assert srv.running and await srv.healthy()
+            await srv.start()                                   # running already: nothing to do
+            body = {"messages": [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Hello"}],
+                    "max_tokens": 6, "temperature": 0, "think": False}
+            pieces = [p async for p in S.stream(port, body)]
+            again = [p async for p in S.stream(port, body)]
+            # Asked from another site's page, or by another name for this computer (a DNS rebinding): refused.
+            other_site = await _raw(port, f"GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                                          "Origin: https://example.com\r\nConnection: close\r\n\r\n")
+            other_name = await _raw(port, f"GET /health HTTP/1.1\r\nHost: example.com:{port}\r\n"
+                                          "Connection: close\r\n\r\n")
+            ours = await _raw(port, f"GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                                    "Origin: https://chatcomputer.ai\r\nConnection: close\r\n\r\n")
+            return pieces, again, other_site, other_name, ours
+        finally:
+            await srv.stop()
+            assert not srv.running
+
+    pieces, again, other_site, other_name, ours = asyncio.run(run())
+    words = "".join(c["delta"].get("content") or "" for p in pieces for c in p.get("choices", []))
+    finish = [c["finish_reason"] for p in pieces for c in p.get("choices", []) if c.get("finish_reason")]
+    usage = next(p["usage"] for p in pieces if p.get("usage"))
+    assert words and finish == ["length"] and usage["completion_tokens"] == 6
+    usage2 = next(p["usage"] for p in again if p.get("usage"))
+    assert usage2["prompt_tokens_details"]["cached_tokens"] > 0                # read once, kept for the next
+    assert "".join(c["delta"].get("content") or "" for p in again for c in p.get("choices", [])) == words
+    assert other_site.startswith(b"HTTP/1.1 403") and other_name.startswith(b"HTTP/1.1 403")
+    assert ours.startswith(b"HTTP/1.1 200") and b"access-control-allow-origin: https://chatcomputer.ai" in ours.lower()
+    assert list((tmp_path / "cache").glob("*.ccstate"))                          # the system prompt's reading kept
+
+
+def test_a_request_the_engine_refuses_says_why(tmp_path):
+    prog, port = _engine(), _free_port()
+
+    async def run():
+        srv = S.ModelServer(prog, str(TINY), port, threads=1)
+        await srv.start()
+        try:
+            with pytest.raises(S.ServerError, match="refused"):
+                async for _ in S.stream(port, {"messages": "not a list"}):
+                    pass
+        finally:
+            await srv.stop()
+    asyncio.run(run())
+
+
+def test_the_model_service_starts_its_server_once_the_model_is_ready(tmp_path, monkeypatch):
+    prog, port = _engine(), _free_port()
+    monkeypatch.setenv("CHATCOMPUTER_MODEL_BIN", prog)
+    paths = SimpleNamespace(models=tmp_path / "models", logs=tmp_path)
+    tiny = models.Model("tiny", "Tiny", "Qwen/Tiny", "0" * 40, 0, 8, ())
+    monkeypatch.setattr(models, "chosen", lambda setting, store=None: tiny)
+    svc = S.ModelService(paths, SimpleNamespace(model="auto"), port=port, threads=1)
+    prepared = []
+    monkeypatch.setattr(svc, "prepare_in_background", lambda: prepared.append(True))
+
+    async def run():
+        with pytest.raises(S.NotReady):
+            await svc.ensure()                     # not there yet: it's being got ready
+        assert prepared and not svc.ready
+        f = svc.store.path(tiny)
+        f.parent.mkdir(parents=True)
+        f.write_bytes(TINY.read_bytes())
+        try:
+            assert svc.ready and await svc.ensure() == port
+            status, body = await S.request(port, "GET", "/health")
+            return status, json.loads(body)
+        finally:
+            await svc.stop()
+    status, health = asyncio.run(run())
+    assert status == 200 and health["ok"] is True
+    assert (tmp_path / "model.log").read_text().startswith("serving tiny")

@@ -8,7 +8,7 @@
    conversation's place in the middle, with the message box under it, until it's closed.
    Sizes are the Claude app's on a computer, measured on a 1920 x 1080 screen at 100% display scaling, in rem (16px
    there; the screen sets 1 rem for its own display scaling: ui/layout.py): its words 16px on lines 22px apart (1.375),
-   the conversation 924px wide (57.75rem), Claude's words in it up to 865px (54.0625rem), yours in bubbles up to 85%
+   the conversation 924px wide (57.75rem), Chat Computer's words in it up to 865px (54.0625rem), yours in bubbles up to 85%
    of it; the message box 962px wide and 46px high for a line (60.125rem by 2.875rem); its sidebar 280px wide
    (17.5rem). */
 html { scrollbar-width: none; }
@@ -37,7 +37,7 @@ body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
 /* The message a tapped item of Actions was asked in, for a moment. */
 .you.found { outline: 2px solid var(--ink); outline-offset: 3px; }
 .ai { overflow-wrap: anywhere; max-width: 54.0625rem; }
-/* What Claude is doing (when show_activity is on), in the mono font, above the words it leads to. */
+/* What Chat Computer is doing (when show_activity is on), in the mono font, above the words it leads to. */
 .ai .activity { display: block; font-family: var(--mono); margin: 0 0 0.5em; }
 .ai.thinking .md:empty::after {
   content: ""; display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%;
@@ -174,7 +174,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 body.sleeping #wake, body.resting #wake { display: block; }
 /* "/" first in the message box: it searches this computer. What matches shows in a list above the box (as a
    search box's suggestions), in front of everything, even what's open: the arrow keys choose, Enter or a click
-   opens it between the sidebars, and the last line asks Claude instead. */
+   opens it between the sidebars, and the last line asks Chat Computer instead. */
 #search-icon { display: none; flex: none; width: 1.2em; height: 1.375em; }
 body.searching #search-icon { display: block; }
 #results {
@@ -314,7 +314,7 @@ body.show-messages:not(.panel) #messages, body.full.show-messages #messages {
 .msg-src { font-weight: bold; }
 
 /* Connecting an account: a form over the whole screen. What's typed in it goes to Chat Computer's own sign-in store,
-   not to Claude. */
+   not to the model. */
 #sheet {
   position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
   background: var(--ground); padding: 2rem;

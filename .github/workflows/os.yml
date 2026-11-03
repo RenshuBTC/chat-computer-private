@@ -2,7 +2,8 @@
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
 #   engine's, text setting's, chimes', FAT, exFAT, NTFS, ZIP, Office, picture, BitLocker and registry readers',
 #   Markdown reader's, memory file's, HID descriptors' and AML interpreter's tests (the last against ACPICA's acpiexec),
-#   and the model engine's;
+#   and the model engine's; checks the engine's programs for Linux (chatcomputer/brain/bin) and the tiny model
+#   Chat Computer's tests use (tests/data/tiny-model.ccm) are exactly what this source builds;
 #   starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a crash stops it
 #   cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts), checking the
 #   firmware refuses it unsigned; types on PS/2 and USB keyboards (on ports, behind a hub, plugged in and out),
@@ -19,8 +20,9 @@ name: Own OS test
 on:
   push:
     branches: [main]
-    paths: ['os/**', 'chatcomputer/ui/assets/fonts/**', 'windows/own-os.ps1', 'windows/lib/OwnOs.ps1',
-            'windows/lib/Startup.ps1', 'tests/win_ci/own-os.ps1', '.github/workflows/os.yml']
+    paths: ['os/**', 'chatcomputer/ui/assets/fonts/**', 'chatcomputer/brain/bin/**', 'tests/data/tiny-model.ccm',
+            'windows/own-os.ps1', 'windows/lib/OwnOs.ps1', 'windows/lib/Startup.ps1', 'tests/win_ci/own-os.ps1',
+            '.github/workflows/os.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -46,6 +48,11 @@ jobs:
         run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p markdown -p remember -p hid -p aml
       - name: The model engine's tests (on small models with random weights)
         run: cargo test -p model --features std
+      - name: The engine's programs for Linux (x86-64 and ARM) and the tiny test model are what this source builds
+        run: |
+          sh model/release.sh --check
+          cargo run -q -p model --features std --example tiny_model -- "$RUNNER_TEMP/tiny-model.ccm"
+          cmp "$RUNNER_TEMP/tiny-model.ccm" ../tests/data/tiny-model.ccm
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh

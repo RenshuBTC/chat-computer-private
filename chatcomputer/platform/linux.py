@@ -445,7 +445,7 @@ def power_mode(root: str = "/sys") -> str | None:
 
 # Programs as people know them: the processes Chat Computer and the system run under their own names.
 FRIENDLY = {"WebKitWebProcess": "web pages open in Chat Computer", "WebKitNetworkProcess": "Chat Computer's web connections",
-            "WebKitGPUProcess": "Chat Computer's drawing", "claude": "Claude's engine (Chat Computer)",
+            "WebKitGPUProcess": "Chat Computer's drawing", "chat-computer-model": "Chat Computer's model",
             "Xorg": "the display (Xorg)", "pipewire": "sound (PipeWire)", "pipewire-pulse": "sound (PipeWire)",
             "wireplumber": "sound (WirePlumber)", "bluetoothd": "Bluetooth", "NetworkManager": "the network",
             "unattended-upgr": "automatic updates", "apt": "updates", "apt-get": "updates", "dpkg": "updates",
@@ -1507,7 +1507,7 @@ def _jpeg_that_fits(im: Any, max_w: int, max_h: int, quality: int = 80) -> tuple
 
 
 def png_to_jpeg_scaled(png: bytes, max_w: int = 1366, max_h: int = 1366, quality: int = 80) -> tuple[bytes, float]:
-    """Shrink a screenshot to fit Claude's image limits. Returns (jpeg, scale) where
+    """Shrink a screenshot to a size a model reads well. Returns (jpeg, scale) where
     original_coordinate = sent_coordinate * scale."""
     from PIL import Image
     return _jpeg_that_fits(Image.open(io.BytesIO(png)).convert("RGB"), max_w, max_h, quality)

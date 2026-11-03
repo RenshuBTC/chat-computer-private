@@ -1,5 +1,5 @@
 """The lock screen's PIN. It's typed on the screen (the lock screen's keypad, or the form that sets it), checked here,
-and kept only as a salted PBKDF2 hash in Chat Computer's private folder (secrets/lock_pin): it never reaches Claude,
+and kept only as a salted PBKDF2 hash in Chat Computer's private folder (secrets/lock_pin): it never reaches the model,
 the conversation or the logs.
 
 Wrong PINs make the next try wait, longer each time (as phones do), so a PIN can't be guessed by trying them all."""

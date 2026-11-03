@@ -1,7 +1,8 @@
 # Chat Computer's runtime on GitHub's Ubuntu, the system it installs on a PC: the Python tests, against the versions
 # pinned in requirements-linux.txt (what runs on the PC) and requirements-dev.txt (what the tests need besides it).
-# They are the whole conversation: the permission gate, the tools, the file index, the screen's layout and pages, the
-# voice, Messages, the timers, undo, and the browser demo and apps the scripts build. The screen's own rendering
+# They are the whole conversation: the brain's agent loop, the model's server (the real engine, with a tiny model of
+# random weights) and getting a model ready, the permission gate, the tools, the file index, the screen's layout and
+# pages, the voice, Messages, the timers, undo, and the browser demo and apps the scripts build. The screen's own rendering
 # checks (tests/test_rendering.py) need a virtual display and minutes of real GTK; a developer runs them by hand.
 name: Runtime test
 on:

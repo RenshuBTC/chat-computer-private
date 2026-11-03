@@ -99,7 +99,7 @@ class XInput:
 class SharedPointer:
     """AirTouch's use of the display's pointer, shared with a real mouse. While AirTouch moves it the arrow is
     hidden (the dots show where the hands are); when something else moves it (it isn't where AirTouch left it:
-    a mouse, or a click Claude made) the arrow comes back and AirTouch leaves the pointer alone until that has
+    a mouse, or a click the model made) the arrow comes back and AirTouch leaves the pointer alone until that has
     been still for MOUSE_YIELD_S. Clicks and scrolls always happen: a pinch is meant."""
 
     def __init__(self, x: Any) -> None:

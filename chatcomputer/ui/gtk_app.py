@@ -1,6 +1,6 @@
 """The Chat Computer window: one full-screen GTK window with two layers.
 
-* The conversation (a local web page with only your words and Claude's words).
+* The conversation (a local web page with only your words and Chat Computer's).
 * The content layer: websites, videos, documents and pages, shown by a WebKit browser engine
   with a caption strip over it. Sign-ins and cookies are kept in ~/ChatComputer/web.
 
@@ -51,7 +51,7 @@ SAFARI_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.
 
 def private_file_uri(paths: Paths, uri: str) -> bool:
     """Whether `uri` is one of Chat Computer's private files (sign-ins, the engine's settings, the browser's logins), which
-    must never be shown on screen: from there, read_screen would hand it to Claude."""
+    must never be shown on screen: from there, read_screen would hand it to the model."""
     if not (uri or "").lower().startswith("file:"):
         return False
     return is_private(paths, urllib.parse.unquote(urllib.parse.urlparse(uri).path) or "/")
@@ -615,7 +615,7 @@ class GtkScreen(Screen):
             return
         if kind in PAGE_EVENTS:
             # Pins, a message opened, a sign-in form filled in, "/" searching: the controller's (on its thread).
-            # A form's passwords go straight there, never to Claude, and are never logged.
+            # A form's passwords go straight there, never to the model, and are never logged.
             if self.loop:
                 self.loop.call_soon_threadsafe(self.on_page_event, msg)
             return
@@ -661,7 +661,7 @@ class GtkScreen(Screen):
             GLib.timeout_add(300, lambda: self.content.reload() and False)
 
     # ================================================================ content layer
-    # What's open (a website, a video, a message, a document, a page Claude made) fills the middle, between the two
+    # What's open (a website, a video, a message, a document, a page the model made) fills the middle, between the two
     # sidebars, from the top down to the message box, in place of the conversation: the conversation page draws its
     # frame and says where (a "hole" message), and the view is laid over the page there.
     def _add_in_hole(self, view: Gtk.Widget) -> None:
@@ -727,7 +727,7 @@ class GtkScreen(Screen):
         """Puts a view in the middle, in place of the conversation or what was there, named at the top of its frame
         (`title`, else its page's). A website has the keys: typing and the keys that scroll are the page's (its
         search box, its shortcuts) until the message box is tapped. A page of Chat Computer's own (a document, a
-        message, a page Claude made) leaves them in the message box until it's tapped itself: it scrolls under the
+        message, a page the model made) leaves them in the message box until it's tapped itself: it scrolls under the
         pointer, and with Page Up and Down there. While locked, it's only noted: it comes on the screen once
         unlocked."""
         if self.shown is not None and self.shown is not view:
@@ -762,7 +762,7 @@ class GtkScreen(Screen):
 
     def close_content(self, pause: bool = True) -> None:
         """The x at the top of what's open: it goes away (a video stops), and the conversation is back.
-        (show_conversation, Claude's, leaves music playing.)"""
+        (show_conversation, the model's, leaves music playing.)"""
         if self.mode != "content":
             return
         if pause and self.shown is self.content:
@@ -919,7 +919,7 @@ class GtkScreen(Screen):
 
     def _info(self) -> dict[str, Any]:
         if self.mode == "content" and self.shown is not None and self.shown is not self.content:
-            # A site Messages reads (WhatsApp, Instagram...): shown to the person, not for Claude to use.
+            # A site Messages reads (WhatsApp, Instagram...): shown to the person, not for the model to use.
             provider = next((p for p, v in self.sources.items() if v is self.shown), "")
             return {"mode": "source", "source": provider, "url": self.shown.get_uri(), "title": self.shown.get_title()}
         return {"mode": self.mode, "url": self.content.get_uri(), "title": self.content.get_title()}
@@ -1065,8 +1065,8 @@ class GtkScreen(Screen):
     async def settle(self, quiet_s: float = 0.15, max_s: float = 1.5, load_s: float = 10.0) -> dict[str, Any]:
         """After a click or keys: waits for the page to react, rather than a fixed pause. A page that starts
         loading is waited for (up to `load_s`), then until nothing on it has changed for `quiet_s` (up to `max_s`).
-        Returns what's showing. A fixed pause was too short for a new page (Claude then read the old one, or a
-        page still loading, and had to look again: another trip to Claude) and too long for a menu that opens
+        Returns what's showing. A fixed pause was too short for a new page (the model then read the old one, or a
+        page still loading, and had to look again: another trip to the model) and too long for a menu that opens
         at once."""
         assert self.loop is not None
         await asyncio.sleep(0.08)               # the click reaches the page; a link starts loading
@@ -1366,7 +1366,7 @@ class GtkScreen(Screen):
 
     def account_form(self, form: dict[str, Any] | None) -> None:
         """A sign-in form for a mail or Telegram account on the conversation page (None closes it). What's typed
-        in it comes back to on_account, never through Claude."""
+        in it comes back to on_account, never through the model."""
         self._chat_js(f"CO.accountForm({json.dumps(form)})", "transient")
 
     # ================================================================ the touchscreen

@@ -1,13 +1,9 @@
-"""The permission gate: every tool call Claude makes passes through here.
+"""The permission gate: every tool call the model makes passes through here.
 
 Safe things (reading, looking, showing) just happen. Things that can't be undone, cost money,
 send something as you, or change the machine are spoken as a yes/no question first. A few
-things are never allowed (reading the sign-in token, wiping disks, running downloaded scripts).
+things are never allowed (reading the sign-ins Chat Computer keeps, wiping disks, running downloaded scripts).
 File edits are backed up first so they can be undone.
-
-When the request came from the Claude app on the phone, nobody may be at the PC to hear the
-question. Then Claude is told to ask in its reply; when the person answers yes on the phone, the
-same action is allowed once when Claude tries it again.
 
 A command runs without asking only when every part of it is known to only read. Anything this file
 can't analyse with certainty (substitutions, unusual redirections, several lines) is asked about.
@@ -17,31 +13,37 @@ from __future__ import annotations
 import asyncio
 import glob
 import itertools
-import json
 import logging
 import os
 import re
 import shlex
 import shutil
-import time
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
-
-if TYPE_CHECKING:
-    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
 
 from .. import update
-from ..answers import classify_answer
 from ..config import Paths
 from ..journal import Journal
 
 log = logging.getLogger("chatcomputer.permissions")
 
-# A confirm callback speaks the question and returns ("yes"|"no"|"unclear"|"timeout", what the user said),
-# or ("phone", "") when the person is on the phone and the question has to go in Claude's reply.
+
+@dataclass
+class PermissionResultAllow:
+    """Go ahead, with this input."""
+    updated_input: dict[str, Any] | None = None
+    behavior: str = "allow"
+
+
+@dataclass
+class PermissionResultDeny:
+    """Not done: the message says why (the model reads it as the tool's result)."""
+    message: str = ""
+    interrupt: bool = False
+    behavior: str = "deny"
+
+# A confirm callback asks the question and returns ("yes"|"no"|"unclear"|"timeout", what the user said).
 ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
-PHONE_ASKED = "\x00phone"
-PHONE_OK_FOR_S = 10 * 60       # a yes on the phone allows the action for this long
-PHONE_QUESTION_FOR_S = 30 * 60 # a question on the phone can be answered for this long
 ToolPolicy = Callable[[dict[str, Any]], "str | None"]   # returns a question, or None to allow
 
 READ_ONLY_CMDS = {
@@ -77,12 +79,12 @@ SAFE_REDIRECTS = {">/dev/null", "2>/dev/null", "2>&1", "1>/dev/null", "&>/dev/nu
 FORBIDDEN_PATTERNS = [
     (re.compile(r"(chatcomputer/secrets|claude_token|claude_login\.json|\.credentials\.json|CLAUDE_CODE_OAUTH_TOKEN|"
                 r"ANTHROPIC_API_KEY|(?<![\w.-])\.engine\b|chatcomputer/web\b)", re.I),
-     "That would expose your Claude sign-in token, so Chat Computer blocks it."),
+     "That would expose the sign-ins Chat Computer keeps, so Chat Computer blocks it."),
     (re.compile(r"\benviron\b", re.I), "That would expose secret settings, so Chat Computer blocks it."),
     (re.compile(r"[%$]ENV\b|process\.env\b|\bjq\b[^|;&]*\benv\b"),
      "That would expose secret settings, so Chat Computer blocks it."),
     (re.compile(r"(^|[;&|]\s*)(printenv|env|set|export\s+-p|declare\s+-p)\s*($|[;&|])"),
-     "Listing all settings would expose your Claude sign-in token, so Chat Computer blocks it."),
+     "Listing all settings could expose secret ones, so Chat Computer blocks it."),
     (re.compile(r"\|\s*(sudo\s+)?(ba|z|da|k|fi)?sh\b|\|\s*(python3?|perl|ruby|node)\b|(ba)?sh\s+<\(\s*(curl|wget)"),
      "Chat Computer never runs scripts straight from the internet. Download it, look at it, then decide."),
     (re.compile(r"\b(mkfs(\.\w+)?|wipefs|fdisk|sfdisk|sgdisk|gdisk|parted|cfdisk)\b"),
@@ -467,7 +469,7 @@ def holds_private(paths: Paths, path: str) -> bool:
 
 def program_dirs() -> list[str]:
     """Chat Computer's own program: where it's installed, and the folder on Windows' drive it updates itself from
-    (update.py). Claude can read them but not change them: what's in them is Chat Computer, this gate included."""
+    (update.py). The model can read them but not change them: what's in them is Chat Computer, this gate included."""
     out = [os.path.realpath(update.APP.parent)]
     src = update.source_dir()
     if src is not None:
@@ -606,8 +608,6 @@ class PermissionGate:
         self.tool_policies = tool_policies or {}
         self.on_decision = on_decision
         self._lock = asyncio.Lock()
-        self._phone_question: dict[str, Any] | None = None   # asked in the chat, waiting for an answer
-        self._phone_ok: dict[str, float] = {}                 # action key -> allowed until
         self._cwds: set[str] = set()                          # folders shell commands have moved to
 
     # ------------------------------------------------------------------ helpers
@@ -624,40 +624,12 @@ class PermissionGate:
                     "blocks it. Search a more specific folder (like ~/Documents), or use search_files.")
         return None
 
-    async def _ask(self, question: str, key: str | None = None) -> tuple[bool, str]:
-        key = key or question
-        until = self._phone_ok.pop(key, 0.0)
-        if until > time.time():
-            return True, "yes (on their phone)"
+    async def _ask(self, question: str) -> tuple[bool, str]:
         if self.confirm is None:
             return False, ""
         async with self._lock:  # one spoken question at a time
             verdict, said = await self.confirm(question)
-        if verdict == "phone":
-            self._phone_question = {"key": key, "question": question, "at": time.time()}
-            return False, PHONE_ASKED
         return verdict == "yes", said
-
-    def phone_reply(self, text: str) -> None:
-        """What the person typed on the phone, in case it answers the question Claude asked there."""
-        q = self._phone_question
-        if not q or time.time() - q["at"] > PHONE_QUESTION_FOR_S:
-            return
-        verdict = classify_answer(text)
-        if verdict == "yes":
-            self._phone_ok[q["key"]] = time.time() + PHONE_OK_FOR_S
-            self._phone_question = None
-        elif verdict == "no":
-            self._phone_question = None
-
-    @staticmethod
-    def _key(tool: str, inp: dict[str, Any]) -> str:
-        if tool == "Bash":
-            return "Bash:" + str(inp.get("command", "")).strip()
-        try:
-            return tool + ":" + json.dumps(inp, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            return tool + ":" + repr(inp)
 
     def _note(self, decision: str, tool: str, inp: dict[str, Any]) -> None:
         if self.on_decision:
@@ -668,15 +640,9 @@ class PermissionGate:
 
     @staticmethod
     def _deny(msg: str) -> PermissionResultDeny:
-        from claude_agent_sdk import PermissionResultDeny
         return PermissionResultDeny(message=msg, interrupt=False)
 
     def _user_said_no(self, said: str) -> PermissionResultDeny:
-        if said == PHONE_ASKED:
-            q = (self._phone_question or {}).get("question", "Should I go ahead?")
-            return self._deny("Not done yet: this needs their OK, and they're messaging you from the Claude app on "
-                              f'their phone, so nobody is at the PC to answer. Ask them in your reply: "{q}" Then '
-                              "stop. If they answer yes, do exactly the same thing again and it will be allowed.")
         if said:
             return self._deny(f'The user did not approve. They said: "{said}". Do not retry this action; '
                               f"follow what they said or ask what they'd like instead.")
@@ -690,7 +656,7 @@ class PermissionGate:
 
     # ------------------------------------------------------------------ the gate
     async def __call__(self, tool: str, inp: dict[str, Any], ctx: Any = None):
-        # The tool call about to run (Claude's run one at a time, each just after this): what it changes is recorded
+        # The tool call about to run (the model's run one at a time, each just after this): what it changes is recorded
         # as its, so Actions can take that back (Revert).
         self.journal.call = getattr(ctx, "tool_use_id", None) or None
         try:
@@ -722,8 +688,7 @@ class PermissionGate:
                 self._note("deny", tool, inp)
                 return self._deny(why or PROGRAM_DENIED)
             if _runs_code(path):
-                ok, said = await self._ask(f"Can I change {os.path.basename(path)}? Your computer runs what's in it.",
-                                           self._key(tool, inp))
+                ok, said = await self._ask(f"Can I change {os.path.basename(path)}? Your computer runs what's in it.")
                 self._note("allow" if ok else "deny", tool, inp)
                 if not ok:
                     return self._user_said_no(said)
@@ -748,7 +713,7 @@ class PermissionGate:
             desc = (inp.get("description") or "").strip().rstrip(".")
             question = (f"Can I run a command to {desc[0].lower() + desc[1:]}?" if desc and len(desc) > 3
                         else "Can I run this command: " + _short(cmd) + "?")
-            ok, said = await self._ask(question, self._key(tool, inp))
+            ok, said = await self._ask(question)
             self._note("allow" if ok else "deny", tool, inp)
             if ok:
                 self._moved_to(cmd)
@@ -765,19 +730,16 @@ class PermissionGate:
                 return self._deny(question[5:].strip())
             if not question:
                 return _allow(inp)
-            ok, said = await self._ask(question, self._key(tool, inp))
+            ok, said = await self._ask(question)
             self._note("allow" if ok else "deny", tool, inp)
             return _allow(inp) if ok else self._user_said_no(said)
 
         # Any other tool (e.g. one added by a future engine version): ask.
-        ok, said = await self._ask(f"Can I use {tool}?", self._key(tool, inp))
+        ok, said = await self._ask(f"Can I use {tool}?")
         return _allow(inp) if ok else self._user_said_no(said)
 
 
 def _allow(inp: dict[str, Any]) -> PermissionResultAllow:
-    # The Agent SDK is loaded when the engine first asks, not with this module: the window needs is_private from
-    # here, and it comes up without waiting for the SDK (most of a second).
-    from claude_agent_sdk import PermissionResultAllow
     return PermissionResultAllow(updated_input=inp)
 
 

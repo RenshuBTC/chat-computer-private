@@ -1,8 +1,8 @@
-"""Chat Computer's system services: everything Claude can do on this computer, as tools.
+"""Chat Computer's system services: everything the model can do on this computer, as tools.
 
-Each tool has a short description (Claude reads it to decide what to use) and a policy that
-returns None (just do it), a spoken yes/no question, or "DENY: reason". Built-in Claude Code
-tools (Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch) are available alongside these.
+Each tool has a short description (the model reads it to decide what to use) and a policy that
+returns None (just do it), a spoken yes/no question, or "DENY: reason". The everyday tools (Bash,
+Read, Write, Edit, Glob, Grep, WebSearch, WebFetch: brain/builtin.py) are available alongside these.
 """
 from __future__ import annotations
 
@@ -20,10 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
-
 from ..brain.permissions import PROGRAM_DENIED, holds_private, holds_program, is_private, is_program
-from ..config import EFFORTS, MODEL_RE, Paths, Settings
+from ..config import EFFORTS, Paths, Settings
 from ..files_index import FileIndex
 from ..journal import Journal, move_to_trash
 from ..memory import Memory
@@ -38,7 +36,7 @@ ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
 
 SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
-            "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "phone_access", "airtouch",
+            "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "airtouch",
             "left_panel", "right_panel", "keyboard_layout", "home_place"}
 # Windows' own folders, at the top of its drive (a folder of the person's own called Recovery or Boot is theirs).
 WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
@@ -57,7 +55,7 @@ class ToolContext:
     on_sleep: Callable[[], None] | None = None
     on_settings_changed: Callable[[list[str]], None] | None = None
     on_mic_changed: Callable[[], None] | None = None   # another microphone was chosen: listen with it now
-    rate_limit: dict[str, Any] = field(default_factory=dict)
+    model_status: Callable[[], dict[str, Any]] | None = None   # the model that thinks: which, and whether it's ready
     airtouch_status: Callable[[], dict[str, Any]] | None = None
     keyboard: Callable[[bool], Awaitable[str]] | None = None       # AirTouch's on-screen keyboard up or down
     announce: Callable[[str], None] | None = None     # show and say something now, mid-tool (any thread)
@@ -105,6 +103,11 @@ def _size(n: float) -> str:
     return f"{int(n)} bytes"
 
 
+def _model_names() -> list[str]:
+    from ..brain.models import names
+    return names()
+
+
 def _names(paths: list[str], n: int = 4) -> str:
     names = [os.path.basename(p.rstrip("/")) or p for p in paths]
     return ", ".join(names[:n]) + (f" and {len(names) - n} more" if len(names) > n else "")
@@ -134,10 +137,11 @@ def normalize_url(url: str) -> str:
     return "https://" + u
 
 
-def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[str, Any]], str | None]], list[str]]:
-    """Returns (mcp server config, {tool name: policy}, [tool names])."""
+def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[dict[str, Any]], str | None]], list[str]]:
+    """Returns ([each tool's name, description and input schema], {tool name: policy}, [tool names]). What each
+    does is ctx.tool_fns[name]."""
     on_mac = getattr(ctx.platform, "name", "") == "mac"
-    tools: list[Any] = []
+    tools: list[dict[str, Any]] = []
     policies: dict[str, Callable[[dict[str, Any]], str | None]] = {}
 
     def reg(name: str, description: str, schema: dict[str, Any], policy: Callable[[dict[str, Any]], str | None] | None = None):
@@ -151,7 +155,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                 except Exception as exc:
                     log.exception("tool %s failed", name)
                     return _err(f"{name} failed: {exc}")
-            tools.append(tool(name, description, schema)(wrapped))
+            tools.append({"name": name, "description": description, "input_schema": schema})
             ctx.tool_fns[name] = wrapped
             if policy:
                 policies[name] = policy
@@ -417,9 +421,6 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         if not ctx.confirm:
             return _err("No one is there to answer.")
         verdict, said = await ctx.confirm(a["question"])
-        if verdict == "phone":
-            return _text("They're messaging you from the Claude app on their phone, so nobody is at the PC to hear "
-                         "this. Ask the question in your reply and stop; their next message is the answer.")
         return _text(f"Answer: {verdict}. They said: “{said}”" if said else f"Answer: {verdict} (no reply).")
 
     # ================================================================ files
@@ -674,7 +675,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          "busy (the busiest programs, the processor with its speed and power mode, memory and disk, now and over the "
          "last minutes), the camera and which program has it open, " +
          ("the drive with the files from macOS, " if on_mac else "the Windows drive (and the folder its files are in), ") +
-         "the user's Claude usage limits, and which version of Chat Computer this is.", obj({}))
+         "the model you are (it runs on this computer) and which version of Chat Computer this is.", obj({}))
     async def system_status(a):
         p = ctx.platform
         parts = {"internet": p.internet_ok, "machine": p.system_info, "busy": p.busiest, "wifi": p.wifi_status,
@@ -697,14 +698,14 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
             st["file_index"] = {**ctx.index.status, "files": ctx.index.status.get("files")}
         if ctx.airtouch_status:
             st["airtouch"] = ctx.airtouch_status()
-        if ctx.rate_limit:
-            st["claude_usage"] = ctx.rate_limit
+        if ctx.model_status:
+            st["thinking_model"] = ctx.model_status()
         return _text(_json(st))
 
     def _wifi_policy(a: dict[str, Any]) -> str | None:
         act = a.get("action")
         if act in ("disconnect", "off"):
-            return "Turn off the Wi-Fi? I won't be able to reach Claude until it's back."
+            return "Turn off the Wi-Fi? Websites, messages and web searches won't work until it's back."
         if act == "forget":
             return f"Forget the Wi-Fi network {a.get('network', '')}?"
         return None
@@ -822,7 +823,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         return _text(said)
 
     def _amount(v: Any, default: int) -> int:
-        """A number Claude gave: 0 is a number (volume 0 is silence, not the default), and "40%" is 40."""
+        """A number the model gave: 0 is a number (volume 0 is silence, not the default), and "40%" is 40."""
         if v is None or (isinstance(v, str) and not v.strip()):
             return default
         m = re.search(r"\d+(\.\d+)?", str(v))
@@ -1415,7 +1416,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          lambda a: POWER_Q.get(a.get("action", ""), "Do that?"))
     async def power(a):
         act = a["action"]
-        # A switch first sets the other system for the next start; when that fails, Claude hears it now, before
+        # A switch first sets the other system for the next start; when that fails, the model hears it now, before
         # saying goodbye.
         problem = await asyncio.to_thread(ctx.platform.prepare_power, act)
         if problem:
@@ -1518,21 +1519,27 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         return _text(ctx.memory.for_prompt() or "Nothing remembered yet.")
 
     def _settings_policy(a: dict[str, Any]) -> str | None:
-        """Which Claude answers them, and how hard it thinks, are theirs to choose: changed only once they say yes
+        """Which model answers them, and how hard it thinks, are theirs to choose: changed only once they say yes
         (not because a reply was slow, say)."""
         if a.get("action") != "set" or a.get("key") not in ("model", "effort"):
             return None
         from ..config import model_label
         v, s = str(a.get("value") or ""), ctx.settings
         if a["key"] == "model":
-            return f"Switch me from {model_label(s.model)} to {model_label(v) or v}?"
+            from ..brain import models as llm
+            m = llm.chosen(v)
+            here = llm.Store(ctx.paths.models).ready(m)
+            later = "" if here else f" It's a one-time download of about {m.download_bytes / 1e9:.0f} GB first."
+            return f"Switch me from {model_label(s.model)} to {m.label}?{later}"
         return (f"Change how hard I think from {s.effort} to {v}? Lower answers sooner; higher takes more care."
                 if v != s.effort else None)
 
     @reg("chatcomputer_settings", "Read or change Chat Computer settings: voice (af_heart, af_bella, af_nicole, am_michael, "
          "am_fenrir, bf_emma, bm_george...), speech_speed (0.7-1.6), show_activity (true/false), "
          "auto_sleep_minutes (minutes of quiet before Chat Computer stops listening until its wake word; the computer "
-         "stays on, and timers and alarms still ring; 0 = never), barge_in, wake_words, model, effort, user_name "
+         "stays on, and timers and alarms still ring; 0 = never), barge_in, wake_words, model (the model that thinks, "
+         "on this computer: auto, or " + ", ".join(_model_names()) + "), effort (off, low, medium, high, max: how "
+         "long it thinks before answering), user_name "
          "(what to call them: the greeting says its first word), home_place (the town or city they live in, for the "
          "weather in the greeting; empty: their time zone's city), keyboard_layout (the "
          "keyboard's layout, as us, gb, fr, de, es, it, ch, be, or a kind of one like fr(bepo): set it when the "
@@ -1543,9 +1550,7 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
          "'get' shows the result. To make all text bigger or smaller set text_scale (1.0 = automatic; e.g. 1.15 "
          "bigger, 0.87 smaller). When the user says how far they sit from the screen, set viewing_distance_cm. "
          "If the screen's size is wrong (some TVs don't report it), set screen_inches (the diagonal). web_zoom "
-         "zooms websites (0 = automatic). text_size forces a fixed pixel size (0 = automatic). phone_access "
-         "(true/false) lets them message you from the Claude app on their phone (needs the full sign-in from "
-         "Chat Computer Setup). airtouch (true/false) turns AirTouch, the hand gestures seen by the screen's camera, on or "
+         "zooms websites (0 = automatic). text_size forces a fixed pixel size (0 = automatic). airtouch (true/false) turns AirTouch, the hand gestures seen by the screen's camera, on or "
          "off. left_panel and right_panel (true/false) show or hide Messages (left) and Actions (right), as their "
          "switches on the screen do.",
          obj({"action": {"type": "string", "enum": ["get", "set"]}, "key": S, "value": {}}, ["action"]),
@@ -1561,12 +1566,12 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
         key = a.get("key", "")
         if key not in SETTABLE:
             return _err(f"{key!r} can't be changed. Settable: {', '.join(sorted(SETTABLE))}")
-        # Values that would stop Claude from working (and so couldn't be put back by asking) are refused.
+        # Values that would stop the model from working (and so couldn't be put back by asking) are refused.
         value = a.get("value")
         if key == "effort" and str(value) not in EFFORTS:
             return _err(f"effort must be one of: {', '.join(EFFORTS)}.")
-        if key == "model" and not MODEL_RE.match(str(value or "")):
-            return _err("That isn't a Claude model name (like claude-sonnet-5-5, or opus).")
+        if key == "model" and str(value or "") not in ("auto", *_model_names()):
+            return _err(f"model must be auto or one of: {', '.join(_model_names())}.")
         if key == "voice" and not re.fullmatch(r"[ab][fm]_[a-z]+", str(value or "")):
             # Kokoro's voices start with their language (a: American English, b: British English, z: Mandarin...),
             # and Chat Computer speaks English: another language's voice would read English sounds badly, or nothing.
@@ -1611,16 +1616,15 @@ def build(ctx: ToolContext) -> tuple[dict[str, Any], dict[str, Callable[[dict[st
                  " (takes effect next time Chat Computer starts)" if key == "stt_model" else "")
         return _text(f"{key} is now {getattr(ctx.settings, key)!r}{later}.")
 
-    @reg("stop_listening", "Stop listening until the user says the wake word (\"Claude\") or presses an AirPods "
+    @reg("stop_listening", f"Stop listening until the user says the wake word (\"{(ctx.settings.wake_words or ['computer'])[0]}\") or presses an AirPods "
          "stem. Use when they say goodbye, goodnight, or that they're done.", obj({}))
     async def stop_listening(a):
         if ctx.on_sleep:
             ctx.on_sleep()
         return _text("Sleeping after this reply. Say a very short goodbye.")
 
-    server = create_sdk_mcp_server(SERVER, "1.0.0", tools)
-    names = [t.name for t in tools]
-    return server, policies, names
+    names = [t["name"] for t in tools]
+    return tools, policies, names
 
 
 def full_names(names: list[str]) -> list[str]:

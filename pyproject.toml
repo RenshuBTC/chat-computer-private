@@ -1,12 +1,11 @@
 [project]
 name = "chatcomputer"
-version = "0.1.0"
-description = "Chat Computer: a voice-first, AI-native computer. Claude is the interface; a thin Linux layer runs hidden underneath."
+version = "0.2.0"
+description = "Chat Computer: a voice-first, AI-native computer. An open model running on the computer itself is the interface; a thin Linux layer runs hidden underneath."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Personal use" }
 dependencies = [
-  "claude-agent-sdk>=0.2.167",
   "numpy>=1.26",
   "sounddevice>=0.4.6",
   "onnxruntime>=1.17",

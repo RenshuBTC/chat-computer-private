@@ -1,4 +1,4 @@
-"""Turns documents, files and Claude-made pages into something the content layer can show."""
+"""Turns documents, files and pages the model made into something the content layer can show."""
 from __future__ import annotations
 
 import contextlib
@@ -129,7 +129,7 @@ def chat_html(title: str, lines: list[tuple[str, str, str]], settings: Any) -> s
 
 
 def wrap_page(html: str, title: str, settings: Any) -> str:
-    """Claude-made pages are shown as written; fragments get the Chat Computer look around them."""
+    """Pages the model made are shown as written; fragments get the Chat Computer look around them."""
     low = html.lstrip()[:200].lower()
     if low.startswith("<!doctype") or low.startswith("<html"):
         return html

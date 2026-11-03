@@ -1,5 +1,6 @@
 """Things that make Chat Computer quicker to start and to answer, kept from coming back slow."""
 import asyncio
+from types import SimpleNamespace
 import subprocess
 import sys
 import time
@@ -33,42 +34,34 @@ class SlowInternetCheck(FakePlatform):
         return self.online
 
 
-def test_a_request_doesnt_wait_for_an_internet_check(tmp_path, monkeypatch):
-    c = _controller(tmp_path, monkeypatch, SlowInternetCheck())
+def test_a_request_doesnt_wait_for_the_internet(tmp_path, monkeypatch):
+    # The model is on the computer: a question goes to it without any check of the internet, online or not.
+    c = _controller(tmp_path, monkeypatch, SlowInternetCheck(online=False))
+    asked = []
+
+    async def ask(text, typed=False):
+        asked.append(text)
+        return "t1"
+    c.brain = SimpleNamespace(busy=False, last_activity=0.0, ask=ask, current_origin="here")
+    c.model = SimpleNamespace(ready=True)
 
     async def run():
         c.loop = asyncio.get_running_loop()
-        c._online_cache = (time.time() - 60, True)        # online a minute ago
         t0 = time.monotonic()
-        assert await c._online_now() is True
-        waited = time.monotonic() - t0
-        await asyncio.sleep(1.3)                           # the check, in the background
-        return waited
-    waited = asyncio.run(run())
-    assert waited < 0.3 and c.platform.checks == 1 and c._online_cache[1] is True
+        await c.handle("what's 2 and 2", typed=True)
+        return time.monotonic() - t0
+    assert asyncio.run(run()) < 0.5 and len(asked) == 1 and c.platform.checks == 0
 
 
-def test_offline_is_checked_again_before_the_next_request(tmp_path, monkeypatch):
-    c = _controller(tmp_path, monkeypatch, SlowInternetCheck(online=True))
-
-    async def run():
-        c.loop = asyncio.get_running_loop()
-        c._online_cache = (0.0, False)          # set after a request answered offline
-        return await c._online_now()
-    assert asyncio.run(run()) is True and c.platform.checks == 1
-
-
-def test_the_window_doesnt_wait_for_the_agent_sdk():
-    # The window module needs is_private from the permission gate; the gate loads the Agent SDK (most of a
-    # second) only when the engine first asks.
-    code = "import sys, chatcomputer.brain.permissions; print('claude_agent_sdk' in sys.modules)"
+def test_the_window_doesnt_wait_for_the_brain():
+    # The window module needs is_private from the permission gate: loading the gate doesn't load the brain.
+    code = "import sys, chatcomputer.brain.permissions; print('chatcomputer.brain.agent' in sys.modules)"
     r = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, timeout=60)
     assert r.stdout.strip() == "False", r.stderr
 
 
-def test_the_gate_still_answers_with_the_sdks_results(tmp_path):
-    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
-    from chatcomputer.brain.permissions import PermissionGate
+def test_the_gate_answers_with_its_own_results(tmp_path):
+    from chatcomputer.brain.permissions import PermissionGate, PermissionResultAllow, PermissionResultDeny
     from chatcomputer.journal import Journal
     paths = Paths(tmp_path / "ChatComputer").ensure()
 
@@ -76,8 +69,9 @@ def test_the_gate_still_answers_with_the_sdks_results(tmp_path):
         return ("no", "no")
     gate = PermissionGate(paths, Journal(paths), confirm, {})
     ok = asyncio.run(gate("WebSearch", {"query": "weather"}))
-    no = asyncio.run(gate("Read", {"file_path": str(paths.secrets / "claude_token")}))
+    no = asyncio.run(gate("Read", {"file_path": str(paths.secrets / "accounts.json")}))
     assert isinstance(ok, PermissionResultAllow) and isinstance(no, PermissionResultDeny)
+    assert ok.behavior == "allow" and ok.updated_input == {"query": "weather"} and no.behavior == "deny"
 
 
 def test_voice_models_load_side_by_side(tmp_path, monkeypatch):
@@ -137,35 +131,23 @@ def _pc_controller(tmp_path, monkeypatch, mounted):
 
 
 def test_windows_files_that_arrive_after_the_start_are_taken_in(tmp_path, monkeypatch):
-    import types
     mounted = {"now": False}
     c, mnt = _pc_controller(tmp_path, monkeypatch, mounted)
-    restarted = []
-
-    async def restart():
-        restarted.append(True)
-    c._restart_brain_when_idle = restart
 
     async def run():
         await c.start()
         assert c._other_files_pending() and not c._files_settled.is_set()
         assert [label for label, _ in c.index.roots] == ["home"]
-        # The engine had started without them.
-        c.brain = types.SimpleNamespace(add_dirs=[], client=object())
-        tok = "sk-ant-oat01-" + "W" * 90
-        (mnt / "Users" / "rensh" / "ChatComputer").mkdir(parents=True)
-        (mnt / "Users" / "rensh" / "ChatComputer" / "claude_token").write_text(tok + "\n")
+        (mnt / "Users" / "rensh" / "Documents").mkdir(parents=True)
         mounted["now"] = True
         await asyncio.wait_for(c._files_settled.wait(), 3)
         await asyncio.sleep(0.2)
-        brain, c.brain = c.brain, None
+        c.brain = None
         await c.stop()
-        return tok, brain
-    tok, brain = asyncio.run(run())
+    asyncio.run(run())
     home = str(mnt / "Users" / "rensh")
     assert ("windows", home) in c.index.roots
-    assert c.paths.token_file.read_text().strip() == tok        # the sign-in left on Windows, taken in
-    assert brain.add_dirs == [home] and restarted == [True]
+    assert c._other_os_files() == home         # and the next conversation's system prompt says where they are
 
 
 def test_the_engine_waits_a_moment_for_windows_files_at_the_start(tmp_path, monkeypatch):
@@ -303,7 +285,6 @@ def test_history_reads_only_the_end_of_a_long_transcript(tmp_path, monkeypatch):
 
 # ------------------------------------------------------------------ tools
 def _tools(tmp_path, platform):
-    import os
     from chatcomputer import tools as T
     from chatcomputer.journal import Journal
     from chatcomputer.memory import Memory
@@ -313,14 +294,12 @@ def _tools(tmp_path, platform):
     paths = Paths(home / "ChatComputer").ensure()
     ctx = T.ToolContext(paths, Settings(windows_mount=str(tmp_path / "win")), platform, Journal(paths), RecordingScreen(),
                         Memory(paths))
-    server, _, _ = T.build(ctx)
-    return ctx, server
+    T.build(ctx)
+    return ctx, ctx
 
 
-def _call(server, name, args):
-    entry = server["instance"].get_request_handler("tools/call")
-    out = asyncio.run(entry.handler(None, entry.params_type(name=name, arguments=args)))
-    return out
+def _call(ctx, name, args):
+    return asyncio.run(ctx.tool_fns[name](args))
 
 
 class SlowParts(FakePlatform):
@@ -359,7 +338,7 @@ def test_the_status_check_asks_every_part_side_by_side(tmp_path):
     t0 = time.monotonic()
     out = _call(server, "system_status", {})
     took = time.monotonic() - t0
-    st = json.loads(out.content[0].text)
+    st = json.loads(out["content"][0]["text"])
     assert took < 1.2                       # seven parts of 0.4 s each: 2.8 s one after another
     assert st["internet"] is True and st["wifi"] == {"connected_to": "Home"}
     assert st["windows_drive"] == "unavailable (no helper)"
@@ -383,7 +362,7 @@ def test_a_look_at_the_screen_comes_from_the_platforms_jpeg(tmp_path):
             return b"\xff\xd8jpeg", 3.0
     ctx, server = _tools(tmp_path, Shot())
     out = _call(server, "look_at_screen", {})
-    assert out.content[0].type == "image" and ctx.shot_scale == 3.0
+    assert out["content"][0]["type"] == "image" and ctx.shot_scale == 3.0
     _call(server, "click", {"x": 100, "y": 50})
     assert ("click", (300, 150, "left", 1)) in ctx.platform.calls
 

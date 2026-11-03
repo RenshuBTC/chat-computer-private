@@ -1,5 +1,5 @@
 /* Chat Computer page helper. Runs in its own isolated script world inside every page shown on
-   screen, so websites can't see or tamper with it. It lets Claude read pages, find things to
+   screen, so websites can't see or tamper with it. It lets the model read pages, find things to
    click, type, scroll and control video. Nothing here sends data anywhere except to Chat Computer. */
 (function () {
   "use strict";

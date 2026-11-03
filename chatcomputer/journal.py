@@ -57,8 +57,8 @@ def redact(obj: Any) -> Any:
     return obj
 
 
-# The tool call making changes now when it isn't one of Claude's (a revert, set in the task doing it). It comes before
-# Journal.call, which the permission gate sets just before each of Claude's tool calls runs (they run one at a time).
+# The tool call making changes now when it isn't one of the model's (a revert, set in the task doing it). It comes before
+# Journal.call, which the permission gate sets just before each of the model's tool calls runs (they run one at a time).
 CALL: contextvars.ContextVar[str | None] = contextvars.ContextVar("chatcomputer_journal_call", default=None)
 # The change being taken back now (by a revert): what's recorded meanwhile takes it back, and taking that back in turn
 # puts it back.
@@ -88,7 +88,7 @@ class Journal:
     def __init__(self, paths: Paths) -> None:
         self.paths = paths
         self.lock = threading.Lock()
-        # Claude's tool call running now (its tool_use_id), set by the permission gate.
+        # The model's tool call running now (its id), set by the permission gate.
         self.call: str | None = None
         # Each recent tool call's changes that can be taken back (record ids, oldest first).
         self._calls: OrderedDict[str, list[str]] = OrderedDict()

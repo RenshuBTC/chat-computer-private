@@ -97,37 +97,37 @@ def test_another_microphone_by_asking(tmp_path):
     platform = FakePlatform()
     ctx = T.ToolContext(paths, Settings(), platform, Journal(paths), RecordingScreen(), Memory(paths),
                         on_mic_changed=lambda: reopened.append(True))
-    server, _, _ = T.build(ctx)
-    said = call(server, "sound", {"action": "input", "value": "webcam"})
+    T.build(ctx)
+    said = call(ctx, "sound", {"action": "input", "value": "webcam"})
     assert said == "Listening with webcam now." and reopened == [True] and ("set_input", ("webcam",)) in platform.calls
-    assert call(server, "sound", {"action": "input"}) == "Which microphone? Available: AirPods Pro"
+    assert call(ctx, "sound", {"action": "input"}) == "Which microphone? Available: AirPods Pro"
     from chatcomputer.done import describe
     assert describe("mcp__chatcomputer__sound", {"action": "input", "value": "webcam"}, said) == \
         ("Listened with the microphone webcam", False)
 
 
-def call(server, name, args):
-    entry = server["instance"].get_request_handler("tools/call")
-    out = asyncio.run(entry.handler(None, entry.params_type(name=name, arguments=args)))
-    return "\n".join(x.text for x in out.content)
+def call(ctx, name, args):
+    out = asyncio.run(ctx.tool_fns[name](args))
+    return "\n".join(x["text"] for x in out["content"])
 
 
 def test_another_model_from_the_next_message(tmp_path, monkeypatch):
     c, screen = _controller(tmp_path, monkeypatch)
-    restarted = []
+    switched = []
 
-    async def restart():
-        restarted.append(True)
-    c._restart_brain_when_idle = restart
+    async def switch():
+        switched.append(True)
+    c._switch_model_when_idle = switch
     c.brain = SimpleNamespace()
+    c.model = SimpleNamespace()
 
     async def run():
         c.loop = asyncio.get_running_loop()
         c._settings_changed(["model"])
-        c._settings_changed(["effort"])
-        c._settings_changed(["model"], restart=False)     # the fallback to the usual model asks again itself
+        c._settings_changed(["effort"])                   # (from the next question by itself)
+        c._settings_changed(["model"], restart=False)
         c._settings_changed(["user_name"])
         await asyncio.sleep(0.05)
     asyncio.run(run())
-    assert restarted == [True, True]
+    assert switched == [True]
     assert json.dumps(screen.events)                      # (nothing on the screen needs to change for effort)

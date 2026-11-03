@@ -3,7 +3,7 @@ newest first. Email over IMAP (mail.py), Telegram through its API (telegram.py),
 from their own pages (web.py). Kept in ~/ChatComputer/messages.db; the accounts' sign-ins in secrets/accounts.json.
 
 Signing in happens on the screen, typed by the person: a form on the conversation page for email and Telegram,
-the site's own page for WhatsApp and the social sites, Microsoft's page for Outlook. Claude never sees a password:
+the site's own page for WhatsApp and the social sites, Microsoft's page for Outlook. The model never sees a password:
 it asks for an account to be connected (the messages tool), and the form or the page does the rest.
 """
 from __future__ import annotations
@@ -259,7 +259,7 @@ class Inbox:
 
     # ================================================================ opening one
     async def open(self, item_id: str) -> None:
-        """A message tapped in Messages (or opened by Claude): shown between the sidebars."""
+        """A message tapped in Messages (or opened by the model): shown between the sidebars."""
         m = self.store.get(item_id)
         if m is None:
             return
@@ -320,7 +320,7 @@ class Inbox:
         return await src.chat(m["ref"])
 
     async def read(self, item_id: str) -> str:
-        """A message in full, for Claude: an email's words, a Telegram chat's latest messages, or what a site's
+        """A message in full, for the model: an email's words, a Telegram chat's latest messages, or what a site's
         inbox showed."""
         m = self.store.get(item_id)
         if m is None:
@@ -577,7 +577,7 @@ class Inbox:
         return f"{a.get('label')} {a.get('address') or ''} is no longer connected, and its messages are gone from " \
                "Messages.".replace("  ", " ")
 
-    # ================================================================ for Claude
+    # ================================================================ for the model
     def lines(self, rows: list[dict[str, Any]]) -> str:
         out = []
         for m in rows:

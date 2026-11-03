@@ -5,8 +5,7 @@ import json
 import time
 from types import SimpleNamespace
 
-from claude_agent_sdk import (AssistantMessage, ServerToolResultBlock, ServerToolUseBlock, ToolResultBlock, ToolUseBlock,
-                              UserMessage)
+from mock_model import FakeModelService, MockModel, call, last_is_tool_result
 
 from chatcomputer import tools as T
 from chatcomputer.brain.agent import Brain, BrainEvents
@@ -105,28 +104,40 @@ def test_an_earlier_message_is_found_in_the_transcript(tmp_path):
     assert History(Paths(tmp_path / "none").ensure()).earlier("x", 0, None) == []
 
 
-def test_the_brain_reports_tool_calls_when_they_finish():
+async def _brain_turn(tmp_path, parts, after_tool, events):
+    """One turn of the real brain against the stand-in model: it answers `parts` (words and tool calls), then
+    `after_tool` once the tools have given their results."""
+    mock = MockModel()
+    mock.rules.append(lambda req: [after_tool] if last_is_tool_result(req) else parts)
+    mock.start()
+    paths = Paths(tmp_path / "ChatComputer").ensure()
+    ctx = T.ToolContext(paths, Settings(), FakePlatform(), Journal(paths), RecordingScreen(), Memory(paths))
+    specs, _, _ = T.build(ctx)
+
+    async def allow(tool, inp, c=None):
+        return SimpleNamespace(behavior="allow", updated_input=inp)
+    done = asyncio.Event()
+    brain = Brain(paths, Settings(), SimpleNamespace(get=lambda k, d=None: d, set=lambda **k: None),
+                  FakeModelService(mock), specs, ctx.tool_fns, allow, lambda: "",
+                  BrainEvents(on_tool=lambda *a: events.append(("tool", a)), on_text=lambda t, d: events.append(("text", d)),
+                              on_turn_end=lambda t, r: done.set()), cwd=str(tmp_path))
+    try:
+        tid = await brain.ask("go")
+        await asyncio.wait_for(done.wait(), 30)
+        return tid
+    finally:
+        mock.stop()
+
+
+def test_the_brain_reports_tool_calls_when_they_finish(tmp_path):
     got = []
-    brain = Brain(Paths(), Settings(), SimpleNamespace(get=lambda k, d=None: d, set=lambda **k: None), None, {}, None,
-                  lambda: "", BrainEvents(on_tool=lambda *a: got.append(a)))
-    brain._cur = brain._new_turn("here")
-    tid = brain._cur.tid
-    brain._route(AssistantMessage(content=[
-        ToolUseBlock(id="t1", name="WebSearch", input={"query": "trains"}),
-        ToolUseBlock(id="t2", name="mcp__chatcomputer__wifi", input={"action": "connect", "network": "Home"}),
-        ServerToolUseBlock(id="s1", name="web_search", input={"query": "laksa"})], model="m"))
-    assert got == []                            # nothing finished yet
-    brain._route(UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="results", is_error=False),
-                                      ToolResultBlock(tool_use_id="t2", content=[{"type": "text", "text": "Failed: no"}],
-                                                      is_error=True)],
-                             tool_use_result={"x": 1}))
-    brain._route(AssistantMessage(content=[ServerToolResultBlock(tool_use_id="s1", content={"type": "web_search_result"})],
-                                  model="m"))
-    assert got == [(tid, "WebSearch", {"query": "trains"}, True, "results", "t1"),
-                   (tid, "mcp__chatcomputer__wifi", {"action": "connect", "network": "Home"}, False, "Failed: no", "t2"),
-                   (tid, "web_search", {"query": "laksa"}, True, "", "s1")]
-    brain._route(UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="again")], tool_use_result={}))
-    assert len(got) == 3                        # each once
+    (tmp_path / "a.txt").write_text("x")
+    tid = asyncio.run(_brain_turn(tmp_path, [call("Glob", pattern="*.txt"), call("no_such_tool"),
+                                             call("wifi", action="status")], "Done.", got))
+    tools = [a for kind, a in got if kind == "tool"]
+    assert [(t[0], t[1], t[3]) for t in tools] == [(tid, "Glob", True), (tid, "mcp__chatcomputer__wifi", True)]
+    assert tools[0][2] == {"pattern": "*.txt"} and str(tmp_path / "a.txt") in tools[0][4]
+    assert tools[0][5] != tools[1][5]           # each with its call's own id, once
 
 
 def _controller(tmp_path, monkeypatch):
@@ -144,7 +155,7 @@ def test_whats_done_is_linked_to_the_message_that_asked(tmp_path, monkeypatch):
         asked.append(text)
         return "t7"
     c.brain = SimpleNamespace(busy=False, last_activity=0.0, ask=ask, current_origin="here")
-    c._online_now = lambda: asyncio.sleep(0, True)
+    c.model = SimpleNamespace(ready=True)
 
     async def run():
         c.loop = asyncio.get_running_loop()
@@ -164,16 +175,6 @@ def test_whats_done_is_linked_to_the_message_that_asked(tmp_path, monkeypatch):
     assert said[-1]["id"] == uid and said[-1]["ts"] == done[0]["prompt_ts"]
     assert [e["text"] for e in c.history.recent()] == ["Searched youtube.com for “lofi”"]
     assert len(c.history.find("b.txt")) == 1
-
-
-def test_something_typed_on_the_phone_is_the_message_asked_there(tmp_path, monkeypatch):
-    c, screen = _controller(tmp_path, monkeypatch)
-    c.gate = SimpleNamespace(phone_reply=lambda t: None)
-    c._on_user_text("p3", "turn the volume down")
-    c._on_tool("p3", OURS + "sound", {"action": "volume_down"}, True, "Volume is 30%.")
-    uid = [e[1] for e in screen.events if e[0] == "user"][-1][0]
-    done = [e[1] for e in screen.events if e[0] == "done"]
-    assert done[0]["text"] == "Turned the volume down" and done[0]["prompt_id"] == uid
 
 
 def test_the_screen_gets_whats_done_and_can_go_back(tmp_path, monkeypatch):
@@ -197,42 +198,27 @@ def test_recent_actions_reads_whats_done(tmp_path):
     h.add("Installed vlc", OURS + "software", {"action": "install", "packages": ["vlc"]},
           prompt=("u1", "install vlc", 1.0))
     ctx = T.ToolContext(paths, Settings(), FakePlatform(), Journal(paths), RecordingScreen(), Memory(paths), history=h)
-    server, _, _ = T.build(ctx)
-    entry = server["instance"].get_request_handler("tools/call")
+    T.build(ctx)
 
     def call(args):
-        out = asyncio.run(entry.handler(None, entry.params_type(name="recent_actions", arguments=args)))
-        return "\n".join(x.text for x in out.content)
+        out = asyncio.run(ctx.tool_fns["recent_actions"](args))
+        return "\n".join(x["text"] for x in out["content"])
     assert call({}).endswith("Installed vlc (asked: “install vlc”)")
     assert call({"query": "vlc"}).endswith("Installed vlc (asked: “install vlc”)")
     assert call({"query": "chrome"}) == "Nothing done in that time with those words."
 
 
-def test_the_model_is_named_as_the_claude_app_names_it():
-    assert model_label("claude-sonnet-5-5") == "Sonnet 5.5"
-    assert model_label("claude-opus-5-5") == "Opus 5.5"
-    assert model_label("claude-fable-5-1") == "Fable 5.1"
-    assert model_label("claude-opus-4-20250514") == "Opus 4"
-    assert model_label("opus") == "Opus"
-    assert model_label("claude-sonnet-5-5[1m]") == "Sonnet 5.5"
-    assert model_label("") == ""
+def test_the_model_is_named_by_its_name():
+    from chatcomputer.brain import models
+    assert model_label("qwen3.5-9b") == "Qwen3.5 9B"
+    assert model_label("qwen3.6-35b-a3b") == "Qwen3.6 35B-A3B"
+    assert model_label("auto") == models.pick().label        # the one this computer gets
+    assert model_label("something else") == "something else"
 
 
-def test_words_after_a_tool_call_are_not_glued_to_the_words_before():
-    # Claude writes "Checking the drive." then calls a tool, then "It's open." in a new block of text: on the screen
-    # and out loud that's two sentences, not "drive.It's open".
-    from claude_agent_sdk.types import StreamEvent
-
-    shown = []
-    brain = Brain(Paths(), Settings(), SimpleNamespace(get=lambda k, d=None: d, set=lambda **k: None), None, {}, None,
-                  lambda: "", BrainEvents(on_text=lambda tid, t: shown.append(t)))
-    brain._cur = brain._new_turn("here")
-
-    def ev(e):
-        brain._route(StreamEvent(uuid="u", session_id="s", event=e))
-    for block in ("Checking the drive.", "It's open.", " Your photos are on it.", "Done\n", "Bye"):
-        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
-        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": block}})
-    ev({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "t", "name": "x"}})
-    assert brain._cur.res.text == "Checking the drive. It's open. Your photos are on it. Done\nBye"
-    assert "".join(shown) == brain._cur.res.text
+def test_words_after_a_tool_call_are_not_glued_to_the_words_before(tmp_path):
+    # The model writes "Checking the drive." then calls a tool, then "It's open." in its next message: on the
+    # screen and out loud that's two sentences, not "drive.It's open".
+    got = []
+    asyncio.run(_brain_turn(tmp_path, ["Checking the drive.", call("Glob", pattern="*")], "It's open.", got))
+    assert "".join(d for kind, d in got if kind == "text") == "Checking the drive. It's open."

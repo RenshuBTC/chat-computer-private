@@ -1,12 +1,13 @@
-"""End to end: the real Claude Code engine (bundled with the Agent SDK) talking to a mock
-Claude API, driving the real Chat Computer tools and permission gate."""
+"""End to end: the brain's own agent loop (brain/agent.py) talking to a stand-in for the model's server (the same
+API), driving the real Chat Computer tools and permission gate."""
 import asyncio
+import json
 import time
 from pathlib import Path
 
 import pytest
 
-from mock_anthropic import MockAnthropic, last_message_is_tool_result, last_user_text, text_block, tool_results, tool_use_block
+from mock_model import FakeModelService, MockModel, call, last_is_tool_result, last_user_text, tool_results
 
 from chatcomputer import tools as T
 from chatcomputer.brain.agent import Brain, BrainEvents
@@ -17,12 +18,10 @@ from chatcomputer.memory import Memory
 from chatcomputer.platform.fake import FakePlatform
 from chatcomputer.screen import RecordingScreen
 
-TOKEN = "sk-ant-api03-" + "x" * 40
-
 
 class Rig:
-    def __init__(self, home: Path, answers: list[tuple[str, str]]):
-        self.mock = MockAnthropic()
+    def __init__(self, home: Path, answers: list[tuple[str, str]], ready: bool = True):
+        self.mock = MockModel()
         self.mock.start()
         self.paths = Paths(home / "ChatComputer").ensure()
         self.settings = Settings(user_name="Ren Shu")
@@ -41,17 +40,18 @@ class Rig:
 
         self.ctx = T.ToolContext(self.paths, self.settings, self.platform, self.journal, self.screen, Memory(self.paths),
                                  confirm=confirm)
-        server, policies, _ = T.build(self.ctx)
+        specs, policies, _ = T.build(self.ctx)
         self.gate = PermissionGate(self.paths, self.journal, confirm, policies)
         ev = BrainEvents(
             on_turn_start=lambda t: self.events.append(("start", t)),
             on_text=lambda t, d: self.events.append(("text", d)),
             on_activity=lambda t, a: self.events.append(("activity", a)),
             on_turn_end=lambda t, r: (self.events.append(("end", r)), self.done.set()),
+            on_tool=lambda t, n, i, ok, r, u: self.events.append(("tool", n, ok)),
         )
-        self.brain = Brain(self.paths, self.settings, self.state, TOKEN, server, self.gate,
-                           lambda: "You are Chat Computer (test).", ev,
-                           extra_env={"ANTHROPIC_BASE_URL": self.mock.url}, cwd=str(home))
+        self.model = FakeModelService(self.mock, ready=ready)
+        self.brain = Brain(self.paths, self.settings, self.state, self.model, specs, self.ctx.tool_fns, self.gate,
+                           lambda: "You are Chat Computer (test).", ev, cwd=str(home))
 
     async def say(self, text: str, timeout: float = 60):
         self.done.clear()
@@ -63,24 +63,23 @@ class Rig:
         return "".join(e[1] for e in self.events if e[0] == "text")
 
 
-def script(mock: MockAnthropic, steps: dict[str, list[dict]], after_tool: str = "Done."):
+def script(mock: MockModel, steps: dict[str, list], after_tool: str = "Done."):
     def rule(req):
-        if last_message_is_tool_result(req):
-            return [text_block(after_tool)]
+        if last_is_tool_result(req):
+            return [after_tool]
         said = last_user_text(req)
-        for key, blocks in steps.items():
+        for key, parts in steps.items():
             if key in said:
-                return blocks
+                return parts
         return None
     mock.rules.append(rule)
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(60)
 def test_voice_request_opens_a_website_and_streams_words(clean_env):
     async def go():
         rig = Rig(clean_env, [])
-        script(rig.mock, {"open youtube": [text_block("Opening YouTube."),
-                                           tool_use_block("mcp__chatcomputer__show_website", {"url": "youtube.com"})]},
+        script(rig.mock, {"open youtube": ["Opening YouTube.", call("show_website", url="youtube.com")]},
                after_tool="It's on screen now.")
         try:
             res = await rig.say("open youtube")
@@ -88,24 +87,31 @@ def test_voice_request_opens_a_website_and_streams_words(clean_env):
             assert rig.screen.events[0] == ("show_url", "https://youtube.com")
             assert ("activity", "Opening youtube.com") in rig.events
             assert "Opening YouTube." in rig.text() and "It's on screen now." in rig.text()
+            assert rig.text() == "Opening YouTube. It's on screen now."   # carried on after the tool, with a space
             assert rig.asked == []                     # showing a website needs no permission
-            # Every request carries the Chat Computer tools up front (no deferred tool search).
-            names = [t.get("name") for t in rig.mock.requests[0]["tools"]]
-            assert "mcp__chatcomputer__show_website" in names and "Bash" in names
-            assert not any(n and n.startswith("mcp__claude-in-chrome") for n in names)
+            assert ("tool", "mcp__chatcomputer__show_website", True) in rig.events
+            # Every request carries Chat Computer's tools and the everyday ones, with the system prompt first.
+            first = rig.mock.requests[0]
+            names = [t["function"]["name"] for t in first["tools"]]
+            assert "show_website" in names and "Bash" in names and names.index("show_website") < names.index("Bash")
+            assert first["messages"][0] == {"role": "system", "content": "You are Chat Computer (test)."}
+            # The tool's result went back with its call's id.
+            second = rig.mock.requests[1]["messages"]
+            assert second[-2]["tool_calls"][0]["function"]["name"] == "show_website"
+            assert second[-1]["role"] == "tool" and second[-1]["tool_call_id"] == second[-2]["tool_calls"][0]["id"]
         finally:
             await rig.brain.close()
             rig.mock.stop()
     asyncio.run(go())
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(60)
 def test_trash_needs_a_spoken_yes_and_can_be_undone(clean_env):
     async def go():
         rig = Rig(clean_env, [("yes", "yes")])
         f = clean_env / "old.zip"
         f.write_bytes(b"zip")
-        script(rig.mock, {"delete": [tool_use_block("mcp__chatcomputer__trash_files", {"paths": [str(f)]})]})
+        script(rig.mock, {"delete": [call("trash_files", paths=[str(f)])]})
         try:
             res = await rig.say("delete old zip")
             assert res.ok
@@ -119,23 +125,43 @@ def test_trash_needs_a_spoken_yes_and_can_be_undone(clean_env):
     asyncio.run(go())
 
 
-@pytest.mark.timeout(120)
-def test_saying_no_stops_a_risky_command_and_claude_hears_why(clean_env):
+@pytest.mark.timeout(60)
+def test_saying_no_stops_a_risky_command_and_the_model_hears_why(clean_env):
     async def go():
         rig = Rig(clean_env, [("no", "no don't, I still need it")])
-        script(rig.mock, {"clean": [tool_use_block("Bash", {"command": "rm -r ~/Downloads/stuff", "description": "Delete the stuff folder"})]})
+        target = clean_env / "Downloads" / "stuff"
+        target.mkdir(parents=True)
+        script(rig.mock, {"clean": [call("Bash", command=f"rm -r {target}", description="Delete the stuff folder")]})
         try:
             await rig.say("clean my downloads")
             assert rig.asked == ["Can I run a command to delete the stuff folder?"]
             results = tool_results(rig.mock.requests[-1])
-            assert results and "I still need it" in str(results[0])
+            assert results and "I still need it" in results[0]
+            assert target.exists()
         finally:
             await rig.brain.close()
             rig.mock.stop()
     asyncio.run(go())
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(60)
+def test_a_command_runs_and_its_output_comes_back(clean_env):
+    async def go():
+        rig = Rig(clean_env, [])
+        (clean_env / "notes.txt").write_text("one\ntwo\n")
+        script(rig.mock, {"count": [call("Bash", command="wc -l notes.txt", description="Count the lines")]})
+        try:
+            res = await rig.say("count the lines in my notes")
+            assert res.ok
+            assert rig.asked == []                     # only reads: no question
+            assert "2 notes.txt" in tool_results(rig.mock.requests[-1])[0]
+        finally:
+            await rig.brain.close()
+            rig.mock.stop()
+    asyncio.run(go())
+
+
+@pytest.mark.timeout(60)
 def test_conversation_resumes_after_restart(clean_env):
     async def go():
         rig = Rig(clean_env, [])
@@ -144,28 +170,31 @@ def test_conversation_resumes_after_restart(clean_env):
             sid = rig.state.get("session_id")
             assert sid
             await rig.brain.close()
-            # A new process: same state file → same conversation.
+            # A new process: the same state file, so the same conversation, with the same system prompt.
             rig.state = State(rig.paths)
             rig.brain.state = rig.state
             rig.brain.session_id = None
+            rig.brain.conversation = None
             await rig.say("what did I say?")
-            convo = [m for m in rig.mock.requests[-1]["messages"] if m["role"] in ("user", "assistant")]
-            assert any("favourite colour is green" in str(m) for m in convo)
+            msgs = rig.mock.requests[-1]["messages"]
+            assert any("favourite colour is green" in str(m.get("content")) for m in msgs)
+            assert msgs[0]["content"] == "You are Chat Computer (test)."
+            assert rig.brain.session_id == sid
         finally:
             await rig.brain.close()
             rig.mock.stop()
     asyncio.run(go())
 
 
-@pytest.mark.timeout(120)
-def test_speaking_over_claude_interrupts_the_running_task(clean_env):
+@pytest.mark.timeout(60)
+def test_speaking_over_it_interrupts_the_running_task(clean_env):
     async def go():
         rig = Rig(clean_env, [("yes", "yes")])
-        script(rig.mock, {"long job": [text_block("Starting."), tool_use_block("Bash", {"command": "sleep 20", "description": "Wait a while"})]})
+        script(rig.mock, {"long job": ["Starting.", call("Bash", command="sleep 20", description="Wait a while")]})
         try:
             rig.done.clear()
             await rig.brain.ask("do the long job")
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             assert rig.brain.busy
             t0 = time.time()
             await rig.brain.ask("actually stop and say hi")
@@ -176,24 +205,44 @@ def test_speaking_over_claude_interrupts_the_running_task(clean_env):
                 await asyncio.sleep(0.1)
             assert len(ends) == 2
             assert ends[0].interrupted
-            assert time.time() - t0 < 15
-            # The new words reach Claude in the very next request, after the interrupted tool's result.
-            assert "say hi" in last_user_text(rig.mock.requests[-1])
+            assert time.time() - t0 < 10
+            # The new words reach the model in the very next request, after a note that it was interrupted.
+            msgs = rig.mock.requests[-1]["messages"]
+            assert msgs[-1]["content"] == "actually stop and say hi"
+            assert "[Request interrupted by user]" in [m.get("content") for m in msgs]
         finally:
             await rig.brain.close()
             rig.mock.stop()
     asyncio.run(go())
 
 
-@pytest.mark.timeout(180)
-def test_a_model_the_api_doesnt_know_is_reported_as_such(clean_env):
+@pytest.mark.timeout(60)
+def test_a_model_still_being_got_ready_says_so(clean_env):
+    async def go():
+        rig = Rig(clean_env, [], ready=False)
+        try:
+            res = await rig.say("hello")
+            assert not res.ok and res.error_kind == "model_not_ready"
+            assert "40%" in res.error_text
+            assert rig.model.prepared == 1             # and it's being got ready
+            assert rig.mock.requests == []
+            # The question isn't kept (it's asked again once the model is ready).
+            conv = json.loads((rig.paths.engine / "conversations" / f"{rig.brain.session_id}.json").read_text())
+            assert conv["messages"] == []
+        finally:
+            await rig.brain.close()
+            rig.mock.stop()
+    asyncio.run(go())
+
+
+@pytest.mark.timeout(60)
+def test_pictures_are_said_to_be_pictures(clean_env):
     async def go():
         rig = Rig(clean_env, [])
-        rig.settings.model = "claude-no-such-model-9"
-        rig.mock.unknown_models.add("claude-no-such-model-9")
+        script(rig.mock, {"look": [call("look_at_screen")]})
         try:
-            res = await rig.say("hello", timeout=150)
-            assert not res.ok and res.error_kind == "model", (res.error_kind, res.error_text)
+            await rig.say("look at the screen")
+            assert "reads text only" in tool_results(rig.mock.requests[-1])[0]
         finally:
             await rig.brain.close()
             rig.mock.stop()

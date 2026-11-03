@@ -96,10 +96,23 @@ def check(update_source: Path | None = None, mount: Path | None = None, app: Pat
     if n == 0:
         return None
     try:
-        same_packages = filecmp.cmp(src / "requirements-linux.txt", app / "requirements-linux.txt", shallow=False)
-    except OSError:
-        same_packages = False
-    return Offer(src, n, version_of(src), not same_packages)
+        has_packages = packages(src / "requirements-linux.txt") <= packages(app / "requirements-linux.txt")
+    except (OSError, UnicodeDecodeError):
+        has_packages = False
+    return Offer(src, n, version_of(src), not has_packages)
+
+
+def packages(requirements: Path) -> set[str]:
+    """The Python packages a requirements-linux.txt names, as pinned (comments, blank lines and spacing aside). A
+    version needing only packages already installed can be an update (the root helper reads the file the same way:
+    a version that needs fewer packages runs with the ones there); one needing others has to come with Chat
+    Computer Setup, which installs them."""
+    out = set()
+    for line in requirements.read_text(encoding="utf-8").splitlines():
+        words = line.split("#", 1)[0].split()
+        if words:
+            out.add(" ".join(words))
+    return out
 
 
 def source_there(update_source: Path | None = None, mount: Path | None = None) -> bool:

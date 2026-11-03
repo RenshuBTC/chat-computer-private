@@ -79,7 +79,7 @@ _RINGING_DONE = _STOP | {
 
 def stops_ringing_only(text: str) -> bool:
     """What someone says to a timer or alarm that's ringing, meaning only "that's enough" ("stop", "okay thanks",
-    "I'm up"): it stops it, and isn't a request for Claude."""
+    "I'm up"): it stops it, and isn't a request for the model."""
     t = normalize(text.replace("claude", "")).rstrip(".!")
     return t in _RINGING_DONE
 
@@ -90,7 +90,7 @@ def is_snooze(text: str) -> bool:
 
 # A web address typed or said alone, as into a browser's address bar: "youtube.com", "open bbc.co.uk", a whole link.
 # Its last part is a known ending: the common ones, or any two letters (a country's), except those that are more
-# often a file's (notes.md, main.rs, run.sh), which Claude finds on the computer instead. (docs/demo/host.js has the
+# often a file's (notes.md, main.rs, run.sh), which the model finds on the computer instead. (docs/demo/host.js has the
 # same, for the website.)
 _TLD = ("com|org|net|edu|gov|mil|int|info|biz|io|ai|app|dev|co|me|tv|xyz|site|online|store|shop|tech|blog|news|"
         "cloud|page|live|art|design|studio|agency|world|today|space|website|fun|club|life|email|link|pro|mobi|name|"
@@ -119,7 +119,7 @@ def is_sleep(text: str) -> bool:
 
 
 def strip_wake_word(text: str, wake_words: list[str]) -> tuple[bool, str]:
-    """If the utterance starts with a wake word ("Claude, open YouTube"), return (True, rest)."""
+    """If the utterance starts with a wake word ("Computer, open YouTube"), return (True, rest)."""
     raw = text.strip()
     low = raw.lower()
     variants: list[str] = []

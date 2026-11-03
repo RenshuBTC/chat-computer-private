@@ -44,7 +44,16 @@ Qwen3.5-0.8B is the one the checks use.
 ## The program
 
     chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]
-    chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--allow-origin ORIGIN]...
+    chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]...
+
+`--cache DIR` keeps the reading of a conversation's first message (the system prompt and the tools: about 10,000
+tokens for Chat Computer) on disk, named by the model and those tokens, so a restart picks it up instead of reading
+it again.
+
+`release.sh` builds the program for Linux into `chatcomputer/brain/bin` (x86-64 and 64-bit ARM, static, linked by
+Rust's own rust-lld), where Chat Computer takes it from; the paths it was built in are left out, so the same source
+builds the same files anywhere (`release.sh --check`, as CI runs it). `examples/tiny_model.rs` writes the small
+random model the tests use (Chat Computer's Python tests start the program with it: `tests/data/tiny-model.ccm`).
 
 `serve` answers only requests addressed to this computer by its own name (127.0.0.1, localhost: not a site's name
 pointed here by a DNS trick), from programs on it or from Chat Computer's own pages (chatcomputer.ai, the desktop
@@ -53,10 +62,14 @@ refused, so no site can use the model behind the person's back. The model only w
 
 ## Checks
 
-`cargo test -p model --features std`: on two small models made with random weights (one with experts), reading many
-tokens at once gives exactly the scores of reading them one at a time; a snapshot goes back exactly; a session reads
-only what's new and answers exactly as a new session does; the kernels (plain, AVX2, AVX-VNNI, AVX-512 VNNI) agree;
-the chat template's rules; NFC; JSON.
+`cargo test -p model --features std`: on two small models made with random weights (one with experts: `testing.rs`),
+reading many tokens at once gives exactly the scores of reading them one at a time; a snapshot goes back exactly; a
+session reads only what's new and answers exactly as a new session does; the first message's reading kept on disk
+reads back exactly; the kernels (plain, AVX2, AVX-VNNI, AVX-512 VNNI) agree; the chat template's rules; NFC; JSON.
+
+Getting a model ready as Chat Computer does (`chatcomputer/brain/models.py`: Qwen3.5-0.8B's files downloaded from the
+pinned revision, each checked against its SHA-256, converted by the program in `chatcomputer/brain/bin`) made a file
+byte for byte the same as the one checked against the reference below.
 
 Against the reference implementation (transformers, in float32) and the published files, with `tools/refcheck`:
 
@@ -76,4 +89,7 @@ tokens a second and writes at about 14.
 ## Next
 
 Qwen's FP8 files (half the download of the BF16 ones) and their experts stored one by one; ARM's NEON (Macs with
-Chat Computer); graphics cards (Vulkan, with the engine's own shaders); keys and values in 16 bits.
+Chat Computer: the ARM program runs the plain code, vectorised only as the compiler manages, and hasn't been timed on
+a Mac yet); graphics cards (Vulkan, with the engine's own shaders); keys and values in 16 bits; pictures (Qwen's
+models see them; the engine leaves their vision part out for now, so a tool's picture reaches the model as a line
+saying there was one).

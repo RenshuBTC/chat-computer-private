@@ -1,6 +1,7 @@
 """Chat Computer on an Apple silicon Mac: Linux (Fedora Asahi Remix) started instead of macOS. What differs from a PC:
 going back to macOS is a restart, and macOS's files come from the drive Chat Computer Setup sends them to."""
 import asyncio
+from types import SimpleNamespace
 import os
 
 from chatcomputer import tools as T
@@ -13,9 +14,6 @@ from chatcomputer.platform import linux as L
 from chatcomputer.platform.base import CommandResult
 from chatcomputer.platform.fake import FakePlatform
 from chatcomputer.screen import RecordingScreen
-
-LOGIN = '{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": 1}}'
-
 
 class FakeMac(FakePlatform):
     name = "mac"
@@ -79,30 +77,15 @@ def _mac_controller(tmp_path, monkeypatch):
 def test_on_a_mac_the_files_from_macos_are_the_other_systems_files(tmp_path, monkeypatch):
     c, _, _, home = _mac_controller(tmp_path, monkeypatch)
     assert c._other_os_files() == str(home / "Mac")
-    # A new sign-in left by Chat Computer Setup in macOS waits in a hidden folder on that drive.
-    assert c._signin_drop() == str(home / "Mac" / ".chatcomputer")
     prompt = c._system_prompt()
     assert str(home / "Mac") in prompt and "drive called ChatComp" in prompt
     assert "switch_to_macos" in prompt and "Fedora" in prompt and "Windows" not in prompt
 
 
-def test_on_a_mac_a_new_sign_in_from_macos_is_taken_and_removed(tmp_path, monkeypatch):
-    c, screen, paths, home = _mac_controller(tmp_path, monkeypatch)
-    drop = home / "Mac" / ".chatcomputer"
-    drop.mkdir()
-    tok = "sk-ant-oat01-" + "B" * 90
-    (drop / "claude_token").write_text(tok + "\n")
-    (drop / "claude_login.json").write_text(LOGIN)
-    c._import_signin(c._signin_drop())
-    assert paths.token_file.read_text().strip() == tok
-    assert not (drop / "claude_token").exists() and not (drop / "claude_login.json").exists()
-    assert any("from macOS" in str(e) for e in screen.events)
-
-
 def test_mac_without_the_drive_has_no_other_files(tmp_path, monkeypatch):
     c, _, _, home = _mac_controller(tmp_path, monkeypatch)
     os.rmdir(home / "Mac")
-    assert c._other_os_files() is None and c._signin_drop() is None
+    assert c._other_os_files() is None
     assert "drive called ChatComp" not in c._system_prompt()
 
 
@@ -133,8 +116,8 @@ def test_tools_on_a_mac(tmp_path):
     # (The trash's folder is one for the whole run: tests/conftest.py sets XDG_DATA_HOME once, before any test.)
     paths = Paths(home / "ChatComputer").ensure()
     ctx = T.ToolContext(paths, Settings(), FakeMac(), Journal(paths), RecordingScreen(), Memory(paths), power_delay_s=0.05)
-    server, policies, names = T.build(ctx)
-    tools = {t.name: t for t in _list(server)}
+    specs, policies, names = T.build(ctx)
+    tools = {t["name"]: SimpleNamespace(**t) for t in specs}
     power = tools["power"]
     assert power.input_schema["properties"]["action"]["enum"] == ["shutdown", "restart", "sleep", "switch_to_macos"]
     assert policies["power"]({"action": "switch_to_macos"}).startswith("Restart into macOS?")
@@ -143,12 +126,6 @@ def test_tools_on_a_mac(tmp_path):
     assert "import_from_windows" not in tools["bluetooth"].input_schema["properties"]["action"]["enum"]
     assert "files from macOS" in tools["system_status"].description
     assert "macOS" in tools["start_by_default"].description
-
-
-def _list(server):
-    entry = server["instance"].get_request_handler("tools/list")
-    out = asyncio.new_event_loop().run_until_complete(entry.handler(None, None))
-    return out.tools
 
 
 def test_mac_prompt_tells_claude_where_files_are_and_how_to_go_back():

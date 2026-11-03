@@ -1,7 +1,7 @@
-"""Speaking: a natural local voice (Kokoro), turning Claude's streamed text into sentences.
+"""Speaking: a natural local voice (Kokoro), turning the model's streamed text into sentences.
 
-Claude's text is cleaned for the ear (no markdown symbols, code or long URLs) and cut into
-sentences as it streams, so Chat Computer starts talking before Claude has finished writing.
+The model's text is cleaned for the ear (no markdown symbols, code or long URLs) and cut into
+sentences as it streams, so Chat Computer starts talking before the model has finished writing.
 """
 from __future__ import annotations
 

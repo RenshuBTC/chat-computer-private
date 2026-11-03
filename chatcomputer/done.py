@@ -4,7 +4,7 @@ Wi-Fi network, installed a program...), each linked to the message that asked fo
 
 The conversation screen lists it in a panel at the right, "Actions". Tapping one scrolls back to the message
 that asked for it; when that message isn't on the screen any more (an earlier day), the conversation from there on
-is put back from the transcript first. Claude reads the list with recent_actions ("what did I change yesterday?").
+is put back from the transcript first. The model reads the list with recent_actions ("what did I change yesterday?").
 
 Each one keeps the ids of the changes it made that can be taken back (the journal's records: files changed, and
 settings with how to put them back, journal.py). One with changes not yet taken back has Revert, which takes them back

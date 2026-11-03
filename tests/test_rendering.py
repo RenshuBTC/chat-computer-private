@@ -296,13 +296,13 @@ def test_slash_in_the_message_box_searches_this_computer():
     assert res["right_click"]["menus"] == 0 and not res["right_click"]["searching"]
     s = res["search"]
     assert s["searching"] and s["icon"] == "block" and s["value"] == "/rep"
-    assert [r["text"] for r in s["results"]] == ["report.pdf~/Documents", "Ask Claude to find \u201crep\u201d"]
+    assert [r["text"] for r in s["results"]] == ["report.pdf~/Documents", "Ask Chat Computer to find \u201crep\u201d"]
     assert s["bold"] == ["rep"] and "sel" in s["results"][0]["cls"] and s["results_box"][3] <= s["box"][1]
     assert "sel" in res["search_down"]["results"][1]["cls"] and "sel" in res["search_up"]["results"][0]["cls"]
     assert not res["opened"]["searching"] and res["opened"]["value"] == ""
     assert res["events"][:2] == [{"type": "search", "q": "rep"}, {"type": "open_file", "path": "/home/ren/Documents/report.pdf"}]
     nothing = res["nothing"]
-    assert [r["text"] for r in nothing["results"]] == ["Ask Claude to find \u201czzq\u201d"]
+    assert [r["text"] for r in nothing["results"]] == ["Ask Chat Computer to find \u201czzq\u201d"]
     assert nothing["note"] == "Nothing on this computer matches \u201czzq\u201d."
     assert not res["cleared"]["searching"] and res["cleared"]["value"] == "" and res["cleared"]["icon"] == "none"
     assert res["typed"] == ["hello there"] and res["message"]["focused"]

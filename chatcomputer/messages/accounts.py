@@ -1,6 +1,6 @@
 """The accounts Messages reads, and their sign-ins, in ~/ChatComputer/secrets/accounts.json (readable by this user only,
-in a folder Claude's tools can't open). What the person types in a sign-in form is kept here and never shown to
-Claude; `public()` is what the screen and Claude get."""
+in a folder the model's tools can't open). What the person types in a sign-in form is kept here and never shown to
+the model; `public()` is what the screen and the model get."""
 from __future__ import annotations
 
 import json
@@ -86,5 +86,5 @@ class Accounts:
 
 
 def public(account: dict[str, Any]) -> dict[str, Any]:
-    """An account without its sign-in: what the screen and Claude may see."""
+    """An account without its sign-in: what the screen and the model may see."""
     return {k: v for k, v in account.items() if k not in SECRET_KEYS and not k.startswith("_")}

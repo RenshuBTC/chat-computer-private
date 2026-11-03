@@ -2,8 +2,8 @@
 
 None of them offers a way for an app to read a personal account's messages (WhatsApp and WeChat have no such API;
 Instagram's and Facebook's are for business accounts; X's costs money per message read). So, as the person chose, Chat Computer
-opens each site's own inbox page in a browser of its own (its sign-ins kept apart from Claude's browser, in
-~/ChatComputer/sources, where Claude's tools can't look), and reads the list of conversations shown there: who, the
+opens each site's own inbox page in a browser of its own (its sign-ins kept apart from the model's browser, in
+~/ChatComputer/sources, where the model's tools can't look), and reads the list of conversations shown there: who, the
 latest message, when, unread. It only reads: it never sends, posts or clicks anything by itself. The person
 signs in once, on the site's own page, shown between the sidebars (WhatsApp and WeChat: by scanning its code with
 the phone). WeChat's is WeChat for Web, which not every WeChat account may use (WeChat says so on the page), and

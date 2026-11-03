@@ -567,7 +567,7 @@ PACKAGES=(
 
   # --- Trust, fetching, security. ---
   pciutils                   # lspci: detect the graphics card (driver choice)
-  ca-certificates            # TLS trust for HTTPS to Claude
+  ca-certificates            # TLS trust for HTTPS (websites, the model's download)
   curl                       # fetching (model downloads etc.)
   sudo                       # the root helper is reached via `sudo -n`; visudo validates the drop-in
   ufw                        # host firewall (default-deny inbound)

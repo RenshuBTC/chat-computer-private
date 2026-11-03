@@ -4,136 +4,18 @@
 //! (Against the published models and the reference implementation: tools/refcheck.)
 
 use crate::chat::{Message, Options, Style};
-use crate::file::{File, Writer};
+use crate::file::File;
 use crate::net::{Model, Serial};
 use crate::quant::{self, Dtype, Prepared};
 use crate::sample::Sampling;
 use crate::session::{Request, Session};
-use alloc::format;
-use alloc::string::String;
+use crate::testing::{tiny, Rng};
 use alloc::vec;
 use alloc::vec::Vec;
 
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        (self.0 % 20001) as f32 / 10000.0 - 1.0
-    }
-
-    fn vec(&mut self, n: usize, scale: f32) -> Vec<f32> {
-        (0..n).map(|_| self.next() * scale).collect()
-    }
-}
-
-const SPECIALS: [&str; 9] = [
-    "<|endoftext|>",
-    "<|im_start|>",
-    "<|im_end|>",
-    "<think>",
-    "</think>",
-    "<tool_call>",
-    "</tool_call>",
-    "<tool_response>",
-    "</tool_response>",
-];
-
-/// A model file with random weights: 4 layers (three of linear attention, one of attention), 64 wide; a byte for
-/// each of the first 256 tokens, then the chat's special tokens.
-fn tiny(experts: bool) -> Vec<u8> {
-    let mut r = Rng(0x9E37_79B9_7F4A_7C15 ^ experts as u64);
-    let (h, vocab) = (64usize, 300usize);
-    let mut config = String::from(
-        "arch=qwen3_5\nhidden=64\nlayers=4\nheads=4\nkv_heads=2\nhead_dim=32\nlinear_key_heads=2\nlinear_value_heads=4\n\
-         linear_key_dim=16\nlinear_value_dim=16\nconv_kernel=4\nfull_attention_interval=4\nvocab=300\nrope_theta=10000000\n\
-         rotary_dim=8\nrms_eps=0.000001\ncontext=4096\nchat.style=qwen3.5\n",
-    );
-    if experts {
-        config.push_str("experts=4\nexperts_used=2\nexpert_intermediate=32\nshared_intermediate=64\n");
-    } else {
-        config.push_str("intermediate=96\n");
-    }
-    let mut w = Writer::default();
-    w.add("config", Dtype::Blob, &[config.len()], config.as_bytes());
-    // The tokenizer: bytes, no merges, the specials.
-    let mut tokens: Vec<Vec<u8>> = (0..=255u8).map(|b| vec![b]).collect();
-    tokens.extend(SPECIALS.iter().map(|s| s.as_bytes().to_vec()));
-    let mut blob = Vec::new();
-    blob.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
-    let mut at = 0u32;
-    blob.extend_from_slice(&at.to_le_bytes());
-    for t in &tokens {
-        at += t.len() as u32;
-        blob.extend_from_slice(&at.to_le_bytes());
-    }
-    for t in &tokens {
-        blob.extend_from_slice(t);
-    }
-    w.add("tokenizer.tokens", Dtype::Blob, &[blob.len()], &blob);
-    w.add("tokenizer.merges", Dtype::Blob, &[0], &[]);
-    let specials: String = SPECIALS.iter().enumerate().map(|(i, s)| format!("{} {s}\n", 256 + i)).collect();
-    w.add("tokenizer.specials", Dtype::Blob, &[specials.len()], specials.as_bytes());
-    let matrix = |w: &mut Writer, name: &str, rows: usize, cols: usize, r: &mut Rng| {
-        let v = r.vec(rows * cols, 1.0 / (cols as f32).sqrt() * 1.7);
-        let mut q = Vec::new();
-        quant::quantize_q8(&v, &mut q);
-        w.add(name, Dtype::Q8, &[rows, cols], &q);
-    };
-    let f32s = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
-    let vector = |w: &mut Writer, name: &str, v: Vec<f32>| w.add(name, Dtype::F32, &[v.len()], &f32s(&v));
-    matrix(&mut w, "embed", vocab, h, &mut r);
-    matrix(&mut w, "head", vocab, h, &mut r);
-    vector(&mut w, "norm", r.vec(h, 0.1));
-    for l in 0..4 {
-        let p = |n: &str| format!("layers.{l}.{n}");
-        vector(&mut w, &p("norm1"), r.vec(h, 0.1));
-        vector(&mut w, &p("norm2"), r.vec(h, 0.1));
-        if l == 3 {
-            matrix(&mut w, &p("q"), 4 * 32 * 2, h, &mut r);
-            matrix(&mut w, &p("k"), 2 * 32, h, &mut r);
-            matrix(&mut w, &p("v"), 2 * 32, h, &mut r);
-            matrix(&mut w, &p("o"), h, 4 * 32, &mut r);
-            vector(&mut w, &p("q_norm"), r.vec(32, 0.1));
-            vector(&mut w, &p("k_norm"), r.vec(32, 0.1));
-        } else {
-            matrix(&mut w, &p("qkv"), 2 * 32 + 64, h, &mut r);
-            matrix(&mut w, &p("z"), 64, h, &mut r);
-            matrix(&mut w, &p("b"), 4, h, &mut r);
-            matrix(&mut w, &p("a"), 4, h, &mut r);
-            let conv = r.vec(128 * 4, 0.3);
-            w.add(&p("conv"), Dtype::F32, &[128, 4], &f32s(&conv));
-            vector(&mut w, &p("a_log"), (0..4).map(|i| (1.0 + i as f32 * 3.0).ln()).collect());
-            vector(&mut w, &p("dt_bias"), r.vec(4, 0.5));
-            vector(&mut w, &p("linear_norm"), r.vec(16, 0.1).iter().map(|v| 1.0 + v).collect());
-            matrix(&mut w, &p("out"), h, 64, &mut r);
-        }
-        if experts {
-            let router = r.vec(4 * h, 0.4);
-            w.add(&p("router"), Dtype::F32, &[4, h], &f32s(&router));
-            matrix(&mut w, &p("experts_gate_up"), 4 * 2 * 32, h, &mut r);
-            matrix(&mut w, &p("experts_down"), 4 * h, 32, &mut r);
-            matrix(&mut w, &p("shared_gate"), 64, h, &mut r);
-            matrix(&mut w, &p("shared_up"), 64, h, &mut r);
-            matrix(&mut w, &p("shared_down"), h, 64, &mut r);
-            let sw = r.vec(h, 0.3);
-            w.add(&p("shared_weight"), Dtype::F32, &[1, h], &f32s(&sw));
-        } else {
-            matrix(&mut w, &p("gate"), 96, h, &mut r);
-            matrix(&mut w, &p("up"), 96, h, &mut r);
-            matrix(&mut w, &p("down"), h, 96, &mut r);
-        }
-    }
-    let mut out = w.head();
-    out.extend_from_slice(&w.data);
-    out
-}
-
 fn tokens(n: usize, seed: u64) -> Vec<u32> {
     let mut r = Rng(seed);
-    (0..n).map(|_| ((r.next() + 1.0) * 127.9) as u32).collect()
+    (0..n).map(|_| ((r.float() + 1.0) * 127.9) as u32).collect()
 }
 
 fn max_diff(a: &[f32], b: &[f32]) -> f32 {
@@ -257,4 +139,28 @@ fn a_damaged_file_is_refused() {
     let file = File::open(&bytes).unwrap();
     assert!(Model::load(&file).is_err());
     assert_eq!(File::open(b"not a model").err(), Some(crate::Error::NotModel));
+}
+
+#[test]
+fn the_anchor_kept_on_disk_reads_back_exactly() {
+    let bytes = tiny(false);
+    let file = File::open(&bytes).unwrap();
+    let m = Model::load(&file).unwrap();
+    let o = Options { think: Some(false), keep_thinking: Some(true), ..Options::default() };
+    let msgs = vec![Message::System("A long system prompt, read once.".into()), Message::User("Hello there".into())];
+    let r = Request { tools: &[], messages: &msgs, options: o, sampling: Sampling::GREEDY, max_tokens: 8, seed: 1 };
+    let mut s = Session::new(&m, Style::QWEN35);
+    let (a, _) = s.ask(&r, &Serial, &mut |_, _| true).unwrap();
+    let (tokens, state, snap) = s.anchor().expect("an anchor where the system prompt ends");
+    let (tokens, saved) = (tokens.to_vec(), state.export(snap));
+    // A new session (as after a restart) from what was kept: only what follows the system prompt is read.
+    let restored = m.import(&saved).unwrap();
+    assert_eq!(restored.pos, tokens.len());
+    let mut again = Session::new(&m, Style::QWEN35);
+    again.restore(tokens.clone(), restored);
+    let (b, st) = again.ask(&r, &Serial, &mut |_, _| true).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(st.read, st.prompt - tokens.len());
+    // Bytes that don't fit the model aren't taken.
+    assert!(m.import(&saved[..saved.len() - 4]).is_none());
 }

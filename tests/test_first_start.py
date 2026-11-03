@@ -55,26 +55,3 @@ def test_missing_voice_models_are_downloaded_then_voice_starts(tmp_path, monkeyp
     assert any("one-time download" in str(n) for n in notices)
     assert any("need the internet" in str(n) for n in notices)
     assert not c._voice_models_missing()
-
-
-def test_new_signin_left_on_windows_is_taken_and_removed(tmp_path, monkeypatch):
-    c, screen, paths = _controller(tmp_path, monkeypatch)
-    win_home = tmp_path / "windows/Users/rensh"
-    (win_home / "ChatComputer").mkdir(parents=True)
-    tok = "sk-ant-oat01-" + "A" * 90
-    (win_home / "ChatComputer/claude_token").write_text("﻿" + tok + "\r\n", encoding="utf-8")
-    c._import_signin(str(win_home / "ChatComputer"))
-    from chatcomputer.config import read_token
-    assert read_token(paths) == tok
-    assert not (win_home / "ChatComputer/claude_token").exists()
-    assert any("new sign-in" in str(e[1]) for e in screen.events if e[0] == "notice")
-
-
-def test_junk_left_on_windows_is_ignored(tmp_path, monkeypatch):
-    c, screen, paths = _controller(tmp_path, monkeypatch)
-    win_home = tmp_path / "windows/Users/rensh"
-    (win_home / "ChatComputer").mkdir(parents=True)
-    (win_home / "ChatComputer/claude_token").write_text("hello", encoding="utf-8")
-    c._import_signin(str(win_home / "ChatComputer"))
-    from chatcomputer.config import read_token
-    assert read_token(paths) is None

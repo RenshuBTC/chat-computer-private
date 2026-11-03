@@ -1,4 +1,4 @@
-"""Speaking Claude's words as they stream in, sentence by sentence; stops instantly."""
+"""Speaking Chat Computer's words as they stream in, sentence by sentence; stops instantly."""
 from __future__ import annotations
 
 import asyncio

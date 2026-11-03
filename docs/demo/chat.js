@@ -1,6 +1,6 @@
-/* The conversation screen: the messages (yours on the right, Claude's on the left), the message box at the bottom,
+/* The conversation screen: the messages (yours on the right, Chat Computer's on the left), the message box at the bottom,
    Messages at the left and Actions at the right. Python calls window.CO.*; the page tells Python
-   (postMessage) what was typed, what was tapped, and where it leaves room for what Claude opens. */
+   (postMessage) what was typed, what was tapped, and where it leaves room for what Chat Computer opens. */
 (function () {
   "use strict";
   function $(id) { return document.getElementById(id); }
@@ -122,7 +122,7 @@
   // (from 6 in the morning, 12, 5 in the evening, 9 at night), some by the day of the week, with the name you go by
   // ("Good evening, Ren"); here the same, said on from hello, world: "and good evening to you, Ren". The name comes
   // from CO.settings (on a Chat Computer the one it was set up with; "call me ..." changes it). [with the name,
-  // without one (null: not without), from, until (hours), days (0 Sunday) or null, only where Claude answers]
+  // without one (null: not without), from, until (hours), days (0 Sunday) or null, only where a model answers]
   var GREETINGS = [
     ["and good morning to you, {name}", "and good morning to you", 6, 12],
     ["and welcome, {name}", "and welcome", 6, 12],
@@ -138,7 +138,7 @@
     ["and to you, {name}: what's on your mind?", "and to you: what's on your mind?", 6, 12, [6, 0]],
     ["and to you, {name}: Sunday session?", "and to you: Sunday session?", 6, 12, [0]],
     ["and a happy Sunday to you, {name}", "and a happy Sunday to you", 6, 12, [0]],
-    ["and to you, {name}: coffee and Claude time?", "and to you: coffee and Claude time?", 6, 12, null, true],
+    ["and to you, {name}: coffee and computer time?", "and to you: coffee and computer time?", 6, 12, null, true],
     ["and good afternoon to you, {name}", "and good afternoon to you", 12, 17],
     ["and hi, {name}: how are you?", "and hi to you: how are you?", 12, 17],
     ["and to you, {name}: what's new?", "and to you: what's new?", 12, 17],
@@ -150,14 +150,14 @@
     ["and to you, {name}: what's on your mind tonight?", "and to you: what's on your mind tonight?", 21, 6],
     ["and hello to you too, night owl", "and hello to you too, night owl", 21, 6]
   ];
-  var who = "", claudeAnswers = false;            // the name you go by, and whether Claude answers (CO.settings)
-  // Claude's greetings: for this hour and this day, with the name or without it (and, without, one of their own:
+  var who = "", modelAnswers = false;             // the name you go by, and whether a model answers (CO.settings)
+  // The greetings: for this hour and this day, with the name or without it (and, without, one of their own:
   // "Greetings, whoever you are").
   function greetings(at) {
     var h = at.getHours(), day = at.getDay(), out = [];
     GREETINGS.forEach(function (g) {
       if (!(g[2] < g[3] ? h >= g[2] && h < g[3] : h >= g[2] || h < g[3])) return;
-      if ((g[4] && g[4].indexOf(day) < 0) || (g[5] && !claudeAnswers)) return;
+      if ((g[4] && g[4].indexOf(day) < 0) || (g[5] && !modelAnswers)) return;
       out.push(named(g));
     });
     if (!who) out.push("and greetings to you, whoever you are");
@@ -282,7 +282,7 @@
     return m;
   }
 
-  // Where the finished part of Claude's words ends: after the last blank line that isn't inside a code block.
+  // Where the finished part of Chat Computer's words ends: after the last blank line that isn't inside a code block.
   // Every block md.js draws (a paragraph, a list, a table, a quote) ends at a blank line, so what comes before it
   // can't change any more: it's drawn once, and only the part still being written is drawn again as words stream
   // in. (Drawing the whole message again on every word cost more the longer it got.)
@@ -675,7 +675,7 @@
     fitHint();                                   // ("Esc" in the hint only where there's room for the sidebars)
   }
   // The sidebars' switches: Messages (left) and Actions (right), each switched off and on again with its switch,
-  // or by asking Claude (the settings left_panel and right_panel). Chat Computer keeps the choice: the page tells
+  // or by asking Chat Computer (the settings left_panel and right_panel). Chat Computer keeps the choice: the page tells
   // it, and it tells the page at the start.
   var PANEL_NAMES = { left: "Messages", right: "Actions" };
   function applyPanels() {
@@ -943,7 +943,7 @@
 
   // ------------------------------------------------------------------ connecting an account
   // A form Chat Computer shows (CO.accountForm): what's typed in it goes back to Chat Computer's own sign-in store, never to
-  // Claude. Choices (which kind of account) are buttons.
+  // the model. Choices (which kind of account) are buttons.
   var form = null;
   function showForm(f) {
     form = f;
@@ -1007,7 +1007,7 @@
 
   // ------------------------------------------------------------------ the lock screen
   // CO.lock({error}) covers everything with the time and a keypad; the PIN typed (on the keypad, or a keyboard) goes
-  // back to Chat Computer to check, never to Claude. CO.lock(null) takes it away.
+  // back to Chat Computer to check, never to the model. CO.lock(null) takes it away.
   var locked = false;
   function lockFocus() { var p = $("lock-pin"); if (document.activeElement !== p) p.focus({ preventScroll: true }); }
   function lockClock() {
@@ -1050,9 +1050,8 @@
   // ------------------------------------------------------------------ "/": searching this computer
   // A "/" first in the box makes it search this computer's files (Chat Computer's index of them) for the words after
   // it, as they're typed: the best matches in a list above the box. The arrow keys choose, Enter or a click opens
-  // one between the sidebars; the last line asks Claude to look instead. Escape (clearing the box) ends it. The list
-  // can also hold things to connect or turn on (an item with a `command`: the website's Connect Claude, Connect
-  // AirPods...), done with Enter or a click as a file is opened.
+  // one between the sidebars; the last line asks Chat Computer to look instead. Escape (clearing the box) ends it. The list
+  // can also hold things to connect or turn on (an item with a `command`: the website's Connect AirPods...), done with Enter or a click as a file is opened.
   var searching = false, searchN = 0, searchQ = "", results = [], resSel = 0, searchTimer = 0;
   function useIcon(id) { return '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#' + id + '"/></svg>'; }
   function checkSearch() {
@@ -1112,7 +1111,7 @@
     var ask = el("res ask");
     ask.setAttribute("role", "option");
     ask.innerHTML = useIcon("i-chat");
-    ask.appendChild(el("res-text", q ? "Ask Claude to find “" + q + "”" : "Ask Claude to find something"));
+    ask.appendChild(el("res-text", q ? "Ask Chat Computer to find “" + q + "”" : "Ask Chat Computer to find something"));
     ask.addEventListener("mousedown", function (e) { e.preventDefault(); });
     ask.addEventListener("click", function () { resSel = results.length; openResult(); });
     list.appendChild(ask);
@@ -1544,11 +1543,11 @@
     },
     accountForm: function (f) { showForm(f || null); },
     lock: function (info) { showLock(info || null); },
-    // The name you go by (the first name) and Claude's model ("" where Claude isn't the one answering): for the
+    // The name you go by (the first name) and the model that answers ("" where none does): for the
     // greeting under "hello, world". Only letters, spaces and a name's marks are kept, 40 at most.
     settings: function (name, model) {
       who = String(name || "").replace(/[^\p{L}\p{M}'’ .-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 40);
-      claudeAnswers = !!model;
+      modelAnswers = !!model;
     },
     // Where you are, and its weather now when it's been looked up: {place, code, temp, day} (see hereGreetings);
     // pending while it's being looked up (the greeting waits for it a moment).
@@ -1558,7 +1557,7 @@
                code: typeof info.code === "number" ? info.code : null, temp: typeof info.temp === "number" ? info.temp : null,
                day: typeof info.day === "boolean" ? info.day : null, pending: !!info.pending };
     },
-    // The greetings there are to choose from now: Claude's for the time and day, and those for where you are.
+    // The greetings there are to choose from now: those for the time and day, and those for where you are.
     greetingsNow: function () { var at = new Date(); return { time: greetings(at), here: hereGreetings(at) }; },
     // Which sidebars show: {left, right} (Chat Computer keeps the choice; see "the sidebars' switches").
     panels: function (s) {

@@ -306,15 +306,14 @@ def _tools(tmp_path, platform=None):
     paths = Paths(home / "ChatComputer").ensure()
     ctx = T.ToolContext(paths, Settings(), platform or FakePlatform(), Journal(paths), RecordingScreen(), Memory(paths),
                         schedule=sch.Schedule(paths.root / "schedule.json"))
-    server, _, names = T.build(ctx)
-    return ctx, server, names
+    _, _, names = T.build(ctx)
+    return ctx, ctx, names
 
 
-def call(server, name, args):
-    entry = server["instance"].get_request_handler("tools/call")
-    out = asyncio.run(entry.handler(None, entry.params_type(name=name, arguments=args)))
-    texts = [c.text for c in out.content if getattr(c, "type", "") == "text"]
-    return "\n".join(texts), bool(getattr(out, "is_error", False) or getattr(out, "isError", False))
+def call(ctx, name, args):
+    out = asyncio.run(ctx.tool_fns[name](args))
+    texts = [c["text"] for c in out["content"] if c.get("type") == "text"]
+    return "\n".join(texts), bool(out.get("is_error"))
 
 
 def test_drive_tool(tmp_path):
@@ -437,7 +436,7 @@ def test_a_timer_rings_on_time_and_stop_silences_it(tmp_path, monkeypatch):
         asked.append(text)
         return "t1"
     c.brain = SimpleNamespace(busy=False, last_activity=0.0, ask=ask, current_origin="here")
-    c._online_now = lambda: asyncio.sleep(0, True)
+    c.model = SimpleNamespace(ready=True)
 
     async def run():
         c.loop = asyncio.get_running_loop()
@@ -560,7 +559,7 @@ def test_locking_choosing_a_pin_and_unlocking(tmp_path, monkeypatch):
         asked.append(text)
         return "t1"
     c.brain = SimpleNamespace(busy=False, last_activity=0.0, ask=ask, current_origin="here")
-    c._online_now = lambda: asyncio.sleep(0, True)
+    c.model = SimpleNamespace(ready=True)
 
     async def run():
         c.loop = asyncio.get_running_loop()

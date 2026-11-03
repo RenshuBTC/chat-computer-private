@@ -647,7 +647,7 @@ mk_app() {   # mk_app DIR VERSION: a pretend Chat Computer
   printf '#!/bin/bash\necho %s\n' "$2" > "$1/linux/session/chatcomputer-session"
   printf 'exec something %s\n' "$2" > "$1/linux/session/xinitrc"
   printf '#!/bin/bash\necho root %s\n' "$2" > "$1/linux/root-helper/chatcomputer-root"
-  printf 'claude-agent-sdk==1\n' > "$1/requirements-linux.txt"
+  printf 'numpy==1\nsoxr==1\n' > "$1/requirements-linux.txt"
 }
 reset_update() {
   rm -rf "$UPD"; mkdir -p "$UPD/opt" "$UPD/win/$SRC_REL" "$UPD/etc" "$UPD/var"
@@ -706,6 +706,12 @@ if [ "$(id -u)" -eq 0 ]; then
   OUT="$(runupdate update-done)"
   [ "$(jget "$OUT" ok)" = "True" ] && [ ! -e "$UPD/var/update-pending" ] && pass "update-done: the update is kept" \
     || fail "update-done: $OUT"
+  # A version that needs fewer Python packages (one left out; comments and spacing aside) is an update too: what
+  # it needs is installed already.
+  reset_update; printf '# the runtime\r\nnumpy==1    # arrays\r\n\r\n' > "$UPD/win/$SRC_REL/requirements-linux.txt"
+  OUT="$(runupdate update-app)"
+  [ "$(jget "$OUT" ok)" = "True" ] && [ "$(app_version)" = 2 ] \
+    && pass "update-app: a version needing fewer Python packages is put in place" || fail "update-app, fewer packages: $OUT"
 
   # What update-app refuses, leaving the installed version as it is.
   refused() {   # refused WHAT: update-app must fail and change nothing
@@ -719,7 +725,8 @@ if [ "$(id -u)" -eq 0 ]; then
     fi
   }
   reset_update; rm "$UPD/var/base-installed";                     refused "before Chat Computer has finished installing"
-  reset_update; echo 'claude-agent-sdk==2' > "$UPD/win/$SRC_REL/requirements-linux.txt"; refused "other Python packages"
+  reset_update; printf 'numpy==2\nsoxr==1\n' > "$UPD/win/$SRC_REL/requirements-linux.txt"; refused "other Python packages"
+  reset_update; printf 'numpy==1\nsoxr==1\nmore==1\n' > "$UPD/win/$SRC_REL/requirements-linux.txt"; refused "one more Python package"
   reset_update; ln -s /etc "$UPD/win/$SRC_REL/chatcomputer/etc";       refused "a link out of the folder"
   reset_update; rm -rf "$UPD/win/$SRC_REL/linux/session"; ln -s /etc "$UPD/win/$SRC_REL/linux/session"; refused "a part that is a link"
   reset_update; : > "$UPD/win/$SRC_REL/chatcomputer/sitecustomize.py"; refused "a Python start-up hook"

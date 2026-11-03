@@ -1,5 +1,5 @@
 """Updating Chat Computer from the folder Chat Computer Setup ran from (update.py), the copy of the logs on Windows' drive
-(logcopy.py), and what keeps Claude from changing Chat Computer's own program files."""
+(logcopy.py), and what keeps the model from changing Chat Computer's own program files."""
 import asyncio
 import json
 import os
@@ -15,7 +15,7 @@ from chatcomputer.ui.gtk_app import displays_report, graphics_report
 SOURCE = "Users/Ren Shu/Downloads/ChatComputer/ChatComputer"
 
 
-def _app(root, version="1", agent="x = 1\n", requirements="claude-agent-sdk==1\n"):
+def _app(root, version="1", agent="x = 1\n", requirements="numpy==1\nsoxr==1\n"):
     (root / "chatcomputer/brain").mkdir(parents=True, exist_ok=True)
     (root / "linux/session").mkdir(parents=True, exist_ok=True)
     (root / "chatcomputer/__init__.py").write_text(f'__version__ = "{version}"\n')
@@ -68,9 +68,19 @@ def test_a_new_version_is_offered(setup):
 
 def test_a_version_needing_other_python_packages_needs_setup(setup):
     app, mount, src, note = setup
-    _app(src, agent="x = 2\n", requirements="claude-agent-sdk==2\n")
+    for other in ("numpy==2\nsoxr==1\n", "numpy==1\nsoxr==1\nmore==1\n"):
+        _app(src, agent="x = 2\n", requirements=other)
+        offer = update.check(note, mount, app)
+        assert offer is not None and offer.needs_setup, other
+
+
+def test_a_version_needing_fewer_python_packages_is_an_update(setup):
+    # What it needs is installed already (the package left out stays, unused). Comments and spacing don't count.
+    app, mount, src, note = setup
+    _app(src, agent="x = 2\n", requirements="# the runtime\r\nnumpy==1    # arrays\r\n\r\n")
     offer = update.check(note, mount, app)
-    assert offer is not None and offer.needs_setup
+    assert offer is not None and not offer.needs_setup
+    assert update.packages(src / "requirements-linux.txt") == {"numpy==1"}
 
 
 def test_no_offer_without_the_folder(tmp_path, setup):

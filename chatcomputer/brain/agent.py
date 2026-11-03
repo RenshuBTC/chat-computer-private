@@ -1,48 +1,43 @@
-"""The brain: one long-running Claude session (the official Claude Code engine via the Agent
-SDK), signed in with the user's own Claude subscription.
+"""The brain: a conversation with the model running on this computer (Chat Computer's own engine with one of Qwen's
+open models: server.py, models.py), and the loop that lets it act: it writes, calls tools (Chat Computer's own, and
+the everyday ones in builtin.py), each call passing the permission gate first, reads what they gave back, and goes
+on until it has answered.
 
-It streams Claude's words as they're written, reports what Claude is doing, can be
-interrupted when the user speaks over it, and resumes the same conversation after a restart.
-
-The same session can also be reached from the Claude app on the user's phone (Claude Code's
-Remote Control). Everything the engine says is read by one reader task, so a turn that starts on
-the phone, with no question asked here, is shown on the screen like any other; Chat Computer just
-doesn't speak it.
+It streams the model's words as they're written, reports what it's doing, can be interrupted when the person speaks
+over it, and keeps each conversation (its messages, in .engine/conversations) to carry on after a restart. Nothing
+leaves the computer: the model, its tools and the conversations are all here.
 """
 from __future__ import annotations
 
 import asyncio
-import collections
 import contextlib
 import itertools
 import json
 import logging
 import os
 import re
-import socket
+import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
-from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, ServerToolResultBlock,
-                              ServerToolUseBlock, SystemMessage, ToolResultBlock, ToolUseBlock, UserMessage)
-from claude_agent_sdk.types import RateLimitEvent, StreamEvent
-
-from ..config import EFFORTS, MODEL_RE, Paths, Settings, State, has_login, token_kind
+from ..config import Paths, Settings, State, atomic_write
 from ..done import result_text
+from . import builtin
+from .server import ServerError, request, stream
 
 log = logging.getLogger("chatcomputer.brain")
 
-BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"]
-HERE, PHONE = "here", "phone"
-# Turns injected by the engine itself (a finished background task and the like) belong to the person here.
-ENGINE_ORIGINS = {"task-notification", "auto-continuation", "peer", "coordinator", "unclassified", "channel"}
-PHONE_TURN_IDLE_S = 15 * 60   # a phone turn that has gone silent this long is considered over
-# When Remote Control doesn't start, it's tried again after these many seconds. On the engine's first start it
-# looks up the account in the background, and refuses Remote Control until it has ("Unable to determine your
-# organization"); a moment later the same request works.
-REMOTE_RETRY_S = (20.0, 60.0)
+HERE = "here"
+OURS = "mcp__chatcomputer__"       # Chat Computer's own tools, as the gate and Actions name them
+MOST_STEPS = 60                    # tool calls in one turn before it's stopped
+MOST_RESULT = 40_000               # characters of a tool's result kept in the conversation
+MOST_MESSAGES = 400                # messages kept in a conversation (older ones go, the first question stays)
+SPOKEN_TOKENS = 4096               # the most a turn's answer may write (its thinking included)
+TYPED_TOKENS = 16384
 
 
 @dataclass
@@ -51,11 +46,7 @@ class BrainEvents:
     on_text: Callable[[str, str], None] = lambda tid, delta: None
     on_activity: Callable[[str, str], None] = lambda tid, text: None
     on_turn_end: Callable[[str, "TurnResult"], None] = lambda tid, res: None
-    on_rate_limit: Callable[[dict[str, Any]], None] = lambda info: None
-    on_user_text: Callable[[str, str], None] = lambda tid, text: None        # what they typed on the phone
-    on_remote: Callable[[str, Any], None] = lambda state, info: None         # the Claude app link: on | failed
-    # A tool call finished: (turn, tool name, its input, whether it worked, the words of its result).
-    # A tool call finished: (turn id, tool, input, worked, result, the call's tool_use_id).
+    # A tool call finished: (turn id, tool, input, worked, result, the call's id).
     on_tool: Callable[[str, str, dict[str, Any], bool, str, str], None] = lambda tid, name, inp, ok, result, use_id: None
 
 
@@ -63,15 +54,14 @@ class BrainEvents:
 class TurnResult:
     ok: bool = True
     interrupted: bool = False
-    error_kind: str | None = None      # auth | billing | rate_limit | overloaded | network | engine | other
+    error_kind: str | None = None      # model_not_ready | engine | other
     error_text: str | None = None
     text: str = ""
-    cost_usd: float | None = None
     tools: list[str] = field(default_factory=list)
 
 
 def describe_tool(name: str, inp: dict[str, Any]) -> str:
-    """A few plain words about what Claude is doing, shown faintly on screen."""
+    """A few plain words about what the model is doing, shown faintly on screen."""
     short = name.split("__")[-1]
     g = lambda k: str(inp.get(k, "") or "")
     base = lambda p: os.path.basename(str(p).rstrip("/")) or str(p)
@@ -133,134 +123,116 @@ def describe_tool(name: str, inp: dict[str, Any]) -> str:
 @dataclass
 class _Turn:
     tid: str
-    origin: str                      # HERE (voice or keyboard on this PC) or PHONE (the Claude app)
+    origin: str = HERE
     res: TurnResult = field(default_factory=TurnResult)
     done: asyncio.Event = field(default_factory=asyncio.Event)
-    last: float = field(default_factory=time.time)
-    gap: bool = False                # a new block of text begins: it's kept apart from what came before
 
 
-def _user_text(m: UserMessage) -> str:
-    """The words of a user message; '' for tool results."""
-    if m.parent_tool_use_id or m.tool_use_result is not None:
-        return ""
-    if isinstance(m.content, str):
-        return m.content.strip()
-    parts = []
-    for b in m.content:
-        t = getattr(b, "text", None)
-        if isinstance(t, str):
-            parts.append(t)
-        elif isinstance(b, dict) and b.get("type") == "text":
-            parts.append(str(b.get("text", "")))
-    return "\n".join(p for p in parts if p).strip()
+def tool_text(result: Any) -> str:
+    """A tool's result as the model reads it: its words (a picture, which this model can't see, said to be one)."""
+    content = result.get("content") if isinstance(result, dict) else result
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict) and p.get("type") == "image":
+                parts.append("[A picture: this model reads text only, so it can't see it. read_screen gives a page's "
+                             "words and what's on it to click.]")
+            elif isinstance(p, dict):
+                parts.append(str(p.get("text", "")))
+        text = "\n".join(p for p in parts if p)
+    else:
+        text = result_text(content)
+    return builtin._cut(text, MOST_RESULT) if text else "(nothing)"
+
+
+class Conversation:
+    """One conversation: its system prompt (fixed when it starts, so what the model read of it is read once) and its
+    messages, as the model's API has them."""
+
+    def __init__(self, folder: Path, cid: str | None = None) -> None:
+        self.folder = folder
+        self.id = cid or time.strftime("c%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        self.system = ""
+        self.messages: list[dict[str, Any]] = []
+
+    @property
+    def path(self) -> Path:
+        return self.folder / f"{self.id}.json"
+
+    @classmethod
+    def load(cls, folder: Path, cid: str) -> "Conversation | None":
+        if not re.fullmatch(r"[A-Za-z0-9_\-]{1,80}", cid or ""):
+            return None
+        c = cls(folder, cid)
+        try:
+            data = json.loads(c.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        c.system = str(data.get("system") or "")
+        c.messages = [m for m in data.get("messages") or [] if isinstance(m, dict) and m.get("role")]
+        return c
+
+    def save(self) -> None:
+        if len(self.messages) > MOST_MESSAGES:
+            # The oldest go (from a question on, so a tool's result never loses its call), the first question stays.
+            cut = len(self.messages) - MOST_MESSAGES
+            while cut < len(self.messages) and self.messages[cut].get("role") != "user":
+                cut += 1
+            self.messages = self.messages[:1] + self.messages[cut:]
+        atomic_write(self.path, json.dumps({"id": self.id, "system": self.system, "messages": self.messages,
+                                            "updated": time.time()}, ensure_ascii=False))
+
+    def for_model(self) -> list[dict[str, Any]]:
+        return [{"role": "system", "content": self.system}] + self.messages
 
 
 class Brain:
-    def __init__(self, paths: Paths, settings: Settings, state: State, token: str | None, mcp_server: dict[str, Any],
-                 gate: Any, system_prompt_fn: Callable[[], str], events: BrainEvents,
-                 extra_env: dict[str, str] | None = None, cwd: str | None = None,
-                 add_dirs: list[str] | None = None, client_factory: Callable[..., Any] | None = None) -> None:
+    """`model` gets the model's server ready (server.ModelService); `tools` are Chat Computer's own tools' names,
+    descriptions and input schemas, and `handlers` what each does; `gate` is the permission gate."""
+
+    def __init__(self, paths: Paths, settings: Settings, state: State, model: Any, tools: list[dict[str, Any]],
+                 handlers: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]], gate: Any,
+                 system_prompt_fn: Callable[[], str], events: BrainEvents, cwd: str | None = None,
+                 env: dict[str, str] | None = None, resolve: Callable[[str], str] | None = None) -> None:
         self.paths = paths
         self.settings = settings
         self.state = state
-        self.token = token
-        self.mcp_server = mcp_server
+        self.model = model
+        self.handlers = handlers
         self.gate = gate
         self.system_prompt_fn = system_prompt_fn
         self.ev = events
-        self.extra_env = extra_env or {}
         self.cwd = cwd or os.path.expanduser("~")
-        self.add_dirs = [d for d in (add_dirs or []) if os.path.isdir(d)]
-        self.client_factory = client_factory or (lambda options: ClaudeSDKClient(options=options))
-        self.client: Any | None = None
+        self.builtins = builtin.Builtins(self.cwd, env, resolve)
+        # Chat Computer's own tools first: the prompt says to use them before a command.
+        self.tool_specs = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
+                                                             "parameters": t["input_schema"]}}
+                           for t in [*tools, *builtin.SPECS]]
+        self.folder = paths.engine / "conversations"
+        self.conversation: Conversation | None = None
         self.session_id: str | None = None
-        self._reader: asyncio.Task | None = None
-        self._background: set[asyncio.Task] = set()
         self._cur: _Turn | None = None
+        self._task: asyncio.Task | None = None
         self.origins: dict[str, str] = {}
         self.typed: set[str] = set()      # turns asked by typing on this PC's keyboard (answered in text only)
-        # Tool calls waiting for their result: tool use id -> (turn, name, input). See _tool_done.
-        self._tool_calls: collections.OrderedDict[str, tuple[str, str, dict[str, Any]]] = collections.OrderedDict()
-        # What the engine last wrote to its error output: logged when something fails (the reason the phone
-        # can't connect, say, is often only there).
-        self.engine_said: collections.deque[str] = collections.deque(maxlen=200)
         self._ids = itertools.count(1)
-        self._connect_lock = asyncio.Lock()
         self.last_activity = float(state.get("last_activity", 0) or 0)
-        self.login_failed = False         # the full sign-in stopped working: use the one-year token
-        self.remote = "off"               # the Claude app link: off | connecting | on | failed
-        self.remote_detail = ""
 
-    # ------------------------------------------------------------------ sign-in
-    @property
-    def auth_mode(self) -> str:
-        """'login' (full sign-in, the phone can connect), 'token' (one-year token) or 'none'."""
-        token_ok = token_kind(self.token) != "invalid"
-        login_ok = has_login(self.paths) and not self.login_failed
-        if login_ok and (self.settings.phone_access or not token_ok):
-            return "login"
-        return "token" if token_ok else "none"
-
-    @property
-    def can_sign_in(self) -> bool:
-        return self.auth_mode != "none"
-
-    def use_token_instead(self) -> bool:
-        """After the full sign-in failed: switch to the one-year token if there is one. True if switched."""
-        if self.auth_mode != "login" or token_kind(self.token) == "invalid":
-            return False
-        self.login_failed = True
-        self.remote = "off"
-        return True
-
-    # ------------------------------------------------------------------ session
+    # ------------------------------------------------------------------ the conversation
     @property
     def busy(self) -> bool:
         return self._cur is not None and not self._cur.done.is_set()
 
     @property
     def current_origin(self) -> str:
-        return self._cur.origin if self.busy and self._cur else HERE
+        return HERE
 
     def origin_of(self, tid: str) -> str:
         return self.origins.get(tid, HERE)
 
     def typed_here(self, tid: str) -> bool:
-        """Asked by typing on this PC's keyboard (not said, and not from the phone)."""
+        """Asked by typing on this PC's keyboard (not said)."""
         return tid in self.typed
-
-    def engine_tail(self, n: int = 40) -> str:
-        """The engine's last lines of error output, without anything that looks like a sign-in."""
-        lines = list(self.engine_said)[-n:]
-        return re.sub(r"sk-ant-[A-Za-z0-9_\-]+", "sk-ant-(hidden)", "\n".join(lines))
-
-    def _env(self) -> dict[str, str]:
-        env = {
-            "CLAUDE_CONFIG_DIR": str(self.paths.engine),
-            "DISABLE_AUTOUPDATER": "1",
-            "DISABLE_TELEMETRY": "1",
-            "DISABLE_ERROR_REPORTING": "1",
-            "ENABLE_TOOL_SEARCH": "false",          # load Chat Computer tools up front: faster replies by voice
-            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",  # Chat Computer keeps its own memory file
-            "CLAUDE_AGENT_SDK_CLIENT_APP": "chatcomputer/0.1",
-            "BASH_DEFAULT_TIMEOUT_MS": "180000",
-            "MAX_MCP_OUTPUT_TOKENS": "40000",
-        }
-        if self.auth_mode == "login":
-            # Claude Code reads the full sign-in from CLAUDE_CONFIG_DIR. A token in the environment would win
-            # over it (the engine inherits Chat Computer's environment), so make sure there is none. Remote Control
-            # needs Claude Code's feature flags, so the "non-essential traffic" switch stays off in this mode.
-            for k in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-                os.environ.pop(k, None)
-        else:
-            env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
-            if token_kind(self.token) == "api_key":
-                env["ANTHROPIC_API_KEY"] = self.token or ""
-            else:
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = self.token or ""
-        env.update(self.extra_env)
-        return env
 
     def _should_resume(self) -> str | None:
         sid = self.state.get("session_id")
@@ -272,129 +244,41 @@ class Brain:
         except (TypeError, ValueError):
             limit = 8.0
         if not limit > 0:
-            limit = 8.0          # 0 or less would forget the conversation every time the engine starts
+            limit = 8.0          # 0 or less would forget the conversation every time Chat Computer starts
         if idle_h > limit:
             log.info("starting a fresh conversation (idle %.1f h)", idle_h)
             return None
         return sid
 
-    def _options(self, resume: str | None) -> ClaudeAgentOptions:
-        return ClaudeAgentOptions(
-            system_prompt=self.system_prompt_fn(),
-            tools=list(BUILTIN_TOOLS),
-            allowed_tools=[],                    # everything goes through the permission gate
-            mcp_servers={"chatcomputer": self.mcp_server},
-            can_use_tool=self.gate,
-            permission_mode="default",
-            include_partial_messages=True,
-            setting_sources=[],
-            # A hand-edited settings file can hold anything: a value the engine can't take is left out.
-            model=self.settings.model if MODEL_RE.match(self.settings.model or "") else None,
-            effort=self.settings.effort if self.settings.effort in EFFORTS else None,
-            cwd=self.cwd,
-            add_dirs=self.add_dirs,
-            env=self._env(),
-            resume=resume,
-            max_buffer_size=32 * 1024 * 1024,
-            stderr=self._engine_stderr,
-        )
+    def _conversation(self) -> Conversation:
+        if self.conversation is None:
+            sid = self.session_id or self._should_resume()
+            c = Conversation.load(self.folder, sid) if sid else None
+            if c is None:
+                c = Conversation(self.folder)
+                c.system = self.system_prompt_fn()
+            self.conversation = c
+            self.session_id = c.id
+        return self.conversation
 
     async def connect(self) -> None:
-        async with self._connect_lock:
-            if self.client is not None:
-                return
-            resume = self.session_id or self._should_resume()
-            for attempt in (resume, None) if resume else (None,):
-                client = self.client_factory(self._options(attempt))
-                try:
-                    await client.connect()
-                except Exception as exc:
-                    log.warning("connect failed (resume=%s): %s", attempt, exc)
-                    with contextlib.suppress(Exception):
-                        await client.disconnect()
-                    continue
-                self.client = client
-                self.session_id = attempt
-                self._reader = asyncio.create_task(self._read_loop(client))
-                log.info("Claude session %s (%s sign-in)", "resumed " + attempt if attempt else "started", self.auth_mode)
-                if self.auth_mode == "login" and self.settings.phone_access:
-                    self._spawn(self._enable_remote(client))
-                return
-            raise RuntimeError("couldn't start the Claude engine")
-
-    def _spawn(self, coro: Any) -> None:
-        """Runs `coro` in the background. The event loop keeps only a weak reference to a task, so one
-        nothing else holds can be destroyed before it finishes; this set holds each until it's done."""
-        task = asyncio.create_task(coro)
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
-
-    async def _enable_remote(self, client: Any) -> None:
-        """Make this session reachable from the Claude app on the phone (Remote Control). Claude Code's
-        own hosts (the desktop app, VS Code) do this with the same control request; the Python SDK has no
-        public call for it yet, so it goes through the SDK's control channel directly."""
-        name = "Chat Computer"
-        host = socket.gethostname()
-        if host and host.lower() not in ("chatcomputer", "localhost"):
-            name = f"Chat Computer ({host})"
-        req: dict[str, Any] = {"subtype": "remote_control", "enabled": True, "name": name}
-        previous = self.state.get("remote_session_id")
-        if previous:
-            req["reattach_session_id"] = previous
-        self.remote = "connecting"
-        tries = len(REMOTE_RETRY_S) + 1
-        for attempt in range(tries):
-            try:
-                resp = await self._remote_request(client, req)
-                break
-            except Exception as exc:
-                if client is not self.client:
-                    return
-                detail = str(exc)[:300] or type(exc).__name__
-                log.warning("Remote Control (the Claude app on the phone) didn't start (try %d of %d): %s (%s)",
-                            attempt + 1, tries, detail, type(exc).__name__)
-                log.warning("the engine's last words before that:\n%s", self.engine_tail())
-                if attempt + 1 < tries:
-                    await asyncio.sleep(REMOTE_RETRY_S[attempt])
-                    if client is not self.client:
-                        return
-                    continue
-                self.remote = "failed"
-                self.remote_detail = detail
-                self.ev.on_remote("failed", self.remote_detail)
-                return
-        if client is not self.client:
+        """Gets the model's server going, and has it read the system prompt and the tools' descriptions (thousands of
+        words: on a processor, a minute or more the first time; the engine keeps that reading, on disk too), so the
+        first question doesn't wait for that."""
+        conv = self._conversation()
+        port = await self.model.ensure()
+        if self.busy:
             return
-        self.remote = "on"
-        self.remote_detail = json.dumps(resp)[:500] if resp else ""
-        log.info("Remote Control is on: %s", self.remote_detail)
-        sid = None
-        if isinstance(resp, dict):
-            for k in ("session_id", "sessionId", "bridge_session_id", "bridgeSessionId", "remote_session_id"):
-                if isinstance(resp.get(k), str) and resp.get(k):
-                    sid = resp[k]
-                    break
-        if sid:
-            self.state.set(remote_session_id=sid)
-        self.ev.on_remote("on", resp or {})
-
-    @staticmethod
-    async def _remote_request(client: Any, req: dict[str, Any]) -> Any:
-        query = getattr(client, "_query", None)
-        if query is None:
-            raise RuntimeError("the engine connection isn't ready")
-        try:
-            return await query._send_control_request(req, timeout=90)
-        except Exception:
-            if "reattach_session_id" not in req:
-                raise
-            req.pop("reattach_session_id")          # that session is gone: start a new one
-            return await query._send_control_request(req, timeout=90)
+        body = {"messages": [{"role": "system", "content": conv.system}, {"role": "user", "content": "."}],
+                "tools": self.tool_specs, "think": False, "max_tokens": 1}
+        with contextlib.suppress(Exception):
+            await request(port, "POST", "/v1/chat/completions", json.dumps(body, ensure_ascii=False).encode(),
+                          timeout=3600)
 
     async def switch_conversation(self, session_id: str | None) -> None:
-        """Carry on another conversation (a chat opened from Chats): its session, at the next question."""
+        """Carry on another conversation (a chat opened from Chats)."""
         await self.interrupt()
-        await self.close()
+        self.conversation = None
         self.session_id = session_id or None
         self.last_activity = time.time()
         self.state.set(session_id=self.session_id, last_activity=self.last_activity)
@@ -402,69 +286,33 @@ class Brain:
     async def new_conversation(self) -> None:
         """Forget the current conversation (memory facts stay)."""
         await self.interrupt()
-        await self.close()
+        self.conversation = None
         self.session_id = None
         self.state.set(session_id=None)
 
     async def close(self) -> None:
-        client, self.client = self.client, None
-        reader, self._reader = self._reader, None
-        if reader and reader is not asyncio.current_task():
-            reader.cancel()
-            with contextlib.suppress(BaseException):
-                await reader
-        if client:
-            with contextlib.suppress(Exception):
-                await client.disconnect()
-        if self._cur and not self._cur.done.is_set():
-            self._cur.res.interrupted = True
-            self._finish(self._cur)
+        await self.interrupt()
 
     # ------------------------------------------------------------------ turns
     async def interrupt(self) -> None:
-        t = self._cur
-        if t is None or t.done.is_set():
+        t, task = self._cur, self._task
+        if t is None or t.done.is_set() or task is None:
             return
-        try:
-            if self.client:
-                await asyncio.wait_for(self.client.interrupt(), timeout=5)
-        except Exception as exc:
-            log.info("interrupt failed: %s", exc)
-        try:
+        task.cancel()
+        with contextlib.suppress(BaseException):
             await asyncio.wait_for(asyncio.shield(t.done.wait()), timeout=10)
-        except asyncio.TimeoutError:
-            log.warning("the engine didn't stop; starting clean next time")
-            await self.close()   # the engine is stuck
-
-    def _engine_stderr(self, line: str) -> None:
-        line = line.rstrip()
-        log.debug("engine: %s", line)
-        if line:
-            self.engine_said.append(line[:500])
 
     async def ask(self, text: str, typed: bool = False) -> str:
-        """Send what the user said here (or typed on this PC's keyboard: `typed`). Interrupts anything still
+        """Send what the person said here (or typed on this PC's keyboard: `typed`). Interrupts anything still
         running. Returns the turn id."""
         if self.busy:
             await self.interrupt()
-        t = self._new_turn(HERE)
+        t = self._new_turn()
         if typed:
             self.typed.add(t.tid)
         self._cur = t
         self.ev.on_turn_start(t.tid)
-        try:
-            if self.client is None:
-                await self.connect()
-            assert self.client is not None
-            await self.client.query(text)
-        except Exception as exc:
-            log.exception("couldn't send to Claude")
-            msg = str(exc)
-            t.res.ok = False
-            t.res.error_kind = "network" if any(w in msg.lower() for w in ("network", "connect", "timed out", "dns")) else "engine"
-            t.res.error_text = msg[:300]
-            self._finish(t)
-            await self.close()
+        self._task = asyncio.create_task(self._turn(t, text))
         return t.tid
 
     async def wait_idle(self) -> None:
@@ -472,22 +320,13 @@ class Brain:
             with contextlib.suppress(Exception):
                 await asyncio.shield(self._cur.done.wait())
 
-    def _new_turn(self, origin: str) -> _Turn:
-        prefix = "p" if origin == PHONE else "t"
-        t = _Turn(f"{prefix}{next(self._ids)}-{int(time.time())}", origin)
-        self.origins[t.tid] = origin
+    def _new_turn(self) -> _Turn:
+        t = _Turn(f"t{next(self._ids)}-{int(time.time())}")
+        self.origins[t.tid] = HERE
         if len(self.origins) > 500:
             for k in list(self.origins)[:250]:
                 self.origins.pop(k, None)
                 self.typed.discard(k)
-        return t
-
-    def _start_unasked(self, origin: str) -> _Turn:
-        """A turn this PC didn't ask for: typed on the phone, or the engine continuing on its own."""
-        t = self._new_turn(origin)
-        self._cur = t
-        log.info("turn %s started from %s", t.tid, origin)
-        self.ev.on_turn_start(t.tid)
         return t
 
     def _finish(self, t: _Turn) -> None:
@@ -503,170 +342,131 @@ class Brain:
         except Exception:
             log.exception("on_turn_end failed")
 
-    # ------------------------------------------------------------------ everything the engine says
-    async def _read_loop(self, client: Any) -> None:
-        error: Exception | None = None
+    async def _turn(self, t: _Turn, text: str) -> None:
+        conv: Conversation | None = None
         try:
-            async for m in client.receive_messages():
-                try:
-                    self._route(m)
-                except Exception:
-                    log.exception("couldn't handle a message from the engine")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            error = exc
-            log.warning("the engine connection ended: %s", exc)
-        # The engine stopped (or its output ended). Start clean next time.
-        if self.client is client:
-            self.client = None
-            self._reader = None
-            self._spawn(self._dispose(client))
-        t = self._cur
-        if t is not None and not t.done.is_set():
-            if error is not None:
-                msg = str(error)
-                t.res.ok = False
-                t.res.error_kind = ("network" if any(w in msg.lower() for w in ("network", "connect", "timed out", "dns"))
-                                    else "engine")
-                t.res.error_text = msg[:300]
+            conv = self._conversation()
+            conv.messages.append({"role": "user", "content": text})
+            port = await self.model.ensure()
+            for _ in range(MOST_STEPS):
+                answer = await self._write(t, port, conv)
+                conv.messages.append(answer)
+                calls = answer.get("tool_calls") or []
+                if not calls:
+                    break
+                for call in calls:
+                    conv.messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
+                                          "content": await self._call(t, call)})
+                conv.save()
             else:
-                t.res.interrupted = True
+                t.res.ok, t.res.error_kind = False, "other"
+                t.res.error_text = f"it was still going after {MOST_STEPS} steps, so it was stopped"
+        except asyncio.CancelledError:
+            t.res.interrupted = True
+            if conv is not None and conv.messages and conv.messages[-1].get("role") != "user":
+                conv.messages.append({"role": "user", "content": "[Request interrupted by user]"})
+        except Exception as exc:
+            from .server import NotReady
+            t.res.ok = False
+            if isinstance(exc, NotReady):
+                t.res.error_kind = "model_not_ready"
+            elif isinstance(exc, (ServerError, OSError)):
+                t.res.error_kind = "engine"
+                log.warning("the model's engine failed: %s", exc)
+            else:
+                t.res.error_kind = "other"
+                log.exception("the turn failed")
+            t.res.error_text = str(exc)[:300]
+            if conv is not None and conv.messages and conv.messages[-1].get("role") == "user" and t.res.error_kind == "model_not_ready":
+                conv.messages.pop()        # (asked again once the model is ready)
+        finally:
+            if conv is not None:
+                with contextlib.suppress(Exception):
+                    conv.save()
             self._finish(t)
 
-    @staticmethod
-    async def _dispose(client: Any) -> None:
-        with contextlib.suppress(Exception):
-            await client.disconnect()
+    def _effort(self) -> tuple[bool, str]:
+        e = (self.settings.effort or "medium").lower()
+        think = e != "off"
+        return think, {"max": "xhigh", "high": "xhigh", "medium": "medium", "low": "low"}.get(e, "medium")
 
-    def _tool_done(self, use_id: str, ok: bool, result: str) -> None:
-        """A tool call's result came back (Actions lists what worked: chatcomputer/done.py)."""
-        call = self._tool_calls.pop(use_id, None)
-        if call is None:
-            return
-        tid, name, inp = call
+    async def _write(self, t: _Turn, port: int, conv: Conversation) -> dict[str, Any]:
+        """The model's next message, its words streamed to the screen as they come; returned as the API's assistant
+        message (with its thinking and tool calls)."""
+        think, effort = self._effort()
+        body = {"messages": conv.for_model(), "tools": self.tool_specs, "think": think, "reasoning_effort": effort,
+                "max_tokens": TYPED_TOKENS if t.tid in self.typed else SPOKEN_TOKENS}
+        text, thinking = [], []
+        calls: list[dict[str, Any]] = []
+        started_thinking = False
+        gap = bool(t.res.text) and not t.res.text[-1].isspace()
+        async for piece in stream(port, body):
+            for choice in piece.get("choices") or []:
+                d = choice.get("delta") or {}
+                if d.get("reasoning_content"):
+                    thinking.append(d["reasoning_content"])
+                    if not started_thinking:
+                        started_thinking = True
+                        self.ev.on_activity(t.tid, "Thinking")
+                if d.get("content"):
+                    words = d["content"]
+                    if gap:
+                        gap = False
+                        if not words[0].isspace():
+                            words = " " + words      # carries on the same reply after a tool call
+                    text.append(d["content"])
+                    t.res.text += words
+                    self.ev.on_text(t.tid, words)
+                for c in d.get("tool_calls") or []:
+                    calls.append({"id": c.get("id") or f"call_{len(calls)}", "type": "function",
+                                  "function": c.get("function") or {}})
+        message: dict[str, Any] = {"role": "assistant", "content": "".join(text)}
+        if thinking:
+            message["reasoning_content"] = "".join(thinking)
+        if calls:
+            message["tool_calls"] = calls
+        return message
+
+    async def _call(self, t: _Turn, call: dict[str, Any]) -> str:
+        """Runs one tool call, past the gate first: what it gave back, as words."""
+        f = call.get("function") or {}
+        name = str(f.get("name") or "")
+        use_id = str(call.get("id") or "")
         try:
-            self.ev.on_tool(tid, name, inp, ok, result, use_id)
+            args = json.loads(f.get("arguments") or "{}")
+        except ValueError:
+            args = None
+        if not isinstance(args, dict):
+            return "That tool call's arguments weren't a JSON object."
+        handler = self.builtins.handler(name) or self.handlers.get(name)
+        if handler is None:
+            return f"There's no tool called {name}."
+        full = name if name in builtin.NAMES else OURS + name
+        t.res.tools.append(full)
+        self.ev.on_activity(t.tid, describe_tool(name, args))
+        decision = await self.gate(full, args, SimpleNamespace(tool_use_id=use_id))
+        if getattr(decision, "behavior", "allow") == "deny":
+            result: dict[str, Any] = {"content": [{"type": "text", "text": decision.message}], "is_error": True}
+        else:
+            inp = getattr(decision, "updated_input", None) or args
+            try:
+                result = await handler(inp)
+            except Exception as exc:
+                log.exception("tool %s failed", name)
+                result = {"content": [{"type": "text", "text": f"{name} failed: {exc}"}], "is_error": True}
+        words = tool_text(result)
+        try:
+            self.ev.on_tool(t.tid, full, args, not result.get("is_error"), words, use_id)
         except Exception:
             log.exception("on_tool failed")
-
-    def _route(self, m: Any) -> None:
-        now = time.time()
-        t = self._cur if self._cur is not None and not self._cur.done.is_set() else None
-        if t is not None and t.origin == PHONE and now - t.last > PHONE_TURN_IDLE_S:
-            t.res.interrupted = True     # the phone turn went quiet long ago; whatever comes now is new
-            self._finish(t)
-            t = None
-
-        if isinstance(m, SystemMessage):
-            sid = m.data.get("session_id") if isinstance(m.data, dict) else None
-            if sid:
-                self.session_id = sid
-            return
-        if isinstance(m, RateLimitEvent):
-            info = m.rate_limit_info
-            self.ev.on_rate_limit({"status": info.status, "type": info.rate_limit_type,
-                                   "utilization": info.utilization, "resets_at": info.resets_at})
-            return
-        if isinstance(m, UserMessage):
-            if isinstance(m.content, list):
-                for b in m.content:
-                    if isinstance(b, ToolResultBlock):
-                        self._tool_done(b.tool_use_id, not b.is_error, result_text(b.content))
-            text = _user_text(m)
-            kind = (m.origin or {}).get("kind") if isinstance(m.origin, dict) else None
-            if t is None and text:
-                # Nobody here asked: typed in the Claude app, or injected by the engine itself.
-                t = self._start_unasked(HERE if kind in ENGINE_ORIGINS else PHONE)
-                if t.origin == PHONE:
-                    self.ev.on_user_text(t.tid, text)
-            elif t is not None and t.origin == PHONE and text and kind not in ENGINE_ORIGINS:
-                self.ev.on_user_text(t.tid, text)   # another message from the phone in the same turn
-            if t is not None:
-                t.last = now
-            return
-
-        if t is None:
-            if not isinstance(m, (StreamEvent, AssistantMessage)):
-                return          # a stray result or status with no turn
-            t = self._start_unasked(PHONE)
-        t.last = now
-        res = t.res
-        if isinstance(m, StreamEvent):
-            e = m.event
-            if e.get("type") == "content_block_start" and (e.get("content_block") or {}).get("type") == "text":
-                # Words written after a tool call (or in a later block) carry on the same reply: they'd otherwise be
-                # glued to the last sentence ("...check again.Your internet is fine"), on the screen and out loud.
-                t.gap = bool(res.text) and not res.text[-1].isspace()
-            elif e.get("type") == "content_block_delta":
-                d = e.get("delta", {})
-                if d.get("type") == "text_delta" and d.get("text"):
-                    text = d["text"]
-                    if t.gap:
-                        t.gap = False
-                        if not text[0].isspace():
-                            text = " " + text
-                    res.text += text
-                    self.ev.on_text(t.tid, text)
-        elif isinstance(m, AssistantMessage):
-            if m.error:
-                res.error_kind = {"authentication_failed": "auth", "billing_error": "billing",
-                                  "rate_limit": "rate_limit", "server_error": "overloaded"}.get(m.error, "other")
-            for b in m.content:
-                if isinstance(b, (ToolUseBlock, ServerToolUseBlock)):
-                    self._tool_calls[b.id] = (t.tid, b.name, b.input or {})
-                    while len(self._tool_calls) > 200:
-                        self._tool_calls.popitem(last=False)
-                if isinstance(b, ToolUseBlock):
-                    res.tools.append(b.name)
-                    self.ev.on_activity(t.tid, describe_tool(b.name, b.input or {}))
-                elif isinstance(b, ServerToolResultBlock):
-                    # Run by Claude's servers (a web search): an error comes back as the result's content.
-                    c = b.content if isinstance(b.content, dict) else {}
-                    self._tool_done(b.tool_use_id, "error_code" not in c and not str(c.get("type", "")).endswith("_error"),
-                                    "")
-        elif isinstance(m, ResultMessage):
-            self.session_id = m.session_id or self.session_id
-            res.cost_usd = m.total_cost_usd
-            if m.terminal_reason in ("aborted_streaming", "aborted_tools"):
-                res.interrupted = True
-            if m.is_error and not res.interrupted:
-                res.ok = False
-                status = m.api_error_status
-                if status == 401 or res.error_kind == "auth":
-                    res.error_kind = "auth"
-                elif status == 429 or res.error_kind == "rate_limit":
-                    res.error_kind = "rate_limit"
-                elif status == 404 and "model" in "; ".join(m.errors or [m.result or ""]).lower():
-                    res.error_kind = "model"
-                elif status in (500, 502, 503, 529) or res.error_kind == "overloaded":
-                    res.error_kind = "overloaded"
-                elif m.subtype == "error_during_execution" and not status:
-                    res.error_kind = res.error_kind or "engine"
-                else:
-                    res.error_kind = res.error_kind or "other"
-                res.error_text = "; ".join(m.errors or []) or (m.result or m.subtype)
-            self._finish(t)
+        return words
 
 
-def friendly_error(res: TurnResult, rate: dict[str, Any] | None = None,
-                   setup_place: str = "Chat Computer Setup on Windows") -> str:
+def friendly_error(res: TurnResult, progress: str | None = None) -> str:
     k = res.error_kind
-    if k == "auth":
-        # setup_place: where this computer's people sign in again (on a Mac, Chat Computer Setup in macOS).
-        return (f"I can't sign in to Claude: your sign-in has expired or was removed. Run {setup_place} "
-                "again to sign in, then come back.")
-    if k == "billing":
-        return "Your Claude plan needs attention before I can continue. Check your account at claude.ai."
-    if k == "rate_limit":
-        when = ""
-        if rate and rate.get("resets_at"):
-            when = " It resets at " + time.strftime("%-I:%M %p", time.localtime(rate["resets_at"])) + "."
-        return "You've reached your Claude usage limit for now." + when
-    if k == "overloaded":
-        return "Claude is very busy right now. Try again in a minute."
-    if k == "model":
-        return "The Claude model in my settings isn't available."
-    if k == "network":
-        return "I can't reach Claude. Check the internet connection."
+    if k == "model_not_ready":
+        return ("I'm still getting my model ready" + (f": {progress}" if progress else "") +
+                ". Until then I can only help with Wi-Fi, volume and restarting.")
+    if k == "engine":
+        return "My model stopped working for a moment. Please say that again."
     return "Something went wrong on my side. Please say that again."

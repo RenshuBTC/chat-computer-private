@@ -98,7 +98,11 @@ async function state(page) {
       hint_weight: getComputedStyle(document.getElementById("input")).fontWeight,
       buttons: Array.from(document.querySelectorAll("#demo-tools, #box button:not(#send)")).map((b) => b.id || b.className),
       tools: Array.from(document.querySelectorAll("#tools button")).map((b) => [b.getAttribute("aria-label"), b.getBoundingClientRect().left, b.getBoundingClientRect().top]),
+      tools_round: Array.from(document.querySelectorAll("#tools button")).map((b) => { const r = b.getBoundingClientRect(), st = getComputedStyle(b);
+        return [Math.round(r.width), Math.round(r.height), st.borderRadius, st.backgroundColor, Math.round(r.right)]; }),
+      box_at: [document.getElementById("box").getBoundingClientRect().left, document.getElementById("box").getBoundingClientRect().right],
       send_at: [document.getElementById("send").getBoundingClientRect().left, document.getElementById("send").getBoundingClientRect().top],
+      send_size: [Math.round(document.getElementById("send").getBoundingClientRect().width), Math.round(document.getElementById("send").getBoundingClientRect().height)],
       input_top: document.getElementById("input").getBoundingClientRect().top,
       more: document.querySelectorAll(".more").length,
     };

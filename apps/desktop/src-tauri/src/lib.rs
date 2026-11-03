@@ -453,6 +453,9 @@ fn home_url(app: &tauri::App) -> Result<WebviewUrl, Box<dyn std::error::Error>> 
     Ok(WebviewUrl::App("index.html".into()))
 }
 
+/// The screen's dark (theme.css's ground): the window and the page are that while the page loads, never white.
+const SCREEN: tauri::window::Color = tauri::window::Color(0x15, 0x15, 0x15, 255);
+
 pub fn run() {
     let engine = Arc::new(engine::Engine::default());
     let (starting, stopping) = (engine.clone(), engine.clone());
@@ -481,6 +484,7 @@ pub fn run() {
             // The whole screen to start with, as a Chat Computer has (and room for both sidebars).
             let window = tauri::window::WindowBuilder::new(app, "chat-computer")
                 .title("Chat Computer")
+                .background_color(SCREEN)
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(420.0, 560.0)
                 .center()
@@ -505,6 +509,7 @@ pub fn run() {
             let (back, opener, guard) = (home.clone(), app.handle().clone(), app.handle().clone());
             let opening = Mutex::new(std::env::var("CHATCOMPUTER_OPEN").ok().filter(|u| web_url(u).is_ok()));
             let main = WebviewBuilder::new(MAIN, url)
+                .background_color(SCREEN)
                 .auto_resize()
                 // The app's own page stays: a link followed opens in the middle instead (the page itself does that;
                 // this catches the rest). Frames in it (a map, a page of its own) may load what they like.

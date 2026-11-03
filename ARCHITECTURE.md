@@ -683,19 +683,20 @@ retrying with backoff, then starts listening.
   holding a message opens `#hold-menu` over `#hold-shade` (the screen dimmed by 20% black, not blurred; the menu
   frosted): Copy, Send to (`navigator.share`, where there is one), Select text (`#reader`: the message alone over
   the screen, selectable as usual), and Edit for yours or Read aloud for Chat Computer's.
-* Look: plain. Black text (#000000) on a warm off-white (`--ground: #F8F5F0`, white 8% dimmer with a faint warm
-  tint) and nothing else: no dark mode, no grey text. Chosen from the research on long screen reading, as the user
-  asked (theme.css cites it): dark on light reads best because the screen is bright; full white is rated glarier;
-  19.3:1 instead of 21:1 changes no reading measure; very warm screens tired people most. The screen's own
-  brightness matters far more than the colour, so dimming stays the screen's (`display`, the night light). The font is Atkinson Hyperlegible Next, with
+* Look: Claude's dark mode, as the user asked ("similar to Claude Cowork's dark mode"), its colours measured off
+  the Claude app in dark mode: the middle `--ground: #151515`, the sidebars a shade darker (`--side: #111111`), the
+  words `--ink: #F9F9F7` (17.3:1), the message box `--paper: #303030` with its round buttons `--knob: #414141`,
+  lines `--line: #3D3D3C`, shadows black (`--shade`), and nothing else: one look (no light mode beside it), and no
+  grey text but the empty box's hint. The screen's own brightness matters far more than the colour, so dimming
+  stays the screen's (`display`, the night light). The font is Atkinson Hyperlegible Next, with
   Atkinson Hyperlegible Mono for code. They ship in `ui/assets/fonts` (SIL OFL 1.1, from google/fonts; see
   its README), and `theme.css` loads them with `@font-face`. Pages written elsewhere get the fonts' file
   address (`render._theme_css`). `gtk_app.register_fonts` hands the folder to fontconfig (FcConfigAppFontAddDir)
   for the onscreen keyboard. Characters the fonts lack (CJK, Greek, Cyrillic, emoji) come from the system's fonts
-  (Noto). Laid out like the Claude app, as the user asked: their words on the right in a light grey bubble
-  (`--bubble: #E7E4DD`; black on it is 16.5:1; lines are `--line: #DDD9D1`), Chat Computer's flush left in one
-  column, from the top of the screen down. Its words fade in as they come, each new piece from nothing to
-  black in 400 ms at an even pace (the Claude app's timing, measured there), and a new message rises 10px into
+  (Noto). Laid out like the Claude app, as the user asked: their words on the right in a bubble (`--bubble:
+  #2C2C2A`, Claude's; white on it is 13.3:1), Chat Computer's flush left in one column, from the top of the screen
+  down. Its words fade in as they come, each new piece from nothing to
+  white in 400 ms at an even pace (the Claude app's timing, measured there), and a new message rises 10px into
   place. Under each message a row of what can be done with it, as in the Claude app: under Chat Computer's, copy, read
   aloud (`speak`, through the Speaker), good and bad (kept in `feedback.jsonl` with the question, for finding what
   to improve) and ask again, with when; under theirs, when, ask again, edit and copy. Below is a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter

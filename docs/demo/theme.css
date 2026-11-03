@@ -1,25 +1,20 @@
-/* Chat Computer look: black text on a warm off-white, and nothing else. The font is Atkinson Hyperlegible Next
-   (by the Braille Institute, made so that letters that are easy to confuse look different), and code is in
-   Atkinson Hyperlegible Mono. Both come with Chat Computer (fonts/, SIL Open Font License 1.1). Characters they
-   don't have (Chinese, Japanese, Korean, Greek, Cyrillic, emoji) come from the system's fonts.
-   The background, for a screen looked at for hours: dark text on a light background reads best (proofreading is
-   better in any room light; Buchner & Baumgartner 2007), and that's because the screen is bright (Buchner, Mayr &
-   Brandt 2009), so it stays light; full white is the most glaring of it, though (160 readers rated it glarier), and
-   contrast hardly matters this high (reading slows by under half for ten times less of it; Legge et al. 1987). So
-   --ground is white made 8% dimmer, with a faint warm tint (about 6200 K; not cream or sepia: the warmest screens
-   tired people most, Xie et al. 2025): #F8F5F0, black on it 19.3:1 (white's is 21:1; 7:1 is WCAG's best grade).
-   The screen's own brightness matters far more than any colour here: turned down to the room's light, it eased eye
-   fatigue where tinting didn't (a randomised month-long study of 47 people), so
-   Chat Computer dims the screen itself ("brightness", the night light). No dark mode, and no grey text but one: the
-   empty message box's hint, dimmed (--dim), with the send button grey in the same shade until there's something
-   to send, as in ChatGPT. The other colours are the light grey of your messages' bubbles (black on it is still
-   16.5:1, and it stands off the background as #EDEDED did off white), which sets your words apart from Chat Computer's the
-   way chat apps do, and a little darker grey for lines (--line), as thin lines need more contrast than filled areas
-   to show as well. The message box is white (--paper), set off from the background with a thin line and a soft
-   shadow, as the Claude app's is; the sidebars are a shade darker than the background (--side, as the Claude app's
-   sidebar is a shade darker than its middle), against the screen's edges. Sizes are in rem, and they're the Claude
-   app's: 16px words on lines 22px apart at 100% display scaling. The screen sets the root size for its own display
-   scaling (chatcomputer/ui/layout.py), as a computer's display scaling makes the Claude app bigger. */
+/* Chat Computer look: dark, in the tones of Claude's dark mode (as its Cowork shows it), and nothing else. The font
+   is Atkinson Hyperlegible Next (by the Braille Institute, made so that letters that are easy to confuse look
+   different), and code is in Atkinson Hyperlegible Mono. Both come with Chat Computer (fonts/, SIL Open Font License
+   1.1). Characters they don't have (Chinese, Japanese, Korean, Greek, Cyrillic, emoji) come from the system's fonts.
+   The colours are Claude's, measured off the Claude app in dark mode (its middle, sidebar and words are also its
+   stylesheet's dark theme's): the middle of the screen --ground, #151515, near black and neutral; the sidebars a
+   shade darker (--side, #111111), as Claude's sidebar is darker than its middle; the words --ink, #F9F9F7, a white
+   just off pure (17.3:1 on the middle); the message box --paper, #303030, lifted off the middle as Claude's is, and
+   its round buttons (+ and the microphone) --knob, #414141; your messages' bubbles, and what's pointed at or chosen,
+   --bubble, #2C2C2A (white on it 13.3:1); thin lines --line, #3D3D3C (the line round Claude's middle); and one
+   dimmed grey, --dim, #96958D, only for the empty message box's hint (Claude's) and the send button with nothing to
+   send, as in ChatGPT. Shadows, and the screen dimmed behind a held message, are --shade: black. The screen's
+   brightness matters more than any colour (turned down to the room's light, it eased eye fatigue where tinting
+   didn't, in a randomised month-long study of 47 people), so Chat Computer dims the screen itself ("brightness", the
+   night light). Sizes are in rem, and they're the Claude app's: 16px words on lines 22px apart at 100% display
+   scaling. The screen sets the root size for its own display scaling (chatcomputer/ui/layout.py), as a computer's
+   display scaling makes the Claude app bigger. */
 @font-face {
   font-family: "Atkinson Hyperlegible Next"; font-style: normal; font-weight: 200 800;
   src: url("fonts/AtkinsonHyperlegibleNext.ttf") format("truetype");
@@ -37,13 +32,16 @@
   src: url("fonts/AtkinsonHyperlegibleMono-Italic.ttf") format("truetype");
 }
 :root {
-  --ground: #F8F5F0;
-  --ink: #000000;
-  --bubble: #E7E4DD;
-  --line: #DDD9D1;
-  --dim: #918F8A;
-  --paper: #FFFFFF;
-  --side: #F3F0EB;
+  --ground: #151515;
+  --ink: #F9F9F7;
+  --bubble: #2C2C2A;
+  --line: #3D3D3C;
+  --dim: #96958D;
+  --paper: #303030;
+  --knob: #414141;
+  --side: #111111;
+  --shade: #000000;
+  color-scheme: dark;
   --sans: "Atkinson Hyperlegible Next", sans-serif;
   --mono: "Atkinson Hyperlegible Mono", monospace;
 }
@@ -51,7 +49,7 @@
 html { font-size: var(--co-size, 16px); }
 html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink); }
 body { font-family: var(--sans); font-size: 1rem; line-height: 1.375; }
-/* Selected text (to copy it) is shown the other way round: white on black. */
+/* Selected text (to copy it) is shown the other way round: dark on light. */
 ::selection { background: var(--ink); color: var(--ground); }
 
 /* Chat Computer's words as written (Markdown), in the same font and size as everything else. */
@@ -69,13 +67,13 @@ body { font-family: var(--sans); font-size: 1rem; line-height: 1.375; }
 .md li.task.done::before { content: "\2611\00a0 "; }
 .md li.task.done { text-decoration: line-through; }
 /* Code: the mono font at the same size as the words around it (its letters are the same height). Blocks of
-   code get a thin black frame. */
+   code get a thin frame, and tables, quotes and rules thin lines, in the lines' grey (on the dark, as Claude's). */
 .md code, .md pre { font-family: var(--mono); font-size: 1em; }
-.md pre { margin: 0 0 1em; padding: 0.75em 1em; border: 1px solid var(--ink); white-space: pre-wrap; }
-.md blockquote { margin: 0 0 1em; padding-left: 1em; border-left: 2px solid var(--ink); }
+.md pre { margin: 0 0 1em; padding: 0.75em 1em; border: 1px solid var(--line); white-space: pre-wrap; }
+.md blockquote { margin: 0 0 1em; padding-left: 1em; border-left: 2px solid var(--line); }
 .md table { border-collapse: collapse; margin: 0 0 1em; }
-.md th, .md td { text-align: left; padding: 0.4em 1em 0.4em 0; border-bottom: 1px solid var(--ink); vertical-align: top; }
+.md th, .md td { text-align: left; padding: 0.4em 1em 0.4em 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 .md th { font-weight: bold; }
-.md hr { border: 0; border-top: 1px solid var(--ink); margin: 1.2em 0; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
 .md .link { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

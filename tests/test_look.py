@@ -1,4 +1,4 @@
-"""Chat Computer's look: black text on a warm off-white only, in Atkinson Hyperlegible, which Chat Computer brings
+"""Chat Computer's look: light words on Claude's dark only, in Atkinson Hyperlegible, which Chat Computer brings
 itself."""
 import hashlib
 import json
@@ -19,46 +19,54 @@ def _asset(name: str) -> str:
     return (ASSETS / name).read_text(encoding="utf-8")
 
 
+def _declarations(css: str) -> str:
+    """What's inside CSS's braces, not its selectors (an id such as #add looks like a colour)."""
+    return " ".join(re.findall(r"\{([^{}]*)\}", css))
+
+
 def _code(css: str) -> str:
     """CSS without its comments."""
     return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
 
 
-def test_only_black_text_on_a_warm_off_white():
+def test_light_words_on_claude_s_dark():
     theme, chat = _code(_asset("theme.css")), _code(_asset("chat.css"))
     root = re.search(r":root\s*\{([^}]*)\}", theme).group(1)
-    # White made 8% dimmer, faintly warm (black on it 19.3:1; see theme.css for why), and black.
-    assert re.search(r"--ground:\s*#F8F5F0;", root) and re.search(r"--ink:\s*#000000;", root)
-    # The light grey of your messages' bubbles (black on it is still 16.5:1), as the Claude app shows them; a little
-    # darker grey for lines; and one dimmed grey, only for the empty box's hint and the send button with nothing to
-    # send (as ChatGPT's).
-    assert re.search(r"--bubble:\s*#E7E4DD;", root) and re.search(r"--line:\s*#DDD9D1;", root)
-    assert re.search(r"--dim:\s*#918F8A;", root)
-    # The message box: white, set off from the background (with a soft shadow), as the Claude app's is; the sidebars
-    # a shade darker than the background, as the Claude app's sidebar is darker than its middle.
-    assert re.search(r"--paper:\s*#FFFFFF;", root) and re.search(r"--side:\s*#F3F0EB;", root)
+    # Claude's dark mode, as its Cowork shows it (measured off the Claude app; the same as its stylesheet's dark
+    # theme): the middle #151515, the sidebars a shade darker (#111111), as Claude's sidebar is darker than its
+    # middle, and the words #F9F9F7 (17.3:1 on the middle). The browser's own parts (scroll bars, fields) dark too.
+    assert re.search(r"--ground:\s*#151515;", root) and re.search(r"--side:\s*#111111;", root)
+    assert re.search(r"--ink:\s*#F9F9F7;", root) and re.search(r"color-scheme:\s*dark;", root)
+    # Your messages' bubbles, and what's pointed at or chosen (Claude's bubbles); thin lines (the line round Claude's
+    # middle); the message box, lifted off the middle as Claude's is, and its round buttons; and one dimmed grey,
+    # only for the empty box's hint (Claude's) and the send button with nothing to send (as ChatGPT's). Shadows,
+    # and the screen dimmed behind a held message, are black.
+    assert re.search(r"--bubble:\s*#2C2C2A;", root) and re.search(r"--line:\s*#3D3D3C;", root)
+    assert re.search(r"--paper:\s*#303030;", root) and re.search(r"--knob:\s*#414141;", root)
+    assert re.search(r"--dim:\s*#96958D;", root) and re.search(r"--shade:\s*#000000;", root)
     # Those are the only colours: everything else uses them.
     assert COLOR.findall(theme.replace(root, "")) == []
-    assert COLOR.findall(chat) == []
+    assert COLOR.findall(_declarations(chat)) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
     sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--kb", "--side-gap"}
-    assert used - sizes == {"--ground", "--ink", "--bubble", "--line", "--dim", "--paper", "--side", "--sans", "--mono"}
+    assert used - sizes == {"--ground", "--ink", "--bubble", "--line", "--dim", "--paper", "--knob", "--side", "--shade",
+                            "--sans", "--mono"}
     dims = re.findall(r"([^{}]+)\{[^}]*var\(--dim\)", chat)
     assert [d.strip() for d in dims] == ["#input::placeholder", "#send"]
-    # No dark mode.
+    # One look: no light mode beside it, and no switch between them.
     for text in (theme, chat, _asset("chat.html"), _asset("chat.js"), render.DOC_CSS):
-        assert "data-theme" not in text and "dark" not in text.lower()
-    # Pages Chat Computer makes are black on the same off-white; only a playing video sits on black, as in any player.
+        assert "data-theme" not in text and "prefers-color-scheme" not in text
+    # Pages Chat Computer makes are in the same colours; only a playing video sits on black, as in any player.
     assert COLOR.findall(render.DOC_CSS) == ["#000"]
     assert re.search(r"\.media \{[^}]*background: #000;", render.DOC_CSS)
 
 
 def test_your_words_are_in_a_bubble_not_grey_text():
-    # Like the Claude app: your messages on the right in a light grey bubble, upright and black; no text is grey.
+    # Like the Claude app: your messages on the right in a bubble, upright, in the same white; no text is grey.
     chat = _code(_asset("chat.css"))
     assert re.search(r"\.you \{[^}]*align-self: flex-end;[^}]*background: var\(--bubble\);", chat)
     assert "italic" not in chat
-    # Nothing is see-through grey: what fades in goes all the way to black, and a row under a message is either
+    # Nothing is see-through grey: what fades in goes all the way to white, and a row under a message is either
     # there or not (opacity only ever 0 or 1, but for the thinking dot's pulse).
     rest = chat.replace("@keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }", "")
     assert set(re.findall(r"opacity:\s*([\d.]+)", rest)) <= {"0", "1"}

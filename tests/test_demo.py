@@ -140,7 +140,8 @@ def test_the_demo_works_in_a_browser():
     assert "and greetings to you, whoever you are" in options["time"] and not any("{" in g for g in options["time"])
     assert all(g.startswith("and ") for g in options["time"] + options["here"]), options
     # Then: nothing open, no sheet, the cursor in the box under the dimmed hint; under the words, as in the Claude app,
-    # + (add files) and the microphone at the left, each doing just that (no menus), and the arrow at the right.
+    # + (add files) at the left, and at the right the microphone beside the arrow, each doing just that (no menus),
+    # + and the microphone each in a circle of its own, as big as the arrow's.
     # "/" lists what can be used here (this computer's model, AirPods), then the files.
     assert not first["content"] and not first["sheet"] and first["view"] is None
     # The sidebars show from the start (where there's room for them), with their switches pressed.
@@ -154,7 +155,12 @@ def test_the_demo_works_in_a_browser():
     assert first["hint_weight"] == "400" and first["buttons"] == ["add", "mic"]
     (add, ax, ay), (mic, mx, my) = first["tools"]
     assert (add, mic) == ("Add files", "Talk") and ax < mx < first["send_at"][0] and abs(ay - my) < 1
-    assert ay > first["input_top"] and abs(my - first["send_at"][1]) < 12          # on the row under the words
+    assert ay > first["input_top"] and abs(my - first["send_at"][1]) < 1           # on the row under the words
+    (aw, ah, around, afill, _), (mw, mh, mround, mfill, mright) = first["tools_round"]
+    assert (aw, ah, around, afill) == (mw, mh, mround, mfill) == (32, 32, "50%", "rgb(65, 65, 65)")
+    assert first["send_size"] == [32, 32]
+    box_left, box_right = first["box_at"]
+    assert ax - box_left < 16 and 0 < first["send_at"][0] - mright < 12 and box_right - first["send_at"][0] < 50
     assert res["slash"][:2] == ["Use this computer's model", "Connect AirPods"] and "Packing list.md" in res["slash"][2:]
     # The sidebars' switches: off (their icons empty) and on again, and the choice is kept.
     assert res["sides_off"]["sides"] == [False, False] and res["sides_off"]["toggles"][:2] == ["false", "false"]

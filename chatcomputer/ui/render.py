@@ -27,7 +27,7 @@ DOC_CSS = """
 body { overflow-y: auto; }
 article { width: var(--co-column, min(57.75rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto; padding: 2rem 0 4rem; }
 article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; margin: 0 0 1rem; }
-.pages img { display: block; width: 100%; margin: 0 0 1rem; border: 1px solid var(--ink); }
+.pages img { display: block; width: 100%; margin: 0 0 1rem; border: 1px solid var(--line); }
 .media { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; }
 .media video { width: 100vw; height: 100vh; object-fit: contain; }
 .sound { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; }

@@ -6,8 +6,8 @@ import SwiftUI
 import WebKit
 
 let home = URL(string: "https://chatcomputer.ai/")!
-/// The screen's off-white (theme.css's ground), around the page.
-let ground = Color(red: 0xF8 / 255, green: 0xF5 / 255, blue: 0xF0 / 255)
+/// The screen's dark (theme.css's ground), around the page.
+let ground = Color(red: 0x15 / 255, green: 0x15 / 255, blue: 0x15 / 255)
 
 @main
 struct ChatComputerApp: App {
@@ -17,6 +17,7 @@ struct ChatComputerApp: App {
                 ground.ignoresSafeArea()            // (behind the status bar and the home indicator too)
                 Page()
             }
+            .preferredColorScheme(.dark)            // (the status bar's light on it)
         }
     }
 }

@@ -104,20 +104,21 @@ kept aside to measure it, the model refused 9 as published and none after (see
   within two minutes. Only when there are no AirPods anywhere does it ask "Connect your AirPods?"; say or type
   yes and hold the button on the back of the case. Later, "connect my AirPods" does it in one step. Through the
   PC's own speakers Chat Computer doesn't greet you out loud.
-* **The screen.** Like the Claude app: your messages on the right in grey bubbles, Chat Computer's on the left, from
-  the top of the screen down, on a warm off-white that's easier on the eyes than white, and a message box at the
-  bottom. What you send moves to the top of the screen with the answer coming in under it, its words fading in as
+* **The screen.** Like the Claude app: your messages on the right in bubbles, Chat Computer's on the left, from
+  the top of the screen down, in the tones of Claude's dark mode (its middle #151515, its sidebar a shade darker,
+  its words #F9F9F7), and a message box at the bottom. What you send moves to the top of the screen with the answer coming in under it, its words fading in as
   they come, so you never scroll down to read it; scroll up for anything earlier. Under each message, as in the
   Claude app: under Chat Computer's, copy, read aloud, thumbs up or down (kept, to make Chat Computer better) and ask
   again; under yours, ask again, edit and copy; with when it was. A
   conversation starts with its name, **Chat Computer**, alone in the middle; after a second it fades away, and
   Chat Computer's first words come in as if just typed, as its answers do: the classic `hello, world`, alone.
-  The empty message box, white on the off-white screen as the Claude app's is, says, dimmed, "Type anything", with
+  The empty message box, lifted off the dark screen as the Claude app's is, says, dimmed, "Type anything", with
   the cursor already blinking in it (a "/" first in it searches your files; Escape puts Messages and Actions at
-  the sides away, and brings them back). Under the words, as in the Claude app, **+** adds files to your message
-  (Chat Computer reads them) and the **microphone** starts or stops listening; neither has a menu. A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
+  the sides away, and brings them back). Under the words, as in the Claude app, each in a circle of its own:
+  **+** at the left adds files to your message (Chat Computer reads them), and the **microphone** at the right,
+  beside the send button, starts or stops listening; neither has a menu. A site's address typed alone (`youtube.com`, `open bbc.co.uk`, a whole link) opens it at once,
   in the middle, as a browser's address bar would. The round button at its right sends: grey while there's
-  nothing to send, black once there is. There are no menus: everything is done by asking. Scroll up (a finger,
+  nothing to send, white once there is. There are no menus: everything is done by asking. Scroll up (a finger,
   the mouse wheel, Page Up) to read back.
 * **What Chat Computer opens** (a website, a video, a document, a message) takes the conversation's place in the
   middle, from the top of the screen down to the message box, in a rounded frame with its name and a close
@@ -491,7 +492,7 @@ no buttons beside the message box):
 
 On a phone the page is laid out as the Claude app is there, in any browser: the text an eighteenth of the screen's
 width (never under 16px, so the browser doesn't zoom in on the box and push the page past the screen's edges), the
-message box white and nearly as wide as the screen, with the words above and the send arrow under them, never
+message box nearly as wide as the screen, with the words above and + and the microphone and send arrow under them, never
 under the keyboard (Safari on an iPhone doesn't make the page smaller for its keyboard, so the box is lifted to sit
 just above it), and the keyboard going down after sending, as in ChatGPT's app. Nothing zooms, two fingers included. Holding a message
 dims the screen behind it and brings up what can be done with it: Copy, Send to (the phone's share sheet),

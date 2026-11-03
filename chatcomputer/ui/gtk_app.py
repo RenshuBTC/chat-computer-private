@@ -59,9 +59,9 @@ def private_file_uri(paths: Paths, uri: str) -> bool:
 
 MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86AudioMedia", "XF86AudioNext",
               "XF86AudioPrev", "XF86AudioStop"}
-# The window behind the pages is the conversation's warm off-white (theme.css). register_fonts() makes Chat Computer's own copy
+# The window behind the pages is the conversation's dark (theme.css). register_fonts() makes Chat Computer's own copy
 # of its font known to GTK, for AirTouch's keyboard.
-COLORS = {"bg": "#F8F5F0", "ink": "#000000"}
+COLORS = {"bg": "#151515", "ink": "#F9F9F7"}
 
 CSS_TEMPLATE = """
 window {{ background-color: {bg}; }}

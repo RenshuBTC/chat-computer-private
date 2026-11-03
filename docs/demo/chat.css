@@ -1,5 +1,5 @@
-/* The conversation, laid out like the Claude app: Claude's words on the left in one column, upright and black;
-   yours on the right, in a light grey bubble; from the top of the screen down. What you send goes to the top of the
+/* The conversation, laid out like the Claude app: Claude's words on the left in one column, upright;
+   yours on the right, in a bubble; from the top of the screen down. What you send goes to the top of the
    screen, with the answer coming in under it (chat.js leaves room under the latest exchange for that: #room), so
    it's never below the screen: scrolling up (the mouse wheel, Page Up, the arrow keys while the box is empty, or
    pinching and moving with AirTouch) shows earlier messages. On a wide screen, Messages runs down the left and
@@ -129,12 +129,12 @@ body.content #column { display: none; }
 body.full { --left: 0px !important; --panel: 0px !important; }
 body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.full .toggle { display: none !important; }
 
-/* The message box, as in the Claude app: a rounded white box (--paper, on the off-white background, with a thin
-   line round it and a soft shadow) a little wider than the conversation (962px to its 924px, 16px round), 46px high
+/* The message box, as in the Claude app: a rounded box lifted off the middle (--paper, with a thin line round it
+   and a soft shadow) a little wider than the conversation (962px to its 924px, 16px round), 46px high
    for a line of words, 39px above the bottom of the screen; it grows with what's typed (up to a few
    lines, then scrolls). Enter sends, Shift+Enter starts a new
    line; so does the round button at its right, as ChatGPT's: an arrow up, grey while there's nothing to send,
-   black once there is. Nothing else: Chat Computer is the conversation (and "/" to search this computer).
+   white once there is. Nothing else: Chat Computer is the conversation (and "/" to search this computer).
    Asleep, a line above it says how to wake Chat Computer. A phone's keyboard never covers it: it's lifted to sit
    just above the keyboard (--kb, chat.js: fitKeyboard). */
 #composer {
@@ -144,25 +144,29 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
 #box, #wake { width: min(60.125rem, 100% - 2rem); margin: 0 auto; }
 #box {
   position: relative; border: 1px solid var(--line); border-radius: 1rem; background: var(--paper);
-  padding: 0.6875rem 0.75rem 0.6875rem 0.9375rem; box-shadow: 0 0.25rem 1.25rem color-mix(in srgb, var(--ink) 5%, transparent);
+  padding: 0.6875rem 0.75rem 0.6875rem 0.9375rem; box-shadow: 0 0.25rem 1.25rem color-mix(in srgb, var(--shade) 35%, transparent);
 }
-/* The box, as the Claude app's: what's typed across the top; under it, at the left, + (add files) and the microphone
-   (talk), each doing just that, no menus; at the right, the send button. */
+/* The box, as the Claude app's: what's typed across the top; under it, at the left, + (add files), and at the right
+   the microphone (talk) beside the send button: each in a circle of its own (--knob) and doing just that, no menus. */
 #row {
-  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: "icon input input" "tools tools send"; align-items: center; gap: 0.55rem 0;
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "icon input input input" "add add mic send"; align-items: center; gap: 0.55rem 0;
 }
 #input { grid-area: input; }
 #send { grid-area: send; }
-#tools { grid-area: tools; display: flex; align-items: center; gap: 0.2rem; margin-left: -0.35rem; }
+#tools { display: contents; }
+/* (+ spans the search icon's column and the words' column, as the words do, so the icon's column is only as wide as
+   the icon, and nothing when it's away.) */
+#add { grid-area: add; justify-self: start; margin-left: -0.35rem; }
+#mic { grid-area: mic; margin-right: 0.45rem; }
 .tool {
-  display: flex; align-items: center; justify-content: center; width: 1.9em; height: 1.9em; margin: 0; padding: 0;
-  border: 0; border-radius: 0.55em; background: none; color: var(--ink); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; width: 2em; height: 2em; margin: 0; padding: 0;
+  border: 0; border-radius: 50%; background: var(--knob); color: var(--ink); cursor: pointer;
 }
-.tool:hover { background: var(--bubble); }
+.tool:hover { background: color-mix(in srgb, var(--knob) 88%, var(--ink)); }
 .tool svg { display: block; width: 1.15em; height: 1.15em; }
 #mic .fill { fill: none; }
-#mic[aria-pressed="true"] { background: var(--bubble); }
+#mic[aria-pressed="true"] { background: color-mix(in srgb, var(--knob) 75%, var(--ink)); }
 #mic[aria-pressed="true"] .fill { fill: currentColor; }
 /* Files added to the message: one chip each, above what's typed, with an x to take it off again. */
 #attached { display: none; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.55rem; }
@@ -193,12 +197,12 @@ body.attaching #attached { display: flex; }
   body { touch-action: manipulation; }          /* and a double tap doesn't zoom */
 }
 #send {
-  flex: none; display: flex; align-items: center; justify-content: center; width: 1.375em; height: 1.375em;
+  flex: none; display: flex; align-items: center; justify-content: center; width: 2em; height: 2em;
   margin: 0; padding: 0; border: 0; border-radius: 50%; background: var(--dim); color: var(--ground); cursor: default;
 }
 body.drafting #send { background: var(--ink); cursor: pointer; }
 svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-#send svg { display: block; width: 62%; height: 62%; stroke-width: 2.6; }
+#send svg { display: block; width: 55%; height: 55%; stroke-width: 2.6; }
 #wake { display: none; margin-bottom: 0.5rem; text-align: center; font-size: 0.8rem; line-height: 1.4; }
 body.sleeping #wake, body.resting #wake { display: block; }
 /* "/" first in the message box: it searches this computer. What matches shows in a list above the box (as a
@@ -210,7 +214,7 @@ body.searching #search-icon { display: block; }
   position: absolute; left: -1px; right: -1px; bottom: calc(100% + 0.5rem); display: none;
   max-height: 60vh; overflow-y: auto; scrollbar-width: none;
   padding: 0.35rem; border: 2px solid var(--paper); border-radius: 0.9rem; background: var(--paper);
-  box-shadow: 0 0.3rem 1.4rem color-mix(in srgb, var(--ink) 9%, transparent); font-size: 0.8rem; line-height: 1.4;
+  box-shadow: 0 0.3rem 1.4rem color-mix(in srgb, var(--shade) 50%, transparent); font-size: 0.8rem; line-height: 1.4;
 }
 body.searching #results { display: block; }
 .res { display: flex; align-items: center; gap: 0.7em; padding: 0.4em 0.6em; border-radius: 0.5em; cursor: pointer; }
@@ -219,10 +223,10 @@ body.searching #results { display: block; }
 .res-name, .res-where { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .res-name b { font-weight: bold; }
 .res-when { flex: none; }
-.res:hover, .res.sel { background: var(--bubble); }
+.res:hover, .res.sel { background: var(--knob); }
 .res-note { margin: 0; padding: 0.4em 0.6em; }
 
-/* Buttons: words underlined, or a small outlined icon; the one main button of a form, white on black. */
+/* Buttons: words underlined, or a small outlined icon; the one main button of a form, dark on light. */
 button { font: inherit; color: var(--ink); }
 .text-button { margin: 0; padding: 0; border: 0; background: none; text-decoration: underline; cursor: pointer; }
 .icon-button {
@@ -420,22 +424,22 @@ body.phone #log { -webkit-user-select: none; user-select: none; -webkit-touch-ca
    read aloud. A tap anywhere else puts it away. */
 #hold-shade {
   position: fixed; inset: 0; z-index: 40; display: none; touch-action: none; cursor: pointer;
-  background: color-mix(in srgb, var(--ink) 20%, transparent);
+  background: color-mix(in srgb, var(--shade) 55%, transparent);
 }
 body.holding #hold-shade { display: block; animation: shade 160ms ease-out both; }
 @keyframes shade { from { opacity: 0; } }
 body.holding .held { position: relative; z-index: 41; touch-action: none; }
 .ai.held {
   border-radius: 0.5rem; background: var(--ground);
-  box-shadow: 0 0 0 0.6rem var(--ground), 0 0.5rem 1.75rem 0.6rem color-mix(in srgb, var(--ink) 12%, transparent);
+  box-shadow: 0 0 0 0.6rem var(--ground), 0 0.5rem 1.75rem 0.6rem color-mix(in srgb, var(--shade) 50%, transparent);
 }
-.you.held { box-shadow: 0 0.4rem 1.5rem color-mix(in srgb, var(--ink) 12%, transparent); }
+.you.held { box-shadow: 0 0.4rem 1.5rem color-mix(in srgb, var(--shade) 50%, transparent); }
 #hold-menu {
   position: fixed; z-index: 42; display: none; width: max-content; min-width: 13rem; max-width: calc(100vw - 1.5rem);
   padding: 0.5rem 0; overflow: hidden; border-radius: 1.3rem; font-size: 0.9rem; line-height: 1.3;
   background: color-mix(in srgb, var(--ground) 90%, transparent);
   -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4);
-  box-shadow: 0 0.6rem 2rem color-mix(in srgb, var(--ink) 16%, transparent);
+  box-shadow: 0 0.6rem 2rem color-mix(in srgb, var(--shade) 60%, transparent);
 }
 body.holding #hold-menu { display: block; animation: menu 180ms cubic-bezier(0.32, 0.72, 0, 1) both; }
 @keyframes menu { from { opacity: 0; transform: scale(0.92); } }

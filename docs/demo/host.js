@@ -2368,24 +2368,19 @@
         choices: [{ label: "Choose its model", value: "ai:models" }, { label: "Sign out of " + ownName(), value: "ai:out" }] });
       return;
     }
-    var text = [APP ? "Chat Computer answers with its own model, free, on this computer." :
-      "On this page Chat Computer answers from what's written here, or, where the app runs on this computer, with its model.",
-      "Or sign in with an AI you already use, and it answers instead, on your own account: what you say then goes to it."];
+    // (All the ways in, in one panel: its own sign-in, and a key of each kind.)
     var choices = APP && APP.channel ? [{ label: "Continue with ChatGPT", value: "ai:chatgpt" }] :
       TABS ? [] : [{ label: "Continue with OpenRouter", value: "ai:openrouter" }];
-    call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: text,
-      choices: choices.concat([{ label: "Use a key", value: "ai:keys" }]) });
+    call("accountForm", { id: "own-ai", title: "Your own AI", ok: "", text: [
+      "Sign in with an AI you already use, and it answers instead of Chat Computer's own model, on your own account: " +
+      "what you say then goes to it. Or use a key of yours (each AI makes them on its own site)."],
+      choices: choices.concat([{ label: "OpenAI key", value: "ai:key:openai" }, { label: "Gemini key", value: "ai:key:gemini" },
+                               { label: "OpenRouter key", value: "ai:key:openrouter" }, { label: "Another AI's key", value: "ai:key:other" }]) });
   }
   function ownChoice(v) {
     if (v === "openrouter") { openRouterSignIn(); return; }
     if (v === "chatgpt" && APP) { chatgptSignIn(); return; }
     if (v === "usage") { call("accountForm", null); show({ src: PLAN_USAGE, title: "chatgpt.com" }); return; }
-    if (v === "keys") {
-      call("accountForm", { id: "own-ai", title: "Use a key", ok: "", text: ["Whose key is it? Each makes keys on its own site."],
-        choices: [{ label: "OpenAI", value: "ai:key:openai" }, { label: "Google (Gemini)", value: "ai:key:gemini" },
-                  { label: "OpenRouter", value: "ai:key:openrouter" }, { label: "Another", value: "ai:key:other" }] });
-      return;
-    }
     if (v.indexOf("key:") === 0 && AIS[v.slice(4)]) { keyForm(v.slice(4), ""); return; }
     if (v === "models" && own) { modelsForm(); return; }
     if (v.indexOf("model:") === 0 && own) {

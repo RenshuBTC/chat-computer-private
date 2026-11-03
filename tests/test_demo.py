@@ -340,7 +340,9 @@ def test_the_demo_works_in_a_browser():
     # when trading the code for a key), back to this page, the code gone from its address; the newest free model that
     # uses tools chosen; then it answers, on that key, with the page's tools and none of the engine's own options, told
     # who it is; signed out, nothing kept. A key of one's own (OpenAI's): an empty one said so; then its newest chat model.
-    assert res["own_menu"] == {"title": "Your own AI", "choices": ["Continue with OpenRouter", "Use a key"]}
+    # (In one panel: OpenRouter's own sign-in, and a key of each kind.)
+    assert res["own_menu"] == {"title": "Your own AI", "choices": ["Continue with OpenRouter", "OpenAI key", "Gemini key",
+                                                                   "OpenRouter key", "Another AI's key"]}
     auth = res["own_auth"]
     assert auth["back"].startswith("file://") and auth["back"].endswith("/docs/index.html") and auth["method"] == "S256"
     assert auth["challenge"] == 43 and res["own_traded"] == {"code": "test-code", "method": "S256", "verifier": 43}
@@ -362,7 +364,7 @@ def test_the_demo_works_in_a_browser():
     # page's make_timer and then says so, asked as the Responses API takes it (instructions, the conversation in
     # order, the page's tools as functions, store false, streamed); signed in with ChatGPT's own list (Manage usage
     # first); signed out, the app told.
-    assert res["gpt_menu"] == ["Continue with ChatGPT", "Use a key"]
+    assert res["gpt_menu"] == ["Continue with ChatGPT", "OpenAI key", "Gemini key", "OpenRouter key", "Another AI's key"]
     told = res["gpt_told"]
     assert told["ok"] == "Got it" and "on your ChatGPT plan" in told["text"]
     assert told["spark"] == "ChatGPT (gpt-9-plan) answers. Press to change"

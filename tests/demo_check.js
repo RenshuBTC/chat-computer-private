@@ -1000,8 +1000,7 @@ async function ask(page, text, meanwhile) {
     headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ data: [
       { id: "whisper-1", created: 900 }, { id: "gpt-4.1", created: 100 }, { id: "gpt-9", created: 500 }, { id: "gpt-9-realtime", created: 600 }] }) }));
   await ownPage.click("#ai");
-  await ownPage.click("#sheet-fields .choices button:has-text('Use a key')");
-  await ownPage.click("#sheet-fields .choices button:has-text('OpenAI')");
+  await ownPage.click("#sheet-fields .choices button:has-text('OpenAI key')");
   await ownPage.waitForFunction(() => document.getElementById("sheet-title").textContent === "OpenAI key");
   await ownPage.click("#sheet-ok");
   await ownPage.waitForFunction(() => document.getElementById("sheet-error").textContent !== "");

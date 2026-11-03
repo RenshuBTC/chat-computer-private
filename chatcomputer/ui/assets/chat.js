@@ -44,12 +44,22 @@
   window.addEventListener("scroll", function () { if (mode === "chat" && Date.now() > pinning) stick = atBottom(); }, { passive: true });
   window.addEventListener("resize", function () { fitPhone(); closeHold(); fitPanel(); follow(); reportHole(); });
   function latestYou() { var y = log.querySelectorAll(":scope > .you"); return y.length ? y[y.length - 1] : null; }
+  // Where something is laid out on the page (offsets: not moved by a message's rising into place).
+  function pageTop(e) { var t = 0; for (; e; e = e.offsetParent) t += e.offsetTop; return t; }
+  // The page scrolled to your latest message: a little above it (its scroll-margin-top), but never so far up that
+  // any of what came before shows at the top of the screen (the answer before it, or that answer's row of buttons).
+  function pinTop(you) {
+    var at = pageTop(you), top = at - (parseFloat(getComputedStyle(you).scrollMarginTop) || 0);
+    for (var b = you.previousElementSibling; b; b = b.previousElementSibling) {
+      if (!b.getClientRects().length) continue;                               // (not shown)
+      return Math.max(top, Math.min(at, pageTop(b) + b.offsetHeight));
+    }
+    return top;
+  }
   function makeRoom() {
     var you = latestYou(), was = room.offsetHeight, need = 0;
     if (you && mode === "chat") {
-      // Where things are laid out (offsets: not moved by a message's rising into place).
-      var margin = parseFloat(getComputedStyle(you).scrollMarginTop) || 0, top = -margin;
-      for (var e = you; e; e = e.offsetParent) top += e.offsetTop;              // the page scrolled to it
+      var top = pinTop(you);                                                     // the page scrolled to it
       var end = column.offsetTop + column.offsetHeight - was;                    // where the conversation ends
       need = Math.max(0, Math.ceil(top + page.clientHeight - end));
     }

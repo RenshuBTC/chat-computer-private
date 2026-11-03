@@ -34,6 +34,9 @@ body { padding-left: var(--left, 0px); padding-right: var(--panel, 0px); }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .you, .ai { scroll-margin-top: 1.5rem; }
+/* A little more room between an answer's row of buttons and what you say next: as much as is left above your message
+   when it goes to the top of the screen, so nothing of the answer before shows there (chat.js: pinTop). */
+.acts.theirs + .you { margin-top: 0.75rem; }
 /* The message a tapped item of Actions was asked in, for a moment. */
 .you.found { outline: 2px solid var(--ink); outline-offset: 3px; }
 .ai { overflow-wrap: anywhere; max-width: 54.0625rem; }

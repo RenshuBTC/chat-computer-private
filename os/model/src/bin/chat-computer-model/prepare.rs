@@ -433,11 +433,12 @@ mod tests {
     fn the_catalogue_reads_and_the_biggest_that_runs_is_picked() {
         let models = catalogue(CATALOGUE).unwrap();
         let names: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(names, ["qwen3.8-27b", "qwen3.6-35b-a3b", "qwen3.5-9b", "qwen3.5-4b", "qwen3.5-0.8b"]);
+        assert_eq!(names, ["qwen3.8-27b", "qwen3.6-35b-a3b", "qwen3.5-9b", "qwen3.5-4b", "qwen3.5-2b", "qwen3.5-0.8b"]);
         let dir = std::env::temp_dir().join(format!("cc-pick-{}", std::process::id()));
         let store = Store { dir: dir.clone() };
         for (gb, want) in [(128, "qwen3.8-27b"), (47, "qwen3.8-27b"), (46, "qwen3.6-35b-a3b"), (31, "qwen3.6-35b-a3b"),
-                           (16, "qwen3.5-9b"), (12, "qwen3.5-4b"), (8, "qwen3.5-4b"), (6, "qwen3.5-0.8b")] {
+                           (16, "qwen3.5-9b"), (12, "qwen3.5-4b"), (8, "qwen3.5-4b"), (6, "qwen3.5-2b"), (3, "qwen3.5-2b"),
+                           (2, "qwen3.5-0.8b")] {
             assert_eq!(store.pick(&models, gb * GB, None).name, want, "{gb} GB");
         }
         // Without room for the 27B (about 72 GB to get ready), 48 GB of memory gets the 9B with 40 GB free.

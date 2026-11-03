@@ -381,6 +381,41 @@
    ]
   },
   {
+   "name": "qwen3.5-2b",
+   "label": "Qwen3.5 2B",
+   "repo": "Qwen/Qwen3.5-2B",
+   "revision": "15852e8c16360a2fea060d615a32b45270f8a8fc",
+   "memory_gb": 4,
+   "bits": 4,
+   "files": [
+    {
+     "name": "chat_template.jinja",
+     "size": 7755,
+     "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"
+    },
+    {
+     "name": "config.json",
+     "size": 2908,
+     "sha256": "ed1c1723241f23f7f4e23430759cbd7dcfb4103cbdfe052bfe7626b57c2615b4"
+    },
+    {
+     "name": "model.safetensors-00001-of-00001.safetensors",
+     "size": 4548221488,
+     "sha256": "aa33250c4fc64891ddfaba3a314fd9542ea371843c387178b425fbcc5ed680b1"
+    },
+    {
+     "name": "tokenizer.json",
+     "size": 12807982,
+     "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+    },
+    {
+     "name": "tokenizer_config.json",
+     "size": 16709,
+     "sha256": "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c"
+    }
+   ]
+  },
+  {
    "name": "qwen3.5-0.8b",
    "label": "Qwen3.5 0.8B",
    "repo": "Qwen/Qwen3.5-0.8B",

@@ -7,7 +7,9 @@ right, and whatever Chat Computer puts there for you: websites, YouTube, documen
 
 It thinks with an open model that runs on the computer itself (one of Qwen's, chosen for the computer's memory,
 run by Chat Computer's own engine): there's no account, no sign-in and nothing to pay, and what you say stays on
-the computer.
+the computer. If you'd rather it used an AI you already have, the spark beside the message box's + signs in with
+it: your ChatGPT plan (in the app, as T3 Code does), OpenRouter, or a key of your own; then what you say goes to
+that AI, on your account.
 
 **[Try it in your browser](https://chatcomputer.ai)**: Chat Computer's own screen (see
 [The demo](#the-demo)).

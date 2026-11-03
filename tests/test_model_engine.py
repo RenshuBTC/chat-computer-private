@@ -27,7 +27,7 @@ GB = 2**30
 # ------------------------------------------------------------------ which model
 def test_each_model_is_pinned_to_one_revision_with_every_file_checked():
     ms = models.catalogue()
-    assert [m.name for m in ms] == ["qwen3.8-27b", "qwen3.6-35b-a3b", "qwen3.5-9b", "qwen3.5-4b", "qwen3.5-0.8b"]
+    assert [m.name for m in ms] == ["qwen3.8-27b", "qwen3.6-35b-a3b", "qwen3.5-9b", "qwen3.5-4b", "qwen3.5-2b", "qwen3.5-0.8b"]
     assert [m.memory_gb for m in ms] == sorted((m.memory_gb for m in ms), reverse=True)    # biggest first
     for m in ms:
         assert m.repo.startswith("Qwen/") and len(m.revision) == 40 and int(m.revision, 16) >= 0
@@ -43,7 +43,8 @@ def test_each_model_is_pinned_to_one_revision_with_every_file_checked():
 @pytest.mark.parametrize("gb, name", [(128, "qwen3.8-27b"), (48, "qwen3.8-27b"), (47, "qwen3.8-27b"),
                                       (46, "qwen3.6-35b-a3b"), (32, "qwen3.6-35b-a3b"), (31, "qwen3.6-35b-a3b"),
                                       (24, "qwen3.5-9b"), (16, "qwen3.5-9b"), (15, "qwen3.5-9b"), (12, "qwen3.5-4b"),
-                                      (8, "qwen3.5-4b"), (6, "qwen3.5-0.8b"), (2, "qwen3.5-0.8b")])
+                                      (8, "qwen3.5-4b"), (6, "qwen3.5-2b"), (4, "qwen3.5-2b"), (3, "qwen3.5-2b"),
+                                      (2, "qwen3.5-0.8b")])
 def test_the_biggest_model_the_memory_runs_well(gb, name):
     # (A computer said to have 32 GB shows a little less: some is the graphics' or the firmware's.)
     assert models.pick(int(gb * GB)).name == name

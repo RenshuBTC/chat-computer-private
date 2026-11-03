@@ -19,6 +19,7 @@ REVISIONS = {
     "qwen3.6-35b-a3b": ("Qwen3.6 35B-A3B", "Qwen/Qwen3.6-35B-A3B", "995ad96eacd98c81ed38be0c5b274b04031597b0", 32, 4),
     "qwen3.5-9b": ("Qwen3.5 9B", "Qwen/Qwen3.5-9B", "c202236235762e1c871ad0ccb60c8ee5ba337b9a", 16, 4),
     "qwen3.5-4b": ("Qwen3.5 4B", "Qwen/Qwen3.5-4B", "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a", 8, 4),
+    "qwen3.5-2b": ("Qwen3.5 2B", "Qwen/Qwen3.5-2B", "15852e8c16360a2fea060d615a32b45270f8a8fc", 4, 4),
     "qwen3.5-0.8b": ("Qwen3.5 0.8B", "Qwen/Qwen3.5-0.8B", "2fc06364715b967f1860aea9cf38778875588b17", 0, 8),
 }
 KEEP = ("config.json", "tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "generation_config.json")

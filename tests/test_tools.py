@@ -20,7 +20,7 @@ from chatcomputer.ui import render
 def make(tmp_path, clean=True):
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
-    os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
+    # (The trash's folder is one for the whole run: tests/conftest.py sets XDG_DATA_HOME once.)
     paths = Paths(home / "ChatComputer").ensure()
     win = tmp_path / "windows"
     (win / "Users" / "rensh" / "Documents").mkdir(parents=True)

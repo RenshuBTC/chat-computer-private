@@ -722,13 +722,13 @@
 
 
   // ------------------------------------------------------------------ the sidebars
-  // Shown when there's room for them (17.5rem each, as the Claude app's sidebar) beside most of the conversation
-  // (most screens; not a narrow window).
+  // Shown when there's room for them (17.5rem each, as the Claude app's sidebar) beside more than half the
+  // conversation's width (most screens, and a laptop's at 150%: 1280 points across; not a narrow window).
   function fitPanel() {
     var rem = remPx();
     var col = parseFloat(rootStyle.getPropertyValue("--co-column")) || 57.75 * rem;
     var w = window.innerWidth;
-    body.classList.toggle("panel", w - 35 * rem - 3 * rem >= 0.8 * col);
+    body.classList.toggle("panel", w - 35 * rem - 3 * rem >= 0.55 * col);
     fitHint();                                   // ("Esc" in the hint only where there's room for the sidebars)
   }
   // The sidebars' switches: Messages (left) and Actions (right), each switched off and on again with its switch,
@@ -926,7 +926,7 @@
   // Messages: everything sent to you (email, Telegram, WhatsApp, social media), newest first, grouped by day;
   // pinned ones above. Unread: who in bold. Tapping one opens it between the sidebars.
   var msgs = {}, accounts = [], MSG_MAX = 400;
-  var ICON = { email: "i-email", telegram: "i-telegram", whatsapp: "i-chat" };
+  var ICON = { email: "i-email", telegram: "i-telegram", whatsapp: "i-chat", wechat: "i-chat", discord: "i-chat" };
   function msgItem(m) {
     var li = document.createElement("li");
     li.className = "item msg" + (m.unread ? " unread" : "") + (m.pinned ? " pinned" : "");

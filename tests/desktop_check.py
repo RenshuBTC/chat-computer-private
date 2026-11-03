@@ -8,6 +8,11 @@ in Documents and opens one (with a stand-in for the system's opener); refuses a 
 shows a site in the middle, in the app's own view, which hears its title and where it is; a site there can't ask the
 app for anything; the app's own page, sent elsewhere, comes back, and the address opens in the middle. With
 "loopback", the page comes from the app's own server at 127.0.0.1 (as on a Mac), which answers only to that name.
+
+Messages: Gmail, WhatsApp and Outlook connected from Messages' + (pages of this check's own, built as theirs are:
+a build for testing points the services at them, CHATCOMPUTER_SERVICES_AT), each opened in the middle to sign in,
+then put aside; what their reader reads comes into Messages; tapping one opens its service at that conversation; a
+site in the middle can't hand over messages; a service disconnected goes from Messages.
 """
 from __future__ import annotations
 
@@ -35,6 +40,34 @@ PAGES = {
                "else t.invoke('search_files', {query: ''}).then(function () { document.title = 'A test page: the app answered'; },"
                " function () { document.title = 'A test page: the app said no'; });</script>",
     "/b.html": "<!doctype html><title>B page</title><p>B</p>",
+    # A site that tries to hand over messages, as only a connected service's own pages may.
+    "/c.html": "<!doctype html><title>C page</title><script>"
+               "window.__TAURI__.core.invoke('messages_found', {items: [{id: 'x', who: 'Mallory', text: 'hi'}]})"
+               ".then(function () { document.title = 'C page: the app took them'; },"
+               " function () { document.title = 'C page: the app said no'; });</script>",
+    # The services, built as theirs are (their lists' parts named as on their pages); a tap on one shows in the title.
+    "/gmail.html": "<!doctype html><title>Inbox (2) - me@example.com - Gmail</title><table><tbody>"
+                   "<tr class='zA zE'><td class='yX'><div class='yW'><span email='jane@example.com' name='Jane Lim'>Jane Lim</span>"
+                   "</div></td><td><span class='bog'><span data-thread-id='#thread-f:1'>Lunch on Friday?</span></span>"
+                   "<span class='y2'> - 12:30 at the usual place works for me.</span></td>"
+                   "<td class='xW'><span title=''>9:05 AM</span></td></tr>"
+                   "<tr class='zA yO'><td class='yX'><div class='yW'><span email='lib@example.org' name='City Library'>City Library"
+                   "</span></div></td><td><span class='bog'><span data-thread-id='#thread-f:2'>Books due</span></span>"
+                   "<span class='y2'> - Your books are due back on Thursday.</span></td><td class='xW'><span>Yesterday</span></td></tr>"
+                   "</tbody></table><script>document.addEventListener('click', function (e) {"
+                   " var r = e.target.closest('tr.zA'); if (r) document.title = 'opened: ' + r.querySelector('[name]').getAttribute('name'); });"
+                   "</script>",
+    "/whatsapp.html": "<!doctype html><title>(1) WhatsApp</title><div id='pane-side'><div aria-label='Chat list' role='grid'>"
+                      "<div role='listitem'><div role='gridcell'><span dir='auto' title='Mum'>Mum</span><div>10:15</div>"
+                      "<span title='Dinner at 7 tonight?'>Dinner at 7 tonight?</span><span aria-label='1 unread message'>1</span>"
+                      "</div></div><div role='listitem'><div role='gridcell'><span dir='auto' title='Alex'>Alex</span><div>Mon</div>"
+                      "<span title='Sent you the slides'>Sent you the slides</span></div></div></div></div>"
+                      "<script>document.addEventListener('mousedown', function (e) {"
+                      " var r = e.target.closest('[role=listitem]'); if (r) document.title = 'opened: ' + r.querySelector('span[title]').title; });"
+                      "</script>",
+    "/outlook.html": "<!doctype html><title>Mail - Outlook</title><div role='listbox'>"
+                     "<div role='option' data-convid='c1' aria-label='Unread, Sam Lee, Trip photos'>"
+                     "<div>Sam Lee</div><div>Trip photos</div><div>8:30 AM</div><div>Here they are, all 40.</div></div></div>",
 }
 
 
@@ -86,6 +119,7 @@ def main() -> None:
     env["no_proxy"] = env["NO_PROXY"] = "127.0.0.1,localhost"
     if loopback:
         env["CHATCOMPUTER_LOOPBACK"] = "1"
+    env["CHATCOMPUTER_SERVICES_AT"] = f"http://127.0.0.1:{SITE_PORT}/"      # (the services: this check's own pages)
     xvfb = None
     if not os.environ.get("DISPLAY"):
         xvfb = subprocess.Popen(["Xvfb", ":97", "-screen", "0", "1440x900x24", "-nolisten", "tcp"], stderr=subprocess.DEVNULL)
@@ -165,6 +199,49 @@ def main() -> None:
         # Closed: the page has the middle again.
         js("document.getElementById('frame-close').click()")
         out["closed"] = until("!document.body.classList.contains('content') && 'yes'", 10)
+        # Messages: Gmail, WhatsApp and Outlook connected from + in Messages, each in the middle to sign in (here,
+        # already in), then out of sight, read; a site in the middle can't hand over messages.
+        def connect(name):
+            js("document.getElementById('add-account').click()")
+            until("document.body.classList.contains('sheet') && document.querySelector('#sheet-fields .choices button')")
+            js("var want = arguments[0]; Array.from(document.querySelectorAll('#sheet-fields .choices button')).filter(function (b) {"
+               " return b.textContent === want; })[0].click()", name)
+            until("document.body.classList.contains('content') && document.getElementById('frame-title').textContent === arguments[0]"
+                  .replace("arguments[0]", json.dumps(name)), 15)
+        msgs = "Array.from(document.querySelectorAll('#messages-list li.msg')).map(function (li) { return [li.querySelector('.msg-who')" \
+               ".textContent, li.querySelector('.msg-text').textContent, li.classList.contains('unread')]; })"
+        connect("Gmail")
+        out["choices"] = None
+        js("document.getElementById('frame-close').click()")
+        js("document.getElementById('add-account').click()")
+        out["choices"] = until("document.body.classList.contains('sheet') && Array.from(document.querySelectorAll('#sheet-fields .choices "
+                               "button')).map(function (b) { return b.textContent; })")
+        js("document.getElementById('sheet-cancel').click()")
+        connect("WhatsApp")
+        js("document.getElementById('frame-close').click()")
+        connect("Outlook")
+        js("document.getElementById('frame-close').click()")
+        out["messages"] = until(msgs + ".length >= 5 && " + msgs, 30)
+        out["accounts"] = js("return JSON.parse(localStorage.getItem('chatcomputer-app-services'))")
+        if os.environ.get("CHATCOMPUTER_SHOT_MESSAGES"):         # the screen, with Messages from the three
+            time.sleep(1)
+            subprocess.run(["import", "-display", env["DISPLAY"], "-window", "root", os.environ["CHATCOMPUTER_SHOT_MESSAGES"]], check=False)
+        # Tapping one: its service in the middle, at that conversation.
+        record()
+        js("Array.from(document.querySelectorAll('#messages-list li.msg')).filter(function (li) {"
+           " return li.querySelector('.msg-who').textContent === 'Mum'; })[0].click()")
+        out["tapped"] = until("document.body.classList.contains('content') && /opened/.test(document.getElementById('frame-title')"
+                              ".textContent) && document.getElementById('frame-title').textContent", 15)
+        js("document.getElementById('frame-close').click()")
+        js("window.chatcomputerApp({ open: 'http://127.0.0.1:%d/c.html' })" % SITE_PORT)
+        out["c_title"] = until("(window.__seen || []).map(function (m) { return m.title; }).filter(function (t) { return /^C page: /.test(t || ''); })[0]")
+        js("document.getElementById('frame-close').click()")
+        # Disconnected: Outlook's go from Messages.
+        js("document.getElementById('add-account').click()")
+        until("document.querySelector('#sheet-fields .choices button')")
+        js("Array.from(document.querySelectorAll('#sheet-fields .choices button')).filter(function (b) {"
+           " return b.textContent === 'Disconnect Outlook'; })[0].click()")
+        out["after_disconnect"] = until("!" + msgs + ".some(function (m) { return m[0] === 'Sam Lee'; }) && " + msgs, 10)
         if loopback:
             port = int(out["page"].rsplit(":", 1)[1])
             req = urllib.request.Request(f"http://127.0.0.1:{port}/index.html", headers={"Host": "evil.example"})

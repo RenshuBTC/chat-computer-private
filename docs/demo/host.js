@@ -55,7 +55,7 @@
   // ------------------------------------------------------------------ chats
   // Each task's chat, as on Chat Computer (the right sidebar's lower half): what's said goes into the chat on the
   // screen, kept in this browser (nothing leaves it); + starts a new one, and a click on one brings it back. A first
-  // visit has a few earlier ones to show how it looks.
+  // visit to the website has a few earlier ones to show how it looks (the app starts with none: they'd be made up).
   var CHATS_KEY = "chatcomputer-demo-chats", CHATS_MAX = 50;
   var chatsNow = null;
   function chatsKept() {
@@ -66,8 +66,7 @@
     function past(id, title, ago, you, ai) {
       return { id: id, title: title, ts: at - ago, items: [{ role: "user", text: you, ts: at - ago }, { role: "assistant", text: ai, ts: at - ago + 5 }] };
     }
-    chatsNow = { current: "c-now", list: [
-      { id: "c-now", title: "", ts: at, items: [] },
+    chatsNow = { current: "c-now", list: [{ id: "c-now", title: "", ts: at, items: [] }].concat(APP ? [] : [
       past("c-bali", "Plan the weekend in Bali", 2 * 3600, "Plan us a weekend in Bali, nothing too busy",
         "**Saturday:** a slow morning in Ubud, the rice terraces at Tegallalang before it's hot, lunch by the river.\n\n" +
         "**Sunday:** down to the coast at Uluwatu for the cliffs and the sunset; dinner on the beach at Jimbaran."),
@@ -75,7 +74,7 @@
         "They're in Documents, in **Taxes**: *Taxes 2025.pdf* and the receipts beside it. Want me to open it?"),
       past("c-pack", "Packing list for the trip", 3 * day, "Make me a packing list for a week at the beach",
         "- Swimwear, two\n- Sunscreen and a hat\n- Light shirts and one warm layer\n- Sandals and walking shoes\n- Chargers, passport, cards")
-    ] };
+    ]) };
     return chatsNow;
   }
   function chatsSave() {
@@ -351,7 +350,8 @@
   // being framed in a page), laid over the frame (hole), and moved with it. The same view each time: sign-ins stay.
   // What it's at and called comes back from the app (chatcomputerApp, below), and a sheet over the screen (Connect
   // Claude) or a message held puts it out of sight meanwhile: the app's view would be in front of them.
-  var site = { on: false, hidden: false, url: "" };
+  // (view: which of the app's views it is: "site", or a connected service's, "msg-gmail"...)
+  var site = { on: false, hidden: false, url: "", view: "" };
   function showSite(page) {
     if (view) { viewGone(view); view.remove(); view = null; }
     acted++;
@@ -360,6 +360,7 @@
     site.on = true;
     site.hidden = false;
     site.url = page.src;
+    site.view = "site";
     open = true;
     call("mode", "content", page.title || hostOf(page.src));
     var h = hole || { x: 0, y: 0, w: 1, h: 1 };
@@ -376,6 +377,7 @@
   function closeSite() {
     site.on = false;
     site.url = "";
+    site.view = "";
     open = false;
     player.token = {};
     player.id = "";
@@ -397,11 +399,110 @@
   // new window).
   window.chatcomputerApp = function (m) {
     if (!APP || !m || typeof m !== "object") return;
-    if (typeof m.title === "string" && site.on && open && m.title.trim()) call("mode", "content", clip(m.title, 80));
-    if (typeof m.url === "string" && site.on) site.url = m.url;
+    if (m.messages && typeof m.messages === "object") { serviceMessages(m.messages); return; }
+    var mine = !m.view || m.view === site.view;        // (what a view out of sight says isn't for the frame)
+    if (typeof m.title === "string" && mine && site.on && open && m.title.trim()) call("mode", "content", clip(m.title, 80));
+    if (typeof m.url === "string" && mine && site.on) site.url = m.url;
     if (typeof m.downloaded === "string") did((m.ok ? "Downloaded " : "Couldn't download ") + clip(m.downloaded, 60) + (m.ok ? " to Downloads" : ""));
     if (typeof m.open === "string" && /^https?:/i.test(m.open)) show({ src: m.open, title: hostOf(m.open) });
   };
+  // ------------------------------------------------------------------ the app: messages from your own accounts
+  // In the app, Gmail, Outlook, Telegram, WhatsApp, WeChat and Discord connect: each opens in the middle, in a view of
+  // its own, for you to sign in on its own page; then it's kept open out of sight (signed in, as a browser keeps
+  // you), and what's in its list of conversations comes into Messages, newest first (apps/desktop: messages.rs,
+  // reader.js). Tapping one opens its service in the middle, at that conversation. Which are connected is kept here.
+  var SERVICES = {
+    gmail: { label: "Gmail", group: "email", source: "email" },
+    outlook: { label: "Outlook", group: "email", source: "email" },
+    telegram: { label: "Telegram", group: "chat", source: "telegram" },
+    whatsapp: { label: "WhatsApp", group: "chat", source: "whatsapp" },
+    wechat: { label: "WeChat", group: "chat", source: "wechat" },
+    discord: { label: "Discord", group: "chat", source: "discord" }
+  };
+  var CONNECTED = "chatcomputer-app-services";
+  function connected() { return (store(CONNECTED) || []).filter(function (k) { return SERVICES[k]; }); }
+  function appAccounts() { return connected().map(function (k) { return { id: k, label: SERVICES[k].label }; }); }
+  function drawAppMessages() { call("messagesList", MESSAGES.map(withPin), appAccounts()); }
+  // Connected: in the middle, to sign in (show), or out of sight, to be read (at the start, those connected before).
+  function connectService(k, show) {
+    if (!SERVICES[k]) return;
+    var list = connected();
+    if (list.indexOf(k) < 0) { list.push(k); store(CONNECTED, list); drawAppMessages(); }
+    if (show) showService(k);
+    else APP.app("connect_service", { service: k, show: false, x: 0, y: 0, w: 1, h: 1 }).catch(noop);
+  }
+  function showService(k, item) {
+    var s = SERVICES[k];
+    if (view) { viewGone(view); view.remove(); view = null; }
+    acted++;
+    player.token = {};
+    player.id = "";
+    site.on = true;
+    site.hidden = false;
+    site.url = "";
+    site.view = "msg-" + k;
+    open = true;
+    call("mode", "content", s.label);
+    var h = hole || { x: 0, y: 0, w: 1, h: 1 };
+    APP.app("connect_service", { service: k, show: true, x: h.x, y: h.y, w: h.w, h: h.h }).then(function () {
+      place();
+      covered();
+      if (item) APP.app("open_service_item", { service: k, item: item }).catch(noop);
+    }, function (e) {
+      site.on = false;
+      site.view = "";
+      open = false;
+      call("mode", "chat");
+      call("notice", s.label + " didn't open: " + e, "warn");
+    });
+  }
+  function forgetService(k) {
+    store(CONNECTED, connected().filter(function (x) { return x !== k; }));
+    MESSAGES = MESSAGES.filter(function (m) { return m.service !== k; });
+    if (site.on && site.view === "msg-" + k) { site.on = false; site.view = ""; open = false; call("mode", "chat"); }
+    APP.app("forget_service", { service: k }).catch(noop);
+    drawAppMessages();
+  }
+  // What a service's reader read: its conversations, in place of what it had in Messages (where its list couldn't be
+  // read, the number of unread messages its page's title shows, in one line).
+  function serviceMessages(m) {
+    var k = String(m.service || ""), s = SERVICES[k];
+    if (!s || connected().indexOf(k) < 0) return;
+    var now = Date.now() / 1000, last = now;
+    var items = (m.items || []).map(function (it) {
+      // (Where the time couldn't be read: just before the one listed above it, keeping the service's order.)
+      var ts = typeof it.ts === "number" && it.ts > 0 ? it.ts : last - 1;
+      last = Math.min(last, ts);
+      return { id: k + "-" + String(it.id || ""), service: k, item: String(it.id || ""), source: s.source, label: s.label,
+               who: clip(it.who, 80) || s.label, text: clip(it.text, 300), ts: ts, unread: !!it.unread };
+    });
+    var unread = +m.unread || 0;
+    if (!items.length && unread > 0) {
+      items = [{ id: k + "-unread", service: k, item: "", source: s.source, label: s.label, who: s.label,
+                 text: unread + (unread === 1 ? " unread message" : " unread messages"), ts: now, unread: true }];
+    }
+    MESSAGES = MESSAGES.filter(function (x) { return x.service !== k; }).concat(items);
+    drawAppMessages();
+  }
+  // Connect email or chat apps: which, to sign in to (one connected already opens again, or is disconnected).
+  function appConnectForm(group) {
+    var ids = Object.keys(SERVICES).filter(function (k) { return !group || SERVICES[k].group === group; }), on = connected();
+    var text = ["Choose one and sign in on its own page, right here. It stays signed in in this app, and its messages " +
+      "come into Messages, newest first. Nothing leaves your computer."];
+    if (ids.indexOf("wechat") >= 0) text.push("WeChat's web version isn't open to every account: if it says yours can't use " +
+      "it, WeChat can't come into Messages here.");
+    return { id: "accounts", title: group === "email" ? "Connect email" : group === "chat" ? "Connect chat apps" :
+      "Connect an account", ok: "", text: text,
+      choices: ids.map(function (k) { return { label: (on.indexOf(k) >= 0 ? "Open " : "") + SERVICES[k].label, value: k }; })
+        .concat(ids.filter(function (k) { return on.indexOf(k) >= 0; })
+          .map(function (k) { return { label: "Disconnect " + SERVICES[k].label, value: "forget:" + k }; })) };
+  }
+  function appInbox() {
+    return MESSAGES.slice().sort(function (a, b) { return b.ts - a.ts; }).slice(0, 40).map(function (m) {
+      return { id: m.id, from: m.label, who: m.who, when: when(m.ts), unread: m.unread, says: m.text };
+    });
+  }
+
   // Links in this page (an answer's, a page of the demo's own): opened here, in the middle, rather than leaving it.
   if (APP) {
     document.addEventListener("click", function (e) {
@@ -2198,6 +2299,7 @@
   function openMessage(id) {
     var m = MESSAGES.filter(function (x) { return x.id === id; })[0];
     if (m && m.unread) { m.unread = false; call("message", withPin(m)); }
+    if (APP) { if (m && m.service) showService(m.service, m.item); return m; }
     var html = thread(id);
     if (html) show({ html: html });
     return m;
@@ -2291,8 +2393,10 @@
       "Here you can: play YouTube videos (play_youtube; use web_search to find a video's address when you don't know its " +
       "ID for certain), show maps (show_map), show a page you write when they ask for one on the screen (show_page), open a website (open_website: " +
       sites + "make a timer (make_timer), set the volume of what's playing (set_volume), close what's open (close), and " +
-      "search the web. " + (APP ? "Chat Computer itself, installed in place of a desktop, also reads their messages, " +
-        "changes settings and uses their AirPods; when they ask for something only it can do, say so in a sentence." :
+      "search the web. " + (APP ? "Their messages from the accounts they've connected in Messages (Gmail, Outlook, Telegram, " +
+        "WhatsApp, WeChat, Discord) are yours to read (read_messages) and open (open_message): what each service's list shows, " +
+        "not whole conversations. Chat Computer itself, installed in place of a desktop, also changes settings and uses their " +
+        "AirPods; when they ask for something only it can do, say so in a sentence." :
       "On a real Chat Computer you also use any website, " +
       "their real files, apps and settings, and their AirPods; when they ask for something only a Chat Computer can do, " +
       "say so in a sentence.") + "\n\n" +
@@ -2340,7 +2444,12 @@
       "Desktop, Documents, Downloads, Pictures, Music, Videos and OneDrive. Up to 8, best first, each with its path.",
       input_schema: obj({ query: { type: "string", description: "Words in the name, like “taxes 2025”" } }, ["query"]) },
     { name: "open_file", description: "Open a file or folder find_files found, with its own app (Preview, Word, Photos...; a " +
-      "folder in Finder or File Explorer). Never a program or a script.", input_schema: obj({ path: { type: "string" } }, ["path"]) }
+      "folder in Finder or File Explorer). Never a program or a script.", input_schema: obj({ path: { type: "string" } }, ["path"]) },
+    { name: "read_messages", description: "Their messages, newest first, from the accounts connected in Messages: each with its " +
+      "id, where it's from, who, when, whether it's unread, and what it says (an email's subject and start, a chat's last " +
+      "message). Empty when none is connected (they connect one with + in Messages).", input_schema: obj({}) },
+    { name: "open_message", description: "Open one of their messages (its id, from read_messages) in the middle: its service's " +
+      "own page, at that conversation, for them to read and answer there.", input_schema: obj({ id: { type: "string" } }, ["id"]) }
   ];
   function tools() {
     var list = APP ? TOOLS.filter(function (t) { return t.name !== "open_message" && t.name !== "open_file"; }).concat(APP_TOOLS) : TOOLS;
@@ -2389,6 +2498,18 @@
         '" target="_blank" rel="noopener noreferrer">Open ' + esc(host) + " in a new tab</a></p></article>", NOTE_CSS) });
       did("Showed a link to " + host, you, uts);
       return "A link to " + host + " is on the screen (it opens in a new tab).";
+    }
+    if (APP && n === "read_messages") {
+      if (!connected().length) return "No account is connected: they can connect Gmail, Outlook, Telegram, WhatsApp, WeChat " +
+        "or Discord with + in Messages.";
+      return JSON.stringify(appInbox());
+    }
+    if (APP && n === "open_message") {
+      var am = MESSAGES.filter(function (x) { return x.id === String(a.id || ""); })[0];
+      if (!am) return "There's no message " + clip(a.id, 60) + " (read_messages has them).";
+      openMessage(am.id);
+      did("Opened the message from " + am.who + " on " + am.label, you, uts);
+      return "It's in the middle, on " + am.label + "'s own page.";
     }
     if (n === "open_message") {
       var m = THREADS[a.id] ? openMessage(a.id) : null;
@@ -3206,7 +3327,10 @@
           if (pins[e.id]) o.pinned = pins[e.id];
           return o;
         }));
-        call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
+        if (APP) {                             // (in the app, your own accounts', those connected before read again)
+          drawAppMessages();
+          connected().forEach(function (k) { connectService(k, false); });
+        } else call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
         startChat();
         status();
         nanoCheck().then(gemmaCheck);          // the browser's own AI, else Gemma where it can run
@@ -3262,19 +3386,20 @@
       case "open_chat": openChat(String(msg.id || "")); break;
       case "new_chat": newChat(); break;
       case "add_account":
+        if (APP && msg.provider) {
+          var pv = String(msg.provider), off = pv.indexOf("forget:") === 0 ? pv.slice(7) : "";
+          call("accountForm", null);
+          if (off && SERVICES[off]) { forgetService(off); did("Disconnected " + SERVICES[off].label); }
+          else if (SERVICES[pv]) { connectService(pv, true); did("Opened " + SERVICES[pv].label + " to connect it"); }
+          break;
+        }
+        if (APP && msg.group !== "social") { call("accountForm", appConnectForm(msg.group && GROUPS[msg.group] ? msg.group : "")); break; }
         if (msg.group && GROUPS[msg.group]) {
           var g = GROUPS[msg.group];
           call("accountForm", { id: "accounts", title: g.title, ok: "OK", text: [
             "On Chat Computer, " + g.names + " connect here, and their messages come into Messages, newest first. " +
-            "Sign-ins stay on your computer.", APP ? "The app doesn't connect accounts yet: open them as sites, right here (say \u201copen " +
+            "Sign-ins stay on your computer.", APP ? "The app doesn't connect these yet: open them as sites, right here (say \u201copen " +
             g.site + "\u201d)." : "The demo can't connect accounts."] });
-          break;
-        }
-        if (APP) {
-          call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
-            "On Chat Computer itself (installed in place of a desktop), Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, WeChat, X, " +
-            "Instagram, Facebook, TikTok and LinkedIn connect here, and their messages come into Messages, newest first.",
-            "The app doesn't connect accounts yet: open them as sites, right here (say “open gmail.com”)."] });
           break;
         }
         call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [

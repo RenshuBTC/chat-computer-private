@@ -539,7 +539,14 @@ for each, the line that says what it is; no video):
   used each time, so sign-ins stay; a link that would open a new window opens there; downloads go to Downloads.
   "/" finds files on the computer by name (Desktop, Documents, Downloads, Pictures, Music, Videos, OneDrive), and
   the one chosen opens with its own app; programs, scripts and anything "/" didn't find aren't opened. Connected
-  Claude can do the same (find_files, open_file). The greeting has the name the computer knows you by. Gemma's
+  Claude can do the same (find_files, open_file). Messages brings together your own Gmail, Outlook (Outlook.com,
+  Hotmail, Live and Microsoft 365), Telegram, WhatsApp, WeChat and Discord: + in Messages (or Connect email, Connect
+  chat apps) opens the one chosen in the middle, on its own page, where you sign in yourself (a code or a QR code
+  from your phone, as on its website); it then stays signed in, out of sight, and what its list of conversations
+  shows comes into Messages, newest first (who, what, when, unread). Tapping one opens it there, at that
+  conversation. Nothing is sent anywhere: the app reads the service's page as you'd see it, and only that page can
+  hand it over. (WeChat's web version isn't open to every account; Google sometimes refuses sign-ins in an app's
+  browser view.) The greeting has the name the computer knows you by. Gemma's
   code comes with the app; only Google's model is downloaded. Only the app's own page can ask the app for these
   (its capabilities, and each command checks); a site in the middle gets nothing. On a Mac the page comes from
   the app's own server at 127.0.0.1 (a Mac's web view doesn't count Tauri's own scheme as secure, and then there's

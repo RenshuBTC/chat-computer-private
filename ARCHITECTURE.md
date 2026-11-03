@@ -102,7 +102,10 @@ chat-computer/
                             real Chrome tabs; scripts/build_apps.py zips it into docs/get, tests/test_apps.py checks
   apps/desktop/             The Windows and Mac app (Tauri 2): src-tauri/ (Rust: the window, the site's own view
                             laid over the page's frame, "/" file search, the Mac's 127.0.0.1 page server,
-                            capabilities/ giving only the app's own page its commands), frontend/ (made by
+                            Messages from Gmail, Outlook, Telegram, WhatsApp, WeChat and Discord: each service's
+                            own view, signed in by you and kept aside, read by reader.js for messages.rs;
+                            capabilities/ giving only the app's own page its commands, and the services' own
+                            pages only messages_found), frontend/ (made by
                             build_apps.py desktop: the website's page, with Gemma's and Heart's code), smoke/ (a site for
                             CI's real start-up pictures); .github/workflows/apps.yml builds both on GitHub;
                             tests/test_desktop.py checks it, driving a Linux build with WebDriver where there is one

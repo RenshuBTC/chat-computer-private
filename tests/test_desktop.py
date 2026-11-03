@@ -20,7 +20,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_apps  # noqa: E402
 
-COMMANDS = ["show_site", "place_site", "hide_site", "unhide_site", "close_site", "site_media", "search_files", "open_file", "about"]
+COMMANDS = ["show_site", "place_site", "hide_site", "unhide_site", "close_site", "site_media", "search_files", "open_file", "about",
+            "connect_service", "forget_service", "open_service_item"]
+# What a connected service's own pages may ask (what its reader read there), and nothing else.
+SERVICE_COMMANDS = ["messages_found"]
+SERVICES = ["gmail", "outlook", "telegram", "whatsapp", "wechat", "discord"]
 
 
 def test_the_app_s_page_is_the_website_s(tmp_path, monkeypatch):
@@ -44,10 +48,10 @@ def test_the_app_s_page_is_the_website_s(tmp_path, monkeypatch):
 
 def test_only_the_app_s_own_page_may_ask_the_app():
     build = (TAURI / "build.rs").read_text()
-    assert re.findall(r'"([a-z_]+)",', build) == COMMANDS
+    assert re.findall(r'"([a-z_]+)",', build) == COMMANDS + SERVICE_COMMANDS
     lib = (TAURI / "src" / "lib.rs").read_text()
     handlers = re.search(r"generate_handler!\[([^\]]+)\]", lib).group(1)
-    assert sorted(x.strip() for x in handlers.split(",") if x.strip()) == sorted(COMMANDS)
+    assert sorted(x.strip() for x in handlers.split(",") if x.strip()) == sorted(COMMANDS + SERVICE_COMMANDS)
     # Each command checks it's the app's own page asking.
     for c in COMMANDS:
         body = re.search(r"fn " + c + r"\(([^)]*)\)[^{]*\{(.*?)\n\}", lib, re.S)
@@ -60,6 +64,18 @@ def test_only_the_app_s_own_page_may_ask_the_app():
     ports = re.search(r"PORTS: \[u16; 3\] = \[(\d+), (\d+), (\d+)\]", (TAURI / "src" / "loopback.rs").read_text()).groups()
     assert loop["webviews"] == ["main"] and "windows" not in loop and loop["permissions"] == allowed
     assert loop["remote"]["urls"] == [f"http://127.0.0.1:{p}" for p in ports]
+    # The services' views: on their own pages (https, their own sites), only what their reader read, and the command
+    # checks that too (the view's name, and that it's at one of its service's own sites).
+    msg = json.loads((TAURI / "capabilities" / "messages.json").read_text())
+    assert msg["webviews"] == ["msg-" + s for s in SERVICES] and "windows" not in msg and msg["local"] is False
+    assert msg["permissions"] == ["allow-messages-found"]
+    assert all(re.fullmatch(r"https://[a-z0-9.]+\.(com|org)/\*", u) for u in msg["remote"]["urls"])
+    found = re.search(r"fn messages_found\(([^)]*)\)[^{]*\{(.*?)\n\}", lib, re.S).group(2)
+    assert "messages::of_view(webview.label())" in found and "messages::is_own_page(s, &url)" in found
+    assert "from_main" not in found
+    # A build for testing alone may point the services at pages on this computer.
+    assert "if !cfg!(debug_assertions) {\n        return None;" in lib
+    assert len(sorted((TAURI / "capabilities").glob("*.json"))) == 3
     # The site view: only web pages, a new window's link in its place, and the Mac's view as Safari.
     assert 'const SITE: &str = "site";' in lib and '.on_navigation(|u| matches!(u.scheme(), "http" | "https" | "about" | "blob"))' in lib
     assert "NewWindowResponse::Deny" in lib and "Version/26.0 Safari/605.1.15" in lib
@@ -121,5 +137,72 @@ def test_the_app_works(loopback):
     assert res["content"] == [True, res["content"][1]] and res["content"][1].startswith("A test page")
     # The page sent elsewhere comes back, with that address in the middle; closed, the conversation again.
     assert res["back_home"] == res["page"] and res["sent_there"] == "B page" and res["closed"] == "yes"
+    # Messages: Gmail, WhatsApp and Outlook (this check's own pages, built as theirs are) connected from + in
+    # Messages; their conversations together, newest first; one tapped opens its service at that conversation (and
+    # is read); a site in the middle can't hand over messages; Outlook disconnected, its go.
+    assert res["choices"] == ["Open Gmail", "Outlook", "Telegram", "WhatsApp", "WeChat", "Discord", "Disconnect Gmail"]
+    assert res["accounts"] == ["gmail", "whatsapp", "outlook"]
+    got = {m[0]: m[1:] for m in res["messages"]}
+    assert got == {"Mum": ["WhatsApp: Dinner at 7 tonight?", True], "Alex": ["WhatsApp: Sent you the slides", False],
+                   "Jane Lim": ["Gmail: Lunch on Friday? – 12:30 at the usual place works for me.", True],
+                   "City Library": ["Gmail: Books due – Your books are due back on Thursday.", False],
+                   "Sam Lee": ["Outlook: Trip photos – Here they are, all 40.", True]}
+    assert res["tapped"] == "opened: Mum" and res["c_title"] == "C page: the app said no"
+    after = {m[0]: m[1:] for m in res["after_disconnect"]}
+    assert "Sam Lee" not in after and after["Mum"] == ["WhatsApp: Dinner at 7 tonight?", False] and len(after) == 4
     if loopback:
         assert res["other_name"] == 404 and res["own_name"] == 200
+
+
+def _node_with_playwright():
+    node = shutil.which("node")
+    root = subprocess.run(["npm", "root", "-g"], capture_output=True, text=True).stdout.strip() if shutil.which("npm") else ""
+    return (node, root) if node and root and (Path(root) / "playwright").exists() else (None, None)
+
+
+@pytest.mark.skipif(_node_with_playwright()[0] is None, reason="node with Playwright not available")
+def test_the_reader_reads_each_service_s_list():
+    """Messages' reader (reader.js) in Chromium, the engine of Windows' WebView2, on pages built as each service's
+    list is, at each service's own address (tests/reader_check.js)."""
+    node, modules = _node_with_playwright()
+    r = subprocess.run([node, str(ROOT / "tests" / "reader_check.js")], capture_output=True, text=True, timeout=180,
+                       env={**os.environ, "NODE_PATH": modules})
+    lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+    assert lines, (r.stdout[-2000:], r.stderr[-2000:])
+    res = json.loads(lines[-1])
+    assert "failed" not in res, res["failed"]
+    assert res["errors"] == []
+    # Each service: who, what (an email's subject and start; a chat's last message), when, unread or not; a time
+    # read wherever one is shown; handed to the app as messages_found; the first opened as a tap on it would.
+    expect = {
+        "gmail": [["Jane Lim", "Lunch on Friday? – 12:30 at the usual place works for me.", "9:05 AM", True],
+                  ["Ann, Bo", "Plans – See you there", "Oct 28", False]],
+        "outlook": [["Sam Lee", "Trip photos – Here they are, all 40.", "8:30 AM", True],
+                    ["City Council", "Bin day – Collections move to Friday.", "2026-10-30", False]],
+        "telegram": [["Alex", "Sent you the slides for Monday.", "Yesterday", True], ["Chess club", "Lee: Game at 6?", "Sat", False]],
+        "whatsapp": [["Mum", "Dinner at 7 tonight? Bring the photos!", "10:15", True], ["Dad", "Call me back", "11/2/2026", False]],
+        "wechat": [["李明", "明天见", "下午3:20", True], ["王芳", "好的", "昨天", False]],
+        "discord": [["Priya", "New message", "", True], ["Tom", "Direct message", "", False]],
+        # A list whose parts aren't named as expected (its service changed its page): read by its shape.
+        "changed": [["Kim", "On my way", "9:41", False], ["Joe", "Thanks!", "Yesterday", False], ["Eve", "See the doc", "Tue", False]],
+    }
+    for k, items in expect.items():
+        got = res[k]
+        assert [i[:4] for i in got["items"]] == items, k
+        assert all(i[4] == bool(i[2]) for i in got["items"]), k                 # (a time wherever one is shown)
+        assert got["command"] == "messages_found" and got["opened"] is True, k
+        assert got["title_after"].startswith("opened "), k
+        assert all(re.fullmatch(r"[a-z]+:[0-9a-z]+", i) for i in got["ids"]) and len(set(got["ids"])) == len(got["ids"]), k
+    assert [res[k]["unread_in_title"] for k in ("gmail", "whatsapp", "discord", "outlook")] == [2, 1, 3, None]
+    # Nothing listed (signed out, or still loading): the count in the page's title alone.
+    assert res["title_only"]["items"] == [] and res["title_only"]["unread_in_title"] == 12
+    # The times it understands (now: Tuesday 3 November 2026, 14:00, in London, its dates day first).
+    when = dict((k, v) for k, v in res["when"])
+    assert when == {
+        "10:15": "Tue Nov 03 2026 10:15", "9:05 AM": "Tue Nov 03 2026 09:05", "3:20 PM": "Mon Nov 02 2026 15:20",
+        "16:45": "Mon Nov 02 2026 16:45", "下午3:20": "Mon Nov 02 2026 15:20", "上午9:00": "Tue Nov 03 2026 09:00",
+        "Yesterday": "Mon Nov 02 2026 12:00", "昨天": "Mon Nov 02 2026 12:00", "Sat": "Sat Oct 31 2026 12:00",
+        "星期一": "Mon Nov 02 2026 12:00", "Oct 28": "Wed Oct 28 2026 12:00", "2 Nov": "Mon Nov 02 2026 12:00",
+        "11/2/2026": "Wed Feb 11 2026 12:00", "2026-10-30": "Fri Oct 30 2026 12:00", "10月30日": "Fri Oct 30 2026 12:00",
+        "5m": "Tue Nov 03 2026 13:55", "2h": "Tue Nov 03 2026 12:00", "just now": "Tue Nov 03 2026 14:00",
+        "sometime": None, "": None, "9:05 AM + its date": "Mon Nov 02 2026 09:05"}

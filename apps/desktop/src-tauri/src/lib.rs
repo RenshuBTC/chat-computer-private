@@ -6,14 +6,18 @@
 //! - "/" finds files on this computer by name, and opens the one chosen with its own app (programs and scripts
 //!   aren't opened from here).
 //! - The greeting has the name this computer knows you by.
+//! - Messages from your own Gmail, Outlook, Telegram, WhatsApp, WeChat and Discord, each signed in on its own page in
+//!   a view of its own, put together in Messages (messages.rs).
 //!
 //! Only the app's own page (the webview called "main") can ask for these: the sites shown in the middle can't
-//! (capabilities/, and each command checks who's asking).
+//! (capabilities/, and each command checks who's asking). A connected service's own pages may hand the app what's
+//! read there, and nothing else.
 #![cfg_attr(test, allow(dead_code))]
 
 mod files;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod loopback;
+mod messages;
 
 use std::sync::Mutex;
 
@@ -35,6 +39,21 @@ struct Home(Url);
 /// The files the last searches found: the only ones the page can have opened.
 #[derive(Default)]
 struct Found(Mutex<files::Seen>);
+
+/// Which view is in the middle: the site's, a service's, or none.
+#[derive(Default)]
+struct Middle(Mutex<String>);
+
+fn middle(app: &AppHandle) -> Option<Webview> {
+    let label = app.state::<Middle>().0.lock().ok()?.clone();
+    app.get_webview(&label)
+}
+
+fn set_middle(app: &AppHandle, label: &str) {
+    if let Ok(mut m) = app.state::<Middle>().0.lock() {
+        *m = label.to_string();
+    }
+}
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -74,35 +93,55 @@ fn place(site: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
     site.set_size(LogicalSize::new(w.max(1.0), h.max(1.0))).map_err(err)
 }
 
-/// A site in the middle, at the frame the page drew for it (x, y, w, h: CSS pixels of the page, which are the
-/// window's logical pixels). The same view each time, so sign-ins and the way back stay.
-#[tauri::command]
-fn show_site(app: AppHandle, webview: Webview, url: String, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
-    from_main(&webview)?;
-    let url = web_url(&url)?;
-    if let Some(site) = app.get_webview(SITE) {
-        site.navigate(url).map_err(err)?;
-        place(&site, x, y, w, h)?;
-        return site.show().map_err(err);
+/// A service's view out of sight: beside the window, as big as it, still shown (a page that's hidden stops drawing
+/// its list, and some stop keeping it up to date), so it stays signed in and its reader keeps reading. (On Linux,
+/// where the app is built only for its tests, GTK lays the views out and has no room beside the window: hidden.)
+fn aside(view: &Webview) -> Result<(), String> {
+    if cfg!(target_os = "linux") {
+        return view.hide().map_err(err);
     }
+    let (w, h) = match view.window().inner_size().and_then(|s| Ok(s.to_logical::<f64>(view.window().scale_factor()?))) {
+        Ok(s) => (s.width.max(800.0), s.height.max(600.0)),
+        Err(_) => (1200.0, 800.0),
+    };
+    view.set_position(LogicalPosition::new(-(w + 64.0), 0.0)).map_err(err)?;
+    view.set_size(LogicalSize::new(w, h)).map_err(err)?;
+    view.show().map_err(err)
+}
+
+/// What's in the middle goes, for `label` to take its place: a service's view is put aside (still signed in and
+/// read); the site's closes, as a site does when another opens in its place (what played there stops).
+fn clear_middle(app: &AppHandle, label: &str) {
+    if let Some(view) = middle(app).filter(|v| v.label() != label) {
+        if messages::of_view(view.label()).is_some() {
+            let _ = aside(&view);
+        } else {
+            let _ = view.close();
+        }
+    }
+}
+
+/// A view of the web (the site's, or a service's): only web pages; a link for a new window opens in the middle
+/// instead; its title and where it is, told to the app's page (with the view's name: only the one in the middle
+/// is shown); downloads to the Downloads folder.
+fn web_view(app: &AppHandle, label: &str, url: Url) -> WebviewBuilder<tauri::Wry> {
     let (titled, loaded, saved, popup) = (app.clone(), app.clone(), app.clone(), app.clone());
+    let (name, name2) = (label.to_string(), label.to_string());
     #[allow(unused_mut)]
-    let mut builder = WebviewBuilder::new(SITE, WebviewUrl::External(url))
+    let mut builder = WebviewBuilder::new(label, WebviewUrl::External(url))
         // Only web pages (and their blank and blob pages); a mailto: or an app's own link isn't followed here.
         .on_navigation(|u| matches!(u.scheme(), "http" | "https" | "about" | "blob"))
-        // A link that would open a new window or tab: here, in its place, as on a Chat Computer.
+        // A link that would open a new window or tab: in the middle, in the site's view, as on a Chat Computer.
         .on_new_window(move |u, _features| {
             if matches!(u.scheme(), "http" | "https") {
-                if let Some(site) = popup.get_webview(SITE) {
-                    let _ = site.navigate(u);
-                }
+                tell_main(&popup, serde_json::json!({ "open": u.as_str() }));
             }
             NewWindowResponse::Deny
         })
-        .on_document_title_changed(move |_, title| tell_main(&titled, serde_json::json!({ "title": title })))
+        .on_document_title_changed(move |_, title| tell_main(&titled, serde_json::json!({ "title": title, "view": name })))
         .on_page_load(move |_, load| {
             if let PageLoadEvent::Finished = load.event() {
-                tell_main(&loaded, serde_json::json!({ "url": load.url().as_str() }));
+                tell_main(&loaded, serde_json::json!({ "url": load.url().as_str(), "view": name2 }));
             }
         })
         // Downloads go to the Downloads folder, as a browser's do; the page says so in Actions.
@@ -121,6 +160,23 @@ fn show_site(app: AppHandle, webview: Webview, url: String, x: f64, y: f64, w: f
     {
         builder = builder.user_agent(SAFARI_UA);
     }
+    builder
+}
+
+/// A site in the middle, at the frame the page drew for it (x, y, w, h: CSS pixels of the page, which are the
+/// window's logical pixels). The same view each time, so sign-ins and the way back stay.
+#[tauri::command]
+fn show_site(app: AppHandle, webview: Webview, url: String, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    from_main(&webview)?;
+    let url = web_url(&url)?;
+    clear_middle(&app, SITE);
+    set_middle(&app, SITE);
+    if let Some(site) = app.get_webview(SITE) {
+        site.navigate(url).map_err(err)?;
+        place(&site, x, y, w, h)?;
+        return site.show().map_err(err);
+    }
+    let builder = web_view(&app, SITE, url);
     webview
         .window()
         .add_child(builder, LogicalPosition::new(x.max(0.0), y.max(0.0)), LogicalSize::new(w.max(1.0), h.max(1.0)))
@@ -128,12 +184,12 @@ fn show_site(app: AppHandle, webview: Webview, url: String, x: f64, y: f64, w: f
     Ok(())
 }
 
-/// The frame moved or changed size (the window did, or the sidebars came in).
+/// The frame moved or changed size (the window did, or the sidebars came in): what's in the middle moves with it.
 #[tauri::command]
 fn place_site(app: AppHandle, webview: Webview, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
     from_main(&webview)?;
-    match app.get_webview(SITE) {
-        Some(site) => place(&site, x, y, w, h),
+    match middle(&app) {
+        Some(view) => place(&view, x, y, w, h),
         None => Ok(()),
     }
 }
@@ -142,8 +198,8 @@ fn place_site(app: AppHandle, webview: Webview, x: f64, y: f64, w: f64, h: f64) 
 #[tauri::command]
 fn hide_site(app: AppHandle, webview: Webview) -> Result<(), String> {
     from_main(&webview)?;
-    match app.get_webview(SITE) {
-        Some(site) => site.hide().map_err(err),
+    match middle(&app) {
+        Some(view) => view.hide().map_err(err),
         None => Ok(()),
     }
 }
@@ -152,18 +208,21 @@ fn hide_site(app: AppHandle, webview: Webview) -> Result<(), String> {
 #[tauri::command]
 fn unhide_site(app: AppHandle, webview: Webview) -> Result<(), String> {
     from_main(&webview)?;
-    match app.get_webview(SITE) {
-        Some(site) => site.show().map_err(err),
+    match middle(&app) {
+        Some(view) => view.show().map_err(err),
         None => Ok(()),
     }
 }
 
-/// Closed: gone, and what played stops.
+/// Closed: the site's gone, and what played stops; a service's is put aside (it stays signed in, and read).
 #[tauri::command]
 fn close_site(app: AppHandle, webview: Webview) -> Result<(), String> {
     from_main(&webview)?;
-    match app.get_webview(SITE) {
-        Some(site) => site.close().map_err(err),
+    let view = middle(&app);
+    set_middle(&app, "");
+    match view {
+        Some(view) if messages::of_view(view.label()).is_some() => aside(&view),
+        Some(view) => view.close().map_err(err),
         None => Ok(()),
     }
 }
@@ -175,9 +234,101 @@ fn close_site(app: AppHandle, webview: Webview) -> Result<(), String> {
 fn site_media(app: AppHandle, webview: Webview, action: String, value: Option<f64>) -> Result<(), String> {
     from_main(&webview)?;
     let js = site_script(&action, value)?;
-    if let Some(site) = app.get_webview(SITE) {
-        site.eval(js).map_err(err)?;
+    if let Some(view) = middle(&app) {
+        view.eval(js).map_err(err)?;
     }
+    Ok(())
+}
+
+/// Where a service's view opens: its own page (or, only in a build for testing, with CHATCOMPUTER_SERVICES_AT, a
+/// page of the tests' own on this computer, named after the service).
+fn service_url(s: &messages::Service) -> Result<Url, String> {
+    if let Some(base) = test_services() {
+        return base.join(&format!("{}.html", s.id)).map_err(err);
+    }
+    s.url.parse().map_err(err)
+}
+
+/// The tests' own pages for the services: only in a debug build, and only on this computer.
+fn test_services() -> Option<Url> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let base: Url = std::env::var("CHATCOMPUTER_SERVICES_AT").ok()?.parse().ok()?;
+    (base.scheme() == "http" && matches!(base.host_str(), Some("127.0.0.1" | "localhost"))).then_some(base)
+}
+
+/// A service connected (Gmail, Outlook, Telegram, WhatsApp, WeChat, Discord): its own view, made if it isn't there
+/// yet. With `show`, in the middle at the frame (x, y, w, h), to sign in or to read there; otherwise put aside,
+/// where its reader reads it for Messages.
+#[tauri::command]
+fn connect_service(app: AppHandle, webview: Webview, service: String, show: bool, x: f64, y: f64, w: f64, h: f64)
+    -> Result<(), String> {
+    from_main(&webview)?;
+    let s = messages::by_id(&service).ok_or("That isn't a service Chat Computer connects.")?;
+    let label = messages::view_label(s);
+    let view = match app.get_webview(&label) {
+        Some(v) => v,
+        None => {
+            let builder = web_view(&app, &label, service_url(s)?).initialization_script(messages::READER);
+            webview
+                .window()
+                .add_child(builder, LogicalPosition::new(x.max(0.0), y.max(0.0)), LogicalSize::new(w.max(1.0), h.max(1.0)))
+                .map_err(err)?
+        }
+    };
+    if show {
+        clear_middle(&app, &label);
+        set_middle(&app, &label);
+        place(&view, x, y, w, h)?;
+        view.show().map_err(err)
+    } else if middle(&app).is_some_and(|m| m.label() == label) {
+        Ok(())
+    } else {
+        aside(&view)
+    }
+}
+
+/// A service no longer connected: its view closes (its sign-in stays with the app's web views, as a browser's
+/// would: sign out on its page first to end it).
+#[tauri::command]
+fn forget_service(app: AppHandle, webview: Webview, service: String) -> Result<(), String> {
+    from_main(&webview)?;
+    let s = messages::by_id(&service).ok_or("That isn't a service Chat Computer connects.")?;
+    if middle(&app).is_some_and(|m| m.label() == messages::view_label(s)) {
+        set_middle(&app, "");
+    }
+    match app.get_webview(&messages::view_label(s)) {
+        Some(v) => v.close().map_err(err),
+        None => Ok(()),
+    }
+}
+
+/// One of a service's conversations, opened in its view (a fixed script: only the conversation's name is in it).
+#[tauri::command]
+fn open_service_item(app: AppHandle, webview: Webview, service: String, item: String) -> Result<(), String> {
+    from_main(&webview)?;
+    let s = messages::by_id(&service).ok_or("That isn't a service Chat Computer connects.")?;
+    let js = messages::open_script(&item).ok_or("That isn't one of its conversations.")?;
+    match app.get_webview(&messages::view_label(s)) {
+        Some(v) => v.eval(js).map_err(err),
+        None => Err(format!("{} isn't connected.", s.label)),
+    }
+}
+
+/// What a service's reader read on its page, for Messages: only from a service's own view, on its own pages.
+#[tauri::command]
+fn messages_found(app: AppHandle, webview: Webview, items: Vec<messages::Item>, unread: Option<u32>) -> Result<(), String> {
+    let s = messages::of_view(webview.label()).ok_or("Only a connected service's own view hands over its messages.")?;
+    let url = webview.url().map_err(err)?;
+    let test = test_services().is_some_and(|b| same_origin(&url, &b) && url.path() == format!("/{}.html", s.id));
+    if !messages::is_own_page(s, &url) && !test {
+        return Err("Only the service's own pages hand over its messages.".into());
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    tell_main(&app, serde_json::json!({ "messages": {
+        "service": s.id, "label": s.label, "items": messages::clean(items, now), "unread": unread.map(|n| n.min(100_000)),
+    } }));
     Ok(())
 }
 
@@ -278,16 +429,32 @@ fn home_url(app: &tauri::App) -> Result<WebviewUrl, Box<dyn std::error::Error>> 
 pub fn run() {
     tauri::Builder::default()
         .manage(Found::default())
+        .manage(Middle::default())
         .invoke_handler(tauri::generate_handler![
-            show_site, place_site, hide_site, unhide_site, close_site, site_media, search_files, open_file, about
+            show_site, place_site, hide_site, unhide_site, close_site, site_media, search_files, open_file, about,
+            connect_service, forget_service, open_service_item, messages_found
         ])
         .setup(|app| {
+            // (A build for testing, pointed at the tests' own pages for the services: those may hand over what's
+            // read there too.)
+            if let Some(base) = test_services() {
+                let mut cap = tauri::ipc::CapabilityBuilder::new("messages-test")
+                    .remote(format!("{}*", base.as_str()))
+                    .local(false)
+                    .permission("allow-messages-found");
+                for s in &messages::SERVICES {
+                    cap = cap.webview(messages::view_label(s));
+                }
+                app.add_capability(cap)?;
+            }
             let url = home_url(app)?;
+            // The whole screen to start with, as a Chat Computer has (and room for both sidebars).
             let window = tauri::window::WindowBuilder::new(app, "chat-computer")
                 .title("Chat Computer")
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(420.0, 560.0)
                 .center()
+                .maximized(true)
                 .build()?;
             let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
             let home = match &url {

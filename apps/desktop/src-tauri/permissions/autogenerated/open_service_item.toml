@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-service-item"
+description = "Enables the open_service_item command without any pre-configured scope."
+commands.allow = ["open_service_item"]
+
+[[permission]]
+identifier = "deny-open-service-item"
+description = "Denies the open_service_item command without any pre-configured scope."
+commands.deny = ["open_service_item"]

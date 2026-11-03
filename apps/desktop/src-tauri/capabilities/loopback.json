@@ -16,6 +16,9 @@
     "allow-site-media",
     "allow-search-files",
     "allow-open-file",
-    "allow-about"
+    "allow-about",
+    "allow-connect-service",
+    "allow-forget-service",
+    "allow-open-service-item"
   ]
 }

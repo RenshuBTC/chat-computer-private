@@ -180,6 +180,7 @@ def test_the_demo_works_in_a_browser():
     (aw, ah, around, afill, _), (ow, oh, oround, ofill, _), (mw, mh, mround, mfill, mright) = first["tools_round"]
     assert (aw, ah, around, afill) == (ow, oh, oround, ofill) == (mw, mh, mround, mfill) == (32, 32, "50%", "rgb(65, 65, 65)")
     assert first["send_size"] == [32, 32]
+    assert abs(first["gaps"][0] - first["gaps"][1]) < 0.2 and first["gaps"][0] > 0, first["gaps"]   # (+ to the spark as the mic to the arrow)
     box_left, box_right = first["box_at"]
     assert ax - box_left < 16 and 0 < first["send_at"][0] - mright < 12 and box_right - first["send_at"][0] < 50
     # Messages' +: one panel of everything that can be connected, by kind, each with its own logo; one chosen, it's
@@ -612,6 +613,7 @@ def test_the_demo_works_in_a_browser():
     phone = res["phone_opening"]
     assert phone["first_ai"] == "" and phone["logo"] == "Chat Computer" and phone["toggles"] == [False, False]
     assert phone["buttons"] == ["add", "ai", "mic"]
+    assert abs(phone["gaps"][0] - phone["gaps"][1]) < 0.2 and phone["gaps"][0] > 0, phone["gaps"]   # (on a phone too)
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
     # As the Claude app is on a phone (measured on an iPhone): text a eighteenth of the screen's width (390px: 21.7px),
     # never under 16px, so the browser doesn't zoom in on the box; the box 0.77rem from the screen's sides and 4.77rem
@@ -629,6 +631,10 @@ def test_the_demo_works_in_a_browser():
     assert kbd["up"] == {"box": kbd["up"]["seen"], "seen": kbd["up"]["seen"], "room": 300, "keyboard": True}
     assert kbd["scrolled"]["box"] == kbd["scrolled"]["seen"]
     assert kbd["down"] == {"box": kbd["down"]["seen"], "seen": kbd["down"]["seen"], "room": 0, "keyboard": False}
+    # The conversation pulled down past its top (as Chrome on an iPhone lets it be, to reload): the box doesn't move
+    # up with it, typing (still just above the keyboard) or not (at the bottom).
+    assert kbd["pulled_typing"]["box"] == kbd["pulled_typing"]["seen"] == kbd["up"]["box"]
+    assert kbd["pulled"] == {"box": kbd["down"]["box"], "seen": kbd["down"]["seen"], "keyboard": False}
     # Sent: the keyboard goes down (the box isn't being typed in), as in ChatGPT's app.
     assert res["phone"]["typing_in"] != "input"
     # Holding a message: its menu (yours: Copy, Select text, Edit; the answer's: Copy, Select text, Read aloud; Send

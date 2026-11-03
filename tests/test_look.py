@@ -55,6 +55,7 @@ def test_light_words_on_claude_s_dark():
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
     sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--kb", "--side-gap",
              "--mid-left", "--mid-right",   # (where the middle is, between the sidebars as they are when they show)
+             "--tool",                      # (the message box's round buttons)
              "--level"}       # (and the microphone's bar: how loud it hears)
     assert used - sizes == {"--ground", "--ink", "--bubble", "--chosen", "--line", "--muted", "--dim", "--paper", "--knob",
                             "--box-ink", "--box-line", "--box-ground", "--box-chosen", "--side", "--shade", "--text", "--mono"}

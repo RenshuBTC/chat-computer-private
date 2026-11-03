@@ -162,6 +162,7 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
 /* The box, as the Claude app's: what's typed across the top; under it, at the left, + (add files), and at the right
    the microphone (talk) beside the send button: each in a circle of its own (--knob) and doing just that, no menus. */
 #row {
+  --tool: 2em;                                   /* (the round buttons' size: + and the spark, the microphone, the arrow) */
   position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-template-areas: "icon input input input" "add add mic send"; align-items: center; gap: 0.55rem 0;
 }
@@ -174,14 +175,15 @@ body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.fu
 /* Beside +, your own AI: Chat Computer's spark (its sign for a model, as in "/"). Pressed, the AIs to sign in with
    instead of Chat Computer's own model (the page's host lists them); while one of them answers, the button shows
    that AI's own icon (chat.js: CO.ownAi). Only where the page's host offers it (body.own-ai). */
-#ai { display: none; grid-area: add; justify-self: start; margin-left: calc(2em + 0.1rem); }
+/* (As far from + as the microphone is from the arrow: +'s width, less its pull to the left (0.35rem), and 0.45rem.) */
+#ai { display: none; grid-area: add; justify-self: start; margin-left: calc(var(--tool) + 0.1rem); }
 body.own-ai #ai { display: flex; }
 #ai .ai-icon { display: none; width: 1.15em; height: 1.15em; border-radius: 0.25em; object-fit: contain; }
 #ai.has-icon .ai-icon { display: block; }
 #ai.has-icon svg { display: none; }
 #mic { grid-area: mic; margin-right: 0.45rem; }
 .tool {
-  display: flex; align-items: center; justify-content: center; width: 2em; height: 2em; margin: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center; width: var(--tool); height: var(--tool); margin: 0; padding: 0;
   border: 0; border-radius: 50%; background: var(--knob); color: var(--ink); cursor: pointer;
 }
 .tool:hover { background: color-mix(in srgb, var(--knob) 88%, var(--ink)); }
@@ -226,7 +228,7 @@ body.attaching #attached { display: flex; }
   body { touch-action: manipulation; }          /* and a double tap doesn't zoom */
 }
 #send {
-  flex: none; display: flex; align-items: center; justify-content: center; width: 2em; height: 2em;
+  flex: none; display: flex; align-items: center; justify-content: center; width: var(--tool, 2em); height: var(--tool, 2em);
   margin: 0; padding: 0; border: 0; border-radius: 50%; background: var(--dim); color: var(--ground); cursor: default;
 }
 body.drafting #send { background: var(--ink); cursor: pointer; }
@@ -456,7 +458,7 @@ body.phone #box, body.phone #wake { width: min(var(--co-column, 30rem), 100% - 1
 body.phone #box { padding: 0.49rem 0.29rem 0.27rem 0.58rem; border: 2px solid var(--paper); border-radius: 1.25rem; }
 body.phone #row { gap: 0.6rem 0; }                 /* (no gap between the columns: the words start 14px in) */
 body.phone #input { height: 1.5em; line-height: 1.5; }
-body.phone #send, body.phone .tool { width: 1.73rem; height: 1.73rem; }   /* (+ and the microphone no taller) */
+body.phone #row { --tool: 1.73rem; }               /* (+ and the microphone no taller; the spark as far from + as ever) */
 body.phone .you { padding: 0.5rem 0.77rem; border-radius: 1.1rem; }
 body.phone #log { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 

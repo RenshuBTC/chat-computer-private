@@ -687,8 +687,12 @@
   var onScreen = window.visualViewport, kb = 0;
   function fitKeyboard() {
     var bottom = composer.getBoundingClientRect().bottom + kb;       // where the box's bottom would be, not lifted
-    var lift = Math.max(0, Math.round(bottom - (onScreen.offsetTop + onScreen.height)));
-    if (lift < 2 || Math.abs((onScreen.scale || 1) - 1) > 0.01) lift = 0;     // (a part of a pixel; or zoomed in, not a keyboard)
+    // (Only a keyboard lifts the box, and one is up only while something's being typed in. The conversation pulled
+    // down past its top, as a phone's browser lets it be to reload, puts what's on the screen above the page's top
+    // (offsetTop under 0): that's not a keyboard, and the box stays at the bottom.)
+    var at = document.activeElement, typing = !!at && (at.tagName === "TEXTAREA" || at.tagName === "INPUT" || at.isContentEditable);
+    var lift = Math.max(0, Math.round(bottom - (Math.max(0, onScreen.offsetTop) + onScreen.height)));
+    if (!typing || lift < 2 || Math.abs((onScreen.scale || 1) - 1) > 0.01) lift = 0;     // (a part of a pixel; or zoomed in, not a keyboard)
     if (lift === kb) return;
     kb = lift;
     rootStyle.setProperty("--kb", kb + "px");

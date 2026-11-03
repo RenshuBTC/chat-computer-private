@@ -176,6 +176,9 @@ async function state(page) {
       box_at: [document.getElementById("box").getBoundingClientRect().left, document.getElementById("box").getBoundingClientRect().right],
       send_at: [document.getElementById("send").getBoundingClientRect().left, document.getElementById("send").getBoundingClientRect().top],
       send_size: [Math.round(document.getElementById("send").getBoundingClientRect().width), Math.round(document.getElementById("send").getBoundingClientRect().height)],
+      // (Between + and the spark, and between the microphone and the arrow.)
+      gaps: (() => { const r = (id) => document.getElementById(id).getBoundingClientRect();
+        return document.getElementById("ai").offsetParent ? [+(r("ai").left - r("add").right).toFixed(1), +(r("send").left - r("mic").right).toFixed(1)] : null; })(),
       input_top: document.getElementById("input").getBoundingClientRect().top,
       more: document.querySelectorAll(".more").length,
     };
@@ -899,10 +902,19 @@ async function ask(page, text, meanwhile) {
     const up = { box: box(), seen: H - 300, room: room() - before, keyboard: document.body.classList.contains("keyboard") };
     await put(H - 300, 300, "scroll");
     const scrolled = { box: box(), seen: H };
+    // (The conversation pulled down past its top, as Chrome on an iPhone lets it be to reload: what's on the screen
+    // then starts above the page's top. While typing, the box stays just above the keyboard; not typing, at the
+    // bottom: nothing lifts it.)
+    await put(H - 300, -120, "scroll");
+    const pulled_typing = { box: box(), seen: H - 300 };
     await put(H, 0, "resize");
     const down = { box: box(), seen: H, room: room() - before, keyboard: document.body.classList.contains("keyboard") };
+    document.activeElement.blur();
+    await put(H, -120, "scroll");
+    const pulled = { box: box(), seen: H, keyboard: document.body.classList.contains("keyboard") };
+    await put(H, 0, "scroll");
     delete vv.height; delete vv.offsetTop;
-    return { up, scrolled, down };
+    return { up, scrolled, pulled_typing, down, pulled };
   });
   await ask(phone, "hello");
   out.phone = await state(phone);

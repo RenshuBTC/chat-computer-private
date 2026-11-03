@@ -44,6 +44,6 @@ autoinstall:
     # Put the Wi-Fi card's Linux name into the network settings (see chatcomputer/network.sh).
     - ["sh", "/cdrom/chatcomputer/network.sh"]
   late-commands:
-    # Copy Chat Computer, the Claude sign-in and settings, then set up the Chat Computer session.
+    # Copy Chat Computer and its settings, then set up the Chat Computer session.
     - ["sh", "/cdrom/chatcomputer/finish.sh", {{USERNAME}}, {{INSTALL_ID}}]
   shutdown: reboot

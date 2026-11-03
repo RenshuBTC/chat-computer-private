@@ -154,18 +154,10 @@ chmod -R u=rwX,go=rX "$T/opt/chatcomputer/app.new"
 rm -rf "$T/opt/chatcomputer/app"
 mv "$T/opt/chatcomputer/app.new" "$T/opt/chatcomputer/app"
 
-# 5. The person's sign-in and settings, owned by them (as finish.sh does on a PC).
+# 5. The person's settings, and Chat Computer's private folder, owned by them (as finish.sh does on a PC).
 H="$HOME_DIR/ChatComputer"
 mkdir -p "$H/secrets"
 chmod 700 "$H/secrets"
-if [ -f "$P/secrets/claude_token" ]; then
-  ( umask 077; cp "$P/secrets/claude_token" "$H/secrets/claude_token" )
-fi
-if [ -f "$P/secrets/claude_login.json" ]; then
-  mkdir -p "$H/.engine"
-  chmod 700 "$H/.engine"
-  ( umask 077; cp "$P/secrets/claude_login.json" "$H/.engine/.credentials.json" )
-fi
 if [ -f "$P/settings.json" ]; then
   cp "$P/settings.json" "$H/settings.json"
   chmod 644 "$H/settings.json"

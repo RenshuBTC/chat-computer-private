@@ -9,20 +9,22 @@
 # chips yet.
 #
 # Installing it:
-#   1. checks this Mac, signs in to Claude (the official Claude program from Anthropic's Agent SDK), notes
-#      the Wi-Fi, and asks which folders to bring over: Chat Computer can't open macOS's own files (on Apple silicon
+#   1. checks this Mac, notes the Wi-Fi, and asks which folders to bring over: Chat Computer can't open macOS's
+#      own files (on Apple silicon
 #      they're always encrypted, FileVault or not, with keys in the Secure Enclave that Linux can't use yet),
 #      so setup copies them now, onto a drive called ChatComp that both open;
 #   2. downloads the Asahi installer and Fedora Asahi Remix's Minimal image (mac/manifest.sh: pinned, checked
 #      against SHA-256 fingerprints) and runs the installer, answering its questions (mac/drive-installer.exp):
 #      it makes room next to macOS and installs Fedora there; you type your Mac's password once;
 #   3. makes the Chat Computer drive in the space left over and copies your folders onto it;
-#   4. leaves Chat Computer's first start on Chat Computer's EFI partition (mac/esp): your account, Wi-Fi and sign-in;
+#   4. leaves Chat Computer's first start on Chat Computer's EFI partition (mac/esp): your account and Wi-Fi;
 #   5. shows the one step Apple requires in the Mac's startup options, and shuts the Mac down.
-# On its first start Chat Computer sets itself up from there and installs the rest with the internet.
+# On its first start Chat Computer sets itself up from there and installs the rest with the internet, then downloads
+# the open model it thinks with (Qwen's, chosen for this Mac's memory) and runs it on the Mac itself: no account,
+# no sign-in, nothing to pay.
 #
-# It can also send more folders to Chat Computer, sign Chat Computer in again, choose what starts when the Mac turns on,
-# and remove Chat Computer completely. Written for the bash that comes with macOS (3.2).
+# It can also send more folders to Chat Computer, choose what starts when the Mac turns on, and remove Chat Computer
+# completely. Written for the bash that comes with macOS (3.2).
 # Messages and logs go to the person's own log on purpose, also from commands run with sudo; a failed check
 # stops setup (stop exits), so "A && B || stop" can't fall through.
 # shellcheck disable=SC2015,SC2024,SC1091
@@ -47,7 +49,7 @@ DRIVE_NAME="ChatComp"            # the drive both systems open
 FOLDERS="Desktop Documents Downloads Pictures Movies Music"
 
 # ------------------------------------------------------------------ talking to the person
-# Anything shaped like a Claude sign-in is blanked out before it is written to the log.
+# Anything shaped like an API key (sk-ant-...) is blanked out before it is written to the log.
 log() {
   if [ -d "$WORK" ]; then
     printf '%s  %s\n' "$(date '+%H:%M:%S')" "$(printf '%s' "$*" | sed -E 's/sk-ant-[A-Za-z0-9_-]+/sk-ant-(hidden)/g')" \
@@ -112,55 +114,6 @@ read_secret() {   # read_secret PROMPT: a hidden answer into SECRET (never logge
   read -r SECRET || SECRET=""
   [ -n "$saved" ] && stty "$saved" 2>/dev/null
   printf '\n'
-}
-
-# Reads what's pasted, hidden, however many lines it has, into PASTED, up to the Enter that follows it.
-# Claude's sign-in code is longer than Terminal's usual width and Claude Code wraps it with real line breaks,
-# so a copy of it can hold two or more lines. Terminal marks where a paste starts and ends when asked to
-# (bracketed paste), so line breaks inside the paste don't end it, and the Enter pressed after it does.
-STTY_SAVED=""
-restore_terminal() {
-  if [ -n "$STTY_SAVED" ]; then
-    printf '\033[?2004l'
-    stty "$STTY_SAVED" 2>/dev/null
-    STTY_SAVED=""
-  fi
-}
-trap 'restore_terminal' EXIT
-trap 'restore_terminal; printf "\n"; exit 130' INT TERM
-read_chunk() {   # one read of whatever has arrived (up to 4 KB), kept exactly, newlines included
-  CHUNK="$(dd bs=4096 count=1 2>/dev/null; printf x)"
-  CHUNK="${CHUNK%x}"
-}
-read_paste() {
-  local all="" rest start end
-  start=$'\033[200~'
-  end=$'\033[201~'
-  if ! STTY_SAVED="$(stty -g 2>/dev/null)"; then    # not a terminal: one line
-    STTY_SAVED=""
-    read -r all || all=""
-    PASTED="$all"
-    return 0
-  fi
-  stty -echo -icanon min 1 time 0
-  printf '\033[?2004h'
-  while :; do
-    read_chunk
-    [ -z "$CHUNK" ] && break
-    all="$all$CHUNK"
-    if [ "${all#*"$start"}" != "$all" ]; then
-      case "${all##*"$start"}" in *"$end"*) ;; *) continue ;; esac
-    fi
-    rest="${all##*"$end"}"
-    case "$rest" in *$'\n'*|*$'\r'*) ;; *) continue ;; esac
-    stty min 0 time 5
-    read_chunk
-    stty min 1 time 0
-    [ -z "$CHUNK" ] && break
-    all="$all$CHUNK"
-  done
-  restore_terminal
-  PASTED="$all"
 }
 
 # ------------------------------------------------------------------ small helpers
@@ -384,55 +337,6 @@ choose_folders() {
   log "folders:$CHOSEN ($CHOSEN_BYTES bytes)"
 }
 
-# ------------------------------------------------------------------ signing in to Claude
-claude_program() {   # the official Claude program, from Anthropic's Agent SDK
-  if [ -n "${CHATCOMPUTER_ENGINE_CLI:-}" ]; then CLAUDE="$CHATCOMPUTER_ENGINE_CLI"; return 0; fi
-  CLAUDE="$WORK/claude/claude_agent_sdk/_bundled/claude"
-  [ -x "$CLAUDE" ] && return 0
-  mkdir -p "$WORK/claude"
-  fetch "$CLAUDE_WHEEL_URL" "$WORK/claude/agent-sdk.whl" "$CLAUDE_WHEEL_SHA256" "the Claude program (about 100 MB)"
-  (cd "$WORK/claude" && unzip -o -q agent-sdk.whl 'claude_agent_sdk/_bundled/claude') || stop "Couldn't unpack the Claude program."
-  chmod 755 "$CLAUDE"
-}
-
-sign_in() {   # sets TOKEN, and LOGIN (the full sign-in for the phone) or ""
-  step "Sign in to Claude"
-  local tmp raw try=1
-  TOKEN="" LOGIN=""
-  claude_program
-  say "Your browser opens to sign in to Claude. Use the account with your Claude subscription."
-  say "When it finishes, this window shows a long code starting with sk-ant-. It may run over two lines:"
-  say "copy all of it."
-  tmp="$(mktemp -d)"
-  CLAUDE_CONFIG_DIR="$tmp" "$CLAUDE" setup-token
-  rm -rf "$tmp"
-  while [ $try -le 3 ]; do
-    printf 'Paste the code here (it stays hidden), then press Enter: '
-    read_paste
-    raw="$PASTED"
-    printf '\n'
-    TOKEN="$(printf '%s' "$raw" | tr -d ' \t\r\n"'"'" | grep -oE 'sk-ant-(oat01|api03)-[A-Za-z0-9_-]{20,}' | head -n 1)"
-    [ -n "$TOKEN" ] && break
-    warn "That doesn't look like the code. It starts with sk-ant- and is about 100 characters long."
-    try=$((try + 1))
-  done
-  [ -n "$TOKEN" ] || stop "No valid Claude sign-in code was entered."
-  good "Got it."
-  say ""
-  say "Besides talking, you can type to Chat Computer in the Claude app on your phone: the phone is its keyboard."
-  if ask_yes "Set up typing from your phone? (your browser opens once more)" y; then
-    tmp="$(mktemp -d)"
-    CLAUDE_CONFIG_DIR="$tmp" "$CLAUDE" auth login --claudeai
-    if [ -f "$tmp/.credentials.json" ]; then
-      LOGIN="$(cat "$tmp/.credentials.json")"
-      good "Done. In the Claude app on your phone, tap Code, then Chat Computer."
-    else
-      warn "That sign-in didn't finish. Chat Computer works without it; run setup again and choose to sign in again to add it."
-    fi
-    rm -rf "$tmp"
-  fi
-}
-
 # ------------------------------------------------------------------ Wi-Fi for Chat Computer's first start
 wifi_device() {
   networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: (Wi-Fi|AirPort)/ { getline; print $2; exit }'
@@ -643,8 +547,6 @@ write_first_start() {
       printf 'WIFI_SSID=%s\n' "$(b64 "$WIFI_SSID")"
       printf 'WIFI_PSK=%s\n' "$(b64 "$WIFI_PSK")"
     } > "$p/setup.env"
-    printf '%s\n' "$TOKEN" > "$p/secrets/claude_token"
-    if [ -n "$LOGIN" ]; then printf '%s\n' "$LOGIN" > "$p/secrets/claude_login.json"; fi
   )
   printf '{\n  "user_name": "%s",\n  "timezone": "%s",\n  "locale": "en_US.UTF-8"\n}\n' \
     "$(printf '%s' "$REAL_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')" "$TZONE" > "$p/settings.json"
@@ -685,7 +587,6 @@ install() {
     printf 'PLAN store=%s macos_new=%s chatcomputer=%s drive=%s folders=%s\n' "$STORE" "$MACOS_NEW" "$CHATCOMPUTER_BYTES" "$DRIVE_BYTES" "$CHOSEN" >> "$LOG"
     return 0
   fi
-  sign_in
   ask_wifi
   RECOVERY="$(LC_ALL=C tr -dc 'a-km-z2-9' < /dev/urandom | head -c 16 | sed 's/\(....\)/\1-/g; s/-$//')"
   INSTALL_ID="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
@@ -705,7 +606,7 @@ install() {
   # shellcheck disable=SC2086
   [ -n "$CHOSEN" ] && copy_folders "$DRIVE_MOUNT" $CHOSEN
   write_first_start
-  TOKEN="" LOGIN="" WIFI_PSK=""
+  WIFI_PSK=""
   local note="$ROOT/Documents/Chat Computer recovery password.txt"
   mkdir -p "$ROOT/Documents"
   printf 'Chat Computer recovery password\n\nAccount: %s\nPassword: %s\n\nYou normally never need this: Chat Computer starts without a password. It is for repairs only.\n' \
@@ -757,24 +658,6 @@ send_files() {
   # shellcheck disable=SC2086
   [ -n "$CHOSEN" ] && copy_folders "$mount" $CHOSEN
   good "Done. Chat Computer sees them the next time it starts (in Mac, on the Chat Computer drive)."
-}
-
-sign_in_again() {
-  local mount
-  find_install "$(system_disk)" || true
-  [ -n "$FOUND_DRIVE" ] || stop "There's no Chat Computer drive on this Mac. Install Chat Computer first."
-  diskutil mount "$FOUND_DRIVE" >> "$LOG" 2>&1
-  diskutil info -plist "$FOUND_DRIVE" > "$WORK/drive.plist" 2>/dev/null
-  mount="$(plist "$WORK/drive.plist" MountPoint)"
-  [ -n "$mount" ] || stop "Couldn't open the Chat Computer drive."
-  sign_in
-  mkdir -p "$mount/.chatcomputer"
-  ( umask 077
-    printf '%s\n' "$TOKEN" > "$mount/.chatcomputer/claude_token"
-    if [ -n "$LOGIN" ]; then printf '%s\n' "$LOGIN" > "$mount/.chatcomputer/claude_login.json"; fi
-  )
-  TOKEN="" LOGIN=""
-  good "Done. Restart into Chat Computer; it takes the new sign-in when it starts and deletes this copy."
 }
 
 choose_start() {
@@ -895,15 +778,13 @@ main() {
   ask_choice "What would you like to do?" \
     "Install Chat Computer on this Mac" \
     "Send more files to Chat Computer" \
-    "Sign Chat Computer in to Claude again" \
     "Choose what starts when the Mac turns on: Chat Computer or macOS" \
     "Remove Chat Computer from this Mac"
   case "$CHOICE" in
     1) install ;;
     2) send_files ;;
-    3) sign_in_again ;;
-    4) choose_start ;;
-    5) remove ;;
+    3) choose_start ;;
+    4) remove ;;
   esac
 }
 

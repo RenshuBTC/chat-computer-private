@@ -4,12 +4,13 @@ Chat Computer Setup (run on Windows; double-click "Chat Computer Setup.cmd").
 Installs Chat Computer next to Windows, without a USB stick:
   1. checks this PC (read-only),
   2. asks where Chat Computer should go and makes room there (only after you confirm),
-  3. signs in to Claude with your subscription,
-  4. downloads the official Ubuntu Server 24.04 installer and checks it,
-  5. writes the installer, Chat Computer and your settings to a temporary partition at the end of that room,
+  3. downloads the official Ubuntu Server 24.04 installer and checks it,
+  4. writes the installer, Chat Computer and your settings to a temporary partition at the end of that room,
      and adds "Chat Computer setup" to the power-on menu for the next restart.
 Then the PC restarts into the installer; Chat Computer installs itself, becomes the first choice on the
-power-on menu, with Windows as the second, and takes over the installer's space when it first starts.
+power-on menu, with Windows as the second, and takes over the installer's space when it first starts. There it
+downloads the open model it thinks with (Qwen's, chosen for this PC's memory) and runs it on the PC itself: no
+account, no sign-in, nothing to pay.
 
   -PlanOnly   go through every question and check, show what would happen, change nothing.
   -IsoPath    use an Ubuntu 24.04 server installer you already downloaded.
@@ -28,7 +29,7 @@ Set-StrictMode -Version 2.0
 
 $Here = $PSScriptRoot
 $RepoRoot = Split-Path -Parent $Here
-foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'Flow')) {
+foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'Flow')) {
     . ([IO.Path]::Combine($Here, 'lib', $lib + '.ps1'))
 }
 

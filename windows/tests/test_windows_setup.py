@@ -166,8 +166,6 @@ def _run_finish(tmp_path, installer_works=True, bitlocker_key=None, update_sourc
     (src / "app/linux/session/xinitrc").write_text("exec something\n")
     (src / "app/chatcomputer/__init__.py").write_text("")
     (src / "secrets").mkdir()
-    (src / "secrets/claude_token").write_text("sk-ant-oat01-test\n")
-    (src / "secrets/claude_login.json").write_text('{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}}')
     (src / "settings.json").write_text("{}\n")
     if bitlocker_key:
         (src / "secrets/bitlocker-key").write_text(bitlocker_key + "\n")
@@ -201,12 +199,8 @@ def test_finish_script_against_a_fake_system(tmp_path):
     assert mode(app / "linux/session/chatcomputer-session") == 0o755
     assert mode(app / "linux/session/xinitrc") == 0o644
     assert mode(app / "chatcomputer/__init__.py") == 0o644
-    token = target / "home/rensh/ChatComputer/secrets/claude_token"
-    assert token.read_text() == "sk-ant-oat01-test\n" and mode(token) == 0o600
     assert mode(target / "home/rensh/ChatComputer/secrets") == 0o700
-    login = target / "home/rensh/ChatComputer/.engine/.credentials.json"
-    assert "refreshToken" in login.read_text() and mode(login) == 0o600
-    assert mode(target / "home/rensh/ChatComputer/.engine") == 0o700
+    assert list((target / "home/rensh/ChatComputer/secrets").iterdir()) == []      # nothing to sign in with
     assert mode(target / "home/rensh/ChatComputer/settings.json") == 0o644
     # The installer's boot menu (and guard.sh) look for this file to tell that this installer already installed here.
     assert (target / "boot/efi/EFI/chatcomputer/installed-0123456789abcdef").read_text().splitlines()[0] == "id=0123456789abcdef"
@@ -398,8 +392,8 @@ DESTRUCTIVE = ("Resize-Partition", "Clear-Disk", "Initialize-Disk", "New-Install
                "Disable-FastStartup", "Suspend-BitLocker", "BitLocker add", "BitLocker delete", "bcdedit", "shutdown",
                "vssadmin", "fsutil", "powercfg")
 USER_KEY = "{0b000000-0000-4000-8000-000000000001}"           # the person's own BitLocker recovery password
-CLAUDE_KEY = "{2b000000-0000-4000-8000-0000000000c1}"         # the one setup adds for Chat Computer
-CLAUDE_KEY_PASSWORD = "123456-234567-345678-456789-567890-678901-789012-890123"
+OUR_KEY = "{2b000000-0000-4000-8000-0000000000c1}"         # the one setup adds for Chat Computer
+OUR_KEY_PASSWORD = "123456-234567-345678-456789-567890-678901-789012-890123"
 SETUP_ID = "{5e7e0a00-0000-4000-8000-00000000000a}"          # the "Chat Computer setup" entry the pretend bcdedit makes
 CHATCOMPUTER_ID = "{9f62d3e2-5c1a-11ef-a1b2-806e6f6e6963}"   # Chat Computer's own entry, once installed
 # The pretend PC's Windows disk before Chat Computer, in MiB: EFI, reserved, C: (950 GB), Windows' recovery partition.
@@ -482,14 +476,14 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     assert (inst / f"chatcomputer/installer-{install_id}").read_text() == f"id={install_id}\n"
     assert ai["network"]["wifis"]["any-wifi"]["access-points"] == {"Home 5G": {"password": "correct horse"}}
     assert ai["timezone"] == "Asia/Singapore" and ai["identity"]["realname"] == "Ren Shu"
-    # One sign-in in the browser before "Go ahead?": the full sign-in, which Chat Computer and the phone both use.
-    # No one-year code to paste.
-    login = json.loads((inst / "chatcomputer/secrets/claude_login.json").read_text())
-    assert login["claudeAiOauth"]["refreshToken"].startswith("r")
-    assert not (inst / "chatcomputer/secrets/claude_token").exists()
-    _in_order(calls, "Invoke-ClaudeBrowserSignIn", go)
+    # Nothing to sign in to: Chat Computer thinks with a model on the PC itself. No secrets go with it here (no
+    # BitLocker on this PC).
+    assert list((inst / "chatcomputer/secrets").iterdir()) == []
     assert (inst / "chatcomputer/app/chatcomputer/__init__.py").exists()
     assert not (inst / "chatcomputer/app/windows").exists() and not (inst / "chatcomputer/app/.venv").exists()
+    # Nor the website, the apps, or what was built here from the own system's source.
+    assert not any((inst / "chatcomputer/app" / p).exists() for p in ("docs", "apps", "evals", "os/target", "os/out"))
+    assert (inst / "chatcomputer/app/chatcomputer/brain/bin/chat-computer-model-x86_64").exists()
     # Updates come from the folder setup runs from only when it's on Windows' own drive (C:); this pretend PC's
     # setup isn't (Get-UpdateSource, finish.sh).
     assert not (inst / "chatcomputer/update-source").exists()
@@ -500,7 +494,7 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     recovery = (out / "Documents/Chat Computer recovery password.txt").read_text()
     password = recovery.split("Password: ")[1].split()[0]
     log = (out / "setup.log").read_text()
-    for secret in ("sk-ant-oat01-", "correct horse", password, "a" * 40, "r" * 40):
+    for secret in ("correct horse", password):
         assert secret not in log, secret
 
 
@@ -532,7 +526,7 @@ def test_flow_separate_disk(tmp_path):
     assert "Mount-EspPartition 0 1" in calls[calls.index("Copy-IsoToInstaller"):]
     assert (out / "esp/EFI/chatcomputer-setup/shimx64.efi").exists()
     assert _load(out / "installer/autoinstall.yaml")["storage"]["layout"]["match"] == {"install-media": True}
-    assert (out / "installer/chatcomputer/secrets/claude_login.json").exists()
+    assert (out / "installer/chatcomputer/app/chatcomputer/__init__.py").exists()
     assert calls[-1] == "shutdown /r /t 5"
 
 
@@ -579,33 +573,23 @@ def test_flow_gives_chatcomputer_its_own_bitlocker_key(tmp_path):
     # Made after "Go ahead", with the installer, before the PC is told to start it.
     _in_order(calls, "Q Go ahead? [y/N] -> y", "Copy-IsoToInstaller", "BitLocker add key",
               f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}")
-    assert res["bitlocker_keys"] == [USER_KEY, CLAUDE_KEY]          # the person's own key stays
+    assert res["bitlocker_keys"] == [USER_KEY, OUR_KEY]          # the person's own key stays
     # Chat Computer gets the key in the installer's secrets (finish.sh puts it in /etc/chatcomputer), and setup keeps
     # its id, so "Remove Chat Computer" deletes exactly this key.
-    assert (out / "installer/chatcomputer/secrets/bitlocker-key").read_text() == CLAUDE_KEY_PASSWORD + "\n"
-    assert (out / "ProgramData/ChatComputer/bitlocker-key-id").read_text() == CLAUDE_KEY + "\n"
-    assert CLAUDE_KEY_PASSWORD not in (out / "setup.log").read_text()
+    assert (out / "installer/chatcomputer/secrets/bitlocker-key").read_text() == OUR_KEY_PASSWORD + "\n"
+    assert (out / "ProgramData/ChatComputer/bitlocker-key-id").read_text() == OUR_KEY + "\n"
+    assert OUR_KEY_PASSWORD not in (out / "setup.log").read_text()
 
 
 @needs_pwsh
 def test_flow_deletes_chatcomputer_bitlocker_key_when_a_later_step_fails(tmp_path):
     out, res = _flow(tmp_path, "bitlocker-fails")
     assert not res["ok"] and "EFI partition" in res["error"], res
-    _in_order(res["calls"], "BitLocker add key", f"BitLocker delete key {CLAUDE_KEY}", "Remove-Partition 0 5",
+    _in_order(res["calls"], "BitLocker add key", f"BitLocker delete key {OUR_KEY}", "Remove-Partition 0 5",
               "Resize-Partition C 950")
     assert res["bitlocker_keys"] == [USER_KEY]
     assert not (out / "ProgramData/ChatComputer/bitlocker-key-id").exists()
     assert _disk(res, 0) == DISK0
-
-
-@needs_pwsh
-def test_flow_sign_in_again_leaves_the_sign_in_for_chatcomputer(tmp_path):
-    out, res = _flow(tmp_path, "signin")
-    assert res["ok"], res
-    assert "Invoke-ClaudeBrowserSignIn" in res["calls"]
-    assert not _changes(res["calls"])
-    assert json.loads((out / "Users/rensh/ChatComputer/claude_login.json").read_text())["claudeAiOauth"]
-    assert not (out / "Users/rensh/ChatComputer/claude_token").exists()
 
 
 @needs_pwsh
@@ -659,17 +643,7 @@ def test_flow_says_how_much_to_free_up(tmp_path):
     out, res = _flow(tmp_path, "nospace")
     assert not res["ok"], res
     assert "C: has 50 GB free" in res["error"] and "Free up about 21 GB" in res["error"], res["error"]
-    assert not _changes(res["calls"]) and "Invoke-ClaudeBrowserSignIn" not in res["calls"]
-
-
-@needs_pwsh
-def test_flow_with_a_pasted_sign_in_code(tmp_path):
-    out, res = _flow(tmp_path, "paste")
-    assert res["ok"], res
-    secrets = out / "installer/chatcomputer/secrets"
-    assert (secrets / "claude_token").read_text().startswith("sk-ant-oat01-")
-    assert not (secrets / "claude_login.json").exists()
-    assert "sk-ant-oat01-" not in (out / "setup.log").read_text()
+    assert not _changes(res["calls"])
 
 
 def _run_network(tmp_path, cfg_text, wifi_iface):
@@ -742,7 +716,7 @@ def test_removing_chatcomputer_gives_windows_everything_back(tmp_path):
     assert [c for c in calls if c.startswith("Remove-Partition")] == ["Remove-Partition 0 5"]
     assert _disk(res, 0) == DISK0
     # Chat Computer's BitLocker key goes too, and only that one.
-    _in_order(calls, "Remove-Partition 0 5", f"BitLocker delete key {CLAUDE_KEY}")
+    _in_order(calls, "Remove-Partition 0 5", f"BitLocker delete key {OUR_KEY}")
     assert res["bitlocker_keys"] == [USER_KEY]
     assert not (out / "ProgramData/ChatComputer/bitlocker-key-id").exists()
     esp = out / "esp/EFI"
@@ -750,19 +724,19 @@ def test_removing_chatcomputer_gives_windows_everything_back(tmp_path):
     assert (esp / "BOOT/BOOTX64.EFI").read_text() == "Windows Boot Manager"     # Windows back in the fallback slot
     assert not (esp / "BOOT/fbx64.efi").exists()
     assert (esp / "Microsoft/Boot/bootmgfw.efi").exists()
-    assert not (out / "Users/rensh/ChatComputer").exists()                       # sign-in copies
+    assert not (out / "Users/rensh/ChatComputer").exists()       # the sign-in copy an earlier version left
     assert not (out / "Documents/Chat Computer recovery password.txt").exists()
     assert not list((out / "work").iterdir())                                    # downloads
 
 
 @needs_pwsh
 def test_removing_chatcomputer_can_keep_the_downloads_to_install_again(tmp_path):
-    # Installing again (to get a new version of Chat Computer) then needn't download Ubuntu's 4 GB again.
+    # Installing again (to get a new version of Chat Computer) then needn't download Ubuntu's 3 GB again. What an
+    # earlier version downloaded for Claude (its engine) isn't needed any more, and goes.
     out, res = _flow(tmp_path, "remove-again")
     assert res["ok"], res
     assert [c for c in res["calls"] if c.startswith("Q Keep the downloads")][0].endswith("[y/N] -> y")
-    assert sorted(f.name for f in (out / "work").iterdir()) == [
-        "claude_agent_sdk-0.2.167-py3-none-win_amd64.whl", "ubuntu-24.04.5-live-server-amd64.iso"]
+    assert sorted(f.name for f in (out / "work").iterdir()) == ["ubuntu-24.04.5-live-server-amd64.iso"]
     assert _disk(res, 0) == DISK0 and not (out / "esp/EFI/chatcomputer").exists()  # Chat Computer itself is gone
     assert not (out / "Users/rensh/ChatComputer").exists()
 

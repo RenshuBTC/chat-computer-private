@@ -34,21 +34,10 @@ rm -rf "$T/opt/chatcomputer/app"
 mv "$T/opt/chatcomputer/app.new" "$T/opt/chatcomputer/app"
 chown -R 0:0 "$T/opt/chatcomputer/app"
 
-# 2. The person's sign-in and settings, owned by them.
+# 2. The person's settings, and Chat Computer's private folder, owned by them.
 H="$T/home/$USER_NAME/ChatComputer"
 mkdir -p "$H/secrets"
 chmod 0700 "$H/secrets"
-if [ -f "$SRC/secrets/claude_token" ]; then
-  cp "$SRC/secrets/claude_token" "$H/secrets/claude_token"
-  chmod 0600 "$H/secrets/claude_token"
-fi
-# The full sign-in for the Claude app on the phone goes where Claude Code reads (and refreshes) it.
-if [ -f "$SRC/secrets/claude_login.json" ]; then
-  mkdir -p "$H/.engine"
-  chmod 0700 "$H/.engine"
-  cp "$SRC/secrets/claude_login.json" "$H/.engine/.credentials.json"
-  chmod 0600 "$H/.engine/.credentials.json"
-fi
 if [ -f "$SRC/settings.json" ]; then
   cp "$SRC/settings.json" "$H/settings.json"
   chmod 0644 "$H/settings.json"     # FAT32, where every file looks executable

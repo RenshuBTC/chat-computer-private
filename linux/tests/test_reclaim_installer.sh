@@ -33,7 +33,7 @@ setup() {   # setup INSTALLER_START [MARK_ID] [INSTALLER_PARTTYPE] [ROOT_SOURCE]
   mkdir -p "$W/devs/nvme0n1p5/chatcomputer/secrets" "$W/devs/nvme0n1p1/EFI" "$W/devs/sda1/EFI/chatcomputer-setup" "$W/devs/sda1/EFI/Microsoft"
   echo shim > "$W/devs/sda1/EFI/chatcomputer-setup/shimx64.efi"
   echo "id=$mark" > "$W/devs/nvme0n1p5/chatcomputer/installer-$mark"
-  printf 'sk-ant-oat01-secret\n' > "$W/devs/nvme0n1p5/chatcomputer/secrets/claude_token"
+  printf '123456-234567-345678-456789-567890-678901-789012-890123\n' > "$W/devs/nvme0n1p5/chatcomputer/secrets/bitlocker-key"
   rec() { printf '#!/bin/bash\necho "%s $*" >> "%s/calls"\n%s\n' "$1" "$W" "${2:-}" > "$W/bin/$1"; chmod +x "$W/bin/$1"; }
   # findmnt: the root's source, and which EFI partition is in use (Chat Computer's, at /boot/efi).
   rec findmnt "case \"\$*\" in '-n -o SOURCE /') echo $rootsrc ;; *nvme0n1p1) echo /boot/efi ;; *) exit 1 ;; esac"
@@ -64,8 +64,8 @@ grep -q "^sfdisk --no-reread --delete /dev/nvme0n1 5$" "$W/calls" && pass "delet
 ! grep -q "delete /dev/nvme0n1 [1-46]" "$W/calls" && pass "deletes nothing else" || fail "deleted another partition"
 grep -q "^growpart /dev/nvme0n1 6$" "$W/calls" && grep -q "^resize2fs /dev/nvme0n1p6$" "$W/calls" \
   && pass "grows Chat Computer's partition and file system into the space" || fail "not grown"
-grep -q "of=.*claude_token.*conv=notrunc" "$W/calls" && [ ! -e "$W/devs/nvme0n1p5/chatcomputer/secrets/claude_token" ] \
-  && pass "blanks the sign-in in place, then removes it" || fail "sign-in not blanked"
+grep -q "of=.*bitlocker-key.*conv=notrunc" "$W/calls" && [ ! -e "$W/devs/nvme0n1p5/chatcomputer/secrets/bitlocker-key" ] \
+  && pass "blanks the secret in place, then removes it" || fail "secret not blanked"
 [ ! -d "$W/esp/EFI/chatcomputer-setup" ] && [ -d "$W/esp/EFI/ubuntu" ] \
   && pass "removes the installer's boot loader, and only that" || fail "boot loader files"
 [ ! -d "$W/devs/sda1/EFI/chatcomputer-setup" ] && [ -d "$W/devs/sda1/EFI/Microsoft" ] && ! grep -q "^mount .*nvme0n1p1" "$W/calls" \
@@ -78,7 +78,7 @@ rm -rf "$W"
 # 2. A CHATCOMP partition from another install (another id): left alone.
 setup $((34121728 + 85000000)) fedcba9876543210fedcba98
 rc=$(run)
-{ [ "$rc" = 0 ] && ! grep -q "^sfdisk" "$W/calls" && [ -e "$W/devs/nvme0n1p5/chatcomputer/secrets/claude_token" ]; } \
+{ [ "$rc" = 0 ] && ! grep -q "^sfdisk" "$W/calls" && [ -e "$W/devs/nvme0n1p5/chatcomputer/secrets/bitlocker-key" ]; } \
   && pass "leaves a partition without this install's mark alone" || fail "touched another install's partition"
 rm -rf "$W"
 

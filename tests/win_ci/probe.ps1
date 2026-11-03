@@ -78,7 +78,7 @@ Save 'programs.txt' (@('explorer.exe: ' + (Test-Path -LiteralPath (Join-Path $en
                       'TEMP: ' + [IO.Path]::GetTempPath()))
 # 8. Setup's own helpers on real Windows.
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'Flow')) {
+foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'Flow')) {
     . ([IO.Path]::Combine($repo, 'windows', 'lib', $lib + '.ps1'))
 }
 # What stops C: from shrinking, as setup reads it.

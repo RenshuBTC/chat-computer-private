@@ -312,13 +312,12 @@ function Remove-ChatComputer {
         return
     }
     if ($PlanOnly) { Write-Line '(Plan only: nothing was changed.)'; return }
-    # The downloads (the Ubuntu installer and Claude's engine, about 4 GB) can stay, to install Chat Computer again
-    # without downloading them again.
+    # The download (the Ubuntu installer, about 3 GB) can stay, to install Chat Computer again without downloading
+    # it again.
     $keepDownloads = @()
     $downloads = @()
     if ($WorkDir -and (Test-Path -LiteralPath $WorkDir)) {
-        $downloads = @(Get-ChildItem -LiteralPath $WorkDir -Force -File |
-            Where-Object { $_.Name -like 'ubuntu-*.iso' -or $_.Name -like 'claude_agent_sdk-*.whl' })
+        $downloads = @(Get-ChildItem -LiteralPath $WorkDir -Force -File | Where-Object { $_.Name -like 'ubuntu-*.iso' })
     }
     if ($downloads.Count -gt 0) {
         $size = [double](($downloads | Measure-Object -Property Length -Sum).Sum)
@@ -403,14 +402,14 @@ function Remove-ChatComputer {
                     'drive, or add them to C:.')
     }
 
-    # 4. What setup left on Windows: downloads (unless kept), sign-in copies and the recovery password note
-    #    (setup's log stays).
+    # 4. What setup left on Windows: downloads (unless kept), the sign-in copies an earlier Chat Computer (which
+    #    thought with Claude) left, and the recovery password note (setup's log stays).
     if ($WorkDir -and (Test-Path -LiteralPath $WorkDir)) {
         Get-ChildItem -LiteralPath $WorkDir -Force | Where-Object { $_.Name -ne 'setup.log' -and $keepDownloads -notcontains $_.Name } |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
-    # C:\Users\<you>\ChatComputer: the sign-in copies, and the folder only when nothing else is in it (a folder of that
-    # name may hold something of the person's own, or this very Chat Computer folder).
+    # C:\Users\<you>\ChatComputer: those sign-in copies, and the folder only when nothing else is in it (a folder of
+    # that name may hold something of the person's own, or this very Chat Computer folder).
     $signin = Join-Path $env:USERPROFILE 'ChatComputer'
     if ([IO.Directory]::Exists($signin)) {
         try {
@@ -426,4 +425,16 @@ function Remove-ChatComputer {
     $note = Join-Path $docs 'Chat Computer recovery password.txt'
     if (Test-Path -LiteralPath $note) { Remove-Item -LiteralPath $note -Force }
     Write-Good 'Done. Chat Computer is removed and this PC is back to just Windows.'
+}
+
+function Remove-OldSignInFolders {
+    # Sign-in folders that runs of an earlier setup (when Chat Computer thought with Claude) left in %TEMP%: a run
+    # that stopped could leave a sign-in in one.
+    param([string]$Root = $env:TEMP)
+    try {
+        if (-not $Root -or -not [IO.Directory]::Exists($Root)) { return }
+        foreach ($dir in [IO.Directory]::GetDirectories($Root, 'chatcomputer-signin-*')) { Remove-Folder $dir }
+    } catch {
+        Write-SetupLog ('Old sign-in folders: ' + $_.Exception.Message)
+    }
 }

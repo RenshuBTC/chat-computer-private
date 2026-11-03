@@ -13,7 +13,7 @@ function Initialize-SetupLog {
 }
 
 function Protect-SetupText {
-    # Removes anything that looks like a Claude token from text before it is logged or shown.
+    # Removes anything that looks like an API key (sk-ant-...) from text before it is logged or shown.
     param([AllowNull()][string]$Text)
     if ($null -eq $Text) { return '' }
     return [regex]::Replace($Text, 'sk-ant-[A-Za-z0-9_\-]+', 'sk-ant-(hidden)')
@@ -128,9 +128,9 @@ function Test-InputWaiting {
 }
 
 function Read-PastedSecret {
-    # Reads something pasted, hidden, however many lines it has. Claude's sign-in code is longer than many
-    # windows are wide, and Claude Code wraps it with real line breaks, so a copy of it can hold two or more
-    # lines. A paste arrives all at once, so the lines already waiting after the first one belong to it.
+    # Reads something pasted, hidden, however many lines it has. A long key copied from a page that wraps it can
+    # hold two or more lines. A paste arrives all at once, so the lines already waiting after the first one
+    # belong to it.
     param([Parameter(Mandatory = $true)][string]$Prompt, [int]$SettleMs = 300)
     $text = Read-Secret $Prompt
     for ($more = 0; $more -lt 10; $more++) {
@@ -311,4 +311,30 @@ function Unblock-SetupFiles {
     } catch {
         Write-SetupLog ('Unblocking setup''s files: ' + $_.Exception.Message)
     }
+}
+
+function Invoke-Download {
+    # Downloads a file, preferring BITS (resumable, shows progress), falling back to .NET.
+    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Destination,
+          [string]$Description = 'Downloading')
+    $partial = $Destination + '.part'
+    $ok = $false
+    try {
+        Import-Module BitsTransfer -ErrorAction Stop
+        Start-BitsTransfer -Source $Url -Destination $partial -Description $Description -ErrorAction Stop
+        $ok = $true
+    } catch {
+        Write-SetupLog ('BITS download failed, trying again another way: ' + $_.Exception.Message)
+    }
+    if (-not $ok) {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $wc = New-Object System.Net.WebClient
+        try { $wc.DownloadFile($Url, $partial) } finally { $wc.Dispose() }
+    }
+    Move-Item -LiteralPath $partial -Destination $Destination -Force
+}
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }

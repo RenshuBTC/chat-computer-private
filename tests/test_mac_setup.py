@@ -20,7 +20,6 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 MAC = REPO / "mac"
 TESTS = REPO / "tests"
-TOKEN = "sk-ant-oat01-" + "x" * 90
 GB = 1000 ** 3
 # The shell setup runs in: macOS's is bash 3.2 (CHATCOMPUTER_TEST_BASH can point at one).
 SHELL = os.environ.get("CHATCOMPUTER_TEST_BASH") or "bash"
@@ -102,16 +101,10 @@ esac''')
             _tool(self.bin, name, rec)
         _tool(self.bin, "bless", rec + '\nread -r pw; echo "bless password: $pw" >> "' + str(self.calls) + '"')
         _tool(self.bin, "sudo", rec + '\n[ "$1" = -v ] && exit 0\nexec "$@"')
-        # The official Claude program: prints a sign-in code; "auth login" saves a full sign-in.
-        _tool(self.bin, "fake-claude", rec + f'''
-case "$1" in
-  setup-token) echo "Your token: {TOKEN}" ;;
-  auth) echo '{{"claudeAiOauth":{{"accessToken":"a","refreshToken":"r"}}}}' > "$CLAUDE_CONFIG_DIR/.credentials.json" ;;
-esac''')
         self._downloads()
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", CHATCOMPUTER_MAC_ROOT=str(self.home),
                         CHATCOMPUTER_SETUP_WORK=str(self.home / ".chatcomputer-setup"),
-                        CHATCOMPUTER_ENGINE_CLI=str(self.bin / "fake-claude"), CHATCOMPUTER_MANIFEST=str(self.manifest),
+                        CHATCOMPUTER_MANIFEST=str(self.manifest),
                         CHATCOMPUTER_INSTALLER_CMD=f"{sys.executable} {TESTS}/mac_fake_installer.py --pretend-mac",
                         PRETEND_MAC_STATE=str(self.state), FAKE_INSTALLER_LOG=str(self.answers_log))
 
@@ -157,9 +150,9 @@ def _env_values(text):
 @needs_tools
 def test_install_on_a_mac(tmp_path):
     mac = PretendMac(tmp_path)
-    # Install; bring all folders; the sign-in code; phone typing yes; Wi-Fi name (Enter: the one in use) and
-    # password; go ahead; the Mac's password for the installer; shut down now.
-    r = mac.run(["1", "y", TOKEN, "y", "", "correct horse", "y", "hunter2", "y"])
+    # Install; bring all folders; Wi-Fi name (Enter: the one in use) and password; go ahead; the Mac's password for
+    # the installer; shut down now. Nothing to sign in to: Chat Computer thinks with a model on the Mac itself.
+    r = mac.run(["1", "y", "", "correct horse", "y", "hunter2", "y"])
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
     answers = [json.loads(line) for line in mac.answers_log.read_text().splitlines()]
     asked = {a["q"]: a["a"] for a in answers}
@@ -199,8 +192,7 @@ def test_install_on_a_mac(tmp_path):
     assert v["WIFI_SSID"] == "Home 5G" and v["WIFI_PSK"] == "correct horse"
     assert v["MAC_FILES_PARTUUID"] == drive["uuid"] and re.fullmatch(r"[0-9a-f]{24}", v["INSTALL_ID"])
     assert re.fullmatch(r"[a-km-z2-9]{4}(-[a-km-z2-9]{4}){3}", v["RECOVERY_PASSWORD"])
-    assert (p / "secrets/claude_token").read_text().strip() == TOKEN
-    assert json.loads((p / "secrets/claude_login.json").read_text())["claudeAiOauth"]["refreshToken"] == "r"
+    assert list((p / "secrets").iterdir()) == []
     assert json.loads((p / "settings.json").read_text())["user_name"] == "Ren Shu"
     with tarfile.open(p / "app.tar.gz") as t:
         names = t.getnames()
@@ -212,10 +204,9 @@ def test_install_on_a_mac(tmp_path):
     work = mac.home / ".chatcomputer-setup"
     assert not (work / "os").exists() and not (work / "payload").exists()
     log = (work / "setup.log").read_text()
-    for secret in (TOKEN, "correct horse", "hunter2", v["RECOVERY_PASSWORD"]):
+    for secret in ("correct horse", "hunter2", v["RECOVERY_PASSWORD"]):
         assert secret not in log and secret not in mac.log()
     calls = mac.log()
-    assert "fake-claude auth login --claudeai" in calls
     assert "mdutil -i off" in calls and "shutdown -h now" in calls
     assert "Take a photo of these instructions" in r.stdout
 
@@ -229,11 +220,11 @@ def test_plan_only_changes_nothing(tmp_path):
     plan = [line for line in (mac.home / ".chatcomputer-setup/setup.log").read_text().splitlines() if line.startswith("PLAN ")]
     assert plan and "store=disk0s2" in plan[0] and "chatcomputer=60000000000" in plan[0]
     assert mac.disk()["parts"] == mac_pretend.new_mac(tmp_path / "again.json", mac.volumes)["parts"]
-    assert "fake-claude" not in mac.log() and "addPartition" not in mac.log()
+    assert "addPartition" not in mac.log()
 
 
 CRASHING_INSTALLER = f"{sys.executable} {TESTS}/mac_fake_installer.py --pretend-mac --crash"
-ANSWERS_TO_THE_INSTALLER = ["1", "y", TOKEN, "y", "", "correct horse", "y"]
+ANSWERS_TO_THE_INSTALLER = ["1", "y", "", "correct horse", "y"]
 
 
 @needs_tools
@@ -274,7 +265,7 @@ def test_macs_chatcomputer_cant_start_on_are_turned_away(tmp_path, chip, words):
     mac = PretendMac(tmp_path, chip=chip)
     r = mac.run(["1"])
     assert r.returncode == 1 and words in r.stdout
-    assert "addPartition" not in mac.log() and "fake-claude" not in mac.log()
+    assert "addPartition" not in mac.log()
 
 
 def test_old_macos_and_non_admins_are_turned_away(tmp_path):
@@ -298,7 +289,7 @@ def test_too_little_space_stops_before_anything_changes(tmp_path):
     mac = PretendMac(tmp_path, free=60 * GB)       # 38 GB must stay free: 22 GB left, less than Chat Computer needs
     r = mac.run(["1", "y"])
     assert r.returncode == 1 and "Free up space in macOS" in r.stdout
-    assert "fake-claude" not in mac.log() and "addPartition" not in mac.log()
+    assert "addPartition" not in mac.log()
 
 
 @needs_tools
@@ -332,7 +323,7 @@ def test_removing_chatcomputer_gives_macos_everything_back(tmp_path):
     mac = PretendMac(tmp_path)
     made = _installed(mac)
     # Remove; copy the drive's files to macOS first; REMOVE; the Mac's password for the start-up disk.
-    r = mac.run(["5", "y", "REMOVE", "hunter2"])
+    r = mac.run(["4", "y", "REMOVE", "hunter2"])
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
     calls = mac.log()
     # macOS is the start-up disk again before anything is deleted, then Chat Computer's pieces go, then macOS grows.
@@ -357,13 +348,13 @@ def test_space_left_after_a_removal_goes_back_to_macos_on_the_next_run(tmp_path)
     st = mac.disk()
     st["resize_fails"] = 1                                   # macOS's partition can't grow the first time
     mac.state.write_text(json.dumps(st))
-    r = mac.run(["5", "n", "REMOVE", "hunter2"])
+    r = mac.run(["4", "n", "REMOVE", "hunter2"])
     assert r.returncode == 0 and "couldn't grow" in r.stdout, r.stdout[-2000:]
     assert mac.disk()["parts"][1]["size"] == 400 * GB
-    r = mac.run(["5", "y"])                                  # again: Chat Computer is gone, the space comes back
+    r = mac.run(["4", "y"])                                  # again: Chat Computer is gone, the space comes back
     assert r.returncode == 0 and "free space is right after macOS's partition" in r.stdout, r.stdout[-2000:]
     assert mac.disk()["parts"][1]["size"] == 494 * GB
-    r = mac.run(["5"])
+    r = mac.run(["4"])
     assert r.returncode == 0 and "isn't installed on this Mac. Nothing was changed." in r.stdout
 
 
@@ -371,7 +362,7 @@ def test_space_left_after_a_removal_goes_back_to_macos_on_the_next_run(tmp_path)
 def test_removing_needs_the_typed_word(tmp_path):
     mac = PretendMac(tmp_path)
     _installed(mac)
-    r = mac.run(["5", "n", "keep it"])
+    r = mac.run(["4", "n", "keep it"])
     assert r.returncode == 0 and "Nothing was changed" in r.stdout
     assert "deleteContainer" not in mac.log() and "eraseVolume" not in mac.log()
 
@@ -390,22 +381,10 @@ def test_sending_more_files(tmp_path):
 
 
 @needs_tools
-def test_signing_in_again_leaves_the_sign_in_for_chatcomputer(tmp_path):
-    mac = PretendMac(tmp_path)
-    _installed(mac)
-    r = mac.run(["3", TOKEN, "y"])
-    assert r.returncode == 0, r.stdout + r.stderr
-    drop = mac.volumes / "ChatComp/.chatcomputer"
-    assert (drop / "claude_token").read_text().strip() == TOKEN
-    assert stat.S_IMODE((drop / "claude_token").stat().st_mode) == 0o600
-    assert json.loads((drop / "claude_login.json").read_text())["claudeAiOauth"]
-
-
-@needs_tools
 def test_choosing_what_starts(tmp_path):
     mac = PretendMac(tmp_path)
     _installed(mac)
-    r = mac.run(["4", "1", "hunter2"])
+    r = mac.run(["3", "1", "hunter2"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "bless --setBoot --device /dev/disk5s1" in mac.log()        # Chat Computer's start-up volume
 
@@ -462,8 +441,6 @@ def _first_start(tmp_path, setup_env=None, app=True):
     (esp / "EFI/fedora").mkdir(parents=True)
     (esp / "EFI/fedora/grub.cfg").write_text("Chat Computer first start\n")
     (p / "fedora-grub.cfg").write_text("Fedora's own\n")
-    (p / "secrets/claude_token").write_text(TOKEN + "\n")
-    (p / "secrets/claude_login.json").write_text('{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}}\n')
     (p / "settings.json").write_text('{"user_name": "Ren Shu"}\n')
     values = {"USER_NAME": "rensh", "REAL_NAME": "Ren Shu", "RECOVERY_PASSWORD": "abcd-efgh-jkmn-pqrs",
               "TIMEZONE": "Asia/Singapore", "INSTALL_ID": "0123456789abcdef01234567",
@@ -506,9 +483,7 @@ def test_first_start_on_the_mac(tmp_path):
     assert stat.S_IMODE(wifi.stat().st_mode) == 0o600
     assert (root / "opt/chatcomputer/app/chatcomputer/__init__.py").exists()
     h = root / "home/rensh/ChatComputer"
-    assert (h / "secrets/claude_token").read_text().strip() == TOKEN
-    assert stat.S_IMODE((h / "secrets/claude_token").stat().st_mode) == 0o600
-    assert "refreshToken" in (h / ".engine/.credentials.json").read_text()
+    assert stat.S_IMODE((h / "secrets").stat().st_mode) == 0o700 and list((h / "secrets").iterdir()) == []
     assert (root / "home/rensh/Mac").is_dir()
     assert (root / "etc/chatcomputer/install-user").read_text() == "rensh\n"
     assert (root / "etc/chatcomputer/mac-files-partuuid").read_text() == "4b1e2f3a-0000-4000-8000-00000000c0de\n"
@@ -521,7 +496,7 @@ def test_first_start_on_the_mac(tmp_path):
         assert os.readlink(mask) == "/dev/null", name
     assert os.readlink(root / "etc/localtime") == "../usr/share/zoneinfo/Asia/Singapore"
     assert (root / "etc/hostname").read_text() == "chatcomputer\n"
-    # Fedora's own first-start questions are off, its usual start is back, and no sign-in copies are left.
+    # Fedora's own first-start questions are off, its usual start is back, and nothing of setup's is left.
     assert not (root / "etc/reconfigSys").exists()
     assert not (root / "etc/systemd/system/multi-user.target.wants/initial-setup.service").is_symlink()
     assert (esp / "EFI/fedora/grub.cfg").read_text() == "Fedora's own\n"
@@ -539,7 +514,7 @@ def test_first_start_tries_again_then_falls_back_to_fedora(tmp_path):
     for name in ("sshd.service", "sshd.socket", "cockpit.service", "cockpit.socket"):
         assert os.readlink(root / "etc/systemd/system" / name) == "/dev/null", name   # masked before anything fails
     assert (root / "etc/reconfigSys").exists()                                       # Fedora's questions still on
-    assert (esp / "chatcomputer/setup.env").exists() and (esp / "chatcomputer/secrets/claude_token").exists()  # for the retry
+    assert (esp / "chatcomputer/setup.env").exists() and (esp / "chatcomputer/settings.json").exists()  # for the retry
     (esp / "chatcomputer/tries").write_text("2\n")
     env = dict(os.environ, PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}", CHATCOMPUTER_ESP=str(esp),
                CHATCOMPUTER_TARGET=str(root), CHATCOMPUTER_CONSOLE="/dev/null")
@@ -581,7 +556,7 @@ def test_manifest_installer_data_and_first_start_agree():
         {"name": "Boot", "type": "Linux", "size": "1073741824B", "image": "boot.img"},
         {"name": "Root", "type": "Linux", "size": "4216303616B", "expand": True, "image": "root.img"}]
     assert entry["icon"] == "chatcomputer.icns" and (MAC / "chatcomputer.icns").read_bytes()[:4] == b"icns"
-    for k in ("ASAHI_INSTALLER_SHA256", "FEDORA_PACKAGE_SHA256", "CLAUDE_WHEEL_SHA256"):
+    for k in ("ASAHI_INSTALLER_SHA256", "FEDORA_PACKAGE_SHA256"):
         assert re.fullmatch(r"[0-9a-f]{64}", m[k]), k
     assert m["ASAHI_INSTALLER_URL"].endswith(f"installer-{m['ASAHI_INSTALLER_VERSION']}.tar.gz")
     grub = (MAC / "esp/grub-firststart.cfg").read_text()

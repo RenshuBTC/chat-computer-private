@@ -1,6 +1,7 @@
 # The setup conversation, step by step (setup.ps1 runs it; tests run it with a pretend PC).
 # On a PC without Chat Computer it asks as little as it can: everything it would change is in one list at the end,
-# and nothing changes before "Go ahead?". Sign-in is one approval in the browser.
+# and nothing changes before "Go ahead?". Nothing to sign in to: Chat Computer thinks with a model on the PC itself,
+# which it downloads by itself when it first starts.
 # ASCII-only file (see Common.ps1).
 
 function Stop-Setup {
@@ -35,19 +36,14 @@ function Invoke-ChatComputerSetup {
         if ($installed) { $default = 1 }
         $mode = Read-Choice 'What would you like to do?' @(
             'Install Chat Computer on this PC',
-            'Sign Chat Computer in to Claude again (Chat Computer is already installed)',
             'Choose what starts when the PC turns on: Chat Computer or Windows',
             'Remove Chat Computer from this PC') $default
     }
     if ($mode -eq 1) {
-        Invoke-SignInAgain -WorkDir $WorkDir -PlanOnly:$PlanOnly
-        return
-    }
-    if ($mode -eq 2) {
         Invoke-StartupChoice -PlanOnly:$PlanOnly
         return
     }
-    if ($mode -eq 3) {
+    if ($mode -eq 2) {
         Remove-ChatComputer -WorkDir $WorkDir -DocumentsDir $DocumentsDir -PlanOnly:$PlanOnly
         return
     }
@@ -196,20 +192,7 @@ function Invoke-ChatComputerSetup {
     $hash = Get-Sha512Crypt -Password $recovery
     $installId = New-InstallId
 
-    # ------------------------------------------------------------- 5. Claude
-    Write-Step 'Sign in to Claude'
-    $token = ''
-    $login = $null
-    if ($PlanOnly) {
-        Write-Line '(Plan only: skipping sign-in.)'
-    } else {
-        $exe = Get-ClaudeProgram -WorkDir $WorkDir
-        $signin = Invoke-ClaudeBrowserSignIn -ClaudeExe $exe
-        $login = $signin.Login
-        $token = [string]$signin.Token
-    }
-
-    # ------------------------------------------------------------- 6. Ubuntu
+    # ------------------------------------------------------------- 5. Ubuntu
     Write-Step 'Ubuntu installer'
     $iso = $null
     if ($PlanOnly -and -not $IsoPath) {
@@ -222,13 +205,13 @@ function Invoke-ChatComputerSetup {
         }
     }
 
-    # ------------------------------------------------------------- 7. the answers file
+    # ------------------------------------------------------------- 6. the answers file
     $template = [IO.File]::ReadAllText((Join-Path $Here 'autoinstall.template.yaml'))
     $yaml = New-AutoinstallYaml -Template $template -Account $userName -RealName $realName -PasswordHash $hash `
         -TimeZone $tz -InstallId $installId -WifiSsid $wifiSsid -WifiPassword $wifiPassword -WifiAuth $wifiAuth
     $settingsJson = New-SettingsJson -UserName $realName -WindowsUser $windowsUser -TimeZone $tz
 
-    # ------------------------------------------------------------- 8. confirm
+    # ------------------------------------------------------------- 7. confirm
     Write-Step 'Ready'
     Write-Line 'This is what happens now:'
     $n = 1
@@ -261,7 +244,7 @@ function Invoke-ChatComputerSetup {
     }
     if (-not (Read-YesNo 'Go ahead?' $false)) { Stop-Setup 'Stopped at your request.' }
 
-    # ------------------------------------------------------------- 9. do it
+    # ------------------------------------------------------------- 8. do it
     # The power-on entry first: if this PC won't take one, nothing else is changed.
     $entry = $null
     try {
@@ -313,7 +296,7 @@ function Invoke-ChatComputerSetup {
                 }
             }
             Write-InstallerPayload -Root $inst.Root -RepoRoot $RepoRoot -AutoinstallYaml $yaml -SettingsJson $settingsJson `
-                -Token $token -InstallId $installId -Login $login -BitLockerKey $blKey
+                -InstallId $installId -BitLockerKey $blKey
             $esp = Get-WindowsEsp
             if (-not $esp) { throw 'Setup could not find Windows'' EFI partition.' }
             $m = Mount-EspPartition $esp
@@ -345,12 +328,10 @@ function Invoke-ChatComputerSetup {
         elseif (-not $shrunk) { $msg += ' No disks were changed.' }
         throw $msg
     }
-    $token = $null
-    $login = $null
     $blKey = $null
     Write-Good 'The installer is ready.'
 
-    # ------------------------------------------------------------- 10. recovery password and restart
+    # ------------------------------------------------------------- 9. recovery password and restart
     $docs = $DocumentsDir
     if (-not $docs) { $docs = [Environment]::GetFolderPath('MyDocuments') }
     $note = "Chat Computer recovery password`r`n`r`nAccount: " + $userName + "`r`nPassword: " + $recovery + "`r`n`r`n" +
@@ -425,32 +406,4 @@ function Undo-InstallSteps {
         }
     }
     return , $left
-}
-
-function Invoke-SignInAgain {
-    # For when Chat Computer says it isn't signed in, or to add the Claude app on the phone: sign in here and leave
-    # the new sign-in where Chat Computer looks on its next start, C:\Users\<you>\ChatComputer (claude_login.json, the
-    # full sign-in; or claude_token, a pasted sign-in code). Chat Computer takes it into its private folder and
-    # deletes the copy.
-    param([Parameter(Mandatory = $true)][string]$WorkDir, [switch]$PlanOnly)
-    Write-Step 'Sign in to Claude'
-    if ($PlanOnly) { Write-Line '(Plan only: skipping sign-in.)'; return }
-    $exe = Get-ClaudeProgram -WorkDir $WorkDir
-    $signin = Invoke-ClaudeBrowserSignIn -ClaudeExe $exe
-    $dir = Join-Path $env:USERPROFILE 'ChatComputer'
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    $file = Join-Path $dir 'claude_login.json'
-    $other = Join-Path $dir 'claude_token'
-    if (-not $signin.Login) { $file, $other = $other, $file }
-    # Only the new sign-in waits there: an older one of the other kind would be taken too.
-    Remove-Item -LiteralPath $other -Force -ErrorAction SilentlyContinue
-    if ($signin.Login) {
-        Write-TextFileLf -Path $file -Text $signin.Login
-    } else {
-        Write-TextFileLf -Path $file -Text ([string]$signin.Token + "`n")
-    }
-    $signin = $null
-    Write-Good 'Done. Restart into Chat Computer; it picks up the new sign-in when it starts.'
-    Write-Line ('If Chat Computer still says it is not signed in, Windows'' Fast Startup may be keeping the drive locked:')
-    Write-Line ('shut Windows down with Shift held on "Shut down", then start Chat Computer. The sign-in waits in ' + $file + '.')
 }

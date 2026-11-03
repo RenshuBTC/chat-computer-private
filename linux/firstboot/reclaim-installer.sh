@@ -8,7 +8,7 @@
 # partition, this:
 #   1. finds that partition: vfat, labelled CHATCOMP, with the mark for this install's id
 #      (/etc/chatcomputer/install-id), and neither the partition Chat Computer runs from nor an EFI partition;
-#   2. blanks the Claude sign-in it carried, in place, then deletes the partition;
+#   2. blanks the secrets it carried (Chat Computer's BitLocker key), in place, then deletes the partition;
 #   3. if it sat right after Chat Computer's partition, grows that partition and its file system into the space;
 #   4. deletes \EFI\chatcomputer-setup and the power-on entries that start it;
 #   5. notes that it's done (/var/lib/chatcomputer/installer-reclaimed), so it never runs again.

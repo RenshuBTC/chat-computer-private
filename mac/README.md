@@ -7,8 +7,8 @@ downloads, checks and runs. How to use it is in `../README.md` ("Chat Computer o
 
 | File | What it is |
 |---|---|
-| `setup.sh` | Chat Computer Setup for Mac (bash 3.2, in Terminal): install, send more files, sign in again, choose what starts, remove |
-| `manifest.sh` | What setup downloads, pinned with SHA-256: the Asahi installer (v0.9.2), Fedora Asahi Remix 44 Minimal, the Claude program for signing in; and that image's kernel and file system ids |
+| `setup.sh` | Chat Computer Setup for Mac (bash 3.2, in Terminal): install, send more files, choose what starts, remove |
+| `manifest.sh` | What setup downloads, pinned with SHA-256: the Asahi installer (v0.9.2) and Fedora Asahi Remix 44 Minimal; and that image's kernel and file system ids |
 | `installer_data.json` | The Asahi installer's list of systems: Chat Computer, with Fedora's own partitions and Chat Computer's icon |
 | `drive-installer.exp` | Answers the Asahi installer's questions (expect); the person types only their Mac's password |
 | `esp/grub-firststart.cfg` | Put in place of Fedora's `EFI/fedora/grub.cfg` for one start: runs `firstboot.sh` instead of Fedora's first-start questions |

@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $Here = $PSScriptRoot
 $Win = Split-Path -Parent $Here
-foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'OwnOs')) {
+foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'OwnOs')) {
     . (Join-Path $Win ('lib/' + $lib + '.ps1'))
 }
 
@@ -125,15 +125,9 @@ $net = New-NetworkYaml -WifiSsid 'Home "5G"' -WifiPassword 'secret' -WifiAuth 'W
 Assert-True ($net.Contains('key-management: sae')) 'wpa3 uses sae'
 Assert-True (-not (New-NetworkYaml).Contains('wifis')) 'no wifi section without a network'
 
-# ------------------------------------------------------------------ Claude token
-$tok = 'sk-ant-oat01-' + ('Ab9_-' * 20)
-Assert-True (Test-ClaudeToken $tok) 'token accepted'
-Assert-Equal $tok (ConvertTo-CleanToken ('  "' + $tok.Substring(0, 50) + "`r`n" + $tok.Substring(50) + '" ')) 'wrapped paste cleaned'
-Assert-True (-not (Test-ClaudeToken 'sk-ant-oat01-short')) 'short token rejected'
-Assert-True (-not (Test-ClaudeToken 'hello')) 'junk rejected'
-
-# ------------------------------------------------------------------ a sign-in code pasted over several lines
-# Claude Code wraps the code with real line breaks; the rest of a paste is already waiting in the console.
+# ------------------------------------------------------------------ a key pasted over several lines
+# A long key copied from a page that wraps it; the rest of a paste is already waiting in the console.
+$key = 'sk-ant-api03-' + ('Ab9_-' * 20)
 $origReadSecret = ${function:Read-Secret}
 $origReadSecretLine = ${function:Read-SecretLine}
 $origInputWaiting = ${function:Test-InputWaiting}
@@ -142,118 +136,16 @@ $Script:PasteIndex = 0
 ${function:Read-Secret} = { param($Prompt) $Script:PasteIndex = 1; return $Script:PasteLines[0] }
 ${function:Read-SecretLine} = { $v = $Script:PasteLines[$Script:PasteIndex]; $Script:PasteIndex++; return $v }
 ${function:Test-InputWaiting} = { return ($Script:PasteIndex -lt $Script:PasteLines.Count) }
-$Script:PasteLines = @($tok.Substring(0, 70), $tok.Substring(70))
-Assert-Equal $tok (ConvertTo-CleanToken (Read-PastedSecret 'Paste' -SettleMs 1)) 'code pasted over two lines is read whole'
-$Script:PasteLines = @($tok.Substring(0, 40), $tok.Substring(40, 40), $tok.Substring(80), '')
-Assert-Equal $tok (ConvertTo-CleanToken (Read-PastedSecret 'Paste' -SettleMs 1)) 'three lines, then the Enter after them'
-$Script:PasteLines = @($tok)
-Assert-Equal $tok (ConvertTo-CleanToken (Read-PastedSecret 'Paste' -SettleMs 1)) 'code on one line'
+$Script:PasteLines = @($key.Substring(0, 70), $key.Substring(70))
+Assert-Equal $key (Read-PastedSecret 'Paste' -SettleMs 1) 'a key pasted over two lines is read whole'
+$Script:PasteLines = @($key.Substring(0, 40), $key.Substring(40, 40), $key.Substring(80), '')
+Assert-Equal $key (Read-PastedSecret 'Paste' -SettleMs 1) 'three lines, then the Enter after them'
+$Script:PasteLines = @($key)
+Assert-Equal $key (Read-PastedSecret 'Paste' -SettleMs 1) 'a key on one line'
 ${function:Read-Secret} = $origReadSecret
 ${function:Read-SecretLine} = $origReadSecretLine
 ${function:Test-InputWaiting} = $origInputWaiting
-
-# A sign-in code pasted instead of the browser sign-in: taken whole, asked again after a bad paste (Ctrl+V can
-# give one stray character), and Enter goes back.
-$origPasted = ${function:Read-PastedSecret}
-$Script:Pasted = New-Object System.Collections.Queue
-${function:Read-PastedSecret} = { param($Prompt, $SettleMs) return $Script:Pasted.Dequeue() }
-$Script:Pasted.Enqueue('  ' + $tok.Substring(0, 60) + "`r`n" + $tok.Substring(60) + ' ')
-Assert-Equal $tok (Read-SignInCode -ClaudeExe 'C:\x\claude.exe') 'code: a wrapped paste is read whole'
-$Script:Pasted.Enqueue([string][char]22)
-$Script:Pasted.Enqueue($tok)
-Assert-Equal $tok (Read-SignInCode -ClaudeExe 'C:\x\claude.exe') 'code: a bad paste is asked again'
-$Script:Pasted.Enqueue('')
-Assert-True ($null -eq (Read-SignInCode -ClaudeExe 'C:\x\claude.exe')) 'code: Enter goes back'
-foreach ($i in 1..3) { $Script:Pasted.Enqueue('hello') }
-Assert-True ($null -eq (Read-SignInCode -ClaudeExe 'C:\x\claude.exe')) 'code: three bad pastes go back'
-Assert-Equal 0 $Script:Pasted.Count 'code: every answer used'
-
-# The sign-in window's .cmd: Windows Terminal when it's there, the person's home folder, a throwaway
-# settings folder, "claude auth login"; ASCII with Windows line endings.
-$cmd = New-SignInWindowScript -ClaudeExe '%LOCALAPPDATA%\ChatComputer\setup\claude\claude.exe' -ConfigDir '%TEMP%\chatcomputer-signin-1\config'
-Assert-True ($cmd.Contains('start "" wt.exe -d "%~dp0." cmd /c signin.cmd here')) 'window: reopens in Windows Terminal'
-Assert-True ($cmd.Contains("cd /d `"%USERPROFILE%`"`r`n")) 'window: runs from the home folder'
-Assert-True ($cmd.Contains('set "CLAUDE_CONFIG_DIR=%TEMP%\chatcomputer-signin-1\config"')) 'window: throwaway settings folder'
-Assert-True ($cmd.Contains('"%LOCALAPPDATA%\ChatComputer\setup\claude\claude.exe" auth login --claudeai')) 'window: claude auth login'
-Assert-True ($cmd.Contains('if exist "%TEMP%\chatcomputer-signin-1\config\.credentials.json" (')) 'window: says whether it worked'
-Assert-True (-not ($cmd -replace "`r`n", '').Contains("`n") -and $cmd -notmatch '[^\x00-\x7F]') 'window: ASCII, Windows line endings'
-# Paths in it go through the variables, so a user folder with other letters works.
-$saved = @{}
-foreach ($v in 'TEMP', 'LOCALAPPDATA', 'USERPROFILE') { $saved[$v] = [Environment]::GetEnvironmentVariable($v) }
-[Environment]::SetEnvironmentVariable('TEMP', 'C:\Users\Ren Shu\AppData\Local\Temp')
-[Environment]::SetEnvironmentVariable('LOCALAPPDATA', 'C:\Users\Ren Shu\AppData\Local')
-[Environment]::SetEnvironmentVariable('USERPROFILE', 'C:\Users\Ren Shu')
-Assert-Equal '%TEMP%\chatcomputer-signin-1\config' (ConvertTo-CmdPath 'C:\Users\Ren Shu\AppData\Local\Temp\chatcomputer-signin-1\config') 'cmd path: temp'
-Assert-Equal '%LOCALAPPDATA%\ChatComputer\setup\claude\claude.exe' (ConvertTo-CmdPath 'c:\users\ren shu\appdata\local\ChatComputer\setup\claude\claude.exe') 'cmd path: local app data, any case'
-Assert-Equal 'D:\Tools\claude.exe' (ConvertTo-CmdPath 'D:\Tools\claude.exe') 'cmd path: elsewhere unchanged'
-Assert-Equal '%USERPROFILE%\TempX\a' (ConvertTo-CmdPath 'C:\Users\Ren Shu\TempX\a') 'cmd path: only whole folder names'
-foreach ($v in @($saved.Keys)) { [Environment]::SetEnvironmentVariable($v, $saved[$v]) }
-
-# Waiting for the sign-in: the saved sign-in is returned; none within the time: $null.
-$signDir = Join-Path ([IO.Path]::GetTempPath()) ('signin-test-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path (Join-Path $signDir 'config') -Force | Out-Null
-$credFile = Join-Path (Join-Path $signDir 'config') '.credentials.json'
-$fullLogin = '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt","expiresAt":1}}'
-Assert-True ($null -eq (Wait-ClaudeSignIn -File $credFile -Seconds 1 -PollMs 100)) 'wait: nothing saved, nothing returned'
-[IO.File]::WriteAllText($credFile, '{"claudeAiOauth":{"accessT')       # still being written
-Assert-True ($null -eq (Wait-ClaudeSignIn -File $credFile -Seconds 1 -PollMs 100)) 'wait: half a file is not a sign-in'
-[IO.File]::WriteAllText($credFile, $fullLogin)
-Assert-Equal $fullLogin (Wait-ClaudeSignIn -File $credFile -Seconds 5 -PollMs 100) 'wait: the saved sign-in'
-Remove-Item -LiteralPath $signDir -Recurse -Force
-
-# The whole sign-in, with the window standing in: one approval, nothing pasted; if the window can't open,
-# the person picks "Paste a sign-in code instead".
-$savedTemp = $env:TEMP
-$env:TEMP = [IO.Path]::GetTempPath().TrimEnd('\', '/')
-$origStart = ${function:Start-SignInWindow}
-$origChoice = ${function:Read-Choice}
-$Script:Opened = @()
-${function:Start-SignInWindow} = {
-    param($ClaudeExe, $Folder)
-    $Script:Opened += $Folder
-    [IO.File]::WriteAllText((Join-Path (Join-Path $Folder 'config') '.credentials.json'), '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}')
-    return $true
-}
-$r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 5
-Assert-True ((Test-ClaudeLogin $r.Login) -and $null -eq $r.Token) 'sign-in: the full sign-in, no code'
-Assert-True ($Script:Opened.Count -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $Script:Opened[0] 'config'))) 'sign-in: one window; the sign-in it saved is deleted'
-Remove-Item -LiteralPath $Script:Opened[0] -Recurse -Force
-${function:Start-SignInWindow} = { param($ClaudeExe, $Folder) return $false }
-${function:Read-Choice} = { param($Question, $Options, $Default) return 1 }
-$Script:Pasted.Enqueue($tok)
-$r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 1
-Assert-True ($null -eq $r.Login -and $r.Token -eq $tok) 'sign-in: no window, a pasted code instead'
-${function:Read-Choice} = { param($Question, $Options, $Default) return 2 }
-Assert-Throws { Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 1 } 'sign-in: stopping stops setup'
-${function:Start-SignInWindow} = $origStart
-${function:Read-Choice} = $origChoice
-${function:Read-PastedSecret} = $origPasted
-$env:TEMP = $savedTemp
-
-# The Claude program comes out of the checked download into a folder of that download's own: an earlier setup's
-# program (another version) is neither run nor kept.
-$cp = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-cp-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path (Join-Path $cp 'claude') -Force | Out-Null
-[IO.File]::WriteAllText((Join-Path $cp 'claude/claude.exe'), 'an older version')
-Add-Type -AssemblyName System.IO.Compression
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$fakeWheel = Join-Path $cp 'fake.whl'
-$zip = [IO.Compression.ZipFile]::Open($fakeWheel, [IO.Compression.ZipArchiveMode]::Create)
-try {
-    $w = New-Object IO.StreamWriter(($zip.CreateEntry('claude_agent_sdk/_bundled/claude.exe')).Open())
-    try { $w.Write('this version') } finally { $w.Dispose() }
-} finally {
-    $zip.Dispose()
-}
-$savedWheel = $Script:ClaudeWheel
-$Script:ClaudeWheel = [pscustomobject]@{ Name = 'fake.whl'; Url = 'https://example.invalid/fake.whl'; Sha256 = (Get-FileSha256 $fakeWheel)
-    Exe = 'claude_agent_sdk/_bundled/claude.exe' }
-$exe = Get-ClaudeProgram -WorkDir $cp
-Assert-Equal 'this version' ([IO.File]::ReadAllText($exe)) 'claude program: the one in this download, not an earlier one'
-Assert-True (-not (Test-Path -LiteralPath (Join-Path $cp 'claude')) -and -not (Test-Path -LiteralPath ($exe + '.part'))) 'claude program: the earlier one deleted, nothing half-written'
-Assert-Equal $exe (Get-ClaudeProgram -WorkDir $cp) 'claude program: taken out once'
-$Script:ClaudeWheel = $savedWheel
-Remove-Folder $cp
+Assert-Equal 'key sk-ant-(hidden) end' (Protect-SetupText ('key ' + $key + ' end')) 'a key is never logged'
 
 # ------------------------------------------------------------------ folders, and short (8.3) folder names
 # Remove-Folder deletes a folder with everything in it, quietly; a missing folder is fine.
@@ -264,7 +156,7 @@ $out = @(Remove-Folder $rf)
 Assert-True (-not (Test-Path -LiteralPath $rf) -and $out.Count -eq 0) 'remove folder: gone, and nothing written to the output'
 Remove-Folder $rf
 Assert-True (-not (Test-Path -LiteralPath $rf)) 'remove folder: a missing folder is fine'
-# Sign-in folders an earlier, stopped run left behind are deleted; other folders stay.
+# Sign-in folders an earlier setup's stopped run left behind are deleted; other folders stay.
 $tr = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-tr-' + [guid]::NewGuid().ToString('N'))
 foreach ($d in 'chatcomputer-signin-1/config', 'chatcomputer-signin-2', 'keep-me') { New-Item -ItemType Directory -Path (Join-Path $tr $d) -Force | Out-Null }
 [IO.File]::WriteAllText((Join-Path $tr 'chatcomputer-signin-1/config/.credentials.json'), '{}')
@@ -292,19 +184,6 @@ if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
             [IO.File]::WriteAllText((Join-Path $long 'probe/x.json'), '{}')
             try { Remove-Item -LiteralPath (Join-Path $short 'probe') -Recurse -Force -ErrorAction SilentlyContinue; Write-Host 'short path: Remove-Item -Recurse worked here' }
             catch { Write-Host ('short path: Remove-Item -Recurse failed here: ' + $_.Exception.Message) }
-            # The sign-in, start to finish, with %TEMP% spelled the short way: setup carries on.
-            $env:TEMP = $short
-            ${function:Start-SignInWindow} = {
-                param($ClaudeExe, $Folder)
-                $Script:Opened += $Folder
-                [IO.File]::WriteAllText((Join-Path (Join-Path $Folder 'config') '.credentials.json'), '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}')
-                return $true
-            }
-            $Script:Opened = @()
-            $r = $null
-            try { $r = Invoke-ClaudeBrowserSignIn -ClaudeExe 'C:\x\claude.exe' -WaitSeconds 5 } catch { Write-Host ('short path: sign-in failed: ' + $_.Exception.Message) }
-            Assert-True ($null -ne $r -and (Test-ClaudeLogin $r.Login)) 'short path: the sign-in comes through'
-            Assert-True ($Script:Opened.Count -eq 1 -and -not [IO.Directory]::Exists((Join-Path $Script:Opened[0] 'config'))) 'short path: the sign-in it saved is deleted'
             # Setup spells %TEMP% out at the start.
             $savedTmp = $env:TMP
             $env:TMP = $short
@@ -315,7 +194,6 @@ if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         } finally {
             Pop-Location
             $env:TEMP = $savedEnvTemp
-            ${function:Start-SignInWindow} = $origStart
         }
     } else {
         Write-Host 'short path: this drive makes no short names; skipped'
@@ -348,7 +226,7 @@ Assert-True ((Get-RoomAdvice -Blocker ([pscustomobject]@{ Kind = 'pagefile'; Fil
 Assert-True ((Get-RoomAdvice -Blocker ([pscustomobject]@{ Kind = 'ntfs'; File = '\$Mft::$BITMAP' }) -Made 10GB -NeedBytes 46GB) -match 'separate disk') 'advice: file system records'
 Assert-True ((Get-RoomAdvice -Blocker $null -Made 10GB -NeedBytes 46GB) -match '10 GB of room') 'advice: says what was made'
 
-# Only real answers reach the log, so a stray piece of a code typed at a yes/no question never does.
+# Only real answers reach the log, so a stray piece of a key typed at a yes/no question never does.
 $Script:SetupLogFile = [IO.Path]::GetTempFileName()
 $Script:Answers = New-Object System.Collections.Queue
 function Read-Host { param([Parameter(Position = 0)]$Prompt, [switch]$AsSecureString) return $Script:Answers.Dequeue() }
@@ -366,14 +244,7 @@ Assert-True ($logText -match 'ahead\? -> y' -and $logText -match 'do\? -> 2') 'r
 Remove-Item Function:\Read-Host
 Remove-Item -LiteralPath $Script:SetupLogFile -Force
 $Script:SetupLogFile = $null
-Assert-True (-not (Protect-SetupText ('x ' + $tok + ' y')).Contains('Ab9_')) 'token hidden in logs'
-# The full sign-in (Claude Code's .credentials.json).
-Assert-True (Test-ClaudeLogin '{"claudeAiOauth":{"accessToken":"abc","refreshToken":"def","expiresAt":1}}') 'full sign-in accepted'
-Assert-True (-not (Test-ClaudeLogin '{"claudeAiOauth":{"accessToken":"abc"}}')) 'sign-in without refresh token rejected'
-Assert-True (-not (Test-ClaudeLogin '{"claudeAiOauth":{"accessToken":"abc","refreshToken":5}}')) 'non-text token rejected'
-Assert-True (-not (Test-ClaudeLogin '{"other":1}')) 'other json rejected'
-Assert-True (-not (Test-ClaudeLogin 'not json')) 'junk sign-in rejected'
-Assert-True (-not (Test-ClaudeLogin '')) 'empty sign-in rejected'
+Assert-True (-not (Protect-SetupText ('x ' + $key + ' y')).Contains('Ab9_')) 'key hidden in logs'
 
 # ------------------------------------------------------------------ time zones and settings
 Assert-Equal 'Asia/Singapore' (Get-IanaTimeZone 'Singapore Standard Time') 'singapore'

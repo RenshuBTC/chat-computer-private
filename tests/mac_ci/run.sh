@@ -200,7 +200,6 @@ if [ -z "$dot" ]; then pass "no ._ files on the drive (extended attributes not c
 (
   EFI_DEV="$ESP" ACCOUNT="rensh" REAL_NAME='Ren "Shu"' RECOVERY="abcd-efgh-jkmn-pqrs" TZONE="Asia/Singapore"
   INSTALL_ID="0123456789abcdef01234567" WIFI_SSID='Home "5G"' WIFI_PSK="correct horse"
-  TOKEN="sk-ant-oat01-$(printf 'x%.0s' $(seq 1 90))" LOGIN='{"claudeAiOauth":{"refreshToken":"r"}}'
   write_first_start
 ) > "$OUT/2-first-start.txt" 2>&1
 rc=$?
@@ -225,8 +224,8 @@ v = {k: base64.b64decode(x).decode() for k, x in env.items()}
 assert v["USER_NAME"] == "rensh" and v["REAL_NAME"] == 'Ren "Shu"', v
 assert v["WIFI_SSID"] == 'Home "5G"' and v["WIFI_PSK"] == "correct horse" and v["TIMEZONE"] == "Asia/Singapore"
 assert v["MAC_FILES_PARTUUID"].upper() == drive.upper() and v["RECOVERY_PASSWORD"] == "abcd-efgh-jkmn-pqrs"
-assert open(p + "/secrets/claude_token").read().startswith("sk-ant-oat01-")
-assert json.load(open(p + "/secrets/claude_login.json"))["claudeAiOauth"]["refreshToken"] == "r"
+import os
+assert os.listdir(p + "/secrets") == [], os.listdir(p + "/secrets")
 assert json.load(open(p + "/settings.json"))["user_name"] == 'Ren "Shu"'
 with tarfile.open(p + "/app.tar.gz") as t:
     members = t.getmembers()
@@ -236,10 +235,10 @@ bad = [n for n in names if n.split("/")[-1].startswith("._") or "__pycache__" in
 assert not bad, bad
 xattrs = sorted({k for m in members for k in m.pax_headers if "xattr" in k.lower() or "acl" in k.lower()})
 assert not xattrs, xattrs
-print("setup.env, sign-in, settings and Chat Computer's package as Chat Computer's first start reads them;", len(names), "files")
+print("setup.env, settings and Chat Computer's package as Chat Computer's first start reads them;", len(names), "files")
 EOF
 then
-  pass "settings, sign-in and Chat Computer's package read back as the first start reads them (no ._ or xattr entries)"
+  pass "settings and Chat Computer's package read back as the first start reads them (no ._ or xattr entries)"
 else
   fail "what's on the EFI partition (see 2-first-start-check.txt)"
 fi

@@ -10,12 +10,11 @@
 #   gap63                      install into 63 GB already empty after C: (made by hand), $Mft in the way of more
 #   stuck                      install when Windows' page file stops C: from shrinking at all: stops, undoes
 #   nospace                    install when C: hasn't the free space: stops before changing anything
-#   paste                      install with a pasted sign-in code instead of the browser sign-in
 #   nodocs                     install when the recovery password can't be saved in Documents (shown instead)
 #   no-entry, install-fails    install, when the PC won't take the power-on entry / when copying fails
 #   leftover                   install, while the installer of an earlier try is still there
 #   bitlocker, bitlocker-fails install on an encrypted C: (Chat Computer gets its own key) / when a later step fails
-#   bitlocker-stop, signin     stop at the recovery-key question; sign in again
+#   bitlocker-stop             stop at the recovery-key question
 #   startup-windows, startup-once
 #   remove, remove-keep        remove Chat Computer (confirmed / not confirmed)
 #   remove-again               remove Chat Computer, keeping the downloads to install it again
@@ -23,8 +22,8 @@
 #   remove-unfinished          remove an installer that never installed
 param(
     [Parameter(Mandatory = $true)][ValidateSet('plan', 'shrink', 'disk', 'no-entry', 'install-fails', 'leftover', 'bitlocker', 'bitlocker-fails', 'bitlocker-stop',
-        'signin', 'startup-windows', 'startup-once', 'remove', 'remove-keep', 'remove-again', 'remove-both', 'remove-unfinished',
-        'blocked', 'gap63', 'stuck', 'nospace', 'paste', 'nodocs')][string]$Scenario,
+        'startup-windows', 'startup-once', 'remove', 'remove-keep', 'remove-again', 'remove-both', 'remove-unfinished',
+        'blocked', 'gap63', 'stuck', 'nospace', 'nodocs')][string]$Scenario,
     [Parameter(Mandatory = $true)][string]$OutDir
 )
 $ErrorActionPreference = 'Stop'
@@ -32,7 +31,7 @@ Set-StrictMode -Version 2.0
 $Here = $PSScriptRoot
 $Win = Split-Path -Parent $Here
 $Repo = Split-Path -Parent $Win
-foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'ClaudeSignIn', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'Flow')) {
+foreach ($lib in @('Common', 'Timezones', 'Autoinstall', 'Disks', 'Network', 'Ubuntu', 'Installer', 'Checks', 'Startup', 'Flow')) {
     . ([IO.Path]::Combine($Win, 'lib', $lib + '.ps1'))
 }
 
@@ -50,7 +49,7 @@ $env:USERNAME = 'rensh'
 $env:USERPROFILE = (Join-Path $OutDir 'Users/rensh')
 $Script:BitLocker = ($Scenario -in @('bitlocker', 'bitlocker-fails', 'bitlocker-stop'))
 # Chat Computer installed (and its installer cleaned up, except in remove-both); or only an installer, never used.
-$Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-again', 'remove-both', 'startup-windows', 'startup-once', 'signin')
+$Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-again', 'remove-both', 'startup-windows', 'startup-once')
 # A PC with just the one disk, like most laptops (no "Where should Chat Computer go?" question then).
 $Script:OneDisk = $Scenario -in @('blocked', 'gap63', 'stuck', 'nospace')
 $Script:InstallerLeft = $Scenario -in @('remove-both', 'remove-unfinished', 'leftover')
@@ -125,12 +124,12 @@ function Get-BitLockerVolume {
 # Chat Computer's own key is there, with setup's record of it.
 $env:CHATCOMPUTER_STATE_DIR = Join-Path $OutDir 'ProgramData/ChatComputer'
 $Script:Protectors = [ordered]@{ '{0b000000-0000-4000-8000-000000000001}' = 3 }
-$Script:ClaudeKeyId = '{2b000000-0000-4000-8000-0000000000c1}'
-$Script:ClaudeKey = '123456-234567-345678-456789-567890-678901-789012-890123'
+$Script:OurKeyId = '{2b000000-0000-4000-8000-0000000000c1}'
+$Script:OurKey = '123456-234567-345678-456789-567890-678901-789012-890123'
 if ($Scenario -eq 'remove') {
-    $Script:Protectors[$Script:ClaudeKeyId] = 3
+    $Script:Protectors[$Script:OurKeyId] = 3
     New-Item -ItemType Directory -Path $env:CHATCOMPUTER_STATE_DIR -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $env:CHATCOMPUTER_STATE_DIR 'bitlocker-key-id'), $Script:ClaudeKeyId + "`n")
+    [IO.File]::WriteAllText((Join-Path $env:CHATCOMPUTER_STATE_DIR 'bitlocker-key-id'), $Script:OurKeyId + "`n")
 }
 function Get-CimInstance { param([string]$Namespace, [string]$ClassName, [string]$Filter) return [pscustomobject]@{ DriveLetter = 'C:' } }
 function Invoke-CimMethod {
@@ -140,10 +139,10 @@ function Invoke-CimMethod {
     switch ($MethodName) {
         'ProtectKeyWithNumericalPassword' {
             Add-Call 'BitLocker add key'
-            $Script:Protectors[$Script:ClaudeKeyId] = 3
-            return [pscustomobject]@{ ReturnValue = 0; VolumeKeyProtectorID = $Script:ClaudeKeyId }
+            $Script:Protectors[$Script:OurKeyId] = 3
+            return [pscustomobject]@{ ReturnValue = 0; VolumeKeyProtectorID = $Script:OurKeyId }
         }
-        'GetKeyProtectorNumericalPassword' { return [pscustomobject]@{ ReturnValue = 0; NumericalPassword = $Script:ClaudeKey } }
+        'GetKeyProtectorNumericalPassword' { return [pscustomobject]@{ ReturnValue = 0; NumericalPassword = $Script:OurKey } }
         'GetKeyProtectorType' {
             if ($Script:Protectors.Contains($id)) { return [pscustomobject]@{ ReturnValue = 0; KeyProtectorType = $Script:Protectors[$id] } }
             return [pscustomobject]@{ ReturnValue = 2150694920; KeyProtectorType = 0 }     # 0x80310008: no such key
@@ -315,15 +314,6 @@ function Initialize-Disk {
 }
 function Get-TimeZone { return [pscustomobject]@{ Id = 'Singapore Standard Time' } }
 function Get-LocalUser { return [pscustomobject]@{ FullName = 'Ren Shu' } }
-function Get-ClaudeProgram { return '/fake/claude.exe' }
-function Invoke-ClaudeBrowserSignIn {
-    # One approval in the browser gives the full sign-in; in 'paste', a sign-in code was pasted instead.
-    param([string]$ClaudeExe)
-    Add-Call 'Invoke-ClaudeBrowserSignIn'
-    if ($Scenario -eq 'paste') { return [pscustomobject]@{ Login = $null; Token = ('sk-ant-oat01-' + ('x' * 90)) } }
-    return [pscustomobject]@{ Token = $null
-        Login = ('{"claudeAiOauth":{"accessToken":"' + ('a' * 40) + '","refreshToken":"' + ('r' * 40) + '","expiresAt":1}}') }
-}
 function Get-UbuntuIso {
     Add-Call 'Get-UbuntuIso'
     $iso = Join-Path $OutDir 'ubuntu-24.04.5-live-server-amd64.iso'
@@ -358,13 +348,26 @@ function Copy-IsoToInstaller {
     Copy-Item -LiteralPath (Join-Path $Script:MockTests 'data/ubuntu-24.04.5-grub.cfg') -Destination ([IO.Path]::Combine($Root, 'boot', 'grub', 'grub.cfg'))
 }
 function Invoke-Robocopy {
+    # As robocopy /XD does: a folder named alone is left out wherever it is; one given with its path, only that
+    # one. /XF: files matching a pattern are left out.
     param([string]$From, [string]$To, [string[]]$ExcludeDirs = @(), [string[]]$ExcludeFiles = @())
     Add-Call ('Invoke-Robocopy ' + (Split-Path -Leaf $From))
-    $skip = @($ExcludeDirs | ForEach-Object { Split-Path -Leaf $_ })
-    foreach ($item in Get-ChildItem -LiteralPath $From -Force) {
-        if ($skip -contains $item.Name) { continue }
-        Copy-Item -LiteralPath $item.FullName -Destination $To -Recurse -Force
+    $names = @($ExcludeDirs | Where-Object { -not (Split-Path -Parent $_) })
+    $paths = @($ExcludeDirs | Where-Object { Split-Path -Parent $_ } |
+        ForEach-Object { [IO.Path]::GetFullPath(($_ -replace '\\', [IO.Path]::DirectorySeparatorChar)).TrimEnd([IO.Path]::DirectorySeparatorChar) })
+    $copy = {
+        param([string]$Src, [string]$Dst)
+        New-Item -ItemType Directory -Path $Dst -Force | Out-Null
+        foreach ($item in Get-ChildItem -LiteralPath $Src -Force) {
+            if ($item.PSIsContainer) {
+                if ($names -contains $item.Name -or $paths -contains $item.FullName.TrimEnd([IO.Path]::DirectorySeparatorChar)) { continue }
+                & $copy $item.FullName (Join-Path $Dst $item.Name)
+            } elseif (-not @($ExcludeFiles | Where-Object { $item.Name -like $_ }).Count) {
+                Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $Dst $item.Name) -Force
+            }
+        }
     }
+    & $copy $From $To
 }
 function shutdown.exe { Add-Call ('shutdown ' + ($args -join ' ')) }
 function Suspend-BitLocker { param([string]$MountPoint, [int]$RebootCount) Add-Call ('Suspend-BitLocker ' + $MountPoint + ' ' + $RebootCount) }
@@ -419,6 +422,7 @@ if ($Script:InstallerLeft) {
 if ($Script:Installed -or $Script:InstallerLeft) {
     $w = New-Item -ItemType Directory -Path (Join-Path $OutDir 'work') -Force
     [IO.File]::WriteAllText((Join-Path $w.FullName 'ubuntu-24.04.5-live-server-amd64.iso'), 'iso')
+    # What an earlier setup (when Chat Computer thought with Claude) also left: Claude's engine and a sign-in copy.
     [IO.File]::WriteAllText((Join-Path $w.FullName 'claude_agent_sdk-0.2.167-py3-none-win_amd64.whl'), 'whl')
     $engine = New-Item -ItemType Directory -Path (Join-Path $w.FullName 'claude-139597261e6d') -Force
     [IO.File]::WriteAllText((Join-Path $engine.FullName 'claude.exe'), 'exe')
@@ -434,7 +438,7 @@ $Script:EspFailed = $false
 function Mount-EspPartition {
     param($Partition)
     Add-Call ('Mount-EspPartition ' + $Partition.DiskNumber + ' ' + $Partition.PartitionNumber)
-    if ($Scenario -eq 'bitlocker-fails' -and $Script:Protectors.Contains($Script:ClaudeKeyId) -and -not $Script:EspFailed) {
+    if ($Scenario -eq 'bitlocker-fails' -and $Script:Protectors.Contains($Script:OurKeyId) -and -not $Script:EspFailed) {
         $Script:EspFailed = $true
         throw 'Windows could not open its EFI partition: access denied.'
     }
@@ -442,7 +446,7 @@ function Mount-EspPartition {
 }
 function Dismount-EspPartition { param($Mount) Add-Call 'Dismount-EspPartition' }
 
-# The answers, in order. The first picks what to do: 1 install, 2 sign in again, 3 what starts, 4 remove.
+# The answers, in order. The first picks what to do: 1 install, 2 what starts, 3 remove.
 $Script:Answers = New-Object System.Collections.Queue
 # No menu unless Chat Computer (or an earlier installer) is already there.
 $scripted = switch ($Scenario) {
@@ -455,20 +459,18 @@ $scripted = switch ($Scenario) {
     'bitlocker' { @('y', '1', 'y', 'n') }                   # recovery key saved, then as in shrink
     'bitlocker-fails' { @('y', '1', 'y') }
     'bitlocker-stop' { @('n') }                             # recovery key not saved
-    'signin' { @('2') }                                     # (menu) sign in again
     'blocked' { @('y', 'n') }                               # one disk: go ahead, restart later
     'gap63' { @('y', 'n') }
     'stuck' { @('y') }
     'nospace' { @() }
-    'paste' { @('1', 'y', 'n') }
     'nodocs' { @('1', 'y', 'n') }
-    'startup-windows' { @('3', '2') }                        # Windows
-    'startup-once' { @('3', '3', 'n') }                      # Chat Computer once, restart later
-    'remove' { @('4', 'REMOVE', 'n') }                       # downloads deleted too
-    'remove-keep' { @('4', 'no') }
-    'remove-again' { @('4', 'REMOVE', 'y') }                 # downloads kept, to install again
-    'remove-both' { @('4', 'REMOVE', 'n') }
-    'remove-unfinished' { @('4', 'REMOVE', 'n') }
+    'startup-windows' { @('2', '2') }                        # Windows
+    'startup-once' { @('2', '3', 'n') }                      # Chat Computer once, restart later
+    'remove' { @('3', 'REMOVE', 'n') }                       # downloads deleted too
+    'remove-keep' { @('3', 'no') }
+    'remove-again' { @('3', 'REMOVE', 'y') }                 # the download kept, to install again
+    'remove-both' { @('3', 'REMOVE', 'n') }
+    'remove-unfinished' { @('3', 'REMOVE', 'n') }
 }
 foreach ($a in $scripted) { $Script:Answers.Enqueue($a) }
 function Read-Host {

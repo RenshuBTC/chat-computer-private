@@ -19,6 +19,3 @@ FEDORA_KERNEL="7.1.6-400.asahi.fc44.aarch64+16k"
 FEDORA_BOOT_UUID="65e9d770-9bc9-4b3f-9877-10347fb284e5"
 FEDORA_ROOT_UUID="9db8788b-4718-404e-a6d0-1c9694d398fd"
 
-# The official Claude program, for signing in (Anthropic's claude-agent-sdk on PyPI, Apple silicon build).
-CLAUDE_WHEEL_URL="https://files.pythonhosted.org/packages/50/09/368d0a39a32e6396cede4943e45d6b9c58f4aa5e275bca28f5d31413b397/claude_agent_sdk-0.2.167-py3-none-macosx_11_0_arm64.whl"
-CLAUDE_WHEEL_SHA256="e9f699d6f00f5f710e696a00010d5efe5ab2de21b040b4e843cbd170f01d1008"

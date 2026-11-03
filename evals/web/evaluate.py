@@ -2,9 +2,25 @@
 analysis of the scripted baseline (labels/scripted-baseline.json): does the answer (and what opened between the
 sidebars) do what a first-time visitor asked, or say honestly what this page can't do?
 
-    python -m evals.web.evaluate RESULTS.json [--labels evals/web/labels/scripted-baseline.json]
+And checks of the failures the error analysis of 4 November 2026 found (labels/scripted-v3.json, the written
+answers; labels/web-model-v1.json, Chat Computer's model in the browser), each pass/fail for every case:
 
-With --labels it says where the checks and the hand labels disagree (how far to trust the checks)."""
+  catch_all    - "I can't answer that yet" (or "I can't <do that> yet") where the page could have answered, or a
+                 model was there to (the cases only a model can answer are left out when no model was there)
+  stale_step   - the way to real answers given as the app's model only ("Use this computer's model"), on the website
+  empty        - an answer with no words (the model's turn ended on tool calls)
+  round_cap    - the model went round its tools as often as it may (8 rounds), or asked for the same tool with the same
+                 input twice in one turn
+  bad_input    - a tool told the model its input was wrong ("That box isn't...", "There's no tool called...")
+  stray_tool   - a tool the words asked for nothing of: the weather, a map, a timer, YouTube or closing, with none of
+                 their words in the question (weather for "hello", a timer for "play music")
+  time_stamp   - the model answered the time stamp's place rather than the question: Singapore (the visitor's time
+                 zone) in a tool call or the answer, unasked and unneeded
+
+    python -m evals.web.evaluate RESULTS.json [--labels evals/web/labels/scripted-v3.json]
+
+With --labels it says where the checks and the hand labels disagree (how far to trust the checks): the true
+positive rate (fails the checks catch) and true negative rate (passes they leave alone), as the evals FAQ has it."""
 from __future__ import annotations
 
 import argparse
@@ -154,7 +170,7 @@ DONE: dict[str, Callable[[R], bool]] = {
     "are-you-claude": lambda r: said(r, r"written in advance|scripted|qwen|own model|this computer's model"),
     "who-made": lambda r: said(r, r"independent") and said(r, r"qwen|own engine|open model"),
     "anthropic": lambda r: said(r, r"\bno\b|independent") and said(r, r"qwen|open model|own engine"),
-    "cant-do": lambda r: said(r, r"can't|cannot|only|not") and said(r, r"this page|here|demo"),
+    "cant-do": lambda r: said(r, r"can't|cannot|only|not") and said(r, r"this page|here|demo|written in advance|in this browser"),
     "control-my-pc": lambda r: said(r, r"can't|cannot|no\b|not from") and said(r, r"made up|this page|website|browser"),
     "real-or-fake": lambda r: said(r, r"made up|not real|aren't real|pretend|examples|made-up"),
     "gibberish": lambda r: said(r, r"try|didn't (catch|get)|not sure"),
@@ -178,8 +194,82 @@ DONE: dict[str, Callable[[R], bool]] = {
     "headlines": lambda r: online(r) and (shown(r, r"in the news") or did(r, r"news")),
     "news-yesterday": lambda r: online(r) and (shown(r, r"in the news") or did(r, r"news")),
     "why-no-internet": lambda r: online(r) and said(r, r"\bi can\b|look (things|it) up|wikipedia|\bsearch"),
-    "tell-me-more": lambda r: online(r) and turn(r, 0, r"haze|smoke|fires?\b|pollution") and turn(r, 1, r"1997|2015|2019|2006"),
+    "tell-me-more": lambda r: online(r) and turn(r, 0, r"haze|smoke|fires?\b|pollution") and turn(r, 1, r"1997|2015|2019|2006")
+                              and not turn(r, 0, r"air quality index"),
+    # Which AI answers, and choosing it (the spark beside +: your own AI, its model and effort; / for this browser's).
+    "which-model-now": lambda r: said(r, r"written in advance|qwen|own model|in this browser") and not catch_all(r),
+    "use-chatgpt": lambda r: said(r, r"openai|api key") and said(r, r"spark|openrouter") and not catch_all(r),
+    "use-claude": lambda r: said(r, r"anthropic|api key") and said(r, r"spark|openrouter") and not catch_all(r),
+    "change-model": lambda r: said(r, r"spark") and said(r, r"\bmodels?\b") and not catch_all(r),
+    "think-harder": lambda r: said(r, r"effort|how hard|think") and not catch_all(r)
+                              and not said(r, r"\bI('ll| will) (think|try) (harder|more)"),
+    "smarter-ai": lambda r: said(r, r"spark|claude|chatgpt|gemini|openrouter") and not catch_all(r),
+    "run-in-browser": lambda r: said(r, r"run my model in this browser|in this browser") and not catch_all(r),
+    "connect-gmail": lambda r: said(r, r"gmail") and said(r, r"\bapp\b|\+ in messages|can't connect") and not shown(r, r"jane lim"),
+    "call-me": lambda r: said(r, r"\bren\b") and did(r, r"name"),
+    "i-live-tokyo": lambda r: said(r, r"tokyo") and (did(r, r"place") or said(r, r"got it|noted|kept|i'll remember")),
+    "weather-follow": lambda r: turn(r, 0, r"paris") and turn(r, 1, r"tomorrow") and turn(r, 1, r"paris") and turn(r, 1, r"°|degrees"),
+    "timer-words": lambda r: shown(r, r"15:00") and said(r, r"\b15\b|fifteen"),
+    "timer-cancel": lambda r: turn(r, 0, r"\b3\b|three") and turn(r, 1, r"closed|cancel|gone|stopped|removed") and not r.get("open"),
 }
+
+# --- The failures of 4 November 2026, as checks over every case.
+CATCH_ALL = r"\bI can't (answer that|[a-z ]{3,30}) yet\b"
+# Only a model can answer these: without one, saying so (and how to get one) is the page's best.
+NEEDS_AI = {"recipe", "write-email", "poem", "translate", "trip-plan", "advice", "code", "tell-me-more", "haze-trace"}
+
+
+def catch_all(r: R) -> bool:
+    return any(re.search(CATCH_ALL, a, re.I) for a in answers(r))
+
+
+def rounds(r: R) -> list[dict]:
+    return r.get("rounds") or []
+
+
+def tool_calls(r: R) -> list[tuple[str, str]]:
+    out = []
+    for x in rounds(r):
+        for c in ((x.get("out") or {}).get("tool_calls") or []):
+            f = c.get("function") or {}
+            out.append((f.get("name") or "", f.get("arguments") or ""))
+    return out
+
+
+def tool_results(r: R) -> list[str]:
+    return [m.get("content") or "" for m in (r.get("messages") or []) if m.get("role") == "tool"]
+
+
+# The words that ask for each tool (any of the conversation's turns).
+TOOL_WORDS = {
+    "weather": r"weather|rain|umbrella|forecast|temperature|hot|cold|sunny|degrees|jacket|outside",
+    "show_map": r"\bmaps?\b|where is|where's|directions|get (from|to)|how far|route",
+    "make_timer": r"timer|countdown|minutes?|\bmin\b|remind|tell me when|eggs?|alarm",
+    "youtube_search": r"youtube|videos?|music|songs?|play|watch|lofi|jazz|piano",
+    "close": r"close|stop|cancel|hide|turn (it )?off|get rid",
+}
+
+
+def general(r: R) -> dict[str, bool]:
+    """Each general check: True where it passes (the failure isn't there)."""
+    asked = " ".join(r.get("turns") or [r.get("query") or ""])
+    calls = tool_calls(r)
+    names = [n for n, _ in calls]
+    said_all = " ".join(answers(r))
+    stray = [n for n in names if n in TOOL_WORDS and not re.search(TOOL_WORDS[n], asked, re.I)]
+    singapore_unasked = not re.search(r"singapore|weather|rain|umbrella|haze|air|pm|prime minister|population|marina|orchard|"
+                                      r"news|headlines|happen|time|day|date", asked, re.I)
+    return {
+        "catch_all": not catch_all(r) or (r.get("model") != "web" and r["id"] in NEEDS_AI),
+        "stale_step": not re.search(r"use this computer's model", said_all, re.I) or
+                      re.search(r"run my model in this browser|spark", said_all, re.I) is not None,
+        "empty": all(re.search(r"\S", a) for a in answers(r)) and bool(answers(r)),
+        "round_cap": len(rounds(r)) < 8 and len(set(calls)) == len(calls),
+        "bad_input": not any(re.search(r"^That (box|isn't)|isn't a|There's no tool called", t) for t in tool_results(r)),
+        "stray_tool": not stray,
+        "time_stamp": not (singapore_unasked and (re.search(r"singapore", said_all, re.I) or
+                                                  any(re.search(r"singapore", a, re.I) for _, a in calls))),
+    }
 
 
 def evaluate(results: list[R]) -> dict[str, dict[str, Any]]:
@@ -187,9 +277,20 @@ def evaluate(results: list[R]) -> dict[str, dict[str, Any]]:
     for r in results:
         cid = r["id"]
         ok = bool(DONE[cid](r)) and (cid in DEAD_END_OK or not dead_end(r)) if cid in DONE else None
-        out[cid] = {"pass": ok, "errors": bool(r.get("errors")),
+        out[cid] = {"pass": ok, "errors": bool(r.get("errors")), "general": general(r) if "answers" in r else {},
                     "first_ms": r.get("first_ms"), "total_ms": r.get("total_ms")}
     return out
+
+
+def agreement(pred: dict[str, bool], labels: dict[str, Any]) -> str:
+    """How a check's verdicts agree with the hand labels' pass/fail: TPR, the share of labelled failures it fails; TNR,
+    the share of labelled passes it passes."""
+    both = [k for k in pred if k in labels and labels[k].get("pass") is not None]
+    fails = [k for k in both if not labels[k]["pass"]]
+    passes = [k for k in both if labels[k]["pass"]]
+    tp = sum(1 for k in fails if not pred[k])
+    tn = sum(1 for k in passes if pred[k])
+    return (f"TPR {tp}/{len(fails)} ({tp / max(1, len(fails)):.0%}), TNR {tn}/{len(passes)} ({tn / max(1, len(passes)):.0%})")
 
 
 def report(res: dict[str, dict[str, Any]], labels: dict[str, Any] | None = None) -> str:
@@ -210,10 +311,23 @@ def report(res: dict[str, dict[str, Any]], labels: dict[str, Any] | None = None)
     firsts = sorted(v["first_ms"] for v in res.values() if v.get("first_ms") is not None)
     if firsts:
         lines.append(f"first words after: median {firsts[len(firsts) // 2] / 1000:.1f} s, longest {firsts[-1] / 1000:.1f} s")
+    gen = [k for k, v in res.items() if v.get("general")]
+    if gen:
+        names = list(res[gen[0]]["general"])
+        lines.append("general checks (cases failing each): " + ", ".join(
+            f"{n} {sum(1 for k in gen if not res[k]['general'][n])}" for n in names))
+        for n in names:
+            bad = [k for k in gen if not res[k]["general"][n]]
+            if bad:
+                lines.append(f"  {n}: {', '.join(bad)}")
     if labels:
         both = [k for k in scored if k in labels and labels[k].get("pass") is not None]
         dis = [k for k in both if labels[k]["pass"] != res[k]["pass"]]
         lines.append(f"checks vs hand labels: {len(both) - len(dis)}/{len(both)} agree" + (f"; disagree: {dis}" if dis else ""))
+        lines.append("  the case checks: " + agreement({k: res[k]["pass"] for k in scored}, labels))
+        if gen:
+            every = {k: res[k]["pass"] is not False and all(res[k]["general"].values()) for k in gen}
+            lines.append("  the case checks and the general ones together: " + agreement(every, labels))
     return "\n".join(lines)
 
 

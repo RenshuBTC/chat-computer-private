@@ -247,3 +247,27 @@ def test_pictures_are_said_to_be_pictures(clean_env):
             await rig.brain.close()
             rig.mock.stop()
     asyncio.run(go())
+
+
+@pytest.mark.timeout(60)
+def test_the_same_tool_asked_for_again_and_again_stops(clean_env):
+    """A small model can ask for the same tool, with the same input, round after round (evals/os: Qwen3.5 0.8B showed
+    the same document until the turn ran out of time). Asked again, it isn't run again: its answer is given back with
+    a word to answer now; a step asking for nothing new ends the turn, saying so."""
+    async def go():
+        rig = Rig(clean_env, [])
+        (clean_env / "notes.txt").write_text("one\ntwo\n")
+        same = call("Bash", command="wc -l notes.txt", description="Count the lines")
+        rig.mock.rules.append(lambda req: [same])          # every time, whatever it's told
+        try:
+            res = await rig.say("count the lines in my notes")
+            ran = [e for e in rig.events if e[0] == "tool"]
+            assert len(ran) == 1                           # run once, not again and again
+            assert not res.ok and res.error_kind == "circles"
+            told = tool_results(rig.mock.requests[1])
+            assert told and "2 notes.txt" in told[-1]
+            assert len(rig.mock.requests) == 2             # the second ask was the same: no third
+        finally:
+            await rig.brain.close()
+            rig.mock.stop()
+    asyncio.run(go())

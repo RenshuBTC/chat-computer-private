@@ -54,7 +54,7 @@ class BrainEvents:
 class TurnResult:
     ok: bool = True
     interrupted: bool = False
-    error_kind: str | None = None      # model_not_ready | engine | other
+    error_kind: str | None = None      # model_not_ready | engine | circles | other
     error_text: str | None = None
     text: str = ""
     tools: list[str] = field(default_factory=list)
@@ -348,15 +348,32 @@ class Brain:
             conv = self._conversation()
             conv.messages.append({"role": "user", "content": text})
             port = await self.model.ensure()
+            # What each tool gave back this turn, by its name and input: asked for again with the same input, it isn't
+            # run again (its answer is given back, with a word to answer now); a step that asks for nothing new is
+            # going round in circles, and the turn stops there. (evals/os: Qwen3.5 0.8B showed the same document
+            # again and again until the turn ran out of time.)
+            given: dict[str, str] = {}
             for _ in range(MOST_STEPS):
                 answer = await self._write(t, port, conv)
                 conv.messages.append(answer)
                 calls = answer.get("tool_calls") or []
                 if not calls:
                     break
-                for call in calls:
-                    conv.messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
-                                          "content": await self._call(t, call)})
+                keys = [str((c.get("function") or {}).get("name") or "") + " " + str((c.get("function") or {}).get("arguments") or "")
+                        for c in calls]
+                if all(k in given for k in keys):
+                    conv.messages.pop()
+                    if not t.res.text.strip():
+                        t.res.ok, t.res.error_kind = False, "circles"
+                        t.res.error_text = "it asked for the same thing again and again, so it was stopped"
+                    break
+                for call, key in zip(calls, keys):
+                    if key in given:
+                        content = ("Already done, with the same input, earlier in this turn; it said: " + given[key][:400] +
+                                   " Don't ask for it again: answer them now.")
+                    else:
+                        content = given[key] = await self._call(t, call)
+                    conv.messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": content})
                 conv.save()
             else:
                 t.res.ok, t.res.error_kind = False, "other"
@@ -469,4 +486,6 @@ def friendly_error(res: TurnResult, progress: str | None = None) -> str:
                 ". Until then I can only help with Wi-Fi, volume and restarting.")
     if k == "engine":
         return "My model stopped working for a moment. Please say that again."
+    if k == "circles":
+        return "I went round in circles there and stopped. Could you say it another way?"
     return "Something went wrong on my side. Please say that again."

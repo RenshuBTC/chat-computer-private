@@ -404,9 +404,11 @@ def test_the_demo_works_in_a_browser():
                                 "Step 5 Preview @stepfun.ai.ico", "Ling 3.1 Flash @ant-ling.com.ico", "Mistral Large 4.0 @mistral.ai.ico",
                                 "Sign out of OpenRouter"]
     # Chat Computer's model in this browser (its engine standing in): offered with "/" and when an answer needs a
-    # model; chosen, what it is and what it costs said first; its download said as it goes; its short instructions
-    # (the same every visit) and its few tools read ahead while it gets ready; then it answers, its tools run; a later
-    # visit starts it from the browser's copy at once, nothing downloaded; stopped; removed (nothing kept of it).
+    # model; chosen, what it is and what it costs said first; its download said as it goes; its few lines of
+    # instructions (the same every visit; no tools) read ahead while it gets ready; then the page answers what it can
+    # itself (a timer: the model isn't asked) and the model the rest, with what was said before and no time stamp (the
+    # evals: Qwen3.5 0.8B took the stamp for the question, and called tools at random); a later visit starts it from
+    # the browser's copy at once, nothing downloaded; stopped; removed (nothing kept of it).
     assert res["web_slash"][:3] == ["Use this computer's model", "Run my model in this browser", "Connect AirPods"]
     assert res["web_offer"] == ("I can't write a poem yet. My model can run in this browser: type / and choose Run my model in this "
                                 "browser (free; 1.8 GB, once). Or press the spark beside + to use an AI you already have.")
@@ -415,14 +417,15 @@ def test_the_demo_works_in_a_browser():
     assert "It downloads 1.8 GB once, from Qwen's own repository" in form["text"] and "nothing you type leaves this browser" in form["text"]
     assert res["web_getting"].startswith("Getting my model ready: downloading it (0.9 of 1.8 GB, 50%)"), res["web_getting"]
     assert "Getting my model ready" in res["web_getting_slash"]
-    ahead, first, second = res["web_asked"]
-    tools = sorted(["web_search", "weather", "show_map", "youtube_search", "make_timer", "close"])
+    assert res["web_timer_asked"] == 0
+    ahead, first = res["web_asked"]
     assert ahead["kind"] == "ahead" and ahead["roles"] == ["system"] and ahead["think"] is False and ahead["max"] == 1024
-    assert sorted(ahead["tools"]) == tools
-    assert ahead["system"].startswith("You are Chat Computer: you run a whole computer for the person. Right now you're on")
-    assert first["kind"] == "chat" and first["system"] == ahead["system"] and first["tools"] == ahead["tools"]
-    assert first["roles"] == ["system", "user"] and first["last"].endswith("a five minute timer")
-    assert second["roles"] == ["system", "user", "assistant", "tool"] and second["last"].startswith("A 5-minute timer is on the screen")
+    assert ahead["tools"] == [] and first["tools"] == []
+    assert ahead["system"].startswith("You are Chat Computer's own model, Qwen3.5 0.8B, answering on Chat Computer's website")
+    assert first["kind"] == "chat" and first["system"] == ahead["system"]
+    assert first["roles"] == ["system", "user", "assistant", "user"], first
+    assert first["said"][0] == "a five minute timer" and first["said"][1].startswith("A 5-minute timer, on the screen")
+    assert first["last"] == "write a short poem about the timer"
     assert res["web_on_slash"][:3] == ["Use this computer's model", "Stop using my model in this browser", "Remove my model from this browser"]
     assert res["web_log"] == ["download"]
     assert res["web_later"]["log"] == ["load"] and res["web_later_slash"][1] == "Stop using my model in this browser"

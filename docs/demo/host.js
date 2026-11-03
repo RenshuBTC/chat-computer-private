@@ -842,8 +842,7 @@
   var TRY = APP ? "Try “play some piano music”, “show me a map of Tokyo”, “weather”, “open bbc.com” or “set a timer for " +
     "5 minutes”. Type / and a name to find a file on this computer." : "Try “play some piano music”, “show me a map of Tokyo”, “weather in London”, " +
             "“set a timer for 5 minutes” or “what did Jane say?”. Type / to search the files.";
-  var REAL = APP ? "My model comes with this app, and runs on this computer." : "Where the Chat Computer app runs on this " +
-    "computer, type / and choose Use this computer's model, and its model answers for real.";
+  var REAL = "My model comes with this app, and runs on this computer.";      // (the app's; the website's: nextStep())
   function map(b, name) {
     show({ src: "https://www.openstreetmap.org/export/embed.html?bbox=" + b.join("%2C") + "&layer=mapnik",
            title: name ? "Map of " + name : "Map" });
@@ -1035,8 +1034,24 @@
               67: "freezing rain", 71: "light snow", 73: "snow", 75: "heavy snow", 77: "snow", 80: "showers", 81: "showers",
               82: "heavy showers", 85: "snow showers", 86: "snow showers", 95: "thunderstorms", 96: "thunderstorms with hail",
               99: "thunderstorms with hail" };
+  var lastWeather = null;                 // the weather asked for last: {place, tomorrow}, for "and tomorrow?"
+  // ("and tomorrow?", "what about Tokyo?", "and in London tomorrow?": a day, a place, or both.)
+  var WEATHER_AGAIN = /^\s*(?:(?:and|ok(?:ay)?|so|but)[,\s]+)?(?:(?:what|how) about|and|also)?\s*(?:(?:in|for|at)\s+)?(.*?)\s*(?:then|instead|too)?\s*[?.!]*\s*$/i;
+  var DAYS = /^(?:(?:for |on )?(tomorrow|today|tonight|the day after(?: tomorrow)?))$|^(.+?)\s+(tomorrow|today|tonight)$|^(tomorrow|today|tonight)\s+(?:in|for|at)\s+(.+)$/i;
+  function weatherAgain(t) {
+    if (!lastWeather || t.length > 40 || !/^\s*((and|ok(ay)?|so|but)[,\s]+)?((what|how) about|and|also|in|for|at|tomorrow|today|tonight)\b/i.test(t)) return null;
+    var rest = WEATHER_AGAIN.exec(t)[1], d = DAYS.exec(rest), day = lastWeather.tomorrow, where = lastWeather.place;
+    if (d) {
+      var w = d[1] || d[3] || d[4];
+      day = /tomorrow|day after/i.test(w);
+      if (d[2] || d[5]) where = d[2] || d[5];
+    } else if (rest && /^[\p{L}][\p{L}\p{M}' .-]{1,40}$/u.test(rest) && !/\b(it|that|this|you|me|music|news|timer|map)\b/i.test(rest)) where = rest;
+    else return null;
+    return weather("weather" + (where ? " in " + where : "") + (day ? " tomorrow" : ""));
+  }
   function weather(t) {
     var asked = placeIn(t), where = asked || homeName() || hereName() || "Singapore", tomorrow = /\btomorrow\b/i.test(t);
+    lastWeather = { place: asked || "", tomorrow: tomorrow };
     var home = !asked && store(PLACE_KEY);           // where you live: found on the map when you said
     return { later: function () {
       return (home && typeof home.lat === "number" ? Promise.resolve({ name: home.place, lat: home.lat, lon: home.lon }) : place_(where)).then(function (p) {
@@ -1121,7 +1136,10 @@
       var name = "Portal:Current_events/" + d.getUTCFullYear() + "_" + MONTHS[d.getUTCMonth()] + "_" + d.getUTCDate();
       return getJSON(WIKI + "action=parse&prop=text&disablelimitreport=1&disableeditsection=1&page=" + encodeURIComponent(name))
         .then(function (j) { return stories(j.parse && j.parse.text, d, name); }, function () { return []; });
-    })).then(function (two) { return two[0].concat(two[1]); });
+    })).then(function (two) {
+      var seen = {};
+      return two[0].concat(two[1]).filter(function (x) { var k = x.text.toLowerCase(); if (seen[k]) return false; seen[k] = true; return true; });
+    });
   }
   // A day's stories, from its page (read here, not shown): each with its topics ("Hurricane Melissa: ...") and sources.
   function stories(html, d, name) {
@@ -1273,7 +1291,7 @@
   // the name you give it. "Call me Ren" or "my name is Ren" sets it (the model, with set_name); "what's my name?" says
   // it; "forget my name" forgets it. "Call me back" isn't a name.
   var NAME_KEY = "chatcomputer-demo-name";
-  var NAME_IS = /^\s*(?:(?:please|pls|just|you can|you may|from now on,?)\s+)*(?:call me|my name(?:'s| is))\s+([\p{L}][\p{L}\p{M}'’.-]*(?:\s+[\p{L}][\p{L}\p{M}'’.-]*){0,2}?)\s*(?:,?\s*(?:please|pls|thanks|thank you))?\s*[.!]*\s*$/iu;
+  var NAME_IS = /^\s*(?:(?:please|pls|just|you can|you may|from now on,?)\s+)*(?:call me|my name(?:'s| is))\s+([\p{L}][\p{L}\p{M}'’.-]*(?:\s+[\p{L}][\p{L}\p{M}'’.-]*){0,2}?)\s*(?:,?\s*(?:please|pls|thanks|thank you|from now on|from now|from today|going forward|instead|in future))*\s*[.!]*\s*$/iu;
   var NOT_A_NAME = /^(back|later|tomorrow|tonight|today|now|soon|again|anytime|whenever|maybe|sometime|sometimes|asap|please|a|an|the|when|if|at|on|in|by|after|before|crazy|that|this|it|him|her|them|you|me|what|anything|whatever|out|up|ok|okay|not|never|no|yes)$/i;
   var WHO_AM_I = /^\s*(?:what(?:'s| is) my name|who am i|do you know (?:my name|who i am)|what (?:do|will) you call me)\s*[?.!]*\s*$/i;
   var FORGET_NAME = /^\s*(?:please\s+)?(?:forget|remove|delete|clear|erase)\s+my name\b|^\s*(?:don'?t|do not|stop)\s+(?:call(?:ing)? me by|us(?:e|ing)) my name\b/i;
@@ -1296,6 +1314,88 @@
     return n === n.toLowerCase() ? n.replace(/(^|\s)(\p{L})/gu, function (a, s, c) { return s + c.toUpperCase(); }) : n;
   }
   function setName(n) { store(NAME_KEY, n || null); greetWith(); }
+  // Asking about an AI of their own (Claude, ChatGPT, Gemini...: "can I use my ChatGPT account here?", "I pay for
+  // Claude, can I use it with this?"), changing the model, a better one, how hard it thinks, or the model in this
+  // browser. (Not "are you Claude?" or "is this made by Anthropic?": who answers, and who made it, below.)
+  var AI_NAMES = "chat ?gpt|openai|gpt-?\\d[\\w.-]*|claude|anthropic|gemini|grok|xai|deepseek|kimi|moonshot|qwen|mistral|llama|meta ai|openrouter|glm|minimax|mimo";
+  var OWN_AI = new RegExp("\\b(" + AI_NAMES + ")\\b.*\\b(use|using|connect|sign(ed)? in|log(ged)? in|account|subscription|plan|api key|key|with (this|it|you)|here|instead)\\b|" +
+    "\\b(use|using|connect|sign in (with|to)|log in (with|to)|bring|plug in|add)\\b.*\\b(my own|own|my)\\b.*\\b(ai|model|llm|api key|key|account|subscription)\\b|" +
+    "\\b(change|switch|swap|pick|choose|select|set|use) (the |your |my |a |another |which )?(ai|model|llm|brain)s?\\b|" +
+    "\\b(better|smarter|bigger|stronger|cleverer|another|different|other) (ai|model|llm)s?\\b|" +
+    "\\b(think (harder|more|longer|deeper|more carefully|carefully)|effort|reasoning (level|effort|mode)|thinking (mode|level)|how hard (do |does )?(you|it) think)\\b|" +
+    "\\b(run|runs|running|work|works)\\b.*\\b(in|inside|on) (my|the|this) (web )?browser\\b|\\b(ai|model)\\b.*\\bin (my|the|this) (web )?browser\\b", "i");
+  // An AI's name as it's said, as the panel names it (and which of the panel's AIs that is).
+  function panelName(n) {
+    n = n.toLowerCase().replace(/\s+/g, " ");
+    if (/^(xai|grok)$/.test(n)) return "Grok";
+    if (/^(kimi|moonshot)$/.test(n)) return "Kimi";
+    if (/^(llama|meta ai)$/.test(n)) return "Meta";
+    var names = { gemini: "Gemini", deepseek: "DeepSeek", qwen: "Qwen", mistral: "Mistral", glm: "GLM", minimax: "MiniMax",
+                  mimo: "MiMo", openrouter: "OpenRouter" };
+    return names[n] || title(n);
+  }
+  function ownKeyOf(label) { for (var k in AIS) if (AIS[k].name === label) return k; return ""; }
+  function ownAiAnswer(t) {
+    var spark = "Press the spark beside +";
+    var rest = APP && APP.channel ? "" : " Or, with one account for all of them, Continue with OpenRouter there.";
+    var how = " What you type then goes to that AI, and its key stays " + (APP ? "in the app" : "in this browser") + ". In the same panel " +
+      "you choose its model, and how hard it thinks (its effort, where its maker offers one).";
+    if (/\b(run|runs|running|work|works)\b.*\bbrowser\b|\bbrowser\b/i.test(t) && !APP) {
+      if (!webCan()) return { text: "Not in this browser: " + ((ENGINE && ENGINE.supported().why) || "it can't run my model") + ". In a " +
+        "newer Chrome, Edge, Firefox or Safari it can. " + spark + " to use an AI you already have." };
+      return { text: webOn() ? "It is: " + local.label + ", Chat Computer's own model, answers now, in this browser." :
+        "Yes: type / and choose Run my model in this browser. It's Qwen3.5 0.8B, Chat Computer's own model: it downloads once (" +
+        WEB_SIZE + ") and then runs on this " + deviceWord() + "'s own processor, free, with no account, and nothing you type leaves " +
+        "the browser. It's slow, though, and small: a browser gives it one core." };
+    }
+    if (/\b(think (harder|more|longer|deeper|more carefully|carefully)|effort|reasoning|thinking (mode|level)|how hard)\b/i.test(t)) {
+      return { text: (webOn() ? "My model here doesn't think before answering: it's small, and a browser runs it slowly." :
+        "Here my answers are written in advance, so there's no thinking to turn up.") + " With an AI of yours, you choose how " +
+        "hard it thinks: " + spark.toLowerCase() + ", choose the AI, then its effort (from Low up to Max, where its maker offers " +
+        "it). Harder thinking answers better and takes longer." };
+    }
+    var gpt = /\b(chat ?gpt|openai|gpt-?\d[\w.-]*)\b/i.test(t), claude = /\b(claude|anthropic)\b/i.test(t);
+    if (gpt) {
+      if (APP && APP.channel) return { text: "Yes: " + spark.toLowerCase() + " and choose Continue with ChatGPT: you sign in with " +
+        "your ChatGPT plan, and its models answer here." + how };
+      return { text: "Yes, with an OpenAI API key (made on OpenAI's platform, paid as you use it; a ChatGPT plan isn't one): " +
+        spark.toLowerCase() + ", choose OpenAI and paste it." + rest + how + " Signing in with your ChatGPT plan itself comes with " +
+        "the Chat Computer app (coming soon)." };
+    }
+    if (claude) {
+      return { text: "Yes, with an Anthropic API key: " + spark.toLowerCase() + ", choose Claude and paste one (made at " +
+        "platform.claude.com, paid as you use it). A Claude subscription (Pro or Max) isn't an API key, so it can't answer here." +
+        rest + how };
+    }
+    var named = new RegExp("\\b(" + AI_NAMES + ")\\b", "i").exec(t), label = named && panelName(named[1]);
+    if (label === "OpenRouter") return { text: "Yes: " + spark.toLowerCase() + " and choose Continue with OpenRouter (or paste an " +
+      "OpenRouter key): its free models answer, or the best of each maker's on your OpenRouter credits." + how };
+    return { text: (label ? "Yes: " + spark.toLowerCase() + ", choose " + label + " and paste your API key from " +
+      (AIS[ownKeyOf(label)] && AIS[ownKeyOf(label)].by || label) + "." : spark + " to have an AI you already have answer: Claude, ChatGPT, Gemini, Grok, DeepSeek, Kimi, Qwen, Mistral " +
+      "and the other top AIs, each with your own API key from its maker.") + rest + how +
+      (APP ? "" : " Or type / and choose Run my model in this browser: Chat Computer's own model, free, but small and slow.") };
+  }
+
+  // How many minutes are asked for: "5 minutes", "a five minute timer", "twenty-five mins", "half an hour", "an hour
+  // and a half", "2 hours" (0: none said).
+  var NUMBERS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11,
+                  twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+                  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, ninety: 90 };
+  function minutesIn(t) {
+    var n = "(\\d+(?:\\.\\d+)?|(?:twenty|thirty|forty|fifty)(?:[ -](?:one|two|three|four|five|six|seven|eight|nine))?|" +
+      "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|sixty|ninety|an?)";
+    function num(w) {
+      if (/^\d/.test(w)) return parseFloat(w);
+      var parts = w.toLowerCase().split(/[ -]/);
+      return parts.reduce(function (a, x) { return a + (NUMBERS[x] || 0); }, 0);
+    }
+    if (/\bhalf an? hour\b/i.test(t)) return 30;
+    if (/\b(a )?quarter of an hour\b/i.test(t)) return 15;
+    var h = new RegExp("\\b" + n + "\\s*(?:hours?|hrs?)\\b(\\s*and a half)?", "i").exec(t);
+    if (h) return Math.round(num(h[1]) * 60 + (h[2] ? 30 : 0));
+    var m = /\b(\d+(?:\.\d+)?)\s*(?:min|mins|minutes?|m)\b/i.exec(t) || new RegExp("\\b" + n + "[ -](?:min|mins|minutes?)\\b", "i").exec(t);
+    return m ? Math.round(num(m[1])) : 0;
+  }
   var INTENTS = [
     [NAME_IS, function (t) {
       var n = nameOf(t);
@@ -1335,7 +1435,7 @@
     }],
     // Closing, and the volume, before music: "stop the music", "close the song" or "turn the music down" have music
     // words in them too (and would start it again).
-    [/^(close|stop|pause)\b|\b(close|stop|pause|hide|turn off|switch off)\s+(the\s+|that\s+|this\s+|my\s+)?(it|that|this|music|videos?|page|songs?|piano|playing|youtube|timer|map)\b|\b(turn|switch)\s+(it|that|this|the\s+(music|video|song|piano))\s+off\b/i, function () {
+    [/^(close|stop|pause|cancel)\b|\b(close|stop|pause|hide|turn off|switch off|cancel|get rid of|dismiss)\s+(the\s+|that\s+|this\s+|my\s+)?(it|that|this|music|videos?|page|songs?|piano|playing|youtube|timer|map)\b|\b(turn|switch)\s+(it|that|this|the\s+(music|video|song|piano))\s+off\b/i, function () {
       return { text: view ? "Closed it." : "Nothing's open.", act: close };
     }],
     [/\b(volume|louder|quieter|softer|mute|unmute)\b|\bturn\s+(up|down|(it|that|this|the\s+(music|sound|song|video|piano|volume))\s+(up|down))\b/i, function (t) {
@@ -1349,10 +1449,13 @@
       return { text: up ? "Volume is 60%." : "Volume is 40%.", done: [up ? "Turned the volume up" : "Turned the volume down"],
         act: function () { return volumeTo(up ? 60 : 40); } };
     }],
+    // Choosing who answers: an AI of yours (the spark beside +), its model and how hard it thinks; this browser's model.
+    [OWN_AI, ownAiAnswer],
     // Who's answering, and who made it.
-    [/\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|qwen|ai|real|human|bot|model)\b|^(who are you|are you real)\b|\bwhat('s| is) (running|powering|behind) (you|this)\b|\bwho('s| is) (answering|talking|running this)\b|\bpowered by\b|\bwhat powers (you|this|it)\b|\bwhat (are you|is this|is it) (running|built|based) on\b|\bwhat('s| is) your (model|engine|brain|ai)\b/i, function () {
-      return { text: localReady() ? "Right now, " + local.label + ", Chat Computer's own model, on this computer: no account, " +
-        "and nothing you say leaves it." : "Here, answers written in advance. " + FACTS.indie + " " + nextStep() };
+    [/\b(which|what) (ai|model|llm)('s| is| are)? (is |are )?(answering|replying|talking|running|responding|this|that|you|here|used|in use|behind)\b|\b(are you|is this|who are you|which (ai|model)|what (ai|model))\b.*\b(claude|chatgpt|gpt|gemini|qwen|ai|real|human|bot|model)\b|^(who are you|are you real)\b|\bwhat('s| is) (running|powering|behind) (you|this)\b|\bwho('s| is) (answering|talking|running this)\b|\bpowered by\b|\bwhat powers (you|this|it)\b|\bwhat (are you|is this|is it) (running|built|based) on\b|\bwhat('s| is) your (model|engine|brain|ai)\b/i, function () {
+      return { text: localReady() ? "Right now, " + local.label + ", Chat Computer's own model, " + (local.kind === "web" ?
+        "in this browser (with the page's own answers for music, maps, the weather, timers and looking things up)" : "on this computer") +
+        ": no account, and nothing you say leaves it." : "Here, answers written in advance. " + FACTS.indie + " " + nextStep() };
     }],
     // Whether the model is coming ("are you stuck downloading?"): how far the app has got with it.
     [/\b(stuck|still|how long|how much longer|progress|done|finished|ready|working)\b.*\b(download(ing|ed)?|model|qwen)\b|\b(download(ing)?|model|qwen)\b.*\b(stuck|slow|done|ready|finished|working|progress)\b/i, function () {
@@ -1379,10 +1482,12 @@
         "Chat Computer opens your own files, from your Windows folders too." };
     }],
     [/\bwhat (can'?t|can not|cannot) you do\b|\byour limits\b|\bwhat don'?t you do\b/i, function () {
-      return { text: "On this page I can only show a few things: music the browser makes, maps, timers, the weather, the news, " +
-        "Wikipedia's articles and the made-up messages and files. Real answers need Chat Computer's model, which runs on your own " +
-        "computer (" + (APP ? "this app's" : "the app's") + "). On a Chat Computer, it does most of what a computer does, by talking; " +
-        "it doesn't run Windows or Mac apps (it uses websites instead), and Windows stays one restart away." };
+      return { text: (webOn() ? "Here I'm small: " + local.label + " in this browser, which writes and talks but knows little and " +
+        "can get things wrong, and the page itself shows only a few things: music the browser makes, maps, timers, the weather, " +
+        "the news, Wikipedia's articles and the made-up messages and files." : "With answers written in advance I can only show a few " +
+        "things: music the browser makes, maps, timers, the weather, the news, Wikipedia's articles and the made-up messages and files. " +
+        (APP ? "Real answers need my model: this app's, on this computer." : realAnswers())) + " On a Chat Computer, it does most of what a computer " +
+        "does, by talking; it doesn't run Windows or Mac apps (it uses websites instead), and Windows stays one restart away." };
     }],
     // Getting it: what it needs, what it costs, whether it's safe.
     [/\b(install|download|get it|get this|buy|where (can|do) i get|how (do|can) i (get|try|use) (it|this|chat ?computer)|sign ?up|waitlist)\b|^download\b/i, function () {
@@ -1402,8 +1507,9 @@
         "once. " + FACTS.use + " " + FACTS.soon };
     }],
     [/\b(privacy|private|my data|data|secure|security|safe to use|track|spy|listening to me)\b/i, function () {
-      return { text: "On this page, what you type stays in your browser (or, with this computer's model, goes to the app, on this " +
-        "computer). For a map or the weather only the place's name goes out (to Open-Meteo), and when the model looks something " +
+      return { text: "On this page, what you type stays in your browser (with my model in this browser too; with this computer's " +
+        "model it goes to the app, on this computer). With an AI of yours (the spark beside +), it goes to that AI's maker, as on " +
+        "its own site. For a map or the weather only the place's name goes out (to Open-Meteo), and when the model looks something " +
         "up or you ask for the news, only the words looked up go out (to Wikipedia). " +
         "Google's own pages show here when you open Google, ask for directions or look up something Wikipedia hasn't got: " +
         "those words go to Google, as they would on google.com. " +
@@ -1433,14 +1539,22 @@
     [/^\s*(hi|hello|hey|hiya|yo|good (morning|afternoon|evening)|\u{1F44B}|help)( there| chat ?computer| everyone| all)?[\s!.,?]*$|\bwhat can you do\b|\bhow does (this|it) work\b|\bwhat is (this|chat ?computer)\b|^what('?s| is) this\b|^\?+$/iu, function () {
       return { text: "Hi! I'm Chat Computer: I run the whole computer for you. You talk, type or touch, and I do it: open websites, " +
         "play music, read your messages, look after your files and settings.\n\n" + (APP ? REAL + " " + nextStep() :
-        "On this page my answers are written in advance, and what you type stays in your browser. " + REAL) + " " + FACTS.indie + " " + TRY };
+        (webOn() ? local.label + ", Chat Computer's own model, answers here, in this browser, and what you type stays in it." :
+        "On this page my answers are written in advance, and what you type stays in your browser. " + realAnswers())) + " " +
+        FACTS.indie + " " + TRY };
     }],
     [/^\s*(how are you|how'?s it going|how do you do)\b/i, function () { return { text: "I'm good, thanks! What would you like to try? " + TRY }; }],
     [/\b(useless|stupid|dumb|rubbish|sucks?|hate you)\b|\b(you'?re|you are|this is|that'?s|it'?s) (so )?(terrible|awful|the worst)\b/i, function () {
       return { text: "Sorry I'm not much help yet. " + nextStep() };
     }],
     // Things it can show or do here. The air first ("where is the haze from?" isn't a map).
-    [AIRY, function (t) { return { search: t, later: function () { return airAnswer(t); } }; }],
+    [AIRY, function (t) {
+      if (/^\s*(what('s| is| are| was| were)|tell me (more )?about|explain|define|why (is|are|does|do)|what causes|where does)\b/i.test(t) &&
+          /\b(haze|smog|pollution)\b/i.test(t) && !/\b(now|today|tonight|outside|here|currently|at the moment|this (morning|afternoon|evening|week)|like|level|levels|reading|bad|good|safe)\b/i.test(t)) {
+        return null;                         // (a question of what it is: Wikipedia's article on it, below)
+      }
+      return { search: t, later: function () { return airAnswer(t); } };
+    }],
     [/^(?=.*\b(youtube|videos?)\b)(?=.*\b(cats?|dogs?|funny|of|about|music video)\b)|\bplay\s+(?!(some|me some|music|a song|songs|piano|lofi|jazz|something)\b)([a-z][\w' &-]{2,40})$/i, function (t) {
       var q = t.replace(/^\s*(please\s+)?(show me|play|find|put on)\s+(me\s+)?(a\s+|some\s+)?/i, "").replace(/\s+on youtube\b/i, "").trim();
       return youtubeSearch(q || t);
@@ -1459,7 +1573,7 @@
     }],
     [/\b(map|maps|where is|where's|show me .+ on a map)\b/i, mapOf],
     [/\b(timer|countdown|stopwatch|remind me in|tell me when)\b|\bboil(ing)? (an? )?eggs?\b/i, function (t) {
-      var m = /(\d+)\s*(min|minute|m\b)/i.exec(t), eggs = /\beggs?\b/i.test(t), mins = m ? Math.min(180, +m[1]) : eggs ? 9 : 10;
+      var m = minutesIn(t), eggs = /\beggs?\b/i.test(t), mins = m ? Math.min(180, m) : eggs ? 9 : 10;
       return { text: (eggs && !m ? "A 9-minute timer for hard-boiled eggs (6 minutes for soft), on the screen: press Start." :
         "A " + mins + "-minute timer, on the screen: press Start. I made it just now: on Chat Computer I can make any little page or app like this."),
         done: ["Made a timer"], act: function () { show({ html: timer(mins) }); return shown(); } };
@@ -1478,6 +1592,14 @@
       return { text: "I can't send messages: Chat Computer reads your messages, but replying isn't possible yet. " +
         (alex ? "Alex's" : jane ? "Jane's" : "Mum's") + " message is on the screen, so you can reply on your phone.",
         act: function () { openMessage(alex ? "m3" : jane ? "m2" : "m1"); } };
+    }],
+    [/\b(connect|link|add|set ?up|sign in to|log in to|hook up)\b.*\b(gmail|outlook|hotmail|e-?mail|mail|icloud|yahoo|telegram|whatsapp|wechat|discord|instagram|facebook|tiktok|linkedin|twitter|accounts?)\b/i, function (t) {
+      var m = /\b(gmail|outlook|hotmail|icloud|yahoo|telegram|whatsapp|wechat|discord|instagram|facebook|tiktok|linkedin|twitter)\b/i.exec(t);
+      var which = m ? title(m[1]).replace("Icloud", "iCloud").replace("Whatsapp", "WhatsApp").replace("Wechat", "WeChat").replace("Linkedin", "LinkedIn").replace("Tiktok", "TikTok") : "an account";
+      if (APP) return { text: "Press + in Messages and choose " + (m ? which : "the account") + ": you sign in on its own page, right " +
+        "here, and its messages come into Messages, newest first." };
+      return { text: "The website can't connect " + which + ": the Chat Computer app (coming soon) does, with + in Messages, and its " +
+        "messages then come into Messages, newest first, with nothing leaving your computer. The messages here are made up." };
     }],
     [/\b(jane|lunch|email|emails|e-mail|mail|inbox|gmail|outlook)\b/i, function () {
       return { text: "Jane says 12:30 at the usual place works for her, for lunch on Friday. Her emails are on the screen.", act: function () {
@@ -1551,6 +1673,9 @@
     if (s) return s;
     if (MASH.test(text)) return { text: "I didn't catch that. Try “play some piano music” or “weather”." };
     if (LOOK_IT_UP.test(text) || SEARCH_FOR.test(text)) { var l = lookUp(text); if (l) return l; }
+    var again = weatherAgain(text);
+    if (again) return again;
+    lastWeather = null;                    // (something else asked since: "and tomorrow?" isn't the weather's any more)
     if (OPEN_ENDED.test(text)) return { ai: true };
     for (var i = 0; i < INTENTS.length; i++) {
       var r = INTENTS[i][0].test(text) ? INTENTS[i][1](text) : null;
@@ -1565,6 +1690,7 @@
   // small), and how to get it: the app's, on this computer.
   function noAnswer(want) { return "I can't " + (want ? want[1] : "answer that") + " yet. " + nextStep(); }
   function nextStep() {
+    if (webOn()) return "";
     if (APP) {
       if (local.state === "preparing") return "My model is getting ready on this computer: " + localWords() + ". Ask me again once it's here.";
       if (local.state === "none") return "My model can't run here" + (local.detail ? ": " + local.detail : "") + ".";
@@ -1584,13 +1710,20 @@
     return "My model comes with the Chat Computer app (coming soon). Where the app runs on this computer, type / and choose " +
       "Use this computer's model. Or press the spark beside + to use an AI you already have.";
   }
+  // On the website, how to have real answers: this browser's model, or an AI of yours (or, while either is getting
+  // ready or couldn't, how that's going).
+  function realAnswers() {
+    if (local.kind === "web" && local.state !== "off") return nextStep();
+    return webCan() ? "For real answers, type / and choose Run my model in this browser (free; " + WEB_SIZE + ", once), or press " +
+      "the spark beside + to use an AI you already have." : "For real answers, press the spark beside + to use an AI you already have.";
+  }
   function iOS() { return /iPhone|iPad|iPod/.test(navigator.userAgent || "") || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
   function fallback(text) {
     if (/^[\W\d_]*[a-z]{0,6}[\W\d_]*$/i.test(text) && !/\b(hi|ok)\b/i.test(text)) {
       return { text: "I didn't catch that. Try “play some piano music” or “weather”." };
     }
     var want = WANTS.filter(function (w) { return w[0].test(text); })[0];
-    var note = { text: noAnswer(want) };
+    var note = { text: noAnswer(want), none: true };             // (none: only a model could answer it)
     // (Not about this page or the one answering, and not a follow-up: "when was the worst one?" needs what came before.)
     if ((!want || want[1] === "explain that") && FACTUAL.test(text) && !/\b(you|your|yours|this page|chat ?computer)\b/i.test(text)) {
       if (NEWSY.test(text)) return { later: newsAnswer };
@@ -1661,14 +1794,17 @@
   function ask(text, shown) {
     var you = uid("u"), uts = now(), id = "a" + (++turns), since = acted;
     call("user", you, shown || text, true);
-    if (own || localReady()) { localTurn(text, you, uts, id, since); return; }
+    if (own || localReady() && local.kind !== "web") { localTurn(text, you, uts, id, since); return; }
     var r = answer(text);
     if (!LOOK_IT_UP.test(text)) lastAsked = text;              // what "look it up" means next
     if (r.ai) r = fallback(text);
+    // (With this browser's model: what the page can't answer itself, the model does, knowing what was said before.)
+    if (r.none && webOn()) { localTurn(text, you, uts, id, since); return; }
     setTimeout(function () {
       call("aiStart", id);
       var waited = Date.now();
       Promise.resolve(r.later ? r.later() : r).then(function (a) {
+        if (webOn() && a.text) { local.talk.push({ role: "user", content: text }, { role: "assistant", content: a.text }); trimTalk(); }
         setTimeout(function () { deliver(a, id, you, uts, since); }, Math.max(0, 600 - (Date.now() - waited)));
       });
     }, 120);
@@ -1939,21 +2075,22 @@
   // os/model, as WebAssembly, in a worker): Qwen3.5 0.8B, downloaded once from Qwen's own repository at the revision
   // Chat Computer pins (each file checked against its size and SHA-256) and kept by the browser; it runs on the
   // visitor's own processor, free, with no account, and nothing typed leaves the page. A browser runs it slowly (one
-  // thread), so it's told less: a short system prompt, the same every visit, and the tools it's most use for. Those it
-  // reads once, while it gets ready, and the browser keeps that reading with the model: a later visit starts at once.
+  // thread), and it's small, so the page does what it can do itself (music, maps, the weather, timers, looking things
+  // up, what Chat Computer is: its written answers, at once) and the model answers the rest (writing, explaining,
+  // translating, advice, talk, follow-ups), with what was said before. It's told who it is in a few lines, the same
+  // every visit, and has no tools and no time stamp: evals/web found Qwen3.5 0.8B took "[time, Asia/Singapore]" before
+  // a question for the question ("what is this?": "Singapore"), and called tools at random (weather for "hello",
+  // timer after timer for "play music"). It reads those lines once, while it gets ready, and the browser keeps that
+  // reading with the model: a later visit starts at once.
   // (Whether it was chosen, and whether the browser keeps it, are remembered here too: nothing's started to find out.)
   var ENGINE = window.ChatComputerEngine || null, WEB_KEY = "chatcomputer-web-model", WEB_KEPT = "chatcomputer-web-kept", WEB_SIZE = "1.8 GB";
-  var WEB_TOOLS = ["web_search", "weather", "show_map", "youtube_search", "make_timer", "close"];
-  var WEB_SYSTEM = "You are Chat Computer: you run a whole computer for the person. Right now you're on Chat Computer's " +
-    "website (chatcomputer.ai), thinking with Qwen3.5 0.8B, Chat Computer's own model, in their web browser: nothing they " +
-    "say leaves it. Answer briefly and plainly, in the language they use. Use your tools when they help: web_search to " +
-    "look something up (never make up facts: look them up, or say you don't know), weather, show_map for a place, " +
-    "youtube_search for videos, make_timer, and close to put away what's open. Each of their messages starts with the " +
-    "time, in brackets.";
+  var WEB_SYSTEM = "You are Chat Computer's own model, Qwen3.5 0.8B, answering on Chat Computer's website in the visitor's " +
+    "web browser: nothing they type leaves it. Chat Computer is a computer you talk to: it runs the whole computer for you, " +
+    "with no desktop or apps to learn, and installs next to Windows or macOS (free; coming soon). Answer what they ask, " +
+    "briefly and plainly, in the language they use. Never make up facts: if you don't know, say so.";
   function webCan() { return !APP && !!ENGINE && ENGINE.supported().ok; }
   function webOn() { return local.kind === "web" && localReady(); }
-  function webTools() { return localTools().filter(function (t) { return WEB_TOOLS.indexOf(t.function.name) >= 0; }); }
-  function webRequest(messages) { return { think: false, max_tokens: 1024, tools: webTools(), messages: messages }; }
+  function webRequest(messages) { return { think: false, max_tokens: 1024, messages: messages }; }
   // Getting it ready: downloaded (or, on a later visit, from the browser's copy), loaded, its instructions read.
   function webStart(chosen) {
     if (local.kind === "web" && (local.state === "preparing" || localReady())) return;
@@ -2307,7 +2444,8 @@
   }
   // One turn: the model's answer streams in, its tools run here, and it goes on until it's done (at most 8 rounds).
   function localTurn(text, you, uts, id, since) {
-    var said = "", gap = false, rounds = 0, asked = { role: "user", content: "[" + clock() + "] " + text };
+    var web = !own && local.kind === "web", calledBefore = {}, ran = 0;
+    var said = "", gap = false, rounds = 0, asked = { role: "user", content: (web ? "" : "[" + clock() + "] ") + text };
     if (!local.talk.length) local.system = !own && local.kind === "web" ? WEB_SYSTEM : systemPrompt();
     local.talk.push(asked);
     trimTalk();
@@ -2325,12 +2463,23 @@
       localMessage(onText).then(function (msg) {
         local.talk.push(msg.message);
         if (msg.calls.length) {
+          // (The same tools with the same input as before, and nothing else: it's going round in circles. It stops.)
+          var fresh = msg.calls.filter(function (c) { return !calledBefore[c.name + " " + c.args]; });
+          if (!fresh.length) {
+            local.talk.pop();
+            finish();
+            return;
+          }
           // Each tool's answer, some later (a promise), in the order asked.
           Promise.all(msg.calls.map(function (c) {
-            var out;
+            var out, key = c.name + " " + c.args;
+            if (calledBefore[key]) {
+              return Promise.resolve({ role: "tool", tool_call_id: c.id, content: "Already done, as asked before: " + calledBefore[key] });
+            }
+            ran++;
             try { out = run({ name: c.name, input: c.input, id: c.id }, you, uts); } catch (e) { out = "That didn't work: " + e.message; }
             return Promise.resolve(out).then(String, function (e) { return "That didn't work: " + (e && e.message || e); })
-              .then(function (t) { return { role: "tool", tool_call_id: c.id, content: t }; });
+              .then(function (t) { calledBefore[key] = clip(t, 300); return { role: "tool", tool_call_id: c.id, content: t }; });
           })).then(function (results) {
             results.forEach(function (r) { local.talk.push(r); });
             round();
@@ -2346,7 +2495,13 @@
         say(said);
       });
     })();
-    function finish() { call("aiDone", id); say(said); }
+    function finish() {
+      // (No words at all: what it did is in Actions; or it got nowhere.)
+      if (!/\S/.test(said)) onText(ran ? (rounds > 8 ? "I stopped there: that was taking too many steps. What it did is in Actions." :
+        "Done: it's in Actions.") : "I don't have an answer to that.");
+      call("aiDone", id);
+      say(said);
+    }
   }
   // At most 40 messages back, starting at something they said.
   function trimTalk() {

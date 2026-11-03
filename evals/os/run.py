@@ -10,8 +10,8 @@ proxy): no other tools or connections of the session running the evals reach the
                                    [--models DIR] [--model auto] [--effort medium]
 
 Traces go to OUT_DIR/traces/<id>.json. Chat Computer thinks as it does on a real one: with its own model, run by its
-own engine on this computer, from --models (a folder of models made ready, NAME.ccm with its NAME.refusal, as Chat
-Computer leaves them in ~/ChatComputer/models; that folder unless told otherwise), the one it picks by this
+own engine on this computer, from --models (a folder of models made ready, llm/NAME.ccm with its llm/NAME.refusal, as
+Chat Computer leaves them in ~/ChatComputer/models; that folder unless told otherwise), the one it picks by this
 computer's memory unless --model names one. --app runs another version of Chat Computer (a folder with its code, such
 as an export of an earlier commit) with these same cases, harness and simulated machine, to compare before and
 after."""
@@ -64,9 +64,14 @@ def sandbox(work: Path, binfolder: Path, display: int = 120, app: Path = REPO, m
             "--ro-bind", str(VENV), "/opt/chatcomputer/venv",
             "--ro-bind", str(binfolder), "/opt/evals/bin",
             "--bind", str(work / "io"), INSIDE + "/io"]
-    # The models made ready, where Chat Computer keeps them (read-only: each case uses them as they are).
+    # The models made ready, where Chat Computer keeps them (read-only: each case uses them as they are), but for the
+    # engine's reading of the system prompt (llm/cache), which a Chat Computer keeps from its first conversation on:
+    # one for the run, written by its first case (and again whenever the prompt differs), so each case starts as a
+    # Chat Computer in use does rather than reading the whole prompt first.
     if models.is_dir():
         args += ["--ro-bind", str(models), "/home/ren/ChatComputer/models"]
+        if (models / "llm" / "cache").is_dir():
+            args += ["--bind", str(work.parent.parent / "engine-cache"), "/home/ren/ChatComputer/models/llm/cache"]
     ca = next((os.environ[k] for k in CA_ENV if os.environ.get(k) and os.path.exists(os.environ[k])), None)
     if ca:
         args += ["--ro-bind", ca, INSIDE + "/ca.crt"]
@@ -106,7 +111,8 @@ def run_case(case: dict, out: Path, model: str, effort: str, binfolder: Path, di
     t0 = time.time()
     with open(work / "log.txt", "w") as log:
         try:
-            p = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=900)
+            # (The turn may take 10 minutes; before it, the run's first case reads the prompt, which can take long.)
+            p = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=4800)
             code = p.returncode
         except subprocess.TimeoutExpired:
             code = "timeout"
@@ -135,9 +141,10 @@ def main() -> None:
     if not (app / "evals").is_dir():
         sys.exit(f"{app} needs an evals folder (it can be empty): this harness is put there.")
     (out / "traces").mkdir(parents=True, exist_ok=True)
+    (out / "engine-cache").mkdir(exist_ok=True)
     models = Path(a.models).expanduser().resolve()
-    if not any(models.glob("*.ccm")):
-        sys.exit(f"No model made ready in {models}: Chat Computer (or the engine's prepare command) makes one ready there.")
+    if not any(models.glob("llm/*.ccm")):
+        sys.exit(f"No model made ready in {models}/llm: Chat Computer (or the engine's prepare command) makes one ready there.")
     (out / "run.json").write_text(json.dumps({"app": str(app), "model": a.model, "effort": a.effort, "models": str(models),
                                              "started": time.strftime("%Y-%m-%d %H:%M:%S")}))
     missing = build_bin(out / "bin", app)

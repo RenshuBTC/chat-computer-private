@@ -1133,9 +1133,10 @@ async function ask(page, text, meanwhile) {
   await ownCtx.close();
 
   // Chat Computer's model in this browser (docs/demo/engine's API, standing in): offered with / and when an answer
-  // needs a model; chosen, its download said as it goes, its short instructions (the same every visit, with its few
-  // tools) read ahead while it gets ready; then it answers, calling its tools; a later visit starts it from the
-  // browser's copy without asking or downloading; stopped; removed (the browser's copy deleted).
+  // needs a model; chosen, its download said as it goes, its few lines of instructions (the same every visit, with no
+  // tools) read ahead while it gets ready; then the page answers what it can itself (a timer: no model asked), and the
+  // model the rest, knowing what was said before (the timer's question and answer), with no time stamp; a later visit
+  // starts it from the browser's copy without asking or downloading; stopped; removed (the browser's copy deleted).
   const wCtx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
   await wCtx.route(/icons\.duckduckgo\.com/, (route) => route.fulfill({ status: 404, body: "" }));
   await wCtx.addInitScript(() => {
@@ -1157,11 +1158,8 @@ async function ask(page, text, meanwhile) {
       ahead: (req, onReading) => { log.push({ ahead: req }); onReading(40, 100); return new Promise((r) => setTimeout(r, 300)); },
       chat: (req, onChunk) => {
         log.push({ chat: req });
-        const last = req.messages[req.messages.length - 1];
-        if (last.role === "tool") { onChunk({ content: "Your timer " }); onChunk({ content: "is on." }); return Promise.resolve({ role: "assistant", content: "Your timer is on." }); }
-        const call = { id: "call_w1", type: "function", function: { name: "make_timer", arguments: '{"minutes": 5}' } };
-        onChunk({ tool_calls: [{ index: 0, id: call.id, type: "function", function: call.function }] });
-        return Promise.resolve({ role: "assistant", content: "", tool_calls: [call] });
+        onChunk({ content: "Five minutes, " }); onChunk({ content: "ticking softly." });
+        return Promise.resolve({ role: "assistant", content: "Five minutes, ticking softly." });
       },
       stop: () => {},
       forget: () => { log.push("forget"); kept = false; localStorage.removeItem("fake-engine-kept"); return Promise.resolve(); },
@@ -1190,12 +1188,18 @@ async function ask(page, text, meanwhile) {
   await wp.waitForFunction(() => /Using my model in this browser/.test(document.getElementById("done-list").textContent), null, { timeout: 10000 });
   await wp.fill("#input", "a five minute timer");
   await wp.keyboard.press("Enter");
-  await wp.waitForFunction(() => /Your timer is on\./.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
+  await wp.waitForFunction(() => /A 5-minute timer/.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
+    null, { timeout: 10000 });
+  out.web_timer_asked = await wp.evaluate(() => window.__engine.filter((e) => e.chat).length);
+  await wp.fill("#input", "write a short poem about the timer");
+  await wp.keyboard.press("Enter");
+  await wp.waitForFunction(() => /ticking softly\./.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
     null, { timeout: 10000 });
   out.web_asked = await wp.evaluate(() => window.__engine.filter((e) => e.chat || e.ahead).map((e) => {
     const r = e.chat || e.ahead;
-    return { kind: e.chat ? "chat" : "ahead", think: r.think, max: r.max_tokens, tools: r.tools.map((t) => t.function.name),
-             system: r.messages[0].content.slice(0, 120), roles: r.messages.map((m) => m.role), last: String(r.messages[r.messages.length - 1].content || "").slice(-60) };
+    return { kind: e.chat ? "chat" : "ahead", think: r.think, max: r.max_tokens, tools: (r.tools || []).map((t) => t.function.name),
+             system: r.messages[0].content.slice(0, 120), roles: r.messages.map((m) => m.role),
+             said: r.messages.slice(1).map((m) => String(m.content || "").slice(0, 40)), last: String(r.messages[r.messages.length - 1].content || "").slice(-60) };
   }));
   out.web_on_slash = await slash(wp);
   out.web_log = await wp.evaluate(() => window.__engine.filter((e) => typeof e === "string"));

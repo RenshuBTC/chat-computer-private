@@ -9,6 +9,7 @@ Writes the trace: what was asked, every tool call with its input and result, the
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -90,14 +91,23 @@ async def run(case: dict[str, Any]) -> dict[str, Any]:
         return trace
     before = listing(home)
 
+    # The model's reading of the system prompt and the tools (thousands of words: minutes on a processor, the first
+    # time), before the person says anything, as on a Chat Computer that's been on a while (it reads them when it
+    # starts, and keeps that reading: run.py's engine-cache, from the run's first case on). How long it took is kept.
+    w0 = time.time()
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(c.brain.connect(), 3600)
+    trace["warm_up_s"] = round(time.time() - w0, 1)
+
     done = asyncio.Event()
     ev = c.brain.ev
     on_tool, on_end = ev.on_tool, ev.on_turn_end
 
-    def tool(tid: str, name: str, inp: dict[str, Any], ok: bool, result: str) -> None:
+    def tool(tid: str, name: str, inp: dict[str, Any], ok: bool, result: str, *rest: Any) -> None:
+        # (The brain gives the tool call's id too, now: passed on as it came.)
         trace["tools"].append({"t": round(time.time() - t0, 1), "name": name.split("__")[-1], "full": name,
                                "input": inp, "ok": ok, "result": _clip(result)})
-        on_tool(tid, name, inp, ok, result)
+        on_tool(tid, name, inp, ok, result, *rest)
 
     def end(tid: str, res: Any) -> None:
         trace["turns"].append({"ok": res.ok, "error_kind": res.error_kind, "error_text": res.error_text,

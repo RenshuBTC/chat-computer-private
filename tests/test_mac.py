@@ -130,7 +130,7 @@ def test_offline_switch_to_macos_asks_then_restarts(tmp_path, monkeypatch):
 def test_tools_on_a_mac(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
+    # (The trash's folder is one for the whole run: tests/conftest.py sets XDG_DATA_HOME once, before any test.)
     paths = Paths(home / "ChatComputer").ensure()
     ctx = T.ToolContext(paths, Settings(), FakeMac(), Journal(paths), RecordingScreen(), Memory(paths), power_delay_s=0.05)
     server, policies, names = T.build(ctx)

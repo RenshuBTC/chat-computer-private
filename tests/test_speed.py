@@ -309,7 +309,7 @@ def _tools(tmp_path, platform):
     from chatcomputer.memory import Memory
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
-    os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
+    # (The trash's folder is one for the whole run: tests/conftest.py sets XDG_DATA_HOME once, before any test.)
     paths = Paths(home / "ChatComputer").ensure()
     ctx = T.ToolContext(paths, Settings(windows_mount=str(tmp_path / "win")), platform, Journal(paths), RecordingScreen(),
                         Memory(paths))

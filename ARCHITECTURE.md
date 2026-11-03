@@ -79,6 +79,9 @@ chat-computer/
                             menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
                             guides approving it (db Append) or turning Secure Boot off, then shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime
+  requirements-dev.txt      What its tests need besides those (pytest, the mock Claude API's aiohttp); the runtime's
+                            tests run as .github/workflows/python.yml does: a venv with the system's python3-gi and
+                            python3-cairo, both requirements files, then pytest --ignore=tests/test_rendering.py
   tests/                    Python tests for the runtime (+ mock Claude API)
   docs/                     The browser demo (GitHub Pages): Chat Computer's own screen with docs/demo/host.js standing
                             in for the computer; scripts/build_demo.py copies the screen, tests/test_demo.py checks

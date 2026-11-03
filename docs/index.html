@@ -16,8 +16,12 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
     </button>
   </div>
-  <p id="messages-empty" class="side-empty">Your email, Telegram, WhatsApp and social media messages show up here, newest first.
-    <button id="connect-first" class="text-button" type="button" tabindex="-1">Connect an account</button></p>
+  <div id="connect" class="connect" role="group" aria-label="Connect">
+    <button type="button" class="connect-row" data-group="email" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-email"/></svg>Connect email</button>
+    <button type="button" class="connect-row" data-group="chat" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chat"/></svg>Connect chat apps</button>
+    <button type="button" class="connect-row" data-group="social" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-social"/></svg>Connect social media</button>
+  </div>
+  <p id="messages-empty" class="side-empty">Your email, Telegram, WhatsApp and social media messages show up here, newest first.</p>
   <ol id="messages-pinned" class="side-pinned"></ol>
   <ol id="messages-list" class="side-list"></ol>
 </aside>
@@ -27,12 +31,24 @@
   <div id="live" class="you live"><div id="live-in"><span id="live-text"></span><span id="caret"></span></div></div>
   <div id="room" aria-hidden="true"></div>
 </main>
-<aside id="done" class="side" aria-label="Actions">
-  <div class="side-head"><h2 class="side-title" id="done-title">Actions</h2></div>
-  <p id="clock" aria-live="off"><span id="clock-date"></span><span id="clock-time"></span></p>
-  <p id="done-empty" class="side-empty">What I do for you shows up here: sites I open, searches, files I change.</p>
-  <ol id="done-pinned" class="side-pinned"></ol>
-  <ol id="done-list" class="side-list"></ol>
+<aside id="done" class="side" aria-label="Actions and chats">
+  <section id="actions" class="half" aria-label="Actions">
+    <div class="side-head"><h2 class="side-title" id="done-title">Actions</h2></div>
+    <p id="clock" aria-live="off"><span id="clock-date"></span><span id="clock-time"></span></p>
+    <p id="done-empty" class="side-empty">What I do for you shows up here: sites I open, searches, files I change.</p>
+    <ol id="done-pinned" class="side-pinned"></ol>
+    <ol id="done-list" class="side-list"></ol>
+  </section>
+  <section id="chats" class="half" aria-label="Chats">
+    <div class="side-head">
+      <h2 class="side-title">Chats</h2>
+      <button id="new-chat" class="icon-button" type="button" tabindex="-1" aria-label="New chat" title="New chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+    <p id="chats-empty" class="side-empty">Each task gets a chat of its own here, newest first. + starts a new one.</p>
+    <ol id="chats-list" class="side-list"></ol>
+  </section>
 </aside>
 <div id="frame"><div id="frame-bar"><span id="frame-title"></span><button id="frame-close" class="icon-button" type="button" tabindex="-1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
 <button id="toggle-left" class="toggle" type="button" tabindex="-1" aria-pressed="true" aria-label="Hide Messages" title="Hide Messages">

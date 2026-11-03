@@ -48,7 +48,102 @@
   function now() { return Date.now() / 1000; }
   function call(name) {
     var args = Array.prototype.slice.call(arguments, 1);
+    keepInChat(name, args);
     if (window.CO && typeof window.CO[name] === "function") window.CO[name].apply(null, args);
+  }
+
+  // ------------------------------------------------------------------ chats
+  // Each task's chat, as on Chat Computer (the right sidebar's lower half): what's said goes into the chat on the
+  // screen, kept in this browser (nothing leaves it); + starts a new one, and a click on one brings it back. A first
+  // visit has a few earlier ones to show how it looks.
+  var CHATS_KEY = "chatcomputer-demo-chats", CHATS_MAX = 50;
+  var chatsNow = null;
+  function chatsKept() {
+    if (chatsNow) return chatsNow;
+    var kept = store(CHATS_KEY);
+    if (kept && Array.isArray(kept.list) && kept.list.length) { chatsNow = kept; return kept; }
+    var day = 86400, at = Math.floor(Date.now() / 1000);
+    function past(id, title, ago, you, ai) {
+      return { id: id, title: title, ts: at - ago, items: [{ role: "user", text: you, ts: at - ago }, { role: "assistant", text: ai, ts: at - ago + 5 }] };
+    }
+    chatsNow = { current: "c-now", list: [
+      { id: "c-now", title: "", ts: at, items: [] },
+      past("c-bali", "Plan the weekend in Bali", 2 * 3600, "Plan us a weekend in Bali, nothing too busy",
+        "**Saturday:** a slow morning in Ubud, the rice terraces at Tegallalang before it's hot, lunch by the river.\n\n" +
+        "**Sunday:** down to the coast at Uluwatu for the cliffs and the sunset; dinner on the beach at Jimbaran."),
+      past("c-taxes", "Find my 2025 tax papers", day + 3000, "Where are my tax papers from last year?",
+        "They're in Documents, in **Taxes**: *Taxes 2025.pdf* and the receipts beside it. Want me to open it?"),
+      past("c-pack", "Packing list for the trip", 3 * day, "Make me a packing list for a week at the beach",
+        "- Swimwear, two\n- Sunscreen and a hat\n- Light shirts and one warm layer\n- Sandals and walking shoes\n- Chargers, passport, cards")
+    ] };
+    return chatsNow;
+  }
+  function chatsSave() {
+    var c = chatsKept();
+    c.list.sort(function (a, b) { return b.ts - a.ts; });
+    c.list = c.list.slice(0, CHATS_MAX);
+    store(CHATS_KEY, c);
+  }
+  function chatOnScreen() {
+    var c = chatsKept();
+    return c.list.filter(function (x) { return x.id === c.current; })[0] || null;
+  }
+  function showChats() {
+    var c = chatsKept();
+    if (window.CO && window.CO.chats) {
+      window.CO.chats(c.list.map(function (x) { return { id: x.id, title: x.title, ts: x.ts }; }), c.current);
+    }
+  }
+  // What the page is told to show, kept in the chat on the screen: your words (final), Claude's as they come.
+  function keepInChat(name, args) {
+    if (name !== "user" && name !== "ai" && name !== "aiDone") return;
+    var chat = chatOnScreen();
+    if (!chat) return;
+    if (name === "user") {
+      if (!args[2]) return;                                   // (still being spoken)
+      chat.items.push({ role: "user", id: String(args[0]), text: String(args[1] || ""), ts: now() });
+      chat.ts = now();
+      if (!chat.title) { chat.title = clip(args[1], 48); setTimeout(showChats, 0); }
+      return;
+    }
+    var id = String(args[0]), last = chat.items[chat.items.length - 1];
+    if (name === "ai") {
+      if (!last || last.role !== "assistant" || last.id !== id) { last = { role: "assistant", id: id, text: "", ts: now() }; chat.items.push(last); }
+      last.text += String(args[1] || "");
+      return;
+    }
+    chatsSave();                                              // (an answer finished)
+  }
+  function openChat(id) {
+    var c = chatsKept();
+    if (!c.list.some(function (x) { return x.id === id; })) return;
+    c.current = id;
+    chatsSave();
+    var chat = chatOnScreen();
+    if (window.CO) { if (chat.items.length) window.CO.history(chat.items); else window.CO.clear(); }
+    showChats();
+  }
+  // The page opened: a new chat, as the Claude app opens on one (the one before is in the list), unless the chat
+  // on the screen has nothing in it yet.
+  function startChat() {
+    var c = chatsKept(), on = chatOnScreen();
+    if (on && on.items.length) {
+      var chat = { id: "c" + Date.now().toString(36), title: "", ts: now(), items: [] };
+      c.list.unshift(chat);
+      c.current = chat.id;
+      chatsSave();
+    }
+    showChats();
+  }
+  function newChat() {
+    var c = chatsKept(), on = chatOnScreen();
+    if (on && !on.items.length) { openChat(on.id); return; }  // (the one on the screen is new already)
+    var chat = { id: "c" + Date.now().toString(36), title: "", ts: now(), items: [] };
+    c.list.unshift(chat);
+    c.current = chat.id;
+    chatsSave();
+    if (window.CO) window.CO.clear();
+    showChats();
   }
   function $(id) { return document.getElementById(id); }
   function esc(s) {
@@ -141,8 +236,9 @@
   // On a phone, as in the Claude app there (measured on an iPhone 375 points wide: its words are as big as ours at a
   // eighteenth of the screen's width), a eighteenth of the screen's width (its narrow side), 16 to 24px, in Safari,
   // Chrome or any browser alike, with the conversation 0.77rem from the screen's sides (chat.css). On a tablet, a
-  // forty-sixth, 16 to 20px. On a computer, what a full-size browser window on that screen would have. Never under
-  // 16px on a touchscreen: phones zoom in on a box to type in with smaller text. Pinching the conversation (a
+  // forty-sixth, 16 to 20px. On a computer, the Claude app's there: 16px, which the computer's display scaling makes
+  // bigger on a sharper screen, as it does every page's (the conversation, the box and the sidebars in rem follow it,
+  // chat.css). Never under 16px on a touchscreen: phones zoom in on a box to type in with smaller text. Pinching the conversation (a
   // tablet's touchscreen) or asking for bigger or smaller text changes it, as on Chat Computer; a phone keeps its own
   // choice (pinching there once changed it; now nothing zooms on a phone, so that old choice is left behind).
   var touchOnly = window.matchMedia ? window.matchMedia("(hover: none) and (pointer: coarse)") : { matches: false };
@@ -158,14 +254,14 @@
     var s = window.screen || {}, sw = s.width || window.innerWidth, sh = s.height || window.innerHeight, across = Math.min(sw, sh);
     if (onPhone()) return Math.max(16, Math.min(24, across / 18));
     if (touchOnly.matches) return Math.max(16, Math.min(20, across / 46));
-    return Math.max(15, Math.min(26, sw * 0.0125, ((s.availHeight || sh) - 90) * 0.022));
+    return 16;
   }
   function sizeAt(k) { var v = baseSize() * k; return touchOnly.matches ? Math.max(16, v) : v; }
   function layout() {
     var w = window.innerWidth, phone = onPhone();
     scale = store(scaleKey()) || 1;
     size = sizeAt(scale);
-    column = Math.round(Math.min(30 * size, w - (phone ? 1.54 : 2) * size));
+    column = Math.round(Math.min(57.75 * size, w - (phone ? 1.54 : 2) * size));
     call("layout", Math.round(size * 10) / 10, column);
     place();
   }
@@ -3048,6 +3144,13 @@
     call("hint", h);
   }
 
+  // What each of Messages' connect buttons offers.
+  var GROUPS = {
+    email: { title: "Connect email", names: "Gmail, Outlook and Hotmail, iCloud Mail, Yahoo Mail and any other email", site: "gmail.com" },
+    chat: { title: "Connect chat apps", names: "Telegram, WhatsApp and WeChat", site: "web.whatsapp.com" },
+    social: { title: "Connect social media", names: "X, Instagram, Facebook, TikTok and LinkedIn", site: "instagram.com" }
+  };
+
   // ------------------------------------------------------------------ what the page says
   function handle(msg) {
     switch (msg.type) {
@@ -3072,6 +3175,7 @@
           return o;
         }));
         call("messagesList", MESSAGES.map(withPin), ACCOUNTS);
+        startChat();
         status();
         nanoCheck().then(gemmaCheck);          // the browser's own AI, else Gemma where it can run
         heartCheck();                          // and Heart, the warmer voice, where it can
@@ -3119,7 +3223,17 @@
       case "command": slashCommand(String(msg.id || "")); break;
       case "text_scale": setScale(scale * (+msg.factor || 1)); break;
       case "panels": store("chatcomputer-demo-panels", { left: !!msg.left, right: !!msg.right }); break;
+      case "open_chat": openChat(String(msg.id || "")); break;
+      case "new_chat": newChat(); break;
       case "add_account":
+        if (msg.group && GROUPS[msg.group]) {
+          var g = GROUPS[msg.group];
+          call("accountForm", { id: "accounts", title: g.title, ok: "OK", text: [
+            "On Chat Computer, " + g.names + " connect here, and their messages come into Messages, newest first. " +
+            "Sign-ins stay on your computer.", APP ? "The app doesn't connect accounts yet: open them as sites, right here (say \u201copen " +
+            g.site + "\u201d)." : "The demo can't connect accounts."] });
+          break;
+        }
         if (APP) {
           call("accountForm", { id: "accounts", title: "Connect an account", ok: "OK", text: [
             "On Chat Computer itself (installed in place of a desktop), Gmail, Outlook, iCloud Mail, Telegram, WhatsApp, WeChat, X, " +

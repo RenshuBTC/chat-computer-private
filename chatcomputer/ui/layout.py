@@ -1,21 +1,19 @@
-"""How big Chat Computer draws things, on any screen.
+"""How big Chat Computer draws things, on any screen: as big as the Claude app draws them there.
 
-Text is sized for reading speed. What counts is the visual angle of the letters' x-height (the height of
-a lowercase x). Reading speed rises with size up to a "critical print size" of about 0.2 degrees for people
-with normal sight; between people it ranges from 0.15 to 0.3 degrees, and it grows with age. Above that
-size, reading gets no faster until about 2 degrees (Legge & Bigelow 2011, Journal of Vision 11(5):8;
-Calabrese et al. 2016, IOVS 57(8):3836). Chat Computer aims at 0.3 degrees, the top of the normal range, so
-nearly everyone reads at full speed. Atkinson Hyperlegible Next's x-height is 0.496 of its size, so on a
-standard desktop monitor (96 dots per inch, viewed from about 60 cm) that is about 24 pixels (100%). Lines
-hold about 70 characters (a column 30 rem wide), within the 80 that WCAG's AAA level allows.
+The sizes are the Claude app's on a computer, measured from it on a 1920 x 1080 screen at 100% display scaling: its
+words 16 px, on lines 22 px apart; the conversation 924 px wide, Claude's words in it up to 865 px (about 120
+characters a line), yours in bubbles up to 85% of it; the message box 962 px wide, 46 px high for a line; its sidebar
+280 px wide. Atkinson Hyperlegible Next at 16 px is as big as the Claude app's letters are (an x-height of 8 px, 0.496
+of its size), so its lines hold as many characters. The page's style sheet (assets/chat.css) has them in rem, so
+they follow the root size set here.
 
-Sharper screens, and screens farther away, are scaled up the way the system's display scaling does, so
-the text covers the same angle on a 4K monitor or on a TV across the room. Websites get the same zoom.
-
-The screen's real size comes from the monitor (EDID). The viewing distance is estimated from the
-screen size unless you tell Claude how far you sit: about 50 cm for a laptop, 60-80 cm for a desk
-monitor, and for a TV the distance at which it fills about 30 degrees of view. "Bigger" and "smaller"
-adjust on top (text_scale).
+A computer draws the Claude app bigger on a sharper screen, or one looked at from farther away, by its display
+scaling (125% is usual for a 14-inch 1080p laptop, 150-200% for a 27-inch 4K monitor). Chat Computer does the same,
+from the screen's real size (the monitor's EDID) and how far away it's looked at, so its text covers the angle the
+Claude app's does on a standard desktop monitor (96 dots per inch, about 60 cm away) whatever the screen. The viewing
+distance is estimated from the screen size unless you tell Claude how far you sit: about 50 cm for a laptop, 60-80 cm
+for a desk monitor, and for a TV the distance at which it fills about 30 degrees of view. "Bigger" and "smaller" adjust
+on top (text_scale).
 """
 from __future__ import annotations
 
@@ -23,14 +21,18 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
-REF_PX_PER_MM = 96 / 25.4      # a standard desktop monitor...
+REF_PX_PER_MM = 96 / 25.4      # a standard desktop monitor (100% display scaling)...
 REF_DISTANCE_MM = 600.0        # ...at arm's length
-X_HEIGHT_DEG = 0.3             # the visual angle the x-height aims for (see above)
 X_HEIGHT_EM = 0.496            # Atkinson Hyperlegible Next's x-height (OS/2 sxHeight 496 / 1000 units)
-# Text size at 100%: 0.3 degrees of x-height on the reference monitor at the reference distance (23.9 px).
-BASE_FONT_PX = REF_DISTANCE_MM * math.tan(math.radians(X_HEIGHT_DEG)) * REF_PX_PER_MM / X_HEIGHT_EM
 AVG_CHAR_EM = 0.43             # Atkinson Hyperlegible Next's average character width in English (WebKit)
-COLUMN_REM = 30.0              # the widest the conversation column gets: about 70 characters a line
+# The Claude app's sizes at 100% display scaling (see above), as 1 rem and in rem.
+BASE_FONT_PX = 16.0            # its words
+LINE_HEIGHT = 1.375            # its lines, 22 px apart
+COLUMN_REM = 57.75             # the conversation, 924 px
+TEXT_REM = 54.0625             # Claude's words in it, 865 px
+BOX_REM = 60.125               # the message box, 962 px wide...
+BOX_HEIGHT_REM = 2.875         # ...and 46 px high for a line
+SIDEBAR_REM = 17.5             # each sidebar, 280 px
 MARGIN_REM = 1.5               # space kept at each side on narrow screens
 SCALE_STEP = 0.125
 SCALE_RANGE = (0.75, 4.0)

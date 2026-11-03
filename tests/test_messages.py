@@ -451,3 +451,22 @@ def test_pins_from_the_page_are_kept(tmp_path, monkeypatch):
                                                                 ("done", "d1", False)]
     saved = json.loads((c.paths.root / "pins.json").read_text())
     assert list(saved["messages"]) == ["m1"] and saved["done"] == {}
+
+
+def test_messages_buttons_offer_their_own_kind(tmp_path):
+    # Messages' three buttons: Connect email, chat apps, social media, each with only its own to choose from.
+    inbox, screen, _ = _inbox(tmp_path)
+
+    async def run():
+        inbox.loop = asyncio.get_running_loop()
+        for group in ("email", "chat", "social"):
+            await inbox.connect(None, group)
+        await inbox.stop()
+    asyncio.run(run())
+    forms = [e[1] for e in screen.events if e[0] == "form"]
+    shown = [(f["title"], [c["label"] for c in f["choices"]]) for f in forms]
+    assert shown == [
+        ("Connect email", ["Gmail", "Outlook or Hotmail", "iCloud Mail", "Yahoo Mail", "Other email"]),
+        ("Connect chat apps", ["Telegram", "WhatsApp", "WeChat"]),
+        ("Connect social media", ["X", "Instagram", "Facebook", "TikTok", "LinkedIn"]),
+    ]

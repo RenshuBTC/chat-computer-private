@@ -34,14 +34,15 @@ def test_only_black_text_on_a_warm_off_white():
     # send (as ChatGPT's).
     assert re.search(r"--bubble:\s*#E7E4DD;", root) and re.search(r"--line:\s*#DDD9D1;", root)
     assert re.search(r"--dim:\s*#918F8A;", root)
-    # The message box: white, set off from the background (with a soft shadow), as the Claude app's is.
-    assert re.search(r"--paper:\s*#FFFFFF;", root)
+    # The message box: white, set off from the background (with a soft shadow), as the Claude app's is; the sidebars
+    # a shade darker than the background, as the Claude app's sidebar is darker than its middle.
+    assert re.search(r"--paper:\s*#FFFFFF;", root) and re.search(r"--side:\s*#F3F0EB;", root)
     # Those are the only colours: everything else uses them.
     assert COLOR.findall(theme.replace(root, "")) == []
     assert COLOR.findall(chat) == []
     used = set(re.findall(r"var\((--[a-z-]+)", theme + chat + render.DOC_CSS))
     sizes = {"--co-size", "--co-column", "--panel", "--left", "--rail", "--composer-h", "--kb", "--side-gap"}
-    assert used - sizes == {"--ground", "--ink", "--bubble", "--line", "--dim", "--paper", "--sans", "--mono"}
+    assert used - sizes == {"--ground", "--ink", "--bubble", "--line", "--dim", "--paper", "--side", "--sans", "--mono"}
     dims = re.findall(r"([^{}]+)\{[^}]*var\(--dim\)", chat)
     assert [d.strip() for d in dims] == ["#input::placeholder", "#send"]
     # No dark mode.

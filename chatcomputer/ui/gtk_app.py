@@ -108,6 +108,7 @@ DONE_SHOWN = 300             # Actions: how many the page holds (the rest are in
 MESSAGES_SHOWN = 400         # Messages: how many the page holds (the rest are in messages.db)
 # What the conversation page tells the controller (Controller.page_event).
 PAGE_EVENTS = {"pin", "revert", "open_message", "add_account", "account", "account_cancel", "panels",
+               "new_chat", "open_chat",         # Chats: + pressed, or a chat clicked
                "search", "open_file",           # "/" in the message box: searching this computer, opening a file
                "text_scale",                    # two fingers pinched on the conversation: its text bigger or smaller
                "unlock",                        # the PIN typed on the lock screen
@@ -326,7 +327,7 @@ class GtkScreen(Screen):
         self._add_in_hole(self.content)
 
         self.pointer_area = Gtk.DrawingArea()
-        self.air = AirLayer(self.pointer_area, lambda: self.layout.font_px if self.layout else 24.0)
+        self.air = AirLayer(self.pointer_area, lambda: self.layout.font_px if self.layout else 16.0)
         self.pointer_area.connect("draw", self.air.draw)
         self.root.add_overlay(self.pointer_area)
         self.root.set_overlay_pass_through(self.pointer_area, True)
@@ -674,7 +675,7 @@ class GtkScreen(Screen):
         w, h = self.root.get_allocated_width(), self.root.get_allocated_height()
         if w <= 1 or h <= 1:
             w, h = self.win.get_default_size()
-        rem = self.layout.font_px if self.layout else 24.0
+        rem = self.layout.font_px if self.layout else 16.0
         return 0, 0, w, max(0, int(h - 5 * rem))
 
     def _place(self, view: Gtk.Widget, full: bool = False) -> None:
@@ -1266,6 +1267,12 @@ class GtkScreen(Screen):
 
     def history(self, items: list[dict[str, Any]]) -> None:
         self._chat_js(f"CO.history({json.dumps(items)})")
+
+    def clear(self) -> None:
+        self._chat_js("CO.clear()")
+
+    def chats(self, items: list[dict[str, Any]], current: str) -> None:
+        self._chat_js(f"CO.chats({json.dumps(items)},{json.dumps(current)})", "chats")
 
     def mic(self, on: bool) -> None:
         self._chat_js(f"CO.mic({json.dumps(bool(on))})", "mic")

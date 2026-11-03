@@ -356,8 +356,9 @@ The screen follows Chat Computer's look (`chatcomputer/ui/assets/theme.css` and 
   (arrows, check marks, maths, Greek and Cyrillic, emoji in black and white, box drawing in code) comes from two
   fallback fonts made from Google's Noto fonts (`fonts/`, built by `fonts/build.py`), as a browser would take it
   from the system's fonts. Chinese, Japanese and Korean show as boxes still;
-* text sized by the same 0.3° x-height rule as `chatcomputer/ui/layout.py`, from the monitor's real size;
-* a column at most 30 em wide.
+* text sized as the Claude app's (16 px at 100%), scaled as `chatcomputer/ui/layout.py` does, from the
+  monitor's real size;
+* Claude's words up to 54 em across (865 px at 100%) in a 57.75 em conversation, and a 60 em message box.
 
 Italics are the regular or bold glyphs slanted 12° (as browsers do for a font without its italic), which keeps
 the italic font file out.

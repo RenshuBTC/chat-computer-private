@@ -391,6 +391,14 @@ class Brain:
             req.pop("reattach_session_id")          # that session is gone: start a new one
             return await query._send_control_request(req, timeout=90)
 
+    async def switch_conversation(self, session_id: str | None) -> None:
+        """Carry on another conversation (a chat opened from Chats): its session, at the next question."""
+        await self.interrupt()
+        await self.close()
+        self.session_id = session_id or None
+        self.last_activity = time.time()
+        self.state.set(session_id=self.session_id, last_activity=self.last_activity)
+
     async def new_conversation(self) -> None:
         """Forget the current conversation (memory facts stay)."""
         await self.interrupt()

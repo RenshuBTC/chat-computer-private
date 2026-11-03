@@ -486,13 +486,13 @@
   var lastHole = "";
   function reportHole() {
     if (mode !== "content") return;
-    var rem = remPx(), gap = Math.round(0.75 * rem), half = Math.round(0.5 * rem);
-    // Between the sidebars, with the same space as around their cards (from half a line inside where each one's
-    // space ends: its card, or the narrow margin with its switch when it's switched off). Without them (a narrow
-    // window, or Escape), the width of the screen, less that space.
+    var rem = remPx(), gap = Math.round(0.75 * rem);
+    // Between the sidebars, that much from each (from where each one's space ends: the sidebar, or the narrow
+    // margin with its switch when it's switched off). Without them (a narrow window, or Escape), the width of the
+    // screen, less that space.
     var sides = body.classList.contains("panel") && !full, cs = getComputedStyle(body);
-    var left = sides ? Math.round(parseFloat(cs.paddingLeft) || 0) + half : gap;
-    var right = window.innerWidth - (sides ? Math.round(parseFloat(cs.paddingRight) || 0) + half : gap);
+    var left = sides ? Math.round(parseFloat(cs.paddingLeft) || 0) + gap : gap;
+    var right = window.innerWidth - (sides ? Math.round(parseFloat(cs.paddingRight) || 0) + gap : gap);
     // Down to the message box (or the line above it while asleep), with that space again between them.
     var bottom = Math.round(composer.getBoundingClientRect().top + (parseFloat(getComputedStyle(composer).paddingTop) || 0)) - gap;
     // "/" searching: its list goes in front of what's open. Where the window lays what's open over this page (on
@@ -665,13 +665,13 @@
 
 
   // ------------------------------------------------------------------ the sidebars
-  // Shown when there's room for them beside the conversation, and for their words (most screens; not a narrow
-  // window).
+  // Shown when there's room for them (17.5rem each, as the Claude app's sidebar) beside most of the conversation
+  // (most screens; not a narrow window).
   function fitPanel() {
     var rem = remPx();
-    var col = parseFloat(rootStyle.getPropertyValue("--co-column")) || 30 * rem;
+    var col = parseFloat(rootStyle.getPropertyValue("--co-column")) || 57.75 * rem;
     var w = window.innerWidth;
-    body.classList.toggle("panel", w * 0.17 >= 11 * rem && w * 0.66 - 3 * rem >= 0.8 * col);
+    body.classList.toggle("panel", w - 35 * rem - 3 * rem >= 0.8 * col);
     fitHint();                                   // ("Esc" in the hint only where there's room for the sidebars)
   }
   // The sidebars' switches: Messages (left) and Actions (right), each switched off and on again with its switch,
@@ -917,7 +917,29 @@
     drawMessages();
   });
   $("add-account").addEventListener("click", function () { post({ type: "add_account" }); });
-  $("connect-first").addEventListener("click", function () { post({ type: "add_account" }); });
+  // Connect email, chat apps or social media: the list of that kind to choose from.
+  Array.prototype.forEach.call(document.querySelectorAll(".connect-row"), function (b) {
+    b.addEventListener("click", function () { post({ type: "add_account", group: b.getAttribute("data-group") }); });
+  });
+
+  // ------------------------------------------------------------------ chats
+  // Each task's chat, in the right sidebar's lower half: newest first, the one on the screen marked; a click opens
+  // one, + starts a new one (as the Claude app's sidebar does). Chat Computer keeps them, and says which (CO.chats).
+  var chatsList = $("chats-list"), chats = [], chatNow = "";
+  function drawChats() {
+    chatsList.innerHTML = "";
+    chats.forEach(function (c) {
+      var li = document.createElement("li");
+      li.className = "item chat-item" + (c.id === chatNow ? " current" : "");
+      li.textContent = c.title || "New chat";
+      li.title = c.title || "New chat";
+      li.setAttribute("data-id", c.id);
+      li.addEventListener("click", function () { if (c.id !== chatNow) post({ type: "open_chat", id: c.id }); });
+      chatsList.appendChild(li);
+    });
+    body.classList.toggle("has-chats", chats.length > 0);
+  }
+  $("new-chat").addEventListener("click", function () { post({ type: "new_chat" }); });
 
   // ------------------------------------------------------------------ connecting an account
   // A form Chat Computer shows (CO.accountForm): what's typed in it goes back to Chat Computer's own sign-in store, never to
@@ -1477,6 +1499,8 @@
       if (target) reveal(target);
     },
     doneList: function (entries) { dones = (entries || []).slice(-DONE_MAX); drawDone(); },
+    // The chats ({id, title, ts}, newest first) and which is on the screen.
+    chats: function (list, current) { chats = (list || []).slice(0, 200); chatNow = String(current || ""); drawChats(); },
     // Which can be reverted and which have been, after a revert (or "undo that"): only the marks change.
     doneStates: function (states) {
       var changed = {};

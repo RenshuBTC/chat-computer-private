@@ -23,6 +23,7 @@ from .brain.permissions import PermissionGate, is_private
 from .brain.prompt import build_system_prompt, turn_prefix
 from .config import (Paths, Settings, State, has_login, login_valid, model_label, read_token, save_login, save_token,
                      token_kind)
+from .chats import Chats
 from .done import FAILED, History, describe as describe_done, for_screen, result_text
 from .files_index import FileIndex
 from .here import Here
@@ -100,6 +101,7 @@ class Controller:
         self.journal = Journal(self.paths)
         self.memory = Memory(self.paths)
         self.history = History(self.paths)          # Actions (chatcomputer/done.py)
+        self.chats = Chats(self.paths)              # each task's chat (the right sidebar's lower half)
         self.schedule = sch.Schedule(self.paths.root / "schedule.json")   # timers, reminders, alarms
         self.ringing: dict[str, Any] | None = None   # the timer, reminder or alarm ringing now
         self._time_wake: asyncio.Event | None = None  # what rings next changed: look again
@@ -561,6 +563,10 @@ class Controller:
             item["id"] = msg_id
         if via:
             item["via"] = via
+        item["chat"] = self.chats.current
+        if role == "user" and text.strip():
+            self.chats.said(text)
+            self.screen.chats(self.chats.shown(), self.chats.current)
         try:
             with open(self.paths.transcript, "a", encoding="utf-8") as f:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
@@ -569,6 +575,7 @@ class Controller:
 
     def _show_history(self) -> None:
         # Only the end of the transcript is read: it holds every conversation, and grows by the day.
+        self.screen.chats(self.chats.shown(), self.chats.current)
         try:
             with open(self.paths.transcript, "rb") as f:
                 size = f.seek(0, os.SEEK_END)
@@ -587,7 +594,11 @@ class Controller:
                 continue         # a line cut short (the power went off mid-write): the others still show
             if isinstance(item, dict) and isinstance(item.get("ts"), (int, float)) and isinstance(item.get("text"), str):
                 items.append(item)
-        # Only show recent history (same day).
+        # Only the chat on the screen's (and from before chats, what was said, while it has nothing of its own), and
+        # only recent history (same day).
+        here = self.chats.current
+        untitled = not self.chats.on_screen().get("title")
+        items = [i for i in items if i.get("chat", here if untitled else None) == here]
         items = [i for i in items if time.time() - i["ts"] < 12 * 3600]
         if items:
             self.screen.history(items)
@@ -895,6 +906,46 @@ class Controller:
             return "remembered again " + "; ".join(ln[2:] for ln in back)
         return await asyncio.to_thread(self.journal.undo_file, e)
 
+    async def _new_chat(self) -> None:
+        """+ in Chats: a new chat on the screen, and a fresh conversation with the engine."""
+        if self.brain:
+            await self.brain.new_conversation()
+        self.chats.new()
+        self.screen.clear()
+        self.screen.chats(self.chats.shown(), self.chats.current)
+
+    async def _open_chat(self, chat_id: str) -> None:
+        """A chat in Chats clicked: its words back on the screen, and the engine carrying on its conversation."""
+        chat = self.chats.open(chat_id)
+        if chat is None:
+            return
+        if self.brain:
+            await self.brain.switch_conversation(chat.get("session"))
+        items = await asyncio.to_thread(self._chat_items, chat_id)
+        if items:
+            self.screen.history(items)
+        else:
+            self.screen.clear()
+        self.screen.chats(self.chats.shown(), self.chats.current)
+
+    def _chat_items(self, chat_id: str, most: int = 200) -> list[dict[str, Any]]:
+        """What was said in a chat, from the transcript (its last `most` lines)."""
+        out: list[dict[str, Any]] = []
+        try:
+            with open(self.paths.transcript, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if chat_id not in line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(item, dict) and item.get("chat") == chat_id and isinstance(item.get("text"), str):
+                        out.append(item)
+        except OSError:
+            pass
+        return out[-most:]
+
     def page_event(self, msg: dict[str, Any]) -> None:
         """What the conversation page says was done on it (GtkScreen.PAGE_EVENTS): a pin, a message opened, an
         account to connect, a sign-in form filled in or cancelled."""
@@ -945,6 +996,12 @@ class Controller:
                 self.settings.save(self.paths)
                 self._settings_changed(["text_scale"])
             return
+        if kind == "new_chat":
+            self._spawn(self._new_chat())
+            return
+        if kind == "open_chat":
+            self._spawn(self._open_chat(str(msg.get("id") or "")))
+            return
         if kind == "panels":
             # A sidebar's switch pressed: kept for the next start.
             changed = [f"{k}_panel" for k in ("left", "right")
@@ -964,7 +1021,7 @@ class Controller:
         elif kind == "open_message":
             self._spawn(self.inbox.open(str(msg.get("id") or "")))
         elif kind == "add_account":
-            self._spawn(self.inbox.connect(msg.get("provider")))
+            self._spawn(self.inbox.connect(msg.get("provider"), msg.get("group")))
         elif kind == "account":
             values = msg.get("values") if isinstance(msg.get("values"), dict) else {}
             self._spawn(self.inbox.form_submit(str(msg.get("form") or ""), values))
@@ -1118,6 +1175,8 @@ class Controller:
             self.speaker.end()
         said = self.turn_text.pop(tid, "") or ""
         self._transcript("assistant", said, via="phone" if self._typed(tid) else None, msg_id=tid)
+        if self.brain:
+            self.chats.session(getattr(self.brain, "session_id", None))   # (what opening this chat again carries on)
         self._show_words(tid, said, res)
         if (not res.ok and res.error_kind == "auth" and self.brain and self.brain.use_token_instead()):
             # The full sign-in (for the phone) stopped working; the one-year sign-in still does.

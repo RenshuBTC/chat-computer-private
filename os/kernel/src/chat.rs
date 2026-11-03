@@ -1,7 +1,9 @@
 //! What the screen shows: the conversation with Claude, laid out as Chat Computer's own screen is (chat.css,
 //! theme.css): Claude's words on the left in one column, black on the warm off-white background; yours on the
-//! right in a light grey bubble; the message box at the bottom, a white card with a soft shadow, "Type anything"
-//! in it while it's empty, and its send button, grey until there's something to send. What you send goes to the
+//! right in a light grey bubble; the message box at the bottom, a white card with a thin line round it and a soft
+//! shadow, "Type anything" in it while it's empty, and its send button, grey until there's something to send. Sizes
+//! are the Claude app's (layout.rs): 16px words on 22px lines at 100%, Claude's up to 865px across, yours in bubbles
+//! up to 85% of the 924px conversation, the box 962px wide and 46px high for a line, 39px above the screen's bottom. What you send goes to the
 //! top of the screen, with the answer coming in under it (and the screen following the answer down); Page Up and
 //! Page Down, the arrow keys, or a mouse's wheel scroll. Esc clears the box, or stops an answer.
 //!
@@ -37,8 +39,8 @@ const BACK_TO_WINDOWS_STOPPED: &str = "To go back to Windows, hold the power but
 const TYPED_MAX: usize = 4000;
 /// The most lines the message box grows to; past that it scrolls.
 const BOX_LINES: usize = 6;
-/// The soft shadow under the message box: CSS 0 0.3rem 1.4rem, black at 9%.
-const SHADOW: u32 = 23;
+/// The soft shadow under the message box: CSS 0 0.25rem 1.25rem, black at 5%.
+const SHADOW: u32 = 13;
 /// Big redraws (more than a quarter of the screen) at most this often, so a fast answer doesn't take all the time.
 const BIG_REDRAW_MS: u64 = 40;
 /// Under a conversation brought back after a restart.
@@ -140,6 +142,11 @@ struct Metrics {
     line: i32,
     column_x: i32,
     column_w: i32,
+    /// How wide Claude's words (and the start screen's) go, from the column's left edge.
+    text_w: i32,
+    /// The message box: its left edge and width.
+    box_x: i32,
+    box_w: i32,
 }
 
 impl Metrics {
@@ -252,9 +259,10 @@ fn pulse(ms: u64) -> u32 {
 impl Chat {
     fn metrics(layout: &Layout, width: usize) -> Metrics {
         let rem = layout.font_px;
-        let line = (rem * 1.5 + 0.5) as i32;
+        let line = (rem * layout::LINE_HEIGHT + 0.5) as i32;
         let title_line = (rem * 1.5 * 1.3 + 0.5) as i32;
         let column_w = layout.column_px as i32;
+        let box_w = ((layout::BOX_REM * rem) as i32).min(width as i32 - (2.0 * rem) as i32).max(column_w.min(width as i32));
         Metrics {
             rem,
             body: Style { size: fx(rem), line_height: line * ONE },
@@ -262,6 +270,9 @@ impl Chat {
             line,
             column_x: (width as i32 - column_w) / 2,
             column_w,
+            text_w: ((layout::TEXT_REM * rem + 0.5) as i32).min(column_w),
+            box_x: (width as i32 - box_w) / 2,
+            box_w,
         }
     }
 
@@ -339,17 +350,17 @@ impl Chat {
     /// The message box for what's typed now. Changes `dirty` if its size changed.
     fn lay_out_box(&mut self) {
         let m = self.m;
-        let border = 2;
-        let (pad_top, pad_left, pad_right, gap) = (m.px(0.6), m.px(1.0), m.px(0.7), m.px(0.5));
-        let send_d = m.px(1.5);
-        let text_w = m.column_w - 2 * border - pad_left - pad_right - gap - send_d;
+        let border = self.hair();
+        let (pad_top, pad_left, pad_right, gap) = (m.px(0.6875), m.px(0.9375), m.px(0.75), m.px(0.5));
+        let send_d = m.line;
+        let text_w = m.box_w - 2 * border - pad_left - pad_right - gap - send_d;
         let lines = self.ty.breaks(&self.typed, m.body.size, text_w * ONE);
         let shown = lines.len().clamp(1, BOX_LINES);
         let caret_line = self.caret_line(&lines);
         let first = (caret_line + 1).saturating_sub(shown).min(lines.len().saturating_sub(shown));
         let h = 2 * border + 2 * pad_top + shown as i32 * m.line;
-        let y = self.screen.height as i32 - m.px(0.75) - h;
-        let card = Rect::new(m.column_x, y, m.column_w, h);
+        let y = self.screen.height as i32 - m.px(2.4375) - h;
+        let card = Rect::new(m.box_x, y, m.box_w, h);
         let row_bottom = y + border + pad_top + shown as i32 * m.line;
         let send = (
             (card.right() - border - pad_right) * 8 - send_d * 4,
@@ -359,7 +370,7 @@ impl Chat {
         if card != self.composer.card && self.composer.card != Rect::default() {
             self.relayout = true; // the conversation's room changed
         }
-        self.composer = BoxLayout { card, text_x: m.column_x + border + pad_left, text_y: y + border + pad_top, lines, first, shown, send };
+        self.composer = BoxLayout { card, text_x: m.box_x + border + pad_left, text_y: y + border + pad_top, lines, first, shown, send };
     }
 
     /// Which line of the box the caret is on.
@@ -401,14 +412,14 @@ impl Chat {
             b.height = p.height as i32;
         } else if b.kind == Kind::Claude && !b.thinking {
             // Claude's words, as Markdown (rich.rs).
-            let laid = rich::lay_out(ty, &shown, m.rem, style, m.column_w, hair);
+            let laid = rich::lay_out(ty, &shown, m.rem, style, m.text_w, hair);
             for (i, run) in laid.runs.into_iter().enumerate() {
                 lines.push(reuse(&run.text, run.face, run.style, run.x, run.y, i));
             }
             b.marks = laid.marks;
             b.height = laid.height.max(line);
         } else if b.kind == Kind::You {
-            let (pad_x, pad_y) = (m.px(0.9), m.px(0.5));
+            let (pad_x, pad_y) = (m.px(1.0), m.px(0.75));
             let inner = m.column_w * 85 / 100 - 2 * pad_x;
             let ranges = ty.breaks(&shown, style.size, inner * ONE);
             let widest = ranges.iter().map(|r| (ty.width(&shown[r.clone()], style.size) + ONE - 1) / ONE).max().unwrap_or(0);
@@ -422,7 +433,7 @@ impl Chat {
         } else if b.thinking {
             b.height = line;
         } else {
-            let ranges = ty.breaks(&shown, style.size, m.column_w * ONE);
+            let ranges = ty.breaks(&shown, style.size, m.text_w * ONE);
             // (A divider's line, then 1 em, then its words.)
             let mut y = if b.kind == Kind::Divider { m.px(1.0) } else { 0 };
             for r in &ranges {
@@ -538,7 +549,7 @@ impl Chat {
             }
             if b.kind == Kind::You {
                 let r = Rect::new(m.column_x + b.bubble.x, y + b.bubble.y, b.bubble.w, b.bubble.h);
-                canvas.round_rect(r, m.px(1.1), BUBBLE);
+                canvas.round_rect(r, m.px(0.75), BUBBLE);
             }
             if b.kind == Kind::Divider {
                 canvas.fill(Rect::new(m.column_x, y, m.column_w, rule), LINE);
@@ -579,8 +590,11 @@ impl Chat {
         let m = self.m;
         let b = &self.composer;
         let canvas = &mut self.canvas;
-        canvas.shadow(b.card, m.px(0.3), m.px(1.4), SHADOW);
-        canvas.round_rect(b.card, m.px(1.1), PAPER);
+        canvas.shadow(b.card, m.px(0.25), m.px(1.25), SHADOW);
+        // (A thin line round it: the card in the line's colour, the white inside it.)
+        let hair = ((self.layout.scale + 0.5) as i32).max(1);
+        canvas.round_rect(b.card, m.px(1.0), LINE);
+        canvas.round_rect(Rect::new(b.card.x + hair, b.card.y + hair, b.card.w - 2 * hair, b.card.h - 2 * hair), m.px(1.0) - hair, PAPER);
         let caret_w = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
         if self.typed.is_empty() {
             let hint = if assistant::busy() { "Esc stops the answer" } else { "Type anything" };

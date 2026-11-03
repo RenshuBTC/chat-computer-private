@@ -666,14 +666,17 @@ retrying with backoff, then starts listening.
   aloud (`speak`, through the Speaker), good and bad (kept in `feedback.jsonl` with the question, for finding what
   to improve) and ask again, with when; under theirs, when, ask again, edit and copy. Below is a message box (a real `<textarea>`: chat.js sends on Enter, Shift+Enter
   for a new line; no placeholder, since that would be grey text) with nothing under it; while asleep, a line
-  above it says how to wake Chat Computer. On a wide screen Messages and Actions take the left and right 17%
-  each (the Claude app's side panel's share); the column and the box centre in the rest.
-* Size and width: text is sized so that the x-height covers 0.3 degrees of view. That is the top of the
-  normal range of critical print size (0.15-0.3 degrees; Legge & Bigelow 2011), above which reading gets no
-  faster until about 2 degrees. With Atkinson's x-height (0.496 em), that is 23.9 px at 100%. The column is
-  at most 30 rem wide, about 70 characters a line (WCAG 1.4.8 AAA allows 80). `ui/layout.py` scales this for
-  the monitor's physical size (EDID via GDK) and the viewing distance (estimated from the screen size, or set
-  by voice), the way display scaling does. Websites get the display-scaling zoom, not the bigger text.
+  above it says how to wake Chat Computer. On a wide screen Messages runs down the left (with its buttons to
+  connect email, chat apps and social media) and the right sidebar down the right, each 17.5 rem (the Claude app's
+  sidebar's 280 px) against its edge of the screen from top to bottom, a thin line between it and the middle; the
+  right one is two halves of the same height, Actions above and Chats below (each task's chat, newest first, the
+  one on the screen marked; + starts a new one: `chats.py`). The column and the box centre in the rest.
+* Size and width: the Claude app's, measured from it on a 1920 x 1080 screen at 100% display scaling: 16 px
+  words on lines 22 px apart, a 924 px conversation with Claude's words up to 865 px (about 120 characters) and
+  yours in bubbles up to 85% of it, a 962 x 46 px message box 39 px above the bottom. Atkinson's letters at 16 px
+  are as big as the Claude app's (an x-height of 8 px). `ui/layout.py` scales this for the monitor's physical
+  size (EDID via GDK) and the viewing distance (estimated from the screen size, or set by voice), the way
+  display scaling makes the Claude app bigger. Websites get the display-scaling zoom, not the bigger text.
   Everything is recomputed when the window, monitor or settings change. Settings: `text_size` (0 = auto), `text_scale`, `viewing_distance_cm`, `screen_inches`
   (0 = reported), `web_zoom` (0 = auto).
 * Voice: PipeWire/AirPods, Silero VAD, faster-whisper (local), Kokoro TTS (local), barge-in.

@@ -1,15 +1,21 @@
-//! How big Chat Computer draws text on this screen. The same rules as Chat Computer's current screen
-//! (chatcomputer/ui/layout.py, where the reasons are written down): the x-height of the letters aims at
-//! 0.3 degrees of the reader's view, so nearly everyone reads at full speed; lines are at most 30 em
-//! wide (about 70 characters). The screen's real size comes from the monitor (EDID); the viewing
-//! distance is estimated from it.
+//! How big Chat Computer draws text on this screen: as big as the Claude app draws it there. The same rules as
+//! Chat Computer's screen on Linux (chatcomputer/ui/layout.py, where they're written down): the Claude app's sizes
+//! on a computer at 100% display scaling (measured from it on a 1920 x 1080 screen): its words 16px on lines 22px
+//! apart, the conversation 924px wide, Claude's words in it up to 865px, the message box 962px wide; made bigger on
+//! a sharper screen, or one farther away, as a computer's display scaling makes the Claude app bigger. The screen's
+//! real size comes from the monitor (EDID); the viewing distance is estimated from it.
 
-/// Text size at 100%: 0.3° of x-height on a 96-dpi monitor 60 cm away, in Atkinson Hyperlegible Next
-/// (x-height 0.496 em): 600 · tan(0.3°) · (96 / 25.4) / 0.496.
-pub const BASE_FONT_PX: f64 = 23.93920266766632;
+/// Text size at 100%: the Claude app's words.
+pub const BASE_FONT_PX: f64 = 16.0;
+/// Its lines' height, in em (22px).
+pub const LINE_HEIGHT: f64 = 1.375;
+/// Claude's words' widest line, and the message box's width, in rem (865px and 962px).
+pub const TEXT_REM: f64 = 54.0625;
+pub const BOX_REM: f64 = 60.125;
 const REF_PX_PER_MM: f64 = 96.0 / 25.4;
 const REF_DISTANCE_MM: f64 = 600.0;
-const COLUMN_REM: f64 = 30.0;
+/// The conversation's width, in rem (924px).
+const COLUMN_REM: f64 = 57.75;
 const MARGIN_REM: f64 = 1.5;
 const SCALE_STEP: f64 = 0.125;
 const SCALE_MIN: f64 = 0.75;

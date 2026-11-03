@@ -15,10 +15,11 @@
    to send, as in ChatGPT. The other colours are the light grey of your messages' bubbles (black on it is still
    16.5:1, and it stands off the background as #EDEDED did off white), which sets your words apart from Claude's the
    way chat apps do, and a little darker grey for lines (--line), as thin lines need more contrast than filled areas
-   to show as well. The message box and the sidebars are white (--paper), cards set off from the background with a
-   soft shadow, as the Claude app's message box is. Sizes are in rem. The screen sets the root size for this monitor and viewing distance
-   (chatcomputer/ui/layout.py), so the letters' x-height covers 0.3 degrees of view and lines hold about 70
-   characters. */
+   to show as well. The message box is white (--paper), set off from the background with a thin line and a soft
+   shadow, as the Claude app's is; the sidebars are a shade darker than the background (--side, as the Claude app's
+   sidebar is a shade darker than its middle), against the screen's edges. Sizes are in rem, and they're the Claude
+   app's: 16px words on lines 22px apart at 100% display scaling. The screen sets the root size for its own display
+   scaling (chatcomputer/ui/layout.py), as a computer's display scaling makes the Claude app bigger. */
 @font-face {
   font-family: "Atkinson Hyperlegible Next"; font-style: normal; font-weight: 200 800;
   src: url("fonts/AtkinsonHyperlegibleNext.ttf") format("truetype");
@@ -42,13 +43,14 @@
   --line: #DDD9D1;
   --dim: #918F8A;
   --paper: #FFFFFF;
+  --side: #F3F0EB;
   --sans: "Atkinson Hyperlegible Next", sans-serif;
   --mono: "Atkinson Hyperlegible Mono", monospace;
 }
 * { box-sizing: border-box; }
-html { font-size: var(--co-size, 24px); }
+html { font-size: var(--co-size, 16px); }
 html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink); }
-body { font-family: var(--sans); font-size: 1rem; line-height: 1.5; }
+body { font-family: var(--sans); font-size: 1rem; line-height: 1.375; }
 /* Selected text (to copy it) is shown the other way round: white on black. */
 ::selection { background: var(--ink); color: var(--ground); }
 

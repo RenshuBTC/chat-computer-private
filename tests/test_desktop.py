@@ -90,8 +90,11 @@ BINARY = TAURI / "target" / "debug" / "chat-computer"
 
 
 def _can_drive():
+    # (desktop_check.py drives the app with Selenium, which the runtime's requirements don't have.)
+    import importlib.util
     driver = shutil.which("tauri-driver") or os.path.expanduser("~/.cargo/bin/tauri-driver")
-    return BINARY.exists() and os.path.exists(driver) and shutil.which("WebKitWebDriver") and shutil.which("Xvfb")
+    return (BINARY.exists() and os.path.exists(driver) and shutil.which("WebKitWebDriver") and shutil.which("Xvfb")
+            and importlib.util.find_spec("selenium") is not None)
 
 
 @pytest.mark.skipif(not _can_drive(), reason="the app isn't built here, or WebDriver for it isn't there")

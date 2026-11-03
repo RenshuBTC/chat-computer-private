@@ -1,4 +1,4 @@
-"""How big Chat Computer draws things: letters big enough to read at full speed, scaled for each screen like display
+"""How big Chat Computer draws things: as big as the Claude app draws them, scaled for each screen like display
 scaling does."""
 import math
 import struct
@@ -36,17 +36,22 @@ def test_scale_like_desktop_display_scaling(name):
     assert lay.column_px <= scr.view_w_px
 
 
-def _x_height_deg(scr, lay):
-    mm = lay.font_px * L.X_HEIGHT_EM / scr.px_per_mm
-    return math.degrees(2 * math.atan(mm / 2 / lay.distance_mm))
-
-
-def test_letters_are_big_enough_to_read_at_full_speed():
-    # 24 px on a standard desktop monitor at 60 cm: an x-height of 0.3 degrees, the top of the range of
-    # critical print sizes for normal sight (0.15-0.3) and far below where large print slows reading (2).
-    assert L.BASE_FONT_PX == pytest.approx(23.94, abs=0.01)
-    for name, (scr, _) in CASES.items():
-        assert 0.28 <= _x_height_deg(scr, L.compute(scr)) <= 0.33, name
+def test_sizes_are_the_claude_apps():
+    # Measured from the Claude app on a 1920 x 1080 screen at 100% display scaling: 16px words on lines 22px apart,
+    # the conversation 924px wide with Claude's words up to 865px, the message box 962 x 46px, the sidebar 280px.
+    px = L.BASE_FONT_PX
+    assert (px, px * L.LINE_HEIGHT) == (16, 22)
+    assert (L.COLUMN_REM * px, L.TEXT_REM * px) == (924, 865)
+    assert (L.BOX_REM * px, L.BOX_HEIGHT_REM * px, L.SIDEBAR_REM * px) == (962, 46, 280)
+    # The page's style sheet has the same numbers (in rem), and the line height.
+    css = (L.__file__.rsplit("/", 1)[0] + "/assets/")
+    chat, theme = open(css + "chat.css").read(), open(css + "theme.css").read()
+    assert "var(--co-column, 57.75rem)" in chat and "max-width: 54.0625rem" in chat
+    assert "width: min(60.125rem, 100% - 2rem)" in chat and "--left: 17.5rem; --panel: 17.5rem" in chat
+    assert "line-height: 1.375;" in theme and "var(--co-size, 16px)" in theme
+    # On a standard desktop monitor (a 24-inch 1080p one at about 60 cm), exactly those.
+    lay = L.compute(CASES["24in 1080p monitor"][0])
+    assert (lay.font_px, lay.column_px) == (16, 924)
 
 
 def test_x_height_is_the_fonts():
@@ -59,9 +64,9 @@ def test_x_height_is_the_fonts():
     assert x_height / units == L.X_HEIGHT_EM
 
 
-def test_lines_hold_about_70_characters():
-    # WCAG 1.4.8 (AAA): no more than 80 characters a line.
-    assert 65 <= L.COLUMN_REM / L.AVG_CHAR_EM <= 75
+def test_lines_hold_as_many_characters_as_the_claude_apps():
+    # The Claude app's longest line in the screenshot measured: 121 characters in 861px (its words 16px).
+    assert 115 <= L.TEXT_REM / L.AVG_CHAR_EM <= 130
 
 
 def test_text_looks_the_same_size_on_every_screen():
@@ -74,7 +79,7 @@ def test_text_looks_the_same_size_on_every_screen():
     assert max(angles) / min(angles) < 1.08, angles
 
 
-def test_column_is_30_rem_or_the_screen():
+def test_column_is_57_75_rem_or_the_screen():
     lay = L.compute(CASES["27in 1440p monitor"][0])
     assert lay.column_px == pytest.approx(L.COLUMN_REM * lay.font_px, abs=2)
     narrow = L.compute(screen(1920, 1080, 14, view=(700, 600)))
@@ -122,7 +127,7 @@ def test_diagonal_setting_overrides_monitor_report():
 
 def test_css_vars():
     css = L.css_vars(L.compute(CASES["24in 1080p monitor"][0]))
-    assert css == ":root{--co-size:23.9px;--co-column:718px}"
+    assert css == ":root{--co-size:16.0px;--co-column:924px}"
 
 
 def test_print_table():

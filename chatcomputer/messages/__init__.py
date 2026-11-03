@@ -31,6 +31,10 @@ SIGNED_OUT_WAIT_S = 30 * 60       # an account that stopped taking its sign-in i
 CHOICES = [("Gmail", "gmail"), ("Outlook or Hotmail", "outlook"), ("iCloud Mail", "icloud"), ("Yahoo Mail", "yahoo"),
            ("Other email", "imap"), ("Telegram", "telegram"), ("WhatsApp", "whatsapp"), ("WeChat", "wechat"), ("X", "x"),
            ("Instagram", "instagram"), ("Facebook", "facebook"), ("TikTok", "tiktok"), ("LinkedIn", "linkedin")]
+# Messages' three buttons: what each offers.
+GROUPS = {"email": ("Connect email", {"gmail", "outlook", "icloud", "yahoo", "imap"}),
+          "chat": ("Connect chat apps", {"telegram", "whatsapp", "wechat"}),
+          "social": ("Connect social media", {"x", "instagram", "facebook", "tiktok", "linkedin"})}
 MAIL_HELP = {
     "gmail": ["Gmail needs an app password, not your usual one. Turn on 2-Step Verification for your Google "
               "account, then make an app password at myaccount.google.com/apppasswords and type it here.",
@@ -353,12 +357,18 @@ class Inbox:
             if si is not None and si is not keep and self.loop is not None:
                 self.loop.create_task(si.close())
 
-    async def connect(self, provider: str | None) -> str:
-        """Starts connecting an account: the right form or page on the screen. Returns what to tell the person."""
+    async def connect(self, provider: str | None, group: str | None = None) -> str:
+        """Starts connecting an account: the right form or page on the screen (with only `group`'s to choose from:
+        email, chat or social, Messages' buttons). Returns what to tell the person."""
         provider = (provider or "").lower().strip()
         aliases = {"hotmail": "outlook", "live": "outlook", "outlook.com": "outlook", "google": "gmail",
                    "twitter": "x", "messenger": "facebook", "email": "imap", "mail": "imap", "apple": "icloud"}
         provider = aliases.get(provider, provider)
+        if not provider and group in GROUPS:
+            title, values = GROUPS[group]
+            self._form("choose", title=title, text=["Which one?"], ok="",
+                       choices=[{"label": l, "value": v} for l, v in CHOICES if v in values])
+            return "The list of accounts to connect is on the screen."
         if not provider:
             self._form("choose", title="Connect an account", text=["Which one?"], ok="",
                        choices=[{"label": l, "value": v} for l, v in CHOICES])

@@ -276,7 +276,7 @@ class VirtualPC:
 
 
 # Chat Computer's colours (theme.css): the background, the words, your messages' bubbles, the message box.
-GROUND, INK, BUBBLE, PAPER = (21, 21, 21), (249, 249, 247), (44, 44, 42), (48, 48, 48)
+GROUND, INK, BUBBLE, PAPER = (25, 25, 25), (240, 240, 240), (37, 37, 37), (48, 48, 48)
 
 
 def colours(image) -> dict:

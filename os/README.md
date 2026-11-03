@@ -252,8 +252,8 @@ drivers.
   GDEF's item variation store). It's tested against fontTools' reading of the same font, at the default weight and
   at others, and against HarfBuzz: every glyph's advance at three weights, and the kerning of every pair of 152
   characters at four (`font/reference.py`).
-* `text/` sets lines of text in those fonts: which font has each character (the fallback fonts for what Atkinson
-  Hyperlegible lacks), how wide lines are, where they wrap, and drawing them, with the kerning a browser applies
+* `text/` sets lines of text in those fonts: which font has each character (the fallback fonts for what Lora and
+  the code font lack), how wide lines are, where they wrap, and drawing them, with the kerning a browser applies
   (within a run of one font and face). Tested against where HarfBuzz puts each letter, at the regular weight and
   the bold (`text/reference.py`).
 * `markdown/` reads the Markdown the model writes into blocks and styled words, by the same rules as the main
@@ -356,8 +356,8 @@ drivers.
 The screen follows Chat Computer's look (`chatcomputer/ui/assets/theme.css` and `chat.css`):
 * light words on the dark background, in the tones of Claude's dark mode, your messages in bubbles on the
   right, the message box a card lifted off the middle with a soft shadow at the bottom;
-* Atkinson Hyperlegible Next (its regular and bold), and Atkinson Hyperlegible Mono for code. What they lack
-  (arrows, check marks, maths, Greek and Cyrillic, emoji in black and white, box drawing in code) comes from two
+* Lora (its regular and bold), and Atkinson Hyperlegible Mono for code. What they lack (arrows, check marks, maths,
+  Greek, emoji in black and white, box drawing in code) comes from two
   fallback fonts made from Google's Noto fonts (`fonts/`, built by `fonts/build.py`), as a browser would take it
   from the system's fonts. Chinese, Japanese and Korean show as boxes still;
 * text sized as the Claude app's (16 px at 100%), scaled as `chatcomputer/ui/layout.py` does, from the
@@ -531,8 +531,7 @@ Some things are made by others but are not software between the hardware and Cha
   own library into Chat Computer (`core` and `alloc`, for things like formatting numbers and collections on
   the heap). Chat Computer replaces pieces of it with its own where that matters; `memcpy` and its relatives
   are already Chat Computer's own.
-* **Data**, such as the font (Atkinson Hyperlegible Next, by the Braille Institute, under the SIL Open
-  Font License), and the list of certificate authorities Chat Computer trusts, which is Mozilla's
+* **Data**, such as the font (Lora, by Cyreal, under the SIL Open Font License), and the list of certificate authorities Chat Computer trusts, which is Mozilla's
   (`tls/roots.txt`). Chat Computer ignores the hinting programs inside the font. Later, speech models' weights
   will be data of this kind too, as the model's weights already are (Qwen's, published by Alibaba under the Apache
   2.0 licence; Chat Computer's own engine runs them).

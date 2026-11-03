@@ -6,18 +6,24 @@ use text::Ink;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// The background: Claude's dark mode's middle (theme.css --ground).
-pub const GROUND: u32 = 0x151515;
+/// The background: the middle of Claude's app on a PC, in dark mode (theme.css --ground).
+pub const GROUND: u32 = 0x191919;
 /// The words: a white just off pure (theme.css --ink).
-pub const INK: u32 = 0xF9F9F7;
-/// Your messages' bubbles.
-pub const BUBBLE: u32 = 0x2C2C2A;
-/// The empty message box's hint, and its send button until there's something to send.
-pub const DIM: u32 = 0x96958D;
+pub const INK: u32 = 0xF0F0F0;
+/// Your messages' bubbles (theme.css --bubble).
+pub const BUBBLE: u32 = 0x252525;
+/// Words that matter less: what Chat Computer is doing while it thinks (theme.css --muted).
+pub const MUTED: u32 = 0x9E9E9E;
 /// Lines between things (theme.css --line).
-pub const LINE: u32 = 0x3D3D3C;
-/// The message box.
+pub const LINE: u32 = 0x303030;
+/// The message box, which keeps its own look (theme.css --paper, and #box in chat.css): the box itself; the thin
+/// line round it; its words and caret, and its send button once there's something to send; the arrow on that
+/// button; and its hint, and the send button until there's something to send.
 pub const PAPER: u32 = 0x303030;
+pub const BOX_LINE: u32 = 0x3D3D3C;
+pub const BOX_INK: u32 = 0xF9F9F7;
+pub const BOX_GROUND: u32 = 0x151515;
+pub const DIM: u32 = 0x96958D;
 /// Shadows (theme.css --shade).
 pub const SHADE: u32 = 0x000000;
 

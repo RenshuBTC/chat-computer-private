@@ -1,6 +1,6 @@
 # The own system's fallback fonts
 
-Chat Computer's own system draws text in Atkinson Hyperlegible Next and code in Atkinson Hyperlegible Mono
+Chat Computer's own system draws text in Lora and code in Atkinson Hyperlegible Mono
 (`chatcomputer/ui/assets/fonts`). Claude also writes characters those fonts don't have: arrows (→), check marks
 (✓), maths (≈ ≤ Δ), Greek and Cyrillic, emoji (🙂), and box drawing in code (└─). On the main screen they come from
 the system's fonts; the own system has no other fonts, so it carries these two, made from Google's Noto fonts:
@@ -10,7 +10,7 @@ the system's fonts; the own system has no other fonts, so it carries these two, 
 | `ChatComputerFallback.ttf` | Latin letters with other accents, Greek, Cyrillic, punctuation, super- and subscripts, currency and letterlike symbols; arrows, maths and geometric shapes; dingbats and other symbols; emoji (in black and white) | Noto Sans, Noto Sans Math, Noto Sans Symbols 2, Noto Sans Symbols and Noto Emoji, in that order where two have a character |
 | `ChatComputerFallbackMono.ttf` | for code: box drawing, blocks and shapes, arrows, maths, Greek and Cyrillic | Noto Sans Mono, its glyphs stretched from 600 to 632 units wide (Atkinson Hyperlegible Mono's width), so lines meet |
 
-Only characters Atkinson Hyperlegible lacks are in them (`text/src/lib.rs` looks there when it does). Both are
+Only characters Lora (for the code one, Atkinson Hyperlegible Mono) lacks are in them (`text/src/lib.rs` looks there when it does). Both are
 regular weight only (bold text shows these characters regular), with 1000 units to the em, and without hinting,
 layout tables or glyph names. Chinese, Japanese and Korean aren't in them (their fonts are 10 MB or more): those
 characters still show as boxes.
@@ -33,7 +33,7 @@ the em to 1000, and each is cut down to the Unicode blocks `build.py` lists. Wit
 the same every time:
 
 ```
-429bc248f872e7dbf933803380f345e8addb69a6d371f411cdfcc6e07f602eba  ChatComputerFallback.ttf
+590400864620262bbf3148caa2af1eb61a4b61531328039021b78412db4aaca7  ChatComputerFallback.ttf
 94dea26c8c5a3cf4a719ff730924a048bbe4a2ce8a99b474298b5e52721079ea  ChatComputerFallbackMono.ttf
 ```
 

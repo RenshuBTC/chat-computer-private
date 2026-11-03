@@ -23,7 +23,7 @@ import uharfbuzz as hb
 from fontTools.ttLib import TTFont
 
 HERE = Path(__file__).resolve().parent
-FONT = HERE.parent.parent / "chatcomputer" / "ui" / "assets" / "fonts" / "AtkinsonHyperlegibleNext.ttf"
+FONT = HERE / "testdata" / "AtkinsonHyperlegibleNext.ttf"
 WEIGHTS = (400, 700, 200, 800)
 # Printable ASCII with the space, and letters and punctuation from other Latin languages and typesetting.
 CHARS = [chr(c) for c in range(0x20, 0x7F)] + list("àáâäåçèéêëíîïñóôöøúûüÿÀÁÂÄÅÇÈÉÊËÍÎÏÑÓÔÖØÚÛÜßæÆœŒ‘’“”«»–—…")

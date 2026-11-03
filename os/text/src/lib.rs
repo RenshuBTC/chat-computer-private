@@ -1,5 +1,5 @@
-//! Text in Atkinson Hyperlegible Next (its regular and bold, both from the one variable font file) and, for code,
-//! Atkinson Hyperlegible Mono, set with Chat Computer's own font engine: measuring, wrapping and drawing lines.
+//! Text in Lora (its regular and bold, both from the one variable font file) and, for code, Atkinson Hyperlegible
+//! Mono, set with Chat Computer's own font engine: measuring, wrapping and drawing lines.
 //! Characters they don't have (arrows, check marks, maths, Greek and Cyrillic, emoji, and box drawing in code) come
 //! from fallback fonts made from Google's Noto fonts (`os/fonts/`), as a browser would take them from the system's.
 //! Letters side by side are kerned as the font says ("AV", "To" and "y." closer), at its regular weight and its bold,
@@ -15,7 +15,7 @@ use core::ops::Range;
 use font::raster::{Pen, Raster, ONE};
 use font::{Font, Instance, Kerning, Outline};
 
-static ATKINSON: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf");
+static LORA: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/Lora.ttf");
 static MONO: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleMono.ttf");
 static FALLBACK: &[u8] = include_bytes!("../../fonts/ChatComputerFallback.ttf");
 static FALLBACK_MONO: &[u8] = include_bytes!("../../fonts/ChatComputerFallbackMono.ttf");
@@ -129,8 +129,9 @@ pub struct Ink {
 }
 
 impl Type {
-    pub fn atkinson() -> Type {
-        let font = Font::parse(ATKINSON).expect("the built-in font is damaged");
+    /// Chat Computer's own fonts: Lora, Atkinson Hyperlegible Mono for code, and the fallbacks.
+    pub fn builtin() -> Type {
+        let font = Font::parse(LORA).expect("the built-in font is damaged");
         let mono = Font::parse(MONO).expect("the built-in code font is damaged");
         let fallback = Font::parse(FALLBACK).expect("the built-in fallback font is damaged");
         let fallback_mono = Font::parse(FALLBACK_MONO).expect("the built-in fallback code font is damaged");

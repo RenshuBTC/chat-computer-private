@@ -1,15 +1,15 @@
-"""Prints the table in src/tests.rs: where HarfBuzz sets each letter of some lines of text in Atkinson Hyperlegible
-Next, at its regular weight and its bold (700), kerning and all: each glyph's start along the line, in font units
-(1000 to the em), and the line's width.
+"""Prints the table in src/tests.rs: where HarfBuzz sets each letter of some lines of text in Lora, at its regular
+weight and its bold (700), kerning and all: each glyph's start along the line, in font units (1000 to the em), and
+the line's width.
 
-Made with uharfbuzz 0.56.3 (HarfBuzz 14.6.0):
+Made with uharfbuzz 0.57.0:
     python reference.py
 """
 from pathlib import Path
 
 import uharfbuzz as hb
 
-FONT = Path(__file__).resolve().parent.parent.parent / "chatcomputer" / "ui" / "assets" / "fonts" / "AtkinsonHyperlegibleNext.ttf"
+FONT = Path(__file__).resolve().parent.parent.parent / "chatcomputer" / "ui" / "assets" / "fonts" / "Lora.ttf"
 LINES = ["AVATAR", "Today, Tokyo.", "WAVY lines: P. F, y. r.", "“Quoted” — LT AV To", "Hello, world", " T A Y "]
 
 

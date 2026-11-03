@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Builds the own system's fallback fonts: the characters Atkinson Hyperlegible lacks that Claude writes (arrows, check
-marks, maths, Greek and Cyrillic, emoji, and box drawing in code), from Google's Noto fonts. See README.md.
+"""Builds the own system's fallback fonts: the characters its fonts (Lora, and Atkinson Hyperlegible Mono for code) lack
+that Claude writes (arrows, check marks, maths, Greek, emoji, and box drawing in code), from Google's Noto fonts. See
+README.md.
 
     ./build.py              downloads the Noto fonts (checking their SHA-256), builds both, and prints their SHA-256
     ./build.py --from DIR   uses the Noto fonts already in DIR (named as in google/fonts)
@@ -26,8 +27,8 @@ from fontTools.ttLib.scaleUpem import scale_upem
 from fontTools.varLib import instancer
 
 HERE = Path(__file__).resolve().parent
-ATKINSON = HERE.parent.parent / "chatcomputer/ui/assets/fonts"
-# google/fonts at the commit Atkinson Hyperlegible's files came from.
+FONTS = HERE.parent.parent / "chatcomputer/ui/assets/fonts"
+# google/fonts at the commit Atkinson Hyperlegible's files came from (the Noto fonts the fallbacks are made from).
 COMMIT = "47d54ca1ebb14fd864695f1d39dc734f39017c33"
 SOURCES = {
     "ofl/notosans/NotoSans[wdth,wght].ttf": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d",
@@ -105,7 +106,7 @@ def static(data: bytes, **axes: float) -> TTFont:
 
 
 def cut(font: TTFont, wanted: set[int], skip: set[int]) -> TTFont:
-    """Only the characters in `wanted` the font has, but not those in `skip` (Atkinson's own)."""
+    """Only the characters in `wanted` the font has, but not those in `skip` (the main font's own)."""
     cmap = font.getBestCmap()
     keep = sorted(c for c in wanted if c in cmap and c not in skip)
     options = subset.Options()
@@ -156,17 +157,17 @@ def named(font: TTFont, family: str) -> None:
 
 
 def build(where: Path | None) -> None:
-    atkinson = set(TTFont(ATKINSON / "AtkinsonHyperlegibleNext.ttf").getBestCmap())
-    atkinson_mono = set(TTFont(ATKINSON / "AtkinsonHyperlegibleMono.ttf").getBestCmap())
+    main = set(TTFont(FONTS / "Lora.ttf").getBestCmap())
+    mono_font = set(TTFont(FONTS / "AtkinsonHyperlegibleMono.ttf").getBestCmap())
     data = {source: fetch(source, where) for source in SOURCES}
 
-    sans = cut(static(data["ofl/notosans/NotoSans[wdth,wght].ttf"], wght=400, wdth=100), LATIN_GREEK_CYRILLIC, atkinson)
-    maths = cut(static(data["ofl/notosansmath/NotoSansMath-Regular.ttf"]), SYMBOLS, atkinson)
-    symbols = cut(static(data["ofl/notosanssymbols2/NotoSansSymbols2-Regular.ttf"]), SYMBOLS, atkinson)
-    more_symbols = cut(static(data["ofl/notosanssymbols/NotoSansSymbols[wght].ttf"], wght=400), SYMBOLS, atkinson)
+    sans = cut(static(data["ofl/notosans/NotoSans[wdth,wght].ttf"], wght=400, wdth=100), LATIN_GREEK_CYRILLIC, main)
+    maths = cut(static(data["ofl/notosansmath/NotoSansMath-Regular.ttf"]), SYMBOLS, main)
+    symbols = cut(static(data["ofl/notosanssymbols2/NotoSansSymbols2-Regular.ttf"]), SYMBOLS, main)
+    more_symbols = cut(static(data["ofl/notosanssymbols/NotoSansSymbols[wght].ttf"], wght=400), SYMBOLS, main)
     emoji = static(data["ofl/notoemoji/NotoEmoji[wght].ttf"], wght=400)
     scale_upem(emoji, 1000)
-    emoji = cut(emoji, EMOJI, atkinson)
+    emoji = cut(emoji, EMOJI, main)
     parts = []
     for font in (sans, maths, symbols, more_symbols, emoji):
         buffer = io.BytesIO()
@@ -178,7 +179,7 @@ def build(where: Path | None) -> None:
     named(merged, "Chat Computer Fallback")
     merged.save(HERE / "ChatComputerFallback.ttf")
 
-    mono = cut(static(data["ofl/notosansmono/NotoSansMono[wdth,wght].ttf"], wght=400, wdth=100), MONO, atkinson_mono)
+    mono = cut(static(data["ofl/notosansmono/NotoSansMono[wdth,wght].ttf"], wght=400, wdth=100), MONO, mono_font)
     widen(mono, 632)
     named(mono, "Chat Computer Fallback Mono")
     mono.save(HERE / "ChatComputerFallbackMono.ttf")

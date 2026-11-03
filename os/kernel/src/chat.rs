@@ -12,7 +12,7 @@
 //! back to Windows. If the kernel ever stops, the same place says so, with details to pass on.
 
 use crate::assistant::{self, Event, Ready};
-use crate::draw::{Canvas, Rect, BUBBLE, DIM, GROUND, INK, LINE, PAPER};
+use crate::draw::{Canvas, Rect, BOX_GROUND, BOX_INK, BOX_LINE, BUBBLE, DIM, GROUND, INK, LINE, MUTED, PAPER};
 use crate::keyboard::{Key, Press};
 use crate::layout::{self, Layout};
 use crate::screen::Screen;
@@ -304,7 +304,7 @@ impl Chat {
         let mut c = Chat {
             screen,
             canvas,
-            ty: Type::atkinson(),
+            ty: Type::builtin(),
             layout,
             m,
             blocks,
@@ -574,7 +574,7 @@ impl Chat {
                 canvas.circle((m.column_x * 2 + d) * 4, (y + baseline) * 8 - d * 4, d * 4, INK, pulse(now));
                 if let Some(doing) = &b.activity {
                     let ink = ty.ink(doing, m.body, 0);
-                    canvas.ink(m.column_x + d + m.px(0.6) - ink.left as i32, y, &ink, DIM);
+                    canvas.ink(m.column_x + d + m.px(0.6) - ink.left as i32, y, &ink, MUTED);
                 }
             }
         }
@@ -592,7 +592,7 @@ impl Chat {
         canvas.shadow(b.card, m.px(0.25), m.px(1.25), SHADOW);
         // (A thin line round it: the card in the line's colour, the box's own inside it.)
         let hair = ((self.layout.scale + 0.5) as i32).max(1);
-        canvas.round_rect(b.card, m.px(1.0), LINE);
+        canvas.round_rect(b.card, m.px(1.0), BOX_LINE);
         canvas.round_rect(Rect::new(b.card.x + hair, b.card.y + hair, b.card.w - 2 * hair, b.card.h - 2 * hair), m.px(1.0) - hair, PAPER);
         let caret_w = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
         if self.typed.is_empty() {
@@ -606,7 +606,7 @@ impl Chat {
                 continue;
             }
             let ink = self.ty.ink(text, m.body, 0);
-            canvas.ink(b.text_x - ink.left as i32, b.text_y + (i - b.first) as i32 * m.line, &ink, INK);
+            canvas.ink(b.text_x - ink.left as i32, b.text_y + (i - b.first) as i32 * m.line, &ink, BOX_INK);
         }
         // The caret.
         let li = b.lines.iter().rposition(|l| l.start <= self.cursor).unwrap_or(0);
@@ -617,16 +617,16 @@ impl Chat {
             // (Where the next letter starts: kerned closer to the one before, the caret is too.)
             let x = b.text_x + self.ty.x_at(&self.typed[start..line_end], end - start, m.body.size) / ONE;
             let y = b.text_y + (li - b.first) as i32 * m.line;
-            canvas.fill(Rect::new(x, y + m.line * 18 / 100, caret_w, m.line * 64 / 100), INK);
+            canvas.fill(Rect::new(x, y + m.line * 18 / 100, caret_w, m.line * 64 / 100), BOX_INK);
         }
         // The send button: a circle with an arrow up (chat.html's arrow), drawn at 62% of the button.
         let (cx, cy, r) = b.send;
         let ready = !self.typed.trim().is_empty() && !assistant::busy();
-        canvas.circle(cx, cy, r, if ready { INK } else { DIM }, 255);
+        canvas.circle(cx, cy, r, if ready { BOX_INK } else { DIM }, 255);
         let unit = r * 2 * 62 / 100; // the icon's size, in 1/8 pixel; its drawing is 24 units across
         let at = |u: i32, v: i32| (cx - unit / 2 + u * unit / 240, cy - unit / 2 + v * unit / 240);
         let segments = [(at(120, 190), at(120, 50)), (at(55, 115), at(120, 50)), (at(120, 50), at(185, 115))];
-        canvas.strokes(&segments, unit * 26 / 240, GROUND);
+        canvas.strokes(&segments, unit * 26 / 240, BOX_GROUND);
     }
 
     /// Draws what changed (everything if `all`) and puts it on the screen.

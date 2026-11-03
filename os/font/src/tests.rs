@@ -4,7 +4,8 @@ use super::raster::{Pen, Raster, ONE};
 use super::*;
 
 fn atkinson() -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleNext.ttf");
+    // (Atkinson Hyperlegible Next, Chat Computer's font before Lora, kept here as the engine's test font: testdata/.)
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/AtkinsonHyperlegibleNext.ttf");
     std::fs::read(path).expect("the font file")
 }
 
@@ -304,16 +305,16 @@ fn bold_and_light_come_from_the_same_font() {
 /// them. One merged from several Noto fonts, with emoji scaled from 2048 units to the em and glyphs built from others
 /// (ǅ); the code one stretched to Atkinson Hyperlegible Mono's width.
 const FALLBACK: [(char, u16, u16, f64); 10] = [
-    ('→', 1988, 1012, -94250.0),
-    ('✓', 1624, 780, -104113.0),
-    ('α', 170, 623, -133071.0),
-    ('Ж', 217, 905, -229335.0),
-    ('🙂', 4251, 1270, -166110.0),
-    ('☀', 2435, 914, -159571.0),
-    ('⌘', 2677, 814, -253561.0),
-    ('①', 3118, 1000, -173016.0),
-    ('ʃ', 845, 258, -98927.0),
-    ('ǅ', 671, 1200, -286870.0),
+    ('→', 1578, 1012, -94250.0),
+    ('✓', 1215, 780, -104113.0),
+    ('α', 128, 623, -133071.0),
+    ('♪', 1083, 451, -62991.0),
+    ('🙂', 3842, 1270, -166110.0),
+    ('☀', 2025, 914, -159571.0),
+    ('⌘', 2267, 814, -253561.0),
+    ('①', 2709, 1000, -173016.0),
+    ('ʃ', 465, 258, -98927.0),
+    ('ǅ', 305, 1200, -286870.0),
 ];
 const FALLBACK_MONO: [(char, u16, u16, f64); 6] = [
     ('└', 974, 632, -68835.0),
@@ -337,7 +338,7 @@ fn reads_the_fallback_fonts() {
             let got = a.twice / 2.0;
             assert!((got - area).abs() < area.abs() * 0.0005, "{file}: {c:?}: area {got}, fontTools {area}");
         }
-        // Atkinson Hyperlegible's own characters aren't in them.
+        // The main fonts' own characters aren't in them (Lora's, and the code font's).
         assert_eq!(f.glyph_index('a'), 0, "{file}");
     }
 }

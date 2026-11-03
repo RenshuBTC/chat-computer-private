@@ -4,18 +4,18 @@ use super::*;
 
 // Where HarfBuzz sets each glyph along the line (font units), at the regular weight or the bold, and the line's width.
 const SET: [(&str, bool, &[i32], i32); 12] = [
-    ("AVATAR", false, &[0, 586, 1139, 1715, 2223, 2849], 3463),
-    ("AVATAR", true, &[0, 630, 1226, 1838, 2379, 3057], 3707),
-    ("Today, Tokyo.", false, &[0, 478, 1029, 1593, 2111, 2530, 2740, 3000, 3478, 4026, 4523, 4964, 5502], 5712),
-    ("Today, Tokyo.", true, &[0, 527, 1104, 1700, 2234, 2701, 2972, 3264, 3791, 4367, 4931, 5434, 6000], 6272),
-    ("WAVY lines: P. F, y. r.", false, &[0, 826, 1412, 2034, 2579, 2859, 3128, 3380, 3930, 4468, 4939, 5149, 5429, 5961, 6171, 6451, 6943, 7153, 7423, 7842, 8052, 8332, 8611], 8821),
-    ("WAVY lines: P. F, y. r.", true, &[0, 848, 1478, 2151, 2771, 3083, 3380, 3680, 4251, 4814, 5322, 5594, 5906, 6475, 6747, 7059, 7573, 7844, 8138, 8605, 8877, 9189, 9495], 9767),
-    ("“Quoted” — LT AV To", false, &[0, 399, 1123, 1663, 2198, 2512, 3050, 3614, 4013, 4293, 5117, 5397, 5868, 6406, 6676, 7262, 7835, 8095, 8573], 9121),
-    ("“Quoted” — LT AV To", true, &[0, 479, 1235, 1802, 2376, 2738, 3301, 3897, 4376, 4688, 5520, 5832, 6298, 6885, 7187, 7817, 8441, 8733, 9260], 9836),
-    ("Hello, world", false, &[0, 694, 1232, 1489, 1747, 2285, 2495, 2765, 3441, 3989, 4348, 4606], 5170),
-    ("Hello, world", true, &[0, 701, 1264, 1572, 1876, 2442, 2713, 3007, 3729, 4305, 4691, 4995], 5591),
-    (" T A Y ", false, &[0, 260, 798, 1068, 1684, 1934, 2479], 2759),
-    (" T A Y ", true, &[0, 292, 879, 1181, 1849, 2131, 2751], 3063),
+    ("AVATAR", false, &[0, 587, 1196, 1798, 2414, 3040], 3668),
+    ("AVATAR", true, &[0, 590, 1221, 1836, 2433, 3101], 3787),
+    ("Today, Tokyo.", false, &[0, 591, 1176, 1774, 2280, 2753, 3006, 3269, 3860, 4445, 4982, 5500, 6085], 6331),
+    ("Today, Tokyo.", true, &[0, 599, 1165, 1761, 2272, 2784, 3034, 3297, 3896, 4458, 5052, 5594, 6160], 6393),
+    ("WAVY lines: P. F, y. r.", false, &[0, 951, 1538, 2250, 2884, 3147, 3419, 3700, 4307, 4849, 5312, 5562, 5825, 6347, 6593, 6856, 7331, 7584, 7847, 8338, 8584, 8847, 9238], 9484),
+    ("WAVY lines: P. F, y. r.", true, &[0, 946, 1536, 2268, 2935, 3198, 3510, 3837, 4475, 5013, 5498, 5748, 6011, 6559, 6792, 7055, 7562, 7812, 8075, 8587, 8820, 9083, 9518], 9751),
+    ("“Quoted” — LT AV To", false, &[0, 385, 1181, 1778, 2363, 2750, 3287, 3885, 4234, 4497, 5338, 5601, 6120, 6760, 7023, 7610, 8263, 8526, 9117], 9702),
+    ("“Quoted” — LT AV To", true, &[0, 423, 1193, 1811, 2377, 2790, 3328, 3924, 4335, 4598, 5443, 5706, 6249, 6899, 7162, 7752, 8460, 8723, 9322], 9888),
+    ("Hello, world", false, &[0, 758, 1300, 1572, 1844, 2429, 2682, 2945, 3734, 4319, 4748, 5020], 5618),
+    ("Hello, world", true, &[0, 781, 1319, 1631, 1943, 2509, 2759, 3022, 3823, 4389, 4860, 5172], 5768),
+    (" T A Y ", false, &[0, 263, 903, 1166, 1792, 2055, 2689], 2952),
+    (" T A Y ", true, &[0, 263, 913, 1176, 1844, 2107, 2774], 3037),
 ];
 
 /// A size at which a font unit is a 256th of a pixel: widths come out in font units.
@@ -27,7 +27,7 @@ fn starts(ty: &Type, text: &str, face: Face) -> Vec<i32> {
 
 #[test]
 fn sets_letters_where_harfbuzz_does() {
-    let ty = Type::atkinson();
+    let ty = Type::builtin();
     for (text, bold, want, width) in SET {
         let face = if bold { Face::Bold } else { Face::Regular };
         assert_eq!(starts(&ty, text, face), want, "{text:?}, bold {bold}");
@@ -43,7 +43,7 @@ fn sets_letters_where_harfbuzz_does() {
 
 #[test]
 fn kerns_only_within_one_font_and_face() {
-    let ty = Type::atkinson();
+    let ty = Type::builtin();
     let (r, b) = (Face::Regular, Face::Bold);
     assert!(ty.kern_between(('A', r), ('V', r), UNIT) < 0 && ty.kern_between(('A', b), ('V', b), UNIT) < 0);
     // Not across a change of face, nor in code (its font doesn't kern), nor with a fallback font's character.
@@ -57,7 +57,7 @@ fn kerns_only_within_one_font_and_face() {
 
 #[test]
 fn wraps_kerned_text_as_wide_as_it_is_drawn() {
-    let ty = Type::atkinson();
+    let ty = Type::builtin();
     // (At this size widths are font units, exactly: no rounding between measuring and wrapping.)
     let size = UNIT;
     // Kerned, it fits in its own width (it wouldn't, unkerned); a unit less and it breaks inside the word.
@@ -67,23 +67,23 @@ fn wraps_kerned_text_as_wide_as_it_is_drawn() {
     assert_eq!(ty.breaks(word, size, w - 1).len(), 2);
     let styled = |t: &str| t.chars().map(|c| (c, Face::Regular)).collect::<Vec<_>>();
     assert_eq!(ty.breaks_styled(&styled(word), size, w), vec![0..8]);
-    // Broken at a space, the next line starts with the word after it, not kerned with the space (" T" is closer):
-    // "ToT" is a unit too wide for the last line, however close the space would have made it.
+    // Broken at a space, the next line starts with the word after it: "ToT" is a unit too wide for the last line.
+    // (Lora kerns no letter with a space, so nothing of a space's carries over to the next line.)
     let text = "To To ToT";
     let max = ty.width("ToT", size) - 1;
-    assert!(ty.kern_between((' ', Face::Regular), ('T', Face::Regular), size) < 0);
+    assert_eq!(ty.kern_between((' ', Face::Regular), ('T', Face::Regular), size), 0);
     assert_eq!(ty.breaks(text, size, max), vec![0..2, 3..5, 6..8, 8..9]);
     assert_eq!(ty.breaks_styled(&styled(text), size, max), vec![0..2, 3..5, 6..8, 8..9]);
     assert_eq!(ty.breaks(text, size, max + 1), vec![0..2, 3..5, 6..9]);
-    // While the line goes on, a space's own kerning counts ("T " and " A" are closer).
+    // A line with a space in it is as wide as its letters and the space, and fits in that width.
     let spaced = ty.width("T A", size);
-    assert!(spaced < ty.width("T", size) + ty.width(" ", size) + ty.width("A", size));
+    assert_eq!(spaced, ty.width("T", size) + ty.width(" ", size) + ty.width("A", size));
     assert_eq!(ty.breaks("T A", size, spaced), vec![0..3]);
 }
 
 #[test]
 fn the_caret_goes_where_the_letter_starts() {
-    let ty = Type::atkinson();
+    let ty = Type::builtin();
     let text = "AVATAR";
     let want = starts(&ty, text, Face::Regular);
     for (i, x) in want.iter().enumerate() {
@@ -96,7 +96,7 @@ fn the_caret_goes_where_the_letter_starts() {
 
 #[test]
 fn draws_kerned_lines_as_wide_as_measured() {
-    let ty = Type::atkinson();
+    let ty = Type::builtin();
     let style = Style { size: 24 * ONE, line_height: 36 * ONE };
     for face in [Face::Regular, Face::Bold] {
         let ink = ty.ink_in("AVATAR", face, style, 0);

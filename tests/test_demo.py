@@ -65,11 +65,13 @@ def test_what_s_typed_stays_on_this_computer():
         "https://en.wikipedia.org", "https://open-meteo.com",
         "https://www.youtube.com", "https://www.google.com", "https://maps.google.com", "https://www.bbc.com",
         "https://cdn.jsdelivr.net", "https://huggingface.co", "https://icons.duckduckgo.com", "https://openrouter.ai",
-        "https://api.openai.com", "https://generativelanguage.googleapis.com", "https://chatcomputer.ai"}
+        "https://api.openai.com", "https://generativelanguage.googleapis.com", "https://chatcomputer.ai",
+        "https://ssl.gstatic.com"}
     assert 'library: "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js"' in host
     # Messages: each service's own icon (as its pages give it), through DuckDuckGo's icon service, sent only the
     # service's address.
     assert 'return site ? "https://icons.duckduckgo.com/ip3/" + site + ".ico" : "";' in host
+    assert 'var GMAIL_ICON = "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico";' in host     # (Gmail's own, Google's server)
     assert host.count("import(") == 1 and "import(HEART.library)" in host
     fetches = re.findall(r"fetch\(([^,)]+)", host)
     assert sorted(f.split("?")[0] for f in fetches if not f.startswith("localBase(")) == [
@@ -323,10 +325,10 @@ def test_the_demo_works_in_a_browser():
     # Messages: each with its service's own icon, from DuckDuckGo's icon service (standing in), sent no page address;
     # where it can't be had (LinkedIn's, there), Chat Computer's own.
     assert res["msg_icons"] == [
-        ["WhatsApp", "web.whatsapp.com.ico", "no-referrer"], ["Gmail", "mail.google.com.ico", "no-referrer"],
+        ["WhatsApp", "whatsapp.com.ico", "no-referrer"], ["Gmail", "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico", "no-referrer"],
         ["Telegram", "web.telegram.org.ico", "no-referrer"], ["Instagram", "www.instagram.com.ico", "no-referrer"],
         ["Outlook", "outlook.live.com.ico", "no-referrer"], ["X", "x.com.ico", "no-referrer"], ["LinkedIn", "own", ""]], res["msg_icons"]
-    assert res["icons_asked"] == ["mail.google.com.ico", "outlook.live.com.ico", "web.telegram.org.ico", "web.whatsapp.com.ico",
+    assert res["icons_asked"] == ["outlook.live.com.ico", "web.telegram.org.ico", "whatsapp.com.ico",
                                   "www.instagram.com.ico", "www.linkedin.com.ico", "x.com.ico"]
     # The sidebars' switches on the edges nearest the middle (Messages' at its right, Actions' at its left), each
     # centred on its sidebar's title's line; Messages' connect rows only once + is pressed.

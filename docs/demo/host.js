@@ -15,7 +15,8 @@
    goes there, then its position, at most once every half hour), YouTube's player when the model plays a video,
    and, when the model looks something up (or you ask for the news), Wikipedia's articles and its Current events:
    only the words looked up go there. Messages shows each service's own icon (WhatsApp's, Gmail's...), as its own
-   pages give it, through DuckDuckGo's icon service: only the service's address goes there. Google's own pages (its
+   pages give it, through DuckDuckGo's icon service (Gmail's from Google's own server): only the service's address
+   goes there. Google's own pages (its
    search, Google Maps' directions) and Wikipedia's show
    in the middle when asked for: of the sites that might be asked for, they're the ones that let another page show
    them.
@@ -174,13 +175,15 @@
 
   // ------------------------------------------------------------------ made-up messages, things done, files
   // Each service's own icon, beside its messages: the one its own pages give (a browser tab shows it), from its own
-  // site through DuckDuckGo's icon service (which keeps no record of who asks); where it can't be had, Chat
-  // Computer's own for that kind of message (chat.js: msgIcon).
-  var SITES = { whatsapp: "web.whatsapp.com", gmail: "mail.google.com", outlook: "outlook.live.com", telegram: "web.telegram.org",
-                instagram: "www.instagram.com", x: "x.com", linkedin: "www.linkedin.com", wechat: "web.wechat.com",
-                discord: "discord.com" };
+  // site through DuckDuckGo's icon service (which keeps no record of who asks); Gmail's from Google's own server, the
+  // file Gmail's pages name (its site's own icon is Google's G). Where one can't be had, Chat Computer's own for that
+  // kind of message (chat.js: msgIcon).
+  var SITES = { whatsapp: "whatsapp.com", outlook: "outlook.live.com", telegram: "web.telegram.org", instagram: "www.instagram.com",
+                x: "x.com", linkedin: "www.linkedin.com", wechat: "web.wechat.com", discord: "discord.com" };
+  var GMAIL_ICON = "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico";
   function siteIcon(name) {
-    var site = SITES[String(name || "").toLowerCase()];
+    var key = String(name || "").toLowerCase(), site = SITES[key];
+    if (key === "gmail") return GMAIL_ICON;
     return site ? "https://icons.duckduckgo.com/ip3/" + site + ".ico" : "";
   }
   var MESSAGES = APP ? [] : [

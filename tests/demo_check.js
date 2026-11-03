@@ -173,6 +173,7 @@ async function ask(page, text, meanwhile) {
   // messages then show Chat Computer's own icon).
   const ICON_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
   const iconsAsked = [];
+  await page.route(/ssl\.gstatic\.com/, (route) => route.fulfill({ status: 200, contentType: "image/png", body: ICON_PNG }));
   await page.route(/icons\.duckduckgo\.com/, (route) => {
     const u = route.request().url();
     iconsAsked.push(u.replace("https://icons.duckduckgo.com/ip3/", ""));

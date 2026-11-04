@@ -682,6 +682,14 @@ Some things are made by others but are not software between the hardware and Cha
 The steps come in the order Chat Computer needs them. Each is tested in a virtual PC first, then on the real
 PC.
 
+The goal: a better computer for everyday people than Ubuntu, the most established system that is free and open.
+Chat Computer is already ahead where it matters most: its assistant is built in from the first start (Ubuntu has
+none, only a command that installs a model), private, and acts on the PC; and it installs from a download on
+Windows, with no USB stick and no partitioning. Ubuntu is ahead on running on every PC, Wi-Fi, speed (it runs models
+on graphics cards) and apps. The steps after 11 close those gaps in that order: trying it on real PCs throughout,
+then Wi-Fi, then the model faster (the fast cores of Intel's hybrid processors first, then Intel's built-in
+graphics, which most laptops have and Intel documents), then showing websites and touchpads.
+
 1. ✓ The start-up stage, the kernel's core, interrupts and timer, the font engine and the first screen.
 2. The real PC: start from its own start-up partition (no USB stick) and show the first screen on its
    monitor, with Secure Boot on and Chat Computer's own key approved. Ready to try: see "Starting it on a PC".
@@ -733,9 +741,12 @@ PC.
     ACPICA on 144 real PCs' tables and in a virtual PC; to be tried on real PCs. To do: sleep (S3) and waking, the
     screen's brightness (_BCM), and the touchpads and keyboards laptops have on I2C (described only in the
     firmware's tables).
-13. Updates: signed, with a way back.
-14. Later: Wi-Fi (Intel's and MediaTek's chips, which most laptops have), touchpads, graphics
-    acceleration, and showing websites.
+13. Wi-Fi: Intel's chips (the AX200, AX201, AX210 and AX211, and the BE200), then MediaTek's, which most laptops
+    have between them.
+14. The model faster: the fast cores of Intel's hybrid processors given more of the arithmetic (each matrix's rows
+    shared by how fast each core is), then Intel's built-in graphics doing the model's arithmetic.
+15. Showing websites, and touchpads.
+16. Updates: signed, with a way back.
 
 ## Reaching everybody's PC
 

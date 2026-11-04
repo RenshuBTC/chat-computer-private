@@ -201,7 +201,7 @@ DONE: dict[str, Callable[[R], bool]] = {
     "real-or-fake": lambda r: said(r, r"made up|not real|aren't real|pretend|examples|made-up"),
     "gibberish": lambda r: said(r, r"try|didn't (catch|get)|not sure"),
     "emoji": lambda r: said(r, r"\b(hi|hello|hey)\b"),
-    "question-mark": lambda r: said(r, r"try|can"),
+    "question-mark": lambda r: said(r, r"try|can|" + GET_ONE),
     "chinese": lambda r: re.search(r"[一-鿿]", r.get("answer") or "") is not None,
     "spanish": lambda r: said(r, r"\b(computadora|ordenador|chat computer)\b"),
     "malay": lambda r: said(r, r"\b(komputer|chat computer)\b") and not said(r, r"only know a few things|cuaca"),

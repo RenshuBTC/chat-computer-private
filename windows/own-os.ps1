@@ -8,8 +8,9 @@ scratch) on this PC, without a USB stick:
      Secure Boot already trusts, where there is one (ClaudeOS's, made by this before the name changed, too),
   3. says which model it answers with there: the one Chat Computer's app got ready on this PC (free, run on the PC
      itself, so nothing you type leaves it),
-  4. puts the signed file, its settings and its memory file (where it keeps the conversation across restarts; kept
-     when this runs again) on the partition the PC starts from (\EFI\chatcomputer-own), next to Windows' own files,
+  4. puts the signed file, its settings, its memory file (where it keeps the conversation across restarts; kept
+     when this runs again) and its log file (read back when this next runs, to last-run.txt in its work folder, and
+     said in a line) on the partition the PC starts from (\EFI\chatcomputer-own), next to Windows' own files,
      and keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu), to choose whenever you like,
   5. restarts into it after a 10-second countdown (any key stays in Windows; with no model yet, it opens
      chatcomputer.ai/get to get the app, which gets it, and doesn't restart).
@@ -76,7 +77,7 @@ try {
     Write-Line 'from, next to Windows'' own files.'
     # (A double-click starts it, with the newest files in this folder, every time: taking it off is -Remove.)
     if ($Remove) {
-        Remove-OwnSystem -Unattended:$Unattended
+        Remove-OwnSystem -Unattended:$Unattended -WorkDir $WorkDir
     } else {
         Start-OwnSystem -RepoRoot $RepoRoot -WorkDir $WorkDir -Unattended:$Unattended -NoRestart:$NoRestart -Out $Out
     }

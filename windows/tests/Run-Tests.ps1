@@ -695,6 +695,244 @@ try {
     Remove-Item -LiteralPath $memTmp -Recurse -Force
 }
 
+# Its log file (os/kernel/src/journal.rs), made as the memory file is with an id of its own (log-id in the settings),
+# and read back here the way Chat Computer's own system keeps it (os/remember): two halves written in turn, each
+# starting with a header ("CCMEMDAT", version 1, a sequence number, the data's length and its FNV-1a hash) that the
+# data follows, across the 496 bytes after each 512-byte chunk's tag. What's read is the newest whole copy.
+function Get-TestFnv1a([byte[]]$Data) {
+    # The data's FNV-1a hash (64 bits, little-endian), worked in two 32-bit halves so that nothing passes 64 bits.
+    $hi = [uint64]3421674724
+    $lo = [uint64]2216829733
+    $mask = [uint64]4294967295
+    foreach ($b in $Data) {
+        $lo = $lo -bxor [uint64]$b
+        $t = $lo * [uint64]435
+        $hi = ($hi * [uint64]435 + $lo * [uint64]256 + ($t -shr 32)) -band $mask
+        $lo = $t -band $mask
+    }
+    return , [byte[]]([BitConverter]::GetBytes([uint32]$lo) + [BitConverter]::GetBytes([uint32]$hi))
+}
+function Add-TestKept([byte[]]$File, [int]$Which, [uint64]$Sequence, [byte[]]$Data, [int64]$Length = -1) {
+    # A copy of $Data kept in half $Which (0 or 1) of $File, as os/remember writes one. $Length: what its header says
+    # the data's length is, if not the data's own.
+    if ($Length -lt 0) { $Length = $Data.Length }
+    $all = New-Object byte[] (32 + $Data.Length)
+    [Array]::Copy([Text.Encoding]::ASCII.GetBytes('CCMEMDAT'), 0, $all, 0, 8)
+    [Array]::Copy([BitConverter]::GetBytes([uint32]1), 0, $all, 8, 4)
+    [Array]::Copy([BitConverter]::GetBytes($Sequence), 0, $all, 12, 8)
+    [Array]::Copy([BitConverter]::GetBytes([uint32]$Length), 0, $all, 20, 4)
+    [Array]::Copy((Get-TestFnv1a $Data), 0, $all, 24, 8)
+    [Array]::Copy($Data, 0, $all, 32, $Data.Length)
+    $firstChunk = $Which * [int][Math]::Floor($File.Length / 1024)
+    for ($k = 0; $k * 496 -lt $all.Length; $k++) {
+        [Array]::Copy($all, $k * 496, $File, ($firstChunk + $k) * 512 + 16, [Math]::Min(496, $all.Length - $k * 496))
+    }
+}
+function Get-TestKeptText([byte[]]$File) {
+    # What Read-OwnKept finds in $File, as text ('(none)' if it finds nothing).
+    $keptBytes = Read-OwnKept $File
+    if ($null -eq $keptBytes) { return '(none)' }
+    return [Text.Encoding]::UTF8.GetString($keptBytes)
+}
+function ConvertTo-TestBytes([string]$Text) { return , [byte[]][Text.Encoding]::UTF8.GetBytes($Text) }
+Assert-Equal '0B-BD-AA-80-46-D8-30-A4' ([BitConverter]::ToString((Get-TestFnv1a (ConvertTo-TestBytes 'hello')))) 'own log: the copies made here carry os/remember''s hash (FNV-1a of "hello")'
+$logBlank = New-OwnMemoryBytes -Id ([uint32]0x10C0FFEE) -Bytes 512KB
+$second = $logBlank.Length / 2 + 16               # the second half's header: after its first chunk's tag
+Assert-Equal '(none)' (Get-TestKeptText $logBlank) 'own log: a new file keeps nothing'
+Assert-Equal '(none)' (Get-TestKeptText (New-Object byte[] 1536)) 'own log: nothing in a file too small for two halves'
+$kept = $logBlank.Clone()
+Add-TestKept $kept 0 1 (ConvertTo-TestBytes "Chat Computer kernel: started`n")
+Assert-True ((Read-OwnKept $kept) -is [byte[]]) 'own log: read back as bytes'
+Assert-Equal "Chat Computer kernel: started`n" (Get-TestKeptText $kept) 'own log: one copy'
+$kept = $logBlank.Clone()
+Add-TestKept $kept 1 1 (ConvertTo-TestBytes 'only in the second half')
+Assert-Equal 'only in the second half' (Get-TestKeptText $kept) 'own log: a copy in the second half, its header in that half''s first chunk'
+# Two copies: the one with the higher sequence number, in either half.
+$kept = $logBlank.Clone()
+Add-TestKept $kept 0 7 (ConvertTo-TestBytes 'older')
+Add-TestKept $kept 1 8 (ConvertTo-TestBytes 'newer')
+Assert-Equal 'newer' (Get-TestKeptText $kept) 'own log: two copies, the newer in the second half'
+$kept = $logBlank.Clone()
+Add-TestKept $kept 0 4294967296 (ConvertTo-TestBytes 'newer')
+Add-TestKept $kept 1 4294967295 (ConvertTo-TestBytes 'older')
+Assert-Equal 'newer' (Get-TestKeptText $kept) 'own log: two copies, the newer in the first half (sequence numbers past 32 bits)'
+# A half whose header isn't one (its magic gone wrong, another version) holds no copy, whatever its sequence number.
+$kept = $logBlank.Clone()
+Add-TestKept $kept 0 3 (ConvertTo-TestBytes 'whole')
+Add-TestKept $kept 1 4 (ConvertTo-TestBytes 'damaged')
+$kept[$second] = [byte][char]'X'
+Assert-Equal 'whole' (Get-TestKeptText $kept) 'own log: a half with a bad magic is no copy'
+$kept[$second] = [byte][char]'C'
+$kept[$second + 8] = 2
+Assert-Equal 'whole' (Get-TestKeptText $kept) 'own log: nor is one of another version'
+# Data across several chunks: each chunk's 496 bytes after its tag, in order.
+$longLog = (1..60 | ForEach-Object { 'Chat Computer kernel: line ' + $_ + ' of a long start' }) -join "`n"
+$kept = $logBlank.Clone()
+Add-TestKept $kept 1 2 (ConvertTo-TestBytes $longLog)
+Assert-Equal $longLog (Get-TestKeptText $kept) 'own log: data across several chunks, whole and in order'
+# A half of 8 chunks holds 8 x 496 - 32 = 3936 bytes: a copy that fills it is read, a header saying more is no copy.
+$small = New-OwnMemoryBytes -Id ([uint32]0x10C0FFEE) -Bytes 8192
+$kept = $small.Clone()
+Add-TestKept $kept 1 1 (ConvertTo-TestBytes ('x' * 3936))
+Assert-Equal ('x' * 3936) (Get-TestKeptText $kept) 'own log: a copy that fills its half, to the file''s last chunk'
+$kept = $small.Clone()
+Add-TestKept $kept 0 1 (ConvertTo-TestBytes 'whole')
+Add-TestKept $kept 1 2 (ConvertTo-TestBytes ('x' * 3936)) -Length 3937
+Assert-Equal 'whole' (Get-TestKeptText $kept) 'own log: a length more than a half holds is no copy (the other half''s is read)'
+$kept = $small.Clone()
+Add-TestKept $kept 0 1 (ConvertTo-TestBytes 'x') -Length 100000
+Assert-Equal '(none)' (Get-TestKeptText $kept) 'own log: nor is it when it''s the only one'
+
+# The settings name the log file's id too, and keep a line put there by hand for the most processor cores to use, as
+# the kernel reads them (os/kernel/src/settings.rs).
+$withLog = New-OwnSettingsText -Model '' -ClockOffsetMinutes 60 -MemoryId ([uint32]0x0A1B2C3D) -LogId ([uint32]0x10C0FFEE) -Cores '2'
+Assert-True ($withLog -match '(?m)^log-id = 10c0ffee\r$') 'own settings: the log id, in hex as the kernel reads it'
+Assert-True ($withLog -match '(?m)^cores = 2\r$') 'own settings: the most cores, on a line of its own'
+Assert-Equal ([uint32]0x10C0FFEE) (Get-OwnSettingsMemoryId $withLog -Name 'log-id') 'own settings: the log id read back'
+Assert-Equal ([uint32]0x0A1B2C3D) (Get-OwnSettingsMemoryId $withLog) 'own settings: the memory id read back next to it, not the log''s'
+Assert-Equal '2' (Get-OwnSettingsCores $withLog) 'own settings: the most cores read back'
+Assert-Equal $null (Get-OwnSettingsMemoryId "log-id = 10c0ffee`r`n") 'own settings: a log id is no memory id'
+Assert-Equal $null (Get-OwnSettingsMemoryId $ownText -Name 'log-id') 'own settings: no log id read back without a log file'
+Assert-Equal $null (Get-OwnSettingsMemoryId "log-id = 0`r`n" -Name 'log-id') 'own settings: a log id of 0 is none'
+Assert-True ($ownText -notmatch '(?m)^(log-id|cores)') 'own settings: no log id or most cores unless given'
+Assert-Equal '' (Get-OwnSettingsCores $ownText) 'own settings: no most cores read back'
+Assert-Equal '' (Get-OwnSettingsCores $null) 'own settings: no settings, no most cores'
+Assert-Equal '7' (Get-OwnSettingsCores "cores = 007`r`n") 'own settings: the most cores, as a number'
+# What the kernel doesn't take as a number of cores isn't kept: 0, or anything else that isn't a number.
+foreach ($junk in @('cores = 0', 'cores = all', 'cores = -1', 'cores = 1.5', 'cores = 2 # core 3 hangs', 'cores =', 'cores')) {
+    Assert-Equal '' (Get-OwnSettingsCores ($junk + "`r`n")) ('own settings: not a number of cores: ' + $junk)
+}
+# The kernel reads a setting's name in capitals or not, and its value in quotes or not: written so by hand, kept too.
+Assert-Equal '2' (Get-OwnSettingsCores "Cores = 2`r`n") 'own settings: the most cores, its name in capitals'
+Assert-Equal '2' (Get-OwnSettingsCores "cores = `"2`"`r`n") 'own settings: the most cores, in quotes'
+# Set up again, the settings are written anew: the most cores stays, a 0 doesn't come back.
+$again = New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -Cores (Get-OwnSettingsCores "# by hand`r`ncores = 1`r`n")
+Assert-Equal '1' (Get-OwnSettingsCores $again) 'own settings: the most cores kept when set up again'
+Assert-True ((New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -Cores (Get-OwnSettingsCores "cores = 0`r`n")) -notmatch 'cores') 'own settings: cores = 0 not written back'
+
+# The log file on the start-up partition (a folder here): made; kept when the settings name it; a new one when they
+# name another; none when there's no room.
+$logTmp = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-log-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $logTmp | Out-Null
+$logRoomBefore = $Script:OwnEspRoom
+try {
+    $logFile = Join-Path $logTmp 'log.bin'
+    $logRoot = [IO.Path]::GetPathRoot($logTmp)
+    $logId = Install-OwnLog -Dir $logTmp -Root $logRoot -Id $null
+    Assert-True ($logId -is [uint32] -and $logId -ne 0) 'own log: made'
+    Assert-Equal (512 * 1024) ((Get-Item -LiteralPath $logFile).Length) 'own log: 512 KB'
+    Assert-True (Test-OwnMemoryFile -Path $logFile -Id $logId) 'own log: every chunk tagged with its id'
+    Assert-Equal '(none)' (Get-TestKeptText ([IO.File]::ReadAllBytes($logFile))) 'own log: nothing kept in it yet'
+    # Set up again with its id in the settings: the same file stays, with the last run's log in it.
+    $logBytes = [IO.File]::ReadAllBytes($logFile)
+    Add-TestKept $logBytes 0 1 (ConvertTo-TestBytes "Chat Computer: ready`n")
+    [IO.File]::WriteAllBytes($logFile, $logBytes)
+    Assert-Equal $logId (Install-OwnLog -Dir $logTmp -Root $logRoot -Id $logId) 'own log: set up again, the same file'
+    Assert-Equal "Chat Computer: ready`n" (Get-TestKeptText ([IO.File]::ReadAllBytes($logFile))) 'own log: the last run''s log in it stays'
+    # Settings whose log id isn't the file's (an older setup's file, say): a new file, with a new id.
+    $newLogId = Install-OwnLog -Dir $logTmp -Root $logRoot -Id ([uint32]($logId -bxor 1))
+    Assert-True ($newLogId -ne 0 -and $newLogId -ne $logId) 'own log: a new file when the id is not the file''s'
+    Assert-True (Test-OwnMemoryFile -Path $logFile -Id $newLogId) 'own log: the new file''s tags'
+    Assert-Equal '(none)' (Get-TestKeptText ([IO.File]::ReadAllBytes($logFile))) 'own log: the new file keeps nothing yet'
+    $logFree = Get-OwnFreeSpace $logRoot
+    if ($null -ne $logFree) {
+        $Script:OwnEspRoom = $logFree + 1GB
+        Assert-Equal ([uint32]0) (Install-OwnLog -Dir $logTmp -Root $logRoot -Id ([uint32]($newLogId -bxor 1))) 'own log: none when there is no room'
+        Assert-True (-not (Test-Path -LiteralPath $logFile)) 'own log: no file left behind'
+    } else {
+        Write-Host 'own log: free space unknown here, room not tested'
+    }
+} finally {
+    $Script:OwnEspRoom = $logRoomBefore
+    Remove-Item -LiteralPath $logTmp -Recurse -Force
+}
+
+# What's said about the last run, from its log (os/kernel/src/serial.rs, with plain line ends): when, by its clock's
+# line; why it stopped, if it did; else, for a start that never got ready, its last step; else that it was ready.
+$clockLine = 'Chat Computer kernel: clock: 4 November 2026, 10:10 UTC (local time, offset from the settings)'
+$started = "Chat Computer kernel: started`n" + $clockLine + "`nChat Computer kernel: next: the network`n"
+$panic = $started + "Chat Computer: ready`n`nChat Computer kernel stopped: panicked at kernel/src/cores.rs:581:9:`nindex out of bounds: the len is 2 but the index is 5`n"
+$said = Get-OwnLastRunSummary $panic
+Assert-True ($said -clike 'The last time Chat Computer''s own system ran (4 November 2026, 10:10 UTC*') ('last run: when, by its clock: ' + $said)
+Assert-True ($said -clike '*, it stopped: panicked at kernel/src/cores.rs:581:9: index out of bounds: the len is 2 but the index is 5') ('last run: a panic, its place and, from the next line, its message: ' + $said)
+$fault = $started + "Chat Computer: ready`n`nChat Computer kernel stopped: Page fault (vector 14, error 0x2)`nrip 0xffffffff8005cf07  cs 0x8  rflags 0x282`n"
+$said = Get-OwnLastRunSummary $fault
+Assert-True ($said -clike '*, it stopped: Page fault (vector 14, error 0x2)') ('last run: a fault, on one line (not the registers after it): ' + $said)
+# Another processor core's stop (os/kernel/src/cores.rs) says which core: the first core may stop after it (saying so
+# in its own words), or go on without it.
+$coreStop = $started + "Chat Computer: ready`n`nChat Computer kernel: processor core 3 stopped: panicked at kernel/src/model.rs:40:5:`nattempt to divide by zero`n" +
+    "`nChat Computer kernel stopped: panicked at kernel/src/cores.rs:600:9:`nprocessor core 3 stopped: panicked at kernel/src/model.rs:40:5:`nattempt to divide by zero`n"
+$said = Get-OwnLastRunSummary $coreStop
+Assert-True ($said -clike '*processor core 3 stopped: panicked at kernel/src/model.rs:40:5: attempt to divide by zero') ('last run: another core''s stop, which core and why: ' + $said)
+$coreFault = $started + "`nChat Computer kernel: processor core 1 stopped: General protection fault (vector 13, error 0x0, at 0xffffffff80012345, address 0x0, stack 0xfffff07ffffbff70)`nChat Computer: ready`n"
+$said = Get-OwnLastRunSummary $coreFault
+Assert-True ($said -clike '*processor core 1 stopped: General protection fault (vector 13, error 0x0, *') ('last run: another core''s fault, the rest going on to be ready: ' + $said)
+$said = Get-OwnLastRunSummary $started
+Assert-True ($said -clike '*ran (4 November 2026, 10:10 UTC*, it didn''t finish starting. The last thing in its log: Chat Computer kernel: next: the network') ('last run: a start that never got ready, and its last step: ' + $said)
+Assert-Equal 'The last time Chat Computer''s own system ran, it didn''t finish starting. The last thing in its log: Chat Computer kernel: started' `
+    (Get-OwnLastRunSummary "Chat Computer kernel: started`n") 'last run: with no clock line, no when'
+$clean = ($started + "Chat Computer: ready`nChat Computer kernel: memory: the conversation kept (812 bytes)`nChat Computer kernel: turning off`n") -replace "`n", "`r`n"
+$said = Get-OwnLastRunSummary $clean
+Assert-True ($said -clike '*ran (4 November 2026, 10:10 UTC*, it started, and nothing went wrong that it noticed.') ('last run: ready, and nothing stopped (Windows line ends too): ' + $said)
+# Only the kernel's own words for a stop are one: "stopped: " in a line for another reason (a USB drive's own name,
+# here) isn't.
+$innocent = $started + "Chat Computer kernel: USB drive `"Stopped: Pro 128`": its medium was taken out`nChat Computer: ready`n"
+$said = Get-OwnLastRunSummary $innocent
+Assert-True ($said -clike '*, it started, and nothing went wrong that it noticed.') ('last run: "stopped: " in another line is no stop: ' + $said)
+Assert-Equal $null (Get-OwnLastRunSummary '') 'last run: nothing to say about an empty log'
+Assert-Equal $null (Get-OwnLastRunSummary "`n`r`n  `n") 'last run: nor about one of empty lines'
+
+# Reading it back (the start-up partition a folder here, Get-WindowsEsp and its mounting stood in for): saved in the
+# work folder with Windows' line ends, and said in a line. No log, one the settings don't name, or anything going
+# wrong on the way: nothing to say, and never an error that would stop the setup (the partition closed again).
+$Script:FakeEsp = Join-Path ([IO.Path]::GetTempPath()) ('chatcomputer-esp-' + [guid]::NewGuid().ToString('N'))
+$Script:FakeEspFails = $false
+$Script:FakeEspClosed = 0
+function Get-WindowsEsp { return [pscustomobject]@{ IsSystem = $true } }
+function Mount-EspPartition {
+    param($Partition)
+    if ($Script:FakeEspFails) { throw 'Windows could not open its EFI partition.' }
+    return [pscustomobject]@{ Root = $Script:FakeEsp }
+}
+function Dismount-EspPartition { param($Mount) $Script:FakeEspClosed++ }
+$runWork = Join-Path $Script:FakeEsp 'work'
+$runDir = [IO.Path]::Combine($Script:FakeEsp, 'EFI', 'chatcomputer-own')
+$runSettings = Join-Path $runDir 'settings.txt'
+New-Item -ItemType Directory -Path $runWork, $runDir -Force | Out-Null
+try {
+    Assert-Equal $null (Read-OwnLastRun -WorkDir $runWork) 'last run: nothing when there are no settings or log there'
+    $runText = "Chat Computer kernel: started`nChat Computer kernel: files: Caf" + [char]0x00E9 + " (D:)`nChat Computer: ready`n"
+    $runFile = New-OwnMemoryBytes -Id ([uint32]0x10C0FFEE) -Bytes 8192
+    Add-TestKept $runFile 1 5 (ConvertTo-TestBytes $runText)
+    [IO.File]::WriteAllBytes((Join-Path $runDir 'log.bin'), $runFile)
+    [IO.File]::WriteAllText($runSettings, (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -LogId ([uint32]0x10C0FFEE)))
+    $Script:FakeEspClosed = 0
+    $run = Read-OwnLastRun -WorkDir $runWork
+    Assert-True ([string](Get-Prop $run 'Summary') -clike '*, it started, and nothing went wrong that it noticed.') 'last run: said in a line'
+    Assert-Equal (Join-Path $runWork 'last-run.txt') (Get-Prop $run 'Path') 'last run: saved in the work folder'
+    Assert-Equal ($runText -replace "`n", "`r`n") ([IO.File]::ReadAllText((Join-Path $runWork 'last-run.txt'))) 'last run: its whole log, as UTF-8 with Windows'' line ends'
+    Assert-Equal 1 $Script:FakeEspClosed 'last run: the start-up partition closed again'
+    [IO.File]::WriteAllText($runSettings, (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -LogId ([uint32]0x10C0FFEF)))
+    Assert-Equal $null (Read-OwnLastRun -WorkDir $runWork) 'last run: nothing from a log file the settings don''t name'
+    [IO.File]::WriteAllText($runSettings, (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -MemoryId ([uint32]0x0A1B2C3D)))
+    Assert-Equal $null (Read-OwnLastRun -WorkDir $runWork) 'last run: nothing when the settings name no log file (an older setup''s)'
+    $Script:FakeEspFails = $true
+    Assert-Equal $null (Read-OwnLastRun -WorkDir $runWork) 'last run: nothing when the start-up partition can''t be opened'
+    $Script:FakeEspFails = $false
+    [IO.File]::WriteAllText($runSettings, (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -LogId ([uint32]0x10C0FFEE)))
+    Assert-Equal $null (Read-OwnLastRun -WorkDir (Join-Path $runWork 'not-there')) 'last run: nothing when it can''t be saved'
+    # Reading failing part-way (the settings can't be read: here, a folder of that name).
+    Remove-Item -LiteralPath $runSettings
+    New-Item -ItemType Directory -Path $runSettings | Out-Null
+    $Script:FakeEspClosed = 0
+    Assert-Equal $null (Read-OwnLastRun -WorkDir $runWork) 'last run: nothing when reading fails part-way'
+    Assert-Equal 1 $Script:FakeEspClosed 'last run: the start-up partition closed again then too'
+} finally {
+    Remove-Item -LiteralPath $Script:FakeEsp -Recurse -Force
+    Remove-Item Function:\Get-WindowsEsp, Function:\Mount-EspPartition, Function:\Dismount-EspPartition
+    . (Join-Path $Win 'lib/Startup.ps1')    # the real ones again
+}
+
 # ------------------------------------------------------------------ files from a disc image
 # On a real PC, grub.cfg copied from the mounted Ubuntu image kept the image's read-only mark, and setup
 # couldn't patch it ("Access to the path 'S:\boot\grub\grub.cfg' is denied"). tests/win_ci/iso.ps1 checks

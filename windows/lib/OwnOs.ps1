@@ -13,14 +13,17 @@ $Script:OwnCert = 'ChatComputer.cer'
 $Script:OwnSettings = 'settings.txt'            # read by the kernel at start-up (os/kernel/src/settings.rs)
 $Script:OwnMemory = 'memory.bin'                # the conversation, kept across restarts (os/remember)
 $Script:OwnMemorySizes = @(4MB, 1MB)            # the memory file's size: the first that leaves room on the partition
+$Script:OwnLog = 'log.bin'                      # its log, kept for this to read back (os/kernel/src/journal.rs)
+$Script:OwnLogSize = 512KB
+$Script:OwnLastRun = 'last-run.txt'             # the last run's log, as read back, in the work folder
 $Script:OwnEspRoom = 16MB                       # left free on the start-up partition, for Windows' own updates
 
 # ------------------------------------------------------------------ its model, and its settings: the clock
 # Chat Computer's own system answers with the model Chat Computer's app gets ready on Windows (its own engine runs it
 # on the PC itself): it finds it there when it starts (os/kernel/src/assistant.rs), as this does here, to say which.
 $Script:OwnModels = 'ai.chatcomputer.desktop\models'   # under %LOCALAPPDATA%: NAME.ccm, as the app's engine leaves them
-# Bigger models answer too slowly on the one processor core Chat Computer's own system uses yet: of the models there,
-# it picks the biggest file at most this (the smallest, if none is).
+# Bigger models answered too slowly when Chat Computer's own system used one processor core (it uses all of them now,
+# not yet measured on a PC): of the models there, it picks the biggest file at most this (the smallest, if none is).
 $Script:OwnOneCoreMost = 3600000000
 
 function Get-OwnModelLabel {
@@ -67,12 +70,16 @@ function Get-ClockOffsetMinutes {
 function New-OwnSettingsText {
     # The settings file, as the kernel reads it: "name = value" lines, # for notes. $Model: a model's file named in
     # the settings ('': none, and the kernel finds the one Chat Computer's app got ready). $MemoryId: the memory
-    # file's id (0: there's no memory file).
-    param([AllowEmptyString()][string]$Model, [int]$ClockOffsetMinutes, [uint32]$MemoryId = 0)
+    # file's id (0: there's no memory file); $LogId: the log file's. $Cores: the most processor cores to use, put
+    # there by hand ('': all).
+    param([AllowEmptyString()][string]$Model, [int]$ClockOffsetMinutes, [uint32]$MemoryId = 0, [uint32]$LogId = 0,
+          [AllowEmptyString()][string]$Cores = '')
     $lines = @('# Chat Computer''s settings, read by its own system when it starts. Written by Chat Computer Own System.')
     if ($Model) { $lines += ('model = ' + $Model) }
     $lines += ('clock-offset-minutes = ' + $ClockOffsetMinutes)
     if ($MemoryId -ne 0) { $lines += ('memory-id = ' + $MemoryId.ToString('x8')) }
+    if ($LogId -ne 0) { $lines += ('log-id = ' + $LogId.ToString('x8')) }
+    if ($Cores) { $lines += ('cores = ' + $Cores) }
     return (($lines -join "`r`n") + "`r`n")
 }
 
@@ -87,12 +94,24 @@ function Get-OwnSettingsModel {
     return ''
 }
 
-function Get-OwnSettingsMemoryId {
-    # The memory file's id in a settings file's text ($null if none).
+function Get-OwnSettingsCores {
+    # The most processor cores a settings file's text says to use ('' if it doesn't say): put there by hand, for a PC
+    # whose other cores don't start well, and kept when this runs again.
     param([AllowNull()][string]$Text)
+    if (-not $Text) { return '' }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $m = [regex]::Match($line, '(?i)^\s*cores\s*=\s*"*\s*([0-9]{1,3})\s*"*\s*$')
+        if ($m.Success -and [int]$m.Groups[1].Value -ge 1) { return [string][int]$m.Groups[1].Value }
+    }
+    return ''
+}
+
+function Get-OwnSettingsMemoryId {
+    # The memory file's id in a settings file's text ($null if none); with -Name 'log-id', the log file's.
+    param([AllowNull()][string]$Text, [string]$Name = 'memory-id')
     if (-not $Text) { return $null }
     foreach ($line in ($Text -split "`r?`n")) {
-        $m = [regex]::Match($line, '^\s*memory-id\s*=\s*([0-9a-fA-F]{1,8})\s*$')
+        $m = [regex]::Match($line, '^\s*' + [regex]::Escape($Name) + '\s*=\s*([0-9a-fA-F]{1,8})\s*$')
         if ($m.Success) {
             $id = [Convert]::ToUInt32($m.Groups[1].Value, 16)
             if ($id -ne 0) { return $id }
@@ -212,6 +231,147 @@ function Install-OwnMemory {
     Write-SetupLog ('No memory file (free on the partition: ' + $free + ' bytes)')
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
     return [uint32]0
+}
+
+# ------------------------------------------------------------------ its log, kept for this to read back
+# Chat Computer's own system keeps its log (what it found on this PC, each step of its start, and why it stopped, if
+# it did) in a file made as the memory file is, with an id of its own (log-id in the settings): a PC has no other
+# way to show it, there being no serial port on most. This reads the last run's back when it next runs.
+function Install-OwnLog {
+    # The log file in $Dir (on the drive at $Root): the one there stays when it's the one with the settings' id ($Id),
+    # else a new one is made, if it leaves $Script:OwnEspRoom free. Returns its id: 0 when there's none.
+    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][string]$Root, $Id)
+    $path = Join-Path $Dir $Script:OwnLog
+    if (Test-OwnMemoryFile -Path $path -Id $Id) { return [uint32]$Id }
+    $free = Get-OwnFreeSpace $Root
+    $there = 0
+    if (Test-Path -LiteralPath $path -PathType Leaf) { $there = [int64](Get-Item -LiteralPath $path).Length }
+    if ($null -eq $free -or $free + $there - $Script:OwnLogSize -ge $Script:OwnEspRoom) {
+        $newId = New-OwnMemoryId
+        try {
+            [IO.File]::WriteAllBytes($path, (New-OwnMemoryBytes -Id $newId -Bytes $Script:OwnLogSize))
+            if (Test-OwnMemoryFile -Path $path -Id $newId) {
+                Write-SetupLog ('Made a log file of ' + $Script:OwnLogSize + ' bytes')
+                return $newId
+            }
+            Write-SetupLog 'The log file written is not the same when read back.'
+        } catch {
+            Write-SetupLog ('Writing the log file: ' + $_.Exception.Message)
+        }
+    }
+    Write-SetupLog ('No log file (free on the partition: ' + $free + ' bytes)')
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    return [uint32]0
+}
+
+function Get-OwnFnv1a {
+    # FNV-1a, 64 bits, as os/remember hashes a copy (little-endian bytes): in two 32-bit halves, so nothing passes 64 bits.
+    param([AllowEmptyCollection()][byte[]]$Data)
+    $hi = [uint64]3421674724
+    $lo = [uint64]2216829733
+    $mask = [uint64]4294967295
+    foreach ($b in $Data) {
+        $lo = $lo -bxor [uint64]$b
+        $t = $lo * [uint64]435
+        $hi = ($hi * [uint64]435 + $lo * [uint64]256 + ($t -shr 32)) -band $mask
+        $lo = $t -band $mask
+    }
+    return , [byte[]]([BitConverter]::GetBytes([uint32]$lo) + [BitConverter]::GetBytes([uint32]$hi))
+}
+
+function Read-OwnKept {
+    # The newest whole copy kept in $Bytes, a file made as the memory file is (os/remember: two halves written in turn,
+    # each starting with a header: "CCMEMDAT", version 1, a sequence number, the data's length and hash; 496 bytes of
+    # each 512-byte chunk carry them, after its tag), as bytes: $null if it holds none. (The hash isn't checked: a
+    # header is written last, after its data, so the newest one's data is whole.)
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    $chunks = [int][Math]::Floor($Bytes.Length / 512)
+    $half = [int][Math]::Floor($chunks / 2)
+    if ($half -lt 2) { return $null }
+    $best = $null
+    $bestSequence = [uint64]0
+    for ($h = 0; $h -lt 2; $h++) {
+        $first = $h * $half
+        $o = $first * 512 + 16
+        if ([Text.Encoding]::ASCII.GetString($Bytes, $o, 8) -cne 'CCMEMDAT') { continue }
+        if ([BitConverter]::ToUInt32($Bytes, $o + 8) -ne 1) { continue }
+        $sequence = [BitConverter]::ToUInt64($Bytes, $o + 12)
+        $length = [int64][BitConverter]::ToUInt32($Bytes, $o + 20)
+        if ($length -gt ($half * 496 - 32)) { continue }
+        if ($null -ne $best -and $sequence -le $bestSequence) { continue }
+        $all = New-Object byte[] (32 + $length)
+        $at = 0
+        $c = 0
+        while ($at -lt $all.Length) {
+            $n = [Math]::Min(496, $all.Length - $at)
+            [Array]::Copy($Bytes, ($first + $c) * 512 + 16, $all, $at, $n)
+            $at += $n
+            $c++
+        }
+        $data = New-Object byte[] $length
+        [Array]::Copy($all, 32, $data, 0, $length)
+        if ([BitConverter]::ToString((Get-OwnFnv1a $data)) -ne [BitConverter]::ToString($Bytes, $o + 24, 8)) { continue }
+        $best = $data
+        $bestSequence = $sequence
+    }
+    if ($null -eq $best) { return $null }
+    return , $best
+}
+
+function Get-OwnLastRunSummary {
+    # What to say about the run whose log is $Text: when (its clock's line), and how it went: why it stopped, if it
+    # did; else the last step of a start that didn't get as far as being ready; else that it was ready.
+    param([AllowEmptyString()][string]$Text)
+    $lines = @($Text -split "`r?`n" | Where-Object { $_.Trim() })
+    if ($lines.Count -eq 0) { return $null }
+    $clock = @($lines | Where-Object { $_ -match 'kernel: clock: ' })
+    $when = ''
+    if ($clock.Count -gt 0) { $when = ' (' + ($clock[0] -replace '^.*kernel: clock: ', '' -replace ' \(.*$', '') + ')' }
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        # Only the kernel's own words for a stop (main.rs, idt.rs), or another of its cores' (cores.rs), which the rest
+        # may outlive; a panic's message is on the line after its place.
+        $stop = [regex]::Match($lines[$i], '^Chat Computer kernel(?: stopped|: (processor core \d+) stopped): (.*)$')
+        if ($stop.Success) {
+            $why = $stop.Groups[2].Value
+            for ($j = $i + 1; $why.EndsWith(':') -and $j -lt $lines.Count -and $j -le $i + 3; $j++) { $why += ' ' + $lines[$j] }
+            $who = $(if ($stop.Groups[1].Success) { 'its ' + $stop.Groups[1].Value } else { 'it' })
+            return ('The last time Chat Computer''s own system ran' + $when + ', ' + $who + ' stopped: ' + $why)
+        }
+    }
+    if (-not ($lines -contains 'Chat Computer: ready')) {
+        return ('The last time Chat Computer''s own system ran' + $when + ', it didn''t finish starting. The last thing in its log: ' + $lines[-1])
+    }
+    return ('The last time Chat Computer''s own system ran' + $when + ', it started, and nothing went wrong that it noticed.')
+}
+
+function Read-OwnLastRun {
+    # The last run's log, from the log file on the start-up partition, saved as $Script:OwnLastRun in $WorkDir.
+    # Returns what to say about it ($null: no log, or nothing in it).
+    param([Parameter(Mandatory = $true)][string]$WorkDir)
+    try {
+        $esp = Get-WindowsEsp
+        if (-not $esp) { return $null }
+        $m = Mount-EspPartition $esp
+        try {
+            $dir = [IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir)
+            $settings = Join-Path $dir $Script:OwnSettings
+            $path = Join-Path $dir $Script:OwnLog
+            if (-not (Test-Path -LiteralPath $settings) -or -not (Test-Path -LiteralPath $path)) { return $null }
+            $id = Get-OwnSettingsMemoryId ([IO.File]::ReadAllText($settings)) -Name 'log-id'
+            if (-not (Test-OwnMemoryFile -Path $path -Id $id)) { return $null }
+            $data = Read-OwnKept ([IO.File]::ReadAllBytes($path))
+        } finally {
+            Dismount-EspPartition $m
+        }
+        if ($null -eq $data -or $data.Length -eq 0) { return $null }
+        $text = [Text.Encoding]::UTF8.GetString($data)
+        $saved = Join-Path $WorkDir $Script:OwnLastRun
+        [IO.File]::WriteAllText($saved, ($text -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $false))
+        return [pscustomobject]@{ Summary = (Get-OwnLastRunSummary $text); Path = $saved }
+    } catch {
+        Write-SetupLog ('Reading the last run''s log: ' + $_.Exception.Message)
+        return $null
+    }
 }
 
 function Get-OwnSha256 {
@@ -395,7 +555,9 @@ function Install-OwnFiles {
         if (Test-Path -LiteralPath $settings) { $before = [IO.File]::ReadAllText($settings) }
         $model = Get-OwnSettingsModel $before
         $memoryId = Install-OwnMemory -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before)
-        $text = New-OwnSettingsText -Model $model -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId
+        $logId = Install-OwnLog -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before -Name 'log-id')
+        $text = New-OwnSettingsText -Model $model -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId `
+            -LogId $logId -Cores (Get-OwnSettingsCores $before)
         [IO.File]::WriteAllText($settings, $text, [Text.Encoding]::ASCII)
         Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($model) { 'naming a model' } else { 'naming no model' }))
         return [pscustomobject]@{ Memory = ($memoryId -ne 0) }
@@ -545,6 +707,11 @@ function Start-OwnSystem {
         throw 'This PC starts in the old BIOS mode, and Chat Computer needs UEFI. Nothing was changed.'
     }
     Write-Good 'Starts in UEFI mode.'
+    $last = Read-OwnLastRun -WorkDir $WorkDir
+    if ($last) {
+        Write-Line $last.Summary
+        Write-Line ('Its whole log is in ' + $last.Path + '.')
+    }
     $release = Get-OwnRelease -RepoRoot $RepoRoot
     $sb = Get-SecureBootState
     if ($sb -eq $true) { Write-Line 'Secure Boot is on.' } elseif ($sb -eq $false) { Write-Line 'Secure Boot is off.' }
@@ -595,9 +762,10 @@ function Start-OwnSystem {
     # said as it's done, with no question before it; the restart can still be stopped, with any key.)
     Write-Step 'Putting it on this PC'
     Write-Line '  * Its start-up file (signed with this PC''s key), the key''s certificate, its settings (how far this PC''s'
-    Write-Line '    clock is from UTC) and its memory file (where it keeps your conversation across restarts) go in'
-    Write-Line '    \EFI\chatcomputer-own on the partition this PC starts from (about 5 MB). Windows'' own files stay as they'
-    Write-Line '    are. The conversation is kept there as it is, where anyone who can read that partition can read it.'
+    Write-Line '    clock is from UTC), its memory file (where it keeps your conversation across restarts) and its log (what'
+    Write-Line '    it found on this PC and how its start went, read back here next time) go in \EFI\chatcomputer-own on'
+    Write-Line '    the partition this PC starts from (about 8 MB). Windows'' own files stay as they are. The conversation is'
+    Write-Line '    kept there as it is, where anyone who can read that partition can read it.'
     Write-Line ('  * "' + $Script:OwnEntryName + '" stays in the power-on menu (the PC''s boot menu), to choose whenever you like.')
     if ($bitlocker) {
         Write-Line '  * BitLocker pauses for two restarts, so the Secure Boot change doesn''t make it ask for its recovery key.'
@@ -670,7 +838,7 @@ function Start-OwnSystem {
 }
 
 function Remove-OwnSystem {
-    param([switch]$Unattended)
+    param([switch]$Unattended, [string]$WorkDir)
     Write-Step 'Remove Chat Computer''s own system from this PC'
     $entries = Get-OwnBootEntries
     $cert = Get-OwnKey
@@ -682,6 +850,11 @@ function Remove-OwnSystem {
         return
     }
     foreach ($e in $entries) { Invoke-Bcdedit @('/delete', $e.Id) }
+    if ($WorkDir) {
+        # (Its last run's log, kept here before its files go.)
+        $last = Read-OwnLastRun -WorkDir $WorkDir
+        if ($last) { Write-Line ('Its last run''s log is kept in ' + $last.Path + '.') }
+    }
     Remove-OwnFiles
     if ($cert) {
         Remove-Item -LiteralPath ('Cert:\CurrentUser\My\' + $cert.Thumbprint) -DeleteKey -ErrorAction Stop

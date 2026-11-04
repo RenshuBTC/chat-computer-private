@@ -1,20 +1,22 @@
 //! Chat Computer's own TrueType font reader: which glyph a character uses, how wide it is, and its outline.
 //!
 //! It reads 'glyf' outlines (made of straight lines and quadratic curves), including glyphs built from
-//! other glyphs (é = e + ´), a variable font's other instances (bold, from the same file: vary.rs), and its
-//! kerning (kern.rs). It ignores the hinting programs fonts carry: Chat Computer never runs code that comes inside a
-//! font.
+//! other glyphs (é = e + ´), a variable font's other instances (bold, from the same file: vary.rs), its kerning
+//! (kern.rs), and where it puts marks on letters (marks.rs). It ignores the hinting programs fonts carry: Chat
+//! Computer never runs code that comes inside a font.
 //! Everything is bounds-checked; a damaged font gives `None`, never a crash.
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
 mod kern;
+mod marks;
 pub mod raster;
 mod store;
 mod vary;
 
 pub use kern::Kerning;
+pub use marks::Marks;
 pub use vary::Instance;
 
 use alloc::vec::Vec;
@@ -219,6 +221,11 @@ impl<'a> Font<'a> {
         Kerning::new(self.gpos, self.gdef, instance.map_or(&[][..], |at| &at.coords))
     }
 
+    /// The font's mark positioning (accents on letters), at an instance (None: the default).
+    pub fn marks(&self, instance: Option<&Instance>) -> Marks<'a> {
+        Marks::new(self.gpos, self.gdef, instance.map_or(&[][..], |at| &at.coords))
+    }
+
     /// Axis `axis`'s avar segment map (from, to pairs in 2.14; empty: none).
     fn avar_segments(&self, axis: usize) -> Vec<(i32, i32)> {
         let Some(avar) = self.avar else { return Vec::new() };
@@ -393,6 +400,16 @@ impl<'a> Font<'a> {
             }
         }
         None
+    }
+
+    /// The glyph's bounding box (x min, y min, x max, y max, in font units: y up), as its outline's data says;
+    /// None for one without an outline (a space).
+    pub fn bounds(&self, glyph: u16) -> Option<(i32, i32, i32, i32)> {
+        let g = self.glyph_data(glyph)?;
+        if g.len() < 10 {
+            return None;
+        }
+        Some((i16_at(g, 2)? as i32, i16_at(g, 4)? as i32, i16_at(g, 6)? as i32, i16_at(g, 8)? as i32))
     }
 
     /// How far the pen moves after this glyph, in font units.

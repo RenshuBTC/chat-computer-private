@@ -691,6 +691,18 @@ try {
         Write-Host 'own memory: free space unknown here, room not tested'
     }
     $Script:OwnEspRoom = $roomBefore
+    # Chat Computer's own system's file: refused, saying so, where it doesn't fit (in place of the one there).
+    if ($null -ne $free) {
+        $sys = Join-Path $memTmp 'chatcomputer.efi'
+        Assert-OwnRoom -Root $memRoot -Path $sys -Size 4MB
+        $said = ''
+        try { Assert-OwnRoom -Root $memRoot -Path $sys -Size ($free + 1GB) } catch { $said = $_.Exception.Message }
+        Assert-True ($said -like 'The partition this PC starts from has * MB free, and Chat Computer''s own system needs * MB there.') ('own system: no room said: ' + $said)
+        [IO.File]::WriteAllBytes($sys, (New-Object byte[] 4096))
+        $said = ''
+        try { Assert-OwnRoom -Root $memRoot -Path $sys -Size ($free - 1MB + 4096) } catch { $said = $_.Exception.Message }
+        Assert-Equal '' $said 'own system: the one there counts as room'
+    }
 } finally {
     Remove-Item -LiteralPath $memTmp -Recurse -Force
 }

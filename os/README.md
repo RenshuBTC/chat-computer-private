@@ -320,13 +320,19 @@ drivers.
   integer arithmetic only. It reads variable fonts too (fvar, avar and gvar: deltas, intermediate regions and
   inferred deltas; HVAR for the advances), so the bold comes from the same font file as the regular. And it reads
   a font's kerning (GPOS's pair adjustments, by pairs of glyphs and by classes, varying with the weight through
-  GDEF's item variation store). It's tested against fontTools' reading of the same font, at the default weight and
-  at others, and against HarfBuzz: every glyph's advance at three weights, and the kerning of every pair of 152
-  characters at four (`font/reference.py`).
+  GDEF's item variation store), and where it puts marks (GPOS's mark-to-base and mark-to-mark anchors, with their
+  mark filtering sets, varying with the weight too). It's tested against fontTools' reading of the same font, at the
+  default weight and at others, and against HarfBuzz: every glyph's advance at three weights, the kerning of every
+  pair of 152 characters at four (`font/reference.py`), and where Lora's marks go on letters and on each other, at
+  the regular weight and the bold (`font/marks_reference.py`).
 * `text/` sets lines of text in those fonts: which font has each character (the fallback fonts for what Lora and
-  the code font lack), how wide lines are, where they wrap, and drawing them, with the kerning a browser applies
-  (within a run of one font and face). Tested against where HarfBuzz puts each letter, at the regular weight and
-  the bold (`text/reference.py`).
+  the code font lack), how wide lines are, where they wrap (at spaces, and between the characters of Chinese,
+  Japanese and Korean, as a browser breaks them: not before closing punctuation, nor after opening), and drawing
+  them, with the kerning a browser applies (within a run of one font and face). Accents typed as characters of their
+  own (a letter, then a combining mark, as Macs name files) are set as HarfBuzz sets them: composed into one letter
+  where the font has it, else placed where the font's anchors put them, else over or under the letter by its ink.
+  Tested against where HarfBuzz puts each letter and mark, at the regular weight and the bold (`text/reference.py`);
+  its breaks in Chinese, Japanese and Korean are the ones Chromium made for the same lines (checked once, by hand).
 * `markdown/` reads the Markdown the model writes into blocks and styled words, by the same rules as the main
   screen's renderer (`chatcomputer/ui/assets/md.js`). Its test runs md.js on each case (`markdown/gen/`) and
   checks the two read it the same way.
@@ -449,9 +455,9 @@ The screen follows Chat Computer's look (`chatcomputer/ui/assets/theme.css` and 
 * light words on the dark background, in the tones of Claude's dark mode, your messages in bubbles on the
   right, the message box a card lifted off the middle with a soft shadow at the bottom;
 * Lora (its regular and bold), and Atkinson Hyperlegible Mono for code. What they lack (arrows, check marks, maths,
-  Greek, emoji in black and white, box drawing in code) comes from two
-  fallback fonts made from Google's Noto fonts (`fonts/`, built by `fonts/build.py`), as a browser would take it
-  from the system's fonts. Chinese, Japanese and Korean show as boxes still;
+  Greek, emoji in black and white, box drawing in code; Chinese, Japanese and Korean) comes from three fallback fonts
+  made from Google's Noto fonts (`fonts/`, built by `fonts/build.py`), as a browser would take it from the system's
+  fonts; in bold, their glyphs drawn twice a little apart, as a browser makes a bold up;
 * text sized as the Claude app's (16 px at 100%), scaled as `chatcomputer/ui/layout.py` does, from the
   monitor's real size;
 * the model's words up to 54 em across (865 px at 100%, as the Claude app's) in a 57.75 em conversation, and a 60 em
@@ -695,8 +701,11 @@ PC.
    picture takes there to be seen), and JPEG 2000's and JBIG2's scans.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting the model's answers use
    (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the
-   conversation (JPEG, PNG, GIF). To do: accents
-   placed over letters typed as two characters (GPOS's mark positioning), and Chinese, Japanese and Korean.
+   conversation (JPEG, PNG, GIF), ✓ accents typed as two characters (composed, or placed by GPOS's mark positioning,
+   as HarfBuzz does), ✓ Chinese, Japanese and Korean (their ideographs in mainland China's forms, wrapped between
+   characters as Chromium wraps them). To do: the forms of ideographs Japan and Taiwan write (mainland China's now),
+   rarer ideographs (boxes now), and the font's own glyph substitutions for marks (GSUB: a capital's flatter
+   accents).
 10. Sound and AirPods: ✓ HD Audio's outputs, for the chimes of timers and reminders (checked with QEMU's
     controllers and codecs). To do: trying it on real PCs, microphones, USB audio, then Bluetooth (HCI over USB,
     L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.

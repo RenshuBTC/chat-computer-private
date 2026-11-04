@@ -159,7 +159,7 @@ fn value_size(format: u16) -> usize {
 }
 
 /// Where the glyph is in a coverage table, if it is.
-fn coverage_index(d: &[u8], at: usize, glyph: u16) -> Option<usize> {
+pub(crate) fn coverage_index(d: &[u8], at: usize, glyph: u16) -> Option<usize> {
     let count = u16_at(d, at + 2)? as usize;
     match u16_at(d, at)? {
         // A sorted list of glyphs.
@@ -201,7 +201,7 @@ fn coverage_index(d: &[u8], at: usize, glyph: u16) -> Option<usize> {
 }
 
 /// A glyph's class in a class definition table (0 for glyphs it doesn't list).
-fn class_of(d: &[u8], at: usize, glyph: u16) -> u16 {
+pub(crate) fn class_of(d: &[u8], at: usize, glyph: u16) -> u16 {
     let class = || -> Option<u16> {
         match u16_at(d, at)? {
             // The classes of a run of glyphs from the first.

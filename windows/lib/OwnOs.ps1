@@ -535,6 +535,22 @@ function Get-OwnBootEntry {
     return (New-FirmwareBootEntry -Name $Script:OwnEntryName -Path ('\EFI\' + $Script:OwnDir + '\' + $Script:OwnFile))
 }
 
+function Assert-OwnRoom {
+    # Throws, saying so, when the partition at $Root has no room for a file of $Size bytes at $Path (in place of the
+    # one there, if any) and a megabyte more, for the settings and the certificate. (Chat Computer's own system is
+    # 10 MB since it carries Chinese, Japanese and Korean.) Nothing's said when Windows won't say how much is free.
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Path,
+          [Parameter(Mandatory = $true)][int64]$Size)
+    $free = Get-OwnFreeSpace $Root
+    if ($null -eq $free) { return }
+    $there = 0
+    if (Test-Path -LiteralPath $Path) { $there = (Get-Item -LiteralPath $Path).Length }
+    if ($free + $there -lt $Size + 1MB) {
+        throw ('The partition this PC starts from has ' + [math]::Floor($free / 1MB) + ' MB free, and Chat Computer''s ' +
+            'own system needs ' + [math]::Ceiling(($Size + 1MB - $there) / 1MB) + ' MB there.')
+    }
+}
+
 function Install-OwnFiles {
     # The signed start-up file, the key's certificate, the settings and the memory file, in \EFI\chatcomputer-own on
     # the partition Windows starts from. The settings are written anew (a model named in them by hand is kept; an
@@ -547,6 +563,7 @@ function Install-OwnFiles {
         $dir = [IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir)
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         $file = Join-Path $dir $Script:OwnFile
+        Assert-OwnRoom -Root $m.Root -Path $file -Size (Get-Item -LiteralPath $Signed).Length
         Copy-Item -LiteralPath $Signed -Destination $file -Force
         Copy-Item -LiteralPath $Certificate -Destination (Join-Path $dir $Script:OwnCert) -Force
         if ((Get-OwnSha256 $file) -ne (Get-OwnSha256 $Signed)) { throw 'The copy on the start-up partition is not the same as the original.' }

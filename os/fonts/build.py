@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Builds the own system's fallback fonts: the characters its fonts (Lora, and Atkinson Hyperlegible Mono for code) lack
-that Claude writes (arrows, check marks, maths, Greek, emoji, and box drawing in code), from Google's Noto fonts. See
-README.md.
+that Claude writes (arrows, check marks, maths, Greek, emoji, and box drawing in code; Chinese, Japanese and Korean),
+from Google's Noto fonts. See README.md.
 
-    ./build.py              downloads the Noto fonts (checking their SHA-256), builds both, and prints their SHA-256
+    ./build.py              downloads the Noto fonts (checking their SHA-256), builds the three, and prints their SHA-256
     ./build.py --from DIR   uses the Noto fonts already in DIR (named as in google/fonts)
 
 Needs fontTools (pip install fonttools). The output is the same for the same fontTools (4.65.0 built these).
@@ -37,6 +37,8 @@ SOURCES = {
     "ofl/notosanssymbols/NotoSansSymbols[wght].ttf": "f7e7e04b4a24b6c78893d50cbfd2b2f6cae49617ab047bfef668d252adb128f7",
     "ofl/notoemoji/NotoEmoji[wght].ttf": "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551",
     "ofl/notosansmono/NotoSansMono[wdth,wght].ttf": "2cb2adb378a8f574213e23df697050b83c54c27df465a2015552740b2769a081",
+    "ofl/notosanssc/NotoSansSC[wght].ttf": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+    "ofl/notosanskr/NotoSansKR[wght].ttf": "194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252",
 }
 
 
@@ -81,6 +83,41 @@ MONO = blocks(
 )
 
 
+def legacy(codec: str, firsts: range, seconds: list[int]) -> set[int]:
+    """The characters of a two-byte character set, as Python's codec for it maps each pair of bytes."""
+    out = set()
+    for a in firsts:
+        for b in seconds:
+            try:
+                text = bytes([a, b]).decode(codec)
+            except UnicodeDecodeError:
+                continue
+            if len(text) == 1:
+                out.add(ord(text))
+    return out
+
+
+def ideographs(chars: set[int]) -> set[int]:
+    return {c for c in chars if 0x3400 <= c <= 0x9FFF or 0xF900 <= c <= 0xFAFF}
+
+
+# Chinese and Japanese: the ideographs of the character sets their text has long been written in, China's GB 2312
+# (6,763), Taiwan's Big5 (its first level, the commoner 5,401) and Japan's JIS X 0208 (6,356): 10,269 together. With
+# kana, Bopomofo, CJK punctuation and full-width forms. From Noto Sans SC, so in the forms mainland China writes them.
+HAN = (ideographs(legacy("gb2312", range(0xB0, 0xF8), list(range(0xA1, 0xFF))))
+       | ideographs(legacy("big5", range(0xA4, 0xC7), list(range(0x40, 0x7F)) + list(range(0xA1, 0xFF))) & set(range(0x4E00, 0xA000)))
+       | ideographs(legacy("euc_jp", range(0xB0, 0xF5), list(range(0xA1, 0xFF)))))
+CJK = HAN | blocks(
+    (0x3000, 0x303F),  # CJK punctuation (、。「」)
+    (0x3040, 0x30FF),  # hiragana and katakana
+    (0x3100, 0x312F),  # Bopomofo
+    (0x31F0, 0x31FF),  # small katakana for Ainu
+    (0xFF00, 0xFFEF),  # full-width forms (，：！？（）) and half-width katakana
+)
+# Korean: every Hangul syllable (11,172) and Hangul's letters on their own, from Noto Sans KR.
+HANGUL = blocks((0xAC00, 0xD7A3), (0x3130, 0x318F))
+
+
 def fetch(source: str, where: Path | None) -> bytes:
     if where is not None:
         data = (where / Path(source).name).read_bytes()
@@ -94,15 +131,28 @@ def fetch(source: str, where: Path | None) -> bytes:
     return data
 
 
+UNREAD = ("GSUB", "GPOS", "GDEF", "MATH", "STAT", "BASE", "fpgm", "prep", "cvt ", "gasp", "vhea", "vmtx", "HVAR", "MVAR")
+
+
 def static(data: bytes, **axes: float) -> TTFont:
     """The font at `axes` (a variable one made static), without what Chat Computer's engine doesn't read."""
     font = TTFont(io.BytesIO(data))
     if "fvar" in font:
         font = instancer.instantiateVariableFont(font, axes)
-    for table in ("GSUB", "GPOS", "GDEF", "MATH", "STAT", "fpgm", "prep", "cvt ", "gasp", "vhea", "vmtx", "HVAR", "MVAR"):
+    for table in UNREAD:
         if table in font:
             del font[table]
     return font
+
+
+def static_cut(data: bytes, wanted: set[int], skip: set[int], **axes: float) -> TTFont:
+    """As cut(static(...)), but cut first: a CJK font has some 30,000 glyphs, and only those kept are made static."""
+    font = TTFont(io.BytesIO(data))
+    for table in UNREAD:
+        if table in font:
+            del font[table]
+    font = cut(font, wanted, skip)
+    return instancer.instantiateVariableFont(font, axes)
 
 
 def cut(font: TTFont, wanted: set[int], skip: set[int]) -> TTFont:
@@ -184,7 +234,21 @@ def build(where: Path | None) -> None:
     named(mono, "Chat Computer Fallback Mono")
     mono.save(HERE / "ChatComputerFallbackMono.ttf")
 
-    for name in ("ChatComputerFallback.ttf", "ChatComputerFallbackMono.ttf"):
+    # (Characters the other fallback has come from it first: they're left out here.)
+    before = main | set(merged.getBestCmap())
+    chinese = static_cut(data["ofl/notosanssc/NotoSansSC[wght].ttf"], CJK, before, wght=400)
+    korean = static_cut(data["ofl/notosanskr/NotoSansKR[wght].ttf"], HANGUL, before, wght=400)
+    parts = []
+    for font in (chinese, korean):
+        buffer = io.BytesIO()
+        font.save(buffer)
+        buffer.seek(0)
+        parts.append(buffer)
+    cjk = Merger().merge(parts)
+    named(cjk, "Chat Computer CJK")
+    cjk.save(HERE / "ChatComputerCJK.ttf")
+
+    for name in ("ChatComputerFallback.ttf", "ChatComputerFallbackMono.ttf", "ChatComputerCJK.ttf"):
         out = (HERE / name).read_bytes()
         print(f"{hashlib.sha256(out).hexdigest()}  {name} ({len(out)} bytes, {len(TTFont(HERE / name).getBestCmap())} characters)")
 

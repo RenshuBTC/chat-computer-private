@@ -420,3 +420,50 @@ fn a_font_without_kerning_kerns_nothing() {
     let m = Font::parse(&mono).unwrap();
     assert!(m.kerning(None).is_empty(), "the code font has marks positioned, but no kerning");
 }
+
+/// Where Lora puts marks (accents typed as characters of their own) on letters and on each other, as HarfBuzz has
+/// them (marks_reference.txt, from marks_reference.py), at its regular weight and its bold: each mark on the letter
+/// by the font's mark-to-base anchors, then on the mark before it by its mark-to-mark ones; where it has none for
+/// the two, where the pen is after the letter (marks take no room).
+#[test]
+fn places_marks_as_harfbuzz_does() {
+    let data = std::fs::read(format!("{}/../../chatcomputer/ui/assets/fonts/Lora.ttf", env!("CARGO_MANIFEST_DIR"))).expect("Lora");
+    let f = Font::parse(&data).unwrap();
+    let bold = f.instance(b"wght", 700).unwrap();
+    let (regular_marks, bold_marks) = (f.marks(None), f.marks(Some(&bold)));
+    assert!(!regular_marks.is_empty());
+    let mut placed = 0;
+    for line in include_str!("marks_reference.txt").lines() {
+        let mut words = line.split(' ');
+        let (text, weight) = (words.next().unwrap(), words.next().unwrap());
+        let glyphs: Vec<(u16, i32, i32)> = words
+            .map(|w| {
+                let v: Vec<i32> = w.split(':').map(|n| n.parse().unwrap()).collect();
+                (v[0] as u16, v[1], v[2])
+            })
+            .collect();
+        let (marks, pen) = if weight == "700" {
+            (&bold_marks, f.advance_at(glyphs[0].0, &bold) as i32)
+        } else {
+            (&regular_marks, f.advance(glyphs[0].0) as i32)
+        };
+        let base = glyphs[0].0;
+        assert!(!marks.is_mark(base), "{text}");
+        let mut before: Vec<(u16, (i32, i32))> = Vec::new();
+        for &(g, x, y) in &glyphs[1..] {
+            assert!(marks.is_mark(g), "{text}: {g}");
+            let mut at = marks.on_base(base, g).unwrap_or((pen, 0));
+            if let Some(on) = marks.on_mark(&before, g) {
+                at = on;
+            }
+            assert_eq!(at, (x, y), "{text} at {weight}: glyph {g}");
+            before.push((g, at));
+            placed += 1;
+        }
+    }
+    assert!(placed >= 25, "{placed}");
+    // A font without them (the fallbacks are made without GPOS) places none.
+    let data = std::fs::read(format!("{}/../fonts/ChatComputerFallback.ttf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let none = Font::parse(&data).unwrap().marks(None);
+    assert!(none.is_empty() && none.on_base(1, 2).is_none() && !none.is_mark(1));
+}

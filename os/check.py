@@ -676,10 +676,16 @@ def network(args) -> list[str]:
 # A Markdown answer, as models write them: a heading, bold and italic, a list, a table, a quote and code, which the
 # screen lays out (its picture: chat-markdown.png); with characters the text and code fonts lack, from the fallback
 # fonts: an arrow, a check mark, Greek and maths, emoji (one with the "as an emoji" selector, which shows nothing
-# itself) and box drawing.
+# itself), box drawing, and Chinese, Japanese and Korean; and accents typed after their letters.
 MARKDOWN = ("## Today\n\n**Sunny** all day, with *light* wind and ~~no~~ little cloud:\n\n- Morning: `12 °C`\n"
             "- Afternoon: 18 °C → 20 °C ✓\n\n| Time | Sky | Wind |\n|---|---|---|\n| 9:00 | Clear ☀\ufe0f | 5 km/h |\n"
-            "| 15:00 | **Sunny** | 10 km/h (Δ ≈ 5) |\n\n> Enjoy the day. 🙂\n\n```\nforecast --today\n└─ sunny, 20 °C\n```")
+            "| 15:00 | **Sunny** | 10 km/h (Δ ≈ 5) |\n\n> Enjoy the day. 🙂\n\n"
+            # (Chinese, Japanese and Korean, wrapped between their characters, bold made up.)
+            "今天**天气晴朗**，最高气温二十度，适合出门散步。午後は少し風が強くなりますが、雨は降りません。"
+            "오후에는 바람이 조금 불지만 비는 오지 않습니다.\n\n"
+            # (Accents typed after their letters, as Macs name files: composed, or placed by the font's anchors.)
+            "Cafe\u0301 au lait, Tie\u0302\u0301ng Vie\u0323\u0302t, n\u0303\u0323, y\u030a\n\n"
+            "```\nforecast --today\n└─ sunny, 20 °C\n```")
 # The settings' first line, as Chat Computer Own System writes them on Windows (New-OwnSettingsText): Windows' line
 # breaks.
 SETTINGS_HEAD = "# Chat Computer's settings, read by its own system when it starts. Written by Chat Computer Own System.\r\n"

@@ -2,13 +2,14 @@
 # - linux: builds it and checks the committed release file is exactly what this source builds; runs the font
 #   engine's, text setting's, chimes', FAT, exFAT, NTFS, ZIP, Office, picture, BitLocker and registry readers',
 #   Markdown reader's, memory file's, HID descriptors' and AML interpreter's tests (the last against ACPICA's acpiexec),
-#   and the model engine's; checks the engine's programs for Linux (chatcomputer/brain/bin) and the tiny model
-#   Chat Computer's tests use (tests/data/tiny-model.ccm) are exactly what this source builds;
+#   and the model engine's; checks the engine's programs for Linux (chatcomputer/brain/bin) and the tiny models
+#   Chat Computer's tests use (tests/data/tiny-model.ccm, and tiny-seeing-model.ccm with a vision part) are exactly
+#   what this source builds;
 #   starts it in virtual PCs (QEMU with OVMF) and checks the screen and the clock; checks that a crash stops it
 #   cleanly; starts it with Secure Boot enforced (signed with a test key the firmware trusts), checking the
 #   firmware refuses it unsigned; types on PS/2 and USB keyboards (on ports, behind a hub, plugged in and out),
 #   checking what comes out; rings a timer, recording its chime; runs its own model (a tiny one, found where the
-#   app keeps its models, its answer the engine's on Linux); has a test's script in place of the model hold a
+#   app keeps its models, its answer the engine's on Linux; one that sees, shown a picture and a scanned page); has a test's script in place of the model hold a
 #   conversation, keep it across a restart, and read files on a Windows drive (NTFS) with its tools, then on one
 #   BitLocker encrypts, unlocked with its recovery key, on the PC's other drives, by the letters Windows' registry
 #   gives them, and on USB drives as they come and go; and runs the firmware's own programs: a battery, an AC
@@ -22,7 +23,7 @@ name: Own OS test
 on:
   push:
     branches: [main]
-    paths: ['os/**', 'chatcomputer/ui/assets/fonts/**', 'chatcomputer/brain/bin/**', 'chatcomputer/brain/models.json', 'tests/data/tiny-model.ccm',
+    paths: ['os/**', 'chatcomputer/ui/assets/fonts/**', 'chatcomputer/brain/bin/**', 'chatcomputer/brain/models.json', 'tests/data/tiny-model.ccm', 'tests/data/tiny-seeing-model.ccm',
             'windows/own-os.ps1', 'windows/lib/OwnOs.ps1', 'windows/lib/Startup.ps1', 'tests/win_ci/own-os.ps1',
             '.github/workflows/os.yml']
   workflow_dispatch:
@@ -55,6 +56,8 @@ jobs:
           sh model/release.sh --check
           cargo run -q -p model --features std --example tiny_model -- "$RUNNER_TEMP/tiny-model.ccm"
           cmp "$RUNNER_TEMP/tiny-model.ccm" ../tests/data/tiny-model.ccm
+          cargo run -q -p model --features std --example tiny_model -- "$RUNNER_TEMP/tiny-seeing-model.ccm" seeing
+          cmp "$RUNNER_TEMP/tiny-seeing-model.ccm" ../tests/data/tiny-seeing-model.ccm
       - name: Build, and check the release file is what this source builds
         run: |
           ./build.sh

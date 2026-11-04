@@ -18,8 +18,8 @@ Computer's own engine (`model/`), from the file Chat Computer's app gets ready o
 starts. There's no account, no internet needed and nothing to pay, and nothing you type leaves the PC, unless the
 model looks something up on the web for you, which the screen shows. The answer streams onto a screen that looks
 like Chat Computer's. The model acts on the computer through tools: it sees how it's doing, makes the text bigger or
-smaller, sets timers, reads your files on Windows' drive and USB drives, searches the web and reads web pages, shows
-you a picture, and restarts it. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF,
+smaller, sets timers, reads your files on Windows' drive and USB drives and sees your pictures in them (photos,
+screenshots, scanned pages), searches the web and reads web pages, shows you a picture, and restarts it. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF,
 the open-source UEFI firmware). It has its own network stack, with drivers for the wired network chips most PCs have
 (Intel's I219, I210, I211, I225 and I226, Realtek's RTL8111/8168 and RTL8125: written to the makers' datasheets and
 the open-source drivers, not yet tried on a real PC), USB network adapters, Android phones sharing their connection
@@ -174,8 +174,8 @@ drivers.
     followed within a drive (a junction such as "My Documents", a symbolic link);
     OneDrive's files are read when they're downloaded to the PC, and said to be online only when they aren't. Word,
     Excel and PowerPoint files are read as their words (`office/`, through Chat Computer's own ZIP and DEFLATE
-    reader, `zip/`), and PDFs too (`pdf/`); a picture is said to be one (the model reads words only), and can be
-    shown to the person. A drive
+    reader, `zip/`), and PDFs too (`pdf/`); a picture is given to the model to see (its vision part's), as is a
+    scanned page, and can be shown to the person. A drive
     BitLocker encrypts (many new laptops have Windows' "device encryption" on) is read decrypted (`bitlocker/`):
     at once if BitLocker keeps its key in the clear (suspended, or not switched on yet), else once the person types
     its recovery key in the message box (48 digits, from their Microsoft account at aka.ms/myrecoverykey). The key
@@ -209,8 +209,8 @@ drivers.
     app's threads do; each job is one core's alone, so the answer is the same however many cores there are (checked:
     `./check.py --model --cores 4`). Between steps the other cores wait a moment for the next, then sleep until the
     first core's message wakes them, and the log says what share of the jobs they did. It works a step at a time
-    from the main loop: part of what it's asked read, or one token written, a few hundredths of a second each (as the
-    processor allows), so the screen and the keyboard go on meanwhile. Before the first question, it reads its instructions (the system prompt, with its
+    from the main loop: part of what it's asked read, part of a picture looked at, or one token written, a few
+    hundredths of a second each (as the processor allows), so the screen and the keyboard go on meanwhile. Before the first question, it reads its instructions (the system prompt, with its
     tools) ahead, and keeps that reading for every conversation after. Each message it's given starts with when it
     was sent; it doesn't think before answering (it was decided when it ran on one core, where thinking would take
     minutes; to be measured again on all of them). It's given as much of the
@@ -236,9 +236,16 @@ drivers.
       CSV with each row's number and each column's letter, dates as dates, formulas after their values; a
       presentation's slides with their notes. A PDF comes back as its words, page by page ("## Page 1"), with its
       title, and a filled-in form's fields after; an encrypted one too if it opens without a password (as most do:
-      only an owner's password, limiting printing or copying), and a scanned one is said to have no words (its pages
-      are pictures). The last PDF read is kept, so its next parts don't read it again. A ZIP archive's files are
-      listed. A picture (with its size in pixels) is said to be one, as is anything else of a kind it can't read;
+      only an owner's password, limiting printing or copying). A page with no words (a scanned one) is given to the
+      model to see, as one picture of its pictures where they are on the page (`page` says which; the first, if the
+      PDF has no words at all). The last PDF read is kept, so its next parts don't read it again. A ZIP archive's
+      files are listed. A picture (JPEG, PNG or GIF) is given to the model to see: decoded at about twice the size
+      the model sees it at (a big JPEG at a fraction of its size), turned as its camera says, then resized as Qwen's
+      processor resizes it (Pillow's bicubic resampling, `picture/`), at most 1,024 of its rows (about a million
+      pixels: a photo of 1,152 by 864, a page of 832 by 1,216). The model looks at it a step at a time, each step as
+      many of its patches as take about as long as a step should (a few hundredths of a second), "Looking at the
+      picture" beside the screen as it does; the 16 last pictures seen are kept as the model read them. A model whose
+      file has no vision part is told it can't see. Anything else of a kind it can't read is said to be one;
     * `search_web` and `read_web_page` (`web.rs`, `web/`): the web, as the main Chat Computer reads it (the same
       DuckDuckGo search and the same reading of a page as its words), fetched over Chat Computer's own network stack
       and TLS 1.3: the site's address found with DNS, its certificate checked against Mozilla's authorities for its
@@ -374,7 +381,8 @@ drivers.
   that make dates, times and percentages, both of Excel's date systems, formulas), a presentation's slides in order
   with their notes. Tested against documents made by python-docx, openpyxl and python-pptx, the same saved by
   LibreOffice, and documents written by hand with what programs write less often (`office/tests/make.py`).
-* `pdf/` reads the words in PDFs, its own way from ISO 32000: the file's objects through its cross-reference tables
+* `pdf/` reads the words in PDFs, its own way from ISO 32000, and makes a page's pictures one picture for the model
+  to see: the file's objects through its cross-reference tables
   or streams (updates appended to it followed, objects packed in object streams), or, in a damaged file (offsets
   wrong, the cross-reference gone, cut short), by looking through it for them; streams' filters (Flate with PNG's and
   TIFF's predictors, LZW, ASCII85, ASCIIHex, RunLength); fonts' codes as text (ToUnicode CMaps, the standard
@@ -383,15 +391,23 @@ drivers.
   are put left to right, words spaced where there's room between them, lines and paragraphs where the text moves
   down, and right-to-left words (Hebrew's, Arabic's) in the order they're read. Encrypted files that open without a
   password are decrypted (RC4 and AES, revisions 2 to 6, with its own MD5). Everything is held to a most: sizes,
-  depths, how much work a page or a file takes. Tested against PDFs made by ReportLab, LibreOffice, pdfTeX, Chrome
-  and qpdf (seven kinds of encryption), and by hand with what programs write less often (`pdf/tests/make.py`),
-  damaged ones and tens of thousands with bytes changed at random, which never crash it.
+  depths, how much work a page or a file takes. A page's pictures (image XObjects, in forms too, and inline images)
+  are each drawn where the page's matrices put it, the page turned as it says, on white, at its pictures'
+  resolution: JPEGs (`picture/`), raw samples (any depth; gray, RGB, CMYK, indexed, ICC-based, calibrated; their
+  Decode arrays), fax's compression as office scanners write it (CCITT's Group 4, and Group 3's lines, its own
+  decoder), stencil masks in their colour, soft masks' transparency; each made the size it's drawn at by Pillow's
+  bicubic resampling. JPEG 2000's and JBIG2's pictures aren't read yet (said to be missing). Tested against PDFs
+  made by ReportLab, LibreOffice, pdfTeX, Chrome and qpdf (seven kinds of encryption), and by hand with what programs
+  write less often (`pdf/tests/make.py`): scanned pages against Pillow's own decoding and resampling of the same
+  scan, fax's against libtiff's encoding of the same pixels (exactly), and every kind of picture's sample; damaged
+  ones and tens of thousands with bytes changed at random, which never crash it.
 * `picture/` decodes pictures for the screen: JPEG (baseline and progressive, any sampling, restart markers,
   Adobe's CMYK, EXIF's orientation) as libjpeg decodes it (its accurate integer inverse DCT, its "fancy" upsampling,
   its YCbCr arithmetic), a big one at a half, a quarter or an eighth of its size when that's enough, so a phone's
   48-megapixel photo needs a few megabytes; PNG (every colour type and depth, transparency, interlacing); and GIF's
   first frame. Shrunk to fit by averaging, in integers only, and in the memory it's given (the kernel gives half its
-  heap's biggest free piece: a bigger picture is said to be too big). It writes JPEGs too: baseline, 4:2:0, the standard's tables, exactly as libjpeg writes them (its colour arithmetic, its
+  heap's biggest free piece: a bigger picture is said to be too big). And resampled as Pillow does it (bicubic, with
+  antialiasing), as Qwen's processor resizes a picture for its model to see. It writes JPEGs too: baseline, 4:2:0, the standard's tables, exactly as libjpeg writes them (its colour arithmetic, its
   rounding as it halves the colour, its edges and dummy blocks, its accurate integer DCT). Tested against Pillow's
   (libjpeg-turbo's) decoding of pictures it wrote (within one level a sample) and PNGs written by its test, every
   depth and colour type (exactly), damaged pictures, and Pillow's JPEGs of the same pixels, which the writer's must
@@ -532,7 +548,9 @@ cargo test -p model --features std # the model engine (small models of random we
 ./check.py --model               # the own model: a tiny one of random weights found where the app keeps its
                                  # models, read, its instructions read ahead, a question answered as the engine
                                  # on Linux answers it, the other cores doing part of the arithmetic (--cores 4:
-                                 # three of them); named by the settings; a file that isn't a model
+                                 # three of them); one with a vision part shown a picture and a scanned PDF's
+                                 # page, the pictures and its answers the engine's on Linux; named by the
+                                 # settings; a file that isn't a model
 ./check.py --chat                # typing to a test's script in place of the model: what it's given each round,
                                  # its tools (the computer's status, a bigger text size, a timer, a restart), the
                                  # answer on the screen (Markdown), a failure, a mouse's wheel scrolling; then an
@@ -552,7 +570,8 @@ cargo test -p model --features std # the model engine (small models of random we
 ./check.py --files               # Windows' drive read by the model's tools (a test's script asks): a folder
                                  # listed, text files read (UTF-8 and UTF-16, a long one in two parts), links
                                  # followed, OneDrive's files on the PC and online only, Word, Excel and
-                                 # PowerPoint files and a PDF as words, a search, and a photo shown on the screen
+                                 # PowerPoint files and a PDF as words, pictures given to be seen, a search, and a
+                                 # photo shown on the screen
                                  # (needs xz and gdisk)
 ./check.py --drives              # the PC's other drives: a second NVMe SSD (GPT) and two SATA drives (MBR and
                                  # GPT), read by the letters Windows' registry gives them, one Windows hasn't seen
@@ -670,8 +689,10 @@ PC.
    processor's vector registers (AVX) kept across interrupts, the answer a step at a time beside the screen and the
    keyboard; checked in a virtual PC against the engine on Linux; ✓ on every core; ✓ the web (a search and pages'
    words, over its own HTTPS; checked against a stand-in for DuckDuckGo and a site); ✓ PDFs read (on the drives and
-   the web, encrypted ones that open without a password too). To do: trying the web on a real PC, and pictures seen
-   (scanned pages among them).
+   the web, encrypted ones that open without a password too); ✓ pictures seen (photos, screenshots, scanned pages:
+   Qwen 3.5's vision part, run by the engine, checked against the reference implementation; in the kernel, checked
+   in a virtual PC against the engine on Linux). To do: trying the web and pictures on a real PC (and how long a
+   picture takes there to be seen), and JPEG 2000's and JBIG2's scans.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting the model's answers use
    (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the
    conversation (JPEG, PNG, GIF). To do: accents

@@ -30,7 +30,9 @@ log go to out/.
     ./check.py --model               Chat Computer's own model: a tiny one (random weights) found where Chat
                                      Computer's app keeps its models, read into memory, its instructions read
                                      ahead, a question typed and answered, the answer the same as the engine's on
-                                     Linux; then named by the settings; then a file that isn't a model
+                                     Linux; then one with a vision part shown a picture and a scanned PDF's page by
+                                     read_file, the pictures and its answers the same as the engine's on Linux; then
+                                     named by the settings; then a file that isn't a model
     ./check.py --chat                a conversation typed on the keyboard, answered by a test's script in place of
                                      the model: what the model's given each round (the conversation so far, the
                                      tools' results, when each message was sent), its tools (the computer's
@@ -1038,6 +1040,7 @@ def model_check(args) -> list[str]:
             else:
                 print(f"The kernel's model said what the engine says ({len(rounds[0]['text'])} characters, "
                       f"{len(rounds[0]['calls'])} tool calls), with {ready[2]} arithmetic.")
+        problems += seeing_check(args, tmp, settings, models)
         # Named by the settings: read from there; and a file that isn't a model.
         for named, want_words in ((path, "model: Qwen3.5 TINY ready"),
                                   ("D:\\Documents\\not a model.ccm", "isn't a model Chat Computer's engine can run")):
@@ -1055,6 +1058,101 @@ def model_check(args) -> list[str]:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
+    return problems
+
+
+SEEING = HERE.parent / "tests/data/tiny-seeing-model.ccm"
+
+
+def seeing_check(args, tmp: Path, settings: str, models: str) -> list[str]:
+    """The model sees: a tiny model with a vision part (tests/data/tiny-seeing-model.ccm), given by read_file a
+    picture (a PNG drawn here) and a scanned PDF's page (fax's Group 3, os/pdf's test file), each asked for by a model
+    test build's "look at" (in place of a model of random weights asking; each in a conversation of its own): each
+    picture made as the engine on Linux makes it from the same file (its size and mark the same), looked at by the
+    vision part a step at a time, and the model's answer the same as the engine's on Linux to the same conversation
+    with the same picture."""
+    import re
+    from PIL import Image, ImageDraw
+
+    problems: list[str] = []
+    sun = Image.new("RGB", (120, 90), (40, 110, 200))
+    d = ImageDraw.Draw(sun)
+    d.ellipse((20, 15, 60, 55), fill=(250, 220, 90))
+    d.rectangle((70, 50, 115, 85), fill=(30, 140, 60))
+    sun.save(tmp / "sun.png")
+    scan = HERE / "pdf/tests/scan-fax.pdf"
+    volume = fat_volume(tmp, "DATA", 64, 32, 1, {f"{models}/qwen3.5-tiny.ccm": SEEING.read_bytes(),
+                                                 "Pictures/Sun.png": (tmp / "sun.png").read_bytes(),
+                                                 "Documents/Scan.pdf": scan.read_bytes()})
+    gpt_disk(tmp / "seeing.img", volume)
+    extra = ("-drive", f"if=none,id=d1,format=raw,file={tmp / 'seeing.img'}", "-device", "nvme,serial=ccdata1,drive=d1")
+    questions = ["look at D:\\Pictures\\Sun.png", "look at D:\\Documents\\Scan.pdf page 2"]
+    pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings)
+    try:
+        if not wait_for(pc.log, ("model: read its instructions ahead", "model: failed", "stopped"), args.timeout):
+            return ["the seeing model's instructions weren't read ahead"]
+        for n, q in enumerate(questions, 1):
+            monitor_many(pc.mon, keys_for(q) + ["sendkey ret"])
+            if wait_for(pc.log, ("model: answered", "model: failed", "stopped"), args.timeout, times=n) != "model: answered":
+                problems.append(f"the model didn't answer {q!r}")
+                break
+        pc.settled_picture("model-seeing")
+    finally:
+        pc.stop()
+    text = pc.text()
+    problems += stack_problems(text)
+    if problems:
+        print(text)
+        return problems
+    if "seeing pictures" not in text and "you see it" not in text:
+        problems.append("the seeing model's file wasn't read as one that sees")
+    tools, rounds, asked = logged(text, "tool"), logged(text, "round"), logged(text, "asked")
+    pictures = [t for t in tools if t.get("picture")]
+    want = [(r"D:\\Pictures\\Sun\.png \(\d+ (bytes|KB), 120×90 pixels, changed .*\): the picture is here \(as you see it, "
+             r"72×48 pixels\)\.", "72x48"),
+            (r"D:\\Documents\\Scan\.pdf \(a PDF, 3 pages, \d+ KB, changed .*\) has no words that can be read: its pages are pictures "
+             r"\(scanned, perhaps\)\. Page 2's pictures are here, where they are on the page \(as you see it, 56×72 pixels\)\. "
+             r"read_file with page 3 shows the next\.", "56x72")]
+    if len(pictures) != 2:
+        return problems + [f"read_file gave the model {len(pictures)} pictures, not 2: {tools!r}"[:2000]]
+    for t, (pattern, size) in zip(pictures, want):
+        if not re.fullmatch(pattern, t["said"]) or not t["picture"].startswith(size + " "):
+            problems.append(f"read_file said {t['said']!r} with the picture {t['picture']!r}")
+    if not re.search(r"model: answered .*; a picture seen in [\d.]+ s", text):
+        problems.append("the log didn't say a picture was seen")
+    # The model's rounds (each after the round that's "look at"'s call), and what it was asked for each (the last
+    # "asked" before it).
+    ours, given, last, after_call = [], [], None, False
+    for line in text.splitlines():
+        if "kernel: test: asked " in line:
+            last = json.loads(line.split("kernel: test: asked ", 1)[1])
+        elif "kernel: test: round " in line:
+            r = json.loads(line.split("kernel: test: round ", 1)[1])
+            if after_call:
+                ours.append(r)
+                given.append(last)
+            after_call = not r["text"] and [c["name"] for c in r["calls"]] == ["read_file"]
+    if len(ours) != 2 or None in given:
+        return problems + [f"the model's rounds weren't found: {rounds!r}"[:2000]]
+    asked = given
+    level = re.search(r"its arithmetic (.+)", text)
+    files = [str(tmp / "sun.png"), f"{scan}#2"]
+    for k in range(2):
+        (tmp / "asked.json").write_text(json.dumps(asked[k], ensure_ascii=False))
+        (tmp / "tools.json").write_text("[]")
+        engine = subprocess.run(["cargo", "run", "-q", "--release", "-p", "model", "--features", "std", "--example",
+                                 "kernel_check", "--", str(SEEING), str(tmp / "asked.json"), "--tools", str(tmp / "tools.json"),
+                                 "--max", "24", "--level", LEVELS.get(level[1] if level else "", "plain")]
+                                + ["--picture", files[k]],
+                                cwd=HERE, capture_output=True, text=True)
+        try:
+            theirs = json.loads(engine.stdout)
+        except ValueError:
+            theirs = engine.stderr[-2000:]
+        if ours[k] != theirs:
+            problems.append(f"seeing {questions[k]!r}, the kernel's model said {ours[k]!r}, the engine on Linux {theirs!r}"[:3000])
+        else:
+            print(f"Seeing {questions[k]!r}, the kernel's model said what the engine says ({len(ours[k]['text'])} characters).")
     return problems
 
 
@@ -1628,8 +1726,8 @@ def files_check(args) -> list[str]:
                     r"## Budget\nrow,A,B,C,D,E,F,G\n.*\n4,Total,1612\.5 \(=SUM\(B2:B3\)\),,,,,\n.*## Notes\n.*",
             "pptx": rf"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx \(a PowerPoint presentation, 35 KB, changed {day}\), its "
                     r"words:\n## Slide 1: Chat Computer\n.*## Slide 2: What it does\n.*Notes: Say hello first\.\n.*",
-            "photo": rf"C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels, changed {day}\) is a picture\. Chat "
-                     r"Computer's own model can't see pictures yet; show_picture shows it to the person\.",
+            "photo": rf"C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels, changed {day}\): the picture is "
+                     r"here \(as you see it, 640×480 pixels\)\.",
             "pdf": rf"C:\\Users\\Sam\\Documents\\Work\\Receipt\.pdf \(a PDF, 1 page, 600 bytes, changed {day}\), its words:\n"
                    r"## Page 1\nReceipt: 3 coffees, 12\.50",
             "zip": r"C:\\Users\\Sam\\Downloads\\photos\.zip is a ZIP archive \(4 KB\) of 2 files:\nBeach\.jpg \(10 KB\)\n"
@@ -1638,8 +1736,8 @@ def files_check(args) -> list[str]:
                       r"\(\.doc, \.xls, \.ppt\), which Chat Computer's own system can't read inside yet\.",
             "heic": r"C:\\Users\\Sam\\Pictures\\IMG_0001\.HEIC \(3 KB\) is a HEIC picture \(as iPhones take them\), which "
                     r"Chat Computer's own system can't open yet\.",
-            "wide": rf"C:\\Users\\Sam\\Pictures\\Panorama\.png \(\d+ KB, 9000×40 pixels, changed {day}\) is a picture\. "
-                    r"Chat Computer's own model can't see pictures yet; show_picture shows it to the person\.",
+            "wide": rf"C:\\Users\\Sam\\Pictures\\Panorama\.png \(\d+ KB, 9000×40 pixels, changed {day}\): the picture "
+                    r"is here \(as you see it, 8992×32 pixels\)\.",
             "nopic": r"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx isn't a picture this screen shows \(JPEG, PNG or GIF\)\.",
             "showpic": r"Shown on the screen: C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels\)\.",
         }
@@ -1963,9 +2061,10 @@ def usb_check(args) -> list[str]:
 
 
 def keys_for(text: str) -> list[str]:
-    """The monitor's commands that type `text` (letters, digits, spaces, dashes, colons and full stops)."""
-    named = {" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot"}
-    return [f"sendkey {named.get(c, c)}" for c in text]
+    """The monitor's commands that type `text` (letters, capitals among them, digits, spaces, dashes, colons, full
+    stops and backslashes)."""
+    named = {" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot", "\\": "backslash"}
+    return [f"sendkey {named.get(c, f'shift-{c.lower()}' if c.isupper() else c)}" for c in text]
 
 
 def encrypted(volume: bytes, clear: bool) -> tuple[bytes, dict]:

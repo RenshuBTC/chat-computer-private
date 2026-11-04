@@ -9,7 +9,9 @@
 //! the first question has only itself to be read. Each message it's given starts with when it was sent.
 //!
 //! It acts on this computer through its tools (tools.json): it sees how the computer's doing, changes the text size,
-//! sets timers, reminders and alarms, reads the files on its drives, shows a picture, notes things about the person,
+//! sets timers, reminders and alarms, reads the files on its drives (and sees their pictures, scanned pages among
+//! them, when its file has the vision part: a picture a tool gives it goes with what the tool said, and its vision
+//! part looks at it a step at a time), shows a picture, notes things about the person,
 //! starts a new conversation, restarts the computer or turns it off. When an answer calls them, they run here and what
 //! they say goes back to the model, until it has finished. The conversation is kept across restarts in Chat
 //! Computer's memory file (keep.rs), with the model's notes about the person, which it's shown in every conversation.
@@ -25,9 +27,10 @@ use crate::{clock, files, heap, time};
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use model::chat::{Answer, Call, Content, Message, Options, Said as Saying, Style};
+use model::chat::{Answer, Call, Content, Message, Options, Picture, Said as Saying, Style};
 use model::cpu::Level;
 use model::json::{self, Json};
 use model::refusal::Found;
@@ -95,7 +98,7 @@ computer unless you look something up on the web, which they see.
 
 With your tools you can see how this computer is doing, change the text size, set timers, reminders and alarms (and \
 how loud they ring), read the files on its drives (Windows' C: and the others, USB sticks and memory cards included; \
-nothing can be changed), search the web and read web pages (when this computer is connected), show the person a \
+nothing can be changed){sees}, search the web and read web pages (when this computer is connected), show the person a \
 picture, note things about them to remember in later conversations, start a new conversation, and restart this \
 computer (to go back to Windows) or turn it off. Use a tool rather than saying \
 how; don't say you're about to use one, just use it.
@@ -170,6 +173,28 @@ fn test_build() -> Option<&'static str> {
 /// "cut": true, a round that reached the most a round says) or {"fail": why}.
 static TEST_SCRIPT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test_script.json"));
 
+/// The most rows a picture the model sees becomes for it (about a million pixels: a photo of 1,152 by 864, a page of
+/// 832 by 1,216), each read as a token is.
+const SEEN_ROWS: usize = 1024;
+
+/// How the model sees a picture: by its vision part, or (a test's script) as Qwen 3.5's does.
+#[derive(Clone, Copy)]
+enum Sight {
+    Model(&'static model::vision::Vision<'static>),
+    Qwen,
+}
+
+impl Sight {
+    /// The size (width, height) it reads a picture of `w` by `h` at, with at most SEEN_ROWS rows.
+    fn size(self, w: usize, h: usize) -> (usize, usize) {
+        let (h, w) = match self {
+            Sight::Model(v) => v.size_for(h, w, SEEN_ROWS),
+            Sight::Qwen => model::vision::smart_resize(h, w, 32, 65_536, SEEN_ROWS * 32 * 32),
+        };
+        (w, h)
+    }
+}
+
 /// A part of the conversation.
 #[derive(Clone)]
 enum Part {
@@ -177,8 +202,8 @@ enum Part {
     You { text: String, at: Option<i64> },
     /// A round of the model's answer: its words, and the tools it called.
     Said(Answer),
-    /// What a tool said back.
-    Tool(String),
+    /// What a tool said back, and a picture it gave the model to see (read_file's).
+    Tool(String, Option<Arc<Picture>>),
 }
 
 /// The model's file, being read into memory.
@@ -205,8 +230,10 @@ struct Loaded {
     /// Its instructions' tokens, to read ahead of the first question (empty once read), and how many are read.
     ahead: Vec<u32>,
     ahead_done: usize,
-    /// How many tokens a reading step takes (suited to the processor's speed).
+    /// How many tokens a reading step takes, and how many of a picture's patches a step of seeing it (each suited
+    /// to the processor's speed).
     read: usize,
+    see: usize,
     /// Tokens written a second, in its last answer.
     speed: Option<f64>,
 }
@@ -245,11 +272,13 @@ struct Job {
     /// What it has said (the log has it only in a test build), and the activity last shown.
     text: String,
     shown: String,
-    /// Tokens read and written, and the time each took, for the log.
+    /// Tokens read and written, pictures seen, and the time each took, for the log.
     read: usize,
     read_ms: u64,
     written: usize,
     write_ms: u64,
+    seen: usize,
+    see_ms: u64,
     /// The round's web tools' calls still being fetched, in order: the next round waits for them.
     web: Vec<WebCall>,
 }
@@ -299,6 +328,8 @@ impl Job {
             read_ms: 0,
             written: 0,
             write_ms: 0,
+            seen: 0,
+            see_ms: 0,
             web: Vec::new(),
         }
     }
@@ -433,7 +464,7 @@ pub fn conversation() -> Vec<(bool, String)> {
                     _ => {}
                 }
             }
-            Part::Tool(_) => {}
+            Part::Tool(..) => {}
         }
     }
     shown
@@ -481,6 +512,11 @@ pub fn ask(text: &str) -> Result<(), String> {
     }
     if let Brain::None { why, .. } = &a.brain {
         return Err(why.clone());
+    }
+    // (A model test build's "look at": a conversation of its own, as check.py asks the engine on Linux it: an earlier
+    // answer of random weights isn't text that would read back as the same tokens.)
+    if test_build() == Some("model") && text.starts_with("look at ") {
+        a.parts.clear();
     }
     // A new conversation's instructions have the notes as they are now.
     if a.parts.is_empty() && matches!(a.brain, Brain::Ready(_) | Brain::Script(_)) {
@@ -617,7 +653,7 @@ impl Assistant {
             Brain::Ready(m) => {
                 let level = level_name();
                 format!(
-                    "Model: you are {} ({}), run by Chat Computer's own engine on {} ({level}){}; \
+                    "Model: you are {} ({}), run by Chat Computer's own engine on {} ({level}){}{}; \
                      conversations up to {} tokens{}",
                     m.name,
                     m.path,
@@ -626,6 +662,7 @@ impl Assistant {
                         n => format!("{n} of this PC's processor cores"),
                     },
                     if m.uncensored { ", its refusals taken out" } else { "" },
+                    if m.session.model.vision.is_some() { ", seeing pictures" } else { ", its file without the part that sees pictures" },
                     m.context,
                     m.speed.map(|s| format!("; lately {s:.1} tokens a second")).unwrap_or_default()
                 )
@@ -645,7 +682,15 @@ impl Assistant {
             Brain::Reading(r) => r.name.clone(),
             _ => String::from("Qwen"),
         };
-        let mut system = SYSTEM.replace("{model}", &name);
+        let sees = match &self.brain {
+            Brain::Ready(m) => m.session.model.vision.is_some(),
+            Brain::Script(_) => true,
+            _ => false,
+        };
+        let mut system = SYSTEM.replace("{model}", &name).replace(
+            "{sees}",
+            if sees { " and see the pictures among them (scanned pages too)" } else { "" },
+        );
         if self.from > 0 {
             system.push_str(SHORTENED);
         }
@@ -667,7 +712,8 @@ impl Assistant {
                 Part::You { text, at: Some(t) } => Message::User(format!("[{}] {text}", clock::short_text(*t))),
                 Part::You { text, at: None } => Message::User(text.clone()),
                 Part::Said(a) => Message::Assistant(a.clone()),
-                Part::Tool(t) => Message::Tool(t.clone()),
+                Part::Tool(t, None) => Message::Tool(t.clone()),
+                Part::Tool(t, Some(picture)) => Message::ToolParts(vec![Content::Text(t.clone()), Content::Picture(picture.clone())]),
             });
         }
         out
@@ -753,6 +799,30 @@ impl Assistant {
             if !self.web_step(job, events) {
                 return false;
             }
+            // (A model test build, asked "look at PATH [page N]": its first round read_file's call of it, as if the
+            // model had made it, for check.py to see the model see a picture, which a model of random weights won't
+            // ask for.)
+            if job.turn.is_none()
+                && job.rounds == 0
+                && test_build() == Some("model")
+                && let Some(Part::You { text, .. }) = self.parts.get(job.base)
+                && let Some(rest) = text.strip_prefix("look at ")
+            {
+                let (path, page) = match rest.rsplit_once(" page ") {
+                    Some((path, page)) if page.parse::<u32>().is_ok() => (path, Some(page)),
+                    _ => (rest, None),
+                };
+                let mut args = vec![(String::from("path"), String::from(path))];
+                if let Some(page) = page {
+                    args.push((String::from("page"), String::from(page)));
+                }
+                let answer = Answer { calls: vec![Call { name: String::from("read_file"), args }], ..Answer::default() };
+                job.closed = 1;
+                if self.round_over(job, answer, false, events) {
+                    return true;
+                }
+                continue;
+            }
             if job.turn.is_none()
                 && let Err(why) = self.begin_round(job)
             {
@@ -771,6 +841,7 @@ impl Assistant {
             } else {
                 let reading = turn.reading();
                 let t = time::uptime_ms();
+                m.session.see = m.see;
                 let step = m.session.step(turn, m.read, &crate::cores::Cores);
                 let took = time::uptime_ms() - t;
                 // (A call that comes as the turn ends was never closed: the engine reads it as far as it got. If the
@@ -786,6 +857,11 @@ impl Assistant {
                         }
                     }
                     Step::Seeing { done, total } => {
+                        job.see_ms += took;
+                        m.see = suited_to(m.see, took, 1 << 16);
+                        if done == total {
+                            job.seen += 1;
+                        }
                         if !job.said {
                             activity(job, format!("Looking at the picture ({}%)", percent(done, total)), events);
                         }
@@ -885,7 +961,7 @@ impl Assistant {
             // answer ends with what it said, all it did kept for the next message to carry on from.
             crate::log!("Chat Computer kernel: model: its rounds of tools were used up: {} more not run", calls.len());
             for call in &calls {
-                self.tool_said(&call.name, String::from(NOT_RUN), true);
+                self.tool_said(&call.name, String::from(NOT_RUN), true, None);
             }
             events.push(Event::Note(String::from(USED_UP)));
             self.finish(job, events);
@@ -894,25 +970,26 @@ impl Assistant {
         for (i, call) in calls.iter().enumerate() {
             if cut && i >= job.closed {
                 crate::log!("Chat Computer kernel: model: its call of {} was cut off as it wrote it, so isn't run", call.name);
-                self.tool_said(&call.name, String::from(CUT_CALL), true);
+                self.tool_said(&call.name, String::from(CUT_CALL), true, None);
                 continue;
             }
             let tool = self.tools.iter().find(|t| t.get("function").and_then(|f| f.get("name")).and_then(Json::str) == Some(&call.name));
             let input = call.arguments(tool);
             if matches!(call.name.as_str(), "search_web" | "read_web_page") {
                 if let Some((said, error)) = self.start_web(&call.name, &input, job) {
-                    self.tool_said(&call.name, said, error);
+                    self.tool_said(&call.name, said, error, None);
                 }
                 continue;
             }
             let notes = self.notes.clone();
-            let (said, error) = run_tool(&call.name, &input, job, &mut self.notes, events);
+            let sight = self.sight();
+            let (said, error, picture) = run_tool(&call.name, &input, job, &mut self.notes, events, sight);
             self.unkept |= self.notes != notes;
-            self.tool_said(&call.name, said, error);
+            self.tool_said(&call.name, said, error, picture);
         }
         job.rounds += 1;
         if job.rounds == TOOL_ROUNDS
-            && let Some(Part::Tool(said)) = self.parts.last_mut()
+            && let Some(Part::Tool(said, _)) = self.parts.last_mut()
         {
             said.push_str("\n\n");
             said.push_str(&last_round());
@@ -946,7 +1023,7 @@ impl Assistant {
             }
             (WebWhat::Read { url: url.to_string(), offset }, url)
         };
-        self.parts.push(Part::Tool(String::new()));
+        self.parts.push(Part::Tool(String::new(), None));
         job.web.push(WebCall { part: self.parts.len() - 1, what, fetch: crate::web::Fetch::new(url), begun: false });
         None
     }
@@ -984,7 +1061,7 @@ impl Assistant {
                 crate::log!("Chat Computer kernel: test: tool {}", json::compact(&logged));
             }
             // (Anything already added after its place, such as the note that the rounds of tools are used up, stays.)
-            if let Some(Part::Tool(place)) = self.parts.get_mut(call.part) {
+            if let Some(Part::Tool(place, _)) = self.parts.get_mut(call.part) {
                 let after = core::mem::take(place);
                 *place = format!("{}{said}{after}", if error { "Error: " } else { "" });
             }
@@ -1049,25 +1126,47 @@ impl Assistant {
         }
     }
 
-    /// What a tool said back (`error`: why it couldn't), for the model in the next round.
-    fn tool_said(&mut self, name: &str, said: String, error: bool) {
+    /// What a tool said back (`error`: why it couldn't), and a picture it gives the model to see, for the model in
+    /// the next round.
+    fn tool_said(&mut self, name: &str, said: String, error: bool, picture: Option<picture::Picture>) {
+        let picture = picture.map(|p| Arc::new(Picture::new(p.width as usize, p.height as usize, p.rgb)));
         if test_build().is_some() {
-            let logged = Json::Object(vec![
+            let mut logged = vec![
                 (String::from("name"), Json::Str(String::from(name))),
                 (String::from("error"), Json::Bool(error)),
                 (String::from("said"), Json::Str(said.clone())),
-            ]);
-            crate::log!("Chat Computer kernel: test: tool {}", json::compact(&logged));
+            ];
+            if let Some(p) = &picture {
+                logged.push((String::from("picture"), Json::Str(picture_text(p))));
+            }
+            crate::log!("Chat Computer kernel: test: tool {}", json::compact(&Json::Object(logged)));
         }
-        self.parts.push(Part::Tool(if error { format!("Error: {said}") } else { said }));
+        self.parts.push(Part::Tool(if error { format!("Error: {said}") } else { said }, picture));
+    }
+
+    /// How the model sees, if it can (its file has a vision part; a test's script sees as Qwen 3.5 does).
+    fn sight(&self) -> Option<Sight> {
+        match &self.brain {
+            Brain::Ready(m) => {
+                let model: &'static model::Model<'static> = m.session.model;
+                model.vision.as_ref().map(Sight::Model)
+            }
+            Brain::Script(_) => Some(Sight::Qwen),
+            _ => None,
+        }
     }
 
     /// The answer is complete.
     fn finish(&mut self, job: &mut Job, events: &mut Vec<Event>) {
         let chars = job.text.chars().count();
         let speed = (job.write_ms > 0).then(|| job.written as f64 * 1000.0 / job.write_ms as f64);
+        let seen = match job.seen {
+            0 => String::new(),
+            1 => format!("; a picture seen in {:.1} s", job.see_ms as f64 / 1000.0),
+            n => format!("; {n} pictures seen in {:.1} s", job.see_ms as f64 / 1000.0),
+        };
         crate::log!(
-            "Chat Computer kernel: model: answered ({chars} characters; {} tokens read in {:.1} s, {} written in {:.1} s{})",
+            "Chat Computer kernel: model: answered ({chars} characters; {} tokens read in {:.1} s, {} written in {:.1} s{seen}{})",
             job.read,
             job.read_ms as f64 / 1000.0,
             job.written,
@@ -1220,12 +1319,17 @@ fn activity(job: &mut Job, doing: String, events: &mut Vec<Event>) {
 
 /// How many tokens a reading step takes next: more while steps are quick, fewer when they're slow.
 fn suited(read: usize, took_ms: u64) -> usize {
+    suited_to(read, took_ms, model::net::BATCH)
+}
+
+/// How much a step does next (at most `most`): more while steps are quick, less when they're slow.
+fn suited_to(n: usize, took_ms: u64, most: usize) -> usize {
     if took_ms < STEP_MS / 2 {
-        (read * 2).min(model::net::BATCH)
+        (n * 2).min(most)
     } else if took_ms > STEP_MS * 2 {
-        (read / 2).max(1)
+        (n / 2).max(1)
     } else {
-        read
+        n
     }
 }
 
@@ -1413,6 +1517,7 @@ fn load(all: &'static [u8], opened: &files::Opened, name: String) -> Result<Load
         ahead: Vec::new(),
         ahead_done: 0,
         read: 8,
+        see: 64,
         speed: None,
     })
 }
@@ -1427,14 +1532,14 @@ fn messages_json(messages: &[Message]) -> Json {
                 Message::System(t) => Json::Object(vec![(String::from("role"), s("system")), (String::from("content"), s(t))]),
                 Message::User(t) => Json::Object(vec![(String::from("role"), s("user")), (String::from("content"), s(t))]),
                 Message::Tool(t) => Json::Object(vec![(String::from("role"), s("tool")), (String::from("content"), s(t))]),
-                // (Pictures as their size: a test's log has no room for their pixels.)
+                // (Pictures as their size and mark: a test's log has no room for their pixels.)
                 Message::UserParts(parts) | Message::ToolParts(parts) => {
                     let role = if matches!(m, Message::UserParts(_)) { "user" } else { "tool" };
                     let text: String = parts
                         .iter()
                         .map(|p| match p {
                             Content::Text(t) => t.clone(),
-                            Content::Picture(pic) => format!("[a picture, {}x{}]", pic.width, pic.height),
+                            Content::Picture(pic) => format!("[a picture, {}]", picture_text(pic)),
                         })
                         .collect();
                     Json::Object(vec![(String::from("role"), s(role)), (String::from("content"), s(&text))])
@@ -1447,6 +1552,11 @@ fn messages_json(messages: &[Message]) -> Json {
             })
             .collect(),
     )
+}
+
+/// A picture as a test's log has it: its size, and its mark (a hash of its size and pixels).
+fn picture_text(p: &Picture) -> String {
+    format!("{}x{} {:016x}", p.width, p.height, p.mark)
 }
 
 /// Tool calls as JSON, for a test build's log: each {"name": ..., "args": {name: value as the model wrote it}}.
@@ -1547,8 +1657,34 @@ fn from_kept(text: &str) -> Option<(Vec<String>, Vec<Part>)> {
     Some((notes, parts))
 }
 
-/// Runs a tool the model called: what it says back, and whether that's an error.
-fn run_tool(name: &str, input: &Json, job: &mut Job, notes: &mut Vec<String>, events: &mut Vec<Event>) -> (String, bool) {
+/// Runs a tool the model called: what it says back, whether that's an error, and a picture it gives the model to see
+/// (read_file's, when the model can: `sight`).
+fn run_tool(
+    name: &str,
+    input: &Json,
+    job: &mut Job,
+    notes: &mut Vec<String>,
+    events: &mut Vec<Event>,
+    sight: Option<Sight>,
+) -> (String, bool, Option<picture::Picture>) {
+    if name == "read_file" {
+        activity(job, String::from("Reading a file"), events);
+        crate::log!("Chat Computer kernel: model: uses {name}");
+        let text = input.get("path").and_then(Json::str).map(str::trim).unwrap_or("");
+        let num = |key: &str| input.get(key).and_then(number);
+        let page = num("page").filter(|p| *p >= 1.0).map(|p| p as u64);
+        let size = |w: usize, h: usize| sight.map_or((w, h), |s| s.size(w, h));
+        return match crate::files::read(text, num("offset").unwrap_or(0.0).max(0.0) as u64, page, sight.map(|_| &size as crate::files::Sight)) {
+            Ok(got) => (got.said, false, got.picture),
+            Err(e) => (e, true, None),
+        };
+    }
+    let (said, error) = run_other_tool(name, input, job, notes, events);
+    (said, error, None)
+}
+
+/// Runs a tool other than read_file.
+fn run_other_tool(name: &str, input: &Json, job: &mut Job, notes: &mut Vec<String>, events: &mut Vec<Event>) -> (String, bool) {
     crate::log!("Chat Computer kernel: model: uses {name}");
     let text = |key: &str| input.get(key).and_then(Json::str).map(str::trim).unwrap_or("");
     let num = |key: &str| input.get(key).and_then(number);
@@ -1645,11 +1781,10 @@ fn run_tool(name: &str, input: &Json, job: &mut Job, notes: &mut Vec<String>, ev
                 Err(why) => (why, true),
             }
         }
-        "list_files" | "read_file" | "find_files" => {
-            activity(job, String::from(if name == "read_file" { "Reading a file" } else { "Looking through your files" }), events);
+        "list_files" | "find_files" => {
+            activity(job, String::from("Looking through your files"), events);
             let said = match name {
                 "list_files" => crate::files::list(text("path")),
-                "read_file" => crate::files::read(text("path"), num("offset").unwrap_or(0.0).max(0.0) as u64),
                 _ => crate::files::find(text("words"), text("in")),
             };
             match said {

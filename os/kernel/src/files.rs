@@ -20,8 +20,9 @@
 //!
 //! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); a
 //! PDF as its words, page by page (pdf/: the last one read kept, to read on in parts); and a ZIP archive as the list
-//! of what's in it. Pictures are said to be what they are (the model reads words only); show_picture puts a picture
-//! on the screen for the person.
+//! of what's in it. A picture (JPEG, PNG, GIF) is given to the model to see, made the size its vision part reads it
+//! at (picture/'s decode_for), as is a PDF's page whose words are pictures (a scanned page: pdf/'s page_picture);
+//! show_picture puts a picture on the screen for the person.
 
 use crate::storage::{self, Disk, Drive};
 use crate::sync::SpinLock;
@@ -1219,14 +1220,25 @@ pub fn list(path: &str) -> Result<String, String> {
 /// The last PDF read (read_file): which (its name, size and when it changed), and its words.
 static PDF_READ: SpinLock<Option<(String, Arc<pdf::Document>)>> = SpinLock::new(None);
 
+/// What read_file gives the model: words (or what the file is), and a picture it sees, if it's given one.
+pub struct Got {
+    pub said: String,
+    pub picture: Option<picture::Picture>,
+}
+
+/// How the model sees, when it can: the size (width, height) it reads a picture of a given size at.
+pub type Sight<'a> = &'a dyn Fn(usize, usize) -> (usize, usize);
+
 /// A file (read_file), from byte `from`: text as it is (UTF-8, or UTF-16 as Notepad saves it); an Office file's or a
-/// PDF's words (`from` counts in them); a ZIP archive's list. A picture or a file of another kind is said to be one.
-pub fn read(path: &str, from: u64) -> Result<String, String> {
+/// PDF's words (`from` counts in them); a ZIP archive's list. A picture (JPEG, PNG or GIF) is given to the model to see
+/// if it can (`sight`), as is a PDF's page whose words are pictures (a scanned one: `page`, from 1); else, as a file
+/// of another kind, it's said to be one.
+pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>) -> Result<Got, String> {
     let (letter, rel) = inside(path);
     with(letter, |fs, p| {
         let (e, rel, link) = found(fs, p, letter, &rel)?;
         let f = fs.open_file(p, &e).map_err(|err| error_text(err, &shown(letter, &rel)))?;
-        let said = |text: String| Ok(text);
+        let said = |text: String| Ok(Got { said: text, picture: None });
         let fail = |err: ntfs::Error| error_text(err, &shown(letter, &rel));
         let name = format!("{}{}", shown(letter, &rel), by_way_of(&link));
         let mut head = [0u8; 32];
@@ -1236,12 +1248,38 @@ pub fn read(path: &str, from: u64) -> Result<String, String> {
                 let mut head = vec![0u8; f.size.min(PICTURE_HEAD) as usize];
                 let n = fs.read(p, &f, 0, &mut head).map_err(fail)?;
                 let pixels = dimensions(media, &head[..n]).map(|(w, h)| format!(", {w}×{h} pixels")).unwrap_or_default();
-                said(format!(
-                    "{name} ({}{pixels}, changed {}) is a picture. Chat Computer's own model can't see pictures yet; \
-                     show_picture shows it to the person.",
-                    size(f.size),
-                    date(e.modified)
-                ))
+                let about = format!("{name} ({}{pixels}, changed {})", size(f.size), date(e.modified));
+                let Some(sight) = sight else {
+                    return said(format!(
+                        "{about} is a picture, which Chat Computer's model here can't see: its file has no vision part. \
+                         show_picture shows it to the person."
+                    ));
+                };
+                if media == "image/webp" {
+                    return said(format!("{about} is a WebP picture, which Chat Computer's own system can't open yet."));
+                }
+                if f.size > MOST_SHOWN {
+                    return said(format!("{about} is a picture too big for Chat Computer's own system to open."));
+                }
+                let data = whole(fs, p, &f, MOST_SHOWN).map_err(fail)?;
+                let started = time::uptime_ms();
+                match picture::decode_for(&data, sight, decoding_room()) {
+                    Ok(pic) => {
+                        crate::log!(
+                            "Chat Computer kernel: files: a picture made ready to be seen ({}×{}) in {} ms",
+                            pic.width,
+                            pic.height,
+                            time::uptime_ms().saturating_sub(started)
+                        );
+                        Ok(Got {
+                            said: format!("{about}: the picture is here (as you see it, {}×{} pixels).", pic.width, pic.height),
+                            picture: Some(pic),
+                        })
+                    }
+                    Err(picture::Error::Unsupported(what)) => said(format!("{about} is a {what}, which Chat Computer's own system can't open yet.")),
+                    Err(picture::Error::TooBig) => said(format!("{about} has too many pixels for Chat Computer's own system to open.")),
+                    Err(_) => said(format!("{about} should be a picture, but it seems to be damaged: it can't be opened.")),
+                }
             }
             Kind::Office | Kind::Zip | Kind::Pdf if f.size > MOST_OFFICE => {
                 said(format!("{name} is {}: too big for Chat Computer's own system to open.", size(f.size)))
@@ -1286,15 +1324,68 @@ pub fn read(path: &str, from: u64) -> Result<String, String> {
                     date(e.modified),
                     d.title.as_ref().map(|t| format!(", titled \u{201C}{t}\u{201D}")).unwrap_or_default()
                 );
-                if d.text.is_empty() {
-                    return said(format!(
-                        "{about} has no words that can be read: its pages are pictures (scanned, perhaps), which Chat \
-                         Computer's own model can't see yet."
-                    ));
+                // A page to see: the one asked for, or the first, if no page has words.
+                let look = page.or(d.text.is_empty().then_some(1));
+                if let Some(k) = look {
+                    let wordless = if d.text.is_empty() { " has no words that can be read: its pages are pictures (scanned, perhaps)" } else { "" };
+                    if k == 0 || k > d.pages as u64 {
+                        return said(format!("{about}{wordless}: there's no page {k}."));
+                    }
+                    let Some(sight) = sight else {
+                        return said(format!(
+                            "{about}{wordless}, which Chat Computer's model here can't see as pictures: its file has no \
+                             vision part."
+                        ));
+                    };
+                    let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
+                    let started = time::uptime_ms();
+                    let next = if k < d.pages as u64 { format!(" read_file with page {} shows the next.", k + 1) } else { String::new() };
+                    return match pdf::page_picture(&data, k as usize - 1, sight, decoding_room()) {
+                        Ok(Some(pic)) if pic.drawn == 0 => {
+                            let kinds = if pic.missing.is_empty() { String::from("too big, or damaged") } else { format!("in {}", pic.missing.join(" and ")) };
+                            said(format!(
+                                "{about}{wordless}: page {k}'s pictures can't be opened by Chat Computer's own system \
+                                 ({kinds}).{next}"
+                            ))
+                        }
+                        Ok(Some(pic)) => {
+                            crate::log!(
+                                "Chat Computer kernel: files: a PDF's page {k} made a picture to be seen ({}×{}, {} of its \
+                                 pictures) in {} ms",
+                                pic.width,
+                                pic.height,
+                                pic.drawn,
+                                time::uptime_ms().saturating_sub(started)
+                            );
+                            let missing = if pic.missing.is_empty() {
+                                String::new()
+                            } else {
+                                format!(
+                                    " (some of its pictures, in {}, Chat Computer's own system can't open yet: they're left white)",
+                                    pic.missing.join(" and ")
+                                )
+                            };
+                            let (width, height) = (pic.width as u32, pic.height as u32);
+                            Ok(Got {
+                                said: format!(
+                                    "{about}{wordless}. Page {k}'s pictures are here, where they are on the page (as you see \
+                                     it, {width}×{height} pixels){missing}.{next}"
+                                ),
+                                picture: Some(picture::Picture { width, height, rgb: pic.rgb }),
+                            })
+                        }
+                        Ok(None) if pdf_page_has_words(&d.text, k) => said(format!("{about}: page {k} has no pictures, only words (read_file reads them).")),
+                        Ok(None) => said(format!("{about}{wordless}: page {k} has nothing to see on it.{next}")),
+                        Err(pdf::Error::Encrypted) => said(format!("{name}: a password protects it, so it can't be read here.")),
+                        Err(_) => said(format!("{about}: page {k} can't be read: the file may be damaged.")),
+                    };
                 }
                 let mut out = part_of(&d.text, from, &format!("{about}, its words"));
                 if d.cut && (from as usize).saturating_add(READ_AT_ONCE) >= d.text.len() {
                     out += "\n[That's as far as it's read here: its words go on past 8 MB.]";
+                }
+                if sight.is_some() && d.text.contains(pdf::NO_WORDS) {
+                    out += "\n[A page with no words may be a picture (scanned): read_file with page shows you its pictures.]";
                 }
                 said(out)
             }
@@ -1356,6 +1447,12 @@ pub fn read(path: &str, from: u64) -> Result<String, String> {
             }
         }
     })?
+}
+
+/// Whether a PDF's words (pdf::read's) have words on page `k` (from 1).
+fn pdf_page_has_words(text: &str, k: u64) -> bool {
+    let head = format!("## Page {k}\n");
+    text.find(&head).is_some_and(|at| !text[at + head.len()..].starts_with(pdf::NO_WORDS))
 }
 
 /// The biggest picture file shown on the screen.

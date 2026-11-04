@@ -96,7 +96,11 @@ it again.
 `release.sh` builds the program for Linux into `chatcomputer/brain/bin` (x86-64 and 64-bit ARM, static, linked by
 Rust's own rust-lld), where Chat Computer takes it from; the paths it was built in are left out, so the same source
 builds the same files anywhere (`release.sh --check`, as CI runs it). `examples/tiny_model.rs` writes the small
-random model the tests use (Chat Computer's Python tests start the program with it: `tests/data/tiny-model.ccm`).
+random model the tests use (Chat Computer's Python tests start the program with it: `tests/data/tiny-model.ccm`),
+and one with a small vision part (`tests/data/tiny-seeing-model.ccm`, which the own system's check shows a picture
+and a scanned page). `examples/kernel_check.rs` answers what the own system's kernel asked its model, as the kernel
+asks, for that check to compare: with the pictures the kernel gave it made again from the same files (their size
+and pixels the same, or it says so).
 
 `serve` answers only requests addressed to this computer by its own name (127.0.0.1, localhost: not a site's name
 pointed here by a DNS trick), from programs on it or from Chat Computer's own pages (chatcomputer.ai, the desktop

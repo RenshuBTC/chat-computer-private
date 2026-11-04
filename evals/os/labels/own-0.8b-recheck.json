@@ -1,5 +1,5 @@
 {
- "about": "Hand labels for the two desktop cases whose fixes came after the after-run (own-0.8b-after.json: dark-mode, usb-whats-on), each run twice per version of Chat Computer, on its own model (Qwen3.5 0.8B at medium effort), 4 November 2026. Same meaning as own-0.8b-base.json. os-after3 and os-after3b: ba813b8 (the display tool's dark_mode action; the drive list says what's on each drive). os-after4 and os-after4b: 0110333 (the display tool answers a dark or light mode asked for, whichever action the model picks, with the person's words for the turn; an opened drive says what's on it). os-after5 and os-after5b: f6f9586 (a tool's own answer said when the model says none, as the display tool gives for a dark mode; no moves into temporary folders). The model's answers vary from run to run, so each is a sample.",
+ "about": "Hand labels for the two desktop cases whose fixes came after the after-run (own-0.8b-after.json: dark-mode, usb-whats-on), each run twice per version of Chat Computer, on its own model (Qwen3.5 0.8B at medium effort), 4 November 2026. Same meaning as own-0.8b-base.json. os-after3 and os-after3b: ba813b8 (the display tool's dark_mode action; the drive list says what's on each drive). os-after4 and os-after4b: 0110333 (the display tool answers a dark or light mode asked for, whichever action the model picks, with the person's words for the turn; an opened drive says what's on it). os-after5 and os-after5b: f6f9586 (a tool's own answer said when the model says none, as the display tool gives for a dark mode; no moves into temporary folders). os-after6 and os-after6b: 189b503 (the dark mode note in words to pass on as they are). The model's answers vary from run to run, so each is a sample.",
  "runs": {
   "os-after3": {
    "code": "ba813b8",
@@ -104,6 +104,38 @@
       "to_model"
      ],
      "note": "asked for brightness, then the night light (each time told there's no dark mode, nothing changed), then passed the tool's note on word for word, \"Tell them so, and offer to dim the screen ...\" too"
+    }
+   }
+  },
+  "os-after6": {
+   "code": "189b503",
+   "labels": {
+    "usb-whats-on": {
+     "pass": true,
+     "modes": [],
+     "note": "tried to move the stick's photos and file into /tmp (refused: nothing moved), then \"The USB stick contains photos and a recipe document.\""
+    },
+    "dark-mode": {
+     "pass": false,
+     "modes": [
+      "circles"
+     ],
+     "note": "brightness, then the night light (each told there's no dark mode, nothing changed), then the screen's status, then the same again until it was stopped: nothing said (the status, asked last, had no answer of its own to say)"
+    }
+   }
+  },
+  "os-after6b": {
+   "code": "189b503",
+   "labels": {
+    "usb-whats-on": {
+     "pass": true,
+     "modes": [],
+     "note": "\"The USB stick at /media/ren/SANDISK contains photos and a recipe document.\""
+    },
+    "dark-mode": {
+     "pass": true,
+     "modes": [],
+     "note": "the dark_mode action itself (told there's no dark mode): \"The screen is already in dark mode.\""
     }
    }
   }

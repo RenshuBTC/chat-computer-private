@@ -745,7 +745,7 @@ def test_dark_mode_is_answered_not_turned_up(tmp_path):
     assert "Tell them" not in out          # (words to pass on as they are: the model passed that on too)
     assert not [c for c in ctx.platform.calls if c[0] in ("set_brightness", "set_night_light")]
     out, _ = call(ctx, "display", {"action": "status"})
-    assert "always dark" not in out
+    assert "always dark" in out                      # (what was asked isn't the status: told so again)
     # Asked for the screen itself, it's done.
     for words in ("Light mode is too bright, dim it", "It's too dark, make it brighter", "Turn on the night light"):
         ctx.asked = lambda w=words: w

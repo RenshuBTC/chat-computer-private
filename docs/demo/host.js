@@ -1727,12 +1727,18 @@
         "hour; Windows stays. The PC must start in UEFI mode (any from the last ten years) and have about 70 GB free. " +
         FACTS.free + " " + FACTS.soon };
     }],
-    [/^\s*(hi|hello|hey|hiya|yo|good (morning|afternoon|evening)|\u{1F44B}|help)( there| chat ?computer| everyone| all)?[\s!.,?]*$|\bwhat can you do\b|\bhow does (this|it) work\b|\bwhat is (this|chat ?computer)\b|^what('?s| is) this\b|^\?+$/iu, function () {
-      return { text: "Hi! I'm Chat Computer: I run the whole computer for you. You talk, type or touch, and I do it: open websites, " +
-        "play music, read your messages, look after your files and settings.\n\n" + (APP ? REAL + " " + nextStep() :
-        (webOn() ? local.label + ", Chat Computer's own model, answers here, in this browser, and what you type stays in it." :
-        "On this page my answers are written in advance, and what you type stays in your browser. " + realAnswers())) + " " +
-        FACTS.indie + " " + TRY };
+    [/^\s*(hi|hello|hey|hiya|yo|good (morning|afternoon|evening)|\u{1F44B}|help)( there| chat ?computer| everyone| all)?[\s!.,?]*$|\bwhat can you do\b|\bhow does (this|it) work\b|\bwhat is (this|chat ?computer)\b|^what('?s| is) this\b|^\?+$/iu, function (t) {
+      if (APP) {
+        return { text: "Hi! I'm Chat Computer: I run the whole computer for you. You talk, type or touch, and I do it: open " +
+          "websites, play music, read your messages, look after your files and settings.\n\n" + REAL + " " + nextStep() + " " +
+          FACTS.indie + " " + TRY };
+      }
+      // (The website: a line or two, the first thing most visitors read; with no model here yet, the buttons that get
+      // one, under it.)
+      var hi = /^\s*(hi|hello|hey|hiya|yo|good |\u{1F44B})/iu.test(t);
+      return { text: (hi ? "Hi! I'm Chat Computer, a computer you talk to. " : "I'm Chat Computer, a computer you talk to: say or " +
+        "type what you want, and I do it, from music and maps to your files and settings. ") +
+        (webOn() ? "Ask me anything, or try “play some piano music”." : needModel("answer you here")) };
     }],
     [/^\s*(how are you|how'?s it going|how do you do)\b/i, function () { return { text: "I'm good, thanks! What would you like to try? " + TRY }; }],
     [/\b(useless|stupid|dumb|rubbish|sucks?|hate you)\b|\b(you'?re|you are|this is|that'?s|it'?s) (so )?(terrible|awful|the worst)\b/i, function () {
@@ -1878,8 +1884,56 @@
   // the news); the rest an honest note, and how to get an AI.
   var FACTUAL = /^\s*(who|what|when|where|which|whose|why|how (many|much|old|tall|big|far|long|does|do|did|is|are|was|were)|tell me about|explain|define)\b/i;
   // No good answer here (only the model could answer it, and it isn't here): a line, short (a phone's screen is
-  // small), and how to get it: the app's, on this computer.
-  function noAnswer(want) { return "I can't " + (want ? want[1] : "answer that") + " yet. " + nextStep(); }
+  // small), and how to get it: on the website, a button for each way, under the answer (needModel); in the app, its
+  // own model, on this computer.
+  function noAnswer(want) {
+    var what = want ? want[1] : "answer that";
+    return APP || webOn() ? "I can't " + what + " yet. " + nextStep() : needModel(what);
+  }
+  // On the website with no model here yet (none in this browser, no AI of yours), a line that says one's needed, as
+  // short as can be (its maker: "short and concise, allowing people to press to download whatever is needed or sign in
+  // to their existing AI account"); the answer then has the buttons (modelChoices), and what was asked is answered
+  // once one's here (answerWaiting). Getting ready: how far it's got, and the same promise.
+  var offered = false;            // (the answer being written said a model's needed: it gets the buttons)
+  function needModel(what) {
+    offered = true;
+    if (local.kind === "web" && local.state === "preparing") {
+      return "My model is getting ready in this browser (" + localWords() + "): I'll answer once it's here.";
+    }
+    var failed = local.kind === "web" && local.state === "failed";
+    return "To " + (what || "answer") + ", I need " + (webCan() ? "a model." : "an AI.") +
+      (failed ? " Mine couldn't get ready in this browser" + (local.detail ? ": " + local.detail : "") + "." : "");
+  }
+  // The buttons under such an answer: my model, downloaded into this browser at once (the button says how big), and
+  // signing in to an AI you already use. (Getting ready: none, the hint under the box says how far it's got.)
+  function modelChoices() {
+    if (local.kind === "web" && local.state === "preparing") return [];
+    var c = [];
+    if (webCan()) {
+      c.push({ label: local.kind === "web" && local.state === "failed" ? "Try my model again" : local.webKept ? "Start my model" :
+        "Download my model (" + WEB_SIZE + ")", command: "web-now", main: true });
+    }
+    c.push({ label: "Sign in to your AI", command: "ai", main: !webCan() });
+    return c;
+  }
+  // What was asked when a model was offered for it, answered once one's here (my model got ready in this browser, or
+  // an AI of yours signed in), under it. Only the last thing asked, and only while nothing's been asked since.
+  // (And the buttons go from the answers that had them: a model's here.)
+  var waiting = null, offers = [];
+  function answerWaiting() {
+    var w = waiting;
+    waiting = null;
+    if (!own && !webOn()) return;
+    offers.forEach(function (id) { call("aiChoices", id, []); });
+    offers = [];
+    if (w) localTurn(w.text, w.you, w.uts, "a" + (++turns), acted);
+  }
+  // "Download my model" under an answer: it starts at once (the button said how big it is), and the hint under the
+  // box says how far it's got.
+  function webNow() {
+    if (!webCan() || local.kind === "web" && (local.state === "preparing" || localReady())) return;
+    webStart(true);
+  }
   function nextStep() {
     if (webOn()) return "";
     if (APP) {
@@ -1892,22 +1946,11 @@
       if (localReady()) return "";
       return "My model is starting: ask me again in a moment.";
     }
-    if (local.kind === "web" && local.state === "preparing") return "My model is getting ready in this browser: " + localWords() + ". Ask me again once it's here.";
-    if (webCan()) {
-      return (local.kind === "web" && local.state === "failed" ? "My model couldn't get ready in this browser" + (local.detail ? ": " + local.detail : "") +
-        ". " : "") + "My model can run in this browser: type / and choose Run my model in this browser (free; " + WEB_SIZE +
-        ", once). Or press the spark beside + to use an AI you already have.";
-    }
-    return "My model comes with the Chat Computer app (coming soon). Where the app runs on this computer, type / and choose " +
-      "Use this computer's model. Or press the spark beside + to use an AI you already have.";
+    return needModel();
   }
   // On the website, how to have real answers: this browser's model, or an AI of yours (or, while either is getting
   // ready or couldn't, how that's going).
-  function realAnswers() {
-    if (local.kind === "web" && local.state !== "off") return nextStep();
-    return webCan() ? "For real answers, type / and choose Run my model in this browser (free; " + WEB_SIZE + ", once), or press " +
-      "the spark beside + to use an AI you already have." : "For real answers, press the spark beside + to use an AI you already have.";
-  }
+  function realAnswers() { return needModel("answer for real"); }
   function iOS() { return /iPhone|iPad|iPod/.test(navigator.userAgent || "") || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
   function fallback(text) {
     if (/^[\W\d_]*[a-z]{0,6}[\W\d_]*$/i.test(text) && !/\b(hi|ok)\b/i.test(text)) {
@@ -1985,10 +2028,14 @@
   function ask(text, shown) {
     var you = uid("u"), uts = now(), id = "a" + (++turns), since = acted;
     call("user", you, shown || text, true);
+    waiting = null;                                            // (something new asked: that's what's answered now)
     if (own || localReady() && local.kind !== "web") { localTurn(text, you, uts, id, since); return; }
+    offered = false;
     var r = answer(text);
     if (!LOOK_IT_UP.test(text)) lastAsked = text;              // what "look it up" means next
     if (r.ai) r = fallback(text);
+    // (A model offered in an answer written now; one looked up offers one only where it found nothing: none.)
+    var offer = offered && !r.later;
     // (With this browser's model: what the page can't answer itself, the model does, knowing what was said before.)
     if (r.none && webOn()) { localTurn(text, you, uts, id, since); return; }
     setTimeout(function () {
@@ -1996,16 +2043,25 @@
       var waited = Date.now();
       Promise.resolve(r.later ? r.later() : r).then(function (a) {
         if (webOn() && a.text) { local.talk.push({ role: "user", content: text }, { role: "assistant", content: a.text }); trimTalk(); }
-        setTimeout(function () { deliver(a, id, you, uts, since); }, Math.max(0, 600 - (Date.now() - waited)));
+        var choices = [];
+        if ((offer || a.none) && !APP && !own && !webOn()) {
+          waiting = { text: text, you: you, uts: uts };
+          choices = modelChoices();
+        }
+        setTimeout(function () { deliver(a, id, you, uts, since, choices); }, Math.max(0, 600 - (Date.now() - waited)));
       });
     }, 120);
   }
-  // A written answer: what it shows, what it did (Actions), and its words (where they can be read: wordsOnly).
-  function deliver(a, id, you, uts, since) {
+  // A written answer: what it shows, what it did (Actions), and its words (where they can be read: wordsOnly); and
+  // under them, its buttons (getting a model).
+  function deliver(a, id, you, uts, since, choices) {
     var back = a.act ? a.act() : null;           // (how to take it back, when it says)
     (a.done || []).forEach(function (d, i) { did(d, you, uts, i === 0 ? back : null); });
     if (a.text && since != null) wordsOnly(since);
-    stream(id, a.text || "", function () { say(a.text || ""); });
+    stream(id, a.text || "", function () {
+      if (choices && choices.length) { call("aiChoices", id, choices); offers.push(id); }
+      say(a.text || "");
+    });
   }
   // Something done, in Actions. `back`: how to take it back ({kind, ...}: takeBack), for its Revert.
   function did(text, you, uts, back) {
@@ -2318,6 +2374,7 @@
       status();
       greetWith();
       if (chosen) did("Using my model in this browser (" + local.label + ")");
+      answerWaiting();                           // (what was asked while it wasn't here)
     }).catch(function (e) {
       local.state = "failed";
       local.detail = clip(e && e.message || "it stopped", 160);
@@ -3204,6 +3261,7 @@
     status();
     greetWith();
     if (done) did(done);
+    if (o) answerWaiting();                      // (what was asked while no model was here)
   }
   // Your own AI, all in one panel. Not signed in: its own sign-in where there's one here (ChatGPT's in the app,
   // OpenRouter's on the website), then each AI once; one chosen (pick), what it needs typed shows under them, in the
@@ -4246,6 +4304,8 @@
     if (id === "way") location.href = "start/index.html?change";     // (the app's page that asks: apps/desktop/start)
     else if (id === "local") localButton();
     else if (id === "web") webButton();
+    else if (id === "web-now") webNow();         // (the buttons under an answer that needs a model)
+    else if (id === "ai") ownMenu();
     else if (id === "web-remove") webRemove();
     else if (id === "model") modelSheet();
     else if (id === "airpods") talkButton(true);

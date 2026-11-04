@@ -150,7 +150,11 @@ async function state(page) {
       frame: [frame.left, frame.top, frame.width, frame.height].map(Math.round),
       messages: document.querySelectorAll("#messages .msg").length,
       done: Array.from(document.querySelectorAll("#done .done-what")).map((e) => e.textContent),
-      last: (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || "",
+      // (The last answer's words; its buttons, where it has them, apart.)
+      last: (() => { const a = Array.from(document.querySelectorAll("#log > .ai")).pop(); if (!a) return "";
+        const c = a.cloneNode(true); c.querySelectorAll(".offers").forEach((o) => o.remove()); return c.textContent; })(),
+      offers: Array.from((Array.from(document.querySelectorAll("#log > .ai")).pop() || document.createElement("i"))
+        .querySelectorAll(".offers button")).map((b) => b.textContent + (b.classList.contains("main") ? " *" : "")),
       results: Array.from(document.querySelectorAll("#results .res-text")).map((e) => e.textContent),
       panel: document.body.classList.contains("panel"),
       first_ai: (() => { const a = document.querySelector("#log > .ai"); return a ? String(a._said != null ? a._said : a.textContent).trim() : ""; })(),
@@ -737,7 +741,7 @@ async function ask(page, text, meanwhile) {
     await greeted(page);
     await page.waitForFunction(() => window.CO);
     await page.click("#input");
-    await ask(page, "what is chat computer");
+    await ask(page, "my dad struggles with computers, would this help?");     // (an answer of a few sentences)
     return page;
   }
   // Closed: the browser's voice.
@@ -1186,9 +1190,11 @@ async function ask(page, text, meanwhile) {
   out.web_slash = await slash(wp);
   await wp.fill("#input", "write a poem about the sea");
   await wp.keyboard.press("Enter");
-  await wp.waitForFunction(() => /an AI you already have\.$/.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
+  await wp.waitForFunction(() => { const a = Array.from(document.querySelectorAll("#log > .ai")).pop(); return a && a.querySelector(".offers button"); },
     null, { timeout: 10000 });
-  out.web_offer = await wp.evaluate(() => (Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent);
+  out.web_offer = await wp.evaluate(() => { const a = Array.from(document.querySelectorAll("#log > .ai")).pop();
+    return { text: a.querySelector(".md").textContent, buttons: Array.from(a.querySelectorAll(".offers button")).map((b) => b.textContent +
+      (b.classList.contains("main") ? " *" : "")) }; });
   await slash(wp, "Run my model in this browser");
   await wp.waitForFunction(() => document.body.classList.contains("sheet"));
   out.web_form = await wp.evaluate(() => ({ title: document.getElementById("sheet-title").textContent, ok: document.getElementById("sheet-ok").textContent,
@@ -1198,11 +1204,17 @@ async function ask(page, text, meanwhile) {
   out.web_getting = await wp.evaluate(() => document.getElementById("input").placeholder);
   out.web_getting_slash = await slash(wp);
   await wp.waitForFunction(() => /Using my model in this browser/.test(document.getElementById("done-list").textContent), null, { timeout: 10000 });
+  // What was asked while it wasn't here (the poem), answered once it is, under it; the buttons gone.
+  await wp.waitForFunction(() => window.__engine.filter((e) => e.chat).length === 1 &&
+    /ticking softly\./.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""), null, { timeout: 10000 });
+  out.web_waited = await wp.evaluate(() => ({ asked: window.__engine.filter((e) => e.chat).map((e) => e.chat.messages[e.chat.messages.length - 1].content),
+    offers: document.querySelectorAll("#log .offers").length }));
+  const chatsBefore = await wp.evaluate(() => window.__engine.filter((e) => e.chat).length);
   await wp.fill("#input", "a five minute timer");
   await wp.keyboard.press("Enter");
   await wp.waitForFunction(() => /A 5-minute timer/.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
     null, { timeout: 10000 });
-  out.web_timer_asked = await wp.evaluate(() => window.__engine.filter((e) => e.chat).length);
+  out.web_timer_asked = await wp.evaluate((n) => window.__engine.filter((e) => e.chat).length - n, chatsBefore);
   await wp.fill("#input", "write a short poem about the timer");
   await wp.keyboard.press("Enter");
   await wp.waitForFunction(() => /ticking softly\./.test((Array.from(document.querySelectorAll("#log > .ai")).pop() || {}).textContent || ""),
@@ -1215,8 +1227,15 @@ async function ask(page, text, meanwhile) {
   }));
   out.web_on_slash = await slash(wp);
   out.web_log = await wp.evaluate(() => window.__engine.filter((e) => typeof e === "string"));
-  // A later visit: started from the browser's copy, at once, nothing downloaded.
+  // A later visit: started from the browser's copy, at once, nothing downloaded. (A page at a file:// address, as this
+  // one is, sometimes comes back from a reload with its storage empty, as Chromium keeps file pages' now and then,
+  // the same before and after the page's changes: what the page kept is put back, and it's opened again.)
+  const keptBefore = await wp.evaluate(() => JSON.stringify(Object.assign({}, localStorage)));
   await wp.reload();
+  if (await wp.evaluate(() => !localStorage.getItem("chatcomputer-web-model"))) {
+    await wp.evaluate((k) => { const o = JSON.parse(k); for (const x in o) localStorage.setItem(x, o[x]); }, keptBefore);
+    await wp.reload();
+  }
   await wp.waitForFunction(() => window.CO && (window.__engine || []).some((e) => e.ahead), null, { timeout: 20000, polling: 100 }).catch(async (e) => {
     throw new Error(e.message + " " + JSON.stringify(await wp.evaluate(() => ({ log: (window.__engine || []).map((x) => typeof x === "string" ? x : Object.keys(x)[0]),
       ls: Object.fromEntries(Object.keys(localStorage).filter((k) => /web|fake|own|local/.test(k)).map((k) => [k, localStorage.getItem(k).slice(0, 80)])),

@@ -239,9 +239,9 @@ def test_the_demo_works_in_a_browser():
     # conversation has the middle again, the answer in it in full (no "more").
     long = res["fallback"]
     assert not long["content"] and long["column_shown"] and long["view"] is None and long["more"] == 0
-    # No good answer: a few short lines, and the one thing that gets one (Chat Computer's own model: with the app).
-    assert long["last"] == ("I can't answer that yet. My model can run in this browser: type / and choose Run my model in this "
-                            "browser (free; 1.8 GB, once). Or press the spark beside + to use an AI you already have.")
+    # No good answer: a line that a model's needed, and under it a button for each way to get one (my model, at once,
+    # its size said; or signing in to an AI you already use).
+    assert long["last"] == "To answer that, I need a model." and long["offers"] == ["Download my model (1.8 GB) *", "Sign in to your AI"]
     # Google, for real, in the middle: its own address for being shown in another page; a click on its box, and
     # typing goes there, not into the message box.
     g = res["google"]
@@ -411,21 +411,24 @@ def test_the_demo_works_in_a_browser():
     # evals: Qwen3.5 0.8B took the stamp for the question, and called tools at random); a later visit starts it from
     # the browser's copy at once, nothing downloaded; stopped; removed (nothing kept of it).
     assert res["web_slash"][:3] == ["Use this computer's model", "Run my model in this browser", "Connect AirPods"]
-    assert res["web_offer"] == ("I can't write a poem yet. My model can run in this browser: type / and choose Run my model in this "
-                                "browser (free; 1.8 GB, once). Or press the spark beside + to use an AI you already have.")
+    assert res["web_offer"] == {"text": "To write a poem, I need a model.", "buttons": ["Download my model (1.8 GB) *", "Sign in to your AI"]}
     form = res["web_form"]
     assert form["title"] == "Run my model in this browser" and form["ok"] == "Download it"
     assert "It downloads 1.8 GB once, from Qwen's own repository" in form["text"] and "nothing you type leaves this browser" in form["text"]
     assert res["web_getting"].startswith("Getting my model ready: downloading it (0.9 of 1.8 GB, 50%)"), res["web_getting"]
     assert "Getting my model ready" in res["web_getting_slash"]
+    # Once it's here, what was asked while it wasn't (the poem) is answered, and the buttons go.
+    assert res["web_waited"] == {"asked": ["write a poem about the sea"], "offers": 0}
     assert res["web_timer_asked"] == 0
-    ahead, first = res["web_asked"]
+    ahead, waited, first = res["web_asked"]
+    assert waited["kind"] == "chat" and waited["roles"] == ["system", "user"] and waited["last"] == "write a poem about the sea"
     assert ahead["kind"] == "ahead" and ahead["roles"] == ["system"] and ahead["think"] is False and ahead["max"] == 1024
     assert ahead["tools"] == [] and first["tools"] == []
     assert ahead["system"].startswith("You are Chat Computer's own model, Qwen3.5 0.8B, answering on Chat Computer's website")
     assert first["kind"] == "chat" and first["system"] == ahead["system"]
-    assert first["roles"] == ["system", "user", "assistant", "user"], first
-    assert first["said"][0] == "a five minute timer" and first["said"][1].startswith("A 5-minute timer, on the screen")
+    assert first["roles"] == ["system", "user", "assistant", "user", "assistant", "user"], first
+    assert first["said"][:2] == ["write a poem about the sea", "Five minutes, ticking softly."]
+    assert first["said"][2] == "a five minute timer" and first["said"][3].startswith("A 5-minute timer, on the screen")
     assert first["last"] == "write a short poem about the timer"
     assert res["web_on_slash"][:3] == ["Use this computer's model", "Stop using my model in this browser", "Remove my model from this browser"]
     assert res["web_log"] == ["download"]
@@ -652,7 +655,7 @@ def test_the_demo_works_in_a_browser():
     assert res["phone_hold_you"] == {"holding": True, "held": "you enter held", "items": ["Copy", "Select text", "Edit"], "selected": ""}
     assert res["phone_edit"] == {"holding": False, "box": "hello", "typing_in": "input"}
     assert res["phone_hold_ai"]["items"] == ["Copy", "Select text", "Read aloud"] and "held" in res["phone_hold_ai"]["held"]
-    assert res["phone_select"] == {"reading": True, "text": "Hi! I'm Chat Computer: I run the whole c", "select": "text"}
+    assert res["phone_select"] == {"reading": True, "text": "Hi! I'm Chat Computer, a computer you ta", "select": "text"}
     assert res["phone_put_away"] is False and res["phone_put_away_too"] is False
     assert res["phone_shade"]["blur"] == "none" and res["phone_shade"]["menu_blur"].startswith("blur(")
     # The buttons under messages with a finger: with the keyboard up, Read aloud and Good still do what they say (the

@@ -52,8 +52,11 @@ def did(r: R, pattern: str) -> bool:
 # instead, is a pass for a request it can't do.
 CANT = r"can't|cannot|isn't able|not able|only (know|show|do)|unable|no way to|needs? (its|my|the) model|(on|in) (a|the real) chat computer|use this computer's model|chat computer app"
 MUSIC = r"piano|music|chords|playing|lofi|jazz"
-NOT_STUCK = r"try|use this computer's model|you can|say|type"
+# (Or, with no model here yet, the buttons that get one: the answer's own words then say only that one's needed.)
+NOT_STUCK = r"try|use this computer's model|you can|say|type|sign in to your ai|download my model|start my model"
 NO_AI = r"without an ai|written in advance"     # the page's honest note when only an AI could answer
+# The buttons under an answer that needs a model, where none is here yet (getting one: mine, or an AI of yours).
+GET_ONE = r"sign in to your ai|download my model|start my model"
 
 
 # Saying it can't go on the internet: what the browser's own AI said to every question that needed it, before the
@@ -117,9 +120,9 @@ def music(r: R) -> bool:
 
 
 DONE: dict[str, Callable[[R], bool]] = {
-    "what-is-this": lambda r: said(r, r"chat computer") and said(r, r"talk|type|touch") and said(r, r"try"),
+    "what-is-this": lambda r: said(r, r"chat computer") and said(r, r"talk|type|touch") and said(r, r"try|ask me|" + GET_ONE),
     "how-work": lambda r: said(r, r"talk|type|touch") and said(r, r"try|do it|does it"),
-    "what-can-do": lambda r: said(r, r"music|maps?|messages|files|websites") and said(r, r"try"),
+    "what-can-do": lambda r: said(r, r"music|maps?|messages|files|websites") and said(r, r"try|ask me|" + GET_ONE),
     "is-this-an-os": lambda r: said(r, r"\b(yes|operating system|runs the whole computer|instead of (a )?desktop)\b")
                                and said(r, r"linux|windows|mac"),
     "hello": lambda r: said(r, r"\b(hi|hello|hey)\b") and said(r, NOT_STUCK),
@@ -237,7 +240,8 @@ DONE: dict[str, Callable[[R], bool]] = {
 }
 
 # --- The failures of 4 November 2026, as checks over every case.
-CATCH_ALL = r"\bI can't (answer that|[a-z ]{3,30}) yet\b"
+CATCH_ALL = (r"\bI can't (answer that|[a-z ]{3,30}) yet\b|"
+             r"\bTo (answer that|write an? [a-z]+|write code|translate|explain that|plan that|give advice), I need (a model|an AI)\b")
 # Only a model can answer these: without one, saying so (and how to get one) is the page's best.
 NEEDS_AI = {"recipe", "write-email", "poem", "translate", "trip-plan", "advice", "code", "tell-me-more", "haze-trace"}
 

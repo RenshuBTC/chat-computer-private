@@ -1546,6 +1546,26 @@
       delete ai[id];
       follow();
     },
+    // Buttons under an answer, from the page's host (the website's, where no model answers yet: download my model,
+    // or sign in to an AI of yours): [{label, command, main}], each doing its command as "/" does its own. None:
+    // they go (a model's here now).
+    aiChoices: function (id, list) {
+      var m = log.querySelector('.ai[data-id="' + String(id).replace(/["\\]/g, "") + '"]');
+      if (!m) return;
+      var was = m.querySelector(".offers");
+      if (!list || !list.length) { if (was) was.remove(); return; }
+      var row = was || m.appendChild(el("offers"));
+      row.textContent = "";
+      list.forEach(function (c) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = c.main ? "main" : "";
+        b.textContent = c.label;
+        b.addEventListener("click", function () { post({ type: "command", id: c.command }); });
+        row.appendChild(b);
+      });
+      follow();
+    },
     activity: function (id, text) {
       var m = ensureAI(id);
       if (m.raf) { cancelAnimationFrame(m.raf); paint(m); }

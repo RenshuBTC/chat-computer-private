@@ -34,7 +34,7 @@ h2 { margin: 0 0 1.25rem; font-size: 1.5rem; line-height: 1.3; }
 .later { margin: 1.5rem 0 0; color: var(--muted); }
 
 .panel p { margin: 0 0 1rem; line-height: 1.5; }
-.steps { margin: 0 0 1.5rem; padding-left: 1.4rem; }
+.steps { margin: 0 0 1rem; padding-left: 1.4rem; }
 .steps li { margin: 0 0 0.9rem; padding-left: 0.3rem; line-height: 1.5; }
 .folder {
   display: block; margin: 0.5rem 0; padding: 0.55rem 0.8rem; font-family: var(--mono); font-size: 0.9rem;

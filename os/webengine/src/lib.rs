@@ -425,6 +425,10 @@ pub extern "C" fn cc_step(read: u32) -> i32 {
                 put_json(obj(vec![("read", Json::Array(vec![num(done as f64), num(total as f64)]))]));
                 return Ok(1);
             }
+            Step::Seeing { .. } => {
+                put_json(obj(vec![]));
+                return Ok(1);
+            }
             Step::Said(s) => delta(&s, a),
             Step::Over => None,
         };

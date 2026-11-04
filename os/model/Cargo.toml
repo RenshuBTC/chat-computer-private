@@ -51,3 +51,11 @@ required-features = ["std"]
 [[example]]
 name = "kernel_check"
 required-features = ["std"]
+
+[[example]]
+name = "vision_check"
+required-features = ["std"]
+
+[[example]]
+name = "picture_check"
+required-features = ["std"]

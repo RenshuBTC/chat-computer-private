@@ -28,21 +28,31 @@ Qwen3.5-0.8B is the one the checks use.
   arithmetic gives.
 - `net.rs`: the network: Gated DeltaNet (linear attention) in three layers of four, attention with a gate in the
   fourth, SwiGLU or 8 of 256 experts; many tokens at a time (a prompt is read 64 tokens at a time, 256 with experts).
+  A picture's rows are read in place of tokens, with Qwen's positions for them (M-RoPE: a time, a row and a column,
+  the rotary pairs taking turns at which they turn by).
+- `vision.rs`: what the model sees: Qwen 3.5's vision part. A picture resized as Qwen's processor resizes it (its
+  sides whole numbers of 32 pixels, its area within bounds; bicubic resampling as Pillow and torchvision do it), cut
+  into 16-pixel patches, embedded, given its learned positions (interpolated to the picture's grid), through
+  attention over every patch (turned by row and column) and feed-forward blocks, each 2x2 group of patches made a
+  row as wide as the language model. A block a step, for a caller with other things to do.
 - `token.rs`, `unicode.rs`, `nfc.rs`: the tokenizer (byte-level BPE, its splitting rule written by hand, text put in
   Unicode's composed form first as the model's own tokenizer does).
-- `chat.rs`: a conversation as each model's chat template writes it (the templates' Jinja, as Rust), and what the
-  model writes back read as it comes: its thinking, its words and its tool calls. Special tokens come only from the
-  template's own writing: text from a person, a page, a file or a tool is read as text even when it spells
-  `<|im_end|>`.
+- `chat.rs`: a conversation as each model's chat template writes it (the templates' Jinja, as Rust), pictures in
+  the person's messages and tools' results among them, and what the model writes back read as it comes: its thinking,
+  its words and its tool calls. Special tokens come only from the template's own writing: text from a person, a page,
+  a file or a tool is read as text even when it spells `<|im_end|>`.
 - `sample.rs`: choosing the next token as the models' makers recommend.
 - `session.rs`: a conversation kept going: what was read is reused for the next request as far as it starts the same
   (with snapshots of the linear attention's memories to go back to), and the model's own answers go back in as the
   tokens it chose. A request is answered all at once, or a step at a time (part of the prompt read, or one token
   written, a step) for a caller with other things to do between steps, and the system prompt can be read ahead of
   the first question: the own system's kernel does both (`os/kernel/src/assistant.rs`), its screen and keyboard
-  going on meanwhile.
+  going on meanwhile. Each picture is given a slot by its pixels, its rows read as tokens of that slot, so a request
+  is the same as an earlier one as far as its pictures are too; a picture's rows are made when the reading reaches
+  them (a block of the vision part a step), and kept for the 16 most recent.
 - `convert.rs` and the program's `convert` command: the model's file from Qwen's published files (config.json,
-  tokenizer.json, the chat template, the safetensors weights), a weight at a time.
+  tokenizer.json, the chat template, the safetensors weights), a weight at a time; the vision part in 8 bits a
+  weight (or 16) even when the language model is in 4, with how pictures are prepared (preprocessor_config.json).
 - `refusal.rs` and the program's `find-refusal` command: the direction the model refuses along, found and measured
   (below), kept beside the model's file and taken out as the model runs (`net.rs`: `Ablation`).
 - `src/bin/chat-computer-model`: the program: `serve` answers this computer's programs over HTTP on 127.0.0.1 as
@@ -127,7 +137,11 @@ reading many tokens at once gives exactly the scores of reading them one at a ti
 session reads only what's new and answers exactly as a new session does; the first message's reading kept on disk
 reads back exactly; the kernels (plain, AVX2, AVX-VNNI, AVX-512 VNNI) agree; the chat template's rules; NFC; JSON;
 a direction taken out is in nothing the model thinks with, at any layer (and with strength 0, nothing changes); the
-refusal search runs through, the same each time; its file reads back only for its model.
+refusal search runs through, the same each time; its file reads back only for its model. With a small vision part
+(`tiny_seeing`): a picture's rows read at once give the scores of reading them one at a time, another picture other
+scores; the template writes pictures as Qwen's does (checked against it); a session reuses what it read only as far
+as the same picture, answering as a new session does; a picture seen a step at a time answers as all at once; a model
+without a vision part says it can't see; pictures are sized as Qwen's processor sizes them.
 
 Getting a model ready as Chat Computer does (`chatcomputer/brain/models.py`: Qwen3.5-0.8B's files downloaded from the
 pinned revision, each checked against its SHA-256, converted by the program in `chatcomputer/brain/bin`) made a file
@@ -138,6 +152,14 @@ Against the reference implementation (transformers, in float32) and the publishe
 - Qwen3.5-0.8B as published (BF16): every position's scores within 0.0006 of the reference's (scores up to 33), the
   same likeliest token at all 76, KL divergence 0; in 8 bits: the same likeliest token at 74 of 76, mean KL 0.002.
 - Experts (a small Qwen 3.5/3.6 model with random weights, transformers' own code): within 0.0002, KL 0.
+- Pictures, with `tools/refcheck/vision_reference.py` and `picture_reference.py` (examples/vision_check.rs and
+  picture_check.rs): a picture of 500 by 375 pixels is read at 512 by 384 as the processor reads it (its resizing
+  the same but for 118 of 589,824 bytes, each by 1), and becomes 192 rows; as published (16 bits), every row within
+  0.00017 of the reference's (numbers up to 4.1); in 8 bits, each row within 3.7% of it (the median; the reference
+  itself in bfloat16, as the model is usually run, is within 2.0%). Asked about it, Qwen3.5-0.8B as published gives
+  the same prompt (220 tokens), scores within 0.0003 at its last 16 positions (KL 0), and the same answer, token for
+  token ("This image features a colorful geometric composition... 1. **Yellow Circle**"); in 8 bits, KL 0.004, the
+  same likeliest token at all 16, and the same answer. The vision part of 8 bits took 6 seconds on this machine.
 - The chat: 285 conversations (system prompts, tools, thinking on and off, earlier thinking kept or not, the effort
   setting, tool calls and their results, Unicode) written by each model's own template and by `chat.rs`: the same
   text and the same tokens, but for the one that spells special tokens in the person's words, read as text on purpose.
@@ -152,6 +174,6 @@ tokens a second and writes at about 14.
 
 Qwen's FP8 files (half the download of the BF16 ones) and their experts stored one by one; ARM's NEON (Macs with
 Chat Computer: the ARM program runs the plain code, vectorised only as the compiler manages, and hasn't been timed on
-a Mac yet); graphics cards (Vulkan, with the engine's own shaders); keys and values in 16 bits; pictures (Qwen's
-models see them; the engine leaves their vision part out for now, so a tool's picture reaches the model as a line
-saying there was one).
+a Mac yet); graphics cards (Vulkan, with the engine's own shaders); keys and values in 16 bits; pictures given to
+`serve` (OpenAI's image_url, for Chat Computer's app: the engine sees them, the program doesn't take them yet);
+videos.

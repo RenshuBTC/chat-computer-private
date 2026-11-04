@@ -51,6 +51,9 @@ pub fn run(folder: &Path, out: &Path, bits: u32) -> Result<(), String> {
     let read = |n: &str| fs::read_to_string(folder.join(n)).map_err(|e| format!("{n}: {e}"));
     let config = model::json::parse(&read("config.json")?).ok_or("config.json isn't JSON")?;
     let mut settings = convert::settings(&config)?;
+    // The vision part's settings, with how pictures are prepared (if the model's files say).
+    let preprocessor = fs::read_to_string(folder.join("preprocessor_config.json")).ok().and_then(|t| model::json::parse(&t));
+    settings.push_str(&convert::vision_settings(&config, preprocessor.as_ref()));
     // How the model's conversations are written: its chat template, said as one of the styles chat.rs knows.
     let template = match fs::read_to_string(folder.join("chat_template.jinja")) {
         Ok(t) => t,

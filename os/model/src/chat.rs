@@ -12,11 +12,40 @@
 //! <tool_call> and the rest) come only from the template's own writing. Text that a person, a web page, a file or a
 //! tool brings is read as text even when it spells out a special token, so it can't end a turn and start a system
 //! prompt of its own. (Run through the Jinja template and a tokenizer, it would.)
+//!
+//! A message from the person, or a tool's result, may have pictures in it (`Content`), written as the templates
+//! write them: <|vision_start|><|image_pad|><|vision_end|>, the pad becoming the picture's rows (session.rs).
 
 use crate::json::{self, Json};
 use crate::token::Tokenizer;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+/// A picture for the model to see: its pixels (RGB, a byte a colour, row after row), and a mark of them (FNV-1a over
+/// its size and pixels), by which it's known again.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Picture {
+    pub width: usize,
+    pub height: usize,
+    pub rgb: Vec<u8>,
+    pub mark: u64,
+}
+
+impl Picture {
+    pub fn new(width: usize, height: usize, rgb: Vec<u8>) -> Picture {
+        let size = [(width as u64).to_le_bytes(), (height as u64).to_le_bytes()].concat();
+        let mark = crate::file::fnv(crate::file::fnv(0xcbf2_9ce4_8422_2325, &size), &rgb);
+        Picture { width, height, rgb, mark }
+    }
+}
+
+/// A part of a message: words, or a picture.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Content {
+    Text(String),
+    Picture(Arc<Picture>),
+}
 
 /// How a model family's template writes a conversation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +129,16 @@ pub enum Message {
     Assistant(Answer),
     /// What a tool said back.
     Tool(String),
+    /// From the person, with pictures among the words.
+    UserParts(Vec<Content>),
+    /// A tool's result with pictures (one that shows the model a picture).
+    ToolParts(Vec<Content>),
+}
+
+impl Message {
+    fn is_tool(&self) -> bool {
+        matches!(self, Message::Tool(_) | Message::ToolParts(_))
+    }
 }
 
 /// What the model said in one turn.
@@ -126,6 +165,8 @@ pub enum Problem {
     SystemNotFirst,
     /// A tool's result before anything that called it.
     ToolFirst,
+    /// A picture, for a model that can't see (its file has no vision part).
+    Blind,
 }
 
 /// The model's special tokens the templates write.
@@ -158,6 +199,8 @@ pub enum Part {
     Text(String),
     /// Tokens as they are: one of the model's own answers, as it chose them.
     Tokens(Vec<u32>),
+    /// A picture, between <|vision_start|> and <|vision_end|>: its rows.
+    Picture(Arc<Picture>),
 }
 
 impl Prompt {
@@ -199,21 +242,57 @@ impl Prompt {
                 Part::Special(s) => out.push_str(s),
                 Part::Text(t) => out.push_str(t),
                 Part::Tokens(_) => out.push_str("(tokens)"),
+                Part::Picture(_) => out.push_str("<|image_pad|>"),
             }
         }
         out
     }
 
-    /// As tokens: the text between special tokens is read as a tokenizer reads text between them.
+    /// As tokens: the text between special tokens is read as a tokenizer reads text between them. (A picture
+    /// can't be: see tokens_seeing.)
     pub fn tokens(&self, tok: &Tokenizer, out: &mut Vec<u32>) -> Result<(), &'static str> {
+        self.tokens_seeing(tok, out, &mut |_, _| Err("a picture, with nothing to see it"))
+    }
+
+    /// As tokens, each picture's by `picture` (which adds them to the list).
+    pub fn tokens_seeing(&self, tok: &Tokenizer, out: &mut Vec<u32>,
+                         picture: &mut dyn FnMut(&Arc<Picture>, &mut Vec<u32>) -> Result<(), &'static str>) -> Result<(), &'static str> {
         for p in &self.parts {
             match p {
                 Part::Special(s) => out.push(tok.special(s).ok_or(*s)?),
                 Part::Text(t) => tok.encode(t, out),
                 Part::Tokens(t) => out.extend_from_slice(t),
+                Part::Picture(pic) => picture(pic, out)?,
             }
         }
         Ok(())
+    }
+
+    /// A message's parts as the template writes them (its pictures between their markers), the whole stripped of
+    /// white space at its ends as the template strips it.
+    fn content(&mut self, parts: &[Content]) {
+        let first = parts.iter().position(|c| !matches!(c, Content::Text(t) if strip(t).is_empty()));
+        let last = parts.iter().rposition(|c| !matches!(c, Content::Text(t) if strip(t).is_empty()));
+        let (Some(first), Some(last)) = (first, last) else { return };
+        for (i, c) in parts.iter().enumerate().take(last + 1).skip(first) {
+            match c {
+                Content::Text(t) => {
+                    let mut t = t.as_str();
+                    if i == first {
+                        t = t.trim_start_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c));
+                    }
+                    if i == last {
+                        t = t.trim_end_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c));
+                    }
+                    self.text(t);
+                }
+                Content::Picture(p) => {
+                    self.parts.push(Part::Special("<|vision_start|>"));
+                    self.parts.push(Part::Picture(p.clone()));
+                    self.parts.push(Part::Special("<|vision_end|>"));
+                }
+            }
+        }
     }
 }
 
@@ -297,6 +376,7 @@ pub fn render_known(style: Style, tools: &[Json], messages: &[Message], o: &Opti
                 let c = strip(c);
                 !(c.starts_with("<tool_response>") && c.ends_with("</tool_response>"))
             }
+            Message::UserParts(_) => true,
             _ => false,
         })
         .map(|(i, _)| i)
@@ -308,6 +388,11 @@ pub fn render_known(style: Style, tools: &[Json], messages: &[Message], o: &Opti
             Message::User(c) => {
                 p.markup("<|im_start|>user\n");
                 p.text(strip(c));
+                p.markup("<|im_end|>\n");
+            }
+            Message::UserParts(parts) => {
+                p.markup("<|im_start|>user\n");
+                p.content(parts);
                 p.markup("<|im_end|>\n");
             }
             Message::Assistant(a) => {
@@ -349,17 +434,21 @@ pub fn render_known(style: Style, tools: &[Json], messages: &[Message], o: &Opti
                 }
                 p.markup("<|im_end|>\n");
             }
-            Message::Tool(c) => {
+            Message::Tool(_) | Message::ToolParts(_) => {
                 if i == 0 {
                     return Err(Problem::ToolFirst);
                 }
-                if !matches!(messages[i - 1], Message::Tool(_)) {
+                if !messages[i - 1].is_tool() {
                     p.markup("<|im_start|>user");
                 }
                 p.markup("\n<tool_response>\n");
-                p.text(strip(c));
+                match m {
+                    Message::Tool(c) => p.text(strip(c)),
+                    Message::ToolParts(parts) => p.content(parts),
+                    _ => {}
+                }
                 p.markup("\n</tool_response>");
-                if !matches!(messages.get(i + 1), Some(Message::Tool(_))) {
+                if !messages.get(i + 1).is_some_and(Message::is_tool) {
                     p.markup("<|im_end|>\n");
                 }
             }

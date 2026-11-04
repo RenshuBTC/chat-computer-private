@@ -1,6 +1,8 @@
 //! The engine's own tests, on small models made here with random weights (a dense one and one with experts), so
 //! they need no download: reading many tokens at once gives exactly what reading them one at a time does,
-//! snapshots go back exactly, a session's reuse changes no answer, and the arithmetic's kernels agree.
+//! snapshots go back exactly, a session's reuse changes no answer, and the arithmetic's kernels agree. With
+//! pictures too (a small model that sees): their rows read at once as one at a time, the template's writing of
+//! them, a session reusing what it read only for the same picture.
 //! (Against the published models and the reference implementation: tools/refcheck.)
 
 use crate::chat::{Answer, Message, Options, Style};
@@ -9,7 +11,7 @@ use crate::net::{Model, Serial};
 use crate::quant::{self, Dtype, Prepared};
 use crate::sample::Sampling;
 use crate::session::{Request, Session};
-use crate::testing::{tiny, Rng};
+use crate::testing::{tiny, tiny_seeing, Rng};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -121,6 +123,7 @@ fn a_step_at_a_time_answers_as_all_at_once() {
                     reads += 1;
                     assert!(done <= total);
                 }
+                Step::Seeing { .. } => panic!("a picture, where there's none"),
                 Step::Said(_) => said += 1,
                 Step::Over => break,
             }
@@ -256,4 +259,157 @@ fn the_anchor_kept_on_disk_reads_back_exactly() {
     assert_eq!(st.read, st.prompt - tokens.len());
     // Bytes that don't fit the model aren't taken.
     assert!(m.import(&saved[..saved.len() - 4]).is_none());
+}
+
+/// A picture for the model, made here.
+fn a_picture(width: usize, height: usize, seed: u64) -> alloc::sync::Arc<crate::chat::Picture> {
+    alloc::sync::Arc::new(crate::chat::Picture::new(width, height, crate::testing::picture(width, height, seed)))
+}
+
+#[test]
+fn the_template_writes_pictures_as_qwens_does() {
+    use crate::chat::{render, Content};
+    let pic = a_picture(16, 16, 1);
+    let msgs = vec![
+        Message::UserParts(vec![Content::Text("  Look:\n".into()), Content::Picture(pic.clone()), Content::Text(" what's this?  ".into())]),
+        Message::Assistant(Answer { calls: vec![crate::chat::Call { name: "show".into(), args: vec![] }], ..Answer::default() }),
+        Message::ToolParts(vec![Content::Picture(pic.clone()), Content::Text("The picture.".into())]),
+    ];
+    let o = Options { think: Some(false), ..Options::default() };
+    let p = render(Style::QWEN35, &[], &msgs, &o).unwrap();
+    // (As Qwen 3.5's Jinja template writes it: each content's parts joined, then stripped.)
+    assert_eq!(
+        p.to_text(),
+        "<|im_start|>user\nLook:\n<|vision_start|><|image_pad|><|vision_end|> what's this?<|im_end|>\n\
+         <|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=show>\n</function>\n</tool_call><|im_end|>\n\
+         <|im_start|>user\n<tool_response>\n<|vision_start|><|image_pad|><|vision_end|>The picture.\n</tool_response><|im_end|>\n\
+         <|im_start|>assistant\n<think>\n\n</think>\n\n"
+    );
+}
+
+#[test]
+fn pictures_rows_at_once_are_read_as_one_at_a_time() {
+    use crate::chat::Content;
+    for experts in [false, true] {
+        let bytes = tiny_seeing(experts);
+        let file = File::open(&bytes).unwrap();
+        let m = Model::load(&file).unwrap();
+        assert!(m.vision.is_some());
+        let mut s = Session::new(&m, Style::QWEN35);
+        // A picture of 40 by 24 pixels: read at 40 by 24 (5 by 3 rows), between words.
+        let msgs = vec![Message::UserParts(vec![Content::Text("Hi".into()), Content::Picture(a_picture(40, 24, 2)), Content::Text("what".into())])];
+        let o = Options { think: Some(false), ..Options::default() };
+        let r = Request { tools: &[], messages: &msgs, options: o, sampling: Sampling::GREEDY, max_tokens: 8, seed: 1 };
+        let toks = s.prompt(&r).unwrap();
+        let rows = toks.iter().filter(|&&t| crate::net::picture_of(t).is_some()).count();
+        assert_eq!(rows, 15);
+        s.read(&toks, &Serial);
+        let all = s.scores().to_vec();
+        // The same tokens one at a time (in a session of their own, so the rows are made again).
+        let mut s2 = Session::new(&m, Style::QWEN35);
+        let toks2 = s2.prompt(&r).unwrap();
+        assert_eq!(toks, toks2);
+        for i in 1..=toks.len() {
+            s2.read(&toks[..i], &Serial);
+        }
+        assert_eq!(max_diff(&all, s2.scores()), 0.0, "experts: {experts}");
+        assert!(all.iter().all(|v| v.is_finite()));
+        // And the picture matters: another picture, other scores.
+        let msgs3 = vec![Message::UserParts(vec![Content::Text("Hi".into()), Content::Picture(a_picture(40, 24, 3)), Content::Text("what".into())])];
+        let r3 = Request { messages: &msgs3, ..r };
+        let mut s3 = Session::new(&m, Style::QWEN35);
+        let t3 = s3.prompt(&r3).unwrap();
+        s3.read(&t3, &Serial);
+        assert!(max_diff(&all, s3.scores()) > 0.001);
+    }
+}
+
+#[test]
+fn a_session_reuses_what_it_read_only_for_the_same_picture() {
+    use crate::chat::Content;
+    let bytes = tiny_seeing(true);
+    let file = File::open(&bytes).unwrap();
+    let m = Model::load(&file).unwrap();
+    let o = Options { think: Some(false), keep_thinking: Some(true), ..Options::default() };
+    let ask = |s: &mut Session, msgs: &[Message]| {
+        let r = Request { tools: &[], messages: msgs, options: o, sampling: Sampling::GREEDY, max_tokens: 6, seed: 1 };
+        s.ask(&r, &Serial, &mut |_, _| true).unwrap()
+    };
+    let with = |seed: u64, q: &str| Message::UserParts(vec![Content::Picture(a_picture(32, 32, seed)), Content::Text(q.into())]);
+    let mut s = Session::new(&m, Style::QWEN35);
+    let mut msgs = vec![Message::System("Look.".into()), with(5, "What is it?")];
+    let (a1, st1) = ask(&mut s, &msgs);
+    assert_eq!(st1.read, st1.prompt);
+    // The conversation goes on: only the new turn is read (the picture's rows were).
+    msgs.push(Message::Assistant(a1));
+    msgs.push(Message::User("And?".into()));
+    let (a2, st2) = ask(&mut s, &msgs);
+    assert!(st2.read < st2.prompt - st1.prompt, "{} of {}", st2.read, st2.prompt);
+    let mut fresh = Session::new(&m, Style::QWEN35);
+    let (f2, _) = ask(&mut fresh, &msgs);
+    assert_eq!(a2, f2);
+    // Another picture in the first message's place: read again from it, and answered as a new session answers.
+    let msgs2 = vec![Message::System("Look.".into()), with(6, "What is it?")];
+    let (b1, sb) = ask(&mut s, &msgs2);
+    assert!(sb.read >= 16, "only {} read", sb.read);
+    let mut fresh = Session::new(&m, Style::QWEN35);
+    let (fb, _) = ask(&mut fresh, &msgs2);
+    assert_eq!(b1, fb);
+    // A model without a vision part says it can't see.
+    let blind_bytes = tiny(true);
+    let blind_file = File::open(&blind_bytes).unwrap();
+    let blind = Model::load(&blind_file).unwrap();
+    let mut s = Session::new(&blind, Style::QWEN35);
+    let r = Request { tools: &[], messages: &msgs2, options: o, sampling: Sampling::GREEDY, max_tokens: 6, seed: 1 };
+    assert_eq!(s.begin(&r).err(), Some(crate::chat::Problem::Blind));
+}
+
+#[test]
+fn pictures_are_sized_as_qwens_processor_sizes_them() {
+    use crate::vision::smart_resize;
+    // (As transformers' smart_resize gives them, for Qwen 3.5's bounds: 32 pixels a row, 65,536 to 16,777,216.)
+    for &(h, w, want) in &[
+        ((375, 500), (384, 512)),
+        ((1080, 1920), (1088, 1920)),
+        ((100, 100), (256, 256)),
+        ((4000, 3000), (4000, 3008)),
+        ((20, 4000), (32, 4000)),
+        ((6000, 8000), (3520, 4704)),
+    ].map(|(hw, want)| (hw.0, hw.1, want)) {
+        assert_eq!(smart_resize(h, w, 32, 65536, 16_777_216), want, "{h}x{w}");
+    }
+}
+
+#[test]
+fn a_picture_seen_a_step_at_a_time_answers_as_all_at_once() {
+    use crate::chat::Content;
+    use crate::session::Step;
+    let bytes = tiny_seeing(false);
+    let file = File::open(&bytes).unwrap();
+    let m = Model::load(&file).unwrap();
+    let o = Options { think: Some(false), ..Options::default() };
+    let msgs = vec![
+        Message::User("First, no picture.".into()),
+        Message::Assistant(Answer { text: "Fine.".into(), ..Answer::default() }),
+        Message::UserParts(vec![Content::Picture(a_picture(56, 40, 9)), Content::Text("And this?".into())]),
+    ];
+    let r = Request { tools: &[], messages: &msgs, options: o, sampling: Sampling::GREEDY, max_tokens: 8, seed: 2 };
+    let mut whole = Session::new(&m, Style::QWEN35);
+    let (want, _) = whole.ask(&r, &Serial, &mut |_, _| true).unwrap();
+    let mut parts = Session::new(&m, Style::QWEN35);
+    let mut t = parts.begin(&r).unwrap();
+    let (mut seeing, mut last) = (Vec::new(), 0);
+    loop {
+        match parts.step(&mut t, 5, &Serial) {
+            Step::Seeing { done, total } => seeing.push((done, total)),
+            Step::Read { done, .. } => last = done,
+            Step::Said(_) => {}
+            Step::Over => break,
+        }
+    }
+    let (got, st) = parts.end(t);
+    assert_eq!(got, want);
+    // (Begun, a step for each of its 2 blocks, the merger's: then read.)
+    assert_eq!(seeing, vec![(1, 4), (2, 4), (3, 4), (4, 4)]);
+    assert_eq!(last, st.prompt);
 }

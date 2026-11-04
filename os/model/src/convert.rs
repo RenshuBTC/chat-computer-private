@@ -1,6 +1,7 @@
 //! From the model's published files (Qwen's config.json, tokenizer.json and safetensors weights) to its file in
 //! Chat Computer's own format: the settings it needs, the tokenizer's tables, and each weight renamed, reshaped
 //! and stored as 8 or 4 bits a weight (the small ones, and what the model is most sensitive to, kept more exactly).
+//! The vision part is kept too (in 8 bits, or 16), with how pictures are to be prepared (preprocessor_config.json).
 
 use crate::json::Json;
 use crate::quant::{self, Dtype};
@@ -65,7 +66,78 @@ pub fn settings(config: &Json) -> Result<String, String> {
     put("rotary_dim", ((head_dim as f64 * factor) as usize).to_string());
     put("rms_eps", format!("{}", t.get("rms_norm_eps").and_then(Json::num).unwrap_or(1e-6)));
     put("context", num("max_position_embeddings").unwrap_or(32768).to_string());
+    // Positions for pictures (M-RoPE): which of the rotary pairs turn by a picture's row, which by its column.
+    if let Some(sections) = rope.and_then(|r| r.get("mrope_section")).and_then(Json::array) {
+        let parts: Vec<String> = sections.iter().filter_map(Json::usize).map(|v| v.to_string()).collect();
+        put("mrope_section", parts.join(","));
+        let interleaved = rope.and_then(|r| r.get("mrope_interleaved")).is_some_and(|v| matches!(v, Json::Bool(true)));
+        put("mrope_interleaved", (interleaved as u8).to_string());
+    }
     Ok(s)
+}
+
+/// The vision part's settings, as more "key=value" lines (none if the model has no vision part, or one the engine
+/// doesn't run): from config.json's vision_config, and how pictures are prepared (preprocessor_config.json, if
+/// there is one; else Qwen 3.5's).
+pub fn vision_settings(config: &Json, preprocessor: Option<&Json>) -> String {
+    let Some(v) = config.get("vision_config") else { return String::new() };
+    // (Features taken from the middle of the vision part into the language model's first layers: not run here.)
+    if v.get("deepstack_visual_indexes").and_then(Json::array).is_some_and(|a| !a.is_empty()) {
+        return String::new();
+    }
+    let num = |k: &str| v.get(k).and_then(Json::usize);
+    let (Some(depth), Some(hidden), Some(heads), Some(inter), Some(patch), Some(temporal), Some(merge), Some(positions), Some(out)) = (
+        num("depth"),
+        num("hidden_size"),
+        num("num_heads"),
+        num("intermediate_size"),
+        num("patch_size"),
+        num("temporal_patch_size"),
+        num("spatial_merge_size"),
+        num("num_position_embeddings"),
+        num("out_hidden_size"),
+    ) else {
+        return String::new();
+    };
+    let ids = |k: &str| config.get(k).and_then(Json::usize);
+    let (Some(image), Some(start), Some(end)) = (ids("image_token_id"), ids("vision_start_token_id"), ids("vision_end_token_id")) else {
+        return String::new();
+    };
+    let mut s = String::new();
+    let mut put = |k: &str, v: String| {
+        s.push_str("vision.");
+        s.push_str(k);
+        s.push('=');
+        s.push_str(&v);
+        s.push('\n');
+    };
+    put("depth", depth.to_string());
+    put("hidden", hidden.to_string());
+    put("heads", heads.to_string());
+    put("intermediate", inter.to_string());
+    put("patch", patch.to_string());
+    put("temporal", temporal.to_string());
+    put("merge", merge.to_string());
+    put("positions", positions.to_string());
+    put("out", out.to_string());
+    let theta = v.get("rope_parameters").and_then(|r| r.get("rope_theta")).and_then(Json::num).unwrap_or(10000.0);
+    put("rope_theta", format!("{theta}"));
+    put("image_token", image.to_string());
+    put("start_token", start.to_string());
+    put("end_token", end.to_string());
+    let p = preprocessor;
+    let size = p.and_then(|p| p.get("size"));
+    let min = size.and_then(|s| s.get("shortest_edge")).or_else(|| p.and_then(|p| p.get("min_pixels"))).and_then(Json::usize);
+    let max = size.and_then(|s| s.get("longest_edge")).or_else(|| p.and_then(|p| p.get("max_pixels"))).and_then(Json::usize);
+    put("min_pixels", min.unwrap_or(65536).to_string());
+    put("max_pixels", max.unwrap_or(16_777_216).to_string());
+    let three = |k: &str| -> String {
+        let vals: Vec<String> = p.and_then(|p| p.get(k)).and_then(Json::array).map(|a| a.iter().filter_map(Json::num).map(|x| format!("{x}")).collect()).unwrap_or_default();
+        if vals.len() == 3 { vals.join(",") } else { String::from("0.5,0.5,0.5") }
+    };
+    put("mean", three("image_mean"));
+    put("std", three("image_std"));
+    s
 }
 
 /// The tokenizer's tables, from tokenizer.json: every token's bytes (count, offsets, bytes), the merges (left,
@@ -133,11 +205,14 @@ pub fn tokenizer(tj: &Json) -> Result<(Vec<u8>, Vec<u8>, String), String> {
 }
 
 /// A weight in the published files: where it goes in ours (its name, type and shape), or None to leave it out
-/// (the vision part, and the extra layer for predicting further ahead).
+/// (the extra layer for predicting further ahead).
 pub fn plan(name: &str, dims: &[usize], bits: u32) -> Option<(String, Dtype, Vec<usize>)> {
     let n = name.strip_prefix("model.language_model.").or_else(|| name.strip_prefix("model."))
         .unwrap_or(name);
-    if name.contains("visual") || name.starts_with("mtp.") {
+    if let Some(v) = name.strip_prefix("model.visual.").or_else(|| name.strip_prefix("visual.")) {
+        return plan_vision(v, dims, bits);
+    }
+    if name.starts_with("mtp.") {
         return None;
     }
     // (16: every weight as published, BF16, for checking against the reference; 8 and 4: quantized.)
@@ -200,6 +275,53 @@ pub fn plan(name: &str, dims: &[usize], bits: u32) -> Option<(String, Dtype, Vec
         dtype
     };
     Some((format!("layers.{layer}.{ours}"), dtype, shape))
+}
+
+/// A vision weight (its name after "model.visual."): where it goes in ours. Its matrices in 8 bits even when the
+/// language model's are in 4 (seeing suffers more from rounding, and the vision part is small), or 16 as published.
+fn plan_vision(v: &str, dims: &[usize], bits: u32) -> Option<(String, Dtype, Vec<usize>)> {
+    let m = if bits == 16 { Dtype::BF16 } else { Dtype::Q8 };
+    let flat = dims.to_vec();
+    // (The patch embedding's convolution, as a matrix: each output's weights over a patch's numbers.)
+    let as_matrix = |d: &[usize]| -> Vec<usize> { alloc::vec![d[0], d[1..].iter().product()] };
+    let (ours, dtype, shape) = match v {
+        "patch_embed.proj.weight" if dims.len() >= 2 => ("vision.patch".to_string(), m, as_matrix(dims)),
+        "patch_embed.proj.bias" => ("vision.patch_bias".to_string(), Dtype::F32, flat),
+        "pos_embed.weight" => ("vision.pos".to_string(), m, flat),
+        "merger.norm.weight" => ("vision.merger.norm".to_string(), Dtype::F32, flat),
+        "merger.norm.bias" => ("vision.merger.norm_bias".to_string(), Dtype::F32, flat),
+        "merger.linear_fc1.weight" => ("vision.merger.fc1".to_string(), m, flat),
+        "merger.linear_fc1.bias" => ("vision.merger.fc1_bias".to_string(), Dtype::F32, flat),
+        "merger.linear_fc2.weight" => ("vision.merger.fc2".to_string(), m, flat),
+        "merger.linear_fc2.bias" => ("vision.merger.fc2_bias".to_string(), Dtype::F32, flat),
+        _ => {
+            let rest = v.strip_prefix("blocks.")?;
+            let (block, part) = rest.split_once('.')?;
+            let block: usize = block.parse().ok()?;
+            let (ours, dtype) = match part {
+                "norm1.weight" => ("norm1", Dtype::F32),
+                "norm1.bias" => ("norm1_bias", Dtype::F32),
+                "norm2.weight" => ("norm2", Dtype::F32),
+                "norm2.bias" => ("norm2_bias", Dtype::F32),
+                "attn.qkv.weight" => ("qkv", m),
+                "attn.qkv.bias" => ("qkv_bias", Dtype::F32),
+                "attn.proj.weight" => ("proj", m),
+                "attn.proj.bias" => ("proj_bias", Dtype::F32),
+                "mlp.linear_fc1.weight" => ("fc1", m),
+                "mlp.linear_fc1.bias" => ("fc1_bias", Dtype::F32),
+                "mlp.linear_fc2.weight" => ("fc2", m),
+                "mlp.linear_fc2.bias" => ("fc2_bias", Dtype::F32),
+                _ => return None,
+            };
+            (format!("vision.{block}.{ours}"), dtype, flat)
+        }
+    };
+    let dtype = if matches!(dtype, Dtype::Q8 | Dtype::Q4) && !shape.last().is_some_and(|c| c.is_multiple_of(quant::BLOCK)) {
+        Dtype::F32
+    } else {
+        dtype
+    };
+    Some((ours, dtype, shape))
 }
 
 /// A weight's numbers (as published: BF16, F16 or F32, little-endian) in our type.

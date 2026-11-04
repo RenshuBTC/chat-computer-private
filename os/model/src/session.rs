@@ -10,10 +10,15 @@
 //! a part of the prompt read, or one token written, per step, for a caller with other things to do between them
 //! (Chat Computer's own kernel, whose screen and keyboard go on while the model reads and writes). Such a caller can
 //! also read the system prompt ahead of the first question (`ahead`, `read_ahead`), while the person is still typing.
+//!
+//! Pictures in a request are each given a slot (by their mark: the same picture, the same slot), their rows read as
+//! tokens PICTURE | slot << 16 | row, so a request is the same as an earlier one as far as its pictures are too. A
+//! picture's rows are made (the vision part) when the reading gets to them, and kept for the most recent pictures.
 
-use crate::chat::{self, Answer, Message, Options, Problem, Reply, Said as Saying, Style};
+use crate::chat::{self, Answer, Message, Options, Picture, Problem, Reply, Said as Saying, Style};
 use crate::json::Json;
-use crate::net::{Model, Pool, Snapshot, State};
+use crate::net::{self, Model, Pool, Rows, Snapshot, State};
+use alloc::sync::Arc;
 use crate::sample::{self, Random, Said, Sampling};
 use alloc::string::ToString;
 use alloc::vec;
@@ -23,6 +28,29 @@ use alloc::vec::Vec;
 const SNAPSHOTS: usize = 4;
 /// And this many of the model's answers, to put back as their tokens.
 const ANSWERS: usize = 64;
+/// The most rows a picture is read at (unless the caller says fewer), and how many pictures' rows are kept made.
+pub const MOST_ROWS: usize = 1024;
+const PICTURES_KEPT: usize = 16;
+
+/// A picture the session has been shown: the picture, the most rows it's read at, its grid of rows, and its rows
+/// once they're made.
+struct Seen {
+    picture: Arc<Picture>,
+    most: usize,
+    gh: usize,
+    gw: usize,
+    rows: Option<Vec<f32>>,
+}
+
+/// The pictures' rows, by slot.
+struct Pictures<'p>(&'p [Seen]);
+
+impl Rows for Pictures<'_> {
+    fn rows(&self, slot: u32) -> Option<(&[f32], usize, usize)> {
+        let s = self.0.get(slot as usize)?;
+        Some((s.rows.as_deref().unwrap_or(&[]), s.gh, s.gw))
+    }
+}
 
 pub struct Session<'m> {
     pub model: &'m Model<'m>,
@@ -36,6 +64,11 @@ pub struct Session<'m> {
     snapshots: Vec<Kept>,
     /// The model's recent answers, how it was asked for them (thinking or not), and their tokens.
     answers: Vec<(Answer, bool, Vec<u32>)>,
+    /// The pictures it's been shown (a slot each), and the most rows a new one is read at; a picture's rows being
+    /// made a step at a time (its slot, and how many steps are taken).
+    pictures: Vec<Seen>,
+    pub most_rows: usize,
+    encoding: Option<(u32, crate::vision::Encoding, usize)>,
 }
 
 /// A snapshot kept, with the scores where it was taken (empty when the reading goes on past it), and whether it's
@@ -108,6 +141,11 @@ impl Turn {
     pub fn prompt_tokens(&self) -> usize {
         self.prompt.len()
     }
+
+    /// The tokens it has written so far.
+    pub fn generated(&self) -> &[u32] {
+        &self.generated
+    }
 }
 
 /// What a step did.
@@ -115,6 +153,8 @@ impl Turn {
 pub enum Step {
     /// Read more of the prompt: `done` of its `total` tokens are read now.
     Read { done: usize, total: usize },
+    /// Looked at a picture: `done` of the `total` steps of making its rows taken (the reading goes on after).
+    Seeing { done: usize, total: usize },
     /// Wrote a token: what it adds (`Said::Done` at the turn's end).
     Said(Saying),
     /// Nothing: the turn is over.
@@ -141,18 +181,121 @@ impl<'m> Session<'m> {
             logits: vec![0.0; model.settings.vocab],
             snapshots: Vec::new(),
             answers: Vec::new(),
+            pictures: Vec::new(),
+            most_rows: MOST_ROWS,
+            encoding: None,
         }
     }
 
-    /// The prompt for a request, with the model's earlier answers as their own tokens.
-    pub fn prompt(&self, r: &Request) -> Result<Vec<u32>, Problem> {
+    /// The prompt for a request, with the model's earlier answers as their own tokens, and its pictures' rows as
+    /// their slots' (each picture given a slot, if it hasn't one).
+    pub fn prompt(&mut self, r: &Request) -> Result<Vec<u32>, Problem> {
         let known = |a: &Answer| {
             self.answers.iter().rev().find(|(b, _, _)| same_answer(a, b)).map(|(_, think, t)| (*think, t.clone()))
         };
         let p = chat::render_known(self.style, r.tools, r.messages, &r.options, &known)?;
+        if self.model.vision.is_none() && p.parts.iter().any(|part| matches!(part, chat::Part::Picture(_))) {
+            return Err(Problem::Blind);
+        }
         let mut tokens = Vec::new();
-        p.tokens(&self.model.tokenizer, &mut tokens).map_err(|_| Problem::NoMessages)?;
+        let (model, most) = (self.model, self.most_rows);
+        let pictures = &mut self.pictures;
+        let mut blind = false;
+        let made = p.tokens_seeing(&model.tokenizer, &mut tokens, &mut |pic, out| {
+            let Some(vision) = &model.vision else {
+                blind = true;
+                return Err("blind");
+            };
+            let slot = match pictures.iter().position(|s| s.picture.mark == pic.mark && s.most == most && *s.picture == **pic) {
+                Some(slot) => slot,
+                None => {
+                    if pictures.len() >= 0x7FFF {
+                        return Err("too many pictures");
+                    }
+                    let (h, w) = vision.size_for(pic.height, pic.width, most);
+                    let (gh, gw) = vision.rows_for(h, w);
+                    pictures.push(Seen { picture: pic.clone(), most, gh, gw, rows: None });
+                    pictures.len() - 1
+                }
+            };
+            let s = &pictures[slot];
+            out.extend((0..(s.gh * s.gw) as u32).map(|row| net::picture_token(slot as u32, row)));
+            Ok(())
+        });
+        if blind {
+            return Err(Problem::Blind);
+        }
+        made.map_err(|_| Problem::NoMessages)?;
         Ok(tokens)
+    }
+
+    /// The rows of every picture among `tokens` made, if they aren't (the vision part, a picture at a time: this is
+    /// what takes long for a picture); the oldest pictures' rows let go beyond the most kept.
+    fn see(&mut self, tokens: &[u32], pool: &dyn Pool) {
+        let Some(vision) = &self.model.vision else { return };
+        let mut slots: Vec<u32> = tokens.iter().filter_map(|&t| net::picture_of(t).map(|(s, _)| s)).collect();
+        slots.dedup();
+        for slot in slots {
+            let Some(s) = self.pictures.get_mut(slot as usize) else { continue };
+            if s.rows.is_some() {
+                continue;
+            }
+            let sized = vision.prepare(&s.picture.rgb, s.picture.width, s.picture.height, s.most);
+            let patches = vision.patches(&sized);
+            let p = vision.settings.patch;
+            s.rows = Some(vision.encode(&patches, sized.height / p, sized.width / p, pool));
+            self.keep_rows(slot);
+        }
+    }
+
+    /// Only the most recent pictures' rows kept (`slot`'s just made): a picture seen again is made again.
+    fn keep_rows(&mut self, slot: u32) {
+        let made: Vec<usize> = (0..self.pictures.len()).filter(|&i| self.pictures[i].rows.is_some()).collect();
+        if made.len() > PICTURES_KEPT {
+            for &i in made.iter().filter(|&&i| i != slot as usize).take(made.len() - PICTURES_KEPT) {
+                self.pictures[i].rows = None;
+            }
+        }
+    }
+
+    /// A step of making the rows of the first picture among `tokens` that has none (the first step begins it): how
+    /// many of its steps are taken, of how many; None if every picture there has its rows.
+    fn see_a_step(&mut self, tokens: &[u32], pool: &dyn Pool) -> Option<(usize, usize)> {
+        let vision = self.model.vision.as_ref()?;
+        let slot = tokens.iter().find_map(|&t| {
+            net::picture_of(t).map(|(s, _)| s).filter(|&s| self.pictures.get(s as usize).is_some_and(|p| p.rows.is_none()))
+        })?;
+        let total = vision.steps() + 1;
+        if let Some((s, e, done)) = &mut self.encoding
+            && *s == slot
+        {
+            return match vision.advance(e, pool) {
+                Some(rows) => {
+                    self.pictures[slot as usize].rows = Some(rows);
+                    self.encoding = None;
+                    self.keep_rows(slot);
+                    Some((total, total))
+                }
+                None => {
+                    *done += 1;
+                    Some((*done, total))
+                }
+            };
+        }
+        let p = &self.pictures[slot as usize];
+        let sized = vision.prepare(&p.picture.rgb, p.picture.width, p.picture.height, p.most);
+        let patches = vision.patches(&sized);
+        let ps = vision.settings.patch;
+        self.encoding = Some((slot, vision.begin(&patches, sized.height / ps, sized.width / ps, pool), 1));
+        Some((1, total))
+    }
+
+    /// The model reads `tokens` (pictures' rows among them), with the scores after the last if `logits`.
+    fn forward(&mut self, tokens: &[u32], logits: bool, pool: &dyn Pool) {
+        self.see(tokens, pool);
+        let rows = Pictures(&self.pictures);
+        let scores = if logits { Some(&mut self.logits[..]) } else { None };
+        self.model.forward_seeing(&mut self.state, tokens, &rows, scores, pool);
     }
 
     /// Reads the prompt (only what wasn't read already), then writes the answer, telling `on` what each token
@@ -176,7 +319,7 @@ impl<'m> Session<'m> {
                     }
                 }
                 Step::Over => break,
-                Step::Read { .. } => {}
+                Step::Read { .. } | Step::Seeing { .. } => {}
             }
         }
         Ok(self.end(t))
@@ -220,6 +363,11 @@ impl<'m> Session<'m> {
         }
         if t.reading {
             let to = self.seen.len().saturating_add(read.max(1)).min(t.prompt.len());
+            // (A picture among what's next, its rows not made: a step of making them first.)
+            let next = t.prompt[self.seen.len().min(to)..to].to_vec();
+            if let Some((done, total)) = self.see_a_step(&next, pool) {
+                return Step::Seeing { done, total };
+            }
             self.read_to(&t.prompt, to, t.anchor, pool);
             if to == t.prompt.len() {
                 t.reading = false;
@@ -241,7 +389,7 @@ impl<'m> Session<'m> {
         }
         t.said.add(next);
         t.generated.push(next);
-        self.model.forward(&mut self.state, &[next], Some(&mut self.logits), pool);
+        self.forward(&[next], true, pool);
         self.seen.push(next);
         Step::Said(s)
     }
@@ -277,7 +425,10 @@ impl<'m> Session<'m> {
     /// The tokens of a request's first message (the system prompt, with the tools), to read ahead of the question
     /// (`read_ahead`); none if the prompt has no end to its first message.
     pub fn ahead(&self, r: &Request) -> Result<Vec<u32>, Problem> {
-        let mut prompt = self.prompt(r)?;
+        // (The first message has no pictures: those after it are left out, as everything after it is.)
+        let p = chat::render_known(self.style, r.tools, r.messages, &r.options, &|_| None)?;
+        let mut prompt = Vec::new();
+        p.tokens_seeing(&self.model.tokenizer, &mut prompt, &mut |_, _| Ok(())).map_err(|_| Problem::NoMessages)?;
         let end = self.model.tokenizer.special("<|im_end|>");
         let anchor = prompt.iter().position(|&t| Some(t) == end).map_or(0, |i| i + 1);
         prompt.truncate(anchor);
@@ -308,7 +459,7 @@ impl<'m> Session<'m> {
         let from = self.seen.len();
         let to = from.saturating_add(read.max(1)).min(tokens.len());
         if from < to {
-            self.model.forward(&mut self.state, &tokens[from..to], None, pool);
+            self.forward(&tokens[from..to], false, pool);
             self.seen.extend_from_slice(&tokens[from..to]);
         }
         if to < tokens.len() {
@@ -370,7 +521,7 @@ impl<'m> Session<'m> {
     fn read_to(&mut self, tokens: &[u32], to: usize, anchor: Option<usize>, pool: &dyn Pool) {
         let from = self.seen.len();
         if let Some(a) = anchor.filter(|&a| from < a && a < tokens.len() && a <= to) {
-            self.model.forward(&mut self.state, &tokens[from..a], None, pool);
+            self.forward(&tokens[from..a], false, pool);
             self.seen.extend_from_slice(&tokens[from..a]);
             self.snapshots.retain(|k| !k.anchor);
             self.snapshots.push(Kept { snap: self.state.snapshot(), logits: Vec::new(), anchor: true });
@@ -378,7 +529,7 @@ impl<'m> Session<'m> {
         let at = self.seen.len();
         if at < to {
             let last = to == tokens.len();
-            self.model.forward(&mut self.state, &tokens[at..to], if last { Some(&mut self.logits) } else { None }, pool);
+            self.forward(&tokens[at..to], last, pool);
             self.seen.extend_from_slice(&tokens[at..to]);
         }
     }
@@ -426,11 +577,18 @@ impl<'m> Session<'m> {
         self.state.cache_bytes() + self.snapshots.iter().map(|k| k.snap.bytes() + 4 * k.logits.len()).sum::<usize>()
     }
 
+    /// The scores after the last token read.
+    pub fn scores(&self) -> &[f32] {
+        &self.logits
+    }
+
     /// Forgets everything read.
     pub fn clear(&mut self) {
         self.state = self.model.state();
         self.seen.clear();
         self.snapshots.clear();
         self.answers.clear();
+        self.pictures.clear();
+        self.encoding = None;
     }
 }

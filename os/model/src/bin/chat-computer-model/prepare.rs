@@ -57,10 +57,11 @@ impl Model {
         self.files.iter().map(|f| f.size).sum()
     }
 
-    /// About how big its own file is: its weights at `bits` a weight (less the vision part, which isn't kept).
+    /// About how big its own file is: its weights at `bits` a weight (the vision part's, a few in a hundred of
+    /// them, at 8 even in a 4-bit model: a little more than this says).
     pub fn file_bytes(&self) -> u64 {
         let weights: u64 = self.files.iter().filter(|f| f.name.ends_with(".safetensors")).map(|f| f.size).sum();
-        (weights as f64 / 2.0 * (self.bits as f64 + 0.5) / 8.0 * 0.95) as u64
+        (weights as f64 / 2.0 * (self.bits as f64 + 0.5) / 8.0 * 1.02) as u64
     }
 }
 

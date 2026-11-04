@@ -27,7 +27,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
-use model::chat::{Answer, Call, Message, Options, Said as Saying, Style};
+use model::chat::{Answer, Call, Content, Message, Options, Said as Saying, Style};
 use model::cpu::Level;
 use model::json::{self, Json};
 use model::refusal::Found;
@@ -785,6 +785,11 @@ impl Assistant {
                             activity(job, format!("Reading ({}%)", percent(done, total)), events);
                         }
                     }
+                    Step::Seeing { done, total } => {
+                        if !job.said {
+                            activity(job, format!("Looking at the picture ({}%)", percent(done, total)), events);
+                        }
+                    }
                     Step::Said(s) => {
                         if !reading {
                             job.written += 1;
@@ -1422,6 +1427,18 @@ fn messages_json(messages: &[Message]) -> Json {
                 Message::System(t) => Json::Object(vec![(String::from("role"), s("system")), (String::from("content"), s(t))]),
                 Message::User(t) => Json::Object(vec![(String::from("role"), s("user")), (String::from("content"), s(t))]),
                 Message::Tool(t) => Json::Object(vec![(String::from("role"), s("tool")), (String::from("content"), s(t))]),
+                // (Pictures as their size: a test's log has no room for their pixels.)
+                Message::UserParts(parts) | Message::ToolParts(parts) => {
+                    let role = if matches!(m, Message::UserParts(_)) { "user" } else { "tool" };
+                    let text: String = parts
+                        .iter()
+                        .map(|p| match p {
+                            Content::Text(t) => t.clone(),
+                            Content::Picture(pic) => format!("[a picture, {}x{}]", pic.width, pic.height),
+                        })
+                        .collect();
+                    Json::Object(vec![(String::from("role"), s(role)), (String::from("content"), s(&text))])
+                }
                 Message::Assistant(a) => Json::Object(vec![
                     (String::from("role"), s("assistant")),
                     (String::from("content"), s(&a.text)),

@@ -1,5 +1,6 @@
 //! Small models with random weights, made here, for tests that need a model without downloading one: the engine's
 //! own (tests.rs), and Chat Computer's, which start the engine's program with one (examples/tiny_model.rs writes it).
+//! One can have a small vision part too (`tiny_seeing`), for pictures.
 
 use crate::file::Writer;
 use crate::quant::{self, Dtype};
@@ -39,6 +40,19 @@ const SPECIALS: [&str; 9] = [
 /// A model file with random weights: 4 layers (three of linear attention, one of attention), 64 wide; a byte for
 /// each of the first 256 tokens, then the chat's special tokens. The same bytes every time.
 pub fn tiny(experts: bool) -> Vec<u8> {
+    build(experts, false)
+}
+
+/// The same with a vision part (2 blocks, 64 wide, patches of 4 pixels, 2x2 of them a row: a picture 8 pixels a
+/// side a row, 8 by 8 to 64 by 64 pixels) and M-RoPE's positions, and the pictures' special tokens.
+pub fn tiny_seeing(experts: bool) -> Vec<u8> {
+    build(experts, true)
+}
+
+/// The vision's special tokens, after the chat's (ids 265 to 267).
+const VISION_SPECIALS: [&str; 3] = ["<|vision_start|>", "<|vision_end|>", "<|image_pad|>"];
+
+fn build(experts: bool, seeing: bool) -> Vec<u8> {
     let mut r = Rng(0x9E37_79B9_7F4A_7C15 ^ experts as u64);
     let (h, vocab) = (64usize, 300usize);
     let mut config = String::from(
@@ -51,11 +65,22 @@ pub fn tiny(experts: bool) -> Vec<u8> {
     } else {
         config.push_str("intermediate=96\n");
     }
+    if seeing {
+        config.push_str(
+            "mrope_section=2,1,1\nmrope_interleaved=1\nvision.depth=2\nvision.hidden=64\nvision.heads=2\n\
+             vision.intermediate=96\nvision.patch=4\nvision.temporal=2\nvision.merge=2\nvision.positions=16\nvision.out=64\n\
+             vision.rope_theta=10000\nvision.image_token=267\nvision.start_token=265\nvision.end_token=266\n\
+             vision.min_pixels=64\nvision.max_pixels=4096\nvision.mean=0.5,0.5,0.5\nvision.std=0.5,0.5,0.5\n",
+        );
+    }
     let mut w = Writer::default();
     w.add("config", Dtype::Blob, &[config.len()], config.as_bytes());
     // The tokenizer: bytes, no merges, the specials.
     let mut tokens: Vec<Vec<u8>> = (0..=255u8).map(|b| vec![b]).collect();
     tokens.extend(SPECIALS.iter().map(|s| s.as_bytes().to_vec()));
+    if seeing {
+        tokens.extend(VISION_SPECIALS.iter().map(|s| s.as_bytes().to_vec()));
+    }
     let mut blob = Vec::new();
     blob.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
     let mut at = 0u32;
@@ -69,7 +94,8 @@ pub fn tiny(experts: bool) -> Vec<u8> {
     }
     w.add("tokenizer.tokens", Dtype::Blob, &[blob.len()], &blob);
     w.add("tokenizer.merges", Dtype::Blob, &[0], &[]);
-    let specials: String = SPECIALS.iter().enumerate().map(|(i, s)| format!("{} {s}\n", 256 + i)).collect();
+    let all: Vec<&str> = SPECIALS.iter().chain(if seeing { &VISION_SPECIALS[..] } else { &[] }).copied().collect();
+    let specials: String = all.iter().enumerate().map(|(i, s)| format!("{} {s}\n", 256 + i)).collect();
     w.add("tokenizer.specials", Dtype::Blob, &[specials.len()], specials.as_bytes());
     let matrix = |w: &mut Writer, name: &str, rows: usize, cols: usize, r: &mut Rng| {
         let v = r.vec(rows * cols, 1.0 / crate::math::sqrt(cols as f32) * 1.7);
@@ -121,7 +147,54 @@ pub fn tiny(experts: bool) -> Vec<u8> {
             matrix(&mut w, &p("down"), h, 96, &mut r);
         }
     }
+    if seeing {
+        // The vision part: (vh wide, 2 blocks, its patches 3 x 2 x 4 x 4 numbers, 4 x 4 learned positions).
+        let vh = 64;
+        let pairs = |w: &mut Writer, name: &str, r: &mut Rng| {
+            vector(w, name, r.vec(vh, 0.1).iter().map(|v| 1.0 + v).collect());
+            vector(w, &format!("{name}_bias"), r.vec(vh, 0.1));
+        };
+        matrix(&mut w, "vision.patch", vh, 96, &mut r);
+        vector(&mut w, "vision.patch_bias", r.vec(vh, 0.1));
+        matrix(&mut w, "vision.pos", 16, vh, &mut r);
+        for b in 0..2 {
+            let p = |n: &str| format!("vision.{b}.{n}");
+            pairs(&mut w, &p("norm1"), &mut r);
+            matrix(&mut w, &p("qkv"), 3 * vh, vh, &mut r);
+            vector(&mut w, &p("qkv_bias"), r.vec(3 * vh, 0.1));
+            matrix(&mut w, &p("proj"), vh, vh, &mut r);
+            vector(&mut w, &p("proj_bias"), r.vec(vh, 0.1));
+            pairs(&mut w, &p("norm2"), &mut r);
+            matrix(&mut w, &p("fc1"), 96, vh, &mut r);
+            vector(&mut w, &p("fc1_bias"), r.vec(96, 0.1));
+            matrix(&mut w, &p("fc2"), vh, 96, &mut r);
+            vector(&mut w, &p("fc2_bias"), r.vec(vh, 0.1));
+        }
+        pairs(&mut w, "vision.merger.norm", &mut r);
+        matrix(&mut w, "vision.merger.fc1", 4 * vh, 4 * vh, &mut r);
+        vector(&mut w, "vision.merger.fc1_bias", r.vec(4 * vh, 0.1));
+        matrix(&mut w, "vision.merger.fc2", h, 4 * vh, &mut r);
+        vector(&mut w, "vision.merger.fc2_bias", r.vec(h, 0.1));
+    }
     let mut out = w.head();
     out.extend_from_slice(&w.data);
     out
+}
+
+/// A picture of `width` by `height` pixels that looks like something (gradients, a square, a stripe), the same each
+/// time from the same `seed`.
+pub fn picture(width: usize, height: usize, seed: u64) -> Vec<u8> {
+    let mut r = Rng((seed << 1) | 1);
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    let (sx, sy) = ((r.float().abs() * width as f32) as usize, (r.float().abs() * height as f32) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let square = x >= sx && x < sx + width / 3 && y >= sy && y < sy + height / 3;
+            let stripe = (x + y) % 7 == 0;
+            let base = [(x * 255 / width.max(1)) as u8, (y * 255 / height.max(1)) as u8, ((x ^ y) & 0xFF) as u8];
+            let px = if square { [250, 220, 90] } else if stripe { [20, 20, 20] } else { base };
+            rgb.extend_from_slice(&px);
+        }
+    }
+    rgb
 }

@@ -6,6 +6,11 @@
 //! the fourth by ordinary attention over every token so far (8 or more query heads sharing 2 to 4 key-value heads,
 //! a gate on its output, rotary positions on a quarter of each head). The feed-forward part is SwiGLU, or 8 of 256
 //! small experts (and one shared) chosen per token.
+//!
+//! Pictures are read as rows in place of tokens (made by the vision part, vision.rs): a picture's rows are "tokens"
+//! PICTURE | slot << 16 | row, whose rows the caller has (`Rows`). Their positions are three (Qwen's M-RoPE: a time,
+//! a row and a column, the rotary pairs taking turns at which they turn by); text's three are the same, from where the
+//! last picture ended on.
 
 use crate::file::{Error, File};
 use crate::math;
@@ -62,6 +67,10 @@ pub struct Settings {
     pub rotary_dim: usize,
     pub eps: f32,
     pub context: usize,
+    /// How many rotary pairs turn by a picture's time, row and column (M-RoPE's sections), and whether they take
+    /// turns (interleaved) rather than coming one section after another.
+    pub mrope: [usize; 3],
+    pub mrope_interleaved: bool,
 }
 
 impl Settings {
@@ -227,13 +236,45 @@ pub struct Model<'a> {
     head: Matrix<'a>,
     norm: Vec<f32>,
     layers: Vec<Layer<'a>>,
-    /// The rotary frequencies (one per pair of rotated numbers).
+    /// The rotary frequencies (one per pair of rotated numbers), and which of a token's three positions each pair
+    /// turns by (0: time, 1: row, 2: column; text's three are the same).
     inv_freq: Vec<f64>,
+    axis: Vec<u8>,
     /// A direction taken out as it runs (refusal.rs finds it), if any.
     pub ablation: Option<Ablation>,
+    /// What makes pictures into rows (None: the model's file has no vision part, so it can't see).
+    pub vision: Option<crate::vision::Vision<'a>>,
 }
 
-fn vector(file: &File, name: &str) -> Result<Vec<f32>, Error> {
+/// A picture's row read in place of a token: PICTURE | slot << 16 | row.
+pub const PICTURE: u32 = 0x8000_0000;
+
+/// The token for row `row` of picture `slot`.
+pub fn picture_token(slot: u32, row: u32) -> u32 {
+    PICTURE | (slot & 0x7FFF) << 16 | (row & 0xFFFF)
+}
+
+/// Which picture and row a token is, if it's one.
+pub fn picture_of(token: u32) -> Option<(u32, u32)> {
+    (token & PICTURE != 0).then(|| ((token >> 16) & 0x7FFF, token & 0xFFFF))
+}
+
+/// Pictures' rows, for the tokens that are them.
+pub trait Rows {
+    /// Picture `slot`'s rows (each as wide as the model), and how many rows and columns of them its grid has.
+    fn rows(&self, slot: u32) -> Option<(&[f32], usize, usize)>;
+}
+
+/// No pictures.
+pub struct NoPictures;
+
+impl Rows for NoPictures {
+    fn rows(&self, _slot: u32) -> Option<(&[f32], usize, usize)> {
+        None
+    }
+}
+
+pub(crate) fn vector(file: &File, name: &str) -> Result<Vec<f32>, Error> {
     let e = file.get(name).ok_or(Error::Missing)?;
     let n = e.elements();
     let mut out = vec![0.0; n];
@@ -241,7 +282,7 @@ fn vector(file: &File, name: &str) -> Result<Vec<f32>, Error> {
     Ok(out)
 }
 
-fn matrix<'a>(file: &File<'a>, name: &str, rows: usize, cols: usize) -> Result<Matrix<'a>, Error> {
+pub(crate) fn matrix<'a>(file: &File<'a>, name: &str, rows: usize, cols: usize) -> Result<Matrix<'a>, Error> {
     let e = file.get(name).ok_or(Error::Missing)?;
     if e.elements() != rows * cols {
         return Err(Error::Damaged);
@@ -275,6 +316,16 @@ impl<'a> Model<'a> {
             rotary_dim: c.usize("rotary_dim")?,
             eps: c.f64("rms_eps")? as f32,
             context: c.usize("context").unwrap_or(32768),
+            mrope: {
+                let mut m = [0usize; 3];
+                if let Some(v) = c.str("mrope_section") {
+                    for (slot, part) in m.iter_mut().zip(v.split(',')) {
+                        *slot = part.trim().parse().unwrap_or(0);
+                    }
+                }
+                m
+            },
+            mrope_interleaved: c.str("mrope_interleaved") == Some("1"),
         };
         if s.interval == 0 || !s.heads.is_multiple_of(s.kv_heads.max(1)) || !s.lv_heads.is_multiple_of(s.lk_heads.max(1))
             || s.rotary_dim > s.head_dim || !s.rotary_dim.is_multiple_of(2) || !s.hidden.is_multiple_of(quant::BLOCK)
@@ -353,8 +404,36 @@ impl<'a> Model<'a> {
         let inv_freq = (0..s.rotary_dim / 2)
             .map(|i| 1.0 / math::powf64(s.rope_theta, (2 * i) as f64 / s.rotary_dim as f64))
             .collect();
+        // Which position each pair turns by: interleaved (time, row, column, time...: the rows' and columns' turns
+        // as many as their sections), or one section after another.
+        let [t_sec, h_sec, w_sec] = s.mrope;
+        let axis = (0..s.rotary_dim / 2)
+            .map(|j| {
+                if s.mrope_interleaved {
+                    if j % 3 == 1 && j < 3 * h_sec {
+                        1
+                    } else if j % 3 == 2 && j < 3 * w_sec {
+                        2
+                    } else {
+                        0
+                    }
+                } else if j < t_sec {
+                    0
+                } else if j < t_sec + h_sec {
+                    1
+                } else if j < t_sec + h_sec + w_sec {
+                    2
+                } else {
+                    0
+                }
+            })
+            .collect();
         let tokenizer = crate::load_tokenizer(file)?;
-        Ok(Model { settings: s, tokenizer, embed, head, norm, layers, inv_freq, ablation: None })
+        let vision = crate::vision::Vision::load(file)?;
+        if vision.as_ref().is_some_and(|v| v.settings.out != h) {
+            return Err(Error::Damaged);
+        }
+        Ok(Model { settings: s, tokenizer, embed, head, norm, layers, inv_freq, axis, ablation: None, vision })
     }
 
     /// A new conversation's state (nothing seen yet).
@@ -372,7 +451,7 @@ impl<'a> Model<'a> {
                 });
             }
         }
-        State { pos: 0, linear, full }
+        State { pos: 0, rope: 0, base: 0, linear, full }
     }
 
     /// Feeds one token (at the state's next position); with `logits`, the scores of what may come next.
@@ -383,18 +462,23 @@ impl<'a> Model<'a> {
     /// Feeds tokens (from the state's next position on), many at a time: each weight is read once for all of
     /// them, which is what makes reading a long prompt fast. With `logits`, the scores after the last.
     pub fn forward(&self, st: &mut State, tokens: &[u32], logits: Option<&mut [f32]>, pool: &dyn Pool) {
-        self.forward_with(st, tokens, logits, None, pool);
+        self.forward_with(st, tokens, &NoPictures, logits, None, pool);
+    }
+
+    /// The same, with pictures' rows among the tokens (`pictures` has them).
+    pub fn forward_seeing(&self, st: &mut State, tokens: &[u32], pictures: &dyn Rows, logits: Option<&mut [f32]>, pool: &dyn Pool) {
+        self.forward_with(st, tokens, pictures, logits, None, pool);
     }
 
     /// Feeds tokens as forward does, and gives what the model thinks with (the residual stream) after the last of
     /// them: as each layer starts (one for each layer), and after the last (one more).
     pub fn residuals(&self, st: &mut State, tokens: &[u32], pool: &dyn Pool) -> Vec<Vec<f32>> {
         let mut out = Vec::new();
-        self.forward_with(st, tokens, None, Some(&mut out), pool);
+        self.forward_with(st, tokens, &NoPictures, None, Some(&mut out), pool);
         out
     }
 
-    fn forward_with(&self, st: &mut State, tokens: &[u32], mut logits: Option<&mut [f32]>,
+    fn forward_with(&self, st: &mut State, tokens: &[u32], pictures: &dyn Rows, mut logits: Option<&mut [f32]>,
                     mut capture: Option<&mut Vec<Vec<f32>>>, pool: &dyn Pool) {
         // (With experts, more at once: each expert is chosen by few of the tokens.)
         let batch = if self.settings.experts > 0 { 4 * BATCH } else { BATCH };
@@ -402,7 +486,7 @@ impl<'a> Model<'a> {
         for (i, chunk) in tokens.chunks(batch).enumerate() {
             let last = i + 1 == chunks;
             let (l, c) = if last { (logits.as_deref_mut(), capture.as_deref_mut()) } else { (None, None) };
-            self.batch(st, chunk, l, c, pool);
+            self.batch(st, chunk, pictures, l, c, pool);
         }
     }
 
@@ -418,16 +502,45 @@ impl<'a> Model<'a> {
         }
     }
 
-    fn batch(&self, st: &mut State, tokens: &[u32], logits: Option<&mut [f32]>, mut capture: Option<&mut Vec<Vec<f32>>>,
-             pool: &dyn Pool) {
+    fn batch(&self, st: &mut State, tokens: &[u32], pictures: &dyn Rows, logits: Option<&mut [f32]>,
+             mut capture: Option<&mut Vec<Vec<f32>>>, pool: &dyn Pool) {
         let s = &self.settings;
         let (h, n) = (s.hidden, tokens.len());
         if n == 0 {
             return;
         }
         let mut x = vec![0.0f32; n * h];
+        // Each token's three positions: text's from where the last ended on; a picture's row's from where the picture
+        // starts (its time), plus its row and column; after a picture, text goes on from as far as its larger side.
+        let mut positions = Vec::with_capacity(n);
         for (t, &tok) in tokens.iter().enumerate() {
-            self.embed.row((tok as usize).min(s.vocab - 1), &mut x[t * h..(t + 1) * h]);
+            let at = &mut x[t * h..(t + 1) * h];
+            match picture_of(tok) {
+                None => {
+                    self.embed.row((tok as usize).min(s.vocab - 1), at);
+                    positions.push([st.rope; 3]);
+                    st.rope += 1;
+                }
+                Some((slot, row)) => {
+                    let (rows, gh, gw) = match pictures.rows(slot) {
+                        Some((rows, gh, gw)) if (row as usize) < gh * gw && rows.len() == gh * gw * h => (Some(rows), gh, gw),
+                        // (A picture whose rows aren't there: nothing for its rows, though it takes its places.)
+                        Some((_, gh, gw)) => (None, gh.max(1), gw.max(1)),
+                        None => (None, 1, 1),
+                    };
+                    if let Some(rows) = rows {
+                        at.copy_from_slice(&rows[row as usize * h..(row as usize + 1) * h]);
+                    }
+                    if row == 0 {
+                        st.base = st.rope;
+                    }
+                    let (r, c) = ((row as usize / gw) as i64, (row as usize % gw) as i64);
+                    positions.push([st.base, st.base + r, st.base + c]);
+                    if row as usize + 1 >= gh * gw {
+                        st.rope = st.base + gh.max(gw) as i64;
+                    }
+                }
+            }
         }
         self.ablate(&mut x, n);
         let mut normed = vec![0.0f32; n * h];
@@ -445,7 +558,7 @@ impl<'a> Model<'a> {
                     li += 1;
                 }
                 Mixer::Full(f) => {
-                    self.full(f, &mut st.full[fi], pos, &xs, &mut out, pool);
+                    self.full(f, &mut st.full[fi], pos, &positions, &xs, &mut out, pool);
                     fi += 1;
                 }
             }
@@ -581,7 +694,7 @@ impl<'a> Model<'a> {
 
     /// Attention over every token so far: queries (and their gates), keys and values; queries and keys
     /// normalised per head and turned by their position; the output gated, then projected.
-    fn full(&self, w: &Full, c: &mut Cache, pos: usize, xs: &[Prepared], out: &mut [f32], pool: &dyn Pool) {
+    fn full(&self, w: &Full, c: &mut Cache, pos: usize, positions: &[[i64; 3]], xs: &[Prepared], out: &mut [f32], pool: &dyn Pool) {
         let s = &self.settings;
         let (n, hd) = (xs.len(), s.head_dim);
         let (qd, kvd) = (s.heads * hd, s.kv_heads * hd);
@@ -601,9 +714,10 @@ impl<'a> Model<'a> {
                 let at = t * kvd + h * hd;
                 rms_norm(&k[at..at + hd], &w.k_norm, true, s.eps, &mut kn[at..at + hd]);
             }
-            // Rotary positions on each head's first rotary_dim numbers: pairs (i, i + rotary_dim/2).
+            // Rotary positions on each head's first rotary_dim numbers: pairs (i, i + rotary_dim/2), each turned by
+            // its own one of the token's three positions.
             for (i, f) in self.inv_freq.iter().enumerate() {
-                let (sn, cn) = math::sin_cos((pos + t) as f64 * f);
+                let (sn, cn) = math::sin_cos(positions[t][self.axis[i] as usize] as f64 * f);
                 cs[i] = (cn as f32, sn as f32);
             }
             let rotate = |head: &mut [f32]| {
@@ -795,9 +909,13 @@ pub struct Cache {
     v: Vec<f32>,
 }
 
-/// What the model has seen of a conversation.
+/// What the model has seen of a conversation: how many tokens (each one's keys and values kept), and the next
+/// text's position (the same as how many, until a picture: a picture takes as many positions as its larger side
+/// has rows, however many rows it has), with where the picture being read started.
 pub struct State {
     pub pos: usize,
+    pub rope: i64,
+    base: i64,
     linear: Vec<Recurrent>,
     full: Vec<Cache>,
 }
@@ -806,6 +924,8 @@ pub struct State {
 /// the attention layers' keys and values up to there are still in the state, which only adds to them.
 pub struct Snapshot {
     pub pos: usize,
+    rope: i64,
+    base: i64,
     linear: Vec<Recurrent>,
 }
 
@@ -818,7 +938,7 @@ impl Snapshot {
 
 impl State {
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { pos: self.pos, linear: self.linear.clone() }
+        Snapshot { pos: self.pos, rope: self.rope, base: self.base, linear: self.linear.clone() }
     }
 
     /// Back to a snapshot of this same state, taken at or before where it is now.
@@ -834,6 +954,8 @@ impl State {
             c.v.truncate(snap.pos * per);
         }
         self.pos = snap.pos;
+        self.rope = snap.rope;
+        self.base = snap.base;
     }
 
     /// The attention layers' keys and values' size in memory.
@@ -892,6 +1014,9 @@ impl Model<'_> {
             r.state = take(r.state.len());
         }
         st.pos = pos;
+        // (What's kept is where a conversation's first message ends, which has no pictures: its positions are its
+        // tokens'.)
+        st.rope = pos as i64;
         Some(st)
     }
 }

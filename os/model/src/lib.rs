@@ -37,6 +37,7 @@ pub mod testing;
 pub mod threads;
 pub mod token;
 mod unicode;
+pub mod vision;
 
 #[cfg(test)]
 mod tests;

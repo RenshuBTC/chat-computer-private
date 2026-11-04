@@ -87,6 +87,11 @@ log go to out/.
                                      HD Audio QEMU has (the ICH6's and ICH9's controllers; codecs with a line out,
                                      a line out and in, and a speaker and microphone), recorded: the chime's two
                                      notes, in order, in both channels, as loud as the main Chat Computer's
+    ./check.py --microphone          microphones: a build that listens once it's ready, on each kind of HD Audio
+                                     QEMU has with an input (the ICH6's and ICH9's controllers; codecs with a line
+                                     in, and with a microphone), each fed a tone of its own through QEMU's audio
+                                     (SDL's, reading it from a file): heard at its frequency and its loudness; and
+                                     a codec without one, which says so
     ./check.py --secure-boot        Secure Boot, as on a PC that has approved Chat Computer's key: signs the
                                      build with a test key, adds that key to the firmware's allowed list
                                      (db, next to Microsoft's), starts with Secure Boot enforced; then
@@ -219,8 +224,10 @@ class VirtualPC:
     """One run of the virtual PC, started from `efi` as \\EFI\\BOOT\\BOOTX64.EFI."""
 
     def __init__(self, efi: Path, *, size: str, memory: str, cpu: str, secure_vars: Path | None = None,
-                 extra: tuple[str, ...] = (), settings: str | None = None, disk: tuple[Path, str] | None = None):
-        """`disk`: start from this disk image instead (on an NVMe or SATA drive: "nvme" or "sata")."""
+                 extra: tuple[str, ...] = (), settings: str | None = None, disk: tuple[Path, str] | None = None,
+                 env: dict[str, str] | None = None):
+        """`disk`: start from this disk image instead (on an NVMe or SATA drive: "nvme" or "sata"). `env`: more of
+        QEMU's environment (for its audio's SDL, say)."""
         self.tmp = tempfile.TemporaryDirectory()
         tmp = Path(self.tmp.name)
         esp = tmp / "esp"
@@ -261,7 +268,7 @@ class VirtualPC:
             "-no-reboot",
             *(() if "-smp" in extra else ("-smp", str(CORES))),
             *extra,
-        ])
+        ], env={**os.environ, **(env or {})})
 
     def text(self) -> str:
         return self.log.read_text(errors="replace") if self.log.exists() else ""
@@ -2407,6 +2414,73 @@ def sound(args) -> list[str]:
     return problems
 
 
+def microphone(args) -> list[str]:
+    """What the microphone hears: a test build listens for 2.5 seconds once it's ready, on each HD Audio controller
+    and codec QEMU has that has an input, which is fed a tone of its own (its frequency and its loudness), from a
+    file, by QEMU's SDL audio (SDL's disk driver). What it heard after its first quarter second must be that tone:
+    its frequency (by how often it crosses zero) within 1%, its loudness (root mean square) within 0.5 dB, its peak
+    within 1%. A codec without an input says it can't listen."""
+    import math
+    import re
+    import struct
+
+    build("microphone")
+    problems = []
+    tmp = Path(tempfile.mkdtemp(prefix="cc-microphone-"))
+    rate = 48000
+    try:
+        runs = [("intel-hda", "hda-duplex", "a line in", 440.0, 8000), ("intel-hda", "hda-micro", "a microphone jack", 1000.0, 3000),
+                ("ich9-intel-hda", "hda-duplex", "a line in", 1500.0, 20000), ("ich9-intel-hda", "hda-micro", "a microphone jack", 700.0, 12000),
+                ("intel-hda", "hda-output", None, 1000.0, 8000)]
+        for controller, codec, what, freq, amp in runs:
+            label = f"{controller} + {codec}"
+            # A minute of the tone (a whole number of its waves a second), in both channels: the virtual PC listens a
+            # few seconds after it starts, and SDL reads the file as the time goes by, from when QEMU starts.
+            tone = tmp / f"tone-{controller}-{codec}.raw"
+            one = b"".join(struct.pack("<hh", v, v) for v in
+                           (int(round(amp * math.sin(2 * math.pi * freq * i / rate))) for i in range(rate)))
+            tone.write_bytes(one * 60)
+            env = {"SDL_AUDIODRIVER": "disk", "SDL_DISKAUDIOFILEIN": str(tone), "SDL_DISKAUDIOFILE": str(tmp / "played.raw")}
+            extra = ("-audiodev", f"sdl,id=snd0,in.frequency={rate},in.channels=2,in.format=s16,out.frequency={rate}",
+                     "-device", f"{controller},id=hda0", "-device", f"{codec},audiodev=snd0,bus=hda0.0")
+            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, env=env)
+            try:
+                got = wait_for(pc.log, ("test: heard", "test: can't listen", "kernel stopped"), args.timeout)
+                time.sleep(0.3)
+            finally:
+                pc.stop()
+            text = pc.text()
+            found = next((line for line in text.splitlines() if "kernel: sound" in line), "(no line about sound)")
+            print(f"{label}: {found}")
+            if what is None:
+                if "test: can't listen: it has no microphone or line in" not in text:
+                    problems.append(f"{label}: it didn't say it can't listen ({got or 'nothing said in time'})")
+                continue
+            if f"test: listening to {what}" not in text:
+                problems.append(f"{label}: it didn't listen to {what}")
+            heard = re.search(r"test: heard (\d+) samples from (.+?): root mean square (\d+), peak (\d+), (\d+) zero crossings", text)
+            if not heard:
+                problems.append(f"{label}: it didn't say what it heard ({got or 'nothing said in time'})")
+                continue
+            n, rms, peak, crossings = int(heard[1]), int(heard[3]), int(heard[4]), int(heard[5])
+            seconds = n / rate
+            heard_freq = crossings / 2 / seconds if n else 0
+            print(f"{label}: heard {seconds:.2f} s of {heard[2]}: {heard_freq:.1f} Hz (fed {freq:g}), root mean square "
+                  f"{rms} (fed {amp / math.sqrt(2):.0f}), peak {peak} (fed {amp})")
+            if seconds < 2.0:
+                problems.append(f"{label}: only {seconds:.2f} s heard")
+            if abs(heard_freq - freq) > freq * 0.01:
+                problems.append(f"{label}: heard {heard_freq:.1f} Hz, not {freq:g}")
+            if rms == 0 or abs(20 * math.log10(rms / (amp / math.sqrt(2)))) > 0.5:
+                problems.append(f"{label}: heard it at {rms} root mean square, not {amp / math.sqrt(2):.0f}")
+            if abs(peak - amp) > amp * 0.01:
+                problems.append(f"{label}: heard a peak of {peak}, not {amp}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
 def power_check(args) -> list[str]:
     """The firmware's programs: a laptop's battery, AC adapter and lid (an extra table, whose readings change 15 seconds
     after the battery is first read), a processor plugged in (QEMU's own firmware handles that event with its _E02
@@ -2489,6 +2563,7 @@ def main() -> int:
     ap.add_argument("--web", action="store_true", help="the model's web tools, against a stand-in for its sites")
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
+    ap.add_argument("--microphone", action="store_true", help="what QEMU's HD Audio inputs hear, fed a tone")
     ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by the model's file tools")
     ap.add_argument("--bitlocker", action="store_true", help="Windows' drive encrypted with BitLocker, unlocked")
     ap.add_argument("--drives", action="store_true", help="the PC's other drives (NVMe and SATA) read, by Windows' letters")
@@ -2517,6 +2592,8 @@ def main() -> int:
         problems = remember(args)
     elif args.sound:
         problems = sound(args)
+    elif args.microphone:
+        problems = microphone(args)
     elif args.files:
         problems = files_check(args)
     elif args.bitlocker:

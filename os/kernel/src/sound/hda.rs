@@ -6,8 +6,10 @@
 //! driver does.
 //!
 //! Chat Computer plays short sounds (its chimes): each whole in memory, played once by one output stream, which is
-//! stopped after. Commands go to a codec through the command ring (CORB) and its answers come back through the
-//! response ring (RIRB), one at a time, waited for. Nothing interrupts the processor.
+//! stopped after. And it listens: the microphone (a plugged-in one, else the built-in one, else the line in) found the
+//! same way, from an input converter (an ADC) back to its pin, and recorded by the first input stream into a ring of
+//! memory, which is read as it fills. Commands go to a codec through the command ring (CORB) and its answers come back
+//! through the response ring (RIRB), one at a time, waited for. Nothing interrupts the processor.
 
 use crate::dma::Page;
 use crate::paging::{self, Cache};
@@ -39,11 +41,13 @@ const RIRBSTS: u64 = 0x5D; // 8
 const RIRBSIZE: u64 = 0x5E; // 8
 // A stream descriptor's (from 0x80, 0x20 each: the input streams', then the output streams', then the two-way ones).
 const SD_CTL: u64 = 0x00; // 24 bits, then the status byte
+const SD_LPIB: u64 = 0x04; // where in its ring of memory the stream is (bytes)
 const SD_CBL: u64 = 0x08;
 const SD_LVI: u64 = 0x0C; // 16
 const SD_FMT: u64 = 0x12; // 16
 const SD_BDPL: u64 = 0x18;
 const SD_BDPU: u64 = 0x1C;
+const SD_FIFOS: u64 = 0x10; // 16: how many bytes its FIFO holds, less one
 
 const GCAP_64BIT: u16 = 1 << 0;
 const GCTL_RUNNING: u32 = 1 << 0; // CRST: 0 holds the controller (and the link) in reset
@@ -95,6 +99,7 @@ const AUDIO_FUNCTION: u32 = 0x01;
 
 // Widgets: their kinds (bits 23:20 of their capabilities), and what they have.
 const OUTPUT: u32 = 0x0;
+const INPUT: u32 = 0x1;
 const MIXER: u32 = 0x2;
 const SELECTOR: u32 = 0x3;
 const PIN: u32 = 0x4;
@@ -109,9 +114,14 @@ const PIN_TRIGGER: u32 = 1 << 1;
 const PIN_PRESENCE: u32 = 1 << 2;
 const PIN_HEADPHONE_DRIVE: u32 = 1 << 3;
 const PIN_OUT: u32 = 1 << 4;
+const PIN_IN: u32 = 1 << 5;
+const PIN_VREF_80: u32 = 1 << 12;
 const PIN_EAPD: u32 = 1 << 16;
 const PIN_OUT_ENABLE: u32 = 1 << 6;
 const PIN_HEADPHONE_ENABLE: u32 = 1 << 7;
+const PIN_IN_ENABLE: u32 = 1 << 5;
+/// A microphone's bias voltage, 80% (what electret microphones, the usual kind, take).
+const PIN_BIAS_80: u32 = 0x4;
 const EAPD: u32 = 1 << 1;
 // A pin's configuration (set by the PC's maker): how it's connected, and what to.
 const CONNECTED_NOTHING: u32 = 1;
@@ -119,6 +129,8 @@ const CONNECTED_BUILT_IN: u32 = 2;
 const LINE_OUT: u32 = 0x0;
 const SPEAKER: u32 = 0x1;
 const HEADPHONES: u32 = 0x2;
+const LINE_IN: u32 = 0x8;
+const MICROPHONE: u32 = 0xA;
 // Amplifiers: set both channels, of the output or an input; muted; the gain step that's 0 dB.
 const AMP_OUT: u32 = 1 << 15;
 const AMP_IN: u32 = 1 << 14;
@@ -128,8 +140,13 @@ const AMP_MUTE: u32 = 1 << 7;
 /// 48 kHz, 16 bits, two channels: what every codec plays.
 pub const FORMAT: u16 = 0x0011;
 pub const RATE: u32 = 48_000;
-/// The stream's number on the link (any of 1 to 15: there's only the one).
+/// The streams' numbers on the link (any of 1 to 15, each its own): what's played, and what's heard.
 const STREAM: u32 = 1;
+const IN_STREAM: u32 = 2;
+/// How much a microphone's own amplifier (its "boost") adds, where it has one: 20 dB, as Windows has it.
+const BOOST_DB: u32 = 20;
+/// The ring of memory what's heard goes round, in pages: 2.7 seconds of it (read far more often than that).
+const HEARD_PAGES: usize = 128;
 /// How long a command's answer may take.
 const ANSWER_MS: u64 = 50;
 /// Silence after a sound, so that the stream (a ring) doesn't come round to the sound again before it's stopped.
@@ -163,6 +180,33 @@ impl Output {
     fn dac(&self) -> u16 {
         self.path.last().map_or(0, |p| p.0)
     }
+}
+
+/// An input: a pin (a microphone, or a line in), and the way from an input converter (an ADC) to it: the widgets on
+/// the way, each with the connection it takes, the ADC first and the pin last.
+struct Input {
+    pin: u16,
+    device: u32,
+    built_in: bool,
+    path: Vec<(u16, usize)>,
+}
+
+impl Input {
+    fn adc(&self) -> u16 {
+        self.path.first().map_or(0, |p| p.0)
+    }
+}
+
+/// What's being recorded: the ring of pages the input stream fills, the list of them it reads, and how far into the
+/// ring it's been read (bytes).
+struct Recording {
+    pages: Vec<Page>,
+    /// (Kept while it records: the controller reads it.)
+    #[allow(dead_code)]
+    list: Page,
+    bytes: u32,
+    read: u32,
+    input: usize,
 }
 
 /// A sound ready to play: its pages, and the list of them the controller reads (the buffer descriptor list).
@@ -223,8 +267,9 @@ pub struct Hda {
     rirb_entries: u16,
     corb_wp: u16,
     rirb_rp: u16,
-    /// The first output stream's registers.
+    /// The first output stream's registers, and the first input stream's (0: none).
     stream: u64,
+    in_stream: u64,
     codec: u8,
     /// The codec's name, as its maker's ID says.
     pub name: String,
@@ -234,8 +279,10 @@ pub struct Hda {
     out_amp: u32,
     in_amp: u32,
     outputs: Vec<Output>,
+    inputs: Vec<Input>,
     /// When the sound playing now ends (time::now_us), if one is.
     until: Option<u64>,
+    recording: Option<Recording>,
 }
 
 unsafe impl Send for Hda {}
@@ -292,6 +339,7 @@ impl Hda {
             corb_wp: 0,
             rirb_rp: 0,
             stream: 0,
+            in_stream: 0,
             codec: 0,
             name: String::new(),
             afg: 0,
@@ -299,7 +347,9 @@ impl Hda {
             out_amp: 0,
             in_amp: 0,
             outputs: Vec::new(),
+            inputs: Vec::new(),
             until: None,
+            recording: None,
         };
         let gcap = d.r16(GCAP);
         d.wide = gcap & GCAP_64BIT != 0;
@@ -308,6 +358,7 @@ impl Hda {
             return Err(String::from("it has no output streams"));
         }
         d.stream = 0x80 + 0x20 * inputs as u64;
+        d.in_stream = if inputs > 0 { 0x80 } else { 0 };
 
         // Everything stopped (what the firmware left running), and the controller reset and started again.
         d.w32(INTCTL, 0);
@@ -473,7 +524,51 @@ impl Hda {
         if self.outputs.is_empty() {
             return Err(format!("{} has no outputs Chat Computer can use", self.name));
         }
+        // The inputs: pins that can take a signal in, the maker says are connected to a microphone or a line in, and
+        // that an ADC reaches.
+        self.inputs.clear();
+        let pins: Vec<(u16, u32, bool)> = self
+            .widgets
+            .iter()
+            .filter(|w| w.kind() == PIN && w.pin_caps & PIN_IN != 0 && w.caps & W_DIGITAL == 0)
+            .filter(|w| w.config >> 30 != CONNECTED_NOTHING && matches!((w.config >> 20) & 0xF, MICROPHONE | LINE_IN))
+            .map(|w| (w.nid, (w.config >> 20) & 0xF, w.config >> 30 == CONNECTED_BUILT_IN))
+            .collect();
+        let adcs: Vec<u16> = self.widgets.iter().filter(|w| w.kind() == INPUT && w.caps & W_DIGITAL == 0).map(|w| w.nid).collect();
+        for (pin, device, built_in) in pins {
+            for &adc in &adcs {
+                let mut seen = vec![adc];
+                if let Some(path) = self.path_to_pin(adc, pin, 0, &mut seen) {
+                    self.inputs.push(Input { pin, device, built_in, path });
+                    break;
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// The way from node `from` (an ADC, or a mixer or selector on the way) to the pin `pin` through mixers and
+    /// selectors (at most four), as (node, the connection it takes) pairs, the pin last.
+    fn path_to_pin(&self, from: u16, pin: u16, depth: u32, seen: &mut Vec<u16>) -> Option<Vec<(u16, usize)>> {
+        let w = self.widget(from)?;
+        if let Some(i) = w.connections.iter().position(|&n| n == pin) {
+            return Some(vec![(from, i), (pin, 0)]);
+        }
+        if depth >= 4 {
+            return None;
+        }
+        for (i, &next) in w.connections.iter().enumerate() {
+            let Some(n) = self.widget(next) else { continue };
+            if !matches!(n.kind(), MIXER | SELECTOR) || seen.contains(&next) {
+                continue;
+            }
+            seen.push(next);
+            if let Some(mut rest) = self.path_to_pin(next, pin, depth + 1, seen) {
+                rest.insert(0, (from, i));
+                return Some(rest);
+            }
+        }
+        None
     }
 
     /// The nodes node `nid` takes its input from, in order (ranges written out).
@@ -535,7 +630,8 @@ impl Hda {
         None
     }
 
-    /// What it plays on, for people: "Realtek ALC897: speakers, headphones".
+    /// What it plays on and hears from, for people: "Realtek ALC897: speakers, headphones; hears a built-in
+    /// microphone, a microphone jack".
     pub fn describe(&self) -> String {
         let mut kinds: Vec<&str> = Vec::new();
         for o in &self.outputs {
@@ -548,7 +644,15 @@ impl Hda {
                 kinds.push(k);
             }
         }
-        format!("{}: {}", self.name, kinds.join(", "))
+        let mut heard: Vec<&str> = Vec::new();
+        for i in &self.inputs {
+            let k = input_kind(i);
+            if !heard.contains(&k) {
+                heard.push(k);
+            }
+        }
+        let hears = if heard.is_empty() { String::new() } else { format!("; hears {}", heard.join(", ")) };
+        format!("{}: {}{hears}", self.name, kinds.join(", "))
     }
 
     /// For the log: each output, and the way to it.
@@ -562,6 +666,10 @@ impl Hda {
                 _ => "line out",
             };
             out += &format!("{}{what} {}", if out.is_empty() { "" } else { "; " }, way.join(" < "));
+        }
+        for i in &self.inputs {
+            let way: Vec<String> = i.path.iter().map(|(n, _)| format!("{n:#x}")).collect();
+            out += &format!("{}{} {}", if out.is_empty() { "" } else { "; " }, input_kind(i), way.join(" < "));
         }
         out
     }
@@ -596,19 +704,19 @@ impl Hda {
             .filter(|o| o.device == HEADPHONES && !o.built_in)
             .filter_map(|o| self.widget(o.pin).map(|w| (o.pin, w.pin_caps)))
             .collect();
-        for (pin, caps) in jacks {
-            if caps & PIN_PRESENCE == 0 {
-                continue;
-            }
-            if caps & PIN_TRIGGER != 0 {
-                self.verb(pin, SENSE_PIN, 0);
-                time::delay_us(100);
-            }
-            if self.verb(pin, GET_PIN_SENSE, 0).unwrap_or(0) & 1 << 31 != 0 {
-                return true;
-            }
+        jacks.into_iter().any(|(pin, caps)| self.plugged(pin, caps))
+    }
+
+    /// Whether something's plugged into the jack at `pin` (false if it can't tell).
+    fn plugged(&mut self, pin: u16, caps: u32) -> bool {
+        if caps & PIN_PRESENCE == 0 {
+            return false;
         }
-        false
+        if caps & PIN_TRIGGER != 0 {
+            self.verb(pin, SENSE_PIN, 0);
+            time::delay_us(100);
+        }
+        self.verb(pin, GET_PIN_SENSE, 0).unwrap_or(0) & 1 << 31 != 0
     }
 
     /// Every output set up to play the stream: the ways to them powered, connected and unmuted, their pins on (the
@@ -667,18 +775,26 @@ impl Hda {
     }
 
     fn sd_ctl(&self) -> u32 {
-        self.r32(self.stream + SD_CTL) & 0x00FF_FFFF
+        self.ctl_of(self.stream)
+    }
+
+    fn ctl_of(&self, sd: u64) -> u32 {
+        self.r32(sd + SD_CTL) & 0x00FF_FFFF
     }
 
     /// The output stream stopped and reset.
     fn reset_stream(&mut self) {
-        let sd = self.stream;
-        self.w32(sd + SD_CTL, self.sd_ctl() & !SD_RUN);
-        self.wait(5, |d| d.sd_ctl() & SD_RUN == 0);
-        self.w32(sd + SD_CTL, self.sd_ctl() | SD_RESET);
-        self.wait(5, |d| d.sd_ctl() & SD_RESET != 0);
-        self.w32(sd + SD_CTL, self.sd_ctl() & !SD_RESET);
-        self.wait(5, |d| d.sd_ctl() & SD_RESET == 0);
+        self.reset(self.stream);
+    }
+
+    /// The stream at `sd` stopped and reset.
+    fn reset(&mut self, sd: u64) {
+        self.w32(sd + SD_CTL, self.ctl_of(sd) & !SD_RUN);
+        self.wait(5, |d| d.ctl_of(sd) & SD_RUN == 0);
+        self.w32(sd + SD_CTL, self.ctl_of(sd) | SD_RESET);
+        self.wait(5, |d| d.ctl_of(sd) & SD_RESET != 0);
+        self.w32(sd + SD_CTL, self.ctl_of(sd) & !SD_RESET);
+        self.wait(5, |d| d.ctl_of(sd) & SD_RESET == 0);
     }
 
     /// Plays `sound` from its start (whatever was playing stops).
@@ -710,6 +826,161 @@ impl Hda {
         if self.until.take().is_some() {
             self.reset_stream();
         }
+    }
+
+    /// Which input to listen to: a microphone plugged into a jack that can tell it's there, else a built-in
+    /// microphone, else a microphone jack that can't tell, else a line in.
+    fn chosen_input(&mut self) -> Option<usize> {
+        for k in 0..self.inputs.len() {
+            let (pin, device, built_in) = (self.inputs[k].pin, self.inputs[k].device, self.inputs[k].built_in);
+            let caps = self.widget(pin).map_or(0, |w| w.pin_caps);
+            if device == MICROPHONE && !built_in && self.plugged(pin, caps) {
+                return Some(k);
+            }
+        }
+        let jack_that_cant_tell = |i: &Input, caps: u32| i.device == MICROPHONE && caps & PIN_PRESENCE == 0;
+        self.inputs
+            .iter()
+            .position(|i| i.device == MICROPHONE && i.built_in)
+            .or_else(|| self.inputs.iter().position(|i| jack_that_cant_tell(i, self.widget(i.pin).map_or(0, |w| w.pin_caps))))
+            .or_else(|| self.inputs.iter().position(|i| i.device == LINE_IN))
+    }
+
+    /// Input `k`'s way, from its pin to its ADC, set up to record: powered, connected and unmuted at 0 dB (a mixer's
+    /// other inputs muted), the pin taking a signal in (a microphone given its bias, and its own amplifier's 20 dB),
+    /// the ADC making the input stream, both channels.
+    fn set_input(&mut self, k: usize) {
+        let afg = self.afg;
+        self.verb(afg, SET_POWER_STATE, 0);
+        let (pin, device, path) = (self.inputs[k].pin, self.inputs[k].device, self.inputs[k].path.clone());
+        for &(nid, input) in &path[..path.len() - 1] {
+            let Some((caps, kind, inputs)) = self.widget(nid).map(|w| (w.caps, w.kind(), w.connections.len())) else { continue };
+            if caps & W_POWER != 0 {
+                self.verb(nid, SET_POWER_STATE, 0);
+            }
+            if kind != MIXER && inputs > 1 {
+                self.verb(nid, SET_CONNECTION_SELECT, input as u32);
+            }
+            if caps & W_IN_AMP != 0 {
+                if kind == MIXER {
+                    for i in 0..inputs {
+                        self.amp(nid, caps, Some(i), i != input);
+                    }
+                } else {
+                    self.amp(nid, caps, Some(input), false);
+                }
+            }
+            if caps & W_OUT_AMP != 0 {
+                self.amp(nid, caps, None, false);
+            }
+        }
+        let Some((caps, pin_caps)) = self.widget(pin).map(|w| (w.caps, w.pin_caps)) else { return };
+        if caps & W_POWER != 0 {
+            self.verb(pin, SET_POWER_STATE, 0);
+        }
+        let mut control = PIN_IN_ENABLE;
+        if device == MICROPHONE && pin_caps & PIN_VREF_80 != 0 {
+            control |= PIN_BIAS_80;
+        }
+        self.verb(pin, SET_PIN_CONTROL, control);
+        if caps & W_IN_AMP != 0 {
+            self.boost(pin, caps, if device == MICROPHONE { BOOST_DB } else { 0 });
+        }
+        let adc = self.inputs[k].adc();
+        self.verb16(adc, SET_FORMAT, FORMAT as u32);
+        self.verb(adc, SET_CHANNEL_STREAM, IN_STREAM << 4);
+    }
+
+    /// The input amplifier of `nid` (both channels) set `db` above 0 dB, as near as its steps go.
+    fn boost(&mut self, nid: u16, caps: u32, db: u32) {
+        let amp = self.amp_caps(nid, caps, false);
+        // (Its 0 dB step, its last step, and each step's size in quarters of a dB.)
+        let (zero, last, size) = (amp & 0x7F, (amp >> 8) & 0x7F, ((amp >> 16) & 0x7F) + 1);
+        let step = (zero + (db * 4 + size / 2) / size).min(last.max(zero));
+        self.verb16(nid, SET_AMP, AMP_IN | AMP_BOTH | step);
+    }
+
+    /// Starts listening: the input chosen set up, and the first input stream recording it into a ring of memory, 48
+    /// kHz in 16 bits, both channels. What it listens to ("a built-in microphone"), or why it can't.
+    pub fn listen(&mut self) -> Result<String, String> {
+        self.stop_listening();
+        if self.in_stream == 0 {
+            return Err(String::from("its controller has no input streams"));
+        }
+        let input = self.chosen_input().ok_or_else(|| String::from("it has no microphone or line in"))?;
+        let low = !self.wide;
+        let mut pages = Vec::with_capacity(HEARD_PAGES);
+        for _ in 0..HEARD_PAGES {
+            pages.push(Page::new(low).ok_or_else(|| String::from("out of memory"))?);
+        }
+        let list = Page::new(low).ok_or_else(|| String::from("out of memory"))?;
+        for (i, page) in pages.iter().enumerate() {
+            unsafe {
+                write_volatile(list.at::<u64>(16 * i), page.phys);
+                write_volatile(list.at::<u32>(16 * i + 8), PAGE_SIZE as u32);
+                write_volatile(list.at::<u32>(16 * i + 12), 0);
+            }
+        }
+        for line in (0..PAGE_SIZE).step_by(64) {
+            cpu::flush_line(list.at::<u8>(line as usize) as u64);
+        }
+        cpu::memory_fence();
+        let sd = self.in_stream;
+        self.reset(sd);
+        self.set_input(input);
+        let bytes = (HEARD_PAGES * PAGE_SIZE as usize) as u32;
+        self.w32(sd + SD_CBL, bytes);
+        self.w16(sd + SD_LVI, HEARD_PAGES as u16 - 1);
+        self.w16(sd + SD_FMT, FORMAT);
+        self.w32(sd + SD_BDPL, list.phys as u32);
+        self.w32(sd + SD_BDPU, (list.phys >> 32) as u32);
+        let ctl = (self.ctl_of(sd) & !(0xF << SD_TAG_SHIFT)) | IN_STREAM << SD_TAG_SHIFT;
+        self.w32(sd + SD_CTL, ctl);
+        self.w32(sd + SD_CTL, ctl | SD_RUN);
+        let what = input_kind(&self.inputs[input]);
+        self.recording = Some(Recording { pages, list, bytes, read: 0, input });
+        Ok(String::from(what))
+    }
+
+    /// What's been heard since last asked (each sample the mean of its two channels), appended to `out`: as far as
+    /// the stream has written it to memory (where it is on the link, less what its FIFO still holds).
+    pub fn heard(&mut self, out: &mut Vec<i16>) {
+        let sd = self.in_stream;
+        let (position, fifo) = (self.r32(sd + SD_LPIB), self.r16(sd + SD_FIFOS) as u32 + 1);
+        let Some(r) = &mut self.recording else { return };
+        let ready = ((position % r.bytes + r.bytes - r.read) % r.bytes).saturating_sub(fifo.div_ceil(4) * 4) & !3;
+        let page_size = PAGE_SIZE as u32;
+        for _ in 0..ready / 4 {
+            let page = &r.pages[(r.read / page_size) as usize];
+            let at = (r.read % page_size) as usize;
+            if at % 64 == 0 {
+                // (Read from memory, which the controller wrote, not from a line the caches kept from before.)
+                cpu::flush_line(page.at::<u8>(at) as u64);
+            }
+            let v = unsafe { read_volatile(page.at::<u32>(at)) };
+            out.push(((v as u16 as i16 as i32 + (v >> 16) as u16 as i16 as i32) / 2) as i16);
+            r.read = (r.read + 4) % r.bytes;
+        }
+    }
+
+    /// Stops listening.
+    pub fn stop_listening(&mut self) {
+        if let Some(r) = self.recording.take() {
+            self.reset(self.in_stream);
+            let pin = self.inputs[r.input].pin;
+            self.verb(pin, SET_PIN_CONTROL, 0);
+            drop(r);
+        }
+    }
+
+}
+
+/// An input as people call it.
+fn input_kind(i: &Input) -> &'static str {
+    match (i.device, i.built_in) {
+        (MICROPHONE, true) => "a built-in microphone",
+        (MICROPHONE, false) => "a microphone jack",
+        _ => "a line in",
     }
 }
 

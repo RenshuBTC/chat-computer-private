@@ -264,6 +264,8 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         }
         // (A timer, as the model's reminders tool sets one.)
         Some("sound") => log!("Chat Computer kernel: test: {}", schedule::timer(2.0, "tea").unwrap_or_else(|e| e)),
+        // (What the microphone hears for a moment.)
+        Some("microphone") => log!("Chat Computer kernel: test: {}", sound::test_listen()),
         Some("core") => {
             log!("Chat Computer kernel: test: a core other than the first stopping");
             cores::test_stop();

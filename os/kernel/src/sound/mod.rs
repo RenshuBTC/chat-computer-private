@@ -1,6 +1,7 @@
 //! Sound: the PC's sound controller (HD Audio: `hda.rs`), and what Chat Computer plays on it, the chimes of its timers
 //! and reminders (made by the `chime` crate, the main Chat Computer's). Each chime is made the first time it rings and
-//! kept for the next.
+//! kept for the next. And what it hears: its microphone (or line in), recorded as it comes, for Chat Computer's own
+//! speech recognition to come (the roadmap's next step).
 
 pub mod hda;
 
@@ -8,6 +9,7 @@ use crate::pci;
 use crate::sync::SpinLock;
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 use chime::Kind;
 use hda::{Hda, Sound};
 
@@ -107,11 +109,88 @@ pub fn volume() -> Option<u32> {
     SOUND.lock().as_ref().map(|s| s.volume)
 }
 
-/// Stops a chime once it has played (after every wake).
+/// Stops a chime once it has played (after every wake); a test build's listening, once it has heard enough.
 pub fn work() {
     if let Some(s) = SOUND.lock().as_mut() {
         s.hda.work();
     }
+    if option_env!("CHATCOMPUTER_TEST") == Some("microphone") {
+        test_heard();
+    }
+}
+
+/// Starts listening to the microphone (a plugged-in one, else the built-in one, else the line in): what to, or why
+/// it can't.
+pub fn listen() -> Result<String, String> {
+    let mut s = SOUND.lock();
+    match s.as_mut() {
+        Some(sp) => sp.hda.listen(),
+        None => Err(String::from("there's no sound")),
+    }
+}
+
+/// What's been heard since last asked (48 kHz, 16 bits, one channel), appended to `out`.
+pub fn heard(out: &mut Vec<i16>) {
+    if let Some(sp) = SOUND.lock().as_mut() {
+        sp.hda.heard(out);
+    }
+}
+
+/// Stops listening.
+pub fn stop_listening() {
+    if let Some(sp) = SOUND.lock().as_mut() {
+        sp.hda.stop_listening();
+    }
+}
+
+/// A test build's listening (check.py --microphone): when it started, and what it has heard.
+static TEST: SpinLock<Option<(u64, String, Vec<i16>)>> = SpinLock::new(None);
+/// How long it listens.
+const TEST_MS: u64 = 2500;
+
+/// Starts a test build's listening, for check.py --microphone: what to.
+pub fn test_listen() -> String {
+    match listen() {
+        Ok(what) => {
+            *TEST.lock() = Some((crate::time::uptime_ms(), what.clone(), Vec::new()));
+            format!("listening to {what}")
+        }
+        Err(e) => format!("can't listen: {e}"),
+    }
+}
+
+/// A test build's listening, once it has heard enough: what it heard (after its first quarter second, the stream
+/// starting), for check.py to check: how many samples, their root mean square and peak, and how often they cross
+/// zero (a tone's frequency, twice over).
+fn test_heard() {
+    let mut t = TEST.lock();
+    let Some((start, what, samples)) = t.as_mut() else { return };
+    heard(samples);
+    if crate::time::uptime_ms() < *start + TEST_MS {
+        return;
+    }
+    stop_listening();
+    let s = &samples[(hda::RATE as usize / 4).min(samples.len())..];
+    let n = s.len().max(1) as u64;
+    let squares: u64 = s.iter().map(|&v| (v as i64 * v as i64) as u64).sum();
+    let peak = s.iter().map(|&v| (v as i32).unsigned_abs()).max().unwrap_or(0);
+    let mut crossings = 0;
+    let mut sign = 0i32;
+    for &v in s {
+        let now = (v as i32).signum();
+        if now != 0 {
+            if sign != 0 && now != sign {
+                crossings += 1;
+            }
+            sign = now;
+        }
+    }
+    crate::log!(
+        "Chat Computer kernel: test: heard {} samples from {what}: root mean square {}, peak {peak}, {crossings} zero crossings",
+        s.len(),
+        (squares / n).isqrt()
+    );
+    *t = None;
 }
 
 /// What the computer plays sound on, for people (computer_status).

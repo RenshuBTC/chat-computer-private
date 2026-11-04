@@ -192,9 +192,14 @@ drivers.
     mixers and selectors, as Linux's generic driver does; on the way, the right connections are chosen and the
     amplifiers unmuted at 0 dB (a mixer's other inputs, such as a microphone's loop back, muted), the pins switched on
     with their external amplifiers (EAPD), and built-in speakers left off while headphones are plugged in. A sound
-    plays whole from memory on the first output stream, 48 kHz in 16 bits, and the stream stops after it. Commands
-    go through the command and response rings, one at a time; nothing interrupts. Only QEMU's controllers and codecs
-    have played it so far;
+    plays whole from memory on the first output stream, 48 kHz in 16 bits, and the stream stops after it. It
+    listens too: the microphones and line ins found the same way, from an input converter (an ADC) back to each pin
+    the maker marked as a microphone or a line in; a microphone plugged into a jack that can tell is listened to,
+    else a built-in one, else a line in, its pin given a microphone's bias (80%) and 20 dB from its own amplifier,
+    where it has one (as Windows sets it), the rest at 0 dB; the first input stream records it, 48 kHz in 16 bits,
+    into a ring of memory read as it fills (as far as the stream has written it, less what its FIFO still holds).
+    Commands go through the command and response rings, one at a time; nothing interrupts. Only QEMU's controllers
+    and codecs have played and been listened to so far;
   * Chat Computer's own model (`assistant.rs`): the one Chat Computer's app got ready on Windows
     (`Users\NAME\AppData\Local\ai.chatcomputer.desktop\models\MODEL.ccm`, on Windows' drive or any other with
     people's folders: of those that fit in memory, the biggest that answers quickly enough, at most 3.6 GB, which is
@@ -573,6 +578,8 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # nothing else on the disk changed (needs dosfstools, mtools and gdisk)
 ./check.py --sound               # a timer set by a test build, its chime recorded from each of QEMU's
                                  # HD Audio controllers and codecs and checked against the chime's own samples
+./check.py --microphone          # a test build listening, on each of QEMU's HD Audio controllers and codecs
+                                 # with an input, fed a tone of its own: heard at its frequency and loudness
 ./check.py --files               # Windows' drive read by the model's tools (a test's script asks): a folder
                                  # listed, text files read (UTF-8 and UTF-16, a long one in two parts), links
                                  # followed, OneDrive's files on the PC and online only, Word, Excel and
@@ -707,8 +714,9 @@ PC.
    rarer ideographs (boxes now), and the font's own glyph substitutions for marks (GSUB: a capital's flatter
    accents).
 10. Sound and AirPods: ✓ HD Audio's outputs, for the chimes of timers and reminders (checked with QEMU's
-    controllers and codecs). To do: trying it on real PCs, microphones, USB audio, then Bluetooth (HCI over USB,
-    L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.
+    controllers and codecs), ✓ its microphones (the one to listen to found and recorded, for the speech recognition
+    to come; checked with QEMU's codecs fed tones). To do: trying it on real PCs, USB audio, then Bluetooth (HCI over
+    USB, L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
 12. Power: ✓ restart, ✓ turning off (ACPI's S5, with the firmware's _TTS and _PTS), ✓ the firmware's own programs
     (AML) run by Chat Computer's own interpreter: ✓ the power button, ✓ laptops' batteries, AC adapters and lids, ✓

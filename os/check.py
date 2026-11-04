@@ -30,8 +30,12 @@ log go to out/.
                                      tools' results, when each message was sent), its tools (the computer's
                                      status, a bigger text size, a timer, a restart, which ends the virtual PC),
                                      the answer on the screen (Markdown laid out), a failure shown, and the
-                                     conversation scrolled back and forth by a USB mouse's wheel
-    ./check.py --remember            the conversation kept across a restart: started from a disk laid out like a
+                                     conversation scrolled back and forth by a USB mouse's wheel; then an answer's
+                                     limits: the tools the model's given (tools.json's), its tools used up (what
+                                     the eighth round's said tells it so; the ninth round's call not run, its words
+                                     the answer, the question kept), an answer cut short at the most a round says,
+                                     and a tool call cut off as it was written (not run, the model told why)
+    ./check.py --remember           the conversation kept across a restart: started from a disk laid out like a
                                      PC's (a FAT32 start-up partition with Windows' files and Chat Computer's,
                                      its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
                                      drive; a question answered, the PC restarted, the conversation back on the
@@ -800,6 +804,94 @@ def chat(args) -> list[str]:
             problems += check_colours(answered, args.size)
             if colours(answered).get(BUBBLE, 0) < 1000:
                 problems.append("no bubble for what was typed")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
+def chat_limits(args) -> list[str]:
+    """An answer's limits, with a test build's script in place of the model (assistant.rs). The tools the model's
+    given, named at start-up, must be tools.json's (a test's script calls the tools itself, so it wouldn't notice the
+    model having none). A question answered with tools in every round: what the eighth round's tools said must end by
+    telling the model that was its last, and the ninth round's call isn't run (answered as not run), its words standing
+    as the answer, with a line under it, the question kept rather than failed. An answer that reached the most a round
+    says, with a line under it. A tool call cut off as it was written (its round reached the most a round says): not
+    run, and the model told why. Then a question given the conversation with all of that in it."""
+    import re
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-limits-"))
+    looking = {"text": "Looking.", "calls": [["computer_status", {}]]}
+    script = {
+        "busy": [looking] * 8 + [{"text": "This is what I found.", "calls": [["computer_status", {}]]}],
+        "long": [{"text": "The first part of a long answer", "cut": True}],
+        "note": [{"calls": [["remember", {"note": "The person likes"}]], "cut": True}, {"text": "Noted."}],
+        "after": [{"text": "Done."}],
+    }
+    script_build(script, tmp)
+    problems: list[str] = []
+    try:
+        settings = SETTINGS_HEAD + "clock-offset-minutes = 0\r\n"
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, settings=settings)
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            for n, question in enumerate(script, 1):
+                monitor_many(pc.mon, keys_for(question) + ["sendkey ret"])
+                end = time.time() + 120
+                while time.time() < end and pc.text().count("model: answered (") < n \
+                        and not any(w in pc.text() for w in ("model: failed", "kernel stopped")):
+                    time.sleep(0.5)
+                pc.settled_picture(f"chat-limits-{question}")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        named = re.search(r"model: its tools: (.*)", text)
+        tools = [t["function"]["name"] for t in json.loads((HERE / "kernel/src/tools.json").read_text())]
+        if not named or named[1].split(", ") != tools:
+            problems.append(f"the model wasn't given tools.json's tools: {named[1] if named else 'none named'}")
+        if "model: failed" in text or text.count("model: answered (") != len(script):
+            problems.append(f"{text.count('model: answered (')} of {len(script)} questions answered")
+        if text.count("model: uses computer_status") != 8 or "its rounds of tools were used up: 1 more not run" not in text:
+            problems.append(f"computer_status ran {text.count('model: uses computer_status')} times, not 8, the ninth not run")
+        if "model: its answer reached the most a round says" not in text:
+            problems.append("an answer cut short wasn't said to be")
+        if "model: uses remember" in text or "its call of remember was cut off as it wrote it" not in text:
+            problems.append("a call cut off as it was written was run, or not said to be")
+        said = logged(text, "said")
+        if said != ["\n\n".join(["Looking."] * 8 + ["This is what I found."]), "The first part of a long answer", "Noted.",
+                    "Done."]:
+            problems.append(f"the answers came as {said!r}"[:2000])
+        # What the model was given: the last round's note only after the eighth round's tools; then, for the last
+        # question, all of the conversation (the answer that used its tools up, the one cut short, the call cut off).
+        rounds = [plain(r)[1:] for r in logged(text, "asked")]
+        if len(rounds) != 13:
+            problems.append(f"the model was given {len(rounds)} rounds, not 13")
+            return problems
+        last = "That was the last of the 8 rounds of tools you can use for one message"
+        told = [i for i, r in enumerate(rounds) for m in r if m["role"] == "tool" and last in m["content"]]
+        if told[:1] != [8] or rounds[8][-1]["role"] != "tool" or last not in rounds[8][-1]["content"]:
+            problems.append(f"the model was told its tools' last round in rounds {sorted(set(told))}, not first in the ninth")
+        user = lambda t: {"role": "user", "content": t}  # noqa: E731
+        answer = lambda t, *calls: {"role": "assistant", "content": t, "calls": list(calls)}  # noqa: E731
+        status = {"name": "computer_status", "args": {}}
+        convo = rounds[12]
+        roles = ["user"] + ["assistant", "tool"] * 9 + ["user", "assistant"] + ["user", "assistant", "tool", "assistant", "user"]
+        if [m["role"] for m in convo] != roles:
+            problems.append(f"the last question was given {[m['role'] for m in convo]}")
+            return problems
+        not_run = lambda m, words: m["role"] == "tool" and m["content"].startswith("Error: Not run: " + words)  # noqa: E731
+        if convo[0] != user("busy") or any(convo[1 + 2 * k] != answer("Looking.", status) for k in range(8)) \
+                or convo[17] != answer("This is what I found.", status) or not not_run(convo[18], "you had used all"):
+            problems.append(f"the answer that used its tools up wasn't kept as it was: {convo[15:19]!r}"[:2000])
+        if convo[19:21] != [user("long"), answer("The first part of a long answer")]:
+            problems.append(f"the answer cut short wasn't kept: {convo[19:21]!r}")
+        if convo[21:23] != [user("note"), answer("", {"name": "remember", "args": {"note": "The person likes"}})] \
+                or not not_run(convo[23], "you reached the most you can write at once") \
+                or convo[24:] != [answer("Noted."), user("after")]:
+            problems.append(f"the call cut off wasn't answered as not run: {convo[21:]!r}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
@@ -2037,7 +2129,7 @@ def main() -> int:
     elif args.model:
         problems = model_check(args)
     elif args.chat:
-        problems = chat(args)
+        problems = chat(args) + chat_limits(args)
     elif args.remember:
         problems = remember(args)
     elif args.sound:

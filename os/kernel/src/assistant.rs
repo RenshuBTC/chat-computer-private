@@ -32,7 +32,7 @@ use model::cpu::Level;
 use model::json::{self, Json};
 use model::refusal::Found;
 use model::sample::Sampling;
-use model::session::{Request, Session, Step, Turn};
+use model::session::{Ended, Request, Session, Step, Turn};
 use model::{File, Model, Serial};
 
 /// What came of the question.
@@ -58,6 +58,9 @@ pub enum Event {
     Picture(picture::Picture),
     /// The conversation so far is over: the next question starts a new one.
     NewConversation,
+    /// A line from Chat Computer itself under the answer: that it was cut short, or that the model's tools were
+    /// used up.
+    Note(String),
 }
 
 /// Whether the model can be asked now.
@@ -114,8 +117,28 @@ const LEAST_TOKENS: usize = 2_048;
 /// The most one round of an answer says, in tokens (a model test build's: a few, for the same reason as its tools).
 const ROUND_TOKENS: usize = 2_048;
 const TEST_ROUND_TOKENS: usize = 24;
-/// Rounds of tool calls in one answer, at most.
+/// Rounds of tool calls in one answer, at most. What the last of them says back ends by telling the model so
+/// (last_round), so that the round after it is its answer, in words: tools it calls then aren't run, and what it did
+/// and found stays in the conversation, for the next message to carry on from, rather than the whole question
+/// being lost when it would rather go on using them.
 const TOOL_ROUNDS: u32 = 8;
+/// Told the model after what its last round of tools said.
+fn last_round() -> String {
+    format!(
+        "(That was the last of the {TOOL_ROUNDS} rounds of tools you can use for one message: now answer the person in \
+         words, with what you found, and say what you couldn't find out or do. Tools called now aren't run.)"
+    )
+}
+/// What a tool called after the last round says back (not run), and the line under that answer.
+const NOT_RUN: &str = "Not run: you had used all your rounds of tools for this message. Answer with what you found.";
+const USED_UP: &str = "Chat Computer's model had used its tools as many times as it can for one message, so it \
+stopped there: ask it to carry on.";
+/// What a tool call the model was still writing when its round reached the most it says (ROUND_TOKENS) says back:
+/// its arguments may be cut short, so it isn't run.
+const CUT_CALL: &str = "Not run: you reached the most you can write at once while you were still writing this call, so \
+it may be cut short. Call it again, shorter.";
+/// The line under an answer that reached the most a round says.
+const CUT_SHORT: &str = "Chat Computer's answer stops here: that's the most its model writes at once. Ask it to go on.";
 /// About how long a step of work takes: the screen and the keyboard go on between steps.
 const STEP_MS: u64 = 40;
 /// With no model found, looking again this often (Windows' drive may be unlocked meanwhile).
@@ -139,8 +162,8 @@ fn test_build() -> Option<&'static str> {
 }
 
 /// A test build's script (CHATCOMPUTER_TEST=chat; empty in every other build: kernel/build.rs): JSON, each question
-/// (or "else") with the rounds of its answer, each round {"text": words, "calls": [[tool, {arguments}], ...]} or
-/// {"fail": why}.
+/// (or "else") with the rounds of its answer, each round {"text": words, "calls": [[tool, {arguments}], ...]} (with
+/// "cut": true, a round that reached the most a round says) or {"fail": why}.
 static TEST_SCRIPT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test_script.json"));
 
 /// A part of the conversation.
@@ -209,8 +232,12 @@ struct Job {
     new_conversation: bool,
     /// The model's turn in the round being answered, once it's begun.
     turn: Option<Turn>,
-    /// A test script's round: its words still to say, and the answer they're part of.
-    script: Option<(String, Answer)>,
+    /// How many of the round's tool calls the model finished writing before the round was over (one it was still
+    /// writing when the round reached the most it says is read as far as it got: it isn't run).
+    closed: usize,
+    /// A test script's round: its words still to say, the answer they're part of, and whether the round reached the
+    /// most a round says.
+    script: Option<(String, Answer, bool)>,
     /// What it has said (the log has it only in a test build), and the activity last shown.
     text: String,
     shown: String,
@@ -232,6 +259,7 @@ impl Job {
             turn_off: false,
             new_conversation: false,
             turn: None,
+            closed: 0,
             script: None,
             text: String::new(),
             shown: String::new(),
@@ -282,8 +310,15 @@ pub fn init(setting: Option<String>) {
     // is emulated, and their descriptions would take minutes to read.)
     let tools = match json::parse(TOOLS) {
         Some(Json::Array(t)) if test_build() != Some("model") => t,
-        _ => Vec::new(),
+        Some(Json::Array(_)) => Vec::new(),
+        _ => {
+            // (Without them it could only talk, and a test's script, which calls the tools itself, wouldn't notice.)
+            crate::log!("Chat Computer kernel: model: its tools can't be read: tools.json isn't a list of them");
+            Vec::new()
+        }
     };
+    let names: Vec<&str> = tools.iter().filter_map(|t| t.get("function").and_then(|f| f.get("name")).and_then(Json::str)).collect();
+    crate::log!("Chat Computer kernel: model: its tools: {}", if names.is_empty() { String::from("none") } else { names.join(", ") });
     // The model's notes and the conversation from before the last restart, if they were kept.
     let (notes, parts) = crate::keep::load()
         .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -506,7 +541,7 @@ impl Assistant {
                         if self.script_step(&mut job, events) {
                             break true;
                         }
-                        if job.script.as_ref().is_some_and(|(left, _)| !left.is_empty()) || time::uptime_ms() >= until {
+                        if job.script.as_ref().is_some_and(|(left, ..)| !left.is_empty()) || time::uptime_ms() >= until {
                             break false;
                         }
                     };
@@ -681,8 +716,8 @@ impl Assistant {
             let Some(turn) = job.turn.as_mut() else { return true };
             if turn.finished() {
                 let turn = job.turn.take().expect("the round's turn");
-                let (answer, _) = m.session.end(turn);
-                if self.round_over(job, answer, events) {
+                let (answer, stats) = m.session.end(turn);
+                if self.round_over(job, answer, stats.ended == Ended::Length, events) {
                     return true;
                 }
             } else {
@@ -690,6 +725,9 @@ impl Assistant {
                 let t = time::uptime_ms();
                 let step = m.session.step(turn, m.read, &Serial);
                 let took = time::uptime_ms() - t;
+                // (A call that comes as the turn ends was never closed: the engine reads it as far as it got. If the
+                // round reached the most it says, it was cut off as it was written, and isn't run.)
+                let over = turn.finished();
                 match step {
                     Step::Read { done, total } => {
                         job.read += m.read.min(total);
@@ -707,6 +745,7 @@ impl Assistant {
                         match s {
                             Saying::Text(words) => say(job, words, events),
                             Saying::Thinking(_) => activity(job, String::from("Thinking"), events),
+                            Saying::Call(_) if !over => job.closed += 1,
                             _ => {}
                         }
                     }
@@ -734,6 +773,7 @@ impl Assistant {
                     crate::log!("Chat Computer kernel: test: asked {}", json::compact(&messages_json(&messages)));
                 }
                 job.turn = Some(turn);
+                job.closed = 0;
                 return Ok(());
             }
             if !self.shorten(job.base) {
@@ -760,9 +800,10 @@ impl Assistant {
         }
     }
 
-    /// A round of the answer is over: kept in the conversation; if it called tools, they run, and what they say goes
-    /// back to the model in the next round (false); else the answer's over (true).
-    fn round_over(&mut self, job: &mut Job, answer: Answer, events: &mut Vec<Event>) -> bool {
+    /// A round of the answer is over (`cut`: at the most a round says, ROUND_TOKENS): kept in the conversation; if it
+    /// called tools, they run, and what they say goes back to the model in the next round (false); else the answer's
+    /// over (true).
+    fn round_over(&mut self, job: &mut Job, answer: Answer, cut: bool, events: &mut Vec<Event>) -> bool {
         let calls = answer.calls.clone();
         if test_build().is_some() {
             let round = Json::Object(vec![
@@ -778,33 +819,60 @@ impl Assistant {
         }
         self.parts.push(Part::Said(answer));
         if calls.is_empty() {
+            if cut {
+                // (The person can't tell by looking that it stopped mid-way: a line says so.)
+                crate::log!("Chat Computer kernel: model: its answer reached the most a round says, and stops there");
+                events.push(Event::Note(String::from(CUT_SHORT)));
+            }
             self.finish(job, events);
             return true;
         }
         if job.rounds >= TOOL_ROUNDS {
-            self.parts.truncate(job.base);
-            fail(events, String::from("Chat Computer's model kept on using its tools, so it was stopped."));
+            // Its tools used up (what they said last told it so): these aren't run, but each is answered, and the
+            // answer ends with what it said, all it did kept for the next message to carry on from.
+            crate::log!("Chat Computer kernel: model: its rounds of tools were used up: {} more not run", calls.len());
+            for call in &calls {
+                self.tool_said(&call.name, String::from(NOT_RUN), true);
+            }
+            events.push(Event::Note(String::from(USED_UP)));
+            self.finish(job, events);
             return true;
         }
-        for call in &calls {
+        for (i, call) in calls.iter().enumerate() {
+            if cut && i >= job.closed {
+                crate::log!("Chat Computer kernel: model: its call of {} was cut off as it wrote it, so isn't run", call.name);
+                self.tool_said(&call.name, String::from(CUT_CALL), true);
+                continue;
+            }
             let tool = self.tools.iter().find(|t| t.get("function").and_then(|f| f.get("name")).and_then(Json::str) == Some(&call.name));
             let input = call.arguments(tool);
             let notes = self.notes.clone();
             let (said, error) = run_tool(&call.name, &input, job, &mut self.notes, events);
             self.unkept |= self.notes != notes;
-            if test_build().is_some() {
-                let logged = Json::Object(vec![
-                    (String::from("name"), Json::Str(call.name.clone())),
-                    (String::from("error"), Json::Bool(error)),
-                    (String::from("said"), Json::Str(said.clone())),
-                ]);
-                crate::log!("Chat Computer kernel: test: tool {}", json::compact(&logged));
-            }
-            self.parts.push(Part::Tool(if error { format!("Error: {said}") } else { said }));
+            self.tool_said(&call.name, said, error);
         }
         job.rounds += 1;
+        if job.rounds == TOOL_ROUNDS
+            && let Some(Part::Tool(said)) = self.parts.last_mut()
+        {
+            said.push_str("\n\n");
+            said.push_str(&last_round());
+        }
         job.separate = job.said;
         false
+    }
+
+    /// What a tool said back (`error`: why it couldn't), for the model in the next round.
+    fn tool_said(&mut self, name: &str, said: String, error: bool) {
+        if test_build().is_some() {
+            let logged = Json::Object(vec![
+                (String::from("name"), Json::Str(String::from(name))),
+                (String::from("error"), Json::Bool(error)),
+                (String::from("said"), Json::Str(said.clone())),
+            ]);
+            crate::log!("Chat Computer kernel: test: tool {}", json::compact(&logged));
+        }
+        self.parts.push(Part::Tool(if error { format!("Error: {said}") } else { said }));
     }
 
     /// The answer is complete.
@@ -880,7 +948,10 @@ impl Assistant {
                 })
                 .collect();
             let answer = Answer { thinking: String::new(), text: String::from(text), calls };
-            job.script = Some((String::from(text), answer));
+            // ("cut": the round reached the most a round says, its last call, if it has calls, still being written.)
+            let cut = round.and_then(|r| r.get("cut")).and_then(Json::bool).unwrap_or(false);
+            job.closed = if cut { answer.calls.len().saturating_sub(1) } else { answer.calls.len() };
+            job.script = Some((String::from(text), answer, cut));
         }
         let left = &mut job.script.as_mut().expect("the script's round").0;
         if !left.is_empty() {
@@ -889,8 +960,8 @@ impl Assistant {
             say(job, piece, events);
             return false;
         }
-        let (_, answer) = job.script.take().expect("the script's round");
-        self.round_over(job, answer, events)
+        let (_, answer, cut) = job.script.take().expect("the script's round");
+        self.round_over(job, answer, cut, events)
     }
 }
 

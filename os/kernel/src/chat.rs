@@ -936,6 +936,10 @@ impl Chat {
                 self.blocks.push(Block::new(Kind::Divider, Live::No, String::from(NEW_CONVERSATION)));
                 self.relayout = true;
             }
+            Event::Note(text) => {
+                self.blocks.push(Block::new(Kind::Note, Live::No, text));
+                self.relayout = true;
+            }
         }
     }
 

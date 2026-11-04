@@ -220,7 +220,12 @@ drivers.
       (each conversation's instructions stay as they began, so they're read once). The screen says when the model
       notes or forgets something. At most 40 notes, 8,000 characters in all.
 
-    The model may use tools up to 8 times for one message. A test build answers from a script in place of the model
+    The model may use tools up to 8 times for one message: what its eighth round of tools says back ends by telling it
+    so, and its next round is its answer, in words (a tool it calls then isn't run, and a line under the answer says it
+    stopped there), all it did and found kept in the conversation for the next message to carry on from. An answer that
+    reaches the most the model writes at once (2,048 tokens) has a line under it saying so, and a tool call it was
+    still writing then isn't run (it's told to call it again, shorter). The log names the tools it's given as it
+    starts. A test build answers from a script in place of the model
     (`CHATCOMPUTER_TEST=chat`, by `check.py --chat` and the drives' checks), so all that's around it is checked
     without one, and logs what the model would have been given.
 
@@ -445,7 +450,9 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # on Linux answers it; named by the settings; a file that isn't a model
 ./check.py --chat                # typing to a test's script in place of the model: what it's given each round,
                                  # its tools (the computer's status, a bigger text size, a timer, a restart), the
-                                 # answer on the screen (Markdown), a failure, a mouse's wheel scrolling
+                                 # answer on the screen (Markdown), a failure, a mouse's wheel scrolling; then an
+                                 # answer's limits: the tools it's given (tools.json's), its tools used up, an answer
+                                 # and a tool call cut short
 ./check.py --remember            # the conversation and the model's notes kept across a restart, on an NVMe SSD
                                  # and a SATA drive laid out like a PC's, then a new conversation started (the
                                  # note still in the model's instructions), then the PC turned off;

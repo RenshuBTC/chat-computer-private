@@ -1,0 +1,8 @@
+# shellcheck shell=sh
+# Chat Computer ~/.xinitrc (installed into the user's home). Run by startx.
+#
+# Hand straight off to the session script. We keep this file trivial so all the
+# real logic (supervisor, recovery, screen-blank disabling) lives in one place
+# that is part of the repo at /opt/chatcomputer/app and is therefore updated with
+# the app, not stranded in the user's home.
+exec /opt/chatcomputer/app/linux/session/chatcomputer-session

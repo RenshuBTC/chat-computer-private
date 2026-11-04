@@ -1,0 +1,15 @@
+[package]
+name = "chatcomputer-boot"
+description = "Chat Computer's start-up stage: the UEFI program that carries and starts the kernel"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+bootinfo = { path = "../bootinfo" }
+
+[[bin]]
+name = "chatcomputer-boot"
+test = false
+bench = false

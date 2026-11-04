@@ -1,0 +1,13 @@
+[package]
+name = "pdf"
+description = "Chat Computer's own reading of PDFs' words"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# (A scanned page's JPEGs decoded, and its pictures resampled, as one picture of the page: image.rs.)
+picture = { path = "../picture" }
+zip = { path = "../zip" }
+crypto = { path = "../crypto" }

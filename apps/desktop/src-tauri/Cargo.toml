@@ -1,0 +1,43 @@
+[package]
+name = "chat-computer"
+version = "1.0.1"
+description = "Chat Computer for Windows and Mac"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "chat_computer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["unstable"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+open = "5"
+whoami = "1"
+# Signing in with ChatGPT (src/chatgpt.rs): Chat Computer's own TLS and cryptography (os/), and the system's random
+# bytes (a crate the app already has).
+tls = { path = "../../../os/tls" }
+crypto = { path = "../../../os/crypto" }
+getrandom = "0.3"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+tiny_http = "0.12"
+
+# Windows: the app as a browser (ways.rs): listed with Windows in its registry, for this account (winreg, which the
+# build already has); and one Chat Computer at a time, so a link clicked in another app reaches the one running
+# (Tauri's own plugin).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+tauri-plugin-single-instance = "2.5"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

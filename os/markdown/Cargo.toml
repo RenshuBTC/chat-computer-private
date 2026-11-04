@@ -1,0 +1,7 @@
+[package]
+name = "markdown"
+description = "The Markdown Claude writes, read as Chat Computer's screens show it (the same rules as chatcomputer/ui/assets/md.js)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true

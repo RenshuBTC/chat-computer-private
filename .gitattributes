@@ -1,0 +1,10 @@
+# Windows batch launchers must have CRLF line endings, on every platform they're
+# checked out to: Windows' command processor can mis-read a .cmd/.bat saved with
+# LF (and tests/test_windows_setup.py enforces CRLF). Everything else keeps its
+# natural endings; shell scripts and the Rust/EFI sources stay LF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.sh text eol=lf
+*.command text eol=lf
+# PDFs count their own bytes (each object's offset): never changed, whatever their lines end with.
+*.pdf binary

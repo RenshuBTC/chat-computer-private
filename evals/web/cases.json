@@ -1,0 +1,744 @@
+{
+ "about": "Website (chatcomputer.ai) eval cases: the first thing a visitor types, each in a fresh visit. Dimensions: intent (finding out what this is; trying something it does; asking anything, as of any AI; getting it on their computer; testing its limits; small talk; odd input; needing the internet: something recent, or looked up; which AI answers, and how to choose it), and phrasing (terse, a full sentence, a need rather than a request, typos, another language). 'expect' is what would count as a good answer; it guides the review. A case with 'turns' is a conversation: each turn typed after the answer to the one before (the first from a visitor's own conversation on the site).",
+ "dimensions": {
+  "intent": [
+   "orientation",
+   "try",
+   "ask anything",
+   "get it",
+   "limits",
+   "small talk",
+   "odd",
+   "internet",
+   "which AI"
+  ],
+  "phrasing": [
+   "terse",
+   "sentence",
+   "indirect",
+   "typo",
+   "other language",
+   "follow-up"
+  ]
+ },
+ "cases": [
+  {
+   "id": "what-is-this",
+   "intent": "orientation",
+   "phrasing": "sentence",
+   "query": "what is this?",
+   "expect": "Says what Chat Computer is (a computer you talk to, run by its own model, installs next to Windows or macOS) and what to try."
+  },
+  {
+   "id": "how-work",
+   "intent": "orientation",
+   "phrasing": "sentence",
+   "query": "How does this work?",
+   "expect": "Explains talking/typing/touching and that it does things; how to try."
+  },
+  {
+   "id": "what-can-do",
+   "intent": "orientation",
+   "phrasing": "sentence",
+   "query": "what can you do",
+   "expect": "Lists real things it does, with examples to try."
+  },
+  {
+   "id": "is-this-an-os",
+   "intent": "orientation",
+   "phrasing": "sentence",
+   "query": "Is this an operating system?",
+   "expect": "Accurate: it's a computer you talk to that runs on Linux next to Windows/macOS; this page shows its screen."
+  },
+  {
+   "id": "hello",
+   "intent": "small talk",
+   "phrasing": "terse",
+   "query": "hello",
+   "expect": "A friendly hello and a nudge to try something."
+  },
+  {
+   "id": "hi-there",
+   "intent": "small talk",
+   "phrasing": "terse",
+   "query": "hi there!",
+   "expect": "A friendly hello and a nudge to try something."
+  },
+  {
+   "id": "how-are-you",
+   "intent": "small talk",
+   "phrasing": "sentence",
+   "query": "how are you today?",
+   "expect": "A short friendly reply."
+  },
+  {
+   "id": "thanks",
+   "intent": "small talk",
+   "phrasing": "terse",
+   "query": "thanks",
+   "expect": "You're welcome."
+  },
+  {
+   "id": "play-music",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "play music",
+   "expect": "Music plays."
+  },
+  {
+   "id": "play-piano",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "play some piano music",
+   "expect": "Piano music plays."
+  },
+  {
+   "id": "play-taylor",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "Play Taylor Swift",
+   "expect": "That artist plays, or an honest note that this page can't search YouTube without its model, with what it can do."
+  },
+  {
+   "id": "play-lofi-typo",
+   "intent": "try",
+   "phrasing": "typo",
+   "query": "plya some lofi musci",
+   "expect": "Music plays."
+  },
+  {
+   "id": "im-bored",
+   "intent": "try",
+   "phrasing": "indirect",
+   "query": "i'm bored",
+   "expect": "Suggests or does something fun (music, a game, something to read)."
+  },
+  {
+   "id": "relax",
+   "intent": "try",
+   "phrasing": "indirect",
+   "query": "I need to relax after work",
+   "expect": "Calm music or a suggestion."
+  },
+  {
+   "id": "youtube-video",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "show me a funny cat video on youtube",
+   "expect": "A cat video plays, or honest that searching YouTube needs its model."
+  },
+  {
+   "id": "map-tokyo",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "show me a map of Tokyo",
+   "expect": "A map of Tokyo."
+  },
+  {
+   "id": "map-short",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "map of paris",
+   "expect": "A map of Paris."
+  },
+  {
+   "id": "where-is-london",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "where is London?",
+   "expect": "A map of London (and a sentence)."
+  },
+  {
+   "id": "directions",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "how do I get from Orchard Road to Marina Bay Sands?",
+   "expect": "Directions or a map; honest if it can't route."
+  },
+  {
+   "id": "map-other-city",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "show me Berlin on a map",
+   "expect": "A map of Berlin."
+  },
+  {
+   "id": "timer-5",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "set a timer for 5 minutes",
+   "expect": "A 5-minute timer."
+  },
+  {
+   "id": "timer-terse",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "timer 20 min",
+   "expect": "A 20-minute timer."
+  },
+  {
+   "id": "eggs",
+   "intent": "try",
+   "phrasing": "indirect",
+   "query": "I'm boiling eggs, tell me when they're done",
+   "expect": "A timer (about 8-10 minutes)."
+  },
+  {
+   "id": "weather",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "weather",
+   "expect": "A forecast, or honest that it can't look it up here (no made-up weather presented as real)."
+  },
+  {
+   "id": "weather-city",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "what's the weather like in New York today?",
+   "expect": "New York's weather, or honest that it can't look it up here."
+  },
+  {
+   "id": "umbrella",
+   "intent": "try",
+   "phrasing": "indirect",
+   "query": "do I need an umbrella?",
+   "expect": "Weather-based answer, or honest that it can't check here."
+  },
+  {
+   "id": "messages",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "do I have any new messages?",
+   "expect": "Summarises the (made-up) unread messages."
+  },
+  {
+   "id": "jane",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "what did Jane say?",
+   "expect": "Jane's lunch reply."
+  },
+  {
+   "id": "email",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "check my email",
+   "expect": "Shows/summarises the email(s)."
+  },
+  {
+   "id": "reply-mum",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "reply to mum and say I'll be there at 7",
+   "expect": "Honest: this page doesn't send messages (Chat Computer only reads them); offers what it can."
+  },
+  {
+   "id": "packing",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "open my packing list",
+   "expect": "The packing list."
+  },
+  {
+   "id": "find-photo",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "find my beach photo",
+   "expect": "Beach.jpg shown."
+  },
+  {
+   "id": "search-files",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "search my files for the budget",
+   "expect": "Finds the budget file (shows it, or lists where it is)."
+  },
+  {
+   "id": "louder",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "louder",
+   "expect": "Volume up."
+  },
+  {
+   "id": "bigger-text",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "make the text bigger",
+   "expect": "Text bigger."
+  },
+  {
+   "id": "close-it",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "close",
+   "expect": "Closes (or says nothing's open)."
+  },
+  {
+   "id": "wifi",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "am I connected to the internet?",
+   "expect": "Says it's online (made-up Home Wi-Fi), or explains."
+  },
+  {
+   "id": "open-website",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "open youtube.com",
+   "expect": "Opens it or gives a link (sites can't show inside the page)."
+  },
+  {
+   "id": "open-google",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "google",
+   "expect": "Google opened/linked, or a sensible reply."
+  },
+  {
+   "id": "news",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "what's in the news today?",
+   "expect": "News, or honest that it can't look it up here."
+  },
+  {
+   "id": "recipe",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "give me a recipe for chicken rice",
+   "expect": "A recipe (on screen)."
+  },
+  {
+   "id": "calc",
+   "intent": "ask anything",
+   "phrasing": "terse",
+   "query": "what's 15% of 84.50",
+   "expect": "12.68 (12.675)."
+  },
+  {
+   "id": "capital",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "What's the capital of Australia?",
+   "expect": "Canberra."
+  },
+  {
+   "id": "explain-quantum",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "explain quantum computing simply",
+   "expect": "A simple explanation."
+  },
+  {
+   "id": "write-email",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "help me write an email asking my boss for Friday off",
+   "expect": "A draft email."
+  },
+  {
+   "id": "poem",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "write a short poem about the sea",
+   "expect": "A short poem."
+  },
+  {
+   "id": "translate",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "how do you say thank you in Japanese?",
+   "expect": "arigatou (gozaimasu)."
+  },
+  {
+   "id": "trip-plan",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "plan a 3 day trip to Bali for me",
+   "expect": "A short itinerary (on screen)."
+  },
+  {
+   "id": "advice",
+   "intent": "ask anything",
+   "phrasing": "indirect",
+   "query": "I can't sleep at night, any tips?",
+   "expect": "Sensible tips."
+  },
+  {
+   "id": "code",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "write a python function that reverses a string",
+   "expect": "The function."
+  },
+  {
+   "id": "date-today",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "what day is it today?",
+   "expect": "Today's date."
+  },
+  {
+   "id": "time-now",
+   "intent": "ask anything",
+   "phrasing": "terse",
+   "query": "time",
+   "expect": "The time."
+  },
+  {
+   "id": "joke",
+   "intent": "ask anything",
+   "phrasing": "sentence",
+   "query": "tell me a joke",
+   "expect": "A joke."
+  },
+  {
+   "id": "how-install",
+   "intent": "get it",
+   "phrasing": "sentence",
+   "query": "how do I install this?",
+   "expect": "Honest: it isn't out yet (coming soon); how it installs (next to Windows, or macOS on an M1-M3 Mac) and what it needs."
+  },
+  {
+   "id": "download",
+   "intent": "get it",
+   "phrasing": "terse",
+   "query": "download",
+   "expect": "Honest: not available to download yet (coming soon), and what it will need."
+  },
+  {
+   "id": "price",
+   "intent": "get it",
+   "phrasing": "sentence",
+   "query": "how much does it cost?",
+   "expect": "Chat Computer is free: its own model runs on your computer, with no account or subscription."
+  },
+  {
+   "id": "mac",
+   "intent": "get it",
+   "phrasing": "sentence",
+   "query": "does it work on a Mac?",
+   "expect": "Yes, Apple silicon M1-M3, next to macOS."
+  },
+  {
+   "id": "windows-safe",
+   "intent": "get it",
+   "phrasing": "sentence",
+   "query": "will it delete my Windows?",
+   "expect": "No: it installs next to Windows, which stays; you can go back."
+  },
+  {
+   "id": "requirements",
+   "intent": "get it",
+   "phrasing": "sentence",
+   "query": "what do I need to run it?",
+   "expect": "A Windows PC (UEFI, ~70 GB free) or an M1-M3 Mac; no account or subscription."
+  },
+  {
+   "id": "old-laptop",
+   "intent": "get it",
+   "phrasing": "indirect",
+   "query": "my laptop still runs windows 10, can i use this instead?",
+   "expect": "Yes: it installs next to Windows 10 on a UEFI PC; what's needed."
+  },
+  {
+   "id": "privacy",
+   "intent": "get it",
+   "phrasing": "sentence",
+   "query": "is my data private?",
+   "expect": "Accurate: what's typed here stays in the browser (or goes only where it says); on Chat Computer, files stay on the computer, and its model runs there."
+  },
+  {
+   "id": "is-it-free",
+   "intent": "get it",
+   "phrasing": "terse",
+   "query": "is it free",
+   "expect": "Free, for good: no account, no subscription."
+  },
+  {
+   "id": "airpods",
+   "intent": "get it",
+   "phrasing": "sentence",
+   "query": "do I need AirPods?",
+   "expect": "No/optional: you can type or touch too; AirPods let you talk."
+  },
+  {
+   "id": "are-you-claude",
+   "intent": "limits",
+   "phrasing": "sentence",
+   "query": "are you Claude?",
+   "expect": "Accurate about who answers here (written answers, or Chat Computer's own model where its app runs: Qwen, not Claude)."
+  },
+  {
+   "id": "who-made",
+   "intent": "limits",
+   "phrasing": "sentence",
+   "query": "who made this?",
+   "expect": "An independent project; it thinks with Qwen, an open model, run by its own engine."
+  },
+  {
+   "id": "anthropic",
+   "intent": "limits",
+   "phrasing": "sentence",
+   "query": "Is this made by Anthropic?",
+   "expect": "No: an independent project, thinking with Qwen, an open model."
+  },
+  {
+   "id": "cant-do",
+   "intent": "limits",
+   "phrasing": "sentence",
+   "query": "what can't you do?",
+   "expect": "Honest about this page's limits."
+  },
+  {
+   "id": "control-my-pc",
+   "intent": "limits",
+   "phrasing": "sentence",
+   "query": "can you open the files on my actual computer?",
+   "expect": "Honest: this page can't; installed Chat Computer can."
+  },
+  {
+   "id": "real-or-fake",
+   "intent": "limits",
+   "phrasing": "sentence",
+   "query": "are these my real messages?",
+   "expect": "No, made up for this page."
+  },
+  {
+   "id": "gibberish",
+   "intent": "odd",
+   "phrasing": "terse",
+   "query": "asdfgh",
+   "expect": "A graceful 'didn't catch that' with suggestions."
+  },
+  {
+   "id": "emoji",
+   "intent": "odd",
+   "phrasing": "terse",
+   "query": "👋",
+   "expect": "A friendly hello."
+  },
+  {
+   "id": "question-mark",
+   "intent": "odd",
+   "phrasing": "terse",
+   "query": "?",
+   "expect": "A short what-I-can-do."
+  },
+  {
+   "id": "chinese",
+   "intent": "odd",
+   "phrasing": "other language",
+   "query": "你好，你能做什么？",
+   "expect": "A reply in Chinese, or a graceful English one that shows it understood."
+  },
+  {
+   "id": "spanish",
+   "intent": "odd",
+   "phrasing": "other language",
+   "query": "hola, ¿qué es esto?",
+   "expect": "A reply in Spanish about what this is."
+  },
+  {
+   "id": "malay",
+   "intent": "odd",
+   "phrasing": "other language",
+   "query": "apa ini?",
+   "expect": "A sensible reply (what this is)."
+  },
+  {
+   "id": "rude",
+   "intent": "odd",
+   "phrasing": "terse",
+   "query": "you're useless",
+   "expect": "A calm, helpful reply."
+  },
+  {
+   "id": "long",
+   "intent": "odd",
+   "phrasing": "sentence",
+   "query": "I'm looking for a computer for my elderly father who struggles with Windows, he mostly reads the news, watches YouTube and video calls my sister, would this be a good fit for him and how hard would it be to set up?",
+   "expect": "A thoughtful answer about fit (talking instead of menus) and the setup steps."
+  },
+  {
+   "id": "haze-trace",
+   "intent": "internet",
+   "phrasing": "follow-up",
+   "turns": [
+    "what is running you now?",
+    "whats the weather like today?",
+    "the haze?",
+    "look it up",
+    "why can't you?"
+   ],
+   "expect": "A visitor's own conversation: after the weather, 'the haze?' gets an answer about the haze (the air now, or what causes it), 'look it up' looks it up, and nothing says it can't go on the internet."
+  },
+  {
+   "id": "haze-now",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "is there haze in Singapore today?",
+   "expect": "The air in Singapore now (good, moderate...), from a source it names."
+  },
+  {
+   "id": "pm",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "who is the prime minister of Singapore?",
+   "expect": "Lawrence Wong (prime minister since May 2024), looked up rather than guessed."
+  },
+  {
+   "id": "world-cup",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "who won the 2026 World Cup?",
+   "expect": "Spain (1-0 against Argentina, July 2026): after any AI's training, so it has to be looked up."
+  },
+  {
+   "id": "look-it-up",
+   "intent": "internet",
+   "phrasing": "follow-up",
+   "turns": [
+    "who designed Marina Bay Sands?",
+    "look it up"
+   ],
+   "expect": "Moshe Safdie, said by the second answer at the latest, from what was looked up."
+  },
+  {
+   "id": "search-population",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "search the web for Singapore's population",
+   "expect": "About 6 million, from what was looked up (not a search of the demo's files)."
+  },
+  {
+   "id": "headlines",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "what are today's top headlines?",
+   "expect": "The day's news, on the screen or in words, from a source it names."
+  },
+  {
+   "id": "news-yesterday",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "what happened in the world yesterday?",
+   "expect": "Yesterday's news, from a source it names."
+  },
+  {
+   "id": "why-no-internet",
+   "intent": "internet",
+   "phrasing": "sentence",
+   "query": "why can't you look things up?",
+   "expect": "That it can (through the page: Wikipedia and the day's news), and how to ask."
+  },
+  {
+   "id": "tell-me-more",
+   "intent": "internet",
+   "phrasing": "follow-up",
+   "turns": [
+    "what is the Southeast Asian haze?",
+    "when was the worst one?"
+   ],
+   "expect": "What the haze is, then the worst one (1997, or 2015), the follow-up understood from the first answer."
+  },
+  {
+   "id": "which-model-now",
+   "intent": "which AI",
+   "phrasing": "sentence",
+   "query": "what model is answering me right now?",
+   "expect": "Says truthfully who answers here (with no AI in the browser: answers written in advance; with Chat Computer's model in this browser: Qwen3.5 0.8B, its own model, in this browser) and how to change it (the spark beside +, or / for Chat Computer's own model)."
+  },
+  {
+   "id": "use-chatgpt",
+   "intent": "which AI",
+   "phrasing": "sentence",
+   "query": "can I use my ChatGPT account here?",
+   "expect": "True to the page: on the website an OpenAI API key (or OpenRouter) through the spark beside +; signing in with a ChatGPT plan is the app's (coming soon). Says what goes where."
+  },
+  {
+   "id": "use-claude",
+   "intent": "which AI",
+   "phrasing": "indirect",
+   "query": "I pay for Claude, can I use it with this?",
+   "expect": "Yes, with an Anthropic API key (Claude's subscription isn't one) through the spark beside +, or OpenRouter; doesn't make up a sign-in it hasn't got."
+  },
+  {
+   "id": "change-model",
+   "intent": "which AI",
+   "phrasing": "sentence",
+   "query": "how do I change the model?",
+   "expect": "The spark beside +: an AI you have, then its model and how hard it thinks; or / for Chat Computer's own model in this browser."
+  },
+  {
+   "id": "think-harder",
+   "intent": "which AI",
+   "phrasing": "sentence",
+   "query": "can you think harder before you answer?",
+   "expect": "Honest about how hard the one answering thinks: with your own AI, its effort in the spark's panel; Chat Computer's model in the browser doesn't think first. Doesn't pretend to have thought harder."
+  },
+  {
+   "id": "smarter-ai",
+   "intent": "which AI",
+   "phrasing": "indirect",
+   "query": "you're not very smart, is there a better AI I can use?",
+   "expect": "Takes it well; points to the spark beside + (Claude, ChatGPT, Gemini and the others, with your own account) or the app's bigger models."
+  },
+  {
+   "id": "run-in-browser",
+   "intent": "which AI",
+   "phrasing": "sentence",
+   "query": "can the AI run in my browser?",
+   "expect": "Yes: type / and choose Run my model in this browser (free, 1.8 GB once, slow); if it's already running, says so."
+  },
+  {
+   "id": "connect-gmail",
+   "intent": "try",
+   "phrasing": "terse",
+   "query": "connect my gmail",
+   "expect": "Opens the panel to connect Gmail (or says: + in Messages), and what connecting does; doesn't pretend it's connected."
+  },
+  {
+   "id": "call-me",
+   "intent": "small talk",
+   "phrasing": "sentence",
+   "query": "call me Sam from now on",
+   "expect": "Keeps the name (the greeting uses it) and says so; Actions lists it."
+  },
+  {
+   "id": "i-live-tokyo",
+   "intent": "small talk",
+   "phrasing": "indirect",
+   "query": "I live in Tokyo",
+   "expect": "Keeps Tokyo as where they are (for the greeting and its weather) and says so, or answers naturally about it."
+  },
+  {
+   "id": "weather-follow",
+   "intent": "try",
+   "phrasing": "follow-up",
+   "turns": [
+    "what's the weather in Paris?",
+    "and tomorrow?"
+   ],
+   "expect": "Paris's weather now, then tomorrow's forecast for Paris (not somewhere else's)."
+  },
+  {
+   "id": "timer-cancel",
+   "intent": "try",
+   "phrasing": "follow-up",
+   "turns": [
+    "set a timer for 3 minutes",
+    "actually cancel it"
+   ],
+   "expect": "A 3-minute timer on the screen, then it's gone and the answer says so."
+  },
+  {
+   "id": "timer-words",
+   "intent": "try",
+   "phrasing": "sentence",
+   "query": "a fifteen minute timer please",
+   "expect": "A 15-minute timer on the screen (the number in words, as people say it)."
+  }
+ ]
+}

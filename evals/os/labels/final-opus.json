@@ -1,0 +1,228 @@
+{
+ "about": "Hand labels for the final desktop run on Opus 5.5 at max effort (run os-final-opus, 20 Oct 2026: the abilities added since 2aaaca4, on the simulated computer), read from each case's outcome and reply. Same meaning as baseline-opus.json; a general check's failure, when one was seen, is among a case's modes.",
+ "labels": {
+  "files-find-open": {
+   "pass": true,
+   "modes": []
+  },
+  "files-rename": {
+   "pass": true,
+   "modes": []
+  },
+  "files-tidy-screenshots": {
+   "pass": true,
+   "modes": []
+  },
+  "files-recent": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-whats-on": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-copy-photos": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-eject": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-none": {
+   "pass": true,
+   "modes": []
+  },
+  "print-boarding-pass": {
+   "pass": true,
+   "modes": []
+  },
+  "print-two-copies": {
+   "pass": true,
+   "modes": []
+  },
+  "print-photo": {
+   "pass": true,
+   "modes": []
+  },
+  "print-no-printer": {
+   "pass": true,
+   "modes": [],
+   "note": "no printer, how to connect one, offers a PDF instead (didn't make one unasked)"
+  },
+  "brightness-too-bright": {
+   "pass": true,
+   "modes": []
+  },
+  "brightness-set": {
+   "pass": true,
+   "modes": []
+  },
+  "brightness-desktop": {
+   "pass": true,
+   "modes": []
+  },
+  "night-light": {
+   "pass": true,
+   "modes": []
+  },
+  "text-bigger": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-too-loud": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-speakers": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-mute": {
+   "pass": true,
+   "modes": []
+  },
+  "wifi-join": {
+   "pass": true,
+   "modes": []
+  },
+  "wifi-slow": {
+   "pass": true,
+   "modes": [],
+   "note": "speed, delay to router vs internet, nothing else using it: points past the router"
+  },
+  "vpn": {
+   "pass": true,
+   "modes": []
+  },
+  "bt-keyboard": {
+   "pass": true,
+   "modes": []
+  },
+  "bt-airpods": {
+   "pass": true,
+   "modes": []
+  },
+  "battery-left": {
+   "pass": true,
+   "modes": []
+  },
+  "battery-desktop": {
+   "pass": true,
+   "modes": []
+  },
+  "shutdown": {
+   "pass": true,
+   "modes": []
+  },
+  "windows-briefly": {
+   "pass": true,
+   "modes": []
+  },
+  "timer": {
+   "pass": true,
+   "modes": []
+  },
+  "reminder": {
+   "pass": true,
+   "modes": []
+  },
+  "alarm": {
+   "pass": false,
+   "modes": [
+    "wrong_advice"
+   ],
+   "note": "alarm set right, but said Chat Computer's auto-sleep would stop it ringing and offered to turn auto-sleep off (it only stops listening): the tool descriptions said 'awake', now clearer"
+  },
+  "timezone": {
+   "pass": true,
+   "modes": []
+  },
+  "install-vlc": {
+   "pass": true,
+   "modes": []
+  },
+  "install-spotify": {
+   "pass": false,
+   "modes": [
+    "made_up"
+   ],
+   "note": "'Spotify is installed': Ubuntu's library has no spotify package, so a real Chat Computer couldn't; the simulation installed anything (now it checks Ubuntu's lists)"
+  },
+  "updates": {
+   "pass": true,
+   "modes": []
+  },
+  "screenshot-save": {
+   "pass": true,
+   "modes": []
+  },
+  "screenshot-of-page": {
+   "pass": true,
+   "modes": []
+  },
+  "dark-mode": {
+   "pass": true,
+   "modes": []
+  },
+  "keyboard-azerty": {
+   "pass": true,
+   "modes": []
+  },
+  "language-chinese": {
+   "pass": true,
+   "modes": []
+  },
+  "default-windows": {
+   "pass": true,
+   "modes": []
+  },
+  "lock-screen": {
+   "pass": true,
+   "modes": []
+  },
+  "password-kids": {
+   "pass": true,
+   "modes": []
+  },
+  "camera-on": {
+   "pass": true,
+   "modes": []
+  },
+  "backup-usb": {
+   "pass": true,
+   "modes": []
+  },
+  "backup-status": {
+   "pass": true,
+   "modes": []
+  },
+  "storage-left": {
+   "pass": true,
+   "modes": []
+  },
+  "feels-slow": {
+   "pass": true,
+   "modes": [
+    "shell_ask"
+   ],
+   "note": "checked and explained well; asked (yes) before lowering its own effort from max to high; also asked to run a command once (shell_ask)"
+  },
+  "which-version": {
+   "pass": true,
+   "modes": []
+  },
+  "youtube-jazz": {
+   "pass": true,
+   "modes": []
+  },
+  "weather": {
+   "pass": true,
+   "modes": []
+  },
+  "open-gmail": {
+   "pass": true,
+   "modes": []
+  }
+ }
+}

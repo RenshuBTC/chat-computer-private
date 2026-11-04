@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Chat Computer openbox configuration.
+
+  Goal: openbox is invisible plumbing. Every window is undecorated, maximized
+  and focused; there is no root menu, no desktop switching, and the only
+  keyboard shortcut is the safe escape hatch Ctrl+Alt+Backspace, which kills the
+  X server. startx exits, the tty1 getty respawns, ~/.bash_profile re-execs
+  startx, and Chat Computer comes back — i.e. "restart Chat Computer".
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <resistance>
+    <strength>0</strength>
+    <screen_edge_strength>0</screen_edge_strength>
+  </resistance>
+
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+    <focusLast>yes</focusLast>
+    <underMouse>no</underMouse>
+  </focus>
+
+  <placement>
+    <policy>Smart</policy>
+    <center>yes</center>
+  </placement>
+
+  <theme>
+    <!-- No titlebar buttons; undecorated windows (see <applications> below). -->
+    <keepBorder>no</keepBorder>
+    <animateIconify>no</animateIconify>
+    <titleLayout></titleLayout>
+  </theme>
+
+  <desktops>
+    <!-- Exactly one desktop: nowhere to switch to. -->
+    <number>1</number>
+    <firstdesk>1</firstdesk>
+    <names><name>Chat Computer</name></names>
+    <popupTime>0</popupTime>
+  </desktops>
+
+  <!-- No window title/resize decorations at all. -->
+  <keyboard>
+    <!-- The ONLY binding: restart Chat Computer by terminating X. -->
+    <keybind key="C-A-BackSpace">
+      <action name="Execute">
+        <command>/opt/chatcomputer/app/linux/session/chatcomputer-restart</command>
+      </action>
+    </keybind>
+  </keyboard>
+
+  <mouse>
+    <!-- No root-window menu bindings: a stray click must do nothing. -->
+    <dragThreshold>8</dragThreshold>
+    <doubleClickTime>200</doubleClickTime>
+    <screenEdgeWarpTime>0</screenEdgeWarpTime>
+    <context name="Frame"></context>
+    <context name="Root"></context>
+    <context name="Titlebar"></context>
+    <context name="Client"></context>
+  </mouse>
+
+  <applications>
+    <!-- Force every window undecorated, maximized and focused. -->
+    <application class="*">
+      <decor>no</decor>
+      <maximized>yes</maximized>
+      <focus>yes</focus>
+      <layer>normal</layer>
+      <fullscreen>yes</fullscreen>
+    </application>
+  </applications>
+
+  <menu>
+    <!-- Absolute path so it resolves regardless of openbox's config dir.
+         The menu itself is empty (no root menu). -->
+    <file>/opt/chatcomputer/app/linux/session/openbox-menu.xml</file>
+    <hideDelay>0</hideDelay>
+    <submenuShowDelay>0</submenuShowDelay>
+    <showIcons>no</showIcons>
+  </menu>
+</openbox_config>

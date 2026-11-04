@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-messages-found"
+description = "Enables the messages_found command without any pre-configured scope."
+commands.allow = ["messages_found"]
+
+[[permission]]
+identifier = "deny-messages-found"
+description = "Denies the messages_found command without any pre-configured scope."
+commands.deny = ["messages_found"]

@@ -1,0 +1,23 @@
+#!/bin/sh
+# chatcomputer-restart — the Ctrl+Alt+Backspace escape hatch.
+#
+# Bound in openbox-rc.xml. Ending the X server is the cleanest "restart Chat Computer": xinit then ends the
+# session (chatcomputer-session, Chat Computer and openbox with it), startx returns, the tty1 getty respawns the
+# login shell, and ~/.bash_profile execs startx again, bringing the whole session back fresh.
+#
+# Asking openbox to exit isn't enough: the program startx waits on is chatcomputer-session, not openbox, so
+# Chat Computer would keep running, without a window manager and without this key.
+#
+# The X server of this display wrote its process id to /tmp/.X<display>-lock.
+n=${DISPLAY:-}
+n=${n#*:}
+n=${n%%.*}
+case "$n" in
+  ''|*[!0-9]*) ;;
+  *)
+    pid=$(tr -cd '0-9' < "/tmp/.X$n-lock" 2>/dev/null)
+    if [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; then exit 0; fi
+    ;;
+esac
+# No lock file to go by: the X server by name.
+pkill -x Xorg 2>/dev/null || pkill -x X 2>/dev/null || true

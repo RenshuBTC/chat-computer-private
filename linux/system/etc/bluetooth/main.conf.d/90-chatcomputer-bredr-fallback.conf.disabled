@@ -1,0 +1,15 @@
+# Chat Computer BlueZ fallback: force classic-only (BR/EDR) controller mode.
+#
+# DISABLED BY DEFAULT (note the .disabled suffix, and that noble's BlueZ ignores
+# main.conf.d anyway). Some adapters/firmware reconnect classic headsets (like
+# AirPods in HFP) more reliably when the controller runs BR/EDR-only, at the
+# cost of losing BLE. Only use this if AirPods keep dropping or refuse to
+# reconnect after a Windows<->Chat Computer switch.
+#
+# To apply as the fallback:
+#   chatcomputer-root is not involved; an admin edits /etc/bluetooth/main.conf and
+#   sets `ControllerMode = bredr` under [General], then `systemctl restart
+#   bluetooth`. (install-chatcomputer.sh leaves ControllerMode = dual.)
+
+[General]
+ControllerMode = bredr

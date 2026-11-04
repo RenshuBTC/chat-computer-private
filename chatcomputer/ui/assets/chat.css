@@ -1,0 +1,589 @@
+/* The conversation, laid out like the Claude app: Claude's words on the left in one column, upright;
+   yours on the right, in a bubble; from the top of the screen down. What you send goes to the top of the
+   screen, with the answer coming in under it (chat.js leaves room under the latest exchange for that: #room), so
+   it's never below the screen: scrolling up (the mouse wheel, Page Up, the arrow keys while the box is empty, or
+   pinching and moving with AirTouch) shows earlier messages. On a wide screen, Messages runs down the left and
+   Actions down the right, each against its edge of the screen from top to bottom, as the Claude app's sidebar is.
+   Three parts, side by side, and no more: what's open (a website, a video, a message, a document) takes the
+   conversation's place in the middle, with the message box under it, until it's closed.
+   Sizes are the Claude app's on a computer, measured on a 1920 x 1080 screen at 100% display scaling, in rem (16px
+   there; the screen sets 1 rem for its own display scaling: ui/layout.py): its words 16px on lines 22px apart (1.375),
+   the conversation 924px wide (57.75rem), Chat Computer's words in it up to 865px (54.0625rem), yours in bubbles up to 85%
+   of it; the message box 962px wide and 46px high for a line (60.125rem by 2.875rem); its sidebar 280px wide
+   (17.5rem). */
+html { scrollbar-width: none; }
+::-webkit-scrollbar { display: none; }
+body.panel { --left: 17.5rem; --panel: 17.5rem; --rail: 2.75rem; --mid-left: 17.5rem; --mid-right: 17.5rem; }
+/* A sidebar switched off leaves a narrow margin with just its switch (see "The panels' switches" below); what's in
+   the middle (the conversation, the word logo, the message box, what's open) stays where it was, as the person
+   asked: it's placed between where the sidebars are when they show (--mid-left, --mid-right), either way. */
+body.panel.hide-left { --left: var(--rail); }
+body.panel.hide-right { --panel: var(--rail); }
+body { padding-left: var(--mid-left, 0px); padding-right: var(--mid-right, 0px); }
+#column {
+  display: flex; flex-direction: column;
+  width: min(var(--co-column, 57.75rem), 100% - 3rem); margin: 0 auto;
+  padding: 2rem 0 calc(var(--composer-h, 5rem) + var(--kb, 0px) + 1.25rem);
+}
+#log { display: flex; flex-direction: column; gap: 1.25rem; }
+#room { flex: none; height: 0; }
+
+/* Your words: on the right, in a bubble no wider than most of the column, the way chat apps show them (the Claude
+   app's: 12px round, its words 12px from its top and bottom and 16px from its sides). */
+.you {
+  align-self: flex-end; max-width: 85%;
+  background: var(--bubble); border-radius: 0.75rem; padding: 0.75rem 1rem;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.you, .ai { scroll-margin-top: 1.5rem; }
+/* A little more room between an answer's row of buttons and what you say next: as much as is left above your message
+   when it goes to the top of the screen, so nothing of the answer before shows there (chat.js: pinTop). */
+.acts.theirs + .you { margin-top: 0.75rem; }
+/* The message a tapped item of Actions was asked in, for a moment. */
+.you.found { outline: 2px solid var(--ink); outline-offset: 3px; }
+.ai { overflow-wrap: anywhere; max-width: 54.0625rem; }
+/* What Chat Computer is doing (when show_activity is on), in the mono font, above the words it leads to. */
+.ai .activity { display: block; font-family: var(--mono); margin: 0 0 0.5em; color: var(--muted); }
+/* Buttons under an answer (chat.js: aiChoices): the website's ways to get a model, the first of them the main one. */
+.ai .offers { display: flex; flex-wrap: wrap; gap: 0.6em; margin: 0.8em 0 0; }
+.ai .offers button {
+  margin: 0; padding: 0.45em 1em; font: inherit; line-height: 1.3; color: var(--ink); cursor: pointer;
+  background: var(--ground); border: 2px solid var(--line); border-radius: 0.6em;
+}
+.ai .offers button:hover { border-color: var(--ink); }
+.ai .offers button.main { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+.ai .offers button.main:hover { background: var(--box-ink); }
+.ai .offers button:focus-visible { outline: 3px solid var(--dim); outline-offset: 2px; }
+.ai.thinking .md:empty::after {
+  content: ""; display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%;
+  background: var(--ink); animation: pulse 1.2s ease-in-out infinite;
+}
+/* Arriving, as in the Claude app (its timings, measured there): Chat Computer's words fade in a piece at a time, each
+   from nothing to black in 0.4 s at an even pace (chat.js puts the newest in .fresh spans); a new answer rises 10px
+   into place as it fades in, over 1.1 s, and your message over 0.45 s, both slowing as they settle. Not when the
+   system asks for less motion. */
+.fresh { animation: fresh 400ms linear both; }
+@keyframes fresh { from { opacity: 0; } }
+.ai.enter { animation: rise 1.1s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.you.enter { animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+@media (prefers-reduced-motion: reduce) { .fresh, .ai.enter, .you.enter { animation: none; } }
+
+/* Under each message, what can be done with it (chat.js), in a row that fades in under the pointer (and stays under
+   the latest answer, or under a message tapped on a touchscreen): under Chat Computer's, copy, read aloud, good,
+   bad, ask again and when; under yours, at the right, when, ask again, edit and copy. Black, small. */
+.acts {
+  display: flex; align-items: center; gap: 0.1rem; margin: -1rem 0 -0.5rem; min-height: 1.6rem; font-size: 0.7rem;
+  opacity: 0; transition: opacity 120ms cubic-bezier(0.32, 0.72, 0, 1) 100ms;
+}
+.acts.mine { justify-content: flex-end; }
+.acts.last, .acts.shown { opacity: 1; transition-delay: 0s; }
+/* Under the pointer only where there is one: a phone's browser keeps a tapped message "hovered", which would leave
+   its row showing after a second tap put it away, its buttons there but not to be pressed. (The pointer can always
+   reach a row, which shows as it comes; a finger can't press one that isn't shown.) */
+@media (hover: hover) {
+  .you:hover + .acts, .ai:hover + .acts, .acts:hover { opacity: 1; transition-delay: 0s; }
+  .ai:hover + .acts .when, .acts.theirs:hover .when { opacity: 1; }
+  .act:hover { background: var(--chosen); }
+}
+@media (hover: none) { .acts:not(.last):not(.shown) { pointer-events: none; } }
+.acts .when { padding: 0 0.4rem; white-space: nowrap; color: var(--muted); }
+.acts.theirs .when { opacity: 0; transition: opacity 120ms cubic-bezier(0.32, 0.72, 0, 1); }
+.acts.shown .when { opacity: 1; }
+.act {
+  flex: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.28rem; border: 0; border-radius: 0.4rem;
+  background: none; color: var(--ink); cursor: pointer;
+}
+.act svg { display: block; width: 100%; height: 100%; stroke-width: 1.8; }
+.act .i-done, .act.did .i-copy { display: none; }
+.act.did .i-done { display: block; }
+.act.on svg { fill: currentColor; }
+
+/* Messages from an earlier day, put back to show where something was asked: their day above them. */
+.day, .gap { align-self: center; font-size: 0.8rem; }
+.day { font-weight: bold; }
+
+/* What you're saying right now, as it's heard: your next bubble, forming on the right, with a dot that pulses
+   while you speak. (Only then: an animation has the page drawn again 60 times a second, which without a graphics
+   chip costs a steady few percent of a processor core.) */
+#live { margin-top: 1.25rem; display: none; }
+body.hearing #live { display: block; }
+#caret {
+  display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%; margin-left: 0.35em; vertical-align: middle;
+  background: var(--ink); animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* A conversation starts with the word logo in the middle of the screen (body.intro, from the first moment), and it
+   stays until something's said (body.has-log); under it, the greeting (chat.js: greet), fading in once it's chosen:
+   whole, never cut off, on a second line where the screen's too narrow for one (a phone), the two lines evened out.
+   Something said fades them away. */
+#welcome {
+  position: fixed; left: var(--mid-left, 0px); right: var(--mid-right, 0px); top: 0; bottom: calc(var(--composer-h, 5rem) + var(--kb, 0px));
+  display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0; padding: 0 1rem;
+  pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 500ms ease, visibility 0s linear 500ms;
+}
+#wordmark { font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin: 0; }
+#greeting {
+  max-width: 100%; margin: 0.7em 0 0; color: var(--muted); line-height: 1.4; text-align: center; text-wrap: balance;
+  overflow-wrap: break-word; opacity: 0; transition: opacity 400ms ease;
+}
+#greeting.shown { opacity: 1; }
+body.intro:not(.has-log) #welcome { opacity: 1; visibility: visible; transition: none; }
+body.content #welcome { display: none; }
+
+/* Something open (body.content): a website, a video, a map, a conversation from Messages, a file. It fills the
+   middle, from the top down to the message box, in a rounded frame like the sidebars', with its name and a close
+   button (x) above it; the conversation with Chat Computer is put away until it's closed (the window lays what's
+   open inside #frame, below its bar: chat.js reports where). There's no other part: Messages at the left, what's
+   in the middle, Actions at the right. */
+#frame { display: none; position: fixed; border: 2px solid var(--line); border-radius: 1.1rem; }
+body.content #frame { display: block; }
+body.content #column { display: none; }
+#frame-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  height: 2.4rem; padding: 0 0.45rem 0 1.1rem; font-size: 0.8rem; line-height: 1.2;
+}
+#frame-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
+#frame-close { width: 1.75rem; height: 1.75rem; }
+/* The Chat Computer app as your browser (its host puts the row there: #tabs): the tabs in a row above the middle,
+   between the sidebars, from the top of the screen: back and forward, the conversation's own tab, the sites' tabs,
+   each with its x, and + for a new one; the one shown marked as a chosen chat is. What's open is laid out under the
+   row (chat.js), a tab's frame without a bar of its own (the row names it), and the conversation starts under it. */
+#tabs {
+  position: fixed; z-index: 4; top: 0; left: calc(var(--mid-left, 0px) + 0.75rem); right: calc(var(--mid-right, 0px) + 0.75rem);
+  display: flex; align-items: center; gap: 0.3rem; height: 3rem; padding-top: 0.55rem; background: var(--ground);
+  font-size: 0.8rem; line-height: 1.2;
+}
+#tab-list { display: flex; align-items: center; gap: 0.3rem; min-width: 0; overflow: hidden; }
+.tab {
+  display: flex; align-items: center; gap: 0.15rem; flex: 0 1 13rem; min-width: 3rem; height: 2rem; padding: 0 0.25rem 0 0.8rem;
+  border: 1px solid var(--line); border-radius: 0.6rem; cursor: pointer; white-space: nowrap;
+}
+.tab.home { flex: none; min-width: 0; padding-right: 0.8rem; font-weight: bold; }
+.tab:hover { border-color: var(--chosen); }
+.tab.on { background: var(--chosen); border-color: var(--chosen); }
+.tab-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tab-close { width: 1.45rem; height: 1.45rem; }
+#tab-back, #tab-forward, #tab-new { width: 1.75rem; height: 1.75rem; }
+/* (Back and forward are for a tab shown: while the conversation has the middle, they're not there.) */
+#tab-back:disabled, #tab-forward:disabled { visibility: hidden; }
+body.tabbed #column { padding-top: 4.25rem; }
+body.tabbed .you, body.tabbed .ai { scroll-margin-top: 4.25rem; }
+body.tabbed.on-tab #frame-bar { display: none; }
+/* The sidebars show from the start; Escape makes the middle fill the screen (body.full), whatever is in it, the
+   message box included, the sidebars and their switches put away, and brings them back again. */
+body.full { --left: 0px !important; --panel: 0px !important; --mid-left: 0px !important; --mid-right: 0px !important; }
+body.full .side:not(#messages), body.full:not(.show-messages) #messages, body.full .toggle { display: none !important; }
+
+/* The message box, as in the Claude app: a rounded box lifted off the middle (--paper, with a thin line round it
+   and a soft shadow) a little wider than the conversation (962px to its 924px, 16px round), 46px high
+   for a line of words, 39px above the bottom of the screen; it grows with what's typed (up to a few
+   lines, then scrolls). Enter sends, Shift+Enter starts a new
+   line; so does the round button at its right, as ChatGPT's: an arrow up, grey while there's nothing to send,
+   white once there is. Nothing else: Chat Computer is the conversation (and "/" to search this computer).
+   Asleep, a line above it says how to wake Chat Computer. A phone's keyboard never covers it: it's lifted to sit
+   just above the keyboard (--kb, chat.js: fitKeyboard). */
+#composer {
+  position: fixed; left: var(--mid-left, 0px); right: var(--mid-right, 0px); bottom: var(--kb, 0px); z-index: 6;
+  padding: 0.5rem 0 2.4375rem; background: var(--ground);
+}
+#box, #wake { width: min(60.125rem, 100% - 2rem); margin: 0 auto; }
+/* The message box keeps its own look, whatever the screen round it (theme.css): its words, the thin line round it,
+   and what's inside it (the files added, "/"'s results) in the tones it was made in. */
+#box {
+  --ground: var(--box-ground); --ink: var(--box-ink); --line: var(--box-line); --chosen: var(--box-chosen);
+  position: relative; border: 1px solid var(--line); border-radius: 1rem; background: var(--paper);
+  padding: 0.6875rem 0.75rem 0.6875rem 0.9375rem; box-shadow: 0 0.25rem 1.25rem color-mix(in srgb, var(--shade) 35%, transparent);
+}
+/* The box, as the Claude app's: what's typed across the top; under it, at the left, + (add files), and at the right
+   the microphone (talk) beside the send button: each in a circle of its own (--knob) and doing just that, no menus. */
+#row {
+  --tool: 2em;                                   /* (the round buttons' size: + and the spark, the microphone, the arrow) */
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "icon input input input" "add add mic send"; align-items: center; gap: 0.55rem 0;
+}
+#input { grid-area: input; }
+#send { grid-area: send; }
+#tools { display: contents; }
+/* (+ spans the search icon's column and the words' column, as the words do, so the icon's column is only as wide as
+   the icon, and nothing when it's away.) */
+#add { grid-area: add; justify-self: start; margin-left: -0.35rem; }
+/* Beside +, your own AI: Chat Computer's spark (its sign for a model, as in "/"). Pressed, the AIs to sign in with
+   instead of Chat Computer's own model (the page's host lists them); while one of them answers, the button shows
+   that AI's own icon (chat.js: CO.ownAi). Only where the page's host offers it (body.own-ai). */
+/* (As far from + as the microphone is from the arrow: +'s width, less its pull to the left (0.35rem), and 0.45rem.) */
+#ai { display: none; grid-area: add; justify-self: start; margin-left: calc(var(--tool) + 0.1rem); }
+body.own-ai #ai { display: flex; }
+#ai .ai-icon { display: none; width: 1.15em; height: 1.15em; border-radius: 0.25em; object-fit: contain; }
+#ai.has-icon .ai-icon { display: block; }
+#ai.has-icon svg { display: none; }
+#mic { grid-area: mic; margin-right: 0.45rem; }
+.tool {
+  display: flex; align-items: center; justify-content: center; width: var(--tool); height: var(--tool); margin: 0; padding: 0;
+  border: 0; border-radius: 50%; background: var(--knob); color: var(--ink); cursor: pointer;
+}
+.tool:hover { background: color-mix(in srgb, var(--knob) 88%, var(--ink)); }
+.tool svg { display: block; width: 1.15em; height: 1.15em; }
+#mic .fill { fill: none; }
+#mic[aria-pressed="true"] { background: color-mix(in srgb, var(--knob) 75%, var(--ink)); }
+/* Listening, the microphone becomes one bar that rises and falls with what it hears (--level, chat.js: level), so
+   you can see it's working as you speak: short when it's quiet, tall when you talk. */
+#mic .level {
+  display: none; width: 0.2em; height: 1.05em; border-radius: 0.1em; background: currentColor;
+  transform: scaleY(var(--level, 0.18)); transition: transform 90ms linear;
+}
+#mic[aria-pressed="true"] svg { display: none; }
+#mic[aria-pressed="true"] .level { display: block; }
+@media (prefers-reduced-motion: reduce) { #mic .level { transition: none; } }
+/* Files added to the message: one chip each, above what's typed, with an x to take it off again. */
+#attached { display: none; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.55rem; }
+body.attaching #attached { display: flex; }
+.chip {
+  display: flex; align-items: center; gap: 0.35em; max-width: 100%; padding: 0.25em 0.3em 0.25em 0.65em;
+  border: 1px solid var(--line); border-radius: 0.6em; font-size: 0.875em; background: var(--ground);
+}
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip button { flex: none; width: 1.4em; height: 1.4em; margin: 0; padding: 0.15em; border: 0; border-radius: 0.4em;
+  background: none; color: var(--ink); cursor: pointer; }
+.chip button:hover { background: var(--chosen); }
+.chip svg { display: block; width: 100%; height: 100%; }
+/* The empty box's hint, where typing starts: "Type anything", dimmed (--dim, the one grey text on
+   the screen). It's the box's own placeholder,
+   so the cursor blinks just before its first letter in every browser (a hint laid over the box can't line up with
+   it: Safari on an iPhone, for one, sets a text box's words 3px in). It goes with the first thing typed. */
+#input::placeholder { color: var(--dim); opacity: 1; }
+#input {
+  flex: 1; min-width: 0; height: 1.375em; max-height: 40vh; margin: 0; padding: 0;
+  border: 0; outline: 0; resize: none; overflow-y: auto; scrollbar-width: none;
+  font: inherit; line-height: 1.375; color: var(--ink); background: transparent; caret-color: var(--ink);
+}
+/* A touchscreen alone (a phone, a tablet): what's typed is never under 16px, or the browser zooms in on the box as
+   it's tapped (Safari on an iPhone does), pushing the page past the screen's edges. */
+@media (hover: none) and (pointer: coarse) {
+  #input, #sheet-fields input, #sheet-fields select { font-size: max(16px, 1em); }
+  body { touch-action: manipulation; }          /* and a double tap doesn't zoom */
+}
+#send {
+  flex: none; display: flex; align-items: center; justify-content: center; width: var(--tool, 2em); height: var(--tool, 2em);
+  margin: 0; padding: 0; border: 0; border-radius: 50%; background: var(--dim); color: var(--ground); cursor: default;
+}
+body.drafting #send { background: var(--ink); cursor: pointer; }
+svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#send svg { display: block; width: 55%; height: 55%; stroke-width: 2.6; }
+#wake { display: none; margin-bottom: 0.5rem; text-align: center; font-size: 0.8rem; line-height: 1.4; }
+body.sleeping #wake, body.resting #wake { display: block; }
+/* "/" first in the message box: it searches this computer. What matches shows in a list above the box (as a
+   search box's suggestions), in front of everything, even what's open: the arrow keys choose, Enter or a click
+   opens it between the sidebars, and the last line asks Chat Computer instead. */
+#search-icon { display: none; flex: none; width: 1.2em; height: 1.375em; grid-area: icon; margin-right: 0.5rem; }
+body.searching #search-icon { display: block; }
+#results {
+  position: absolute; left: -1px; right: -1px; bottom: calc(100% + 0.5rem); display: none;
+  max-height: 60vh; overflow-y: auto; scrollbar-width: none;
+  padding: 0.35rem; border: 2px solid var(--paper); border-radius: 0.9rem; background: var(--paper);
+  box-shadow: 0 0.3rem 1.4rem color-mix(in srgb, var(--shade) 50%, transparent); font-size: 0.8rem; line-height: 1.4;
+}
+body.searching #results { display: block; }
+.res { display: flex; align-items: center; gap: 0.7em; padding: 0.4em 0.6em; border-radius: 0.5em; cursor: pointer; }
+.res > svg { flex: none; width: 1.3em; height: 1.3em; }
+.res-text { flex: 1; min-width: 0; }
+.res-name, .res-where { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.res-name b { font-weight: bold; }
+.res-when { flex: none; }
+.res:hover, .res.sel { background: var(--knob); }
+.res-note { margin: 0; padding: 0.4em 0.6em; }
+
+/* Buttons: words underlined, or a small outlined icon; the one main button of a form, dark on light. */
+button { font: inherit; color: var(--ink); }
+.text-button { margin: 0; padding: 0; border: 0; background: none; text-decoration: underline; cursor: pointer; }
+.icon-button {
+  flex: none; width: 1.6em; height: 1.6em; margin: 0; padding: 0.2em; border: 0; border-radius: 0.4em;
+  background: none; cursor: pointer;
+}
+.icon-button svg { display: block; width: 100%; height: 100%; }
+.icon-button:hover { background: var(--chosen); }
+.primary {
+  margin: 0; padding: 0.45em 1.2em; border: 2px solid var(--ink); border-radius: 0.6em;
+  background: var(--ink); color: var(--ground); cursor: pointer;
+}
+
+/* The two sidebars: Messages at the left (newest first), Actions at the right (oldest at the top, grouped by
+   day), as the Claude app's sidebar is: against the screen's edge from top to bottom, no space round it, a shade
+   lighter than the middle (--side), as on a PC, and a thin line between them, its words 14px; the days and the
+   times in the grey of the words that matter less (--muted). Each item can be pinned:
+   pinned ones stay at the top, under the title. Tapping a message opens it between the sidebars; tapping something
+   done scrolls the conversation back to the message that asked for it. Something done that changed what can be
+   changed back (a file, a setting) can be reverted. */
+.side {
+  position: fixed; top: 0; bottom: 0; width: var(--panel, 0px);
+  display: none; flex-direction: column;
+  padding: 0.75rem 0.5rem 0.75rem 0.75rem; background: var(--side);
+  font-size: 0.875rem; line-height: 1.4; z-index: 7;
+}
+body.panel .side { display: flex; }
+#messages { left: 0; width: var(--left, 0px); border-right: 1px solid var(--line); }
+#done { right: 0; border-left: 1px solid var(--line); }
+/* Words in a sidebar line up with the items' words; an item's grey (under the pointer) reaches a little past them. */
+.side-head, .side-day, .side-empty, #clock { padding-left: 0.4em; }
+/* (Each title's row as tall as its buttons, with or without them, so a title and its sidebar's switch, which sits
+   over that row, are centred on the same line.) */
+.side-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 1.6em; margin: 0 0 0.75rem; }
+.side-title { font-size: 1em; font-weight: bold; line-height: 1.3; margin: 0; }
+.side-empty { margin: 0; }
+body.has-done #done-empty, body.has-messages #messages-empty, body.has-chats #chats-empty { display: none; }
+.side-empty .text-button { display: block; margin-top: 0.6em; }
+/* The right sidebar in two halves of the same height, a line between them: Actions at the top, and under them
+   Chats, each task's chat, newest first, the one on the screen marked, as the Claude app's sidebar lists its chats
+   (one line each). */
+.half { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+#actions { padding-bottom: 0.75rem; }
+#chats { margin: 0 -0.5rem 0 -0.75rem; padding: 0.75rem 0.5rem 0 0.75rem; border-top: 1px solid var(--line); }
+.chat-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0.5em 0.4em; }
+.chat-item.current { background: var(--chosen); }
+.side-list, .side-pinned { list-style: none; margin: 0; padding: 0; }
+.side-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.side-pinned { flex: none; max-height: 40%; overflow-y: auto; scrollbar-width: none; }
+.side-pinned:not(:empty) { padding-bottom: 0.6em; margin-bottom: 0.6em; border-bottom: 2px solid var(--line); }
+.side-day { font-weight: bold; margin: 1em 0 0.35em; color: var(--muted); }
+.side-day:first-child { margin-top: 0; }
+.item { position: relative; padding: 0.35em 0.4em; border-radius: 0.5em; overflow-wrap: break-word; cursor: pointer; }
+.item:hover { background: var(--chosen); }
+/* The pin: shown on a pinned item, and on any item under the pointer, to pin it. It sits at the end of an item's
+   first line, which leaves room for it. */
+.pin {
+  position: absolute; top: 0.3em; right: 0.25em; width: 1.5em; height: 1.5em; margin: 0; padding: 0.2em;
+  border: 0; border-radius: 0.4em; background: none; visibility: hidden; cursor: pointer;
+}
+.pin svg { display: block; width: 100%; height: 100%; }
+.item:hover .pin, .item.pinned .pin { visibility: visible; }
+.item.pinned .pin svg { fill: currentColor; }
+.msg-top { padding-right: 1.6em; }
+/* Revert, beside the pin (under the pointer, as the pin): what it did is taken back, and that's listed after it. One
+   reverted is struck through; one being reverted says so where its time was, until it's done. */
+.revert {
+  position: absolute; top: 0.3em; right: 1.75em; width: 1.5em; height: 1.5em; margin: 0; padding: 0.2em;
+  border: 0; border-radius: 0.4em; background: none; visibility: hidden; cursor: pointer;
+}
+.revert svg { display: block; width: 100%; height: 100%; }
+.item:hover .revert { visibility: visible; }
+.done-item.reverted .done-what { text-decoration: line-through; }
+/* On a touchscreen, as in the iPad's Mail: an item swiped left shows its Pin (or Unpin) along its right side; a
+   touch elsewhere puts it back. Up and down still scroll the list. Fingers get a little more room on each item. */
+.item { touch-action: pan-y; }
+.item.swiped .pin {
+  visibility: visible; top: 0; right: 0; bottom: 0; width: auto; height: auto; padding: 0 1em;
+  border-radius: 0 0.5em 0.5em 0; background: var(--ink); color: var(--ground);
+}
+.item.swiped .pin svg { display: none; }
+.item.swiped .pin::after { content: attr(data-label); font-weight: bold; }
+/* Something done that can be reverted shows Revert too, before Pin, in grey. */
+.done-item.swiped .pin { width: 4.6em; padding: 0; }
+.item.swiped .revert {
+  visibility: visible; top: 0; right: 4.6em; bottom: 0; width: 5.4em; height: auto; padding: 0;
+  border-radius: 0; background: var(--chosen); color: var(--ink);
+}
+.item.swiped .revert svg { display: none; }
+.item.swiped .revert::after { content: attr(data-label); font-weight: bold; }
+@media (any-pointer: coarse) { .item { padding-top: 0.55em; padding-bottom: 0.55em; } }
+/* Messages pulled down from the top where the sidebars aren't showing (a screen too narrow for them, or the middle
+   filling the screen after Escape), over the conversation: the iPad's Notification Center. */
+body.show-messages:not(.panel) #messages, body.full.show-messages #messages {
+  display: flex; z-index: 30; width: min(24rem, 100vw - 1.5rem);
+}
+/* Something done: what, and its time at the right of its first line, as a message's time is. Under the pointer the
+   pin (and Revert) take the time's place; a pinned one keeps its time, left of the pin. Above the list, today's
+   date and the time now. */
+#clock { margin: -0.4rem 0 0.9rem; }
+#clock span { display: block; }
+.done-item { display: flex; align-items: baseline; gap: 0.6em; }
+.done-what { flex: 1; min-width: 0; }
+.done-when { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+.done-item.pinned .done-when { padding-right: 1.6em; }
+.done-item:hover .done-when { visibility: hidden; }
+/* A message: where it came from (a small icon), who, when; then the words, two lines at most. Unread: who in bold. */
+.msg-top { display: flex; align-items: center; gap: 0.4em; }
+.msg-top svg { flex: none; width: 1.1em; height: 1.1em; }
+/* A service's own icon (chat.js: msgIcon): as big as Chat Computer's own, a little rounded, as a browser tab's. */
+.msg-top .msg-icon { flex: none; width: 1.1em; height: 1.1em; border-radius: 0.2em; object-fit: contain; }
+.msg-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg.unread .msg-who { font-weight: bold; }
+.msg-when { flex: none; color: var(--muted); }
+.item:hover .msg-when { color: var(--ink); }
+.msg-text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 0.1em;
+}
+.msg-src { font-weight: bold; }
+
+/* A small panel over the screen (connecting an account, signing in with your own AI, a question to answer), as the
+   Claude app's dialogs are: the screen stays in sight behind it, a little dimmed, and a click beside it is Cancel.
+   What's typed in it goes to Chat Computer's own sign-in store, not to the model. */
+#sheet {
+  position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--shade) 40%, transparent); padding: 1rem;
+}
+body.sheet #sheet { display: flex; }
+#sheet-form {
+  width: min(28rem, 100%); max-height: 100%; overflow-y: auto; padding: 1.25rem 1.5rem;
+  border: 1px solid var(--line); border-radius: 1rem; background: var(--side);
+  box-shadow: 0 0.6rem 2rem color-mix(in srgb, var(--shade) 60%, transparent);
+}
+/* Its top: the title, a back arrow before it where the panel came from another (f.back), and an x at the right that
+   closes it (as Cancel did). */
+#sheet-head { display: flex; align-items: center; gap: 0.4em; margin: -0.3rem -0.6rem 0.5em 0; }
+#sheet-title { flex: 1; font-size: 1.25rem; line-height: 1.3; margin: 0; }
+#sheet-back, #sheet-cancel { width: 2rem; height: 2rem; padding: 0.35rem; }
+#sheet-back { display: none; margin-left: -0.6rem; }
+body.sheet-back #sheet-back { display: block; }
+#sheet-text p { margin: 0 0 0.75em; }
+#sheet-fields label { display: block; margin: 0.9em 0 0.25em; }
+#sheet-fields input, #sheet-fields select {
+  display: block; width: 100%; margin: 0; padding: 0.45em 0.7em; font: inherit; color: var(--ink);
+  background: var(--ground); border: 2px solid var(--line); border-radius: 0.6em; outline: 0;
+}
+#sheet-fields input:focus { border-color: var(--ink); }
+#sheet-fields .choices { display: flex; flex-wrap: wrap; gap: 0.6em; margin-top: 0.9em; }
+#sheet-fields .choices button {
+  padding: 0.45em 1em; border: 2px solid var(--line); border-radius: 0.6em; background: var(--ground); cursor: pointer;
+}
+#sheet-fields .choices button:hover { border-color: var(--ink); }
+#sheet-fields .choices button:has(.choice-icon) { display: inline-flex; align-items: center; gap: 0.5em; padding-left: 0.75em; }
+#sheet-fields .choice-icon { flex: none; width: 1.05em; height: 1.05em; border-radius: 0.2em; object-fit: contain; }
+#sheet-fields .choices-note { flex-basis: 100%; margin: 0.5em 0 0; color: var(--muted); }
+#sheet-fields .choices-note:empty { margin: 0; }
+#sheet-fields .choices button.on { border-color: var(--ink); background: var(--chosen); }
+#sheet-error { margin: 0.9em 0 0; font-weight: bold; }
+#sheet-error:empty { display: none; }
+#sheet-buttons { display: flex; justify-content: flex-end; align-items: center; gap: 1.25em; margin-top: 1.5em; }
+body.sheet-busy #sheet-ok { visibility: hidden; }
+
+/* The sidebars' switches, like the Claude app's sidebar button, each at the top of its sidebar on the edge nearest
+   the middle: Messages' at its right edge, Actions' at its left edge. Each icon is the screen with its sidebar
+   marked, filled in while the sidebar shows. Switched off, a sidebar leaves a narrow margin with just its switch.
+   Only where the sidebars fit (body.panel), and not while the middle fills the screen (body.full, after Escape). */
+.toggle {
+  position: fixed; z-index: 7; display: none; width: 1.6rem; height: 1.6rem; margin: 0; padding: 0.15rem;
+  border: 0; border-radius: 0.4rem; background: none; color: var(--ink); cursor: pointer;
+}
+.toggle svg { display: block; width: 100%; height: 100%; }
+.toggle .fill { fill: currentColor; stroke: none; }
+.toggle[aria-pressed="false"] .fill { display: none; }
+.toggle:hover { background: var(--chosen); }
+body.panel #toggle-left, body.panel #toggle-right { display: block; }
+#toggle-left, #toggle-right { top: 0.65rem; }
+#toggle-left { left: max(0.6rem, var(--left, 0px) - 2.2rem); }
+#toggle-right { right: max(0.6rem, var(--panel, 0px) - 2.2rem); }
+body.panel.hide-left #messages, body.panel.hide-right #done { display: none; }
+body.panel #messages .side-head { padding-right: 1.95rem; }
+body.panel #actions .side-head { padding-left: 1.95rem; }
+
+/* A phone (body.phone, chat.js: a touchscreen alone, on a screen under 600px across), as the Claude app is there:
+   the text a twentieth of the screen's width (docs/demo/host.js), the conversation nearly as wide as the screen and
+   the message box wider still, in two rows: what's typed above, and under it its buttons at the left and the send
+   arrow at the right. Nothing zooms (two fingers do nothing), and nothing goes past the screen's edges. Holding a
+   message brings up what can be done with it (below), rather than the phone's own selecting. */
+html:has(> body.phone) { overflow-x: hidden; }
+body.phone { touch-action: manipulation; touch-action: pan-x pan-y; line-height: 1.32; }
+/* Sizes as the Claude app's on an iPhone 375 points wide, measured: there the text is as big as ours at a
+   eighteenth of the screen's width (the rem, docs/demo/host.js), so 1rem is 20.8px; the conversation and the box
+   are 16px (0.77rem) in from the screen's sides; the box is 100px tall: its words' baseline 35px from its top, its
+   buttons 36px (1.73rem) round, 8px (0.29rem past the 2px line) from its sides and bottom, the words 14px in. */
+body.phone #column { width: min(var(--co-column, 30rem), 100% - 1.54rem); padding-top: 1.25rem; }
+body.phone .ai { max-width: none; }
+body.phone #composer { padding: 0.3rem 0 0.5rem; }
+body.phone #box, body.phone #wake { width: min(var(--co-column, 30rem), 100% - 1.54rem); }
+body.phone #box { padding: 0.49rem 0.29rem 0.27rem 0.58rem; border: 2px solid var(--paper); border-radius: 1.25rem; }
+body.phone #row { gap: 0.6rem 0; }                 /* (no gap between the columns: the words start 14px in) */
+body.phone #input { height: 1.5em; line-height: 1.5; }
+body.phone #row { --tool: 1.73rem; }               /* (+ and the microphone no taller; the spark as far from + as ever) */
+body.phone .you { padding: 0.5rem 0.77rem; border-radius: 1.1rem; }
+body.phone #log { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+/* Holding a message on a phone, as in the Claude app: the screen behind it dimmed (still to be seen, not blurred),
+   the message lifted above it, and under it (or over it, where there's no room under it) what can be done with it,
+   on frosted glass: copy it, send it to another app, select some of its words, edit yours or hear Chat Computer's
+   read aloud. A tap anywhere else puts it away. */
+#hold-shade {
+  position: fixed; inset: 0; z-index: 40; display: none; touch-action: none; cursor: pointer;
+  background: color-mix(in srgb, var(--shade) 55%, transparent);
+}
+body.holding #hold-shade { display: block; animation: shade 160ms ease-out both; }
+@keyframes shade { from { opacity: 0; } }
+body.holding .held { position: relative; z-index: 41; touch-action: none; }
+.ai.held {
+  border-radius: 0.5rem; background: var(--ground);
+  box-shadow: 0 0 0 0.6rem var(--ground), 0 0.5rem 1.75rem 0.6rem color-mix(in srgb, var(--shade) 50%, transparent);
+}
+.you.held { box-shadow: 0 0.4rem 1.5rem color-mix(in srgb, var(--shade) 50%, transparent); }
+#hold-menu {
+  position: fixed; z-index: 42; display: none; width: max-content; min-width: 13rem; max-width: calc(100vw - 1.5rem);
+  padding: 0.5rem 0; overflow: hidden; border-radius: 1.3rem; font-size: 0.9rem; line-height: 1.3;
+  background: color-mix(in srgb, var(--ground) 90%, transparent);
+  -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4);
+  box-shadow: 0 0.6rem 2rem color-mix(in srgb, var(--shade) 60%, transparent);
+}
+body.holding #hold-menu { display: block; animation: menu 180ms cubic-bezier(0.32, 0.72, 0, 1) both; }
+@keyframes menu { from { opacity: 0; transform: scale(0.92); } }
+#hold-menu button {
+  display: flex; align-items: center; gap: 0.95rem; width: 100%; margin: 0; padding: 0.62rem 1.6rem 0.62rem 1.45rem;
+  border: 0; background: none; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+#hold-menu button[hidden] { display: none; }
+#hold-menu button:active { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+#hold-menu svg { flex: none; width: 1.2em; height: 1.2em; stroke-width: 1.7; }
+#hold-menu .dot { fill: currentColor; stroke: none; }
+/* Select text: the message alone over the whole screen, where its words are selected as anywhere else on the phone
+   (hold a word, then move its handles), with an x to close it. */
+#reader { position: fixed; inset: 0; z-index: 45; display: none; flex-direction: column; background: var(--ground); }
+body.reading #reader { display: flex; }
+#reader-bar {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  padding: 0.55rem 0.55rem 0.55rem 1rem; border-bottom: 2px solid var(--line);
+}
+#reader-title { font-weight: bold; }
+#reader-close { width: 1.9rem; height: 1.9rem; }
+#reader-text {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 1rem 1rem 2rem; overflow-wrap: anywhere;
+  -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
+}
+#reader-text.plain { white-space: pre-wrap; }
+/* A word of what was done (Copied), for a moment, over the message box. */
+#toast {
+  position: fixed; left: 50%; bottom: calc(var(--composer-h, 5rem) + var(--kb, 0px) + 0.75rem); z-index: 46; margin: 0;
+  padding: 0.35rem 0.95rem; border-radius: 999px; background: var(--ink); color: var(--ground);
+  font-size: 0.8rem; line-height: 1.4; white-space: nowrap; pointer-events: none;
+  opacity: 0; transform: translate(-50%, 0.4rem); transition: opacity 160ms ease-out, transform 160ms ease-out;
+}
+#toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+/* Locked: one screen over everything, the time and a keypad; nothing of the conversation, the sidebars or what's open
+   shows until the PIN is typed (what's open is taken off the screen by the window, gtk_app.py). */
+#lock {
+  position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center;
+  background: var(--ground); padding: 2rem; text-align: center;
+}
+body.locked #lock { display: flex; }
+body.locked #column, body.locked .side, body.locked .toggle, body.locked #composer, body.locked #sheet,
+body.locked #frame { visibility: hidden; }
+#lock-form { width: min(20rem, 100%); }
+#lock-time { font-size: 3.2rem; line-height: 1.1; margin: 0; font-variant-numeric: tabular-nums; }
+#lock-date { margin: 0.2em 0 2em; }
+#lock-title { font-size: 1.25rem; margin: 0 0 0.25em; }
+#lock-note { margin: 0 0 1em; }
+#lock-pin {
+  display: block; width: 100%; margin: 0 0 0.5em; padding: 0.45em 0.7em; font: inherit; font-size: 1.5rem;
+  letter-spacing: 0.35em; text-align: center; color: var(--ink); background: var(--ground);
+  border: 2px solid var(--line); border-radius: 0.6em; outline: 0;
+}
+#lock-pin:focus { border-color: var(--ink); }
+#lock-error { min-height: 1.5em; margin: 0 0 0.75em; font-weight: bold; }
+#lock-pad { display: grid; grid-template-columns: repeat(3, 3.8rem); justify-content: center; gap: 0.8rem 1.6rem; }
+#lock-pad button {
+  width: 3.8rem; height: 3.8rem; padding: 0; font: inherit; font-size: 1.4rem; color: var(--ink); background: var(--ground);
+  border: 2px solid var(--line); border-radius: 50%; cursor: pointer; touch-action: manipulation;
+}
+#lock-pad button:active { background: var(--chosen); }
+
+/* Sleeping: the conversation and the sidebars go away; the line under the message box says how to wake Chat Computer. */
+body.sleeping #column, body.sleeping .side, body.sleeping .toggle { visibility: hidden; }
+
+@keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }

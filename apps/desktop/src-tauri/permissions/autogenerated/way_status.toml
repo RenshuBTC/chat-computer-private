@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-way-status"
+description = "Enables the way_status command without any pre-configured scope."
+commands.allow = ["way_status"]
+
+[[permission]]
+identifier = "deny-way-status"
+description = "Denies the way_status command without any pre-configured scope."
+commands.deny = ["way_status"]

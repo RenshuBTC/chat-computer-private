@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Chat Computer",
+  "version": "1.0.0",
+  "description": "Chat Computer in Chrome's side panel: ask anything, and sites you ask for open in real tabs.",
+  "homepage_url": "https://chatcomputer.ai/get/",
+  "minimum_chrome_version": "116",
+  "action": { "default_title": "Open Chat Computer" },
+  "side_panel": { "default_path": "panel.html" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["sidePanel"]
+}

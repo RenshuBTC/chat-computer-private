@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trace review</title>
+<!--
+  Reading and labelling the evals' traces, one at a time (the evals FAQ's "custom annotation tool"): open a run's
+  results (evals/web/run.js's RESULTS.json, or the desktop run's traces/*.json, several at once) and, if there are
+  some, its labels (evals/*/labels/*.json). Each trace shows what was asked, each round of the model's (its tool calls,
+  what they gave back, its words), the answer, what opened and what Actions listed. Mark each pass or fail (P, F),
+  name its first failure (the mode) and note why; J and K go to the next and the one before. Save labels writes a
+  labels file in the evals' own form ({about, labels: {id: {pass, mode, note}}}). The labels are kept in this
+  browser as you go, for each run.
+-->
+<style>
+  :root { --bg: #ffffff; --ink: #1d1d1b; --mute: #6b6b66; --line: #e4e2dc; --pass: #1f7a3a; --fail: #b3261e; --tint: #f6f5f1; --tool: #36507a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #1e1e1c; --ink: #ecebe6; --mute: #a3a29c; --line: #3a3936; --pass: #6fcf8a; --fail: #ff8a80; --tint: #262624; --tool: #9db7e6; } }
+  :root[data-theme="dark"] { --bg: #1e1e1c; --ink: #ecebe6; --mute: #a3a29c; --line: #3a3936; --pass: #6fcf8a; --fail: #ff8a80; --tint: #262624; --tool: #9db7e6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 17px; margin: 0 8px 0 0; }
+  header .count { color: var(--mute); }
+  button, label.file { font: inherit; border: 1px solid var(--line); background: var(--tint); color: var(--ink); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  button:focus-visible, label.file:focus-within, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--tool); outline-offset: 1px; }
+  input[type=file] { position: absolute; opacity: 0; width: 1px; }
+  main { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 58px); }
+  nav { border-right: 1px solid var(--line); overflow: auto; max-height: calc(100vh - 58px); }
+  nav button { display: flex; width: 100%; justify-content: space-between; gap: 8px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; text-align: left; padding: 7px 12px; }
+  nav button.on { background: var(--tint); font-weight: 600; }
+  .mark { font-weight: 600; }
+  .mark.pass { color: var(--pass); } .mark.fail { color: var(--fail); }
+  article { padding: 16px 24px 48px; max-width: 900px; }
+  .q { font-size: 18px; font-weight: 600; margin: 4px 0 10px; }
+  .meta { color: var(--mute); font-size: 13px; }
+  .step { margin: 6px 0; padding-left: 12px; border-left: 3px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+  .step.tool { border-color: var(--tool); color: var(--tool); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .step.result { color: var(--mute); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .answer { background: var(--tint); border-radius: 10px; padding: 10px 14px; white-space: pre-wrap; margin: 10px 0; }
+  .answer.empty { color: var(--fail); font-style: italic; }
+  h2 { font-size: 13px; color: var(--mute); margin: 18px 0 6px; font-weight: 600; }
+  .label { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .label button.on.pass { background: var(--pass); color: var(--bg); border-color: var(--pass); }
+  .label button.on.fail { background: var(--fail); color: var(--bg); border-color: var(--fail); }
+  .label input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); min-width: 180px; }
+  textarea { font: inherit; width: 100%; min-height: 64px; margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+  .empty-state { padding: 32px 24px; color: var(--mute); max-width: 640px; }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } nav { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); } article { padding: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Trace review</h1>
+  <label class="file">Open traces and labels…<input id="files" type="file" accept=".json" multiple></label>
+  <button id="save" type="button" disabled>Save labels</button>
+  <span class="count" id="count"></span>
+</header>
+<main>
+  <nav id="list" aria-label="Cases"></nav>
+  <article id="view"><p class="empty-state">Open a run's results (the website's RESULTS.json, or the desktop run's traces) and, if you have them, its labels. Then P or F for each, J and K to move.</p></article>
+</main>
+<script>
+(function () {
+  "use strict";
+  var traces = [], labels = {}, about = "", at = 0, runKey = "";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function short(v, n) { var s = typeof v === "string" ? v : JSON.stringify(v); s = String(s || "").replace(/\s+/g, " "); return s.length > n ? s.slice(0, n) + "…" : s; }
+  function keep() { try { localStorage.setItem("review:" + runKey, JSON.stringify(labels)); } catch (e) {} }
+  function kept() { try { return JSON.parse(localStorage.getItem("review:" + runKey) || "null"); } catch (e) { return null; } }
+
+  $("files").addEventListener("change", function (e) {
+    var files = Array.prototype.slice.call(e.target.files || []);
+    Promise.all(files.map(function (f) { return f.text().then(function (t) { return { name: f.name, data: JSON.parse(t) }; }, function () { return null; }); }))
+      .then(function (got) {
+        got.filter(Boolean).forEach(function (g) {
+          var d = g.data;
+          if (Array.isArray(d)) traces = traces.concat(d);                       // the website's results
+          else if (d && d.labels) { about = d.about || about; for (var k in d.labels) labels[k] = d.labels[k]; }
+          else if (d && d.id) traces.push(d);                                     // one desktop trace
+        });
+        runKey = traces.map(function (t) { return t.id; }).join(",").slice(0, 300);
+        var mine = kept();
+        if (mine) for (var k in mine) labels[k] = mine[k];
+        at = 0;
+        $("save").disabled = !traces.length;
+        draw();
+      });
+  });
+
+  function draw() {
+    var done = traces.filter(function (t) { return labels[t.id] && labels[t.id].pass != null; });
+    var passed = done.filter(function (t) { return labels[t.id].pass; }).length;
+    $("count").textContent = traces.length ? done.length + " of " + traces.length + " labelled, " + passed + " pass" : "";
+    $("list").innerHTML = traces.map(function (t, i) {
+      var l = labels[t.id], m = l && l.pass != null ? (l.pass ? '<span class="mark pass">pass</span>' : '<span class="mark fail">fail</span>') : "";
+      return '<button type="button" data-i="' + i + '" class="' + (i === at ? "on" : "") + '"><span>' + esc(t.id) + "</span>" + m + "</button>";
+    }).join("");
+    if (traces.length) show(traces[at]);
+  }
+  $("list").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-i]");
+    if (b) { at = +b.dataset.i; draw(); }
+  });
+
+  // One trace: the website's (rounds, messages, answers) or the desktop's (tools, confirmations, reply).
+  function show(t) {
+    var h = '<p class="meta">' + esc([t.intent || t.area, t.phrasing, t.modality].filter(Boolean).join(" · ")) +
+      (t.total_ms ? " · " + Math.round(t.total_ms / 1000) + " s" : t.seconds ? " · " + t.seconds + " s" : "") + "</p>";
+    var turns = t.turns && typeof t.turns[0] === "string" ? t.turns : [t.query];
+    h += '<p class="q">' + esc(turns.join("  /  ")) + "</p>";
+    if (t.expect) h += '<p class="meta">Good answer: ' + esc(t.expect) + "</p>";
+    var msgs = t.messages || [], rounds = t.rounds || [];
+    if (msgs.length || rounds.length) {
+      h += "<h2>The model</h2>";
+      var all = msgs.concat(rounds.length && rounds[rounds.length - 1].out ? [rounds[rounds.length - 1].out] : []);
+      all.forEach(function (m) {
+        if (m.role === "user") h += '<div class="step">' + esc(m.content) + "</div>";
+        else if (m.role === "assistant") {
+          (m.tool_calls || []).forEach(function (c) { h += '<div class="step tool">' + esc(c.function.name + "(" + short(c.function.arguments, 300) + ")") + "</div>"; });
+          if ((m.content || "").trim()) h += '<div class="step">' + esc(m.content) + "</div>";
+        } else if (m.role === "tool") h += '<div class="step result">→ ' + esc(short(m.content, 400)) + "</div>";
+      });
+    }
+    (t.tools || []).forEach(function (x) {
+      h += '<div class="step tool">' + esc(x.name + "(" + short(x.input, 300) + ")" + (x.ok ? "" : " FAILED")) + '</div><div class="step result">→ ' + esc(short(x.result, 400)) + "</div>";
+    });
+    (t.confirmations || []).forEach(function (c) { h += '<div class="step">Asked: ' + esc(c.question) + "</div>"; });
+    var answers = t.answers || [t.answer != null ? t.answer : t.reply];
+    h += "<h2>What they saw</h2>";
+    answers.forEach(function (a) { h += '<div class="answer' + (String(a || "").trim() ? "" : " empty") + '">' + esc(String(a || "").trim() || "(no words)") + "</div>"; });
+    if (t.open) h += '<p class="meta">Open: ' + esc(short(t.title || t.src, 120)) + "</p>";
+    if (t.done_added) h += '<p class="meta">Actions: ' + esc((t.done || []).slice(-t.done_added).join(" · ")) + "</p>";
+    if (t.files && (t.files.added || []).length) h += '<p class="meta">Files added: ' + esc(t.files.added.join(", ")) + "</p>";
+    if ((t.errors || []).length) h += '<p class="meta">Errors: ' + esc(short(t.errors, 400)) + "</p>";
+    var l = labels[t.id] || {};
+    h += '<div class="label"><button type="button" id="p" class="pass' + (l.pass === true ? " on" : "") + '">Pass (P)</button>' +
+      '<button type="button" id="f" class="fail' + (l.pass === false ? " on" : "") + '">Fail (F)</button>' +
+      '<input id="mode" list="modes" placeholder="First failure (mode)" value="' + esc(l.mode || "") + '">' +
+      '<datalist id="modes">' + modes().map(function (m) { return '<option value="' + esc(m) + '">'; }).join("") + "</datalist>" +
+      '<textarea id="note" placeholder="Why (what went wrong first, or what was good)">' + esc(l.note || "") + "</textarea></div>";
+    $("view").innerHTML = h;
+    $("p").onclick = function () { mark(true); };
+    $("f").onclick = function () { mark(false); };
+    $("mode").oninput = $("note").oninput = function () { set({ mode: $("mode").value, note: $("note").value }); };
+  }
+  function modes() {
+    var seen = {};
+    for (var k in labels) if (labels[k].mode) seen[labels[k].mode] = 1;
+    return Object.keys(seen).sort();
+  }
+  function set(o) {
+    var id = traces[at].id, l = labels[id] = labels[id] || {};
+    for (var k in o) { if (o[k] === "" || o[k] == null) delete l[k]; else l[k] = o[k]; }
+    keep();
+  }
+  function mark(p) { set({ pass: p }); draw(); }
+  document.addEventListener("keydown", function (e) {
+    if (!traces.length || /INPUT|TEXTAREA/.test((document.activeElement || {}).tagName || "")) return;
+    var k = e.key.toLowerCase();
+    if (k === "p") mark(true);
+    else if (k === "f") mark(false);
+    else if (k === "j" || e.key === "ArrowDown") { at = Math.min(traces.length - 1, at + 1); draw(); }
+    else if (k === "k" || e.key === "ArrowUp") { at = Math.max(0, at - 1); draw(); }
+  });
+  $("save").addEventListener("click", function () {
+    var out = { about: about || "Hand labels, made in evals/tools/review.html.", labels: {} };
+    traces.forEach(function (t) { if (labels[t.id]) out.labels[t.id] = labels[t.id]; });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 1) + "\n"], { type: "application/json" }));
+    a.download = "labels.json";
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,304 @@
+#!/bin/bash
+# chatcomputer-session — the X session that runs and supervises Chat Computer.
+#
+# Invoked by ~/.xinitrc under startx (so DISPLAY is set and we own the X
+# server). Responsibilities, in order:
+#   1. Make the screen behave like an appliance: no blanking, no DPMS, black
+#      root window, hidden idle cursor.
+#   2. Start a minimal window manager (openbox) so the Chat Computer window is
+#      borderless and maximized.
+#   3. Supervise the Chat Computer runtime per the exit-code contract:
+#         0      -> normal exit, restart after 1s
+#         3      -> restart requested (e.g. after update), restart immediately
+#         other  -> crash; restart with backoff 1,2,5s
+#      3 crashes within 120s -> show the recovery screen (last log lines +
+#      `chatcomputer doctor`), Enter retries. Unless that version came with an update
+#      that hasn't started well yet: then the version before it is put back first.
+#   4. Log to ~/ChatComputer/logs/session.log with simple size-based rotation.
+#
+# Test hooks (env vars, all optional — production uses defaults):
+#   CHATCOMPUTER_START_CMD        override the command that "is" Chat Computer
+#   CHATCOMPUTER_DOCTOR_CMD       override the doctor command
+#   CHATCOMPUTER_RESTART_DELAY    seconds for a normal (exit 0) restart   [1]
+#   CHATCOMPUTER_BACKOFF          space-separated crash backoff seconds   ["1 2 5"]
+#   CHATCOMPUTER_CRASH_WINDOW     crash-count window in seconds           [120]
+#   CHATCOMPUTER_MAX_CRASHES      crashes within the window -> recovery   [3]
+#   CHATCOMPUTER_ONESHOT          if set to 1, run the loop body once and exit
+#                             (used by tests to avoid an infinite loop)
+#   CHATCOMPUTER_NO_X_SETUP       if set to 1, skip xset/openbox/unclutter (tests)
+#   CHATCOMPUTER_RECOVERY_NOWAIT  if set to 1, recovery screen does not block on
+#                             Enter (tests)
+#   CHATCOMPUTER_RECOVERY_PAUSE   seconds to wait when the recovery screen can't be
+#                             shown or answered                      [60]
+#   CHATCOMPUTER_UPDATE_PENDING   the file saying the version is a new update
+#   CHATCOMPUTER_ROOT_CMD         override how the root helper is run
+#   CHATCOMPUTER_LOG_CHECK_S      seconds between looks at the log's size while Chat Computer runs [60]
+
+set -u
+
+# ---- Paths & config -------------------------------------------------------
+APP_DIR=/opt/chatcomputer/app
+VENV_PY=/opt/chatcomputer/venv/bin/python
+LOG_DIR="${HOME}/ChatComputer/logs"
+LOG_FILE="${LOG_DIR}/session.log"
+LOG_MAX_BYTES=${CHATCOMPUTER_LOG_MAX_BYTES:-1048576}  # rotate at ~1 MiB
+LOG_KEEP=${CHATCOMPUTER_LOG_KEEP:-2}                # keep .1 and .2
+LOG_CHECK_S=${CHATCOMPUTER_LOG_CHECK_S:-60}         # how often the log's size is looked at while Chat Computer runs
+
+START_CMD=${CHATCOMPUTER_START_CMD:-}
+DOCTOR_CMD=${CHATCOMPUTER_DOCTOR_CMD:-}
+RESTART_DELAY=${CHATCOMPUTER_RESTART_DELAY:-1}
+BACKOFF=${CHATCOMPUTER_BACKOFF:-1 2 5}
+CRASH_WINDOW=${CHATCOMPUTER_CRASH_WINDOW:-120}
+MAX_CRASHES=${CHATCOMPUTER_MAX_CRASHES:-3}
+UPDATE_PENDING=${CHATCOMPUTER_UPDATE_PENDING:-/var/lib/chatcomputer/update-pending}
+ROOT_CMD=${CHATCOMPUTER_ROOT_CMD:-sudo -n /usr/local/libexec/chatcomputer/chatcomputer-root}
+
+# Default production commands (per ARCHITECTURE.md).
+if [ -z "$START_CMD" ]; then
+  # -P: the home folder (where this starts) is not put on Python's import path, so a file there such as
+  # json.py can't take the place of part of Python.
+  START_CMD="$VENV_PY -P -m chatcomputer run"
+fi
+if [ -z "$DOCTOR_CMD" ]; then
+  DOCTOR_CMD="$VENV_PY -P -m chatcomputer doctor"
+fi
+
+mkdir -p "$LOG_DIR"
+
+# ---- Logging --------------------------------------------------------------
+rotate_log() {
+  # Size-based rotation to keep the log small (appliance has finite disk and no
+  # admin to clean up). Rotate session.log -> .1 -> .2, dropping the oldest.
+  # $1 = "copy" while Chat Computer runs: its output goes straight into session.log, so the log is copied and
+  # emptied rather than moved (Chat Computer would go on writing into the moved file).
+  [ -f "$LOG_FILE" ] || return 0
+  local size
+  size=$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
+  if [ "$size" -ge "$LOG_MAX_BYTES" ]; then
+    local i
+    for (( i=LOG_KEEP-1; i>=1; i-- )); do
+      [ -f "${LOG_FILE}.$i" ] && mv -f "${LOG_FILE}.$i" "${LOG_FILE}.$((i+1))"
+    done
+    if [ "${1:-}" = "copy" ]; then
+      cp -f "$LOG_FILE" "${LOG_FILE}.1" && : > "$LOG_FILE"
+    else
+      mv -f "$LOG_FILE" "${LOG_FILE}.1"
+    fi
+  fi
+}
+
+# While Chat Computer runs (for weeks, as an appliance): the log kept small all the same. Ends with this session.
+watch_log() {
+  while sleep "$LOG_CHECK_S" && kill -0 $$ 2>/dev/null; do
+    rotate_log copy
+  done
+}
+
+log() {
+  local ts
+  ts=$(date '+%Y-%m-%d %H:%M:%S')
+  printf '%s %s\n' "$ts" "$*" >> "$LOG_FILE"
+}
+
+# ---- Screen setup ---------------------------------------------------------
+setup_screen() {
+  [ "${CHATCOMPUTER_NO_X_SETUP:-0}" = "1" ] && return 0
+  # Disable screen blanking and all DPMS power-saving: the orb/captions must
+  # stay visible indefinitely.
+  xset s off >/dev/null 2>&1 || true
+  xset s noblank >/dev/null 2>&1 || true
+  xset -dpms >/dev/null 2>&1 || true
+  # Black root window so there is never a grey X stipple flash.
+  xsetroot -solid black >/dev/null 2>&1 || true
+  # Hide the mouse's arrow when the mouse is still, and when a finger touches the screen (the touchscreen
+  # first: a mouse is optional, and AirTouch draws its own dots). An unclutter without --hide-on-touch stops at
+  # once: then the one without it.
+  local hider
+  for hider in unclutter unclutter-xfixes; do
+    command -v "$hider" >/dev/null 2>&1 || continue
+    "$hider" --timeout 3 --hide-on-touch >/dev/null 2>&1 &
+    sleep 0.2
+    kill -0 $! 2>/dev/null || "$hider" --timeout 3 >/dev/null 2>&1 &
+    break
+  done
+  # Each screen at the fastest refresh rate it offers, as Windows has it: at X's usual 60 Hz the mouse's
+  # arrow moves in coarser steps than in Windows and feels slow (chatcomputer-refresh).
+  bash "${APP_DIR}/linux/session/chatcomputer-refresh" 2>&1 | while IFS= read -r line; do log "$line"; done
+  map_touchscreens
+  log_display
+  # Minimal WM: borderless, maximized windows, no root menu.
+  if command -v openbox >/dev/null 2>&1; then
+    openbox --config-file "${APP_DIR}/linux/session/openbox-rc.xml" >/dev/null 2>&1 &
+    # Give openbox a beat to own the screen before the app maps its window.
+    sleep 0.3
+  fi
+}
+
+# Each touchscreen's touches go to the screen Chat Computer fills (the primary one), so a finger lands where it touches
+# even with a second monitor plugged in (X spreads a touchscreen over all of them otherwise). A touchscreen is a
+# device whose touches are direct (a touchpad's are "dependent").
+map_touchscreens() {
+  command -v xinput >/dev/null 2>&1 && command -v xrandr >/dev/null 2>&1 || return 0
+  local output id
+  output=$(xrandr --query 2>/dev/null | awk '$2 == "connected" && $3 == "primary" {print $1; exit}')
+  [ -n "$output" ] || output=$(xrandr --query 2>/dev/null | awk '$2 == "connected" {print $1; exit}')
+  [ -n "$output" ] || return 0
+  for id in $(xinput list --long 2>/dev/null | awk 'match($0, /id=[0-9]+/) {id = substr($0, RSTART + 3, RLENGTH - 3)}
+                                                   /DirectTouch/ {print id}' | sort -u); do
+    if xinput map-to-output "$id" "$output" >/dev/null 2>&1; then
+      log "touchscreen: device $id on $output"
+    fi
+  done
+}
+
+# What draws the screen and the mouse's arrow, for the log. An arrow X draws itself (no hardware cursor) moves
+# only as often as X gets round to it, and lags while pages are being drawn; the refresh rate sets how often
+# it can move at all.
+log_display() {
+  local xlog
+  for xlog in "${HOME}/.local/share/xorg/Xorg.0.log" /var/log/Xorg.0.log; do
+    [ -r "$xlog" ] || continue
+    grep -E -i 'LoadModule: "(modesetting|amdgpu|intel|i915|nvidia|nouveau|radeon|fbdev|vesa)"|glamor|cursor|Using input driver' \
+      "$xlog" 2>/dev/null | head -n 30 | while IFS= read -r l; do log "xorg: $l"; done
+    break
+  done
+  if command -v xrandr >/dev/null 2>&1; then
+    xrandr --query 2>/dev/null | grep -E ' connected|\*' | while IFS= read -r l; do log "xrandr: $l"; done
+  fi
+}
+
+# ---- Recovery screen ------------------------------------------------------
+show_recovery() {
+  log "RECOVERY: entering recovery screen after repeated crashes"
+  # Build the recovery text: last log lines + doctor JSON.
+  local tmp
+  tmp=$(mktemp "${TMPDIR:-/tmp}/chatcomputer-recovery.XXXXXX")
+  {
+    echo "================ Chat Computer recovery ================"
+    echo "Chat Computer could not stay running. The last log lines and a health"
+    echo "check are shown below. Press Enter to try again."
+    echo
+    echo "---- last session.log lines ----"
+    tail -n 40 "$LOG_FILE" 2>/dev/null || echo "(no log)"
+    echo
+    echo "---- chatcomputer doctor ----"
+    # doctor prints JSON; show it raw. Time-limit so a hung doctor can't wedge
+    # the recovery screen.
+    timeout 20 $DOCTOR_CMD 2>&1 || echo "(doctor failed or timed out)"
+    echo
+    echo "=================================================="
+    echo "Press Enter to retry Chat Computer."
+  } > "$tmp"
+
+  if [ "${CHATCOMPUTER_RECOVERY_NOWAIT:-0}" = "1" ]; then
+    cat "$tmp"
+    rm -f "$tmp"
+    return 0
+  fi
+
+  # Show it in a full-screen terminal; pressing Enter closes it and returns to the loop.
+  if [ -n "${DISPLAY:-}" ] && command -v xterm >/dev/null 2>&1 \
+      && xterm -fullscreen -fa Monospace -fs 14 -bg white -fg black \
+           -e bash -c 'cat "'"$tmp"'"; read -r _' >/dev/null 2>&1; then
+    :
+  else
+    cat "$tmp"
+    # Without a terminal window there may be no keyboard to answer either (the X server owns the
+    # console, so reading fails at once): wait instead of restarting Chat Computer in a tight loop.
+    read -r -t 600 _ 2>/dev/null || sleep "${CHATCOMPUTER_RECOVERY_PAUSE:-60}"
+  fi
+  rm -f "$tmp"
+}
+
+# ---- An update that won't start ------------------------------------------
+# After an update (chatcomputer/update.py), UPDATE_PENDING says the version is new until it has run for a while.
+# If it keeps failing to start before then, the version before it is put back (chatcomputer-root update-undo).
+undo_update() {
+  log "the updated Chat Computer keeps failing to start; going back to the version before it"
+  if $ROOT_CMD update-undo >> "$LOG_FILE" 2>&1; then
+    log "back on the version before the update"
+    return 0
+  fi
+  log "couldn't go back to the version before the update"
+  return 1
+}
+
+# ---- Supervisor loop ------------------------------------------------------
+supervise() {
+  local crash_times=() now code delay backoff_arr idx=0
+  read -r -a backoff_arr <<< "$BACKOFF"
+
+  while true; do
+    rotate_log
+    log "starting Chat Computer: $START_CMD"
+
+    # Run Chat Computer in the foreground, its output into the log, and capture the exit code.
+    watch_log &
+    local watcher=$!
+    $START_CMD >> "$LOG_FILE" 2>&1
+    code=$?
+    kill "$watcher" 2>/dev/null
+    wait "$watcher" 2>/dev/null
+    log "Chat Computer exited with code $code"
+
+    case "$code" in
+      0)
+        # Normal exit -> brief pause, then restart.
+        delay="$RESTART_DELAY"
+        log "normal exit; restarting in ${delay}s"
+        sleep "$delay"
+        idx=0            # a clean exit resets the crash backoff
+        crash_times=()
+        ;;
+      3)
+        # Restart requested (e.g. post-update) -> immediate.
+        log "restart requested (exit 3); restarting immediately"
+        idx=0
+        crash_times=()
+        ;;
+      *)
+        # Crash. Record the time and apply backoff.
+        now=$(date +%s)
+        crash_times+=("$now")
+        # Drop crash timestamps older than the window.
+        local kept=()
+        local t
+        for t in "${crash_times[@]}"; do
+          if [ $(( now - t )) -lt "$CRASH_WINDOW" ]; then kept+=("$t"); fi
+        done
+        crash_times=("${kept[@]}")
+        log "crash #${#crash_times[@]} within ${CRASH_WINDOW}s window"
+
+        if [ "${#crash_times[@]}" -ge "$MAX_CRASHES" ]; then
+          if [ -f "$UPDATE_PENDING" ] && undo_update; then
+            :   # straight back to the version that worked
+          else
+            show_recovery
+          fi
+          # After the user acknowledges, reset and try again.
+          idx=0
+          crash_times=()
+        else
+          # Backoff: 1,2,5 then clamp at the last value.
+          if [ "$idx" -lt "${#backoff_arr[@]}" ]; then
+            delay="${backoff_arr[$idx]}"
+          else
+            delay="${backoff_arr[${#backoff_arr[@]}-1]}"
+          fi
+          idx=$((idx+1))
+          log "restarting after backoff ${delay}s"
+          sleep "$delay"
+        fi
+        ;;
+    esac
+
+    [ "${CHATCOMPUTER_ONESHOT:-0}" = "1" ] && break
+  done
+}
+
+# ---- main -----------------------------------------------------------------
+log "session start (DISPLAY=${DISPLAY:-none})"
+setup_screen
+supervise
+log "session end"

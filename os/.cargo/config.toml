@@ -1,0 +1,4 @@
+# The start-up stage gets no debugging record, and its header holds a hash of the file instead of the
+# time it was built. So the same source always builds the same file, byte for byte, wherever it's built.
+[target.x86_64-unknown-uefi]
+rustflags = ["-C", "link-arg=/Brepro", "-C", "link-arg=/DEBUG:NONE"]

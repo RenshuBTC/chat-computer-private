@@ -1,0 +1,87 @@
+/* Chat Computer look: dark, in the tones of Claude's dark mode (as its Cowork shows it), and nothing else. The font
+   is Lora, a serif made for reading on screens (by Cyreal), everywhere but code, which is in Atkinson Hyperlegible
+   Mono (by the Braille Institute: letters of one width, and those easy to confuse looking different). Both come with
+   Chat Computer (fonts/, SIL Open Font License 1.1). Characters they don't have (Chinese, Japanese, Korean, Greek, Cyrillic, emoji) come from the system's fonts.
+   The colours are Claude's, measured off the Claude app on a PC (Windows) in dark mode: the middle of the screen
+   --ground, #191919, near black and neutral; the sidebars a shade lighter (--side, #1F1F1F), as Claude's are on a
+   PC, with a thin line between them and the middle (--line, #303030, which also parts things inside them); the words
+   --ink, #F0F0F0 (15.4:1 on the middle); your messages' bubbles --bubble, #252525 (white on it 13.5:1); what's
+   pointed at or chosen --chosen, #404040, as Claude's chosen chat in its sidebar; and the words that matter less, a
+   list's days and the times, --muted, #9E9E9E, as Claude's sidebar's headings (6.2:1 on the sidebars). The message
+   box keeps its own look (chat.css: #box): --paper, #303030, with a line of --box-line, #3D3D3C, round it, its
+   round buttons (+ and the microphone) --knob, #414141, its words --box-ink, #F9F9F7 (the send button's arrow
+   --box-ground, #151515; what's pointed at in it --box-chosen, #2C2C2A), and one dimmed grey, --dim, #96958D, only
+   for its hint and the send button with nothing to send, as in ChatGPT. Shadows, and the screen dimmed behind a held message, are
+   --shade: black. The screen's brightness matters more than any colour (turned down to the room's light, it eased
+   eye fatigue where tinting didn't, in a randomised month-long study of 47 people), so Chat Computer dims the screen
+   itself ("brightness", the night light). Sizes are in rem, and they're the Claude app's: 16px words on lines 22px apart at 100% display
+   scaling. The screen sets the root size for its own display scaling (chatcomputer/ui/layout.py), as a computer's
+   display scaling makes the Claude app bigger. */
+@font-face {
+  font-family: "Lora"; font-style: normal; font-weight: 400 700;
+  src: url("fonts/Lora.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Lora"; font-style: italic; font-weight: 400 700;
+  src: url("fonts/Lora-Italic.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono"; font-style: normal; font-weight: 200 800;
+  src: url("fonts/AtkinsonHyperlegibleMono.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono"; font-style: italic; font-weight: 200 800;
+  src: url("fonts/AtkinsonHyperlegibleMono-Italic.ttf") format("truetype");
+}
+:root {
+  --ground: #191919;
+  --ink: #F0F0F0;
+  --bubble: #252525;
+  --chosen: #404040;
+  --line: #303030;
+  --muted: #9E9E9E;
+  --dim: #96958D;
+  --paper: #303030;
+  --knob: #414141;
+  --box-ink: #F9F9F7;
+  --box-line: #3D3D3C;
+  --box-ground: #151515;
+  --box-chosen: #2C2C2A;
+  --side: #1F1F1F;
+  --shade: #000000;
+  color-scheme: dark;
+  --text: "Lora", serif;
+  --mono: "Atkinson Hyperlegible Mono", monospace;
+}
+* { box-sizing: border-box; }
+html { font-size: var(--co-size, 16px); }
+html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink); }
+body { font-family: var(--text); font-size: 1rem; line-height: 1.375; }
+/* Selected text (to copy it) is shown the other way round: dark on light. */
+::selection { background: var(--ink); color: var(--ground); }
+
+/* Chat Computer's words as written (Markdown), in the same font and size as everything else. */
+.md p { margin: 0 0 1em; }
+.md p:last-child { margin-bottom: 0; }
+.md h1 { font-size: 1.5rem; }
+.md h2 { font-size: 1.25rem; }
+.md h3, .md h4 { font-size: 1rem; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: bold; line-height: 1.3; margin: 1.2em 0 0.5em; }
+.md > :first-child { margin-top: 0; }
+.md ul, .md ol { margin: 0 0 1em; padding-left: 1.5em; }
+.md li { margin: 0.25em 0; }
+.md li.task { list-style: none; margin-left: -1.5em; }
+.md li.task::before { content: "\2610\00a0 "; }
+.md li.task.done::before { content: "\2611\00a0 "; }
+.md li.task.done { text-decoration: line-through; }
+/* Code: the mono font at the same size as the words around it (its letters are the same height). Blocks of
+   code get a thin frame, and tables, quotes and rules thin lines, in the lines' grey (on the dark, as Claude's). */
+.md code, .md pre { font-family: var(--mono); font-size: 1em; }
+.md pre { margin: 0 0 1em; padding: 0.75em 1em; border: 1px solid var(--line); white-space: pre-wrap; }
+.md blockquote { margin: 0 0 1em; padding-left: 1em; border-left: 2px solid var(--line); }
+.md table { border-collapse: collapse; margin: 0 0 1em; }
+.md th, .md td { text-align: left; padding: 0.4em 1em 0.4em 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.md th { font-weight: bold; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
+.md .link { text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

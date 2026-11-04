@@ -1,0 +1,21 @@
+[package]
+name = "webengine"
+description = "Chat Computer's own model engine in a web page: os/model as WebAssembly, for chatcomputer.ai's chat"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Built for wasm32-unknown-unknown by scripts/build_web_engine.py, into docs/demo/engine/engine.wasm (a cdylib: a
+# WebAssembly module with the functions below for JavaScript); an rlib too, for its tests on this computer.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# A model of Qwen3.5 0.8B's shape with random weights, made in memory, to time the engine in a browser without
+# downloading the model (scripts/build_web_engine.py --bench); not in the website's module.
+bench = []
+
+[dependencies]
+model = { path = "../model" }
+crypto = { path = "../crypto" }

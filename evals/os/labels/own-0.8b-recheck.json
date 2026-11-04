@@ -1,0 +1,176 @@
+{
+ "about": "Hand labels for the two desktop cases whose fixes came after the after-run (own-0.8b-after.json: dark-mode, usb-whats-on), each run twice per version of Chat Computer, on its own model (Qwen3.5 0.8B at medium effort), 4 November 2026. Same meaning as own-0.8b-base.json. os-after3 and os-after3b: ba813b8 (the display tool's dark_mode action; the drive list says what's on each drive). os-after4 and os-after4b: 0110333 (the display tool answers a dark or light mode asked for, whichever action the model picks, with the person's words for the turn; an opened drive says what's on it). os-after5 and os-after5b: f6f9586 (a tool's own answer said when the model says none, as the display tool gives for a dark mode; no moves into temporary folders). os-after6 and os-after6b: 189b503 (the dark mode note in words to pass on as they are). os-after7 and os-after7b: 7b04ee9 (asked for a dark mode, the screen's status answers the same). The model's answers vary from run to run, so each is a sample.",
+ "runs": {
+  "os-after3": {
+   "code": "ba813b8",
+   "labels": {
+    "usb-whats-on": {
+     "pass": false,
+     "modes": [
+      "circles"
+     ],
+     "note": "listed the drive (with what's on it), opened it, then asked for the same again until it was stopped: nothing said"
+    },
+    "dark-mode": {
+     "pass": false,
+     "modes": [
+      "wrong tool",
+      "false claim"
+     ],
+     "note": "brightness to 100%, then \"I've turned on dark mode.\""
+    }
+   }
+  },
+  "os-after3b": {
+   "code": "ba813b8",
+   "labels": {
+    "usb-whats-on": {
+     "pass": true,
+     "modes": [],
+     "note": "from the list: \"contains two folders: Photos/ and Recipes.docx\" (one's a file)"
+    },
+    "dark-mode": {
+     "pass": false,
+     "modes": [
+      "wrong tool",
+      "false claim"
+     ],
+     "note": "turned the night light on, then \"Done.\""
+    }
+   }
+  },
+  "os-after4": {
+   "code": "0110333",
+   "labels": {
+    "usb-whats-on": {
+     "pass": true,
+     "modes": [],
+     "note": "\"Your USB stick contains two items: Photos/ and Recipes.docx.\""
+    },
+    "dark-mode": {
+     "pass": false,
+     "modes": [
+      "circles"
+     ],
+     "note": "asked for brightness 0 (told there's no dark mode, nothing changed), then the same again until it was stopped: nothing said"
+    }
+   }
+  },
+  "os-after4b": {
+   "code": "0110333",
+   "labels": {
+    "usb-whats-on": {
+     "pass": false,
+     "modes": [
+      "wrong action"
+     ],
+     "note": "moved the stick's photos and file into /tmp (gone at a restart), showed them, and said so: asked only what's on it"
+    },
+    "dark-mode": {
+     "pass": true,
+     "modes": [],
+     "note": "asked for brighter (told there's no dark mode, nothing changed): \"Chat Computer's screen is already dark, with no light mode on.\" (offers nothing more)"
+    }
+   }
+  },
+  "os-after5": {
+   "code": "f6f9586",
+   "labels": {
+    "usb-whats-on": {
+     "pass": false,
+     "modes": [
+      "never answered"
+     ],
+     "note": "showed the Photos folder, then Recipes.docx, on the screen, and said only \"It's on the screen.\" (the files stayed on the stick)"
+    },
+    "dark-mode": {
+     "pass": true,
+     "modes": [],
+     "note": "asked for brightness 100 (told there's no dark mode, nothing changed): \"Chat Computer's screen is already dark.\""
+    }
+   }
+  },
+  "os-after5b": {
+   "code": "f6f9586",
+   "labels": {
+    "usb-whats-on": {
+     "pass": true,
+     "modes": [],
+     "note": "\"It's mounted and contains Photos/ and Recipes.docx\""
+    },
+    "dark-mode": {
+     "pass": true,
+     "modes": [
+      "to_model"
+     ],
+     "note": "asked for brightness, then the night light (each time told there's no dark mode, nothing changed), then passed the tool's note on word for word, \"Tell them so, and offer to dim the screen ...\" too"
+    }
+   }
+  },
+  "os-after6": {
+   "code": "189b503",
+   "labels": {
+    "usb-whats-on": {
+     "pass": true,
+     "modes": [],
+     "note": "tried to move the stick's photos and file into /tmp (refused: nothing moved), then \"The USB stick contains photos and a recipe document.\""
+    },
+    "dark-mode": {
+     "pass": false,
+     "modes": [
+      "circles"
+     ],
+     "note": "brightness, then the night light (each told there's no dark mode, nothing changed), then the screen's status, then the same again until it was stopped: nothing said (the status, asked last, had no answer of its own to say)"
+    }
+   }
+  },
+  "os-after6b": {
+   "code": "189b503",
+   "labels": {
+    "usb-whats-on": {
+     "pass": true,
+     "modes": [],
+     "note": "\"The USB stick at /media/sam/SANDISK contains photos and a recipe document.\""
+    },
+    "dark-mode": {
+     "pass": true,
+     "modes": [],
+     "note": "the dark_mode action itself (told there's no dark mode): \"The screen is already in dark mode.\""
+    }
+   }
+  },
+  "os-after7": {
+   "code": "7b04ee9",
+   "labels": {
+    "usb-whats-on": {
+     "pass": true,
+     "modes": [],
+     "note": "\"The USB stick is a 32GB SANDISK drive and contains two folders: Photos/ and Recipes.docx.\" (one's a file)"
+    },
+    "dark-mode": {
+     "pass": true,
+     "modes": [],
+     "note": "the dark_mode action (told there's no dark mode): \"Chat Computer's screen is already in dark mode with light text on a dark background.\""
+    }
+   }
+  },
+  "os-after7b": {
+   "code": "7b04ee9",
+   "labels": {
+    "usb-whats-on": {
+     "pass": false,
+     "modes": [
+      "wrong action",
+      "circles"
+     ],
+     "note": "tried to move the stick's photos and file into /tmp (refused: nothing moved), then moves of what wasn't there, until it was stopped: nothing said"
+    },
+    "dark-mode": {
+     "pass": true,
+     "modes": [],
+     "note": "asked for brightness 0 (told there's no dark mode, nothing changed): \"Your computer's screen is already in dark mode.\""
+    }
+   }
+  }
+ }
+}

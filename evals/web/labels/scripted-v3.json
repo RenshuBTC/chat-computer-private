@@ -1,0 +1,354 @@
+{
+ "about": "Hand labels for the website's written answers (no AI in the browser), run web-none-base, 4 Nov 2026 (chatcomputer.ai at c240eb7), read from each answer and what opened. Same meaning as scripted-baseline.json: pass = a first-time visitor got a useful, true answer to what they typed. mode: the first failure, from the open coding: needs an AI (honest that only a model could do it, and how to get one); unhandled (the page could answer: a fact about itself, or something it does, but fell to \"I can't answer that yet\"); misrouted (another question's written answer); lost the follow-up. A note on a pass is a smaller fault seen in it.",
+ "labels": {
+  "what-is-this": {
+   "pass": true,
+   "note": "the welcome's way to real answers is the app's model (coming soon); not this browser's, nor the spark"
+  },
+  "how-work": {
+   "pass": true,
+   "note": "same welcome: the app's model only"
+  },
+  "what-can-do": {
+   "pass": true,
+   "note": "same welcome: the app's model only"
+  },
+  "is-this-an-os": {
+   "pass": true
+  },
+  "hello": {
+   "pass": true,
+   "note": "same welcome: the app's model only"
+  },
+  "hi-there": {
+   "pass": true,
+   "note": "same welcome: the app's model only"
+  },
+  "how-are-you": {
+   "pass": true
+  },
+  "thanks": {
+   "pass": true
+  },
+  "play-music": {
+   "pass": true
+  },
+  "play-piano": {
+   "pass": true
+  },
+  "play-taylor": {
+   "pass": true
+  },
+  "play-lofi-typo": {
+   "pass": true
+  },
+  "im-bored": {
+   "pass": true
+  },
+  "relax": {
+   "pass": true
+  },
+  "youtube-video": {
+   "pass": true
+  },
+  "map-tokyo": {
+   "pass": true
+  },
+  "map-short": {
+   "pass": true
+  },
+  "where-is-london": {
+   "pass": true
+  },
+  "directions": {
+   "pass": true
+  },
+  "map-other-city": {
+   "pass": true
+  },
+  "timer-5": {
+   "pass": true
+  },
+  "timer-terse": {
+   "pass": true
+  },
+  "eggs": {
+   "pass": true
+  },
+  "weather": {
+   "pass": true
+  },
+  "weather-city": {
+   "pass": true
+  },
+  "umbrella": {
+   "pass": true
+  },
+  "messages": {
+   "pass": true
+  },
+  "jane": {
+   "pass": true
+  },
+  "email": {
+   "pass": true
+  },
+  "reply-mum": {
+   "pass": true
+  },
+  "packing": {
+   "pass": true
+  },
+  "find-photo": {
+   "pass": true
+  },
+  "search-files": {
+   "pass": true
+  },
+  "louder": {
+   "pass": true,
+   "note": "nothing was playing: \"Volume is 60%\" anyway"
+  },
+  "bigger-text": {
+   "pass": true
+  },
+  "close-it": {
+   "pass": true
+  },
+  "wifi": {
+   "pass": true
+  },
+  "open-website": {
+   "pass": true
+  },
+  "open-google": {
+   "pass": true
+  },
+  "news": {
+   "pass": true,
+   "note": "each story twice: the harness answered yesterday's page with today's stories (fixed in the harness)"
+  },
+  "recipe": {
+   "pass": false,
+   "mode": "needs an AI",
+   "note": "honest that writing a recipe needs a model, and how to get one (this browser's, or the spark); no recipe"
+  },
+  "calc": {
+   "pass": true
+  },
+  "capital": {
+   "pass": true
+  },
+  "explain-quantum": {
+   "pass": true
+  },
+  "write-email": {
+   "pass": false,
+   "mode": "needs an AI",
+   "note": "honest that it needs a model; no draft"
+  },
+  "poem": {
+   "pass": false,
+   "mode": "needs an AI",
+   "note": "honest that it needs a model; no poem"
+  },
+  "translate": {
+   "pass": false,
+   "mode": "needs an AI",
+   "note": "honest that it needs a model; no translation"
+  },
+  "trip-plan": {
+   "pass": false,
+   "mode": "needs an AI",
+   "note": "honest that it needs a model; no plan"
+  },
+  "advice": {
+   "pass": false,
+   "mode": "needs an AI",
+   "note": "honest that it needs a model; no tips"
+  },
+  "code": {
+   "pass": false,
+   "mode": "needs an AI",
+   "note": "honest that it needs a model; no code"
+  },
+  "date-today": {
+   "pass": true
+  },
+  "time-now": {
+   "pass": true
+  },
+  "joke": {
+   "pass": true
+  },
+  "how-install": {
+   "pass": true
+  },
+  "download": {
+   "pass": true
+  },
+  "price": {
+   "pass": true
+  },
+  "mac": {
+   "pass": true
+  },
+  "windows-safe": {
+   "pass": true
+  },
+  "requirements": {
+   "pass": true
+  },
+  "old-laptop": {
+   "pass": true
+  },
+  "privacy": {
+   "pass": true,
+   "note": "doesn't say that with your own AI (the spark) what you type goes to its maker"
+  },
+  "is-it-free": {
+   "pass": true
+  },
+  "airpods": {
+   "pass": true
+  },
+  "are-you-claude": {
+   "pass": true
+  },
+  "who-made": {
+   "pass": true
+  },
+  "anthropic": {
+   "pass": true
+  },
+  "cant-do": {
+   "pass": true,
+   "note": "says real answers need the app's model; not this browser's, nor the spark"
+  },
+  "control-my-pc": {
+   "pass": true
+  },
+  "real-or-fake": {
+   "pass": true
+  },
+  "gibberish": {
+   "pass": true
+  },
+  "emoji": {
+   "pass": true,
+   "note": "same welcome: the app's model only"
+  },
+  "question-mark": {
+   "pass": true,
+   "note": "same welcome: the app's model only"
+  },
+  "chinese": {
+   "pass": true
+  },
+  "spanish": {
+   "pass": true
+  },
+  "malay": {
+   "pass": true
+  },
+  "rude": {
+   "pass": true
+  },
+  "long": {
+   "pass": true
+  },
+  "haze-trace": {
+   "pass": true,
+   "note": "the last turn (\"why can't you?\", after it had looked it up) gets \"I can't answer that yet\""
+  },
+  "haze-now": {
+   "pass": true
+  },
+  "pm": {
+   "pass": true
+  },
+  "world-cup": {
+   "pass": true
+  },
+  "look-it-up": {
+   "pass": true
+  },
+  "search-population": {
+   "pass": true
+  },
+  "headlines": {
+   "pass": true,
+   "note": "each story twice (the harness, as for news)"
+  },
+  "news-yesterday": {
+   "pass": true,
+   "note": "each story twice (the harness, as for news)"
+  },
+  "why-no-internet": {
+   "pass": true
+  },
+  "tell-me-more": {
+   "pass": false,
+   "mode": "misrouted",
+   "note": "\"what is the Southeast Asian haze?\" got today's air reading in Singapore (the haze words), not what the haze is; then \"when was the worst one?\" needs a model"
+  },
+  "which-model-now": {
+   "pass": false,
+   "mode": "unhandled",
+   "note": "\"what model is answering me right now?\" isn't recognised as asking who answers: \"I can't answer that yet\""
+  },
+  "use-chatgpt": {
+   "pass": false,
+   "mode": "unhandled",
+   "note": "asking to use their ChatGPT account falls to \"I can't answer that yet\"; nothing on an OpenAI key or OpenRouter"
+  },
+  "use-claude": {
+   "pass": false,
+   "mode": "misrouted",
+   "note": "\"I pay for Claude, can I use it?\" got the price answer (\"pay\"): Chat Computer is free; nothing on using Claude"
+  },
+  "change-model": {
+   "pass": false,
+   "mode": "unhandled",
+   "note": "\"how do I change the model?\" falls to \"I can't answer that yet\" (its next step does name the spark)"
+  },
+  "think-harder": {
+   "pass": false,
+   "mode": "unhandled",
+   "note": "nothing on how hard the one answering thinks: \"I can't answer that yet\""
+  },
+  "smarter-ai": {
+   "pass": false,
+   "mode": "unhandled",
+   "note": "\"is there a better AI I can use?\" falls to \"I can't answer that yet\", whose next step happens to be the answer"
+  },
+  "run-in-browser": {
+   "pass": false,
+   "mode": "unhandled",
+   "note": "\"can the AI run in my browser?\" gets \"I can't answer that yet\", followed by the answer (type /, Run my model in this browser)"
+  },
+  "connect-gmail": {
+   "pass": false,
+   "mode": "misrouted",
+   "note": "\"connect my gmail\" showed Jane's (made-up) emails, as for \"check my email\"; nothing on connecting"
+  },
+  "call-me": {
+   "pass": false,
+   "mode": "unhandled",
+   "note": "\"call me Sam from now on\": \"from now on\" at the end isn't taken, so the name isn't kept"
+  },
+  "i-live-tokyo": {
+   "pass": true
+  },
+  "weather-follow": {
+   "pass": false,
+   "mode": "lost the follow-up",
+   "note": "Paris's weather, then \"and tomorrow?\" isn't understood"
+  },
+  "timer-cancel": {
+   "pass": false,
+   "mode": "lost the follow-up",
+   "note": "the timer, then \"actually cancel it\" isn't understood (\"close\" would be)"
+  }
+ }
+}

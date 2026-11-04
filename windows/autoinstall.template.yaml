@@ -1,0 +1,49 @@
+#cloud-config
+# Chat Computer: answers for the official Ubuntu Server 24.04 installer (subiquity "autoinstall").
+# Chat Computer Setup on Windows fills in the marked fields and writes the result to the root of the
+# installer partition (a temporary FAT32 partition labelled CHATCOMP on the PC's own disk) as
+# autoinstall.yaml. The word "autoinstall" on the installer's boot menu makes it run without questions.
+#
+# Disks: the installer only uses FREE space ("use_gap"), on the disk it started from ("install-media":
+# the disk holding the installer partition, which setup put on the disk Chat Computer goes on, at the end of
+# Chat Computer's free space). It never reformats a disk; Windows and its files are left exactly as they are.
+autoinstall:
+  version: 1
+  interactive-sections: []
+  refresh-installer:
+    update: false
+  locale: "en_US.UTF-8"
+  keyboard:
+    layout: "us"
+  timezone: {{TIMEZONE}}
+  source:
+    id: ubuntu-server-minimal
+    search_drivers: true
+  kernel:
+    flavor: hwe
+  network:
+{{NETWORK}}
+  identity:
+    hostname: chatcomputer
+    realname: {{REALNAME}}
+    username: {{USERNAME}}
+    password: {{PASSWORD_HASH}}
+  ssh:
+    install-server: false
+  drivers:
+    install: true
+  storage:
+    layout:
+      name: direct
+      mode: use_gap
+      match:
+        install-media: true
+  early-commands:
+    # Never install twice from the same installer (see chatcomputer/guard.sh on the installer partition).
+    - ["sh", "/cdrom/chatcomputer/guard.sh", {{INSTALL_ID}}]
+    # Put the Wi-Fi card's Linux name into the network settings (see chatcomputer/network.sh).
+    - ["sh", "/cdrom/chatcomputer/network.sh"]
+  late-commands:
+    # Copy Chat Computer and its settings, then set up the Chat Computer session.
+    - ["sh", "/cdrom/chatcomputer/finish.sh", {{USERNAME}}, {{INSTALL_ID}}]
+  shutdown: reboot

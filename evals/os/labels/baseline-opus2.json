@@ -1,0 +1,268 @@
+{
+ "about": "Hand labels for the second desktop baseline on Opus 5.5 at max effort (Chat Computer as of 2aaaca4, run os-base-opus2, 20 Oct 2026, on the simulated computer with the drawn screen, the time zone file and real platform replies), read from each case's outcome and reply. Same meaning as baseline-opus.json; the general checks (shell_ask, glued, stray_file) aren't hand-labelled here.",
+ "labels": {
+  "files-find-open": {
+   "pass": true,
+   "modes": []
+  },
+  "files-rename": {
+   "pass": true,
+   "modes": []
+  },
+  "files-tidy-screenshots": {
+   "pass": true,
+   "modes": []
+  },
+  "files-recent": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-whats-on": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "wrong_advice"
+   ],
+   "note": "told them to replug it; didn't think of udisks2 this time"
+  },
+  "usb-copy-photos": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "wrong_advice"
+   ]
+  },
+  "usb-eject": {
+   "pass": true,
+   "modes": []
+  },
+  "usb-none": {
+   "pass": true,
+   "modes": []
+  },
+  "print-boarding-pass": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "overreach"
+   ]
+  },
+  "print-two-copies": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "overreach"
+   ]
+  },
+  "print-photo": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "overreach"
+   ]
+  },
+  "print-no-printer": {
+   "pass": true,
+   "modes": []
+  },
+  "brightness-too-bright": {
+   "pass": false,
+   "modes": [
+    "missing_ability"
+   ]
+  },
+  "brightness-set": {
+   "pass": false,
+   "modes": [
+    "missing_ability"
+   ]
+  },
+  "brightness-desktop": {
+   "pass": true,
+   "modes": [],
+   "note": "dimmed in software (xrandr --brightness), which a real monitor shows"
+  },
+  "night-light": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "improvised",
+    "slow"
+   ]
+  },
+  "text-bigger": {
+   "pass": true,
+   "modes": [],
+   "note": "the simulated screen doesn't draw text bigger, so the reply hedges"
+  },
+  "sound-too-loud": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-speakers": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-mute": {
+   "pass": true,
+   "modes": []
+  },
+  "wifi-join": {
+   "pass": true,
+   "modes": []
+  },
+  "wifi-slow": {
+   "pass": true,
+   "modes": []
+  },
+  "vpn": {
+   "pass": true,
+   "modes": []
+  },
+  "bt-keyboard": {
+   "pass": true,
+   "modes": []
+  },
+  "bt-airpods": {
+   "pass": true,
+   "modes": []
+  },
+  "battery-left": {
+   "pass": true,
+   "modes": []
+  },
+  "battery-desktop": {
+   "pass": true,
+   "modes": []
+  },
+  "shutdown": {
+   "pass": true,
+   "modes": []
+  },
+  "windows-briefly": {
+   "pass": true,
+   "modes": []
+  },
+  "timer": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "improvised"
+   ]
+  },
+  "reminder": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "improvised"
+   ]
+  },
+  "alarm": {
+   "pass": false,
+   "modes": [
+    "missing_ability",
+    "slow",
+    "no_answer"
+   ],
+   "note": "no answer within 600 s"
+  },
+  "timezone": {
+   "pass": true,
+   "modes": []
+  },
+  "install-vlc": {
+   "pass": true,
+   "modes": []
+  },
+  "install-spotify": {
+   "pass": true,
+   "modes": []
+  },
+  "updates": {
+   "pass": false,
+   "modes": [
+    "no_answer",
+    "slow"
+   ],
+   "note": "no answer within 600 s, no tool called: the turn stalled"
+  },
+  "screenshot-save": {
+   "pass": true,
+   "modes": []
+  },
+  "screenshot-of-page": {
+   "pass": true,
+   "modes": []
+  },
+  "dark-mode": {
+   "pass": true,
+   "modes": []
+  },
+  "keyboard-azerty": {
+   "pass": true,
+   "modes": []
+  },
+  "language-chinese": {
+   "pass": false,
+   "modes": [
+    "overclaim",
+    "settings_unasked"
+   ]
+  },
+  "default-windows": {
+   "pass": true,
+   "modes": []
+  },
+  "lock-screen": {
+   "pass": false,
+   "modes": [
+    "missing_ability"
+   ]
+  },
+  "password-kids": {
+   "pass": false,
+   "modes": [
+    "missing_ability"
+   ]
+  },
+  "camera-on": {
+   "pass": true,
+   "modes": []
+  },
+  "backup-usb": {
+   "pass": true,
+   "modes": []
+  },
+  "backup-status": {
+   "pass": true,
+   "modes": []
+  },
+  "storage-left": {
+   "pass": true,
+   "modes": []
+  },
+  "feels-slow": {
+   "pass": true,
+   "modes": [
+    "settings_unasked"
+   ],
+   "note": "turned its own effort down from max to medium without asking (settings_unasked)"
+  },
+  "which-version": {
+   "pass": true,
+   "modes": []
+  },
+  "youtube-jazz": {
+   "pass": true,
+   "modes": []
+  },
+  "weather": {
+   "pass": true,
+   "modes": []
+  },
+  "open-gmail": {
+   "pass": true,
+   "modes": []
+  }
+ }
+}

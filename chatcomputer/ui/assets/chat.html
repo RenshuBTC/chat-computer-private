@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content">
+<title>Chat Computer</title>
+<link rel="stylesheet" href="theme.css">
+<link rel="stylesheet" href="chat.css">
+</head>
+<body class="intro">
+<aside id="messages" class="side" aria-label="Messages">
+  <div class="side-head">
+    <h2 class="side-title">Messages</h2>
+    <button id="add-account" class="icon-button" type="button" tabindex="-1" aria-label="Connect an account" title="Connect an account"
+            aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </div>
+  <p id="messages-empty" class="side-empty">Press + to connect your email, chat apps and social media: their messages show up here, newest first.</p>
+  <ol id="messages-pinned" class="side-pinned"></ol>
+  <ol id="messages-list" class="side-list"></ol>
+</aside>
+<main id="column" aria-live="polite">
+  <section id="welcome"><h1 id="wordmark">Chat Computer</h1><p id="greeting"></p></section>
+  <section id="log"></section>
+  <div id="live" class="you live"><div id="live-in"><span id="live-text"></span><span id="caret"></span></div></div>
+  <div id="room" aria-hidden="true"></div>
+</main>
+<aside id="done" class="side" aria-label="Actions and chats">
+  <section id="actions" class="half" aria-label="Actions">
+    <div class="side-head"><h2 class="side-title" id="done-title">Actions</h2></div>
+    <p id="clock" aria-live="off"><span id="clock-date"></span><span id="clock-time"></span></p>
+    <p id="done-empty" class="side-empty">What I do for you shows up here: sites I open, searches, files I change.</p>
+    <ol id="done-pinned" class="side-pinned"></ol>
+    <ol id="done-list" class="side-list"></ol>
+  </section>
+  <section id="chats" class="half" aria-label="Chats">
+    <div class="side-head">
+      <h2 class="side-title">Chats</h2>
+      <button id="new-chat" class="icon-button" type="button" tabindex="-1" aria-label="New chat" title="New chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+    <p id="chats-empty" class="side-empty">Each task gets a chat of its own here, newest first. + starts a new one.</p>
+    <ol id="chats-list" class="side-list"></ol>
+  </section>
+</aside>
+<div id="frame"><div id="frame-bar"><span id="frame-title"></span><button id="frame-close" class="icon-button" type="button" tabindex="-1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div>
+<button id="toggle-left" class="toggle" type="button" tabindex="-1" aria-pressed="true" aria-label="Hide Messages" title="Hide Messages">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M9 5H6.5A3.5 3.5 0 0 0 3 8.5v7A3.5 3.5 0 0 0 6.5 19H9z"/><rect x="3" y="5" width="18" height="14" rx="3.5"/><path d="M9 5v14"/></svg>
+</button>
+<button id="toggle-right" class="toggle" type="button" tabindex="-1" aria-pressed="true" aria-label="Hide Actions" title="Hide Actions">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M15 5h2.5A3.5 3.5 0 0 1 21 8.5v7a3.5 3.5 0 0 1-3.5 3.5H15z"/><rect x="3" y="5" width="18" height="14" rx="3.5"/><path d="M15 5v14"/></svg>
+</button>
+<footer id="composer">
+  <p id="wake">Sleeping. Say “Computer”, press an AirPod or type to wake me.</p>
+  <div id="box">
+    <div id="results" role="listbox" aria-label="On this computer"></div>
+    <div id="attached" aria-label="Added to the message"></div>
+    <div id="row">
+      <svg id="search-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg>
+      <textarea id="input" rows="1" aria-label="Message" enterkeyhint="send" placeholder="Type anything"></textarea>
+      <div id="tools">
+        <button id="add" class="tool" type="button" tabindex="-1" aria-label="Add files" title="Add files">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button id="ai" class="tool" type="button" tabindex="-1" aria-label="Sign in with your own AI" title="Sign in with your own AI">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spark"/></svg>
+        </button>
+        <button id="mic" class="tool" type="button" tabindex="-1" aria-pressed="false" aria-label="Talk" title="Talk">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect class="fill" x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg>
+          <span class="level" aria-hidden="true"></span>
+        </button>
+      </div>
+      <button id="send" type="button" tabindex="-1" aria-label="Send">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg>
+      </button>
+    </div>
+  </div>
+</footer>
+<div id="hold-shade" aria-hidden="true"></div>
+<div id="hold-menu" role="menu" aria-label="This message">
+  <button type="button" role="menuitem" data-do="copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.5"/><path d="M15.5 8.5V6.5A2.5 2.5 0 0 0 13 4H6.5A2.5 2.5 0 0 0 4 6.5V13a2.5 2.5 0 0 0 2.5 2.5h2"/></svg>Copy</button>
+  <button type="button" role="menuitem" data-do="share"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19.5v-3a6.5 6.5 0 0 1 6.5-6.5H20"/><path d="M15.5 5.5L20 10l-4.5 4.5"/></svg>Send to</button>
+  <button type="button" role="menuitem" data-do="select"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 6.5v12a1.5 1.5 0 0 0 1.5 1.5h10.5M18.5 17.5v-12A1.5 1.5 0 0 0 17 4H6.5"/><path d="M9 9h6M9 12.5h6M9 16h3.5"/><circle class="dot" cx="5.5" cy="4.5" r="1.6"/><circle class="dot" cx="18.5" cy="19.5" r="1.6"/></svg>Select text</button>
+  <button type="button" role="menuitem" data-do="edit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h3.5L18.7 8.8a2.1 2.1 0 0 0-3-3L5.5 16v3z"/><path d="M14.5 7l2.5 2.5"/></svg>Edit</button>
+  <button type="button" role="menuitem" data-do="speak"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/></svg>Read aloud</button>
+</div>
+<div id="reader" role="dialog" aria-modal="true" aria-labelledby="reader-title">
+  <div id="reader-bar"><span id="reader-title">Select text</span><button id="reader-close" class="icon-button" type="button" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <div id="reader-text"></div>
+</div>
+<p id="toast" role="status" aria-live="polite"></p>
+<div id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <form id="sheet-form" autocomplete="off">
+    <div id="sheet-head">
+      <button id="sheet-back" class="icon-button" type="button" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <h2 id="sheet-title"></h2>
+      <button id="sheet-cancel" class="icon-button" type="button" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div id="sheet-text"></div>
+    <div id="sheet-fields"></div>
+    <p id="sheet-error" role="alert"></p>
+    <div id="sheet-buttons">
+      <button id="sheet-ok" class="primary" type="submit"></button>
+    </div>
+  </form>
+</div>
+<div id="lock" role="dialog" aria-modal="true" aria-labelledby="lock-title">
+  <form id="lock-form" autocomplete="off">
+    <p id="lock-time"></p>
+    <p id="lock-date"></p>
+    <h2 id="lock-title">Locked</h2>
+    <p id="lock-note">Type your PIN to unlock.</p>
+    <input id="lock-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="off" aria-label="PIN">
+    <p id="lock-error" role="alert"></p>
+    <div id="lock-pad">
+      <button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button>
+      <button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button>
+      <button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button>
+      <button type="button" data-key="del" aria-label="Delete">⌫</button><button type="button" data-key="0">0</button><button type="submit" data-key="ok" aria-label="Unlock">OK</button>
+    </div>
+  </form>
+</div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-email" viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.5 7l8.5 6 8.5-6"/></symbol>
+  <symbol id="i-telegram" viewBox="0 0 24 24"><path d="M21 4L3 11l6 2.5M21 4l-3 16-9-6.5M21 4L9 13.5V19l3-3.5"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 18.5l1.2-3.6A7.5 7.5 0 1 1 8.8 18z"/></symbol>
+  <symbol id="i-social" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/><path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3zM12 14v6"/></symbol>
+  <symbol id="i-revert" viewBox="0 0 24 24"><path d="M9 13L4.5 8.5 9 4"/><path d="M4.5 8.5h10a5 5 0 0 1 0 10H11"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16.5 6.5l2.5 2.5M14 9l2 2"/></symbol>
+  <symbol id="i-pods" viewBox="0 0 24 24"><path d="M8 3a4 4 0 0 0-4 4 4 4 0 0 0 3 3.87V19a1.5 1.5 0 0 0 3 0V7a4 4 0 0 0-2-4z"/><path d="M16 3a4 4 0 0 1 4 4 4 4 0 0 1-3 3.87V19a1.5 1.5 0 0 1-3 0V7a4 4 0 0 1 2-4z"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+  <symbol id="i-voice" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/></symbol>
+</svg>
+<script src="md.js"></script>
+<script src="chat.js"></script>
+</body>
+</html>

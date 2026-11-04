@@ -1,0 +1,676 @@
+#!/bin/bash
+# chatcomputer-root — the ONLY privileged entry point Chat Computer may use.
+#
+# Installed at /usr/local/libexec/chatcomputer/chatcomputer-root, owned root:root 0755,
+# invoked by the Chat Computer user via:  sudo -n /usr/local/libexec/chatcomputer/chatcomputer-root <verb> [args]
+# (see /etc/sudoers.d/chatcomputer).
+#
+# Design rules (security-critical — the caller is an AI acting on spoken
+# commands that may be influenced by untrusted content on screen):
+#   * Every verb validates its own arguments with strict regexes/allow-lists.
+#   * User-supplied strings are NEVER interpolated into a shell; external
+#     commands are always invoked as argument vectors (no `eval`, no `sh -c`
+#     with interpolation).
+#   * stdout is exactly one JSON object; human/debug text goes to stderr.
+#   * Exit 0 = success, non-zero = failure (JSON still printed on stdout).
+#   * Unknown verbs are rejected.
+#
+# Verbs (per ARCHITECTURE.md): status, boot-windows-next, boot-macos-next, boot-default, mount-windows,
+# apt-install, apt-remove, system-update, bt-import-windows-keys,
+# set-timezone, wipe-install-secrets, update-app, update-done, update-undo.
+# On a PC Chat Computer runs on Ubuntu next to Windows; on an Apple silicon Mac on Fedora Asahi Remix next to
+# macOS, where the start-up volume is chosen with asahi-bless and packages come from dnf.
+
+set -u
+umask 022
+export LC_ALL=C
+# Force a known-good PATH so a poisoned caller environment cannot substitute a
+# trojan binary for mount/efibootmgr/etc. CHATCOMPUTER_ROOT_PATH is a TEST-ONLY
+# override: when invoked through `sudo -n` (production), sudo's env_reset +
+# secure_path drop it, so PATH is always the hardcoded default in production.
+# The test harness invokes the helper directly and sets it to a shim dir.
+export PATH="${CHATCOMPUTER_ROOT_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
+
+# Where Windows' drive is mounted. (CHATCOMPUTER_TEST_WINDOWS_MOUNT: test only, dropped by sudo like the others.)
+WINDOWS_MOUNT="${CHATCOMPUTER_TEST_WINDOWS_MOUNT:-/mnt/windows}"
+# Updating Chat Computer from the folder on Windows' drive Chat Computer Setup ran from (see "Updating Chat Computer" below).
+# (CHATCOMPUTER_TEST_*: test only.)
+APP_ROOT="${CHATCOMPUTER_TEST_APP_ROOT:-/opt/chatcomputer}"
+UPDATE_SOURCE_FILE="${CHATCOMPUTER_TEST_UPDATE_SOURCE:-/etc/chatcomputer/update-source}"
+UPDATE_PENDING="${CHATCOMPUTER_TEST_UPDATE_PENDING:-/var/lib/chatcomputer/update-pending}"
+# Written by install-chatcomputer.sh once Chat Computer is fully installed. Until then the first start's finisher runs
+# the install again as root, and that runs Chat Computer's own code: so no update before.
+BASE_INSTALLED="${CHATCOMPUTER_TEST_BASE_INSTALLED:-/var/lib/chatcomputer/base-installed}"
+# Chat Computer's own BitLocker recovery password for Windows' drive, from Chat Computer Setup (root, 0600).
+# CHATCOMPUTER_TEST_BITLOCKER_KEY is a TEST-ONLY override, dropped by sudo like CHATCOMPUTER_ROOT_PATH.
+BITLOCKER_KEY_FILE="${CHATCOMPUTER_TEST_BITLOCKER_KEY:-/etc/chatcomputer/bitlocker-recovery-key}"
+# Windows' drive, opened with that key: /dev/mapper/chatcomputer-windows. (CHATCOMPUTER_TEST_MAPPER_DIR: test only.)
+WINDOWS_MAPPER=chatcomputer-windows
+MAPPER_DIR="${CHATCOMPUTER_TEST_MAPPER_DIR:-/dev/mapper}"
+# What the machine is (CHATCOMPUTER_TEST_DT_COMPATIBLE: test only, dropped by sudo).
+DT_COMPATIBLE="${CHATCOMPUTER_TEST_DT_COMPATIBLE:-/proc/device-tree/compatible}"
+# Chat Computer's start-up volume on a Mac: the name Chat Computer Setup gives it in the Asahi installer.
+MAC_CHATCOMPUTER_VOLUME="Chat Computer"
+VENV_PYTHON=/opt/chatcomputer/venv/bin/python
+BT_IMPORT_PY=/usr/local/libexec/chatcomputer/bt-import-windows-keys.py
+# The packages Chat Computer is made of (install-chatcomputer.sh writes the list): never removed. (Test only override,
+# dropped by sudo like the others.)
+BASE_PACKAGES="${CHATCOMPUTER_TEST_BASE_PACKAGES:-/etc/chatcomputer/base-packages}"
+
+# ---------------------------------------------------------------------------
+# JSON helpers (no jq dependency; we emit small, controlled objects).
+# ---------------------------------------------------------------------------
+
+# json_escape <string> -> escaped JSON string body (no surrounding quotes).
+json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '%s' "$s"
+}
+
+# Emit a JSON object from key=value pairs. Values that are exactly 'true',
+# 'false', 'null' or a bare integer are emitted raw; everything else is quoted
+# and escaped. Prefix a key with '@' to force raw (used for nested JSON).
+emit_json() {
+  local out="{" first=1 pair key val raw
+  for pair in "$@"; do
+    key=${pair%%=*}
+    val=${pair#*=}
+    raw=0
+    if [ "${key#@}" != "$key" ]; then raw=1; key=${key#@}; fi
+    if [ "$first" -eq 1 ]; then first=0; else out+=","; fi
+    out+="\"$(json_escape "$key")\":"
+    if [ "$raw" -eq 1 ]; then
+      out+="$val"
+    elif [ "$val" = "true" ] || [ "$val" = "false" ] || [ "$val" = "null" ]; then
+      out+="$val"
+    elif [[ "$val" =~ ^(0|-?[1-9][0-9]*)$ ]]; then
+      # Bare integer with no leading zeros (JSON forbids 0001). EFI boot numbers
+      # like "0001" therefore stay quoted strings, which is correct.
+      out+="$val"
+    else
+      out+="\"$(json_escape "$val")\""
+    fi
+  done
+  out+="}"
+  printf '%s\n' "$out"
+}
+
+# die <message> — print an error JSON object to stdout and exit non-zero.
+die() {
+  emit_json ok=false error="$1"
+  exit 1
+}
+
+# is_efi — true on a UEFI system. CHATCOMPUTER_FORCE_EFI=1 is a TEST-ONLY override
+# (stripped by sudo in production, like CHATCOMPUTER_ROOT_PATH) so the EFI code
+# paths can be exercised in a BIOS/container test environment.
+is_efi() {
+  [ "${CHATCOMPUTER_FORCE_EFI:-0}" = "1" ] && return 0
+  [ -d /sys/firmware/efi ]
+}
+
+# ---------------------------------------------------------------------------
+# Windows partition discovery + mounting.
+# ---------------------------------------------------------------------------
+
+# Does a device hold Windows (an NTFS file system with Windows/System32)? Probed read-only, without touching
+# what's on it.
+windows_on() {
+  local dev=$1 tmp found=1
+  tmp=$(mktemp -d /run/chatcomputer/winprobe.XXXXXX 2>/dev/null || mktemp -d)
+  if mount -o ro,noexec,nodev,nosuid -t ntfs3 "$dev" "$tmp" 2>/dev/null \
+     || mount -o ro,noexec,nodev,nosuid -t ntfs-3g "$dev" "$tmp" 2>/dev/null \
+     || mount -o ro,noexec,nodev,nosuid "$dev" "$tmp" 2>/dev/null; then
+    [ -d "$tmp/Windows/System32" ] && found=0
+    umount "$tmp" 2>/dev/null || true
+  fi
+  rmdir "$tmp" 2>/dev/null || true
+  return $found
+}
+
+# The plain (not encrypted) NTFS partition that holds Windows. Echoes its device path, or nothing.
+find_windows_partition() {
+  local dev fstype
+  # lsblk gives a stable, parseable device+fstype list.
+  while IFS='|' read -r dev fstype; do
+    [ -n "$dev" ] && [ "$fstype" = "ntfs" ] || continue
+    if windows_on "/dev/$dev"; then printf '%s' "/dev/$dev"; return 0; fi
+  done < <(lsblk -rno NAME,FSTYPE 2>/dev/null | awk 'NF>=1 {name=$1; ft=($2==""?"":$2); print name"|"ft}')
+}
+
+# Is an NTFS device "clean" (not left dirty / hibernated by Windows)? We treat a
+# successful read-write-capable probe as clean; the simplest robust signal is
+# ntfsfix -d's dirty check, but we avoid writing. Use `ntfs-3g.probe --readwrite`.
+ntfs_is_clean() {
+  local dev=$1
+  if command -v ntfs-3g.probe >/dev/null 2>&1; then
+    ntfs-3g.probe --readwrite "$dev" >/dev/null 2>&1
+  else
+    # No probe tool: be conservative and treat as not-clean (-> ro).
+    return 1
+  fi
+}
+
+# mount_windows_impl — the shared implementation used by the `mount-windows`
+# verb and the boot service. Echoes nothing; sets globals via the JSON emit at
+# the end. Returns 0 always (best-effort); callers inspect the JSON.
+do_mount_windows() {
+  local caller_uid caller_gid
+  # Mount with the Chat Computer user's ownership. SUDO_UID/GID identify the caller;
+  # fall back to the first human uid (1000) for the boot service (run as root
+  # with no SUDO_*).
+  caller_uid=${SUDO_UID:-1000}
+  caller_gid=${SUDO_GID:-$caller_uid}
+  # Validate they are numeric (defensive; they come from sudo, not user args).
+  [[ "$caller_uid" =~ ^[0-9]+$ ]] || caller_uid=1000
+  [[ "$caller_gid" =~ ^[0-9]+$ ]] || caller_gid=$caller_uid
+
+  mkdir -p "$WINDOWS_MOUNT"
+
+  # Already mounted? Report and stop (idempotent).
+  if mountpoint -q "$WINDOWS_MOUNT"; then
+    local rw=false
+    if findmnt -no OPTIONS "$WINDOWS_MOUNT" 2>/dev/null | grep -qvE '(^|,)ro(,|$)'; then rw=true; fi
+    emit_json ok=true windows_mounted=true windows_rw=$rw note="already mounted"
+    return 0
+  fi
+
+  local dev bitlocker=false target_dev
+  dev=$(find_windows_partition)
+
+  if [ -z "$dev" ]; then
+    # Windows' drive may be encrypted with BitLocker (no readable NTFS until it's opened). Chat Computer Setup
+    # gives Chat Computer a recovery password of its own for it; the BitLocker partition that opens with that
+    # key and holds Windows is the one. Opened with the kernel's own BitLocker support (cryptsetup's
+    # BITLK); the key goes in on standard input, never on a command line other programs could read.
+    local b any=false key opened
+    for b in $(lsblk -rno NAME,FSTYPE 2>/dev/null | awk '$2=="BitLocker"{print $1}'); do
+      any=true
+      if [ ! -r "$BITLOCKER_KEY_FILE" ]; then break; fi
+      if [ ! -e "$MAPPER_DIR/$WINDOWS_MAPPER" ]; then
+        key=$(tr -d '\r\n' < "$BITLOCKER_KEY_FILE")
+        printf '%s' "$key" | cryptsetup open --type bitlk --key-file=- "/dev/$b" "$WINDOWS_MAPPER" >/dev/null 2>&1
+        opened=$?
+        key=""
+        [ "$opened" -eq 0 ] || continue
+      fi
+      if windows_on "$MAPPER_DIR/$WINDOWS_MAPPER"; then
+        dev="/dev/$b"; bitlocker=true; break
+      fi
+      cryptsetup close "$WINDOWS_MAPPER" >/dev/null 2>&1 || true
+    done
+    if [ -z "$dev" ] && [ "$any" = true ]; then
+      if [ ! -r "$BITLOCKER_KEY_FILE" ]; then
+        emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
+          note="Windows' drive is encrypted (BitLocker) and Chat Computer has no key for it"
+      else
+        emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=true \
+          note="Chat Computer's BitLocker key did not open Windows' drive"
+      fi
+      return 0
+    fi
+  fi
+
+  if [ -z "$dev" ]; then
+    emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker=false \
+      note="no Windows partition found"
+    return 0
+  fi
+
+  target_dev="$dev"
+  [ "$bitlocker" = true ] && target_dev="$MAPPER_DIR/$WINDOWS_MAPPER"
+
+  # Decide rw vs ro by cleanliness. NEVER pass remove_hiberfile. Nothing on Windows' drive can act as a device
+  # or gain root's rights here (nodev, nosuid).
+  local opts rw=false
+  if ntfs_is_clean "$target_dev"; then
+    opts="rw,nosuid,nodev,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"; rw=true
+  else
+    opts="ro,nosuid,nodev,uid=$caller_uid,gid=$caller_gid,umask=077,windows_names"
+  fi
+
+  if mount -t ntfs-3g -o "$opts" "$target_dev" "$WINDOWS_MOUNT" 2>/dev/null \
+     || mount -o "$opts" "$target_dev" "$WINDOWS_MOUNT" 2>/dev/null; then
+    emit_json ok=true windows_mounted=true windows_rw=$rw windows_bitlocker="$bitlocker" \
+      device="$dev" options="$opts"
+    return 0
+  fi
+
+  # Mount failed; close Windows' drive again if this opened it.
+  if [ "$bitlocker" = true ]; then cryptsetup close "$WINDOWS_MAPPER" >/dev/null 2>&1 || true; fi
+  emit_json ok=true windows_mounted=false windows_rw=false windows_bitlocker="$bitlocker" \
+    note="mount failed"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Verb implementations.
+# ---------------------------------------------------------------------------
+
+verb_status() {
+  local mounted=false rw=false bl=false bootentry=false efi=false
+  if mountpoint -q "$WINDOWS_MOUNT"; then
+    mounted=true
+    if findmnt -no OPTIONS "$WINDOWS_MOUNT" 2>/dev/null | grep -qvE '(^|,)ro(,|$)'; then rw=true; fi
+  fi
+  # EFI present?
+  if is_efi; then efi=true; fi
+  # A BitLocker partition present on the system?
+  if lsblk -rno FSTYPE 2>/dev/null | grep -q '^BitLocker$'; then bl=true; fi
+  # Does a UEFI "Windows Boot Manager" entry exist?
+  if [ "$efi" = true ] && command -v efibootmgr >/dev/null 2>&1; then
+    if efibootmgr 2>/dev/null | grep -qi 'Windows Boot Manager'; then bootentry=true; fi
+  fi
+  emit_json windows_mounted=$mounted windows_rw=$rw windows_bitlocker=$bl \
+    windows_boot_entry=$bootentry efi=$efi
+}
+
+verb_boot_windows_next() {
+  # Prefer UEFI BootNext (BitLocker-friendly: Windows sees the same firmware
+  # boot path it expects). Fall back to grub-reboot "Windows".
+  if is_efi && command -v efibootmgr >/dev/null 2>&1; then
+    # Find the 4-hex-digit boot number of the Windows Boot Manager entry.
+    local num
+    num=$(efibootmgr 2>/dev/null | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)[ *].*Windows Boot Manager.*/\1/p' | head -n1)
+    if [ -n "$num" ]; then
+      if efibootmgr --bootnext "$num" >/dev/null 2>&1; then
+        emit_json ok=true method=bootnext entry="$num"
+        return 0
+      fi
+    fi
+  fi
+  # Fallback: tell GRUB to boot the "Windows" entry once.
+  if command -v grub-reboot >/dev/null 2>&1; then
+    if grub-reboot "Windows" >/dev/null 2>&1; then
+      emit_json ok=true method=grub-reboot entry="Windows"
+      return 0
+    fi
+  fi
+  die "could not set next boot to Windows (no EFI entry and grub-reboot failed)"
+}
+
+# An Apple silicon Mac (its device tree says "apple,...")?
+# (2>/dev/null comes first: on a PC there is no device tree, and the redirection from it fails before tr runs.)
+on_apple_silicon() { tr '\0' '\n' 2>/dev/null < "$DT_COMPATIBLE" | grep -q '^apple,'; }
+
+# bless_macos [--next] — make macOS the Mac's start-up volume (for the next start only, with --next).
+# asahi-bless finds macOS by its usual name ("Macintosh HD"); if it was renamed, the one start-up volume
+# that isn't Chat Computer's is macOS. With more than one, there's no telling: the person picks in the Mac's
+# startup options (hold the power button).
+bless_macos() {
+  local list picks
+  command -v asahi-bless >/dev/null 2>&1 || die "asahi-bless is not installed"
+  if asahi-bless --set-boot-macos "$@" --yes >/dev/null 2>&1; then
+    emit_json ok=true method=asahi-bless volume=macos
+    return 0
+  fi
+  list=$(asahi-bless --list-volumes 2>/dev/null) || die "asahi-bless could not list the Mac's start-up volumes"
+  picks=$(printf '%s\n' "$list" | sed -n 's/^[* ]\{0,1\}\([0-9][0-9]*\)) \(.*\)$/\1|\2/p' \
+          | grep -v -i "|$MAC_CHATCOMPUTER_VOLUME\$" || true)
+  [ -n "$picks" ] || die "the Mac has no other start-up volume"
+  [ "$(printf '%s\n' "$picks" | wc -l)" -eq 1 ] \
+    || die "the Mac has more than one other system; choose macOS in its startup options (hold the power button)"
+  asahi-bless --set-boot "${picks%%|*}" "$@" --yes >/dev/null 2>&1 || die "asahi-bless could not choose macOS"
+  emit_json ok=true method=asahi-bless volume="${picks#*|}"
+}
+
+verb_boot_macos_next() {
+  on_apple_silicon || die "this computer isn't a Mac"
+  bless_macos --next
+}
+
+verb_boot_default() {
+  # What starts when the computer turns on, removing nothing, so the other system stays one choice away.
+  # PC: put Windows Boot Manager's or Chat Computer's ("ubuntu") UEFI entry first in BootOrder, keeping every
+  # other entry in its place. Mac: the start-up volume, with asahi-bless (macos or chatcomputer).
+  [ "$#" -eq 1 ] || die "boot-default takes one argument: windows, macos or chatcomputer"
+  if on_apple_silicon; then
+    case "$1" in
+      macos) bless_macos; return 0 ;;
+      chatcomputer)
+        command -v asahi-bless >/dev/null 2>&1 || die "asahi-bless is not installed"
+        asahi-bless --set-boot "$MAC_CHATCOMPUTER_VOLUME" --yes >/dev/null 2>&1 || die "asahi-bless could not choose Chat Computer"
+        emit_json ok=true default=chatcomputer method=asahi-bless
+        return 0 ;;
+      *) die "boot-default takes macos or chatcomputer on a Mac" ;;
+    esac
+  fi
+  local num out order rest new
+  is_efi && command -v efibootmgr >/dev/null 2>&1 || die "this computer has no UEFI boot entries to change"
+  out=$(efibootmgr 2>/dev/null) || die "could not read the UEFI boot entries"
+  case "$1" in
+    windows)  num=$(printf '%s\n' "$out" | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)[ *].*Windows Boot Manager.*/\1/p' | head -n1) ;;
+    chatcomputer) num=$(printf '%s\n' "$out" | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\{0,1\} ubuntu\([[:space:]].*\)\{0,1\}$/\1/p' | head -n1) ;;
+    *)        die "boot-default takes windows or chatcomputer" ;;
+  esac
+  [ -n "$num" ] || die "no UEFI boot entry for $1"
+  order=$(printf '%s\n' "$out" | sed -n 's/^BootOrder: *//p' | head -n1)
+  rest=$(printf '%s\n' "$order" | tr ',' '\n' | grep -v -i -x "$num" | grep . | paste -sd, -)
+  new="$num${rest:+,$rest}"
+  efibootmgr --bootorder "$new" >/dev/null 2>&1 || die "could not change the UEFI boot order"
+  emit_json ok=true default="$1" entry="$num" order="$new"
+}
+
+verb_mount_windows() { do_mount_windows; }
+
+# Package-name validation shared by apt-install / apt-remove: the characters of Debian's and Fedora's
+# package names. The last one is a letter, digit or "+": apt-get reads "name-" as "remove name".
+valid_pkg() { [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]{0,61}[a-z0-9+]$ ]]; }
+
+# Ubuntu (a PC) has apt-get; Fedora (a Mac) has dnf. (CHATCOMPUTER_TEST_PKG: test only, dropped by sudo.)
+have_dnf() {
+  case "${CHATCOMPUTER_TEST_PKG:-}" in dnf) return 0 ;; apt) return 1 ;; esac
+  ! command -v apt-get >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1
+}
+
+# apt-get reads more into a name than a name: "name+" given to remove installs it, and a name that isn't
+# a package's is taken as a pattern ("." matches any letter) and acts on every package whose name
+# contains a match. So each name must be exactly a package's: one apt knows, to install (pkgnames
+# matches the start of names, not patterns); an installed one, to remove (no wildcard characters
+# get past valid_pkg, so dpkg-query looks up exactly that name).
+apt_known()     { apt-cache pkgnames --all-names "$1" 2>/dev/null | grep -qxF -- "$1"; }
+apt_installed() { dpkg-query -W -f='${db:Status-Status}\n' "$1" 2>/dev/null | grep -qx installed; }
+
+verb_apt_install() {
+  [ "$#" -ge 1 ] || die "apt-install needs at least one package"
+  local p
+  for p in "$@"; do valid_pkg "$p" || die "invalid package name: $p"; done
+  if have_dnf; then
+    dnf install -y --setopt=install_weak_deps=False "$@" >/dev/null 2>&1 || die "dnf install failed"
+    emit_json ok=true action=install @packages="$(json_array "$@")"
+    return 0
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update >/dev/null 2>&1 || die "apt-get update failed (is the internet connected?)"
+  for p in "$@"; do apt_known "$p" || die "no package is called $p"; done
+  # --no-remove: installing never removes anything (apt-get would remove a program that conflicts with
+  # the new one); the person agreed to an install.
+  if apt-get install -y --no-install-recommends --no-remove "$@" >/dev/null 2>&1; then
+    emit_json ok=true action=install @packages="$(json_array "$@")"
+  else
+    die "apt-get install failed"
+  fi
+}
+
+verb_apt_remove() {
+  [ "$#" -ge 1 ] || die "apt-remove needs at least one package"
+  local p extra
+  for p in "$@"; do valid_pkg "$p" || die "invalid package name: $p"; done
+  # Chat Computer's own packages stay: without them there'd be no screen, voice or network to put them back with.
+  for p in "$@"; do
+    if [ -r "$BASE_PACKAGES" ] && grep -qxF -- "$p" "$BASE_PACKAGES"; then die "$p is part of Chat Computer itself, so it stays"; fi
+  done
+  # Removing a package also removes every installed program that needs it (Chat Computer's own, too, behind an
+  # innocent-looking name). Only what was named may go: anything more is refused, and named, so the
+  # person can be asked about those as well (Chat Computer's own packages among them stay, above).
+  if have_dnf; then
+    for p in "$@"; do rpm -q --quiet "$p" 2>/dev/null || die "$p is not installed"; done
+    if ! rpm -e --test "$@" >/dev/null 2>&1; then
+      extra=$(rpm -e --test "$@" 2>&1 | sed -n 's/.* is needed by (installed) \([^ ]*\).*/\1/p' | sort -u | paste -sd' ' -)
+      die "removing that would also remove: ${extra:-other programs that need it}"
+    fi
+    # And nothing it pulled in once, either (clean_requirements_on_remove): apt-get remove leaves those too.
+    dnf remove -y --setopt=clean_requirements_on_remove=False "$@" >/dev/null 2>&1 || die "dnf remove failed"
+    emit_json ok=true action=remove @packages="$(json_array "$@")"
+    return 0
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  for p in "$@"; do apt_installed "$p" || die "$p is not installed"; done
+  extra=$(apt-get -s remove "$@" 2>/dev/null | sed -n 's/^Remv \([^ :]*\).*/\1/p' \
+          | grep -vxF -f <(printf '%s\n' "$@") | sort -u | paste -sd' ' -)
+  [ -z "$extra" ] || die "removing that would also remove: $extra"
+  if apt-get remove -y "$@" >/dev/null 2>&1; then
+    emit_json ok=true action=remove @packages="$(json_array "$@")"
+  else
+    die "apt-get remove failed"
+  fi
+}
+
+# json_array <items...> -> JSON array of strings.
+json_array() {
+  local out="[" first=1 it
+  for it in "$@"; do
+    if [ "$first" -eq 1 ]; then first=0; else out+=","; fi
+    out+="\"$(json_escape "$it")\""
+  done
+  out+="]"
+  printf '%s' "$out"
+}
+
+verb_system_update() {
+  if have_dnf; then
+    dnf upgrade -y --refresh >/dev/null 2>&1 || die "system update failed"
+    emit_json ok=true action=system-update
+    return 0
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  if apt-get update >/dev/null 2>&1 && apt-get -y upgrade >/dev/null 2>&1; then
+    emit_json ok=true action=system-update
+  else
+    die "system update failed"
+  fi
+}
+
+verb_set_timezone() {
+  [ "$#" -eq 1 ] || die "set-timezone needs exactly one zone"
+  local zone=$1
+  # Strict: letters/digits/_+- and single slashes, must exist under zoneinfo and
+  # must not escape it (no .., no leading /).
+  [[ "$zone" =~ ^[A-Za-z0-9][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$ ]] || die "invalid timezone"
+  case "$zone" in
+    *..*) die "invalid timezone" ;;
+  esac
+  [ -f "/usr/share/zoneinfo/$zone" ] || die "unknown timezone: $zone"
+  if command -v timedatectl >/dev/null 2>&1 && timedatectl set-timezone "$zone" 2>/dev/null; then
+    emit_json ok=true timezone="$zone"
+  else
+    # Fallback for environments without a running systemd (chroot/test).
+    ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
+    printf '%s\n' "$zone" > /etc/timezone
+    emit_json ok=true timezone="$zone" method=symlink
+  fi
+}
+
+verb_bt_import_windows_keys() {
+  # Ensure the Windows SYSTEM hive is reachable (mount first if needed).
+  if [ ! -r "$WINDOWS_MOUNT/Windows/System32/config/SYSTEM" ]; then
+    do_mount_windows >/dev/null 2>&1 || true
+  fi
+  local hive="$WINDOWS_MOUNT/Windows/System32/config/SYSTEM"
+  [ -r "$hive" ] || die "Windows SYSTEM hive not readable at $hive"
+  [ -x "$VENV_PYTHON" ] || die "Chat Computer venv python missing at $VENV_PYTHON"
+  [ -r "$BT_IMPORT_PY" ] || die "bt import script missing at $BT_IMPORT_PY"
+
+  # The Python script prints a JSON object; we pass it the hive path and the
+  # BlueZ state dir as arguments (no shell interpolation). -I = isolated mode.
+  local json
+  if json=$("$VENV_PYTHON" -I "$BT_IMPORT_PY" --hive "$hive" --bluetooth-dir /var/lib/bluetooth 2>/dev/null); then
+    # Restart bluetooth so BlueZ reloads the imported keys: only when something changed, since a restart drops
+    # every Bluetooth connection for a moment (a keyboard, AirPods already connected). The importer prints its
+    # report with json.dumps, so "changed": 0 is written exactly like that.
+    case "$json" in
+      *'"changed": 0'*) ;;
+      *) systemctl restart bluetooth >/dev/null 2>&1 || true ;;
+    esac
+    # Pass the script's JSON through verbatim as the "result" field.
+    emit_json ok=true @result="$json"
+  else
+    die "bt key import failed"
+  fi
+}
+
+verb_wipe_install_secrets() {
+  # Remove /chatcomputer/secrets from an inserted Chat Computer install USB (FS label
+  # CHATCOMP). We locate it by label, mount read-write briefly, delete the
+  # secrets dir, and unmount. Never touch anything not under that mountpoint.
+  local dev tmp
+  dev=$(blkid -L CHATCOMP 2>/dev/null || true)
+  [ -n "$dev" ] || die "no device with label CHATCOMP found"
+  # Confirm it is a block device we just resolved (not user input).
+  [ -b "$dev" ] || die "CHATCOMP label did not resolve to a block device"
+  tmp=$(mktemp -d /run/chatcomputer/usb.XXXXXX 2>/dev/null || mktemp -d)
+  # Only as FAT (what Chat Computer's installer is): FAT has no symbolic links, so nothing on the device can point
+  # the deletion below somewhere else.
+  if ! mount -t vfat -o rw,noexec,nodev,nosuid "$dev" "$tmp" 2>/dev/null; then
+    rmdir "$tmp" 2>/dev/null || true
+    die "could not mount CHATCOMP USB"
+  fi
+  local removed=false
+  if [ -d "$tmp/chatcomputer/secrets" ]; then
+    rm -rf "$tmp/chatcomputer/secrets" && removed=true
+  fi
+  sync
+  umount "$tmp" 2>/dev/null || true
+  rmdir "$tmp" 2>/dev/null || true
+  emit_json ok=true device="$dev" secrets_removed=$removed
+}
+
+# ---------------------------------------------------------------------------
+# Updating Chat Computer.
+#
+# Chat Computer Setup records at install time which folder on Windows' drive it ran from (UPDATE_SOURCE_FILE,
+# written by finish.sh: root's, so Chat Computer can't point updates anywhere else). A newer Chat Computer put in that
+# folder replaces only what runs as the person: the chatcomputer/ package and linux/session/. Never anything root
+# runs (this helper, the Bluetooth importer, the system's settings): those change only when Chat Computer is
+# installed again. Before anything is replaced the new files are checked: plain files and folders only (no
+# links that could lead elsewhere), no Python start-up hooks (sitecustomize, usercustomize, .pth files), and
+# no Python package that isn't installed already (requirements-linux.txt: the same ones, or fewer, since an
+# update never installs one). The version before stays in app.prev:
+# update-undo puts it back (the session does that by itself when a new version keeps failing to start while
+# UPDATE_PENDING says it is new), and update-done marks a new version as good.
+# ---------------------------------------------------------------------------
+
+UPDATE_PARTS=(chatcomputer linux/session)
+
+# update_source — the recorded folder, checked, as a real path on Windows' drive. Prints an error JSON (and
+# fails) if there is none or it isn't Chat Computer.
+update_source() {
+  local rel="" real mnt
+  [ -r "$UPDATE_SOURCE_FILE" ] || die "Chat Computer Setup recorded no folder on Windows' drive to update from"
+  IFS= read -r rel < "$UPDATE_SOURCE_FILE" || true
+  rel=${rel%$'\r'}
+  if [ -z "$rel" ] || [[ "$rel" == /* ]] || [[ "/$rel/" == */../* ]] || [[ "/$rel/" == */./* ]] \
+     || [[ "$rel" =~ [[:cntrl:]] ]]; then
+    die "the folder recorded for updates isn't usable"
+  fi
+  if ! mountpoint -q "$WINDOWS_MOUNT"; then do_mount_windows >/dev/null; fi
+  mnt=$(realpath -e -- "$WINDOWS_MOUNT" 2>/dev/null) || die "Windows' drive isn't there"
+  real=$(realpath -e -- "$mnt/$rel" 2>/dev/null) || die "the Chat Computer folder on Windows' drive isn't there"
+  case "$real" in "$mnt"/*) ;; *) die "the folder recorded for updates isn't on Windows' drive" ;; esac
+  if [ ! -f "$real/chatcomputer/__init__.py" ] || [ ! -f "$real/requirements-linux.txt" ]; then
+    die "the folder recorded for updates doesn't hold Chat Computer"
+  fi
+  printf '%s' "$real"
+}
+
+# packages FILE — the Python packages a requirements-linux.txt names, one a line, sorted: what's after a # left
+# out, spacing made single, blank lines dropped (as chatcomputer/update.py reads them).
+packages() {
+  tr '\r\t\v\f' '    ' < "$1" | LC_ALL=C awk '{ sub(/#.*/, ""); if (NF) { $1 = $1; print } }' | LC_ALL=C sort -u
+}
+
+# not_plain DIR — the first thing under DIR that mustn't be in an update (a link or other special file, or a
+# Python start-up hook), if any.
+not_plain() {
+  find "$1" \( ! -type f ! -type d \) -o -name sitecustomize.py -o -name usercustomize.py -o -name '*.pth' 2>/dev/null \
+    | head -n1
+}
+
+verb_update_app() {
+  local src app="$APP_ROOT/app" next="$APP_ROOT/app.next" prev="$APP_ROOT/app.prev" part bad changed=0 f
+  [ -f "$BASE_INSTALLED" ] || die "Chat Computer hasn't finished installing yet"
+  src=$(update_source) || { printf '%s\n' "$src"; exit 1; }
+  [ -d "$app/chatcomputer" ] || die "Chat Computer isn't installed where it should be"
+  if ! cmp -s -- "$src/requirements-linux.txt" "$app/requirements-linux.txt" \
+     && [ -n "$(LC_ALL=C comm -23 <(packages "$src/requirements-linux.txt") <(packages "$app/requirements-linux.txt"))" ]; then
+    die "this version needs other Python packages, so it has to be installed with Chat Computer Setup"
+  fi
+  for part in "${UPDATE_PARTS[@]}"; do
+    [ -d "$src/$part" ] || die "the new version has no $part"
+    bad=$(not_plain "$src/$part")
+    [ -z "$bad" ] || die "the new version has something an update can't bring: ${bad#"$src"/}"
+  done
+  rm -rf -- "$next"
+  cp -a -- "$app" "$next" || { rm -rf -- "$next"; die "couldn't copy the installed version"; }
+  for part in "${UPDATE_PARTS[@]}"; do
+    rm -rf -- "${next:?}/$part"
+    mkdir -p -- "$(dirname -- "$next/$part")"
+    if ! tar -C "$src" --exclude=__pycache__ --exclude='*.pyc' -cf - -- "$part" \
+         | tar -C "$next" --no-same-owner --no-same-permissions -xf -; then
+      rm -rf -- "$next"; die "couldn't copy the new version"
+    fi
+    # Checked again where it landed: the folder on Windows' drive could have changed in between.
+    bad=$(not_plain "$next/$part")
+    if [ -n "$bad" ]; then rm -rf -- "$next"; die "the new version changed while it was copied"; fi
+    chown -R 0:0 -- "$next/$part" || { rm -rf -- "$next"; die "couldn't make the new version root's"; }
+    find "$next/$part" -type d -exec chmod 0755 {} +
+    find "$next/$part" -type f -exec chmod 0644 {} +
+    while IFS= read -r -d '' f; do
+      [ "$(head -c2 -- "$f")" = '#!' ] && chmod 0755 -- "$f"
+    done < <(find "$next/$part" -type f -print0)
+    changed=$(( changed + $(diff -rq -x __pycache__ -- "$app/$part" "$next/$part" 2>/dev/null | wc -l) ))
+  done
+  if [ "$changed" -eq 0 ]; then
+    rm -rf -- "$next"
+    emit_json ok=true changed=0 note="already up to date"
+    return 0
+  fi
+  rm -rf -- "$prev"
+  if ! mv -- "$app" "$prev"; then rm -rf -- "$next"; die "couldn't set the installed version aside"; fi
+  if ! mv -- "$next" "$app"; then mv -- "$prev" "$app"; die "couldn't put the new version in place"; fi
+  mkdir -p -- "$(dirname -- "$UPDATE_PENDING")"
+  date +%s > "$UPDATE_PENDING"
+  emit_json ok=true changed="$changed"
+}
+
+verb_update_done() {
+  rm -f -- "$UPDATE_PENDING"
+  emit_json ok=true
+}
+
+verb_update_undo() {
+  local app="$APP_ROOT/app" prev="$APP_ROOT/app.prev" failed="$APP_ROOT/app.failed"
+  [ -d "$prev/chatcomputer" ] || die "there is no earlier version to go back to"
+  rm -rf -- "$failed"
+  mv -- "$app" "$failed" || die "couldn't set this version aside"
+  if ! mv -- "$prev" "$app"; then mv -- "$failed" "$app"; die "couldn't put the earlier version back"; fi
+  rm -f -- "$UPDATE_PENDING"
+  emit_json ok=true
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch.
+# ---------------------------------------------------------------------------
+
+[ "$#" -ge 1 ] || die "no verb given"
+verb=$1; shift
+
+# Must run as root (via sudo). Reject otherwise.
+if [ "$(id -u)" -ne 0 ]; then
+  die "chatcomputer-root must run as root (via sudo -n)"
+fi
+
+mkdir -p /run/chatcomputer 2>/dev/null || true
+
+case "$verb" in
+  status)                 [ "$#" -eq 0 ] || die "status takes no args"; verb_status ;;
+  boot-windows-next)      [ "$#" -eq 0 ] || die "boot-windows-next takes no args"; verb_boot_windows_next ;;
+  boot-macos-next)        [ "$#" -eq 0 ] || die "boot-macos-next takes no args"; verb_boot_macos_next ;;
+  boot-default)           verb_boot_default "$@" ;;
+  mount-windows)          [ "$#" -eq 0 ] || die "mount-windows takes no args"; verb_mount_windows ;;
+  apt-install)            verb_apt_install "$@" ;;
+  apt-remove)             verb_apt_remove "$@" ;;
+  system-update)          [ "$#" -eq 0 ] || die "system-update takes no args"; verb_system_update ;;
+  bt-import-windows-keys) [ "$#" -eq 0 ] || die "bt-import-windows-keys takes no args"; verb_bt_import_windows_keys ;;
+  set-timezone)           verb_set_timezone "$@" ;;
+  wipe-install-secrets)   [ "$#" -eq 0 ] || die "wipe-install-secrets takes no args"; verb_wipe_install_secrets ;;
+  update-app)             [ "$#" -eq 0 ] || die "update-app takes no args"; verb_update_app ;;
+  update-done)            [ "$#" -eq 0 ] || die "update-done takes no args"; verb_update_done ;;
+  update-undo)            [ "$#" -eq 0 ] || die "update-undo takes no args"; verb_update_undo ;;
+  *)                      die "unknown verb: $verb" ;;
+esac

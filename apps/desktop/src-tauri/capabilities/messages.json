@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "messages",
+  "description": "Each connected service's own view (Gmail, Outlook, Telegram, WhatsApp, WeChat, Discord), on that service's own pages only: it may hand the app what Chat Computer's reader read there, for Messages, and nothing else.",
+  "webviews": ["msg-gmail", "msg-outlook", "msg-telegram", "msg-whatsapp", "msg-wechat", "msg-discord"],
+  "local": false,
+  "remote": {
+    "urls": [
+      "https://mail.google.com/*",
+      "https://outlook.live.com/*",
+      "https://outlook.office.com/*",
+      "https://outlook.office365.com/*",
+      "https://web.telegram.org/*",
+      "https://web.whatsapp.com/*",
+      "https://web.wechat.com/*",
+      "https://web1.wechat.com/*",
+      "https://web2.wechat.com/*",
+      "https://wx.qq.com/*",
+      "https://wx2.qq.com/*",
+      "https://wx8.qq.com/*",
+      "https://discord.com/*"
+    ]
+  },
+  "permissions": ["allow-messages-found"]
+}

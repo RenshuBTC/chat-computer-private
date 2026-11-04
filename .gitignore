@@ -1,0 +1,18 @@
+__pycache__/
+.venv/
+.pytest_cache/
+*.pyc
+# The desktop app's build: its page and Chat Computer Setup (made by scripts/build_apps.py desktop), Rust's output,
+# Tauri's generated schemas.
+apps/desktop/frontend/
+apps/desktop/src-tauri/setup/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/
+# The Android app's build (Gradle), and the iPhone app's (XcodeGen makes the Xcode project from project.yml).
+apps/android/.gradle/
+apps/android/build/
+apps/android/app/build/
+apps/android/local.properties
+apps/ios/ChatComputer.xcodeproj/
+apps/ios/build/

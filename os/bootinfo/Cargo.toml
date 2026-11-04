@@ -1,0 +1,7 @@
+[package]
+name = "bootinfo"
+description = "What Chat Computer's start-up stage hands to its kernel"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true

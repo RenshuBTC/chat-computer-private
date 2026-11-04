@@ -1,0 +1,15 @@
+# shellcheck shell=bash
+# Chat Computer ~/.bash_profile (installed into the user's home).
+#
+# On tty1, with no X display yet, start the graphical Chat Computer session via
+# startx. On any other tty (recovery), do nothing special — the user gets a
+# normal shell. This is the single hook that turns the autologin console into
+# the full-screen Chat Computer experience.
+
+# Only act for an interactive login on the first virtual terminal, and only if
+# X is not already running.
+if [ -z "${DISPLAY:-}" ] && [ "${XDG_VTNR:-}" = "1" ]; then
+  # exec so the shell is replaced by X; when X exits the getty respawns and we
+  # come straight back here (restart-on-logout behaviour).
+  exec startx -- -nolisten tcp vt1 > "${HOME}/.xorg-startx.log" 2>&1
+fi

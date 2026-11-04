@@ -1,0 +1,149 @@
+#! /bin/sh
+set -e
+
+# Chat Computer boot menu entries. Installed as /etc/grub.d/07_chatcomputer.
+#
+# Runs BEFORE 10_linux (07 < 10) so "Chat Computer" and "Windows" appear first, and
+# 10_linux's stock kernels drop under "Advanced options for Ubuntu" for
+# recovery. os-prober (30_os-prober) is disabled in 99-chatcomputer.cfg because our
+# Windows entry replaces it.
+#
+# We generate the Chat Computer entry the same way 10_linux does: source
+# grub-mkconfig_lib, use prepare_grub_to_access_device, and point at the
+# /boot/vmlinuz + /boot/initrd.img symlinks (so the entry survives kernel
+# upgrades without re-running update-grub, though the installer does re-run it).
+#
+# Contract: entry titled exactly "Chat Computer" (default) and "Windows"
+# (chainloads /EFI/Microsoft/Boot/bootmgfw.efi, located with `search --file`).
+# The Windows entry is only added together with the Chat Computer entry: GRUB_DEFAULT
+# is "saved" (= Chat Computer), and if that entry were missing GRUB would start the
+# first entry, which must then be Ubuntu's (this same system), never Windows.
+#
+# CHATCOMPUTER_SYSROOT (tests only) is a folder standing in for "/" when checking
+# which kernel links exist.
+
+# These three are consumed by the sourced grub-mkconfig_lib / grub tools, not by
+# this script directly; shellcheck cannot see that use.
+# shellcheck disable=SC2034
+prefix="/usr"
+# shellcheck disable=SC2034
+exec_prefix="/usr"
+datarootdir="/usr/share"
+
+# grub-mkconfig exports these; provide harmless fallbacks so the script is also
+# runnable/testable stand-alone.
+: "${pkgdatadir:=$datarootdir/grub}"
+
+# shellcheck source=/dev/null
+. "$pkgdatadir/grub-mkconfig_lib"
+
+export TEXTDOMAIN=grub
+export TEXTDOMAINDIR="${datarootdir}/locale"
+
+CLASS="--class chatcomputer --class gnu-linux --class gnu --class os"
+
+# ---------------------------------------------------------------------------
+# 1) The Chat Computer Linux entry.
+# ---------------------------------------------------------------------------
+# GRUB_DEVICE / GRUB_DEVICE_BOOT etc. are exported by grub-mkconfig. When this
+# script is run stand-alone (tests), fall back to probing "/".
+if [ -z "${GRUB_DEVICE}" ]; then
+  GRUB_DEVICE="$(${grub_probe:-grub-probe} --target=device / 2>/dev/null || echo /dev/sda1)"
+fi
+if [ -z "${GRUB_DEVICE_BOOT}" ]; then
+  GRUB_DEVICE_BOOT="$(${grub_probe:-grub-probe} --target=device /boot 2>/dev/null || echo "${GRUB_DEVICE}")"
+fi
+
+# Root= value for the kernel. Prefer UUID (stable across device renumbering),
+# exactly as 10_linux does; fall back to the device node.
+if [ -n "${GRUB_DEVICE_UUID}" ] \
+    && [ "x${GRUB_DISABLE_LINUX_UUID}" != "xtrue" ] \
+    && test -e "/dev/disk/by-uuid/${GRUB_DEVICE_UUID}"; then
+  LINUX_ROOT_DEVICE="UUID=${GRUB_DEVICE_UUID}"
+else
+  LINUX_ROOT_DEVICE="${GRUB_DEVICE}"
+fi
+
+# Where the kernel is, as GRUB sees it. make_system_path_relative_to_its_root
+# gives /boot's path inside the file system that holds it: "/boot" when /boot is
+# on the root file system, "/" when /boot is its own partition (the kernel then
+# sits at the top of that partition). As in 10_linux, GRUB reads the kernel from
+# the device that holds /boot.
+boot_rel="$(make_system_path_relative_to_its_root /boot)"
+rel_boot_prefix="${boot_rel%/}"
+GRUB_ACCESS_DEVICE="${GRUB_DEVICE_BOOT}"
+
+# Kernel command line (same knobs as the stock config).
+CMDLINE="${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}"
+
+# Only emit the Linux entry if the kernel symlinks actually resolve. Ubuntu
+# keeps /boot/vmlinuz and /boot/initrd.img pointing at the newest kernel (Ubuntu
+# 24.04 has no links at the filesystem root); older setups keep them at the root
+# instead (/vmlinuz -> boot/vmlinuz-x.y), which works when /boot is on the root
+# file system.
+sysroot="${CHATCOMPUTER_SYSROOT:-}"
+vmlinuz=""
+initrd=""
+if test -e "${sysroot}/boot/vmlinuz" && test -e "${sysroot}/boot/initrd.img"; then
+  vmlinuz="${rel_boot_prefix}/vmlinuz"
+  initrd="${rel_boot_prefix}/initrd.img"
+elif test -e "${sysroot}/vmlinuz" && test -e "${sysroot}/initrd.img" && [ "${rel_boot_prefix}" = "/boot" ]; then
+  vmlinuz="/vmlinuz"
+  initrd="/initrd.img"
+fi
+
+if [ -n "${vmlinuz}" ]; then
+  gettext_printf "Adding Chat Computer boot menu entry\n" >&2
+
+  cat <<EOF
+menuentry 'Chat Computer' ${CLASS} \$menuentry_id_option 'chatcomputer' {
+	recordfail
+	load_video
+	gfxmode \$linux_gfx_mode
+	insmod gzio
+	if [ x\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+EOF
+  # Emit the insmod/search lines that make GRUB's $root point at the partition
+  # holding the kernel — identical technique to 10_linux.
+  prepare_grub_to_access_device "${GRUB_ACCESS_DEVICE}" | grub_add_tab
+  cat <<EOF
+	echo	'Loading Chat Computer ...'
+	linux	${vmlinuz} root=${LINUX_ROOT_DEVICE} ro ${CMDLINE}
+	echo	'Loading initial ramdisk ...'
+	initrd	${initrd}
+}
+EOF
+else
+  gettext_printf "Chat Computer: no /boot/vmlinuz and /boot/initrd.img; leaving the menu to Ubuntu's entries\n" >&2
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# 2) The Windows entry (UEFI chainload).
+# ---------------------------------------------------------------------------
+# We only add this on EFI platforms. The Windows boot manager lives at
+# /EFI/Microsoft/Boot/bootmgfw.efi on the EFI System Partition. We locate the
+# ESP at boot with `search --file` (robust against disk/partition renumbering)
+# and chainload it. This is the GRUB-side fallback; Chat Computer's normal
+# "switch to Windows" uses UEFI BootNext (BitLocker-friendly) via the root
+# helper, but a menu entry is still useful for recovery.
+cat <<'EOF'
+if [ "${grub_platform}" = "efi" ]; then
+	menuentry 'Windows' --class windows --class os $menuentry_id_option 'chatcomputer-windows' {
+		insmod part_gpt
+		insmod fat
+		insmod chain
+		insmod search_fs_file
+		# Point $root at whichever partition actually holds the Windows
+		# boot manager, then chainload it.
+		search --file --no-floppy --set=root /EFI/Microsoft/Boot/bootmgfw.efi
+		if [ -f ($root)/EFI/Microsoft/Boot/bootmgfw.efi ]; then
+			chainloader ($root)/EFI/Microsoft/Boot/bootmgfw.efi
+		else
+			echo "Windows boot manager not found."
+			echo "It may be on a BitLocker/this disk the firmware hides."
+			sleep 3
+		fi
+	}
+fi
+EOF

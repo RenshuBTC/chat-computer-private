@@ -1,0 +1,164 @@
+# Chat Computer Setup for Windows and for Mac: the Chat Computer app (apps/desktop), whose first page asks how you want
+# Chat Computer (a Chrome extension, your browser, an app, or its own system: it brings the own system's setup with it,
+# build_apps.py desktop --for), built on GitHub's Windows and Mac machines: for Windows an installer (for the person's
+# own account: no administrator needed; it fetches Microsoft's WebView2 where a PC hasn't got it), for Macs a disk
+# image with one app for Apple silicon and Intel, and mac.sh, the line of Terminal that installs it (pinned to that
+# disk image's SHA-256). Neither is signed with a paid certificate, so Windows SmartScreen asks once before the first
+# start (chatcomputer.ai/get says how); a Mac doesn't, installed from Terminal (and asks for Open Anyway from the disk
+# image). The Mac's app is signed ad hoc, or, where the repository has the secrets MAC_SIGNING_P12 (base64 of a .p12)
+# and MAC_SIGNING_PASSWORD, with that one self-signed identity, the same each time, so macOS keeps what it allowed the
+# app (the microphone) across updates (apps/desktop/make-signing-identity.sh makes it once, on a Mac).
+# All are kept as the run's artifacts, to be put on chatcomputer.ai/get (docs/get).
+name: Windows and Mac apps
+on:
+  push:
+    branches: [main]
+    paths: ['apps/desktop/**', 'apps/chrome/**', 'docs/index.html', 'docs/demo/**', 'scripts/build_apps.py', 'os/model/**', 'os/tls/**', 'os/crypto/**', 'chatcomputer/brain/models.json', 'windows/**', 'mac/**', '.github/workflows/apps.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: apps-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            system: windows
+            bundles: nsis
+            target: ""
+            out: Chat-Computer-Windows.exe
+          - os: macos-latest
+            system: mac
+            bundles: dmg
+            target: universal-apple-darwin
+            out: Chat-Computer-Mac.dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+      - name: The app's page (the website's, with Heart's code, and the first page, which asks how you want Chat Computer), and Chat Computer Setup for its own system
+        run: python scripts/build_apps.py desktop --for ${{ matrix.system }}
+      - name: The model's engine, which comes with the app (os/model, at os/'s own pinned compiler)
+        shell: bash
+        run: |
+          if [ "${{ matrix.target }}" = universal-apple-darwin ]; then
+            (cd os && rustup target add aarch64-apple-darwin x86_64-apple-darwin)
+          fi
+          python scripts/build_apps.py engine ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+      - name: The app's own tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+      # The Mac's app signed with the one self-signed identity in the repository's secrets, where it has them (in a
+      # keychain of this run's own); otherwise ad hoc (tauri.conf.json). No key is ever kept in the repository.
+      - name: The Mac's signing identity, if there is one
+        if: runner.os == 'macOS'
+        env:
+          P12: ${{ secrets.MAC_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.MAC_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "No MAC_SIGNING_P12: the app is signed ad hoc."; exit 0; fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          kpass="$(openssl rand -hex 16)"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/identity.p12"
+          security create-keychain -p "$kpass" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$kpass" "$keychain"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kpass" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/identity.p12"
+          name="$(security find-identity -p codesigning "$keychain" | sed -n 's/.*"\(.*\)"$/\1/p' | head -1)"
+          echo "Signing with \"$name\"."
+          echo "APPLE_SIGNING_IDENTITY=$name" >> "$GITHUB_ENV"
+      - name: Build
+        working-directory: apps/desktop
+        shell: bash
+        run: npx --yes @tauri-apps/cli@2.12.3 build --bundles ${{ matrix.bundles }} ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -- --locked
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "${{ matrix.bundles }}" = nsis ]; then
+            cp apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe "out/${{ matrix.out }}"
+          else
+            cp apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg "out/${{ matrix.out }}"
+            # The line of Terminal that installs it, pinned to this disk image (as docs/get will have them).
+            cp "out/${{ matrix.out }}" docs/get/ && python scripts/build_apps.py && cp docs/get/mac.sh out/
+          fi
+          ls -la out
+          shasum -a 256 out/* || sha256sum out/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: out/
+          if-no-files-found: error
+      # Tried for real: first, the app's first start, which asks how you want Chat Computer (a picture of it); then,
+      # the app chosen (as its first page keeps it), the app started with a site opened in the middle
+      # (apps/desktop/smoke, from this machine), a picture of the screen taken after a while. The site's frame should
+      # sit in the app's middle, saying the app said no when it asked for files.
+      - name: Try it on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("$PWD/screens/$name")
+          }
+          New-Item -ItemType Directory -Force screens | Out-Null
+          $app = Start-Process 'apps/desktop/src-tauri/target/release/chat-computer.exe' -PassThru
+          Start-Sleep -Seconds 15
+          Shot 'windows-first-start.png'
+          Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
+          $kept = Join-Path $env:APPDATA 'ai.chatcomputer.desktop'
+          New-Item -ItemType Directory -Force $kept | Out-Null
+          Set-Content -Path (Join-Path $kept 'way.json') -Value '{"way":"app"}' -NoNewline
+          $site = Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1','--directory','apps/desktop/smoke' -WindowStyle Hidden -PassThru
+          $env:CHATCOMPUTER_OPEN = 'http://127.0.0.1:8765/index.html'
+          $app = Start-Process 'apps/desktop/src-tauri/target/release/chat-computer.exe' -PassThru
+          Start-Sleep -Seconds 25
+          Shot 'windows.png'
+          Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
+          Stop-Process -Id $site.Id -ErrorAction SilentlyContinue
+      - name: Try it on a Mac
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p screens
+          hdiutil attach "out/${{ matrix.out }}" -mountpoint /Volumes/ChatComputer -nobrowse -quiet
+          "/Volumes/ChatComputer/Chat Computer.app/Contents/MacOS/chat-computer" & app=$!
+          sleep 20
+          screencapture -x screens/mac-first-start.png || true
+          kill $app || true
+          kept="$HOME/Library/Application Support/ai.chatcomputer.desktop"
+          mkdir -p "$kept" && printf '{"way":"app"}' > "$kept/way.json"
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory apps/desktop/smoke & site=$!
+          CHATCOMPUTER_OPEN=http://127.0.0.1:8765/index.html \
+            "/Volumes/ChatComputer/Chat Computer.app/Contents/MacOS/chat-computer" & app=$!
+          sleep 30
+          screencapture -x screens/mac.png || true
+          kill $app $site || true
+          hdiutil detach /Volumes/ChatComputer -quiet || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screens-${{ runner.os }}
+          path: screens/
+          if-no-files-found: ignore

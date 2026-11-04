@@ -1,0 +1,7 @@
+[package]
+name = "remember"
+description = "Chat Computer's memory file: the conversation kept across restarts, in a file Windows' setup made, written in place"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true

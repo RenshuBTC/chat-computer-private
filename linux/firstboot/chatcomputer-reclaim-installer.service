@@ -1,0 +1,18 @@
+# Chat Computer: on the first start, delete the installer's temporary partition (Chat Computer Setup on Windows put
+# it at the end of Chat Computer's space) and grow Chat Computer's partition into it; also remove the installer's
+# boot loader and power-on entry. The installer's finish.sh installs and enables this; it does nothing
+# once done (reclaim-installer.sh).
+[Unit]
+Description=Give Chat Computer its installer's space
+After=local-fs.target
+ConditionPathExists=/etc/chatcomputer/install-id
+ConditionPathExists=!/var/lib/chatcomputer/installer-reclaimed
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/chatcomputer/app/linux/firstboot/reclaim-installer.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

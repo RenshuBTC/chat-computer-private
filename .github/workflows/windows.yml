@@ -1,0 +1,42 @@
+# Chat Computer Setup for Windows on GitHub's Windows machines. They can't install Chat Computer (that needs a PC that
+# restarts into the installer), so this runs setup's own tests under Windows PowerShell 5.1, the PowerShell
+# every Windows PC has, and asks real Windows the things setup relies on when it makes room on C:
+# (tests/win_ci/probe.ps1). What it saw is saved to the branch results/win-<run number>.
+name: Windows setup test
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**', 'tests/win_ci/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: write          # to save the results branch
+concurrency:
+  group: windows-test
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: What real Windows says
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\win_ci\probe.ps1 -Out "$env:RUNNER_TEMP\results\probe"
+      - name: Setup's tests under Windows PowerShell 5.1
+        if: always()
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\win_ci\run.ps1 -Out "$env:RUNNER_TEMP\results\tests"
+      - name: Save what it saw to results/win-${{ github.run_number }}
+        if: always()
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+          BRANCH: results/win-${{ github.run_number }}
+          STATUS: ${{ job.status }}
+        run: |
+          cd "$RUNNER_TEMP/results" || exit 0
+          git init -q
+          git checkout -q -b "$BRANCH"
+          git add -A
+          git -c user.name="Chat Computer Windows test" -c user.email="noreply@github.com" commit -q -m "Windows setup test results ($STATUS)"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chatgpt-ask"
+description = "Enables the chatgpt_ask command without any pre-configured scope."
+commands.allow = ["chatgpt_ask"]
+
+[[permission]]
+identifier = "deny-chatgpt-ask"
+description = "Denies the chatgpt_ask command without any pre-configured scope."
+commands.deny = ["chatgpt_ask"]

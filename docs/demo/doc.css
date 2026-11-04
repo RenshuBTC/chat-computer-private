@@ -1,0 +1,26 @@
+body { overflow-y: auto; }
+article { width: var(--co-column, min(57.75rem, calc(100vw - 3rem))); max-width: 100vw; margin: 0 auto; padding: 2rem 0 4rem; }
+article > h1.title { font-size: 1.5rem; font-weight: bold; line-height: 1.3; margin: 0 0 1rem; }
+.pages img { display: block; width: 100%; margin: 0 0 1rem; border: 1px solid var(--line); }
+.media { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; }
+.media video { width: 100vw; height: 100vh; object-fit: contain; }
+.sound { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; }
+.image { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--ground); }
+.image img { max-width: 100vw; max-height: 100vh; object-fit: contain; }
+.image img { transition: transform 0.2s; }
+.image.zoomed img { transform: scale(2.5); }
+.meta { margin: 0 0 1.25rem; }
+.meta div { overflow-wrap: anywhere; }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+.said { margin: 0 0 1rem; }
+.said .who { font-weight: bold; }
+.said.mail { padding: 0 0 1rem; margin: 0 0 1.25rem; border-bottom: 2px solid var(--line); }
+.said.mail:last-child { border-bottom: 0; }
+.said.mail .meta { margin: 0.25rem 0 0.5rem; }
+/* On paper (a PDF, a printer): the size of a printed page's text, the page's own width, no screen colours. */
+@media print {
+  html { font-size: 11pt !important; }
+  html, body { background: var(--ground) !important; color: var(--ink) !important; overflow: visible !important; }
+  article { width: auto; max-width: none; margin: 0; padding: 0; }
+  .media, .sound, .image { position: static; }
+}

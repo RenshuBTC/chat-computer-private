@@ -1,0 +1,158 @@
+#!/usr/bin/expect -f
+# Answers the Asahi installer's questions (v0.9.2, the version mac/manifest.sh pins) the way Chat Computer Setup
+# planned them, so the person doesn't have to. Run by setup.sh from the installer's folder:
+#
+#   CHATCOMPUTER_MACOS_SIZE=<bytes>B  CHATCOMPUTER_OS_SIZE=<bytes>B  expect -f drive-installer.exp -- COMMAND...
+#
+# COMMAND starts the installer (caffeinate -dis sudo -E ./install.sh). With CHATCOMPUTER_MACOS_SIZE empty there is
+# nothing to resize (the free space is already there). The person only types their Mac's password, when the
+# installer asks for it: their typing goes straight to the installer, which never shows it.
+#
+# The installer reads its answers from the terminal and clears anything typed ahead (tcflush), so each answer
+# is sent only once its question is on the screen. Its questions end in colour codes, so they aren't matched
+# at the very end of the output. Exit codes, for setup.sh: 0 done (the installer waits to shut
+# the Mac down; that's left to setup.sh), 2 the macOS partition couldn't be resized, 3 not enough free space,
+# 4 a question setup can't answer, 5 macOS too old, 6 the installer stopped or failed.
+set timeout -1
+log_user 1
+set macos_size ""
+if {[info exists env(CHATCOMPUTER_MACOS_SIZE)]} { set macos_size $env(CHATCOMPUTER_MACOS_SIZE) }
+set os_size $env(CHATCOMPUTER_OS_SIZE)
+set name "Chat Computer"
+
+set cmd $argv
+if {[lindex $cmd 0] eq "--"} { set cmd [lrange $cmd 1 end] }
+eval spawn -noecho $cmd
+
+set resized [expr {$macos_size eq ""}]
+set want_os 0
+set installed 0
+
+# Each question clears what was typed ahead just after it's shown (tcflush), so an answer sent the instant the
+# question appears could be thrown away. Answers go a moment later.
+proc answer {text} {
+    sleep 1
+    send -- $text
+}
+
+# The person types one line (their password) straight to the installer; Enter ends it.
+proc type_password {} {
+    interact -re "\[\r\n\]" {
+        send "\r"
+        return
+    }
+}
+
+proc give_up {code why} {
+    catch {send_user "\r\n\r\nChat Computer Setup: $why\r\n"}
+    exit $code
+}
+
+expect {
+    -re {(^|\n)Password: ?$} {
+        # sudo's own question, if it has forgotten the password typed a moment ago.
+        type_password
+        exp_continue
+    }
+    "Resize complete. Press enter to continue." {
+        set resized 1
+        answer "\r"
+        exp_continue
+    }
+    "Press enter to go back to the main menu." {
+        give_up 3 "the installer found too little free space for Chat Computer."
+    }
+    "Press enter to shut down the system." {
+        exit 0
+    }
+    "Press enter to continue." {
+        answer "\r"
+        exp_continue
+    }
+    "Choose an existing partition to resize:" {
+        give_up 4 "this Mac has more than one macOS partition; setup can't tell which one to make room in."
+    }
+    "Choose a free area to install into:" {
+        give_up 4 "this Mac has more than one free area big enough for Chat Computer; setup can't tell which one to use."
+    }
+    "Choose a container to install into:" {
+        give_up 4 "the installer offered to install into an existing container, which setup doesn't do."
+    }
+    -re {Action \(([a-z0-9])\): } {
+        if {!$resized} { answer "r\r" } else { answer "f\r" }
+        exp_continue
+    }
+    "Enter one of the following:" {
+        give_up 4 "the installer didn't offer what setup needed (to make room, or to install into free space)."
+    }
+    "Continue anyway? (y/N)" {
+        answer "y\r"
+        exp_continue
+    }
+    -re {New size \(([^)]*)\): } {
+        answer "$macos_size\r"
+        exp_continue
+    }
+    -re {Size is too small|Size is too large|Invalid size|not enough free space for an OS install} {
+        give_up 2 "the installer didn't accept the size setup worked out for macOS."
+    }
+    "Continue? (y/N)" {
+        answer "y\r"
+        exp_continue
+    }
+    "Resize failed" {
+        expect -timeout 5 eof
+        give_up 2 "making room failed (see diskutil's message above)."
+    }
+    "Choose an OS to install:" {
+        set want_os 1
+        exp_continue
+    }
+    "OS: " {
+        if {$want_os} {
+            set want_os 0
+            answer "1\r"
+        }
+        exp_continue
+    }
+    "There is not enough free space to install this OS." {
+        give_up 3 "the installer found too little free space for Chat Computer."
+    }
+    -re {New OS size \(([^)]*)\): } {
+        answer "$os_size\r"
+        exp_continue
+    }
+    -re {OS name \(([^)]*)\): } {
+        answer "$name\r"
+        exp_continue
+    }
+    "Your system firmware is too old." {
+        give_up 5 "this Mac's macOS is too old for Chat Computer. Update macOS, then run setup again."
+    }
+    "Your macOS version is too old." {
+        give_up 5 "this Mac's macOS is too old for Chat Computer. Update macOS, then run setup again."
+    }
+    -re {Password for [^:\n]*: } {
+        # The installer needs the Mac's password to make Chat Computer a start-up disk. The person types it; the
+        # installer reads it hidden. Back to answering once the installer has it.
+        catch {send_user "\r\n(Type your Mac's password, then press Enter. It stays hidden.)\r\n"}
+        type_password
+        exp_continue
+    }
+    "Failed to run bless. Press enter to try again." {
+        answer "\r"
+        exp_continue
+    }
+    "Installation successful!" {
+        set installed 1
+        exp_continue
+    }
+    "Traceback (most recent call last)" {
+        expect -timeout 10 eof
+        give_up 6 "the installer stopped with an error (shown above)."
+    }
+    eof {
+        if {$installed} { exit 0 }
+        give_up 6 "the installer stopped before Chat Computer was installed (see above)."
+    }
+}

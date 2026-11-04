@@ -1,0 +1,257 @@
+{
+ "about": "Hand labels for the website's written answers after the rework (run web-scripted4, 20 Oct 2026, no AI in the browser), read from each answer and what opened. Same meaning as scripted-baseline.json: pass = a first-time visitor got a useful, true answer to what they typed. The nine fails need an AI to write or know something; the page says so and how to get one (the browser's built-in AI, or Connect Claude).",
+ "labels": {
+  "what-is-this": {
+   "pass": true
+  },
+  "how-work": {
+   "pass": true
+  },
+  "what-can-do": {
+   "pass": true
+  },
+  "is-this-an-os": {
+   "pass": true
+  },
+  "hello": {
+   "pass": true
+  },
+  "hi-there": {
+   "pass": true
+  },
+  "how-are-you": {
+   "pass": true
+  },
+  "thanks": {
+   "pass": true
+  },
+  "play-music": {
+   "pass": true
+  },
+  "play-piano": {
+   "pass": true
+  },
+  "play-taylor": {
+   "pass": true
+  },
+  "play-lofi-typo": {
+   "pass": true
+  },
+  "im-bored": {
+   "pass": true
+  },
+  "relax": {
+   "pass": true
+  },
+  "youtube-video": {
+   "pass": true
+  },
+  "map-tokyo": {
+   "pass": true
+  },
+  "map-short": {
+   "pass": true
+  },
+  "where-is-london": {
+   "pass": true
+  },
+  "directions": {
+   "pass": true
+  },
+  "map-other-city": {
+   "pass": true
+  },
+  "timer-5": {
+   "pass": true
+  },
+  "timer-terse": {
+   "pass": true
+  },
+  "eggs": {
+   "pass": true
+  },
+  "weather": {
+   "pass": true,
+   "note": "Open-Meteo's forecast (the eval's stand-in) for the visitor's time zone, Singapore"
+  },
+  "weather-city": {
+   "pass": true
+  },
+  "umbrella": {
+   "pass": true
+  },
+  "messages": {
+   "pass": true
+  },
+  "jane": {
+   "pass": true
+  },
+  "email": {
+   "pass": true
+  },
+  "reply-mum": {
+   "pass": true
+  },
+  "packing": {
+   "pass": true
+  },
+  "find-photo": {
+   "pass": true
+  },
+  "search-files": {
+   "pass": true
+  },
+  "louder": {
+   "pass": true
+  },
+  "bigger-text": {
+   "pass": true
+  },
+  "close-it": {
+   "pass": true
+  },
+  "wifi": {
+   "pass": true
+  },
+  "open-website": {
+   "pass": true
+  },
+  "open-google": {
+   "pass": true
+  },
+  "news": {
+   "pass": true
+  },
+  "recipe": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that writing a recipe needs an AI (Free answers or Connect Claude); no recipe"
+  },
+  "calc": {
+   "pass": true
+  },
+  "capital": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that it needs an AI; no answer"
+  },
+  "explain-quantum": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that explaining needs an AI; no explanation"
+  },
+  "write-email": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that writing an email needs an AI; no draft"
+  },
+  "poem": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that writing a poem needs an AI; no poem"
+  },
+  "translate": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that translating needs an AI; no translation"
+  },
+  "trip-plan": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that planning needs an AI; no plan"
+  },
+  "advice": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that advice needs an AI; no tips"
+  },
+  "code": {
+   "pass": false,
+   "mode": "weak",
+   "note": "honest that writing code needs an AI; no code"
+  },
+  "date-today": {
+   "pass": true
+  },
+  "time-now": {
+   "pass": true
+  },
+  "joke": {
+   "pass": true
+  },
+  "how-install": {
+   "pass": true
+  },
+  "download": {
+   "pass": true
+  },
+  "price": {
+   "pass": true
+  },
+  "mac": {
+   "pass": true
+  },
+  "windows-safe": {
+   "pass": true
+  },
+  "requirements": {
+   "pass": true
+  },
+  "old-laptop": {
+   "pass": true
+  },
+  "privacy": {
+   "pass": true
+  },
+  "is-it-free": {
+   "pass": true
+  },
+  "airpods": {
+   "pass": true
+  },
+  "are-you-claude": {
+   "pass": true
+  },
+  "who-made": {
+   "pass": true
+  },
+  "anthropic": {
+   "pass": true
+  },
+  "cant-do": {
+   "pass": true
+  },
+  "control-my-pc": {
+   "pass": true
+  },
+  "real-or-fake": {
+   "pass": true
+  },
+  "gibberish": {
+   "pass": true
+  },
+  "emoji": {
+   "pass": true
+  },
+  "question-mark": {
+   "pass": true
+  },
+  "chinese": {
+   "pass": true
+  },
+  "spanish": {
+   "pass": true
+  },
+  "malay": {
+   "pass": true
+  },
+  "rude": {
+   "pass": true,
+   "note": "calm: sorry, how to get real answers, what to try"
+  },
+  "long": {
+   "pass": true,
+   "note": "fit (no desktop or menus, says or types), honest that video calls don't work yet, and what setting it up takes"
+  }
+ }
+}

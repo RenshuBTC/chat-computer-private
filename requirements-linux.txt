@@ -1,0 +1,20 @@
+# Chat Computer runtime, installed into /opt/chatcomputer/venv (created with --system-site-packages so the
+# distro's python3-gi / WebKitGTK are importable). Versions tested together on Ubuntu 24.04.
+numpy==2.5.4
+sounddevice==0.5.6             # microphone and speaker (PortAudio -> PipeWire)
+onnxruntime==1.31.0            # speech detection (Silero) and the Kokoro voice
+faster-whisper==1.2.1          # speech recognition on the PC
+ctranslate2==4.8.3
+kokoro-onnx==0.6.1             # natural local voice
+soxr==1.1.0                    # audio resampling
+huggingface-hub==2.2.0         # downloads the speech recognition model
+mss==10.2.0                    # screenshots
+pillow==12.3.0
+psutil==7.2.2
+pypdf==6.20.1                  # reading PDFs
+python-docx==1.2.0             # reading Word files
+openpyxl==3.1.5                # reading Excel files
+python-pptx==1.0.2             # reading PowerPoint files
+send2trash==2.1.0              # recoverable deletes
+regipy==6.5.0                  # reads the Windows registry hive to copy AirPods pairings
+telethon==1.45.0               # Telegram's API, for Messages (reads chats; signed in by the person)

@@ -1,0 +1,43 @@
+# Chat Computer Setup for Mac on GitHub's Macs (virtual Macs with Apple silicon, on macOS 15 and 26). They can't run
+# Chat Computer itself (Asahi Linux needs a real Mac), so tests/mac_ci/run.sh tries each part of mac/setup.sh that uses
+# macOS's own tools against real macOS, with a disk image standing in for the Mac's disk, downloads what setup
+# downloads, and starts the real Asahi installer until it turns the virtual Mac down. What it saw (summary.txt,
+# logs, diskutil's output) is saved to the branch results/<run number>-<runner>.
+name: Mac setup test
+on:
+  push:
+    branches: [main]
+    paths: ['mac/**', 'tests/mac_ci/**', 'tests/mac_pretend.py', 'tests/test_mac_setup.py', '.github/workflows/mac.yml']
+  workflow_dispatch:
+permissions:
+  contents: write          # to save the results branch
+concurrency:
+  group: mac-test
+  cancel-in-progress: true
+jobs:
+  mac:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Chat Computer Setup's parts on real macOS
+        run: /bin/bash tests/mac_ci/run.sh "$RUNNER_TEMP/results"   # macOS's own bash 3.2, as people run setup
+      - name: Save what it saw to results/${{ github.run_number }}-${{ matrix.os }}
+        if: always()
+        env:
+          TOKEN: ${{ github.token }}
+          BRANCH: results/${{ github.run_number }}-${{ matrix.os }}
+          STATUS: ${{ job.status }}
+        run: |
+          cd "$RUNNER_TEMP/results" || exit 0
+          find . -type f -size +20M -print -delete
+          git init -q
+          git checkout -q -b "$BRANCH"
+          git add -A
+          git -c user.name="Chat Computer Mac test" -c user.email="noreply@github.com" commit -q -m "Mac setup test results ($STATUS)"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"

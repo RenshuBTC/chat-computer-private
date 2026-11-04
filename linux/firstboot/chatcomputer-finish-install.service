@@ -1,0 +1,19 @@
+# Chat Computer: finish installing on the first start when the Ubuntu installer couldn't (no internet
+# at the time, a power cut, the computer turned off). The installer's finish.sh installs and
+# enables this; it does nothing once install-chatcomputer.sh has marked the base as installed.
+[Unit]
+Description=Finish installing Chat Computer
+Wants=network-online.target
+After=network-online.target
+Before=getty@tty1.service
+ConditionPathExists=!/var/lib/chatcomputer/base-installed
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/chatcomputer/app/linux/firstboot/finish-install.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

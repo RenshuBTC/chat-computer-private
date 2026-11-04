@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-site-media"
+description = "Enables the site_media command without any pre-configured scope."
+commands.allow = ["site_media"]
+
+[[permission]]
+identifier = "deny-site-media"
+description = "Denies the site_media command without any pre-configured scope."
+commands.deny = ["site_media"]

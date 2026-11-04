@@ -1,0 +1,29 @@
+# Chat Computer: mount the Windows partition at boot (best-effort).
+#
+# Delegates all the logic to the root helper's `mount-windows` verb so there is
+# exactly one implementation of "find Windows, unlock BitLocker if a key file
+# exists, mount rw-if-clean-else-ro, never remove the hiberfile". The service
+# is best-effort: a missing/locked/absent Windows partition must not block boot,
+# so the unit always "succeeds".
+[Unit]
+Description=Chat Computer: mount Windows partition at /mnt/windows
+# We keep the default dependencies (clean ordering vs basic.target/shutdown);
+# "best effort" is guaranteed by the '|| true' in ExecStart, not by dropping
+# dependencies.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The disks' details (what's on each partition) must be known first. Waited for
+# here, not with systemd-udev-settle.service: that one comes before
+# sysinit.target, so the whole start, Chat Computer's screen included, would wait for
+# every device. Chat Computer takes Windows' files in when they arrive.
+ExecStartPre=-/usr/bin/udevadm settle --timeout=30
+# The helper prints JSON to stdout; '|| true' makes a locked/absent Windows a
+# non-fatal condition so the AI session always comes up.
+ExecStart=/bin/sh -c '/usr/local/libexec/chatcomputer/chatcomputer-root mount-windows || true'
+# Nothing to unmount on shutdown that systemd will not handle via the mount.
+
+[Install]
+WantedBy=multi-user.target

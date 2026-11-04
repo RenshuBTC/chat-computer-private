@@ -1,0 +1,10 @@
+[package]
+name = "text"
+description = "Chat Computer's own text setting: measuring, wrapping and drawing lines in its fonts"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+font = { path = "../font" }

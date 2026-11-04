@@ -1,0 +1,71 @@
+[package]
+name = "model"
+description = "Chat Computer's own model engine: runs an open model (Qwen 3.5's family) on the PC's own processor, with nothing else"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Threads for the arithmetic, and the program that serves the model (where there's an operating system: Chat
+# Computer on Linux, the desktop app), which also gets a model ready over Chat Computer's own HTTPS.
+std = ["dep:tls", "dep:crypto"]
+
+[dependencies]
+# (Its resampling: a picture resized as Qwen's processor resizes it.)
+picture = { path = "../picture" }
+tls = { path = "../tls", optional = true }
+crypto = { path = "../crypto", optional = true }
+
+[dev-dependencies]
+# (kernel_check: a scanned PDF's page made a picture as the kernel makes it.)
+pdf = { path = "../pdf" }
+
+[[bin]]
+name = "chat-computer-model"
+path = "src/bin/chat-computer-model/main.rs"
+required-features = ["std"]
+
+[[example]]
+name = "run"
+required-features = ["std"]
+
+[[example]]
+name = "chat_check"
+required-features = ["std"]
+
+[[example]]
+name = "tok_check"
+required-features = ["std"]
+
+[[example]]
+name = "nfc_check"
+required-features = ["std"]
+
+[[example]]
+name = "session_check"
+required-features = ["std"]
+
+[[example]]
+name = "bench_mm"
+required-features = ["std"]
+
+[[example]]
+name = "tiny_model"
+required-features = ["std"]
+
+[[example]]
+name = "kernel_check"
+required-features = ["std"]
+
+[[example]]
+name = "vision_check"
+required-features = ["std"]
+
+[[example]]
+name = "picture_check"
+required-features = ["std"]
+
+[[example]]
+name = "listen_check"
+required-features = ["std"]

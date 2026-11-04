@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-close-site"
+description = "Enables the close_site command without any pre-configured scope."
+commands.allow = ["close_site"]
+
+[[permission]]
+identifier = "deny-close-site"
+description = "Denies the close_site command without any pre-configured scope."
+commands.deny = ["close_site"]

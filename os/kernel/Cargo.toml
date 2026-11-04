@@ -1,0 +1,36 @@
+[package]
+name = "chatcomputer-kernel"
+description = "The Chat Computer kernel"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+bootinfo = { path = "../bootinfo" }
+font = { path = "../font" }
+text = { path = "../text" }
+chime = { path = "../chime" }
+net = { path = "../net" }
+fat = { path = "../fat" }
+exfat = { path = "../exfat" }
+ntfs = { path = "../ntfs" }
+zip = { path = "../zip" }
+office = { path = "../office" }
+picture = { path = "../picture" }
+bitlocker = { path = "../bitlocker" }
+registry = { path = "../registry" }
+remember = { path = "../remember" }
+markdown = { path = "../markdown" }
+hid = { path = "../hid" }
+aml = { path = "../aml" }
+model = { path = "../model" }
+tls = { path = "../tls" }
+web = { path = "../web" }
+pdf = { path = "../pdf" }
+
+[[bin]]
+name = "chatcomputer-kernel"
+test = false
+bench = false

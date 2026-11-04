@@ -1,0 +1,10 @@
+# Chat Computer: hand all network devices to NetworkManager.
+#
+# The contract requires "netplan renderer NetworkManager". subiquity writes its
+# own 00-installer-config.yaml using the networkd renderer; this file sorts
+# after it and sets the global renderer to NetworkManager so NM owns the links.
+# install-chatcomputer.sh also neutralises the installer's networkd config and runs
+# `netplan generate`. Mode 0600 is required by netplan (it warns otherwise).
+network:
+  version: 2
+  renderer: NetworkManager

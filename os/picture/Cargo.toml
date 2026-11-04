@@ -1,0 +1,10 @@
+[package]
+name = "picture"
+description = "Chat Computer's own reader of pictures (JPEG, PNG, GIF), to show them on its screen, and JPEG writer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zip = { path = "../zip" }

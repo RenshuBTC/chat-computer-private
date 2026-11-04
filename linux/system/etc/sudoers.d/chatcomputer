@@ -1,0 +1,11 @@
+# Chat Computer sudoers drop-in. Installed as /etc/sudoers.d/chatcomputer, mode 0440.
+#
+# The Chat Computer user may run ONLY the root helper, with no password, and nothing
+# else. The AI calls `sudo -n /usr/local/libexec/chatcomputer/chatcomputer-root <verb>`.
+# All argument validation happens inside the helper; sudo grants the single
+# binary. @CHATCOMPUTER_USER@ is replaced with the real username by
+# install-chatcomputer.sh.
+#
+# NOTE: no wildcards on the command — the helper is the trust boundary, and
+# allowing arbitrary args here is intentional (the helper validates them).
+@CHATCOMPUTER_USER@ ALL=(root) NOPASSWD: /usr/local/libexec/chatcomputer/chatcomputer-root

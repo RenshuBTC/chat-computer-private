@@ -116,9 +116,18 @@ impl Matrix<'_> {
         pool.run(jobs, &|j| {
             let start = j * ROWS_PER_JOB;
             let end = (start + ROWS_PER_JOB).min(rows_out);
-            let mut row_out = vec![0.0f32; n];
+            // (On the stack for a few tokens, the usual case: one job after another needs no memory from the heap,
+            // which every core would otherwise take in turn, in Chat Computer's own kernel.)
+            let mut few = [0.0f32; 16];
+            let mut many = Vec::new();
+            let row_out: &mut [f32] = if n <= few.len() {
+                &mut few[..n]
+            } else {
+                many.resize(n, 0.0f32);
+                &mut many
+            };
             for r in start..end {
-                quant::dot_row_many(m.dtype, m.data, m.cols, r, xs, &mut row_out);
+                quant::dot_row_many(m.dtype, m.data, m.cols, r, xs, row_out);
                 for (t, v) in row_out.iter().enumerate() {
                     // (Each job writes its own rows.)
                     unsafe { *out_ptr.get().add(t * rows + r) = *v };

@@ -35,13 +35,13 @@ B, U, E, C = (Gdk.EventType.TOUCH_BEGIN, Gdk.EventType.TOUCH_UPDATE, Gdk.EventTy
 paths = Paths().ensure()
 choose_rendering()
 screen = GtkScreen(paths, Settings(), windowed=True)
-screen.apply_settings(0, "Ren", "Sonnet 5.5")
+screen.apply_settings(0, "Sam", "Sonnet 5.5")
 loop = asyncio.new_event_loop()
 threading.Thread(target=loop.run_forever, daemon=True).start()
 screen.bind(loop, on_media_key=lambda k: None, on_media_state=lambda p: None, on_typed=lambda t: None)
 now = time.time()
 screen.history([{"role": "user", "id": "u1", "ts": now - 60, "text": "Hello there"},
-                {"role": "assistant", "ts": now - 50, "text": "Hi Ren. The weather is lovely today."}])
+                {"role": "assistant", "ts": now - 50, "text": "Hi Sam. The weather is lovely today."}])
 screen.messages_list([{"id": "m1", "source": "email", "label": "Gmail", "who": "Jane", "text": "Lunch?", "ts": now - 30,
                        "unread": True}], [])
 delivered: list = []

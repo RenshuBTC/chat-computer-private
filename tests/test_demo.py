@@ -321,10 +321,10 @@ def test_the_demo_works_in_a_browser():
     # dark, nor "a warm night" in the morning).
     ev = res["greet_evening"]
     assert ev["meteo"] == ["geocoding-api Singapore", "api"]
-    assert ev["now"]["time"] == ["Look who's back: Ren!", "Good evening, Ren", "How was your day, Ren?"]
-    assert ev["now"]["here"] == ["Good evening in Singapore, Ren", "Hello, Singapore! How was your day, Ren?",
-                                 "Stay dry in rainy Singapore, Ren", "Hello, rainy Singapore! A cozy evening in, Ren?",
-                                 "Hello, Singapore! A warm night, Ren"]
+    assert ev["now"]["time"] == ["Look who's back: Sam!", "Good evening, Sam", "How was your day, Sam?"]
+    assert ev["now"]["here"] == ["Good evening in Singapore, Sam", "Hello, Singapore! How was your day, Sam?",
+                                 "Stay dry in rainy Singapore, Sam", "Hello, rainy Singapore! A cozy evening in, Sam?",
+                                 "Hello, Singapore! A warm night, Sam"]
     assert ev["said"] in ev["now"]["time"] + ev["now"]["here"]
     mo = res["greet_morning"]
     assert mo["now"]["time"] == ["Good morning", "Welcome", "Hey there", "Happy Friday", "Hello to that Friday feeling",
@@ -337,16 +337,16 @@ def test_the_demo_works_in_a_browser():
     # The name you go by: asked, given ("call me", in your words, capitalised), not taken from "call me back later",
     # and forgotten; where you live: found on the map (Penang, in your word for it), its weather in the greeting and
     # when you ask for the weather.
-    assert res["name_asked"] == "You're Ren. (To change it, say \u201ccall me\u201d and the name you'd like.)"
-    assert res["name_given"]["said"] == "Nice to meet you, Ren Shu! I'll call you that from now on."
-    assert res["name_given"]["time"][1] == "Good evening, Ren Shu"
+    assert res["name_asked"] == "You're Sam. (To change it, say \u201ccall me\u201d and the name you'd like.)"
+    assert res["name_given"]["said"] == "Nice to meet you, Sam Lee! I'll call you that from now on."
+    assert res["name_given"]["time"][1] == "Good evening, Sam Lee"
     assert not res["name_not"].startswith("Nice to meet you")
     assert res["place_given"]["said"] == "Got it: you live in Penang, Malaysia. Say \u201cweather\u201d for its forecast."
     assert res["place_given"]["here"] and all("Penang" in g for g in res["place_given"]["here"])
     assert res["place_weather"].startswith("Today in Penang: light rain, 26\u00b0 to 31\u00b0")
     forgot = res["name_forgotten"]
     assert forgot["said"] == "Done: I've forgotten your name." and "Greetings, whoever you are" in forgot["time"]
-    assert forgot["done"][-4:] == ["Set your name to Ren Shu", "Set your place to Penang", "Looked up the weather for Penang",
+    assert forgot["done"][-4:] == ["Set your name to Sam Lee", "Set your place to Penang", "Looked up the weather for Penang",
                                    "Forgot your name"]
     # Singapore found once, and its weather, for the greeting; then Penang, and its weather, for the greeting and when
     # asked for.
@@ -517,7 +517,7 @@ def test_the_demo_works_in_a_browser():
     told = res["gpt_told"]
     assert told["ok"] == "Got it" and "on your ChatGPT plan" in told["text"]
     assert told["spark"] == "ChatGPT (GPT-9, at Medium effort) answers. Press to change"
-    assert told["kept"] == {"provider": "chatgpt", "key": "app", "model": "gpt-9-plan", "email": "ren@example.com", "name": "GPT-9",
+    assert told["kept"] == {"provider": "chatgpt", "key": "app", "model": "gpt-9-plan", "email": "sam@example.com", "name": "GPT-9",
                             "levels": ["low", "medium", "high"], "dflt": "medium", "models": ["gpt-9-plan"]}
     first, second = res["gpt_asked"]
     assert first["model"] == "gpt-9-plan" and first["store"] is False and first["stream"] is True
@@ -529,7 +529,7 @@ def test_the_demo_works_in_a_browser():
     assert second["last"]["call_id"] == "call_g1" and second["last"]["output"].startswith("A 20-minute timer is on the screen")
     assert res["gpt_done"][-1] == "Made a timer", res["gpt_done"]
     assert res["gpt_menu_in"]["choices"] == ["GPT-9", "Low", "Medium", "High", "Manage usage", "Sign out of ChatGPT"]
-    assert res["gpt_menu_in"]["text"].startswith("Using your ChatGPT plan, as ren@example.com: what you say goes to OpenAI.")
+    assert res["gpt_menu_in"]["text"].startswith("Using your ChatGPT plan, as sam@example.com: what you say goes to OpenAI.")
     assert res["gpt_calls"] == ["chatgpt_sign_in", "chatgpt_ask", "chatgpt_ask", "chatgpt_ask", "chatgpt_sign_out"]
     now = res["mic_now"]
     assert not now["sheet"] and now["pressed"] == "true" and now["title"] == "Stop listening"
@@ -557,7 +557,7 @@ def test_the_demo_works_in_a_browser():
     assert "Right now you're in the Chat Computer app on their" in app_asked[0]["messages"][0]["content"]
     assert "Jane Lim" not in app_asked[0]["messages"][0]["content"]          # (no made-up messages in the app)
     found = app_asked[1]["messages"][-1]
-    assert found["role"] == "tool" and json.loads(found["content"])[0]["path"] == "/home/ren/Documents/Taxes 2025.pdf"
+    assert found["role"] == "tool" and json.loads(found["content"])[0]["path"] == "/home/sam/Documents/Taxes 2025.pdf"
     calls = [c for c in res["app_calls"] if c[0] != "search_files" or c[1]["query"]]
     assert calls == [["about", {}], ["model_status", {}], ["take_opening", {}], ["search_files", {"query": "tax"}]]
     # Read aloud's voice where the graphics chip can make Heart's (WebGPU): offered the first time Read aloud is pressed

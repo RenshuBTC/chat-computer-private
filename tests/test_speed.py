@@ -18,7 +18,7 @@ def _controller(tmp_path, monkeypatch, platform=None):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "home" / "ChatComputer"))
     paths = Paths().ensure()
-    return Controller(paths, Settings(user_name="Ren Shu"), platform or FakePlatform(), RecordingScreen(),
+    return Controller(paths, Settings(user_name="Sam Lee"), platform or FakePlatform(), RecordingScreen(),
                       voice=False, index=False)
 
 
@@ -126,7 +126,7 @@ def _pc_controller(tmp_path, monkeypatch, mounted):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "home" / "ChatComputer"))
     paths = Paths().ensure()
-    s = Settings(user_name="Ren Shu", windows_user="rensh", windows_mount=str(mnt))
+    s = Settings(user_name="Sam Lee", windows_user="sammy", windows_mount=str(mnt))
     return Controller(paths, s, JustStarted(), RecordingScreen(), voice=False, index=True), mnt
 
 
@@ -138,14 +138,14 @@ def test_windows_files_that_arrive_after_the_start_are_taken_in(tmp_path, monkey
         await c.start()
         assert c._other_files_pending() and not c._files_settled.is_set()
         assert [label for label, _ in c.index.roots] == ["home"]
-        (mnt / "Users" / "rensh" / "Documents").mkdir(parents=True)
+        (mnt / "Users" / "sammy" / "Documents").mkdir(parents=True)
         mounted["now"] = True
         await asyncio.wait_for(c._files_settled.wait(), 3)
         await asyncio.sleep(0.2)
         c.brain = None
         await c.stop()
     asyncio.run(run())
-    home = str(mnt / "Users" / "rensh")
+    home = str(mnt / "Users" / "sammy")
     assert ("windows", home) in c.index.roots
     assert c._other_os_files() == home         # and the next conversation's system prompt says where they are
 
@@ -166,12 +166,12 @@ def test_the_engine_waits_a_moment_for_windows_files_at_the_start(tmp_path, monk
         task = asyncio.create_task(c._warm_up(wait_for_files=True))
         await asyncio.sleep(0.3)
         assert not connected
-        (mnt / "Users" / "rensh").mkdir(parents=True)
+        (mnt / "Users" / "sammy").mkdir(parents=True)
         mounted["now"] = True
         c._files_settled.set()
         await task
     asyncio.run(run())
-    assert connected and connected[0][1] == str(mnt / "Users" / "rensh") and c._engine_had_files
+    assert connected and connected[0][1] == str(mnt / "Users" / "sammy") and c._engine_had_files
 
 
 # ------------------------------------------------------------------ the file index

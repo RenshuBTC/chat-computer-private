@@ -12,7 +12,7 @@ from chatcomputer.config import Paths
 from chatcomputer.journal import Journal
 from chatcomputer.ui.gtk_app import displays_report, graphics_report
 
-SOURCE = "Users/Ren Shu/Downloads/ChatComputer/ChatComputer"
+SOURCE = "Users/Sam Lee/Downloads/ChatComputer/ChatComputer"
 
 
 def _app(root, version="1", agent="x = 1\n", requirements="numpy==1\nsoxr==1\n"):
@@ -161,7 +161,7 @@ def test_logs_are_copied_to_windows_without_secrets(tmp_path):
     (logs / "chatcomputer.log").write_text("start\nremote control failed: token sk-ant-oat01-abcdef123\n"
                                        'Authorization: Bearer abcdefghijklmnopqrstuvwxyz\n{"refresh_token": "r123"}\n')
     (logs / "session.log").write_text("session start\n")
-    home = tmp_path / "Users/Ren Shu"
+    home = tmp_path / "Users/Sam Lee"
     assert logcopy.copy_logs(logs, str(home), {}) is None        # no Chat Computer folder from Setup: nothing written
     (home / "AppData/Local/ChatComputer").mkdir(parents=True)
     dest = logcopy.copy_logs(logs, str(home), {"phone": {"link": "failed", "detail": "token sk-ant-oat01-zzz"}})

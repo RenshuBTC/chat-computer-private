@@ -8,7 +8,7 @@ members = ["bootinfo", "boot", "kernel", "font", "text", "chime", "net", "crypto
 version = "0.1.0"
 edition = "2024"
 publish = false
-license = "Personal use"
+license = "Apache-2.0"
 
 [profile.dev]
 panic = "abort"

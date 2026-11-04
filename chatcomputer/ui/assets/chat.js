@@ -122,7 +122,7 @@
   // A conversation starts with the word logo in the middle of the screen (body.intro), and it stays there until
   // something's said (body.has-log). Under it, one line: a greeting, as warm and personal as the Claude app's, a
   // different one each time. Theirs (as claude.ai's code has them) are by the time of day (from 6 in the morning, 12,
-  // 5 in the evening, 9 at night), some by the day of the week, with the name you go by ("Good evening, Ren"); here
+  // 5 in the evening, 9 at night), some by the day of the week, with the name you go by ("Good evening, Sam"); here
   // the same. The name comes from CO.settings (on a Chat Computer the one it was set up with; "call me ..." changes
   // it). [with the name, without one (null: not without), from, until (hours), days (0 Sunday) or null, only where a
   // model answers]
@@ -171,7 +171,7 @@
   function named(g) { return who ? g[0].replace("{name}", who) : g[1] || ""; }
   // And, as theirs are for the time of day, greetings for where you are and its weather now (CO.here: the place,
   // your time zone's city or where you said you live; the weather there from Open-Meteo, as a WMO weather code, °C
-  // and whether it's light there), from the world to your city: "Hello, Singapore! How was your day, Ren?".
+  // and whether it's light there), from the world to your city: "Hello, Singapore! How was your day, Sam?".
   // {part}: morning (from 6), afternoon (12), evening (5 pm) or night (9 pm).
   var here = { place: "", code: null, temp: null, day: null, pending: false };
   var AROUND = {

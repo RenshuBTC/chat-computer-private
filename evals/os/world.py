@@ -4,7 +4,7 @@ keyboard layout, the camera, the updates waiting, the internet's speed and the V
 udisksctl, lp, lpstat, setxkbmap...) both read and change it, so whichever way Chat Computer goes about something,
 its tools or a command, it meets the same machine.
 
-A drive's files are where a real computer has them: under /media/ren/<label> while it's mounted (opened), and out
+A drive's files are where a real computer has them: under /media/sam/<label> while it's mounted (opened), and out
 of reach otherwise (kept in UNPLUGGED, which stands for the stick itself)."""
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 FILE = Path(os.environ.get("EVAL_WORLD", "/tmp/.ev/machine.json"))
-MEDIA = Path(os.environ.get("EVAL_MEDIA", "/media/ren"))
+MEDIA = Path(os.environ.get("EVAL_MEDIA", "/media/sam"))
 UNPLUGGED = Path(os.environ.get("EVAL_UNPLUGGED", "/tmp/.ev/drive-contents"))
 # The sandbox's time zone: every program in it has TZ=:LOCALTIME (run.py), so changing this file changes the time
 # zone for all of them, as /etc/localtime does on a real computer.
@@ -117,7 +117,7 @@ def drive_root(d: dict[str, Any]) -> Path:
 
 
 def mount(d: dict[str, Any]) -> Path:
-    """Open the drive: its files appear at /media/ren/<label>."""
+    """Open the drive: its files appear at /media/sam/<label>."""
     if d.get("mounted"):
         return MEDIA / d["label"]
     if d.get("ejected"):

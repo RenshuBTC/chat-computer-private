@@ -126,6 +126,9 @@ const META_MODEL: &str = "muse-spark-1.3";
 const META_TOKENS: usize = 8192;
 /// How many characters of its words are shown at a time, so they appear as they would be written.
 const META_PIECE: usize = 12;
+/// How many times a round is asked again when Meta's Model API answers with what may pass (now and then it says it
+/// has no such model, or that it's busy).
+const META_TRIES: u32 = 4;
 
 /// Said when the oldest part of a long conversation is no longer given to the model.
 const SHORTENED: &str = "\n\nThis conversation began earlier: its oldest part is no longer shown to you, to keep it short \
@@ -312,8 +315,9 @@ struct Job {
     see_ms: u64,
     /// The round's web tools' calls still being fetched, in order: the next round waits for them.
     web: Vec<WebCall>,
-    /// Meta's model's round, being asked: the request on its way, and since when.
+    /// Meta's model's round, being asked: the request on its way, and since when; and how many times it's been asked.
     meta: Option<(crate::web::Fetch, u64)>,
+    meta_tries: u32,
 }
 
 /// One of the round's calls of the web's tools, being fetched: what it was, and where its result goes in the
@@ -365,6 +369,7 @@ impl Job {
             see_ms: 0,
             web: Vec::new(),
             meta: None,
+            meta_tries: 0,
         }
     }
 }
@@ -1310,6 +1315,10 @@ impl Assistant {
                 ];
                 let url = web::Url::parse(META_API).expect("Meta's Model API's own address");
                 crate::log!("Chat Computer kernel: model: asks Meta's {} ({} bytes)", m.name, body.len());
+                job.meta_tries += 1;
+                if test_build().is_some() {
+                    crate::log!("Chat Computer kernel: test: body {body}");
+                }
                 job.meta = Some((crate::web::Fetch::post(url, headers, body.into_bytes()), time::uptime_ms()));
                 let doing = format!("Asking {} (Meta)", m.name);
                 activity(job, doing, events);
@@ -1330,9 +1339,14 @@ impl Assistant {
                         if cut { ", cut at the most it says" } else { "" }
                     );
                     job.closed = answer.calls.len();
+                    job.meta_tries = 0;
                     job.script = Some((answer.text.clone(), answer, cut));
                 }
-                Err(why) => {
+                Err((_, true)) if job.meta_tries < META_TRIES => {
+                    crate::log!("Chat Computer kernel: model: asks again");
+                    return false;
+                }
+                Err((why, _)) => {
                     self.parts.truncate(job.base);
                     fail(events, why);
                     return true;
@@ -1739,16 +1753,18 @@ fn meta_body(model: &str, messages: &[Message], tools: &[Json]) -> String {
 }
 
 /// Meta's model's round, from Meta's Model API's answer: its words and tool calls, whether it reached the most it
-/// says, and the tokens it read and wrote; or why there's none, for the person.
-fn meta_answer(got: Result<crate::web::Page, String>) -> Result<(Answer, bool, usize, usize), String> {
-    let page = got.map_err(|why| format!("Meta's model couldn't be reached: {why}."))?;
+/// says, and the tokens it read and wrote; or why there's none, for the person, and whether asking again may help.
+fn meta_answer(got: Result<crate::web::Page, String>) -> Result<(Answer, bool, usize, usize), (String, bool)> {
+    let page = got.map_err(|why| (format!("Meta's model couldn't be reached: {why}."), false))?;
     let text = String::from_utf8_lossy(&page.bytes);
     let answer = json::parse(&text);
     if page.status != 200 {
         let said = answer.as_ref().and_then(|a| a.get("error")).and_then(|e| e.get("message").or(Some(e))).and_then(Json::str);
         let said = said.map(|m| format!(": \u{201C}{}\u{201D}", m.chars().take(300).collect::<String>())).unwrap_or_default();
         crate::log!("Chat Computer kernel: model: Meta's Model API answered {}{said}", page.status);
-        return Err(match page.status {
+        let code = answer.as_ref().and_then(|a| a.get("error")).and_then(|e| e.get("code")).and_then(Json::str);
+        let again = page.status == 429 || page.status >= 500 || code == Some("model_not_found");
+        return Err((match page.status {
             401 | 403 => format!(
                 "Meta's Model API didn't accept the key in Chat Computer's settings (meta-api-key){said}. A key comes from \
                  https://dev.meta.ai."
@@ -1756,11 +1772,11 @@ fn meta_answer(got: Result<crate::web::Page, String>) -> Result<(Answer, bool, u
             429 => String::from("Meta's Model API says it's had too many requests: try again in a minute."),
             s if s >= 500 => format!("Meta's Model API had a problem ({s}): try again in a minute."),
             s => format!("Meta's Model API refused the question ({s}){said}."),
-        });
+        }, again));
     }
-    let Some(answer) = answer else { return Err(String::from("Meta's Model API's answer couldn't be read.")) };
+    let Some(answer) = answer else { return Err((String::from("Meta's Model API's answer couldn't be read."), true)) };
     let Some(choice) = answer.get("choices").and_then(Json::array).and_then(|c| c.first()) else {
-        return Err(String::from("Meta's Model API's answer had nothing in it."));
+        return Err((String::from("Meta's Model API's answer had nothing in it."), true));
     };
     let message = choice.get("message");
     let words = message.and_then(|m| m.get("content")).and_then(Json::str).unwrap_or("");

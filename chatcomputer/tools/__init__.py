@@ -948,7 +948,7 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
         return await asyncio.to_thread(fn, *args)
 
     @reg("drives", "USB sticks, memory cards and external drives. They open by themselves when plugged in. list: "
-         "what's plugged in, each with the folder its files are in (like /media/ren/SANDISK), to use with show_file, "
+         "what's plugged in, each with the folder its files are in (like /media/sam/SANDISK), to use with show_file, "
          "copy_files, move_files, Glob and Grep (search_files doesn't cover drives); open: open one that isn't open; "
          "eject: close one so it can be pulled out safely (do this before telling them it's safe to pull it out).",
          obj({"action": {"type": "string", "enum": ["list", "open", "eject"]}, "drive": S}, ["action"]))

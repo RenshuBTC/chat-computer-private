@@ -1,6 +1,6 @@
 """One desktop eval case, end to end: the real Chat Computer (controller, tools, permission gate, its own model run by
 its own engine) on the simulated computer (platform.py) with a fresh home folder (home.py). It runs inside the case's
-sandbox (run.py), as the person: HOME is /home/ren, PATH the commands a real Chat Computer has.
+sandbox (run.py), as the person: HOME is /home/sam, PATH the commands a real Chat Computer has.
 
     python -m evals.os.case CASE.json TRACE.json
 
@@ -58,7 +58,7 @@ async def run(case: dict[str, Any]) -> dict[str, Any]:
     os.environ["PATH"] = PATH
 
     state = case["state"]
-    settings = Settings(user_name="Ren Shu")
+    settings = Settings(user_name="Sam Lee")
     if case.get("model"):
         settings.model = case["model"]
     if case.get("effort"):

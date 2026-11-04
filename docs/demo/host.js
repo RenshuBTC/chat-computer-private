@@ -1479,7 +1479,7 @@
                [/translate|how do you say|in (japanese|french|spanish|german|chinese|korean|italian)/i, "translate"],
                [/explain|summari/i, "explain that"], [/plan|itinerary|trip/i, "plan that"], [/advice|tips/i, "give advice"]];
   // The name you go by, kept in this browser: the greeting under the word logo says it, as the Claude app's says
-  // the name you give it. "Call me Ren" or "my name is Ren" sets it (the model, with set_name); "what's my name?" says
+  // the name you give it. "Call me Sam" or "my name is Sam" sets it (the model, with set_name); "what's my name?" says
   // it; "forget my name" forgets it. "Call me back" isn't a name.
   var NAME_KEY = "chatcomputer-demo-name";
   var NAME_IS = /^\s*(?:(?:please|pls|just|you can|you may|from now on,?)\s+)*(?:call me|my name(?:'s| is))\s+([\p{L}][\p{L}\p{M}'’.-]*(?:\s+[\p{L}][\p{L}\p{M}'’.-]*){0,2}?)\s*(?:,?\s*(?:please|pls|thanks|thank you|from now on|from now|from today|going forward|instead|in future))*\s*[.!]*\s*$/iu;

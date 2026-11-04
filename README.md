@@ -27,6 +27,29 @@ next version; until then /get has the Mac app (see [The apps](#the-apps)).
   starts, Chat Computer starts. macOS, your apps and your files stay, one restart away. See
   [Chat Computer on a Mac](#chat-computer-on-a-mac).
 
+## Meta's Muse Spark, at the heart of its own operating system
+
+*Our entry to the Meta Global AI Developer Hackathon.* Chat Computer's own operating system ([os/](os/README.md)) is
+written from scratch in Rust: its own kernel, drivers, network stack, TLS 1.3, file systems (it reads Windows' C:,
+BitLocker too) and model engine. Its whole interface is a conversation, and with a key for
+[Meta's Model API](https://dev.meta.ai) its brain is **Meta's Muse Spark** (`muse-spark-1.3`):
+
+* **The kernel talks to Meta itself.** Each round of an answer is a POST of the conversation, with the operating
+  system's tools, to `api.meta.ai/v1/chat/completions`, made by the kernel's own TCP/IP and TLS 1.3, with no Linux,
+  browser or library in between ([assistant.rs](os/kernel/src/assistant.rs): `meta_step`, `meta_body`,
+  `meta_answer`; [web.rs](os/kernel/src/web.rs); [http.rs](os/web/src/http.rs); [tls](os/tls)).
+* **Muse Spark runs the computer through tool calls.** It sees how the computer is doing, changes the text size,
+  sets timers and reminders, reads files on the PC's drives, searches the web and reads pages, remembers things
+  about you, and restarts or turns off the PC. Each tool is part of the operating system, and the results go back
+  to Muse Spark until it has finished.
+* **You can talk to it.** Press Windows+H and speak: Whisper, run by the system's own engine on the PC, turns it into
+  your message, and Muse Spark answers.
+* **Local first.** Without a key, its own open model answers on the PC, offline. With one, what you say goes to Meta,
+  and the status says so.
+
+Try it in a virtual PC: `META_API_KEY=... os/try-muse-spark.sh` (QEMU and OVMF; it builds the system first). On a
+PC with its own system installed, add `meta-api-key = ...` to `\EFI\chatcomputer-own\settings.txt`.
+
 ## What you need on a Windows PC
 
 * This Windows PC. It must start in UEFI mode, which every PC sold in the last ten years does.
@@ -634,3 +657,8 @@ Chat Computer:
   (`--model web`, and `--engine native:PORT` to have the engine's program answer the page's requests, a few times
   faster). `evals/tools` prints traces to read (`show_web.py`, `show_os.py`) and `review.html` opens them to label
   each one pass or fail, with why.
+
+## Licence
+
+Chat Computer is licensed under the Apache License 2.0 (`LICENSE`). The fonts, Mozilla's root certificates and
+the other material by others that the repository carries keep their own licences, listed in `NOTICE`.

@@ -99,7 +99,7 @@ class Platform:
     # before it's pulled out. Failures raise RuntimeError with what went wrong, in plain words.
     def drives(self) -> list[dict[str, Any]]:
         """Drives plugged in: [{"id": "sdb1", "name": "SANDISK", "kind": "USB drive", "size_gb": 32.0,
-        "mounted": True, "path": "/media/ren/SANDISK", "free_gb": 12.5}] (path and free_gb when mounted)."""
+        "mounted": True, "path": "/media/sam/SANDISK", "free_gb": 12.5}] (path and free_gb when mounted)."""
         return []
     def open_drive(self, drive: str) -> str:
         """Mount a drive (by id or name) so its files can be used; returns the folder they're in."""

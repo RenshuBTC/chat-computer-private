@@ -20,7 +20,7 @@ const PAGES = {
     "<tr class='zA yO' data-name='team'><td class='yX'><div class='yW'><span email='a@example.com' name='Ann'>Ann</span>, <span email='b@example.com' name='Bo'>Bo</span></div></td>" +
     "<td><div class='xT'><span class='bog'><span data-legacy-thread-id='18a2'>Plans</span></span><span class='y2'> - See you there</span></div></td>" +
     "<td class='xW'><span>Oct 28</span></td></tr></tbody></table></div>"],
-  outlook: ["https://outlook.live.com/mail/0/", "<title>Mail - Ren - Outlook</title><div role='listbox' aria-label='Message list'>" +
+  outlook: ["https://outlook.live.com/mail/0/", "<title>Mail - Sam - Outlook</title><div role='listbox' aria-label='Message list'>" +
     "<div role='option' data-convid='AQQk1' aria-label='Unread Sam Lee Trip photos 8:30 AM Here they are' data-name='sam'>" +
     "<div>Sam Lee</div><div>Trip photos</div><div>8:30 AM</div><div>Here they are, all 40.</div></div>" +
     "<div role='option' data-convid='AQQk2' aria-label='City Council Bin day 2026-10-30' data-name='council'>" +

@@ -1169,7 +1169,7 @@ def _controller(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "home" / "ChatComputer"))
     # AirTouch is off unless asked for: these are about it once it's on.
-    return Controller(Paths().ensure(), Settings(user_name="Ren", airtouch=True), FakePlatform(), RecordingScreen(),
+    return Controller(Paths().ensure(), Settings(user_name="Sam", airtouch=True), FakePlatform(), RecordingScreen(),
                       voice=False, index=False)
 
 

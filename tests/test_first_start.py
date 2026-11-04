@@ -12,7 +12,7 @@ def _controller(tmp_path, monkeypatch):
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     paths = Paths().ensure()
     screen = RecordingScreen()
-    c = Controller(paths, Settings(user_name="Ren Shu"), FakePlatform(), screen, voice=True)
+    c = Controller(paths, Settings(user_name="Sam Lee"), FakePlatform(), screen, voice=True)
     return c, screen, paths
 
 

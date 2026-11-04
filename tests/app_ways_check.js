@@ -26,8 +26,8 @@ function standIn(opts) {
   const o = opts || {};
   const kept = (w) => { if (w !== undefined) localStorage.setItem("__way", w); return localStorage.getItem("__way") || null; };
   if (o.way !== undefined && !localStorage.getItem("__fresh")) { localStorage.setItem("__fresh", "1"); kept(o.way); }
-  const ext = o.system === "mac" ? "/Users/ren/Library/Application Support/ai.chatcomputer.desktop/Chrome extension" :
-    "C:\\Users\\Ren\\AppData\\Local\\ai.chatcomputer.desktop\\Chrome extension";
+  const ext = o.system === "mac" ? "/Users/sam/Library/Application Support/ai.chatcomputer.desktop/Chrome extension" :
+    "C:\\Users\\Sam\\AppData\\Local\\ai.chatcomputer.desktop\\Chrome extension";
   const os = o.system === "mac" ? { can: false, why: "This Mac has an Apple M4: Chat Computer's own system starts only on Macs with M1, M2 or M3.",
     system: "mac", chip: "Apple M4" } : { can: true, why: "", system: "windows", chip: "" };
   let isDefault = false;
@@ -39,18 +39,18 @@ function standIn(opts) {
   };
   window.__TAURI__ = { core: { Channel: function () {}, invoke: (command, args) => {
     window.__app.calls.push([command, args || {}]);
-    if (command === "way_status") return Promise.resolve({ way: kept(), chrome: true, extension: ext, setup: "C:\\Users\\Ren\\Setup",
+    if (command === "way_status") return Promise.resolve({ way: kept(), chrome: true, extension: ext, setup: "C:\\Users\\Sam\\Setup",
       default_browser: isDefault, os: os });
     if (command === "choose_way") {
       if (args.way === "os" && !os.can) return Promise.reject(os.why);
       kept(args.way);
       if (args.way === "chrome") return Promise.resolve({ way: "chrome", folder: ext, chrome: true, chrome_opened: true });
       if (args.way === "browser") return Promise.resolve({ way: "browser", default_browser: false });
-      if (args.way === "os") return Promise.resolve({ way: "os", folder: "C:\\Users\\Ren\\AppData\\Local\\ai.chatcomputer.desktop\\Chat Computer Setup" });
+      if (args.way === "os") return Promise.resolve({ way: "os", folder: "C:\\Users\\Sam\\AppData\\Local\\ai.chatcomputer.desktop\\Chat Computer Setup" });
       return Promise.resolve({ way: args.way });
     }
     if (command === "make_default_browser") { setTimeout(() => { isDefault = true; }, 500); return Promise.resolve(null); }
-    if (command === "about") return Promise.resolve({ name: "Ren Shu", system: o.system || "windows", way: kept() });
+    if (command === "about") return Promise.resolve({ name: "Sam Lee", system: o.system || "windows", way: kept() });
     if (command === "take_opening") return Promise.resolve(o.opening || []);
     if (command === "search_files") return Promise.resolve([]);
     if (command === "model_status") return Promise.resolve({ state: "ready", label: "Qwen3.5 9B", preparing: "", stage: "", done: 0,

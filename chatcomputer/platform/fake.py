@@ -194,7 +194,7 @@ class FakePlatform(Platform):
     def open_drive(self, drive: str) -> str:
         self._c("open_drive", drive)
         d = self._drive(drive)
-        d["mounted"], d["path"] = True, d.get("folder") or f"/media/ren/{d['name']}"
+        d["mounted"], d["path"] = True, d.get("folder") or f"/media/sam/{d['name']}"
         return d["path"]
 
     def eject_drive(self, drive: str) -> str:

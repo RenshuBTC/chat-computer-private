@@ -45,8 +45,8 @@ $Script:SetupId = '{5e7e0a00-0000-4000-8000-00000000000a}'     # the "Chat Compu
 
 # ------------------------------------------------------------------ the pretend PC
 $env:firmware_type = 'UEFI'
-$env:USERNAME = 'rensh'
-$env:USERPROFILE = (Join-Path $OutDir 'Users/rensh')
+$env:USERNAME = 'sammy'
+$env:USERPROFILE = (Join-Path $OutDir 'Users/sammy')
 $Script:BitLocker = ($Scenario -in @('bitlocker', 'bitlocker-fails', 'bitlocker-stop'))
 # Chat Computer installed (and its installer cleaned up, except in remove-both); or only an installer, never used.
 $Script:Installed = $Scenario -in @('remove', 'remove-keep', 'remove-again', 'remove-both', 'startup-windows', 'startup-once')
@@ -157,7 +157,7 @@ function Invoke-CimMethod {
 }
 function Get-ItemProperty { return [pscustomobject]@{ HiberbootEnabled = 1; PEFirmwareType = 2 } }
 function Disable-FastStartup { Add-Call 'Disable-FastStartup' }
-function Get-PnpDevice { return @([pscustomobject]@{ FriendlyName = 'Ren''s AirPods Pro' }, [pscustomobject]@{ FriendlyName = 'Ren''s AirPods Pro' }) }
+function Get-PnpDevice { return @([pscustomobject]@{ FriendlyName = 'Sam''s AirPods Pro' }, [pscustomobject]@{ FriendlyName = 'Sam''s AirPods Pro' }) }
 function Get-NetAdapter { return @([pscustomobject]@{ Status = 'Up'; PhysicalMediaType = 'Native 802.11' }) }
 function netsh.exe {
     $a = @($args)
@@ -313,7 +313,7 @@ function Initialize-Disk {
     (Get-Disk -Number $Number).PartitionStyle = $PartitionStyle
 }
 function Get-TimeZone { return [pscustomobject]@{ Id = 'Singapore Standard Time' } }
-function Get-LocalUser { return [pscustomobject]@{ FullName = 'Ren Shu' } }
+function Get-LocalUser { return [pscustomobject]@{ FullName = 'Sam Lee' } }
 function Get-UbuntuIso {
     Add-Call 'Get-UbuntuIso'
     $iso = Join-Path $OutDir 'ubuntu-24.04.5-live-server-amd64.iso'
@@ -426,7 +426,7 @@ if ($Script:Installed -or $Script:InstallerLeft) {
     [IO.File]::WriteAllText((Join-Path $w.FullName 'claude_agent_sdk-0.2.167-py3-none-win_amd64.whl'), 'whl')
     $engine = New-Item -ItemType Directory -Path (Join-Path $w.FullName 'claude-139597261e6d') -Force
     [IO.File]::WriteAllText((Join-Path $engine.FullName 'claude.exe'), 'exe')
-    $u = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Users/rensh/ChatComputer') -Force
+    $u = New-Item -ItemType Directory -Path (Join-Path $OutDir 'Users/sammy/ChatComputer') -Force
     [IO.File]::WriteAllText((Join-Path $u.FullName 'claude_token'), 'sk-ant-oat01-old')
     # In remove-both, the person also keeps a file of their own in that folder.
     if ($Scenario -eq 'remove-both') { [IO.File]::WriteAllText((Join-Path $u.FullName 'notes.txt'), 'mine') }

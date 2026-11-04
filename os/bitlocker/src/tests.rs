@@ -284,17 +284,17 @@ fn recovery_keys() {
     assert_eq!(recovery_key_bytes("000011-000022-000033-000044-000055-000066-000077-720896").err(), Some(Error::NotARecoveryKey));
     // Found in a message: with dashes, spaces or nothing between the groups; not in a longer number, or one whose
     // groups aren't a recovery key's.
-    let key = "235818-357951-253979-013365-241120-245575-342914-591910";
+    let key = "123453-234564-345675-456786-567897-678909-111111-222222";
     assert_eq!(find_recovery_key(key), Some(key));
     assert_eq!(find_recovery_key(&format!("My key is {key}.")), Some(key));
     assert_eq!(find_recovery_key(&format!("key:{}\n", key.replace('-', " "))), Some(key.replace('-', " ").as_str()));
     assert_eq!(find_recovery_key(&key.replace('-', "")), Some(key.replace('-', "").as_str()));
     assert_eq!(find_recovery_key(&format!("1{key}")), None);
     assert_eq!(find_recovery_key(&format!("{key}0")), None);
-    assert_eq!(find_recovery_key(&key.replace("591910", "591911")), None);
+    assert_eq!(find_recovery_key(&key.replace("222222", "222223")), None);
     assert_eq!(find_recovery_key(&key[..48]), None);
     assert_eq!(find_recovery_key("Call 555-123456 at 9"), None);
-    assert_eq!(find_recovery_key("£€ 235818-357951-253979-013365-241120-245575-342914-591910 ünïcode"), Some(key));
+    assert_eq!(find_recovery_key("£€ 123453-234564-345675-456786-567897-678909-111111-222222 ünïcode"), Some(key));
 }
 
 

@@ -15,7 +15,7 @@ $Script:ReservedLinuxNames = @(
 
 function ConvertTo-LinuxUserName {
     # A valid Ubuntu user name ([a-z_][a-z0-9_-]*, at most 32 characters, not reserved) from a
-    # Windows user name such as "Ren Shu" or "rensh".
+    # Windows user name such as "Sam Lee" or "sammy".
     param([AllowNull()][AllowEmptyString()][string]$WindowsName)
     if ($null -eq $WindowsName) { $WindowsName = '' }
     $decomposed = $WindowsName.Normalize([Text.NormalizationForm]::FormD)
@@ -227,7 +227,7 @@ function New-AutoinstallYaml {
     if ($InstallId -notmatch '^[0-9a-f]{8,64}$') { throw 'Bad install id' }
     if ($PasswordHash -notmatch '^\$6\$[./0-9A-Za-z]{1,16}\$[./0-9A-Za-z]{86}$') { throw 'Bad password hash' }
     # The name as the installer's own form would take it: without : , or = (the account is made with useradd,
-    # which refuses a colon) and at most 160 characters. "Shu, Ren" becomes "Shu Ren".
+    # which refuses a colon) and at most 160 characters. "Lee, Sam" becomes "Lee Sam".
     $name = ([regex]::Replace([string]$RealName, '[:,=\p{Cc}]', ' ') -replace '\s+', ' ').Trim()
     if ($name.Length -gt 160) { $name = $name.Substring(0, 160).TrimEnd() }
     $values = @{

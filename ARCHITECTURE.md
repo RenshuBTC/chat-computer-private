@@ -235,7 +235,7 @@ addresses.
 | Logs, readable from Windows | `C:\Users\<you>\AppData\Local\ChatComputer\from-chatcomputer\` (`chatcomputer.log.txt`, `session.log.txt`, `info.json`), see "Runtime" |
 
 `settings.json` keys written by the Windows setup (all optional): `user_name` (display name), `windows_user`
-(Windows profile folder name, e.g. `rensh`), `timezone` (IANA), `locale`.
+(Windows profile folder name, e.g. `sammy`), `timezone` (IANA), `locale`.
 
 ### Chat Computer exit codes (session supervisor contract)
 
@@ -637,11 +637,11 @@ retrying with backoff, then starts listening.
   look nothing up). With it on: under it the rest of the same greeting, a line going on from it ("and ...": one greeting, not two), as the Claude app's are: in the manner of
   its own (as claude.ai's code has them: each for a time of day, from 6, 12, 17 and 21 o'clock, some for a day of
   the week, "coffee and computer time?" only where a model answers), said on from hello, world ("and good evening
-  to you, Ren"), with the name from `CO.settings` (on a Chat Computer `user_name`'s first word; on the website the
+  to you, Sam"), with the name from `CO.settings` (on a Chat Computer `user_name`'s first word; on the website the
   name given with "call me ..."), and without it where there's none ("and good
   evening to you", "and greetings to you, whoever you are"); and, half the time where there's a place, one for
   the place and its weather now from `CO.here` ({place, code, temp, day}), from the world to the city: "and
-  hello, Singapore! How was your day, Ren?", "and to you in rainy Singapore, Ren: stay dry". The place is where they said they live (`home_place`, or the
+  hello, Singapore! How was your day, Sam?", "and to you in rainy Singapore, Sam: stay dry". The place is where they said they live (`home_place`, or the
   website's "I live in ..."), else the time zone's city; its weather comes from Open-Meteo (`here.py` on a Chat
   Computer, every half hour; the website's host, at most once every half hour), and the greeting is chosen once
   the moment's thinking is over, so a weather looked up meanwhile can be in it. Never the one shown last time

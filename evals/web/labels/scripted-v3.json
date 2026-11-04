@@ -335,7 +335,7 @@
   "call-me": {
    "pass": false,
    "mode": "unhandled",
-   "note": "\"call me Ren from now on\": \"from now on\" at the end isn't taken, so the name isn't kept"
+   "note": "\"call me Sam from now on\": \"from now on\" at the end isn't taken, so the name isn't kept"
   },
   "i-live-tokyo": {
    "pass": true

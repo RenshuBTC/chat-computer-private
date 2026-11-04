@@ -540,7 +540,7 @@ mod tests {
         }
         put_extension(&dir).unwrap();               // (again: the same folder, the same files)
         assert_eq!(std::fs::read_dir(&to).unwrap().count(), EXTENSION.len());
-        assert_eq!(chrome_steps(Path::new(r"C:\Users\Ren Shu\AppData\Local\ai.chatcomputer.desktop\Chrome extension")),
+        assert_eq!(chrome_steps(Path::new(r"C:\Users\Sam Lee\AppData\Local\ai.chatcomputer.desktop\Chrome extension")),
                    "https://chatcomputer.ai/get/chrome.html#folder=C%3A%5CUsers%5CRen%20Shu%5CAppData%5CLocal%5Cai.chatcomputer.desktop%5CChrome%20extension");
         assert_eq!(chrome_steps(Path::new("/Users/zoë/Library/x")),
                    "https://chatcomputer.ai/get/chrome.html#folder=%2FUsers%2Fzo%C3%AB%2FLibrary%2Fx");
@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn the_browser_is_registered_for_this_account_only() {
-        let keys = browser_keys(r"C:\Users\Ren\AppData\Local\Chat Computer\chat-computer.exe");
+        let keys = browser_keys(r"C:\Users\Sam\AppData\Local\Chat Computer\chat-computer.exe");
         let get = |key: &str, name: &str| keys.iter().find(|(k, n, _)| k == key && n == name).map(|(_, _, v)| v.as_str());
         let client = r"Software\Clients\StartMenuInternet\Chat Computer";
         assert_eq!(get(client, ""), Some("Chat Computer"));
@@ -558,8 +558,8 @@ mod tests {
         assert_eq!(get(&format!(r"{client}\Capabilities\StartMenu"), "StartMenuInternet"), Some("Chat Computer"));
         assert_eq!(get(r"Software\RegisteredApplications", "Chat Computer"), Some(r"Software\Clients\StartMenuInternet\Chat Computer\Capabilities"));
         assert_eq!(get(r"Software\Classes\ChatComputerURL\shell\open\command", ""),
-                   Some(r#""C:\Users\Ren\AppData\Local\Chat Computer\chat-computer.exe" --url "%1""#));
-        assert_eq!(get(&format!(r"{client}\shell\open\command"), ""), Some(r#""C:\Users\Ren\AppData\Local\Chat Computer\chat-computer.exe""#));
+                   Some(r#""C:\Users\Sam\AppData\Local\Chat Computer\chat-computer.exe" --url "%1""#));
+        assert_eq!(get(&format!(r"{client}\shell\open\command"), ""), Some(r#""C:\Users\Sam\AppData\Local\Chat Computer\chat-computer.exe""#));
         // Every key is the account's own (written under HKEY_CURRENT_USER), and in one of the trees taken out again.
         for (k, _, _) in &keys {
             assert!(k.starts_with(r"Software\"), "{k}");

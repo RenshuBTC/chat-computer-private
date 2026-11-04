@@ -1,7 +1,7 @@
 """Run the desktop eval cases: each in its own process (case.py) and its own sandbox (bubblewrap), a few at a time.
 
 Inside a case's sandbox the computer looks like a Chat Computer's: the person is an ordinary user (uid 1000) with
-their files in /home/ren, Chat Computer is in /opt/chatcomputer/app with its Python in /opt/chatcomputer/venv, the
+their files in /home/sam, Chat Computer is in /opt/chatcomputer/app with its Python in /opt/chatcomputer/venv, the
 commands are those a real one has (machine.py), and there's a display (Xvfb). Everything else of this machine is
 read-only or hidden (/home, /root, /opt, /mnt), and the environment holds only what the web tools need (the network's
 proxy): no other tools or connections of the session running the evals reach the Chat Computer under test.
@@ -48,8 +48,8 @@ def cases(path: Path) -> tuple[dict, list[dict]]:
 
 
 def sandbox(work: Path, binfolder: Path, display: int = 120, app: Path = REPO, models: Path = MODELS) -> tuple[list[str], dict[str, str]]:
-    env = {"EVAL_DISPLAY": str(display), "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/home/ren", "USER": "ren", "LANG": "en_GB.UTF-8",
-           "TZ": ":" + INSIDE + "/io/localtime", "CHATCOMPUTER_HOME": "/home/ren/ChatComputer",
+    env = {"EVAL_DISPLAY": str(display), "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/home/sam", "USER": "sam", "LANG": "en_GB.UTF-8",
+           "TZ": ":" + INSIDE + "/io/localtime", "CHATCOMPUTER_HOME": "/home/sam/ChatComputer",
            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/opt/chatcomputer/app"}
     for k in PASS_ENV:
         if os.environ.get(k):
@@ -57,8 +57,8 @@ def sandbox(work: Path, binfolder: Path, display: int = 120, app: Path = REPO, m
     args = ["bwrap", "--unshare-user", "--uid", "1000", "--gid", "1000", "--unshare-pid", "--die-with-parent",
             "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
             "--tmpfs", "/tmp", "--tmpfs", "/home", "--tmpfs", "/root", "--tmpfs", "/opt", "--tmpfs", "/mnt",
-            "--tmpfs", "/media",       # where drives are mounted (opened): /media/ren/<label>
-            "--bind", str(work / "home"), "/home/ren",
+            "--tmpfs", "/media",       # where drives are mounted (opened): /media/sam/<label>
+            "--bind", str(work / "home"), "/home/sam",
             "--ro-bind", str(app), "/opt/chatcomputer/app",
             "--ro-bind", str(HERE.parent), "/opt/chatcomputer/app/evals",     # this harness, whichever version runs
             "--ro-bind", str(VENV), "/opt/chatcomputer/venv",
@@ -69,30 +69,30 @@ def sandbox(work: Path, binfolder: Path, display: int = 120, app: Path = REPO, m
     # one for the run, written by its first case (and again whenever the prompt differs), so each case starts as a
     # Chat Computer in use does rather than reading the whole prompt first.
     if models.is_dir():
-        args += ["--ro-bind", str(models), "/home/ren/ChatComputer/models"]
+        args += ["--ro-bind", str(models), "/home/sam/ChatComputer/models"]
         if (models / "llm" / "cache").is_dir():
-            args += ["--bind", str(work.parent.parent / "engine-cache"), "/home/ren/ChatComputer/models/llm/cache"]
+            args += ["--bind", str(work.parent.parent / "engine-cache"), "/home/sam/ChatComputer/models/llm/cache"]
     ca = next((os.environ[k] for k in CA_ENV if os.environ.get(k) and os.path.exists(os.environ[k])), None)
     if ca:
         args += ["--ro-bind", ca, INSIDE + "/ca.crt"]
         env.update({k: INSIDE + "/ca.crt" for k in CA_ENV})
-    for name in ("passwd", "group"):      # the person is ren (user_files)
+    for name in ("passwd", "group"):      # the person is sam (user_files)
         mine = binfolder.parent / f"etc_{name}"
         if mine.exists():
             args += ["--ro-bind", str(mine), f"/etc/{name}"]
     args += ["--clearenv"]
     for k, v in env.items():
         args += ["--setenv", k, v]
-    args += ["--chdir", "/home/ren"]
+    args += ["--chdir", "/home/sam"]
     return args, env
 
 
 def user_files(out: Path) -> None:
-    """The person is ren (uid 1000) in the sandbox, as on their Chat Computer, not this machine's own user of that
+    """The person is sam (uid 1000) in the sandbox, as on their Chat Computer, not this machine's own user of that
     number: /etc/passwd and /etc/group as this machine's with that one line changed."""
     for name in ("passwd", "group"):
         lines = [ln for ln in Path(f"/etc/{name}").read_text().splitlines() if ln.split(":")[2:3] != ["1000"]]
-        lines.append("ren:x:1000:1000:Ren Shu:/home/ren:/bin/bash" if name == "passwd" else "ren:x:1000:")
+        lines.append("sam:x:1000:1000:Sam Lee:/home/sam:/bin/bash" if name == "passwd" else "sam:x:1000:")
         (out / f"etc_{name}").write_text("\n".join(lines) + "\n")
 
 

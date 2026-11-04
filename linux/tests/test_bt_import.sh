@@ -30,11 +30,11 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 HIVE="$WORK/SYSTEM"
 BT="$WORK/bluetooth"
-ADAPTER="D4:6D:6D:97:62:9B"
-DEV1="A4:BF:C6:D0:E5:FF"
-DEV2="C2:9E:1D:E2:3D:A5"
+ADAPTER="0A:1B:2C:3D:4E:5F"
+DEV1="A1:B2:C3:D4:E5:F6"
+DEV2="C0:FF:EE:12:34:56"
 KEY1="0123456789ABCDEF0123456789ABCDEF"
-KEY2="C486D66A8779AFBE72FA81C749DC580C"
+KEY2="FEDCBA9876543210FEDCBA9876543210"
 
 # Build the synthetic hive.
 if "$PY" "$MAKER" "$HIVE" >/dev/null 2>&1; then pass "built synthetic SYSTEM hive"; else fail "could not build synthetic hive"; exit "$FAILED"; fi
@@ -53,11 +53,11 @@ def check(cond, msg):
     print(("PASS " if cond else "FAIL ") + msg)
     ok = ok and cond
 # mac_from_hex
-check(m.mac_from_hex("d46d6d97629b") == "D4:6D:6D:97:62:9B", "mac_from_hex basic")
-check(m.mac_from_hex("A4BFC6D0E5FF") == "A4:BF:C6:D0:E5:FF", "mac_from_hex uppercases")
+check(m.mac_from_hex("0a1b2c3d4e5f") == "0A:1B:2C:3D:4E:5F", "mac_from_hex basic")
+check(m.mac_from_hex("A1B2C3D4E5F6") == "A1:B2:C3:D4:E5:F6", "mac_from_hex uppercases")
 # key_to_bluez_hex: byte order preserved, uppercase
-kb = bytes.fromhex("c486d66a8779afbe72fa81c749dc580c")
-check(m.key_to_bluez_hex(kb) == "C486D66A8779AFBE72FA81C749DC580C", "key_to_bluez_hex no reversal + upper")
+kb = bytes.fromhex("fedcba9876543210fedcba9876543210")
+check(m.key_to_bluez_hex(kb) == "FEDCBA9876543210FEDCBA9876543210", "key_to_bluez_hex no reversal + upper")
 # extract_value_bytes handles bytes, hex-string, and list forms
 class V:  # minimal stand-in for a regipy value
     def __init__(self, value): self.value = value
@@ -67,7 +67,7 @@ check(m.extract_value_bytes(V([1, 2, 255])) == bytes([1,2,255]), "extract int li
 # name_from_value: what Windows calls a device (Devices\<mac>\Name), as regipy hands it over
 class N:
     def __init__(self, value, value_type): self.value, self.value_type = value, value_type
-airpods = "Ren\u2019s AirPods Pro"
+airpods = "Sam\u2019s AirPods Pro"
 check(m.name_from_value(N((airpods.encode() + b"\x00junk").hex(), "REG_BINARY")) == airpods, "name from REG_BINARY hex")
 check(m.name_from_value(N(airpods.encode() + b"\x00", "REG_BINARY")) == airpods, "name from REG_BINARY bytes")
 check(m.name_from_value(N(airpods, "REG_SZ")) == airpods, "name from REG_SZ")
@@ -90,7 +90,7 @@ count="$(echo "$OUT" | "$PY" -c 'import sys,json;print(json.load(sys.stdin)["cou
 changed="$(echo "$OUT" | "$PY" -c 'import sys,json;print(json.load(sys.stdin)["changed"])')"
 [ "$changed" = "2" ] && pass "reports 2 pairings changed (so bluetoothd is restarted)" || fail "expected changed=2, got $changed"
 named="$(echo "$OUT" | "$PY" -c 'import sys,json;print([i.get("name","") for i in json.load(sys.stdin)["imported"]])')"
-[ "$named" = "['Ren’s AirPods Pro', '']" ] && pass "reports what Windows calls each device" || fail "names reported: $named"
+[ "$named" = "['Sam’s AirPods Pro', '']" ] && pass "reports what Windows calls each device" || fail "names reported: $named"
 
 # info file 1
 F1="$BT/$ADAPTER/$DEV1/info"
@@ -101,7 +101,7 @@ if [ -f "$F1" ]; then
   grep -q "^Type=4$" "$F1" && pass "$DEV1: Type=4" || fail "$DEV1: Type!=4"
   grep -q "^PINLength=0$" "$F1" && pass "$DEV1: PINLength=0" || fail "$DEV1: PINLength!=0"
   # Windows' name for it, so Chat Computer knows them for AirPods, and trusted so they connect by themselves.
-  grep -q "^Name=Ren’s AirPods Pro$" "$F1" && pass "$DEV1: Name from Windows" || { fail "$DEV1: no Name"; cat "$F1"; }
+  grep -q "^Name=Sam’s AirPods Pro$" "$F1" && pass "$DEV1: Name from Windows" || { fail "$DEV1: no Name"; cat "$F1"; }
   grep -q "^Trusted=true$" "$F1" && grep -q "^Blocked=false$" "$F1" && grep -q "^SupportedTechnologies=BR/EDR;$" "$F1" \
     && pass "$DEV1: trusted, not blocked, classic Bluetooth" || { fail "$DEV1: [General] incomplete"; cat "$F1"; }
   # The link key is readable by root only, as bluetoothd keeps it.

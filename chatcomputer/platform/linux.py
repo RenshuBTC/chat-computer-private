@@ -268,8 +268,8 @@ def _true(v: Any) -> bool:
 
 
 def parse_mounted_at(text: str) -> str | None:
-    """Where udisksctl mounted a drive ("Mounted /dev/sdb1 at /media/ren/SANDISK", with or without a full stop),
-    or where it already was ("...AlreadyMounted: Device /dev/sdb1 is already mounted at `/media/ren/X'.")."""
+    """Where udisksctl mounted a drive ("Mounted /dev/sdb1 at /media/sam/SANDISK", with or without a full stop),
+    or where it already was ("...AlreadyMounted: Device /dev/sdb1 is already mounted at `/media/sam/X'.")."""
     m = re.search(r"^Mounted \S+ at (.+?)\.?\s*$", text, re.M)
     if m:
         return m.group(1)

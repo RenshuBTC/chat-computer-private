@@ -200,7 +200,7 @@ function Copy-IsoToInstaller {
 
 function ConvertTo-UpdateSource {
     # Where a folder is on Windows' own drive, the way Chat Computer finds it there: the path below the top of the
-    # drive, with forward slashes ("Users/Ren/Downloads/ChatComputer"). Empty for a folder on another drive, or with
+    # drive, with forward slashes ("Users/Sam/Downloads/ChatComputer"). Empty for a folder on another drive, or with
     # a part Chat Computer won't follow.
     param([Parameter(Mandatory = $true)][string]$FullPath, [AllowEmptyString()][string]$SystemDrive = '')
     if (-not $SystemDrive) { return '' }

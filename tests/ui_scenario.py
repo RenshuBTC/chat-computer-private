@@ -104,7 +104,7 @@ from chatcomputer.journal import setup_logging  # noqa: E402
 setup_logging(paths, verbose=True)
 # The model's server is the stand-in: the controller's ModelService gives its port.
 controller_module.ModelService = lambda *a, **k: FakeModelService(mock)
-settings = Settings(user_name="Ren Shu", windows_user="rensh", stt_model=os.environ.get("CHATCOMPUTER_TEST_STT", "base.en"))
+settings = Settings(user_name="Sam Lee", windows_user="sammy", stt_model=os.environ.get("CHATCOMPUTER_TEST_STT", "base.en"))
 # Pretend-monitor size and viewing distance (the virtual display always reports 96 dpi).
 settings.screen_inches = float(os.environ.get("UITEST_INCHES", "0") or 0)
 settings.viewing_distance_cm = int(os.environ.get("UITEST_DISTANCE_CM", "0") or 0)
@@ -144,7 +144,7 @@ if (MODELS / "kokoro-v1.0.int8.onnx").exists():
 wd = MODELS / "whisper" / f"faster-whisper-{settings.stt_model}"
 if (wd / "model.bin").exists():
     from chatcomputer.voice.stt import STT
-    stt = STT(str(wd), "en", hint="Computer, Ren Shu, YouTube")
+    stt = STT(str(wd), "en", hint="Computer, Sam Lee, YouTube")
 
 result = {"steps": [], "ok": False}
 holder = {}

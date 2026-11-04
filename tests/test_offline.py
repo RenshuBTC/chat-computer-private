@@ -12,7 +12,7 @@ from chatcomputer.screen import RecordingScreen
 
 def _controller(tmp_path, monkeypatch):
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
-    return Controller(Paths().ensure(), Settings(user_name="Ren"), FakePlatform(), RecordingScreen(),
+    return Controller(Paths().ensure(), Settings(user_name="Sam"), FakePlatform(), RecordingScreen(),
                       voice=False, index=False)
 
 

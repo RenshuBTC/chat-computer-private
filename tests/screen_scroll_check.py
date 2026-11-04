@@ -23,7 +23,7 @@ from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 choose_rendering()
 screen = GtkScreen(Paths().ensure(), Settings(), windowed=True)
-screen.apply_settings(0, "Ren")
+screen.apply_settings(0, "Sam")
 for i in range(20):
     screen.user_text(f"u{i}", f"Question number {i}: what about the weather and the trains tomorrow morning?", True)
     screen.ai_delta(f"a{i}", f"Answer {i}. " + "It will be sunny, and the trains run as usual. " * 4)

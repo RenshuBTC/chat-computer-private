@@ -70,7 +70,7 @@ def _mac_controller(tmp_path, monkeypatch):
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(home / "ChatComputer"))
     paths = Paths().ensure()
     screen = RecordingScreen()
-    c = Controller(paths, Settings(user_name="Ren Shu"), FakeMac(), screen, voice=False, index=False)
+    c = Controller(paths, Settings(user_name="Sam Lee"), FakeMac(), screen, voice=False, index=False)
     return c, screen, paths, home
 
 
@@ -130,11 +130,11 @@ def test_tools_on_a_mac(tmp_path):
 
 def test_mac_prompt_tells_claude_where_files_are_and_how_to_go_back():
     class S:
-        user_name = "Ren Shu"
+        user_name = "Sam Lee"
         windows_user = ""
         timezone = "Asia/Singapore"
-    p = build_system_prompt(S(), "", "/home/rensh", "/home/rensh/Mac", platform="mac")
-    assert "The folders they brought over from macOS are at /home/rensh/Mac" in p
+    p = build_system_prompt(S(), "", "/home/sammy", "/home/sammy/Mac", platform="mac")
+    assert "The folders they brought over from macOS are at /home/sammy/Mac" in p
     assert "can't be opened from here" in p
     assert "restarts into it" in p and "Remove Chat Computer" in p
     assert "Apple silicon Mac running Chat Computer (Fedora Asahi Remix underneath)" in p

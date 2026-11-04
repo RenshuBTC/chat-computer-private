@@ -198,7 +198,7 @@ if [ -z "$dot" ]; then pass "no ._ files on the drive (extended attributes not c
 
 # Chat Computer's first start, on its EFI partition.
 (
-  EFI_DEV="$ESP" ACCOUNT="rensh" REAL_NAME='Ren "Shu"' RECOVERY="abcd-efgh-jkmn-pqrs" TZONE="Asia/Singapore"
+  EFI_DEV="$ESP" ACCOUNT="sammy" REAL_NAME='Sam "Lee"' RECOVERY="abcd-efgh-jkmn-pqrs" TZONE="Asia/Singapore"
   INSTALL_ID="0123456789abcdef01234567" WIFI_SSID='Home "5G"' WIFI_PSK="correct horse"
   write_first_start
 ) > "$OUT/2-first-start.txt" 2>&1
@@ -221,12 +221,12 @@ import base64, json, sys, tarfile
 p, drive = sys.argv[1], sys.argv[2]
 env = dict(line.split("=", 1) for line in open(p + "/setup.env").read().splitlines())
 v = {k: base64.b64decode(x).decode() for k, x in env.items()}
-assert v["USER_NAME"] == "rensh" and v["REAL_NAME"] == 'Ren "Shu"', v
+assert v["USER_NAME"] == "sammy" and v["REAL_NAME"] == 'Sam "Lee"', v
 assert v["WIFI_SSID"] == 'Home "5G"' and v["WIFI_PSK"] == "correct horse" and v["TIMEZONE"] == "Asia/Singapore"
 assert v["MAC_FILES_PARTUUID"].upper() == drive.upper() and v["RECOVERY_PASSWORD"] == "abcd-efgh-jkmn-pqrs"
 import os
 assert os.listdir(p + "/secrets") == [], os.listdir(p + "/secrets")
-assert json.load(open(p + "/settings.json"))["user_name"] == 'Ren "Shu"'
+assert json.load(open(p + "/settings.json"))["user_name"] == 'Sam "Lee"'
 with tarfile.open(p + "/app.tar.gz") as t:
     members = t.getmembers()
 names = [m.name for m in members]

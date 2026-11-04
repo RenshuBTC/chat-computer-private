@@ -300,7 +300,7 @@ def test_the_app_s_first_page_and_its_tabs_work_in_chromium(tmp_path, monkeypatc
     # address: no app can open it), in Windows' words; chrome://extensions copied; the folder shown.
     c = res["chrome"]
     assert c["panels"] == ["way-chrome"] and c["open"] and c["copied_note"] and not c["no_chrome"]
-    assert c["folder"] == "C:\\Users\\Ren\\AppData\\Local\\ai.chatcomputer.desktop\\Chrome extension"
+    assert c["folder"] == "C:\\Users\\Sam\\AppData\\Local\\ai.chatcomputer.desktop\\Chrome extension"
     assert c["copied"] == [c["folder"], "chrome://extensions"]
     assert c["steps"][0].startswith("In Chrome's address bar, type chrome://extensions") and "Developer mode" in c["steps"][1]
     assert "Load unpacked" in c["steps"][2] and c["folder"] in c["steps"][2]

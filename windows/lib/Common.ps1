@@ -214,8 +214,8 @@ function Disable-ConsoleQuickEdit {
 }
 
 function Get-LongPath {
-    # The full spelling of a path that may contain short (8.3) folder names: C:\Users\Ren Shu for
-    # C:\Users\RENSHU~1. Windows spells %TEMP% the short way when the user folder's name has a space in it, and
+    # The full spelling of a path that may contain short (8.3) folder names: C:\Users\Sam Lee for
+    # C:\Users\SAMLEE~1. Windows spells %TEMP% the short way when the user folder's name has a space in it, and
     # some of Windows PowerShell 5.1's commands fail on such paths (see Remove-Folder). The path as given when
     # it has no short names, doesn't exist, or can't be expanded.
     param([AllowNull()][AllowEmptyString()][string]$Path)
@@ -251,7 +251,7 @@ function Use-LongTempPath {
 function Remove-Folder {
     # Deletes a folder and everything in it. It never stops setup: a folder that can't be deleted is only
     # logged. Not Remove-Item -Recurse: in Windows PowerShell 5.1 that fails on a path with a short (8.3) name
-    # in it when the current folder is on the same drive ("An object at the specified path C:\Users\RENSHU~1
+    # in it when the current folder is on the same drive ("An object at the specified path C:\Users\SAMLEE~1
     # does not exist"), even with -ErrorAction SilentlyContinue.
     param([Parameter(Mandatory = $true)][string]$Path)
     try {

@@ -258,7 +258,7 @@ def lpstat(args: list[str]) -> int:
     if "e" in flags:
         lines += [p["queue"] for p in ps]
     if "o" in flags or "W" in flags:
-        lines += [f"{j['queue']}-{j['id']}  ren  {j.get('bytes', 20480)}   {since}" for j in m.get("print_jobs", [])
+        lines += [f"{j['queue']}-{j['id']}  sam  {j.get('bytes', 20480)}   {since}" for j in m.get("print_jobs", [])
                   if not j.get("done")]
     if lines:
         print("\n".join(lines))

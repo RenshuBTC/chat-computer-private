@@ -30,7 +30,7 @@ def _site(url: str) -> dict[str, Any]:
     if host == "mail.google.com":
         mails = ["DBS Bank: Your October statement is ready", "Mum: Dinner on Sunday?",
                  "Singapore Airlines: Online check-in for SQ322 opens on 22 October"]
-        return {"title": "Inbox (3) - ren@example.com - Gmail", "heading": "Gmail",
+        return {"title": "Inbox (3) - sam@example.com - Gmail", "heading": "Gmail",
                 "text": "Compose\nInbox 3\nStarred\nSent\n" + "\n".join(mails),
                 "links": [("button", "Compose", None), ("link", "Inbox", url)] + [("link", m, url) for m in mails]}
     if host == "youtube.com" and u.path.startswith("/results"):

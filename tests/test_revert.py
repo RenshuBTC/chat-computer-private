@@ -32,7 +32,7 @@ class Rig:
         monkeypatch.setattr(jn, "move_to_trash", trash)
         monkeypatch.setattr(T, "move_to_trash", trash)
         self.screen, self.p = RecordingScreen(), FakePlatform()
-        self.c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), self.p, self.screen, voice=False, index=False)
+        self.c = Controller(Paths().ensure(), Settings(user_name="Sam Lee"), self.p, self.screen, voice=False, index=False)
         c = self.c
         c.ctx = T.ToolContext(c.paths, c.settings, self.p, c.journal, self.screen, c.memory, history=c.history,
                               schedule=c.schedule)

@@ -155,7 +155,7 @@ function Get-PairedAirPods {
 }
 
 function Get-WindowsPersonName {
-    # The person's display name, e.g. "Ren Shu", or the account name if none is set.
+    # The person's display name, e.g. "Sam Lee", or the account name if none is set.
     try {
         Add-Type -AssemblyName System.DirectoryServices.AccountManagement -ErrorAction Stop
         $n = [System.DirectoryServices.AccountManagement.UserPrincipal]::Current.DisplayName

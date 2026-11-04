@@ -1,6 +1,6 @@
 """Where the person is, and the weather there now: for the greeting under the word logo (chat.js: CO.here), which,
 as the Claude app's greetings are for the time of day, can be for the place and its weather ("Stay dry in rainy
-Singapore, Ren").
+Singapore, Sam").
 
 The place is where they said they live (settings.home_place), else their time zone's city ("Asia/Singapore":
 Singapore). Its position comes from Open-Meteo's geocoding (only the place's name goes there, once: places don't

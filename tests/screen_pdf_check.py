@@ -50,7 +50,7 @@ async def run() -> None:
     await asyncio.sleep(1.0)
     out["rect_chat"] = await screen.content_rect()
     out["open_nothing"] = await screen.to_pdf(str(tmp / "nothing.pdf"))
-    doc = render.document_html("CV.docx", "# Ren Shu\n\nCurriculum Vitae\n\n- Singapore\n- Designer", settings)
+    doc = render.document_html("CV.docx", "# Sam Lee\n\nCurriculum Vitae\n\n- Singapore\n- Designer", settings)
     out["doc"] = await screen.to_pdf(str(tmp / "CV.pdf"), doc, str(tmp))
     out["doc_pdf"] = pdf_text(tmp / "CV.pdf")
     out["doc_shown"] = (await screen.content_info()).get("mode")      # printed without being shown

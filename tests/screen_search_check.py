@@ -32,12 +32,12 @@ from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 SHOT = sys.argv[1] if len(sys.argv) > 1 else None
 paths = Paths().ensure()
-REPORT = "/home/ren/Documents/report.pdf"
+REPORT = "/home/sam/Documents/report.pdf"
 now = time.time()
 
 choose_rendering()
 screen = GtkScreen(paths, Settings(), windowed=True)
-screen.apply_settings(0, "Ren", "Sonnet 5.5")
+screen.apply_settings(0, "Sam", "Sonnet 5.5")
 screen.mic(True)
 loop = asyncio.new_event_loop()
 threading.Thread(target=loop.run_forever, daemon=True).start()
@@ -58,7 +58,7 @@ def page_event(msg: dict) -> None:
 
 screen.on_page_event = page_event
 screen.history([{"role": "user", "id": "u1", "ts": now - 60, "text": "Hello"},
-                {"role": "assistant", "ts": now - 50, "text": "Hi Ren. What can I do?"}])
+                {"role": "assistant", "ts": now - 50, "text": "Hi Sam. What can I do?"}])
 out: dict = {}
 
 STATE_JS = """(function () {

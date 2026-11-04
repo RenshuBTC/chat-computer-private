@@ -568,15 +568,15 @@ else
 fi
 # macOS renamed (not "Macintosh ..."): the one start-up volume that isn't Chat Computer's.
 touch "$WORK/macos-renamed"
-printf '*1) Chat Computer\n 2) Ren'"'"'s Mac\n' > "$VOLS"
+printf '*1) Chat Computer\n 2) Sam'"'"'s Mac\n' > "$VOLS"
 : > "$LOG"
 OUT="$(runhelper boot-macos-next 2>/dev/null)"
-if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot 2 --next --yes" "$LOG" && [ "$(jget "$OUT" volume)" = "Ren's Mac" ]; then
+if [ "$(jget "$OUT" ok)" = "True" ] && grep -q -- "asahi-bless --set-boot 2 --next --yes" "$LOG" && [ "$(jget "$OUT" volume)" = "Sam's Mac" ]; then
   pass "boot-macos-next: a renamed macOS is found as the one other start-up volume"
 else
   fail "boot-macos-next (renamed): $OUT"; cat "$LOG"
 fi
-printf '*1) Chat Computer\n 2) Ren'"'"'s Mac\n 3) Fedora Linux\n' > "$VOLS"
+printf '*1) Chat Computer\n 2) Sam'"'"'s Mac\n 3) Fedora Linux\n' > "$VOLS"
 : > "$LOG"
 OUT="$(runhelper boot-macos-next 2>/dev/null)"
 if [ "$(jget "$OUT" ok)" = "False" ] && ! grep -q -- "--set-boot [0-9]" "$LOG"; then
@@ -639,7 +639,7 @@ OUT="$(CHATCOMPUTER_TEST_DT_COMPATIBLE="$DT" runhelper boot-macos-next 2>/dev/nu
 # update-app / update-undo / update-done: Chat Computer from the folder Chat Computer Setup ran from
 # ===========================================================================
 UPD="$WORK/upd"
-SRC_REL="Users/Ren Shu/Downloads/ChatComputer"
+SRC_REL="Users/Sam Lee/Downloads/ChatComputer"
 mk_app() {   # mk_app DIR VERSION: a pretend Chat Computer
   mkdir -p "$1/chatcomputer/brain" "$1/linux/session" "$1/linux/root-helper"
   printf '__version__ = "%s"\n' "$2" > "$1/chatcomputer/__init__.py"

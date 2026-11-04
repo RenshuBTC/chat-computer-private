@@ -31,7 +31,7 @@ from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 choose_rendering()
 screen = GtkScreen(Paths().ensure(), Settings(), windowed=True)
-screen.apply_settings(0, "Ren", "Sonnet 5.5")
+screen.apply_settings(0, "Sam", "Sonnet 5.5")
 screen.mic(True)
 loop = asyncio.new_event_loop()
 threading.Thread(target=loop.run_forever, daemon=True).start()

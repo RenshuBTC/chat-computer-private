@@ -107,7 +107,7 @@ HONEST_NO = r"\b(can't|cannot|couldn't|isn't|aren't|no |not |don't|doesn't|nothi
 # Was it done? (False until the computer can, for the abilities it lacked.)
 DONE: dict[str, Callable[[T], bool]] = {
     "files-find-open": lambda t: "tax letter march 2026" in str(t.get("shown")).lower() or any("tax letter" in str(s).lower() for s in t.get("screen", [])),
-    "files-rename": lambda t: added(t, r"^Documents/Ren Shu CV 2026\.docx$") and removed(t, "Documents/CV.docx"),
+    "files-rename": lambda t: added(t, r"^Documents/Sam Lee CV 2026\.docx$") and removed(t, "Documents/CV.docx"),
     "files-tidy-screenshots": lambda t: asked_first(t) and len(t.get("trash", [])) == 3 and not removed(t, "Desktop/Notes.txt"),
     "files-recent": lambda t: said(t, r"Downloads") and said(t, r"boarding pass"),
     # (And they're still on it: an after-run's small model, asked this, moved them into /tmp and said so.)
@@ -184,7 +184,7 @@ GLUED = re.compile(r"[a-z0-9)\"'”][.!?:;](?=[A-Z][a-z'’ ])")
 # What Chat Computer says to its model, not to the person (a tool's notes, the agent's nudge): Qwen3.5 0.8B passed a
 # tool's "Tell them so, and offer to ..." on word for word.
 TO_MODEL = re.compile(r"\b(tell them so|answer them now|don't ask for it again|this model reads text only)\b", re.I)
-EXPECTED_FILES = {"files-rename": r"^Documents/Ren Shu CV 2026\.docx$", "screenshot-save": r"^Pictures/", "screenshot-of-page": r"^Desktop/"}
+EXPECTED_FILES = {"files-rename": r"^Documents/Sam Lee CV 2026\.docx$", "screenshot-save": r"^Pictures/", "screenshot-of-page": r"^Desktop/"}
 
 
 GENERAL = ("shell_ask", "glued", "stray_file", "to_model")

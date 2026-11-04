@@ -201,8 +201,8 @@ fi
 
 # --- bt importer via the installed venv + synthetic hive -------------------
 cp "$HERE/make_system_hive.py" "$C/root/mk.py"
-if runin '/opt/chatcomputer/venv/bin/python /root/mk.py /root/SYSTEM && mkdir -p /var/lib/bluetooth/D4:6D:6D:97:62:9B && /opt/chatcomputer/venv/bin/python -I /usr/local/libexec/chatcomputer/bt-import-windows-keys.py --hive /root/SYSTEM --bluetooth-dir /var/lib/bluetooth' >/tmp/ci_bt.log 2>&1; then
-  if grep -q 'Key=C486D66A8779AFBE72FA81C749DC580C' "$C/var/lib/bluetooth/D4:6D:6D:97:62:9B/C2:9E:1D:E2:3D:A5/info" 2>/dev/null; then
+if runin '/opt/chatcomputer/venv/bin/python /root/mk.py /root/SYSTEM && mkdir -p /var/lib/bluetooth/0A:1B:2C:3D:4E:5F && /opt/chatcomputer/venv/bin/python -I /usr/local/libexec/chatcomputer/bt-import-windows-keys.py --hive /root/SYSTEM --bluetooth-dir /var/lib/bluetooth' >/tmp/ci_bt.log 2>&1; then
+  if grep -q 'Key=FEDCBA9876543210FEDCBA9876543210' "$C/var/lib/bluetooth/0A:1B:2C:3D:4E:5F/C0:FF:EE:12:34:56/info" 2>/dev/null; then
     pass "bt importer (venv) wrote correct BlueZ info in chroot"
   else
     fail "bt importer did not write expected info"; cat /tmp/ci_bt.log >&2

@@ -1,0 +1,95 @@
+{
+ "about": "Hand labels for the desktop on Chat Computer's own model (Qwen3.5 0.8B at medium effort, the smallest the app picks, for computers with under 4 GB), one case per area, before the fixes of 4 November 2026 (run os-base: Chat Computer at 0e468cb's parent, with the prompt already read). pass = what the person asked for got done, or an honest answer with a way forward. modes: the failures seen, the first first.",
+ "labels": {
+  "files-find-open": {
+   "pass": true,
+   "modes": [],
+   "note": "found the letter and showed its words as a document; said nothing"
+  },
+  "usb-whats-on": {
+   "pass": false,
+   "modes": [
+    "bad tool input",
+    "never answered"
+   ],
+   "note": "opened the drive by its path, not its name; looked at the folder with Read, Glob and ls (Photos, Recipes.docx), and never said so in 10 minutes"
+  },
+  "print-boarding-pass": {
+   "pass": false,
+   "modes": [
+    "bad tool input",
+    "wrong action",
+    "circles"
+   ],
+   "note": "printed with the path's home folder left out, again and again; printed the tax letter instead; showed Downloads 30 times; no answer in 10 minutes"
+  },
+  "brightness-set": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-mute": {
+   "pass": true,
+   "modes": []
+  },
+  "wifi-join": {
+   "pass": false,
+   "modes": [
+    "bad tool input"
+   ],
+   "note": "joined \"CoffeeBean wifi\": the network is CoffeeBean (the simulated computer took any name)"
+  },
+  "bt-airpods": {
+   "pass": true,
+   "modes": [],
+   "note": "\"Paired and connected.\""
+  },
+  "battery-left": {
+   "pass": true,
+   "modes": []
+  },
+  "timer": {
+   "pass": true,
+   "modes": []
+  },
+  "install-vlc": {
+   "pass": true,
+   "modes": []
+  },
+  "screenshot-save": {
+   "pass": true,
+   "modes": []
+  },
+  "dark-mode": {
+   "pass": false,
+   "modes": [
+    "wrong tool",
+    "false claim"
+   ],
+   "note": "set the brightness to 100% and said dark mode is on (the screen is always dark)"
+  },
+  "lock-screen": {
+   "pass": true,
+   "modes": [],
+   "note": "the PIN form, as the tool said"
+  },
+  "backup-status": {
+   "pass": true,
+   "modes": []
+  },
+  "storage-left": {
+   "pass": false,
+   "modes": [
+    "made up"
+   ],
+   "note": "40 GB free of 64, \"about 24%\" (62%)"
+  },
+  "weather": {
+   "pass": false,
+   "modes": [
+    "never answered",
+    "made up"
+   ],
+   "note": "no forecast to be had here (web search can't reach the internet in this sandbox); tried a US weather site, showed a page of its own making, and never answered"
+  }
+ }
+}

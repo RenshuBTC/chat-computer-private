@@ -53,6 +53,38 @@ def test_windows_paths_are_understood(tmp_path):
     assert ctx.resolve("~/x.txt") == os.path.join(os.path.expanduser("~"), "x.txt")
 
 
+def test_a_path_said_without_the_home_folder_is_the_home_folders(tmp_path, monkeypatch):
+    """evals/os: a small model wrote "/Downloads/Boarding pass SQ322.pdf" for the file search_files had found in the
+    home folder's Downloads. Where only the home folder's is there, that's the one; a path that's there stays as it is."""
+    ctx, *_ = make(tmp_path)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    (home / "Downloads").mkdir()
+    (home / "Downloads" / "Boarding pass.pdf").write_text("x")
+    assert ctx.resolve("/Downloads/Boarding pass.pdf") == str(home / "Downloads" / "Boarding pass.pdf")
+    assert ctx.resolve("Downloads/Boarding pass.pdf") == str(home / "Downloads" / "Boarding pass.pdf")
+    assert ctx.resolve("/Downloads/nothing.pdf") == "/Downloads/nothing.pdf"      # (nowhere: as said)
+    assert ctx.resolve("/etc/hostname") == "/etc/hostname"
+
+
+def test_a_wifi_network_said_loosely_is_the_one_in_range(tmp_path):
+    """evals/os: "Connect to the CoffeeBean wifi" was joined as a network called "CoffeeBean wifi"."""
+    ctx, *_ = make(tmp_path)
+    ctx.platform.wifi_scan = lambda: [{"name": "CoffeeBean", "signal": 70, "secured": True, "connected": False},
+                                      {"name": "HomeWiFi", "signal": 40, "secured": True, "connected": True}]
+    out, err = call(ctx, "wifi", {"action": "connect", "network": "the CoffeeBean wifi", "password": "latte2026"})
+    assert not err and out == "Connected to CoffeeBean."
+    out, err = call(ctx, "wifi", {"action": "connect", "network": "Starbucks", "password": "x"})
+    assert out == "Connected to Starbucks."       # (not in range: tried as said; the computer says if it isn't there)
+
+
+def test_the_status_gives_each_disks_free_share(tmp_path):
+    """evals/os: a small model said 40 GB free of 64 was 24%: the share comes worked out."""
+    ctx, *_ = make(tmp_path)
+    out, _ = call(ctx, "system_status", {})
+    assert json.loads(out)["machine"]["disks"]["home"]["free_percent"] == 62
+
+
 def test_show_website_normalizes_urls_and_searches(tmp_path):
     ctx, server, *_ = make(tmp_path)
     call(server, "show_website", {"url": "youtube.com"})
@@ -632,3 +664,21 @@ def test_screen_settings_stay_readable(tmp_path):
         assert not err, (key, good, text)
     s = ctx.settings
     assert (s.text_size, s.text_scale, s.viewing_distance_cm, s.screen_inches, s.web_zoom) == (0, 1.15, 250, 55.0, 1.5)
+
+
+def test_a_search_between_the_wrong_dates_says_what_the_words_find(tmp_path):
+    """evals/os: a small model looked for "the tax letter I got in March" from March 2023 and found nothing: a search
+    that finds nothing between its dates (or of its kind) gives what its words alone find, saying so."""
+    ctx, *_ = make(tmp_path)
+
+    class Index:
+        status = {"state": "idle"}
+        roots: list = []
+
+        def search(self, query, kind, after, before, folder, limit):
+            return [] if after or kind else [{"path": "/home/ren/Documents/Tax letter March 2026.pdf"}]
+    ctx.index = Index()
+    out, err = call(ctx, "search_files", {"query": "tax", "modified_after": "2023-03-01"})
+    assert not err and "Tax letter March 2026" in out and "Nothing between those dates" in out
+    out, _ = call(ctx, "search_files", {"query": "tax"})
+    assert "Nothing" not in out

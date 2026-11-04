@@ -95,7 +95,7 @@ HONEST_NO = r"\b(can't|cannot|couldn't|isn't|aren't|no |not |don't|doesn't|nothi
 
 # Was it done? (False until the computer can, for the abilities it lacked.)
 DONE: dict[str, Callable[[T], bool]] = {
-    "files-find-open": lambda t: "Tax letter March 2026" in str(t.get("shown")) or any("Tax letter" in str(s) for s in t.get("screen", [])),
+    "files-find-open": lambda t: "tax letter march 2026" in str(t.get("shown")).lower() or any("tax letter" in str(s).lower() for s in t.get("screen", [])),
     "files-rename": lambda t: added(t, r"^Documents/Ren Shu CV 2026\.docx$") and removed(t, "Documents/CV.docx"),
     "files-tidy-screenshots": lambda t: asked_first(t) and len(t.get("trash", [])) == 3 and not removed(t, "Desktop/Notes.txt"),
     "files-recent": lambda t: said(t, r"Downloads") and said(t, r"boarding pass"),
@@ -124,7 +124,7 @@ DONE: dict[str, Callable[[T], bool]] = {
     "vpn": lambda t: said(t, r"no VPN|isn't (a|any) VPN|not set up|no VPN (client|profile|connection)|nothing (for me )?to (turn|switch) on"
                           r"|(don't|do not|doesn't) have (a|any) VPN"),
     "bt-keyboard": lambda t: bool(calls(t, "bt_pair")),
-    "bt-airpods": lambda t: said(t, r"AirPods"),
+    "bt-airpods": lambda t: said(t, r"AirPods") or bool(calls(t, "bt_pair") or calls(t, "bt_connect")) and said(t, r"connected|paired"),
     "battery-left": lambda t: said(t, r"\b23\b|twenty[- ]three"),
     "battery-desktop": lambda t: said(t, r"no battery|(doesn't|does not) (have|report) a battery|desktop|mains power|runs off the wall"),
     "shutdown": lambda t: asked_first(t) and any(tt["name"] == "power" and tt["input"].get("action") == "shutdown" for tt in t.get("tools", [])),

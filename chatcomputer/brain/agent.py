@@ -349,10 +349,11 @@ class Brain:
             conv.messages.append({"role": "user", "content": text})
             port = await self.model.ensure()
             # What each tool gave back this turn, by its name and input: asked for again with the same input, it isn't
-            # run again (its answer is given back, with a word to answer now); a step that asks for nothing new is
-            # going round in circles, and the turn stops there. (evals/os: Qwen3.5 0.8B showed the same document
-            # again and again until the turn ran out of time.)
+            # run again (its answer is given back, with a word to try something else or answer); a second step in a
+            # row that asks for nothing new is going round in circles, and the turn stops there. (evals/os: Qwen3.5
+            # 0.8B showed the same folder thirty times until the turn ran out of time.)
             given: dict[str, str] = {}
+            again = 0            # steps in a row that asked only for what was done already
             for _ in range(MOST_STEPS):
                 answer = await self._write(t, port, conv)
                 conv.messages.append(answer)
@@ -361,7 +362,8 @@ class Brain:
                     break
                 keys = [str((c.get("function") or {}).get("name") or "") + " " + str((c.get("function") or {}).get("arguments") or "")
                         for c in calls]
-                if all(k in given for k in keys):
+                again = again + 1 if all(k in given for k in keys) else 0
+                if again == 2:
                     conv.messages.pop()
                     if not t.res.text.strip():
                         t.res.ok, t.res.error_kind = False, "circles"
@@ -370,7 +372,7 @@ class Brain:
                 for call, key in zip(calls, keys):
                     if key in given:
                         content = ("Already done, with the same input, earlier in this turn; it said: " + given[key][:400] +
-                                   " Don't ask for it again: answer them now.")
+                                   " Don't ask for it again: try something else, or answer them now.")
                     else:
                         content = given[key] = await self._call(t, call)
                     conv.messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": content})

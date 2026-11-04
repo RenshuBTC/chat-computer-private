@@ -74,12 +74,20 @@ class ToolContext:
     tool_fns: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = field(default_factory=dict)
 
     def resolve(self, p: str) -> str:
-        """Accept ~/x, C:\\Users\\x (the Windows drive) and plain paths."""
+        """Accept ~/x, C:\\Users\\x (the Windows drive) and plain paths. A path that isn't there but is in the home
+        folder ("/Downloads/Boarding pass.pdf", "Documents/x" said without it) is the home folder's: evals/os found a
+        small model leaving the home folder out of paths that search_files had given it whole."""
         p = (p or "").strip().strip('"')
         m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)
         if m and m.group(1).upper() == "C":
             p = os.path.join(self.settings.windows_mount, m.group(2).replace("\\", "/"))
-        return os.path.abspath(os.path.expanduser(p))
+        full = os.path.abspath(os.path.expanduser(p))
+        if p and not p.startswith("~") and not os.path.exists(full):
+            home = os.path.expanduser("~")
+            mine = os.path.abspath(os.path.join(home, p.lstrip("/")))
+            if mine.startswith(home + os.sep) and os.path.exists(mine):
+                return mine
+        return full
 
 
 def _text(s: str) -> dict[str, Any]:
@@ -443,8 +451,15 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
         res = await asyncio.to_thread(ctx.index.search, a.get("query", ""), a.get("kind") or None,
                                       a.get("modified_after"), a.get("modified_before"), folder, a.get("limit") or 20)
         note = ""
+        if not res and (a.get("modified_after") or a.get("modified_before") or a.get("kind")):
+            # (Nothing between those dates, or of that kind: what the words alone find, said so. evals/os: a small
+            # model looked for "the tax letter I got in March" from March 2023, three years early, and found nothing.)
+            res = await asyncio.to_thread(ctx.index.search, a.get("query", ""), None, None, None, folder, a.get("limit") or 20)
+            if res:
+                note = "\n(Nothing " + ("of that kind " if a.get("kind") else "") + ("between those dates" if a.get("modified_after") or
+                       a.get("modified_before") else "") + ": these are what the words alone find.)"
         if ctx.index.status.get("state") != "idle":
-            note = f"\n(Still indexing: {ctx.index.status.get('state')}; results may be incomplete.)"
+            note += f"\n(Still indexing: {ctx.index.status.get('state')}; results may be incomplete.)"
         return _text((_json(res) if res else "Nothing found.") + note)
 
     def _target(i: dict[str, Any]) -> tuple[str, str]:
@@ -694,6 +709,11 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
         if isinstance(wd, dict) and wd.get("windows_mounted"):
             wd["folder"] = ctx.settings.windows_mount
         st["chatcomputer"] = _version()
+        # (Each disk's free share worked out here: evals/os found a small model saying 40 GB free of 64 was 24%.)
+        disks = (st.get("machine") or {}).get("disks") if isinstance(st.get("machine"), dict) else None
+        for d in (disks or {}).values():
+            if isinstance(d, dict) and isinstance(d.get("free_gb"), (int, float)) and d.get("total_gb"):
+                d["free_percent"] = round(100 * d["free_gb"] / d["total_gb"])
         if ctx.index:
             st["file_index"] = {**ctx.index.status, "files": ctx.index.status.get("files")}
         if ctx.airtouch_status:
@@ -737,6 +757,18 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
         before = await asyncio.to_thread(p.wifi_status)
         was_on, was_on_network = before.get("radio") != "disabled", before.get("connected_to")
         if act == "connect":
+            # (A network's name as people say it, "CoffeeBean wifi", is the one in range called CoffeeBean.)
+            name = str(a["network"]).strip()
+            with contextlib.suppress(Exception):
+                names = [str(n.get("name") or "") for n in await asyncio.to_thread(p.wifi_scan)]
+                if name not in names:
+                    def plain(x: str) -> str:
+                        return re.sub(r"\s*\b(wi-?fi|wlan|network|hotspot)\b\s*$", "", re.sub(r"^\s*the\s+", "", x, flags=re.I),
+                                      flags=re.I).strip().lower()
+                    same = [n for n in names if n and plain(n) == plain(name)]
+                    if len(same) == 1:
+                        name = same[0]
+            a = {**a, "network": name}
             said = await asyncio.to_thread(p.wifi_connect, a["network"], a.get("password"))
             if _worked(said) and was_on_network != a["network"]:
                 _undo_by(f"Wi-Fi was on {was_on_network or 'no network'}", "wifi",
@@ -1252,7 +1284,7 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
          "0-100); brighter / dimmer: by value (default 15); night_light: mode on (now, until it's turned off), off, or "
          "evenings (by itself every evening, from 'from' until 'until', default 21:00 to 07:00), with warmth 1-100 "
          "(default 50; higher is warmer, less blue light). A desktop's monitor may only change with its own buttons: "
-         "status says so.",
+         "status says so. There's no dark or light mode to switch: Chat Computer's screen is always dark.",
          obj({"action": {"type": "string", "enum": ["status", "brightness", "brighter", "dimmer", "night_light"]},
               "value": {"type": ["number", "string"]}, "mode": {"type": "string", "enum": ["on", "off", "evenings"]},
               "from": S, "until": S, "warmth": I}, ["action"]))

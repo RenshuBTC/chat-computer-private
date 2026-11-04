@@ -11,6 +11,10 @@
 //!                                       whose firmware does something odd with them
 //!     cores = 1                         use at most this many of the processor's cores (cores.rs; all, without it),
 //!                                       for a PC whose other cores don't start well
+//!     meta-api-key = LLM_...            a key for Meta's Model API (https://dev.meta.ai): Meta's Muse Spark answers in
+//!                                       place of the model on the PC (assistant.rs), what's said going to Meta. Never
+//!                                       logged
+//!     meta-model = muse-spark-1.3       which of Meta's models (Muse Spark 1.3, without it)
 //!
 //! A Claude API key an older setup put there (claude-api-key) is no longer used, nor logged.
 
@@ -30,6 +34,9 @@ pub struct Settings {
     pub firmware_programs_off: bool,
     /// The most processor cores to use (all, if not said).
     pub cores: Option<usize>,
+    /// A key for Meta's Model API, and which of Meta's models answers.
+    pub meta_key: Option<String>,
+    pub meta_model: Option<String>,
     /// How many lines weren't understood (their words aren't logged: one might be a key).
     pub not_understood: usize,
 }
@@ -65,6 +72,22 @@ pub fn parse(bytes: &[u8]) -> Settings {
                 }
             }
             "claude-api-key" => s.old_key = true,
+            "meta-api-key" => {
+                let fits = !value.is_empty() && value.len() <= 512 && value.bytes().all(|b| b.is_ascii_graphic());
+                s.meta_key = fits.then(|| String::from(value));
+                if s.meta_key.is_none() {
+                    s.not_understood += 1;
+                }
+            }
+            "meta-model" => {
+                let fits = !value.is_empty()
+                    && value.len() <= 64
+                    && value.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+                s.meta_model = fits.then(|| String::from(value));
+                if s.meta_model.is_none() {
+                    s.not_understood += 1;
+                }
+            }
             "clock-offset-minutes" => {
                 s.clock_offset_minutes = value.parse::<i32>().ok().filter(|m| (-1440..=1440).contains(m));
                 if s.clock_offset_minutes.is_none() {

@@ -20,6 +20,20 @@ pub fn get(url: &Url) -> Vec<u8> {
     .into_bytes()
 }
 
+/// A POST of `body` to `url` (an API's, such as Meta's Model API), with `headers` (its key, the body's type) besides
+/// who's asking, and how its answer may be compressed.
+pub fn post(url: &Url, headers: &[(String, String)], body: &[u8]) -> Vec<u8> {
+    let host = if url.port == 443 { url.host.clone() } else { format!("{}:{}", url.host, url.port) };
+    let mut out = format!("POST {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\n", url.path);
+    for (name, value) in headers {
+        out.push_str(&format!("{name}: {value}\r\n"));
+    }
+    out.push_str(&format!("Accept-Encoding: gzip, deflate\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()));
+    let mut out = out.into_bytes();
+    out.extend_from_slice(body);
+    out
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Body {
     Length(usize),

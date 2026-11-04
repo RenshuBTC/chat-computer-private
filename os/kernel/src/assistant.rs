@@ -16,6 +16,12 @@
 //! they say goes back to the model, until it has finished. The conversation is kept across restarts in Chat
 //! Computer's memory file (keep.rs), with the model's notes about the person, which it's shown in every conversation.
 //!
+//! With a key for Meta's Model API in the settings (meta-api-key), Meta's Muse Spark answers instead, over the
+//! internet: each round of the answer is a POST of the conversation (OpenAI's form of it, with the same tools) to
+//! https://api.meta.ai/v1/chat/completions, made by Chat Computer's own network stack and TLS 1.3 (web.rs), and its
+//! words and tool calls come back the same way; the tools run here as they do for the model on the PC. What's said
+//! goes to Meta then, and the status says so.
+//!
 //! A test build made with CHATCOMPUTER_TEST=chat (by check.py) answers from a script instead (check.py's, built in:
 //! what its tests have the tools do), so the screen, the tools and the memory file are checked without a model; it
 //! logs what the model would have been asked and what the tools said. One made with CHATCOMPUTER_TEST=model answers
@@ -92,9 +98,7 @@ key below to unlock it (48 digits, which Windows keeps in your Microsoft account
 const TOOLS: &str = include_str!("tools.json");
 
 const SYSTEM: &str = "You are Chat Computer: you run this computer for the person using it, who talks to you by typing \
-here. You are an AI model running on this computer itself ({model}, an open model made by Qwen, run by Chat Computer's \
-own engine on Chat Computer's own operating system), so you work without the internet, and nothing they say leaves the \
-computer unless you look something up on the web, which they see.
+here. {who}
 
 With your tools you can see how this computer is doing, change the text size, set timers, reminders and alarms (and \
 how loud they ring), read the files on its drives (Windows' C: and the others, USB sticks and memory cards included; \
@@ -107,6 +111,22 @@ Each message from the person starts with when they sent it, like [Tue 3 Nov 2026
 briefly unless they ask for more. The screen shows Markdown (headings, bold and italic, lists, code, quotes and simple \
 tables) but no links, and no pictures but the ones you show with show_picture, so write an address out in full. Don't \
 make things up: say so when you don't know.";
+/// Who answers, in the instructions: the model on this PC...
+const LOCAL_WHO: &str = "You are an AI model running on this computer itself ({model}, an open model made by Qwen, run by \
+Chat Computer's own engine on Chat Computer's own operating system), so you work without the internet, and nothing \
+they say leaves the computer unless you look something up on the web, which they see.";
+/// ...or Meta's, over the internet.
+const META_WHO: &str = "You are {model}, Meta's AI model, answering over the internet through Meta's Model API: Chat \
+Computer's own operating system reaches you with its own network stack and TLS, so what they say goes to Meta to be \
+answered, and you can't answer while this computer isn't connected.";
+/// Meta's Model API, and the model it asks when the settings don't say.
+const META_API: &str = "https://api.meta.ai/v1/chat/completions";
+const META_MODEL: &str = "muse-spark-1.3";
+/// The most a round of Meta's model's answer says (its thinking included).
+const META_TOKENS: usize = 8192;
+/// How many characters of its words are shown at a time, so they appear as they would be written.
+const META_PIECE: usize = 12;
+
 /// Said when the oldest part of a long conversation is no longer given to the model.
 const SHORTENED: &str = "\n\nThis conversation began earlier: its oldest part is no longer shown to you, to keep it short \
 enough for you, but the person can still scroll back to it.";
@@ -246,6 +266,17 @@ enum Brain {
     Ready(Box<Loaded>),
     /// A test build's script, in place of a model.
     Script(Json),
+    /// Meta's model, over Meta's Model API.
+    Meta(Box<Meta>),
+}
+
+/// Meta's model: the key for Meta's Model API (never logged), which model, and its name.
+struct Meta {
+    key: String,
+    model: String,
+    name: String,
+    /// How long its last answer's round took to come.
+    took_ms: Option<u64>,
 }
 
 /// A question being answered.
@@ -281,6 +312,8 @@ struct Job {
     see_ms: u64,
     /// The round's web tools' calls still being fetched, in order: the next round waits for them.
     web: Vec<WebCall>,
+    /// Meta's model's round, being asked: the request on its way, and since when.
+    meta: Option<(crate::web::Fetch, u64)>,
 }
 
 /// One of the round's calls of the web's tools, being fetched: what it was, and where its result goes in the
@@ -331,6 +364,7 @@ impl Job {
             seen: 0,
             see_ms: 0,
             web: Vec::new(),
+            meta: None,
         }
     }
 }
@@ -371,8 +405,9 @@ struct Shown {
 static ASSISTANT: SpinLock<Option<Assistant>> = SpinLock::new(None);
 static SHOWN: SpinLock<Option<Shown>> = SpinLock::new(None);
 
-/// Starts: finds the model's file (the one `setting` names, if it names one), and starts reading it.
-pub fn init(setting: Option<String>) {
+/// Starts: finds the model's file (the one `setting` names, if it names one), and starts reading it; or, given a key
+/// for Meta's Model API (and which model, if the settings say), Meta's model answers.
+pub fn init(setting: Option<String>, meta: Option<(String, Option<String>)>) {
     // (A model test build gives the model no tools: in a virtual PC without hardware virtualization, the processor
     // is emulated, and their descriptions would take minutes to read.)
     let tools = match json::parse(TOOLS) {
@@ -416,6 +451,12 @@ pub fn init(setting: Option<String>) {
         a.brain = Brain::Script(script);
         a.system = a.system_prompt();
         crate::log!("Chat Computer kernel: model: a test's script answers, in place of a model");
+    } else if let Some((key, model)) = meta {
+        let model = model.unwrap_or_else(|| String::from(META_MODEL));
+        let name = if model.starts_with("muse-spark") { String::from("Muse Spark") } else { model.clone() };
+        crate::log!("Chat Computer kernel: model: Meta's {name} ({model}) answers, over Meta's Model API");
+        a.brain = Brain::Meta(Box::new(Meta { key, model, name, took_ms: None }));
+        a.system = a.system_prompt();
     } else {
         a.look();
     }
@@ -519,7 +560,7 @@ pub fn ask(text: &str) -> Result<(), String> {
         a.parts.clear();
     }
     // A new conversation's instructions have the notes as they are now.
-    if a.parts.is_empty() && matches!(a.brain, Brain::Ready(_) | Brain::Script(_)) {
+    if a.parts.is_empty() && matches!(a.brain, Brain::Ready(_) | Brain::Script(_) | Brain::Meta(_)) {
         a.from = 0;
         let system = a.system_prompt();
         if system != a.system {
@@ -608,6 +649,25 @@ impl Assistant {
                     }
                 }
             }
+            Brain::Meta(_) => {
+                if let Some(mut job) = self.job.take() {
+                    let over = loop {
+                        if self.meta_step(&mut job, events) {
+                            break true;
+                        }
+                        if job.script.as_ref().is_some_and(|(left, ..)| !left.is_empty())
+                            || job.meta.is_some()
+                            || time::uptime_ms() >= until
+                            || !job.web.is_empty()
+                        {
+                            break false;
+                        }
+                    };
+                    if !over {
+                        self.job = Some(job);
+                    }
+                }
+            }
             Brain::Script(_) => {
                 if let Some(mut job) = self.job.take() {
                     let over = loop {
@@ -646,6 +706,7 @@ impl Assistant {
             )),
             Brain::Ready(m) => Ready::Yes(m.name.clone()),
             Brain::Script(_) => Ready::Yes(String::from("a test's script")),
+            Brain::Meta(m) => Ready::Yes(m.name.clone()),
         };
         let status = match &self.brain {
             Brain::None { why, .. } => format!("Model: none ({why})"),
@@ -668,6 +729,13 @@ impl Assistant {
                 )
             }
             Brain::Script(_) => String::from("Model: a test's script, in place of a model"),
+            Brain::Meta(m) => format!(
+                "Model: you are Meta's {} ({}), answering over Meta's Model API (api.meta.ai), which Chat Computer's own \
+                 system reaches over its own network stack and TLS: what's said goes to Meta{}",
+                m.name,
+                m.model,
+                m.took_ms.map(|t| format!("; its last answer took {:.1} s to come", t as f64 / 1000.0)).unwrap_or_default()
+            ),
         };
         let working = self.job.is_some()
             || matches!(&self.brain, Brain::Reading(_))
@@ -680,14 +748,16 @@ impl Assistant {
         let name = match &self.brain {
             Brain::Ready(m) => m.name.clone(),
             Brain::Reading(r) => r.name.clone(),
+            Brain::Meta(m) => m.name.clone(),
             _ => String::from("Qwen"),
         };
+        let who = if matches!(self.brain, Brain::Meta(_)) { META_WHO } else { LOCAL_WHO };
         let sees = match &self.brain {
             Brain::Ready(m) => m.session.model.vision.is_some(),
             Brain::Script(_) => true,
             _ => false,
         };
-        let mut system = SYSTEM.replace("{model}", &name).replace(
+        let mut system = SYSTEM.replace("{who}", who).replace("{model}", &name).replace(
             "{sees}",
             if sees { " and see the pictures among them (scanned pages too)" } else { "" },
         );
@@ -1165,6 +1235,7 @@ impl Assistant {
                  app on Windows makes it again (downloading the model again, in the background) when it's next opened \
                  there."
             }
+            Brain::Meta(_) => "Chat Computer doesn't send pictures to Meta's model yet.",
             _ => "its file has no vision part.",
         }
     }
@@ -1189,6 +1260,11 @@ impl Assistant {
         if let (Brain::Ready(m), Some(s)) = (&mut self.brain, speed) {
             m.speed = Some(s);
         }
+        if let Brain::Meta(m) = &mut self.brain
+            && job.write_ms > 0
+        {
+            m.took_ms = Some(job.write_ms);
+        }
         if test_build().is_some() {
             crate::log!("Chat Computer kernel: test: said {}", json::compact(&Json::Str(job.text.clone())));
         }
@@ -1211,6 +1287,67 @@ impl Assistant {
             events.push(Event::TurningOff(5));
             crate::power::turn_off_in(5000);
         }
+    }
+
+    /// A step of Meta's model's answer: a round asked of Meta's Model API, its answer come, a few of its words said, or
+    /// the round over. True when the answer's over.
+    fn meta_step(&mut self, job: &mut Job, events: &mut Vec<Event>) -> bool {
+        if !self.web_step(job, events) {
+            return false;
+        }
+        if job.script.is_none() {
+            if job.meta.is_none() {
+                let messages = self.messages();
+                if test_build().is_some() {
+                    crate::log!("Chat Computer kernel: test: asked {}", json::compact(&messages_json(&messages)));
+                }
+                let Brain::Meta(m) = &self.brain else { return true };
+                let body = meta_body(&m.model, &messages, &self.tools);
+                let headers = vec![
+                    (String::from("Authorization"), format!("Bearer {}", m.key)),
+                    (String::from("Content-Type"), String::from("application/json")),
+                    (String::from("Accept"), String::from("application/json")),
+                ];
+                let url = web::Url::parse(META_API).expect("Meta's Model API's own address");
+                crate::log!("Chat Computer kernel: model: asks Meta's {} ({} bytes)", m.name, body.len());
+                job.meta = Some((crate::web::Fetch::post(url, headers, body.into_bytes()), time::uptime_ms()));
+                let doing = format!("Asking {} (Meta)", m.name);
+                activity(job, doing, events);
+            }
+            let Some((fetch, since)) = job.meta.as_mut() else { return true };
+            let since = *since;
+            let Some(got) = fetch.step() else { return false };
+            job.meta = None;
+            let took = time::uptime_ms() - since;
+            match meta_answer(got) {
+                Ok((answer, cut, read, written)) => {
+                    job.read += read;
+                    job.written += written;
+                    job.write_ms += took;
+                    crate::log!(
+                        "Chat Computer kernel: model: Meta's answer came in {:.1} s ({read} tokens read, {written} written{})",
+                        took as f64 / 1000.0,
+                        if cut { ", cut at the most it says" } else { "" }
+                    );
+                    job.closed = answer.calls.len();
+                    job.script = Some((answer.text.clone(), answer, cut));
+                }
+                Err(why) => {
+                    self.parts.truncate(job.base);
+                    fail(events, why);
+                    return true;
+                }
+            }
+        }
+        let left = &mut job.script.as_mut().expect("Meta's round").0;
+        if !left.is_empty() {
+            let cut = left.char_indices().nth(META_PIECE).map_or(left.len(), |(i, _)| i);
+            let piece: String = left.drain(..cut).collect();
+            say(job, piece, events);
+            return false;
+        }
+        let (_, answer, cut) = job.script.take().expect("Meta's round");
+        self.round_over(job, answer, cut, events)
     }
 
     /// A step of a test script's answer: a round begun, a few of its words said, or the round over. True when the
@@ -1533,6 +1670,124 @@ fn load(all: &'static [u8], opened: &files::Opened, name: String) -> Result<Load
         see: 64,
         speed: None,
     })
+}
+
+/// The request for a round of Meta's model's answer, as Meta's Model API reads it (OpenAI's chat completions): the
+/// model, the messages (each tool's result after the call it answers, their ids made up here), and the tools.
+fn meta_body(model: &str, messages: &[Message], tools: &[Json]) -> String {
+    let s = |v: &str| Json::Str(String::from(v));
+    let field = |k: &str, v: Json| (String::from(k), v);
+    let mut out: Vec<Json> = Vec::new();
+    let mut made = 0;
+    let mut waiting: Vec<String> = Vec::new();
+    let text_of = |parts: &[Content]| -> String {
+        parts
+            .iter()
+            .map(|p| match p {
+                Content::Text(t) => t.clone(),
+                Content::Picture(_) => String::from("[a picture, which Chat Computer doesn't send to Meta's model]"),
+            })
+            .collect()
+    };
+    for m in messages {
+        out.push(match m {
+            Message::System(t) => Json::Object(vec![field("role", s("system")), field("content", s(t))]),
+            Message::User(t) => Json::Object(vec![field("role", s("user")), field("content", s(t))]),
+            Message::UserParts(parts) => Json::Object(vec![field("role", s("user")), field("content", s(&text_of(parts)))]),
+            Message::Assistant(a) => {
+                let mut fields = vec![field("role", s("assistant")), field("content", s(&a.text))];
+                if !a.calls.is_empty() {
+                    let calls = a
+                        .calls
+                        .iter()
+                        .map(|c| {
+                            made += 1;
+                            let id = format!("call_{made}");
+                            waiting.push(id.clone());
+                            let tool = tools.iter().find(|t| t.get("function").and_then(|f| f.get("name")).and_then(Json::str) == Some(&c.name));
+                            Json::Object(vec![
+                                field("id", Json::Str(id)),
+                                field("type", s("function")),
+                                field(
+                                    "function",
+                                    Json::Object(vec![field("name", s(&c.name)), field("arguments", Json::Str(json::compact(&c.arguments(tool))))]),
+                                ),
+                            ])
+                        })
+                        .collect();
+                    fields.push(field("tool_calls", Json::Array(calls)));
+                }
+                Json::Object(fields)
+            }
+            Message::Tool(_) | Message::ToolParts(_) => {
+                let text = match m {
+                    Message::Tool(t) => t.clone(),
+                    Message::ToolParts(parts) => text_of(parts),
+                    _ => String::new(),
+                };
+                let id = if waiting.is_empty() { format!("call_{made}") } else { waiting.remove(0) };
+                Json::Object(vec![field("role", s("tool")), field("tool_call_id", Json::Str(id)), field("content", Json::Str(text))])
+            }
+        });
+    }
+    let mut body = vec![field("model", s(model)), field("messages", Json::Array(out))];
+    if !tools.is_empty() {
+        body.push(field("tools", Json::Array(tools.to_vec())));
+    }
+    body.push(field("max_completion_tokens", Json::Number(META_TOKENS as f64)));
+    json::compact(&Json::Object(body))
+}
+
+/// Meta's model's round, from Meta's Model API's answer: its words and tool calls, whether it reached the most it
+/// says, and the tokens it read and wrote; or why there's none, for the person.
+fn meta_answer(got: Result<crate::web::Page, String>) -> Result<(Answer, bool, usize, usize), String> {
+    let page = got.map_err(|why| format!("Meta's model couldn't be reached: {why}."))?;
+    let text = String::from_utf8_lossy(&page.bytes);
+    let answer = json::parse(&text);
+    if page.status != 200 {
+        let said = answer.as_ref().and_then(|a| a.get("error")).and_then(|e| e.get("message").or(Some(e))).and_then(Json::str);
+        let said = said.map(|m| format!(": \u{201C}{}\u{201D}", m.chars().take(300).collect::<String>())).unwrap_or_default();
+        crate::log!("Chat Computer kernel: model: Meta's Model API answered {}{said}", page.status);
+        return Err(match page.status {
+            401 | 403 => format!(
+                "Meta's Model API didn't accept the key in Chat Computer's settings (meta-api-key){said}. A key comes from \
+                 https://dev.meta.ai."
+            ),
+            429 => String::from("Meta's Model API says it's had too many requests: try again in a minute."),
+            s if s >= 500 => format!("Meta's Model API had a problem ({s}): try again in a minute."),
+            s => format!("Meta's Model API refused the question ({s}){said}."),
+        });
+    }
+    let Some(answer) = answer else { return Err(String::from("Meta's Model API's answer couldn't be read.")) };
+    let Some(choice) = answer.get("choices").and_then(Json::array).and_then(|c| c.first()) else {
+        return Err(String::from("Meta's Model API's answer had nothing in it."));
+    };
+    let message = choice.get("message");
+    let words = message.and_then(|m| m.get("content")).and_then(Json::str).unwrap_or("");
+    let calls = message
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(Json::array)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|c| {
+            let f = c.get("function")?;
+            let name = String::from(f.get("name")?.str()?);
+            let args = f.get("arguments").and_then(Json::str).and_then(json::parse);
+            let args = args
+                .as_ref()
+                .and_then(Json::object)
+                .unwrap_or(&[])
+                .iter()
+                .map(|(k, v)| (k.clone(), v.str().map_or_else(|| json::compact(v), String::from)))
+                .collect();
+            Some(Call { name, args })
+        })
+        .collect();
+    let cut = choice.get("finish_reason").and_then(Json::str) == Some("length");
+    let usage = answer.get("usage");
+    let tokens = |k: &str| usage.and_then(|u| u.get(k)).and_then(Json::usize).unwrap_or(0);
+    let answer = Answer { thinking: String::new(), text: String::from(words.trim_start()), calls };
+    Ok((answer, cut, tokens("prompt_tokens"), tokens("completion_tokens")))
 }
 
 /// The messages as JSON, for a test build's log.

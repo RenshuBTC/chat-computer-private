@@ -104,8 +104,9 @@ body.hearing #live { display: block; }
 }
 
 /* A conversation starts with the word logo in the middle of the screen (body.intro, from the first moment), and it
-   stays until something's said (body.has-log); under it, one line of greeting (chat.js: greet), fading in once it's
-   chosen. Something said fades them away. */
+   stays until something's said (body.has-log); under it, the greeting (chat.js: greet), fading in once it's chosen:
+   whole, never cut off, on a second line where the screen's too narrow for one (a phone), the two lines evened out.
+   Something said fades them away. */
 #welcome {
   position: fixed; left: var(--mid-left, 0px); right: var(--mid-right, 0px); top: 0; bottom: calc(var(--composer-h, 5rem) + var(--kb, 0px));
   display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0; padding: 0 1rem;
@@ -113,8 +114,8 @@ body.hearing #live { display: block; }
 }
 #wordmark { font-size: clamp(1.75rem, 9vw, 3rem); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin: 0; }
 #greeting {
-  max-width: 100%; margin: 0.7em 0 0; color: var(--muted); line-height: 1.4; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; opacity: 0; transition: opacity 400ms ease;
+  max-width: 100%; margin: 0.7em 0 0; color: var(--muted); line-height: 1.4; text-align: center; text-wrap: balance;
+  overflow-wrap: break-word; opacity: 0; transition: opacity 400ms ease;
 }
 #greeting.shown { opacity: 1; }
 body.intro:not(.has-log) #welcome { opacity: 1; visibility: visible; transition: none; }

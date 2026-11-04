@@ -148,9 +148,10 @@ def test_the_demo_works_in_a_browser():
     res = json.loads(lines[-1])
     assert "failed" not in res, res["failed"]
     assert res["errors"] == []
-    # It opens on the word logo, and under it one line of greeting, as warm and personal as the Claude app's (for the
-    # time of day and the day, with the name you go by, or for where you are and its weather), fading in once chosen;
-    # nothing is said, and both stay until something is (three seconds on, still there). A different one each visit.
+    # It opens on the word logo, and under it a greeting, as warm and personal as the Claude app's (for the time of
+    # day and the day, with the name you go by, or for where you are and its weather), fading in once chosen, on one
+    # line at a computer's width; nothing is said, and both stay until something is (three seconds on, still there).
+    # A different one each visit.
     intro, first = res["intro"], res["opening"]
     assert intro["logo"] == "Chat Computer" and intro["said"] == 0
     options = res["greeting_options"]
@@ -618,6 +619,10 @@ def test_the_demo_works_in_a_browser():
     assert phone["buttons"] == ["add", "ai", "mic"]
     assert abs(phone["gaps"][0] - phone["gaps"][1]) < 0.2 and phone["gaps"][0] > 0, phone["gaps"]   # (on a phone too)
     assert not res["phone"]["panel"] and res["phone"]["last"].startswith("Hi! I'm Chat Computer")
+    # The greeting whole on a phone (an iPhone showed "Hello, cloudy Singapore! How's your m..."): on two lines when it
+    # needs them, evened out and centred, inside the screen; a short one on one line.
+    assert res["phone_greeting"] == [{"lines": 2, "whole": True, "inside": True, "centred": True},
+                                     {"lines": 1, "whole": True, "inside": True, "centred": True}], res["phone_greeting"]
     # As the Claude app is on a phone (measured on an iPhone): text a eighteenth of the screen's width (390px: 21.7px),
     # never under 16px, so the browser doesn't zoom in on the box; the box 0.77rem from the screen's sides and 4.77rem
     # tall, its words above, 0.58rem in past its line, and the send arrow under them, 8px from its right; nothing past

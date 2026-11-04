@@ -258,8 +258,8 @@ async function ask(page, text, meanwhile) {
     return /linkedin/.test(u) ? route.fulfill({ status: 404, body: "" }) : route.fulfill({ status: 200, contentType: "image/png", body: ICON_PNG });
   });
   await page.goto(page_url);
-  // It opens on the word logo, and under it, once it's chosen, one line of greeting, fading in; nothing said, and
-  // both stay (three seconds on, still there). The cursor in the box, under the hint.
+  // It opens on the word logo, and under it, once it's chosen, the greeting, fading in (at this width, on one line);
+  // nothing said, and both stay (three seconds on, still there). The cursor in the box, under the hint.
   await page.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
   out.intro = await state(page);
   out.greeting = await greeted(page);
@@ -870,6 +870,18 @@ async function ask(page, text, meanwhile) {
   await phone.waitForFunction(() => window.CO && document.getElementById("toggle-left"));
   await greeted(phone);
   out.phone_opening = await state(phone);
+  // The greeting whole on a phone, however long: on a second line where it needs one, centred, never cut off.
+  out.phone_greeting = await phone.evaluate(() => {
+    const g = document.getElementById("greeting"), was = g.textContent, rows = [];
+    for (const t of ["Hello, cloudy Singapore! How's your morning?", "Good morning"]) {
+      g.textContent = t;
+      const r = g.getBoundingClientRect();
+      rows.push({ lines: Math.round(r.height / parseFloat(getComputedStyle(g).lineHeight)), whole: g.scrollWidth <= g.clientWidth + 1,
+                  inside: r.left >= 0 && r.right <= innerWidth, centred: getComputedStyle(g).textAlign === "center" });
+    }
+    g.textContent = was;
+    return rows;
+  });
   // As in the Claude app (measured on an iPhone): the text a eighteenth of the screen's width, never under 16px (no
   // zooming in on the box); the conversation and the box 0.77rem from the sides; the box 100px tall at 375px across,
   // the words above and the arrow under them at the right, 8px from the box's edges; nothing past the screen's edges.

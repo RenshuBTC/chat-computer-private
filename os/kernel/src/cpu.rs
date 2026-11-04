@@ -127,22 +127,28 @@ pub fn brand() -> [u8; 48] {
     out
 }
 
-/// The processor's wider vector registers (AVX's), switched on where it has them, for the model's arithmetic (the
-/// firmware leaves SSE's on): the system says it saves them (CR4.OSXSAVE), and which (XCR0: x87, SSE and AVX's).
-/// Whether AVX is on.
-pub fn enable_avx() -> bool {
+/// The processor's wider vector registers (AVX's, and AVX-512's where it has them), switched on, for the model's
+/// arithmetic (the firmware leaves SSE's on): the system says it saves them (CR4.OSXSAVE), and which (XCR0: x87, SSE
+/// and AVX's; AVX-512's masks and upper registers too, so the engine can use AVX-512's VNNI, as on AMD's Zen 4, which
+/// has no AVX-VNNI). Nothing saves them but SSE's: an interrupt's handler, built for SSE2 alone, never touches them,
+/// and nothing else runs between the model's steps. Whether AVX is on, and whether AVX-512's registers are.
+pub fn enable_avx() -> (bool, bool) {
     let (_, _, ecx, _) = cpuid(1, 0);
     let (xsave, avx) = (ecx & (1 << 26) != 0, ecx & (1 << 28) != 0);
     if !(xsave && avx) || cpuid(0, 0).0 < 0xD {
-        return false;
+        return (false, false);
     }
     unsafe { set_cr4(cr4() | (1 << 18)) };
     let supported = cpuid(0xD, 0).0 as u64;
     if supported & 0b111 != 0b111 {
-        return false;
+        return (false, false);
     }
-    unsafe { asm!("xsetbv", in("ecx") 0u32, in("eax") 0b111u32, in("edx") 0u32, options(nomem, nostack, preserves_flags)) };
-    true
+    // AVX-512's opmask registers, its registers' upper halves, and its 16 more (XCR0 bits 5 to 7): all or none.
+    const AVX512: u64 = 0b1110_0000;
+    let avx512 = supported & AVX512 == AVX512;
+    let xcr0 = 0b111 | if avx512 { AVX512 } else { 0 };
+    unsafe { asm!("xsetbv", in("ecx") 0u32, in("eax") xcr0 as u32, in("edx") 0u32, options(nomem, nostack, preserves_flags)) };
+    (true, avx512)
 }
 
 pub fn interrupts_enabled() -> bool {

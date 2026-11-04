@@ -33,7 +33,7 @@ use model::json::{self, Json};
 use model::refusal::Found;
 use model::sample::Sampling;
 use model::session::{Ended, Request, Session, Step, Turn};
-use model::{File, Model, Serial};
+use model::{File, Model};
 
 /// What came of the question.
 pub enum Event {
@@ -525,7 +525,7 @@ impl Assistant {
                 } else if !m.ahead.is_empty() {
                     while !m.ahead.is_empty() && time::uptime_ms() < until {
                         let t = time::uptime_ms();
-                        if m.session.read_ahead(&m.ahead, m.read, &Serial) {
+                        if m.session.read_ahead(&m.ahead, m.read, &crate::cores::Cores) {
                             crate::log!("Chat Computer kernel: model: read its instructions ahead ({} tokens)", m.ahead.len());
                             m.ahead.clear();
                         } else {
@@ -577,10 +577,14 @@ impl Assistant {
             Brain::Ready(m) => {
                 let level = level_name();
                 format!(
-                    "Model: you are {} ({}), run by Chat Computer's own engine on one of this PC's processor cores ({level}){}; \
+                    "Model: you are {} ({}), run by Chat Computer's own engine on {} ({level}){}; \
                      conversations up to {} tokens{}",
                     m.name,
                     m.path,
+                    match crate::cores::count() {
+                        1 => String::from("one of this PC's processor cores"),
+                        n => format!("{n} of this PC's processor cores"),
+                    },
                     if m.uncensored { ", its refusals taken out" } else { "" },
                     m.context,
                     m.speed.map(|s| format!("; lately {s:.1} tokens a second")).unwrap_or_default()
@@ -723,7 +727,7 @@ impl Assistant {
             } else {
                 let reading = turn.reading();
                 let t = time::uptime_ms();
-                let step = m.session.step(turn, m.read, &Serial);
+                let step = m.session.step(turn, m.read, &crate::cores::Cores);
                 let took = time::uptime_ms() - t;
                 // (A call that comes as the turn ends was never closed: the engine reads it as far as it got. If the
                 // round reached the most it says, it was cut off as it was written, and isn't run.)
@@ -880,11 +884,12 @@ impl Assistant {
         let chars = job.text.chars().count();
         let speed = (job.write_ms > 0).then(|| job.written as f64 * 1000.0 / job.write_ms as f64);
         crate::log!(
-            "Chat Computer kernel: model: answered ({chars} characters; {} tokens read in {:.1} s, {} written in {:.1} s)",
+            "Chat Computer kernel: model: answered ({chars} characters; {} tokens read in {:.1} s, {} written in {:.1} s{})",
             job.read,
             job.read_ms as f64 / 1000.0,
             job.written,
-            job.write_ms as f64 / 1000.0
+            job.write_ms as f64 / 1000.0,
+            crate::cores::shared()
         );
         if let (Brain::Ready(m), Some(s)) = (&mut self.brain, speed) {
             m.speed = Some(s);

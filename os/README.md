@@ -69,6 +69,17 @@ drivers.
     gives drivers short waits that work with interrupts off, and counts the time since start-up when it runs at
     one speed in every power state (an "invariant" one, as processors of the last 15 years or so have), since
     ticks are lost while interrupts are off;
+  * the processor's other cores (`cores.rs`), up to 64, for the model's arithmetic: each is reset (INIT) wherever
+    the firmware left it, then started as every x86 core starts, in 16-bit real mode at a page below 1 MiB named in
+    its start-up message. The code there takes it to protected mode, then to 64-bit mode with page tables made for the
+    switch, then into the kernel, on a stack of its own (128 KiB with nothing mapped below it), where it takes the
+    kernel's page tables and the first core's settings (its caches on, the vector registers and how they round, the
+    page attribute table), and a segment table and TSS of its own. Each start is taken by one core at most (a core
+    that starts late finds it taken and halts), and a core that doesn't start in time is left out. A core whose
+    vector registers aren't the first one's isn't used. The others run nothing but the model's arithmetic (below),
+    with interrupts off except while they sleep; a fault or a panic on one stops it, and the first core then stops
+    too, saying which core and why. Before the PC turns off or restarts they're reset again. `cores = 1` in the
+    settings uses the first core alone;
   * IOMMUs (Intel VT-d, AMD-Vi) the firmware left on are switched off. Chat Computer doesn't use them yet, and
     a firmware that protects itself from devices this way would otherwise keep them from Chat Computer's
     memory, and drop their interrupts;
@@ -174,16 +185,23 @@ drivers.
     have played it so far;
   * Chat Computer's own model (`assistant.rs`): the one Chat Computer's app got ready on Windows
     (`Users\NAME\AppData\Local\ai.chatcomputer.desktop\models\MODEL.ccm`, on Windows' drive or any other with
-    people's folders: of those that fit in memory, the biggest that answers quickly enough on one processor core, at
-    most 3.6 GB, which is Qwen3.5 4B; else the smallest), or the one the settings name (`model = ...`). Its file is read
+    people's folders: of those that fit in memory, the biggest that answers quickly enough, at most 3.6 GB, which is
+    Qwen3.5 4B, chosen when it ran on one processor core and not yet measured on all of them; else the smallest), or
+    the one the settings name (`model = ...`). Its file is read
     into memory a part at a time (the screen says how far), and its refusal direction beside it (`MODEL.refusal`,
     which the engine found when it got the model ready), so its refusals are taken out as it runs, as on Windows.
-    Chat Computer's own engine (`model/`, the same code as in the app) runs it on one processor core, with the fastest
-    arithmetic the processor has (AVX2, or AVX-VNNI). It works a step at a time from the main loop: part of what it's
-    asked read, or one token written, a few hundredths of a second each (as the processor allows), so the screen and
-    the keyboard go on meanwhile. Before the first question, it reads its instructions (the system prompt, with its
+    Chat Computer's own engine (`model/`, the same code as in the app) runs it on every processor core, with the
+    fastest arithmetic the processor has (AVX2, or VNNI's: AVX-VNNI, or AVX-512 VNNI on processors with AVX-512, such as
+    AMD's Zen 4, for which the kernel switches on AVX-512's registers). Each big step of its arithmetic is shared out
+    in jobs (rows of a matrix product, heads of attention), which every core takes from, the first included, as the
+    app's threads do; each job is one core's alone, so the answer is the same however many cores there are (checked:
+    `./check.py --model --cores 4`). Between steps the other cores wait a moment for the next, then sleep until the
+    first core's message wakes them, and the log says what share of the jobs they did. It works a step at a time
+    from the main loop: part of what it's asked read, or one token written, a few hundredths of a second each (as the
+    processor allows), so the screen and the keyboard go on meanwhile. Before the first question, it reads its instructions (the system prompt, with its
     tools) ahead, and keeps that reading for every conversation after. Each message it's given starts with when it
-    was sent; it doesn't think before answering (on one core, thinking would take minutes). It's given as much of the
+    was sent; it doesn't think before answering (it was decided when it ran on one core, where thinking would take
+    minutes; to be measured again on all of them). It's given as much of the
     conversation as the memory holds the reading of (up to 16,384 tokens): in a longer one, the oldest questions are
     left out, a third at a time; they stay on the screen and in the memory file. Its tools:
     * `computer_status`: what the computer is and how it's doing (processor, screen, firmware, Secure Boot,
@@ -415,9 +433,9 @@ laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs it
 Bluetooth comes at step 10.
 
 The model needs no internet. Starting up, it reads the model's file from Windows' drive into memory, which takes a
-moment (longer if BitLocker encrypts the drive: then type its recovery key when it asks). It runs on one processor
-core for now, so it answers slowly (how fast hasn't been measured on a real PC yet); using every core comes next
-(step 4).
+moment (longer if BitLocker encrypts the drive: then type its recovery key when it asks). It runs on every
+processor core (how fast hasn't been measured on a real PC yet). If the PC misbehaves as Chat Computer starts its
+other cores, `cores = 1` in `\EFI\chatcomputer-own\settings.txt` uses the first alone.
 
 To go back to Windows, press the power button (the PC turns off; hold it if a press doesn't), or ask Chat Computer to
 restart it. The only thing
@@ -446,12 +464,15 @@ cargo test -p font -p text -p net -p crypto -p tls -p fat -p exfat -p ntfs -p zi
                                  # xz), memory file, Markdown reader, chimes, HID descriptors and the AML
                                  # interpreter (needs acpica-tools: iasl and acpiexec)
 cargo test -p model --features std # the model engine (small models of random weights)
-./check.py                       # starts it in a virtual PC; checks the screen, the clock, and that the kernel's
-                                 # stack went no more than halfway down (--chat, --model and the drives' checks too)
-./check.py --cpu qemu64 --memory 4096 --size 1024x768
+./check.py                       # starts it in a virtual PC of 2 processor cores; checks the screen, the clock,
+                                 # that both cores were started, and that the kernel's stack went no more than
+                                 # halfway down (--chat, --model and the drives' checks too)
+./check.py --cpu qemu64 --memory 4096 --size 1024x768 --cores 4
 ./check.py --crash page-fault    # a kernel that faults on purpose: checks it stops cleanly
 ./check.py --crash panic
 ./check.py --crash stack         # one that calls itself until its stack runs out: it must say so
+./check.py --crash core          # another core panicking in the middle of the model's arithmetic: the first
+                                 # must stop too, and say which core and why
 ./check.py --keyboard            # typing on a PS/2 keyboard, then USB keyboards on a port and behind a
                                  # hub (MSI-X, MSI, no interrupts), with Intel's and AMD's IOMMUs
                                  # present, plugged in and out
@@ -460,7 +481,8 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # conversation (--card igb: just one of them)
 ./check.py --model               # the own model: a tiny one of random weights found where the app keeps its
                                  # models, read, its instructions read ahead, a question answered as the engine
-                                 # on Linux answers it; named by the settings; a file that isn't a model
+                                 # on Linux answers it, the other cores doing part of the arithmetic (--cores 4:
+                                 # three of them); named by the settings; a file that isn't a model
 ./check.py --chat                # typing to a test's script in place of the model: what it's given each round,
                                  # its tools (the computer's status, a bigger text size, a timer, a restart), the
                                  # answer on the screen (Markdown), a failure, a mouse's wheel scrolling; then an
@@ -570,7 +592,8 @@ PC.
    monitor, with Secure Boot on and Chat Computer's own key approved. Ready to try: see "Starting it on a PC".
 3. ✓ Keyboard: USB (the xHCI controllers, hubs and keyboards) and PS/2 (laptops' built-in keyboards).
    Checked in virtual PCs; on the real PC with step 2.
-4. All processor cores, programs kept apart from each other and from the kernel, and a scheduler.
+4. ✓ All processor cores, for the model's arithmetic (checked in virtual PCs of 2 and 4 cores: the same answer as
+   on one). To do: trying it on real PCs, programs kept apart from each other and from the kernel, and a scheduler.
 5. Storage: ✓ NVMe and SATA (the drive the PC started from), ✓ the conversation kept across restarts in a file on
    the start-up partition, ✓ Windows' drive read (NTFS), for the model to read the person's files (and its own).
    Checked in virtual PCs. ✓ Word, Excel and PowerPoint files' words. ✓ A drive BitLocker
@@ -590,7 +613,7 @@ PC.
    checked against the reference implementation, with nothing from elsewhere, so Chat Computer needs no account and
    no internet to think. ✓ The kernel runs it: the model's file read from Windows' drive into memory, the
    processor's vector registers (AVX) kept across interrupts, the answer a step at a time beside the screen and the
-   keyboard; checked in a virtual PC against the engine on Linux. To do: every core (step 4), the web (looking
+   keyboard; checked in a virtual PC against the engine on Linux; ✓ on every core. To do: the web (looking
    things up over its own HTTPS), and pictures and PDFs read.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting the model's answers use
    (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the

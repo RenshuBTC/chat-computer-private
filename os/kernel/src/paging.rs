@@ -39,6 +39,11 @@ pub const HEAP_END: u64 = 0xFFFF_F000_0000_0000;
 const STACK_TOP: u64 = 0xFFFF_F080_0000_0000;
 /// Where its pages start (0 until it's mapped).
 static STACK_BOTTOM: AtomicU64 = AtomicU64::new(0);
+/// The other processor cores' stacks: below the first's, in the same page-map slot, each in 2 MiB of its own with
+/// nothing mapped below it, and where each one's pages start (0: not mapped).
+const CORE_STACK_ROOM: u64 = 2 << 20;
+pub const MOST_CORES: usize = 64;
+static CORE_STACK_BOTTOMS: [AtomicU64; MOST_CORES] = [const { AtomicU64::new(0) }; MOST_CORES];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cache {
@@ -253,6 +258,23 @@ pub fn map_stack(pages: u64) -> u64 {
     STACK_TOP
 }
 
+/// Maps `pages` zeroed frames as the stack of processor core `core` (1 to MOST_CORES - 1: not the first, whose stack
+/// is the kernel's own), and returns its top.
+pub fn map_core_stack(core: usize, pages: u64) -> u64 {
+    assert!((1..MOST_CORES).contains(&core) && pages * PAGE_SIZE <= CORE_STACK_ROOM / 2);
+    let mut guard = TABLES.lock();
+    let t = guard.as_mut().expect("paging::init first");
+    let flags = PRESENT | WRITABLE | t.no_execute;
+    let top = STACK_TOP - core as u64 * CORE_STACK_ROOM;
+    let bottom = top - pages * PAGE_SIZE;
+    for page in (bottom..top).step_by(PAGE_SIZE as usize) {
+        let phys = memory::alloc_zeroed().expect("no memory for a processor core's stack");
+        t.map(page, phys, PAGE_SIZE, flags, false);
+    }
+    CORE_STACK_BOTTOMS[core].store(bottom, Ordering::Relaxed);
+    top
+}
+
 /// How deep the kernel's own stack has gone, at most, and how big it is, in bytes. Its pages started zeroed, so the
 /// lowest word that isn't zero is as deep as anything has written (a little short if the deepest words written were
 /// zeros); measured, where a count of nested calls would be only a guess at it.
@@ -268,10 +290,11 @@ pub fn stack_used() -> (u64, u64) {
     (STACK_TOP - at, STACK_TOP - bottom)
 }
 
-/// Whether `address` is just past the end of the kernel's own stack: where a fault means it ran out.
+/// Whether `address` is just past the end of the kernel's own stack, or another core's: where a fault means it ran
+/// out.
 pub fn past_stack(address: u64) -> bool {
-    let bottom = STACK_BOTTOM.load(Ordering::Relaxed);
-    bottom != 0 && address < bottom && address >= bottom - (1 << 20)
+    let past = |bottom: u64| bottom != 0 && address < bottom && address >= bottom - (1 << 20);
+    past(STACK_BOTTOM.load(Ordering::Relaxed)) || CORE_STACK_BOTTOMS.iter().any(|b| past(b.load(Ordering::Relaxed)))
 }
 
 /// Whether `phys` to `phys + len` is RAM, reached at PHYS_OFFSET (the firmware's own RAM too: its ACPI tables' and

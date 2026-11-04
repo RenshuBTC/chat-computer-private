@@ -15,8 +15,12 @@ log go to out/.
                                      report descriptors (and by the boot protocol in a build told to); a
                                      smart card reader left alone
     ./check.py --crash page-fault    a kernel that faults on purpose once ready: it must stop cleanly,
-                                     with the fault in its log and a message on the screen (also: panic; and
-                                     stack, one that calls itself until its stack runs out, which must be said)
+                                     with the fault in its log and a message on the screen (also: panic; stack,
+                                     one that calls itself until its stack runs out, which must be said; and core,
+                                     a processor core other than the first panicking in the middle of the model's
+                                     arithmetic, which the first must then show)
+    ./check.py --cores 4             any check with a virtual PC of that many processor cores (2 if not said), every
+                                     one of which the kernel must start and use
     ./check.py --network             the network, with each kind of card there's a driver for (virtio, Intel's
                                      e1000e, e1000 and igb, a USB network adapter by CDC ECM, plugged in once the
                                      kernel is running and then unplugged, and by RNDIS): an address from DHCP, a
@@ -106,6 +110,8 @@ VARS = OVMF / "OVMF_VARS_4M.fd"
 CODE_SECURE = OVMF / "OVMF_CODE_4M.secboot.fd"
 VARS_MICROSOFT = OVMF / "OVMF_VARS_4M.ms.fd"  # Microsoft's keys enrolled, Secure Boot on: like a PC from a shop
 CHATCOMPUTER_KEY_OWNER = "1dd7d236-3557-417b-b0ab-6cf839b24829"  # who added the key, as recorded in db
+# The virtual PCs' processor cores (--cores), unless a check says otherwise.
+CORES = 2
 
 
 def build(test: str | None = None, extra: dict[str, str] | None = None) -> None:
@@ -244,6 +250,7 @@ class VirtualPC:
             "-monitor", f"unix:{self.mon},server,nowait",
             "-net", "none",
             "-no-reboot",
+            *(() if "-smp" in extra else ("-smp", str(CORES))),
             *extra,
         ])
 
@@ -358,15 +365,25 @@ def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None
         pc.stop()
     text = pc.text()
     print(text)
-    problems = check_screen(a, b, args.size) + stack_problems(text)
+    problems = check_screen(a, b, args.size) + stack_problems(text) + cores_problems(text)
     if expect_secure and "Chat Computer kernel: Secure Boot on" not in text:
         problems.append("the kernel didn't see Secure Boot on")
     return problems
 
 
+def cores_problems(log: str) -> list[str]:
+    """Every processor core of the virtual PC started and used."""
+    want = f"processor cores: {CORES} in use"
+    return [] if want in log else [f"the kernel didn't say {want!r}"]
+
+
 def crash(kind: str, args) -> list[str]:
+    global CORES
     expected = {"page-fault": "Chat Computer kernel stopped: Page fault", "panic": "Chat Computer kernel stopped: panicked",
-                "stack": "Chat Computer kernel stopped: The kernel's stack ran out"}[kind]
+                "stack": "Chat Computer kernel stopped: The kernel's stack ran out",
+                "core": "processor core 1 stopped: panicked at"}[kind]
+    if kind == "core":
+        CORES = max(CORES, 2)
     build(kind)
     try:
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu)
@@ -380,7 +397,10 @@ def crash(kind: str, args) -> list[str]:
         build()  # never leave a kernel that crashes on purpose in out/
     text = pc.text()
     print(text)
-    return [] if got and expected in text else [f"expected {expected!r} in the log"]
+    problems = [] if got and expected in text else [f"expected {expected!r} in the log"]
+    if kind == "core" and "Chat Computer kernel stopped: panicked" not in text:
+        problems.append("the first core didn't stop after the other did")
+    return problems
 
 
 # What `keyboard` types (QEMU key names), and the line that should come out: Shift, Backspace and Caps
@@ -956,7 +976,12 @@ def model_check(args) -> list[str]:
             pc.stop()
         text = pc.text()
         print(text)
-        problems += stack_problems(text)
+        problems += stack_problems(text) + cores_problems(text)
+        if CORES > 1:
+            # The other cores took part in the model's arithmetic (the answer, below, the same as on one).
+            share = re.search(r"model: answered .*on (\d+) processor cores, the others doing (\d+)% of the jobs shared", text)
+            if not share or int(share[1]) != CORES or int(share[2]) == 0:
+                problems.append("the other processor cores didn't share the model's arithmetic")
         path = "D:\\Users\\Test\\AppData\\Local\\ai.chatcomputer.desktop\\models\\qwen3.5-tiny.ccm"
         if f"model: reading Qwen3.5 TINY (1 MB) from {path}" not in text:
             problems.append("the model's file wasn't found where Chat Computer's app keeps it")
@@ -2121,7 +2146,8 @@ def main() -> int:
     ap.add_argument("--cpu", default="max", help="QEMU CPU model")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--timeout", type=float, default=240)
-    ap.add_argument("--crash", choices=["page-fault", "panic", "stack"])
+    ap.add_argument("--crash", choices=["page-fault", "panic", "stack", "core"])
+    ap.add_argument("--cores", type=int, default=2, help="the virtual PC's processor cores")
     ap.add_argument("--keyboard", action="store_true", help="USB keyboards: on a port, behind a hub, plugged in and out")
     ap.add_argument("--network", action="store_true", help="each network card there's a driver for: DHCP, DNS and TCP")
     ap.add_argument("--card", action="append", choices=[c[0] for c in CARDS], help="with --network: only this card")
@@ -2138,6 +2164,8 @@ def main() -> int:
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
     args = ap.parse_args()
+    global CORES
+    CORES = max(1, args.cores)
 
     if args.crash:
         problems = crash(args.crash, args)

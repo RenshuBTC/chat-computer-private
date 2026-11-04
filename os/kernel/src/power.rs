@@ -101,6 +101,7 @@ pub fn due() {
 pub fn turn_off() -> ! {
     crate::log!("Chat Computer kernel: turning off");
     cpu::disable_interrupts();
+    crate::cores::park();
     crate::keep::shut_down();
     // The firmware's own preparation, which can say S5's sleep types too.
     let types = crate::firmware::before_turning_off();
@@ -168,6 +169,7 @@ unsafe fn enter_s5(s: &SoftOff) {
 pub fn restart() -> ! {
     crate::log!("Chat Computer kernel: restarting");
     cpu::disable_interrupts();
+    crate::cores::park();
     crate::keep::shut_down();
     let reset = *RESET.lock();
     if let Some(r) = reset {

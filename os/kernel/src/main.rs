@@ -17,6 +17,7 @@ mod apic;
 mod assistant;
 mod chat;
 mod clock;
+mod cores;
 mod cpu;
 mod dma;
 mod draw;
@@ -71,7 +72,14 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     gdt::init();
     idt::init();
     log!("Chat Computer kernel: own segment and interrupt tables loaded");
-    log!("Chat Computer kernel: AVX {}", if cpu::enable_avx() { "on" } else { "not on this processor" });
+    log!(
+        "Chat Computer kernel: AVX {}",
+        match cpu::enable_avx() {
+            (true, true) => "on, and AVX-512's registers",
+            (true, false) => "on",
+            _ => "not on this processor",
+        }
+    );
     log!(
         "Chat Computer kernel: Secure Boot {}",
         match info.secure_boot {
@@ -184,6 +192,9 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         if measured { "" } else { " (assumed)" },
         time::uptime_by()
     );
+    // The other processor cores, for the model's arithmetic: before the firmware's memory is reused (where it may
+    // have left them waiting).
+    log!("Chat Computer kernel: {}", cores::start(&acpi, info, settings.cores));
 
     let (iommus, left_on) = iommu::take_over(&acpi);
     if iommus > 0 {
@@ -240,6 +251,10 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         }
         // (A timer, as the model's reminders tool sets one.)
         Some("sound") => log!("Chat Computer kernel: test: {}", schedule::timer(2.0, "tea").unwrap_or_else(|e| e)),
+        Some("core") => {
+            log!("Chat Computer kernel: test: a core other than the first stopping");
+            cores::test_stop();
+        }
         _ => {}
     }
 
@@ -283,6 +298,7 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         firmware::work();
         chat::tick();
         power::due();
+        cores::check();
         if time::uptime_ms() >= stack_checked + 1000 {
             stack_checked = time::uptime_ms();
             log_stack(&mut stack_shown);
@@ -324,6 +340,9 @@ pub extern "C" fn rust_eh_personality() {}
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     cpu::disable_interrupts();
+    if !cores::is_first() {
+        cores::stop_here(format_args!("{info}"));
+    }
     serial::write_anyway(format_args!("\nChat Computer kernel stopped: {info}\n"));
     let place = info.location().map_or(("?", 0), |l| (l.file(), l.line()));
     chat::show_stop("an internal error", format_args!("{} ({}, line {}).", info.message(), place.0, place.1));

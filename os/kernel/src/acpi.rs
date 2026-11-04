@@ -37,6 +37,8 @@ pub struct Acpi {
     pub local_apic: u64,
     /// Processor cores the firmware says are present and enabled.
     pub cores: u32,
+    /// Their interrupt controllers' ids (the first core's among them), in the firmware's order, each once.
+    pub core_ids: Vec<u32>,
     pub io_apics: [IoApic; 8],
     pub io_apic_count: usize,
     pub has_legacy_pics: bool,
@@ -259,6 +261,14 @@ impl Acpi {
         acpi
     }
 
+    /// A processor core, enabled (listed once even if a firmware lists it twice, as a local APIC and an x2APIC).
+    fn add_core(&mut self, id: u32) {
+        if !self.core_ids.contains(&id) {
+            self.core_ids.push(id);
+            self.cores += 1;
+        }
+    }
+
     /// The MADT: interrupt controllers and processor cores.
     fn read_madt(&mut self, t: &[u8]) {
         self.local_apic = u32_at(t, 36) as u64;
@@ -270,9 +280,11 @@ impl Acpi {
                 break;
             }
             let e = &t[at..at + len];
+            // (A processor whose entry isn't marked enabled is absent, or one the firmware could only bring online
+            // later: left alone.)
             match kind {
-                0 if u32_at(e, 4) & 1 != 0 => self.cores += 1, // processor local APIC, enabled
-                9 if u32_at(e, 8) & 1 != 0 => self.cores += 1, // processor local x2APIC, enabled
+                0 if len >= 8 && u32_at(e, 4) & 1 != 0 => self.add_core(u8_at(e, 3) as u32), // processor local APIC
+                9 if len >= 16 && u32_at(e, 8) & 1 != 0 => self.add_core(u32_at(e, 4)), // processor local x2APIC
                 1 if self.io_apic_count < self.io_apics.len() => {
                     self.io_apics[self.io_apic_count] =
                         IoApic { id: u8_at(e, 2), address: u32_at(e, 4) as u64, first_interrupt: u32_at(e, 8) };

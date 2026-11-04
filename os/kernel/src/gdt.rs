@@ -1,8 +1,11 @@
 //! The kernel's own segment table (GDT) and task state segment (TSS). In 64-bit mode segments do
 //! little, but the processor still needs them: a code segment, a data segment, and a TSS whose
-//! separate stacks catch the faults that can't run on a broken stack.
+//! separate stacks catch the faults that can't run on a broken stack. Each processor core has a table and a TSS of
+//! its own (a core's TSS is marked busy while it uses it), with stacks of its own.
 
 use crate::sync::Static;
+use alloc::alloc::{alloc_zeroed, Layout};
+use alloc::boxed::Box;
 use core::arch::asm;
 use core::mem::size_of;
 
@@ -28,12 +31,15 @@ struct Tss {
 
 const _: () = assert!(size_of::<Tss>() == 104);
 
-#[repr(C, align(16))]
-struct Stack([u8; 16 * 1024]);
+const STACK_SIZE: usize = 16 * 1024;
 
-static TSS: Static<Tss> =
-    Static::new(Tss { reserved0: 0, rsp: [0; 3], reserved1: 0, ist: [0; 7], reserved2: 0, reserved3: 0, iomap_base: 104 });
-static STACKS: Static<[Stack; 3]> = Static::new([const { Stack([0; 16 * 1024]) }; 3]);
+#[repr(C, align(16))]
+struct Stack([u8; STACK_SIZE]);
+
+const EMPTY_TSS: Tss = Tss { reserved0: 0, rsp: [0; 3], reserved1: 0, ist: [0; 7], reserved2: 0, reserved3: 0, iomap_base: 104 };
+
+static TSS: Static<Tss> = Static::new(EMPTY_TSS);
+static STACKS: Static<[Stack; 3]> = Static::new([const { Stack([0; STACK_SIZE]) }; 3]);
 static GDT: Static<[u64; 7]> = Static::new([0; 7]);
 
 #[repr(C, packed)]
@@ -42,23 +48,38 @@ struct Pointer {
     base: u64,
 }
 
+/// The first core's tables (its stacks are the kernel's own memory, there being no heap yet).
 pub fn init() {
+    unsafe { load(GDT.get(), TSS.get(), STACKS.get() as u64) }
+}
+
+/// The tables of a core other than the first: on the heap, for good.
+pub fn init_core() {
+    let gdt: *mut [u64; 7] = Box::leak(Box::new([0u64; 7]));
+    let tss: *mut Tss = Box::leak(Box::new(EMPTY_TSS));
+    let stacks = unsafe { alloc_zeroed(Layout::from_size_align(3 * STACK_SIZE, 4096).expect("the stacks' layout")) };
+    assert!(!stacks.is_null(), "no memory for a processor core's own stacks");
+    unsafe { load(gdt, tss, stacks as u64) }
+}
+
+/// Fills in the table `gdt` with the TSS `tss`, whose stacks for faults are the three from `stacks` up, and has this
+/// core use them.
+unsafe fn load(gdt: *mut [u64; 7], tss: *mut Tss, stacks: u64) {
     unsafe {
-        let stacks = STACKS.get() as u64;
         let mut ist = [0u64; 7];
         for (i, top) in ist.iter_mut().take(3).enumerate() {
-            *top = stacks + (i as u64 + 1) * size_of::<Stack>() as u64; // stacks grow down
+            *top = stacks + (i as u64 + 1) * STACK_SIZE as u64; // stacks grow down
         }
-        (*TSS.get()).ist = ist;
+        (*tss).ist = ist;
 
-        let base = TSS.get() as u64;
+        let base = tss as u64;
         let limit = (size_of::<Tss>() - 1) as u64;
         let tss_low = (limit & 0xFFFF)
             | (base & 0xFF_FFFF) << 16
             | 0x89 << 40 // present, 64-bit TSS (available)
             | ((limit >> 16) & 0xF) << 48
             | ((base >> 24) & 0xFF) << 56;
-        *GDT.get() = [
+        *gdt = [
             0,
             0x00AF_9A00_0000_FFFF, // kernel code: 64-bit, ring 0
             0x00CF_9200_0000_FFFF, // kernel data
@@ -68,7 +89,7 @@ pub fn init() {
             base >> 32,
         ];
 
-        let pointer = Pointer { limit: (size_of::<[u64; 7]>() - 1) as u16, base: GDT.get() as u64 };
+        let pointer = Pointer { limit: (size_of::<[u64; 7]>() - 1) as u16, base: gdt as u64 };
         asm!("lgdt [{}]", in(reg) &pointer, options(readonly, nostack, preserves_flags));
         // Reload the code segment with a far return to the next instruction.
         asm!(

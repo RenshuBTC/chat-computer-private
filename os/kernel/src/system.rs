@@ -38,6 +38,7 @@ pub fn status() -> String {
     let mut lines: Vec<String> = Vec::new();
     if let Some(f) = FACTS.lock().as_ref() {
         lines.push(format!("Processor: {}", f.cpu));
+        lines.push(crate::cores::status());
         let (w, h) = f.screen;
         lines.push(match f.diagonal_in {
             Some(d) => format!("Screen: {w} by {h} pixels, {d} inches"),
@@ -93,8 +94,8 @@ pub fn status() -> String {
     lines.push(String::from(
         "Not yet in Chat Computer's own system: the web, changing files (it reads Windows' drives and USB drives, and \
          writes only its own memory file), seeing pictures and reading PDFs, Office's files from before 2007, sound \
-         other than its chimes (no speech, music or microphones), Wi-Fi, Bluetooth, sleep (it can turn off), the \
-         screen's brightness, and the other processor cores",
+         other than its chimes (no speech, music or microphones), Wi-Fi, Bluetooth, sleep (it can turn off), and the \
+         screen's brightness",
     ));
     lines.join("\n")
 }

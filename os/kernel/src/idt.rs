@@ -13,6 +13,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const TIMER_VECTOR: u8 = 0x30;
 pub const APIC_ERROR_VECTOR: u8 = 0x31;
+/// The first core's message to the others that there's work for them (cores.rs): nothing to do but acknowledge it.
+pub const WAKE_VECTOR: u8 = 0x32;
 pub const SPURIOUS_VECTOR: u8 = 0xFF;
 /// Vectors for devices' interrupt messages, each with its driver's handler.
 pub const DEVICE_VECTORS: core::ops::Range<u8> = 0x40..0x50;
@@ -170,6 +172,11 @@ pub fn init() {
             reserved: 0,
         };
     }
+    load();
+}
+
+/// Has this core use the interrupt table (every core uses the same one).
+pub fn load() {
     let pointer = Pointer { limit: (size_of::<[Gate; 256]>() - 1) as u16, base: IDT.get() as u64 };
     unsafe { asm!("lidt [{}]", in(reg) &pointer, options(readonly, nostack, preserves_flags)) };
 }
@@ -217,6 +224,8 @@ extern "C" fn interrupt_dispatch(frame: &mut Frame) {
     } else if vector == TIMER_VECTOR as u64 {
         time::tick();
         apic::end_of_interrupt();
+    } else if vector == WAKE_VECTOR as u64 {
+        apic::end_of_interrupt();
     } else if vector == APIC_ERROR_VECTOR as u64 {
         crate::log!("Chat Computer kernel: the interrupt controller reported error {:#x}", apic::error_status());
         apic::end_of_interrupt();
@@ -243,6 +252,13 @@ fn exception(f: &Frame) -> ! {
     } else {
         EXCEPTIONS[f.vector as usize]
     };
+    if !crate::cores::is_first() {
+        // (Another core's: it stops, and says why; the first core shows it, and stops too.)
+        crate::cores::stop_here(format_args!(
+            "{name} (vector {}, error {:#x}, at {:#x}, address {:#x}, stack {:#x})",
+            f.vector, f.error, f.rip, crate::cpu::cr2(), f.rsp
+        ));
+    }
     crate::serial::write_anyway(format_args!(
         "\nChat Computer kernel stopped: {name} (vector {}, error {:#x})\n\
          rip {:#018x}  cs {:#x}  rflags {:#x}  rsp {:#018x}  ss {:#x}\n\

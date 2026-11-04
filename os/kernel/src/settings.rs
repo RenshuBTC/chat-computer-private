@@ -8,6 +8,8 @@
 //!     memory-id = 1a2b3c4d              the memory file's id (its tags carry it: remember crate), in hex
 //!     firmware-programs = off           don't run the firmware's own programs (ACPI's AML: firmware.rs), for a PC
 //!                                       whose firmware does something odd with them
+//!     cores = 1                         use at most this many of the processor's cores (cores.rs; all, without it),
+//!                                       for a PC whose other cores don't start well
 //!
 //! A Claude API key an older setup put there (claude-api-key) is no longer used, nor logged.
 
@@ -24,6 +26,8 @@ pub struct Settings {
     pub memory_id: Option<u32>,
     /// Run the firmware's own programs (on unless the settings say off).
     pub firmware_programs_off: bool,
+    /// The most processor cores to use (all, if not said).
+    pub cores: Option<usize>,
     /// How many lines weren't understood (their words aren't logged: one might be a key).
     pub not_understood: usize,
 }
@@ -68,6 +72,12 @@ pub fn parse(bytes: &[u8]) -> Settings {
             "memory-id" => {
                 s.memory_id = u32::from_str_radix(value, 16).ok().filter(|&id| id != 0);
                 if s.memory_id.is_none() {
+                    s.not_understood += 1;
+                }
+            }
+            "cores" => {
+                s.cores = value.parse::<usize>().ok().filter(|&n| n >= 1);
+                if s.cores.is_none() {
                     s.not_understood += 1;
                 }
             }

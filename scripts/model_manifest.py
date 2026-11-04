@@ -6,7 +6,9 @@ checked against what was pinned here, not against what a server says at the time
 
 Run again to move to a newer revision (change REVISIONS first). The files kept are the ones the converter reads:
 the settings, the tokenizer, the chat template, and the weights (their shards hold the vision part too, which the
-converter leaves out).
+converter keeps). Each model says whether it sees ("sees": its config.json has a vision part the engine runs, as
+os/model's convert.rs decides): a file of one that sees made without that part (before the engine kept it) is made
+again by Chat Computer's apps.
 """
 import json
 import os
@@ -51,6 +53,14 @@ def files_of(repo: str, revision: str) -> list[dict]:
     return sorted(out, key=lambda f: f["name"])
 
 
+def sees(repo: str, revision: str) -> bool:
+    """Whether the model has a vision part the engine runs: config.json's vision_config, without features taken
+    from its middle into the language model's first layers (deepstack_visual_indexes), as convert.rs decides."""
+    with urllib.request.urlopen(f"https://huggingface.co/{repo}/resolve/{revision}/config.json", timeout=60) as r:
+        vision = json.load(r).get("vision_config")
+    return bool(vision) and not vision.get("deepstack_visual_indexes")
+
+
 def main() -> None:
     models = []
     for name, (label, repo, revision, memory, bits) in REVISIONS.items():
@@ -58,7 +68,7 @@ def main() -> None:
         weights = sum(f["size"] for f in files if f["name"].endswith(".safetensors"))
         print(f"{name}: {len(files)} files, {weights / 1e9:.1f} GB of weights")
         models.append({"name": name, "label": label, "repo": repo, "revision": revision, "memory_gb": memory,
-                       "bits": bits, "files": files})
+                       "bits": bits, "sees": sees(repo, revision), "files": files})
     with open(OUT, "w") as f:
         json.dump({"models": models}, f, indent=1)
         f.write("\n")

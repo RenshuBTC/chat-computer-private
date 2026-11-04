@@ -165,6 +165,15 @@ async def stream(port: int, body: dict[str, Any]) -> AsyncIterator[dict[str, Any
             await writer.wait_closed()
 
 
+def _identity(path: str) -> tuple[int, int] | None:
+    """Which file is at `path`, and when it was written: a file made again in its place is another."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_ino, st.st_mtime_ns
+
+
 class ModelService:
     """The model that thinks: which one (the settings: models.chosen), getting it onto this computer (models.Store,
     in the background) and its server. on_progress is told how getting it ready goes (from another thread).
@@ -186,6 +195,7 @@ class ModelService:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._uncensoring: threading.Thread | None = None
+        self._served: tuple[int, int] | None = None   # (the file served: which it is, and when it was written)
         self._uncensor_tried: set[str] = set()     # (once a run: one that didn't work isn't tried again until the next)
 
     def serving(self) -> models.Model | None:
@@ -211,7 +221,10 @@ class ModelService:
         return (self.serving() or self.model).label
 
     def prepare_in_background(self) -> None:
-        if self.ready or (self._thread and self._thread.is_alive()):
+        """Gets the chosen model ready in the background (another here answering meanwhile, if one is): one that
+        isn't here, or one made before the engine kept the part that sees (made again)."""
+        here = self.store.ready(self.model) and not self.store.outdated(self.model)
+        if here or (self._thread and self._thread.is_alive()):
             return
         self._stop.clear()
         model, progress = self.model, self.progress
@@ -244,7 +257,7 @@ class ModelService:
     async def ensure(self) -> int:
         """The server's port, once it's running with the model; NotReady while the model is being got ready (and no
         other is here to answer meanwhile)."""
-        if not self.store.ready(self.model):
+        if not self.store.ready(self.model) or self.store.outdated(self.model):
             self.prepare_in_background()
         f = self.file()
         m = self.serving()
@@ -256,11 +269,15 @@ class ModelService:
         uncensored = self.store.uncensored(m)
         if not uncensored:
             self.uncensor_in_background(m)
-        if self.server is None or self.server.model != f or self.server.uncensored != uncensored:
+        # (A file made again has the same name: it's told apart by what the system says of it.)
+        made = _identity(f)
+        if self.server is None or self.server.model != f or self.server.uncensored != uncensored or \
+                self._served != made:
             if self.server:
                 await self.server.stop()
             self.server = ModelServer(program, f, self.port, self.threads, log_file=str(self.paths.logs / "model.log"),
                                       cache=str(self.store.root / "cache"), uncensored=uncensored)
+            self._served = made
         await self.server.start()
         return self.server.port
 

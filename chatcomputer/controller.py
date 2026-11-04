@@ -239,12 +239,19 @@ class Controller:
                    f"only do simple things like Wi-Fi, volume and switching to {self.platform.other_os}.")
             self.screen.notice(msg)
             self._spawn(self._say_on_headphones(msg))
-        elif self.model.serving() != self.model.model:
-            # A bigger model than the one here suits this computer: it's got ready in the background, and the one
-            # here answers meanwhile.
+        elif self.model.serving() != self.model.model or self.model.store.outdated(self.model.model):
             m = self.model.model
-            self.screen.notice(f"Getting a better model ready in the background ({m.label}, a download of about "
-                               f"{m.download_bytes / 1e9:.0f} GB). {self.model.label} answers until then.")
+            if self.model.serving() != m:
+                # A bigger model than the one here suits this computer: it's got ready in the background, and the
+                # one here answers meanwhile.
+                self.screen.notice(f"Getting a better model ready in the background ({m.label}, a download of about "
+                                   f"{m.download_bytes / 1e9:.0f} GB). {self.model.label} answers until then.")
+            else:
+                # Its file was made before the engine kept the part that sees: it's made again in the background,
+                # and it answers meanwhile.
+                self.screen.notice(f"Making {m.label} again so it can see pictures (its file was made before it "
+                                   f"could): a download of about {m.download_bytes / 1e9:.0f} GB, in the background. "
+                                   f"It answers meanwhile.")
             self.model.prepare_in_background()
             if self.greet and self.voice_enabled and not self.locked:
                 first = (s.user_name or "").split(" ")[0]

@@ -7,6 +7,7 @@
    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
    "memory_gb": 48,
    "bits": 4,
+   "sees": true,
    "files": [
     {
      "name": "chat_template.jinja",
@@ -132,6 +133,7 @@
    "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
    "memory_gb": 32,
    "bits": 4,
+   "sees": true,
    "files": [
     {
      "name": "chat_template.jinja",
@@ -297,6 +299,7 @@
    "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
    "memory_gb": 16,
    "bits": 4,
+   "sees": true,
    "files": [
     {
      "name": "chat_template.jinja",
@@ -347,6 +350,7 @@
    "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
    "memory_gb": 8,
    "bits": 4,
+   "sees": true,
    "files": [
     {
      "name": "chat_template.jinja",
@@ -387,6 +391,7 @@
    "revision": "15852e8c16360a2fea060d615a32b45270f8a8fc",
    "memory_gb": 4,
    "bits": 4,
+   "sees": true,
    "files": [
     {
      "name": "chat_template.jinja",
@@ -422,6 +427,7 @@
    "revision": "2fc06364715b967f1860aea9cf38778875588b17",
    "memory_gb": 0,
    "bits": 8,
+   "sees": true,
    "files": [
     {
      "name": "chat_template.jinja",

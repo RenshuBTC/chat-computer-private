@@ -144,6 +144,8 @@ class FakeModelService:
         self.model = SimpleNamespace(label="Qwen (test)", name="test", download_bytes=10**9)
         self.progress = Progress(stage="downloading", done_bytes=4 * 10**8, total_bytes=10**9)
         self.prepared = 0
+        self.outdated = False          # (its file made before the engine kept the part that sees)
+        self.store = SimpleNamespace(outdated=lambda m: self.outdated)
 
     def serving(self):
         return self.model if self.ready else None

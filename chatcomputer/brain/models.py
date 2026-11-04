@@ -7,6 +7,8 @@ there (a download that stops carries on where it stopped), each checked against 
 engine converts them into its own file (the weights in 4 or 8 bits) and the downloads are removed. Last, the engine
 finds the direction the model refuses along, kept beside its file, and takes it out as the model runs: the model
 answers what it's asked (os/model/src/refusal.rs; a model got ready before that has it found when it's next used).
+A file made before the engine kept the part of the model that sees (none of that part, for a model that sees, and
+no converter said it made it) is made again the same way, the one there answering meanwhile.
 
 Which one: as big as this computer's memory runs well and its disk has room to get ready (pick).
 """
@@ -47,6 +49,7 @@ class Model:
     memory_gb: int
     bits: int
     files: tuple[dict[str, Any], ...] = field(default=())
+    sees: bool = False            # (its weights have a vision part the engine runs: the catalogue says)
 
     @property
     def download_bytes(self) -> int:
@@ -54,14 +57,16 @@ class Model:
 
     @property
     def file_bytes(self) -> int:
-        """About how big its own file is: its weights at `bits` a weight (less the vision part, which isn't kept)."""
+        """About how big its own file is: its weights at `bits` a weight (the vision part's, a few in a hundred of
+        them, at 8 even in a 4-bit model: a little more than this says), as the engine's prepare.rs reckons."""
         weights = sum(int(f["size"]) for f in self.files if f["name"].endswith(".safetensors"))
-        return int(weights / 2 * (self.bits + 0.5) / 8 * 0.95)
+        return int(weights / 2 * (self.bits + 0.5) / 8 * 1.02)
 
 
 def catalogue() -> list[Model]:
     data = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    return [Model(m["name"], m["label"], m["repo"], m["revision"], m["memory_gb"], m["bits"], tuple(m["files"]))
+    return [Model(m["name"], m["label"], m["repo"], m["revision"], m["memory_gb"], m["bits"], tuple(m["files"]),
+                  bool(m.get("sees")))
             for m in data["models"]]
 
 
@@ -151,6 +156,31 @@ def engine_program(models_dir: Path | None = None) -> str | None:
     return None
 
 
+def settings_of(path: Path) -> str | None:
+    """A model file's settings (its "config" entry: key=value lines), read from the file's start and its table
+    (os/model/src/file.rs): None if it isn't a model file."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+            if len(head) < 12 or head[:8] != b"CCMODEL1":
+                return None
+            n = int.from_bytes(head[8:12], "little")
+            if n > 64 << 20:
+                return None
+            for line in f.read(n).decode("utf-8").splitlines():
+                parts = line.split(" ")
+                if parts[0] == "config" and len(parts) == 5:
+                    offset, size = int(parts[3]), int(parts[4])
+                    if size > 1 << 20:
+                        return None
+                    f.seek((12 + n + 63) // 64 * 64 + offset)    # (the data starts at the next multiple of 64)
+                    data = f.read(size)
+                    return data.decode("utf-8") if len(data) == size else None
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return None
+
+
 @dataclass
 class Progress:
     """How getting a model ready is going (for the screen)."""
@@ -192,6 +222,16 @@ class Store:
     def downloads(self, m: Model) -> Path:
         return self.root / f"download-{m.name}"
 
+    def outdated(self, m: Model) -> bool:
+        """Whether its file was made before the engine kept the part that sees, for a model that sees: the file has
+        none of it, and no converter's said it made it. Such a file is made again (the engine's prepare.rs too)."""
+        f = self.ready(m)
+        settings = settings_of(f) if f and m.sees else None
+        if settings is None:
+            return False
+        keys = [line.split("=", 1)[0].strip() for line in settings.splitlines() if "=" in line]
+        return not any(k == "converter" or k.startswith("vision.") for k in keys)
+
     def refusal_path(self, m: Model) -> Path:
         """Where the engine keeps the direction the model refuses along (beside its file: the engine looks there)."""
         return self.root / f"{m.name}.refusal"
@@ -207,10 +247,10 @@ class Store:
 
     def uncensor(self, m: Model, model_file: Path, progress: Progress, stop: threading.Event | None = None,
                  on_change: Callable[[Progress], None] | None = None, program: str | None = None,
-                 threads: int | None = None) -> bool:
-        """Has the engine find the direction the model refuses along and keep it beside its file (find-refusal);
-        whether that worked. From a few minutes for the small models to half an hour or so for the biggest, at a
-        lower priority than everything else (Chat Computer may be answering meanwhile)."""
+                 threads: int | None = None, out: Path | None = None) -> bool:
+        """Has the engine find the direction the model refuses along and keep it beside its file (find-refusal; or
+        in `out`); whether that worked. From a few minutes for the small models to half an hour or so for the
+        biggest, at a lower priority than everything else (Chat Computer may be answering meanwhile)."""
         stop = stop or threading.Event()
         tell = on_change or (lambda p: None)
         program = program or engine_program(self.root.parent)
@@ -218,7 +258,7 @@ class Store:
             return False
         progress.stage, progress.step, progress.steps = "uncensoring", 0, 0
         tell(progress)
-        args = [program, "find-refusal", str(model_file), "--out", str(self.refusal_path(m))]
+        args = [program, "find-refusal", str(model_file), "--out", str(out or self.refusal_path(m))]
         if threads:
             args += ["--threads", str(threads)]
         nice = {"preexec_fn": lambda: os.nice(10)} if hasattr(os, "nice") else {}
@@ -265,22 +305,26 @@ class Store:
 
     def prepare(self, m: Model, progress: Progress, stop: threading.Event | None = None,
                 on_change: Callable[[Progress], None] | None = None, program: str | None = None) -> Path:
-        """Downloads (or carries on downloading) and converts the model; its file. Raises on failure (progress says
-        why too)."""
+        """Downloads (or carries on downloading) and converts the model; its file. One made before the engine kept
+        the part that sees is made again, the one there answering meanwhile (it's replaced once the new one is
+        finished: the engine serving it keeps reading the old one until it's started again). Raises on failure
+        (progress says why too)."""
         stop = stop or threading.Event()
         tell = on_change or (lambda p: None)
         try:
             done = self.ready(m)
-            if done:
+            if done and not self.outdated(m):
                 progress.stage = "ready"
                 tell(progress)
                 return done
+            again = done is not None
             program = program or engine_program(self.root.parent)
             if not program:
                 raise RuntimeError("Chat Computer's model engine isn't installed")
             need = self.needed_bytes(m)
             if self.free_bytes() < need:
-                raise RuntimeError(f"it needs {need / 1e9:.1f} GB of free space and there's "
+                why = " to be made again so it can see pictures" if again else ""
+                raise RuntimeError(f"it needs {need / 1e9:.1f} GB of free space{why} and there's "
                                    f"{self.free_bytes() / 1e9:.1f} GB")
             d = self.downloads(m)
             d.mkdir(parents=True, exist_ok=True)
@@ -297,11 +341,21 @@ class Store:
             if r.returncode != 0:
                 raise RuntimeError("converting it failed: " + (r.stderr.strip().splitlines() or ["?"])[-1])
             # Its refusals found before it's ready, so it never answers with them (if this doesn't work, it's
-            # tried again when the model is next used).
-            self.uncensor(m, tmp, progress, stop, tell, program)
+            # tried again when the model is next used). Made again, beside the old one's (which isn't this file's)
+            # until it takes its place.
+            refusal = self.refusal_path(m)
+            if again:
+                refusal = refusal.with_name(refusal.name + ".new")
+                refusal.unlink(missing_ok=True)
+            self.uncensor(m, tmp, progress, stop, tell, program, out=refusal)
             if stop.is_set():
                 raise RuntimeError("stopped")
             os.replace(tmp, out)
+            if again:
+                try:
+                    os.replace(refusal, self.refusal_path(m))
+                except OSError:
+                    self.refusal_path(m).unlink(missing_ok=True)
             shutil.rmtree(d, ignore_errors=True)
             progress.stage = "ready"
             tell(progress)

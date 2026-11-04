@@ -11,7 +11,12 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// The settings, as "key=value" lines, from config.json (its text model's part).
+/// Which converter made a file, as its settings say ("converter=2"): 2 since the vision part is kept. A file
+/// without the setting was made before (by 1), without the vision part: the model can't see with it, so Chat
+/// Computer's apps make it again (a model that sees, with none of that part, made by 1).
+pub const CONVERTER: u32 = 2;
+
+/// The settings, as "key=value" lines, from config.json (its text model's part), after which converter made them.
 pub fn settings(config: &Json) -> Result<String, String> {
     let t = config.get("text_config").unwrap_or(config);
     let num = |k: &str| t.get(k).and_then(Json::usize).ok_or_else(|| format!("config.json has no {k}"));
@@ -41,6 +46,7 @@ pub fn settings(config: &Json) -> Result<String, String> {
         s.push_str(&v);
         s.push('\n');
     };
+    put("converter", CONVERTER.to_string());
     put("arch", arch.to_string());
     put("hidden", num("hidden_size")?.to_string());
     put("layers", num("num_hidden_layers")?.to_string());

@@ -1232,8 +1232,8 @@ pub type Sight<'a> = &'a dyn Fn(usize, usize) -> (usize, usize);
 /// A file (read_file), from byte `from`: text as it is (UTF-8, or UTF-16 as Notepad saves it); an Office file's or a
 /// PDF's words (`from` counts in them); a ZIP archive's list. A picture (JPEG, PNG or GIF) is given to the model to see
 /// if it can (`sight`), as is a PDF's page whose words are pictures (a scanned one: `page`, from 1); else, as a file
-/// of another kind, it's said to be one.
-pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>) -> Result<Got, String> {
+/// of another kind, it's said to be one (and why the model can't see it: `blind`).
+pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>, blind: &str) -> Result<Got, String> {
     let (letter, rel) = inside(path);
     with(letter, |fs, p| {
         let (e, rel, link) = found(fs, p, letter, &rel)?;
@@ -1251,8 +1251,8 @@ pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>) -> R
                 let about = format!("{name} ({}{pixels}, changed {})", size(f.size), date(e.modified));
                 let Some(sight) = sight else {
                     return said(format!(
-                        "{about} is a picture, which Chat Computer's model here can't see: its file has no vision part. \
-                         show_picture shows it to the person."
+                        "{about} is a picture, which Chat Computer's model here can't see: {blind} show_picture shows it \
+                         to the person."
                     ));
                 };
                 if media == "image/webp" {
@@ -1332,10 +1332,7 @@ pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>) -> R
                         return said(format!("{about}{wordless}: there's no page {k}."));
                     }
                     let Some(sight) = sight else {
-                        return said(format!(
-                            "{about}{wordless}, which Chat Computer's model here can't see as pictures: its file has no \
-                             vision part."
-                        ));
+                        return said(format!("{about}{wordless}, which Chat Computer's model here can't see as pictures: {blind}"));
                     };
                     let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
                     let started = time::uptime_ms();

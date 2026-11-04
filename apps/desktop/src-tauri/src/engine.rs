@@ -3,7 +3,10 @@
 //! this computer runs well (`models`); serves the one that's here (`serve`, on 127.0.0.1, OpenAI's chat completions
 //! API, for the app's page and Chat Computer's website only); and, while the one chosen isn't here yet, has the
 //! engine get it ready (`prepare`: downloaded over Chat Computer's own HTTPS, checked, converted, its refusals taken
-//! out), at a lower priority, telling the page how it goes; then serves that one.
+//! out), at a lower priority, telling the page how it goes; then serves that one. A model file made before the
+//! engine kept the part of the model that sees (`models` says it's "outdated") is made again the same way, the old
+//! one answering meanwhile; once the new one's finished, serving stops for a moment (on Windows a file in use can't
+//! be replaced), `models` puts it in the old one's place, and it's served.
 //!
 //! The engine's processes end with the app (--exit-with-stdin: the app holds their standard input). Should the one
 //! serving stop by itself (out of memory, say), it's started again, telling the page.
@@ -27,7 +30,10 @@ pub struct Status {
     /// The model that answers now ("" while none does), and the one being got ready.
     pub label: String,
     pub preparing: String,
-    /// downloading | converting | uncensoring, and how far: bytes, or steps.
+    /// Whether the one being got ready is the one that answers, made again (so it can see pictures).
+    pub updating: bool,
+    /// downloading | converting | uncensoring (failed: getting it ready stopped, though another answers), and how
+    /// far: bytes, or steps.
     pub stage: String,
     pub done: u64,
     pub total: u64,
@@ -87,6 +93,9 @@ pub struct ModelInfo {
     pub name: String,
     pub label: String,
     pub ready: bool,
+    /// Here, but made before the engine kept the part that sees: it's made again (an engine from before says nothing).
+    #[serde(default)]
+    pub outdated: bool,
     pub runs: bool,
 }
 
@@ -100,6 +109,11 @@ impl Models {
 
     pub fn picked(&self) -> Option<&ModelInfo> {
         self.models.iter().find(|m| m.name == self.pick)
+    }
+
+    /// The one chosen, if it's to be got ready: not here yet, or here but to be made again.
+    pub fn to_prepare(&self) -> Option<&ModelInfo> {
+        self.picked().filter(|p| !p.ready || p.outdated)
     }
 }
 
@@ -199,6 +213,16 @@ impl Engine {
         Ok(port)
     }
 
+    /// Stops serving: the model file is let go (so a file made again can take its place).
+    fn stop_serving(&self) {
+        let _one = self.starting.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((mut c, stdin)) = self.serving.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            drop(stdin);
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+
     /// Should the engine serving stop by itself (not stopped by the app), it's started again on the same file: up to
     /// 3 times.
     fn watch(&self, program: &Path, dir: &Path, origins: &[String], tell: &dyn Fn(&Status)) {
@@ -293,13 +317,15 @@ impl Engine {
             let (me, program, dir, origins, tell) = (self.clone(), program.clone(), dir.clone(), origins.clone(), tell.clone());
             std::thread::spawn(move || me.watch(&program, &dir, &origins, &*tell));
         }
-        let Some(pick) = m.picked().filter(|p| !p.ready).cloned() else { return };
-        // The one chosen, got ready.
+        let Some(pick) = m.to_prepare().cloned() else { return };
+        // The one chosen, got ready (or made again, the one here answering meanwhile).
+        let again = pick.ready;
         self.set(&*tell, |s| {
             if s.state != "ready" {
                 s.state = "preparing".into();
             }
             s.preparing = pick.label.clone();
+            s.updating = again;
             s.stage = "downloading".into();
         });
         let mut a = vec!["prepare".to_string(), d.clone(), "--model".into(), pick.name.clone()];
@@ -333,15 +359,24 @@ impl Engine {
         }
         let ok = self.preparing.lock().unwrap_or_else(|p| p.into_inner()).take()
             .and_then(|(mut c, _)| c.wait().ok()).is_some_and(|code| code.success());
+        if ok && again && !self.closing.load(Ordering::Relaxed) {
+            // (The old file let go, so the new one can take its place: `models` puts it there.)
+            self.set(&*tell, |s| s.state = "starting".into());
+            self.stop_serving();
+        }
         let now = if ok { models().ok() } else { None };
         if let Some(m) = now {
-            self.set(&*tell, |s| s.preparing.clear());
+            self.set(&*tell, |s| {
+                s.preparing.clear();
+                s.updating = false;
+            });
             serve_best(&m);
         } else {
             self.set(&*tell, |s| {
                 if s.state != "ready" {
                     s.state = "failed".into();
                 }
+                s.stage = "failed".into();
                 if s.detail.is_empty() {
                     s.detail = "getting the model ready stopped".into();
                 }
@@ -383,7 +418,7 @@ mod tests {
 
     #[test]
     fn the_model_here_answers_while_the_one_chosen_comes() {
-        let m = |name: &str, ready, runs| ModelInfo { name: name.into(), label: name.into(), ready, runs };
+        let m = |name: &str, ready, runs| ModelInfo { name: name.into(), label: name.into(), ready, outdated: false, runs };
         let list = Models { pick: "9b".into(), models: vec![m("27b", false, false), m("9b", false, true), m("4b", true, true), m("0.8b", true, true)] };
         assert_eq!(list.serving().unwrap().name, "4b");
         assert_eq!(list.picked().unwrap().name, "9b");
@@ -391,5 +426,23 @@ mod tests {
         assert_eq!(ready.serving().unwrap().name, "9b");
         let none = Models { pick: "9b".into(), models: vec![m("9b", false, true)] };
         assert!(none.serving().is_none());
+        // The one chosen is got ready while it isn't here, and not once it is.
+        assert_eq!(list.to_prepare().unwrap().name, "9b");
+        assert!(ready.to_prepare().is_none());
+    }
+
+    #[test]
+    fn a_model_made_before_it_could_see_is_made_again_while_it_answers() {
+        // What `models` says of one here made before the engine kept the part that sees ("outdated"); an engine
+        // from before says nothing of it.
+        let said: Models = serde_json::from_str(r#"{"pick":"4b","models":[
+            {"name":"4b","label":"Qwen3.5 4B","ready":true,"outdated":true,"uncensored":true,"runs":true},
+            {"name":"2b","label":"Qwen3.5 2B","ready":true,"runs":true}]}"#).unwrap();
+        assert!(said.models[0].outdated && !said.models[1].outdated);
+        // It answers meanwhile, and it's the one got ready (made again).
+        assert_eq!(said.serving().unwrap().name, "4b");
+        assert_eq!(said.to_prepare().unwrap().name, "4b");
+        let done: Models = serde_json::from_str(r#"{"pick":"4b","models":[{"name":"4b","label":"Qwen3.5 4B","ready":true,"outdated":false,"runs":true}]}"#).unwrap();
+        assert!(done.to_prepare().is_none());
     }
 }

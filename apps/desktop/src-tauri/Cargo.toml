@@ -1,6 +1,6 @@
 [package]
 name = "chat-computer"
-version = "1.0.0"
+version = "1.0.1"
 description = "Chat Computer for Windows and Mac"
 edition = "2024"
 publish = false

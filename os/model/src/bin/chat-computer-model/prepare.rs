@@ -4,11 +4,18 @@
 //! stops carries on where it stopped), converted into the engine's own file, its refusals found and taken out
 //! (find-refusal), and the downloads removed. It's ready when its file has its name, and not before.
 //!
+//! A file made before the engine kept the part of the model that sees (one without that part, for a model that sees,
+//! made by the converter from before: convert::CONVERTER) is made again the same way, the one there answering
+//! meanwhile: the new one waits beside it, finished (NAME.ccm.new, with NAME.refusal.new), until it can take its
+//! place, at once where the system lets a file in use be replaced, else (Windows, while the app serves the old one)
+//! when `models` is next asked, which the app does once it has stopped serving it.
+//!
 //!     chat-computer-model models DIR [--catalogue FILE]
 //!     chat-computer-model prepare DIR [--model NAME|auto] [--catalogue FILE] [--threads N]
 //!
 //! DIR holds the models: NAME.ccm, NAME.refusal, and download-NAME/ while one comes. `models` says (JSON) which
-//! there are, which are here, and which this computer would get; `prepare` gets one ready, saying how it goes on
+//! there are, which are here (and which of those are to be made again: "outdated"), and which this computer would
+//! get, having put any file made again in its place first; `prepare` gets one ready, saying how it goes on
 //! stderr, a line at a time ("downloading DONE TOTAL"; "converting", then its "STEP/STEPS weight"; "uncensoring",
 //! then the refusal search's "STEP/STEPS what"; "ready FILE", or "failed WHY"), and the file on stdout.
 //!
@@ -50,6 +57,8 @@ pub struct Model {
     pub memory_gb: f64,
     pub bits: u32,
     pub files: Vec<FileSpec>,
+    /// Whether it sees (its weights have a vision part the engine runs: the catalogue says).
+    pub sees: bool,
 }
 
 impl Model {
@@ -97,6 +106,7 @@ pub fn catalogue(text: &str) -> Result<Vec<Model>, String> {
             memory_gb: m.get("memory_gb").and_then(Json::num).unwrap_or(0.0),
             bits: m.get("bits").and_then(Json::num).unwrap_or(4.0) as u32,
             files,
+            sees: m.get("sees").and_then(Json::bool).unwrap_or(false),
         });
     }
     Ok(out)
@@ -130,6 +140,33 @@ impl Store {
         p.metadata().ok().filter(|md| md.is_file() && md.len() > 0).map(|_| p)
     }
 
+    /// Where a file made again waits, finished, until it can take the old one's place: it, and its refusal
+    /// direction.
+    pub fn made_again(&self, m: &Model) -> (PathBuf, PathBuf) {
+        (self.dir.join(format!("{}.ccm.new", m.name)), self.dir.join(format!("{}.refusal.new", m.name)))
+    }
+
+    /// Whether its file was made before the engine kept the part that sees, for a model that sees: the file has
+    /// none of it, and no converter's said it made it. Such a file is made again.
+    pub fn outdated(&self, m: &Model) -> bool {
+        let Some(settings) = self.ready(m).filter(|_| m.sees).and_then(|p| settings_of(&p)) else { return false };
+        !settings.lines().filter_map(|l| l.split_once('=')).map(|(k, _)| k.trim()).any(|k| k == "converter" || k.starts_with("vision."))
+    }
+
+    /// A file made again, finished, put in the old one's place, with its refusal direction (without one, the old
+    /// file's goes, as it isn't this file's: it's looked for again). Whether it could be: on Windows, not while
+    /// something has the old one open (the app serving it), so it waits, and the next try puts it there.
+    pub fn put_in_place(&self, m: &Model) -> bool {
+        let (file, refusal) = self.made_again(m);
+        if !file.is_file() || std::fs::rename(&file, self.path(m)).is_err() {
+            return false;
+        }
+        if std::fs::rename(&refusal, self.refusal_path(m)).is_err() {
+            let _ = std::fs::remove_file(self.refusal_path(m));
+        }
+        true
+    }
+
     /// Whether its refusals have been looked for (and taken out, if it had any), the engine's current way.
     pub fn uncensored(&self, m: &Model) -> bool {
         let mut head = [0u8; 20];
@@ -160,6 +197,36 @@ impl Store {
         let Some(free) = free else { return fit[0] };
         fit.iter().find(|m| self.ready(m).is_some() || self.needed(m) + ROOM_LEFT <= free).copied().unwrap_or(fit[fit.len() - 1])
     }
+}
+
+/// A model file's settings (its "config" entry), read from the file's start and its table, without mapping it (on
+/// Windows a mapping would keep it open, and it couldn't be replaced): None if it isn't a model file.
+pub fn settings_of(path: &Path) -> Option<String> {
+    use std::io::{Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 12];
+    f.read_exact(&mut head).ok()?;
+    if &head[..8] != model::file::MAGIC {
+        return None;
+    }
+    let len = u32::from_le_bytes(head[8..12].try_into().unwrap()) as usize;
+    if len > 64 << 20 {
+        return None;
+    }
+    let mut table = vec![0u8; len];
+    f.read_exact(&mut table).ok()?;
+    let table = String::from_utf8(table).ok()?;
+    // "config blob - OFFSET SIZE", its offset from the data's start (the next multiple of 64 after the table).
+    let line = table.lines().find(|l| l.split(' ').next() == Some("config"))?;
+    let parts: Vec<&str> = line.split(' ').collect();
+    let (offset, size): (u64, usize) = (parts.get(3)?.parse().ok()?, parts.get(4)?.parse().ok()?);
+    if size > 1 << 20 {
+        return None;
+    }
+    f.seek(SeekFrom::Start((12 + len).div_ceil(64) as u64 * 64 + offset)).ok()?;
+    let mut text = vec![0u8; size];
+    f.read_exact(&mut text).ok()?;
+    String::from_utf8(text).ok()
 }
 
 fn quoted(s: &str) -> String {
@@ -215,15 +282,19 @@ pub fn models_main(a: Vec<String>) -> i32 {
         let models = load(&a)?;
         let store = Store { dir: a.dir.clone() };
         let _ = std::fs::create_dir_all(&store.dir);
+        // (A file made again, finished, takes its place now: nothing serves the old one while the app asks this.)
+        for m in &models {
+            store.put_in_place(m);
+        }
         let (memory, free) = (sys::memory_bytes(), sys::free_bytes(&store.dir));
         let pick = store.pick(&models, memory, free);
         let list: Vec<String> = models
             .iter()
             .map(|m| {
                 format!(
-                    "{{\"name\":{},\"label\":{},\"memory_gb\":{},\"bits\":{},\"download\":{},\"file\":{},\"ready\":{},\"uncensored\":{},\"runs\":{},\"needed\":{}}}",
+                    "{{\"name\":{},\"label\":{},\"memory_gb\":{},\"bits\":{},\"download\":{},\"file\":{},\"ready\":{},\"outdated\":{},\"uncensored\":{},\"runs\":{},\"needed\":{}}}",
                     quoted(&m.name), quoted(&m.label), m.memory_gb, m.bits, m.download_bytes(), m.file_bytes(),
-                    store.ready(m).is_some(), store.uncensored(m), runs_in(m, memory), store.needed(m)
+                    store.ready(m).is_some(), store.outdated(m), store.uncensored(m), runs_in(m, memory), store.needed(m)
                 )
             })
             .collect();
@@ -271,9 +342,18 @@ pub fn prepare_main(a: Vec<String>) -> i32 {
 }
 
 fn prepare(store: &Store, m: &Model, threads: Option<usize>) -> Result<PathBuf, String> {
-    if let Some(p) = store.ready(m) {
+    // (One made again before, finished: in its place now, if it can be; else it waits for the old one to be let go,
+    // and isn't made again meanwhile.)
+    let (made, _) = store.made_again(m);
+    if !store.put_in_place(m) && made.is_file() {
+        eprintln!("ready {}", made.display());
+        return Ok(made);
+    }
+    // One made before the engine kept the part that sees is made again; the one here answers meanwhile.
+    let again = store.outdated(m);
+    if let Some(p) = store.ready(m).filter(|_| !again) {
         if !store.uncensored(m) {
-            uncensor(store, m, &p, threads)?;
+            uncensor(&p, &store.refusal_path(m), threads)?;
         }
         eprintln!("ready {}", p.display());
         return Ok(p);
@@ -282,8 +362,9 @@ fn prepare(store: &Store, m: &Model, threads: Option<usize>) -> Result<PathBuf, 
     if let Some(free) = sys::free_bytes(&store.dir)
         && free < need
     {
+        let what = if again { "to be made again so it can see pictures (the one here answers meanwhile)" } else { "to get ready" };
         return Err(format!(
-            "{} needs {:.1} GB of free space to get ready, and there's {:.1} GB",
+            "{} needs {:.1} GB of free space {what}, and there's {:.1} GB",
             m.label, need as f64 / 1e9, free as f64 / 1e9
         ));
     }
@@ -300,19 +381,31 @@ fn prepare(store: &Store, m: &Model, threads: Option<usize>) -> Result<PathBuf, 
     let out = store.path(m);
     let tmp = store.dir.join(format!("{}.ccm.part", m.name));
     crate::convert::run(&d, &tmp, m.bits)?;
-    uncensor(store, m, &tmp, threads)?;
+    if again {
+        // Finished beside the old one, then in its place if it can be (else once nothing serves the old one).
+        let (file, refusal) = store.made_again(m);
+        let _ = std::fs::remove_file(&refusal);
+        uncensor(&tmp, &refusal, threads)?;
+        std::fs::rename(&tmp, &file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let _ = std::fs::remove_dir_all(&d);
+        let done = if store.put_in_place(m) { out } else { file };
+        eprintln!("ready {}", done.display());
+        return Ok(done);
+    }
+    uncensor(&tmp, &store.refusal_path(m), threads)?;
     std::fs::rename(&tmp, &out).map_err(|e| format!("{}: {e}", out.display()))?;
     let _ = std::fs::remove_dir_all(&d);
     eprintln!("ready {}", out.display());
     Ok(out)
 }
 
-/// Its refusals found (by this program, as its own process: the model file it maps is let go when it ends).
-fn uncensor(store: &Store, m: &Model, file: &Path, threads: Option<usize>) -> Result<(), String> {
+/// Its refusals found, kept in `out` (by this program, as its own process: the model file it maps is let go when
+/// it ends).
+fn uncensor(file: &Path, out: &Path, threads: Option<usize>) -> Result<(), String> {
     eprintln!("uncensoring");
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(me);
-    cmd.arg("find-refusal").arg(file).arg("--out").arg(store.refusal_path(m));
+    cmd.arg("find-refusal").arg(file).arg("--out").arg(out);
     if crate::WITH_STDIN.load(std::sync::atomic::Ordering::Relaxed) {
         cmd.arg("--exit-with-stdin");        // (its standard input is this one's: it ends with it)
     }
@@ -448,6 +541,59 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("qwen3.6-35b-a3b.ccm"), b"x").unwrap();
         assert_eq!(store.pick(&models, 48 * GB, Some(1_000_000_000)).name, "qwen3.6-35b-a3b");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A model file with these settings (and a little else in it, before them).
+    fn file_with(path: &Path, settings: &str) {
+        let mut w = model::file::Writer::default();
+        w.add("tokenizer.tokens", model::quant::Dtype::Blob, &[], b"x");
+        w.add("config", model::quant::Dtype::Blob, &[], settings.as_bytes());
+        let mut bytes = w.head();
+        bytes.extend_from_slice(&w.data);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn a_file_made_before_the_part_that_sees_was_kept_is_made_again() {
+        let models = catalogue(CATALOGUE).unwrap();
+        assert!(models.iter().all(|m| m.sees), "Qwen's models here all see");
+        let m = models.iter().find(|m| m.name == "qwen3.5-0.8b").unwrap();
+        let dir = std::env::temp_dir().join(format!("cc-again-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store { dir: dir.clone() };
+        // Not here: nothing to make again.
+        assert!(!store.outdated(m));
+        // Made before (no converter said it made it, and no vision part): made again.
+        file_with(&store.path(m), "arch=qwen3_5\nhidden=8\n");
+        assert_eq!(settings_of(&store.path(m)).as_deref(), Some("arch=qwen3_5\nhidden=8\n"));
+        assert!(store.outdated(m));
+        // With the vision part, or made by a converter that says so (with it or not): not.
+        file_with(&store.path(m), "arch=qwen3_5\nvision.depth=2\n");
+        assert!(!store.outdated(m));
+        file_with(&store.path(m), &format!("converter={}\narch=qwen3_5\n", model::convert::CONVERTER));
+        assert!(!store.outdated(m));
+        // Nor one of a model the catalogue doesn't say sees.
+        let plain = r#"{"models":[{"name":"qwen3.5-0.8b","label":"M","repo":"Q/M","revision":"r","memory_gb":0,"bits":8,"files":[]}]}"#;
+        let blind = &catalogue(plain).unwrap()[0];
+        file_with(&store.path(blind), "arch=qwen3_5\n");
+        assert!(!blind.sees && !store.outdated(blind) && store.outdated(m));
+        // Made again, it takes the old one's place, with its refusal direction.
+        std::fs::write(store.refusal_path(m), b"old").unwrap();
+        let (file, refusal) = store.made_again(m);
+        file_with(&file, "converter=2\narch=qwen3_5\nvision.depth=2\n");
+        std::fs::write(&refusal, b"new").unwrap();
+        assert!(store.put_in_place(m));
+        assert!(!file.exists() && !refusal.exists() && !store.outdated(m));
+        assert_eq!(std::fs::read(store.refusal_path(m)).unwrap(), b"new");
+        // Without its own refusal direction, the old one's goes (it isn't this file's: it's looked for again).
+        file_with(&file, "converter=2\n");
+        assert!(store.put_in_place(m) && !store.refusal_path(m).exists() && !store.uncensored(m));
+        // Nothing made again: nothing to put in place.
+        assert!(!store.put_in_place(m));
+        // Not a model file: not known to be outdated.
+        std::fs::write(store.path(m), b"not a model file").unwrap();
+        assert!(settings_of(&store.path(m)).is_none() && !store.outdated(m));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

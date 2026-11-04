@@ -982,8 +982,8 @@ impl Assistant {
                 continue;
             }
             let notes = self.notes.clone();
-            let sight = self.sight();
-            let (said, error, picture) = run_tool(&call.name, &input, job, &mut self.notes, events, sight);
+            let (sight, blind) = (self.sight(), self.blind());
+            let (said, error, picture) = run_tool(&call.name, &input, job, &mut self.notes, events, sight, blind);
             self.unkept |= self.notes != notes;
             self.tool_said(&call.name, said, error, picture);
         }
@@ -1153,6 +1153,19 @@ impl Assistant {
             }
             Brain::Script(_) => Some(Sight::Qwen),
             _ => None,
+        }
+    }
+
+    /// Why the model can't see, when it can't: its file has no vision part; one made before the engine kept that
+    /// part (by the converter from before) is made again by Chat Computer's app on Windows.
+    fn blind(&self) -> &'static str {
+        match &self.brain {
+            Brain::Ready(m) if m.session.model.vision.is_none() && m.session.model.settings.converter < model::convert::CONVERTER => {
+                "its file was made before Chat Computer's engine kept the part of the model that sees. Chat Computer's \
+                 app on Windows makes it again (downloading the model again, in the background) when it's next opened \
+                 there."
+            }
+            _ => "its file has no vision part.",
         }
     }
 
@@ -1658,7 +1671,7 @@ fn from_kept(text: &str) -> Option<(Vec<String>, Vec<Part>)> {
 }
 
 /// Runs a tool the model called: what it says back, whether that's an error, and a picture it gives the model to see
-/// (read_file's, when the model can: `sight`).
+/// (read_file's, when the model can: `sight`; else why it can't, `blind`).
 fn run_tool(
     name: &str,
     input: &Json,
@@ -1666,6 +1679,7 @@ fn run_tool(
     notes: &mut Vec<String>,
     events: &mut Vec<Event>,
     sight: Option<Sight>,
+    blind: &str,
 ) -> (String, bool, Option<picture::Picture>) {
     if name == "read_file" {
         activity(job, String::from("Reading a file"), events);
@@ -1674,7 +1688,7 @@ fn run_tool(
         let num = |key: &str| input.get(key).and_then(number);
         let page = num("page").filter(|p| *p >= 1.0).map(|p| p as u64);
         let size = |w: usize, h: usize| sight.map_or((w, h), |s| s.size(w, h));
-        return match crate::files::read(text, num("offset").unwrap_or(0.0).max(0.0) as u64, page, sight.map(|_| &size as crate::files::Sight)) {
+        return match crate::files::read(text, num("offset").unwrap_or(0.0).max(0.0) as u64, page, sight.map(|_| &size as crate::files::Sight), blind) {
             Ok(got) => (got.said, false, got.picture),
             Err(e) => (e, true, None),
         };

@@ -77,8 +77,13 @@ Qwen3.5-0.8B is the one the checks use.
 in DIR, and which this computer gets: the biggest its memory runs well that its disk has room to get ready.
 `prepare` gets one ready: each of its files downloaded from Qwen's repository at the pinned revision, checked
 against its pinned SHA-256 (a download that broke off carries on where it stopped), converted, its refusals found,
-and the downloads removed; the model's file takes its name last, so a model is ready only once it's whole. The
-downloads use Chat Computer's own HTTPS: TLS 1.3 by `os/tls` with `os/crypto`, offering ChaCha20-Poly1305 alone
+and the downloads removed; the model's file takes its name last, so a model is ready only once it's whole. A file
+made before the engine kept the vision part (one that sees, by the catalogue's `sees`, without that part, and without
+the `converter=2` its settings now start with) is made again the same way, the old one answering meanwhile: the new
+one waits beside it, finished (`NAME.ccm.new`, its refusal direction in `NAME.refusal.new`), until it can take its
+place, at once where the system lets a file in use be replaced, else (Windows, while the app serves the old one) the
+next time `models` is asked, which the desktop app does once it has stopped serving it. The downloads use Chat
+Computer's own HTTPS: TLS 1.3 by `os/tls` with `os/crypto`, offering ChaCha20-Poly1305 alone
 (the own AES-GCM is the constant-time kind without the processor's AES instructions: 1 MB/s on this machine, where
 ChaCha20-Poly1305 does 200), and all three ciphers to a server without it; through the proxy in `HTTPS_PROXY`, if
 there is one (a proxy that decrypts what passes, a company's, is trusted with `CHATCOMPUTER_EXTRA_CA`, a PEM

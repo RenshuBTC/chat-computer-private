@@ -168,10 +168,23 @@ class Hub:
         self.httpd.server_close()
 
 
-def _model(files, bits=8):
+def _model(files, bits=8, sees=False):
     return models.Model("tiny", "Tiny", "Qwen/Tiny", "0" * 40, 0, bits,
                         tuple({"name": n, "size": len(d), "sha256": hashlib.sha256(d).hexdigest()}
-                              for n, d in files.items()))
+                              for n, d in files.items()), sees)
+
+
+def _model_file(path, settings: str) -> None:
+    """A model file (os/model/src/file.rs) with these settings and a little else, before them."""
+    entries = [("tokenizer.tokens", b"x"), ("config", settings.encode())]
+    table, data = "", b""
+    for name, blob in entries:
+        data += bytes(-len(data) % 64)
+        table += f"{name} blob - {len(data)} {len(blob)}\n"
+        data += blob
+    head = b"CCMODEL1" + len(table).to_bytes(4, "little") + table.encode()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(head + bytes(-len(head) % 64) + data)
 
 
 def _converter(tmp_path):
@@ -181,7 +194,7 @@ def _converter(tmp_path):
     prog.write_text("#!/usr/bin/env python3\nimport os, sys\n"
                     "if sys.argv[1] == 'find-refusal':\n"
                     "    _, cmd, model, flag, out = sys.argv\n"
-                    "    assert flag == '--out' and os.path.isfile(model) and not os.path.exists(model[:-5])\n"
+                    "    assert flag == '--out' and os.path.isfile(model) and model.endswith('.ccm.part')\n"
                     "    for i in range(1, 5):\n"
                     "        print(f'{i}/4 trying layer {i}', file=sys.stderr, flush=True)\n"
                     "    open(out, 'wb').write(b'CCREFUS1' + bytes(8) + (1).to_bytes(4, 'little') + bytes(40))\n"
@@ -245,6 +258,72 @@ def test_a_file_that_comes_down_different_is_refused(tmp_path, monkeypatch, hub)
     assert p.stage == "failed" and store.ready(m) is None
     assert not (store.downloads(m) / "model.safetensors").exists()
     assert not (store.downloads(m) / "model.safetensors.part").exists()
+
+
+def test_a_file_made_before_the_part_that_sees_was_kept_is_made_again(tmp_path, monkeypatch, hub):
+    """A model that sees, its file made before the engine kept that part (none of it, and no converter said it made
+    it): made again, its refusal direction with it; the old one's is replaced. Made again, it isn't again."""
+    monkeypatch.setattr(models, "HUB", hub.url)
+    m = _model(hub.files, sees=True)
+    store = models.Store(tmp_path / "models")
+    old = store.path(m)
+    _model_file(old, "arch=qwen3_5\nhidden=8\n")
+    assert models.settings_of(old) == "arch=qwen3_5\nhidden=8\n"
+    assert store.ready(m) == old and store.outdated(m)
+    store.refusal_path(m).write_bytes(b"the old file's")
+    seen = []
+    assert store.prepare(m, models.Progress(), on_change=lambda pr: seen.append(pr.stage), program=_converter(tmp_path)) == old
+    assert "downloading" in seen and "converting" in seen and seen[-1] == "ready"
+    assert old.read_text() == "config.json model.safetensors tokenizer.json bits=8"     # (the stand-in converter's)
+    assert store.refusal_path(m).read_bytes().startswith(b"CCREFUS1") and store.uncensored(m)
+    assert not store.refusal_path(m).with_name("tiny.refusal.new").exists() and not store.downloads(m).exists()
+    assert not store.outdated(m)
+    hub.asked.clear()
+    assert store.prepare(m, models.Progress(), program=_converter(tmp_path)) == old and hub.asked == []
+    # With the part that sees, or made by a converter that says so, or of a model that doesn't see: not outdated.
+    for settings, sees in (("arch=qwen3_5\nvision.depth=2\n", True), ("converter=2\narch=qwen3_5\n", True),
+                           ("arch=qwen3_5\n", False)):
+        _model_file(old, settings)
+        assert not store.outdated(_model(hub.files, sees=sees)), settings
+    assert models.settings_of(tmp_path / "nothing") is None
+
+
+def test_while_a_model_is_made_again_it_answers_then_the_new_one_does(tmp_path, monkeypatch):
+    """The model service: an outdated file answers while the new one is made in the background; once it's in
+    place (the same name), the server starts again on it."""
+    monkeypatch.setattr(models, "memory_bytes", lambda: 64 * GB)
+    svc = S.ModelService(SimpleNamespace(models=tmp_path / "models", logs=tmp_path), SimpleNamespace(model="qwen3.5-4b"))
+    assert svc.model.sees
+    f = svc.store.path(svc.model)
+    _model_file(f, "arch=qwen3_5\n")
+    started = []
+    monkeypatch.setattr(svc, "prepare_in_background", lambda: started.append(True))
+    monkeypatch.setattr(models, "engine_program", lambda d=None: "/bin/true")
+
+    class Server:
+        def __init__(self, program, model, port, threads, log_file=None, cache=None, uncensored=False):
+            self.model, self.uncensored, self.port, self.stopped = model, uncensored, port, False
+
+        async def start(self):
+            pass
+
+        async def stop(self):
+            self.stopped = True
+    monkeypatch.setattr(S, "ModelServer", Server)
+    monkeypatch.setattr(svc, "uncensor_in_background", lambda m: None)
+
+    async def run():
+        await svc.ensure()
+        first = svc.server
+        assert started and svc.serving() == svc.model and first.model == str(f)      # it answers meanwhile
+        await svc.ensure()
+        assert svc.server is first                                                  # (the same file: kept)
+        new = f.with_name(f.name + ".made")
+        _model_file(new, "converter=2\narch=qwen3_5\nvision.depth=2\n")
+        os.replace(new, f)                                                          # made again, in its place
+        await svc.ensure()
+        assert svc.server is not first and first.stopped and not svc.store.outdated(svc.model)
+    asyncio.run(run())
 
 
 def test_without_room_for_it_nothing_is_downloaded(tmp_path, monkeypatch, hub):

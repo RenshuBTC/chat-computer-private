@@ -2220,7 +2220,7 @@
   var LOCAL_KEY = "chatcomputer-local-model";
   // talk: the conversation, as sent; system: its system prompt, made when it starts and kept as it is (the engine
   // reads only what's new, so the start of the conversation is never sent different).
-  var local = { state: APP ? "starting" : "off", port: 8765, label: "", preparing: "", stage: "", done: 0, total: 0, detail: "",
+  var local = { state: APP ? "starting" : "off", port: 8765, label: "", preparing: "", updating: false, stage: "", done: 0, total: 0, detail: "",
                 talk: [], system: "", kind: APP ? "app" : "", webKept: !APP && !!store("chatcomputer-web-kept") };
   function localReady() { return local.state === "ready"; }
   function localBase() { return "http://127.0.0.1:" + local.port; }
@@ -2234,6 +2234,7 @@
     if (local.stage === "converting") return "making it ready to run" + (pct ? " (" + pct + ")" : "");
     if (local.stage === "uncensoring") return "taking its refusals out, so it answers whatever you ask" + (pct ? " (" + pct + ")" : "");
     if (local.stage === "reading") return "reading its instructions" + (pct ? " (" + pct + ")" : "");
+    if (local.stage === "failed") return "it stopped" + (local.detail ? " (" + local.detail + ")" : "");
     return "starting";
   }
   // A model's file name as it's called: qwen3.5-9b, Qwen3.5 9B.
@@ -2248,6 +2249,7 @@
     local.port = +m.port || local.port;
     local.label = String(m.label || "");
     local.preparing = String(m.preparing || "");
+    local.updating = !!m.updating;
     local.stage = String(m.stage || "");
     local.done = +m.done || 0;
     local.total = +m.total || 0;
@@ -2303,7 +2305,11 @@
         "Computer's own engine. There's no account, and nothing you say leaves " + (local.kind === "web" ? "this browser." : "this computer.")] :
       local.state === "preparing" ? ["My model" + (local.preparing ? ", " + local.preparing + "," : "") + " is getting ready " + here +
         ": " + localWords() + ". That happens once; after it, it answers from the start."] : [nextStep() || "My model is starting."];
-    if (localReady() && local.preparing) text.push("A bigger one, " + local.preparing + ", is getting ready meanwhile: " + localWords() + ".");
+    // (The one answering, made again: its file was made before the engine kept the part that sees.)
+    if (localReady() && local.updating) text.push(local.stage === "failed" ? "Making it again, so it can see pictures, stopped: " +
+      (local.detail || "it didn't finish") + ". The app tries again when it next starts." :
+      "It's being made again, so it can see pictures (its file was made before it could): " + localWords() + ". It answers meanwhile.");
+    else if (localReady() && local.preparing) text.push("A bigger one, " + local.preparing + ", is getting ready meanwhile: " + localWords() + ".");
     call("accountForm", { id: "model", title: "Chat Computer's model", ok: "OK", text: text });
   }
   function localChosen() {
@@ -4261,7 +4267,8 @@
     var list = [];
     if (APP) {
       list.push({ command: "model", icon: "i-spark", name: localReady() ? local.label : "Chat Computer's model",
-                  where: localReady() ? "Answers now, on this computer" + (local.preparing ? " (" + local.preparing + " is getting ready)" : "") :
+                  where: localReady() ? "Answers now, on this computer" + (local.updating && local.stage !== "failed" ? " (being made again, so it can see pictures)" :
+                    local.preparing && !local.updating ? " (" + local.preparing + " is getting ready)" : "") :
                     local.state === "preparing" ? "Getting " + (local.preparing || "it") + " ready: " + localWords() :
                     local.state === "failed" || local.state === "none" ? "It couldn't get ready" : "Starting" });
     } else {

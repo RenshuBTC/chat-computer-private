@@ -71,6 +71,8 @@ pub struct Settings {
     /// turns (interleaved) rather than coming one section after another.
     pub mrope: [usize; 3],
     pub mrope_interleaved: bool,
+    /// Which converter made the file (convert::CONVERTER; 1, made before the vision part was kept, says nothing).
+    pub converter: u32,
 }
 
 impl Settings {
@@ -326,6 +328,7 @@ impl<'a> Model<'a> {
                 m
             },
             mrope_interleaved: c.str("mrope_interleaved") == Some("1"),
+            converter: c.str("converter").and_then(|v| v.parse().ok()).unwrap_or(1),
         };
         if s.interval == 0 || !s.heads.is_multiple_of(s.kv_heads.max(1)) || !s.lv_heads.is_multiple_of(s.lk_heads.max(1))
             || s.rotary_dim > s.head_dim || !s.rotary_dim.is_multiple_of(2) || !s.hidden.is_multiple_of(quant::BLOCK)

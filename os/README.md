@@ -383,26 +383,32 @@ the italic font file out.
 
 ## Starting it on a PC
 
-On a Windows PC, double-click `windows\Chat Computer Own System.cmd` (`windows/own-os.ps1`). No USB stick is
-needed.
+On a Windows PC, double-click `windows\Chat Computer Own System.cmd` (`windows/own-os.ps1`): one double-click, no
+questions (Windows asks for permission, as for any change to how the PC starts). No USB stick is needed.
 
 1. It checks the PC (read-only) and saves a list of its parts in `%LOCALAPPDATA%\ChatComputer\own-os\pc.txt`, so
    drivers can be written for exactly those chips.
-2. It signs `release/chatcomputer.efi` with a key that Windows makes on that PC and won't let be copied off.
-3. It says which model the own system will answer with: the one Chat Computer's app got ready on the PC (open the
-   app once first; it gets its model by itself).
-4. After you confirm, it puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
+2. It signs `release/chatcomputer.efi` with a key that Windows makes on that PC and won't let be copied off: the one
+   the PC's Secure Boot already trusts, where there is one, the key it made for ClaudeOS (Chat Computer's name until
+   2026-10-19) too, so a PC that approved that one starts Chat Computer with nothing more to approve.
+3. It says which model the own system will answer with: the one Chat Computer's app got ready on the PC (install
+   the app from chatcomputer.ai/get first; it gets its model by itself). With none yet, it opens that page and
+   doesn't restart.
+4. It puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
    next to Windows' own files, with `settings.txt` (how far the PC's clock is from UTC, as Windows keeps that
    clock in local time, and the memory file's id; a model's file named there by hand, `model = ...`, is kept) and
    `memory.bin`, the memory file where Chat Computer keeps the conversation across restarts (4 MB, or 1 MB if the
    partition is short of room; running setup again keeps it, with the conversation in it). The conversation is kept
    there as it is, so anyone who can read that partition can read it.
-5. It adds "Chat Computer (own system)" to the end of the power-on menu and starts it once, at the next restart.
-   The restart after that starts Windows.
+5. It keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu, often F12, F11, F8 or Esc as
+   it starts), to choose whenever you like, and restarts into it after a 10-second countdown (any key stays in
+   Windows). The restart after that starts Windows. Double-clicking it again puts the newest version from the folder
+   there and starts it.
 
-With Secure Boot on, the PC first has to trust Chat Computer's key. That takes one approval in the PC's setup
-screen: Secure Boot, then Key Management, then Authorized Signatures (db), then Append `ChatComputer.cer`. You
-can turn Secure Boot off there instead. The script shows the steps and restarts into the setup screen.
+With Secure Boot on and no key the PC trusts yet, the PC first has to trust Chat Computer's key. That takes one
+approval in the PC's setup screen: Secure Boot, then Key Management, then Authorized Signatures (db), then Append
+`ChatComputer.cer`. You can turn Secure Boot off there instead. The script asks which, shows the steps and restarts
+into the setup screen.
 
 Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock's), and so do most
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
@@ -415,8 +421,9 @@ core for now, so it answers slowly (how fast hasn't been measured on a real PC y
 
 To go back to Windows, press the power button (the PC turns off; hold it if a press doesn't), or ask Chat Computer to
 restart it. The only thing
-Chat Computer writes on any disk is its memory file, in place. Running the script again with `-Remove` (or choosing
-Remove) takes the files (the conversation with them) and the entry off again, and deletes the key.
+Chat Computer writes on any disk is its memory file, in place. Running the script with `-Remove`
+(`powershell -ExecutionPolicy Bypass -File windows\own-os.ps1 -Remove`) takes the files (the conversation with
+them) and the entry off again, and deletes the key made for Chat Computer (ClaudeOS's stays, for its own entry).
 
 `release/chatcomputer.efi` is committed because Windows has no Rust compiler. The build is reproducible, and CI
 rebuilds it and checks that it's the same file, byte for byte. `./release.sh` updates it.

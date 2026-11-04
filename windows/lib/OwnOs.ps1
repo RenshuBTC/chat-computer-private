@@ -5,6 +5,9 @@
 $Script:OwnDir = 'chatcomputer-own'              # \EFI\chatcomputer-own on the EFI partition
 $Script:OwnEntryName = 'Chat Computer (own system)'
 $Script:OwnKeyName = 'Chat Computer Secure Boot key'  # the certificate's friendly name in Windows' certificate store
+# The key made for ClaudeOS (Chat Computer's name until 2026-10-19), with the same steps: a PC whose setup screen
+# approved it trusts Chat Computer signed with it too, so it starts from the power-on menu with no visit there.
+$Script:OldOwnKeyName = 'ClaudeOS Secure Boot key'
 $Script:OwnFile = 'chatcomputer.efi'
 $Script:OwnCert = 'ChatComputer.cer'
 $Script:OwnSettings = 'settings.txt'            # read by the kernel at start-up (os/kernel/src/settings.rs)
@@ -274,6 +277,46 @@ function Get-OwnKey {
     return ($all | Sort-Object NotBefore -Descending | Select-Object -First 1)
 }
 
+function Get-OwnKeys {
+    # Every key made on this PC for signing Chat Computer (or ClaudeOS before it), with its private key, newest first.
+    $names = @($Script:OwnKeyName, $Script:OldOwnKeyName)
+    return , @(Get-ChildItem -Path 'Cert:\CurrentUser\My' -ErrorAction SilentlyContinue |
+            Where-Object { $names -contains $_.FriendlyName -and $_.HasPrivateKey } | Sort-Object NotBefore -Descending)
+}
+
+function Select-OwnKey {
+    # The key to sign with: one the PC's firmware already trusts ($Trusted says, with Secure Boot on), so Chat Computer
+    # starts with nothing to approve; else Chat Computer's own; else $null (a new one is made).
+    param([object[]]$Keys = @(), [scriptblock]$Trusted)
+    if ($Trusted) {
+        foreach ($k in $Keys) { if ((& $Trusted $k) -eq $true) { return $k } }
+    }
+    foreach ($k in $Keys) { if ([string](Get-Prop $k 'FriendlyName') -eq $Script:OwnKeyName) { return $k } }
+    return $null
+}
+
+function Wait-OwnCountdown {
+    # Counts down $Seconds on the screen; $true when it gets to the end, $false when a key is pressed first (or there's
+    # no keyboard to wait on: then it doesn't wait, and goes ahead).
+    param([int]$Seconds = 10, [switch]$Unattended)
+    if ($Unattended) { return $true }
+    for ($s = $Seconds; $s -gt 0; $s--) {
+        Write-Host ("`r  Restarting in " + $s + ' s (press any key to stay in Windows) ') -NoNewline
+        for ($t = 0; $t -lt 10; $t++) {
+            $pressed = $false
+            try { $pressed = [Console]::KeyAvailable } catch { $pressed = $false }
+            if ($pressed) {
+                try { $null = [Console]::ReadKey($true) } catch { $null = $_ }
+                Write-Host ''
+                return $false
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    Write-Host ''
+    return $true
+}
+
 function New-OwnKey {
     # A key pair for signing Chat Computer, made by Windows on this PC. The private half can't be exported: it never
     # leaves this PC. UEFI firmware doesn't check dates, so the 30 years are only for Windows' sake.
@@ -509,8 +552,12 @@ function Start-OwnSystem {
     Write-Line ('A list of this PC''s parts is in ' + $parts + ', so Chat Computer''s drivers can be written for them.')
 
     Write-Step 'Signing Chat Computer with this PC''s own key'
-    $cert = Get-OwnKey
-    if ($cert) {
+    $trusted = $null
+    if ($sb -eq $true) { $trusted = { param($k) Test-OwnKeyApproved -Cert $k } }
+    $cert = Select-OwnKey -Keys (Get-OwnKeys) -Trusted $trusted
+    if ($cert -and [string](Get-Prop $cert 'FriendlyName') -eq $Script:OldOwnKeyName) {
+        Write-Good 'Using the key this PC made for ClaudeOS, which its Secure Boot already trusts.'
+    } elseif ($cert) {
         Write-Line 'Using the key made on this PC for signing Chat Computer.'
     } else {
         $cert = New-OwnKey
@@ -544,38 +591,47 @@ function Start-OwnSystem {
     $bitlocker = $setupScreen -and (Get-BitLockerOn)
     if ($approved -eq $true) { Write-Good 'This PC already trusts Chat Computer''s key.' }
 
-    Write-Step 'What changes'
-    Write-Line '  * Chat Computer''s start-up file (signed with this PC''s key), the key''s certificate, its settings (how far'
-    Write-Line '    this PC''s clock is from UTC) and its memory file (where it keeps your conversation across restarts) go'
-    Write-Line '    in \EFI\chatcomputer-own on the partition this PC starts from (about 5 MB). Windows'' own files there stay'
-    Write-Line '    as they are. The conversation is kept there as it is, where anyone who can read that partition can read it.'
-    Write-Line ('  * "' + $Script:OwnEntryName + '" goes at the end of the power-on menu and starts once, at the next restart.')
-    Write-Line '    The restart after that starts Windows, as now.'
+    # (One double-click does it all, its owner asked: "make it easier to work with a single click". What changes is
+    # said as it's done, with no question before it; the restart can still be stopped, with any key.)
+    Write-Step 'Putting it on this PC'
+    Write-Line '  * Its start-up file (signed with this PC''s key), the key''s certificate, its settings (how far this PC''s'
+    Write-Line '    clock is from UTC) and its memory file (where it keeps your conversation across restarts) go in'
+    Write-Line '    \EFI\chatcomputer-own on the partition this PC starts from (about 5 MB). Windows'' own files stay as they'
+    Write-Line '    are. The conversation is kept there as it is, where anyone who can read that partition can read it.'
+    Write-Line ('  * "' + $Script:OwnEntryName + '" stays in the power-on menu (the PC''s boot menu), to choose whenever you like.')
     if ($bitlocker) {
         Write-Line '  * BitLocker pauses for two restarts, so the Secure Boot change doesn''t make it ask for its recovery key.'
-    }
-    if (-not (Confirm-Own 'Go ahead?' $true -Unattended:$Unattended)) {
-        Write-Line 'Nothing was changed.'
-        return
     }
     $installed = Install-OwnFiles -Signed $signed -Certificate $cer
     if (-not $installed.Memory) {
         Write-Warn 'Its memory file couldn''t be made on the start-up partition (too little room, or it couldn''t be written), so the conversation won''t be kept across restarts.'
     }
     $id = Get-OwnBootEntry
-    Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
-    Write-Good ('Chat Computer''s own system is on the start-up partition, and "' + $Script:OwnEntryName + '" starts at the next restart, once.')
+    Write-Good ('Chat Computer''s own system is on the start-up partition, and "' + $Script:OwnEntryName + '" is in the power-on menu.')
 
     if (-not $setupScreen) {
         if ($NoRestart) { return }
-        if (Confirm-Own 'Restart into Chat Computer''s own system now?' $true -Unattended:$Unattended) {
-            Write-Line 'Restarting in 5 seconds. To come back to Windows, hold the power button until the PC turns off, then turn it on.'
-            & shutdown.exe /r /t 5
+        if (-not $model) {
+            # (Without a model it would start and only say it needs one: it stays in the menu for when it's here.)
+            Write-Line ''
+            Write-Line 'Get its model first: install Chat Computer''s app from chatcomputer.ai/get (choose App), and leave it open'
+            Write-Line ('until it says its model is ready. Then choose "' + $Script:OwnEntryName + '" in the boot menu, or double-click')
+            Write-Line 'this again.'
+            try { Start-Process 'https://chatcomputer.ai/get' } catch { Write-SetupLog ('Opening chatcomputer.ai/get: ' + $_.Exception.Message) }
+            return
+        }
+        Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
+        Write-Line ''
+        Write-Line 'To come back to Windows: restart (the next start is Windows), or hold the power button until the PC turns off.'
+        Write-Line ('Next time, choose "' + $Script:OwnEntryName + '" in the boot menu as the PC starts (often F12, F11, F8 or Esc).')
+        if (Wait-OwnCountdown 10 -Unattended:$Unattended) {
+            & shutdown.exe /r /t 0
         } else {
-            Write-Line 'It starts at the next restart.'
+            Write-Line ('Staying in Windows: it starts at the next restart, once, and whenever you choose it in the boot menu.')
         }
         return
     }
+    Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
 
     Write-Step 'Secure Boot'
     Write-Line 'This PC starts only software signed with a key it trusts, and it doesn''t know Chat Computer''s key yet.'

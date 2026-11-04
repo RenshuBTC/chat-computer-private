@@ -587,6 +587,16 @@ Assert-Equal 0 $Script:BcdCalls.Count 'own entry: nothing added when it is there
 Assert-Equal 0 (Get-SetupBootEntries).Count 'own entry: not the installer''s entry'
 Assert-Equal 1 (Get-ChatComputerBootEntries).Count 'own entry: not Linux Chat Computer''s entry'
 Remove-Item Function:\bcdedit.exe
+# The key it signs with: one the PC's Secure Boot already trusts (ClaudeOS's, made before the name changed, too: a PC
+# that approved it starts Chat Computer with nothing to approve), else Chat Computer's own, else a new one.
+$kNew = [pscustomobject]@{ FriendlyName = 'Chat Computer Secure Boot key'; Thumbprint = 'NEW' }
+$kOld = [pscustomobject]@{ FriendlyName = 'ClaudeOS Secure Boot key'; Thumbprint = 'OLD' }
+Assert-Equal 'OLD' (Select-OwnKey -Keys @($kNew, $kOld) -Trusted { param($k) $k.Thumbprint -eq 'OLD' }).Thumbprint 'own key: the one Secure Boot trusts, ClaudeOS''s too'
+Assert-Equal 'NEW' (Select-OwnKey -Keys @($kOld, $kNew) -Trusted { param($k) $false }).Thumbprint 'own key: else Chat Computer''s own'
+Assert-Equal 'NEW' (Select-OwnKey -Keys @($kOld, $kNew)).Thumbprint 'own key: Secure Boot off: Chat Computer''s own'
+Assert-Equal $null (Select-OwnKey -Keys @($kOld)) 'own key: only an untrusted ClaudeOS key: a new one is made'
+Assert-Equal $null (Select-OwnKey -Keys @()) 'own key: none yet'
+Assert-True (Wait-OwnCountdown 10 -Unattended) 'own restart: no countdown to wait through, unattended'
 # Its model: the one Chat Computer's app got ready, picked as the kernel picks (os/kernel/src/assistant.rs).
 function New-FakeModel([string]$Name, [int64]$Length) { [pscustomobject]@{ Name = $Name; Length = $Length; FullName = ('C:\m\' + $Name) } }
 Assert-Equal 'Qwen3.5 4B' (Get-OwnModelLabel 'qwen3.5-4b.ccm') 'own model: its name'

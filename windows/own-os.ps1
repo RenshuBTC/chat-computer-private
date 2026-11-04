@@ -4,15 +4,17 @@ Chat Computer's own system (double-click "Chat Computer Own System.cmd").
 Starts Chat Computer's own operating system (os/ in this folder: its own start-up stage and kernel, written from
 scratch) on this PC, without a USB stick:
   1. checks this PC (read-only) and saves a list of its parts, for writing Chat Computer's drivers,
-  2. signs Chat Computer's start-up file with a key made on this PC (the key never leaves it),
+  2. signs Chat Computer's start-up file with a key made on this PC (the key never leaves it): the one the PC's
+     Secure Boot already trusts, where there is one (ClaudeOS's, made by this before the name changed, too),
   3. says which model it answers with there: the one Chat Computer's app got ready on this PC (free, run on the PC
      itself, so nothing you type leaves it),
-  4. after you confirm, puts the signed file, its settings and its memory file (where it keeps the conversation
-     across restarts; kept when this runs again) on the partition the PC starts from (\EFI\chatcomputer-own),
-     next to Windows' own files, and adds "Chat Computer (own system)" to the end of the power-on menu, started
-     once.
-With Secure Boot on, the PC must first trust Chat Computer's key: one approval in the PC's setup screen (or turn
-Secure Boot off there). Then the PC restarts into Chat Computer's own system; the restart after that is Windows.
+  4. puts the signed file, its settings and its memory file (where it keeps the conversation across restarts; kept
+     when this runs again) on the partition the PC starts from (\EFI\chatcomputer-own), next to Windows' own files,
+     and keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu), to choose whenever you like,
+  5. restarts into it after a 10-second countdown (any key stays in Windows; with no model yet, it opens
+     chatcomputer.ai/get to get the app, which gets it, and doesn't restart).
+One double-click, no questions: with Secure Boot on and a key the PC doesn't trust yet, it first needs one approval
+in the PC's setup screen (or Secure Boot turned off there), and asks which. The restart after it is Windows.
 
   -Remove       take it off this PC again
   -Unattended   answer yes to everything (for tests); add -NoRestart so nothing restarts
@@ -72,15 +74,8 @@ try {
     Write-Line '(the one Chat Computer''s app gets ready) answers on the PC itself: no account, no internet, nothing to pay.'
     Write-Line 'No USB stick is needed, and Windows isn''t changed: a few small files go on the partition the PC starts'
     Write-Line 'from, next to Windows'' own files.'
-    $mode = 0
+    # (A double-click starts it, with the newest files in this folder, every time: taking it off is -Remove.)
     if ($Remove) {
-        $mode = 1
-    } elseif ((Get-OwnBootEntries).Count -gt 0 -and -not $Unattended) {
-        $mode = Read-Choice 'What would you like to do?' @(
-            'Start Chat Computer''s own system (at the next restart, once)',
-            'Remove it from this PC') 0
-    }
-    if ($mode -eq 1) {
         Remove-OwnSystem -Unattended:$Unattended
     } else {
         Start-OwnSystem -RepoRoot $RepoRoot -WorkDir $WorkDir -Unattended:$Unattended -NoRestart:$NoRestart -Out $Out

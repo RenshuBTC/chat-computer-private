@@ -17,9 +17,9 @@ Anthropic (Claude), OpenAI, Meta, Moonshot (Kimi), xAI (Grok), Alibaba (Qwen), D
 **[Try it in your browser](https://chatcomputer.ai)**: Chat Computer's own screen (see
 [The demo](#the-demo)).
 
-**[Get it](https://chatcomputer.ai/get)**: on Windows and on a Mac, one Setup, which asks how you want Chat Computer: as a
-Chrome extension, as your web browser, as an app, or as its own system, next to Windows or macOS (see
-[The apps](#the-apps)).
+**[Get it](https://chatcomputer.ai/get)**: on Windows, one Setup, which asks how you want Chat Computer: as a Chrome
+extension, as your web browser, as an app, or as its own system, next to Windows. On a Mac, the same from the Mac app's
+next version; until then /get has the Mac app (see [The apps](#the-apps)).
 
 * **On a Windows PC** it sits next to Windows. When you press the power button, Chat Computer starts by
   itself. Windows stays installed, and you can go back to it whenever you like.

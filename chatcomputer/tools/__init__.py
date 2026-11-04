@@ -40,6 +40,10 @@ SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distanc
             "left_panel", "right_panel", "keyboard_layout", "home_place"}
 # Windows' own folders, at the top of its drive (a folder of the person's own called Recovery or Boot is theirs).
 WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
+# Asked for a dark or light mode (a theme), and not for the screen's brightness or the night light ("dark mode, and
+# dim it" asks for the dimming too): the display tool answers that there's none, whichever action the model chose.
+DARK_OR_LIGHT_MODE = re.compile(r"\b(dark|light)[ -]?(mode|theme)\b", re.I)
+SCREEN_WORDS = re.compile(r"bright|\bdim|darker|lighter|night ?light|warm", re.I)
 
 
 @dataclass
@@ -68,6 +72,7 @@ class ToolContext:
     stop_ringing: Callable[[], str] | None = None           # stop a timer or alarm that's ringing now
     on_night_light: Callable[[], None] | None = None        # the night light's setting changed: apply it now
     lock: Callable[[str], Awaitable[str]] | None = None     # the lock screen (Controller.lock_action)
+    asked: Callable[[], str] | None = None    # what the person asked this turn, in their words (Controller.last_asked)
     shot_scale: float = 1.0
     power_delay_s: float = 4.0
     # Every tool by name (filled by build): what Revert in Actions calls to put a setting back as it was.
@@ -100,6 +105,16 @@ def _err(s: str) -> dict[str, Any]:
 
 def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=1, default=str)
+
+
+def _on_drive(path: str) -> list[str] | None:
+    """What's at the top of a drive (folders with a / after them), the first 30, or None if it can't be read."""
+    try:
+        names = sorted(n + ("/" if os.path.isdir(os.path.join(path, n)) else "")
+                       for n in os.listdir(path) if not n.startswith("."))
+    except OSError:
+        return None
+    return names[:30] + ([f"and {len(names) - 30} more"] if len(names) > 30 else [])
 
 
 def _size(n: float) -> str:
@@ -941,16 +956,19 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
                     o = {k: d.get(k) for k in ("name", "kind", "size_gb", "free_gb", "mounted", "path", "id") if d.get(k) is not None}
                     # (What's on it, at the top: "what's on my USB stick?" is answered by the list itself. evals/os: a
                     # small model answered with the drive's size, and nothing of its files.)
-                    with contextlib.suppress(OSError):
-                        if d.get("mounted") and d.get("path") and os.path.isdir(d["path"]):
-                            names = sorted(n + ("/" if os.path.isdir(os.path.join(d["path"], n)) else "")
-                                           for n in os.listdir(d["path"]) if not n.startswith("."))
-                            o["on_it"] = names[:30] + ([f"and {len(names) - 30} more"] if len(names) > 30 else [])
+                    if d.get("mounted") and d.get("path"):
+                        on_it = _on_drive(d["path"])
+                        if on_it is not None:
+                            o["on_it"] = on_it
                     out.append(o)
                 return _text(_json(out))
             if act == "open":
                 path = await _machine(p.open_drive, a.get("drive") or "")
-                return _text(f"It's open: its files are in {path}")
+                # (And what's on it: evals/os found a small model opening the drive after the list, then asking for
+                # the same again until it was stopped, with nothing said.)
+                on_it = _on_drive(path)
+                return _text(f"It's open: its files are in {path}" +
+                             (f". On it: {', '.join(on_it)}" if on_it else ". It's empty" if on_it == [] else ""))
             name = await _machine(p.eject_drive, a.get("drive") or "")
             ctx.journal.record("drive", f"ejected {name}")
             return _text(f"{name} is ejected: it's safe to pull it out now.")
@@ -1300,11 +1318,14 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
               "from": S, "until": S, "warmth": I}, ["action"]))
     async def display(a):
         act, p, s = a["action"], ctx.platform, ctx.settings
-        if act == "dark_mode" or str(a.get("mode") or "").lower() in ("dark", "light"):
-            # (Asked as people ask it: evals/os found a small model turning the brightness up for "dark mode" and
-            # saying it was on.)
-            return _text("Nothing to change: Chat Computer's screen is always dark (light text on a dark background); "
-                         "there's no light mode. Tell them so. If it's too bright, offer to dim it or turn on the night light.")
+        said = (ctx.asked() if ctx.asked else "") or ""
+        if act == "dark_mode" or str(a.get("mode") or "").lower() in ("dark", "light") or (
+                act != "status" and DARK_OR_LIGHT_MODE.search(said) and not SCREEN_WORDS.search(said)):
+            # (Asked as people ask it, whichever action the model picks: evals/os found Qwen3.5 0.8B, asked to "turn on
+            # dark mode", turning the brightness up, or the night light on, and saying dark mode was on.)
+            return _text("There's no dark mode to turn on or off: Chat Computer's screen is always dark (light text on a "
+                         "dark background), and there's no light mode. Nothing was changed. Tell them so, and offer to dim "
+                         "the screen or turn on the night light (warmer colours) if it's too bright.")
         try:
             if act == "status":
                 st = await _machine(p.display_status)

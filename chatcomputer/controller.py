@@ -201,7 +201,7 @@ class Controller:
                                  announce=lambda text: self.loop.call_soon_threadsafe(self._announce, text),
                                  schedule=self.schedule, on_schedule_changed=self._schedule_changed,
                                  stop_ringing=self._stop_ringing_from_tool, on_night_light=self.apply_night_light,
-                                 lock=self.lock_action)
+                                 lock=self.lock_action, asked=lambda: self.last_asked)
         specs, policies, self.tool_names = T.build(self.ctx)
         self.gate = PermissionGate(self.paths, self.journal, self.confirm, policies)
         self.model = ModelService(self.paths, s, on_progress=self._model_progress)

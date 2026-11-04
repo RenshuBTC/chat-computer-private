@@ -694,12 +694,35 @@ def test_the_drive_list_says_whats_on_each_drive(tmp_path):
     ctx.platform.drives = lambda: [{"name": "SANDISK", "kind": "USB drive", "size_gb": 32.0, "mounted": True, "path": str(stick)}]
     out, err = call(ctx, "drives", {"action": "list"})
     assert not err and json.loads(out)[0]["on_it"] == ["Photos/", "Recipes.docx"]
+    # Opened, it says so too (evals/os: a small model opened it after the list, then asked again until stopped).
+    ctx.platform.open_drive = lambda name: str(stick)
+    out, err = call(ctx, "drives", {"action": "open", "drive": "SANDISK"})
+    assert not err and out == f"It's open: its files are in {stick}. On it: Photos/, Recipes.docx"
+    (stick / "Recipes.docx").unlink()
+    (stick / "Photos").rmdir()
+    out, _ = call(ctx, "drives", {"action": "open", "drive": "SANDISK"})
+    assert out.endswith(". It's empty")
 
 
 def test_dark_mode_is_answered_not_turned_up(tmp_path):
     """evals/os: "Turn on dark mode" turned the brightness up to 100% and said dark mode was on."""
     ctx, *_ = make(tmp_path)
     out, err = call(ctx, "display", {"action": "dark_mode"})
-    assert not err and "always dark" in out
+    assert not err and "always dark" in out and "no dark mode" in out
     out, _ = call(ctx, "display", {"action": "brightness", "value": 100, "mode": "dark"})
     assert "always dark" in out and not [c for c in ctx.platform.calls if c[0] == "set_brightness"]
+    # Whichever action the model picks for it (evals/os: the brightness up, or the night light on, then "Done.").
+    ctx.asked = lambda: "Turn on dark mode"
+    for a in ({"action": "brightness", "value": 100, "mode": "on"}, {"action": "night_light", "mode": "on"},
+              {"action": "brighter"}):
+        out, _ = call(ctx, "display", a)
+        assert "no dark mode" in out and "Nothing was changed" in out
+    assert not [c for c in ctx.platform.calls if c[0] in ("set_brightness", "set_night_light")]
+    out, _ = call(ctx, "display", {"action": "status"})
+    assert "no dark mode" not in out
+    # Asked for the screen itself, it's done.
+    for words in ("Light mode is too bright, dim it", "It's too dark, make it brighter", "Turn on the night light"):
+        ctx.asked = lambda w=words: w
+        out, _ = call(ctx, "display", {"action": "dimmer"})
+        assert "no dark mode" not in out
+    assert [c for c in ctx.platform.calls if c[0] == "set_brightness"]

@@ -4,7 +4,8 @@
 //! * the kernel at the addresses it was linked for, each part with only the access it needs
 //!   (code: read and run; read-only data: read; data: read and write),
 //! * device memory (screen, interrupt controller, ...) mapped on request, uncached or write-combined,
-//! * the heap's room to grow into, RAM mapped there as the heap needs it (for the model's file and what it reads).
+//! * the heap's room to grow into, RAM mapped there as the heap needs it (for the model's file and what it reads),
+//! * the kernel's own stack, with nothing mapped below it.
 //!
 //! Nothing is mapped at low addresses, so a null pointer faults.
 
@@ -12,6 +13,7 @@ use crate::cpu;
 use crate::memory;
 use crate::sync::SpinLock;
 use bootinfo::{BootInfo, PAGE_SIZE, PHYS_OFFSET, SEGMENT_EXECUTE, SEGMENT_WRITE};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
@@ -31,6 +33,12 @@ const DEVICE_END: u64 = 0xFFFF_E000_0000_0000;
 /// the RAM behind it (heap.rs).
 pub const HEAP_START: u64 = 0xFFFF_E000_0000_0000;
 pub const HEAP_END: u64 = 0xFFFF_F000_0000_0000;
+/// Where the kernel's own stack ends: its pages are the last of page-map slot 480, which has nothing else in it, so
+/// running past the stack's end faults at once (the start-up stage's stack is in the map of all RAM, with other
+/// memory right below it, which an overflow would write over unseen).
+const STACK_TOP: u64 = 0xFFFF_F080_0000_0000;
+/// Where its pages start (0 until it's mapped).
+static STACK_BOTTOM: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cache {
@@ -229,6 +237,41 @@ pub fn map_heap(virt: u64, len: u64) {
             }
         }
     }
+}
+
+/// Maps `pages` zeroed frames as the kernel's own stack, and returns its top (a stack grows down from there).
+pub fn map_stack(pages: u64) -> u64 {
+    let mut guard = TABLES.lock();
+    let t = guard.as_mut().expect("paging::init first");
+    let flags = PRESENT | WRITABLE | t.no_execute;
+    let bottom = STACK_TOP - pages * PAGE_SIZE;
+    for page in (bottom..STACK_TOP).step_by(PAGE_SIZE as usize) {
+        let phys = memory::alloc_zeroed().expect("no memory for the kernel's stack");
+        t.map(page, phys, PAGE_SIZE, flags, false);
+    }
+    STACK_BOTTOM.store(bottom, Ordering::Relaxed);
+    STACK_TOP
+}
+
+/// How deep the kernel's own stack has gone, at most, and how big it is, in bytes. Its pages started zeroed, so the
+/// lowest word that isn't zero is as deep as anything has written (a little short if the deepest words written were
+/// zeros); measured, where a count of nested calls would be only a guess at it.
+pub fn stack_used() -> (u64, u64) {
+    let bottom = STACK_BOTTOM.load(Ordering::Relaxed);
+    if bottom == 0 {
+        return (0, 0);
+    }
+    let mut at = bottom;
+    while at < STACK_TOP && unsafe { core::ptr::read_volatile(at as *const u64) } == 0 {
+        at += 8;
+    }
+    (STACK_TOP - at, STACK_TOP - bottom)
+}
+
+/// Whether `address` is just past the end of the kernel's own stack: where a fault means it ran out.
+pub fn past_stack(address: u64) -> bool {
+    let bottom = STACK_BOTTOM.load(Ordering::Relaxed);
+    bottom != 0 && address < bottom && address >= bottom - (1 << 20)
 }
 
 /// Whether `phys` to `phys + len` is RAM, reached at PHYS_OFFSET (the firmware's own RAM too: its ACPI tables' and

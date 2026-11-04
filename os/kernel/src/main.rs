@@ -53,6 +53,10 @@ mod mem;
 
 use alloc::string::String;
 use bootinfo::BootInfo;
+use core::arch::asm;
+
+/// The kernel's own stack: 256 KiB, as the start-up stage's, with nothing mapped below it (paging.rs).
+const STACK_PAGES: u64 = 64;
 
 /// # Safety
 /// Only the start-up stage calls this, once, with what it prepared.
@@ -80,6 +84,26 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
     memory::init(info);
     paging::init(info);
     log!("Chat Computer kernel: own page tables in use");
+    // The rest on the kernel's own stack, with nothing mapped below it: running past its end stops the kernel, saying
+    // so, where running past the start-up stage's would write over the memory below it unseen.
+    let top = paging::map_stack(STACK_PAGES);
+    unsafe {
+        asm!(
+            "mov rsp, {top}",
+            "xor ebp, ebp",
+            "call {go_on}",
+            "ud2",
+            top = in(reg) top,
+            go_on = sym go_on,
+            in("rdi") info as *const BootInfo,
+            options(noreturn)
+        )
+    }
+}
+
+/// The kernel's start, from its heap on, then its loop: on its own stack.
+extern "C" fn go_on(info: *const BootInfo) -> ! {
+    let info = unsafe { &*info };
     let heap = heap::init();
     log!("Chat Computer kernel: heap of {} MiB to start with (it grows as it's needed)", heap >> 20);
     // The settings file and the clock, as the start-up stage read them.
@@ -210,12 +234,18 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
             let _ = unsafe { core::ptr::read_volatile(0x10 as *const u64) };
         }
         Some("panic") => panic!("a test of what happens when the kernel stops"),
+        Some("stack") => {
+            log!("Chat Computer kernel: test: going deeper than its stack goes");
+            deeper(0);
+        }
         // (A timer, as the model's reminders tool sets one.)
         Some("sound") => log!("Chat Computer kernel: test: {}", schedule::timer(2.0, "tea").unwrap_or_else(|e| e)),
         _ => {}
     }
 
     let mut keyboards_shown = u64::MAX;
+    let (mut stack_shown, mut stack_checked) = (0, 0);
+    log_stack(&mut stack_shown);
     loop {
         // (While the model works, the loop goes straight on: its steps are short, and the rest has its turn between.)
         if !assistant::working() {
@@ -253,7 +283,30 @@ pub unsafe extern "C" fn kernel_entry(info: *const BootInfo) -> ! {
         firmware::work();
         chat::tick();
         power::due();
+        if time::uptime_ms() >= stack_checked + 1000 {
+            stack_checked = time::uptime_ms();
+            log_stack(&mut stack_shown);
+        }
     }
+}
+
+/// Says in the log how deep the kernel's stack has gone, when that's 8 KiB or more deeper than it last said.
+fn log_stack(shown: &mut u64) {
+    let (used, size) = paging::stack_used();
+    if used >= *shown + (8 << 10) {
+        *shown = used;
+        log!("Chat Computer kernel: its stack: {} KiB of {} KiB used at most", used.div_ceil(1024), size >> 10);
+    }
+}
+
+/// Calls itself until the stack runs out: a test of what happens then (CHATCOMPUTER_TEST=stack).
+#[allow(unconditional_recursion)]
+#[inline(never)]
+fn deeper(n: u64) -> u64 {
+    let room = [n; 32];
+    let below = deeper(n + 1);
+    // (Used after the call, so its frame can't be let go first and the call turned into a loop.)
+    core::hint::black_box(&room)[(below % 32) as usize]
 }
 
 /// The kernel is built for a target with the processor's floating-point registers (its model's arithmetic needs

@@ -53,6 +53,10 @@ drivers.
     * nothing at address 0, so a null pointer faults;
     * device memory uncached, and the framebuffer write-combined;
     * room for the heap to grow into, at `0xFFFFE00000000000`, RAM mapped there as it's needed;
+  * its own stack, 256 KiB, at the end of a range with nothing else in it, moved onto from the start-up stage's
+    (which is in the map of all RAM, with other memory right below it): running past its end faults at once, and the
+    screen says the kernel's stack ran out, where the memory below would have been written over unseen. How deep it
+    has gone is measured (its pages start zeroed) and in the log as it goes deeper;
   * a heap: 16 to 256 MiB to start with, then growing as it's needed into its own range of addresses (in 2 MiB pages
     where whole blocks of RAM are free), so the model's file, gigabytes, is one piece in memory however scattered the
     RAM behind it, while 64 MiB is always left for everything else;
@@ -435,10 +439,12 @@ cargo test -p font -p text -p net -p crypto -p tls -p fat -p exfat -p ntfs -p zi
                                  # xz), memory file, Markdown reader, chimes, HID descriptors and the AML
                                  # interpreter (needs acpica-tools: iasl and acpiexec)
 cargo test -p model --features std # the model engine (small models of random weights)
-./check.py                       # starts it in a virtual PC; checks the screen and the clock
+./check.py                       # starts it in a virtual PC; checks the screen, the clock, and that the kernel's
+                                 # stack went no more than halfway down (--chat, --model and the drives' checks too)
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768
 ./check.py --crash page-fault    # a kernel that faults on purpose: checks it stops cleanly
 ./check.py --crash panic
+./check.py --crash stack         # one that calls itself until its stack runs out: it must say so
 ./check.py --keyboard            # typing on a PS/2 keyboard, then USB keyboards on a port and behind a
                                  # hub (MSI-X, MSI, no interrupts), with Intel's and AMD's IOMMUs
                                  # present, plugged in and out

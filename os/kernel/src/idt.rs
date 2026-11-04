@@ -236,7 +236,13 @@ extern "C" fn interrupt_dispatch(frame: &mut Frame) {
 }
 
 fn exception(f: &Frame) -> ! {
-    let name = EXCEPTIONS[f.vector as usize];
+    // (Running past the end of the kernel's stack faults just past it, where nothing is mapped (paging.rs), and that
+    // fault can't be taken on the same stack, so it comes as a double fault, on a stack of its own: said as what it is.)
+    let name = if matches!(f.vector, 8 | 14) && crate::paging::past_stack(crate::cpu::cr2()) {
+        "The kernel's stack ran out"
+    } else {
+        EXCEPTIONS[f.vector as usize]
+    };
     crate::serial::write_anyway(format_args!(
         "\nChat Computer kernel stopped: {name} (vector {}, error {:#x})\n\
          rip {:#018x}  cs {:#x}  rflags {:#x}  rsp {:#018x}  ss {:#x}\n\

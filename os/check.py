@@ -15,7 +15,8 @@ log go to out/.
                                      report descriptors (and by the boot protocol in a build told to); a
                                      smart card reader left alone
     ./check.py --crash page-fault    a kernel that faults on purpose once ready: it must stop cleanly,
-                                     with the fault in its log and a message on the screen (also: panic)
+                                     with the fault in its log and a message on the screen (also: panic; and
+                                     stack, one that calls itself until its stack runs out, which must be said)
     ./check.py --network             the network, with each kind of card there's a driver for (virtio, Intel's
                                      e1000e, e1000 and igb, a USB network adapter by CDC ECM, plugged in once the
                                      kernel is running and then unplugged, and by RNDIS): an address from DHCP, a
@@ -320,6 +321,18 @@ def check_screen(a, b, size: str) -> list[str]:
     return problems
 
 
+def stack_problems(log: str) -> list[str]:
+    """The kernel's stack (main.rs says in its log how deep it has gone, measured): at most half of it used, so that
+    something going much deeper is seen long before the stack runs out."""
+    import re
+
+    used = re.findall(r"its stack: (\d+) KiB of (\d+) KiB used at most", log)
+    if not used:
+        return ["the kernel didn't say how deep its stack has gone"]
+    deepest, size = (int(n) for n in used[-1])
+    return [] if deepest * 2 <= size else [f"the kernel's stack went {deepest} KiB deep: more than half of its {size} KiB"]
+
+
 def box_rows(log: str) -> tuple[int, int] | None:
     """Where the message box is, as the kernel says in its log."""
     import re
@@ -345,14 +358,15 @@ def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None
         pc.stop()
     text = pc.text()
     print(text)
-    problems = check_screen(a, b, args.size)
+    problems = check_screen(a, b, args.size) + stack_problems(text)
     if expect_secure and "Chat Computer kernel: Secure Boot on" not in text:
         problems.append("the kernel didn't see Secure Boot on")
     return problems
 
 
 def crash(kind: str, args) -> list[str]:
-    expected = {"page-fault": "Chat Computer kernel stopped: Page fault", "panic": "Chat Computer kernel stopped: panicked"}[kind]
+    expected = {"page-fault": "Chat Computer kernel stopped: Page fault", "panic": "Chat Computer kernel stopped: panicked",
+                "stack": "Chat Computer kernel stopped: The kernel's stack ran out"}[kind]
     build(kind)
     try:
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu)
@@ -736,6 +750,7 @@ def chat(args) -> list[str]:
             pc.stop()
         text = pc.text()
         print(text)
+        problems += stack_problems(text)
         said = logged(text, "said")
         if "clock: " not in text or "(local time, offset from the settings)" not in text:
             problems.append("the clock offset in the settings wasn't used")
@@ -941,6 +956,7 @@ def model_check(args) -> list[str]:
             pc.stop()
         text = pc.text()
         print(text)
+        problems += stack_problems(text)
         path = "D:\\Users\\Test\\AppData\\Local\\ai.chatcomputer.desktop\\models\\qwen3.5-tiny.ccm"
         if f"model: reading Qwen3.5 TINY (1 MB) from {path}" not in text:
             problems.append("the model's file wasn't found where Chat Computer's app keeps it")
@@ -1311,6 +1327,7 @@ def files_check(args) -> list[str]:
             pc.stop()
         text = pc.text()
         print(text)
+        problems += stack_problems(text)
         results = tool_results(text, list(calls))
         if "files: C: Windows' drive (NTFS, 33.5 MB), read only" not in text:
             problems.append("Windows' drive wasn't found as it should be")
@@ -1492,6 +1509,7 @@ def drives_check(args) -> list[str]:
             pc.stop()
         text = pc.text()
         print(text)
+        problems += stack_problems(text)
         results = tool_results(text, list(calls))
         missing = [q for q in calls if q not in results]
         if missing:
@@ -1649,6 +1667,7 @@ def usb_check(args) -> list[str]:
             pc.stop()
         text = pc.text()
         print(text)
+        problems += stack_problems(text)
         results = tool_results(text, list(calls))
         missing = [q for q in calls if q not in results]
         if missing:
@@ -2102,7 +2121,7 @@ def main() -> int:
     ap.add_argument("--cpu", default="max", help="QEMU CPU model")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--timeout", type=float, default=240)
-    ap.add_argument("--crash", choices=["page-fault", "panic"])
+    ap.add_argument("--crash", choices=["page-fault", "panic", "stack"])
     ap.add_argument("--keyboard", action="store_true", help="USB keyboards: on a port, behind a hub, plugged in and out")
     ap.add_argument("--network", action="store_true", help="each network card there's a driver for: DHCP, DNS and TCP")
     ap.add_argument("--card", action="append", choices=[c[0] for c in CARDS], help="with --network: only this card")

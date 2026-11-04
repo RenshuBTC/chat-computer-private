@@ -3,19 +3,65 @@
 //! tokens), the scores at the prompt's last positions, and the answer written with always the likeliest token.
 //!
 //!     cargo run --release --features std --example picture_check -- MODEL.ccm PICTURE.rgb WIDTH HEIGHT REF_PREFIX "the question"
+//!
+//! (Without the reference's files, it gives its answer at length, and how long it took.)
 use model::chat::{Content, Message, Options, Picture, Style};
+use model::file::Writer;
 use model::net;
+use model::quant::Dtype;
 use model::sample::Sampling;
 use model::session::{Request, Session, Step};
 use model::{File, Model};
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
+
+/// A model file of only the vision part of the published files in `folder`, converted as the convert command does at
+/// `bits` a weight.
+fn vision_file(folder: &str, bits: u32) -> Vec<u8> {
+    let config = model::json::parse(&std::fs::read_to_string(format!("{folder}/config.json")).unwrap()).unwrap();
+    let pre = std::fs::read_to_string(format!("{folder}/preprocessor_config.json")).ok().and_then(|t| model::json::parse(&t));
+    let mut w = Writer::default();
+    w.add("config", Dtype::Blob, &[], model::convert::vision_settings(&config, pre.as_ref()).as_bytes());
+    let mut f = std::fs::File::open(format!("{folder}/model.safetensors-00001-of-00001.safetensors")).unwrap();
+    let mut len = [0u8; 8];
+    f.read_exact(&mut len).unwrap();
+    let len = u64::from_le_bytes(len) as usize;
+    let mut header = vec![0u8; len];
+    f.read_exact(&mut header).unwrap();
+    for (name, dtype, dims, a, b) in model::convert::safetensors(&String::from_utf8(header).unwrap()).unwrap() {
+        let Some((ours, mut to, shape)) = model::convert::plan(&name, &dims, bits).filter(|p| p.0.starts_with("vision")) else { continue };
+        // (CC_VISION_EXACT: which of the weights to keep in 16 bits whatever the bits, as vision_check has it.)
+        if let Ok(exact) = std::env::var("CC_VISION_EXACT")
+            && to == Dtype::Q8
+            && exact.split(',').any(|e| !e.is_empty() && ours.ends_with(e))
+        {
+            to = Dtype::BF16;
+        }
+        f.seek(SeekFrom::Start((8 + len + a) as u64)).unwrap();
+        let mut raw = vec![0u8; b - a];
+        f.read_exact(&mut raw).unwrap();
+        w.add(&ours, to, &shape, &model::convert::encode(&dtype, &raw, to).unwrap());
+    }
+    let mut bytes = w.head();
+    bytes.extend_from_slice(&w.data);
+    bytes
+}
 
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let (path, rgb, width, height, prefix, question) = (&a[0], &a[1], a[2].parse().unwrap(), a[3].parse().unwrap(), &a[4], &a[5]);
-    let bytes = std::fs::read(path).unwrap();
-    let file = File::open(&bytes).unwrap();
-    let model = Model::load(&file).unwrap();
+    let bytes: &'static [u8] = Box::leak(std::fs::read(path).unwrap().into_boxed_slice());
+    let file: &'static File = Box::leak(Box::new(File::open(bytes).unwrap()));
+    let mut model = Model::load(file).unwrap();
+    // (CC_VISION_FROM=FOLDER, CC_VISION_BITS=16|8: the vision part converted from the published files instead, at
+    // those bits, the language model still the file's: to tell the vision part's rounding from the language model's.)
+    if let Ok(folder) = std::env::var("CC_VISION_FROM") {
+        let bits = std::env::var("CC_VISION_BITS").ok().and_then(|b| b.parse().ok()).unwrap_or(16);
+        let vision_bytes: &'static [u8] = Box::leak(vision_file(&folder, bits).into_boxed_slice());
+        let vision_file: &'static File = Box::leak(Box::new(File::open(vision_bytes).unwrap()));
+        model.vision = model::vision::Vision::load(vision_file).unwrap();
+        println!("the vision part from {folder}, at {bits} bits");
+    }
     assert!(model.vision.is_some(), "the model's file has no vision part");
     let style = Style::named(file.config().unwrap().str("chat.style").unwrap_or("qwen3.5")).unwrap();
     let pool = model::threads::Threads::for_this_computer();
@@ -24,6 +70,14 @@ fn main() {
     let options = Options { think: Some(false), ..Options::default() };
     let request = Request { tools: &[], messages: &messages, options, sampling: Sampling::GREEDY, max_tokens: 64, seed: 1 };
     let mut session = Session::new(&model, style);
+    // (No reference: only its answer, at length, and how long it took.)
+    if !std::path::Path::new(&format!("{prefix}.ids")).exists() {
+        let started = std::time::Instant::now();
+        let request = Request { max_tokens: 200, ..request };
+        let (answer, stats) = session.ask(&request, &pool, &mut |_, _| true).unwrap();
+        println!("{} tokens read, {} written, in {:.1} s: {:?}", stats.prompt, stats.generated, started.elapsed().as_secs_f64(), answer.text);
+        return;
+    }
     let tokens = session.prompt(&request).unwrap();
     // The tokens, the picture's rows as the pad token they stand for.
     let pad = model.special("<|image_pad|>").unwrap();

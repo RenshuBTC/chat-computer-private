@@ -34,7 +34,9 @@ Qwen3.5-0.8B is the one the checks use.
   sides whole numbers of 32 pixels, its area within bounds; bicubic resampling as Pillow and torchvision do it), cut
   into 16-pixel patches, embedded, given its learned positions (interpolated to the picture's grid), through
   attention over every patch (turned by row and column) and feed-forward blocks, each 2x2 group of patches made a
-  row as wide as the language model. A block a step, for a caller with other things to do.
+  row as wide as the language model. A step at a time for a caller with other things to do: a part of a block (its
+  queries, keys and values; its attention; the rest) for as many patches as the caller says, so a step takes as long
+  as it wants; the rows the same however many patches a step takes.
 - `token.rs`, `unicode.rs`, `nfc.rs`: the tokenizer (byte-level BPE, its splitting rule written by hand, text put in
   Unicode's composed form first as the model's own tokenizer does).
 - `chat.rs`: a conversation as each model's chat template writes it (the templates' Jinja, as Rust), pictures in
@@ -49,10 +51,12 @@ Qwen3.5-0.8B is the one the checks use.
   the first question: the own system's kernel does both (`os/kernel/src/assistant.rs`), its screen and keyboard
   going on meanwhile. Each picture is given a slot by its pixels, its rows read as tokens of that slot, so a request
   is the same as an earlier one as far as its pictures are too; a picture's rows are made when the reading reaches
-  them (a block of the vision part a step), and kept for the 16 most recent.
+  them (a part of the vision part's work a step, for as many patches as the caller says), and kept for the 16 most
+  recent.
 - `convert.rs` and the program's `convert` command: the model's file from Qwen's published files (config.json,
   tokenizer.json, the chat template, the safetensors weights), a weight at a time; the vision part in 8 bits a
-  weight (or 16) even when the language model is in 4, with how pictures are prepared (preprocessor_config.json).
+  weight (or 16) even when the language model is in 4, but its patch embedding always in 16 (below), with how
+  pictures are prepared (preprocessor_config.json).
 - `refusal.rs` and the program's `find-refusal` command: the direction the model refuses along, found and measured
   (below), kept beside the model's file and taken out as the model runs (`net.rs`: `Ablation`).
 - `src/bin/chat-computer-model`: the program: `serve` answers this computer's programs over HTTP on 127.0.0.1 as
@@ -140,8 +144,9 @@ a direction taken out is in nothing the model thinks with, at any layer (and wit
 refusal search runs through, the same each time; its file reads back only for its model. With a small vision part
 (`tiny_seeing`): a picture's rows read at once give the scores of reading them one at a time, another picture other
 scores; the template writes pictures as Qwen's does (checked against it); a session reuses what it read only as far
-as the same picture, answering as a new session does; a picture seen a step at a time answers as all at once; a model
-without a vision part says it can't see; pictures are sized as Qwen's processor sizes them.
+as the same picture, answering as a new session does; a picture seen a step at a time answers as all at once, and
+its rows are the same however many patches a step takes (1, 3, 7 or 64); a model without a vision part says it can't
+see; pictures are sized as Qwen's processor sizes them.
 
 Getting a model ready as Chat Computer does (`chatcomputer/brain/models.py`: Qwen3.5-0.8B's files downloaded from the
 pinned revision, each checked against its SHA-256, converted by the program in `chatcomputer/brain/bin`) made a file
@@ -155,11 +160,18 @@ Against the reference implementation (transformers, in float32) and the publishe
 - Pictures, with `tools/refcheck/vision_reference.py` and `picture_reference.py` (examples/vision_check.rs and
   picture_check.rs): a picture of 500 by 375 pixels is read at 512 by 384 as the processor reads it (its resizing
   the same but for 118 of 589,824 bytes, each by 1), and becomes 192 rows; as published (16 bits), every row within
-  0.00017 of the reference's (numbers up to 4.1); in 8 bits, each row within 3.7% of it (the median; the reference
-  itself in bfloat16, as the model is usually run, is within 2.0%). Asked about it, Qwen3.5-0.8B as published gives
-  the same prompt (220 tokens), scores within 0.0003 at its last 16 positions (KL 0), and the same answer, token for
-  token ("This image features a colorful geometric composition... 1. **Yellow Circle**"); in 8 bits, KL 0.004, the
-  same likeliest token at all 16, and the same answer. The vision part of 8 bits took 6 seconds on this machine.
+  0.00017 of the reference's (numbers up to 4.1). In 8 bits, every row's cosine with the reference's at least 0.90,
+  within 0.73 at most (0.0055 on average); with the patch embedding in 8 bits too, at least 0.83 and within 1.69,
+  which is why it's kept in 16 (any one other kind of weight kept in 16 helped about as much, but for a third to
+  one and a half times more time). Asked about it,
+  Qwen3.5-0.8B as published gives the same prompt (220 tokens), scores within 0.0003 at its last 16 positions (KL 0),
+  and the same answer, token for token ("This image features a colorful geometric composition... 1. **Yellow
+  Circle**"); in 8 bits, KL 0.005, the same likeliest token at all 16, its answer worded otherwise from its fourth
+  token ("This image features several geometric shapes with distinct colors... on a colorful gradient background");
+  its vision part in 16 bits and the rest in 8, the same answer as the reference's. Asked to read a scanned-looking
+  invoice (900 by 520 pixels, slightly turned, specks on it: 448 rows), in 8 bits, the same answer as the
+  reference's for its first 24 tokens, and the whole invoice read without a mistake. The vision part took 5.4 seconds
+  for the first picture on this machine in 8 bits, 30 in 16 (whose arithmetic isn't vectorised).
 - The chat: 285 conversations (system prompts, tools, thinking on and off, earlier thinking kept or not, the effort
   setting, tool calls and their results, Unicode) written by each model's own template and by `chat.rs`: the same
   text and the same tokens, but for the one that spells special tokens in the person's words, read as text on purpose.

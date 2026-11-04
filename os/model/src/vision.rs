@@ -72,13 +72,43 @@ pub struct Vision<'a> {
     inv_freq: Vec<f64>,
 }
 
-/// A picture being made into rows, a step at a time (`Vision::begin`, `advance`): its patches' numbers so far,
-/// their places' turns, how many patches, and the next block.
+/// A picture being made into rows, a step at a time (`Vision::begin`, then `advance` until it gives them), each step
+/// a part of one of these, for as many patches as the caller says (so a step takes as long as the caller wants):
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Phase {
+    /// The patches embedded, with their learned positions.
+    Embed,
+    /// In a block: each patch normalised, its query, key and value made, the query and key turned by its place;
+    Qkv,
+    /// each patch's attention over all of them (all their keys and values made by now);
+    Attend,
+    /// the attention's output projected and added, then the feed-forward part's, each patch on its own.
+    Out,
+    /// Each 2x2 group's patches through the merger: a row for the language model.
+    Merge,
+}
+
 pub struct Encoding {
+    /// The patches' pixels, until they're embedded.
+    patches: Vec<f32>,
+    /// Each patch's numbers so far, its row and column, and its place's turns.
     x: Vec<f32>,
+    places: Vec<(usize, usize)>,
     turns: Vec<(f32, f32)>,
+    gh: usize,
+    gw: usize,
     n: usize,
+    /// Where it is: the block, the part of it, and how many patches (or groups, in the merger) that part has done.
     block: usize,
+    phase: Phase,
+    at: usize,
+    /// The block's queries, keys and values, and its attention's output, as they're made.
+    qkv: Vec<f32>,
+    att: Vec<f32>,
+    /// The rows made so far.
+    rows: Vec<f32>,
+    /// Patches' parts done (a patch embedded, a block's part for a patch, a group merged: one each).
+    done: usize,
 }
 
 /// A picture, resized for the model: its pixels (RGB, row after row) and its grid of patches.
@@ -240,27 +270,22 @@ impl<'a> Vision<'a> {
     /// The rows the language model reads for a picture: from its patches (`patches`, for a grid of `gh` by `gw`
     /// patches), one row (as wide as the language model) for each 2x2 group, in order.
     pub fn encode(&self, patches: &[f32], gh: usize, gw: usize, pool: &dyn Pool) -> Vec<f32> {
-        let mut e = self.begin(patches, gh, gw, pool);
+        let mut e = self.begin(patches.to_vec(), gh, gw);
         loop {
-            if let Some(rows) = self.advance(&mut e, pool) {
+            if let Some(rows) = self.advance(&mut e, usize::MAX, pool) {
                 return rows;
             }
         }
     }
 
-    /// The same a step at a time, for a caller with other things to do between them: the patches embedded, with
-    /// their places (begin), then a block a step, the last with the merger (advance, until it gives the rows).
-    pub fn begin(&self, patches: &[f32], gh: usize, gw: usize, pool: &dyn Pool) -> Encoding {
+    /// The same a step at a time, for a caller with other things to do between them: begun (each patch's place
+    /// found), then advanced (`advance`) until it gives the rows.
+    pub fn begin(&self, patches: Vec<f32>, gh: usize, gw: usize) -> Encoding {
         let s = &self.settings;
         let (h, n) = (s.hidden, gh * gw);
         let per = 3 * s.temporal * s.patch * s.patch;
         assert!(patches.len() == n * per && gh.is_multiple_of(s.merge) && gw.is_multiple_of(s.merge) && n > 0);
-        // The patch embedding.
-        let ready: Vec<Prepared> = patches.chunks_exact(per).map(Prepared::new).collect();
-        let mut x = self.patch.times_all(&ready, pool);
-        drop(ready);
-        add_bias(&mut x, &self.patch_bias);
-        // Each patch's row and column (in the processor's order), and its learned position, interpolated.
+        // Each patch's row and column, in the processor's order.
         let m = s.merge;
         let mut places = Vec::with_capacity(n);
         for bh in 0..gh / m {
@@ -269,23 +294,6 @@ impl<'a> Vision<'a> {
                     for mx in 0..m {
                         places.push((bh * m + my, bw * m + mx));
                     }
-                }
-            }
-        }
-        let side = isqrt(s.positions);
-        let mut row = vec![0.0f32; h];
-        for (i, &(r, c)) in places.iter().enumerate() {
-            let (rt, rw) = taps(r, gh, side);
-            let (ct, cw) = taps(c, gw, side);
-            let xi = &mut x[i * h..(i + 1) * h];
-            for a in 0..2 {
-                for b in 0..2 {
-                    let wgt = rw[a] * cw[b];
-                    if wgt == 0.0 {
-                        continue;
-                    }
-                    self.pos.row(rt[a] * side + ct[b], &mut row);
-                    quant::axpy(wgt, &row, xi);
                 }
             }
         }
@@ -302,100 +310,213 @@ impl<'a> Vision<'a> {
                 turns[i * half + j] = (cn as f32, sn as f32);
             }
         }
-        Encoding { x, turns, n, block: 0 }
+        Encoding {
+            patches,
+            x: vec![0.0f32; n * h],
+            places,
+            turns,
+            gh,
+            gw,
+            n,
+            block: 0,
+            phase: Phase::Embed,
+            at: 0,
+            qkv: Vec::new(),
+            att: Vec::new(),
+            rows: Vec::new(),
+            done: 0,
+        }
     }
 
-    /// One more step of an encoding: a block (and after the last, the merger). The rows, once it's done.
-    pub fn advance(&self, e: &mut Encoding, pool: &dyn Pool) -> Option<Vec<f32>> {
+    /// One more step of an encoding: the part it's at, for up to `most` more patches (at least one; the merger's
+    /// part by groups of patches, at least one). The rows, once they're all made. However many patches a step takes,
+    /// the rows are the same.
+    pub fn advance(&self, e: &mut Encoding, most: usize, pool: &dyn Pool) -> Option<Vec<f32>> {
         let s = &self.settings;
         let (h, n, m) = (s.hidden, e.n, s.merge);
-        let mut normed = vec![0.0f32; n * h];
-        if let Some(b) = self.blocks.get(e.block) {
-            let x = &mut e.x;
-            let mut out = vec![0.0f32; n * h];
-            layer_norm(x, &b.norm1.0, &b.norm1.1, h, &mut normed);
-            self.attention(b, &normed, &e.turns, n, &mut out, pool);
-            for (a, o) in x.iter_mut().zip(&out) {
-                *a += o;
+        let most = most.max(1);
+        let from = e.at;
+        let block = self.blocks.get(e.block);
+        match (e.phase, block) {
+            (Phase::Embed, _) => {
+                // The patch embedding, plus each patch's learned position, interpolated.
+                let end = from.saturating_add(most).min(n);
+                let per = 3 * s.temporal * s.patch * s.patch;
+                let ready: Vec<Prepared> = e.patches[from * per..end * per].chunks_exact(per).map(Prepared::new).collect();
+                let x = &mut e.x[from * h..end * h];
+                self.patch.times_into(&ready, x, pool);
+                drop(ready);
+                add_bias(x, &self.patch_bias);
+                let side = isqrt(s.positions);
+                let mut row = vec![0.0f32; h];
+                for (i, &(r, c)) in e.places[from..end].iter().enumerate() {
+                    let (rt, rw) = taps(r, e.gh, side);
+                    let (ct, cw) = taps(c, e.gw, side);
+                    let xi = &mut x[i * h..(i + 1) * h];
+                    for a in 0..2 {
+                        for b in 0..2 {
+                            let wgt = rw[a] * cw[b];
+                            if wgt == 0.0 {
+                                continue;
+                            }
+                            self.pos.row(rt[a] * side + ct[b], &mut row);
+                            quant::axpy(wgt, &row, xi);
+                        }
+                    }
+                }
+                e.done += end - from;
+                e.at = end;
+                if end == n {
+                    e.patches = Vec::new();
+                    (e.phase, e.at) = (Phase::Qkv, 0);
+                }
             }
-            layer_norm(x, &b.norm2.0, &b.norm2.1, h, &mut normed);
-            let ready: Vec<Prepared> = normed.chunks_exact(h).map(Prepared::new).collect();
-            let mut mid = b.fc1.times_all(&ready, pool);
-            drop(ready);
-            add_bias(&mut mid, &b.fc1_bias);
-            for v in mid.iter_mut() {
-                *v = gelu_tanh(*v);
+            (Phase::Qkv, Some(b)) => {
+                let end = from.saturating_add(most).min(n);
+                if e.qkv.len() != n * 3 * h {
+                    e.qkv = vec![0.0f32; n * 3 * h];
+                }
+                let mut normed = vec![0.0f32; (end - from) * h];
+                layer_norm(&e.x[from * h..end * h], &b.norm1.0, &b.norm1.1, h, &mut normed);
+                let ready: Vec<Prepared> = normed.chunks_exact(h).map(Prepared::new).collect();
+                let qkv = &mut e.qkv[from * 3 * h..end * 3 * h];
+                b.qkv.times_into(&ready, qkv, pool);
+                drop(ready);
+                add_bias(qkv, &b.qkv_bias);
+                // Queries and keys turned (each patch's, every head's).
+                let hd = h / s.heads;
+                let half = hd / 2;
+                for t in from..end {
+                    let tw = &e.turns[t * half..(t + 1) * half];
+                    for part in 0..2 {
+                        for hh in 0..s.heads {
+                            let at = (t - from) * 3 * h + part * h + hh * hd;
+                            let head = &mut qkv[at..at + hd];
+                            for i in 0..half {
+                                let (cn, sn) = tw[i];
+                                let (a, c) = (head[i], head[i + half]);
+                                head[i] = a * cn - c * sn;
+                                head[i + half] = c * cn + a * sn;
+                            }
+                        }
+                    }
+                }
+                e.done += end - from;
+                e.at = end;
+                if end == n {
+                    (e.phase, e.at) = (Phase::Attend, 0);
+                }
             }
-            let ready: Vec<Prepared> = mid.chunks_exact(s.intermediate).map(Prepared::new).collect();
-            drop(mid);
-            b.fc2.times_into(&ready, &mut out, pool);
-            drop(ready);
-            add_bias(&mut out, &b.fc2_bias);
-            for (a, o) in x.iter_mut().zip(&out) {
-                *a += o;
+            (Phase::Attend, Some(_)) => {
+                let end = from.saturating_add(most).min(n);
+                if e.att.len() != n * h {
+                    e.att = vec![0.0f32; n * h];
+                }
+                self.attention(&e.qkv, n, from, end, &mut e.att[from * h..end * h], pool);
+                e.done += end - from;
+                e.at = end;
+                if end == n {
+                    (e.phase, e.at) = (Phase::Out, 0);
+                }
             }
-            e.block += 1;
-            return None;
-        }
-        // The merger: each patch normalised, each group's four side by side, two matrices.
-        layer_norm(&e.x, &self.merger_norm.0, &self.merger_norm.1, h, &mut normed);
-        let wide = h * m * m;
-        let ready: Vec<Prepared> = normed.chunks_exact(wide).map(Prepared::new).collect();
-        let mut mid = self.merger_fc1.times_all(&ready, pool);
-        drop(ready);
-        add_bias(&mut mid, &self.merger_fc1_bias);
-        for v in mid.iter_mut() {
-            *v = gelu(*v);
-        }
-        let ready: Vec<Prepared> = mid.chunks_exact(wide).map(Prepared::new).collect();
-        let mut rows = self.merger_fc2.times_all(&ready, pool);
-        add_bias(&mut rows, &self.merger_fc2_bias);
-        Some(rows)
-    }
-
-    /// How many steps an encoding takes after it's begun (a block each, the last one the merger's too).
-    pub fn steps(&self) -> usize {
-        self.blocks.len() + 1
-    }
-
-    /// Attention over all the picture's patches (each sees every other): queries, keys and values with their
-    /// biases, queries and keys turned by place, then the output projection (with its bias), into `out`.
-    fn attention(&self, b: &Block, normed: &[f32], turns: &[(f32, f32)], n: usize, out: &mut [f32], pool: &dyn Pool) {
-        let s = &self.settings;
-        let h = s.hidden;
-        let hd = h / s.heads;
-        let half = hd / 2;
-        let ready: Vec<Prepared> = normed.chunks_exact(h).map(Prepared::new).collect();
-        let mut qkv = b.qkv.times_all(&ready, pool);
-        drop(ready);
-        add_bias(&mut qkv, &b.qkv_bias);
-        // Queries and keys turned (each patch's, every head's).
-        for t in 0..n {
-            let tw = &turns[t * half..(t + 1) * half];
-            for part in 0..2 {
-                for hh in 0..s.heads {
-                    let at = t * 3 * h + part * h + hh * hd;
-                    let head = &mut qkv[at..at + hd];
-                    for i in 0..half {
-                        let (cn, sn) = tw[i];
-                        let (a, c) = (head[i], head[i + half]);
-                        head[i] = a * cn - c * sn;
-                        head[i + half] = c * cn + a * sn;
+            (Phase::Out, Some(b)) => {
+                let end = from.saturating_add(most).min(n);
+                let rows = end - from;
+                // The attention's output projected (with its bias) and added.
+                let ready: Vec<Prepared> = e.att[from * h..end * h].chunks_exact(h).map(Prepared::new).collect();
+                let mut out = vec![0.0f32; rows * h];
+                b.proj.times_into(&ready, &mut out, pool);
+                drop(ready);
+                add_bias(&mut out, &b.proj_bias);
+                let x = &mut e.x[from * h..end * h];
+                for (a, o) in x.iter_mut().zip(&out) {
+                    *a += o;
+                }
+                // The feed-forward part's, added.
+                let mut normed = vec![0.0f32; rows * h];
+                layer_norm(x, &b.norm2.0, &b.norm2.1, h, &mut normed);
+                let ready: Vec<Prepared> = normed.chunks_exact(h).map(Prepared::new).collect();
+                drop(normed);
+                let mut mid = b.fc1.times_all(&ready, pool);
+                drop(ready);
+                add_bias(&mut mid, &b.fc1_bias);
+                for v in mid.iter_mut() {
+                    *v = gelu_tanh(*v);
+                }
+                let ready: Vec<Prepared> = mid.chunks_exact(s.intermediate).map(Prepared::new).collect();
+                drop(mid);
+                b.fc2.times_into(&ready, &mut out, pool);
+                drop(ready);
+                add_bias(&mut out, &b.fc2_bias);
+                for (a, o) in x.iter_mut().zip(&out) {
+                    *a += o;
+                }
+                e.done += rows;
+                e.at = end;
+                if end == n {
+                    e.block += 1;
+                    (e.phase, e.at) = (if e.block < self.blocks.len() { Phase::Qkv } else { Phase::Merge }, 0);
+                    if e.phase == Phase::Merge {
+                        e.qkv = Vec::new();
+                        e.att = Vec::new();
                     }
                 }
             }
+            (Phase::Merge, _) | (_, None) => {
+                // The merger: each patch normalised, each group's four side by side, two matrices.
+                let groups = n / (m * m);
+                let end = from.saturating_add(most.div_ceil(m * m)).min(groups);
+                let wide = h * m * m;
+                let mut normed = vec![0.0f32; (end - from) * wide];
+                layer_norm(&e.x[from * wide..end * wide], &self.merger_norm.0, &self.merger_norm.1, h, &mut normed);
+                let ready: Vec<Prepared> = normed.chunks_exact(wide).map(Prepared::new).collect();
+                drop(normed);
+                let mut mid = self.merger_fc1.times_all(&ready, pool);
+                drop(ready);
+                add_bias(&mut mid, &self.merger_fc1_bias);
+                for v in mid.iter_mut() {
+                    *v = gelu(*v);
+                }
+                let ready: Vec<Prepared> = mid.chunks_exact(wide).map(Prepared::new).collect();
+                drop(mid);
+                let rows = self.merger_fc2.times_all(&ready, pool);
+                drop(ready);
+                let at = e.rows.len();
+                e.rows.extend_from_slice(&rows);
+                add_bias(&mut e.rows[at..], &self.merger_fc2_bias);
+                e.done += end - from;
+                e.at = end;
+                if end == groups {
+                    e.x = Vec::new();
+                    return Some(core::mem::take(&mut e.rows));
+                }
+            }
         }
+        None
+    }
+
+    /// How far an encoding has got: its parts done, of how many (a patch embedded, a block's part for a patch, and a
+    /// group merged, each one).
+    pub fn progress(&self, e: &Encoding) -> (usize, usize) {
+        let m = self.settings.merge;
+        (e.done, e.n * (1 + 3 * self.blocks.len()) + e.n / (m * m))
+    }
+
+    /// Attention for queries `from` to `end` over all the picture's patches (each sees every other), from their
+    /// queries, keys and values (`qkv`, each patch's turned by its place): into `att` (those queries' rows).
+    fn attention(&self, qkv: &[f32], n: usize, from: usize, end: usize, att: &mut [f32], pool: &dyn Pool) {
+        let s = &self.settings;
+        let h = s.hidden;
+        let hd = h / s.heads;
         let scale = 1.0 / math::sqrt(hd as f32);
-        let mut att = vec![0.0f32; n * h];
         let att_ptr = SyncPtr(att.as_mut_ptr());
-        let qkv = &qkv;
         // A job per head and a few queries: each sees every patch.
         const QUERIES: usize = 8;
-        let per_head = n.div_ceil(QUERIES);
+        let per_head = (end - from).div_ceil(QUERIES);
         pool.run(s.heads * per_head, &|j| {
             let (hh, block) = (j % s.heads, j / s.heads);
             let mut scores = vec![0.0f32; n];
-            for t in block * QUERIES..((block + 1) * QUERIES).min(n) {
+            for t in from + block * QUERIES..(from + (block + 1) * QUERIES).min(end) {
                 let q = &qkv[t * 3 * h + hh * hd..t * 3 * h + (hh + 1) * hd];
                 let mut max = f32::NEG_INFINITY;
                 for (i, sc) in scores.iter_mut().enumerate() {
@@ -409,7 +530,7 @@ impl<'a> Vision<'a> {
                     sum += *sc;
                 }
                 // (Each job writes its own queries' rows of its own head.)
-                let o = unsafe { core::slice::from_raw_parts_mut(att_ptr.get().add(t * h + hh * hd), hd) };
+                let o = unsafe { core::slice::from_raw_parts_mut(att_ptr.get().add((t - from) * h + hh * hd), hd) };
                 o.fill(0.0);
                 for (i, sc) in scores.iter().enumerate() {
                     let v = &qkv[i * 3 * h + 2 * h + hh * hd..i * 3 * h + 2 * h + (hh + 1) * hd];
@@ -417,9 +538,6 @@ impl<'a> Vision<'a> {
                 }
             }
         });
-        let ready: Vec<Prepared> = att.chunks_exact(h).map(Prepared::new).collect();
-        b.proj.times_into(&ready, out, pool);
-        add_bias(out, &b.proj_bias);
     }
 }
 

@@ -282,10 +282,12 @@ pub fn plan(name: &str, dims: &[usize], bits: u32) -> Option<(String, Dtype, Vec
 fn plan_vision(v: &str, dims: &[usize], bits: u32) -> Option<(String, Dtype, Vec<usize>)> {
     let m = if bits == 16 { Dtype::BF16 } else { Dtype::Q8 };
     let flat = dims.to_vec();
-    // (The patch embedding's convolution, as a matrix: each output's weights over a patch's numbers.)
+    // (The patch embedding's convolution, as a matrix: each output's weights over a patch's numbers. Always in 16
+    // bits: a picture's pixels and these weights each rounded to 8 bits took the rows twice as far from the
+    // reference's, for a hundredth of the vision part's arithmetic.)
     let as_matrix = |d: &[usize]| -> Vec<usize> { alloc::vec![d[0], d[1..].iter().product()] };
     let (ours, dtype, shape) = match v {
-        "patch_embed.proj.weight" if dims.len() >= 2 => ("vision.patch".to_string(), m, as_matrix(dims)),
+        "patch_embed.proj.weight" if dims.len() >= 2 => ("vision.patch".to_string(), Dtype::BF16, as_matrix(dims)),
         "patch_embed.proj.bias" => ("vision.patch_bias".to_string(), Dtype::F32, flat),
         "pos_embed.weight" => ("vision.pos".to_string(), m, flat),
         "merger.norm.weight" => ("vision.merger.norm".to_string(), Dtype::F32, flat),

@@ -397,6 +397,7 @@ fn a_picture_seen_a_step_at_a_time_answers_as_all_at_once() {
     let mut whole = Session::new(&m, Style::QWEN35);
     let (want, _) = whole.ask(&r, &Serial, &mut |_, _| true).unwrap();
     let mut parts = Session::new(&m, Style::QWEN35);
+    parts.see = 16;
     let mut t = parts.begin(&r).unwrap();
     let (mut seeing, mut last) = (Vec::new(), 0);
     loop {
@@ -409,7 +410,41 @@ fn a_picture_seen_a_step_at_a_time_answers_as_all_at_once() {
     }
     let (got, st) = parts.end(t);
     assert_eq!(got, want);
-    // (Begun, a step for each of its 2 blocks, the merger's: then read.)
-    assert_eq!(seeing, vec![(1, 4), (2, 4), (3, 4), (4, 4)]);
+    // (56x40 pixels, 4-pixel patches: 140 patches, in 35 groups. Begun; each patch embedded and through each of the
+    // 2 blocks' 3 parts, 16 patches a step; then the merger's, 4 groups a step: then read.)
+    let total = 140 * (1 + 3 * 2) + 35;
+    assert!(seeing.iter().all(|&(_, t)| t == total));
+    assert_eq!(seeing.len(), 1 + 9 + 2 * 3 * 9 + 9);
+    assert_eq!(seeing.first(), Some(&(0, total)));
+    assert_eq!(seeing.last(), Some(&(total, total)));
+    assert!(seeing.windows(2).all(|w| w[0].0 < w[1].0));
     assert_eq!(last, st.prompt);
+}
+
+#[test]
+fn a_pictures_rows_are_the_same_however_many_patches_a_step_takes() {
+    let bytes = tiny_seeing(false);
+    let file = File::open(&bytes).unwrap();
+    let m = Model::load(&file).unwrap();
+    let v = m.vision.as_ref().unwrap();
+    let pic = a_picture(56, 40, 3);
+    let sized = v.prepare(&pic.rgb, 56, 40, usize::MAX);
+    let patches = v.patches(&sized);
+    let ps = v.settings.patch;
+    let (gh, gw) = (sized.height / ps, sized.width / ps);
+    let whole = v.encode(&patches, gh, gw, &Serial);
+    for most in [1, 3, 7, 64] {
+        let mut e = v.begin(patches.clone(), gh, gw);
+        let mut last = v.progress(&e).0;
+        let rows = loop {
+            if let Some(rows) = v.advance(&mut e, most, &Serial) {
+                break rows;
+            }
+            let (done, total) = v.progress(&e);
+            assert!(done > last && done < total, "{most} a step: {done} of {total} after {last}");
+            last = done;
+        };
+        assert_eq!(v.progress(&e), (140 * 7 + 35, 140 * 7 + 35));
+        assert!(rows == whole, "{most} patches a step made different rows");
+    }
 }

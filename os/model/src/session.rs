@@ -65,10 +65,12 @@ pub struct Session<'m> {
     /// The model's recent answers, how it was asked for them (thinking or not), and their tokens.
     answers: Vec<(Answer, bool, Vec<u32>)>,
     /// The pictures it's been shown (a slot each), and the most rows a new one is read at; a picture's rows being
-    /// made a step at a time (its slot, and how many steps are taken).
+    /// made a step at a time (its slot, and where it's got), and how many patches such a step works on at most (a
+    /// caller suits it to how long a step should take; all of a part of a block, unless it says).
     pictures: Vec<Seen>,
     pub most_rows: usize,
-    encoding: Option<(u32, crate::vision::Encoding, usize)>,
+    encoding: Option<(u32, crate::vision::Encoding)>,
+    pub see: usize,
 }
 
 /// A snapshot kept, with the scores where it was taken (empty when the reading goes on past it), and whether it's
@@ -153,7 +155,8 @@ impl Turn {
 pub enum Step {
     /// Read more of the prompt: `done` of its `total` tokens are read now.
     Read { done: usize, total: usize },
-    /// Looked at a picture: `done` of the `total` steps of making its rows taken (the reading goes on after).
+    /// Looked at a picture: `done` of the `total` parts of making its rows done (Vision::progress; the reading goes
+    /// on after).
     Seeing { done: usize, total: usize },
     /// Wrote a token: what it adds (`Said::Done` at the turn's end).
     Said(Saying),
@@ -184,6 +187,7 @@ impl<'m> Session<'m> {
             pictures: Vec::new(),
             most_rows: MOST_ROWS,
             encoding: None,
+            see: usize::MAX,
         }
     }
 
@@ -258,36 +262,35 @@ impl<'m> Session<'m> {
         }
     }
 
-    /// A step of making the rows of the first picture among `tokens` that has none (the first step begins it): how
-    /// many of its steps are taken, of how many; None if every picture there has its rows.
+    /// A step of making the rows of the first picture among `tokens` that has none (begun, if it isn't: resized and
+    /// cut into patches; then a part of the vision part's work, for up to `see` patches): how far it's got, of how
+    /// far it goes; None if every picture there has its rows.
     fn see_a_step(&mut self, tokens: &[u32], pool: &dyn Pool) -> Option<(usize, usize)> {
         let vision = self.model.vision.as_ref()?;
         let slot = tokens.iter().find_map(|&t| {
             net::picture_of(t).map(|(s, _)| s).filter(|&s| self.pictures.get(s as usize).is_some_and(|p| p.rows.is_none()))
         })?;
-        let total = vision.steps() + 1;
-        if let Some((s, e, done)) = &mut self.encoding
-            && *s == slot
-        {
-            return match vision.advance(e, pool) {
-                Some(rows) => {
-                    self.pictures[slot as usize].rows = Some(rows);
-                    self.encoding = None;
-                    self.keep_rows(slot);
-                    Some((total, total))
-                }
-                None => {
-                    *done += 1;
-                    Some((*done, total))
-                }
-            };
+        if !matches!(&self.encoding, Some((s, _)) if *s == slot) {
+            let p = &self.pictures[slot as usize];
+            let sized = vision.prepare(&p.picture.rgb, p.picture.width, p.picture.height, p.most);
+            let patches = vision.patches(&sized);
+            let ps = vision.settings.patch;
+            let e = vision.begin(patches, sized.height / ps, sized.width / ps);
+            let (done, total) = vision.progress(&e);
+            self.encoding = Some((slot, e));
+            return Some((done, total));
         }
-        let p = &self.pictures[slot as usize];
-        let sized = vision.prepare(&p.picture.rgb, p.picture.width, p.picture.height, p.most);
-        let patches = vision.patches(&sized);
-        let ps = vision.settings.patch;
-        self.encoding = Some((slot, vision.begin(&patches, sized.height / ps, sized.width / ps, pool), 1));
-        Some((1, total))
+        let (_, e) = self.encoding.as_mut()?;
+        match vision.advance(e, self.see, pool) {
+            Some(rows) => {
+                let (_, total) = vision.progress(e);
+                self.pictures[slot as usize].rows = Some(rows);
+                self.encoding = None;
+                self.keep_rows(slot);
+                Some((total, total))
+            }
+            None => Some(vision.progress(e)),
+        }
     }
 
     /// The model reads `tokens` (pictures' rows among them), with the scores after the last if `logits`.

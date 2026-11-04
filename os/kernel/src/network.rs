@@ -109,8 +109,8 @@ pub fn work() {
     }
 }
 
-/// Runs `f` with the stack (what talks over the network does so through this), and sends what it queued.
-#[allow(dead_code)] // (Nothing talks over the network yet but the network's own test: the web comes next.)
+/// Runs `f` with the stack (what talks over the network does so through this: the web, web.rs), and sends what it
+/// queued.
 pub fn with<R>(f: impl FnOnce(&mut Stack) -> R) -> Option<R> {
     let mut guard = NETWORK.lock();
     let n = guard.as_mut()?;

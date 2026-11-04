@@ -112,6 +112,9 @@ struct Block {
     changed: bool,
     /// A picture's pixels.
     picture: Option<picture::Picture>,
+    /// In the grey of the words that matter less (what the model looked up, as the main Chat Computer shows what it
+    /// does).
+    quiet: bool,
 }
 
 impl Block {
@@ -129,6 +132,7 @@ impl Block {
             activity: None,
             changed: true,
             picture: None,
+            quiet: false,
         }
     }
 }
@@ -239,8 +243,8 @@ fn memory_text(bytes: u64) -> String {
 fn model_text(ready: Ready) -> String {
     match ready {
         Ready::Yes(name) => format!(
-            "Chat Computer's own model, {name}, is ready, here on this PC: nothing you type leaves it. Type anything below \
-             and press Enter."
+            "Chat Computer's own model, {name}, is ready, here on this PC: nothing you type leaves it, unless it looks \
+             something up on the web for you, which you'll see. Type anything below and press Enter."
         ),
         Ready::Getting(how) => how,
         Ready::No(why) => why,
@@ -566,7 +570,7 @@ impl Chat {
                     continue;
                 }
                 let ink = l.ink.get_or_insert_with(|| ty.ink_in(&l.text, l.face, l.style, 0));
-                canvas.ink(m.column_x + l.x - ink.left as i32, ly, ink, INK);
+                canvas.ink(m.column_x + l.x - ink.left as i32, ly, ink, if b.quiet { MUTED } else { INK });
             }
             if b.thinking {
                 let d = m.px(0.5);
@@ -940,7 +944,28 @@ impl Chat {
                 self.blocks.push(Block::new(Kind::Note, Live::No, text));
                 self.relayout = true;
             }
+            Event::Looked(text) => self.looked(text),
         }
+    }
+
+    /// A line saying what the model looked up on the web, where it happens in the answer: before its words if it has
+    /// none yet, else after them (the answer going on below it), as a picture is placed.
+    fn looked(&mut self, text: String) {
+        let mut block = Block::new(Kind::Note, Live::No, text);
+        block.quiet = true;
+        match self.asking {
+            Some(i) if self.blocks[i].text.trim().is_empty() => {
+                self.blocks.insert(i, block);
+                self.asking = Some(i + 1);
+            }
+            Some(i) => {
+                self.blocks.insert(i + 1, block);
+                self.blocks.insert(i + 2, Block::new(Kind::Answer, Live::No, String::new()));
+                self.asking = Some(i + 2);
+            }
+            None => self.blocks.push(block),
+        }
+        self.relayout = true;
     }
 
     /// A picture the model shows: where the answer is, before its words if it hasn't any yet, else after them (and the

@@ -41,6 +41,10 @@ log go to out/.
                                      the eighth round's said tells it so; the ninth round's call not run, its words
                                      the answer, the question kept), an answer cut short at the most a round says,
                                      and a tool call cut off as it was written (not run, the model told why)
+    ./check.py --web                the model's web tools (search_web, read_web_page) over the kernel's own TCP and TLS
+                                     1.3, against a stand-in here for DuckDuckGo and a site (a test build trusting the
+                                     test's own authority): results read, a redirect followed, a page compressed and in
+                                     chunks read in two parts, a missing page and a wrong certificate said
     ./check.py --remember           the conversation kept across a restart: started from a disk laid out like a
                                      PC's (a FAT32 start-up partition with Windows' files and Chat Computer's,
                                      its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
@@ -1047,6 +1051,171 @@ def model_check(args) -> list[str]:
             if "settings: the model's file named" not in pc.text():
                 problems.append("the settings' model wasn't read")
     finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
+WEB_PORT = 8473
+# The stand-in's pages: DuckDuckGo's plain results page (its form: see os/web/src/search.rs), a page that's sent on
+# (302) to the page, the page (long enough to be read in two parts), and a page that isn't there.
+WEB_RESULTS = """<html><body><div class="result results_links results_links_deep web-result">
+<h2 class="result__title"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.example.com%2Fstart&amp;rut=1">Chat Computer &amp; its <b>own</b> system</a></h2>
+<a class="result__snippet" href="//duckduckgo.com/l/?uddg=x">A computer you talk to, with an operating system of its own.</a></div>
+<div class="result results_links web-result"><h2 class="result__title"><a class="result__a" href="https://duckduckgo.com/y.js?ad=1">An advertisement</a></h2></div>
+</body></html>"""
+WEB_PAGE_WORDS = "The own system reads the web over its own TLS. " * 300
+
+
+def test_authority(tmp: Path, names: list[str]) -> None:
+    """A certificate authority made for the test (tmp/ca.der, which a test build trusts instead of Mozilla's), and a
+    certificate from it for `names` (tmp/leaf.pem, tmp/leaf.key)."""
+    def openssl(*a: str) -> None:
+        subprocess.run(["openssl", *a], cwd=tmp, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    p256 = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
+    openssl("req", "-x509", "-nodes", *p256, "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
+            "-subj", "/CN=Chat Computer test authority (not for real use)",
+            "-addext", "basicConstraints=critical,CA:true", "-addext", "keyUsage=critical,keyCertSign")
+    sans = ",".join(f"DNS:{n}" for n in names)
+    (tmp / "leaf.ext").write_text(f"subjectAltName={sans}\nextendedKeyUsage=serverAuth\n"
+                                  "keyUsage=critical,digitalSignature\nbasicConstraints=critical,CA:false\n")
+    openssl("req", "-nodes", *p256, "-keyout", "leaf.key", "-out", "leaf.csr", "-subj", f"/CN={names[0]}")
+    openssl("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "leaf.pem",
+            "-days", "2", "-extfile", "leaf.ext")
+    openssl("x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der")
+
+
+def web_check(args) -> list[str]:
+    """The web, as the own system's model reads it: a test build trusting a test's own certificate authority, whose
+    sites are all a stand-in here (10.0.2.2: TLS 1.3, a certificate for html.duckduckgo.com and www.example.com),
+    reached over QEMU's virtual network by a virtio card, and a test's script in place of the model: a search (the
+    results page read, its advertisement left out), a page sent on (302) to the page, which comes compressed (gzip) in
+    chunks and is read in two parts (the second from what's kept: the stand-in asked once), a page that isn't there,
+    and a site whose certificate isn't for its name (refused). The results reach the model, and the screen says each
+    search and site."""
+    import gzip
+    import gzip as _gz  # noqa: F401
+    import http.server
+    import ssl
+    import threading
+    from urllib.parse import parse_qs, urlparse
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-web-"))
+    test_authority(tmp, ["html.duckduckgo.com", "www.example.com"])
+    asked: list[tuple[str, str, str]] = []
+
+    class Stand(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            host = self.headers.get("Host", "")
+            asked.append((host, self.path, self.headers.get("User-Agent", "")))
+            url = urlparse(self.path)
+            if host == "html.duckduckgo.com" and url.path == "/html/":
+                q = parse_qs(url.query).get("q", [""])[0]
+                body = WEB_RESULTS.encode() if q == "chat computer own system" else b"<html>nothing</html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif host == "www.example.com" and url.path == "/start":
+                self.send_response(302)
+                self.send_header("Location", "/page")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            elif host == "www.example.com" and url.path == "/page":
+                page = (f"<html><head><title>Example &amp; Page</title><script>no()</script></head><body>"
+                        f"<h1>Hello</h1><p>{WEB_PAGE_WORDS}</p><p>The end.</p></body></html>")
+                body = gzip.compress(page.encode())
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                for i in range(0, len(body), 700):
+                    piece = body[i:i + 700]
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(piece), piece))
+                self.wfile.write(b"0\r\n\r\n")
+            else:
+                body = b"<html>no such page</html>"
+                self.send_response(404)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            self.close_connection = True
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", WEB_PORT), Stand)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.load_cert_chain(tmp / "leaf.pem", tmp / "leaf.key")
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    script = {"web": [
+        {"calls": [["search_web", {"query": "chat computer own system"}]]},
+        {"calls": [["read_web_page", {"url": "https://www.example.com/start"}]]},
+        {"calls": [["read_web_page", {"url": "https://www.example.com/page", "offset": 12000}]]},
+        {"calls": [["read_web_page", {"url": "www.example.com/missing"}], ["read_web_page", {"url": "https://wrong.example.org/"}]]},
+        {"text": "Done."},
+    ]}
+    problems: list[str] = []
+    try:
+        (tmp / "script.json").write_text(json.dumps(script))
+        build("chat", {"CHATCOMPUTER_TEST_SCRIPT": str(tmp / "script.json"), "CHATCOMPUTER_TEST_CA": str(tmp / "ca.der"),
+                       "CHATCOMPUTER_TEST_PORT": str(WEB_PORT)})
+        extra = ("-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0")
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            wait_for(pc.log, ("network: address",), 60)
+            monitor_many(pc.mon, keys_for("web") + ["sendkey ret"])
+            got = wait_for(pc.log, ("model: answered", "test: failed", "stopped"), 180)
+            time.sleep(2)
+            pc.settled_picture("web")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        if got != "model: answered":
+            problems.append(f"the answer didn't end (the log says {got!r})")
+        said = [t["said"] for t in logged(text, "tool")]
+        errors = [t["error"] for t in logged(text, "tool")]
+        if len(said) != 5:
+            return problems + [f"{len(said)} tools' results, not 5: {said!r}"[:3000]]
+        if errors != [False, False, False, True, True]:
+            problems.append(f"the tools' errors were {errors!r}")
+        want = ("Results for “chat computer own system” (DuckDuckGo):\n1. Chat Computer & its own system\n"
+                "   https://www.example.com/start\n   A computer you talk to, with an operating system of its own.")
+        if said[0] != want:
+            problems.append(f"the search said {said[0]!r}")
+        words = "Hello\n\n" + WEB_PAGE_WORDS.strip() + "\n\nThe end."
+        first = f"Example & Page\nhttps://www.example.com/page\n\n# {words[:12000 - 2]}"
+        if not said[1].startswith(first[:400]) or "read_web_page with offset 12000 reads on" not in said[1]:
+            problems.append(f"the page's first part was {said[1][:600]!r}")
+        if not said[2].startswith("https://www.example.com/page, from character 12000:\n\n") or not said[2].endswith("The end."):
+            problems.append(f"the page's second part was {said[2][:300]!r}...{said[2][-100:]!r}")
+        if "says there's no such page (404)" not in said[3]:
+            problems.append(f"the missing page said {said[3]!r}")
+        if "didn't trust the site that answered for wrong.example.org" not in said[4]:
+            problems.append(f"the wrong certificate said {said[4]!r}")
+        pages = [a for a in asked if a[1] == "/page"]
+        if len(pages) != 1:
+            problems.append(f"the page was asked for {len(pages)} times, not once (the second part comes from what's kept)")
+        if not asked or any("ChatComputer/1.0" not in ua for _, _, ua in asked):
+            problems.append(f"the stand-in was asked {asked!r}")
+        for note in ("web: Searched the web (DuckDuckGo) for “chat computer own system”",
+                     "web: Read a page on www.example.com", "web: sent on to www.example.com"):
+            if note not in text:
+                problems.append(f"the log doesn't say {note!r}")
+    finally:
+        server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
     return problems
@@ -2199,6 +2368,7 @@ def main() -> int:
     ap.add_argument("--card", action="append", choices=[c[0] for c in CARDS], help="with --network: only this card")
     ap.add_argument("--model", action="store_true", help="the own model: a tiny one found, read, asked, its answer the engine's")
     ap.add_argument("--chat", action="store_true", help="a conversation answered by a test's script in place of the model")
+    ap.add_argument("--web", action="store_true", help="the model's web tools, against a stand-in for its sites")
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
     ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by the model's file tools")
@@ -2221,6 +2391,8 @@ def main() -> int:
         problems = network(args)
     elif args.model:
         problems = model_check(args)
+    elif args.web:
+        problems = web_check(args)
     elif args.chat:
         problems = chat(args) + chat_limits(args)
     elif args.remember:

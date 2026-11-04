@@ -15,14 +15,15 @@ everywhere, and PCs move to the own kernel as its drivers grow (see "Reaching ev
 
 You type to Chat Computer on it, and its own model answers, on the PC itself: an open model of Qwen's, run by Chat
 Computer's own engine (`model/`), from the file Chat Computer's app gets ready on Windows, read into memory as it
-starts. There's no account, no internet needed and nothing to pay, and nothing you type leaves the PC. The answer
-streams onto a screen that looks like Chat Computer's. The model acts on the computer through tools: it sees how it's
-doing, makes the text bigger or smaller, sets timers, reads your files on Windows' drive and USB drives, shows you a
-picture, and restarts it. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF,
+starts. There's no account, no internet needed and nothing to pay, and nothing you type leaves the PC, unless the
+model looks something up on the web for you, which the screen shows. The answer streams onto a screen that looks
+like Chat Computer's. The model acts on the computer through tools: it sees how it's doing, makes the text bigger or
+smaller, sets timers, reads your files on Windows' drive and USB drives, searches the web and reads web pages, shows
+you a picture, and restarts it. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF,
 the open-source UEFI firmware). It has its own network stack, with drivers for the wired network chips most PCs have
 (Intel's I219, I210, I211, I225 and I226, Realtek's RTL8111/8168 and RTL8125: written to the makers' datasheets and
 the open-source drivers, not yet tried on a real PC), USB network adapters, Android phones sharing their connection
-over USB, and virtual machines' network cards; the model doesn't use it yet (the web comes next). It keeps the
+over USB, and virtual machines' network cards, over which the model reads the web. It keeps the
 conversation across restarts, in a file on the PC's start-up partition that it writes through its own NVMe and SATA
 drivers.
 
@@ -235,6 +236,18 @@ drivers.
       CSV with each row's number and each column's letter, dates as dates, formulas after their values; a
       presentation's slides with their notes. A ZIP archive's files are listed. A picture (with its size in pixels)
       or a PDF is said to be one, as is anything else of a kind it can't read;
+    * `search_web` and `read_web_page` (`web.rs`, `web/`): the web, as the main Chat Computer reads it (the same
+      DuckDuckGo search and the same reading of a page as its words), fetched over Chat Computer's own network stack
+      and TLS 1.3: the site's address found with DNS, its certificate checked against Mozilla's authorities for its
+      name, a GET (compressed with gzip or DEFLATE, or not; in chunks or not), redirects followed (to HTTPS only, at
+      most five), at most 3 MB of a page, given up on after 20 seconds of silence. A search gives the first eight
+      results' titles, addresses and snippets (its advertisements left out); a page, its title, its address and its
+      words (scripts, styles and pictures dropped, a picture's description kept, headings, list items and table rows
+      on lines of their own), 12,000 characters at a time, the last page read kept for reading on. A fetch never
+      holds up the screen or the keyboard: the model's next round waits for it from the main loop. The person sees
+      each search's words and each site read, in grey where it happens in the answer: those are what leave the PC.
+      Without a network (Wi-Fi isn't supported yet), the model's told what would work: a cable, a USB network
+      adapter, or an Android phone's USB tethering;
     * `show_picture`: a photo, a screenshot or a drawing on one of Windows' drives (JPEG, PNG or GIF), shown to the
       person in the conversation where the model's answer is, as wide as the column at most (and two thirds of its
       height), its corners rounded, turned the way the camera says (`picture/`). The last 12 shown keep their pixels;
@@ -274,12 +287,16 @@ drivers.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
   retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
   its own with lost, repeated and reordered packets.
+* `web/` is Chat Computer's own reading of the web, for the kernel's web tools: web addresses (HTTPS only, links and
+  redirects joined to the page they're on), HTTP/1.1's requests and responses (a length, chunks or until the
+  connection closes, interim responses, gzip and DEFLATE), a page's words from its HTML (entities, Latin-1 and
+  Windows-1252 as well as UTF-8), and DuckDuckGo's plain results page read. Nothing a page holds is ever run.
 * `crypto/` is Chat Computer's own cryptography: SHA-256, SHA-384 and SHA-512, HMAC, HKDF, AES-GCM,
   ChaCha20-Poly1305, X25519, ECDSA on P-256 and P-384, RSA (PKCS #1 v1.5 and PSS), and a generator of random
   bytes for keys, seeded from the processor. Tested against the standards' own test vectors and OpenSSL's.
 * `tls/` is Chat Computer's own TLS 1.3 client, with its own certificate checks (chains, names, dates, what
   each certificate may be used for, name constraints) against Mozilla's certificate authorities: the engine gets its
-  models ready over it, on Windows and Linux. Tested against OpenSSL's server with every cipher and kind of key, and
+  models ready over it, on Windows and Linux, and the own kernel reads the web over it. Tested against OpenSSL's server with every cipher and kind of key, and
   against a real site's chain.
 * `model/` is Chat Computer's own model engine: Qwen's open models on the PC's own processor (see its README.md).
   The kernel runs it without the standard library; the same code serves the model on Windows and Linux.
@@ -446,7 +463,8 @@ Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
 Bluetooth comes at step 10.
 
-The model needs no internet. Starting up, it reads the model's file from Windows' drive into memory, which takes a
+The model needs no internet (it uses it only to look things up on the web, through a network cable, a USB network
+adapter or an Android phone's USB tethering: Wi-Fi isn't supported yet). Starting up, it reads the model's file from Windows' drive into memory, which takes a
 moment (longer if BitLocker encrypts the drive: then type its recovery key when it asks). It runs on every
 processor core (how fast hasn't been measured on a real PC yet). If the PC misbehaves as Chat Computer starts its
 other cores, `cores = 1` in `\EFI\chatcomputer-own\settings.txt` uses the first alone.
@@ -503,6 +521,10 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # answer on the screen (Markdown), a failure, a mouse's wheel scrolling; then an
                                  # answer's limits: the tools it's given (tools.json's), its tools used up, an answer
                                  # and a tool call cut short
+./check.py --web                 # the model's web tools over the kernel's own TCP and TLS 1.3, against a stand-in
+                                 # here for DuckDuckGo and a site (TLS 1.3 with a test's own authority): results,
+                                 # a redirect, a gzip page in chunks read in two parts, a missing page, a wrong
+                                 # certificate refused (needs openssl)
 ./check.py --remember            # the conversation and the model's notes kept across a restart, on an NVMe SSD
                                  # and a SATA drive laid out like a PC's, then a new conversation started (the
                                  # note still in the model's instructions), then the PC turned off; the log kept in
@@ -629,8 +651,9 @@ PC.
    checked against the reference implementation, with nothing from elsewhere, so Chat Computer needs no account and
    no internet to think. ✓ The kernel runs it: the model's file read from Windows' drive into memory, the
    processor's vector registers (AVX) kept across interrupts, the answer a step at a time beside the screen and the
-   keyboard; checked in a virtual PC against the engine on Linux; ✓ on every core. To do: the web (looking
-   things up over its own HTTPS), and pictures and PDFs read.
+   keyboard; checked in a virtual PC against the engine on Linux; ✓ on every core; ✓ the web (a search and pages'
+   words, over its own HTTPS; checked against a stand-in for DuckDuckGo and a site). To do: trying the web on a real
+   PC, and pictures and PDFs read.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting the model's answers use
    (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the
    conversation (JPEG, PNG, GIF). To do: accents

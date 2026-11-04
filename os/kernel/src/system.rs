@@ -92,9 +92,9 @@ pub fn status() -> String {
     lines.push(crate::keep::status());
     lines.push(crate::assistant::status());
     lines.push(String::from(
-        "Not yet in Chat Computer's own system: the web, changing files (it reads Windows' drives and USB drives, and \
-         writes only its own memory and log files), seeing pictures and reading PDFs, Office's files from before \
-         2007, sound other than its chimes (no speech, music or microphones), Wi-Fi, Bluetooth, sleep (it can turn \
+        "Not yet in Chat Computer's own system: showing websites (it searches the web and reads pages' words), \
+         changing files (it reads Windows' drives and USB drives, and writes only its own memory and log files), seeing \
+         pictures and reading PDFs, Office's files from before 2007, sound other than its chimes (no speech, music or microphones), Wi-Fi, Bluetooth, sleep (it can turn \
          off), and the screen's brightness",
     ));
     lines.join("\n")

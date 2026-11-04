@@ -26,6 +26,8 @@ markdown = { path = "../markdown" }
 hid = { path = "../hid" }
 aml = { path = "../aml" }
 model = { path = "../model" }
+tls = { path = "../tls" }
+web = { path = "../web" }
 
 [[bin]]
 name = "chatcomputer-kernel"

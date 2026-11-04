@@ -50,6 +50,7 @@ mod sync;
 mod system;
 mod time;
 mod usb;
+mod web;
 #[path = "../../shared/mem.rs"]
 mod mem;
 

@@ -1,0 +1,10 @@
+[package]
+name = "web"
+description = "Chat Computer's own reading of the web: addresses, HTTP/1.1, pages' words and a search's results"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zip = { path = "../zip" }

@@ -47,6 +47,14 @@ pub fn source() -> &'static str {
     }
 }
 
+/// `buf` filled with hard-to-guess bytes (TLS's keys and nonces).
+pub fn fill(buf: &mut [u8]) {
+    for chunk in buf.chunks_mut(8) {
+        let v = u64().to_le_bytes();
+        chunk.copy_from_slice(&v[..chunk.len()]);
+    }
+}
+
 /// 64 hard-to-guess bits.
 pub fn u64() -> u64 {
     let mut x = jitter();

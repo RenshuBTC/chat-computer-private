@@ -81,6 +81,8 @@ jobs:
         run: ./check.py --model
       - name: A conversation (a test's script in place of the model; its tools, the screen, a mouse's wheel)
         run: ./check.py --chat
+      - name: The web (the model's search and page reading, against a stand-in over TLS 1.3)
+        run: ./check.py --web
       - name: The conversation kept across a restart (NVMe and SATA)
         run: ./check.py --remember
       - name: Files (Windows' drive, NTFS, read by the model's tools; a test's script asks)

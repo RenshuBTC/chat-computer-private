@@ -24,7 +24,7 @@ use crate::sync::SpinLock;
 use crate::{clock, files, heap, time};
 use alloc::boxed::Box;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use model::chat::{Answer, Call, Message, Options, Said as Saying, Style};
@@ -61,6 +61,9 @@ pub enum Event {
     /// A line from Chat Computer itself under the answer: that it was cut short, or that the model's tools were
     /// used up.
     Note(String),
+    /// What the model looked up on the web (a search, or a site read): a line where it happens in the answer, so the
+    /// person sees what left the computer.
+    Looked(String),
 }
 
 /// Whether the model can be asked now.
@@ -88,12 +91,13 @@ const TOOLS: &str = include_str!("tools.json");
 const SYSTEM: &str = "You are Chat Computer: you run this computer for the person using it, who talks to you by typing \
 here. You are an AI model running on this computer itself ({model}, an open model made by Qwen, run by Chat Computer's \
 own engine on Chat Computer's own operating system), so you work without the internet, and nothing they say leaves the \
-computer. You can't look things up on the web here.
+computer unless you look something up on the web, which they see.
 
 With your tools you can see how this computer is doing, change the text size, set timers, reminders and alarms (and \
 how loud they ring), read the files on its drives (Windows' C: and the others, USB sticks and memory cards included; \
-nothing can be changed), show the person a picture, note things about them to remember in later conversations, start \
-a new conversation, and restart this computer (to go back to Windows) or turn it off. Use a tool rather than saying \
+nothing can be changed), search the web and read web pages (when this computer is connected), show the person a \
+picture, note things about them to remember in later conversations, start a new conversation, and restart this \
+computer (to go back to Windows) or turn it off. Use a tool rather than saying \
 how; don't say you're about to use one, just use it.
 
 Each message from the person starts with when they sent it, like [Tue 3 Nov 2026 19:02]. Answer in their language, \
@@ -246,7 +250,35 @@ struct Job {
     read_ms: u64,
     written: usize,
     write_ms: u64,
+    /// The round's web tools' calls still being fetched, in order: the next round waits for them.
+    web: Vec<WebCall>,
 }
+
+/// One of the round's calls of the web's tools, being fetched: what it was, and where its result goes in the
+/// conversation (a place kept for it, in order with the round's other tools).
+struct WebCall {
+    part: usize,
+    what: WebWhat,
+    fetch: crate::web::Fetch,
+    begun: bool,
+}
+
+enum WebWhat {
+    Search(String),
+    Read { url: String, offset: usize },
+}
+
+impl WebCall {
+    fn name(&self) -> &'static str {
+        match self.what {
+            WebWhat::Search(_) => "search_web",
+            WebWhat::Read { .. } => "read_web_page",
+        }
+    }
+}
+
+/// A page's words given to the model at a time, at most (read_web_page's offset reads on).
+const PAGE_PART: usize = 12_000;
 
 impl Job {
     fn new(base: usize) -> Job {
@@ -267,12 +299,16 @@ impl Job {
             read_ms: 0,
             written: 0,
             write_ms: 0,
+            web: Vec::new(),
         }
     }
 }
 
 struct Assistant {
     brain: Brain,
+    /// The last web page read: its address, title and words, and whether it was cut at the most read (so reading on
+    /// from an offset doesn't fetch it again).
+    page: Option<(String, String, String, bool)>,
     /// The model's file, if the settings name one (else the app's are looked for).
     setting: Option<String>,
     /// The tools, as the model is given them.
@@ -334,6 +370,7 @@ pub fn init(setting: Option<String>) {
     }
     let mut a = Assistant {
         brain: Brain::None { why: String::new(), again: false, since: 0 },
+        page: None,
         setting,
         tools,
         parts,
@@ -541,7 +578,10 @@ impl Assistant {
                         if self.script_step(&mut job, events) {
                             break true;
                         }
-                        if job.script.as_ref().is_some_and(|(left, ..)| !left.is_empty()) || time::uptime_ms() >= until {
+                        if job.script.as_ref().is_some_and(|(left, ..)| !left.is_empty())
+                            || time::uptime_ms() >= until
+                            || !job.web.is_empty()
+                        {
                             break false;
                         }
                     };
@@ -709,6 +749,10 @@ impl Assistant {
     /// True when the answer is over (its last event given).
     fn answer_job(&mut self, job: &mut Job, until: u64, events: &mut Vec<Event>) -> bool {
         loop {
+            // (The round's web tools still being fetched: the next round waits for them, the main loop going on.)
+            if !self.web_step(job, events) {
+                return false;
+            }
             if job.turn.is_none()
                 && let Err(why) = self.begin_round(job)
             {
@@ -850,6 +894,12 @@ impl Assistant {
             }
             let tool = self.tools.iter().find(|t| t.get("function").and_then(|f| f.get("name")).and_then(Json::str) == Some(&call.name));
             let input = call.arguments(tool);
+            if matches!(call.name.as_str(), "search_web" | "read_web_page") {
+                if let Some((said, error)) = self.start_web(&call.name, &input, job) {
+                    self.tool_said(&call.name, said, error);
+                }
+                continue;
+            }
             let notes = self.notes.clone();
             let (said, error) = run_tool(&call.name, &input, job, &mut self.notes, events);
             self.unkept |= self.notes != notes;
@@ -864,6 +914,122 @@ impl Assistant {
         }
         job.separate = job.said;
         false
+    }
+
+    /// A call of one of the web's tools: its fetch begun, a place kept for what it says in the conversation (None), or
+    /// what it says at once (an address that can't be read, nothing to search for, or the last page read, read on).
+    fn start_web(&mut self, name: &str, input: &Json, job: &mut Job) -> Option<(String, bool)> {
+        crate::log!("Chat Computer kernel: model: uses {name}");
+        let text = |key: &str| input.get(key).and_then(Json::str).map(str::trim).unwrap_or("");
+        let (what, url) = if name == "search_web" {
+            let query: String = text("query").chars().take(400).collect();
+            if query.is_empty() {
+                return Some((String::from("No words to search for were given."), true));
+            }
+            let url = web::Url::parse(&web::search::address(&query)).expect("the search's own address");
+            (WebWhat::Search(query), url)
+        } else {
+            let url = match web::Url::parse(text("url")) {
+                Ok(u) => u,
+                Err(why) => return Some((format!("That address can't be read: {why}."), true)),
+            };
+            let offset = input.get("offset").and_then(number).unwrap_or(0.0).max(0.0) as usize;
+            if let Some((at, title, words, cut)) = &self.page
+                && *at == url.to_string()
+            {
+                return Some((page_part(at, title, words, *cut, offset), false));
+            }
+            (WebWhat::Read { url: url.to_string(), offset }, url)
+        };
+        self.parts.push(Part::Tool(String::new()));
+        job.web.push(WebCall { part: self.parts.len() - 1, what, fetch: crate::web::Fetch::new(url), begun: false });
+        None
+    }
+
+    /// Moves the round's web calls on: each in turn, said to the person as it begins, its result put in its place
+    /// once fetched. True once there are none left.
+    fn web_step(&mut self, job: &mut Job, events: &mut Vec<Event>) -> bool {
+        while let Some(call) = job.web.first_mut() {
+            if !call.begun {
+                call.begun = true;
+                let (doing, note) = match &call.what {
+                    WebWhat::Search(q) => (
+                        String::from("Searching the web"),
+                        format!("Searched the web (DuckDuckGo) for \u{201C}{q}\u{201D}"),
+                    ),
+                    WebWhat::Read { .. } => (
+                        format!("Reading {}", call.fetch.host()),
+                        format!("Read a page on {}", call.fetch.host()),
+                    ),
+                };
+                crate::log!("Chat Computer kernel: web: {note}");
+                events.push(Event::Looked(note));
+                activity(job, doing, events);
+            }
+            let Some(got) = job.web[0].fetch.step() else { return false };
+            let call = job.web.remove(0);
+            let (said, error) = self.web_said(&call.what, got);
+            let name = call.name();
+            if test_build().is_some() {
+                let logged = Json::Object(vec![
+                    (String::from("name"), Json::Str(String::from(name))),
+                    (String::from("error"), Json::Bool(error)),
+                    (String::from("said"), Json::Str(said.clone())),
+                ]);
+                crate::log!("Chat Computer kernel: test: tool {}", json::compact(&logged));
+            }
+            // (Anything already added after its place, such as the note that the rounds of tools are used up, stays.)
+            if let Some(Part::Tool(place)) = self.parts.get_mut(call.part) {
+                let after = core::mem::take(place);
+                *place = format!("{}{said}{after}", if error { "Error: " } else { "" });
+            }
+        }
+        true
+    }
+
+    /// What a web call says to the model, from what was fetched: the search's results, or the page's words (kept for
+    /// reading on). The bool: it's an error.
+    fn web_said(&mut self, what: &WebWhat, got: Result<crate::web::Page, String>) -> (String, bool) {
+        match (what, got) {
+            (WebWhat::Search(q), Ok(page)) => {
+                let found = web::search::results(&String::from_utf8_lossy(&page.bytes));
+                crate::log!("Chat Computer kernel: web: {} results", found.len());
+                if found.is_empty() {
+                    (String::from("The search found nothing (or DuckDuckGo's results page has changed)."), true)
+                } else {
+                    (format!("Results for \u{201C}{q}\u{201D} (DuckDuckGo):\n{}", web::search::listed(&found)), false)
+                }
+            }
+            (WebWhat::Search(_), Err(why)) => {
+                crate::log!("Chat Computer kernel: web: the search failed: {why}");
+                (format!("Couldn't search the web: {why}."), true)
+            }
+            (WebWhat::Read { url, offset }, Ok(page)) => {
+                let at = page.url.to_string();
+                match web::page::words(&page.bytes, &page.kind) {
+                    Ok(p) => {
+                        crate::log!(
+                            "Chat Computer kernel: web: read {} ({} bytes, {} characters of words)",
+                            page.url.host,
+                            page.bytes.len(),
+                            p.text.chars().count()
+                        );
+                        let said = page_part(&at, &p.title, &p.text, page.cut, *offset);
+                        self.page = Some((at, p.title, p.text, page.cut));
+                        // (Read on from the address asked for, too, if it was sent on elsewhere.)
+                        if *url != self.page.as_ref().map_or(String::new(), |p| p.0.clone()) {
+                            crate::log!("Chat Computer kernel: web: {url} was sent on to {}", page.url);
+                        }
+                        (said, false)
+                    }
+                    Err(kind) => (format!("{at} is {kind}, which can't be read here."), true),
+                }
+            }
+            (WebWhat::Read { url, .. }, Err(why)) => {
+                crate::log!("Chat Computer kernel: web: couldn't read {url}: {why}");
+                (format!("Couldn't read {url}: {why}."), true)
+            }
+        }
     }
 
     /// What a tool said back (`error`: why it couldn't), for the model in the next round.
@@ -921,6 +1087,9 @@ impl Assistant {
     /// A step of a test script's answer: a round begun, a few of its words said, or the round over. True when the
     /// answer's over.
     fn script_step(&mut self, job: &mut Job, events: &mut Vec<Event>) -> bool {
+        if !self.web_step(job, events) {
+            return false;
+        }
         if job.script.is_none() {
             let messages = self.messages();
             crate::log!("Chat Computer kernel: test: asked {}", json::compact(&messages_json(&messages)));
@@ -968,6 +1137,32 @@ impl Assistant {
         let (_, answer, cut) = job.script.take().expect("the script's round");
         self.round_over(job, answer, cut, events)
     }
+}
+
+/// A page's words for the model, from character `offset`, at most PAGE_PART of them: from the start, with its title
+/// and address; else its address and where; and how much more there is, or that it was cut at the most read.
+fn page_part(url: &str, title: &str, words: &str, cut: bool, offset: usize) -> String {
+    let total = words.chars().count();
+    if total == 0 {
+        return format!("{url}\n\n(The page has no words: it may be all pictures, or made by programs that run in a browser.)");
+    }
+    if offset >= total {
+        return format!("{url}: that's past its end (it has {total} characters of words).");
+    }
+    let part: String = words.chars().skip(offset).take(PAGE_PART).collect();
+    let end = offset + part.chars().count();
+    let mut out = if offset == 0 {
+        if title.is_empty() { format!("{url}\n\n") } else { format!("{title}\n{url}\n\n") }
+    } else {
+        format!("{url}, from character {offset}:\n\n")
+    };
+    out.push_str(&part);
+    if end < total {
+        out.push_str(&format!("\n\n(The page goes on for {} more characters: read_web_page with offset {end} reads on.)", total - end));
+    } else if cut {
+        out.push_str("\n\n(The page was longer than Chat Computer reads: that was all of its first 3 MB.)");
+    }
+    out
 }
 
 /// The request for a round: the tools, the messages, no thinking first (on one processor core, a model that thought

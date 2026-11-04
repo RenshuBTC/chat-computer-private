@@ -45,6 +45,8 @@ dependencies = [
  "registry",
  "remember",
  "text",
+ "tls",
+ "web",
  "zip",
 ]
 
@@ -126,6 +128,13 @@ name = "tls"
 version = "0.1.0"
 dependencies = [
  "crypto",
+]
+
+[[package]]
+name = "web"
+version = "0.1.0"
+dependencies = [
+ "zip",
 ]
 
 [[package]]

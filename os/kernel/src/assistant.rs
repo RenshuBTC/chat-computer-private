@@ -104,9 +104,9 @@ make things up: say so when you don't know.";
 const SHORTENED: &str = "\n\nThis conversation began earlier: its oldest part is no longer shown to you, to keep it short \
 enough for you, but the person can still scroll back to it.";
 
-/// Chat Computer's own system runs the model on one processor core (all it uses yet), on which bigger models answer
-/// too slowly: of the models Chat Computer's app got ready, the biggest whose file is at most this is chosen (the
-/// smallest, if none is).
+/// Bigger models answered too slowly when Chat Computer's own system ran the model on one processor core (it uses every
+/// core now, not yet measured on a PC): of the models Chat Computer's app got ready, the biggest whose file is at most
+/// this is chosen (the smallest, if none is).
 const ONE_CORE_MOST: u64 = 3_600_000_000;
 /// What the model needs beyond its file, at the least: its state, a few snapshots of it, what reading needs.
 const RUN_ROOM: u64 = 256 << 20;
@@ -971,7 +971,7 @@ impl Assistant {
 }
 
 /// The request for a round: the tools, the messages, no thinking first (on one processor core, a model that thought
-/// first would take minutes to answer).
+/// first took minutes to answer; on all of them, still to be measured on a PC).
 fn request<'a>(tools: &'a [Json], messages: &'a [Message], seed: u64, sampling: Sampling) -> Request<'a> {
     Request {
         tools,
@@ -1075,8 +1075,8 @@ fn too_big(name: &str, size: u64) -> String {
     )
 }
 
-/// Which of the models Chat Computer's app got ready to run: the biggest that's quick enough on one processor core
-/// and fits in memory (else the smallest that fits). Err: why there's none, and whether to look again later.
+/// Which of the models Chat Computer's app got ready to run: the biggest that's quick enough (ONE_CORE_MOST) and fits
+/// in memory (else the smallest that fits). Err: why there's none, and whether to look again later.
 fn choose() -> Result<String, (String, bool)> {
     let found = files::app_models().map_err(|_| {
         let why = if files::windows_locked() { LOCKED } else { NO_MODEL };

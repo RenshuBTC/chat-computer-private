@@ -130,8 +130,8 @@ pub fn start() {
 
 /// The controllers' interrupt.
 fn interrupt() {
-    // Interrupts are off while the lock is held, so on one core it is always free here; but an
-    // interrupt handler never waits for a lock.
+    // Interrupts are off while the lock is held, and only the first core uses USB (cores.rs: the others run the model's
+    // arithmetic alone), so it is always free here; but an interrupt handler never waits for a lock.
     if let Some(mut controllers) = CONTROLLERS.try_lock() {
         for c in controllers.iter_mut() {
             handle_events(c);

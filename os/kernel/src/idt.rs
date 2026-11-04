@@ -219,7 +219,9 @@ const EXCEPTIONS: [&str; 32] = [
 #[unsafe(no_mangle)]
 extern "C" fn interrupt_dispatch(frame: &mut Frame) {
     let vector = frame.vector;
-    if vector < 32 {
+    if vector == 2 {
+        nmi(frame);
+    } else if vector < 32 {
         exception(frame);
     } else if vector == TIMER_VECTOR as u64 {
         time::tick();
@@ -244,7 +246,60 @@ extern "C" fn interrupt_dispatch(frame: &mut Frame) {
     }
 }
 
+/// NMIs said so far (more than a few aren't each said).
+static NMIS: AtomicUsize = AtomicUsize::new(0);
+
+/// A non-maskable interrupt: from the chipset (a memory or bus error it noticed, a watchdog), or a button some PCs
+/// have. Nothing of Chat Computer's sends one, and it's not a fault of the code it interrupted: said in the log (on
+/// its own stack, never waiting for a lock: it can come in the middle of anything), with why, as far as the old
+/// NMI status port (0x61) says, and the work goes on.
+fn nmi(f: &Frame) {
+    let n = NMIS.fetch_add(1, Ordering::Relaxed);
+    if n < 8 {
+        let status = unsafe { crate::cpu::inb(0x61) };
+        let why = match (status & 0x80 != 0, status & 0x40 != 0) {
+            (true, true) => "a memory or bus error (SERR) and an I/O channel check",
+            (true, false) => "a memory or bus error (SERR)",
+            (false, true) => "an I/O channel check",
+            (false, false) => "no reason the chipset's status port gives",
+        };
+        crate::serial::write_anyway(format_args!(
+            "Chat Computer kernel: a non-maskable interrupt (NMI): {why} (port 0x61: {status:#04x}), at {:#x}; going on{}\n",
+            f.rip,
+            if n == 7 { " (more won't be said)" } else { "" }
+        ));
+    }
+}
+
+/// What a machine check's error banks say (MCi_STATUS with its valid bit, and MCi_ADDR where it's valid), for the
+/// log: the processor found a hardware error (memory, cache, bus).
+fn machine_check_banks() {
+    const IA32_MCG_CAP: u32 = 0x179;
+    const IA32_MCG_STATUS: u32 = 0x17A;
+    let cpu_has = crate::cpu::cpuid(1, 0).3;
+    // (Machine checks and their architecture: CPUID 1 EDX bits 7 and 14.)
+    if cpu_has & (1 << 7) == 0 || cpu_has & (1 << 14) == 0 {
+        return;
+    }
+    let banks = unsafe { crate::cpu::rdmsr(IA32_MCG_CAP) } & 0xFF;
+    let status = unsafe { crate::cpu::rdmsr(IA32_MCG_STATUS) };
+    crate::serial::write_anyway(format_args!("Chat Computer kernel: machine check: MCG_STATUS {status:#x}, {banks} banks\n"));
+    for i in 0..banks.min(32) as u32 {
+        let bank = unsafe { crate::cpu::rdmsr(0x401 + 4 * i) };
+        if bank & (1 << 63) == 0 {
+            continue;
+        }
+        let address = if bank & (1 << 58) != 0 { unsafe { crate::cpu::rdmsr(0x402 + 4 * i) } } else { 0 };
+        crate::serial::write_anyway(format_args!(
+            "Chat Computer kernel: machine check: bank {i}: status {bank:#018x}, address {address:#x}\n"
+        ));
+    }
+}
+
 fn exception(f: &Frame) -> ! {
+    if f.vector == 18 {
+        machine_check_banks();
+    }
     // (Running past the end of the kernel's stack faults just past it, where nothing is mapped (paging.rs), and that
     // fault can't be taken on the same stack, so it comes as a double fault, on a stack of its own: said as what it is.)
     let name = if matches!(f.vector, 8 | 14) && crate::paging::past_stack(crate::cpu::cr2()) {
@@ -274,5 +329,6 @@ fn exception(f: &Frame) -> ! {
         name,
         format_args!("vector {}, error {:#x}, at {:#x}, address {:#x}.", f.vector, f.error, f.rip, crate::cpu::cr2()),
     );
+    crate::journal::save_on_stop();
     crate::cpu::stop()
 }

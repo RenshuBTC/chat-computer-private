@@ -6,6 +6,7 @@
 //!                                       the model's file (without it, the one Chat Computer's app got ready is used)
 //!     clock-offset-minutes = 480        how far the PC's clock is ahead of UTC (Windows keeps it in local time)
 //!     memory-id = 1a2b3c4d              the memory file's id (its tags carry it: remember crate), in hex
+//!     log-id = 5e6f7a8b                 the log file's (journal.rs), the same way
 //!     firmware-programs = off           don't run the firmware's own programs (ACPI's AML: firmware.rs), for a PC
 //!                                       whose firmware does something odd with them
 //!     cores = 1                         use at most this many of the processor's cores (cores.rs; all, without it),
@@ -24,6 +25,7 @@ pub struct Settings {
     pub old_key: bool,
     pub clock_offset_minutes: Option<i32>,
     pub memory_id: Option<u32>,
+    pub log_id: Option<u32>,
     /// Run the firmware's own programs (on unless the settings say off).
     pub firmware_programs_off: bool,
     /// The most processor cores to use (all, if not said).
@@ -72,6 +74,12 @@ pub fn parse(bytes: &[u8]) -> Settings {
             "memory-id" => {
                 s.memory_id = u32::from_str_radix(value, 16).ok().filter(|&id| id != 0);
                 if s.memory_id.is_none() {
+                    s.not_understood += 1;
+                }
+            }
+            "log-id" => {
+                s.log_id = u32::from_str_radix(value, 16).ok().filter(|&id| id != 0);
+                if s.log_id.is_none() {
                     s.not_understood += 1;
                 }
             }

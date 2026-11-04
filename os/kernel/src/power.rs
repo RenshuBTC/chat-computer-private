@@ -100,6 +100,7 @@ pub fn due() {
 /// Turns the PC off. If it's still on 3 seconds later, the screen says so (and how to turn it off by hand).
 pub fn turn_off() -> ! {
     crate::log!("Chat Computer kernel: turning off");
+    crate::journal::save();
     cpu::disable_interrupts();
     crate::cores::park();
     crate::keep::shut_down();
@@ -168,6 +169,7 @@ unsafe fn enter_s5(s: &SoftOff) {
 
 pub fn restart() -> ! {
     crate::log!("Chat Computer kernel: restarting");
+    crate::journal::save();
     cpu::disable_interrupts();
     crate::cores::park();
     crate::keep::shut_down();

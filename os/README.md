@@ -39,13 +39,17 @@ drivers.
     called after that.
   * Its UEFI definitions are Chat Computer's own, written from the specification.
 * `kernel/` is the kernel. It sets itself up in this order:
-  * its log, on the serial port;
+  * its log, on the serial port, and kept in memory as it's written (its first 24 KiB, and its latest 40 KiB), for
+    its file on the start-up partition (`journal.rs`, below): most PCs have no serial port;
   * its own segment table and task state segment, with separate stacks for double faults, NMIs and
     machine checks;
   * its own interrupt table, with all 256 entries. A fault is written to the log, with every register,
-    and shown on the screen;
-  * the processor's floating-point and vector registers (SSE, and AVX where it has them) switched on for the
-    model's arithmetic, the kernel built to use them (`build.sh`), and saved and restored around every interrupt;
+    and shown on the screen; a machine check's error banks are written too. An NMI (from the chipset: a memory or
+    bus error it noticed, a watchdog) isn't the code's fault: it's said in the log, with why as far as the chipset's
+    status port says, and the work goes on;
+  * the processor's floating-point and vector registers (SSE, and AVX, and AVX-512's where it has them) switched on
+    for the model's arithmetic, the kernel built to use them (`build.sh`), and SSE's saved and restored around every
+    interrupt (no handler touches the others);
   * a record of free memory, one bit per 4 KiB;
   * its own page tables:
     * all RAM at `0xFFFF800000000000`;
@@ -60,7 +64,9 @@ drivers.
   * a heap: 16 to 256 MiB to start with, then growing as it's needed into its own range of addresses (in 2 MiB pages
     where whole blocks of RAM are free), so the model's file, gigabytes, is one piece in memory however scattered the
     RAM behind it, while 64 MiB is always left for everything else;
-  * the first screen, early, so that if anything after it stops the kernel, the screen says so;
+  * the first screen, early, so that if anything after it stops the kernel, the screen says so. From the start-up
+    drive on, it also says which step comes next ("Starting the network…"), as the log does, so a PC that stops in
+    the middle of one shows which;
   * the ACPI tables: processor cores, interrupt controllers and timers;
   * the local APIC. The old 8259 controllers and all I/O APIC inputs are masked;
   * a timer ticking 100 times a second. Its speed is measured against the ACPI power-management timer,
@@ -145,7 +151,12 @@ drivers.
     asked, and its answer's words) after every answer, and read back at start-up, so a restart carries on the same
     conversation (one kept when the own system talked to Claude is read too). Only the memory file's own blocks are
     ever written, each read and checked first: never the file system, Windows' files or any other partition.
-    Before a restart, the drive is told to write what it has cached. The PC's other drives are started too, to be
+    Before a restart, the drive is told to write what it has cached. It's started before the steps not yet tried on
+    many PCs (the firmware's programs, the network cards, the sound), and the kernel's log is kept on it too, in
+    `\EFI\chatcomputer-own\log.bin`, made by Windows' setup the same way, with an id of its own (`journal.rs`):
+    saved before each of those steps, when it's ready, every 10 seconds when there's more, before the PC turns off
+    or restarts, and when the kernel stops (if the drive isn't in the middle of something), so Windows' setup can
+    read back what happened on a PC with no serial port. The PC's other drives are started too, to be
     read: every NVMe controller's first namespace, and every SATA port with a disk on it (an optical drive left
     alone); each told before a restart too (an SSD counts being switched off without being told);
   * Windows' drives and USB drives, read and never changed (`files.rs`, by Chat Computer's own readers of NTFS,
@@ -414,10 +425,13 @@ questions (Windows asks for permission, as for any change to how the PC starts).
    doesn't restart.
 4. It puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
    next to Windows' own files, with `settings.txt` (how far the PC's clock is from UTC, as Windows keeps that
-   clock in local time, and the memory file's id; a model's file named there by hand, `model = ...`, is kept) and
-   `memory.bin`, the memory file where Chat Computer keeps the conversation across restarts (4 MB, or 1 MB if the
-   partition is short of room; running setup again keeps it, with the conversation in it). The conversation is kept
-   there as it is, so anyone who can read that partition can read it.
+   clock in local time, and the memory and log files' ids; a model's file named there by hand, `model = ...`, and
+   `cores = ...`, are kept), `memory.bin`, the memory file where Chat Computer keeps the conversation across
+   restarts (4 MB, or 1 MB if the partition is short of room; running setup again keeps it, with the conversation in
+   it), and `log.bin`, where it keeps its log (512 KB). The conversation is kept there as it is, so anyone who can
+   read that partition can read it. Each time it runs, it first reads back the last run's log, into `last-run.txt`
+   in `%LOCALAPPDATA%\ChatComputer\own-os`, and says in a line how that run went: why it stopped, if it did, or the
+   last step of a start that didn't finish.
 5. It keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu, often F12, F11, F8 or Esc as
    it starts), to choose whenever you like, and restarts into it after a 10-second countdown (any key stays in
    Windows). The restart after that starts Windows. Double-clicking it again puts the newest version from the folder
@@ -438,8 +452,8 @@ processor core (how fast hasn't been measured on a real PC yet). If the PC misbe
 other cores, `cores = 1` in `\EFI\chatcomputer-own\settings.txt` uses the first alone.
 
 To go back to Windows, press the power button (the PC turns off; hold it if a press doesn't), or ask Chat Computer to
-restart it. The only thing
-Chat Computer writes on any disk is its memory file, in place. Running the script with `-Remove`
+restart it. The only things
+Chat Computer writes on any disk are its memory file and its log file, in place. Running the script with `-Remove`
 (`powershell -ExecutionPolicy Bypass -File windows\own-os.ps1 -Remove`) takes the files (the conversation with
 them) and the entry off again, and deletes the key made for Chat Computer (ClaudeOS's stays, for its own entry).
 
@@ -468,7 +482,8 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # that both cores were started, and that the kernel's stack went no more than
                                  # halfway down (--chat, --model and the drives' checks too)
 ./check.py --cpu qemu64 --memory 4096 --size 1024x768 --cores 4
-./check.py --crash page-fault    # a kernel that faults on purpose: checks it stops cleanly
+./check.py --crash page-fault    # a kernel that faults on purpose: checks it stops cleanly, saying why on the
+                                 # screen and in the log kept on the start-up partition (for Windows to read back)
 ./check.py --crash panic
 ./check.py --crash stack         # one that calls itself until its stack runs out: it must say so
 ./check.py --crash core          # another core panicking in the middle of the model's arithmetic: the first
@@ -490,7 +505,8 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # and a tool call cut short
 ./check.py --remember            # the conversation and the model's notes kept across a restart, on an NVMe SSD
                                  # and a SATA drive laid out like a PC's, then a new conversation started (the
-                                 # note still in the model's instructions), then the PC turned off;
+                                 # note still in the model's instructions), then the PC turned off; the log kept in
+                                 # log.bin, read back as Windows' setup reads it, each start's whole;
                                  # nothing else on the disk changed (needs dosfstools, mtools and gdisk)
 ./check.py --sound               # a timer set by a test build, its chime recorded from each of QEMU's
                                  # HD Audio controllers and codecs and checked against the chime's own samples

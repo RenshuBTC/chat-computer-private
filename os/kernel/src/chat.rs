@@ -29,11 +29,11 @@ use font::raster::ONE;
 
 const BACK_TO_WINDOWS: &str = "To go back to Windows, ask Chat Computer to restart the PC, or turn it off with its power button \
                                (holding it down if a press doesn't) and on again. Chat Computer writes nothing on your \
-                               disks but its own memory file, so either is safe.";
+                               disks but its own memory and log files, so either is safe.";
 /// The same, once Chat Computer has stopped (nothing can be asked).
 const BACK_TO_WINDOWS_STOPPED: &str = "To go back to Windows, hold the power button until the PC turns off, then turn \
                                        it on again. Chat Computer writes nothing on your disks but its own memory \
-                                       file, so this is safe.";
+                                       and log files, so this is safe.";
 
 /// The longest message that can be typed.
 const TYPED_MAX: usize = 4000;
@@ -1010,6 +1010,22 @@ impl Chat {
 /// The most room a picture gets on the screen (show_picture).
 pub fn picture_box() -> (u32, u32) {
     CHAT.lock().as_ref().map_or((800, 600), |c| c.picture_box())
+}
+
+/// Before one of the start's steps (the main loop, which draws, isn't going yet): which, on the start screen, in the
+/// model's line until the model's own news replaces it; drawn at once, so a PC that stops in the middle of a step
+/// shows which.
+pub fn starting(what: &str) {
+    if let Some(c) = CHAT.lock().as_mut()
+        && !c.stopped
+        && !c.started
+    {
+        let seconds = time::uptime_ms() / 1000;
+        c.uptime_shown = Some(seconds);
+        c.set_live(Live::Uptime, uptime_text(seconds));
+        c.set_live(Live::Model, format!("Starting {what}\u{2026}"));
+        c.draw(false);
+    }
 }
 
 /// Called after every interrupt: the start screen's live lines, the thinking dot, and whatever changed.

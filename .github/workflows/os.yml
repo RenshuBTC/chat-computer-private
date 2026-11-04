@@ -70,6 +70,7 @@ jobs:
           ./check.py --crash page-fault
           ./check.py --crash panic
           ./check.py --crash stack
+          ./check.py --crash core
       - name: Secure Boot
         run: ./check.py --no-build --secure-boot
       - name: Sound (a timer's chime, recorded, on QEMU's HD Audio controllers and codecs)

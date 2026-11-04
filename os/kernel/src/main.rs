@@ -27,6 +27,7 @@ mod gdt;
 mod heap;
 mod idt;
 mod iommu;
+mod journal;
 mod keep;
 mod keyboard;
 mod layout;
@@ -208,11 +209,23 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
     usb::take_over();
     let freed = memory::reclaim_firmware_memory(unsafe { info.memory_map() });
     log!("Chat Computer kernel: {} MiB the firmware used is free again", freed >> 20);
+    // The start-up drive, the memory file on it, and the log's file: first, so the log is kept from here on (with
+    // all of it so far), before the steps not yet tried on many PCs. (Its driver waits by the time-stamp counter, so
+    // interrupts needn't be on.)
+    next("the drive Chat Computer started from");
+    match storage::open_start(&info.start_disk) {
+        Ok(drive) => log!("Chat Computer kernel: start-up drive: {drive}"),
+        Err(why) => log!("Chat Computer kernel: start-up drive: not started: {why}"),
+    }
+    log!("Chat Computer kernel: {}", keep::init(&info.start_disk, settings.memory_id));
+    log!("Chat Computer kernel: {}", journal::init(&info.start_disk, settings.log_id));
     // The firmware's own programs (ACPI's AML): the embedded controller, the battery, the power button. Before the
     // keyboard: on a laptop, the embedded controller is what the keyboard is behind.
+    next("the PC's own programs (its firmware's: the power button, the battery, the lid)");
     log!("Chat Computer kernel: {}", firmware::init(&acpi, settings.firmware_programs_off));
     power::use_firmware_s5(&acpi);
     // After the USB controllers: a firmware that made a USB keyboard look like a PS/2 one has stopped.
+    next("the keyboards");
     let ps2_name = if acpi.portable { "built-in keyboard" } else { "PS/2 keyboard" };
     let ps2 = ps2::init();
     system::set_ps2(ps2.then_some(ps2_name));
@@ -220,23 +233,22 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
 
     cpu::enable_interrupts();
     usb::start();
+    next("the network");
     let cards = network::init();
     if cards == 0 {
         log!("Chat Computer kernel: network: no card Chat Computer has a driver for");
     }
+    next("the sound");
     log!("Chat Computer kernel: {}", sound::init());
-    // The start-up drive; the memory file on it, and the conversation it kept; the PC's other drives; Windows'
-    // drives, to read.
-    match storage::open_start(&info.start_disk) {
-        Ok(drive) => log!("Chat Computer kernel: start-up drive: {drive}"),
-        Err(why) => log!("Chat Computer kernel: start-up drive: not started: {why}"),
-    }
-    log!("Chat Computer kernel: {}", keep::init(&info.start_disk, settings.memory_id));
+    // The PC's other drives; Windows' drives, to read.
+    next("the PC's other drives");
     log!("Chat Computer kernel: {}", storage::open_others());
     log!("Chat Computer kernel: {}", files::init());
+    next("Chat Computer's model");
     assistant::init(settings.model);
     chat::restore(&assistant::conversation());
     log!("Chat Computer: ready");
+    journal::save();
 
     // Tests of the crash path, built in only when asked for (CHATCOMPUTER_TEST=page-fault ./build.sh).
     match option_env!("CHATCOMPUTER_TEST") {
@@ -299,11 +311,20 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         chat::tick();
         power::due();
         cores::check();
+        journal::work();
         if time::uptime_ms() >= stack_checked + 1000 {
             stack_checked = time::uptime_ms();
             log_stack(&mut stack_shown);
         }
     }
+}
+
+/// Before one of the start's steps: which, in the log and on the start screen, and the log saved, so a PC that stops
+/// in the middle of a step shows which (on the screen, and in the log Windows' setup reads back).
+fn next(what: &str) {
+    log!("Chat Computer kernel: next: {what}");
+    chat::starting(what);
+    journal::save();
 }
 
 /// Says in the log how deep the kernel's stack has gone, when that's 8 KiB or more deeper than it last said.
@@ -346,5 +367,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     serial::write_anyway(format_args!("\nChat Computer kernel stopped: {info}\n"));
     let place = info.location().map_or(("?", 0), |l| (l.file(), l.line()));
     chat::show_stop("an internal error", format_args!("{} ({}, line {}).", info.message(), place.0, place.1));
+    journal::save_on_stop();
     cpu::stop()
 }

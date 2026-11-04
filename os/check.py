@@ -15,7 +15,8 @@ log go to out/.
                                      report descriptors (and by the boot protocol in a build told to); a
                                      smart card reader left alone
     ./check.py --crash page-fault    a kernel that faults on purpose once ready: it must stop cleanly,
-                                     with the fault in its log and a message on the screen (also: panic; stack,
+                                     with the fault in its log (the serial port's, and the one kept on its start-up
+                                     partition for Windows to read back) and a message on the screen (also: panic; stack,
                                      one that calls itself until its stack runs out, which must be said; and core,
                                      a processor core other than the first panicking in the middle of the model's
                                      arithmetic, which the first must then show)
@@ -378,28 +379,46 @@ def cores_problems(log: str) -> list[str]:
 
 
 def crash(kind: str, args) -> list[str]:
+    """A kernel that stops on purpose once ready, started from a disk like a PC's (memory_disk, with a log file): it
+    must stop cleanly, saying why in its log and on the screen, and the log kept on the start-up partition (the one
+    Windows' setup reads back) must say why too."""
     global CORES
     expected = {"page-fault": "Chat Computer kernel stopped: Page fault", "panic": "Chat Computer kernel stopped: panicked",
                 "stack": "Chat Computer kernel stopped: The kernel's stack ran out",
                 "core": "processor core 1 stopped: panicked at"}[kind]
     if kind == "core":
         CORES = max(CORES, 2)
+    tmp = Path(tempfile.mkdtemp(prefix="cc-crash-"))
     build(kind)
     try:
-        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu)
+        disk = tmp / "crash.img"
+        settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\nlog-id = {LOG_ID:08x}\r\n"
+        files = memory_disk(disk, BUILT, settings, MEMORY_ID)
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, "nvme"))
         try:
             got = wait_for(pc.log, ("Chat Computer kernel stopped",), args.timeout)
-            time.sleep(1.5)
+            time.sleep(3)
             pc.picture(f"screen-{kind}")
         finally:
             pc.stop()
+        fs_problems, _ = esp_now(disk, files)
     finally:
         build()  # never leave a kernel that crashes on purpose in out/
+        shutil.rmtree(tmp, ignore_errors=True)
     text = pc.text()
     print(text)
     problems = [] if got and expected in text else [f"expected {expected!r} in the log"]
     if kind == "core" and "Chat Computer kernel stopped: panicked" not in text:
         problems.append("the first core didn't stop after the other did")
+    problems += fs_problems
+    try:
+        kept = kept_in(LAST_LOG[0], LOG_ID)
+    except ValueError as e:
+        kept = None
+        problems.append(f"the log file: {e}")
+    kept_text = kept[1].decode(errors="replace") if kept else ""
+    if expected not in kept_text or "Chat Computer: ready" not in kept_text:
+        problems.append(f"the log kept on the start-up partition doesn't say why it stopped ({len(kept_text)} bytes kept)")
     return problems
 
 
@@ -1034,6 +1053,7 @@ def model_check(args) -> list[str]:
 
 
 MEMORY_ID = 0x5EEDCAFE
+LOG_ID = 0x10C0FFEE
 
 
 def blank_memory(memory_id: int, size: int) -> bytes:
@@ -1076,7 +1096,8 @@ ESP_START, ESP_MIB = 1 << 20, 80
 
 def memory_disk(path: Path, efi: Path, settings: str, memory_id: int) -> dict[str, bytes]:
     """A disk like a PC's: a GPT, one EFI system partition from 1 MiB (FAT32, 1 KiB clusters, as Windows makes it),
-    with Chat Computer's files, a stand-in for Windows' start-up file, and a 4 MiB memory file. Returns the files."""
+    with Chat Computer's files, a stand-in for Windows' start-up file, a 4 MiB memory file, and (if the settings name
+    one) a 512 KiB log file. Returns the files."""
     with open(path, "wb") as f:
         f.truncate(96 << 20)
     subprocess.run(["sgdisk", "-n", f"1:2048:+{ESP_MIB}M", "-t", "1:EF00", str(path)], check=True, stdout=subprocess.DEVNULL)
@@ -1087,6 +1108,8 @@ def memory_disk(path: Path, efi: Path, settings: str, memory_id: int) -> dict[st
     files = {"EFI/Microsoft/Boot/bootmgfw.efi": os.urandom(300_000), "EFI/BOOT/BOOTX64.EFI": efi.read_bytes(),
              "EFI/chatcomputer-own/settings.txt": settings.encode(),
              "EFI/chatcomputer-own/memory.bin": blank_memory(memory_id, 4 << 20)}
+    if f"log-id = {LOG_ID:08x}" in settings:
+        files["EFI/chatcomputer-own/log.bin"] = blank_memory(LOG_ID, 512 << 10)
     for folder in ("::/EFI", "::/EFI/Microsoft", "::/EFI/Microsoft/Boot", "::/EFI/BOOT", "::/EFI/chatcomputer-own"):
         subprocess.run(["mmd", "-i", str(esp), folder], check=True)
     for name, data in files.items():
@@ -1101,9 +1124,13 @@ def memory_disk(path: Path, efi: Path, settings: str, memory_id: int) -> dict[st
     return files
 
 
+# What the start-up partition's log file was last read as (esp_now).
+LAST_LOG: list[bytes] = [b""]
+
+
 def esp_now(path: Path, files: dict[str, bytes]) -> tuple[list[str], bytes]:
     """The disk's start-up partition checked: its file system clean (fsck.vfat, changing nothing), every file but the
-    memory file as it was. Returns the problems, and the memory file."""
+    memory file and the log file as it was. Returns the problems, and the memory file (the log file: LAST_LOG)."""
     problems = []
     esp = path.with_suffix(".esp")
     with open(path, "rb") as f:
@@ -1123,6 +1150,10 @@ def esp_now(path: Path, files: dict[str, bytes]) -> tuple[list[str], bytes]:
             memory = now
             if len(now) != len(data):
                 problems.append("the memory file's size changed")
+        elif name.endswith("log.bin"):
+            LAST_LOG[0] = now
+            if len(now) != len(data):
+                problems.append("the log file's size changed")
         elif now != data:
             problems.append(f"{name} changed")
     esp.unlink()
@@ -1163,7 +1194,7 @@ def remember(args) -> list[str]:
     try:
         for kind in ("nvme", "sata"):
             disk = tmp / f"{kind}.img"
-            settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
+            settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\nlog-id = {LOG_ID:08x}\r\n"
             files = memory_disk(disk, BUILT, settings, MEMORY_ID)
             texts = []
             turned_off = False
@@ -1198,6 +1229,21 @@ def remember(args) -> list[str]:
                 print(pc.text())
                 fs_problems, memory_file = esp_now(disk, files)
                 problems += [f"{kind}, start {start}: {p}" for p in fs_problems]
+                # The log kept on the start-up partition, as Windows' setup reads it back: this start's, whole (the
+                # same as the serial port's, but for its line ends), to the end of what it did.
+                try:
+                    logged_run = kept_in(LAST_LOG[0], LOG_ID)
+                except ValueError as e:
+                    logged_run = None
+                    problems.append(f"{kind}, start {start}: the log file: {e}")
+                serial = pc.text().replace("\r\n", "\n")
+                log_text = logged_run[1].decode(errors="replace") if logged_run else ""
+                want = ["Chat Computer kernel: started", "next: the network", "Chat Computer: ready",
+                        f"processor cores: {CORES} in use"] + (["kernel: turning off"] if start == 2 else [])
+                missing = [w for w in want if w not in log_text]
+                if missing or log_text[:2000] not in serial:
+                    problems.append(f"{kind}, start {start}: the log kept on the start-up partition lacks {missing!r} "
+                                    f"({len(log_text)} bytes kept)")
                 try:
                     kept = kept_in(memory_file, MEMORY_ID)
                 except ValueError as e:

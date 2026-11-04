@@ -111,6 +111,18 @@ pub fn with_start<T>(f: impl FnOnce(&mut dyn Disk) -> T) -> Option<T> {
     Some(result)
 }
 
+/// The same, for a crash's last words: never waits, and None if the drive is in use (a crash in the middle of using
+/// it), as well as if it isn't started.
+pub fn try_with_start<T>(f: impl FnOnce(&mut dyn Disk) -> T) -> Option<T> {
+    let mut disk = START.try_lock()?.take()?;
+    let result = f(disk.as_mut());
+    match START.try_lock() {
+        Some(mut slot) => *slot = Some(disk),
+        None => core::mem::forget(disk),
+    }
+    Some(result)
+}
+
 /// A drive to read: the start-up drive, one of the PC's other drives (by its number), or a USB drive's medium (the
 /// drive's own number, its logical unit, and which medium in it: a card taken out and another put in is another).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

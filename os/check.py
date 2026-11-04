@@ -298,7 +298,9 @@ def check_colours(a, size: str) -> list[str]:
         problems.append(f"{len(foreign)} colours that aren't Chat Computer's, e.g. {foreign[:3]}")
     if seen.get(GROUND, 0) < total * 0.6:
         problems.append(f"only {seen.get(GROUND, 0) * 100 // total}% of the screen is the background")
-    if seen.get(INK, 0) < 500:
+    # (Light pixels, not only the words' white itself: Lora's strokes are thin, so two short lines have few pixels
+    # wholly inked, and the rest of each stroke is lighter grey than anything but words on this screen.)
+    if sum(n for c, n in seen.items() if min(c) >= 200) < 500:
         problems.append("almost no words' white: is there any text?")
     if seen.get(PAPER, 0) < total * 0.01:
         problems.append("no message box (hardly any of its grey)")

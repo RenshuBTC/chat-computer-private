@@ -197,15 +197,29 @@ pub fn inflate(input: &[u8], most: usize) -> Result<Vec<u8>, Error> {
     inflate_used(input, most).map(|(out, _)| out)
 }
 
+/// Raw DEFLATE as far as it goes: what `input` decompresses to before it ends early or is damaged (at most `most`
+/// bytes), as readers of damaged files (PDFs cut short) want.
+pub fn inflate_partial(input: &[u8], most: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    let _ = inflate_into(input, most, &mut out);
+    out
+}
+
 /// As `inflate`, and how many of the input's bytes the stream took (zlib's checksum comes after them).
 fn inflate_used(input: &[u8], most: usize) -> Result<(Vec<u8>, usize), Error> {
-    let mut bits = Bits { input, at: 0, buf: 0, count: 0 };
     let mut out: Vec<u8> = Vec::new();
+    let used = inflate_into(input, most, &mut out)?;
+    Ok((out, used))
+}
+
+/// DEFLATE's output added to `out`; how many of the input's bytes the stream took.
+fn inflate_into(input: &[u8], most: usize, out: &mut Vec<u8>) -> Result<usize, Error> {
+    let mut bits = Bits { input, at: 0, buf: 0, count: 0 };
     let mut fixed: Option<(Code, Code)> = None;
     loop {
         let last = bits.need(1)?;
         match bits.need(2)? {
-            0 => stored(&mut bits, &mut out, most)?,
+            0 => stored(&mut bits, out, most)?,
             1 => {
                 if fixed.is_none() {
                     let mut lengths = [0u8; 288];
@@ -216,16 +230,16 @@ fn inflate_used(input: &[u8], most: usize) -> Result<(Vec<u8>, usize), Error> {
                     fixed = Some((Code::new(&lengths)?.0, Code::new(&[5u8; 30])?.0));
                 }
                 let (lit, dist) = fixed.as_ref().unwrap();
-                codes(&mut bits, &mut out, most, lit, dist)?;
+                codes(&mut bits, out, most, lit, dist)?;
             }
             2 => {
                 let (lit, dist) = dynamic(&mut bits)?;
-                codes(&mut bits, &mut out, most, &lit, &dist)?;
+                codes(&mut bits, out, most, &lit, &dist)?;
             }
             _ => return Err(Error::Damaged),
         }
         if last == 1 {
-            return Ok((out, bits.used()));
+            return Ok(bits.used());
         }
     }
 }

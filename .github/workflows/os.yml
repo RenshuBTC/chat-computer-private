@@ -46,8 +46,8 @@ jobs:
           sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil python3-cryptography sbsigntool dosfstools mtools gdisk xz-utils zip ntfs-3g acpica-tools
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
-      - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, picture, BitLocker and registry readers, Markdown, memory file, HID and AML tests
-        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p picture -p bitlocker -p registry -p markdown -p remember -p hid -p aml
+      - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, PDF, picture, BitLocker and registry readers, cryptography, Markdown, memory file, HID and AML tests
+        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p pdf -p picture -p bitlocker -p crypto -p registry -p markdown -p remember -p hid -p aml
       - name: The model engine's tests (on small models with random weights)
         run: cargo test -p model --features std
       - name: The engine's programs for Linux (x86-64 and ARM) and the tiny test model are what this source builds

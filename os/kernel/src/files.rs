@@ -18,9 +18,10 @@
 //! until its owner signs in), else once the person types its recovery key in the message box (each locked drive
 //! tried). chat.rs hands the key here and never to the model, and it isn't kept: after a restart it's typed again.
 //!
-//! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); and
-//! a ZIP archive as the list of what's in it. Pictures and PDFs are said to be what they are (the model reads words
-//! only); show_picture puts a picture on the screen for the person.
+//! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); a
+//! PDF as its words, page by page (pdf/: the last one read kept, to read on in parts); and a ZIP archive as the list
+//! of what's in it. Pictures are said to be what they are (the model reads words only); show_picture puts a picture
+//! on the screen for the person.
 
 use crate::storage::{self, Disk, Drive};
 use crate::sync::SpinLock;
@@ -28,6 +29,7 @@ use crate::{time, usb};
 use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -43,7 +45,7 @@ const MOST_FOLDERS: usize = 4_000;
 const SEARCH_MS: u64 = 5_000;
 /// The most links followed on the way to a file (a link to a link to...), so links in a circle end.
 const MOST_LINKS: usize = 8;
-/// The biggest Office file or ZIP archive read.
+/// The biggest Office file, PDF or ZIP archive read.
 const MOST_OFFICE: u64 = 64_000_000;
 /// How much of a picture is read to find how big it is (its header: a JPEG's may come after a photo's details).
 const PICTURE_HEAD: u64 = 65_536;
@@ -76,7 +78,8 @@ fn kind_of(head: &[u8], name: &str) -> Kind {
     if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
         return Kind::Picture("image/webp");
     }
-    if head.starts_with(b"%PDF-") {
+    // (A PDF may have something before its header; a file named .pdf without one is said to be damaged.)
+    if head.starts_with(b"%PDF-") || ext == "pdf" {
         return Kind::Pdf;
     }
     if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
@@ -1213,9 +1216,11 @@ pub fn list(path: &str) -> Result<String, String> {
     })?
 }
 
-/// A file (read_file), from byte `from`: text as it is (UTF-8, or UTF-16 as Notepad saves it); an Office file's
-/// words (`from` counts in them); a ZIP archive's list. A picture, a PDF or a file of another kind is said to be
-/// one.
+/// The last PDF read (read_file): which (its name, size and when it changed), and its words.
+static PDF_READ: SpinLock<Option<(String, Arc<pdf::Document>)>> = SpinLock::new(None);
+
+/// A file (read_file), from byte `from`: text as it is (UTF-8, or UTF-16 as Notepad saves it); an Office file's or a
+/// PDF's words (`from` counts in them); a ZIP archive's list. A picture or a file of another kind is said to be one.
 pub fn read(path: &str, from: u64) -> Result<String, String> {
     let (letter, rel) = inside(path);
     with(letter, |fs, p| {
@@ -1238,13 +1243,60 @@ pub fn read(path: &str, from: u64) -> Result<String, String> {
                     date(e.modified)
                 ))
             }
-            Kind::Pdf => said(format!(
-                "{name} ({}, changed {}) is a PDF, which Chat Computer's own model can't read yet.",
-                size(f.size),
-                date(e.modified)
-            )),
-            Kind::Office | Kind::Zip if f.size > MOST_OFFICE => {
+            Kind::Office | Kind::Zip | Kind::Pdf if f.size > MOST_OFFICE => {
                 said(format!("{name} is {}: too big for Chat Computer's own system to open.", size(f.size)))
+            }
+            Kind::Pdf => {
+                // (Read once: its next parts come from what was read, if it hasn't changed.)
+                let key = format!("{name}\n{}\n{}", f.size, e.modified);
+                let known = PDF_READ.lock().as_ref().filter(|(k, _)| *k == key).map(|(_, d)| d.clone());
+                let d = match known {
+                    Some(d) => d,
+                    None => {
+                        let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
+                        let started = time::uptime_ms();
+                        match pdf::read(&data) {
+                            Ok(d) => {
+                                crate::log!(
+                                    "Chat Computer kernel: files: read a PDF ({} page{}, {} bytes of words) in {} ms",
+                                    d.pages,
+                                    if d.pages == 1 { "" } else { "s" },
+                                    d.text.len(),
+                                    time::uptime_ms().saturating_sub(started)
+                                );
+                                let d = Arc::new(d);
+                                *PDF_READ.lock() = Some((key, d.clone()));
+                                d
+                            }
+                            Err(pdf::Error::Encrypted) => return said(format!("{name}: a password protects it, so it can't be read here.")),
+                            Err(_) => {
+                                return said(format!(
+                                    "{name} ({}) should be a PDF, but Chat Computer's own system can't read it: it may be damaged.",
+                                    size(f.size)
+                                ));
+                            }
+                        }
+                    }
+                };
+                let about = format!(
+                    "{name} (a PDF, {} page{}, {}, changed {}){}",
+                    d.pages,
+                    if d.pages == 1 { "" } else { "s" },
+                    size(f.size),
+                    date(e.modified),
+                    d.title.as_ref().map(|t| format!(", titled \u{201C}{t}\u{201D}")).unwrap_or_default()
+                );
+                if d.text.is_empty() {
+                    return said(format!(
+                        "{about} has no words that can be read: its pages are pictures (scanned, perhaps), which Chat \
+                         Computer's own model can't see yet."
+                    ));
+                }
+                let mut out = part_of(&d.text, from, &format!("{about}, its words"));
+                if d.cut && (from as usize).saturating_add(READ_AT_ONCE) >= d.text.len() {
+                    out += "\n[That's as far as it's read here: its words go on past 8 MB.]";
+                }
+                said(out)
             }
             Kind::Office => {
                 let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;

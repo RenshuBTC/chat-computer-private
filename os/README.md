@@ -174,8 +174,8 @@ drivers.
     followed within a drive (a junction such as "My Documents", a symbolic link);
     OneDrive's files are read when they're downloaded to the PC, and said to be online only when they aren't. Word,
     Excel and PowerPoint files are read as their words (`office/`, through Chat Computer's own ZIP and DEFLATE
-    reader, `zip/`); a picture or a PDF is said to be one (the model reads words only), and a picture can be shown to
-    the person. A drive
+    reader, `zip/`), and PDFs too (`pdf/`); a picture is said to be one (the model reads words only), and can be
+    shown to the person. A drive
     BitLocker encrypts (many new laptops have Windows' "device encryption" on) is read decrypted (`bitlocker/`):
     at once if BitLocker keeps its key in the clear (suspended, or not switched on yet), else once the person types
     its recovery key in the message box (48 digits, from their Microsoft account at aka.ms/myrecoverykey). The key
@@ -234,12 +234,15 @@ drivers.
       default, hidden folders such as AppData passed by. A Word, Excel or PowerPoint file (or OpenDocument's) comes
       back as its words: a document's paragraphs with Markdown's headings, lists and tables; a workbook's sheets as
       CSV with each row's number and each column's letter, dates as dates, formulas after their values; a
-      presentation's slides with their notes. A ZIP archive's files are listed. A picture (with its size in pixels)
-      or a PDF is said to be one, as is anything else of a kind it can't read;
+      presentation's slides with their notes. A PDF comes back as its words, page by page ("## Page 1"), with its
+      title, and a filled-in form's fields after; an encrypted one too if it opens without a password (as most do:
+      only an owner's password, limiting printing or copying), and a scanned one is said to have no words (its pages
+      are pictures). The last PDF read is kept, so its next parts don't read it again. A ZIP archive's files are
+      listed. A picture (with its size in pixels) is said to be one, as is anything else of a kind it can't read;
     * `search_web` and `read_web_page` (`web.rs`, `web/`): the web, as the main Chat Computer reads it (the same
       DuckDuckGo search and the same reading of a page as its words), fetched over Chat Computer's own network stack
       and TLS 1.3: the site's address found with DNS, its certificate checked against Mozilla's authorities for its
-      name, a GET (compressed with gzip or DEFLATE, or not; in chunks or not), redirects followed (to HTTPS only, at
+      name, a GET (compressed with gzip or DEFLATE, or not; in chunks or not; a PDF read as its words, as one on a drive is), redirects followed (to HTTPS only, at
       most five), at most 3 MB of a page, given up on after 20 seconds of silence. A search gives the first eight
       results' titles, addresses and snippets (its advertisements left out); a page, its title, its address and its
       words (scripts, styles and pictures dropped, a picture's description kept, headings, list items and table rows
@@ -293,7 +296,9 @@ drivers.
   Windows-1252 as well as UTF-8), and DuckDuckGo's plain results page read. Nothing a page holds is ever run.
 * `crypto/` is Chat Computer's own cryptography: SHA-256, SHA-384 and SHA-512, HMAC, HKDF, AES-GCM,
   ChaCha20-Poly1305, X25519, ECDSA on P-256 and P-384, RSA (PKCS #1 v1.5 and PSS), and a generator of random
-  bytes for keys, seeded from the processor. Tested against the standards' own test vectors and OpenSSL's.
+  bytes for keys, seeded from the processor; and AES with tables, both ways, for what's kept on the computer itself
+  (BitLocker's drives, encrypted PDFs), where nothing could watch its timing. Tested against the standards' own test
+  vectors and OpenSSL's.
 * `tls/` is Chat Computer's own TLS 1.3 client, with its own certificate checks (chains, names, dates, what
   each certificate may be used for, name constraints) against Mozilla's certificate authorities: the engine gets its
   models ready over it, on Windows and Linux, and the own kernel reads the web over it. Tested against OpenSSL's server with every cipher and kind of key, and
@@ -369,6 +374,17 @@ drivers.
   that make dates, times and percentages, both of Excel's date systems, formulas), a presentation's slides in order
   with their notes. Tested against documents made by python-docx, openpyxl and python-pptx, the same saved by
   LibreOffice, and documents written by hand with what programs write less often (`office/tests/make.py`).
+* `pdf/` reads the words in PDFs, its own way from ISO 32000: the file's objects through its cross-reference tables
+  or streams (updates appended to it followed, objects packed in object streams), or, in a damaged file (offsets
+  wrong, the cross-reference gone, cut short), by looking through it for them; streams' filters (Flate with PNG's and
+  TIFF's predictors, LZW, ASCII85, ASCIIHex, RunLength); fonts' codes as text (ToUnicode CMaps, the standard
+  encodings and /Differences' glyph names, composite fonts' code spaces, Type 3 fonts) and their widths; a page's
+  content streams (and the forms they draw) followed through their text and graphics matrices, so a line's pieces
+  are put left to right, words spaced where there's room between them, lines and paragraphs where the text moves
+  down. Encrypted files that open without a password are decrypted (RC4 and AES, revisions 2 to 6, with its own MD5).
+  Everything is held to a most: sizes, depths, how much work a page or a file takes. Tested against PDFs made by
+  ReportLab, LibreOffice, pdfTeX and qpdf (seven kinds of encryption), and by hand with what programs write less
+  often (`pdf/tests/make.py`), damaged ones and tens of thousands with bytes changed at random, which never crash it.
 * `picture/` decodes pictures for the screen: JPEG (baseline and progressive, any sampling, restart markers,
   Adobe's CMYK, EXIF's orientation) as libjpeg decodes it (its accurate integer inverse DCT, its "fancy" upsampling,
   its YCbCr arithmetic), a big one at a half, a quarter or an eighth of its size when that's enough, so a phone's
@@ -523,8 +539,8 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # and a tool call cut short
 ./check.py --web                 # the model's web tools over the kernel's own TCP and TLS 1.3, against a stand-in
                                  # here for DuckDuckGo and a site (TLS 1.3 with a test's own authority): results,
-                                 # a redirect, a gzip page in chunks read in two parts, a missing page, a wrong
-                                 # certificate refused (needs openssl)
+                                 # a redirect, a gzip page in chunks read in two parts, a PDF, a missing page, a
+                                 # wrong certificate refused (needs openssl)
 ./check.py --remember            # the conversation and the model's notes kept across a restart, on an NVMe SSD
                                  # and a SATA drive laid out like a PC's, then a new conversation started (the
                                  # note still in the model's instructions), then the PC turned off; the log kept in
@@ -535,8 +551,8 @@ cargo test -p model --features std # the model engine (small models of random we
 ./check.py --files               # Windows' drive read by the model's tools (a test's script asks): a folder
                                  # listed, text files read (UTF-8 and UTF-16, a long one in two parts), links
                                  # followed, OneDrive's files on the PC and online only, Word, Excel and
-                                 # PowerPoint files as words, a search, and a photo shown on the screen (needs
-                                 # xz and gdisk)
+                                 # PowerPoint files and a PDF as words, a search, and a photo shown on the screen
+                                 # (needs xz and gdisk)
 ./check.py --drives              # the PC's other drives: a second NVMe SSD (GPT) and two SATA drives (MBR and
                                  # GPT), read by the letters Windows' registry gives them, one Windows hasn't seen
                                  # given the next free letter (needs ntfs-3g's mkntfs too)
@@ -652,8 +668,9 @@ PC.
    no internet to think. ✓ The kernel runs it: the model's file read from Windows' drive into memory, the
    processor's vector registers (AVX) kept across interrupts, the answer a step at a time beside the screen and the
    keyboard; checked in a virtual PC against the engine on Linux; ✓ on every core; ✓ the web (a search and pages'
-   words, over its own HTTPS; checked against a stand-in for DuckDuckGo and a site). To do: trying the web on a real
-   PC, and pictures and PDFs read.
+   words, over its own HTTPS; checked against a stand-in for DuckDuckGo and a site); ✓ PDFs read (on the drives and
+   the web, encrypted ones that open without a password too). To do: trying the web on a real PC, and pictures seen
+   (scanned pages among them).
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting the model's answers use
    (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the
    conversation (JPEG, PNG, GIF). To do: accents

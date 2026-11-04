@@ -1,0 +1,11 @@
+[package]
+name = "pdf"
+description = "Chat Computer's own reading of PDFs' words"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zip = { path = "../zip" }
+crypto = { path = "../crypto" }

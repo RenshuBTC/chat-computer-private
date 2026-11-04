@@ -41,6 +41,7 @@ dependencies = [
  "net",
  "ntfs",
  "office",
+ "pdf",
  "picture",
  "registry",
  "remember",
@@ -98,6 +99,14 @@ version = "0.1.0"
 name = "office"
 version = "0.1.0"
 dependencies = [
+ "zip",
+]
+
+[[package]]
+name = "pdf"
+version = "0.1.0"
+dependencies = [
+ "crypto",
  "zip",
 ]
 

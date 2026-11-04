@@ -28,6 +28,7 @@ aml = { path = "../aml" }
 model = { path = "../model" }
 tls = { path = "../tls" }
 web = { path = "../web" }
+pdf = { path = "../pdf" }
 
 [[bin]]
 name = "chatcomputer-kernel"

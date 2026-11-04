@@ -1,7 +1,7 @@
-//! AES (FIPS 197) both ways, with tables: fast enough to read a drive through (the crypto crate's AES, which TLS
-//! uses, computes its S-box to keep its timing secret, and only encrypts). Here the data is the person's own drive,
-//! on a computer that runs nothing but Chat Computer: nothing could watch the caches. The tables are worked out when
-//! Chat Computer is built.
+//! AES (FIPS 197) both ways, with tables: fast enough to read a drive through (aes.rs, which TLS uses, computes its
+//! S-box to keep its timing secret, and only encrypts). For data kept on the person's own computer, which runs nothing
+//! but Chat Computer, so nothing could watch the caches: BitLocker's drives, encrypted PDFs. The tables are worked out
+//! when Chat Computer is built.
 
 /// Multiplication in GF(2^8) modulo x^8 + x^4 + x^3 + x + 1.
 const fn mul(mut a: u8, mut b: u8) -> u8 {

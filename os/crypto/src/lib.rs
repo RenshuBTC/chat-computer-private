@@ -4,12 +4,14 @@
 //! is written from its specification and checked against the specification's own test vectors.
 //!
 //! What handles secrets (the ciphers, X25519) takes the same time whatever the secret, using no secret as an
-//! array index or a branch condition, except where noted. Signature checks only ever see public values.
+//! array index or a branch condition, except where noted (aes_tables: AES with tables, both ways, for data kept on
+//! the computer itself, where nothing else runs). Signature checks only ever see public values.
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
 pub mod aes;
+pub mod aes_tables;
 pub mod bignum;
 pub mod chacha20poly1305;
 pub mod drbg;

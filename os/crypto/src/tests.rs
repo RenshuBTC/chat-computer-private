@@ -71,6 +71,42 @@ fn aes_matches_fips_197() {
 }
 
 #[test]
+fn table_aes_matches_fips_197_and_the_constant_time_one() {
+    // FIPS 197's examples (C.1, C.3).
+    let mut b: [u8; 16] = core::array::from_fn(|i| (i as u8) * 0x11);
+    let k128: Vec<u8> = (0..16).collect();
+    let k256: Vec<u8> = (0..32).collect();
+    let aes = aes_tables::Aes::new(&k128).unwrap();
+    aes.encrypt(&mut b);
+    assert_eq!(b, [0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a]);
+    aes.decrypt(&mut b);
+    assert_eq!(b, core::array::from_fn(|i| (i as u8) * 0x11));
+    let aes = aes_tables::Aes::new(&k256).unwrap();
+    aes.encrypt(&mut b);
+    assert_eq!(b, [0x8e, 0xa2, 0xb7, 0xca, 0x51, 0x67, 0x45, 0xbf, 0xea, 0xfc, 0x49, 0x90, 0x4b, 0x49, 0x60, 0x89]);
+    aes.decrypt(&mut b);
+    assert_eq!(b, core::array::from_fn(|i| (i as u8) * 0x11));
+    // The same as the crypto crate's (constant-time) AES, for many keys and blocks.
+    let mut x = 1u64;
+    let mut next = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x as u8
+    };
+    for size in [16, 32] {
+        for _ in 0..50 {
+            let key: Vec<u8> = (0..size).map(|_| next()).collect();
+            let mut a: [u8; 16] = core::array::from_fn(|_| next());
+            let mut c = a;
+            aes_tables::Aes::new(&key).unwrap().encrypt(&mut a);
+            aes::Aes::new(&key).encrypt_block(&mut c);
+            assert_eq!(a, c);
+        }
+    }
+}
+
+#[test]
 fn aes_gcm_matches_openssl_and_refuses_anything_changed() {
     for (k, n, aad, pt, ct) in vectors::AES_GCM {
         let (k, aad, pt, ct) = (hex(k), hex(aad), hex(pt), hex(ct));

@@ -6,3 +6,5 @@
 *.bat text eol=crlf
 *.sh text eol=lf
 *.command text eol=lf
+# PDFs count their own bytes (each object's offset): never changed, whatever their lines end with.
+*.pdf binary

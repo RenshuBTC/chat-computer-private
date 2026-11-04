@@ -1006,7 +1006,19 @@ impl Assistant {
             }
             (WebWhat::Read { url, offset }, Ok(page)) => {
                 let at = page.url.to_string();
-                match web::page::words(&page.bytes, &page.kind) {
+                // (A PDF read as one on the PC's drives is, as far as the most fetched goes.)
+                let words = if page.kind.to_ascii_lowercase().contains("application/pdf") || page.bytes.starts_with(b"%PDF-") {
+                    match pdf::read(&page.bytes) {
+                        Ok(d) if d.text.is_empty() => Err(String::from("a PDF whose pages are pictures (scanned, perhaps), with no words to read")),
+                        Ok(d) => Ok(web::page::Page { title: d.title.unwrap_or_default(), text: d.text }),
+                        Err(pdf::Error::Encrypted) => Err(String::from("a PDF a password protects")),
+                        Err(_) if page.cut => Err(String::from("a PDF too big to read here (more than 3 MB)")),
+                        Err(_) => Err(String::from("a PDF that can't be read (it may be damaged)")),
+                    }
+                } else {
+                    web::page::words(&page.bytes, &page.kind)
+                };
+                match words {
                     Ok(p) => {
                         crate::log!(
                             "Chat Computer kernel: web: read {} ({} bytes, {} characters of words)",

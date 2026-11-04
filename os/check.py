@@ -44,7 +44,8 @@ log go to out/.
     ./check.py --web                the model's web tools (search_web, read_web_page) over the kernel's own TCP and TLS
                                      1.3, against a stand-in here for DuckDuckGo and a site (a test build trusting the
                                      test's own authority): results read, a redirect followed, a page compressed and in
-                                     chunks read in two parts, a missing page and a wrong certificate said
+                                     chunks read in two parts, a PDF read as its words, a missing page and a wrong
+                                     certificate said
     ./check.py --remember           the conversation kept across a restart: started from a disk laid out like a
                                      PC's (a FAT32 start-up partition with Windows' files and Chat Computer's,
                                      its memory file as Windows' setup makes it), on an NVMe SSD and then a SATA
@@ -56,8 +57,9 @@ log go to out/.
                                      needs dosfstools, mtools and gdisk)
     ./check.py --files               Windows' drive read: a disk like a PC's, with Windows' NTFS partition after the
                                      start-up one (the ntfs crate's test volume), and a test's script in place of
-                                     the model that lists a folder, reads files (UTF-8 and UTF-16, a Word file it can't, a long one
-                                     in two parts) and finds one by name (needs xz and sgdisk)
+                                     the model that lists a folder, reads files (UTF-8 and UTF-16, Office's files and a
+                                     PDF as their words, a damaged Word file it can't, a long one in two parts) and
+                                     finds one by name (needs xz and sgdisk)
     ./check.py --bitlocker           Windows' drive encrypted with BitLocker (the same volume, encrypted as Windows
                                      10 and 11 do): locked, then unlocked by its recovery key typed in the message
                                      box (a wrong one refused), the key reaching neither the model nor the disk; and
@@ -1091,9 +1093,9 @@ def web_check(args) -> list[str]:
     sites are all a stand-in here (10.0.2.2: TLS 1.3, a certificate for html.duckduckgo.com and www.example.com),
     reached over QEMU's virtual network by a virtio card, and a test's script in place of the model: a search (the
     results page read, its advertisement left out), a page sent on (302) to the page, which comes compressed (gzip) in
-    chunks and is read in two parts (the second from what's kept: the stand-in asked once), a page that isn't there,
-    and a site whose certificate isn't for its name (refused). The results reach the model, and the screen says each
-    search and site."""
+    chunks and is read in two parts (the second from what's kept: the stand-in asked once), a PDF (LibreOffice's, read
+    as its words), a page that isn't there, and a site whose certificate isn't for its name (refused). The results
+    reach the model, and the screen says each search and site."""
     import gzip
     import gzip as _gz  # noqa: F401
     import http.server
@@ -1128,6 +1130,13 @@ def web_check(args) -> list[str]:
                 self.send_header("Location", "/page")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
+            elif host == "www.example.com" and url.path == "/paper.pdf":
+                body = (HERE / "pdf/tests/letter-libreoffice.pdf").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             elif host == "www.example.com" and url.path == "/page":
                 page = (f"<html><head><title>Example &amp; Page</title><script>no()</script></head><body>"
                         f"<h1>Hello</h1><p>{WEB_PAGE_WORDS}</p><p>The end.</p></body></html>")
@@ -1160,6 +1169,7 @@ def web_check(args) -> list[str]:
         {"calls": [["search_web", {"query": "chat computer own system"}]]},
         {"calls": [["read_web_page", {"url": "https://www.example.com/start"}]]},
         {"calls": [["read_web_page", {"url": "https://www.example.com/page", "offset": 12000}]]},
+        {"calls": [["read_web_page", {"url": "https://www.example.com/paper.pdf"}]]},
         {"calls": [["read_web_page", {"url": "www.example.com/missing"}], ["read_web_page", {"url": "https://wrong.example.org/"}]]},
         {"text": "Done."},
     ]}
@@ -1187,9 +1197,9 @@ def web_check(args) -> list[str]:
             problems.append(f"the answer didn't end (the log says {got!r})")
         said = [t["said"] for t in logged(text, "tool")]
         errors = [t["error"] for t in logged(text, "tool")]
-        if len(said) != 5:
-            return problems + [f"{len(said)} tools' results, not 5: {said!r}"[:3000]]
-        if errors != [False, False, False, True, True]:
+        if len(said) != 6:
+            return problems + [f"{len(said)} tools' results, not 6: {said!r}"[:3000]]
+        if errors != [False, False, False, False, True, True]:
             problems.append(f"the tools' errors were {errors!r}")
         want = ("Results for “chat computer own system” (DuckDuckGo):\n1. Chat Computer & its own system\n"
                 "   https://www.example.com/start\n   A computer you talk to, with an operating system of its own.")
@@ -1201,10 +1211,13 @@ def web_check(args) -> list[str]:
             problems.append(f"the page's first part was {said[1][:600]!r}")
         if not said[2].startswith("https://www.example.com/page, from character 12000:\n\n") or not said[2].endswith("The end."):
             problems.append(f"the page's second part was {said[2][:300]!r}...{said[2][-100:]!r}")
-        if "says there's no such page (404)" not in said[3]:
-            problems.append(f"the missing page said {said[3]!r}")
-        if "didn't trust the site that answered for wrong.example.org" not in said[4]:
-            problems.append(f"the wrong certificate said {said[4]!r}")
+        if (not said[3].startswith("https://www.example.com/paper.pdf\n\n## Page 1\nA letter to the council\nWhy I'm writing\n")
+                or "Ünïcödé, 名前, café and 🙂.\n\n## Page 2\nYours faithfully," not in said[3]):
+            problems.append(f"the PDF said {said[3][:600]!r}")
+        if "says there's no such page (404)" not in said[4]:
+            problems.append(f"the missing page said {said[4]!r}")
+        if "didn't trust the site that answered for wrong.example.org" not in said[5]:
+            problems.append(f"the wrong certificate said {said[5]!r}")
         pages = [a for a in asked if a[1] == "/page"]
         if len(pages) != 1:
             problems.append(f"the page was asked for {len(pages)} times, not once (the second part comes from what's kept)")
@@ -1508,7 +1521,7 @@ def files_check(args) -> list[str]:
     Documents", and a symbolic link on the Desktop), OneDrive's files read when they're on the PC and said to be
     online only when they aren't, a file Windows compressed itself said to be one, and a search that finds the
     shopping list (and the link to it) but not the one in AppData (a hidden folder). Word, Excel and PowerPoint files
-    come back as their words; a ZIP archive as its list; a photo, a PDF and a wide picture as what they are (the model
+    and a PDF come back as their words; a ZIP archive as its list; a photo and a wide picture as what they are (the model
     reads words only); what can't be read (a damaged Word file, one from before 2007, an iPhone's photo) says why.
     computer_status says what the drive is. Last, a photo shown on the screen (show_picture): its sun's yellow must be
     there in the picture of the screen."""
@@ -1617,8 +1630,8 @@ def files_check(args) -> list[str]:
                     r"words:\n## Slide 1: Chat Computer\n.*## Slide 2: What it does\n.*Notes: Say hello first\.\n.*",
             "photo": rf"C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels, changed {day}\) is a picture\. Chat "
                      r"Computer's own model can't see pictures yet; show_picture shows it to the person\.",
-            "pdf": rf"C:\\Users\\Sam\\Documents\\Work\\Receipt\.pdf \(600 bytes, changed {day}\) is a PDF, which Chat "
-                   r"Computer's own model can't read yet\.",
+            "pdf": rf"C:\\Users\\Sam\\Documents\\Work\\Receipt\.pdf \(a PDF, 1 page, 600 bytes, changed {day}\), its words:\n"
+                   r"## Page 1\nReceipt: 3 coffees, 12\.50",
             "zip": r"C:\\Users\\Sam\\Downloads\\photos\.zip is a ZIP archive \(4 KB\) of 2 files:\nBeach\.jpg \(10 KB\)\n"
                    r"notes\.txt \(23 bytes\)\n\[What's in it isn't opened here\.\]",
             "olddoc": r"C:\\Users\\Sam\\Documents\\Work\\Old letter\.doc \(5 KB\) is in Office's format from before 2007 "

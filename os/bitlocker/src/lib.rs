@@ -20,12 +20,10 @@
 
 extern crate alloc;
 
-mod aes;
-
 #[cfg(test)]
 mod tests;
 
-use aes::Aes;
+use crypto::aes_tables::Aes;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;

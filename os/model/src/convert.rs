@@ -332,6 +332,147 @@ fn plan_vision(v: &str, dims: &[usize], bits: u32) -> Option<(String, Dtype, Vec
     Some((ours, dtype, shape))
 }
 
+/// A speech recognition model's settings (OpenAI's Whisper, as transformers publishes it), as "key=value" lines:
+/// from config.json, generation_config.json (the tokens never chosen, and never first) and tokenizer.json (the
+/// special tokens, by name).
+pub fn whisper_settings(config: &Json, generation: &Json, tj: &Json) -> Result<String, String> {
+    let num = |k: &str| config.get(k).and_then(Json::usize).ok_or_else(|| format!("config.json has no {k}"));
+    let mut specials: BTreeMap<String, usize> = BTreeMap::new();
+    for a in tj.get("added_tokens").and_then(Json::array).unwrap_or(&[]) {
+        if let (Some(id), Some(text)) = (a.get("id").and_then(Json::usize), a.get("content").and_then(Json::str)) {
+            specials.insert(text.to_string(), id);
+        }
+    }
+    let special = |names: &[&str]| -> Result<usize, String> {
+        names.iter().find_map(|n| specials.get(*n).copied()).ok_or_else(|| format!("the tokenizer has no {}", names[0]))
+    };
+    let blank = tj.get("model").and_then(|m| m.get("vocab")).and_then(|v| v.get("\u{120}")).and_then(Json::usize)
+        .ok_or("the tokenizer has no blank (a space alone)")?;
+    let ids = |k: &str| -> Vec<String> {
+        generation.get(k).and_then(Json::array).map(|a| a.iter().filter_map(Json::usize).map(|v| v.to_string()).collect()).unwrap_or_default()
+    };
+    let mut s = String::new();
+    let mut put = |k: &str, v: String| {
+        s.push_str(k);
+        s.push('=');
+        s.push_str(&v);
+        s.push('\n');
+    };
+    put("converter", CONVERTER.to_string());
+    put("arch", "whisper".to_string());
+    put("whisper.mels", num("num_mel_bins")?.to_string());
+    put("whisper.width", num("d_model")?.to_string());
+    put("whisper.encoder_layers", num("encoder_layers")?.to_string());
+    put("whisper.decoder_layers", num("decoder_layers")?.to_string());
+    put("whisper.encoder_heads", num("encoder_attention_heads")?.to_string());
+    put("whisper.decoder_heads", num("decoder_attention_heads")?.to_string());
+    put("whisper.encoder_ffn", num("encoder_ffn_dim")?.to_string());
+    put("whisper.decoder_ffn", num("decoder_ffn_dim")?.to_string());
+    put("whisper.vocab", num("vocab_size")?.to_string());
+    put("whisper.audio_ctx", num("max_source_positions")?.to_string());
+    put("whisper.text_ctx", num("max_target_positions")?.to_string());
+    put("whisper.sot", special(&["<|startoftranscript|>"])?.to_string());
+    put("whisper.eot", special(&["<|endoftext|>"])?.to_string());
+    let no_timestamps = special(&["<|notimestamps|>"])?;
+    put("whisper.no_timestamps", no_timestamps.to_string());
+    put("whisper.no_speech", special(&["<|nospeech|>", "<|nocaptions|>"])?.to_string());
+    put("whisper.timestamp_begin", special(&["<|0.00|>"]).unwrap_or(no_timestamps + 1).to_string());
+    put("whisper.blank", blank.to_string());
+    // A model of many languages: its language tokens (between the start of a transcript and the task's).
+    let multilingual = generation.get("is_multilingual").is_some_and(|v| matches!(v, Json::Bool(true)));
+    if multilingual {
+        let codes = generation.get("lang_to_id").and_then(Json::object).ok_or("generation_config.json has no lang_to_id")?;
+        let langs: Vec<usize> = codes.iter().filter_map(|(_, v)| v.usize()).collect();
+        let (first, last) = (langs.iter().min().ok_or("no languages")?, langs.iter().max().ok_or("no languages")?);
+        if last - first + 1 != langs.len() {
+            return Err("the language tokens aren't one run".into());
+        }
+        put("whisper.language_first", first.to_string());
+        put("whisper.language_last", last.to_string());
+        put("whisper.transcribe", special(&["<|transcribe|>"])?.to_string());
+    }
+    // The tokens never chosen, as faster-whisper's own list (the same, for these models): speaker tags, music and
+    // the like, and the special tokens.
+    let mut suppress = ids("suppress_tokens");
+    for n in ["<|transcribe|>", "<|translate|>", "<|startoftranscript|>", "<|startofprev|>", "<|startoflm|>", "<|nospeech|>", "<|nocaptions|>"] {
+        if let Some(id) = specials.get(n) {
+            suppress.push(id.to_string());
+        }
+    }
+    let mut suppress: Vec<usize> = suppress.iter().filter_map(|v| v.parse().ok()).collect();
+    suppress.sort_unstable();
+    suppress.dedup();
+    put("whisper.suppress", suppress.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+    put("whisper.begin_suppress", ids("begin_suppress_tokens").join(","));
+    Ok(s)
+}
+
+/// A speech recognition model's weight (transformers' names): where it goes in ours. Its matrices in 8 bits (or 16
+/// as published, for checking), the first convolution (which reads the spectrogram itself) and the learned
+/// positions in full.
+pub fn plan_whisper(name: &str, dims: &[usize], bits: u32) -> Option<(String, Dtype, Vec<usize>)> {
+    let m = if bits == 16 { Dtype::F16 } else { Dtype::Q8 };
+    let flat = dims.to_vec();
+    let n = name.strip_prefix("model.")?;
+    let as_matrix = |d: &[usize]| -> Vec<usize> { alloc::vec![d[0], d[1..].iter().product()] };
+    let (ours, dtype, shape) = match n {
+        "encoder.conv1.weight" => ("whisper.conv1".to_string(), Dtype::F32, as_matrix(dims)),
+        "encoder.conv1.bias" => ("whisper.conv1_bias".to_string(), Dtype::F32, flat),
+        "encoder.conv2.weight" => ("whisper.conv2".to_string(), m, as_matrix(dims)),
+        "encoder.conv2.bias" => ("whisper.conv2_bias".to_string(), Dtype::F32, flat),
+        "encoder.embed_positions.weight" => ("whisper.encoder_pos".to_string(), Dtype::F32, flat),
+        "encoder.layer_norm.weight" => ("whisper.encoder_norm".to_string(), Dtype::F32, flat),
+        "encoder.layer_norm.bias" => ("whisper.encoder_norm_bias".to_string(), Dtype::F32, flat),
+        "decoder.embed_tokens.weight" => ("whisper.embed".to_string(), m, flat),
+        "decoder.embed_positions.weight" => ("whisper.decoder_pos".to_string(), Dtype::F32, flat),
+        "decoder.layer_norm.weight" => ("whisper.decoder_norm".to_string(), Dtype::F32, flat),
+        "decoder.layer_norm.bias" => ("whisper.decoder_norm_bias".to_string(), Dtype::F32, flat),
+        _ => {
+            let (side, rest) = n.split_once(".layers.")?;
+            let (layer, part) = rest.split_once('.')?;
+            let layer: usize = layer.parse().ok()?;
+            let (ours, dtype) = match part {
+                "self_attn_layer_norm.weight" => ("norm1", Dtype::F32),
+                "self_attn_layer_norm.bias" => ("norm1_bias", Dtype::F32),
+                "self_attn.q_proj.weight" => ("attention.q", m),
+                "self_attn.q_proj.bias" => ("attention.q_bias", Dtype::F32),
+                "self_attn.k_proj.weight" => ("attention.k", m),
+                "self_attn.v_proj.weight" => ("attention.v", m),
+                "self_attn.v_proj.bias" => ("attention.v_bias", Dtype::F32),
+                "self_attn.out_proj.weight" => ("attention.o", m),
+                "self_attn.out_proj.bias" => ("attention.o_bias", Dtype::F32),
+                "encoder_attn_layer_norm.weight" => ("norm2", Dtype::F32),
+                "encoder_attn_layer_norm.bias" => ("norm2_bias", Dtype::F32),
+                "encoder_attn.q_proj.weight" => ("cross.q", m),
+                "encoder_attn.q_proj.bias" => ("cross.q_bias", Dtype::F32),
+                "encoder_attn.k_proj.weight" => ("cross.k", m),
+                "encoder_attn.v_proj.weight" => ("cross.v", m),
+                "encoder_attn.v_proj.bias" => ("cross.v_bias", Dtype::F32),
+                "encoder_attn.out_proj.weight" => ("cross.o", m),
+                "encoder_attn.out_proj.bias" => ("cross.o_bias", Dtype::F32),
+                // (The encoder's second norm is before its feed-forward part; the decoder's third.)
+                "final_layer_norm.weight" => (if side == "encoder" { "norm2" } else { "norm3" }, Dtype::F32),
+                "final_layer_norm.bias" => (if side == "encoder" { "norm2_bias" } else { "norm3_bias" }, Dtype::F32),
+                "fc1.weight" => ("fc1", m),
+                "fc1.bias" => ("fc1_bias", Dtype::F32),
+                "fc2.weight" => ("fc2", m),
+                "fc2.bias" => ("fc2_bias", Dtype::F32),
+                _ => return None,
+            };
+            if side != "encoder" && side != "decoder" {
+                return None;
+            }
+            (format!("whisper.{side}.{layer}.{ours}"), dtype, flat)
+        }
+    };
+    let dtype = if matches!(dtype, Dtype::Q8 | Dtype::Q4) && !shape.last().is_some_and(|c| c.is_multiple_of(quant::BLOCK)) {
+        Dtype::F32
+    } else {
+        dtype
+    };
+    Some((ours, dtype, shape))
+}
+
 /// A weight's numbers (as published: BF16, F16 or F32, little-endian) in our type.
 pub fn encode(source: &str, raw: &[u8], dtype: Dtype) -> Result<Vec<u8>, String> {
     let values: Vec<f32> = match source {

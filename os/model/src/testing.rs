@@ -181,6 +181,120 @@ fn build(experts: bool, seeing: bool) -> Vec<u8> {
     out
 }
 
+/// A speech recognition model with random weights (Whisper's design, 64 wide, 2 encoder and 2 decoder layers, 80
+/// mels, its 1,500 positions and 64 for tokens): a byte for each of the first 256 tokens, then Whisper's special
+/// tokens (an English-only model's) and four timestamps. The same bytes every time.
+pub fn tiny_listening() -> Vec<u8> {
+    let mut r = Rng(0x005E_ED0F_5EEC);
+    let (w, ffn, mels, vocab) = (64usize, 96usize, 80usize, 268usize);
+    let config = String::from(
+        "converter=2\narch=whisper\nwhisper.mels=80\nwhisper.width=64\nwhisper.encoder_layers=2\nwhisper.decoder_layers=2\n\
+         whisper.encoder_heads=2\nwhisper.decoder_heads=2\nwhisper.encoder_ffn=96\nwhisper.decoder_ffn=96\nwhisper.vocab=268\n\
+         whisper.audio_ctx=1500\nwhisper.text_ctx=64\nwhisper.sot=257\nwhisper.eot=256\nwhisper.no_timestamps=263\n\
+         whisper.no_speech=262\nwhisper.timestamp_begin=264\nwhisper.blank=32\nwhisper.suppress=257,258,259,260,261,262\n\
+         whisper.begin_suppress=32,256\n",
+    );
+    let mut wr = Writer::default();
+    wr.add("config", Dtype::Blob, &[config.len()], config.as_bytes());
+    let specials = [
+        "<|endoftext|>", "<|startoftranscript|>", "<|translate|>", "<|transcribe|>", "<|startoflm|>", "<|startofprev|>",
+        "<|nocaptions|>", "<|notimestamps|>", "<|0.00|>", "<|0.02|>", "<|0.04|>", "<|0.06|>",
+    ];
+    let mut tokens: Vec<Vec<u8>> = (0..=255u8).map(|b| vec![b]).collect();
+    tokens.extend(specials.iter().map(|s| s.as_bytes().to_vec()));
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
+    let mut at = 0u32;
+    blob.extend_from_slice(&at.to_le_bytes());
+    for t in &tokens {
+        at += t.len() as u32;
+        blob.extend_from_slice(&at.to_le_bytes());
+    }
+    for t in &tokens {
+        blob.extend_from_slice(t);
+    }
+    wr.add("tokenizer.tokens", Dtype::Blob, &[blob.len()], &blob);
+    wr.add("tokenizer.merges", Dtype::Blob, &[0], &[]);
+    let lines: String = specials.iter().enumerate().map(|(i, s)| format!("{} {s}\n", 256 + i)).collect();
+    wr.add("tokenizer.specials", Dtype::Blob, &[lines.len()], lines.as_bytes());
+    let f32s = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let matrix = |wr: &mut Writer, name: &str, rows: usize, cols: usize, r: &mut Rng| {
+        let v = r.vec(rows * cols, 1.0 / crate::math::sqrt(cols as f32) * 1.7);
+        let mut q = Vec::new();
+        quant::quantize_q8(&v, &mut q);
+        wr.add(name, Dtype::Q8, &[rows, cols], &q);
+    };
+    let vector = |wr: &mut Writer, name: &str, v: Vec<f32>| wr.add(name, Dtype::F32, &[v.len()], &f32s(&v));
+    let norm = |wr: &mut Writer, name: &str, r: &mut Rng| {
+        vector(wr, name, r.vec(w, 0.1).iter().map(|v| 1.0 + v).collect());
+        vector(wr, &format!("{name}_bias"), r.vec(w, 0.1));
+    };
+    let attention = |wr: &mut Writer, p: &str, r: &mut Rng| {
+        for m in ["q", "k", "v", "o"] {
+            matrix(wr, &format!("{p}.{m}"), w, w, r);
+        }
+        for b in ["q_bias", "v_bias", "o_bias"] {
+            vector(wr, &format!("{p}.{b}"), r.vec(w, 0.1));
+        }
+    };
+    let mlp = |wr: &mut Writer, p: &str, r: &mut Rng| {
+        matrix(wr, &format!("{p}.fc1"), ffn, w, r);
+        vector(wr, &format!("{p}.fc1_bias"), r.vec(ffn, 0.1));
+        matrix(wr, &format!("{p}.fc2"), w, ffn, r);
+        vector(wr, &format!("{p}.fc2_bias"), r.vec(w, 0.1));
+    };
+    let conv1 = r.vec(w * 3 * mels, 0.1);
+    wr.add("whisper.conv1", Dtype::F32, &[w, 3 * mels], &f32s(&conv1));
+    vector(&mut wr, "whisper.conv1_bias", r.vec(w, 0.1));
+    matrix(&mut wr, "whisper.conv2", w, 3 * w, &mut r);
+    vector(&mut wr, "whisper.conv2_bias", r.vec(w, 0.1));
+    vector(&mut wr, "whisper.encoder_pos", r.vec(1500 * w, 0.5));
+    for l in 0..2 {
+        let p = format!("whisper.encoder.{l}");
+        norm(&mut wr, &format!("{p}.norm1"), &mut r);
+        attention(&mut wr, &format!("{p}.attention"), &mut r);
+        norm(&mut wr, &format!("{p}.norm2"), &mut r);
+        mlp(&mut wr, &p, &mut r);
+    }
+    norm(&mut wr, "whisper.encoder_norm", &mut r);
+    matrix(&mut wr, "whisper.embed", vocab, w, &mut r);
+    vector(&mut wr, "whisper.decoder_pos", r.vec(64 * w, 0.5));
+    for l in 0..2 {
+        let p = format!("whisper.decoder.{l}");
+        norm(&mut wr, &format!("{p}.norm1"), &mut r);
+        attention(&mut wr, &format!("{p}.attention"), &mut r);
+        norm(&mut wr, &format!("{p}.norm2"), &mut r);
+        attention(&mut wr, &format!("{p}.cross"), &mut r);
+        norm(&mut wr, &format!("{p}.norm3"), &mut r);
+        mlp(&mut wr, &p, &mut r);
+    }
+    norm(&mut wr, "whisper.decoder_norm", &mut r);
+    let mut out = wr.head();
+    out.extend_from_slice(&wr.data);
+    out
+}
+
+/// A recording that sounds like something (a voice-like hum rising and falling, its harmonics, a little noise),
+/// `seconds` long at 16 kHz, the same each time from the same `seed`.
+pub fn recording(seconds: f32, seed: u64) -> Vec<f32> {
+    let mut r = Rng((seed << 1) | 1);
+    let n = (seconds * 16000.0) as usize;
+    let mut phase = 0.0f64;
+    (0..n)
+        .map(|i| {
+            let t = i as f64 / 16000.0;
+            let pitch = 140.0 + 40.0 * crate::math::sin_cos(2.0 * core::f64::consts::PI * 0.7 * t).0;
+            phase += 2.0 * core::f64::consts::PI * pitch / 16000.0;
+            let mut v = 0.0;
+            for k in 1..6 {
+                v += crate::math::sin_cos(phase * k as f64).0 / k as f64;
+            }
+            let envelope = 0.5 + 0.5 * crate::math::sin_cos(2.0 * core::f64::consts::PI * 2.0 * t).0;
+            (0.2 * v * envelope) as f32 + 0.01 * r.float()
+        })
+        .collect()
+}
+
 /// A picture of `width` by `height` pixels that looks like something (gradients, a square, a stripe), the same each
 /// time from the same `seed`.
 pub fn picture(width: usize, height: usize, seed: u64) -> Vec<u8> {

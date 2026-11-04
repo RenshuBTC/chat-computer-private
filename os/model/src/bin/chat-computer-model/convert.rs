@@ -2,7 +2,8 @@
 //!
 //!     chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]
 //!
-//! MODEL_FOLDER has Qwen's config.json, tokenizer.json, chat template and its .safetensors weights. Each weight is
+//! MODEL_FOLDER has Qwen's config.json, tokenizer.json, chat template and its .safetensors weights (or a speech
+//! recognition model's: OpenAI's Whisper, as transformers publishes it, with its generation_config.json). Each weight is
 //! read, changed and written one at a time, so a model bigger than the computer's memory converts too.
 
 use model::convert;
@@ -50,22 +51,30 @@ pub fn main_with(args: Vec<String>) -> i32 {
 pub fn run(folder: &Path, out: &Path, bits: u32) -> Result<(), String> {
     let read = |n: &str| fs::read_to_string(folder.join(n)).map_err(|e| format!("{n}: {e}"));
     let config = model::json::parse(&read("config.json")?).ok_or("config.json isn't JSON")?;
-    let mut settings = convert::settings(&config)?;
-    // The vision part's settings, with how pictures are prepared (if the model's files say).
-    let preprocessor = fs::read_to_string(folder.join("preprocessor_config.json")).ok().and_then(|t| model::json::parse(&t));
-    settings.push_str(&convert::vision_settings(&config, preprocessor.as_ref()));
-    // How the model's conversations are written: its chat template, said as one of the styles chat.rs knows.
-    let template = match fs::read_to_string(folder.join("chat_template.jinja")) {
-        Ok(t) => t,
-        Err(_) => {
-            let tc = model::json::parse(&read("tokenizer_config.json")?).ok_or("tokenizer_config.json isn't JSON")?;
-            tc.get("chat_template").and_then(model::json::Json::str).ok_or("no chat template")?.to_string()
-        }
-    };
-    let style = model::chat::Style::of_template(&template)
-        .ok_or("its chat template isn't one the engine knows how to write (Qwen 3.5, 3.6 or 3.8's)")?;
-    settings.push_str(&format!("chat.style={style}\n"));
+    let whisper = config.get("model_type").and_then(model::json::Json::str) == Some("whisper");
     let tj = model::json::parse(&read("tokenizer.json")?).ok_or("tokenizer.json isn't JSON")?;
+    let settings = if whisper {
+        // Speech recognition (Whisper): its settings, the special tokens and those never chosen.
+        let generation = model::json::parse(&read("generation_config.json")?).ok_or("generation_config.json isn't JSON")?;
+        convert::whisper_settings(&config, &generation, &tj)?
+    } else {
+        let mut settings = convert::settings(&config)?;
+        // The vision part's settings, with how pictures are prepared (if the model's files say).
+        let preprocessor = fs::read_to_string(folder.join("preprocessor_config.json")).ok().and_then(|t| model::json::parse(&t));
+        settings.push_str(&convert::vision_settings(&config, preprocessor.as_ref()));
+        // How the model's conversations are written: its chat template, said as one of the styles chat.rs knows.
+        let template = match fs::read_to_string(folder.join("chat_template.jinja")) {
+            Ok(t) => t,
+            Err(_) => {
+                let tc = model::json::parse(&read("tokenizer_config.json")?).ok_or("tokenizer_config.json isn't JSON")?;
+                tc.get("chat_template").and_then(model::json::Json::str).ok_or("no chat template")?.to_string()
+            }
+        };
+        let style = model::chat::Style::of_template(&template)
+            .ok_or("its chat template isn't one the engine knows how to write (Qwen 3.5, 3.6 or 3.8's)")?;
+        settings.push_str(&format!("chat.style={style}\n"));
+        settings
+    };
     let (tokens, merges, specials) = convert::tokenizer(&tj)?;
     drop(tj);
     let mut planned = vec![
@@ -89,7 +98,8 @@ pub fn run(folder: &Path, out: &Path, bits: u32) -> Result<(), String> {
         h.read_exact(&mut header).map_err(|e| e.to_string())?;
         let header = String::from_utf8(header).map_err(|_| "a header isn't UTF-8")?;
         for (name, dtype, dims, a, b) in convert::safetensors(&header)? {
-            let Some((ours, to, shape)) = convert::plan(&name, &dims, bits) else { continue };
+            let plan = if whisper { convert::plan_whisper(&name, &dims, bits) } else { convert::plan(&name, &dims, bits) };
+            let Some((ours, to, shape)) = plan else { continue };
             let elements: usize = shape.iter().product();
             let size = to.bytes_for(elements).ok_or_else(|| format!("{name}: not whole blocks"))?;
             weights.push(Planned { ours, dtype: to, dims: shape, size, from: Some((f.clone(), dtype, (8 + len + a) as u64, b - a)), blob: Vec::new() });

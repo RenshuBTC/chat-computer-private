@@ -65,3 +65,7 @@ required-features = ["std"]
 [[example]]
 name = "picture_check"
 required-features = ["std"]
+
+[[example]]
+name = "listen_check"
+required-features = ["std"]

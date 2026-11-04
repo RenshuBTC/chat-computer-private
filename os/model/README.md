@@ -37,6 +37,15 @@ Qwen3.5-0.8B is the one the checks use.
   row as wide as the language model. A step at a time for a caller with other things to do: a part of a block (its
   queries, keys and values; its attention; the rest) for as many patches as the caller says, so a step takes as long
   as it wants; the rows the same however many patches a step takes.
+- `whisper.rs`: speech recognition, OpenAI's Whisper (MIT licence), as Chat Computer's app runs it with
+  faster-whisper: the sound as a log-mel spectrogram (frames of 400 samples every 160, a Fourier transform of its own,
+  Slaney's mel filters as librosa makes them), padded to 30 seconds; the encoder (two convolutions, then attention
+  over its 1,500 positions); the decoder a token at a time, with attention over the encoder's output; greedy decoding
+  with faster-whisper's rules (its prompt, the tokens it never chooses, the chance it heard no speech). Every size, of
+  English alone or of many languages (the language found as faster-whisper finds it, or given). A step at a time for
+  a caller with other things to do, the transcript the same however many positions a step takes.
+- `vector.rs`: arithmetic on many numbers at once for attention over long inputs (e^x, GELU, the scores of a few
+  queries against every key eight keys at a time, the values weighted by them), with AVX2 where the processor has it.
 - `token.rs`, `unicode.rs`, `nfc.rs`: the tokenizer (byte-level BPE, its splitting rule written by hand, text put in
   Unicode's composed form first as the model's own tokenizer does).
 - `chat.rs`: a conversation as each model's chat template writes it (the templates' Jinja, as Rust), pictures in
@@ -66,7 +75,7 @@ Qwen3.5-0.8B is the one the checks use.
 
 ## The program
 
-    chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]
+    chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]   (Qwen's models, or OpenAI's Whisper)
     chat-computer-model find-refusal MODEL.ccm [--out FILE] [--threads N]
     chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]...
                                         [--refusal FILE | --no-refusal]
@@ -181,6 +190,16 @@ Against the reference implementation (transformers, in float32) and the publishe
   invoice (900 by 520 pixels, slightly turned, specks on it: 448 rows), in 8 bits, the same answer as the
   reference's for its first 24 tokens, and the whole invoice read without a mistake. The vision part took 5.4 seconds
   for the first picture on this machine in 8 bits, 30 in 16 (whose arithmetic isn't vectorised).
+- Speech recognition, with `tools/refcheck/whisper_reference.py` (Whisper written out in numpy from the published
+  weights, with faster-whisper's own features, prompt and suppressed tokens; its tokens the same as faster-whisper's
+  itself) and `examples/listen_check.rs`: whisper-tiny.en as published (16 bits) heard a recording of John F.
+  Kennedy (11 seconds) as the same 23 tokens, its chance of no speech 0.0641932 against the reference's 0.0641933, its
+  features within 0.000006 of faster-whisper's and its encoder's output within 0.00006 (numbers up to 11.9); in 8
+  bits, the same tokens. whisper-small.en, Chat Computer's app's model, in 8 bits: the same tokens as the reference
+  for Kennedy and for a sentence eSpeak said ("Hello chat computer, please set a timer for 10 minutes and tell me the
+  weather in Singapore."). whisper-tiny, of many languages, in 16 bits: the same language found and the same tokens
+  as the reference for French, Chinese and English. On this repository's test machine (2 cores), tiny.en took 1.2
+  seconds for a recording (every recording is 30 seconds to the encoder), small.en 10.
 - The chat: 285 conversations (system prompts, tools, thinking on and off, earlier thinking kept or not, the effort
   setting, tool calls and their results, Unicode) written by each model's own template and by `chat.rs`: the same
   text and the same tokens, but for the one that spells special tokens in the person's words, read as text on purpose.

@@ -129,6 +129,16 @@ pub fn sin_cos(x: f64) -> (f64, f64) {
     }
 }
 
+/// The natural logarithm of x (x > 0), in double precision.
+pub fn ln_f64(x: f64) -> f64 {
+    ln64(x)
+}
+
+/// e^x, in double precision.
+pub fn exp_f64(x: f64) -> f64 {
+    exp64(x)
+}
+
 /// x to the power y, x > 0 (rotary frequencies: θ^(-2i/d)).
 pub fn powf64(x: f64, y: f64) -> f64 {
     exp64(y * ln64(x))

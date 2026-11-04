@@ -688,7 +688,8 @@ none, only a command that installs a model), private, and acts on the PC; and it
 Windows, with no USB stick and no partitioning. Ubuntu is ahead on running on every PC, Wi-Fi, speed (it runs models
 on graphics cards) and apps. The steps after 11 close those gaps in that order: trying it on real PCs throughout,
 then Wi-Fi, then the model faster (the fast cores of Intel's hybrid processors first, then Intel's built-in
-graphics, which most laptops have and Intel documents), then showing websites and touchpads.
+graphics, which most laptops have and Intel documents), then showing websites and touchpads, then apps the model
+writes for each person, in place of Ubuntu's catalogue.
 
 1. ✓ The start-up stage, the kernel's core, interrupts and timer, the font engine and the first screen.
 2. The real PC: start from its own start-up partition (no USB stick) and show the first screen on its
@@ -746,7 +747,14 @@ graphics, which most laptops have and Intel documents), then showing websites an
 14. The model faster: the fast cores of Intel's hybrid processors given more of the arithmetic (each matrix's rows
     shared by how fast each core is), then Intel's built-in graphics doing the model's arithmetic.
 15. Showing websites, and touchpads.
-16. Updates: signed, with a way back.
+16. Apps Chat Computer writes for you: when a person needs a tool (a budget, a study plan, their taxes), the model
+    builds a small app of its own for it and keeps it up to date as things change, so asking again is a button, not
+    another answer from scratch. Each app is one file in a form simple enough for a small model to write well (its
+    data, how its data changes, and its screen); its data is kept when the app changes; what it may do (which site
+    a password may go to) is declared, and checked before it runs, in the kernel; and every action it takes is
+    traced to the person's request that allowed it, never a page's or a file's. The person watches it work through
+    the app's own screen. Chat Computer's answer to the thousands of apps Ubuntu has.
+17. Updates: signed, with a way back.
 
 ## Reaching everybody's PC
 

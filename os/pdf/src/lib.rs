@@ -5,18 +5,20 @@
 //! (sizes, depths, counts), and a part that can't be read is passed over.
 //!
 //! An encrypted file is read if it opens without a password, as most do (only an owner's password, limiting printing
-//! or copying: crypt.rs). What isn't read: pictures (a scanned page is a picture of its words, so it has none here),
-//! and files that need a password to open.
+//! or copying: crypt.rs). What isn't read: files that need a password to open. A page's pictures (a scanned page is a
+//! picture of its words, so it has none here) are made one picture of the page, for a model that sees (image.rs).
 
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
+mod ccitt;
 mod crypt;
 mod file;
 mod filter;
 mod font;
 mod glyphs;
+mod image;
 mod lex;
 mod text;
 #[cfg(test)]
@@ -28,6 +30,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use file::File;
 use lex::{Dict, Obj};
+
+pub use image::{PagePicture, page_picture};
+
+/// What a page with no words says, in a document's words.
+pub const NO_WORDS: &str = "(No words on this page.)";
 
 /// The most pages read.
 const MOST_PAGES: usize = 20_000;
@@ -83,7 +90,7 @@ pub fn read(data: &[u8]) -> Result<Document, Error> {
     for (n, (page, resources)) in pages.iter().enumerate() {
         let words = reader.page(&contents(&f, page), resources);
         any |= !words.is_empty();
-        let part = if words.is_empty() { format!("## Page {}\n(No words on this page.)", n + 1) } else { format!("## Page {}\n{words}", n + 1) };
+        let part = if words.is_empty() { format!("## Page {}\n{NO_WORDS}", n + 1) } else { format!("## Page {}\n{words}", n + 1) };
         if !add(&mut out, &part) {
             cut = true;
             break;
@@ -125,7 +132,7 @@ fn add(out: &mut String, part: &str) -> bool {
 
 /// The pages, in order, each with its resources (its own, or the nearest it inherits from the page tree). Where the
 /// tree can't be followed, every object that says it's a page, in the order of their numbers.
-fn pages(f: &File, catalog: &Dict) -> Vec<(Dict, Dict)> {
+pub(crate) fn pages(f: &File, catalog: &Dict) -> Vec<(Dict, Dict)> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     if let Some(root) = catalog.get("Pages") {
@@ -184,7 +191,7 @@ fn walk(f: &File, node: &Obj, inherited: &Dict, depth: u32, seen: &mut BTreeSet<
 }
 
 /// A page's content streams, decoded, one after another.
-fn contents(f: &File, page: &Dict) -> Vec<u8> {
+pub(crate) fn contents(f: &File, page: &Dict) -> Vec<u8> {
     match f.get_in(page, "Contents") {
         Obj::Array(parts) => {
             let mut all = Vec::new();

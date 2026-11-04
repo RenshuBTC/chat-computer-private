@@ -265,14 +265,18 @@ fn changed_bytes_never_crash_it() {
         "encrypted-rc4.pdf",
         "encrypted-aes256.pdf",
         "encrypted-objects.pdf",
+        "scan-jpeg.pdf",
+        "scan-fax.pdf",
+        "scan-kinds.pdf",
     ];
     for name in names {
         let data = file(name);
+        let scan = name.starts_with("scan");
         for _ in 0..tries {
             let mut d = data.clone();
             for _ in 0..1 + next() % 8 {
                 let at = (next() % d.len() as u64) as usize;
-                const BYTES: &[u8] = b"()<>[]{}/%RnobjstreamTjTJ0123456789 \n";
+                const BYTES: &[u8] = b"()<>[]{}/%RnobjstreamTjTJ0123456789 \ncmDoBIIDEI";
                 d[at] = match next() % 4 {
                     0 => BYTES[(next() % BYTES.len() as u64) as usize],
                     1 => d[at].wrapping_add(1),
@@ -280,6 +284,12 @@ fn changed_bytes_never_crash_it() {
                 };
             }
             let _ = read(&d);
+            // (And a scan's pages as pictures: at a small size, so the tries are quick.)
+            if scan {
+                for page in 0..3 {
+                    let _ = page_picture(&d, page, &|w, h| (w.min(200), h.min(200)), 1 << 30);
+                }
+            }
         }
     }
 }
@@ -414,3 +424,106 @@ fn prints() {
         }
     }
 }
+
+/// A page's pictures as one, at the size `size` gives (and the page's own size it was asked about).
+fn page_of(name: &str, page: usize, size: (usize, usize)) -> (PagePicture, (usize, usize)) {
+    let asked = core::cell::Cell::new((0, 0));
+    let p = page_picture(&file(name), page, &|w, h| {
+        asked.set((w, h));
+        size
+    }, 1 << 30)
+    .unwrap()
+    .unwrap_or_else(|| panic!("{name}: page {page} has no pictures"));
+    (p, asked.get())
+}
+
+fn png(name: &str) -> picture::Picture {
+    picture::decode(&file(name), u32::MAX, u32::MAX, [255, 255, 255]).unwrap()
+}
+
+/// How far two pictures' pixels are apart: the most, and on average.
+fn apart(a: &[u8], b: &[u8]) -> (u8, f64) {
+    assert_eq!(a.len(), b.len());
+    let most = a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+    let mean = a.iter().zip(b).map(|(x, y)| x.abs_diff(*y) as f64).sum::<f64>() / a.len() as f64;
+    (most, mean)
+}
+
+#[test]
+fn a_scanned_page_is_its_picture_as_pillow_makes_it() {
+    // Filling the page; on a page turned a quarter; at half its size in a form, with a red stencil over it.
+    for (n, size, native) in [(1, (150, 210), (750, 1050)), (2, (210, 150), (1050, 750)), (3, (150, 210), (1500, 2100))] {
+        let (p, asked) = page_of("scan-jpeg.pdf", n - 1, size);
+        assert_eq!(asked, native, "page {n}'s own size, at its picture's resolution");
+        assert_eq!((p.width, p.height, p.drawn), (size.0, size.1, if n == 3 { 2 } else { 1 }));
+        let want = png(&format!("scan-jpeg-{n}.png"));
+        let (most, mean) = apart(&p.rgb, &want.rgb);
+        // (Its JPEG decoded by the picture crate rather than libjpeg, and at a half of its size by the JPEG's own
+        // scaling, averaged down to about twice the size it's drawn at, then resampled: within a level on average,
+        // more at sharp edges.)
+        assert!(most <= 64 && mean < 1.0, "page {n}: {most} at most, {mean:.3} on average");
+    }
+}
+
+#[test]
+fn a_fax_scan_is_its_pixels_exactly() {
+    let want = png("scan-fax.png");
+    for page in 0..3 {
+        let (p, asked) = page_of("scan-fax.pdf", page, (864, 1100));
+        assert_eq!(asked, (864, 1100));
+        assert!(p.rgb == want.rgb, "page {}: {:?}", page + 1, apart(&p.rgb, &want.rgb));
+    }
+}
+
+#[test]
+fn each_kind_of_picture_is_drawn() {
+    let (w, h) = (40usize, 30usize);
+    let page = |n: usize| page_of("scan-kinds.pdf", n, (w, h)).0;
+    let at = |p: &PagePicture, x: usize, y: usize| -> [u8; 3] { p.rgb[(y * w + x) * 3..][..3].try_into().unwrap() };
+    let gray = |x: usize, y: usize| ((x * 7 + y * 13) % 256) as u8;
+    // Gray, its Decode turned round.
+    let p = page(0);
+    for (x, y) in [(0, 0), (13, 7), (39, 29)] {
+        assert_eq!(at(&p, x, y), [255 - gray(x, y); 3]);
+    }
+    // An indexed palette of 2-bit samples.
+    let p = page(1);
+    let palette = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [250, 200, 0]];
+    for (x, y) in [(0, 0), (15, 3), (25, 12), (39, 29)] {
+        assert_eq!(at(&p, x, y), palette[(x / 10 + y / 10) % 4], "{x}, {y}");
+    }
+    // CMYK.
+    let p = page(2);
+    let v = |c: usize, k: usize| ((1.0 - c as f64 / 255.0) * (1.0 - k as f64 / 255.0) * 255.0 + 0.5) as u8;
+    for (x, y) in [(0, 0), (20, 10), (39, 29)] {
+        let k = (x + y) % 64;
+        assert_eq!(at(&p, x, y), [v((x * 6) % 256, k), v((y * 8) % 256, k), v(40, k)], "{x}, {y}");
+    }
+    // Inline images: raw RGB over the page, and a 2 by 2 gray one in ASCIIHex, 10 by 10 points at the bottom left.
+    let p = page(3);
+    assert_eq!(p.drawn, 2);
+    for (x, y) in [(20, 0), (39, 29), (15, 5)] {
+        assert_eq!(at(&p, x, y), [((x * 6) % 256) as u8, ((y * 8) % 256) as u8, 100], "{x}, {y}");
+    }
+    for ((x, y), v) in [((1, 21), 0x00u8), ((8, 21), 0xff), ((1, 28), 0x80), ((8, 28), 0xc0)] {
+        assert!(at(&p, x, y)[0].abs_diff(v) <= 24, "{x}, {y}: {:?}", at(&p, x, y));
+    }
+    // A stencil filled blue over the left half of a gray picture.
+    let p = page(4);
+    assert_eq!((at(&p, 5, 5), at(&p, 19, 29)), ([0, 0, 255], [0, 0, 255]));
+    assert_eq!(at(&p, 30, 10), [gray(30, 10); 3]);
+    // A soft mask: opaque on the right, clear on the left, over white.
+    let p = page(5);
+    for (x, y) in [(0, 3), (20, 9), (39, 29)] {
+        let a = (x * 255 / 39) as u32;
+        let blend = |s: u32| ((s * a + 255 * (255 - a) + 127) / 255) as u8;
+        assert_eq!(at(&p, x, y), [blend(((x * 6) % 256) as u32), blend(((y * 8) % 256) as u32), blend(100)], "{x}, {y}");
+    }
+    // Only words: nothing to see. And no such page.
+    assert!(page_picture(&file("scan-kinds.pdf"), 6, &|w, h| (w, h), 1 << 30).unwrap().is_none());
+    assert!(page_picture(&file("scan-kinds.pdf"), 7, &|w, h| (w, h), 1 << 30).unwrap().is_none());
+    // A page with no words, where its words say so.
+    let d = read(&file("scan-fax.pdf")).unwrap();
+    assert!(d.text.is_empty() && d.pages == 3);
+}
+

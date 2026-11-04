@@ -12,8 +12,14 @@ license.workspace = true
 std = ["dep:tls", "dep:crypto"]
 
 [dependencies]
+# (Its resampling: a picture resized as Qwen's processor resizes it.)
+picture = { path = "../picture" }
 tls = { path = "../tls", optional = true }
 crypto = { path = "../crypto", optional = true }
+
+[dev-dependencies]
+# (kernel_check: a scanned PDF's page made a picture as the kernel makes it.)
+pdf = { path = "../pdf" }
 
 [[bin]]
 name = "chat-computer-model"

@@ -1,6 +1,6 @@
 //! Streams' filters (ISO 32000-1, 7.4): FlateDecode (with PNG's and TIFF's predictors), LZWDecode, ASCIIHexDecode,
-//! ASCII85Decode and RunLengthDecode. Pictures' own compression (DCT, JPX, CCITT, JBIG2) isn't undone: those streams
-//! hold no words.
+//! ASCII85Decode and RunLengthDecode. Pictures' own compression (DCT, JPX, CCITT, JBIG2) isn't undone here: those
+//! streams hold no words, and a page's pictures (image.rs) undo it themselves (`decode_image`).
 
 use crate::lex::{Dict, Obj};
 use alloc::vec;
@@ -12,8 +12,20 @@ pub const MOST: usize = 48 << 20;
 /// The filters a stream's dictionary names, in order, each with its parameters (references already followed by
 /// `resolve`).
 pub fn decode(dict: &Dict, data: &[u8], resolve: &dyn Fn(&Obj) -> Obj) -> Option<Vec<u8>> {
+    match decode_image(dict, data, resolve)? {
+        (buf, None) => Some(buf),
+        _ => None,
+    }
+}
+
+/// A picture's compression (its stream's last filter): the filter's name and its parameters.
+pub type Codec = (Vec<u8>, Option<Dict>);
+
+/// The same for a picture's stream, but for its last filter, if that's a picture's own compression (DCT, JPX, CCITT
+/// or JBIG2), which is left for the picture to undo (with its parameters).
+pub fn decode_image(dict: &Dict, data: &[u8], resolve: &dyn Fn(&Obj) -> Obj) -> Option<(Vec<u8>, Option<Codec>)> {
     let filters = match dict.get("Filter").map(resolve) {
-        None | Some(Obj::Null) => return Some(data.to_vec()),
+        None | Some(Obj::Null) => return Some((data.to_vec(), None)),
         Some(Obj::Name(n)) => vec![n],
         Some(Obj::Array(a)) => a.iter().filter_map(|f| resolve(f).name().map(<[u8]>::to_vec)).collect(),
         _ => return None,
@@ -26,6 +38,9 @@ pub fn decode(dict: &Dict, data: &[u8], resolve: &dyn Fn(&Obj) -> Obj) -> Option
     let mut buf = data.to_vec();
     for (i, f) in filters.iter().enumerate() {
         let p = parms.get(i).cloned().flatten();
+        if matches!(f.as_slice(), b"DCTDecode" | b"DCT" | b"JPXDecode" | b"CCITTFaxDecode" | b"CCF" | b"JBIG2Decode") {
+            return (i + 1 == filters.len()).then_some((buf, Some((f.clone(), p))));
+        }
         let num = |key: &str, default: i64| p.as_ref().and_then(|d| d.get(key)).map(resolve).and_then(|o| o.int()).unwrap_or(default);
         buf = match f.as_slice() {
             b"FlateDecode" | b"Fl" => predict(flate(&buf)?, num("Predictor", 1), num("Columns", 1), num("Colors", 1), num("BitsPerComponent", 8))?,
@@ -37,7 +52,7 @@ pub fn decode(dict: &Dict, data: &[u8], resolve: &dyn Fn(&Obj) -> Obj) -> Option
             _ => return None,
         };
     }
-    Some(buf)
+    Some((buf, None))
 }
 
 /// zlib's DEFLATE; a stream with a broken checksum or no zlib header, as its DEFLATE alone; one cut short or damaged,

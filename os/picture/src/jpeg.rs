@@ -220,6 +220,33 @@ struct Frame {
     mcus_y: usize,
 }
 
+/// How a JPEG's EXIF says to turn it (1, as it is, if it says nothing): from its markers before its frame header.
+pub fn orientation(data: &[u8]) -> u8 {
+    let mut at = 2;
+    while at + 4 <= data.len() {
+        if data[at] != 0xFF {
+            return 1;
+        }
+        let m = data[at + 1];
+        if m == 0xFF {
+            at += 1;
+            continue;
+        }
+        let len = u16::from_be_bytes([data[at + 2], data[at + 3]]) as usize;
+        if (0xC0..=0xCF).contains(&m) && !matches!(m, 0xC4 | 0xC8 | 0xCC) || m == 0xDA {
+            return 1;
+        }
+        if m == 0xE1
+            && let Some(body) = data.get(at + 4..at + 2 + len)
+            && body.starts_with(b"Exif\0\0")
+        {
+            return exif_orientation(&body[6..]).unwrap_or(1);
+        }
+        at += 2 + len;
+    }
+    1
+}
+
 /// The size a JPEG says it is (from its frame header).
 pub fn size(data: &[u8]) -> Option<(u32, u32)> {
     let mut at = 2;

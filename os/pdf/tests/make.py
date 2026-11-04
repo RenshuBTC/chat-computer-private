@@ -25,8 +25,19 @@
   field under another); a title in UTF-16; and an update appended to the file that changes a page.
 - picture.pdf: one page, only a picture (as a scanner's would be).
 - cut.pdf: a file cut short half way through its page's (compressed) contents, as a download that stopped would be.
+- scan-jpeg.pdf: scanned pages (written here, the scan drawn by Pillow): a colour JPEG filling the page; the same
+  on a page turned a quarter (/Rotate 90); and at half its size in a form drawn with Do, with a red stencil mask
+  over it. scan-jpeg-1.png, -2.png and -3.png: those pages as Pillow makes them at a fifth of their size (Pillow's
+  JPEG decoding and bicubic resampling), for the page pictures to be compared with.
+- scan-fax.pdf: a black-and-white scan in fax's compression as libtiff writes it: Group 4, then Group 3's
+  one-dimensional lines with their end-of-line codes, then Group 4 with BlackIs1; scan-fax.png: its pixels, which
+  they must give exactly.
+- scan-kinds.pdf: small pictures of each kind of sample: gray with its Decode turned round, an indexed palette of
+  2-bit samples, CMYK, inline images (raw, and in ASCIIHex), a stencil mask filled red over a picture, a picture
+  with a soft mask, and a page with only words.
 
     python3 tests/make.py      (needs ReportLab, LibreOffice's soffice, pdflatex, qpdf, and Playwright's Chromium)
+    python3 tests/make.py scans   (only the scanned pages': needs Pillow, with libtiff)
 """
 from __future__ import annotations
 
@@ -365,7 +376,184 @@ def cut(path: Path) -> None:
     path.write_bytes(data[: at + len(packed) // 2])
 
 
+def scan_page_image():
+    """A scanned page, as Pillow draws one: words, a box, a photo-like gradient, 750 by 1050 pixels."""
+    from PIL import Image, ImageDraw, ImageFont
+    im = Image.new("RGB", (750, 1050), (248, 247, 242))
+    d = ImageDraw.Draw(im)
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", 26)
+    big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", 40)
+    d.text((60, 60), "Tenancy agreement", font=big, fill=(20, 20, 30))
+    for i, line in enumerate(["This agreement is made on 2 May 2026", "between Ana Ruiz (the landlord)",
+                              "and Tom Byrne (the tenant), for the flat", "at 4 Quay Street, Galway.",
+                              "Rent: EUR 1,250 a month, due on the 1st."]):
+        d.text((60, 160 + 52 * i, ), line, font=font, fill=(30, 30, 30))
+    for x in range(300):
+        for y in range(200):
+            im.putpixel((400 + x, 600 + y), (x * 255 // 299, y * 255 // 199, 128))
+    d.rectangle((60, 600, 340, 800), outline=(200, 30, 30), width=6)
+    d.ellipse((120, 860, 300, 1000), fill=(40, 90, 200))
+    return im
+
+
+def scan_expected(jpeg: bytes, size, rotate: int, half: bool, stencil) -> "Image":
+    """A scan page as one picture, at `size`, as Pillow makes it (its JPEG decoder, its bicubic resampling)."""
+    import io
+    from PIL import Image
+    w, h = size
+    im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+    page = Image.new("RGB", (w, h), (255, 255, 255))
+    if half:
+        # (Drawn at 300 by 420 points from 152, 212, on a page 600 by 840: a quarter of its area, upright; its
+        # edges on whole pixels at a fifth of the page's size.)
+        sx, sy = w / 600, h / 840
+        x0, x1 = round(152 * sx), round(452 * sx)
+        y0, y1 = round((840 - 632) * sy), round((840 - 212) * sy)
+        page.paste(im.resize((x1 - x0, y1 - y0), Image.BICUBIC, reducing_gap=None), (x0, y0))
+        mask, (mw, mh), (mx, my) = stencil
+        sm = Image.frombytes("1", (mw, mh), mask).convert("L")
+        # (Painted where the stencil's 0: from 100, 100 points, 200 by 100.)
+        X0, X1 = round(100 * sx), round(300 * sx)
+        Y0, Y1 = round((840 - 200) * sy), round((840 - 100) * sy)
+        alpha = Image.eval(sm, lambda v: 255 - v).resize((X1 - X0, Y1 - Y0), Image.BICUBIC, reducing_gap=None)
+        page.paste(Image.new("RGB", (X1 - X0, Y1 - Y0), (255, 0, 0)), (X0, Y0), alpha)
+        return page
+    if rotate:
+        im = im.transpose(Image.ROTATE_270)
+    return im.resize((w, h), Image.BICUBIC, reducing_gap=None)
+
+
+def scan_jpeg(path: Path) -> None:
+    import io
+    im = scan_page_image()
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=85, subsampling=2)
+    jpeg = buf.getvalue()
+    # A stencil: 1 where it's left alone, 0 where it's painted (a chequer of 10-pixel squares), 80 by 40.
+    mw, mh = 80, 40
+    bits = bytearray()
+    for y in range(mh):
+        row = 0
+        for x in range(mw):
+            row = (row << 1) | (0 if ((x // 10) + (y // 10)) % 2 == 0 else 1)
+        bits += row.to_bytes(mw // 8, "big")
+    p = Pdf()
+    p.obj(1, "<< /Type /Catalog /Pages 2 0 R >>")
+    p.obj(2, "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 600 840] >>")
+    res = "/Resources << /XObject << /Scan 10 0 R /Half 11 0 R >> >>"
+    p.obj(3, f"<< /Type /Page /Parent 2 0 R /Contents 6 0 R {res} >>")
+    p.obj(4, f"<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 6 0 R {res} >>")
+    p.obj(5, f"<< /Type /Page /Parent 2 0 R /Contents 7 0 R {res} >>")
+    p.stream(6, "", b"q 600 0 0 840 0 0 cm /Scan Do Q")
+    p.stream(7, "", b"q 1 0 0 1 152 212 cm /Half Do Q q 1 0 0 rg 200 0 0 100 100 100 cm BI /W 80 /H 40 /IM true /BPC 1 ID\n" + bytes(bits) + b"\nEI Q")
+    p.stream(10, f"/Type /XObject /Subtype /Image /Width 750 /Height 1050 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", jpeg)
+    p.stream(11, "/Type /XObject /Subtype /Form /BBox [0 0 300 420] /Matrix [0.5 0 0 0.5 0 0] /Resources << /XObject << /Scan 10 0 R >> >>",
+             b"q 600 0 0 840 0 0 cm /Scan Do Q")
+    path.write_bytes(p.write(1))
+    for n, (rotate, half) in enumerate([(False, False), (True, False), (False, True)], 1):
+        size = (210, 150) if rotate else (150, 210)
+        scan_expected(jpeg, size, rotate, half, (bytes(bits), (mw, mh), (100, 100))).save(HERE / f"scan-jpeg-{n}.png", optimize=True)
+
+
+def scan_fax(path: Path) -> None:
+    """A black-and-white scan, 864 by 1100 pixels on a page of 432 by 550 points, in Group 4 and Group 3."""
+    import io
+    from PIL import Image, ImageDraw, ImageFont
+    im = Image.new("1", (864, 1100), 255)
+    d = ImageDraw.Draw(im)
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+    for i in range(14):
+        d.text((40, 40 + 70 * i), f"Line {i + 1}: the quick brown fox jumps over {i * 7} lazy dogs.", font=font, fill=0)
+    d.rectangle((600, 900, 820, 1060), fill=0)
+    d.line((0, 1099, 863, 0), fill=0, width=3)
+    im.save(HERE / "scan-fax.png", optimize=True)
+
+    def strip(compression: str, picture) -> bytes:
+        buf = io.BytesIO()
+        picture.save(buf, "TIFF", compression=compression, tiffinfo={278: 1100})
+        t = Image.open(io.BytesIO(buf.getvalue()))
+        # (Black is zero, as Pillow writes it, and libtiff codes zeros as fax's white runs.)
+        assert t.tag_v2.get(262) == 1
+        (offset,), (count,) = t.tag_v2[273], t.tag_v2[279]
+        return buf.getvalue()[offset : offset + count]
+
+    # (So the scan's white is coded as fax's white: its colours turned round first. And as it is, for BlackIs1.)
+    turned = Image.eval(im.convert("L"), lambda v: 255 - v).convert("1", dither=Image.Dither.NONE)
+    g4, g3, g4_black_is_1 = strip("group4", turned), strip("group3", turned), strip("group4", im)
+    p = Pdf()
+    p.obj(1, "<< /Type /Catalog /Pages 2 0 R >>")
+    p.obj(2, "<< /Type /Pages /Kids [3 0 R 4 0 R 8 0 R] /Count 3 /MediaBox [0 0 432 550] >>")
+    p.obj(3, "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /XObject << /Im 6 0 R >> >> >>")
+    p.obj(4, "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /XObject << /Im 7 0 R >> >> >>")
+    p.obj(8, "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /XObject << /Im 9 0 R >> >> >>")
+    p.stream(5, "", b"q 432 0 0 550 0 0 cm /Im Do Q")
+    common = "/Type /XObject /Subtype /Image /Width 864 /Height 1100 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode"
+    p.stream(6, common + " /DecodeParms << /K -1 /Columns 864 /Rows 1100 >>", g4)
+    p.stream(7, common + " /DecodeParms << /K 0 /Columns 864 /Rows 1100 /EndOfLine true >>", g3)
+    p.stream(9, common + " /DecodeParms << /K -1 /Columns 864 /Rows 1100 /BlackIs1 true >>", g4_black_is_1)
+    path.write_bytes(p.write(1))
+
+
+def scan_kinds(path: Path) -> None:
+    """Small pictures of each kind of sample, on pages their own size (a pixel a point), so their pixels are exact."""
+    w, h = 40, 30
+    gray = bytes((x * 7 + y * 13) % 256 for y in range(h) for x in range(w))
+    # 2-bit indexes into a palette of four colours.
+    idx = bytearray()
+    for y in range(h):
+        row = 0
+        for x in range(w):
+            row = (row << 2) | ((x // 10 + y // 10) % 4)
+        idx += row.to_bytes(w // 4, "big")
+    palette = bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 250, 200, 0])
+    cmyk = bytes(v for y in range(h) for x in range(w) for v in ((x * 6) % 256, (y * 8) % 256, 40, (x + y) % 64))
+    rgb = bytes(v for y in range(h) for x in range(w) for v in ((x * 6) % 256, (y * 8) % 256, 100))
+    smask = bytes(((x * 255) // (w - 1)) for y in range(h) for x in range(w))
+    stencil = bytearray()
+    for y in range(h):
+        row = 0
+        for x in range(w):
+            row = (row << 1) | (0 if x < 20 else 1)
+        stencil += row.to_bytes(w // 8, "big")
+    p = Pdf()
+    kids = " ".join(f"{n} 0 R" for n in range(3, 10))
+    p.obj(1, "<< /Type /Catalog /Pages 2 0 R >>")
+    p.obj(2, f"<< /Type /Pages /Kids [{kids}] /Count 7 /MediaBox [0 0 {w} {h}] >>")
+    full = f"q {w} 0 0 {h} 0 0 cm /Im Do Q".encode()
+    img = f"/Type /XObject /Subtype /Image /Width {w} /Height {h}"
+    pages = [
+        (f"{img} /ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [1 0] /Filter /FlateDecode", zlib.compress(gray), full),
+        (f"{img} /ColorSpace [/Indexed /DeviceRGB 3 <{palette.hex()}>] /BitsPerComponent 2", bytes(idx), full),
+        (f"{img} /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /FlateDecode", zlib.compress(cmyk), full),
+        (None, None, f"q {w} 0 0 {h} 0 0 cm BI /W {w} /H {h} /CS /RGB /BPC 8 ID\n".encode() + rgb + b"\nEI Q q 10 0 0 10 0 0 cm BI /W 2 /H 2 /CS /G /BPC 8 /F /AHx ID\n00ff80c0>\nEI Q"),
+        (f"{img} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode", zlib.compress(gray),
+         full + f" q 0 0 1 rg {w} 0 0 {h} 0 0 cm /Mask Do Q".encode()),
+        (f"{img} /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 30 0 R", rgb, full),
+        (None, None, b"BT /F1 12 Tf 2 10 Td (Words) Tj ET"),
+    ]
+    for i, (entries, data, contents) in enumerate(pages):
+        n = 3 + i
+        p.obj(n, f"<< /Type /Page /Parent 2 0 R /Contents {n + 10} 0 R /Resources << /XObject << /Im {n + 20} 0 R /Mask 31 0 R >> /Font << /F1 32 0 R >> >> >>")
+        p.stream(n + 10, "", contents)
+        if entries:
+            p.stream(n + 20, entries, data)
+    p.stream(30, f"/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8", smask)
+    p.stream(31, f"/Type /XObject /Subtype /Image /Width {w} /Height {h} /ImageMask true", bytes(stencil))
+    p.obj(32, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    path.write_bytes(p.write(1))
+
+
+def scans() -> None:
+    scan_jpeg(HERE / "scan-jpeg.pdf")
+    scan_fax(HERE / "scan-fax.pdf")
+    scan_kinds(HERE / "scan-kinds.pdf")
+
+
 def main() -> None:
+    import sys
+    if sys.argv[1:] == ["scans"]:
+        scans()
+        return
     with tempfile.TemporaryDirectory() as t:
         scratch = Path(t)
         reportlab_letter(HERE / "letter-reportlab.pdf")
@@ -385,6 +573,7 @@ def main() -> None:
     edge(HERE / "edge.pdf")
     picture(HERE / "picture.pdf")
     cut(HERE / "cut.pdf")
+    scans()
 
 
 if __name__ == "__main__":

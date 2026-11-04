@@ -7,5 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+# (A scanned page's JPEGs decoded, and its pictures resampled, as one picture of the page: image.rs.)
+picture = { path = "../picture" }
 zip = { path = "../zip" }
 crypto = { path = "../crypto" }

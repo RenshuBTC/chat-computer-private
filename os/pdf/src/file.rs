@@ -439,6 +439,28 @@ impl<'a> File<'a> {
         }
     }
 
+    /// A picture's stream: its dictionary, and its data, its filters undone but for a picture's own compression
+    /// (its last filter's, if it's DCT, JPX, CCITT or JBIG2), which is given with its parameters.
+    pub fn image_stream(&self, o: &Obj) -> Option<(Dict, Vec<u8>, Option<filter::Codec>)> {
+        let Obj::Stream(dict, range) = self.resolve(o) else { return None };
+        let raw = self.data.get(range.clone())?;
+        if self.decoded.get() > MOST_DECODED {
+            return None;
+        }
+        let decrypted;
+        let raw = match &self.crypt {
+            Some(c) if self.encrypted(c, &dict) => {
+                let (n, g) = *self.streams.borrow().get(&range.start)?;
+                decrypted = c.stream(n, g, raw);
+                &decrypted[..]
+            }
+            _ => raw,
+        };
+        let (out, codec) = filter::decode_image(&dict, raw, &|o| self.resolve(o))?;
+        self.decoded.set(self.decoded.get() + out.len());
+        Some((dict, out, codec))
+    }
+
     fn decode(&self, dict: &Dict, range: core::ops::Range<usize>) -> Option<Vec<u8>> {
         let raw = self.data.get(range.clone())?;
         if self.decoded.get() > MOST_DECODED {

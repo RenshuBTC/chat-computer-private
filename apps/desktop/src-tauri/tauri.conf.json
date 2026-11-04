@@ -19,19 +19,22 @@
     "publisher": "Chat Computer",
     "category": "Productivity",
     "shortDescription": "Chat Computer: talk, type or touch, and it does the rest.",
-    "longDescription": "Chat Computer's screen in a window of its own, with its own model on this computer: free, with no account, and nothing sent anywhere; any site opens right in the middle; Messages from your own accounts; \"/\" finds your files.",
+    "longDescription": "Chat Computer, as you choose to have it: as a Chrome extension, as your web browser, as an app (its screen in a window of its own, with its own model on this computer: free, with no account, and nothing sent anywhere; any site opens right in the middle; Messages from your own accounts; \"/\" finds your files), or as its own system next to Windows or macOS.",
     "copyright": "Chat Computer is an independent project.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "externalBin": ["binaries/chat-computer-model"],
+    "resources": { "setup/": "setup/" },
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "Entitlements.plist"
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
         "installMode": "currentUser",
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "nsis/hooks.nsh"
       }
     }
   }

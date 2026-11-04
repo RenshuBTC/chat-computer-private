@@ -17,6 +17,10 @@ Anthropic (Claude), OpenAI, Meta, Moonshot (Kimi), xAI (Grok), Alibaba (Qwen), D
 **[Try it in your browser](https://chatcomputer.ai)**: Chat Computer's own screen (see
 [The demo](#the-demo)).
 
+**[Get it](https://chatcomputer.ai/get)**: on Windows and on a Mac, one Setup, which asks how you want Chat Computer: as a
+Chrome extension, as your web browser, as an app, or as its own system, next to Windows or macOS (see
+[The apps](#the-apps)).
+
 * **On a Windows PC** it sits next to Windows. When you press the power button, Chat Computer starts by
   itself. Windows stays installed, and you can go back to it whenever you like.
 * **On a Mac with Apple silicon (M1, M2 or M3)** it sits next to macOS the same way: when the Mac
@@ -34,11 +38,14 @@ Anthropic (Claude), OpenAI, Meta, Moonshot (Kimi), xAI (Grok), Alibaba (Qwen), D
 
 ## Installing on a Windows PC
 
-1. **Unzip the Chat Computer folder.** Right-click the download, choose **Extract All**, and open the
-   extracted folder.
-2. **Double-click `Chat Computer Setup`.** The first time, Windows warns that "the publisher could not be
-   verified" (or says "Windows protected your PC": click **More info**). Click **Run**. Then click
-   **Yes** when Windows asks for permission.
+1. **Get Chat Computer Setup.** Download it from [chatcomputer.ai/get](https://chatcomputer.ai/get) (**Windows**) and
+   open it. The first time, Windows says "Windows protected your PC": click **More info**, then **Run anyway**. It
+   installs the Chat Computer app for your account, then asks how you want Chat Computer: choose **Its own system**.
+   (Or, with the Chat Computer folder: right-click the download, choose **Extract All**, and double-click
+   `Chat Computer Setup` in its `windows` folder; Windows may warn that "the publisher could not be verified":
+   click **Run**.)
+2. **Let Chat Computer Setup start.** It opens in a window of its own; click **Yes** when Windows asks for
+   permission.
 3. **Check the list and type `y`.** Setup downloads the official Ubuntu installer (about 4 GB; Ubuntu
    is what Chat Computer uses to talk to your Wi-Fi, Bluetooth, sound and screen) and checks it's genuine.
    Then it lists everything it's about to change. Nothing on your disks changes until you answer **y**
@@ -372,11 +379,15 @@ works in Asahi Linux isn't known yet; the built-in microphones of M1, M2 and M3 
 
 ### Installing on a Mac
 
-1. **Unzip the download.** Double-click it; you get a folder called `Chat Computer` (usually in Downloads).
-2. **Open Terminal** (in Applications, then Utilities), type `bash ~/Downloads/ChatComputer/mac/setup.sh`
-   and press Return. If the folder is somewhere else, type `bash ` and drag `setup.sh` from the folder's
-   `mac` folder into Terminal. You can also double-click `Chat Computer Setup.command` in the folder; if macOS
-   won't open it because it came from the internet, use Terminal.
+1. **Get Chat Computer Setup.** Open Terminal (in Applications, then Utilities), paste
+   `curl -fsSL https://chatcomputer.ai/get/mac.sh | bash` and press Return. It puts the Chat Computer app in
+   Applications and opens it; it asks how you want Chat Computer: choose **Its own system**. (On a Mac that can't
+   have it, it says why.)
+2. **Setup opens in Terminal.** (Or, with the Chat Computer folder: unzip the download, then in Terminal type
+   `bash ~/Downloads/ChatComputer/mac/setup.sh` and press Return; if the folder is somewhere else, type `bash ` and
+   drag `setup.sh` from the folder's `mac` folder into Terminal. You can also double-click
+   `Chat Computer Setup.command` in the folder; if macOS won't open it because it came from the internet, use
+   Terminal.)
 3. **Answer setup's questions.**
    * **Your files.** Which of your folders to bring over: Desktop, Documents, Downloads, Pictures, Movies
      and Music. If macOS asks whether Terminal may open them, choose **OK**.
@@ -514,7 +525,46 @@ Pages (A records for the domain itself, a CNAME record for `www`).
 ## The apps
 
 **https://chatcomputer.ai/get** offers Chat Computer as apps, laid out as Annotated's page is (the name, a button
-for each, the line that says what it is; no video):
+for each, the line that says what it is; no video). On Windows and on a Mac it's one Setup, which asks how you want
+Chat Computer:
+
+* **Chat Computer Setup.** For Windows, `Chat-Computer-Windows.exe`: the Chat Computer app's installer, for your account
+  (no administrator needed). For a Mac, one line of Terminal, `curl -fsSL https://chatcomputer.ai/get/mac.sh | bash`
+  (the Mac button shows it): `docs/get/mac.sh` downloads the app's disk image (`Chat-Computer-Mac.dmg`), checks its
+  SHA-256 against the one written in it (`scripts/build_apps.py` writes it from the disk image beside it, so run that
+  again whenever the disk image is replaced), copies Chat Computer into Applications (or your own `~/Applications`)
+  with no password, and opens it. What curl downloads isn't marked as coming from the internet, so macOS opens the
+  app without asking for Open Anyway (the disk image is still there to download, and then macOS does ask). The app's
+  first page (`apps/desktop/start`) asks **How do you want Chat Computer?**, and the app does it
+  (`apps/desktop/src-tauri/src/ways.rs`), keeps the answer, and starts there next time: on the conversation (the app,
+  the browser), or on the way's steps (the extension, the own system). To change it: type **/** in Chat Computer and
+  choose **How you have Chat Computer**, or open the app again.
+  * **Chrome extension**: the extension (`apps/chrome`, which comes with the app) is put in a folder of the app's
+    own that stays (`Chrome extension` in its data folder), the folder's path is copied, Chrome is opened (at
+    `docs/get/chrome.html`, the same steps, with the folder's path after `#folder=`, which a browser doesn't send to
+    the site), and the page shows the three steps: go to chrome://extensions, turn on Developer mode, choose Load
+    unpacked and that folder (paste its path). Chrome adds an extension by itself only from its Web Store, and doesn't let another app
+    open chrome://extensions (it drops such an address from its command line: tried), so those steps are yours. In
+    the Chrome Web Store it would be one click, which needs the owner's developer account.
+  * **Browser**: the app as your web browser. Sites stay open in tabs, in a row above the middle (each a view of the
+    web of its own in the app, `open_tab`, shown in turn): back and forward, the conversation's own tab, the sites'
+    tabs with their x, and + for a new tab (the conversation, its box ready for an address). An address typed opens
+    in a new tab, and so does a link, a link for a new window and a link clicked in another app; what Chat Computer
+    opens goes in the tab it opened the last in. Ctrl+T, Ctrl+W and Ctrl+Tab work too. The app is listed with the
+    system as a browser: on Windows for your account (StartMenuInternet, Capabilities, RegisteredApplications and the
+    ChatComputerURL kind of link, under HKEY_CURRENT_USER; one Chat Computer at a time, so a link clicked while it
+    runs reaches the one running; taken out again by another way, and by the uninstaller), on a Mac by its
+    Info.plist (http and https; macOS sends the link to the app). The page offers to make it the default browser:
+    Windows doesn't let an app do that itself, so Settings opens at Default apps for Chat Computer, where you choose
+    it; a Mac asks you to confirm (LSSetDefaultHandlerForURLScheme).
+  * **App**: the app as it was (below).
+  * **Its own system**: Chat Computer Setup, which comes with the app (the repository's files it uses, put beside
+    the app by `scripts/build_apps.py desktop --for windows|mac`: the repository is private, so its archive on
+    GitHub isn't there to download), is copied to a folder of the app's own (`Chat Computer Setup` in its data
+    folder; on a PC, the installed Chat Computer looks there for its updates too) and started from there: on a PC,
+    `Chat Computer Setup.cmd`, which asks Windows for permission and shows its plan before changing anything (see
+    [Installing on a Windows PC](#installing-on-a-windows-pc)); on a Mac with M1, M2 or M3, `mac/setup.sh`, in
+    Terminal (see [Installing on a Mac](#installing-on-a-mac)). On another Mac the page says plainly why it can't.
 
 * **Chrome**: an extension (`apps/chrome`) that shows Chat Computer in Chrome's side panel. The panel is the
   website itself (chatcomputer.ai, in its frame with `?app=chrome`, so it's always the newest), at a side panel's
@@ -550,9 +600,13 @@ for each, the line that says what it is; no video):
   the app's own server at 127.0.0.1 (a Mac's web view doesn't count Tauri's own scheme as secure, and then there's
   no WebGPU for Heart, no microphone and no browser cache), which answers only to that name. GitHub builds them
   (`.github/workflows/apps.yml`): an installer for Windows (for your account, no administrator needed), and a disk
-  image for Macs with Apple silicon or Intel. They aren't signed with a paid certificate yet, so the first time,
-  Windows says it protected your PC (choose More info, then Run anyway) and macOS says it can't check the app
-  (System Settings, Privacy & Security, Open Anyway).
+  image for Macs with Apple silicon or Intel, with `mac.sh` for it. They aren't signed with a paid certificate yet,
+  so the first time, Windows says it protected your PC (choose More info, then Run anyway), and macOS, for the disk
+  image downloaded in a browser, says it can't check the app (System Settings, Privacy & Security, Open Anyway).
+  The Mac's app is signed ad hoc, so each new version is a new app to macOS, which asks again for the microphone;
+  signed with one self-signed identity, kept as the repository's secrets, it stays the same app: run
+  `bash apps/desktop/make-signing-identity.sh` once on a Mac (it makes the identity and gives GitHub the secrets
+  MAC_SIGNING_P12 and MAC_SIGNING_PASSWORD, which the workflow then signs with).
 * **Android**: the Chat Computer app (`apps/android`), chatcomputer.ai full screen in Chrome, with no address bar (a
   Trusted Web Activity: the site says the app is its own, in `docs/.well-known/assetlinks.json`, by its signing
   key's fingerprint). Downloaded from /get as an APK until it's on Google Play: Android asks once to allow

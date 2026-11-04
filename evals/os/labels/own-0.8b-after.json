@@ -1,0 +1,84 @@
+{
+ "about": "Hand labels for the desktop on Chat Computer's own model (Qwen3.5 0.8B), the same 16 cases after the fixes of 4 November 2026 (run os-after2: the repeat guard with one nudge, a word when a turn says nothing, forgiving paths and Wi-Fi names, searches widened when their dates find nothing, each disk's free share; the simulated Wi-Fi now lists the networks in range and refuses others). Same meaning as own-0.8b-base.json. The model's answers vary from run to run (each message carries the time), so a case's pass or fail once is a sample, not a verdict.",
+ "labels": {
+  "files-find-open": {
+   "pass": true,
+   "modes": [],
+   "note": "found, showed and told what it says"
+  },
+  "usb-whats-on": {
+   "pass": false,
+   "modes": [
+    "wrong answer"
+   ],
+   "note": "listed the drives and gave the stick's size and free space, nothing of what's on it"
+  },
+  "print-boarding-pass": {
+   "pass": true,
+   "modes": [],
+   "note": "a wrong path first, then found it and printed it"
+  },
+  "brightness-set": {
+   "pass": true,
+   "modes": []
+  },
+  "sound-mute": {
+   "pass": true,
+   "modes": []
+  },
+  "wifi-join": {
+   "pass": true,
+   "modes": [],
+   "note": "said the network's name right this time (the baseline's model, run again on the same simulated Wi-Fi, did too)"
+  },
+  "bt-airpods": {
+   "pass": true,
+   "modes": []
+  },
+  "battery-left": {
+   "pass": true,
+   "modes": []
+  },
+  "timer": {
+   "pass": true,
+   "modes": []
+  },
+  "install-vlc": {
+   "pass": true,
+   "modes": [],
+   "note": "installed; then odd advice on opening it (\"typing vlc in the Messages\")"
+  },
+  "screenshot-save": {
+   "pass": true,
+   "modes": []
+  },
+  "dark-mode": {
+   "pass": false,
+   "modes": [
+    "wrong tool",
+    "false claim"
+   ],
+   "note": "brightness to 100%, \"Dark mode is now on.\", as before"
+  },
+  "lock-screen": {
+   "pass": true,
+   "modes": []
+  },
+  "backup-status": {
+   "pass": true,
+   "modes": []
+  },
+  "storage-left": {
+   "pass": true,
+   "modes": [],
+   "note": "62% free, 40 of 64 GB (the status now gives the share)"
+  },
+  "weather": {
+   "pass": false,
+   "modes": [
+    "made up"
+   ],
+   "note": "the web out of reach; opened a forecast site it couldn't read, then gave a forecast of its own making (28°, 65% humidity)"
+  }
+ }
+}

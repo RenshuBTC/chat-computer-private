@@ -55,6 +55,21 @@ class EvalPlatform(FakePlatform):
                     exe.chmod(0o755)
         return out
 
+    # --- Wi-Fi: the networks in range (the case's, or home's, a neighbour's and the café's downstairs), and joining
+    # one that isn't in range fails as nmcli does (before, any name joined: a network called "CoffeeBean wifi" too)
+    def wifi_scan(self) -> list[dict[str, Any]]:
+        self._c("wifi_scan")
+        names = self.state.get("wifi_networks") or ["HomeWiFi", "Neighbour", "CoffeeBean"]
+        on = self.wifi.get("connected_to")
+        return [{"name": n, "signal": 78 - 12 * i, "secured": True, "connected": n == on} for i, n in enumerate(names)]
+
+    def wifi_connect(self, ssid: str, password: str | None) -> str:
+        names = [n["name"] for n in self.wifi_scan()]
+        if ssid not in names:
+            self._c("wifi_connect", ssid, bool(password))
+            return f"Couldn't connect: no network called '{ssid}' is in range."
+        return super().wifi_connect(ssid, password)
+
     # --- what the machine says about itself
     def system_info(self) -> dict[str, Any]:
         info = super().system_info()

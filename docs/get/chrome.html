@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat Computer for Chrome</title>
+<meta name="description" content="How to add Chat Computer to Chrome: three steps, until it's in the Chrome Web Store.">
+<link rel="stylesheet" href="../demo/theme.css">
+<style>
+  /* Where the Chat Computer app opens Chrome when the Chrome extension is chosen (Chrome won't let another app open
+     chrome://extensions): the three steps Chrome asks for, with the extension's folder (the app puts its path after
+     #folder=, which stays in this browser: a page's address after # isn't sent anywhere). In the get page's look. */
+  html { font-size: 16px; }
+  html, body { height: auto; }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 16px 72px; line-height: 1.5; }
+  h1 { margin: 0 0 8px; font-size: 40px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; }
+  .lead { margin: 0 0 28px; color: var(--muted); font-size: 18px; }
+  ol { margin: 0; padding-left: 24px; font-size: 18px; }
+  li { margin: 0 0 18px; padding-left: 6px; }
+  code { display: block; margin: 10px 0 0; padding: 12px 14px; font-family: var(--mono); font-size: 15px; overflow-wrap: anywhere;
+         user-select: all; background: var(--side); border: 1px solid var(--line); border-radius: 10px; }
+  .how { display: block; margin-top: 8px; color: var(--muted); font-size: 16px; }
+  button { margin: 10px 0 0; padding: 6px 16px; font: inherit; font-size: 15px; font-weight: 700; color: var(--ink); cursor: pointer;
+           background: none; border: 2px solid var(--line); border-radius: 999px; }
+  button:hover { border-color: var(--ink); }
+  button:focus-visible { outline: 3px solid var(--dim); outline-offset: 2px; }
+  .done::after { content: " \2713"; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chat Computer for Chrome</h1>
+  <p class="lead">Chrome adds extensions by itself only from its Web Store, and Chat Computer isn't there yet, so Chrome asks
+    you to add it, in three steps.</p>
+  <ol>
+    <li>Open a new tab, type <b>chrome://extensions</b> in the address bar and press Enter (Chrome doesn't let a page or
+      another app open it). <button type="button" id="copy-page">Copy it</button></li>
+    <li>Turn on <b>Developer mode</b>, at the top right.</li>
+    <li>Choose <b>Load unpacked</b>, and choose <span id="which">the folder you unzipped, called Chat Computer.</span>
+      <code id="folder" hidden></code>
+      <button type="button" id="copy-folder" hidden>Copy its path</button>
+      <span class="how" id="how-win" hidden>In the window that opens, click the address bar at its top, paste the path
+        (Ctrl+V), press Enter, then choose Select Folder.</span>
+      <span class="how" id="how-mac" hidden>In the window that opens, press Command-Shift-G, paste the path (Command-V),
+        press Return, then choose Select.</span></li>
+    <li>Chat Computer is then under the puzzle piece in Chrome's toolbar: pin it, and click it to open Chat Computer in
+      the side panel.</li>
+  </ol>
+</main>
+<script>
+  // The extension's folder, as the app put it after #folder= (the app copied it too).
+  (function () {
+    "use strict";
+    var m = /[#&]folder=([^&]*)/.exec(location.hash), folder = "";
+    try { folder = m ? decodeURIComponent(m[1]) : ""; } catch (e) { folder = ""; }
+    function copy(text, button) {
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(text).then(function () {
+        button.classList.add("done");
+        setTimeout(function () { button.classList.remove("done"); }, 2000);
+      }, function () {});
+    }
+    document.getElementById("copy-page").addEventListener("click", function (e) { copy("chrome://extensions", e.currentTarget); });
+    if (!folder) return;
+    var mac = /^\//.test(folder);
+    document.getElementById("which").textContent = "this folder (Chat Computer copied its path):";
+    document.getElementById("folder").textContent = folder;
+    document.getElementById("folder").hidden = false;
+    document.getElementById("copy-folder").hidden = false;
+    document.getElementById(mac ? "how-mac" : "how-win").hidden = false;
+    document.getElementById("copy-folder").addEventListener("click", function (e) { copy(folder, e.currentTarget); });
+  })();
+</script>
+</body>
+</html>

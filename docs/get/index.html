@@ -4,11 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Get Chat Computer</title>
-<meta name="description" content="Chat Computer for Chrome, Windows, Mac, Android and iPhone, and in your browser.">
+<meta name="description" content="Chat Computer for Windows, Mac, Android, iPhone and Chrome, and in your browser. On Windows and Mac, one Setup: as a Chrome extension, your browser, an app, or its own system.">
 <link rel="stylesheet" href="../demo/theme.css">
 <style>
   /* As Annotated's page is: the name, then what to get it with, then the line that says what it is. In Chat
-     Computer's own look: light on its dark, Lora, the name in the word logo's weight. */
+     Computer's own look: light on its dark, Lora, the name in the word logo's weight. Windows and Mac have one Setup
+     each, which asks how you want Chat Computer (a Chrome extension, your browser, an app, or its own system); the
+     Mac's is a line for Terminal, shown under the buttons when Mac is chosen. */
   html { font-size: 16px; }
   html, body { height: auto; }
   main { max-width: 1072px; margin: 0 auto; padding: 56px 16px 72px; }
@@ -27,6 +29,17 @@
   .add.web:hover { border-color: var(--ink); }
   .add.soon { background: none; color: var(--dim); border-color: var(--line); cursor: default; }
   .tagline { margin: 44px 0 0; font-size: 30px; font-weight: 700; line-height: 1.2; text-align: center; text-wrap: balance; }
+  .ways { margin: 18px 0 0; color: var(--muted); font-size: 17px; line-height: 1.5; text-align: center; text-wrap: balance; }
+  /* The Mac's Setup: a line to paste into Terminal (shown when Mac is chosen: #mac-setup). */
+  #mac-setup { display: none; max-width: 760px; margin: 36px auto 0; padding: 22px 24px; border: 1px solid var(--line);
+               border-radius: 16px; background: var(--side); line-height: 1.5; }
+  #mac-setup:target { display: block; }
+  #mac-setup h2 { margin: 0 0 10px; font-size: 20px; }
+  #mac-setup p { margin: 10px 0 0; }
+  #mac-setup code { display: block; margin: 12px 0 0; padding: 12px 14px; font-family: var(--mono); font-size: 15px;
+                    overflow-wrap: anywhere; user-select: all; background: var(--ground); border: 1px solid var(--line); border-radius: 10px; }
+  #mac-setup a { color: var(--ink); }
+  #mac-setup .small { color: var(--muted); font-size: 15px; }
   @media (max-width: 560px) {
     main { padding-top: 32px; }
     h1 { font-size: clamp(26px, 8.5vw, 32px); }
@@ -41,19 +54,32 @@
   <header>
     <h1>Chat Computer</h1>
     <nav class="get" aria-label="Get Chat Computer">
-      <a class="add" id="chrome" href="Chat-Computer-Chrome.zip" download
-         title="Downloads the extension. Unzip it, open chrome://extensions, turn on Developer mode, and choose Load unpacked.">Add to Chrome</a>
       <a class="add" id="windows" href="Chat-Computer-Windows.exe" download
-         title="Downloads the installer, for Windows 10 and 11. If Windows says it protected your PC, choose More info, then Run anyway: the app isn't signed with a paid certificate yet.">Windows</a>
-      <a class="add" id="mac" href="Chat-Computer-Mac.dmg" download
-         title="Downloads the app, for Macs with Apple silicon or Intel (macOS 11 or later). Open it and drag Chat Computer to Applications. The first time, macOS says it can't check the app: open System Settings, Privacy &amp; Security, and choose Open Anyway.">Mac</a>
+         title="Downloads Chat Computer Setup, for Windows 10 and 11. It asks how you want Chat Computer: as a Chrome extension, as your browser, as an app, or as its own system next to Windows. If Windows says it protected your PC, choose More info, then Run anyway: it isn't signed with a paid certificate yet.">Windows</a>
+      <a class="add" id="mac" href="#mac-setup"
+         title="Chat Computer Setup for Mac, in one line of Terminal. It asks how you want Chat Computer: as a Chrome extension, as your browser, as an app, or as its own system next to macOS (on a Mac with M1, M2 or M3).">Mac</a>
       <a class="add" id="android" href="Chat-Computer-Android.apk" download
          title="Downloads the app, for Android 7 or later. Open it on your phone and allow installing from your browser when asked: it isn't on Google Play yet.">Android</a>
       <span class="add soon" id="iphone" aria-disabled="true" title="Coming to the App Store">iPhone</span>
+      <a class="add" id="chrome" href="Chat-Computer-Chrome.zip" download
+         title="Downloads the extension. Unzip it, open chrome://extensions, turn on Developer mode, and choose Load unpacked.">Add to Chrome</a>
       <a class="add web" id="web" href="../" title="Chat Computer in this browser, nothing to install.">Try it here</a>
     </nav>
   </header>
+  <section id="mac-setup" aria-labelledby="mac-title">
+    <h2 id="mac-title">Chat Computer Setup for Mac</h2>
+    <p>Open Terminal (in Applications, then Utilities), paste this line and press Return:</p>
+    <code>curl -fsSL https://chatcomputer.ai/get/mac.sh | bash</code>
+    <p>It puts Chat Computer in Applications, with no password, checks it's the one published here, and opens it. Then
+      choose how you want Chat Computer: as a Chrome extension, as your browser, as an app, or as its own system next to
+      macOS (on a Mac with M1, M2 or M3).</p>
+    <p class="small">Or download <a id="mac-dmg" href="Chat-Computer-Mac.dmg" download>the disk image</a> and drag Chat
+      Computer to Applications: the first time, macOS says it can't check the app; open System Settings,
+      Privacy &amp; Security, and choose Open Anyway. (From Terminal, macOS doesn't ask.)</p>
+  </section>
   <h2 class="tagline">Talk, type or touch. Chat Computer does the rest.</h2>
+  <p class="ways">On Windows and Mac, one Setup: Chat Computer as a Chrome extension, as your browser, as an app, or as
+    its own system.</p>
 </main>
 </body>
 </html>

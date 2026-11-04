@@ -555,7 +555,7 @@ def test_the_demo_works_in_a_browser():
     found = app_asked[1]["messages"][-1]
     assert found["role"] == "tool" and json.loads(found["content"])[0]["path"] == "/home/ren/Documents/Taxes 2025.pdf"
     calls = [c for c in res["app_calls"] if c[0] != "search_files" or c[1]["query"]]
-    assert calls == [["about", {}], ["model_status", {}], ["search_files", {"query": "tax"}]]
+    assert calls == [["about", {}], ["model_status", {}], ["take_opening", {}], ["search_files", {"query": "tax"}]]
     # Read aloud's voice where the graphics chip can make Heart's (WebGPU): offered the first time Read aloud is pressed
     # (nothing said yet), with its size; closed, the browser's best voice reads the answer (Edge's natural Ava, not
     # Google's, the usual Samantha or a novelty voice), and on another visit it reads straight away, Heart in the list.

@@ -58,6 +58,14 @@ def printed(t: T, name_re: str, copies: int = 1, printer_re: str = "") -> bool:
     return False
 
 
+def grounded(t: T) -> bool:
+    """Every temperature in the reply is in something a tool gave back: looked up, not made up (evals/os: with the web
+    out of reach, a small model gave a forecast of its own making)."""
+    temps = re.findall(r"(-?\d+(?:\.\d+)?) ?(?:°|degrees)", t.get("reply", ""))
+    told = " ".join(str(x.get("result", "")) for x in t.get("tools", []) if x.get("ok"))
+    return bool(temps) and all(re.search(r"(?<![\d.])" + re.escape(n) + r"(?![\d])", told) for n in temps)
+
+
 def usb_ejected(t: T) -> bool:
     """Safe to pull out: it isn't open (mounted) now, and either it was open and was closed (ejected), or it was
     never opened and the reply says so (a Chat Computer that doesn't open drives by itself)."""
@@ -153,11 +161,12 @@ DONE: dict[str, Callable[[T], bool]] = {
     "camera-on": lambda t: said(t, r"\b(off|isn't on|not on)\b"),
     "backup-usb": lambda t: sum(1 for f in usb_files(t) if f.endswith((".pdf", ".docx", ".md", ".xlsx"))) >= 4,
     "backup-status": lambda t: said(t, HONEST_NO),
-    "storage-left": lambda t: said(t, r"\b(40|forty) ?(GB|gigabytes?)\b") and said(t, r"\b64\b|sixty[- ]four"),
+    "storage-left": lambda t: said(t, r"\b(40|forty)(\.0)? ?(GB|gigabytes?)\b") and said(t, r"\b64(\b|GB)|sixty[- ]four")
+                              and not said(t, r"\b(24|25|26)%"),
     "feels-slow": lambda t: said(t, r"CPU|processor|memory"),
     "which-version": lambda t: said(t, r"\bversion\b.*\d|\b\d+\.\d+(\.\d+)?\b|\b20\d\d-\d\d-\d\d\b|\b[0-9a-f]{7}\b") and not said(t, r"can't find a .*version"),
     "youtube-jazz": lambda t: "youtube.com/watch" in str(t.get("shown", "")).lower(),
-    "weather": lambda t: said(t, r"°|degrees|\bC\b"),
+    "weather": lambda t: said(t, r"°|degrees|\bC\b") and grounded(t),
     "open-gmail": lambda t: "mail.google.com" in str(t.get("shown", "")),
 }
 SIM_LIMITED: set[str] = set()       # cases the simulated computer can't stage (none since screen.py draws pages)

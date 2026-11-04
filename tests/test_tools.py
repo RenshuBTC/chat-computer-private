@@ -682,3 +682,24 @@ def test_a_search_between_the_wrong_dates_says_what_the_words_find(tmp_path):
     assert not err and "Tax letter March 2026" in out and "Nothing between those dates" in out
     out, _ = call(ctx, "search_files", {"query": "tax"})
     assert "Nothing" not in out
+
+
+def test_the_drive_list_says_whats_on_each_drive(tmp_path):
+    """evals/os: "what's on my USB stick?" was answered with the drive's size: the list says what's on it."""
+    ctx, *_ = make(tmp_path)
+    stick = tmp_path / "SANDISK"
+    (stick / "Photos").mkdir(parents=True)
+    (stick / "Recipes.docx").write_text("x")
+    (stick / ".hidden").write_text("x")
+    ctx.platform.drives = lambda: [{"name": "SANDISK", "kind": "USB drive", "size_gb": 32.0, "mounted": True, "path": str(stick)}]
+    out, err = call(ctx, "drives", {"action": "list"})
+    assert not err and json.loads(out)[0]["on_it"] == ["Photos/", "Recipes.docx"]
+
+
+def test_dark_mode_is_answered_not_turned_up(tmp_path):
+    """evals/os: "Turn on dark mode" turned the brightness up to 100% and said dark mode was on."""
+    ctx, *_ = make(tmp_path)
+    out, err = call(ctx, "display", {"action": "dark_mode"})
+    assert not err and "always dark" in out
+    out, _ = call(ctx, "display", {"action": "brightness", "value": 100, "mode": "dark"})
+    assert "always dark" in out and not [c for c in ctx.platform.calls if c[0] == "set_brightness"]

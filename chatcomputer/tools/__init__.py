@@ -936,8 +936,18 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
                 ds = await _machine(p.drives)
                 if not ds:
                     return _text("No USB drive or memory card is plugged in.")
-                return _text(_json([{k: d.get(k) for k in ("name", "kind", "size_gb", "free_gb", "mounted", "path", "id")
-                                     if d.get(k) is not None} for d in ds]))
+                out = []
+                for d in ds:
+                    o = {k: d.get(k) for k in ("name", "kind", "size_gb", "free_gb", "mounted", "path", "id") if d.get(k) is not None}
+                    # (What's on it, at the top: "what's on my USB stick?" is answered by the list itself. evals/os: a
+                    # small model answered with the drive's size, and nothing of its files.)
+                    with contextlib.suppress(OSError):
+                        if d.get("mounted") and d.get("path") and os.path.isdir(d["path"]):
+                            names = sorted(n + ("/" if os.path.isdir(os.path.join(d["path"], n)) else "")
+                                           for n in os.listdir(d["path"]) if not n.startswith("."))
+                            o["on_it"] = names[:30] + ([f"and {len(names) - 30} more"] if len(names) > 30 else [])
+                    out.append(o)
+                return _text(_json(out))
             if act == "open":
                 path = await _machine(p.open_drive, a.get("drive") or "")
                 return _text(f"It's open: its files are in {path}")
@@ -1284,12 +1294,17 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
          "0-100); brighter / dimmer: by value (default 15); night_light: mode on (now, until it's turned off), off, or "
          "evenings (by itself every evening, from 'from' until 'until', default 21:00 to 07:00), with warmth 1-100 "
          "(default 50; higher is warmer, less blue light). A desktop's monitor may only change with its own buttons: "
-         "status says so. There's no dark or light mode to switch: Chat Computer's screen is always dark.",
-         obj({"action": {"type": "string", "enum": ["status", "brightness", "brighter", "dimmer", "night_light"]},
+         "status says so. dark_mode: there's no dark or light mode to switch, Chat Computer's screen is always dark (say so).",
+         obj({"action": {"type": "string", "enum": ["status", "brightness", "brighter", "dimmer", "night_light", "dark_mode"]},
               "value": {"type": ["number", "string"]}, "mode": {"type": "string", "enum": ["on", "off", "evenings"]},
               "from": S, "until": S, "warmth": I}, ["action"]))
     async def display(a):
         act, p, s = a["action"], ctx.platform, ctx.settings
+        if act == "dark_mode" or str(a.get("mode") or "").lower() in ("dark", "light"):
+            # (Asked as people ask it: evals/os found a small model turning the brightness up for "dark mode" and
+            # saying it was on.)
+            return _text("Nothing to change: Chat Computer's screen is always dark (light text on a dark background); "
+                         "there's no light mode. Tell them so. If it's too bright, offer to dim it or turn on the night light.")
         try:
             if act == "status":
                 st = await _machine(p.display_status)

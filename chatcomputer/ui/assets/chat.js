@@ -500,12 +500,15 @@
     // a Chat Computer), nothing of the page can show over it, so it ends above the list instead.
     var list = $("results").getBoundingClientRect();
     if (searching && !openInPage && list.height) bottom = Math.min(bottom, Math.round(list.top) - gap);
+    // From the top of the screen, or under the row of tabs where there is one (the Chat Computer app as a browser
+    // puts it there: #tabs).
+    var tabs = $("tabs"), top = tabs && tabs.offsetHeight ? Math.round(tabs.getBoundingClientRect().bottom) + Math.round(0.25 * rem) : gap;
     var f = $("frame").style, bar = $("frame-bar").offsetHeight;
-    f.left = left + "px"; f.top = gap + "px";
-    f.width = Math.max(0, right - left) + "px"; f.height = Math.max(0, bottom - gap) + "px";
+    f.left = left + "px"; f.top = top + "px";
+    f.width = Math.max(0, right - left) + "px"; f.height = Math.max(0, bottom - top) + "px";
     // What's open: under the bar, inside the frame's border and clear of its bottom corners' curve.
     var inset = 2 + Math.round(0.4 * rem);
-    var r = { x: left + inset, y: gap + 2 + bar, w: Math.max(0, right - left - 2 * inset), h: Math.max(0, bottom - gap - 2 - bar - inset) };
+    var r = { x: left + inset, y: top + 2 + bar, w: Math.max(0, right - left - 2 * inset), h: Math.max(0, bottom - top - 2 - bar - inset) };
     var key = r.x + "," + r.y + "," + r.w + "," + r.h;
     if (key !== lastHole) { lastHole = key; post({ type: "hole", x: r.x, y: r.y, w: r.w, h: r.h }); }
   }

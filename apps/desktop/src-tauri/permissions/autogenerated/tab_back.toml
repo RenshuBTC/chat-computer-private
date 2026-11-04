@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-back"
+description = "Enables the tab_back command without any pre-configured scope."
+commands.allow = ["tab_back"]
+
+[[permission]]
+identifier = "deny-tab-back"
+description = "Denies the tab_back command without any pre-configured scope."
+commands.deny = ["tab_back"]

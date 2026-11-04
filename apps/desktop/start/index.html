@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat Computer</title>
+<link rel="stylesheet" href="../demo/theme.css">
+<link rel="stylesheet" href="start.css">
+</head>
+<body>
+<main id="start">
+  <h1 id="wordmark">Chat Computer</h1>
+
+  <section id="choose" aria-labelledby="ask" hidden>
+    <h2 id="ask">How do you want Chat Computer?</h2>
+    <div id="ways">
+      <button class="way" type="button" data-way="chrome">
+        <span class="way-name">Chrome extension</span>
+        <span class="way-what">In Chrome's side panel, beside the sites you use. The sites you ask for open in Chrome's tabs.</span>
+      </button>
+      <button class="way" type="button" data-way="browser">
+        <span class="way-name">Browser</span>
+        <span class="way-what">Chat Computer as your web browser: sites in tabs, and the links you click in other apps open here.</span>
+      </button>
+      <button class="way" type="button" data-way="app">
+        <span class="way-name">App</span>
+        <span class="way-what">Chat Computer in a window of its own, with its own model on this computer.</span>
+      </button>
+      <button class="way" type="button" data-way="os">
+        <span class="way-name">Its own system</span>
+        <span class="way-what" id="os-what">Chat Computer in place of a desktop when the computer starts. Your system stays, one restart away.</span>
+      </button>
+    </div>
+    <p id="error" role="alert"></p>
+    <p class="later">You can change this later: type / in Chat Computer, or open this app again.</p>
+  </section>
+
+  <section class="panel" id="way-chrome" aria-labelledby="chrome-title" hidden>
+    <h2 id="chrome-title">Chat Computer for Chrome</h2>
+    <p>Chrome adds extensions by itself only from its Web Store, and Chat Computer isn't there yet, so Chrome asks you to
+      add it, in three steps. <span id="chrome-open">Chrome is open, at a page with these steps.</span></p>
+    <p class="note" id="no-chrome" hidden>Chrome isn't on this computer: get it at google.com/chrome, then press Open Chrome
+      here. The extension's folder stays where it is.</p>
+    <ol class="steps">
+      <li>In Chrome's address bar, type <b>chrome://extensions</b> and press Enter (Chrome doesn't let another app open
+        that page). <button class="copy" type="button" data-copy="chrome://extensions">Copy it</button></li>
+      <li>Turn on <b>Developer mode</b>, at the top right.</li>
+      <li>Choose <b>Load unpacked</b>, and choose this folder:
+        <code class="folder" id="extension-folder"></code>
+        <button class="copy" type="button" data-copy-of="extension-folder">Copy its path</button>
+        <span class="how" data-on="windows">In the window that opens, click the address bar at its top, paste the path
+          (Ctrl+V), press Enter, then choose Select Folder.</span>
+        <span class="how" data-on="mac">In the window that opens, press Command-Shift-G, paste the path (Command-V), press
+          Return, then choose Select.</span>
+        <span class="how copied" id="extension-copied" hidden>Its path is copied.</span></li>
+      <li>Chat Computer is then under the puzzle piece in Chrome's toolbar: pin it, and click it to open Chat Computer in
+        the side panel.</li>
+    </ol>
+    <p class="buttons">
+      <button class="primary" type="button" data-act="chrome">Open Chrome</button>
+      <button class="second" type="button" data-act="extension-folder">Show the folder</button>
+    </p>
+    <p class="other"><button class="text-button" type="button" data-act="choose">Choose another way</button></p>
+  </section>
+
+  <section class="panel" id="way-browser" aria-labelledby="browser-title" hidden>
+    <h2 id="browser-title">Chat Computer as your browser</h2>
+    <p>Sites open in tabs above the conversation. Type a web address in the box for a new tab, or ask Chat Computer
+      anything; + beside the tabs takes you back to the conversation.</p>
+    <p id="default-yes" hidden>It's your default browser: the links you click in other apps open here.</p>
+    <div id="default-ask">
+      <p>So that the links you click in other apps open here, make it your default browser.
+        <span data-on="windows">Windows asks you to choose that yourself: Settings opens at Chat Computer, where you
+          choose Set default (or, under Web browser, Chat Computer).</span>
+        <span data-on="mac">macOS asks you to confirm it.</span></p>
+      <p class="buttons"><button class="second" type="button" data-act="default">Make it my default browser</button></p>
+      <p class="note" id="default-asked" hidden></p>
+    </div>
+    <p class="buttons"><button class="primary" type="button" data-act="start">Start</button></p>
+    <p class="other"><button class="text-button" type="button" data-act="choose">Choose another way</button></p>
+  </section>
+
+  <section class="panel" id="way-os" aria-labelledby="os-title" hidden>
+    <h2 id="os-title">Chat Computer's own system</h2>
+    <p class="note" id="os-started" hidden>Chat Computer Setup has started.</p>
+    <p data-on="windows">Chat Computer Setup runs in a window of its own. Windows asks whether it may make changes: choose
+      Yes. Setup then checks this PC and lists everything it's about to change; nothing on your disks changes until you
+      answer y. It needs about 70 GB of free space and the internet. Windows stays, one restart away.</p>
+    <p data-on="mac">Chat Computer Setup runs in Terminal: answer its questions there. Nothing on your Mac changes until
+      you answer y. It needs about 80 GB of free space and Wi-Fi. macOS, your apps and your files stay, one restart
+      away.</p>
+    <p>Setup's folder: <code class="folder" id="setup-folder"></code></p>
+    <p class="buttons">
+      <button class="primary" type="button" data-act="os">Start Chat Computer Setup again</button>
+      <button class="second" type="button" data-act="setup-folder">Show its folder</button>
+    </p>
+    <p class="other"><button class="text-button" type="button" data-act="choose">Choose another way</button></p>
+  </section>
+</main>
+<script src="start.js"></script>
+</body>
+</html>

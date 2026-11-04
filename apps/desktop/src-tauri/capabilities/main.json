@@ -20,6 +20,15 @@
     "allow-chatgpt-status",
     "allow-chatgpt-sign-in",
     "allow-chatgpt-sign-out",
-    "allow-chatgpt-ask"
+    "allow-chatgpt-ask",
+    "allow-way-status",
+    "allow-choose-way",
+    "allow-make-default-browser",
+    "allow-show-folder",
+    "allow-open-tab",
+    "allow-show-tab",
+    "allow-close-tab",
+    "allow-tab-back",
+    "allow-take-opening"
   ]
 }

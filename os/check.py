@@ -85,8 +85,10 @@ log go to out/.
                                      acpica-tools)
     ./check.py --sound               sound: a build that rings the timer's chime once it's ready, on each kind of
                                      HD Audio QEMU has (the ICH6's and ICH9's controllers; codecs with a line out,
-                                     a line out and in, and a speaker and microphone), recorded: the chime's two
-                                     notes, in order, in both channels, as loud as the main Chat Computer's
+                                     a line out and in, and a speaker and microphone), and on QEMU's USB sound card
+                                     (alone, and beside HD Audio, which it then plays instead of), recorded: the
+                                     chime's two notes, in order, in both channels, as loud as the main Chat
+                                     Computer's (on the USB card, as its own volume makes it)
     ./check.py --microphone          microphones: a build that listens once it's ready, on each kind of HD Audio
                                      QEMU has with an input (the ICH6's and ICH9's controllers; codecs with a line
                                      in, and with a microphone), each fed a tone of its own through QEMU's audio
@@ -2338,12 +2340,14 @@ def chimes_in(wav: Path) -> tuple[list[list[int]], int, list[str]]:
     return chimes, rate, problems
 
 
-def check_chime(name: str, samples: list[int], rate: int) -> list[str]:
-    """One chime: the timer's, its first note then its second, as loud as it should be."""
+def check_chime(name: str, samples: list[int], rate: int, loudness: float = 1.0) -> list[str]:
+    """One chime: the timer's, its first note then its second, as loud as it should be (`loudness`: what the device's
+    own volume makes of it)."""
     problems = []
     peak = max(abs(x) for x in samples)
-    if abs(peak - CHIME_PEAK) > CHIME_PEAK * 0.05:
-        problems.append(f"{name}: its loudest sample is {peak}, not about {CHIME_PEAK}")
+    want = round(CHIME_PEAK * loudness)
+    if abs(peak - want) > want * 0.05:
+        problems.append(f"{name}: its loudest sample is {peak}, not about {want}")
     heard = len(samples) / rate
     if not 0.75 < heard < 1.0:
         problems.append(f"{name}: sound for {heard:.2f} s, not the chime's 0.9 s or so")
@@ -2360,56 +2364,66 @@ def check_chime(name: str, samples: list[int], rate: int) -> list[str]:
 
 def sound(args) -> list[str]:
     """A 2-second timer, set by a test build once it's ready (as the model's reminders tool sets one), on each HD Audio
-    controller and codec QEMU has: it rings (a line in the conversation, and the timer's chime), and rings again 4
-    seconds later until a key is pressed (the first time, after two chimes; then after one). Every chime recorded is
-    checked."""
+    controller and codec QEMU has, and on QEMU's USB sound card (alone, and plugged in beside HD Audio, which it then
+    plays instead of): it rings (a line in the conversation, and the timer's chime), and rings again 4 seconds later
+    until a key is pressed (the first time, and on the USB sound card's first, after two chimes; else after one).
+    Every chime recorded is checked (on the USB sound card, at QEMU's own volume for it: 240 of 255)."""
     import re
 
     build("sound")
     problems = []
     first = True
-    for controller in ("intel-hda", "ich9-intel-hda"):
-        for codec in ("hda-output", "hda-duplex", "hda-micro"):
-            label = f"{controller} + {codec}"
-            wav = OUT / f"sound-{controller}-{codec}.wav"
-            wav.unlink(missing_ok=True)
-            extra = ("-audiodev", f"wav,id=snd0,path={wav},out.frequency=48000",
-                     "-device", f"{controller},id=hda0", "-device", f"{codec},audiodev=snd0,bus=hda0.0")
-            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
-            want = 2 if first else 1
-            try:
-                got = wait_for(pc.log, ("Your 2-second timer is done: tea.", "kernel stopped"), args.timeout)
-                if got and "done" in got:
-                    # Rung: a key once it has rung `want` times stops it.
-                    wait_for(pc.log, ("test: chime at",), 10, times=want)
-                    time.sleep(1.5)
-                    if first:
-                        pc.picture("sound-rung")
-                    monitor(pc.mon, "sendkey a")
-                    time.sleep(5.5)
-            finally:
-                pc.stop()
-            text = pc.text()
-            found = next((line for line in text.splitlines() if "kernel: sound" in line), "(no line about sound)")
-            print(f"{label}: {found}")
-            if "test: Set a 2-second timer for tea (rings in 2 seconds). [1]" not in text:
-                problems.append(f"{label}: the timer wasn't set as the model's tool sets one")
-            if got is None or "done" not in got:
-                problems.append(f"{label}: the timer didn't ring ({got or 'nothing said in time'})")
-                continue
-            times = [int(t) for t in re.findall(r"test: chime at (\d+) ms", text)]
-            if len(times) != want:
-                problems.append(f"{label}: the chime rang {len(times)} times, not {want} (a key stops it)")
-            elif want == 2 and not 3700 <= times[1] - times[0] <= 4400:
-                problems.append(f"{label}: it rang again {times[1] - times[0]} ms after, not 4 s")
-            chimes, rate, wrong = chimes_in(wav)
-            problems += [f"{label}: {p}" for p in wrong]
-            if len(chimes) != want:
-                problems.append(f"{label}: {len(chimes)} chimes were recorded, not {want}")
-            for k, c in enumerate(chimes):
-                problems += [f"{label}: {p}" for p in check_chime(f"{wav.name} chime {k + 1}", c, rate)]
-            print(f"{label}: {len(chimes)} chime(s) recorded at {rate} Hz")
-            first = False
+    usb = ("-device", "qemu-xhci,id=xhci", "-device", "usb-audio,audiodev=snd0,bus=xhci.0")
+    runs = [(controller, codec) for controller in ("intel-hda", "ich9-intel-hda") for codec in ("hda-output", "hda-duplex", "hda-micro")]
+    for controller, codec in runs + [("usb", "usb-audio"), ("intel-hda", "hda-output and usb-audio")]:
+        label = f"{controller} + {codec}"
+        wav = OUT / f"sound-{controller}-{codec.replace(' ', '-')}.wav"
+        wav.unlink(missing_ok=True)
+        on_usb = "usb-audio" in codec
+        if controller == "usb":
+            devices = usb
+        else:
+            devices = ("-device", f"{controller},id=hda0", "-device", f"{codec.split()[0]},audiodev={'none0' if on_usb else 'snd0'},bus=hda0.0")
+            devices += (("-audiodev", "none,id=none0") + usb) if on_usb else ()
+        extra = ("-audiodev", f"wav,id=snd0,path={wav},out.frequency=48000", *devices)
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
+        want = 2 if first or controller == "usb" else 1
+        try:
+            got = wait_for(pc.log, ("Your 2-second timer is done: tea.", "kernel stopped"), args.timeout)
+            if got and "done" in got:
+                # Rung: a key once it has rung `want` times stops it.
+                wait_for(pc.log, ("test: chime at",), 10, times=want)
+                time.sleep(1.5)
+                if first:
+                    pc.picture("sound-rung")
+                monitor(pc.mon, "sendkey a")
+                time.sleep(5.5)
+        finally:
+            pc.stop()
+        text = pc.text()
+        found = next((line for line in text.splitlines() if "kernel: sound" in line), "(no line about sound)")
+        print(f"{label}: {found}")
+        if "test: Set a 2-second timer for tea (rings in 2 seconds). [1]" not in text:
+            problems.append(f"{label}: the timer wasn't set as the model's tool sets one")
+        if got is None or "done" not in got:
+            problems.append(f"{label}: the timer didn't ring ({got or 'nothing said in time'})")
+            continue
+        times = [int(t) for t in re.findall(r"test: chime at (\d+) ms", text)]
+        if len(times) != want:
+            problems.append(f"{label}: the chime rang {len(times)} times, not {want} (a key stops it)")
+        elif want == 2 and not 3700 <= times[1] - times[0] <= 4400:
+            problems.append(f"{label}: it rang again {times[1] - times[0]} ms after, not 4 s")
+        if on_usb and text.count("on the USB sound card") != want:
+            problems.append(f"{label}: it didn't ring on the USB sound card")
+        chimes, rate, wrong = chimes_in(wav)
+        problems += [f"{label}: {p}" for p in wrong]
+        if len(chimes) != want:
+            problems.append(f"{label}: {len(chimes)} chimes were recorded, not {want}")
+        loudness = 240 / 255 if on_usb else 1.0
+        for k, c in enumerate(chimes):
+            problems += [f"{label}: {p}" for p in check_chime(f"{wav.name} chime {k + 1}", c, rate, loudness)]
+        print(f"{label}: {len(chimes)} chime(s) recorded at {rate} Hz")
+        first = False
     build()  # never leave a test build in out/
     return problems
 

@@ -1,12 +1,14 @@
 //! What is plugged into a USB controller. When something is plugged in, Chat Computer gives it a slot and
 //! an address, asks it what it is (its descriptors), and sets it up if it is something Chat Computer uses:
-//! a keyboard, a mouse, a hub with more devices behind it, a network adapter (net.rs), or a drive (storage.rs: a USB
-//! stick, a card reader). Unplugged devices (and everything behind an unplugged hub) give their slots back.
+//! a keyboard, a mouse, a hub with more devices behind it, a network adapter (net.rs), a drive (storage.rs: a USB
+//! stick, a card reader), or a sound card (audio.rs: a headset, speakers). Unplugged devices (and everything behind an
+//! unplugged hub) give their slots back.
 //!
 //! Requests to a device go on its control endpoint (endpoint 0) as a setup packet, an optional data
 //! stage and a status stage. Keyboards, mice and hubs also send small reports on an interrupt endpoint,
 //! which the controller collects from them a few hundred times a second.
 
+use super::audio::{self, Audio};
 use super::net::{self, Net};
 use super::storage::{self, Storage};
 use super::xhci::{self, Doorbell, Page, Ring, Trb};
@@ -31,6 +33,8 @@ pub enum Role {
     Net(alloc::boxed::Box<Net>),
     /// A drive: a USB stick, an external disk, a card reader.
     Storage(alloc::boxed::Box<Storage>),
+    /// A sound card: a headset, speakers.
+    Audio(alloc::boxed::Box<Audio>),
 }
 
 /// One of a device's interfaces for typing or pointing (HID's, the USB class for them).
@@ -274,6 +278,12 @@ impl Device {
         // (A drive's command takes its events itself, errors included.)
         if let Role::Storage(s) = &mut self.role {
             s.transfer_event(e);
+            return;
+        }
+        if let Role::Audio(a) = &mut self.role {
+            if !a.transfer_event(&mut self.rings, db, self.slot, e) {
+                self.stopped |= 1 << dci;
+            }
             return;
         }
         let ok = xhci::ok(e.code());
@@ -682,6 +692,15 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
     let (what, plain_name): (String, Option<&str>) = if let Some(kind) = net_kind {
         net::set_up(hc, slot, speed, kind, &interfaces)?;
         (String::from(net::describe(kind)), Some("USB network adapter"))
+    } else if let Some(plan) = audio::plan(&interfaces) {
+        let (what, a) = audio::set_up(hc, slot, speed, plan)?;
+        crate::log!("Chat Computer kernel: USB {}: sound card in slot {slot}: {}", place.describe(), a.describe());
+        with(hc, |c| {
+            if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
+                d.role = Role::Audio(alloc::boxed::Box::new(a));
+            }
+        });
+        (what, Some("USB sound card"))
     } else if let Some(i) = hub {
         if matches!(speed, Speed::Super | Speed::SuperPlus) {
             (String::from("a USB 3 hub (keyboards and mice behind it show up on its USB 2 side)"), Some("USB hub"))
@@ -717,7 +736,7 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
     Ok(())
 }
 
-/// Adds endpoints (bulk or interrupt, either way) to a configured device, each with a ring of its own.
+/// Adds endpoints (bulk, interrupt or isochronous, either way) to a configured device, each with a ring of its own.
 pub(super) fn add_endpoints(hc: usize, slot: u8, speed: Speed, eps: &[Endpoint]) -> Result<(), Error> {
     let input = with(hc, |c| {
         let (context, low) = (c.host.context_size, c.host.low);
@@ -743,6 +762,8 @@ pub(super) fn add_endpoints(hc: usize, slot: u8, speed: Speed, eps: &[Endpoint])
             let (kind, high_burst) = match (ep.attributes & 3, ep.address & 0x80 != 0) {
                 (2, false) => (xhci::EP_BULK_OUT, 0),
                 (2, true) => (xhci::EP_BULK_IN, 0),
+                (1, false) => (xhci::EP_ISOCH_OUT, ((ep.max_packet >> 11) & 3) as u32),
+                (1, true) => (xhci::EP_ISOCH_IN, ((ep.max_packet >> 11) & 3) as u32),
                 (_, true) => (xhci::EP_INTERRUPT_IN, ((ep.max_packet >> 11) & 3) as u32),
                 (_, false) => (xhci::EP_INTERRUPT_OUT, ((ep.max_packet >> 11) & 3) as u32),
             };
@@ -753,13 +774,22 @@ pub(super) fn add_endpoints(hc: usize, slot: u8, speed: Speed, eps: &[Endpoint])
             };
             let at = context * (dci as usize + 1);
             let start = ring.start();
-            let interval = if ep.attributes & 3 == 3 { interval(speed, ep.interval) } else { 0 };
+            let periodic = matches!(ep.attributes & 3, 1 | 3);
+            let interval = match ep.attributes & 3 {
+                3 => interval(speed, ep.interval),
+                // An isochronous endpoint's: 2^(bInterval - 1) frames at full speed (eight microframes each),
+                // microframes faster.
+                1 => (ep.interval.clamp(1, 16) - 1) as u32 + if matches!(speed, Speed::Low | Speed::Full) { 3 } else { 0 },
+                _ => 0,
+            };
+            // (An isochronous endpoint isn't tried again after an error: its packet's time has gone.)
+            let errors = if ep.attributes & 3 == 1 { 0 } else { 3 };
             set_dword(&d.input, at, interval << 16);
-            set_dword(&d.input, at + 4, 3 << 1 | kind << 3 | burst << 8 | mps << 16);
+            set_dword(&d.input, at + 4, errors << 1 | kind << 3 | burst << 8 | mps << 16);
             set_dword(&d.input, at + 8, start as u32);
             set_dword(&d.input, at + 12, (start >> 32) as u32);
             let average = if ep.attributes & 3 == 2 { 1024 } else { mps };
-            let esit = if ep.attributes & 3 == 3 { mps * (burst + 1) } else { 0 };
+            let esit = if periodic { mps * (burst + 1) } else { 0 };
             set_dword(&d.input, at + 16, average | esit << 16);
             d.rings[dci as usize] = Some(ring);
         }

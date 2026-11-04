@@ -127,6 +127,13 @@ drivers.
       CAPACITY, READ), over its bulk-only transport, 64 KiB at a time, with its reset recovery when something goes
       wrong. Each logical unit (a card reader's slot) is asked about once a second whether a medium is in it, so a
       card put in is read at once, and one taken out forgotten. Nothing is ever written to them;
+    * sound cards (`usb/audio.rs`): headsets, speakers and DACs of USB's Audio Device Class 1 (most of them). The
+      setting of its audio streaming interface that takes PCM in 16 bits (two channels, else one) is chosen, at 48
+      kHz if it has it, else 44.1; its rate is set and its feature units unmuted (its volume is left as it is). While
+      one is plugged in, the chimes play on it instead of the PC's own sound, as a computer switches to one: their
+      packets go on its isochronous endpoint's ring (one each service interval, a millisecond at full speed), 150
+      milliseconds ahead, one more as each goes out. Not yet: class 2's (some high-resolution DACs), and their
+      microphones;
     * devices plugged in and out at any time. Unplugging a hub lets go of everything behind it.
   * the network cards there are drivers for (`netcard/`), and Chat Computer's own network stack on the first
     (`net/`):
@@ -577,7 +584,8 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # log.bin, read back as Windows' setup reads it, each start's whole;
                                  # nothing else on the disk changed (needs dosfstools, mtools and gdisk)
 ./check.py --sound               # a timer set by a test build, its chime recorded from each of QEMU's
-                                 # HD Audio controllers and codecs and checked against the chime's own samples
+                                 # HD Audio controllers and codecs, and its USB sound card (alone, and beside
+                                 # HD Audio, which it plays instead of), and checked against the chime's samples
 ./check.py --microphone          # a test build listening, on each of QEMU's HD Audio controllers and codecs
                                  # with an input, fed a tone of its own: heard at its frequency and loudness
 ./check.py --files               # Windows' drive read by the model's tools (a test's script asks): a folder
@@ -715,8 +723,9 @@ PC.
    accents).
 10. Sound and AirPods: ✓ HD Audio's outputs, for the chimes of timers and reminders (checked with QEMU's
     controllers and codecs), ✓ its microphones (the one to listen to found and recorded, for the speech recognition
-    to come; checked with QEMU's codecs fed tones). To do: trying it on real PCs, USB audio, then Bluetooth (HCI over
-    USB, L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.
+    to come; checked with QEMU's codecs fed tones), ✓ USB sound cards (class 1's: the chimes play on one while it's
+    plugged in; checked with QEMU's). To do: trying it on real PCs, USB sound cards' microphones and class 2's, then
+    Bluetooth (HCI over USB, the controllers' firmware, L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.
 11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
 12. Power: ✓ restart, ✓ turning off (ACPI's S5, with the firmware's _TTS and _PTS), ✓ the firmware's own programs
     (AML) run by Chat Computer's own interpreter: ✓ the power button, ✓ laptops' batteries, AC adapters and lids, ✓

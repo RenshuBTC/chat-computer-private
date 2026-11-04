@@ -73,6 +73,7 @@ pub const TRB_NORMAL: u32 = 1;
 pub const TRB_SETUP: u32 = 2;
 pub const TRB_DATA: u32 = 3;
 pub const TRB_STATUS: u32 = 4;
+pub const TRB_ISOCH: u32 = 5;
 const TRB_LINK: u32 = 6;
 const TRB_ENABLE_SLOT: u32 = 9;
 const TRB_DISABLE_SLOT: u32 = 10;
@@ -95,6 +96,8 @@ pub const SHORT_OK: u32 = 1 << 2; // ISP: tell about a short packet
 pub const ON_COMPLETION: u32 = 1 << 5; // IOC
 pub const IMMEDIATE: u32 = 1 << 6; // IDT
 pub const DIR_IN: u32 = 1 << 16;
+/// An isochronous TRB's "start as soon as possible" (SIA): its packet goes in the first service interval it can.
+pub const ISOCH_ASAP: u32 = 1 << 31;
 
 // Completion codes.
 pub const SUCCESS: u8 = 1;
@@ -102,9 +105,11 @@ pub const SHORT_PACKET: u8 = 13;
 pub const WRONG_STATE: u8 = 19;
 
 /// Endpoint types in an endpoint context.
+pub const EP_ISOCH_OUT: u32 = 1;
 pub const EP_BULK_OUT: u32 = 2;
 pub const EP_INTERRUPT_OUT: u32 = 3;
 pub const EP_CONTROL: u32 = 4;
+pub const EP_ISOCH_IN: u32 = 5;
 pub const EP_BULK_IN: u32 = 6;
 pub const EP_INTERRUPT_IN: u32 = 7;
 

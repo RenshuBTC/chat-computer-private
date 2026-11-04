@@ -1,11 +1,13 @@
 //! USB: Chat Computer's own drivers for the PC's USB controllers and what is plugged into them. So far:
 //! keyboards, mice, network adapters and phones sharing their connection (net.rs), drives (storage.rs: USB sticks,
-//! external disks, card readers), and the hubs they may be behind (a monitor's, a dock's, or one inside the PC).
+//! external disks, card readers), sound cards (audio.rs: headsets, speakers), and the hubs they may be behind (a
+//! monitor's, a dock's, or one inside the PC).
 //!
 //! The controllers' events are handled in their interrupt, or, on a controller that can't send
 //! interrupt messages, whenever the kernel wakes. Work that has to wait for a device (finding out what
 //! was just plugged in, setting a keyboard's lights) runs in the kernel's main loop, in `work`.
 
+mod audio;
 mod device;
 mod net;
 pub mod storage;
@@ -369,4 +371,48 @@ pub fn net_take(hc: usize, slot: u8, id: u64) -> Option<(Vec<Vec<u8>>, bool)> {
 /// Sends a frame. None: the adapter was unplugged; false: no room just now.
 pub fn net_send(hc: usize, slot: u8, id: u64, frame: &[u8]) -> Option<bool> {
     with_net(hc, slot, id, |n, rings, db| n.send(rings, db, slot, frame))
+}
+
+/// The USB sound card to play on, if one is plugged in (the first found): its controller and slot, its name and its
+/// rate.
+pub fn sound_card() -> Option<(usize, u8, String, u32)> {
+    let controllers = CONTROLLERS.lock();
+    for (hc, c) in controllers.iter().enumerate() {
+        if !c.host.running {
+            continue;
+        }
+        for d in c.devices.iter().flatten() {
+            if let Role::Audio(a) = &d.role {
+                return Some((hc, d.slot, d.name.clone(), a.rate));
+            }
+        }
+    }
+    None
+}
+
+/// Plays `samples` (one channel, 16 bits, at its rate) on the sound card in `slot` of controller `hc`. False if
+/// it's gone, or memory ran out.
+pub fn sound_card_play(hc: usize, slot: u8, samples: &[i16]) -> bool {
+    let mut controllers = CONTROLLERS.lock();
+    let Some(c) = controllers.get_mut(hc) else { return false };
+    if !c.host.running {
+        return false;
+    }
+    let (db, low) = (c.host.doorbell(), c.host.low);
+    let Some(Some(d)) = c.devices.get_mut(slot as usize) else { return false };
+    let (rings, role) = d.rings_and_role();
+    match role {
+        Role::Audio(a) => a.play(rings, db, slot, samples, low),
+        _ => false,
+    }
+}
+
+/// Stops what the sound card in `slot` of controller `hc` plays.
+pub fn sound_card_stop(hc: usize, slot: u8) {
+    let mut controllers = CONTROLLERS.lock();
+    if let Some(Some(d)) = controllers.get_mut(hc).and_then(|c| c.devices.get_mut(slot as usize))
+        && let Role::Audio(a) = &mut d.role
+    {
+        a.stop();
+    }
 }

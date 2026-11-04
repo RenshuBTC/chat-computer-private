@@ -1,10 +1,11 @@
 """Pass/fail checks for the desktop traces, written from the error analysis of the baseline (labels/baseline.json):
 one check per case for "was it done" (from what happened to the simulated computer and the files, or for a
-question, what the reply says), and three that apply to every case (from the failure modes that kept coming up):
+question, what the reply says), and four that apply to every case (from the failure modes that kept coming up):
 
   shell_ask  - no question to the person in shell words ("Can I run this command: ...")
   glued      - the reply doesn't run sentences together or carry its working-out
   stray_file - nothing of its own left in the person's folders
+  to_model   - the reply doesn't pass on words meant for the model ("Tell them so", from a tool's note to it)
 
     python -m evals.os.evaluate RUN_DIR [--labels labels/baseline.json]
 
@@ -180,7 +181,13 @@ SIM_LIMITED: set[str] = set()       # cases the simulated computer can't stage (
 # Every case.
 SHELL_ASK = re.compile(r"^Can I run (this|a) command", re.I)
 GLUED = re.compile(r"[a-z0-9)\"'”][.!?:;](?=[A-Z][a-z'’ ])")
+# What Chat Computer says to its model, not to the person (a tool's notes, the agent's nudge): Qwen3.5 0.8B passed a
+# tool's "Tell them so, and offer to ..." on word for word.
+TO_MODEL = re.compile(r"\b(tell them so|answer them now|don't ask for it again|this model reads text only)\b", re.I)
 EXPECTED_FILES = {"files-rename": r"^Documents/Ren Shu CV 2026\.docx$", "screenshot-save": r"^Pictures/", "screenshot-of-page": r"^Desktop/"}
+
+
+GENERAL = ("shell_ask", "glued", "stray_file", "to_model")
 
 
 def general(t: T) -> dict[str, bool]:
@@ -190,6 +197,7 @@ def general(t: T) -> dict[str, bool]:
         "shell_ask": not any(SHELL_ASK.search(c.get("question", "")) for c in t.get("confirmations", [])),
         "glued": not GLUED.search(reply),
         "stray_file": not [f for f in t.get("files", {}).get("added", []) if not re.search(allowed, f)],
+        "to_model": not TO_MODEL.search(reply),
     }
 
 
@@ -215,11 +223,11 @@ def report(res: dict[str, dict[str, Any]], labels: dict[str, Any] | None = None)
     lines = []
     done = sum(res[k]["done"] for k in scored)
     lines.append(f"done: {done}/{len(scored)} ({done / max(1, len(scored)):.0%})")
-    for g in ("shell_ask", "glued", "stray_file"):
+    for g in GENERAL:
         ok = sum(1 for v in res.values() if v.get(g) is True)
         n = sum(1 for v in res.values() if g in v)
         lines.append(f"{g}: {ok}/{n} pass")
-    allp = sum(1 for k in scored if res[k]["done"] and all(res[k].get(g) for g in ("shell_ask", "glued", "stray_file")))
+    allp = sum(1 for k in scored if res[k]["done"] and all(res[k].get(g, True) for g in GENERAL))
     lines.append(f"pass-all (done and every general check): {allp}/{len(scored)} ({allp / max(1, len(scored)):.0%})")
     by: dict[str, list[int]] = {}
     for k in scored:
@@ -242,8 +250,8 @@ def report(res: dict[str, dict[str, Any]], labels: dict[str, Any] | None = None)
         both = [k for k in scored if k in labels and labels[k].get("pass") is not None]
         dis = [k for k in both if labels[k]["pass"] != res[k]["done"]]
         lines.append(f"checks vs hand labels: {len(both) - len(dis)}/{len(both)} agree" + (f"; disagree: {dis}" if dis else ""))
-        for g, mode in (("shell_ask", "shell_ask"), ("glued", "glued"), ("stray_file", "stray_file")):
-            d2 = [k for k in res if k in labels and (mode in labels[k].get("modes", [])) == res[k].get(g)]
+        for g in GENERAL:
+            d2 = [k for k in res if k in labels and (g in labels[k].get("modes", [])) == res[k].get(g)]
             lines.append(f"  {g} vs labels: {len(res) - len(d2)}/{len(res)} agree" + (f"; disagree: {d2}" if d2 else ""))
     return "\n".join(lines)
 

@@ -730,7 +730,7 @@ def test_dark_mode_is_answered_not_turned_up(tmp_path):
     """evals/os: "Turn on dark mode" turned the brightness up to 100% and said dark mode was on."""
     ctx, *_ = make(tmp_path)
     out, err = call(ctx, "display", {"action": "dark_mode"})
-    assert not err and "always dark" in out and "no dark mode" in out
+    assert not err and "always dark" in out and "no dark or light mode" in out
     out, _ = call(ctx, "display", {"action": "brightness", "value": 100, "mode": "dark"})
     assert "always dark" in out and not [c for c in ctx.platform.calls if c[0] == "set_brightness"]
     # Whichever action the model picks for it (evals/os: the brightness up, or the night light on, then "Done.").
@@ -738,16 +738,17 @@ def test_dark_mode_is_answered_not_turned_up(tmp_path):
     for a in ({"action": "brightness", "value": 100, "mode": "on"}, {"action": "night_light", "mode": "on"},
               {"action": "brighter"}):
         out, _ = call(ctx, "display", a)
-        assert "no dark mode" in out and "Nothing was changed" in out
+        assert "always dark" in out and "Nothing was changed" in out
     # With its own answer, said if the model says nothing (brain/agent.py).
     said = asyncio.get_event_loop().run_until_complete(ctx.tool_fns["display"]({"action": "dark_mode"}))["say"]
-    assert said.startswith("There's no dark mode to turn on") and "dim it or turn on the night light" in said
+    assert said.startswith("There's no dark or light mode") and "dim it or turn on the night light" in said
+    assert "Tell them" not in out          # (words to pass on as they are: the model passed that on too)
     assert not [c for c in ctx.platform.calls if c[0] in ("set_brightness", "set_night_light")]
     out, _ = call(ctx, "display", {"action": "status"})
-    assert "no dark mode" not in out
+    assert "always dark" not in out
     # Asked for the screen itself, it's done.
     for words in ("Light mode is too bright, dim it", "It's too dark, make it brighter", "Turn on the night light"):
         ctx.asked = lambda w=words: w
         out, _ = call(ctx, "display", {"action": "dimmer"})
-        assert "no dark mode" not in out
+        assert "always dark" not in out
     assert [c for c in ctx.platform.calls if c[0] == "set_brightness"]

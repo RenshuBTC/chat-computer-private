@@ -288,7 +288,7 @@ def test_a_tool_s_own_answer_is_said_when_the_model_says_nothing(clean_env):
         try:
             res = await rig.say("turn on dark mode")
             assert res.ok and res.error_kind is None and len(rig.mock.requests) == 3
-            assert res.text.startswith("There's no dark mode to turn on") and rig.text() == res.text
+            assert res.text.startswith("There's no dark or light mode") and rig.text() == res.text
         finally:
             await rig.brain.close()
             rig.mock.stop()
@@ -299,7 +299,7 @@ def test_a_tool_s_own_answer_is_said_when_the_model_says_nothing(clean_env):
                           "dark": [call("display", action="dark_mode")]}, after_tool="")
         try:
             res = await rig.say("dark mode please")
-            assert res.ok and res.text.startswith("There's no dark mode to turn on")
+            assert res.ok and res.text.startswith("There's no dark or light mode")
             res = await rig.say("dark mode, and count the lines in my notes")
             assert res.ok and res.text == "Done."
         finally:

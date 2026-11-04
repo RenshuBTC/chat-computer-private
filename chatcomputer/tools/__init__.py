@@ -1331,11 +1331,10 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
                 act != "status" and DARK_OR_LIGHT_MODE.search(said) and not SCREEN_WORDS.search(said)):
             # (Asked as people ask it, whichever action the model picks: evals/os found Qwen3.5 0.8B, asked to "turn on
             # dark mode", turning the brightness up, or the night light on, and saying dark mode was on.)
-            return {**_text("There's no dark mode to turn on or off: Chat Computer's screen is always dark (light text on "
-                            "a dark background), and there's no light mode. Nothing was changed. Tell them so, and offer to "
-                            "dim the screen or turn on the night light (warmer colours) if it's too bright."),
-                    "say": "There's no dark mode to turn on: Chat Computer's screen is always dark, with light text on a "
-                           "dark background. If it's too bright, I can dim it or turn on the night light."}
+            # (In words to pass on as they are: evals/os found the model passing on "Tell them so, and offer ..." too.)
+            words = ("There's no dark or light mode to switch to: Chat Computer's screen is always dark, with light text "
+                     "on a dark background. If it's too bright, I can dim it or turn on the night light.")
+            return {**_text("Nothing was changed. " + words), "say": words}
         try:
             if act == "status":
                 st = await _machine(p.display_status)

@@ -37,6 +37,8 @@ pub const MOST_TEXT: usize = 8 << 20;
 const MOST_DEPTH: u32 = 64;
 /// The most form fields listed.
 const MOST_FIELDS: usize = 2_000;
+/// The most of a page's contents read (its streams, decoded, together).
+const MOST_CONTENTS: usize = 64 << 20;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Error {
@@ -187,8 +189,11 @@ fn contents(f: &File, page: &Dict) -> Vec<u8> {
         Obj::Array(parts) => {
             let mut all = Vec::new();
             for part in &parts {
+                if all.len() >= MOST_CONTENTS {
+                    break;
+                }
                 if let Some(data) = f.stream(part) {
-                    all.extend_from_slice(&data);
+                    all.extend_from_slice(&data[..data.len().min(MOST_CONTENTS - all.len())]);
                     all.push(b'\n');
                 }
             }

@@ -1,5 +1,5 @@
-//! Against PDFs written by ReportLab, LibreOffice, pdfTeX and qpdf (encrypted seven ways among them), and by hand with
-//! what programs write less often (tests/make.py): their words, read back. Damaged ones (offsets wrong, the
+//! Against PDFs written by ReportLab, LibreOffice, pdfTeX, Chrome and qpdf (encrypted seven ways among them), and by
+//! hand with what programs write less often (tests/make.py): their words, read back. Damaged ones (offsets wrong, the
 //! cross-reference gone, cut short, bytes changed at random, objects that lead back to themselves) give errors or what
 //! could be read, never a crash or a hang.
 
@@ -96,6 +96,42 @@ In Helvetica: café, naïve and résumé, the finest “office”.
 2 Results
 The second page’s words.
 2"
+    );
+}
+
+#[test]
+fn reads_what_chrome_prints_and_right_to_left_words_in_reading_order() {
+    let d = text_of("report-chrome.pdf");
+    assert_eq!((d.pages, d.title.as_deref()), (1, Some("Quarterly report")));
+    assert_eq!(
+        d.text,
+        "## Page 1
+Quarterly report — Q3 2026
+Revenue grew 12% to €4.2 million, while costs fell; the “efficient” offices reported fewer late
+shipments.
+Regions
+Region Sales Change
+North 1,200 +5%
+South 980 −2%
+Notes
+Café openings in Zürich and Kraków
+名前 and 東京 in the Japanese report
+Arabic: مرحبا بالعالم
+Hebrew: שלום עולם
+السعر 120 دولار في القاهرة
+שלום, זה 42 ש\"ח
+مرحبا (عالم) جميل
+The word (شكرا) means thanks.
+אני אוהב Python מאוד
+
+The first column has a long paragraph that keeps
+going so that it wraps across several lines, filling
+the column before the text continues in the
+second column.
+
+The second column's paragraph follows, and it
+too has enough words to wrap a few times
+across its width."
     );
 }
 
@@ -224,6 +260,7 @@ fn changed_bytes_never_crash_it() {
         "objects-qpdf.pdf",
         "letter-libreoffice.pdf",
         "paper-latex.pdf",
+        "report-chrome.pdf",
         "edge.pdf",
         "encrypted-rc4.pdf",
         "encrypted-aes256.pdf",
@@ -291,6 +328,37 @@ fn objects_that_lead_back_to_themselves_end() {
     ]);
     let d = read(&data).unwrap();
     assert!(d.text.starts_with("## Page 1\nStill here"), "{}", &d.text[..d.text.len().min(200)]);
+}
+
+#[test]
+fn many_streams_without_their_ends_read_quickly() {
+    // (Each stream's end found once for all: looking for it from each stream to the file's end took minutes.)
+    let mut data = b"%PDF-1.7\n".to_vec();
+    for i in 1..=32_000 {
+        data.extend_from_slice(format!("{i} 0 obj\n<< /X {i} >>\nstream\nxxxxxxxxxxxxxxxx\n").as_bytes());
+    }
+    data.extend_from_slice(b"%%EOF\n");
+    let started = std::time::Instant::now();
+    assert_eq!(read(&data).err(), Some(Error::Damaged));
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    // A page whose contents are many such streams, each read to the next object.
+    let mut objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        Vec::new(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    let mut parts = std::string::String::new();
+    for i in 0..5_000 {
+        objects.push(format!("<< >>\nstream\nBT /F1 9 Tf 72 {} Td (Part {i}) Tj ET\n", 700 - i % 60 * 10).into_bytes());
+        parts += &format!("{} 0 R ", objects.len());
+    }
+    objects[2] = format!("<< /Type /Page /Parent 2 0 R /Contents [{parts}] /Resources << /Font << /F1 4 0 R >> >> >>").into_bytes();
+    let refs: Vec<&[u8]> = objects.iter().map(|o| o.as_slice()).collect();
+    let started = std::time::Instant::now();
+    let d = read(&pdf(&refs)).unwrap();
+    assert!(d.text.starts_with("## Page 1\nPart 0\nPart 1\n") && d.text.contains("Part 4999"), "{}", &d.text[..200]);
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
 }
 
 #[test]

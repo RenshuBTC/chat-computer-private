@@ -36,8 +36,8 @@ pub struct File<'a> {
     decoded: Cell<usize>,
     /// How many objects are being read inside one another now (a file whose objects lead back to themselves stops).
     depth: Cell<u32>,
-    /// Where each "n g obj" is in the file, once looked for.
-    found: RefCell<Option<Rc<BTreeMap<u32, usize>>>>,
+    /// Where each "n g obj" and each "endstream" is in the file, once looked for.
+    found: RefCell<Option<Rc<Found>>>,
     /// An encrypted file's key, if it opens without a password; and which object each stream read is (by where its
     /// data starts), for its key.
     crypt: Option<Crypt>,
@@ -217,7 +217,7 @@ impl<'a> File<'a> {
     fn scan(&mut self) {
         let d = self.data;
         let found = self.found();
-        for (&n, &at) in found.iter() {
+        for (&n, &at) in found.objects.iter() {
             self.entries.insert(n, Entry::At(at));
         }
         // The trailer: the last "trailer" with a /Root.
@@ -300,7 +300,7 @@ impl<'a> File<'a> {
     /// Object `n` where looking through the file finds it, when its cross-reference entry (at `tried`, if it has one)
     /// was wrong or missing.
     fn rescued(&self, n: u32, tried: Option<usize>) -> Option<Obj> {
-        let at = *self.found().get(&n)?;
+        let at = *self.found().objects.get(&n)?;
         if Some(at) == tried {
             return None;
         }
@@ -315,8 +315,8 @@ impl<'a> File<'a> {
         o
     }
 
-    /// Where each "n g obj" is (the last of each number, as the newest), looked for once.
-    fn found(&self) -> Rc<BTreeMap<u32, usize>> {
+    /// Where each "n g obj" and "endstream" is, looked for once.
+    fn found(&self) -> Rc<Found> {
         if let Some(f) = self.found.borrow().as_ref() {
             return f.clone();
         }
@@ -345,7 +345,8 @@ impl<'a> File<'a> {
             return Some((n, g, Obj::Dict(dict)));
         }
         // Its data: after the end of "stream"'s line, as long as /Length says if "endstream" is there, else up to the
-        // next "endstream" (or the file's end: a file cut short).
+        // next "endstream", or the next object, or the file's end (a file cut short). (Where those are is looked for
+        // once, so a file of many such streams is read in the time one is.)
         let mut start = lex.pos;
         if self.data.get(start) == Some(&b'\r') {
             start += 1;
@@ -367,9 +368,13 @@ impl<'a> File<'a> {
                 start + len as usize
             }
             _ => {
-                let rest = &self.data[start.min(self.data.len())..];
-                let mut end = start.min(self.data.len()) + find(rest, b"endstream").unwrap_or(rest.len());
-                while end > start && matches!(self.data[end - 1], b'\r' | b'\n') {
+                let from = start.min(self.data.len());
+                let found = self.found();
+                let after = |list: &[usize], at: usize| list.get(list.partition_point(|&p| p <= at)).copied();
+                let stream_end = after(&found.ends, from.saturating_sub(1)).unwrap_or(self.data.len());
+                let next = after(&found.starts, at).unwrap_or(self.data.len());
+                let mut end = stream_end.min(next).max(from);
+                while end > from && matches!(self.data[end - 1], b'\r' | b'\n') {
                     end -= 1;
                 }
                 end
@@ -479,9 +484,23 @@ impl File<'_> {
     }
 }
 
-/// Where each "n g obj" in `d` starts (the last of each number).
-fn objects_in(d: &[u8]) -> BTreeMap<u32, usize> {
+/// Where a file's objects and its streams' ends are: each "n g obj" (the last of each number, as the newest), every
+/// one's start in order, and every "endstream", in order.
+pub(crate) struct Found {
+    objects: BTreeMap<u32, usize>,
+    starts: Vec<usize>,
+    ends: Vec<usize>,
+}
+
+fn objects_in(d: &[u8]) -> Found {
+    let mut ends = Vec::new();
+    let mut i = 0;
+    while let Some(at) = find(&d[i..], b"endstream") {
+        ends.push(i + at);
+        i += at + 9;
+    }
     let mut out = BTreeMap::new();
+    let mut starts = Vec::new();
     let mut i = 0;
     while let Some(found) = find(&d[i..], b"obj") {
         let at = i + found;
@@ -510,9 +529,10 @@ fn objects_in(d: &[u8]) -> BTreeMap<u32, usize> {
         }
         if ok && (j == 0 || crate::lex::is_white(d[j - 1]) || crate::lex::is_delim(d[j - 1])) && numbers[0] <= u32::MAX as u64 {
             out.insert(numbers[0] as u32, j);
+            starts.push(j);
         }
     }
-    out
+    Found { objects: out, starts, ends }
 }
 
 /// Where "startxref"'s number points (the newest cross-reference section).

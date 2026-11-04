@@ -3,8 +3,9 @@
 //! and TJ's adjustments, each glyph's width, and the graphics' own matrix through cm, q and Q): a string whose baseline
 //! is well above or below the last one's starts a new line; a line's strings are put left to right, with a space
 //! where one ends well before the next starts. A line further below the last than the page's lines usually are, or
-//! above it, starts a new paragraph (after a blank line). Form XObjects' text is read where they're drawn (a few
-//! deep). Pictures are passed over.
+//! above it, starts a new paragraph (after a blank line). Right-to-left words (Hebrew's, Arabic's), drawn as they're
+//! seen, are put in the order they're read. Form XObjects' text is read where they're drawn (a few deep). Pictures
+//! are passed over.
 
 use crate::file::File;
 use crate::font::Font;
@@ -385,7 +386,7 @@ impl<'f, 'a> Reader<'f, 'a> {
         self.line = pieces;
         self.line.clear();
         if !text.trim().is_empty() && self.lines.len() < MOST_LINES {
-            self.lines.push((self.gap, text));
+            self.lines.push((self.gap, in_reading_order(&text)));
         }
     }
 }
@@ -424,6 +425,172 @@ fn push(out: &mut String, t: &str) {
             c => out.push(c),
         }
     }
+}
+
+/// Right-to-left letters (Hebrew's, Arabic's and the like, and their presentation forms), but not Arabic's digits.
+fn rtl(c: char) -> bool {
+    matches!(c as u32, 0x0590..=0x065F | 0x066A..=0x06EF | 0x06FA..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFC)
+}
+
+/// Written left to right even among right-to-left words: other letters, and digits (Arabic's too).
+fn ltr(c: char) -> bool {
+    !rtl(c) && c.is_alphanumeric()
+}
+
+/// A line's text in the order it's read. A PDF draws right-to-left words (Hebrew, Arabic) as they're seen, left to
+/// right: a line that starts (on the left) with a right-to-left letter is read right to left as a whole, its
+/// left-to-right words and numbers kept as they are; in a line that starts left to right, each right-to-left phrase
+/// is turned round, numbers in it kept as they are. Brackets in what's turned round face the other way (a font draws
+/// "(" mirrored among right-to-left words). Then Arabic's presentation forms (letters as they're drawn alone, first,
+/// in the middle or last) as the letters themselves.
+fn in_reading_order(line: &str) -> String {
+    if !line.chars().any(rtl) {
+        return String::from(line);
+    }
+    let mut c: Vec<char> = line.chars().collect();
+    if c.iter().find(|&&x| rtl(x) || ltr(x)).is_some_and(|&x| rtl(x)) {
+        turn(&mut c);
+    } else {
+        let mut i = 0;
+        while i < c.len() {
+            if !rtl(c[i]) {
+                i += 1;
+                continue;
+            }
+            // The phrase: to its last right-to-left letter before a left-to-right one (numbers and spaces in it).
+            let (mut end, mut j) = (i, i + 1);
+            while j < c.len() && !(ltr(c[j]) && !c[j].is_numeric()) {
+                if rtl(c[j]) {
+                    end = j;
+                }
+                j += 1;
+            }
+            turn(&mut c[i..=end]);
+            i = end + 1;
+        }
+    }
+    let mut out = String::with_capacity(line.len());
+    for ch in c {
+        match arabic_letter(ch) {
+            Some(s) => out.push_str(s),
+            None => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Right-to-left text turned round: its brackets the other way, its left-to-right runs (words, numbers and what's
+/// between them) turned back.
+fn turn(c: &mut [char]) {
+    c.reverse();
+    for ch in c.iter_mut() {
+        *ch = match *ch {
+            '(' => ')',
+            ')' => '(',
+            '[' => ']',
+            ']' => '[',
+            '{' => '}',
+            '}' => '{',
+            '<' => '>',
+            '>' => '<',
+            '«' => '»',
+            '»' => '«',
+            x => x,
+        };
+    }
+    let mut i = 0;
+    while i < c.len() {
+        if !ltr(c[i]) {
+            i += 1;
+            continue;
+        }
+        let (mut end, mut j) = (i, i + 1);
+        while j < c.len() && !rtl(c[j]) {
+            if ltr(c[j]) {
+                end = j;
+            }
+            j += 1;
+        }
+        // (Its brackets back as they were, too.)
+        let run = &mut c[i..=end];
+        run.reverse();
+        for ch in run.iter_mut() {
+            *ch = match *ch {
+                '(' => ')',
+                ')' => '(',
+                '[' => ']',
+                ']' => '[',
+                '{' => '}',
+                '}' => '{',
+                '<' => '>',
+                '>' => '<',
+                '«' => '»',
+                '»' => '«',
+                x => x,
+            };
+        }
+        i = end + 1;
+    }
+}
+
+/// Arabic's presentation forms B (Unicode's FE70 to FEFC), each with the letter or marks it's a form of.
+const ARABIC_FORMS: &[(u32, u32, &str)] = &[
+    (0xFE70, 0xFE71, "\u{064B}"),
+    (0xFE72, 0xFE72, "\u{064C}"),
+    (0xFE74, 0xFE74, "\u{064D}"),
+    (0xFE76, 0xFE77, "\u{064E}"),
+    (0xFE78, 0xFE79, "\u{064F}"),
+    (0xFE7A, 0xFE7B, "\u{0650}"),
+    (0xFE7C, 0xFE7D, "\u{0651}"),
+    (0xFE7E, 0xFE7F, "\u{0652}"),
+    (0xFE80, 0xFE80, "\u{0621}"),
+    (0xFE81, 0xFE82, "\u{0622}"),
+    (0xFE83, 0xFE84, "\u{0623}"),
+    (0xFE85, 0xFE86, "\u{0624}"),
+    (0xFE87, 0xFE88, "\u{0625}"),
+    (0xFE89, 0xFE8C, "\u{0626}"),
+    (0xFE8D, 0xFE8E, "\u{0627}"),
+    (0xFE8F, 0xFE92, "\u{0628}"),
+    (0xFE93, 0xFE94, "\u{0629}"),
+    (0xFE95, 0xFE98, "\u{062A}"),
+    (0xFE99, 0xFE9C, "\u{062B}"),
+    (0xFE9D, 0xFEA0, "\u{062C}"),
+    (0xFEA1, 0xFEA4, "\u{062D}"),
+    (0xFEA5, 0xFEA8, "\u{062E}"),
+    (0xFEA9, 0xFEAA, "\u{062F}"),
+    (0xFEAB, 0xFEAC, "\u{0630}"),
+    (0xFEAD, 0xFEAE, "\u{0631}"),
+    (0xFEAF, 0xFEB0, "\u{0632}"),
+    (0xFEB1, 0xFEB4, "\u{0633}"),
+    (0xFEB5, 0xFEB8, "\u{0634}"),
+    (0xFEB9, 0xFEBC, "\u{0635}"),
+    (0xFEBD, 0xFEC0, "\u{0636}"),
+    (0xFEC1, 0xFEC4, "\u{0637}"),
+    (0xFEC5, 0xFEC8, "\u{0638}"),
+    (0xFEC9, 0xFECC, "\u{0639}"),
+    (0xFECD, 0xFED0, "\u{063A}"),
+    (0xFED1, 0xFED4, "\u{0641}"),
+    (0xFED5, 0xFED8, "\u{0642}"),
+    (0xFED9, 0xFEDC, "\u{0643}"),
+    (0xFEDD, 0xFEE0, "\u{0644}"),
+    (0xFEE1, 0xFEE4, "\u{0645}"),
+    (0xFEE5, 0xFEE8, "\u{0646}"),
+    (0xFEE9, 0xFEEC, "\u{0647}"),
+    (0xFEED, 0xFEEE, "\u{0648}"),
+    (0xFEEF, 0xFEF0, "\u{0649}"),
+    (0xFEF1, 0xFEF4, "\u{064A}"),
+    (0xFEF5, 0xFEF6, "\u{0644}\u{0622}"),
+    (0xFEF7, 0xFEF8, "\u{0644}\u{0623}"),
+    (0xFEF9, 0xFEFA, "\u{0644}\u{0625}"),
+    (0xFEFB, 0xFEFC, "\u{0644}\u{0627}"),
+];
+
+fn arabic_letter(c: char) -> Option<&'static str> {
+    let c = c as u32;
+    if !(0xFE70..=0xFEFC).contains(&c) {
+        return None;
+    }
+    ARABIC_FORMS.iter().find(|&&(lo, hi, _)| lo <= c && c <= hi).map(|f| f.2)
 }
 
 /// √x, near enough (core has no square root): Newton's method from a guess halving the exponent.

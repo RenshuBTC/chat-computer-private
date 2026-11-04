@@ -381,10 +381,11 @@ drivers.
   encodings and /Differences' glyph names, composite fonts' code spaces, Type 3 fonts) and their widths; a page's
   content streams (and the forms they draw) followed through their text and graphics matrices, so a line's pieces
   are put left to right, words spaced where there's room between them, lines and paragraphs where the text moves
-  down. Encrypted files that open without a password are decrypted (RC4 and AES, revisions 2 to 6, with its own MD5).
-  Everything is held to a most: sizes, depths, how much work a page or a file takes. Tested against PDFs made by
-  ReportLab, LibreOffice, pdfTeX and qpdf (seven kinds of encryption), and by hand with what programs write less
-  often (`pdf/tests/make.py`), damaged ones and tens of thousands with bytes changed at random, which never crash it.
+  down, and right-to-left words (Hebrew's, Arabic's) in the order they're read. Encrypted files that open without a
+  password are decrypted (RC4 and AES, revisions 2 to 6, with its own MD5). Everything is held to a most: sizes,
+  depths, how much work a page or a file takes. Tested against PDFs made by ReportLab, LibreOffice, pdfTeX, Chrome
+  and qpdf (seven kinds of encryption), and by hand with what programs write less often (`pdf/tests/make.py`),
+  damaged ones and tens of thousands with bytes changed at random, which never crash it.
 * `picture/` decodes pictures for the screen: JPEG (baseline and progressive, any sampling, restart markers,
   Adobe's CMYK, EXIF's orientation) as libjpeg decodes it (its accurate integer inverse DCT, its "fancy" upsampling,
   its YCbCr arithmetic), a big one at a half, a quarter or an eighth of its size when that's enough, so a phone's

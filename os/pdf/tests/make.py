@@ -5,6 +5,9 @@
   a table, a list, Latin-1's letters, curly quotes and the euro sign in the standard fonts (WinAnsi), a title.
 - letter-libreoffice.pdf: the office crate's letter (office/tests/letter.docx) as LibreOffice exports it: TrueType
   subsets with ToUnicode CMaps, composite fonts for Chinese and an emoji, glyphs placed with TJ.
+- report-chrome.pdf: a web page as Chrome prints it (Skia's PDF): composite TrueType fonts, a table, two columns,
+  Chinese and Japanese, and Arabic and Hebrew (right to left, drawn as they're seen: Arabic's letters as their
+  presentation forms) among English, with numbers, brackets and an English word in them.
 - paper-latex.pdf: pdfTeX's: Computer Modern Type 1 fonts with only their own built-in encoding (OT1: ligatures at
   codes below 32, no ToUnicode), a paragraph in Helvetica with LaTeX's T1 encoding (/Differences), maths, a
   footnote, two pages.
@@ -23,7 +26,7 @@
 - picture.pdf: one page, only a picture (as a scanner's would be).
 - cut.pdf: a file cut short half way through its page's (compressed) contents, as a download that stopped would be.
 
-    python3 tests/make.py      (needs ReportLab, LibreOffice's soffice, pdflatex and qpdf)
+    python3 tests/make.py      (needs ReportLab, LibreOffice's soffice, pdflatex, qpdf, and Playwright's Chromium)
 """
 from __future__ import annotations
 
@@ -107,6 +110,35 @@ waffle.\footnote{A footnote, at the foot of the page.} Mathematics: $E = mc^2$ a
 The second page's words.
 \end{document}
 """
+
+
+REPORT = """<!doctype html><html><head><meta charset="utf-8"><title>Quarterly report</title>
+<style>body{font-family:serif;margin:2cm} .cols{column-count:2} table{border-collapse:collapse} td,th{border:1px solid #888;padding:4px}</style></head>
+<body><h1>Quarterly report — Q3 2026</h1>
+<p>Revenue grew <b>12%</b> to €4.2 million, while costs fell; the “efficient” offices reported fewer late shipments.</p>
+<h2>Regions</h2>
+<table><tr><th>Region</th><th>Sales</th><th>Change</th></tr><tr><td>North</td><td>1,200</td><td>+5%</td></tr><tr><td>South</td><td>980</td><td>−2%</td></tr></table>
+<h2>Notes</h2>
+<ul><li>Café openings in Zürich and Kraków</li><li>名前 and 東京 in the Japanese report</li><li>Arabic: مرحبا بالعالم</li><li>Hebrew: שלום עולם</li></ul><p dir="rtl">السعر 120 دولار في القاهرة</p><p dir="rtl">שלום, זה 42 ש"ח</p><p dir="rtl">مرحبا (عالم) جميل</p><p>The word (شكرا) means thanks.</p><p dir="rtl">אני אוהב Python מאוד</p><ul></ul>
+<div class="cols"><p>The first column has a long paragraph that keeps going so that it wraps across several lines, filling the column before the text continues in the second column.</p><p>The second column's paragraph follows, and it too has enough words to wrap a few times across its width.</p></div>
+</body></html>
+"""
+
+PRINT = """const { chromium } = require('playwright');
+(async () => {
+  const b = await chromium.launch();
+  const p = await b.newPage();
+  await p.goto('file://' + process.argv[2]);
+  await p.pdf({ path: process.argv[3], format: 'A4' });
+  await b.close();
+})();
+"""
+
+
+def chrome_report(path: Path, scratch: Path) -> None:
+    (scratch / "report.html").write_text(REPORT, encoding="utf-8")
+    (scratch / "print.js").write_text(PRINT)
+    subprocess.run(["node", str(scratch / "print.js"), str(scratch / "report.html"), str(path)], check=True)
 
 
 def latex_paper(path: Path, scratch: Path) -> None:
@@ -339,6 +371,7 @@ def main() -> None:
         reportlab_letter(HERE / "letter-reportlab.pdf")
         libreoffice_letter(HERE / "letter-libreoffice.pdf", scratch)
         latex_paper(HERE / "paper-latex.pdf", scratch)
+        chrome_report(HERE / "report-chrome.pdf", scratch)
     letter = str(HERE / "letter-reportlab.pdf")
     qpdf(["--object-streams=generate", "--compress-streams=y", letter, str(HERE / "objects-qpdf.pdf")])
     qpdf(["--allow-weak-crypto", "--encrypt", "", "owner", "40", "--", letter, str(HERE / "encrypted-rc4-40.pdf")])

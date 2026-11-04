@@ -91,6 +91,7 @@ pub fn status() -> String {
     lines.push(crate::files::status());
     lines.push(crate::keep::status());
     lines.push(crate::assistant::status());
+    lines.push(crate::listening::status());
     lines.push(String::from(
         "Not yet in Chat Computer's own system: showing websites (it searches the web and reads pages' words), \
          changing files (it reads Windows' drives and USB drives, and writes only its own memory and log files), seeing \

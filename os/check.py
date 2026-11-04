@@ -2428,6 +2428,127 @@ def sound(args) -> list[str]:
     return problems
 
 
+TINY_LISTENING = HERE.parent / "tests/data/tiny-listening-model.ccm"
+
+
+def listen_check(args) -> list[str]:
+    """Chat Computer's own speech recognition, in a virtual PC: a test build, with a small speech recognition model of
+    random weights (tests/data/tiny-listening-model.ccm) where Chat Computer's app keeps its speech models on Windows
+    (its models folder's speech folder, here on a second drive's FAT32 volume), its microphone (QEMU's HD Audio
+    microphone, fed from a file by QEMU's SDL audio) hearing a voice-like hum (harmonics of a pitch rising and falling)
+    for 2.5 seconds every 6. Windows+H is pressed: it must listen, wait for the voice to begin and end, hear it, and say
+    whether it sent it. What it heard (its samples, which the test build logs) must be heard the same by the engine on
+    Linux (examples/listen_check, with the arithmetic the kernel used): the same tokens, and the same chance of no
+    speech and log-likelihood to the last digit; and sent or not by the same rules (Chat Computer's app's)."""
+    import base64
+    import math
+    import re
+    import struct
+    import wave
+
+    build("listening")
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="cc-listen-"))
+    rate = 48000
+    try:
+        models = "Users/Test/AppData/Local/ai.chatcomputer.desktop/models"
+        volume = fat_volume(tmp, "DATA", 64, 32, 1, {f"{models}/speech/whisper-test.ccm": TINY_LISTENING.read_bytes()})
+        gpt_disk(tmp / "data.img", volume)
+        # Four minutes of it: 3.5 s quiet (a little hiss), then the hum for 2.5 s; SDL reads the file as time goes by.
+        frames = []
+        phase = 0.0
+        seed = 12345
+        for i in range(rate * 240):
+            t = (i % (rate * 6)) / rate
+            seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+            v = 30 * (seed / 0x7FFFFFFF - 0.5)
+            if t >= 3.5:
+                pitch = 140 + 40 * math.sin(2 * math.pi * 0.7 * t)
+                phase += 2 * math.pi * pitch / rate
+                hum = sum(math.sin(phase * k) / k for k in range(1, 6))
+                v += 5000 * hum * (0.6 + 0.4 * math.sin(2 * math.pi * 2 * t))
+            s16 = max(-32768, min(32767, int(round(v))))
+            frames.append(struct.pack("<hh", s16, s16))
+        said = tmp / "said.raw"
+        said.write_bytes(b"".join(frames))
+        env = {"SDL_AUDIODRIVER": "disk", "SDL_DISKAUDIOFILEIN": str(said), "SDL_DISKAUDIOFILE": str(tmp / "played.raw")}
+        extra = ("-drive", f"if=none,id=d1,format=raw,file={tmp / 'data.img'}", "-device", "nvme,serial=ccdata1,drive=d1",
+                 "-audiodev", f"sdl,id=snd0,in.frequency={rate},in.channels=2,in.format=s16,out.frequency={rate}",
+                 "-device", "intel-hda,id=hda0", "-device", "hda-micro,audiodev=snd0,bus=hda0.0")
+        settings = SETTINGS_HEAD + "clock-offset-minutes = 0\r\n"
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings, env=env)
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            time.sleep(1)
+            pc.settled_picture("listen-ready")
+            monitor_many(pc.mon, ["sendkey meta_l-h"])
+            if wait_for(pc.log, ("listening: to ", "can't listen", "stopped"), args.timeout) != "listening: to ":
+                problems.append("it didn't start listening when Windows+H was pressed")
+            else:
+                time.sleep(0.5)
+                pc.settled_picture("listen-listening")
+                if wait_for(pc.log, ("hearing it", "didn't hear", "stopped"), 60) != "hearing it":
+                    problems.append("it didn't hear the voice begin and end")
+                elif wait_for(pc.log, ("test: sent", "test: not sent", "stopped"), args.timeout) is None:
+                    problems.append("it didn't finish hearing what was said")
+                pc.settled_picture("listen-heard")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print("\n".join(line for line in text.splitlines() if "test: said" not in line))
+        problems += stack_problems(text)
+        samples = re.search(r"test: said (\d+) samples: ([A-Za-z0-9+/=]+)", text)
+        heard = re.search(r"listening: heard (\d+) tokens in [\d.]+ s \(([\d.]+) s said\): (\{.*\})", text)
+        ready = re.search(r"listening: whisper-test ready \(.*\), its arithmetic (.+)", text)
+        sent = re.search(r"test: (sent as the message|not sent: no words)", text)
+        if not samples or not heard or not ready or not sent:
+            return problems + ["the log doesn't say what was heard, with what, and what came of it"]
+        pcm = base64.b64decode(samples[2])
+        n = int(samples[1])
+        if len(pcm) != 2 * n:
+            problems.append(f"{len(pcm)} bytes of samples logged, not {2 * n}")
+        seconds = n / 16000
+        # (The hum is 2.5 s, with 0.3 s kept before it and after: about 3.1 s, give or take a frame or two.)
+        if not 2.6 <= seconds <= 3.6:
+            problems.append(f"it heard {seconds:.2f} s said, not about 3.1")
+        wav = tmp / "said.wav"
+        with wave.open(str(wav), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(pcm)
+        kernel = json.loads(heard[3])
+        engine = subprocess.run(["cargo", "run", "-q", "--release", "-p", "model", "--features", "std", "--example",
+                                 "listen_check", "--", str(TINY_LISTENING), str(wav), "--level", LEVELS.get(ready[1], "plain")],
+                                cwd=HERE, capture_output=True, text=True)
+        try:
+            linux = json.loads(engine.stdout)
+        except ValueError:
+            return problems + [f"the engine on Linux didn't say what it heard: {engine.stderr[-1500:]}"]
+        same = [k for k in ("tokens", "no_speech", "avg_logprob") if kernel[k] != linux[k]]
+        if same:
+            problems.append(f"the kernel heard {kernel}, the engine on Linux {dict((k, linux[k]) for k in kernel)}"[:2000])
+        else:
+            print(f"The kernel heard what the engine on Linux hears: {len(kernel['tokens'])} tokens, no speech "
+                  f"{kernel['no_speech']}, log-likelihood {kernel['avg_logprob']}, with {ready[1]} arithmetic.")
+        # Sent or not, by Chat Computer's app's rules.
+        words = linux["text"].strip().lower()
+        made_up = {"thank you", "thank you.", "thanks for watching", "thanks for watching!", "thank you for watching", "you",
+                   "bye", "bye.", "bye-bye", "okay.", "so", "uh", "um", "hmm", "mm", "the end", ".", "...",
+                   "subtitles by the amara.org community", "please subscribe", "like and subscribe", "i'm sorry"}
+        noise = (not words or not re.search(r"\w", words)
+                 or (words in made_up and (linux["no_speech"] > 0.3 or seconds < 1.2 or linux["avg_logprob"] < -0.7))
+                 or (linux["no_speech"] > 0.75 and linux["avg_logprob"] < -0.8))
+        if (sent[1] == "sent as the message") == noise:
+            problems.append(f"it {sent[1]!r}, but by Chat Computer's app's rules that's {'noise' if noise else 'words'}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
 def microphone(args) -> list[str]:
     """What the microphone hears: a test build listens for 2.5 seconds once it's ready, on each HD Audio controller
     and codec QEMU has that has an input, which is fed a tone of its own (its frequency and its loudness), from a
@@ -2578,6 +2699,7 @@ def main() -> int:
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
     ap.add_argument("--microphone", action="store_true", help="what QEMU's HD Audio inputs hear, fed a tone")
+    ap.add_argument("--listen", action="store_true", help="speech recognition: Windows+H, a voice heard, the same as the engine on Linux")
     ap.add_argument("--files", action="store_true", help="Windows' drive (NTFS) read by the model's file tools")
     ap.add_argument("--bitlocker", action="store_true", help="Windows' drive encrypted with BitLocker, unlocked")
     ap.add_argument("--drives", action="store_true", help="the PC's other drives (NVMe and SATA) read, by Windows' letters")
@@ -2608,6 +2730,8 @@ def main() -> int:
         problems = sound(args)
     elif args.microphone:
         problems = microphone(args)
+    elif args.listen:
+        problems = listen_check(args)
     elif args.files:
         problems = files_check(args)
     elif args.bitlocker:

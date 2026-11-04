@@ -1648,6 +1648,17 @@ const APP_MODELS: [&str; 4] = ["AppData", "Local", "ai.chatcomputer.desktop", "m
 /// MODEL.ccm, for each person, on Windows' drive and any other with people's folders): their paths and sizes. Where
 /// the own system looks for a model when its settings name none. Err: why no drive can be read.
 pub fn app_models() -> Result<Vec<(String, u64)>, String> {
+    app_files(&[])
+}
+
+/// The speech models Chat Computer's app has got ready beside them (the models folder's speech folder: speech
+/// recognition's, whisper-small.en.ccm, say): their paths and sizes.
+pub fn app_speech_models() -> Result<Vec<(String, u64)>, String> {
+    app_files(&["speech"])
+}
+
+/// The model files in each person's folder for Chat Computer's app (in `sub`, under its models folder).
+fn app_files(sub: &[&str]) -> Result<Vec<(String, u64)>, String> {
     // Windows' drive first.
     let mut letters: Vec<(bool, char)> = VOLUMES
         .lock()
@@ -1662,15 +1673,15 @@ pub fn app_models() -> Result<Vec<(String, u64)>, String> {
     letters.sort();
     let mut out = Vec::new();
     for (_, letter) in letters {
-        if let Ok(found) = with(letter, |fs, p| models_on(fs, p, letter)) {
+        if let Ok(found) = with(letter, |fs, p| models_on(fs, p, letter, sub)) {
             out.extend(found);
         }
     }
     Ok(out)
 }
 
-/// The models in each person's folder for Chat Computer's app on one volume.
-fn models_on(fs: &Fs, p: &mut Partition, letter: char) -> Vec<(String, u64)> {
+/// The models in each person's folder for Chat Computer's app on one volume (in `sub`, under its models folder).
+fn models_on(fs: &Fs, p: &mut Partition, letter: char, sub: &[&str]) -> Vec<(String, u64)> {
     let mut out = Vec::new();
     let root = fs.root();
     let Ok(users) = fs.child(p, &root, "Users") else { return out };
@@ -1681,7 +1692,7 @@ fn models_on(fs: &Fs, p: &mut Partition, letter: char) -> Vec<(String, u64)> {
     for person in people.iter().filter(|e| e.folder && !e.link) {
         let mut at = person.clone();
         let mut names = Vec::new();
-        for part in APP_MODELS {
+        for part in APP_MODELS.iter().chain(sub) {
             match fs.child(p, &at, part) {
                 Ok(e) if e.folder && !e.link => {
                     names.push(e.name.clone());
@@ -1690,7 +1701,7 @@ fn models_on(fs: &Fs, p: &mut Partition, letter: char) -> Vec<(String, u64)> {
                 _ => break,
             }
         }
-        if names.len() < APP_MODELS.len() {
+        if names.len() < APP_MODELS.len() + sub.len() {
             continue;
         }
         let Ok(files) = fs.list(p, &at) else { continue };

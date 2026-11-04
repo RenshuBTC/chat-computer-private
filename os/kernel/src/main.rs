@@ -31,6 +31,7 @@ mod journal;
 mod keep;
 mod keyboard;
 mod layout;
+mod listening;
 mod memory;
 mod mouse;
 mod netcard;
@@ -247,6 +248,7 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
     log!("Chat Computer kernel: {}", files::init());
     next("Chat Computer's model");
     assistant::init(settings.model);
+    listening::init();
     chat::restore(&assistant::conversation());
     log!("Chat Computer: ready");
     journal::save();
@@ -278,12 +280,15 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
     log_stack(&mut stack_shown);
     loop {
         // (While the model works, the loop goes straight on: its steps are short, and the rest has its turn between.)
-        if !assistant::working() {
+        if !assistant::working() && !listening::working() {
             cpu::wait_for_interrupt();
         }
         network::work();
         for event in assistant::work() {
             chat::answer(event);
+        }
+        for heard in listening::work() {
+            chat::heard(heard);
         }
         assistant::keep();
         usb::work();

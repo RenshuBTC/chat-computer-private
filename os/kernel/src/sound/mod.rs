@@ -1,8 +1,8 @@
 //! Sound: the PC's sound controller (HD Audio: `hda.rs`), and what Chat Computer plays on it, the chimes of its timers
 //! and reminders (made by the `chime` crate, the main Chat Computer's). Each chime is made the first time it rings and
 //! kept for the next. While a USB sound card is plugged in (a headset, speakers: `usb/audio.rs`), the chimes play on
-//! it instead, as a computer switches to one. And what it hears: its microphone (or line in), recorded as it comes, for Chat Computer's own
-//! speech recognition to come (the roadmap's next step).
+//! it instead, as a computer switches to one. And what it hears: its microphone (or line in), recorded as it comes, for Chat
+//! Computer's own speech recognition (listening.rs).
 
 pub mod hda;
 
@@ -151,6 +151,11 @@ pub fn listen() -> Result<String, String> {
         Some(sp) => sp.hda.listen(),
         None => Err(String::from("there's no sound")),
     }
+}
+
+/// Whether there's a microphone (or line in) to listen to.
+pub fn has_input() -> bool {
+    SOUND.lock().as_ref().is_some_and(|sp| sp.hda.has_input())
 }
 
 /// What's been heard since last asked (48 kHz, 16 bits, one channel), appended to `out`.

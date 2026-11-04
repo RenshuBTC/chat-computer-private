@@ -600,7 +600,13 @@ impl Chat {
         canvas.round_rect(Rect::new(b.card.x + hair, b.card.y + hair, b.card.w - 2 * hair, b.card.h - 2 * hair), m.px(1.0) - hair, PAPER);
         let caret_w = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
         if self.typed.is_empty() {
-            let hint = if assistant::busy() { "Esc stops the answer" } else { "Type anything" };
+            let hint = match crate::listening::state() {
+                Some(false) => "Listening\u{2026} say it, then pause (Esc stops)",
+                Some(true) => "Hearing what you said\u{2026}",
+                None if assistant::busy() => "Esc stops the answer",
+                None if crate::listening::can() => "Type anything, or press Windows+H to talk",
+                None => "Type anything",
+            };
             let ink = self.ty.ink(hint, m.body, 0);
             canvas.ink(b.text_x - ink.left as i32, b.text_y, &ink, DIM);
         }
@@ -787,6 +793,47 @@ impl Chat {
             _ => return,
         }
         self.lay_out_box();
+        let area = self.box_area();
+        self.dirty = self.dirty.union(&area);
+    }
+
+    /// The talk key: listening starts (or, while it records, what was said so far is heard).
+    fn talk(&mut self) {
+        if let Err(why) = crate::listening::talk() {
+            self.blocks.push(Block::new(Kind::Note, Live::No, why));
+            self.relayout = true;
+        }
+        self.box_changed();
+    }
+
+    /// What came of listening: the words said are sent as if typed.
+    fn heard(&mut self, h: crate::listening::Heard) {
+        use crate::listening::Heard;
+        match h {
+            Heard::Listening | Heard::Hearing => self.box_changed(),
+            Heard::Words(words) => {
+                if self.asking.is_some() {
+                    // (An answer is still coming: the words wait in the box, to be sent with Enter.)
+                    self.typed = words;
+                    self.cursor = self.typed.len();
+                    self.lay_out_box();
+                    self.box_changed();
+                } else {
+                    self.typed = words;
+                    self.cursor = self.typed.len();
+                    self.send();
+                }
+            }
+            Heard::Nothing(why) => {
+                self.blocks.push(Block::new(Kind::Note, Live::No, why));
+                self.relayout = true;
+                self.box_changed();
+            }
+        }
+    }
+
+    /// The message box needs drawing again (its hint changed).
+    fn box_changed(&mut self) {
         let area = self.box_area();
         self.dirty = self.dirty.union(&area);
     }
@@ -1083,7 +1130,32 @@ pub fn wheel(notches: i32) {
 /// A key was typed.
 pub fn typed(p: Press) {
     if let Some(c) = CHAT.lock().as_mut() {
-        c.edit(p);
+        if talk_key(p) {
+            c.talk();
+        } else if matches!(p.key, Key::Escape) && crate::listening::state().is_some() {
+            crate::listening::cancel();
+            c.box_changed();
+        } else {
+            c.edit(p);
+        }
+    }
+}
+
+/// The talk key: Windows+H, as Windows' own voice typing has it, or Ctrl+Space.
+fn talk_key(p: Press) -> bool {
+    match p.key {
+        Key::Char('h' | 'H') => p.logo && !p.ctrl && !p.alt,
+        Key::Char(' ') => p.ctrl && !p.alt && !p.logo,
+        _ => false,
+    }
+}
+
+/// What came of listening.
+pub fn heard(h: crate::listening::Heard) {
+    if let Some(c) = CHAT.lock().as_mut()
+        && !c.stopped
+    {
+        c.heard(h);
     }
 }
 

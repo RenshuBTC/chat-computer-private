@@ -1347,7 +1347,7 @@ fn suited_to(n: usize, took_ms: u64, most: usize) -> usize {
 }
 
 /// The arithmetic the engine uses on this processor (model::cpu): "AVX2", say.
-fn level_name() -> &'static str {
+pub fn level_name() -> &'static str {
     match model::cpu::level() {
         Level::Plain => "plain",
         Level::Avx2 => "AVX2",

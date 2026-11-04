@@ -2,7 +2,7 @@
 //! (tools/refcheck/whisper_reference.py):
 //!
 //!     cargo run --release -p model --features std --example listen_check -- MODEL.ccm SOUND.wav [--dump PREFIX]
-//!         [--language CODE] [--step N]
+//!         [--language CODE] [--step N] [--level plain|avx2|avx-vnni|avx-512-vnni]
 //!
 //! Says (JSON) the tokens, the words, the chance it heard no speech and the mean log-likelihood. --dump: also
 //! writes the features (PREFIX.mel.f32) and the encoder's output (PREFIX.enc.f32), as the reference does. --step:
@@ -18,6 +18,15 @@ fn main() {
         eprintln!("listen_check MODEL.ccm SOUND.wav [--dump PREFIX] [--language CODE] [--step N]");
         std::process::exit(2);
     };
+    // (The arithmetic the own system's kernel used, to compare with it.)
+    if let Some(level) = option("--level") {
+        model::cpu::at_most(match level.as_str() {
+            "plain" => model::cpu::Level::Plain,
+            "avx2" => model::cpu::Level::Avx2,
+            "avx-vnni" => model::cpu::Level::AvxVnni,
+            _ => model::cpu::Level::Avx512Vnni,
+        });
+    }
     let bytes = std::fs::read(path).expect("the model's file");
     let file = model::File::open(&bytes).expect("a model file");
     let w = Whisper::load(&file).expect("a speech recognition model");

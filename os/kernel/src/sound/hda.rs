@@ -632,6 +632,11 @@ impl Hda {
 
     /// What it plays on and hears from, for people: "Realtek ALC897: speakers, headphones; hears a built-in
     /// microphone, a microphone jack".
+    /// Whether it has something to listen to (a microphone or a line in), and an input stream to record it with.
+    pub fn has_input(&self) -> bool {
+        self.in_stream != 0 && !self.inputs.is_empty()
+    }
+
     pub fn describe(&self) -> String {
         let mut kinds: Vec<&str> = Vec::new();
         for o in &self.outputs {

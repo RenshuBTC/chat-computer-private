@@ -13,7 +13,8 @@
 //!
 //! Pictures in a request are each given a slot (by their mark: the same picture, the same slot), their rows read as
 //! tokens PICTURE | slot << 16 | row, so a request is the same as an earlier one as far as its pictures are too. A
-//! picture's rows are made (the vision part) when the reading gets to them, and kept for the most recent pictures.
+//! picture's rows are made (the vision part) when the reading gets to them, and kept for the most recent pictures; a
+//! picture no request has any more (its conversation over, or its oldest part left out) is let go.
 
 use crate::chat::{self, Answer, Message, Options, Picture, Problem, Reply, Said as Saying, Style};
 use crate::json::Json;
@@ -32,10 +33,11 @@ const ANSWERS: usize = 64;
 pub const MOST_ROWS: usize = 1024;
 const PICTURES_KEPT: usize = 16;
 
-/// A picture the session has been shown: the picture, the most rows it's read at, its grid of rows, and its rows
+/// A picture the session has been shown: the picture (until no request has it but this: then it's let go, and the
+/// same picture given again later gets a slot of its own), the most rows it's read at, its grid of rows, and its rows
 /// once they're made.
 struct Seen {
-    picture: Arc<Picture>,
+    picture: Option<Arc<Picture>>,
     most: usize,
     gh: usize,
     gw: usize,
@@ -201,6 +203,13 @@ impl<'m> Session<'m> {
         if self.model.vision.is_none() && p.parts.iter().any(|part| matches!(part, chat::Part::Picture(_))) {
             return Err(Problem::Blind);
         }
+        // (The pictures no request has any more but this one, let go: their pixels and their rows.)
+        for s in self.pictures.iter_mut() {
+            if s.picture.as_ref().is_some_and(|p| Arc::strong_count(p) == 1) {
+                s.picture = None;
+                s.rows = None;
+            }
+        }
         let mut tokens = Vec::new();
         let (model, most) = (self.model, self.most_rows);
         let pictures = &mut self.pictures;
@@ -210,7 +219,8 @@ impl<'m> Session<'m> {
                 blind = true;
                 return Err("blind");
             };
-            let slot = match pictures.iter().position(|s| s.picture.mark == pic.mark && s.most == most && *s.picture == **pic) {
+            let same = |s: &Seen| s.most == most && s.picture.as_ref().is_some_and(|p| p.mark == pic.mark && **p == **pic);
+            let slot = match pictures.iter().position(same) {
                 Some(slot) => slot,
                 None => {
                     if pictures.len() >= 0x7FFF {
@@ -218,7 +228,7 @@ impl<'m> Session<'m> {
                     }
                     let (h, w) = vision.size_for(pic.height, pic.width, most);
                     let (gh, gw) = vision.rows_for(h, w);
-                    pictures.push(Seen { picture: pic.clone(), most, gh, gw, rows: None });
+                    pictures.push(Seen { picture: Some(pic.clone()), most, gh, gw, rows: None });
                     pictures.len() - 1
                 }
             };
@@ -241,10 +251,11 @@ impl<'m> Session<'m> {
         slots.dedup();
         for slot in slots {
             let Some(s) = self.pictures.get_mut(slot as usize) else { continue };
+            let Some(picture) = &s.picture else { continue };
             if s.rows.is_some() {
                 continue;
             }
-            let sized = vision.prepare(&s.picture.rgb, s.picture.width, s.picture.height, s.most);
+            let sized = vision.prepare(&picture.rgb, picture.width, picture.height, s.most);
             let patches = vision.patches(&sized);
             let p = vision.settings.patch;
             s.rows = Some(vision.encode(&patches, sized.height / p, sized.width / p, pool));
@@ -268,11 +279,14 @@ impl<'m> Session<'m> {
     fn see_a_step(&mut self, tokens: &[u32], pool: &dyn Pool) -> Option<(usize, usize)> {
         let vision = self.model.vision.as_ref()?;
         let slot = tokens.iter().find_map(|&t| {
-            net::picture_of(t).map(|(s, _)| s).filter(|&s| self.pictures.get(s as usize).is_some_and(|p| p.rows.is_none()))
+            net::picture_of(t)
+                .map(|(s, _)| s)
+                .filter(|&s| self.pictures.get(s as usize).is_some_and(|p| p.rows.is_none() && p.picture.is_some()))
         })?;
         if !matches!(&self.encoding, Some((s, _)) if *s == slot) {
             let p = &self.pictures[slot as usize];
-            let sized = vision.prepare(&p.picture.rgb, p.picture.width, p.picture.height, p.most);
+            let picture = p.picture.as_ref()?;
+            let sized = vision.prepare(&picture.rgb, picture.width, picture.height, p.most);
             let patches = vision.patches(&sized);
             let ps = vision.settings.patch;
             let e = vision.begin(patches, sized.height / ps, sized.width / ps);
@@ -583,6 +597,11 @@ impl<'m> Session<'m> {
     /// The scores after the last token read.
     pub fn scores(&self) -> &[f32] {
         &self.logits
+    }
+
+    /// How many pictures' pixels it holds: those a request it was given still has.
+    pub fn pictures_held(&self) -> usize {
+        self.pictures.iter().filter(|s| s.picture.is_some()).count()
     }
 
     /// Forgets everything read.

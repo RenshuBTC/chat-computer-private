@@ -345,9 +345,11 @@ fn a_session_reuses_what_it_read_only_for_the_same_picture() {
     msgs.push(Message::User("And?".into()));
     let (a2, st2) = ask(&mut s, &msgs);
     assert!(st2.read < st2.prompt - st1.prompt, "{} of {}", st2.read, st2.prompt);
-    let mut fresh = Session::new(&m, Style::QWEN35);
-    let (f2, _) = ask(&mut fresh, &msgs);
-    assert_eq!(a2, f2);
+    {
+        let mut fresh = Session::new(&m, Style::QWEN35);
+        let (f2, _) = ask(&mut fresh, &msgs);
+        assert_eq!(a2, f2);
+    }
     // Another picture in the first message's place: read again from it, and answered as a new session answers.
     let msgs2 = vec![Message::System("Look.".into()), with(6, "What is it?")];
     let (b1, sb) = ask(&mut s, &msgs2);
@@ -355,6 +357,11 @@ fn a_session_reuses_what_it_read_only_for_the_same_picture() {
     let mut fresh = Session::new(&m, Style::QWEN35);
     let (fb, _) = ask(&mut fresh, &msgs2);
     assert_eq!(b1, fb);
+    // The first picture, which no request has any more, let go; the second kept while its request has it.
+    assert_eq!(s.pictures_held(), 2);
+    drop(msgs);
+    let _ = ask(&mut s, &msgs2);
+    assert_eq!(s.pictures_held(), 1);
     // A model without a vision part says it can't see.
     let blind_bytes = tiny(true);
     let blind_file = File::open(&blind_bytes).unwrap();

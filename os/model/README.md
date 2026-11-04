@@ -52,7 +52,7 @@ Qwen3.5-0.8B is the one the checks use.
   going on meanwhile. Each picture is given a slot by its pixels, its rows read as tokens of that slot, so a request
   is the same as an earlier one as far as its pictures are too; a picture's rows are made when the reading reaches
   them (a part of the vision part's work a step, for as many patches as the caller says), and kept for the 16 most
-  recent.
+  recent; a picture no request has any more is let go, its pixels and rows.
 - `convert.rs` and the program's `convert` command: the model's file from Qwen's published files (config.json,
   tokenizer.json, the chat template, the safetensors weights), a weight at a time; the vision part in 8 bits a
   weight (or 16) even when the language model is in 4, but its patch embedding always in 16 (below), with how
@@ -148,7 +148,7 @@ a direction taken out is in nothing the model thinks with, at any layer (and wit
 refusal search runs through, the same each time; its file reads back only for its model. With a small vision part
 (`tiny_seeing`): a picture's rows read at once give the scores of reading them one at a time, another picture other
 scores; the template writes pictures as Qwen's does (checked against it); a session reuses what it read only as far
-as the same picture, answering as a new session does; a picture seen a step at a time answers as all at once, and
+as the same picture, answering as a new session does, and lets go of a picture no request has any more; a picture seen a step at a time answers as all at once, and
 its rows are the same however many patches a step takes (1, 3, 7 or 64); a model without a vision part says it can't
 see; pictures are sized as Qwen's processor sizes them.
 

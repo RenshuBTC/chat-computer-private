@@ -44,6 +44,9 @@ WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$
 # dim it" asks for the dimming too): the display tool answers that there's none, whichever action the model chose.
 DARK_OR_LIGHT_MODE = re.compile(r"\b(dark|light)[ -]?(mode|theme)\b", re.I)
 SCREEN_WORDS = re.compile(r"bright|\bdim|darker|lighter|night ?light|warm", re.I)
+# Folders emptied when the computer restarts, or now and then: the person's files are never moved into them. (Not
+# /run: Fedora puts USB drives in /run/media.)
+TEMPORARY = re.compile(r"^/(tmp|var/tmp|dev/shm)(/|$)")
 
 
 @dataclass
@@ -530,6 +533,11 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
             if _in_the_way(src, dst, copy):
                 out.append(f"not {'copied' if copy else 'moved'}: there's already {'a folder' if os.path.isdir(dst) else 'a file'} "
                            f"at {dst}. Choose another name or place.")
+                continue
+            if not copy and TEMPORARY.match(os.path.realpath(dst)) and not TEMPORARY.match(os.path.realpath(src)):
+                # (evals/os: asked what's on a USB stick, a small model moved its photos and files into /tmp.)
+                out.append(f"not moved: {os.path.dirname(dst) or dst} is a temporary folder, emptied when the computer "
+                           f"restarts, so {os.path.basename(src.rstrip('/'))} would be lost there. Leave it where it is.")
                 continue
             os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
             backup = ctx.journal.backup(dst) if os.path.isfile(dst) else None
@@ -1323,9 +1331,11 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
                 act != "status" and DARK_OR_LIGHT_MODE.search(said) and not SCREEN_WORDS.search(said)):
             # (Asked as people ask it, whichever action the model picks: evals/os found Qwen3.5 0.8B, asked to "turn on
             # dark mode", turning the brightness up, or the night light on, and saying dark mode was on.)
-            return _text("There's no dark mode to turn on or off: Chat Computer's screen is always dark (light text on a "
-                         "dark background), and there's no light mode. Nothing was changed. Tell them so, and offer to dim "
-                         "the screen or turn on the night light (warmer colours) if it's too bright.")
+            return {**_text("There's no dark mode to turn on or off: Chat Computer's screen is always dark (light text on "
+                            "a dark background), and there's no light mode. Nothing was changed. Tell them so, and offer to "
+                            "dim the screen or turn on the night light (warmer colours) if it's too bright."),
+                    "say": "There's no dark mode to turn on: Chat Computer's screen is always dark, with light text on a "
+                           "dark background. If it's too bright, I can dim it or turn on the night light."}
         try:
             if act == "status":
                 st = await _machine(p.display_status)

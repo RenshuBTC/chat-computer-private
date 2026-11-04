@@ -126,6 +126,7 @@ class _Turn:
     origin: str = HERE
     res: TurnResult = field(default_factory=TurnResult)
     done: asyncio.Event = field(default_factory=asyncio.Event)
+    say: str = ""          # the last tool's own answer, if it gave one: said if the model says nothing
 
 
 def tool_text(result: Any) -> str:
@@ -365,7 +366,7 @@ class Brain:
                 again = again + 1 if all(k in given for k in keys) else 0
                 if again == 2:
                     conv.messages.pop()
-                    if not t.res.text.strip():
+                    if not t.res.text.strip() and not t.say:      # (with a tool's own answer: that's said, below)
                         t.res.ok, t.res.error_kind = False, "circles"
                         t.res.error_text = "it asked for the same thing again and again, so it was stopped"
                     break
@@ -381,10 +382,12 @@ class Brain:
                 t.res.ok, t.res.error_kind = False, "other"
                 t.res.error_text = f"it was still going after {MOST_STEPS} steps, so it was stopped"
             # (Done, with no word said: what was shown is there, but they'd hear nothing, or see an empty reply.
-            # evals/os: Qwen3.5 0.8B found the tax letter and showed it, and said nothing.)
+            # evals/os: Qwen3.5 0.8B found the tax letter and showed it, and said nothing. A tool that knows the
+            # answer itself gives it as `say`, said here: evals/os found the model told there's no dark mode, then
+            # asking the same again until stopped, with nothing said.)
             if t.res.ok and t.res.tools and not t.res.text.strip():
                 shown = any(n.split("__")[-1].startswith("show_") for n in t.res.tools[-2:])
-                words = "It's on the screen." if shown else "Done."
+                words = t.say or ("It's on the screen." if shown else "Done.")
                 t.res.text = words
                 self.ev.on_text(t.tid, words)
                 conv.messages.append({"role": "assistant", "content": words})
@@ -481,6 +484,9 @@ class Brain:
             except Exception as exc:
                 log.exception("tool %s failed", name)
                 result = {"content": [{"type": "text", "text": f"{name} failed: {exc}"}], "is_error": True}
+        # (A tool's own answer counts only while it's the last thing done: anything done after it may change it.)
+        has_say = isinstance(result, dict) and isinstance(result.get("say"), str) and not result.get("is_error")
+        t.say = result["say"] if has_say else ""
         words = tool_text(result)
         try:
             self.ev.on_tool(t.tid, full, args, not result.get("is_error"), words, use_id)

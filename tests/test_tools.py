@@ -704,6 +704,28 @@ def test_the_drive_list_says_whats_on_each_drive(tmp_path):
     assert out.endswith(". It's empty")
 
 
+def test_files_are_never_moved_into_a_temporary_folder(tmp_path, monkeypatch):
+    """evals/os: asked what's on a USB stick, a small model moved its photos and file into /tmp (emptied when the
+    computer restarts). A copy there is fine: the files stay where they were."""
+    import re
+    ctx, *_ = make(tmp_path)
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    monkeypatch.setattr(T, "TEMPORARY", re.compile("^" + re.escape(os.path.realpath(temp)) + "(/|$)"))
+    stick = tmp_path / "SANDISK"
+    (stick / "Photos").mkdir(parents=True)
+    (stick / "Photos" / "IMG_1001.jpg").write_text("x")
+    (stick / "Recipes.docx").write_text("x")
+    out, _ = call(ctx, "move_files", {"items": [{"from": str(stick / "Photos"), "to": str(temp / "Photos")},
+                                                {"from": str(stick / "Recipes.docx"), "to": str(temp)}]})
+    assert out.count("not moved:") == 2 and "a temporary folder, emptied when the computer restarts" in out
+    assert (stick / "Photos" / "IMG_1001.jpg").exists() and (stick / "Recipes.docx").exists() and not any(temp.iterdir())
+    out, _ = call(ctx, "copy_files", {"items": [{"from": str(stick / "Recipes.docx"), "to": str(temp)}]})
+    assert out.startswith("copied") and (stick / "Recipes.docx").exists() and (temp / "Recipes.docx").exists()
+    out, _ = call(ctx, "move_files", {"items": [{"from": str(temp / "Recipes.docx"), "to": str(temp / "Old recipes.docx")}]})
+    assert out.startswith("moved")                       # within the temporary folder: nothing of theirs is lost
+
+
 def test_dark_mode_is_answered_not_turned_up(tmp_path):
     """evals/os: "Turn on dark mode" turned the brightness up to 100% and said dark mode was on."""
     ctx, *_ = make(tmp_path)
@@ -717,6 +739,9 @@ def test_dark_mode_is_answered_not_turned_up(tmp_path):
               {"action": "brighter"}):
         out, _ = call(ctx, "display", a)
         assert "no dark mode" in out and "Nothing was changed" in out
+    # With its own answer, said if the model says nothing (brain/agent.py).
+    said = asyncio.get_event_loop().run_until_complete(ctx.tool_fns["display"]({"action": "dark_mode"}))["say"]
+    assert said.startswith("There's no dark mode to turn on") and "dim it or turn on the night light" in said
     assert not [c for c in ctx.platform.calls if c[0] in ("set_brightness", "set_night_light")]
     out, _ = call(ctx, "display", {"action": "status"})
     assert "no dark mode" not in out

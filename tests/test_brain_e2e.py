@@ -277,6 +277,38 @@ def test_the_same_tool_asked_for_again_and_again_stops(clean_env):
 
 
 @pytest.mark.timeout(60)
+def test_a_tool_s_own_answer_is_said_when_the_model_says_nothing(clean_env):
+    """A tool that knows the answer itself gives it (`say`): it's said if the model ends without a word, or goes round
+    in circles after it (evals/os: told there's no dark mode, Qwen3.5 0.8B asked for the same again until stopped).
+    Anything done after it may change the answer: then it isn't said."""
+    async def go():
+        rig = Rig(clean_env, [])
+        same = call("display", action="dark_mode")
+        rig.mock.rules.append(lambda req: [same])          # every time, whatever it's told
+        try:
+            res = await rig.say("turn on dark mode")
+            assert res.ok and res.error_kind is None and len(rig.mock.requests) == 3
+            assert res.text.startswith("There's no dark mode to turn on") and rig.text() == res.text
+        finally:
+            await rig.brain.close()
+            rig.mock.stop()
+        rig = Rig(clean_env, [])
+        (clean_env / "notes.txt").write_text("one\ntwo\n")
+        script(rig.mock, {"count": [call("display", action="dark_mode"),
+                                    call("Bash", command="wc -l notes.txt", description="Count the lines")],
+                          "dark": [call("display", action="dark_mode")]}, after_tool="")
+        try:
+            res = await rig.say("dark mode please")
+            assert res.ok and res.text.startswith("There's no dark mode to turn on")
+            res = await rig.say("dark mode, and count the lines in my notes")
+            assert res.ok and res.text == "Done."
+        finally:
+            await rig.brain.close()
+            rig.mock.stop()
+    asyncio.run(go())
+
+
+@pytest.mark.timeout(60)
 def test_a_turn_that_does_something_and_says_nothing_says_so(clean_env):
     """A small model can do what was asked and end without a word (evals/os: the tax letter shown, nothing said): the
     reply says it's done, rather than nothing."""

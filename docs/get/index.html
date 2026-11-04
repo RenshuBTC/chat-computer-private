@@ -10,7 +10,9 @@
   /* As Annotated's page is: the name, then what to get it with, then the line that says what it is. In Chat
      Computer's own look: light on its dark, Lora, the name in the word logo's weight. Windows and Mac have one Setup
      each, which asks how you want Chat Computer (a Chrome extension, your browser, an app, or its own system); the
-     Mac's is a line for Terminal, shown under the buttons when Mac is chosen. */
+     Mac's is a line for Terminal, shown under the buttons when Mac is chosen. (Until the Mac's disk image here is the
+     app with that first page, the Mac's says so: #mac-next. Take it out, and the "Mac app's next version" words, when
+     it is.) */
   html { font-size: 16px; }
   html, body { height: auto; }
   main { max-width: 1072px; margin: 0 auto; padding: 56px 16px 72px; }
@@ -57,7 +59,7 @@
       <a class="add" id="windows" href="Chat-Computer-Windows.exe" download
          title="Downloads Chat Computer Setup, for Windows 10 and 11. It asks how you want Chat Computer: as a Chrome extension, as your browser, as an app, or as its own system next to Windows. If Windows says it protected your PC, choose More info, then Run anyway: it isn't signed with a paid certificate yet.">Windows</a>
       <a class="add" id="mac" href="#mac-setup"
-         title="Chat Computer Setup for Mac, in one line of Terminal. It asks how you want Chat Computer: as a Chrome extension, as your browser, as an app, or as its own system next to macOS (on a Mac with M1, M2 or M3).">Mac</a>
+         title="Chat Computer for Mac, in one line of Terminal: it installs the Chat Computer app, with no password, for Macs with Apple silicon or Intel (macOS 11 or later).">Mac</a>
       <a class="add" id="android" href="Chat-Computer-Android.apk" download
          title="Downloads the app, for Android 7 or later. Open it on your phone and allow installing from your browser when asked: it isn't on Google Play yet.">Android</a>
       <span class="add soon" id="iphone" aria-disabled="true" title="Coming to the App Store">iPhone</span>
@@ -70,16 +72,18 @@
     <h2 id="mac-title">Chat Computer Setup for Mac</h2>
     <p>Open Terminal (in Applications, then Utilities), paste this line and press Return:</p>
     <code>curl -fsSL https://chatcomputer.ai/get/mac.sh | bash</code>
-    <p>It puts Chat Computer in Applications, with no password, checks it's the one published here, and opens it. Then
-      choose how you want Chat Computer: as a Chrome extension, as your browser, as an app, or as its own system next to
-      macOS (on a Mac with M1, M2 or M3).</p>
+    <p>It puts the Chat Computer app in Applications, with no password, checks it's the one published here, and opens
+      it.</p>
+    <p id="mac-next">Its next version asks how you want Chat Computer, as the Windows Setup does: as a Chrome extension,
+      as your browser, as an app, or as its own system next to macOS (on a Mac with M1, M2 or M3). Until it's here, this
+      line installs the app.</p>
     <p class="small">Or download <a id="mac-dmg" href="Chat-Computer-Mac.dmg" download>the disk image</a> and drag Chat
       Computer to Applications: the first time, macOS says it can't check the app; open System Settings,
       Privacy &amp; Security, and choose Open Anyway. (From Terminal, macOS doesn't ask.)</p>
   </section>
   <h2 class="tagline">Talk, type or touch. Chat Computer does the rest.</h2>
-  <p class="ways">On Windows and Mac, one Setup: Chat Computer as a Chrome extension, as your browser, as an app, or as
-    its own system.</p>
+  <p class="ways">On Windows, one Setup: Chat Computer as a Chrome extension, as your browser, as an app, or as its own
+    system. On a Mac, with the Mac app's next version.</p>
 </main>
 </body>
 </html>

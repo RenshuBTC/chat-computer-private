@@ -52,12 +52,14 @@ def test_the_get_page_is_as_annotated_s_without_the_video():
     soon = re.findall(r'<span class="add soon" id="(\w+)" aria-disabled="true"', page)
     assert soon == ["iphone"] and 'title="Coming to the App Store">iPhone<' in page
     # Windows and Mac: one Setup each, which asks how you want Chat Computer; the Mac's a line for Terminal (shown when
-    # Mac is chosen), with the disk image as the other way.
-    for name in ("windows", "mac"):
-        title = re.search(r'id="%s" href="[^"]+"(?: download)?\s+title="([^"]+)"' % name, page).group(1)
-        assert "as a Chrome extension, as your browser, as an app, or as its own system" in title, name
+    # Mac is chosen), with the disk image as the other way. (The Mac's disk image here is still the app from before
+    # its first page asked: the page says so, until GitHub's Macs build the new one.)
+    title = re.search(r'id="windows" href="[^"]+" download\s+title="([^"]+)"', page).group(1)
+    assert "as a Chrome extension, as your browser, as an app, or as its own system" in title
     assert "<code>curl -fsSL https://chatcomputer.ai/get/mac.sh | bash</code>" in page and "#mac-setup:target { display: block; }" in page
     assert '<a id="mac-dmg" href="Chat-Computer-Mac.dmg" download>' in page and "M1, M2 or M3" in page
+    mac_title = re.search(r'id="mac" href="#mac-setup"\s+title="([^"]+)"', page).group(1)
+    assert "asks" not in mac_title and '<p id="mac-next">Its next version asks how you want Chat Computer' in page
     # What each download is: Windows' installer (NSIS), a Mac disk image, an Android app.
     assert (GET / "Chat-Computer-Windows.exe").read_bytes()[:2] == b"MZ" and b"Nullsoft" in (GET / "Chat-Computer-Windows.exe").read_bytes()
     assert (GET / "Chat-Computer-Mac.dmg").read_bytes()[-512:][:4] == b"koly"

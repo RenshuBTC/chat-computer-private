@@ -382,7 +382,8 @@ works in Asahi Linux isn't known yet; the built-in microphones of M1, M2 and M3 
 1. **Get Chat Computer Setup.** Open Terminal (in Applications, then Utilities), paste
    `curl -fsSL https://chatcomputer.ai/get/mac.sh | bash` and press Return. It puts the Chat Computer app in
    Applications and opens it; it asks how you want Chat Computer: choose **Its own system**. (On a Mac that can't
-   have it, it says why.)
+   have it, it says why. The Mac app on chatcomputer.ai/get is still the one from before it asked, until GitHub's
+   Macs build the new one: until then, use the Chat Computer folder, below.)
 2. **Setup opens in Terminal.** (Or, with the Chat Computer folder: unzip the download, then in Terminal type
    `bash ~/Downloads/ChatComputer/mac/setup.sh` and press Return; if the folder is somewhere else, type `bash ` and
    drag `setup.sh` from the folder's `mac` folder into Terminal. You can also double-click
@@ -535,7 +536,8 @@ Chat Computer:
   again whenever the disk image is replaced), copies Chat Computer into Applications (or your own `~/Applications`)
   with no password, and opens it. What curl downloads isn't marked as coming from the internet, so macOS opens the
   app without asking for Open Anyway (the disk image is still there to download, and then macOS does ask). The app's
-  first page (`apps/desktop/start`) asks **How do you want Chat Computer?**, and the app does it
+  first page (`apps/desktop/start`) asks **How do you want Chat Computer?** (on a Mac, from the app's next build:
+  the disk image on /get is still the earlier app, and the page says so), and the app does it
   (`apps/desktop/src-tauri/src/ways.rs`), keeps the answer, and starts there next time: on the conversation (the app,
   the browser), or on the way's steps (the extension, the own system). To change it: type **/** in Chat Computer and
   choose **How you have Chat Computer**, or open the app again.

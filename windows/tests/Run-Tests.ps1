@@ -636,6 +636,20 @@ Assert-Equal ([uint32]0x0A1B2C3D) (Get-OwnSettingsMemoryId $withMemory) 'own set
 Assert-Equal ([uint32]4294967295) (Get-OwnSettingsMemoryId (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -MemoryId ([uint32]::MaxValue))) 'own settings: the biggest memory id'
 Assert-Equal $null (Get-OwnSettingsMemoryId "memory-id = 0`r`n") 'own settings: a memory id of 0 is none'
 Assert-Equal $named (Get-OwnSettingsModel $withMemory) 'own settings: the model read back next to a memory id'
+# Meta's Model API (Muse Spark answers when its key is there): a key and a model, put there by hand or pasted when setup
+# asked, written as the kernel reads them and read back, kept when setup runs again.
+$withMeta = New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -MetaKey 'mk-Test_key.123' -MetaModel 'muse-spark-1.3'
+Assert-True ($withMeta -match '(?m)^meta-api-key = mk-Test_key\.123\r$') 'own settings: Meta''s key, on a line of its own'
+Assert-True ($withMeta -match '(?m)^meta-model = muse-spark-1\.3\r$') 'own settings: Meta''s model, on a line of its own'
+Assert-Equal 'mk-Test_key.123' (Get-OwnSettingsValue $withMeta 'meta-api-key') 'own settings: Meta''s key read back'
+Assert-Equal 'muse-spark-1.3' (Get-OwnSettingsValue $withMeta 'meta-model') 'own settings: Meta''s model read back'
+Assert-Equal '' (Get-OwnSettingsValue $ownText 'meta-api-key') 'own settings: no key read back unless one was given'
+Assert-True ($ownText -notmatch 'meta') 'own settings: no Meta lines unless given'
+Assert-True (Test-OwnMetaKey 'mk-Test_key.123') 'Meta key: one that can be'
+Assert-True (-not (Test-OwnMetaKey 'two words')) 'Meta key: no spaces'
+Assert-True (-not (Test-OwnMetaKey '')) 'Meta key: not empty'
+Assert-True (-not (Test-OwnMetaKey ('x' * 513))) 'Meta key: at most 512 characters'
+Assert-True (-not (Test-OwnMetaKey ('caf' + [char]0x00E9 + 'keyvalue'))) 'Meta key: ASCII only'
 
 # Its memory file, as Chat Computer's own system reads it (os/remember: 512-byte chunks, each tagged with "CCMEMORY",
 # the file's id and the chunk's number).
@@ -933,12 +947,21 @@ try {
     $Script:FakeEspFails = $false
     [IO.File]::WriteAllText($runSettings, (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -LogId ([uint32]0x10C0FFEE)))
     Assert-Equal $null (Read-OwnLastRun -WorkDir (Join-Path $runWork 'not-there')) 'last run: nothing when it can''t be saved'
+    # The settings there now (for a key for Meta's Model API kept there): read, or '' when they can't be.
+    [IO.File]::WriteAllText($runSettings, (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -MetaKey 'mk-Test_key.123'))
+    $Script:FakeEspClosed = 0
+    Assert-Equal 'mk-Test_key.123' (Get-OwnSettingsValue (Read-OwnSettings) 'meta-api-key') 'settings now: Meta''s key read from the start-up partition'
+    Assert-Equal 1 $Script:FakeEspClosed 'settings now: the start-up partition closed again'
+    $Script:FakeEspFails = $true
+    Assert-Equal '' (Read-OwnSettings) 'settings now: nothing when the start-up partition can''t be opened'
+    $Script:FakeEspFails = $false
     # Reading failing part-way (the settings can't be read: here, a folder of that name).
     Remove-Item -LiteralPath $runSettings
     New-Item -ItemType Directory -Path $runSettings | Out-Null
     $Script:FakeEspClosed = 0
     Assert-Equal $null (Read-OwnLastRun -WorkDir $runWork) 'last run: nothing when reading fails part-way'
     Assert-Equal 1 $Script:FakeEspClosed 'last run: the start-up partition closed again then too'
+    Assert-Equal '' (Read-OwnSettings) 'settings now: nothing when the settings aren''t a file'
 } finally {
     Remove-Item -LiteralPath $Script:FakeEsp -Recurse -Force
     Remove-Item Function:\Get-WindowsEsp, Function:\Mount-EspPartition, Function:\Dismount-EspPartition

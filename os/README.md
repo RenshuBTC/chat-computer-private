@@ -494,8 +494,11 @@ questions (Windows asks for permission, as for any change to how the PC starts).
    the PC's Secure Boot already trusts, where there is one, the key it made for ClaudeOS (Chat Computer's name until
    2026-10-19) too, so a PC that approved that one starts Chat Computer with nothing more to approve.
 3. It says which model the own system will answer with: the one Chat Computer's app got ready on the PC (install
-   the app from chatcomputer.ai/get first; it gets its model by itself). With none yet, it opens that page and
-   doesn't restart.
+   the app from chatcomputer.ai/get first; it gets its model by itself), or Meta's Muse Spark. With no model of the
+   app's yet, it asks for a key for Meta's Model API (from dev.meta.ai; typed out of sight, never logged). The key is
+   kept in `settings.txt` as `meta-api-key`, and Muse Spark then answers over the internet, which needs a network
+   cable on the PC, since Wi-Fi isn't supported yet. A key there comes first, as the kernel takes it. With neither,
+   it opens chatcomputer.ai/get and doesn't restart.
 4. It puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
    next to Windows' own files, with `settings.txt` (how far the PC's clock is from UTC, as Windows keeps that
    clock in local time, and the memory and log files' ids; a model's file named there by hand, `model = ...`, and

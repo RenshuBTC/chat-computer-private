@@ -73,13 +73,16 @@ function New-OwnSettingsText {
     # file's id (0: there's no memory file); $LogId: the log file's. $Cores: the most processor cores to use, put
     # there by hand ('': all).
     param([AllowEmptyString()][string]$Model, [int]$ClockOffsetMinutes, [uint32]$MemoryId = 0, [uint32]$LogId = 0,
-          [AllowEmptyString()][string]$Cores = '')
+          [AllowEmptyString()][string]$Cores = '', [AllowEmptyString()][string]$MetaKey = '',
+          [AllowEmptyString()][string]$MetaModel = '')
     $lines = @('# Chat Computer''s settings, read by its own system when it starts. Written by Chat Computer Own System.')
     if ($Model) { $lines += ('model = ' + $Model) }
     $lines += ('clock-offset-minutes = ' + $ClockOffsetMinutes)
     if ($MemoryId -ne 0) { $lines += ('memory-id = ' + $MemoryId.ToString('x8')) }
     if ($LogId -ne 0) { $lines += ('log-id = ' + $LogId.ToString('x8')) }
     if ($Cores) { $lines += ('cores = ' + $Cores) }
+    if ($MetaKey) { $lines += ('meta-api-key = ' + $MetaKey) }
+    if ($MetaModel) { $lines += ('meta-model = ' + $MetaModel) }
     return (($lines -join "`r`n") + "`r`n")
 }
 
@@ -102,6 +105,59 @@ function Get-OwnSettingsCores {
     foreach ($line in ($Text -split "`r?`n")) {
         $m = [regex]::Match($line, '(?i)^\s*cores\s*=\s*"*\s*([0-9]{1,3})\s*"*\s*$')
         if ($m.Success -and [int]$m.Groups[1].Value -ge 1) { return [string][int]$m.Groups[1].Value }
+    }
+    return ''
+}
+
+function Get-OwnSettingsValue {
+    # A "name = value" line's value in a settings file's text ('' if none): meta-api-key and meta-model (Meta's Model
+    # API, for Muse Spark to answer), put there by hand or pasted when this asked, and kept when this runs again.
+    param([AllowNull()][string]$Text, [Parameter(Mandatory = $true)][string]$Name)
+    if (-not $Text) { return '' }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $m = [regex]::Match($line, '^\s*' + [regex]::Escape($Name) + '\s*=\s*(\S+)\s*$')
+        if ($m.Success) { return $m.Groups[1].Value }
+    }
+    return ''
+}
+
+function Test-OwnMetaKey {
+    # Whether text can be a key for Meta's Model API as the kernel takes one (os/kernel/src/settings.rs): visible
+    # ASCII characters only, no spaces, at most 512 of them.
+    param([AllowNull()][string]$Key)
+    return ($null -ne $Key -and $Key.Length -ge 8 -and $Key.Length -le 512 -and $Key -cmatch '^[\x21-\x7E]+$')
+}
+
+function Read-OwnSettings {
+    # The settings file on the start-up partition now, as text ('' if there's none, or it can't be read: never an
+    # error, and the partition is closed again).
+    try {
+        $esp = Get-WindowsEsp
+        if (-not $esp) { return '' }
+        $m = Mount-EspPartition $esp
+        try {
+            $settings = [IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir, $Script:OwnSettings)
+            if (Test-Path -LiteralPath $settings -PathType Leaf) { return [IO.File]::ReadAllText($settings) }
+            return ''
+        } finally {
+            Dismount-EspPartition $m
+        }
+    } catch {
+        Write-SetupLog ('Reading the settings: ' + $_.Exception.Message)
+        return ''
+    }
+}
+
+function Read-OwnMetaKey {
+    # A key for Meta's Model API, pasted by the person: not shown as it's typed, never logged. '' for none.
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        $secure = Read-Host -AsSecureString 'Paste the key and press Enter (or just press Enter to get the app''s model instead)'
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try { $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        $key = ([string]$key).Trim()
+        if (-not $key) { return '' }
+        if (Test-OwnMetaKey $key) { return $key }
+        Write-Warn 'That doesn''t look like a key (one word, at most 512 characters). Paste it again, or just press Enter.'
     }
     return ''
 }
@@ -554,8 +610,10 @@ function Assert-OwnRoom {
 function Install-OwnFiles {
     # The signed start-up file, the key's certificate, the settings and the memory file, in \EFI\chatcomputer-own on
     # the partition Windows starts from. The settings are written anew (a model named in them by hand is kept; an
-    # older setup's Claude API key isn't). Returns whether there's a memory file (Memory).
-    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate)
+    # older setup's Claude API key isn't; Meta's key and model are, or the key pasted now, $MetaKey). Returns whether
+    # there's a memory file (Memory), and whether the settings have a key for Meta's Model API (Meta).
+    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate,
+          [AllowEmptyString()][string]$MetaKey = '')
     $esp = Get-WindowsEsp
     if (-not $esp) { throw 'Windows could not find the partition this PC starts from.' }
     $m = Mount-EspPartition $esp
@@ -573,11 +631,14 @@ function Install-OwnFiles {
         $model = Get-OwnSettingsModel $before
         $memoryId = Install-OwnMemory -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before)
         $logId = Install-OwnLog -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before -Name 'log-id')
+        $key = $MetaKey
+        if (-not $key) { $key = Get-OwnSettingsValue $before 'meta-api-key' }
         $text = New-OwnSettingsText -Model $model -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId `
-            -LogId $logId -Cores (Get-OwnSettingsCores $before)
+            -LogId $logId -Cores (Get-OwnSettingsCores $before) -MetaKey $key -MetaModel (Get-OwnSettingsValue $before 'meta-model')
         [IO.File]::WriteAllText($settings, $text, [Text.Encoding]::ASCII)
-        Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($model) { 'naming a model' } else { 'naming no model' }))
-        return [pscustomobject]@{ Memory = ($memoryId -ne 0) }
+        Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($model) { 'naming a model' } else { 'naming no model' }) +
+                        $(if ($key) { ', with a key for Meta''s Model API' } else { '' }))
+        return [pscustomobject]@{ Memory = ($memoryId -ne 0); Meta = [bool]$key }
     } finally {
         Dismount-EspPartition $m
     }
@@ -760,13 +821,28 @@ function Start-OwnSystem {
 
     Write-Step 'Its model'
     $model = Find-OwnModel
-    if ($model) {
+    $metaKey = ''
+    # (A key for Meta's Model API in the settings comes first, as the kernel takes it: Muse Spark answers then.)
+    if (Get-OwnSettingsValue (Read-OwnSettings) 'meta-api-key') {
+        Write-Good 'It answers with Meta''s Muse Spark, over the internet, with the key for Meta''s Model API in its settings.'
+        Write-Line 'That needs a network cable on this PC (or a USB network adapter, or an Android phone''s USB tethering):'
+        Write-Line 'Wi-Fi isn''t supported yet. What you type goes to Meta.'
+        if ($model) {
+            Write-Line ('For ' + $model.Label + ', the model on this PC, instead: run this once with -Remove (which takes the key off'
+            Write-Line 'with the rest), then again.')
+        }
+    } elseif ($model) {
         Write-Good ('It answers with ' + $model.Label + ' (' + (Format-Size $model.Bytes) + '), the model Chat Computer''s app got ready on this PC.')
         Write-Line 'It runs on the PC itself, with no account and nothing to pay: nothing you type leaves it. Starting up, it'
         Write-Line 'reads the model into memory, which takes a moment.'
     } else {
         Write-Warn 'Chat Computer''s app hasn''t got its model ready on this PC yet. Open the app once (it gets its model by'
         Write-Warn 'itself, free); Chat Computer''s own system finds it when it starts.'
+        Write-Line 'Or it can answer with Meta''s Muse Spark, over the internet: that needs a key for Meta''s Model API (from'
+        Write-Line 'dev.meta.ai) and a network cable on this PC (Wi-Fi isn''t supported yet), and what you type goes to Meta. The'
+        Write-Line 'key is kept in its settings on the start-up partition, where anyone who can read that partition can read it.'
+        if (-not $Unattended) { $metaKey = Read-OwnMetaKey }
+        if ($metaKey) { Write-Good 'It answers with Meta''s Muse Spark.' }
     }
 
     $approved = $null
@@ -787,7 +863,7 @@ function Start-OwnSystem {
     if ($bitlocker) {
         Write-Line '  * BitLocker pauses for two restarts, so the Secure Boot change doesn''t make it ask for its recovery key.'
     }
-    $installed = Install-OwnFiles -Signed $signed -Certificate $cer
+    $installed = Install-OwnFiles -Signed $signed -Certificate $cer -MetaKey $metaKey
     if (-not $installed.Memory) {
         Write-Warn 'Its memory file couldn''t be made on the start-up partition (too little room, or it couldn''t be written), so the conversation won''t be kept across restarts.'
     }
@@ -796,7 +872,7 @@ function Start-OwnSystem {
 
     if (-not $setupScreen) {
         if ($NoRestart) { return }
-        if (-not $model) {
+        if (-not $model -and -not $installed.Meta) {
             # (Without a model it would start and only say it needs one: it stays in the menu for when it's here.)
             Write-Line ''
             Write-Line 'Get its model first: install Chat Computer''s app from chatcomputer.ai/get (choose App), and leave it open'

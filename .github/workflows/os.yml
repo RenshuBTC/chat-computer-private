@@ -91,7 +91,7 @@ jobs:
         run: ./check.py --web
       - name: Claude answering with the person's own key (against a stand-in for Anthropic's API over TLS 1.3)
         run: ./check.py --claude
-      - name: A website typed in the message box (a stand-in site over TLS 1.3: shown, a form sent, a link clicked)
+      - name: A website typed in the message box (a stand-in site over TLS 1.3, shown, a form sent, a link clicked)
         run: ./check.py --site
       - name: The conversation kept across a restart (NVMe and SATA)
         run: ./check.py --remember

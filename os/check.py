@@ -849,7 +849,8 @@ def chat(args) -> list[str]:
                 back = pc.settled_picture("chat-scrolled")
                 turn_wheel(pc.mon, [-1])
                 scrolled = [at_end, back, pc.settled_picture("chat-scrolled-forward")]
-                # The mouse moved: the pointer shows, from the middle of the screen, and nothing else changes.
+                # The mouse moved: the pointer shows, from the middle of the screen (a pixel a count, a little more
+                # for a fast move: about 53 and 34 pixels here), and nothing else changes.
                 monitor(pc.mon, "mouse_move 40 30")
                 pointed = pc.settled_picture("chat-pointer")
             # Asked to restart: the model's answer, then a restart (which ends a virtual PC started with -no-reboot).
@@ -1530,10 +1531,10 @@ def site_check(args) -> list[str]:
             if m and use_mouse(pc.mon, "QEMU HID Mouse"):
                 x, y, w, h = (int(v) for v in m[-1])
                 sw, sh = (int(v) for v in args.size.split("x"))
-                # (From the middle of the screen, about 24 pixels a move: to the middle of the link, 200 pixels tall
-                # across the top of the page.)
+                # (From the middle of the screen, 24 pixels a move, a pixel a count: to the middle of the link, 200
+                # pixels tall across the top of the page.)
                 dx, dy = round((x + w // 2 - sw // 2) / 24), round((y + 100 - sh // 2) / 24)
-                moves = [f"mouse_move {12 if dx > 0 else -12} 0"] * abs(dx) + [f"mouse_move 0 {12 if dy > 0 else -12}"] * abs(dy)
+                moves = [f"mouse_move {24 if dx > 0 else -24} 0"] * abs(dx) + [f"mouse_move 0 {24 if dy > 0 else -24}"] * abs(dy)
                 monitor_many(pc.mon, moves, gap=0.05)
                 time.sleep(0.5)
                 monitor_many(pc.mon, ["mouse_button 1", "mouse_button 0"])
@@ -2107,6 +2108,7 @@ def files_check(args) -> list[str]:
         settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\n"
         windows_disk(disk, BUILT, settings, MEMORY_ID)
         pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, "nvme"))
+        opened = None
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
@@ -2116,11 +2118,23 @@ def files_check(args) -> list[str]:
                 monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
                 wait_answered(pc, n + 1)
             pc.settled_picture("files")
+            # "/" opens a file (+ attaches one): the files listed as "shopping" is typed, Enter opens the first, in the
+            # middle, as a website shows; Esc closes it.
+            monitor_many(pc.mon, keys_for("/shopping"))
+            time.sleep(1)
+            monitor_many(pc.mon, ["sendkey ret"])
+            opened = wait_for(pc.log, ("site: Opened Shopping list.txt", "stopped"), 30)
+            time.sleep(1.5)
+            pc.settled_picture("files-opened")
+            monitor_many(pc.mon, ["sendkey esc"])
+            time.sleep(1)
         finally:
             pc.stop()
         text = pc.text()
         print(text)
         problems += stack_problems(text)
+        if opened != "site: Opened Shopping list.txt" or not re.search(r"site: read https://this\.pc/C:/Users/Sam/(Desktop|Documents)/Shopping list\.txt \(\d+ bytes\): \"Shopping list\.txt\"", text):
+            problems.append("a file picked with \"/\" wasn't opened in the middle")
         results = tool_results(text, list(calls))
         if "files: C: Windows' drive (NTFS, 33.5 MB), read only" not in text:
             problems.append("Windows' drive wasn't found as it should be")
@@ -2504,8 +2518,8 @@ def usb_check(args) -> list[str]:
 
 def keys_for(text: str) -> list[str]:
     """The monitor's commands that type `text` (letters, capitals among them, digits, spaces, dashes, colons, full
-    stops and backslashes)."""
-    named = {" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot", "\\": "backslash"}
+    stops, slashes and backslashes)."""
+    named = {" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot", "\\": "backslash", "/": "slash"}
     return [f"sendkey {named.get(c, f'shift-{c.lower()}' if c.isupper() else c)}" for c in text]
 
 

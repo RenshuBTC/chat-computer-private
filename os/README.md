@@ -67,8 +67,9 @@ drivers.
     where whole blocks of RAM are free), so the model's file, gigabytes, is one piece in memory however scattered the
     RAM behind it, while 64 MiB is always left for everything else;
   * the first screen, early, so that if anything after it stops the kernel, the screen says so. From the start-up
-    drive on, it also says which step comes next ("Starting the network…"), as the log does, so a PC that stops in
-    the middle of one shows which;
+    drive on, it also says which step comes next ("Starting the network…"), as the log does (with when), so a PC that
+    stops in the middle of one shows which. Once the keyboards are set up, what's typed shows between the steps that
+    are left, and the message box says it's starting: a message sent then goes once the start is done;
   * the ACPI tables: processor cores, interrupt controllers and timers;
   * the local APIC. The old 8259 controllers and all I/O APIC inputs are masked;
   * a timer ticking 100 times a second. Its speed is measured against the ACPI power-management timer,
@@ -123,7 +124,9 @@ drivers.
       has keys; by the boot protocol every keyboard supports when a descriptor can't be used. With their Caps Lock
       light. The log says which interface first sent a report (never what was typed);
     * mice, read as each one's report descriptor says (`hid/`), or by the boot protocol if it can't be used. They
-      move a pointer (the arrow every PC shows, drawn over the screen), whose left button clicks the message box's
+      move a pointer (the arrow every PC shows), a pixel a count of the mouse as Windows moves it (a little more for
+      a fast flick), moved and drawn straight onto the screen in the USB controller's interrupt as each report comes,
+      so it keeps up with the mouse whatever else is going on (`pointer.rs`). Its left button clicks the message box's
       send button (or its stop, while an answer comes), and their wheels scroll the conversation (`mouse.rs`). A
       wireless receiver's keyboard and mouse both work;
     * network adapters: the configuration that offers a standard way to carry Ethernet, its bulk endpoints, and the
@@ -228,11 +231,16 @@ drivers.
     AMD's Zen 4, for which the kernel switches on AVX-512's registers). Each big step of its arithmetic is shared out
     in jobs (rows of a matrix product, heads of attention), which every core takes from, the first included, as the
     app's threads do; each job is one core's alone, so the answer is the same however many cores there are (checked:
-    `./check.py --model --cores 4`). Between steps the other cores wait a moment for the next, then sleep until the
-    first core's message wakes them, and the log says what share of the jobs they did. It works a step at a time
-    from the main loop: part of what it's asked read, part of a picture looked at, or one token written, a few
-    hundredths of a second each (as the processor allows), so the screen and the keyboard go on meanwhile. Before the first question, it reads its instructions (the system prompt, with its
-    tools) ahead, and keeps that reading for every conversation after. Each message it's given starts with when it
+    `./check.py --model --cores 4`). It works a step at a time: part of what it's asked read (64 tokens at once, so
+    each weight read from memory serves all of them: what makes reading fast), part of a picture looked at, or one
+    token written. Each step is sent away from the first core to the second (`cores::away`), which shares its jobs
+    among the rest, while the first goes on with its loop: the screen, the mouse and the keyboard never wait for the
+    model, and the step's end wakes the loop for the next. Between steps the other cores wait a moment, then sleep
+    until a message wakes them, and the log says what share of the jobs they did. Before a question's sent, it reads
+    ahead what the question will start with: its instructions (the system prompt, with its tools), the conversation
+    so far (after a restart, the one kept from before), and the words being typed in the message box as far as they
+    can't change (all but the last word), so a question has little left to read when it's sent; the reading of its
+    instructions is kept for every conversation after. Each message it's given starts with when it
     was sent; it doesn't think before answering (it was decided when it ran on one core, where thinking would take
     minutes; to be measured again on all of them). It's given as much of the
     conversation as the memory holds the reading of (up to 16,384 tokens): in a longer one, the oldest questions are
@@ -315,8 +323,10 @@ drivers.
   the arrows; each file a chip over what's typed, named with its path in the message for the model to
   read), the spark chooses who answers (below), the microphone listens (as Windows+H), and send sends (its stop
   while an answer comes). "/" typed first in the box lists the files on the PC the same way, the newest first,
-  narrowed to those whose names have the words typed after it; Enter attaches the one chosen, and the list's
-  last line asks the model to find it among all the files instead (Esc clears it, as on the website). Each sidebar
+  narrowed to those whose names have the words typed after it; Enter opens the one chosen in the middle, as a
+  website shows (a picture as itself, a scanned PDF's pages as theirs, a text file's, a document's or a PDF's words,
+  what's in a ZIP archive, or what it is when it can't be shown; `files::view`), and the list's last line asks the
+  model to find it among all the files instead (Esc clears it, as on the website). Each sidebar
   has the website's switch at its top, on the edge nearest the middle: it puts the sidebar away (leaving just the
   switch, the middle where it was) and brings it back, and the choice is kept. Type, press Enter, and the model reads the
   message and answers, its words shown as they're written, with a pulsing dot until the first (and, when it's slow,

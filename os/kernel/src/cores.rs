@@ -7,10 +7,12 @@
 //! registers; its page attribute table) and a segment table and TSS of its own.
 //!
 //! What they do: the model's arithmetic. Each big step of it is some number of jobs (rows of a matrix product, heads
-//! of attention), which every core takes from, one at a time, the first core included, as the app's threads do
-//! (model/src/threads.rs): `Cores` is the pool the kernel runs the model with. Between steps the others wait a moment
-//! for the next one, then sleep until the first core's message (`idt::WAKE_VECTOR`) wakes them. Only the first core
-//! runs everything else; the others' interrupts stay off but while they sleep, and no device sends them any.
+//! of attention), which every core takes from, one at a time, the one that shares them out included, as the app's
+//! threads do (model/src/threads.rs): `Cores` is the pool the kernel runs the model with. The model's steps are sent
+//! away from the first core (`away`): the second core runs each, sharing its jobs among the rest, while the first goes
+//! on with its loop (the screen, the mouse, the keyboard), woken when the step's done. Between steps the others wait a
+//! moment for the next one, then sleep until a message (`idt::WAKE_VECTOR`) wakes them. Only the first core runs
+//! everything else; the others' interrupts stay off but while they sleep, and no device sends them any.
 //!
 //! A core other than the first that faults or panics stops, and says so in the log; the first one then stops too,
 //! saying which core stopped and why on the screen (`check`).
@@ -231,6 +233,13 @@ static ASLEEP: AtomicU64 = AtomicU64::new(0);
 /// Jobs of steps shared among the cores, and how many of them the others did (since last said: `shared`).
 static SHARED_JOBS: AtomicU64 = AtomicU64::new(0);
 static OTHERS_DID: AtomicU64 = AtomicU64::new(0);
+
+/// The pool's in use: a step's jobs are being shared out (by the first core, or by the errand core for an errand's).
+static POOL: AtomicBool = AtomicBool::new(false);
+/// The core that runs errands (work sent away from the first core, which goes on with its loop meanwhile).
+const ERRAND_CORE: usize = 1;
+/// The errand waiting for that core, if there is one.
+static ERRAND: AtomicPtr<Header> = AtomicPtr::new(core::ptr::null_mut());
 
 /// A core other than the first stopped, and why.
 static STOPPED: AtomicBool = AtomicBool::new(false);
@@ -474,13 +483,15 @@ extern "C" fn core_main(core: usize) -> ! {
     serve(core)
 }
 
-/// A core other than the first: the jobs of each step, as they come.
+/// A core other than the first: the jobs of each step, as they come (and the errand core, errands too).
 fn serve(core: usize) -> ! {
     let bit = 1u64 << (core % 64);
+    let errands = core == ERRAND_CORE;
+    let errand = || errands && !ERRAND.load(Ordering::SeqCst).is_null();
     let mut seen = GENERATION.load(Ordering::Acquire);
     loop {
         let mut since = time::now_us();
-        while GENERATION.load(Ordering::Acquire) == seen {
+        while GENERATION.load(Ordering::Acquire) == seen && !errand() {
             if time::now_us() < since + AWAKE_US {
                 core::hint::spin_loop();
                 continue;
@@ -488,11 +499,22 @@ fn serve(core: usize) -> ! {
             // Asleep until woken (`wake`): said first, then looked again, so a step posted meanwhile isn't missed
             // (its message then arrives as this core sleeps, or before, and wakes it at once).
             ASLEEP.fetch_or(bit, Ordering::SeqCst);
-            if GENERATION.load(Ordering::SeqCst) == seen {
+            if GENERATION.load(Ordering::SeqCst) == seen && !errand() {
                 unsafe { asm!("sti", "hlt", "cli", options(nostack)) };
             }
             ASLEEP.fetch_and(!bit, Ordering::SeqCst);
             since = time::now_us();
+        }
+        if errands {
+            let e = ERRAND.swap(core::ptr::null_mut(), Ordering::AcqRel);
+            if !e.is_null() {
+                // (Its own steps' jobs are shared out from here meanwhile: this core takes them as their poster.)
+                unsafe { ((*e).run)(e) };
+                // The first core may be asleep, waiting for it.
+                apic::send(apic::id(), apic::FIXED | idt::WAKE_VECTOR as u32);
+                seen = GENERATION.load(Ordering::Acquire);
+                continue;
+            }
         }
         seen = GENERATION.load(Ordering::Acquire);
         INSIDE.fetch_add(1, Ordering::SeqCst);
@@ -548,7 +570,85 @@ fn wake(asleep: u64) {
     }
 }
 
-/// Every core: the pool the model's engine runs with. Only the first core runs it.
+/// An errand's head, which the errand core runs it by (its type left behind).
+#[repr(C)]
+struct Header {
+    run: unsafe fn(*const Header),
+    done: AtomicBool,
+}
+
+#[repr(C)]
+struct Posted<R> {
+    head: Header,
+    work: core::cell::UnsafeCell<Option<alloc::boxed::Box<dyn FnOnce() -> R + Send>>>,
+    result: core::cell::UnsafeCell<Option<R>>,
+}
+
+unsafe fn run_posted<R>(head: *const Header) {
+    let posted = unsafe { &*(head as *const Posted<R>) };
+    // (Only this core touches the work and the result until `done` says it's finished.)
+    if let Some(work) = unsafe { (*posted.work.get()).take() } {
+        let r = work();
+        unsafe { *posted.result.get() = Some(r) };
+    }
+    posted.head.done.store(true, Ordering::Release);
+}
+
+/// Work sent away from the first core (`away`): done on the errand core, the first going on with its loop meanwhile.
+pub struct Errand<R> {
+    posted: alloc::boxed::Box<Posted<R>>,
+}
+
+impl<R> Errand<R> {
+    pub fn done(&self) -> bool {
+        self.posted.head.done.load(Ordering::Acquire)
+    }
+
+    /// What it came to, once it's done (None before).
+    pub fn take(&mut self) -> Option<R> {
+        if !self.done() {
+            return None;
+        }
+        unsafe { (*self.posted.result.get()).take() }
+    }
+}
+
+impl<R> Drop for Errand<R> {
+    fn drop(&mut self) {
+        // (Not let go while the errand core may still use it.)
+        while !self.done() {
+            check();
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Sends `work` to the errand core, to do while this one goes on; its result is the errand's once it's `done`. With
+/// no other core, it's done here and now. One errand at a time: the next is sent once the last is done.
+pub fn away<R: Send + 'static>(work: impl FnOnce() -> R + Send + 'static) -> Errand<R> {
+    let posted = alloc::boxed::Box::new(Posted {
+        head: Header { run: run_posted::<R>, done: AtomicBool::new(false) },
+        work: core::cell::UnsafeCell::new(Some(alloc::boxed::Box::new(work))),
+        result: core::cell::UnsafeCell::new(None),
+    });
+    let head = &posted.head as *const Header;
+    if count() <= ERRAND_CORE {
+        unsafe { run_posted::<R>(head) };
+        return Errand { posted };
+    }
+    while ERRAND.compare_exchange(core::ptr::null_mut(), head as *mut Header, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        check();
+        core::hint::spin_loop();
+    }
+    let bit = 1u64 << ERRAND_CORE;
+    if ASLEEP.load(Ordering::SeqCst) & bit != 0 {
+        wake(bit);
+    }
+    Errand { posted }
+}
+
+/// Every core: the pool the model's engine runs with, from the first core or from an errand (one of them at a time:
+/// the other waits for the step being shared out, a few milliseconds at most).
 pub struct Cores;
 
 impl model::Pool for Cores {
@@ -559,36 +659,50 @@ impl model::Pool for Cores {
             }
             return;
         }
-        // (The function's lifetime is the caller's: it's only used until every job is done, below, and no core can
-        // start it again after that, every index being taken.)
-        let f: *const (dyn Fn(usize) + Sync) = unsafe { core::mem::transmute(f) };
-        let job = Job { f, total: jobs, next: AtomicUsize::new(0), left: AtomicUsize::new(jobs) };
-        SHARED_JOBS.fetch_add(jobs as u64, Ordering::Relaxed);
-        CURRENT.store(&job as *const Job as *mut Job, Ordering::SeqCst);
-        GENERATION.fetch_add(1, Ordering::SeqCst);
-        let asleep = ASLEEP.load(Ordering::SeqCst);
-        if asleep != 0 {
-            wake(asleep);
-        }
-        work(&job);
-        let mut since = 0;
-        while job.left.load(Ordering::Acquire) != 0 {
-            check();
-            core::hint::spin_loop();
-            // (A job takes milliseconds: one not done in a minute is one a core is stuck on.)
-            if since == 0 {
-                since = time::now_us();
-            } else if time::now_us() > since + 60_000_000 {
-                panic!("a processor core has been on one step of the model's arithmetic for a minute: {} of its {} jobs \
-                        not done", job.left.load(Ordering::Relaxed), jobs);
-            }
-        }
-        // No core looks at it after this (one that looked before is done with it once it's no longer inside).
-        CURRENT.store(core::ptr::null_mut(), Ordering::SeqCst);
-        while INSIDE.load(Ordering::SeqCst) != 0 {
+        while POOL.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
             check();
             core::hint::spin_loop();
         }
+        share(jobs, f);
+        POOL.store(false, Ordering::Release);
+    }
+}
+
+/// A step's jobs, shared among the cores (the pool held).
+fn share(jobs: usize, f: &(dyn Fn(usize) + Sync)) {
+    // (The function's lifetime is the caller's: it's only used until every job is done, below, and no core can
+    // start it again after that, every index being taken.)
+    let f: *const (dyn Fn(usize) + Sync) = unsafe { core::mem::transmute(f) };
+    let job = Job { f, total: jobs, next: AtomicUsize::new(0), left: AtomicUsize::new(jobs) };
+    SHARED_JOBS.fetch_add(jobs as u64, Ordering::Relaxed);
+    CURRENT.store(&job as *const Job as *mut Job, Ordering::SeqCst);
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+    let asleep = ASLEEP.load(Ordering::SeqCst);
+    if asleep != 0 {
+        wake(asleep);
+    }
+    // (Posted by the errand core, its own share is one of the others' too.)
+    let did = work(&job);
+    if did > 0 && !is_first() {
+        OTHERS_DID.fetch_add(did, Ordering::Relaxed);
+    }
+    let mut since = 0;
+    while job.left.load(Ordering::Acquire) != 0 {
+        check();
+        core::hint::spin_loop();
+        // (A job takes milliseconds: one not done in a minute is one a core is stuck on.)
+        if since == 0 {
+            since = time::now_us();
+        } else if time::now_us() > since + 60_000_000 {
+            panic!("a processor core has been on one step of the model's arithmetic for a minute: {} of its {} jobs \
+                    not done", job.left.load(Ordering::Relaxed), jobs);
+        }
+    }
+    // No core looks at it after this (one that looked before is done with it once it's no longer inside).
+    CURRENT.store(core::ptr::null_mut(), Ordering::SeqCst);
+    while INSIDE.load(Ordering::SeqCst) != 0 {
+        check();
+        core::hint::spin_loop();
     }
 }
 

@@ -85,7 +85,21 @@ impl Site {
     /// Opens a site: its page asked for.
     pub fn open(url: Url) -> Site {
         log!("Chat Computer kernel: site: opening {url}");
-        let mut s = Site {
+        let mut s = Site::blank(url.clone());
+        s.go(Request { url, body: None }, None, false);
+        s
+    }
+
+    /// A page made here, not fetched: a file on this PC shown as one (files::view), at `url` (its links, if it has
+    /// any, go to the web from there).
+    pub fn local(url: Url, html: &str) -> Site {
+        let mut s = Site::blank(url.clone());
+        s.page_came(crate::web::Page { url, kind: String::from("text/html; charset=utf-8"), bytes: html.as_bytes().to_vec(), cut: false }, None);
+        s
+    }
+
+    fn blank(url: Url) -> Site {
+        Site {
             page: None,
             loading: None,
             fetching: Vec::new(),
@@ -104,9 +118,7 @@ impl Site {
             laid_at: 0,
             page_h: 0.0,
             view: (0.0, 0.0),
-        };
-        s.go(Request { url, body: None }, None, false);
-        s
+        }
     }
 
     /// Whether a page has come to show.
@@ -540,7 +552,7 @@ fn pixels_set(pixels: &mut [u32], width: usize, x: i32, y: i32, rgb: u32) {
     }
 }
 
-fn escape(s: &str) -> String {
+pub fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 

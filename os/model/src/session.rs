@@ -166,6 +166,28 @@ pub enum Step {
     Over,
 }
 
+/// What a request will start with, to read ahead of it (`Session::prompt_ahead`): its tokens, where its first message
+/// ends (after its end) and where its last message starts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Ahead {
+    pub tokens: Vec<u32>,
+    pub anchor: Option<usize>,
+    pub mark: Option<usize>,
+}
+
+/// The tokens of a request's first message (the system prompt, with the tools): for a caller whose session is busy
+/// (`Session::ahead`).
+pub fn first_message(model: &Model, style: Style, r: &Request) -> Result<Vec<u32>, Problem> {
+    // (The first message has no pictures: those after it are left out, as everything after it is.)
+    let p = chat::render_known(style, r.tools, r.messages, &r.options, &|_| None)?;
+    let mut prompt = Vec::new();
+    p.tokens_seeing(&model.tokenizer, &mut prompt, &mut |_, _| Ok(())).map_err(|_| Problem::NoMessages)?;
+    let end = model.tokenizer.special("<|im_end|>");
+    let anchor = prompt.iter().position(|&t| Some(t) == end).map_or(0, |i| i + 1);
+    prompt.truncate(anchor);
+    Ok(prompt)
+}
+
 /// What to ask.
 pub struct Request<'a> {
     pub tools: &'a [Json],
@@ -442,14 +464,84 @@ impl<'m> Session<'m> {
     /// The tokens of a request's first message (the system prompt, with the tools), to read ahead of the question
     /// (`read_ahead`); none if the prompt has no end to its first message.
     pub fn ahead(&self, r: &Request) -> Result<Vec<u32>, Problem> {
-        // (The first message has no pictures: those after it are left out, as everything after it is.)
-        let p = chat::render_known(self.style, r.tools, r.messages, &r.options, &|_| None)?;
-        let mut prompt = Vec::new();
-        p.tokens_seeing(&self.model.tokenizer, &mut prompt, &mut |_, _| Ok(())).map_err(|_| Problem::NoMessages)?;
-        let end = self.model.tokenizer.special("<|im_end|>");
-        let anchor = prompt.iter().position(|&t| Some(t) == end).map_or(0, |i| i + 1);
-        prompt.truncate(anchor);
-        Ok(prompt)
+        first_message(self.model, self.style, r)
+    }
+
+    /// A request's prompt as far as its last message's words: without that message's end, nor the answer's start.
+    /// It's what the request will start with as long as those words stay: the caller gives, as the last message, the
+    /// words typed so far that can't change (the last word, still being typed, left out: every word is a piece of its
+    /// own for the tokenizer, so more typed after a space doesn't change the tokens before it). With where its first
+    /// message ends (the anchor) and where its last message starts (the mark), to keep snapshots at.
+    pub fn prompt_ahead(&mut self, r: &Request) -> Result<Ahead, Problem> {
+        let mut tokens = self.prompt(r)?;
+        let tk = &self.model.tokenizer;
+        let (end, start) = (tk.special("<|im_end|>"), tk.special("<|im_start|>"));
+        let last = tokens.iter().rposition(|&t| Some(t) == end).ok_or(Problem::NoMessages)?;
+        tokens.truncate(last);
+        let anchor = tokens.iter().position(|&t| Some(t) == end).map(|i| i + 1);
+        let mark = tokens.iter().rposition(|&t| Some(t) == start).filter(|&m| anchor.is_some_and(|a| m >= a));
+        Ok(Ahead { tokens, anchor, mark })
+    }
+
+    /// Reads ahead what a request will start with (`prompt_ahead`'s), up to `read` more of its tokens a call (at least
+    /// one), for a caller with other things to do between parts: what's read already as far as it's the same is kept
+    /// (back to the last snapshot before where it parts, if it does); snapshots are kept where the first message ends
+    /// (the anchor, for good) and where the last starts (so what's typed can change and be read again from there).
+    /// True once it's all read.
+    pub fn read_on(&mut self, a: &Ahead, read: usize, pool: &dyn Pool) -> bool {
+        let tokens = &a.tokens[..];
+        if tokens.is_empty() {
+            return true;
+        }
+        let same = self.seen.iter().zip(tokens).take_while(|(x, y)| x == y).count();
+        if same == tokens.len() && same == self.seen.len() {
+            return true;
+        }
+        if same < self.seen.len() {
+            match self.snapshots.iter().rposition(|k| k.snap.pos <= same) {
+                Some(i) => self.back_to(i),
+                None => {
+                    self.state = self.model.state();
+                    self.snapshots.clear();
+                    self.seen.clear();
+                }
+            }
+        }
+        let from = self.seen.len();
+        let mut to = from.saturating_add(read.max(1)).min(tokens.len());
+        // (As far as the anchor or the mark first, if they're on the way: snapshots are kept there.)
+        for p in [a.anchor, a.mark].into_iter().flatten() {
+            if from < p && p < to {
+                to = p;
+            }
+        }
+        if from < to {
+            self.forward(&tokens[from..to], false, pool);
+            self.seen.extend_from_slice(&tokens[from..to]);
+        }
+        let kept = |s: &Session| s.snapshots.iter().any(|k| k.snap.pos == to);
+        if a.anchor == Some(to) && !self.snapshots.iter().any(|k| k.anchor && k.snap.pos == to) {
+            self.snapshots.retain(|k| !k.anchor && k.snap.pos <= to);
+            self.snapshots.push(Kept { snap: self.state.snapshot(), logits: Vec::new(), anchor: true });
+        } else if a.mark == Some(to) && !kept(self) {
+            if self.snapshots.iter().filter(|k| !k.anchor).count() >= SNAPSHOTS
+                && let Some(oldest) = self.snapshots.iter().position(|k| !k.anchor)
+            {
+                self.snapshots.remove(oldest);
+            }
+            self.snapshots.push(Kept { snap: self.state.snapshot(), logits: Vec::new(), anchor: false });
+        }
+        to == tokens.len()
+    }
+
+    /// How many tokens it has read.
+    pub fn read_so_far(&self) -> usize {
+        self.seen.len()
+    }
+
+    /// How many tokens of `a` are read already (as far as they're the same as what's read).
+    pub fn read_of(&self, a: &Ahead) -> usize {
+        self.seen.iter().zip(&a.tokens).take_while(|(x, y)| x == y).count()
     }
 
     /// Reads a request's first message ahead of the question (`ahead`'s tokens), up to `read` more of them a call

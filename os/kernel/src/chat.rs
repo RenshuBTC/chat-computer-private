@@ -284,9 +284,9 @@ pub struct Chat {
     actions: Vec<(String, String)>,
     clock_shown: (String, String),
     chat_title: Option<String>,
-    /// The mouse pointer: where its tip is (None until a mouse first moves), and where it was last drawn.
-    pointer: Option<(f32, f32)>,
-    pointer_drawn: Rect,
+    /// Which of the message box's round buttons the pointer is over (it's lighter). (The pointer itself is drawn by
+    /// pointer.rs, over the screen, as the mouse's reports come.)
+    tool_lit: Option<usize>,
     /// The start screen's greeting (as the website's: by the time of day and the day), and when it began to fade
     /// (the first message sent).
     greeting: String,
@@ -307,6 +307,10 @@ pub struct Chat {
     switch_lit: Option<usize>,
     /// The files "/" searches (read from the drives once each time it's typed).
     search_files: Vec<files::Recent>,
+    /// The main loop has started (it takes keys as they come: before, they're taken between the start's steps), and
+    /// a message sent before then, to send once it has.
+    looping: bool,
+    send_later: bool,
     /// A website open in the middle, in place of the conversation (site.rs), until it's closed.
     site: Option<Site>,
     /// The page's place on the screen as last logged (a test build logs it, for the test to click in it).
@@ -364,13 +368,6 @@ fn greeting_now() -> String {
     let pick = (crate::time::now_us() ^ (t as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)) as usize % fits.len().max(1);
     String::from(fits.get(pick).copied().unwrap_or("Hello"))
 }
-
-/// The pointer: the arrow every PC shows, its tip at the top left; X its black edge, o its white inside, 12 by 19
-/// of the theme's pixels.
-const ARROW: [&str; 19] = [
-    "X", "XX", "XoX", "XooX", "XoooX", "XooooX", "XoooooX", "XooooooX", "XoooooooX", "XooooooooX", "XoooooooooX",
-    "XooooooXXXXX", "XoooXooX", "XooXXooX", "XoX XooX", "XX  XooX", "X    XooX", "     XooX", "      XX",
-];
 
 static CHAT: SpinLock<Option<Chat>> = SpinLock::new(None);
 
@@ -529,8 +526,7 @@ impl Chat {
             actions: Vec::new(),
             clock_shown: clock_now(),
             chat_title: None,
-            pointer: None,
-            pointer_drawn: Rect::default(),
+            tool_lit: None,
             greeting: greeting_now(),
             welcome_fading: None,
             menu: None,
@@ -541,6 +537,8 @@ impl Chat {
             sides_read: false,
             switch_lit: None,
             search_files: Vec::new(),
+            looping: false,
+            send_later: false,
             site: None,
             site_logged: None,
         };
@@ -548,7 +546,11 @@ impl Chat {
         let card = c.composer.card;
         crate::log!("Chat Computer kernel: message box at rows {} to {}", card.y, card.bottom());
         c.draw(true);
+        // The pointer, drawn over the screen from the mouse's interrupt: what's under it comes back from the canvas
+        // (whose pixels stay where they are as the chat moves into its place).
+        let (raw, pixels, hair) = (c.screen.raw(), c.canvas.pixels().as_ptr(), c.hair());
         *CHAT.lock() = Some(c);
+        crate::pointer::init(raw, pixels, hair);
         layout
     }
 
@@ -801,7 +803,6 @@ impl Chat {
             self.render_site(clip.intersect(&log));
             self.canvas.set_clip(clip);
             self.render_box();
-            self.render_pointer(clip);
             return;
         }
         // The start screen: the word logo and the greeting (fading as the first message goes).
@@ -873,7 +874,6 @@ impl Chat {
             self.canvas.set_clip(clip);
             self.render_box();
         }
-        self.render_pointer(clip);
     }
 
     /// The word logo and the greeting under it, in the middle of the room above the message box (as the website's
@@ -910,57 +910,20 @@ impl Chat {
         }
     }
 
-    /// The pointer's part of the screen, at (x, y).
-    fn pointer_rect(&self, x: f32, y: f32) -> Rect {
-        let s = self.hair();
-        Rect::new(x as i32, y as i32, 12 * s, 19 * s)
+    /// Which of the message box's round buttons is at (x, y) (a little beyond each circle counts too: they're small).
+    fn tool_at(&self, x: f32, y: f32, slack: i64) -> Option<usize> {
+        let (px8, py8) = ((x * 8.0) as i64, (y * 8.0) as i64);
+        self.composer.tools.iter().position(|&(cx, cy, r)| {
+            let (dx, dy) = (px8 - cx as i64, py8 - cy as i64);
+            dx * dx + dy * dy <= (r as i64 + slack).pow(2)
+        })
     }
 
-    /// The pointer, drawn over everything in `clip`.
-    fn render_pointer(&mut self, clip: Rect) {
-        let Some((x, y)) = self.pointer else { return };
-        let s = self.hair();
-        let r = self.pointer_rect(x, y);
-        if r.intersect(&clip).is_empty() {
-            return;
-        }
-        self.canvas.set_clip(clip);
-        for (row, line) in ARROW.iter().enumerate() {
-            let bytes = line.as_bytes();
-            let mut col = 0;
-            while col < bytes.len() {
-                let c = bytes[col];
-                let run = bytes[col..].iter().take_while(|&&b| b == c).count();
-                let rgb = match c {
-                    b'X' => 0x000000,
-                    b'o' => 0xFFFFFF,
-                    _ => {
-                        col += run;
-                        continue;
-                    }
-                };
-                self.canvas.fill(Rect::new(r.x + col as i32 * s, r.y + row as i32 * s, run as i32 * s, s), rgb);
-                col += run;
-            }
-        }
-    }
-
-    /// The mouse moved (by its counts) and its buttons were pressed: the pointer moves (a little faster the faster
-    /// it goes), and a click on the send button sends what's typed, or stops the answer coming.
-    fn pointer_moved(&mut self, dx: i32, dy: i32, pressed: u32) {
-        let (w, h) = (self.screen.width as f32, self.screen.height as f32);
-        let speed = |d: i32| -> f32 {
-            let v = d as f32;
-            v * self.layout.scale as f32 * (1.0 + (v.abs() / 12.0).min(1.5))
-        };
-        let (x, y) = self.pointer.unwrap_or((w / 2.0, h / 2.0));
-        let to = ((x + speed(dx)).clamp(0.0, w - 1.0), (y + speed(dy)).clamp(0.0, h - 1.0));
-        if self.pointer != Some(to) {
-            let area = self.pointer_drawn.union(&self.pointer_rect(to.0, to.1));
-            self.pointer = Some(to);
-            self.pointer_drawn = self.pointer_rect(to.0, to.1);
-            self.dirty = self.dirty.union(&area);
-        }
+    /// The pointer moved to `to` (pointer.rs moved it, as the mouse's reports came), or its left button was pressed
+    /// there (`click`): what's under it lights up, and a click does what it's on (the send button sends what's typed,
+    /// or stops the answer coming).
+    fn pointer_at(&mut self, to: (f32, f32), click: bool) {
+        let pressed = if click { 1 } else { 0 };
         // Under the pointer: a list's item is chosen; a button lights up.
         if let (Some(r), Some(menu)) = (self.menu_rect(), self.menu.as_ref()) {
             let row_h = self.m.line + self.m.px(0.5);
@@ -976,8 +939,13 @@ impl Chat {
                 }
             }
         }
-        let card = self.composer.card;
-        self.dirty = self.dirty.union(&card);
+        // (Drawn again only when what's lit changes.)
+        let tool = self.tool_at(to.0, to.1, 0).filter(|&t| t < TOOL_SEND);
+        if tool != self.tool_lit {
+            self.tool_lit = tool;
+            let card = self.composer.card;
+            self.dirty = self.dirty.union(&card);
+        }
         // A sidebar's switch under the pointer lights up.
         let inside = |r: Rect| to.0 as i32 >= r.x && (to.0 as i32) < r.right() && to.1 as i32 >= r.y && (to.1 as i32) < r.bottom();
         let lit = if self.m.side_w > 0 { (0..2).find(|&k| inside(self.switch_rect(k))) } else { None };
@@ -999,7 +967,6 @@ impl Chat {
             self.dirty = self.dirty.union(&r);
             return;
         }
-        let (px8, py8) = ((to.0 * 8.0) as i64, (to.1 * 8.0) as i64);
         let (px, py) = (to.0 as i32, to.1 as i32);
         // In the list: its item picked (elsewhere, the list closes).
         if let Some(r) = self.menu_rect() {
@@ -1038,11 +1005,7 @@ impl Chat {
             return;
         }
         // (A little beyond each circle counts too: they're small.)
-        let slack = 16 * self.hair() as i64;
-        let hit = self.composer.tools.iter().position(|&(cx, cy, r)| {
-            let (dx, dy) = (px8 - cx as i64, py8 - cy as i64);
-            dx * dx + dy * dy <= (r as i64 + slack).pow(2)
-        });
+        let hit = self.tool_at(to.0, to.1, 16 * self.hair() as i64);
         match hit {
             Some(TOOL_ADD) => self.open_menu(MenuKind::Files),
             Some(TOOL_AI) => self.open_menu(MenuKind::Ai),
@@ -1253,6 +1216,7 @@ impl Chat {
                 _ if self.key_typed.is_some() => "Your key for Claude (made at platform.claude.com/settings/keys), then Enter",
                 Some(false) => "Listening\u{2026} say it, then pause (Esc stops)",
                 Some(true) => "Hearing what you said\u{2026}",
+                None if !self.looping => "Starting\u{2026} type now: it's sent once Chat Computer is ready",
                 None if assistant::busy() => "Esc stops the answer",
                 None if crate::listening::can() => "Type anything, or press Windows+H to talk",
                 None => "Type anything",
@@ -1292,11 +1256,10 @@ impl Chat {
         }
         // The round buttons: +, the spark, the microphone (each in its own circle, lighter under the pointer), then
         // send (bright once there's something to send; its stop while an answer comes).
-        let hover = self.pointer.map(|(x, y)| ((x * 8.0) as i32, (y * 8.0) as i32));
-        let over = |&(cx, cy, r): &(i32, i32, i32)| hover.is_some_and(|(x, y)| ((x - cx) as i64).pow(2) + ((y - cy) as i64).pow(2) <= (r as i64).pow(2));
+        let lit = self.tool_lit;
         let listening = crate::listening::state().is_some();
         for (i, t) in b.tools.iter().enumerate().take(TOOL_SEND) {
-            let ground = if i == TOOL_MIC && listening { mix(KNOB, BOX_INK, 0.25) } else if over(t) { mix(KNOB, BOX_INK, 0.12) } else { KNOB };
+            let ground = if i == TOOL_MIC && listening { mix(KNOB, BOX_INK, 0.25) } else if lit == Some(i) { mix(KNOB, BOX_INK, 0.12) } else { KNOB };
             canvas.circle(t.0, t.1, t.2, ground, 255);
             let unit = t.2 * 2 * 115 / 200; // (1.15 em: the icon's 24 units, in 1/8 pixel)
             let p = |a: f32, b: f32| -> Point { (t.0 - unit / 2 + (a * unit as f32 / 24.0) as i32, t.1 - unit / 2 + (b * unit as f32 / 24.0) as i32) };
@@ -1431,7 +1394,7 @@ impl Chat {
                 if self.search_files.is_empty() {
                     self.search_files = crate::files::recent(SEARCHED);
                 }
-                (String::from("Files on this PC, the newest first"), self.search_items())
+                (String::from("Open a file on this PC (the newest first)"), self.search_items())
             }
             MenuKind::Ai => {
                 let answering = assistant::model_path();
@@ -1571,8 +1534,10 @@ impl Chat {
                         self.lay_out_box();
                         return self.send();
                     }
-                } else if !self.attached.iter().any(|(p, _)| *p == item.path) {
-                    self.attached.push((item.path.clone(), item.label.clone()));
+                } else {
+                    // (Opened, in the middle: + attaches a file; "/" opens one.)
+                    self.lay_out_box();
+                    return self.open_file(item.path.clone());
                 }
                 self.lay_out_box();
             }
@@ -1682,6 +1647,9 @@ impl Chat {
         self.render(dirty);
         let width = self.canvas.width;
         self.screen.copy(dirty.x as usize, dirty.y as usize, dirty.w as usize, dirty.h as usize, self.canvas.pixels(), width);
+        // (Over the pointer, if it was there: it's drawn again. Interrupts are off, the chat's lock held, so it can't
+        // move meanwhile.)
+        crate::pointer::over(dirty.x, dirty.y, dirty.w, dirty.h);
     }
 
     /// The part of the screen a block takes now.
@@ -1703,7 +1671,9 @@ impl Chat {
         if self.stopped {
             return;
         }
-        if !self.sides_read {
+        // What's typed, for the model to read ahead (not a key for Claude being typed).
+        assistant::typing(if self.key_typed.is_some() { "" } else { &self.typed });
+        if !self.sides_read && self.looping {
             self.sides_read = true;
             let sides = assistant::sides();
             if sides != self.sides {
@@ -2002,6 +1972,11 @@ impl Chat {
         if (self.typed.trim().is_empty() && self.attached.is_empty()) || self.asking.is_some() {
             return;
         }
+        // (Still starting: sent once the main loop has.)
+        if !self.looping {
+            self.send_later = true;
+            return;
+        }
         if !self.started {
             self.started = true;
             self.blocks.clear();
@@ -2233,6 +2208,27 @@ impl Chat {
         self.lay_out();
         self.anchor = self.pin_top(you);
         self.scroll = None;
+        self.dirty = self.canvas.whole();
+    }
+
+    /// A file picked with "/": opened in the middle, as a website is (files::view makes a page of it), until it's
+    /// closed; or why it can't be, under the conversation.
+    fn open_file(&mut self, path: String) {
+        match crate::files::view(&path) {
+            Ok(v) => {
+                let what = format!("Opened {}", v.name);
+                crate::log!("Chat Computer kernel: site: {what}");
+                self.action(what);
+                if let Some(mut s) = self.site.take() {
+                    s.stop();
+                }
+                // (Its address is the file's, on this PC: a link in it, if it has any, goes to the web from there.)
+                let url = web::Url { host: String::from("this.pc"), port: 443, path: format!("/{}", path.replace('\\', "/")) };
+                self.site = Some(Site::local(url, &v.html));
+            }
+            Err(why) => self.note_now(why),
+        }
+        self.lay_out_box();
         self.dirty = self.canvas.whole();
     }
 
@@ -2468,6 +2464,18 @@ pub fn starting(what: &str) {
     }
 }
 
+/// The main loop has started: keys are taken as they come; a message sent before then goes now.
+pub fn looping() {
+    if let Some(c) = CHAT.lock().as_mut() {
+        c.looping = true;
+        if core::mem::take(&mut c.send_later) {
+            c.send();
+        }
+        c.box_changed();
+        c.draw(false);
+    }
+}
+
 /// Called after every interrupt: the start screen's live lines, the thinking dot, and whatever changed.
 pub fn tick() {
     if let Some(c) = CHAT.lock().as_mut() {
@@ -2503,10 +2511,13 @@ pub fn wheel(notches: i32) {
     }
 }
 
-/// The mouse moved (its counts, right and down) and its buttons were pressed (bit 0: the left one).
-pub fn pointer(dx: i32, dy: i32, pressed: u32) {
+/// The pointer moved (it's at `at`), or its left button was pressed at `click`.
+pub fn pointer(at: (f32, f32), click: Option<(f32, f32)>) {
     if let Some(c) = CHAT.lock().as_mut() {
-        c.pointer_moved(dx, dy, pressed);
+        if let Some(p) = click {
+            c.pointer_at(p, true);
+        }
+        c.pointer_at(at, false);
         c.draw(false);
     }
 }

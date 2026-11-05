@@ -227,6 +227,66 @@ fn the_system_prompt_read_ahead_is_read_once() {
 }
 
 #[test]
+fn what_is_typed_is_read_ahead_and_only_the_rest_after() {
+    typed_ahead(false);
+    typed_ahead(true);
+}
+
+fn typed_ahead(experts: bool) {
+    let bytes = tiny(experts);
+    let file = File::open(&bytes).unwrap();
+    let m = Model::load(&file).unwrap();
+    let o = Options { think: Some(false), keep_thinking: Some(true), ..Options::default() };
+    fn rq(msgs: &[Message], o: Options) -> Request<'_> {
+        Request { tools: &[], messages: msgs, options: o, sampling: Sampling::GREEDY, max_tokens: 6, seed: 5 }
+    }
+    let mut msgs = vec![Message::System("A system prompt, then a conversation, all read ahead.".into()), Message::User("[Thu 5 Nov 2026 19:30] Hello there".into())];
+    let mut s = Session::new(&m, Style::QWEN35);
+    let (first, _) = s.ask(&rq(&msgs, o), &Serial, &mut |_, _| true).unwrap();
+    msgs.push(Message::Assistant(first));
+    let typed = |words: &str| {
+        let mut all = msgs.clone();
+        all.push(Message::User(alloc::format!("[Thu 5 Nov 2026 19:31] {words}")));
+        all
+    };
+    // "How are you to" typed: the words that can't change read ahead, a few tokens a call.
+    let ahead = s.prompt_ahead(&rq(&typed("How are you"), o)).unwrap();
+    assert!(ahead.anchor.is_some_and(|a| a < ahead.mark.unwrap()) && ahead.mark.unwrap() < ahead.tokens.len());
+    let mut calls = 1;
+    while !s.read_on(&ahead, 3, &Serial) {
+        calls += 1;
+    }
+    assert!(calls > 1 && s.read_of(&ahead) == ahead.tokens.len());
+    assert!(s.read_on(&ahead, 3, &Serial), "read already");
+    // Sent as "How are you today?": only the rest is read, and the answer is what a session that read nothing ahead
+    // says (one that answered the first question too: the model's answer is given back as its own tokens).
+    let answered = || {
+        let mut r = Session::new(&m, Style::QWEN35);
+        r.ask(&rq(&msgs[..2], o), &Serial, &mut |_, _| true).unwrap();
+        r
+    };
+    let sent = typed("How are you today?");
+    let (want, want_st) = answered().ask(&rq(&sent, o), &Serial, &mut |_, _| true).unwrap();
+    let (got, st) = s.ask(&rq(&sent, o), &Serial, &mut |_, _| true).unwrap();
+    assert_eq!(got, want);
+    assert_eq!((st.prompt, st.read), (want_st.prompt, want_st.prompt - ahead.tokens.len()));
+    // Another session: typed, then rubbed out and typed again: read again from where the message starts (the
+    // snapshot there), not from the start.
+    let mut s = answered();
+    let ahead = s.prompt_ahead(&rq(&typed("How are you"), o)).unwrap();
+    while !s.read_on(&ahead, 64, &Serial) {}
+    let other = s.prompt_ahead(&rq(&typed("Something else"), o)).unwrap();
+    let parted = s.read_of(&other);
+    assert!(parted > ahead.mark.unwrap() && parted < ahead.tokens.len());
+    while !s.read_on(&other, 64, &Serial) {}
+    let sent = typed("Something else entirely");
+    let (want, want_st) = answered().ask(&rq(&sent, o), &Serial, &mut |_, _| true).unwrap();
+    let (got, st) = s.ask(&rq(&sent, o), &Serial, &mut |_, _| true).unwrap();
+    assert_eq!(got, want);
+    assert_eq!((st.prompt, st.read), (want_st.prompt, want_st.prompt - other.tokens.len()));
+}
+
+#[test]
 fn a_damaged_file_is_refused() {
     let mut bytes = tiny(false);
     assert!(File::open(&bytes[..100]).is_err());

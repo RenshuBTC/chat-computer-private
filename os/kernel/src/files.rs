@@ -1446,6 +1446,141 @@ pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>, blin
     })?
 }
 
+/// A file opened to look at (chat.rs's "/"), as a page for the browser engine (site.rs): its name, and the page.
+pub struct View {
+    pub name: String,
+    pub html: String,
+}
+
+/// The most of a file's words shown, and how big its pictures are made (each side, at most).
+const VIEW_WORDS: usize = 4_000_000;
+const VIEW_SIDE: usize = 2048;
+/// A scanned PDF's pages shown as pictures, at most.
+const VIEW_PAGES: usize = 5;
+
+/// A file as a page to look at: a picture shown (a PDF's scanned pages too), a text file's words, a document's words
+/// (Word, Excel, PowerPoint, PDF), what's in a ZIP archive, or what it is when it can't be shown. An HTML file is
+/// shown as the page it is (what it needs from beside it isn't fetched).
+pub fn view(path: &str) -> Result<View, String> {
+    let (letter, rel) = inside(path);
+    with(letter, |fs, p| {
+        let (e, rel, _) = found(fs, p, letter, &rel)?;
+        let f = fs.open_file(p, &e).map_err(|err| error_text(err, &shown(letter, &rel)))?;
+        let fail = |err: ntfs::Error| error_text(err, &shown(letter, &rel));
+        let full = shown(letter, &rel);
+        let name = String::from(rel.rsplit(['\\', '/']).next().unwrap_or(&rel));
+        let about = format!("{} \u{00B7} {} \u{00B7} changed {}", full, size(f.size), date(e.modified));
+        let fit = |w: usize, h: usize| -> (usize, usize) {
+            let long = w.max(h).max(1);
+            if long <= VIEW_SIDE { (w.max(1), h.max(1)) } else { ((w * VIEW_SIDE / long).max(1), (h * VIEW_SIDE / long).max(1)) }
+        };
+        let page = |body: String| View { name: name.clone(), html: view_page(&name, &about, &body) };
+        let words = |text: &str| page(format!("<pre>{}</pre>", crate::site::escape(text)));
+        let note = |text: String| page(format!("<p class=note>{}</p>", crate::site::escape(&text)));
+        let picture = |pic: &picture::Picture| -> String {
+            let jpeg = picture::encode_jpeg(pic, 90);
+            format!("<img src=\"data:image/jpeg;base64,{}\" width={} height={}>", claude::api::base64(&jpeg), pic.width, pic.height)
+        };
+        let mut head = [0u8; 32];
+        let n = fs.read(p, &f, 0, &mut head).map_err(fail)?;
+        let ext = rel.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        Ok(match kind_of(&head[..n], &rel) {
+            Kind::Picture(media) => {
+                if media == "image/webp" {
+                    note(String::from("It's a WebP picture, which Chat Computer's own system can't open yet."))
+                } else if f.size > MOST_SHOWN {
+                    note(String::from("It's a picture too big for Chat Computer's own system to open."))
+                } else {
+                    let data = whole(fs, p, &f, MOST_SHOWN).map_err(fail)?;
+                    match picture::decode_for(&data, &fit, decoding_room()) {
+                        Ok(pic) => page(format!("<div class=picture>{}</div>", picture(&pic))),
+                        Err(picture::Error::Unsupported(what)) => note(format!("It's a {what}, which Chat Computer's own system can't open yet.")),
+                        Err(picture::Error::TooBig) => note(String::from("It has too many pixels for Chat Computer's own system to open.")),
+                        Err(_) => note(String::from("It should be a picture, but it seems to be damaged: it can't be opened.")),
+                    }
+                }
+            }
+            Kind::Office | Kind::Zip | Kind::Pdf if f.size > MOST_OFFICE => note(String::from("It's too big for Chat Computer's own system to open.")),
+            Kind::Pdf => {
+                let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
+                match pdf::read(&data) {
+                    // (No words: scanned pages, shown as the pictures they are.)
+                    Ok(d) if d.text.is_empty() || d.text.split("## Page ").skip(1).all(|pg| pg.contains(pdf::NO_WORDS)) => {
+                        let mut body = String::new();
+                        for k in 0..d.pages.min(VIEW_PAGES) {
+                            if let Ok(Some(pic)) = pdf::page_picture(&data, k, &fit, decoding_room())
+                                && pic.drawn > 0
+                            {
+                                let pic = picture::Picture { width: pic.width as u32, height: pic.height as u32, rgb: pic.rgb };
+                                body += &format!("<div class=picture>{}</div>", picture(&pic));
+                            }
+                        }
+                        if d.pages > VIEW_PAGES {
+                            body += &format!("<p class=note>{} more pages aren't shown here.</p>", d.pages - VIEW_PAGES);
+                        }
+                        page(body)
+                    }
+                    Ok(d) => words(&d.text),
+                    Err(pdf::Error::Encrypted) => note(String::from("A password protects it, so it can't be opened here.")),
+                    Err(_) => note(String::from("It should be a PDF, but Chat Computer's own system can't read it: it may be damaged.")),
+                }
+            }
+            Kind::Office => {
+                let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
+                match office::read(&data) {
+                    Ok((_, text)) => words(&text),
+                    Err(office::Error::Zip(zip::Error::Encrypted)) => note(String::from("A password protects it, so it can't be opened here.")),
+                    Err(_) => note(String::from("It should be a Word, Excel or PowerPoint file, but it can't be read: it may be damaged.")),
+                }
+            }
+            Kind::Zip => {
+                let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
+                match zip::Archive::open(&data) {
+                    Ok(archive) => {
+                        let mut list = String::new();
+                        for entry in archive.entries().iter().filter(|e| !e.is_folder()).take(MOST_LISTED) {
+                            list += &format!("{} ({})\n", entry.name, size(entry.size));
+                        }
+                        words(&list)
+                    }
+                    Err(_) => note(String::from("It isn't a ZIP archive Chat Computer's own system can read: it may be damaged.")),
+                }
+            }
+            Kind::OldOffice => note(String::from("It's in Office's format from before 2007 (or a password protects it), which Chat Computer's own system can't read inside yet.")),
+            Kind::Media(what) => note(format!("It's {what}, which Chat Computer's own system can't play yet.")),
+            Kind::Other => {
+                let mut buf = vec![0u8; f.size.min(VIEW_WORDS as u64) as usize];
+                let n = fs.read(p, &f, 0, &mut buf).map_err(fail)?;
+                buf.truncate(n);
+                match as_text(&buf, true) {
+                    // An HTML file: the page it is.
+                    Some((text, _)) if ext == "html" || ext == "htm" => View { name: name.clone(), html: text },
+                    Some((text, _)) => {
+                        let more = if (n as u64) < f.size { "\n\n[The rest of the file isn't shown here.]" } else { "" };
+                        words(&format!("{text}{more}"))
+                    }
+                    None => note(format!("It isn't text: it's a {} file, which Chat Computer's own system can't open yet.", if ext.is_empty() || ext.len() > 5 { "binary" } else { &ext })),
+                }
+            }
+        })
+    })?
+}
+
+/// A file's page: its name and what it is at the top, then what's in it (as Chat Computer's own pages look: dark).
+fn view_page(name: &str, about: &str, body: &str) -> String {
+    format!(
+        "<!doctype html><html><head><meta charset=utf-8><title>{}</title><style>\
+         body{{margin:0;padding:1.25rem 1.5rem;background:#191919;color:#f0f0f0;font-family:sans-serif}}\
+         h1{{font-size:1.1rem;margin:0 0 .25rem}} .about{{color:#9e9e9e;font-size:.85rem;margin:0 0 1rem}}\
+         pre{{white-space:pre-wrap;font-size:.95rem;line-height:1.45;margin:0}} .note{{color:#c8c8c8}}\
+         .picture{{margin:0 0 1rem}} img{{max-width:100%;height:auto}}</style></head>\
+         <body><h1>{}</h1><p class=about>{}</p>{body}</body></html>",
+        crate::site::escape(name),
+        crate::site::escape(name),
+        crate::site::escape(about)
+    )
+}
+
 /// Whether a PDF's words (pdf::read's) have words on page `k` (from 1).
 fn pdf_page_has_words(text: &str, k: u64) -> bool {
     let head = format!("## Page {k}\n");

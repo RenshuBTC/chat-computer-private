@@ -38,6 +38,7 @@ mod netcard;
 mod network;
 mod paging;
 mod pci;
+mod pointer;
 mod power;
 mod ps2;
 mod random;
@@ -241,6 +242,7 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
 
     cpu::enable_interrupts();
     usb::start();
+    KEYS_ON.store(true, core::sync::atomic::Ordering::Relaxed);
     next("the network");
     let cards = network::init();
     if cards == 0 {
@@ -284,6 +286,8 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
     let mut keyboards_shown = u64::MAX;
     let (mut stack_shown, mut stack_checked) = (0, 0);
     log_stack(&mut stack_shown);
+    log!("Chat Computer kernel: taking keys as they come (at {:.1} s)", time::uptime_ms() as f64 / 1000.0);
+    chat::looping();
     loop {
         // (While the model works, the loop goes straight on: its steps are short, and the rest has its turn between.)
         if !assistant::working() && !listening::working() {
@@ -314,9 +318,9 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         if turned != 0 {
             chat::wheel(turned);
         }
-        let (dx, dy, pressed) = mouse::take_motion();
-        if dx != 0 || dy != 0 || pressed != 0 {
-            chat::pointer(dx, dy, pressed);
+        // (The pointer itself moved as the mouse's reports came: what's under it lights up, and a click does its thing.)
+        if let (Some(at), click) = pointer::take() {
+            chat::pointer(at, click);
         }
         if usb::changes() != keyboards_shown {
             keyboards_shown = usb::changes();
@@ -337,12 +341,33 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
     }
 }
 
-/// Before one of the start's steps: which, in the log and on the start screen, and the log saved, so a PC that stops
-/// in the middle of a step shows which (on the screen, and in the log Windows' setup reads back).
+/// Before one of the start's steps: which, in the log (with when) and on the start screen, and the log saved, so a PC
+/// that stops in the middle of a step shows which (on the screen, and in the log Windows' setup reads back). What's
+/// been typed meanwhile is taken too (the keyboards' interrupts keep it), so it shows as the start goes on.
 fn next(what: &str) {
-    log!("Chat Computer kernel: next: {what}");
+    log!("Chat Computer kernel: next: {what} (at {:.1} s)", time::uptime_ms() as f64 / 1000.0);
     chat::starting(what);
+    take_keys();
     journal::save();
+}
+
+/// Whether the keyboards are set up (PS/2's looked for, USB's started).
+static KEYS_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Keys typed and the mouse moved while the start goes on, taken as the main loop takes them (what's sent then waits
+/// for it: chat.rs).
+fn take_keys() {
+    if !KEYS_ON.load(core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    ps2::poll();
+    while let Some(press) = keyboard::take() {
+        chat::typed(press);
+    }
+    if let (Some(at), click) = pointer::take() {
+        chat::pointer(at, click);
+    }
+    chat::tick();
 }
 
 /// Says in the log how deep the kernel's stack has gone, when that's 8 KiB or more deeper than it last said.

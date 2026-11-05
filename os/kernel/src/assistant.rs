@@ -3,10 +3,17 @@
 //! one Chat Computer's app got ready there (or the one the settings name), read into memory at start-up. Nothing
 //! anyone types leaves this PC, and nothing is paid for.
 //!
-//! The model answers a step at a time, from the main loop: part of what it's asked read, or one token written, a step
-//! (a few hundredths of a second, as far as the processor allows), so the screen and the keyboard go on while it reads
-//! and writes. Before anyone asks anything, it reads its instructions (the system prompt, with its tools) ahead, so
-//! the first question has only itself to be read. Each message it's given starts with when it was sent.
+//! The model answers a step at a time: part of what it's asked read (64 tokens at once, so each of its weights read
+//! from memory serves many: what makes reading fast), or one token written, a step. Each step runs on the processor's
+//! other cores (cores::away: the second core takes it, and shares its arithmetic with the rest), the first core going
+//! on with its loop meanwhile, so the screen, the mouse and the keyboard never wait for the model. The main loop looks
+//! for the step's end, takes what came of it, and sends the next. With one core, a step is done in the loop itself,
+//! kept short.
+//!
+//! Before anything's asked, it reads ahead what the next question will start with: its instructions (the system
+//! prompt, with its tools), the conversation so far (after a restart, the one kept from before), and the words being
+//! typed in the message box as far as they can't change (all but the last word), so a question sent has little left
+//! to read. Each message it's given starts with when it was sent.
 //!
 //! It acts on this computer through its tools (tools.json): it sees how the computer's doing, changes the text size,
 //! sets timers, reminders and alarms, reads the files on its drives (and sees their pictures, scanned pages among
@@ -39,7 +46,7 @@ use model::cpu::Level;
 use model::json::{self, Json};
 use model::refusal::Found;
 use model::sample::Sampling;
-use model::session::{Ended, Request, Session, Step, Turn};
+use model::session::{Ahead, Ended, Request, Session, Step, Turn};
 use model::{File, Model};
 
 /// What came of the question.
@@ -150,8 +157,15 @@ const CUT_CALL: &str = "Not run: you reached the most you can write at once whil
 it may be cut short. Call it again, shorter.";
 /// The line under an answer that reached the most a round says.
 const CUT_SHORT: &str = "Chat Computer's answer stops here: that's the most its model writes at once. Ask it to go on.";
-/// About how long a step of work takes: the screen and the keyboard go on between steps.
+/// About how long a step of work done in the main loop takes: the screen and the keyboard go on between steps.
 const STEP_MS: u64 = 40;
+/// About how long a step of the model's sent to the other cores takes (the main loop goes on meanwhile; a step that
+/// long is still soon stopped): a picture's patches a step are suited to it.
+const AWAY_MS: u64 = 300;
+/// Tokens of a prompt read a step, on the other cores: a whole batch of the engine's at least (each weight read from
+/// memory serving all of them), and more while steps are quick.
+const READ_LEAST: usize = model::net::BATCH;
+const READ_MOST: usize = 4 * model::net::BATCH;
 /// With no model found, looking again this often (Windows' drive may be unlocked meanwhile).
 const LOOK_AGAIN_MS: u64 = 3_000;
 /// Reading the model's file: how much a read takes to start with, and at most (it suits itself to the drive).
@@ -239,21 +253,76 @@ struct Loaded {
     name: String,
     /// Where its file is.
     path: String,
+    /// The conversation it has read (not touched while one of its steps is away on the other cores: `Assistant::away`).
     session: Session<'static>,
+    /// The model itself (the session's), for what's asked of it meanwhile.
+    model: &'static Model<'static>,
     style_name: String,
     /// Its refusals are taken out (its .refusal file beside it).
     uncensored: bool,
     /// The longest conversation it's given, in tokens.
     context: usize,
-    /// Its instructions' tokens, to read ahead of the first question (empty once read), and how many are read.
-    ahead: Vec<u32>,
+    /// What's read ahead of the next question (Session::prompt_ahead's: the instructions, the conversation so far, and
+    /// the words typed so far that can't change), what it was made from, how much of it is read, and whether it's all
+    /// read; whether the instructions were (said in the log once).
+    ahead: Option<Arc<Ahead>>,
+    ahead_of: Option<AheadOf>,
     ahead_done: usize,
+    ahead_read: bool,
+    instructions_read: bool,
     /// How many tokens a reading step takes, and how many of a picture's patches a step of seeing it (each suited
     /// to the processor's speed).
     read: usize,
     see: usize,
     /// Tokens written a second, in its last answer.
     speed: Option<f64>,
+}
+
+/// What reading ahead was made from: the conversation as far as it's given (how many parts, from where, with which
+/// instructions), the words typed that can't change, and the minute the message would be sent in.
+#[derive(Clone, PartialEq, Eq)]
+struct AheadOf {
+    parts: usize,
+    from: usize,
+    system: u64,
+    words: String,
+    minute: i64,
+}
+
+impl Loaded {
+    /// The instructions' reading ahead, while it isn't done: how far it's got, of how far.
+    fn instructions_left(&self) -> Option<(usize, usize)> {
+        let a = self.ahead.as_ref()?.anchor?;
+        (!self.instructions_read && self.ahead_done < a).then_some((self.ahead_done, a))
+    }
+}
+
+/// One of the model's steps, away on the other cores: what it's for (reading ahead, made from `of`; or the answer
+/// `job`'s turn's step), and what comes of it.
+struct Away {
+    errand: crate::cores::Errand<Back>,
+    of: Option<AheadOf>,
+    job: Option<u64>,
+}
+
+/// What came of a step away: a turn's step (whether the turn was reading, how much it had read before, whether it's
+/// over after it), or what's read ahead (worked out anew, if it was), how much of it is read, and whether it's all
+/// read; and how long it took.
+enum Back {
+    Turn { step: Step, reading: bool, before: usize, over: bool, took: u64 },
+    Ahead { ahead: Option<Arc<Ahead>>, done: usize, all: bool, took: u64 },
+}
+
+/// A pointer lent to the other cores with a step (what it points to is touched by nothing else until the step's back).
+struct Lent<T>(*mut T);
+
+unsafe impl<T> Send for Lent<T> {}
+
+impl<T> Lent<T> {
+    /// (A method, so a closure takes the whole of it, Send, rather than its pointer.)
+    fn get(self) -> *mut T {
+        self.0
+    }
 }
 
 /// The model, as far as it's got.
@@ -268,7 +337,9 @@ enum Brain {
 
 /// A question being answered.
 struct Job {
-    /// Where it is in the conversation (a failed or stopped question is taken back out).
+    /// Which question this is (each its own number), and where it is in the conversation (a failed or stopped
+    /// question is taken back out).
+    id: u64,
     base: usize,
     rounds: u32,
     /// Whether any words have been shown, and whether the next ones start a new paragraph (after tools ran).
@@ -279,8 +350,9 @@ struct Job {
     turn_off: bool,
     /// Start a new conversation once the answer is over.
     new_conversation: bool,
-    /// The model's turn in the round being answered, once it's begun.
-    turn: Option<Turn>,
+    /// The model's turn in the round being answered, once it's begun (where it is in memory stays the same while one
+    /// of its steps is away).
+    turn: Option<Box<Turn>>,
     /// How many of the round's tool calls the model finished writing before the round was over (one it was still
     /// writing when the round reached the most it says is read as far as it got: it isn't run).
     closed: usize,
@@ -334,8 +406,9 @@ impl WebCall {
 const PAGE_PART: usize = 12_000;
 
 impl Job {
-    fn new(base: usize) -> Job {
+    fn new(id: u64, base: usize) -> Job {
         Job {
+            id,
             base,
             rounds: 0,
             said: false,
@@ -370,7 +443,7 @@ struct Assistant {
     /// The model's file, if the settings name one (else the app's are looked for).
     setting: Option<String>,
     /// The tools, as the model is given them.
-    tools: Vec<Json>,
+    tools: Arc<Vec<Json>>,
     /// The conversation, and where the part the model's given starts (the oldest is left out once it's too long).
     parts: Vec<Part>,
     from: usize,
@@ -380,6 +453,12 @@ struct Assistant {
     /// is read once.
     system: String,
     job: Option<Job>,
+    /// How many questions have been asked (each job's number).
+    jobs: u64,
+    /// One of the model's steps, away on the other cores; and a turn whose question was stopped while its step was
+    /// away (ended once the step's back).
+    away: Option<Away>,
+    orphan: Option<Box<Turn>>,
     /// The conversation changed since it was last kept (keep.rs).
     unkept: bool,
     /// Your own key for Claude, if there's one (never logged), and the mark of the one the settings gave (so a new
@@ -516,12 +595,15 @@ pub fn init(setting: Option<String>, settings_key: Option<String>, ai: Option<St
         brain: Brain::None { why: String::new(), again: false, since: 0 },
         page: None,
         setting,
-        tools,
+        tools: Arc::new(tools),
         parts,
         from: 0,
         notes,
         system: String::new(),
         job: None,
+        jobs: 0,
+        away: None,
+        orphan: None,
         unkept: false,
         claude_key: None,
         setup_key: 0,
@@ -771,7 +853,8 @@ pub fn ask(text: &str) -> Result<(), String> {
     }
     let base = a.parts.len();
     a.parts.push(Part::You { text: String::from(text), at: clock::now() });
-    a.job = Some(Job::new(base));
+    a.jobs += 1;
+    a.job = Some(Job::new(a.jobs, base));
     a.show();
     Ok(())
 }
@@ -784,9 +867,14 @@ pub fn stop() {
     if let Some(mut call) = job.call.take() {
         call.stop();
     }
-    if let (Some(mut turn), Brain::Ready(m)) = (job.turn.take(), &mut a.brain) {
-        m.session.stop(&mut turn);
-        m.session.end(turn);
+    if let Some(mut turn) = job.turn.take() {
+        if a.away.as_ref().is_some_and(|w| w.job == Some(job.id)) {
+            // (Its step is away: the turn is ended once the step's back.)
+            a.orphan = Some(turn);
+        } else if let Brain::Ready(m) = &mut a.brain {
+            m.session.stop(&mut turn);
+            m.session.end(*turn);
+        }
     }
     a.parts.truncate(job.base);
     a.show();
@@ -839,23 +927,7 @@ impl Assistant {
                     }
                 }
             }
-            Brain::Ready(m) => {
-                if self.job.is_some() {
-                    m.ahead.clear();
-                    self.answer(until, events);
-                } else if !m.ahead.is_empty() {
-                    while !m.ahead.is_empty() && time::uptime_ms() < until {
-                        let t = time::uptime_ms();
-                        if m.session.read_ahead(&m.ahead, m.read, &crate::cores::Cores) {
-                            crate::log!("Chat Computer kernel: model: read its instructions ahead ({} tokens)", m.ahead.len());
-                            m.ahead.clear();
-                        } else {
-                            m.ahead_done = (m.ahead_done + m.read).min(m.ahead.len());
-                            m.read = suited(m.read, time::uptime_ms() - t);
-                        }
-                    }
-                }
-            }
+            Brain::Ready(_) => self.model_work(until, events),
             Brain::Script(_) => {
                 if let Some(mut job) = self.job.take() {
                     let over = loop {
@@ -1088,11 +1160,14 @@ impl Assistant {
                 drive_of(&r.file.path),
                 percent(r.bytes.len(), r.file.size as usize)
             )),
-            Brain::Ready(m) if !m.ahead.is_empty() => Ready::Getting(format!(
-                "Getting Chat Computer's own model ready: {} is reading its instructions ({}%)\u{2026}",
-                m.name,
-                percent(m.ahead_done, m.ahead.len())
-            )),
+            Brain::Ready(m) if m.instructions_left().is_some() => {
+                let (done, of) = m.instructions_left().unwrap_or((0, 1));
+                Ready::Getting(format!(
+                    "Getting Chat Computer's own model ready: {} is reading its instructions ({}%)\u{2026}",
+                    m.name,
+                    percent(done, of)
+                ))
+            }
             Brain::Ready(m) => Ready::Yes(m.name.clone()),
             Brain::Script(_) => Ready::Yes(String::from("a test's script")),
         };
@@ -1122,16 +1197,18 @@ impl Assistant {
                         n => format!("{n} of this PC's processor cores"),
                     },
                     if m.uncensored { ", its refusals taken out" } else { "" },
-                    if m.session.model.vision.is_some() { ", seeing pictures" } else { ", its file without the part that sees pictures" },
+                    if m.model.vision.is_some() { ", seeing pictures" } else { ", its file without the part that sees pictures" },
                     m.context,
                     m.speed.map(|s| format!("; lately {s:.1} tokens a second")).unwrap_or_default()
                 )
             }
             Brain::Script(_) => String::from("Model: a test's script, in place of a model"),
         };
-        let working = self.job.is_some()
-            || matches!(&self.brain, Brain::Reading(_))
-            || matches!(&self.brain, Brain::Ready(m) if !m.ahead.is_empty());
+        // (The main loop goes straight on while there's work for it; while a step of the model's is away on the other
+        // cores, it waits: the step's end wakes it.)
+        let ahead = matches!(&self.brain, Brain::Ready(m) if !m.ahead_read && self.claude.is_none());
+        let away = self.away.as_ref().is_some_and(|a| !a.errand.done());
+        let working = !away && (self.job.is_some() || matches!(&self.brain, Brain::Reading(_)) || ahead);
         *SHOWN.lock() = Some(Shown { ready, status, busy: self.job.is_some(), working });
     }
 
@@ -1143,7 +1220,7 @@ impl Assistant {
             _ => String::from("Qwen"),
         };
         let sees = match &self.brain {
-            Brain::Ready(m) => m.session.model.vision.is_some(),
+            Brain::Ready(m) => m.model.vision.is_some(),
             Brain::Script(_) => true,
             _ => false,
         };
@@ -1235,25 +1312,192 @@ impl Assistant {
         }
     }
 
-    /// Starts reading the instructions ahead (the system prompt, with the tools), before anything's asked.
+    /// Reading ahead starts again (the instructions changed, or the conversation): what it reads is worked out anew.
     fn start_ahead(&mut self) {
-        let messages = vec![Message::System(self.system.clone()), Message::User(String::from("."))];
-        let Brain::Ready(m) = &mut self.brain else { return };
-        let r = request(&self.tools, &messages, 0, Sampling::GREEDY);
-        m.ahead = m.session.ahead(&r).unwrap_or_default();
-        m.ahead_done = 0;
+        if let Brain::Ready(m) = &mut self.brain {
+            m.ahead_of = None;
+            m.ahead_read = false;
+        }
     }
 
-    /// Moves the answer on, for a step.
-    fn answer(&mut self, until: u64, events: &mut Vec<Event>) {
+    /// Chat Computer's own model's work: its step away on the other cores looked at (back: what came of it taken), a
+    /// turn whose question was stopped meanwhile ended, and the next step sent (the answer's, or reading ahead). With
+    /// one core, steps are done here, one after another until `until`.
+    fn model_work(&mut self, until: u64, events: &mut Vec<Event>) {
+        loop {
+            if let Some(away) = &self.away {
+                if !away.errand.done() {
+                    return;
+                }
+                let away = self.away.take().expect("a step away");
+                self.step_back(away, events);
+            }
+            if let Some(mut turn) = self.orphan.take()
+                && let Brain::Ready(m) = &mut self.brain
+            {
+                m.session.stop(&mut turn);
+                m.session.end(*turn);
+            }
+            if self.job.is_some() {
+                self.answer(events);
+            } else {
+                self.read_ahead_step();
+            }
+            match &self.away {
+                Some(away) if away.errand.done() && time::uptime_ms() < until => {}
+                _ => return,
+            }
+        }
+    }
+
+    /// What came of a step that was away.
+    fn step_back(&mut self, mut away: Away, events: &mut Vec<Event>) {
+        let Some(back) = away.errand.take() else { return };
+        let Brain::Ready(m) = &mut self.brain else { return };
+        let target = if crate::cores::count() > 1 { AWAY_MS } else { STEP_MS };
+        let (least, most) = if crate::cores::count() > 1 { (READ_LEAST, READ_MOST) } else { (1, model::net::BATCH) };
+        match back {
+            Back::Ahead { ahead, done, all, took } => {
+                if away.of.is_some() && away.of == m.ahead_of {
+                    if ahead.is_some() {
+                        m.ahead = ahead;
+                    }
+                    m.ahead_done = done;
+                    m.ahead_read = all;
+                }
+                if took > 0 {
+                    m.read = suited_to(m.read, took, target, most).max(least);
+                }
+                if let Some(anchor) = m.ahead.as_ref().and_then(|a| a.anchor)
+                    && !m.instructions_read
+                    && m.ahead_done >= anchor
+                {
+                    m.instructions_read = true;
+                    crate::log!("Chat Computer kernel: model: read its instructions ahead ({anchor} tokens)");
+                }
+            }
+            Back::Turn { step, reading, before, over, took } => {
+                // (Its question stopped meanwhile: the turn is the orphan's, ended already.)
+                let Some(job) = self.job.as_mut().filter(|j| away.job == Some(j.id)) else { return };
+                match step {
+                    Step::Read { done, total } => {
+                        job.read += done.saturating_sub(before);
+                        job.read_ms += took;
+                        m.read = suited_to(m.read, took, target, most).max(least);
+                        if !job.said && job.read_ms > 1500 {
+                            activity(job, format!("Reading ({}%)", percent(done, total)), events);
+                        }
+                    }
+                    Step::Seeing { done, total } => {
+                        job.see_ms += took;
+                        m.see = suited_to(m.see, took, target, 1 << 16);
+                        if done == total {
+                            job.seen += 1;
+                        }
+                        if !job.said {
+                            activity(job, format!("Looking at the picture ({}%)", percent(done, total)), events);
+                        }
+                    }
+                    Step::Said(s) => {
+                        if !reading {
+                            job.written += 1;
+                            job.write_ms += took;
+                        }
+                        // (A call that comes as the turn ends was never closed: the engine reads it as far as it got.
+                        // If the round reached the most it says, it was cut off as it was written, and isn't run.)
+                        match s {
+                            Saying::Text(words) => say(job, words, events),
+                            Saying::Thinking(_) => activity(job, String::from("Thinking"), events),
+                            Saying::Call(_) if !over => job.closed += 1,
+                            _ => {}
+                        }
+                    }
+                    Step::Over => {}
+                }
+            }
+        }
+    }
+
+    /// Reads ahead, a step: what the next question will start with (the instructions, the conversation so far, and
+    /// the words typed so far that can't change) worked out again if any of that changed, and a step of reading it
+    /// sent away. Not while Claude answers (its own model isn't asked then).
+    fn read_ahead_step(&mut self) {
+        if self.claude.is_some() {
+            return;
+        }
+        let words = sure_words(&TYPED.lock());
+        let now = clock::now();
+        let of = AheadOf {
+            parts: self.parts.len(),
+            from: self.from,
+            system: model::file::fnv(0xcbf2_9ce4_8422_2325, self.system.as_bytes()),
+            words,
+            minute: now.map_or(-1, |t| t.div_euclid(60)),
+        };
+        let fresh = match &self.brain {
+            Brain::Ready(m) if m.ahead_of.as_ref() == Some(&of) => {
+                if m.ahead_read {
+                    return;
+                }
+                false
+            }
+            Brain::Ready(_) => true,
+            _ => return,
+        };
+        // (Worked out anew on the other core, with the step: the conversation's words made into tokens there.)
+        let messages = if fresh {
+            let mut all = self.messages();
+            all.push(Message::User(match now {
+                Some(t) if of.words.is_empty() => format!("[{}]", clock::short_text(t)),
+                Some(t) => format!("[{}] {}", clock::short_text(t), of.words),
+                None => of.words.clone(),
+            }));
+            Some(all)
+        } else {
+            None
+        };
+        let tools = self.tools.clone();
+        let Brain::Ready(m) = &mut self.brain else { return };
+        if fresh {
+            m.ahead_of = Some(of.clone());
+            m.ahead_read = false;
+        }
+        let known = m.ahead.clone();
+        let (session, read, context) = (Lent(&mut m.session as *mut Session<'static>), m.read, m.context);
+        let errand = crate::cores::away(move || {
+            let session = unsafe { &mut *session.get() };
+            let t = time::uptime_ms();
+            let ahead = match messages {
+                Some(messages) => match session.prompt_ahead(&request(&tools, &messages, 0, Sampling::GREEDY)) {
+                    Ok(a) => Arc::new(a),
+                    // (Nothing to read ahead: it's all read, as far as reading ahead goes.)
+                    Err(_) => return Back::Ahead { ahead: None, done: 0, all: true, took: 0 },
+                },
+                None => match known {
+                    Some(a) => a,
+                    None => return Back::Ahead { ahead: None, done: 0, all: true, took: 0 },
+                },
+            };
+            // (Longer than the model's given: the question shortens the conversation, and reads it then.)
+            if ahead.tokens.len() > context {
+                return Back::Ahead { done: 0, all: true, took: 0, ahead: Some(ahead) };
+            }
+            let all = session.read_on(&ahead, read, &crate::cores::Cores);
+            Back::Ahead { done: session.read_of(&ahead), all, took: time::uptime_ms() - t, ahead: Some(ahead) }
+        });
+        self.away = Some(Away { errand, of: Some(of), job: None });
+    }
+
+    /// Moves the answer on: as far as its next step, sent away.
+    fn answer(&mut self, events: &mut Vec<Event>) {
         let Some(mut job) = self.job.take() else { return };
-        if !self.answer_job(&mut job, until, events) {
+        if !self.answer_job(&mut job, events) {
             self.job = Some(job);
         }
     }
 
     /// True when the answer is over (its last event given).
-    fn answer_job(&mut self, job: &mut Job, until: u64, events: &mut Vec<Event>) -> bool {
+    fn answer_job(&mut self, job: &mut Job, events: &mut Vec<Event>) -> bool {
         loop {
             // (The round's web tools still being fetched: the next round waits for them, the main loop going on.)
             if !self.web_step(job, events) {
@@ -1294,56 +1538,25 @@ impl Assistant {
             let Some(turn) = job.turn.as_mut() else { return true };
             if turn.finished() {
                 let turn = job.turn.take().expect("the round's turn");
-                let (answer, stats) = m.session.end(turn);
+                let (answer, stats) = m.session.end(*turn);
                 if self.round_over(job, answer, stats.ended == Ended::Length, events) {
                     return true;
                 }
-            } else {
-                let reading = turn.reading();
+                continue;
+            }
+            // The turn's next step, away on the other cores (the session and the turn aren't touched here meanwhile).
+            let (session, turn) = (Lent(&mut m.session as *mut Session<'static>), Lent(&mut **turn as *mut Turn));
+            let (read, see) = (m.read, m.see);
+            let errand = crate::cores::away(move || {
+                let (session, turn) = (unsafe { &mut *session.get() }, unsafe { &mut *turn.get() });
+                let (reading, before) = (turn.reading(), session.read_so_far());
+                session.see = see;
                 let t = time::uptime_ms();
-                m.session.see = m.see;
-                let step = m.session.step(turn, m.read, &crate::cores::Cores);
-                let took = time::uptime_ms() - t;
-                // (A call that comes as the turn ends was never closed: the engine reads it as far as it got. If the
-                // round reached the most it says, it was cut off as it was written, and isn't run.)
-                let over = turn.finished();
-                match step {
-                    Step::Read { done, total } => {
-                        job.read += m.read.min(total);
-                        job.read_ms += took;
-                        m.read = suited(m.read, took);
-                        if !job.said && job.read_ms > 1500 {
-                            activity(job, format!("Reading ({}%)", percent(done, total)), events);
-                        }
-                    }
-                    Step::Seeing { done, total } => {
-                        job.see_ms += took;
-                        m.see = suited_to(m.see, took, 1 << 16);
-                        if done == total {
-                            job.seen += 1;
-                        }
-                        if !job.said {
-                            activity(job, format!("Looking at the picture ({}%)", percent(done, total)), events);
-                        }
-                    }
-                    Step::Said(s) => {
-                        if !reading {
-                            job.written += 1;
-                            job.write_ms += took;
-                        }
-                        match s {
-                            Saying::Text(words) => say(job, words, events),
-                            Saying::Thinking(_) => activity(job, String::from("Thinking"), events),
-                            Saying::Call(_) if !over => job.closed += 1,
-                            _ => {}
-                        }
-                    }
-                    Step::Over => {}
-                }
-            }
-            if time::uptime_ms() >= until {
-                return false;
-            }
+                let step = session.step(turn, read, &crate::cores::Cores);
+                Back::Turn { step, reading, before, over: turn.finished(), took: time::uptime_ms() - t }
+            });
+            self.away = Some(Away { errand, of: None, job: Some(job.id) });
+            return false;
         }
     }
 
@@ -1361,7 +1574,7 @@ impl Assistant {
                 if test_build().is_some() {
                     crate::log!("Chat Computer kernel: test: asked {}", json::compact(&messages_json(&messages)));
                 }
-                job.turn = Some(turn);
+                job.turn = Some(Box::new(turn));
                 job.closed = 0;
                 return Ok(());
             }
@@ -1612,7 +1825,7 @@ impl Assistant {
         }
         match &self.brain {
             Brain::Ready(m) => {
-                let model: &'static model::Model<'static> = m.session.model;
+                let model: &'static model::Model<'static> = m.model;
                 model.vision.as_ref().map(Sight::Model)
             }
             Brain::Script(_) => Some(Sight::Qwen),
@@ -1624,7 +1837,7 @@ impl Assistant {
     /// part (by the converter from before) is made again by Chat Computer's app on Windows.
     fn blind(&self) -> &'static str {
         match &self.brain {
-            Brain::Ready(m) if m.session.model.vision.is_none() && m.session.model.settings.converter < model::convert::CONVERTER => {
+            Brain::Ready(m) if m.model.vision.is_none() && m.model.settings.converter < model::convert::CONVERTER => {
                 "its file was made before Chat Computer's engine kept the part of the model that sees. Chat Computer's \
                  app on Windows makes it again (downloading the model again, in the background) when it's next opened \
                  there."
@@ -1797,19 +2010,45 @@ fn activity(job: &mut Job, doing: String, events: &mut Vec<Event>) {
     }
 }
 
-/// How many tokens a reading step takes next: more while steps are quick, fewer when they're slow.
-fn suited(read: usize, took_ms: u64) -> usize {
-    suited_to(read, took_ms, model::net::BATCH)
-}
-
-/// How much a step does next (at most `most`): more while steps are quick, less when they're slow.
-fn suited_to(n: usize, took_ms: u64, most: usize) -> usize {
-    if took_ms < STEP_MS / 2 {
+/// How much a step does next (at most `most`): more while steps are quick, less when they're slow (than `target`
+/// milliseconds).
+fn suited_to(n: usize, took_ms: u64, target: u64, most: usize) -> usize {
+    if took_ms < target / 2 {
         (n * 2).min(most)
-    } else if took_ms > STEP_MS * 2 {
+    } else if took_ms > target * 2 {
         (n / 2).max(1)
     } else {
         n
+    }
+}
+
+/// What's typed in the message box now (the chat says, as it changes), for reading ahead.
+static TYPED: SpinLock<String> = SpinLock::new(String::new());
+
+/// The message box's words changed (what's sent would be them, trimmed): read ahead as far as they can't change.
+pub fn typing(text: &str) {
+    let mut t = TYPED.lock();
+    if *t != text {
+        t.clear();
+        t.push_str(text);
+    }
+}
+
+/// The words typed that can't change as more is typed: all but the last (the words before the last space), from the
+/// first that isn't a space. None of a search ("/"), nor what may be a BitLocker recovery key (which is never given to
+/// the model): its groups of six digits.
+fn sure_words(typed: &str) -> String {
+    let t = typed.trim_start();
+    if t.starts_with('/') {
+        return String::new();
+    }
+    let digits = t.as_bytes().windows(7).any(|w| w[..6].iter().all(u8::is_ascii_digit) && w[6] == b'-');
+    if digits {
+        return String::new();
+    }
+    match t.rfind(char::is_whitespace) {
+        Some(i) => String::from(t[..i].trim_end()),
+        None => String::new(),
     }
 }
 
@@ -1991,12 +2230,18 @@ fn load(all: &'static [u8], opened: &files::Opened, name: String) -> Result<Load
         name,
         path: opened.path.clone(),
         session: Session::new(model, style),
+        model,
         style_name,
         uncensored,
         context,
-        ahead: Vec::new(),
+        ahead: None,
+        ahead_of: None,
         ahead_done: 0,
-        read: 8,
+        ahead_read: false,
+        instructions_read: false,
+        // (With other cores, a whole batch of the engine's a step: each of its weights read from memory serving them
+        // all. With one, a few, so the screen goes on between steps.)
+        read: if crate::cores::count() > 1 { READ_LEAST } else { 8 },
         see: 64,
         speed: None,
     })

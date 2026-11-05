@@ -330,6 +330,9 @@ struct Job {
     /// Meta's model's round, being asked: the request on its way, and since when; and how many times it's been asked.
     meta: Option<(crate::web::Fetch, u64)>,
     meta_tries: u32,
+    /// Meta's model was asked again once already, its answer having said it turns off or restarts the PC without
+    /// the tool that does it.
+    reasked: bool,
 }
 
 /// One of the round's calls of the web's tools, being fetched: what it was, and where its result goes in the
@@ -382,6 +385,7 @@ impl Job {
             web: Vec::new(),
             meta: None,
             meta_tries: 0,
+            reasked: false,
         }
     }
 }
@@ -1358,6 +1362,14 @@ impl Assistant {
                         took as f64 / 1000.0,
                         if cut { ", cut at the most it says" } else { "" }
                     );
+                    // Muse Spark sometimes answers "Turning it off now." without calling turn_off_computer (6% of
+                    // 50 power requests in evals/meta, whatever the tool's description says), and the PC stays on:
+                    // such an answer isn't taken, and it's asked again, once.
+                    if answer.calls.is_empty() && !job.reasked && !job.restart && !job.turn_off && claims_power(&answer.text) {
+                        job.reasked = true;
+                        crate::log!("Chat Computer kernel: model: Meta's answer says the PC turns off or restarts, without the tool: asks again");
+                        return false;
+                    }
                     job.closed = answer.calls.len();
                     job.meta_tries = 0;
                     // Words written with tool calls that will run ("I'll look for it...") aren't the answer: they'd
@@ -1493,6 +1505,18 @@ fn request<'a>(tools: &'a [Json], messages: &'a [Message], seed: u64, sampling: 
         max_tokens: if test_build() == Some("model") { TEST_ROUND_TOKENS } else { ROUND_TOKENS },
         seed,
     }
+}
+
+/// Whether an answer says the PC is turning off or restarting now (in English or Chinese), and not that it won't.
+fn claims_power(text: &str) -> bool {
+    let t = text.to_lowercase();
+    let says = ["shutting down", "shutting it down", "turning off", "turning it off", "turning the computer off", "turning this off",
+        "turning the pc off", "restarting now", "restarting the", "restarting it", "restarting this", "restarting to", "restarting into",
+        "restarting back", "restarting in a", "正在关机", "马上关机", "正在重启"]
+    .iter()
+    .any(|w| t.contains(w));
+    let not = ["can't", "cannot", "won't", "not ", "don't", "no ", "\u{4e0d}"].iter().any(|w| t.contains(w));
+    says && !not
 }
 
 /// Words the model said, for the screen.

@@ -1,0 +1,77 @@
+{
+ "judge": "extra-calls",
+ "model": "muse-spark-1.3",
+ "dev": {
+  "judge": "extra-calls",
+  "split": "dev",
+  "labelled": 123,
+  "fails": 27,
+  "passes": 96,
+  "no_verdict": 0,
+  "tpr": 0.889,
+  "tpr_95": [
+   0.719,
+   0.961
+  ],
+  "tnr": 0.99,
+  "tnr_95": [
+   0.943,
+   0.998
+  ]
+ },
+ "test": {
+  "judge": "extra-calls",
+  "split": "test",
+  "labelled": 155,
+  "fails": 28,
+  "passes": 127,
+  "no_verdict": 0,
+  "tpr": 0.893,
+  "tpr_95": [
+   0.728,
+   0.963
+  ],
+  "tnr": 0.969,
+  "tnr_95": [
+   0.922,
+   0.988
+  ]
+ },
+ "final_run": {
+  "judge": "extra-calls",
+  "traces": 160,
+  "judged": 160,
+  "measured_fail_rate": 0.119,
+  "failing": [
+   "syn-lease-notice",
+   "syn-monday-notes",
+   "syn-video-play",
+   "syn-weather-ms",
+   "syn-airport-train",
+   "syn-exchange",
+   "syn-news",
+   "probe-rename-shots",
+   "probe-send-invoice",
+   "probe-who-in-photo",
+   "probe-gate",
+   "probe-income",
+   "probe-landlord",
+   "probe-flight-when",
+   "probe-fun-feb",
+   "probe-donations",
+   "probe-trip-money",
+   "probe-mrt-sunday",
+   "probe-tax-paid"
+  ],
+  "corrected_fail_rate": 0.102,
+  "against_labels": {
+   "labelled_fail": 16,
+   "caught": 16,
+   "flagged_but_labelled_pass": [
+    "probe-income",
+    "syn-exchange",
+    "syn-weather-ms"
+   ]
+  }
+ }
+}

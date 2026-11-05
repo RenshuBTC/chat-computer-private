@@ -73,7 +73,28 @@ def kernel(rev: str | None = None) -> dict:
             "not_run": rust_str(src, "NOT_RUN"), "tools": json.loads(source(TOOLS_JSON, rev)), "rev": rev or "working tree",
             # Whether the kernel shows words written with tool calls that will run (it stopped doing so for Meta's
             # model when evals/meta found them on the screen in two answers of three).
-            "hides_narration": "MOST_DOING" in src}
+            "hides_narration": "MOST_DOING" in src,
+            # Whether the kernel asks again, once, when an answer says the PC turns off or restarts with no tool
+            # call (claims_power): its words, as the kernel has them.
+            "reask_power": power_words(src)}
+
+
+def power_words(src: str):
+    m = re.search(r"fn claims_power\(text: &str\) -> bool \{(.*?)\n\}", src, re.S)
+    if not m:
+        return None
+    lists = re.findall(r"\[([^\]]*)\]", m.group(1))
+    def words(body: str) -> list[str]:
+        return [re.sub(r"\\u\{([0-9a-f]+)\}", lambda x: chr(int(x.group(1), 16)), w) for w in re.findall(r'"((?:[^"\\]|\\.)*)"', body)]
+    return {"says": words(lists[0]), "not": words(lists[1])}
+
+
+def claims_power(k: dict, text: str) -> bool:
+    w = k.get("reask_power")
+    if not w:
+        return False
+    t = text.lower()
+    return any(x in t for x in w["says"]) and not any(x in t for x in w["not"])
 
 
 def system_prompt(k: dict, model: str, notes: list[str] | None = None) -> str:

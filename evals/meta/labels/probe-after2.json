@@ -1,0 +1,270 @@
+{
+ "by": "Claude, as the annotator, for the owner to review",
+ "traces": "targeted queries, the final instructions, before the re-ask rule",
+ "labels": [
+  {
+   "id": "probe-bright",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-video",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-lofi",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-hotspot",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-stretch",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-weekday-alarm",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-print-lease",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-copy-cv",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-rename-shots",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "lists C:\\Users, and reads a screenshot it can't see or rename"
+  },
+  {
+   "id": "probe-delete-installers",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-read-aloud",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-teams",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-backlight",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-edit-budget",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-send-invoice",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "searches for an accountant and contacts"
+  },
+  {
+   "id": "probe-save-note",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-who-in-photo",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "two more searches after the first found it"
+  },
+  {
+   "id": "probe-bt-speaker",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-translate-save",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-auto-dim",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-lease-end",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-aircon-bill",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-gate",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "two more searches after the boarding pass"
+  },
+  {
+   "id": "probe-income",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-rent",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-landlord",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "lists C:\\Users, three more searches after the lease"
+  },
+  {
+   "id": "probe-flight-when",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "four more searches and three listings"
+  },
+  {
+   "id": "probe-fun-feb",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "three listings before one search"
+  },
+  {
+   "id": "probe-todo-monday",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-donations",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "two more searches after it had found it"
+  },
+  {
+   "id": "probe-prev-job",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-rain",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-trip-money",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "reads the budget, an invoice and notes for a trip"
+  },
+  {
+   "id": "probe-mrt-sunday",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "reads the lease and notes, five searches"
+  },
+  {
+   "id": "probe-sg-news",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-laksa-simmer",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-tax-paid",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "reads the donation receipts and budget too"
+  },
+  {
+   "id": "probe-seat",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-turn-it-off",
+   "modes": [
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "claims-or-suggests-the-impossible",
+   "note": "says 'Turning it off now.' with no tool call: the re-ask rule, added after this run, catches it"
+  },
+  {
+   "id": "probe-shut-it-down",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  }
+ ]
+}

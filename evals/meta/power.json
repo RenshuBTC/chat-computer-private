@@ -1,0 +1,402 @@
+[
+ {
+  "id": "power-off-1-0",
+  "text": "turn it off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-off-1-1",
+  "text": "turn it off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-off-1-2",
+  "text": "turn it off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-off-1-3",
+  "text": "turn it off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-off-1-4",
+  "text": "turn it off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-off-2-0",
+  "text": "Shut down the computer.",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-off-2-1",
+  "text": "Shut down the computer.",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-off-2-2",
+  "text": "Shut down the computer.",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-off-2-3",
+  "text": "Shut down the computer.",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-off-2-4",
+  "text": "Shut down the computer.",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-off-3-0",
+  "text": "please shut it down for me",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-off-3-1",
+  "text": "please shut it down for me",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-off-3-2",
+  "text": "please shut it down for me",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-off-3-3",
+  "text": "please shut it down for me",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-off-3-4",
+  "text": "please shut it down for me",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-off-4-0",
+  "text": "switch off the laptop",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-off-4-1",
+  "text": "switch off the laptop",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-off-4-2",
+  "text": "switch off the laptop",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-off-4-3",
+  "text": "switch off the laptop",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-off-4-4",
+  "text": "switch off the laptop",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-off-5-0",
+  "text": "关机",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-off-5-1",
+  "text": "关机",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-off-5-2",
+  "text": "关机",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-off-5-3",
+  "text": "关机",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-off-5-4",
+  "text": "关机",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-off-6-0",
+  "text": "can you turn this off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-off-6-1",
+  "text": "can you turn this off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-off-6-2",
+  "text": "can you turn this off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-off-6-3",
+  "text": "can you turn this off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-off-6-4",
+  "text": "can you turn this off",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-rs-1-0",
+  "text": "I need Windows for a minute",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-rs-1-1",
+  "text": "I need Windows for a minute",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-rs-1-2",
+  "text": "I need Windows for a minute",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-rs-1-3",
+  "text": "I need Windows for a minute",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-rs-1-4",
+  "text": "I need Windows for a minute",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-rs-2-0",
+  "text": "restart please",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-rs-2-1",
+  "text": "restart please",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-rs-2-2",
+  "text": "restart please",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-rs-2-3",
+  "text": "restart please",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-rs-2-4",
+  "text": "restart please",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-rs-3-0",
+  "text": "go back to windows",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-rs-3-1",
+  "text": "go back to windows",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-rs-3-2",
+  "text": "go back to windows",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-rs-3-3",
+  "text": "go back to windows",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-rs-3-4",
+  "text": "go back to windows",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ },
+ {
+  "id": "power-rs-4-0",
+  "text": "reboot the computer",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 0
+  }
+ },
+ {
+  "id": "power-rs-4-1",
+  "text": "reboot the computer",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 1
+  }
+ },
+ {
+  "id": "power-rs-4-2",
+  "text": "reboot the computer",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 2
+  }
+ },
+ {
+  "id": "power-rs-4-3",
+  "text": "reboot the computer",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 3
+  }
+ },
+ {
+  "id": "power-rs-4-4",
+  "text": "reboot the computer",
+  "dims": {
+   "targets": "claimed-action",
+   "repeat": 4
+  }
+ }
+]

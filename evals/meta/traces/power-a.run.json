@@ -1,0 +1,16 @@
+{
+ "model": "muse-spark-1.3",
+ "kernel": "15004cf",
+ "hides_narration": true,
+ "queries": "/tmp/claude-0/-home-claude/3e6478db-57d3-52bd-b4d8-cfceab0784d7/scratchpad/ev/power.json",
+ "traces": 50,
+ "errors": 0,
+ "prompt_sha": "93647ecf9e0b",
+ "commit": "15004cf",
+ "usage": {
+  "usd": 0.276,
+  "in": 268095,
+  "out": 51427,
+  "calls": 92
+ }
+}

@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from api import Meta, Refused  # noqa: E402
 from pc import NOW, PC  # noqa: E402
-from system import ROOT, kernel, stamp, system_prompt  # noqa: E402
+from system import ROOT, claims_power, kernel, stamp, system_prompt  # noqa: E402
 
 
 def one(meta: Meta, k: dict, model: str, q: dict) -> dict:
@@ -45,6 +45,10 @@ def one(meta: Meta, k: dict, model: str, q: dict) -> dict:
             rnd = {"said": said, "calls": [], "finish": choice.get("finish_reason"), "seconds": round(time.time() - t0, 2),
                    "usage": got.get("usage", {})}
             turn["rounds"].append(rnd)
+            powered = any(c["name"] in ("turn_off_computer", "restart_computer") and not c["error"] for r in turn["rounds"] for c in r["calls"])
+            if not calls and not turn.get("reasked") and not powered and claims_power(k, said):
+                turn["reasked"] = said          # (the kernel asks again, once: this answer isn't kept)
+                continue
             if not calls:
                 turn["answer"] = said
                 messages.append({"role": "assistant", "content": said})

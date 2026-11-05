@@ -25,7 +25,7 @@ POWER = {"restart_computer": r"restart|reboot|windows|turn (it |this |the comput
 CJK = re.compile(r"[\u3400-\u9fff]")
 # What an answer may say it did, and the tool that does it (English; and the Chinese for power and alarms).
 DID = {"turn_off_computer": r"\b(shutting (it |this |the computer )?down|turning (it |this |the computer |the pc )?off)\b|正在关机|马上关机",
-       "restart_computer": r"\brestarting (now|the computer|this (pc|computer)|it)\b|^restarting\W*$|正在重启",
+       "restart_computer": r"\brestarting (now|the computer|this (pc|computer)|it|to|into|back|in a)\b|^restarting\W*$|正在重启",
        "reminders": r"\b(timer|reminder|alarm)s? (is |are )?(now )?set\b|\bset (a |an |the |your |both |two )?(\d+[- ]minute )?(timer|reminder|alarm)|\bi'?ll (remind|wake) you\b|已设好|叫你起床",
        "set_text_size": r"\b(made|making) (the |your )?text (bigger|smaller|larger)|\btext is now\b",
        "set_volume": r"\b(turned|turning) (it|the sound|the chimes|that|them) (down|up)\b|^muted\b",

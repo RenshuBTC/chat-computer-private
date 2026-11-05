@@ -47,23 +47,27 @@ The code: [assistant.rs](os/kernel/src/assistant.rs) (`meta_step`, `meta_body`, 
 
 ## Muse Spark on everyday requests
 
-Our Meta developer credits went into testing. [evals/meta](evals/meta) asks Meta's models the own system's 53
-everyday requests ([evals/os/cases.json](evals/os/cases.json), such as "Find the tax letter I got in March and open
-it"), again and again, with exactly the tools and instructions the kernel gives its model. Muse Spark 1.3 grades
-each answer: **done** (a fitting tool called), **honest** (no combination of the tools could do it, and the answer
-said so) or **wrong**.
+[evals/meta](evals/meta) tests how well Muse Spark runs the own system. It was built the way Hamel Husain's
+[evals FAQ](https://hamel.dev/blog/posts/evals-faq/) recommends:
 
-| Model | Answers | Done | Honest | Wrong | Done or honest |
-| --- | --- | --- | --- | --- | --- |
-| Muse Spark 1.3 | 4,271 | 31% | 27% | 39% | 58% |
-| Muse Wonder 1.0 | 4,119 | 33% | 28% | 34% | 61% |
-| Muse Spark 1.2 | 4,231 | 28% | 11% | 58% | 39% |
+* 120 everyday requests (and 40 targeted ones), asked exactly as the kernel asks them, with a stand-in PC
+  answering the tools;
+* every trace read and labelled;
+* what the labels showed fixed in the system;
+* checks for what persists: code where a rule can tell, and one LLM judge, for unneeded tool calls. On held-out
+  labels it catches 89% of real failures and passes 97% of good traces.
 
-That is 12,621 answers and 25,242 calls to Meta's Model API (57 million tokens), about $132 at publicly reported
-prices. The requests still answered wrong show what the own system needs next: tools it doesn't have yet (renaming
-and deleting files, USB sticks, backups, printing, the time zone and the keyboard's layout, and going back to
-Windows for a while), and asking before it turns the PC off. Every request's results are in
-[results-2026-11-05.json](evals/meta/results-2026-11-05.json).
+| On the 120 requests | Before | Now |
+| --- | --- | --- |
+| Passes every check | 38 | 111 |
+| Words written with tool calls shown in the middle of the answer | 80 | 0 |
+| Tool calls the request didn't need | 20 | 5 |
+| Asks, or gives up, when its tools had the answer | 4 | 0 |
+| Claims or suggests what can't be done here | 4 | 1 (now caught by the kernel) |
+| "Turning it off now." with no tool call, in 50 power requests | 6 | 0 |
+
+[evals/meta/README.md](evals/meta/README.md) has what was fixed, how far to trust each check, and what's still
+open, such as which currency "300 dollars" means.
 
 ## Try it
 
@@ -111,9 +115,9 @@ Chat Computer is built with today's frontier models, and it works with each of t
   with an Anthropic API key.
 * **OpenAI's models** help build it too, and answer in Chat Computer with an OpenAI API key, or in the app when you
   sign in with your ChatGPT plan.
-* **Meta's Muse Spark and Muse Wonder** are the own system's brain through Meta's Model API, answer on
-  [chatcomputer.ai](https://chatcomputer.ai), and test it: [evals/meta](evals/meta) asks them the own system's
-  everyday requests, with its real tools, and Muse Spark grades each answer.
+* **Meta's Muse Spark and Muse Wonder** are the own system's brain through Meta's Model API, and answer on
+  [chatcomputer.ai](https://chatcomputer.ai). Muse Spark is tested in [evals/meta](evals/meta), and is the judge
+  there for one check, validated against human labels.
 
 Without a key, an open model (Qwen) answers on the computer itself, offline.
 

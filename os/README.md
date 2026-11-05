@@ -635,7 +635,8 @@ cargo test -p model --features std # the model engine (small models of random we
 ./check.py --shim                # Secure Boot as on a shop PC that hasn't approved the key, as setup starts it
                                  # there: through shim, with the key in MokList; not there (refused); asked for
                                  # and the blue screen left alone (the request dropped, refused); asked for and
-                                 # approved on the blue screen, then started, its start-up stage's mark left
+                                 # approved on the blue screen (shim in \EFI\chatcomputer-own, started by a
+                                 # power-on entry, as setup puts it), then started, its start-up stage's mark left
 ./release.sh                     # updates release/chatcomputer.efi
 ```
 

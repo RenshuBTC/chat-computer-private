@@ -106,7 +106,8 @@ log go to out/.
                                      MokList: there already; not there (refused); asked for as setup asks
                                      (MokNew and MokAuth) with nobody at MokManager's blue screen (the request
                                      dropped, refused); and asked for, approved on the blue screen with the keys the
-                                     setup's steps say, the virtual PC restarted, and started, its start-up stage's
+                                     setup's steps say (shim where setup puts it, \\EFI\\chatcomputer-own, started by
+                                     a power-on entry), the virtual PC restarted, and started, its start-up stage's
                                      mark (ChatComputerStarted) left for setup
 
 Needs qemu-system-x86_64, OVMF (/usr/share/OVMF) and Pillow; for Secure Boot also openssl, sbsign and
@@ -240,21 +241,27 @@ def wait_for(log: Path, words: tuple[str, ...], timeout: float, times: int = 1) 
 class VirtualPC:
     """One run of the virtual PC, started from `efi` as \\EFI\\BOOT\\BOOTX64.EFI."""
 
-    def __init__(self, efi: Path, *, size: str, memory: str, cpu: str, secure_vars: Path | None = None,
+    def __init__(self, efi: Path | None, *, size: str, memory: str, cpu: str, secure_vars: Path | None = None,
                  extra: tuple[str, ...] = (), settings: str | None = None, disk: tuple[Path, str] | None = None,
                  env: dict[str, str] | None = None, beside: dict[str, Path] | None = None, vars_in_place: bool = False,
-                 reboot: bool = False):
+                 reboot: bool = False, files: dict[str, Path] | None = None):
         """`disk`: start from this disk image instead (on an NVMe or SATA drive: "nvme" or "sata"). `env`: more of
         QEMU's environment (for its audio's SDL, say). `beside`: more files next to it in \\EFI\\BOOT, by name (shim's
         second stage and MokManager). `vars_in_place`: the firmware's settings kept in `secure_vars` itself, so what one
-        run enrolls the next one has. `reboot`: a restart restarts the virtual PC (else QEMU ends)."""
+        run enrolls the next one has. `reboot`: a restart restarts the virtual PC (else QEMU ends). `files`: files put
+        on the start-up partition by their path there; with `efi` None, nothing is in \\EFI\\BOOT, and the firmware
+        starts what its power-on entries (in `secure_vars`) say."""
         self.tmp = tempfile.TemporaryDirectory()
         tmp = Path(self.tmp.name)
         esp = tmp / "esp"
         (esp / "EFI/BOOT").mkdir(parents=True)
-        shutil.copy(efi, esp / "EFI/BOOT/BOOTX64.EFI")
+        if efi is not None:
+            shutil.copy(efi, esp / "EFI/BOOT/BOOTX64.EFI")
         for name, path in (beside or {}).items():
             shutil.copy(path, esp / "EFI/BOOT" / name)
+        for where, path in (files or {}).items():
+            (esp / where).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(path, esp / where)
         if settings is not None:
             # Where the Windows setup puts it (own-os.ps1).
             (esp / "EFI/chatcomputer-own").mkdir(parents=True)
@@ -2330,11 +2337,15 @@ def der_of(cert: Path) -> bytes:
     return subprocess.run(["openssl", "x509", "-in", str(cert), "-outform", "DER"], capture_output=True, check=True).stdout
 
 
-def shim_vars(where: Path, name: str, *, enrolled: Path | None = None, request: tuple[bytes, bytes] | None = None) -> Path:
+def shim_vars(where: Path, name: str, *, enrolled: Path | None = None, request: tuple[bytes, bytes] | None = None,
+              entry: str | None = None) -> Path:
     """A shop PC's firmware settings (Microsoft's keys, Secure Boot on), with `enrolled` in shim's MokList, or a request
-    to enroll a key waiting for MokManager (MokNew and MokAuth, as Windows' setup writes them)."""
+    to enroll a key waiting for MokManager (MokNew and MokAuth, as Windows' setup writes them); `entry`: a power-on
+    entry starting that file, as setup adds one."""
     out = where / f"vars-{name}.fd"
     cmd = ["virt-fw-vars", "-i", str(VARS_MICROSOFT), "-o", str(out)]
+    if entry:
+        cmd += ["--append-boot-filepath", entry]
     if enrolled:
         pem = where / "mok.pem"
         pem.write_bytes(subprocess.run(["openssl", "x509", "-inform", "DER", "-outform", "PEM"], input=der_of(enrolled),
@@ -2362,13 +2373,15 @@ def firmware_variable(vars_fd: Path, name: str, guid: str) -> bytes | None:
 
 def enroll_on_the_blue_screen(signed: Path, cert: Path, args) -> list[str]:
     """Setup's request (MokNew and MokAuth) answered on MokManager's blue screen as its steps say: a key pressed, Enroll
-    MOK, Continue, Yes, the password, Reboot. The virtual PC restarts (its firmware settings kept), and shim must then
-    start Chat Computer, with Secure Boot on, and its start-up stage leave the mark Windows' setup reads to know the
-    approval worked (ChatComputerStarted: "secure-boot=on shim=yes")."""
+    MOK, Continue, Yes, the password, Reboot. Shim and the rest are where setup puts them (\\EFI\\chatcomputer-own,
+    started by a power-on entry, not from \\EFI\\BOOT). The virtual PC restarts (its firmware settings kept), and shim
+    must then start Chat Computer, with Secure Boot on, and its start-up stage leave the mark Windows' setup reads to
+    know the approval worked (ChatComputerStarted: "secure-boot=on shim=yes")."""
+    own = "EFI/chatcomputer-own/"
     with tempfile.TemporaryDirectory() as tmp:
-        vars_fd = shim_vars(Path(tmp), "request", request=mok_request(der_of(cert)))
-        pc = VirtualPC(SHIM, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=vars_fd, vars_in_place=True,
-                       reboot=True, beside={"grubx64.efi": signed, "mmx64.efi": MOKMANAGER})
+        vars_fd = shim_vars(Path(tmp), "request", request=mok_request(der_of(cert)), entry="\\EFI\\chatcomputer-own\\shimx64.efi")
+        pc = VirtualPC(None, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=vars_fd, vars_in_place=True,
+                       reboot=True, files={own + "shimx64.efi": SHIM, own + "grubx64.efi": signed, own + "mmx64.efi": MOKMANAGER})
 
         def keys(*names: str, wait: float = 1.0) -> None:
             for k in names:

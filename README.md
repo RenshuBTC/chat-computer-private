@@ -55,14 +55,14 @@ said so) or **wrong**.
 
 | Model | Answers | Done | Honest | Wrong | Done or honest |
 | --- | --- | --- | --- | --- | --- |
-| Muse Spark 1.3 | 4,098 | 31% | 27% | 39% | 59% |
-| Muse Wonder 1.0 | 3,963 | 33% | 28% | 34% | 61% |
-| Muse Spark 1.2 | 4,081 | 28% | 11% | 58% | 40% |
+| Muse Spark 1.3 | 4,271 | 31% | 27% | 39% | 58% |
+| Muse Wonder 1.0 | 4,119 | 33% | 28% | 34% | 61% |
+| Muse Spark 1.2 | 4,231 | 28% | 11% | 58% | 39% |
 
-That is 12,142 answers and 24,082 calls to Meta's Model API, about $126 at publicly reported prices. The requests
-still answered wrong show what the own system needs next: tools it doesn't have yet (renaming and deleting files,
-USB sticks, backups, printing, the time zone and the keyboard's layout, and going back to Windows for a while), and
-asking before it turns the PC off. Every request's results are in
+That is 12,621 answers and 25,242 calls to Meta's Model API (57 million tokens), about $132 at publicly reported
+prices. The requests still answered wrong show what the own system needs next: tools it doesn't have yet (renaming
+and deleting files, USB sticks, backups, printing, the time zone and the keyboard's layout, and going back to
+Windows for a while), and asking before it turns the PC off. Every request's results are in
 [results-2026-11-05.json](evals/meta/results-2026-11-05.json).
 
 ## Try it
@@ -97,6 +97,7 @@ meta-api-key = your-key
 | [os/model](os/model) | The model engine: Qwen's open models (with vision) and Whisper speech recognition, AVX2 and AVX-512 |
 | [os/ntfs](os/ntfs), [os/fat](os/fat), [os/exfat](os/exfat), [os/bitlocker](os/bitlocker) | Reading Windows' and USB drives |
 | [os/check.py](os/check.py) | Checks that boot the system in virtual PCs and test each part |
+| [evals](evals) | Tests of the models on everyday requests ([evals/meta](evals/meta): Meta's models) |
 | [apps](apps), [docs](docs), [windows](windows) | The Windows and Mac app, the own system's setup, and the website |
 | [chatcomputer](chatcomputer), [linux](linux) | The earlier Chat Computer, an app on a thin Linux base |
 

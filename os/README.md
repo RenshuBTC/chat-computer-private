@@ -492,8 +492,8 @@ system. Nothing else is asked, and no USB stick is needed.
 3. It says which model the own system will answer with: the one Chat Computer's app got ready on the PC (install
    the app from chatcomputer.ai/get first; it gets its model by itself). With none yet, the own system starts all
    the same and says how to get one.
-4. It puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
-   next to Windows' own files, with `settings.txt` (how far the PC's clock is from UTC, as Windows keeps that
+4. It puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from (with shim beside it,
+   when it starts through shim: see below), next to Windows' own files, with `settings.txt` (how far the PC's clock is from UTC, as Windows keeps that
    clock in local time, and the memory and log files' ids; a model's file named there by hand, `model = ...`, and
    `cores = ...`, are kept), `memory.bin`, the memory file where Chat Computer keeps the conversation across
    restarts (4 MB, or 1 MB if the partition is short of room; running setup again keeps it, with the conversation in
@@ -508,15 +508,27 @@ system. Nothing else is asked, and no USB stick is needed.
    first: its own system's, its installers', and "Ubuntu" when that's the Ubuntu-based ClaudeOS (its mark,
    `\EFI\claudeos\installed-*`, is on the start-up partition). Their files and partitions stay as they are.
 
-With Secure Boot on and no key the PC trusts yet, the PC first has to trust Chat Computer's key. That takes one
-approval in the PC's setup screen: Secure Boot (Secure Boot Mode: Custom), then Key Management, then Authorized
-Signatures (db), then Append `ChatComputer.cer`, which setup also puts at the top of the start-up partition, the
-first list of files the setup screen shows. Setup asks nothing: it shows the steps in the words of the
-motherboard's maker's setup screen (MSI's, Gigabyte's, or the usual ones), and Enter restarts into the setup
-screen. From then on, Enter in setup or "Chat Computer (own system)" in the boot menu starts it, with Secure Boot
-still on. A PC that can't add a key can have Secure Boot turned off there instead; the steps say so. Updating or
-resetting the PC's firmware settings can clear the keys approved there; setup then says so, and shows the steps
-again.
+With Secure Boot on and no key the PC trusts yet, the PC first has to trust Chat Computer's key. Setup starts it
+through shim (`release/shim`: a small first stage that Microsoft signs, as it does for Linux distributions; Chat
+Computer's signed file goes beside it as `grubx64.efi`, the name shim starts) and asks shim's MokManager to approve
+the key at the next start (the MokNew and MokAuth firmware variables, as mokutil writes them). That's one approval
+on a blue screen, with no visit to the PC's setup screen: a key pressed within its 10 seconds, "Enroll MOK",
+"Continue", "Yes", the password `hello` (its keys are in the same places on QWERTY, QWERTZ and AZERTY keyboards),
+"Reboot", then "Chat Computer (own system)" in the boot menu. Setup shows these steps and Enter restarts to the blue
+screen. From then on, Enter in setup or the boot menu starts it, with Secure Boot still on. Windows can't read
+shim's list of keys (MokList), so Chat Computer's start-up stage leaves a mark when it starts (the
+`ChatComputerStarted` firmware variable, `secure-boot=on shim=yes`), which setup reads to know the approval worked;
+until it's there, setup shows the steps again. (If the 10 seconds go by, MokManager drops the request and shim
+says "Verification failed"; double-clicking setup again asks again.)
+
+On a PC whose Secure Boot doesn't start shim (one without Microsoft's certificate for other systems, "Microsoft
+Corporation UEFI CA 2011", in its allowed list, or where the blue screen never came up), the key is approved in the
+PC's setup screen instead: Secure Boot (Secure Boot Mode: Custom), then Key Management, then Authorized Signatures
+(db), then Append `ChatComputer.cer`, which setup also puts at the top of the start-up partition, the first list of
+files the setup screen shows. Setup shows those steps in the words of the motherboard's maker's setup screen (MSI's,
+Gigabyte's, or the usual ones), and Enter restarts into the setup screen. A PC that can't add a key can have Secure
+Boot turned off there instead; the steps say so. Updating or resetting the PC's firmware settings can clear the
+keys approved there; setup then says so, and shows the steps again.
 
 Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock's), and so do most
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
@@ -620,6 +632,10 @@ cargo test -p model --features std # the model engine (small models of random we
                                  # python3-cryptography too)
 ./check.py --secure-boot         # signed with a test key the virtual PC's firmware trusts, Secure Boot
                                  # enforced; and the same build unsigned must be refused
+./check.py --shim                # Secure Boot as on a shop PC that hasn't approved the key, as setup starts it
+                                 # there: through shim, with the key in MokList; not there (refused); asked for
+                                 # and the blue screen left alone (the request dropped, refused); asked for and
+                                 # approved on the blue screen, then started, its start-up stage's mark left
 ./release.sh                     # updates release/chatcomputer.efi
 ```
 
@@ -668,11 +684,11 @@ The firmware can't be replaced on everybody's PC, so Chat Computer doesn't try:
 * Replacing firmware can leave a PC unable to start, and often needs a clip on the chip. That can't be
   a download.
 
-Secure Boot, today, adds no one else's code to the chain. Either Chat Computer's own key is approved once in
-the motherboard's settings (added to the firmware's allowed list, db), or Secure Boot is off. That is
-too hard for most people, so the plan for everybody's PC is the first step Linux distributions use (see
-"Reaching everybody's PC"). It puts one small program that isn't Chat Computer's own, shim, at the start of
-the chain. The approved-key way stays, for anyone who wants none.
+With Secure Boot on, a PC that has approved Chat Computer's own key once in its settings (added to the
+firmware's allowed list, db) starts it with no one else's code in the chain. That is too hard for most people,
+so setup otherwise takes the first step Linux distributions use: one small program that isn't Chat Computer's own,
+shim, at the start of the chain (see "Starting it on a PC"). The approved-key way stays, for anyone who wants
+none, as does turning Secure Boot off.
 
 Some things are made by others but are not software between the hardware and Chat Computer:
 
@@ -702,7 +718,8 @@ writes for each person, in place of Ubuntu's catalogue.
 
 1. ✓ The start-up stage, the kernel's core, interrupts and timer, the font engine and the first screen.
 2. The real PC: start from its own start-up partition (no USB stick) and show the first screen on its
-   monitor, with Secure Boot on and Chat Computer's own key approved. Ready to try: see "Starting it on a PC".
+   monitor, with Secure Boot on and Chat Computer's own key approved, once, on shim's blue screen (or in the PC's
+   setup screen). Ready to try: see "Starting it on a PC".
 3. ✓ Keyboard: USB (the xHCI controllers, hubs and keyboards) and PS/2 (laptops' built-in keyboards).
    Checked in virtual PCs; on the real PC with step 2.
 4. ✓ All processor cores, for the model's arithmetic (checked in virtual PCs of 2 and 4 cores: the same answer as
@@ -771,11 +788,12 @@ writes for each person, in place of Ubuntu's catalogue.
 
 Three things stand between the steps above and a download that works on any PC or laptop:
 
-1. **Secure Boot with one confirmation.** PCs ship with Secure Boot on, and their firmware then only
-   starts programs signed with a key it trusts, which Chat Computer's own key isn't. The plan is the route
-   Linux distributions take. Shim, a small program Microsoft signs, starts Chat Computer's own start-up
-   program once the person has confirmed Chat Computer's key, once, on a blue screen at the next restart.
-   Setup on Windows asks for that confirmation, so there is nothing to find in the PC's settings.
+1. **Secure Boot with one confirmation.** ✓ in virtual PCs (`./check.py --shim`); to be tried on real PCs (step
+   2). PCs ship with Secure Boot on, and their firmware then only starts programs signed with a key it trusts,
+   which Chat Computer's own key isn't. Setup takes the route Linux distributions take. Shim, a small program
+   Microsoft signs, starts Chat Computer's own start-up program once the person has confirmed Chat Computer's key,
+   once, on a blue screen at the next restart. Setup on Windows asks for that confirmation, so there is nothing to
+   find in the PC's settings.
    (Microsoft could later sign Chat Computer's own start-up program directly. That needs a registered
    organization with an EV code-signing certificate, and Microsoft may still require the shim route:
    [Microsoft's requirements](https://learn.microsoft.com/windows-hardware/drivers/dashboard/file-signing-reqs).)

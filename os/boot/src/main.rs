@@ -1,10 +1,10 @@
 //! Chat Computer's start-up stage: the UEFI program the PC's firmware runs (\EFI\BOOT\BOOTX64.EFI).
 //! It carries the kernel inside it.
 //!
-//! It asks the firmware, one last time, for what the kernel needs to know (the screen, the memory map,
-//! where the ACPI tables are), copies the kernel into memory, builds the kernel's first page tables,
-//! tells the firmware it is finished with it (ExitBootServices) and jumps to the kernel. Nothing in the
-//! firmware is called after that.
+//! It leaves a mark that it started, for Windows' setup to read back (`mark_started`), asks the firmware, one
+//! last time, for what the kernel needs to know (the screen, the memory map, where the ACPI tables are), copies
+//! the kernel into memory, builds the kernel's first page tables, tells the firmware it is finished with it
+//! (ExitBootServices) and jumps to the kernel. Nothing in the firmware is called after that.
 #![no_std]
 #![no_main]
 
@@ -110,6 +110,8 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
     let bs = unsafe { &*(*st).boot_services };
     // The firmware restarts the PC if a boot program takes more than 5 minutes; not this one's job.
     unsafe { (bs.set_watchdog_timer)(0, 0, 0, null()) };
+    let secure = unsafe { secure_boot(st) };
+    unsafe { mark_started(st, secure) };
 
     let cpu = paging::Features::detect();
     if cpu.five_level {
@@ -199,7 +201,7 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
             }
         }
         info.uefi_revision = (*st).hdr.revision;
-        info.secure_boot = secure_boot(st);
+        info.secure_boot = secure;
         (info.time, info.time_zone) = clock(st);
         info.settings_len = settings(bs, image, &mut info.settings) as u32;
         info.start_disk = start_disk(bs, image);
@@ -609,6 +611,56 @@ unsafe fn secure_boot(st: *mut SystemTable) -> u32 {
         (SUCCESS, 0) => bootinfo::SECURE_BOOT_OFF,
         _ => bootinfo::SECURE_BOOT_UNKNOWN,
     }
+}
+
+/// The firmware variable `mark_started` writes, under Chat Computer's GUID.
+const STARTED: [u16; 20] = wide(b"ChatComputerStarted\0");
+
+const fn wide<const N: usize>(ascii: &[u8; N]) -> [u16; N] {
+    let mut out = [0u16; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = ascii[i] as u16;
+        i += 1;
+    }
+    out
+}
+
+/// Leaves a mark that it started, in a firmware variable (ChatComputerStarted): "secure-boot=on shim=yes", say.
+/// Windows' setup reads it back (windows/lib/OwnOs.ps1). Started with Secure Boot on through shim, by a key the
+/// firmware's own list doesn't have, its key is in shim's list (MokList), which Windows can't read: this is how the
+/// setup knows that approving it on MokManager's blue screen worked, even on a PC where the kernel can't keep its
+/// log. Written only when it says something new (the setup takes it away when it asks for an approval), so a PC's
+/// firmware settings aren't written at every start. Nothing stops for it if the firmware won't keep it.
+unsafe fn mark_started(st: *mut SystemTable, secure_boot: u32) {
+    let (rt, bs) = unsafe { ((*st).runtime_services, (*st).boot_services) };
+    if rt.is_null() || bs.is_null() {
+        return;
+    }
+    let mut shim_lock: *mut c_void = null_mut();
+    let through_shim = unsafe { ((*bs).locate_protocol)(&SHIM_LOCK, null_mut(), &mut shim_lock) } == SUCCESS;
+    let secure: &[u8] = match secure_boot {
+        bootinfo::SECURE_BOOT_ON => b"on",
+        bootinfo::SECURE_BOOT_OFF => b"off",
+        _ => b"unknown",
+    };
+    let mut value = [0u8; 40];
+    let mut n = 0;
+    for part in [b"secure-boot=".as_slice(), secure, b" shim=", if through_shim { b"yes" } else { b"no" }] {
+        value[n..n + part.len()].copy_from_slice(part);
+        n += part.len();
+    }
+    let mut there = [0u8; 40];
+    let mut size = there.len();
+    let status = unsafe {
+        ((*rt).get_variable)(STARTED.as_ptr(), &CHAT_COMPUTER, null_mut(), &mut size, there.as_mut_ptr() as *mut c_void)
+    };
+    if status == SUCCESS && there[..size] == value[..n] {
+        return;
+    }
+    unsafe {
+        ((*rt).set_variable)(STARTED.as_ptr(), &CHAT_COMPUTER, VARIABLE_KEPT_AND_SEEN, n, value.as_ptr() as *const c_void)
+    };
 }
 
 /// Where the ACPI tables start (ACPI 2.0 or later preferred), or 0.

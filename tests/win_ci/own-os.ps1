@@ -1,9 +1,10 @@
 # "Chat Computer Own System" on real Windows (GitHub's Windows machines). Signs Chat Computer's start-up file the way it
 # is signed on a PC (a key made by Windows, Windows' own signing), and leaves the signed file and the key's
-# certificate in -Out, where the Linux job starts it in a virtual PC with Secure Boot enforced. On a machine
-# that starts in UEFI mode it then runs the whole thing unattended (without restarting): the start-up partition
-# (with the memory file, kept when it runs again) and the power-on menu, and removing it again. The test key is
-# deleted at the end.
+# certificate in -Out, where the Linux job starts it in a virtual PC with Secure Boot enforced (and through shim).
+# On a machine that starts in UEFI mode it then writes, reads back and deletes a firmware variable of its own, as
+# the blue screen's request is written, and runs the whole thing unattended (without restarting): the start-up
+# partition (through shim, when Secure Boot is on and doesn't know the key; with the memory file, kept when it runs
+# again) and the power-on menu, and removing it again. The test key is deleted at the end.
 # ASCII-only file (see windows\lib\Common.ps1).
 param([Parameter(Mandatory = $true)][string]$Out)
 
@@ -38,22 +39,53 @@ $sig = Get-AuthenticodeSignature -FilePath $signed
 Check ($null -ne $sig.SignerCertificate -and $sig.SignerCertificate.Thumbprint -eq $cert.Thumbprint) 'signed by the key made on this PC'
 Write-Host ('Signature: ' + $sig.Status + ' (' + $sig.StatusMessage + ')')
 
-# 2. The whole thing, unattended, without restarting, when this machine starts in UEFI mode.
+# 2. A firmware variable, written, read back and deleted, as the request for the blue screen is (MokNew), under a GUID
+# of this test's own. (Skipped, saying so, where Windows isn't allowed to write them.)
+if ($fw -eq 'UEFI') {
+    $testGuid = '0c5f8e2a-6b1d-4f3e-9a7c-2d4b6e8f1a3c'
+    $wrote = $false
+    try {
+        Set-OwnUefiVariable -Name 'ChatComputerTest' -Value ([byte[]](1, 2, 3)) -Guid $testGuid
+        $wrote = $true
+    } catch {
+        Write-Host ('This machine''s firmware variables can''t be written: ' + $_.Exception.Message)
+    }
+    if ($wrote) {
+        $back = Get-OwnUefiVariable -Name 'ChatComputerTest' -Guid $testGuid
+        Check ($null -ne $back -and [BitConverter]::ToString([byte[]]$back) -eq '01-02-03') 'a firmware variable written and read back'
+        Set-OwnUefiVariable -Name 'ChatComputerTest' -Value $null -Guid $testGuid
+        Check ($null -eq (Get-OwnUefiVariable -Name 'ChatComputerTest' -Guid $testGuid)) 'and deleted'
+        Set-OwnUefiVariable -Name 'ChatComputerTest' -Value $null -Guid $testGuid
+        Check $true 'deleting one that isn''t there is fine'
+    }
+    Write-Host ('Shim''s signer trusted here: ' + (Test-OwnShimTrusted) + '; the start-up stage''s mark: ' + (Get-OwnStartedMark))
+}
+
+# 3. The whole thing, unattended, without restarting, when this machine starts in UEFI mode.
 if ($fw -eq 'UEFI') {
     $own = Join-Path $Win 'own-os.ps1'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $own -Unattended -NoRestart
     Check ($LASTEXITCODE -eq 0) 'own-os.ps1 ran'
     $entries = Get-OwnBootEntries
     Check ($entries.Count -eq 1) 'one "Chat Computer (own system)" entry in the power-on menu'
+    # (Through shim when Secure Boot is on and its own list doesn't have the key, and the firmware starts shim.)
+    $throughShim = $entries.Count -eq 1 -and [string]$entries[0].Path -match '(?i)\\shimx64\.efi$'
+    Write-Host ('The entry starts: ' + $(if ($entries.Count -eq 1) { $entries[0].Path } else { '?' }))
+    if ($sb -ne $true) { Check (-not $throughShim) 'with Secure Boot off, not through shim' }
     (& bcdedit.exe /enum firmware) | Out-File -FilePath (Join-Path $Out 'bcdedit-after.txt') -Encoding utf8
     $esp = Get-WindowsEsp
     $m = Mount-EspPartition $esp
     $memoryId = $null
     try {
         $dir = [IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir)
-        $file = Join-Path $dir $Script:OwnFile
+        $file = Join-Path $dir $(if ($throughShim) { $Script:OwnShimNext } else { $Script:OwnFile })
         Check (Test-Path -LiteralPath $file) 'the signed file is on the start-up partition'
         if (Test-Path -LiteralPath $file) { Check (Test-PeSigned $file) 'and it is signed' }
+        if ($throughShim) {
+            Check (Test-Path -LiteralPath (Join-Path $dir $Script:OwnShim)) 'shim is next to it'
+            Check (Test-Path -LiteralPath (Join-Path $dir $Script:OwnMokManager)) 'and MokManager'
+            Check (-not (Test-Path -LiteralPath (Join-Path $dir $Script:OwnFile))) 'and the start-up file only by the name shim starts'
+        }
         Check (Test-Path -LiteralPath (Join-Path $dir $Script:OwnCert)) 'the certificate is next to it'
         Check (Test-Path -LiteralPath (Join-Path $m.Root $Script:OwnCert)) 'and at the partition''s top, for the setup screen'
         Check (Test-Path -LiteralPath ([IO.Path]::Combine($m.Root, 'EFI', 'Microsoft', 'Boot', 'bootmgfw.efi'))) 'Windows'' own start-up file is still there'

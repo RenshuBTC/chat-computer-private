@@ -10,6 +10,16 @@ $Script:OwnKeyName = 'Chat Computer Secure Boot key'  # the certificate's friend
 $Script:OldOwnKeyName = 'ClaudeOS Secure Boot key'
 $Script:OwnFile = 'chatcomputer.efi'
 $Script:OwnCert = 'ChatComputer.cer'
+# On a PC whose Secure Boot doesn't trust Chat Computer's key, shim (os\release\shim: Microsoft signs it, as it does for
+# Linux distributions) starts it once the key is in shim's own list (MokList), approved once on MokManager's blue screen.
+$Script:OwnShim = 'shimx64.efi'
+$Script:OwnMokManager = 'mmx64.efi'
+$Script:OwnShimNext = 'grubx64.efi'              # the name shim starts: Chat Computer's signed start-up file
+$Script:ShimLockGuid = '605dab50-e046-4300-abb6-3dd810dd8b23'  # shim's GUID: MokNew and MokAuth are under it
+$Script:OwnMokPassword = 'hello'                 # typed on the blue screen (its keys are the same on QWERTY, QWERTZ and AZERTY)
+$Script:OwnMokMark = 'mok.txt'                   # in the work folder: where the key's approval on the blue screen is
+$Script:OwnVarGuid = '1dd7d236-3557-417b-b0ab-6cf839b24829'  # Chat Computer's own firmware variables' (os/boot/src/uefi.rs)
+$Script:OwnStartedVar = 'ChatComputerStarted'    # its start-up stage's mark that it started (os/boot/src/main.rs)
 $Script:OwnSettings = 'settings.txt'            # read by the kernel at start-up (os/kernel/src/settings.rs)
 $Script:OwnMemory = 'memory.bin'                # the conversation, kept across restarts (os/remember)
 $Script:OwnMemorySizes = @(4MB, 1MB)            # the memory file's size: the first that leaves room on the partition
@@ -581,28 +591,294 @@ function Remove-OldClaudeOsEntries {
     return $old.Count
 }
 
+# ------------------------------------------------------------------ shim and MokManager
+function Get-OwnShim {
+    # Shim and MokManager (os\release\shim), checked against their SHA-256 (SHA256SUMS). Returns their paths by name.
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+    $dir = [IO.Path]::Combine($RepoRoot, 'os', 'release', 'shim')
+    $sums = Join-Path $dir 'SHA256SUMS'
+    if (-not (Test-Path -LiteralPath $sums)) {
+        throw ('Shim is not in this folder (' + $dir + '). Download the whole Chat Computer folder again.')
+    }
+    $files = @{}
+    foreach ($line in [IO.File]::ReadAllLines($sums)) {
+        $parts = @($line.Trim() -split '\s+')
+        if ($parts.Count -ne 2) { continue }
+        $path = Join-Path $dir $parts[1]
+        if (-not (Test-Path -LiteralPath $path) -or (Get-OwnSha256 $path) -ne $parts[0].ToLowerInvariant()) {
+            throw ('Shim in this folder is damaged (' + $parts[1] + '''s checksum is wrong). Download the Chat Computer folder again.')
+        }
+        $files[$parts[1]] = $path
+    }
+    foreach ($name in @($Script:OwnShim, $Script:OwnMokManager)) {
+        if (-not $files.ContainsKey($name)) { throw ('Shim in this folder has no ' + $name + '. Download the Chat Computer folder again.') }
+    }
+    return $files
+}
+
+function Test-OwnShimTrusted {
+    # Whether this PC's Secure Boot starts shim: its allowed list (db) has the certificate Microsoft signs shim with,
+    # Microsoft Corporation UEFI CA 2011 (some PCs leave it out, trusting only Windows'), and its list of revoked ones
+    # (dbx) doesn't. $null when db can't be read.
+    $ca = [Text.Encoding]::ASCII.GetBytes('Microsoft Corporation UEFI CA 2011')
+    try {
+        $db = Get-SecureBootUEFI -Name db -ErrorAction Stop
+    } catch {
+        Write-SetupLog ('Reading the firmware''s db: ' + $_.Exception.Message)
+        return $null
+    }
+    if (-not (Test-BytesContain ([byte[]](Get-Prop $db 'Bytes')) $ca)) { return $false }
+    try {
+        $dbx = Get-SecureBootUEFI -Name dbx -ErrorAction Stop
+        if (Test-BytesContain ([byte[]](Get-Prop $dbx 'Bytes')) $ca) { return $false }
+    } catch {
+        Write-SetupLog ('Reading the firmware''s dbx: ' + $_.Exception.Message)
+    }
+    return $true
+}
+
+function New-OwnMokRequest {
+    # MokNew and MokAuth as mokutil writes them, for MokManager: $Certificate (DER) in an EFI_SIGNATURE_LIST (X.509,
+    # owned by shim's GUID), and the SHA-256 of that followed by $Password in UTF-16, which MokManager checks what's
+    # typed against. (os/check.py's mok_request makes the same, and a virtual PC's MokManager takes it.)
+    param([Parameter(Mandatory = $true)][byte[]]$Certificate, [Parameter(Mandatory = $true)][string]$Password)
+    $list = New-Object 'System.Collections.Generic.List[byte]'
+    $list.AddRange(([guid]'a5c059a1-94e4-4aa7-87b5-ab155c2bf072').ToByteArray())        # EFI_CERT_X509_GUID
+    $list.AddRange([BitConverter]::GetBytes([uint32](28 + 16 + $Certificate.Length)))  # the list's size
+    $list.AddRange([BitConverter]::GetBytes([uint32]0))                                 # its header's
+    $list.AddRange([BitConverter]::GetBytes([uint32](16 + $Certificate.Length)))       # each signature's
+    $list.AddRange(([guid]$Script:ShimLockGuid).ToByteArray())                           # its owner
+    $list.AddRange($Certificate)
+    $new = $list.ToArray()
+    $typed = [Text.Encoding]::Unicode.GetBytes($Password)
+    $all = New-Object byte[] ($new.Length + $typed.Length)
+    [Array]::Copy($new, 0, $all, 0, $new.Length)
+    [Array]::Copy($typed, 0, $all, $new.Length, $typed.Length)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $auth = $sha.ComputeHash($all) } finally { $sha.Dispose() }
+    return [pscustomobject]@{ MokNew = $new; MokAuth = $auth }
+}
+
+function Initialize-OwnUefi {
+    # Windows' calls for the firmware's variables (they need the SeSystemEnvironmentPrivilege an administrator has,
+    # switched on for this process).
+    if ('ChatComputerUefi' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class ChatComputerUefi {
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    struct TokenPrivileges { public uint Count; public long Luid; public uint Attributes; }
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool SetFirmwareEnvironmentVariableExW(string name, string guid, byte[] value, uint size, uint attributes);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern uint GetFirmwareEnvironmentVariableExW(string name, string guid, byte[] buffer, uint size, out uint attributes);
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr handle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool LookupPrivilegeValueW(string system, string name, out long luid);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokenPrivileges state, uint length, IntPtr previous, IntPtr returned);
+
+    static void Allow() {
+        IntPtr token;
+        if (!OpenProcessToken(GetCurrentProcess(), 0x0028, out token)) throw new Win32Exception();
+        try {
+            long luid;
+            if (!LookupPrivilegeValueW(null, "SeSystemEnvironmentPrivilege", out luid)) throw new Win32Exception();
+            TokenPrivileges tp = new TokenPrivileges();
+            tp.Count = 1;
+            tp.Luid = luid;
+            tp.Attributes = 2;
+            if (!AdjustTokenPrivileges(token, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero)) throw new Win32Exception();
+            int error = Marshal.GetLastWin32Error();
+            if (error != 0) throw new Win32Exception(error);
+        } finally {
+            CloseHandle(token);
+        }
+    }
+
+    public static void Set(string name, string guid, byte[] value, uint attributes) {
+        Allow();
+        uint size = value == null ? 0u : (uint)value.Length;
+        if (!SetFirmwareEnvironmentVariableExW(name, guid, value, size, attributes)) {
+            int error = Marshal.GetLastWin32Error();
+            if (value == null && error == 203) return;
+            throw new Win32Exception(error);
+        }
+    }
+
+    public static byte[] Get(string name, string guid) {
+        Allow();
+        byte[] buffer = new byte[65536];
+        uint attributes;
+        uint n = GetFirmwareEnvironmentVariableExW(name, guid, buffer, (uint)buffer.Length, out attributes);
+        if (n == 0) {
+            int error = Marshal.GetLastWin32Error();
+            if (error == 203) return null;
+            throw new Win32Exception(error);
+        }
+        byte[] result = new byte[n];
+        Array.Copy(buffer, result, (int)n);
+        return result;
+    }
+}
+'@
+}
+
+function Set-OwnUefiVariable {
+    # A firmware variable under $Guid (shim's), kept and seen by the firmware and the OS (non-volatile, boot and
+    # runtime: 7, as mokutil writes MokNew); $Value $null deletes it.
+    param([Parameter(Mandatory = $true)][string]$Name, [AllowNull()][byte[]]$Value, [string]$Guid = $Script:ShimLockGuid)
+    Initialize-OwnUefi
+    [ChatComputerUefi]::Set($Name, '{' + $Guid + '}', $Value, 7)
+}
+
+function Get-OwnUefiVariable {
+    # A firmware variable's bytes ($null if it isn't there).
+    param([Parameter(Mandatory = $true)][string]$Name, [string]$Guid = $Script:ShimLockGuid)
+    Initialize-OwnUefi
+    $b = [ChatComputerUefi]::Get($Name, '{' + $Guid + '}')
+    if ($null -eq $b) { return $null }
+    return , $b
+}
+
+function Get-OwnStartedMark {
+    # What Chat Computer's start-up stage last said when it started (its firmware variable: "secure-boot=on
+    # shim=yes", say), or $null: none since the setup took it away, or the firmware won't say.
+    try {
+        $b = Get-OwnUefiVariable -Name $Script:OwnStartedVar -Guid $Script:OwnVarGuid
+    } catch {
+        Write-SetupLog ('Reading the start-up stage''s mark: ' + $_.Exception.Message)
+        return $null
+    }
+    if ($null -eq $b) { return $null }
+    return [Text.Encoding]::ASCII.GetString($b)
+}
+
+function Test-OwnStartedThroughShim {
+    # Whether Chat Computer's own system has started through shim, with Secure Boot on, since its key's approval was
+    # asked for (the setup takes the start-up stage's mark away then, and makes its log new): its start-up stage's mark
+    # ($Mark) says so; with no mark (a firmware that won't keep one), the log has something in it ($Last, from
+    # Read-OwnLastRun).
+    param([AllowNull()][string]$Mark, $Last)
+    if ($Mark) {
+        $words = @($Mark.Trim() -split '\s+')
+        return (($words -contains 'secure-boot=on') -and ($words -contains 'shim=yes'))
+    }
+    return ($null -ne $Last)
+}
+
+function Get-OwnMokState {
+    # Where the approval of the key with $Thumbprint on MokManager's blue screen is, as the mark in $WorkDir has it:
+    # 'enrolled' (it's in shim's list), 'shown' (asked for, and the PC restarted to the blue screen), 'noshim' (the
+    # blue screen never came up: this PC doesn't start shim), else 'no'. Windows can't read shim's list (MokList), so
+    # $Started (Test-OwnStartedThroughShim) is the proof that turns 'shown' into 'enrolled'.
+    param([Parameter(Mandatory = $true)][string]$WorkDir, [Parameter(Mandatory = $true)][string]$Thumbprint, [bool]$Started)
+    $path = Join-Path $WorkDir $Script:OwnMokMark
+    $state = 'no'
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        $m = [regex]::Match([IO.File]::ReadAllText($path), '^(enrolled|shown|noshim) ([0-9A-Fa-f]+)\s*$')
+        if ($m.Success -and $m.Groups[2].Value -eq $Thumbprint) { $state = $m.Groups[1].Value }
+    }
+    if ($state -eq 'shown' -and $Started) {
+        Set-OwnMokState -WorkDir $WorkDir -Thumbprint $Thumbprint -State 'enrolled'
+        Write-SetupLog ('Shim knows the key ' + $Thumbprint + ': Chat Computer has started through it since its approval was asked for')
+        return 'enrolled'
+    }
+    return $state
+}
+
+function Set-OwnMokState {
+    param([Parameter(Mandatory = $true)][string]$WorkDir, [Parameter(Mandatory = $true)][string]$Thumbprint,
+          [Parameter(Mandatory = $true)][ValidateSet('enrolled', 'shown', 'noshim')][string]$State)
+    [IO.File]::WriteAllText((Join-Path $WorkDir $Script:OwnMokMark), ($State + ' ' + $Thumbprint + "`r`n"))
+}
+
+function Test-OwnMokRequest {
+    # Whether the request for MokManager to enroll $Certificate (DER) is still there (MokNew, as Request-OwnMok writes
+    # it): MokManager takes a request away whenever its blue screen comes up, approved or not (os/check.py --shim
+    # checks it), so one still there after a restart to shim says the blue screen never came up. $null when the
+    # firmware won't say.
+    param([Parameter(Mandatory = $true)][byte[]]$Certificate)
+    try {
+        $there = Get-OwnUefiVariable -Name 'MokNew'
+    } catch {
+        Write-SetupLog ('Reading MokNew: ' + $_.Exception.Message)
+        return $null
+    }
+    if ($null -eq $there) { return $false }
+    $ours = (New-OwnMokRequest -Certificate $Certificate -Password $Script:OwnMokPassword).MokNew
+    return ([BitConverter]::ToString([byte[]]$there) -eq [BitConverter]::ToString($ours))
+}
+
+function Request-OwnMok {
+    # Asks shim's MokManager to enroll $Certificate (DER) at the next start through shim: MokNew and MokAuth, with
+    # the password $Script:OwnMokPassword. The start-up stage's mark from before goes, so one there later says it has
+    # started since.
+    param([Parameter(Mandatory = $true)][byte[]]$Certificate)
+    $request = New-OwnMokRequest -Certificate $Certificate -Password $Script:OwnMokPassword
+    Set-OwnUefiVariable -Name $Script:OwnStartedVar -Value $null -Guid $Script:OwnVarGuid
+    Set-OwnUefiVariable -Name 'MokNew' -Value $request.MokNew
+    Set-OwnUefiVariable -Name 'MokAuth' -Value $request.MokAuth
+    Write-SetupLog ('Asked shim to enroll the key (MokNew, ' + $request.MokNew.Length + ' bytes)')
+}
+
+function Clear-OwnMokRequest {
+    # Takes the request for MokManager to enroll $Certificate away, if it's still there (a request of someone else's,
+    # for a Linux of theirs, stays).
+    param([Parameter(Mandatory = $true)][byte[]]$Certificate)
+    if ((Test-OwnMokRequest -Certificate $Certificate) -ne $true) { return }
+    foreach ($name in @('MokNew', 'MokAuth')) {
+        try { Set-OwnUefiVariable -Name $name -Value $null } catch { Write-SetupLog ('Deleting ' + $name + ': ' + $_.Exception.Message) }
+    }
+    Write-SetupLog 'Took the request for the blue screen away'
+}
+
+function Write-OwnMokSteps {
+    # Approving Chat Computer's key on MokManager's blue screen, once: the steps, in its own words (as os/check.py
+    # --shim answers it).
+    Write-Line 'On it, with the arrow keys and Enter:'
+    Write-Line '  1. Press any key when it says "Press any key to perform MOK management" (it waits 10 seconds).'
+    Write-Line '  2. Choose "Enroll MOK", then "Continue", then "Yes".'
+    Write-Line ('  3. Type the password ' + $Script:OwnMokPassword + ' and press Enter.')
+    Write-Line ('  4. Choose "Reboot". As the PC starts again, press F12 and choose "' + $Script:OwnEntryName + '".')
+    Write-Line '(If the 10 seconds go by, it says "Verification failed": press Enter, and in Windows double-click this again.)'
+}
+
 # ------------------------------------------------------------------ the start-up partition and the power-on menu
 function Get-OwnBootEntries {
     return , @(Get-FirmwareBootEntries | Where-Object { $_.Path -match ('(?i)^\\EFI\\' + $Script:OwnDir + '\\') -and $_.Id -ne '{fwbootmgr}' })
 }
 
 function Get-OwnBootEntry {
-    # Chat Computer's own system's entry in the power-on menu, made if it isn't there. Returns its {id}.
+    # Chat Computer's own system's entry in the power-on menu, starting $Path (\EFI\...): made if it isn't there, its
+    # path set if it starts another file (shim, or the start-up file itself). Returns its {id}.
+    param([string]$Path = ('\EFI\' + $Script:OwnDir + '\' + $Script:OwnFile))
     $entries = Get-OwnBootEntries
-    if ($entries.Count -gt 0) { return $entries[0].Id }
-    return (New-FirmwareBootEntry -Name $Script:OwnEntryName -Path ('\EFI\' + $Script:OwnDir + '\' + $Script:OwnFile))
+    if ($entries.Count -gt 0) {
+        if ([string]$entries[0].Path -ne $Path) { Invoke-Bcdedit @('/set', $entries[0].Id, 'path', $Path) }
+        return $entries[0].Id
+    }
+    return (New-FirmwareBootEntry -Name $Script:OwnEntryName -Path $Path)
 }
 
 function Assert-OwnRoom {
-    # Throws, saying so, when the partition at $Root has no room for a file of $Size bytes at $Path (in place of the
-    # one there, if any) and a megabyte more, for the settings and the certificate. (Chat Computer's own system is
-    # 10 MB since it carries Chinese, Japanese and Korean.) Nothing's said when Windows won't say how much is free.
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Path,
+    # Throws, saying so, when the partition at $Root has no room for files of $Size bytes in all, in place of those at
+    # $Paths (ours there now, if any), and a megabyte more, for the settings and the certificate. (Chat Computer's own
+    # system is 10 MB since it carries Chinese, Japanese and Korean; shim and MokManager are 2 MB.) Nothing's said when
+    # Windows won't say how much is free.
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string[]]$Paths,
           [Parameter(Mandatory = $true)][int64]$Size)
     $free = Get-OwnFreeSpace $Root
     if ($null -eq $free) { return }
-    $there = 0
-    if (Test-Path -LiteralPath $Path) { $there = (Get-Item -LiteralPath $Path).Length }
+    $there = [int64]0
+    foreach ($p in $Paths) { if (Test-Path -LiteralPath $p -PathType Leaf) { $there += (Get-Item -LiteralPath $p).Length } }
     if ($free + $there -lt $Size + 1MB) {
         throw ('The partition this PC starts from has ' + [math]::Floor($free / 1MB) + ' MB free, and Chat Computer''s ' +
             'own system needs ' + [math]::Ceiling(($Size + 1MB - $there) / 1MB) + ' MB there.')
@@ -612,33 +888,59 @@ function Assert-OwnRoom {
 function Install-OwnFiles {
     # The signed start-up file, the key's certificate, the settings and the memory file, in \EFI\chatcomputer-own on
     # the partition Windows starts from. The settings are written anew (a model named in them by hand is kept; an
-    # older setup's Claude API key isn't). Returns whether there's a memory file (Memory).
-    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate)
+    # older setup's Claude API key isn't). With $Shim (shim's and MokManager's paths, from Get-OwnShim), they go
+    # there too, and the start-up file as grubx64.efi, the name shim starts. With -FreshLog, the log file is a new
+    # one, so the last run's log has something in it only once the own system has run since. Returns whether there's
+    # a memory file (Memory), and the file the power-on menu's entry starts (Start, \EFI\...).
+    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate,
+          [hashtable]$Shim, [switch]$FreshLog)
     $esp = Get-WindowsEsp
     if (-not $esp) { throw 'Windows could not find the partition this PC starts from.' }
     $m = Mount-EspPartition $esp
     try {
         $dir = [IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir)
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        $file = Join-Path $dir $Script:OwnFile
-        Assert-OwnRoom -Root $m.Root -Path $file -Size (Get-Item -LiteralPath $Signed).Length
-        Copy-Item -LiteralPath $Signed -Destination $file -Force
+        $put = [ordered]@{}
+        if ($Shim) {
+            $put[$Script:OwnShimNext] = $Signed
+            $put[$Script:OwnShim] = $Shim[$Script:OwnShim]
+            $put[$Script:OwnMokManager] = $Shim[$Script:OwnMokManager]
+            $start = $Script:OwnShim
+        } else {
+            $put[$Script:OwnFile] = $Signed
+            $start = $Script:OwnFile
+        }
+        $ours = @($Script:OwnFile, $Script:OwnShimNext, $Script:OwnShim, $Script:OwnMokManager | ForEach-Object { Join-Path $dir $_ })
+        $size = [int64]0
+        foreach ($from in $put.Values) { $size += (Get-Item -LiteralPath $from).Length }
+        Assert-OwnRoom -Root $m.Root -Paths $ours -Size $size
+        # (The other way's files go: the start-up file itself, or shim's.)
+        foreach ($name in @($Script:OwnFile, $Script:OwnShimNext, $Script:OwnShim, $Script:OwnMokManager)) {
+            $p = Join-Path $dir $name
+            if (-not $put.Contains($name) -and (Test-Path -LiteralPath $p -PathType Leaf)) { Remove-Item -LiteralPath $p -Force }
+        }
+        foreach ($name in $put.Keys) {
+            $to = Join-Path $dir $name
+            Copy-Item -LiteralPath $put[$name] -Destination $to -Force
+            if ((Get-OwnSha256 $to) -ne (Get-OwnSha256 $put[$name])) { throw 'The copy on the start-up partition is not the same as the original.' }
+        }
         Copy-Item -LiteralPath $Certificate -Destination (Join-Path $dir $Script:OwnCert) -Force
         # (And at the partition's top: the setup screen's list of files starts there, so it's the first thing on it
         # when the key is approved.)
         Copy-Item -LiteralPath $Certificate -Destination (Join-Path $m.Root $Script:OwnCert) -Force
-        if ((Get-OwnSha256 $file) -ne (Get-OwnSha256 $Signed)) { throw 'The copy on the start-up partition is not the same as the original.' }
         $settings = Join-Path $dir $Script:OwnSettings
         $before = ''
         if (Test-Path -LiteralPath $settings) { $before = [IO.File]::ReadAllText($settings) }
         $model = Get-OwnSettingsModel $before
         $memoryId = Install-OwnMemory -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before)
-        $logId = Install-OwnLog -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before -Name 'log-id')
+        $logWas = $(if ($FreshLog) { $null } else { Get-OwnSettingsMemoryId $before -Name 'log-id' })
+        $logId = Install-OwnLog -Dir $dir -Root $m.Root -Id $logWas
         $text = New-OwnSettingsText -Model $model -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId `
             -LogId $logId -Cores (Get-OwnSettingsCores $before)
         [IO.File]::WriteAllText($settings, $text, [Text.Encoding]::ASCII)
-        Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($model) { 'naming a model' } else { 'naming no model' }))
-        return [pscustomobject]@{ Memory = ($memoryId -ne 0) }
+        Write-SetupLog ('Copied to ' + $dir + $(if ($Shim) { ', through shim' } else { '' }) + '; settings ' +
+                        $(if ($model) { 'naming a model' } else { 'naming no model' }))
+        return [pscustomobject]@{ Memory = ($memoryId -ne 0); Start = ('\EFI\' + $Script:OwnDir + '\' + $start) }
     } finally {
         Dismount-EspPartition $m
     }
@@ -812,7 +1114,27 @@ function Start-OwnSystem {
     }
     $approved = $null
     if ($sb -eq $true) { $approved = Test-OwnKeyApproved -Cert $cert }
-    $setupScreen = ($sb -eq $true -and $approved -ne $true)
+    # With Secure Boot on and the key not in the firmware's own list: through shim (which Microsoft signs, as for
+    # Linux), the key approved once on its blue screen, MokManager's; on a PC whose Secure Boot doesn't start shim, in
+    # the PC's setup screen.
+    $shim = $null
+    $mok = 'no'
+    $shimTrusted = $null
+    if ($sb -eq $true -and $approved -ne $true) {
+        $mok = Get-OwnMokState -WorkDir $WorkDir -Thumbprint $cert.Thumbprint `
+            -Started (Test-OwnStartedThroughShim -Mark (Get-OwnStartedMark) -Last $last)
+        if ($mok -eq 'shown' -and (Test-OwnMokRequest -Certificate ([byte[]]$cert.RawData)) -eq $true) {
+            Write-SetupLog 'The request was still there after the restart to shim: the blue screen never came up'
+            Clear-OwnMokRequest -Certificate ([byte[]]$cert.RawData)
+            Set-OwnMokState -WorkDir $WorkDir -Thumbprint $cert.Thumbprint -State 'noshim'
+            $mok = 'noshim'
+        }
+        $shimTrusted = Test-OwnShimTrusted
+        Write-SetupLog ('Shim: its signer trusted: ' + $shimTrusted + '; the key''s approval on the blue screen: ' + $mok)
+        if ($mok -ne 'noshim' -and $shimTrusted -ne $false) { $shim = Get-OwnShim -RepoRoot $RepoRoot }
+    }
+    $blueScreen = ($null -ne $shim -and $mok -ne 'enrolled')
+    $setupScreen = ($sb -eq $true -and $approved -ne $true -and $null -eq $shim)
     $old = [string](Get-Prop $cert 'FriendlyName') -eq $Script:OldOwnKeyName
     if ($sb -eq $false) {
         Write-Good 'Signed with this PC''s own key. (Secure Boot is off, so it starts with any key.)'
@@ -822,6 +1144,8 @@ function Start-OwnSystem {
         Write-Good 'Signed with the key this PC approved for ClaudeOS, so Secure Boot lets it start.'
     } elseif ($approved -eq $true) {
         Write-Good 'Signed with Chat Computer''s key, which this PC approved, so Secure Boot lets it start.'
+    } elseif ($shim -and -not $blueScreen) {
+        Write-Good 'Signed with Chat Computer''s key, which this PC approved on the blue screen, so Secure Boot lets it start.'
     } else {
         Write-Line 'Signed with Chat Computer''s key, which this PC hasn''t approved yet.'
         foreach ($k in $keys) {
@@ -835,11 +1159,11 @@ function Start-OwnSystem {
     # Its model: the one Chat Computer's app got ready on this PC (Qwen, run on the PC itself).
     $model = Find-OwnModel
     $bitlocker = $setupScreen -and (Get-BitLockerOn)
-    $installed = Install-OwnFiles -Signed $signed -Certificate $cer
+    $installed = Install-OwnFiles -Signed $signed -Certificate $cer -Shim $shim -FreshLog:$blueScreen
     if (-not $installed.Memory) {
         Write-Warn 'Its memory file couldn''t be made on the start-up partition (too little room, or it couldn''t be written), so the conversation won''t be kept across restarts.'
     }
-    $id = Get-OwnBootEntry
+    $id = Get-OwnBootEntry -Path $installed.Start
     Write-Good 'Put on the partition this PC starts from, next to Windows'' own files (which stay as they are).'
     if ((Remove-OldClaudeOsEntries) -gt 0) {
         Write-Good 'ClaudeOS is out of the boot menu, so only Windows and Chat Computer are there. (Its files stay on the drive.)'
@@ -851,7 +1175,7 @@ function Start-OwnSystem {
         Write-Line 'chatcomputer.ai/get, gets it).'
     }
 
-    if (-not $setupScreen) {
+    if (-not $setupScreen -and -not $blueScreen) {
         if ($NoRestart) { return }
         Write-Line ''
         Write-Line ('To come back to Windows, restart. To start Chat Computer again, choose "' + $Script:OwnEntryName + '" in the')
@@ -871,11 +1195,53 @@ function Start-OwnSystem {
         return
     }
 
+    if ($blueScreen) {
+        # (Secure Boot is on, the firmware's own list doesn't have the key, and the firmware starts shim: the key is
+        # approved once on shim's blue screen. Nothing changes before Enter: closing the window leaves the next start to
+        # Windows. BitLocker isn't paused: Secure Boot's own lists, which it checks as Windows starts, stay as they are;
+        # the key goes in shim's.)
+        Write-Step 'Once: approve Chat Computer''s key on a blue screen'
+        Write-Line 'Secure Boot only starts what this PC knows. Press Enter, and the PC restarts to a blue screen that asks to'
+        Write-Line 'approve Chat Computer''s key: once, with Secure Boot still on.'
+        Write-OwnMokSteps
+        Write-Line 'From then on, Enter here or the boot menu starts Chat Computer, with nothing to approve.'
+        Write-Line ''
+        if ($NoRestart) { return }
+        if (-not $Unattended) {
+            Write-Line 'Take a photo of these steps: this window won''t be there. (To stay in Windows, close this window.)'
+            Clear-OwnKeys
+            $answer = ([string](Read-Host 'Press Enter to restart to the blue screen')).Trim()
+            if ($answer -match '^(?i)n') {
+                Write-SetupLog 'Stayed in Windows before the blue screen'
+                Write-Line 'Staying in Windows. Double-click "Chat Computer Own System" again whenever you''re ready.'
+                return
+            }
+        }
+        try {
+            Request-OwnMok -Certificate ([byte[]]$cert.RawData)
+        } catch {
+            # (Then this PC gets the other way, in its setup screen, the next time.)
+            Write-SetupLog ('Asking for the blue screen: ' + $_.Exception.ToString())
+            Set-OwnMokState -WorkDir $WorkDir -Thumbprint $cert.Thumbprint -State 'noshim'
+            Write-Warn ('Windows wouldn''t ask for the blue screen (' + $_.Exception.Message + '), so nothing was restarted.')
+            Write-Line 'Double-click "Chat Computer Own System" again: it shows the other way, in the PC''s setup screen.'
+            return
+        }
+        Set-OwnMokState -WorkDir $WorkDir -Thumbprint $cert.Thumbprint -State 'shown'
+        Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
+        Write-SetupLog 'Restarting to the blue screen'
+        & shutdown.exe /r /t 0
+        return
+    }
+
     # (Secure Boot is on, and it doesn't trust any key this PC has: it needs one approval in the PC's setup screen,
     # which nothing in Windows can do for it. No choice is asked: approving the key keeps Secure Boot on, for Windows
     # and for games whose anti-cheat needs it; turning Secure Boot off is in the steps, for a PC that can't add a key.
     # Nothing changes before Enter: closing the window leaves the next start to Windows, and BitLocker as it was.)
     Write-Step 'Once: approve Chat Computer''s key in the PC''s setup screen'
+    if ($mok -eq 'noshim' -or $shimTrusted -eq $false) {
+        Write-Line 'The blue screen for approving it doesn''t come up on this PC, so it''s approved in the setup screen instead.'
+    }
     Write-Line 'Secure Boot stops Chat Computer until the PC knows its key ("Secure Boot Violation"). Approve it once, and'
     Write-Line 'from then on Chat Computer starts with Enter here, or from the boot menu, with Secure Boot still on.'
     $maker = ''
@@ -933,13 +1299,21 @@ function Remove-OwnSystem {
         if ($last) { Write-Line ('Its last run''s log is kept in ' + $last.Path + '.') }
     }
     Remove-OwnFiles
+    # (And what it left for its approval on the blue screen: a request still waiting, its start-up stage's mark.)
+    if ($cert) { Clear-OwnMokRequest -Certificate ([byte[]]$cert.RawData) }
+    try { Set-OwnUefiVariable -Name $Script:OwnStartedVar -Value $null -Guid $Script:OwnVarGuid } catch { Write-SetupLog ('Deleting the start-up stage''s mark: ' + $_.Exception.Message) }
+    if ($WorkDir) {
+        $mark = Join-Path $WorkDir $Script:OwnMokMark
+        if (Test-Path -LiteralPath $mark -PathType Leaf) { Remove-Item -LiteralPath $mark -Force }
+    }
     if ($cert) {
         Remove-Item -LiteralPath ('Cert:\CurrentUser\My\' + $cert.Thumbprint) -DeleteKey -ErrorAction Stop
         Write-SetupLog ('Deleted the key ' + $cert.Thumbprint)
     }
     Write-Good 'Done: Chat Computer''s own system is off this PC.'
     if ($cert) {
-        Write-Line 'If you approved its key in the PC''s setup screen, it is still listed there, but nothing can be signed'
-        Write-Line 'with it any more. To take it off that list too, use "Restore Factory Keys" there.'
+        Write-Line 'If you approved its key (on the blue screen, or in the PC''s setup screen), the PC still lists it, but'
+        Write-Line 'nothing can be signed with it any more. ("Restore Factory Keys" in the setup screen takes it off the setup'
+        Write-Line 'screen''s list.)'
     }
 }

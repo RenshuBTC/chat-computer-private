@@ -103,9 +103,11 @@ log go to out/.
     ./check.py --shim [--signed FILE --cert CER]   Secure Boot as on a PC from a shop that hasn't approved
                                      Chat Computer's key, the way Windows' setup starts it there: through shim
                                      (release/shim: Microsoft signs it), which starts it once its key is in
-                                     MokList: there already; not there (refused); and asked for as setup asks
-                                     (MokNew and MokAuth), approved on MokManager's blue screen with the keys the
-                                     setup's steps say, the virtual PC restarted, and started
+                                     MokList: there already; not there (refused); asked for as setup asks
+                                     (MokNew and MokAuth) with nobody at MokManager's blue screen (the request
+                                     dropped, refused); and asked for, approved on the blue screen with the keys the
+                                     setup's steps say, the virtual PC restarted, and started, its start-up stage's
+                                     mark (ChatComputerStarted) left for setup
 
 Needs qemu-system-x86_64, OVMF (/usr/share/OVMF) and Pillow; for Secure Boot also openssl, sbsign and
 virt-fw-vars (pip install virt-firmware).
@@ -2348,10 +2350,21 @@ def shim_vars(where: Path, name: str, *, enrolled: Path | None = None, request: 
     return out
 
 
+def firmware_variable(vars_fd: Path, name: str, guid: str) -> bytes | None:
+    """A variable in a virtual PC's firmware settings, or None."""
+    doc = json.loads(subprocess.run(["virt-fw-vars", "-i", str(vars_fd), "--output-json", "/dev/stdout"], capture_output=True,
+                                    text=True, check=True).stdout)
+    for v in doc["variables"]:
+        if v["name"] == name and v["guid"].lower() == guid:
+            return bytes.fromhex(v["data"])
+    return None
+
+
 def enroll_on_the_blue_screen(signed: Path, cert: Path, args) -> list[str]:
     """Setup's request (MokNew and MokAuth) answered on MokManager's blue screen as its steps say: a key pressed, Enroll
     MOK, Continue, Yes, the password, Reboot. The virtual PC restarts (its firmware settings kept), and shim must then
-    start Chat Computer, with Secure Boot on."""
+    start Chat Computer, with Secure Boot on, and its start-up stage leave the mark Windows' setup reads to know the
+    approval worked (ChatComputerStarted: "secure-boot=on shim=yes")."""
     with tempfile.TemporaryDirectory() as tmp:
         vars_fd = shim_vars(Path(tmp), "request", request=mok_request(der_of(cert)))
         pc = VirtualPC(SHIM, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=vars_fd, vars_in_place=True,
@@ -2380,15 +2393,47 @@ def enroll_on_the_blue_screen(signed: Path, cert: Path, args) -> list[str]:
         finally:
             pc.stop()
         text = pc.text()
-        enrolled = subprocess.run(["virt-fw-vars", "-i", str(vars_fd), "--output-json", "/dev/stdout"], capture_output=True,
-                                  text=True).stdout
+        enrolled = firmware_variable(vars_fd, "MokList", SHIM_LOCK)
+        started = firmware_variable(vars_fd, "ChatComputerStarted", CHATCOMPUTER_KEY_OWNER)
+        left = [n for n in ("MokNew", "MokAuth") if firmware_variable(vars_fd, n, SHIM_LOCK) is not None]
     problems = []
     if got != "Chat Computer: ready":
         problems.append("after its key was approved on the blue screen, shim didn't start it" + (f" ({got!r})" if got else ""))
     if "Chat Computer kernel: Secure Boot on" not in text:
         problems.append("the kernel didn't see Secure Boot on, started through shim")
-    if '"MokList"' not in enrolled:
+    if not enrolled or der_of(cert) not in enrolled:
         problems.append("the approved key isn't in MokList")
+    if left:
+        problems.append(f"MokManager left the request there ({', '.join(left)})")
+    if started != b"secure-boot=on shim=yes":
+        problems.append(f"its start-up stage didn't leave the mark Windows' setup reads (ChatComputerStarted: {started!r})")
+    return problems
+
+
+def unanswered_blue_screen(signed: Path, cert: Path, args) -> list[str]:
+    """Setup's request with nobody at the blue screen: after its 10 seconds, MokManager must take the request away (the
+    setup reads that as "the blue screen came up") and shim must not start Chat Computer."""
+    with tempfile.TemporaryDirectory() as tmp:
+        vars_fd = shim_vars(Path(tmp), "unanswered", request=mok_request(der_of(cert)))
+        pc = VirtualPC(SHIM, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=vars_fd, vars_in_place=True,
+                       beside={"grubx64.efi": signed, "mmx64.efi": MOKMANAGER})
+        try:
+            if not wait_for(pc.log, ("Press any key to perform MOK management",), args.timeout):
+                return ["MokManager's blue screen didn't come up for setup's request"]
+            got = wait_for(pc.log, ("Chat Computer kernel: started", "Verification failed", "Security Violation"), 60)
+        finally:
+            pc.stop()
+        left = [n for n in ("MokNew", "MokAuth") if firmware_variable(vars_fd, n, SHIM_LOCK) is not None]
+        started = firmware_variable(vars_fd, "ChatComputerStarted", CHATCOMPUTER_KEY_OWNER)
+    problems = []
+    if got == "Chat Computer kernel: started" or started is not None:
+        problems.append("shim started it with its key not approved")
+    elif not got:
+        problems.append("after the blue screen's 10 seconds, shim neither refused nor started it")
+    if left:
+        problems.append(f"the unanswered request is still there ({', '.join(left)})")
+    if not problems:
+        print("Refused, and the request taken away, as setup expects.")
     return problems
 
 
@@ -2401,6 +2446,8 @@ def through_shim(signed: Path, cert: Path, args) -> list[str]:
                                 beside=beside)
         print("Through shim, its key not approved:")
         problems += refused(SHIM, shim_vars(Path(tmp), "none"), args, beside=beside)
+    print("Through shim, its key asked for as setup asks, and the blue screen left unanswered:")
+    problems += unanswered_blue_screen(signed, cert, args)
     print("Through shim, its key asked for as setup asks, and approved on the blue screen:")
     return problems + enroll_on_the_blue_screen(signed, cert, args)
 

@@ -137,7 +137,7 @@ def test_the_app_does_each_way():
     assert conf["bundle"]["resources"] == {"setup/": "setup/"}
     win, mac = build_apps.setup_files("windows"), build_apps.setup_files("mac")
     for f in ("windows/Chat Computer Own System.cmd", "windows/own-os.ps1", "windows/lib/OwnOs.ps1", "os/release/chatcomputer.efi",
-              "README.md"):
+              "os/release/shim/shimx64.efi", "os/release/shim/mmx64.efi", "os/release/shim/SHA256SUMS", "README.md"):
         assert f in win, f
     for f in ("mac/setup.sh", "mac/manifest.sh", "Chat Computer Setup.command", "linux/install-chatcomputer.sh", "README.md"):
         assert f in mac, f

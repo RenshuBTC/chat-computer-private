@@ -75,11 +75,15 @@ chat-computer/
                             (u32 LE) + chunk number (u32 LE), 496 data bytes each; two halves written in turn, each
                             headed "CCMEMDAT" + version + sequence + length + FNV-1a 64 (header written last); a
                             sector is written only after all its tags are read back and match
-    build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced,
-                            typing on PS/2 and USB keyboards, USB mice's wheels, the network, the own model (a tiny
+    build.sh, check.py      Build; start in QEMU/OVMF and check the screen (also with Secure Boot enforced, and
+                            through shim with its key enrolled on MokManager's blue screen, typing on PS/2 and USB
+                            keyboards, USB mice's wheels, the network, the own model (a tiny
                             one, its answer the engine's on Linux), a conversation answered by a test's script, and
                             the conversation kept across a restart on NVMe and SATA)
     release/chatcomputer.efi  The reproducible build Windows uses (CI checks it matches the source)
+    release/shim/           Ubuntu's shim 15.8 (signed by Microsoft's third-party UEFI CA) and its MokManager, unchanged
+                            (SHA256SUMS); the start-up stage carries the .sbat section shim requires, and writes
+                            ChatComputerStarted (vendor GUID 1dd7d236-...: "secure-boot=on shim=yes") when it starts
   windows/own-os.ps1        "Chat Computer Own System.cmd": signs os/release with a key Windows makes on the PC
                             (CurrentUser\My, not exportable), says which model the own system will answer with (the
                             app's, in %LOCALAPPDATA%\ai.chatcomputer.desktop\models), copies it to
@@ -88,7 +92,13 @@ chat-computer/
                             memory.bin (made at full size, 4 MiB, else 1 MiB, only if 16 MiB stay free; kept when
                             its first and last tags carry the settings' id), adds "Chat Computer (own system)" last in the power-on
                             menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
-                            shows the steps for approving it (db Append, the certificate also at the partition's
+                            starts it through shim (shimx64.efi, grubx64.efi = the signed file, mmx64.efi; db must
+                            have Microsoft Corporation UEFI CA 2011): after Enter it writes MokNew + MokAuth (the
+                            certificate's EFI_SIGNATURE_LIST, SHA-256 of it + "hello" in UTF-16) under shim's GUID,
+                            marks mok.txt "shown <thumbprint>" and restarts; ChatComputerStarted saying shim=yes
+                            later turns it "enrolled"; MokNew still there after that restart means the firmware
+                            didn't start shim ("noshim"); then, and where db lacks that CA, it shows the steps for
+                            approving it in the setup screen (db Append, the certificate also at the partition's
                             top) and, after Enter, shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime
   requirements-dev.txt      What its tests need besides those (pytest, the stand-in model server's aiohttp); the runtime's

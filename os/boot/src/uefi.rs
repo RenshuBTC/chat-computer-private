@@ -131,7 +131,7 @@ const _: () = {
     assert!(core::mem::size_of::<ConfigurationTable>() == 24);
 };
 
-/// EFI_RUNTIME_SERVICES: only GetTime and GetVariable are used, and only before ExitBootServices.
+/// EFI_RUNTIME_SERVICES: only GetTime, GetVariable and SetVariable are used, and only before ExitBootServices.
 #[repr(C)]
 pub struct RuntimeServices {
     pub hdr: TableHeader,
@@ -142,9 +142,16 @@ pub struct RuntimeServices {
     set_virtual_address_map: usize,
     convert_pointer: usize,
     pub get_variable: unsafe extern "efiapi" fn(*const u16, *const Guid, *mut u32, *mut usize, *mut c_void) -> Status,
+    get_next_variable_name: usize,
+    pub set_variable: unsafe extern "efiapi" fn(*const u16, *const Guid, u32, usize, *const c_void) -> Status,
 }
 
 const _: () = assert!(offset_of!(RuntimeServices, get_variable) == 72);
+const _: () = assert!(offset_of!(RuntimeServices, set_variable) == 88);
+
+/// A firmware variable kept across restarts (non-volatile), and seen before ExitBootServices and after it, by the
+/// OS too (Windows' setup reads it).
+pub const VARIABLE_KEPT_AND_SEEN: u32 = 0x1 | 0x2 | 0x4;
 
 /// EFI_TIME: the PC's clock.
 #[repr(C)]
@@ -211,6 +218,11 @@ pub const FILE_MODE_READ: u64 = 1;
 
 /// The UEFI global variables' owner (EFI_GLOBAL_VARIABLE), e.g. "SecureBoot".
 pub const GLOBAL_VARIABLE: Guid = Guid(0x8be4df61, 0x93ca, 0x11d2, [0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c]);
+/// Shim's protocol (SHIM_LOCK), there when shim started this program (os/release/shim).
+pub const SHIM_LOCK: Guid = Guid(0x605dab50, 0xe046, 0x4300, [0xab, 0xb6, 0x3d, 0xd8, 0x10, 0xdd, 0x8b, 0x23]);
+/// Chat Computer's own firmware variables' owner (the GUID it's recorded under in db, too, when a PC's setup screen
+/// approved its key).
+pub const CHAT_COMPUTER: Guid = Guid(0x1dd7d236, 0x3557, 0x417b, [0xb0, 0xab, 0x6c, 0xf8, 0x39, 0xb2, 0x48, 0x29]);
 
 #[repr(C)]
 pub struct GraphicsOutput {

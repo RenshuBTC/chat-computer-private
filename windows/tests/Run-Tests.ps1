@@ -585,6 +585,8 @@ $Script:Bcd = $bcdEnglish + (New-BcdBlock '{bbbbbbbb-0000-4000-8000-000000000001
 $Script:BcdCalls.Clear()
 Assert-Equal '{bbbbbbbb-0000-4000-8000-000000000001}' (Get-OwnBootEntry) 'own entry: the one already there'
 Assert-Equal 0 $Script:BcdCalls.Count 'own entry: nothing added when it is there'
+Assert-Equal '{bbbbbbbb-0000-4000-8000-000000000001}' (Get-OwnBootEntry -Path '\EFI\chatcomputer-own\shimx64.efi') 'own entry: the same one, through shim'
+Assert-Equal '/set {bbbbbbbb-0000-4000-8000-000000000001} path \EFI\chatcomputer-own\shimx64.efi' ($Script:BcdCalls -join ' | ') 'own entry: pointed at shim'
 Assert-Equal 0 (Get-SetupBootEntries).Count 'own entry: not the installer''s entry'
 Assert-Equal 1 (Get-ChatComputerBootEntries).Count 'own entry: not Linux Chat Computer''s entry'
 Remove-Item Function:\bcdedit.exe
@@ -610,6 +612,49 @@ $menu = @(
 Assert-Equal '{c},{d}' ((Select-OldClaudeOsEntries -Entries $menu -Ubuntu $false | ForEach-Object { $_.Id }) -join ',') 'ClaudeOS out of the menu: not a Ubuntu of the person''s own'
 Assert-Equal '{a},{c},{d}' ((Select-OldClaudeOsEntries -Entries $menu -Ubuntu $true | ForEach-Object { $_.Id }) -join ',') 'ClaudeOS out of the menu: Ubuntu''s boot loader too, when it''s ClaudeOS''s'
 Assert-Equal 0 (Select-OldClaudeOsEntries -Entries @() -Ubuntu $true).Count 'ClaudeOS out of the menu: none there'
+# Shim and MokManager (os\release\shim), checked against their checksums; a damaged copy is refused.
+$shimFiles = Get-OwnShim -RepoRoot $repo
+Assert-Equal ([IO.Path]::Combine($repo, 'os', 'release', 'shim', 'shimx64.efi')) $shimFiles['shimx64.efi'] 'shim: its file, checked'
+Assert-Equal ([IO.Path]::Combine($repo, 'os', 'release', 'shim', 'mmx64.efi')) $shimFiles['mmx64.efi'] 'shim: MokManager''s, checked'
+$shimTmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), 'chatcomputer-shim-test-' + [guid]::NewGuid().ToString('N'))
+$shimCopy = [IO.Path]::Combine($shimTmp, 'os', 'release', 'shim')
+New-Item -ItemType Directory -Path $shimCopy -Force | Out-Null
+try {
+    foreach ($n in @('SHA256SUMS', 'shimx64.efi')) { Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $shimFiles['mmx64.efi']) $n) -Destination $shimCopy }
+    [IO.File]::WriteAllBytes((Join-Path $shimCopy 'mmx64.efi'), [byte[]](1, 2, 3))
+    Assert-Throws { Get-OwnShim -RepoRoot $shimTmp } 'shim: a damaged MokManager is refused'
+    Remove-Item -LiteralPath (Join-Path $shimCopy 'mmx64.efi')
+    Assert-Throws { Get-OwnShim -RepoRoot $shimTmp } 'shim: a missing one too'
+    Assert-Throws { Get-OwnShim -RepoRoot (Join-Path $shimTmp 'nothing') } 'shim: none at all'
+    # The request for MokManager, as mokutil writes it: the same bytes os/check.py's mok_request makes, which a virtual
+    # PC's MokManager takes with the password typed on its blue screen (here for a certificate of the bytes 1 to 10).
+    $request = New-OwnMokRequest -Certificate ([byte[]](1..10)) -Password 'hello'
+    Assert-Equal 'a159c0a5e494a74a87b5ab155c2bf07236000000000000001a00000050ab5d6046e00043abb63dd810dd8b230102030405060708090a' (([BitConverter]::ToString($request.MokNew) -replace '-', '').ToLowerInvariant()) 'shim: MokNew''s bytes'
+    Assert-Equal '7c111865d0e1e547fcfcb137c45c94d00584ca451443ddd460902e95654e2456' (([BitConverter]::ToString($request.MokAuth) -replace '-', '').ToLowerInvariant()) 'shim: MokAuth''s bytes, from the password'
+    Assert-Equal 'hello' $Script:OwnMokPassword 'shim: the password the steps say'
+    # Started through shim with Secure Boot on: the start-up stage's mark says so (os/boot/src/main.rs), or, with no
+    # mark, the log has something in it.
+    Assert-True (Test-OwnStartedThroughShim -Mark 'secure-boot=on shim=yes' -Last $null) 'shim: its mark says it started through shim'
+    Assert-True (-not (Test-OwnStartedThroughShim -Mark 'secure-boot=on shim=no' -Last 'log')) 'shim: started without it (its key in db), the log doesn''t count'
+    Assert-True (-not (Test-OwnStartedThroughShim -Mark 'secure-boot=off shim=yes' -Last $null)) 'shim: started with Secure Boot off proves nothing'
+    Assert-True (Test-OwnStartedThroughShim -Mark $null -Last 'log') 'shim: no mark, but a log'
+    Assert-True (-not (Test-OwnStartedThroughShim -Mark $null -Last $null)) 'shim: neither'
+    # Where the key's approval on the blue screen is.
+    $mokDir = Join-Path $shimTmp 'work'
+    New-Item -ItemType Directory -Path $mokDir | Out-Null
+    Assert-Equal 'no' (Get-OwnMokState -WorkDir $mokDir -Thumbprint 'AB12' -Started $true) 'shim: not asked: started proves nothing'
+    Set-OwnMokState -WorkDir $mokDir -Thumbprint 'AB12' -State 'shown'
+    Assert-Equal 'shown' (Get-OwnMokState -WorkDir $mokDir -Thumbprint 'AB12' -Started $false) 'shim: asked, not started since'
+    Assert-Equal 'no' (Get-OwnMokState -WorkDir $mokDir -Thumbprint 'CD34' -Started $true) 'shim: another key''s approval isn''t this one''s'
+    Assert-Equal 'enrolled' (Get-OwnMokState -WorkDir $mokDir -Thumbprint 'AB12' -Started $true) 'shim: started through shim since: approved'
+    Assert-Equal 'enrolled' (Get-OwnMokState -WorkDir $mokDir -Thumbprint 'AB12' -Started $false) 'shim: and it stays approved'
+    Set-OwnMokState -WorkDir $mokDir -Thumbprint 'AB12' -State 'noshim'
+    Assert-Equal 'noshim' (Get-OwnMokState -WorkDir $mokDir -Thumbprint 'AB12' -Started $true) 'shim: a PC that doesn''t start it'
+    [IO.File]::WriteAllText((Join-Path $mokDir $Script:OwnMokMark), 'something else')
+    Assert-Equal 'no' (Get-OwnMokState -WorkDir $mokDir -Thumbprint 'AB12' -Started $true) 'shim: a mark it can''t read is none'
+} finally {
+    Remove-Item -LiteralPath $shimTmp -Recurse -Force
+}
 # Its model: the one Chat Computer's app got ready, picked as the kernel picks (os/kernel/src/assistant.rs).
 function New-FakeModel([string]$Name, [int64]$Length) { [pscustomobject]@{ Name = $Name; Length = $Length; FullName = ('C:\m\' + $Name) } }
 Assert-Equal 'Qwen3.5 4B' (Get-OwnModelLabel 'qwen3.5-4b.ccm') 'own model: its name'
@@ -707,14 +752,19 @@ try {
     # Chat Computer's own system's file: refused, saying so, where it doesn't fit (in place of the one there).
     if ($null -ne $free) {
         $sys = Join-Path $memTmp 'chatcomputer.efi'
-        Assert-OwnRoom -Root $memRoot -Path $sys -Size 4MB
+        Assert-OwnRoom -Root $memRoot -Paths @($sys) -Size 4MB
         $said = ''
-        try { Assert-OwnRoom -Root $memRoot -Path $sys -Size ($free + 1GB) } catch { $said = $_.Exception.Message }
+        try { Assert-OwnRoom -Root $memRoot -Paths @($sys) -Size ($free + 1GB) } catch { $said = $_.Exception.Message }
         Assert-True ($said -like 'The partition this PC starts from has * MB free, and Chat Computer''s own system needs * MB there.') ('own system: no room said: ' + $said)
         [IO.File]::WriteAllBytes($sys, (New-Object byte[] 4096))
         $said = ''
-        try { Assert-OwnRoom -Root $memRoot -Path $sys -Size ($free - 1MB + 4096) } catch { $said = $_.Exception.Message }
+        try { Assert-OwnRoom -Root $memRoot -Paths @($sys) -Size ($free - 1MB + 4096) } catch { $said = $_.Exception.Message }
         Assert-Equal '' $said 'own system: the one there counts as room'
+        $shimThere = Join-Path $memTmp 'shimx64.efi'
+        [IO.File]::WriteAllBytes($shimThere, (New-Object byte[] 4096))
+        $said = ''
+        try { Assert-OwnRoom -Root $memRoot -Paths @($sys, $shimThere) -Size ($free - 1MB + 8192) } catch { $said = $_.Exception.Message }
+        Assert-Equal '' $said 'own system: through shim, every file of its there counts as room'
     }
 } finally {
     Remove-Item -LiteralPath $memTmp -Recurse -Force

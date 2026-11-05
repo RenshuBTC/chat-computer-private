@@ -8,16 +8,20 @@ scratch) on this PC, without a USB stick:
      Secure Boot already trusts, where there is one (ClaudeOS's, made by this before the name changed, too),
   3. says which model it answers with there: the one Chat Computer's app got ready on this PC (free, run on the PC
      itself, so nothing you type leaves it),
-  4. puts the signed file, its settings, its memory file (where it keeps the conversation across restarts; kept
-     when this runs again) and its log file (read back when this next runs, to last-run.txt in its work folder, and
-     said in a line) on the partition the PC starts from (\EFI\chatcomputer-own), next to Windows' own files,
+  4. puts the signed file (with shim beside it, when it starts through shim), its settings, its memory file (where
+     it keeps the conversation across restarts; kept when this runs again) and its log file (read back when this
+     next runs, to last-run.txt in its work folder, and said in a line) on the partition the PC starts from
+     (\EFI\chatcomputer-own), next to Windows' own files,
      and keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu), to choose whenever you like,
      taking ClaudeOS's old entries out of it (its own system's, its installers', and "Ubuntu" when that's the
      Ubuntu-based ClaudeOS: its mark is on the start-up partition), with Windows first; their files stay,
   5. restarts into it when you press Enter (closing the window stays in Windows). With no model on the PC yet, it
      starts all the same and says how to get one.
 Windows' permission, then Enter: nothing else is asked. With Secure Boot on and no key the PC trusts (it reuses
-the one approved for ClaudeOS), the key needs approving once in the PC's setup screen: it shows the steps (the
+the one approved for ClaudeOS), it starts through shim (os\release\shim: Microsoft signs it, as it does for Linux
+distributions), and the key needs approving once, on shim's blue screen (MokManager): it shows the steps (a key
+pressed, Enroll MOK, Continue, Yes, the password hello, Reboot), and Enter restarts to it. On a PC whose Secure
+Boot doesn't start shim, the key is approved in the PC's setup screen instead: it shows those steps (the
 certificate is at the top of the start-up partition, the first file the setup screen lists), and Enter restarts
 there. From then on, Enter here or "Chat Computer (own system)" in the boot menu starts it. The restart after it
 is Windows.

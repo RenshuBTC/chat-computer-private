@@ -20,6 +20,9 @@ current. Chat Computer's start-up file says its own in its `.sbat` section (`os/
 requires.
 
 `./check.py --shim` starts Chat Computer through them in a virtual PC with Microsoft's keys and Secure Boot on: with
-its key in MokList, without it (refused), and asked for as setup asks, approved on the blue screen.
+its key in MokList; without it (refused); asked for as setup asks, with nobody at the blue screen (MokManager drops
+the request after its 10 seconds, and shim refuses Chat Computer); and asked for, approved on the blue screen, then
+started. Windows can't read MokList, so setup knows the approval worked from a mark Chat Computer's start-up stage
+leaves when it starts (`ChatComputerStarted`, which the check reads back: `secure-boot=on shim=yes`).
 
 shim is under the BSD 2-clause licence (`LICENSE`).

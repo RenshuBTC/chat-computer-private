@@ -1165,7 +1165,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                         MethodKind::Method => FuncKind::Method,
                     }
                 };
-                if matches!(key, PropKey::Private(a) if self.atoms.get(a).is("constructor")) {
+                if matches!(key, PropKey::Private(a) if self.atoms.get(a).is("#constructor")) {
                     return Err(self.err("#constructor isn't allowed"));
                 }
                 if is_static && matches!(key, PropKey::Name(n::PROTOTYPE)) && !matches!(fkind, FuncKind::Constructor { .. }) {
@@ -1187,7 +1187,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 return Err(self.unexpected());
             }
             // A field.
-            if matches!(key, PropKey::Name(n::CONSTRUCTOR)) || matches!(key, PropKey::Private(a) if self.atoms.get(a).is("constructor")) {
+            if matches!(key, PropKey::Name(n::CONSTRUCTOR)) || matches!(key, PropKey::Private(a) if self.atoms.get(a).is("#constructor")) {
                 return Err(self.err("a field can't be named constructor"));
             }
             if is_static && matches!(key, PropKey::Name(n::PROTOTYPE)) {

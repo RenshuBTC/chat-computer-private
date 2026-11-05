@@ -250,3 +250,19 @@ pub const ID_CONTINUE: [(u32, u32); 766] = [
 pub fn within(table: &[(u32, u32)], c: u32) -> bool {
     table.binary_search_by(|&(a, b)| if b < c { core::cmp::Ordering::Less } else if a > c { core::cmp::Ordering::Greater } else { core::cmp::Ordering::Equal }).is_ok()
 }
+
+/// Whether a code point may start a name (ID_Start; the tables leave ASCII out).
+pub fn is_start(c: u32) -> bool {
+    if c < 128 {
+        return (c as u8).is_ascii_alphabetic();
+    }
+    within(&ID_START, c)
+}
+
+/// Whether a code point may continue a name (ID_Continue).
+pub fn is_part(c: u32) -> bool {
+    if c < 128 {
+        return (c as u8).is_ascii_alphanumeric() || c == b'_' as u32;
+    }
+    within(&ID_CONTINUE, c)
+}

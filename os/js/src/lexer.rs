@@ -275,7 +275,10 @@ impl<'a> Lexer<'a> {
             if name.is_empty() {
                 return Err(self.err("# isn't followed by a name"));
             }
-            return Ok(Tok::Private(atoms.intern_units(&name, None)));
+            // (Its atom is written with the #: a private name is never an ordinary one.)
+            let mut units = alloc::vec![b'#' as u16];
+            units.extend_from_slice(&name);
+            return Ok(Tok::Private(atoms.intern_units(&units, None)));
         }
         if c.is_ascii_digit() || (c == '.' && self.peek_at(1).is_some_and(|d| d.is_ascii_digit())) {
             return self.number();

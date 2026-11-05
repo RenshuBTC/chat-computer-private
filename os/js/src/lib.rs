@@ -9,11 +9,25 @@
 extern crate alloc;
 
 pub mod ast;
+pub mod bigint;
+pub mod builtins;
+pub mod code;
+pub mod compiler;
+mod convert;
+mod generators;
 pub mod lexer;
+pub mod math;
 pub mod names;
+pub mod object;
 pub mod parser;
+mod props;
+pub mod regexp;
+pub mod scope;
 pub mod string;
+mod unicode_gc;
 mod unicode_id;
+pub mod value;
+pub mod vm;
 
 #[cfg(test)]
 mod tests;

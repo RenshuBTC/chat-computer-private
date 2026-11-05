@@ -26,6 +26,10 @@ pub const BOX_GROUND: u32 = 0x151515;
 pub const DIM: u32 = 0x96958D;
 /// Shadows (theme.css --shade).
 pub const SHADE: u32 = 0x000000;
+/// The sidebars, a shade lighter than the middle as Claude's are on a PC (theme.css --side), and what's chosen in
+/// them (--chosen).
+pub const SIDE: u32 = 0x1F1F1F;
+pub const CHOSEN: u32 = 0x404040;
 
 /// A point, (x, y).
 pub type Point = (i32, i32);

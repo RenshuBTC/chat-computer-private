@@ -10,9 +10,16 @@
 //! Before the first message, the column says what this PC is, how long Chat Computer has been running on it
 //! (counted by the kernel's own timer), which keyboards it found, how its model is getting ready, and how to get
 //! back to Windows. If the kernel ever stops, the same place says so, with details to pass on.
+//!
+//! Where they fit (as chat.js has it: 17.5 rem each beside more than half the conversation's width), the app's two
+//! sidebars, against the screen's edges, a shade lighter than the middle with a thin line between: Messages at the
+//! left (the messages of the person's email and chat apps, once the own system can connect them); at the right,
+//! Actions (the date and time, then what Chat Computer did for the person, each with its time: what it looked up
+//! on the web, what it read or did on the PC) over Chats (this conversation's, by its first message). The
+//! conversation and the message box are in the middle between them.
 
 use crate::assistant::{self, Event, Ready};
-use crate::draw::{Canvas, Rect, BOX_GROUND, BOX_INK, BOX_LINE, BUBBLE, DIM, GROUND, INK, LINE, MUTED, PAPER};
+use crate::draw::{Canvas, Rect, BOX_GROUND, BOX_INK, BOX_LINE, BUBBLE, CHOSEN, DIM, GROUND, INK, LINE, MUTED, PAPER, SIDE};
 use crate::keyboard::{Key, Press};
 use crate::layout::{self, Layout};
 use crate::screen::Screen;
@@ -47,6 +54,13 @@ const BIG_REDRAW_MS: u64 = 40;
 const RESTARTED: &str = "Chat Computer started again; the conversation above was kept.";
 /// After the model starts a new conversation.
 const NEW_CONVERSATION: &str = "A new conversation starts here: Chat Computer no longer sees what's above, and it won't be kept.";
+/// The sidebars' words while they have nothing to list.
+const MESSAGES_EMPTY: &str = "Messages from your email and chat apps show up here, newest first, once Chat Computer's own \
+                              system can connect them (in the app, + connects them).";
+const ACTIONS_EMPTY: &str = "What I do for you shows up here: what I look up on the web, and what I read or change on this PC.";
+const CHATS_EMPTY: &str = "This conversation shows up here, by its first message.";
+/// The most actions the Actions sidebar keeps (the latest).
+const ACTIONS_MAX: usize = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -151,6 +165,13 @@ struct Metrics {
     /// The message box: its left edge and width.
     box_x: i32,
     box_w: i32,
+    /// Each sidebar's width (0: they don't fit), and the middle between them.
+    side_w: i32,
+    mid_x: i32,
+    mid_w: i32,
+    /// The sidebars' words: 0.875 rem, on lines 1.4 times that.
+    small: Style,
+    small_line: i32,
 }
 
 impl Metrics {
@@ -207,6 +228,11 @@ pub struct Chat {
     uptime_shown: Option<u64>,
     model_checked: u64,
     dot_alpha: u32,
+    /// The Actions sidebar's list (what, and when: "2:32 pm"), the date and time it shows, and the Chats sidebar's
+    /// conversation (by its first message).
+    actions: Vec<(String, String)>,
+    clock_shown: (String, String),
+    chat_title: Option<String>,
 }
 
 static CHAT: SpinLock<Option<Chat>> = SpinLock::new(None);
@@ -251,6 +277,27 @@ fn model_text(ready: Ready) -> String {
     }
 }
 
+/// The Actions sidebar's date and time, as the app shows them in Singapore's English: "Thursday 5 November 2026",
+/// "2:32 pm"; in local time when the settings gave the time zone, else in UTC (said so). Empty while the clock is
+/// unknown.
+fn clock_now() -> (String, String) {
+    const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
+    const MONTHS: [&str; 12] =
+        ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let (t, utc) = match crate::clock::local_now() {
+        Some(t) => (t, false),
+        None => match crate::clock::now() {
+            Some(t) => (t, true),
+            None => return (String::new(), String::new()),
+        },
+    };
+    let (y, mo, d, h, mi) = crate::clock::civil(t);
+    let day = DAYS[t.div_euclid(86_400).rem_euclid(7) as usize];
+    let month = MONTHS[(mo as usize).clamp(1, 12) - 1];
+    let (h12, pm) = (if h % 12 == 0 { 12 } else { h % 12 }, h >= 12);
+    (format!("{day} {d} {month} {y}"), format!("{h12}:{mi:02} {}{}", if pm { "pm" } else { "am" }, if utc { " UTC" } else { "" }))
+}
+
 /// How opaque the thinking dot is `ms` into its pulse (as chat.css: 0.35 to 1 and back in 1.2 s, easing), of 255.
 fn pulse(ms: u64) -> u32 {
     let p = (ms % 1200) as i64; // 0..1200
@@ -264,18 +311,30 @@ impl Chat {
         let rem = layout.font_px;
         let line = (rem * layout::LINE_HEIGHT + 0.5) as i32;
         let title_line = (rem * 1.5 * 1.3 + 0.5) as i32;
-        let column_w = layout.column_px as i32;
-        let box_w = ((layout::BOX_REM * rem) as i32).min(width as i32 - (2.0 * rem) as i32).max(column_w.min(width as i32));
+        let width = width as i32;
+        // The sidebars, where there's room for both beside more than half the conversation (chat.js's fitPanel).
+        let side = (17.5 * rem + 0.5) as i32;
+        let fits = width as f64 - 38.0 * rem >= 0.55 * layout.column_px;
+        let side_w = if fits { side } else { 0 };
+        let (mid_x, mid_w) = (side_w, width - 2 * side_w);
+        let column_w = (layout.column_px as i32).min(if fits { mid_w - (3.0 * rem) as i32 } else { width }).max(1);
+        let box_w = ((layout::BOX_REM * rem) as i32).min(mid_w - (2.0 * rem) as i32).max(column_w.min(mid_w));
+        let small_line = (rem * 0.875 * 1.4 + 0.5) as i32;
         Metrics {
             rem,
             body: Style { size: fx(rem), line_height: line * ONE },
             title: Style { size: fx(rem * 1.5), line_height: title_line * ONE },
             line,
-            column_x: (width as i32 - column_w) / 2,
+            column_x: mid_x + (mid_w - column_w) / 2,
             column_w,
             text_w: ((layout::TEXT_REM * rem + 0.5) as i32).min(column_w),
-            box_x: (width as i32 - box_w) / 2,
+            box_x: mid_x + (mid_w - box_w) / 2,
             box_w,
+            side_w,
+            mid_x,
+            mid_w,
+            small: Style { size: fx(rem * 0.875), line_height: small_line * ONE },
+            small_line,
         }
     }
 
@@ -330,6 +389,9 @@ impl Chat {
             uptime_shown: Some(0),
             model_checked: 0,
             dot_alpha: 0,
+            actions: Vec::new(),
+            clock_shown: clock_now(),
+            chat_title: None,
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -528,13 +590,16 @@ impl Chat {
     /// message box.
     fn render(&mut self, clip: Rect) {
         let view_top = self.view_top();
-        let log = Rect::new(0, 0, self.screen.width as i32, if self.stopped { self.screen.height as i32 } else { self.log_bottom() });
+        let log = Rect::new(self.m.mid_x, 0, self.m.mid_w, if self.stopped { self.screen.height as i32 } else { self.log_bottom() });
         let m = self.m;
         let rule = ((2.0 * self.layout.scale + 0.5) as i32).max(1); // (theme.css's 2px lines)
         let now = time::uptime_ms();
+        self.canvas.set_clip(clip);
+        self.canvas.fill(clip, GROUND);
+        if m.side_w > 0 && !self.stopped {
+            self.render_sides(clip);
+        }
         let Chat { canvas, blocks, ty, .. } = self;
-        canvas.set_clip(clip);
-        canvas.fill(clip, GROUND);
         canvas.set_clip(clip.intersect(&log));
         let area = canvas.clip();
         let screen_h = canvas.height as i32;
@@ -585,6 +650,146 @@ impl Chat {
         if !self.stopped {
             self.canvas.set_clip(clip);
             self.render_box();
+        }
+    }
+
+    /// The two sidebars (where they fit), drawn in `clip`.
+    fn render_sides(&mut self, clip: Rect) {
+        let m = self.m;
+        let (w, h) = (self.screen.width as i32, self.screen.height as i32);
+        let hair = self.hair();
+        let (left, right) = (Rect::new(0, 0, m.side_w, h), Rect::new(w - m.side_w, 0, m.side_w, h));
+        let Chat { canvas, ty, actions, clock_shown, chat_title, .. } = self;
+        canvas.set_clip(clip);
+        for (side, line_x) in [(left, left.right() - hair), (right, right.x)] {
+            canvas.fill(side, SIDE);
+            canvas.fill(Rect::new(line_x, 0, hair, h), LINE);
+        }
+        // Sizes as chat.css's: padding 0.75 rem (0.5 rem on a sidebar's right), words inset 0.4 em, a title's row 1.6
+        // em high and 0.75 rem above what follows.
+        let small = m.small;
+        let em = m.rem * 0.875;
+        let inset = (0.4 * em + 0.5) as i32;
+        let (pad_l, pad_r, pad_t) = (m.px(0.75), m.px(0.5), m.px(0.75));
+        let head_h = (1.6 * em + 0.5) as i32;
+        let words_w = m.side_w - pad_l - pad_r - inset;
+        let text = |canvas: &mut Canvas, s: &str, face: Face, x: i32, y: i32, rgb: u32| {
+            let ink = ty.ink_in(s, face, small, 0);
+            canvas.ink(x - ink.left as i32, y, &ink, rgb);
+        };
+        let wrapped = |canvas: &mut Canvas, s: &str, x: i32, mut y: i32, max: i32, rgb: u32| -> i32 {
+            for r in ty.breaks(s, small.size, max * ONE) {
+                let part = s[r].trim_end();
+                if !part.is_empty() {
+                    let ink = ty.ink_in(part, Face::Regular, small, 0);
+                    canvas.ink(x - ink.left as i32, y, &ink, rgb);
+                }
+                y += m.small_line;
+            }
+            y
+        };
+        let head = |canvas: &mut Canvas, title: &str, x: i32, y: i32| -> i32 {
+            text(canvas, title, Face::Bold, x + inset, y + (head_h - m.small_line) / 2, INK);
+            y + head_h + m.px(0.75)
+        };
+        // Messages.
+        let y = head(canvas, "Messages", left.x + pad_l, pad_t);
+        wrapped(canvas, MESSAGES_EMPTY, left.x + pad_l + inset, y, words_w, INK);
+        // Actions, over Chats: two halves of the same height, a line between them.
+        let x = right.x + hair + pad_l;
+        let half = h / 2;
+        let mut y = head(canvas, "Actions", x, pad_t);
+        y -= m.px(0.4);
+        text(canvas, &clock_shown.0, Face::Regular, x + inset, y, INK);
+        text(canvas, &clock_shown.1, Face::Regular, x + inset, y + m.small_line, INK);
+        y += 2 * m.small_line + m.px(0.9);
+        if actions.is_empty() {
+            wrapped(canvas, ACTIONS_EMPTY, x + inset, y, words_w, INK);
+        } else {
+            // The latest that fit, oldest at the top (as the app lists them), each with its time at its first line's
+            // right, in grey.
+            let room = half - m.px(0.75) - y;
+            let item = |what: &str, when: &str| -> (Vec<Range<usize>>, i32) {
+                let when_w = (ty.width(when, small.size) + ONE - 1) / ONE + (0.6 * em) as i32;
+                let lines = ty.breaks(what, small.size, (words_w - when_w).max(1) * ONE);
+                let height = lines.len() as i32 * m.small_line + (0.7 * em) as i32;
+                (lines, height)
+            };
+            let mut first = actions.len();
+            let mut used = 0;
+            while first > 0 {
+                let (_, height) = item(&actions[first - 1].0, &actions[first - 1].1);
+                if used + height > room {
+                    break;
+                }
+                used += height;
+                first -= 1;
+            }
+            let mut at = y;
+            for (what, when) in &actions[first..] {
+                let (lines, height) = item(what, when);
+                let top = at + (0.35 * em) as i32;
+                for (i, r) in lines.iter().enumerate() {
+                    let part = what[r.clone()].trim_end();
+                    if !part.is_empty() {
+                        text(canvas, part, Face::Regular, x + inset, top + i as i32 * m.small_line, INK);
+                    }
+                }
+                let when_x = right.right() - pad_r - inset - (ty.width(when, small.size) + ONE - 1) / ONE;
+                text(canvas, when, Face::Regular, when_x, top, MUTED);
+                at += height;
+            }
+        }
+        canvas.fill(Rect::new(right.x + hair, half, m.side_w - hair, hair), LINE);
+        let y = head(canvas, "Chats", x, half + hair + pad_t);
+        match chat_title {
+            Some(title) => {
+                // One line, cut short with an ellipsis if it's longer, marked as the one on the screen.
+                let pad = (0.4 * em + 0.5) as i32;
+                let item_h = m.small_line + 2 * (0.5 * em) as i32;
+                canvas.round_rect(Rect::new(x, y, m.side_w - hair - pad_l - pad_r, item_h), (0.5 * em) as i32, CHOSEN);
+                let max = m.side_w - hair - pad_l - pad_r - 2 * pad;
+                let mut shown = String::from(title.lines().next().unwrap_or(""));
+                if ty.width(&shown, small.size) > max * ONE {
+                    while !shown.is_empty() && ty.width(&format!("{shown}\u{2026}"), small.size) > max * ONE {
+                        shown.pop();
+                    }
+                    shown = format!("{}\u{2026}", shown.trim_end());
+                }
+                text(canvas, &shown, Face::Regular, x + pad, y + (0.5 * em) as i32, INK);
+            }
+            None => {
+                wrapped(canvas, CHATS_EMPTY, x + inset, y, words_w, INK);
+            }
+        }
+    }
+
+    /// The right sidebar's part of the screen (for redrawing it when what it lists changes).
+    fn right_side(&self) -> Rect {
+        let w = self.screen.width as i32;
+        Rect::new(w - self.m.side_w, 0, self.m.side_w, self.screen.height as i32)
+    }
+
+    /// Something Chat Computer did for the person, for the Actions sidebar.
+    fn action(&mut self, what: String) {
+        if self.actions.last().is_some_and(|(w, _)| *w == what) {
+            return;
+        }
+        let when = clock_now().1;
+        self.actions.push((what, when));
+        if self.actions.len() > ACTIONS_MAX {
+            self.actions.remove(0);
+        }
+        let area = self.right_side();
+        self.dirty = self.dirty.union(&area);
+    }
+
+    /// The conversation's first message, for the Chats sidebar.
+    fn set_chat_title(&mut self, title: Option<String>) {
+        if self.chat_title != title {
+            self.chat_title = title;
+            let area = self.right_side();
+            self.dirty = self.dirty.union(&area);
         }
     }
 
@@ -684,6 +889,12 @@ impl Chat {
     fn tick(&mut self) {
         if self.stopped {
             return;
+        }
+        let shown = clock_now();
+        if shown != self.clock_shown {
+            self.clock_shown = shown;
+            let area = self.right_side();
+            self.dirty = self.dirty.union(&area);
         }
         let now = time::uptime_ms();
         if !self.started {
@@ -884,6 +1095,9 @@ impl Chat {
         let text = String::from(self.typed.trim());
         self.typed.clear();
         self.cursor = 0;
+        if self.chat_title.is_none() {
+            self.set_chat_title(Some(text.clone()));
+        }
         self.blocks.push(Block::new(Kind::You, Live::No, text.clone()));
         let you = self.blocks.len() - 1;
         match assistant::ask(&text) {
@@ -960,6 +1174,10 @@ impl Chat {
             Event::Failed(why) => self.answer_over(Some(why)),
             Event::TextSize(percent) => self.set_text_size(percent),
             Event::Activity(doing) => {
+                // (What it does, for the Actions sidebar: not how far it's got.)
+                if !doing.contains('%') && !doing.starts_with("Searching") && !doing.starts_with("Reading ") {
+                    self.action(doing.clone());
+                }
                 let Some(i) = self.asking else { return };
                 self.blocks[i].activity = Some(doing);
                 let area = self.block_area(i);
@@ -986,12 +1204,16 @@ impl Chat {
             Event::NewConversation => {
                 self.blocks.push(Block::new(Kind::Divider, Live::No, String::from(NEW_CONVERSATION)));
                 self.relayout = true;
+                self.set_chat_title(None);
             }
             Event::Note(text) => {
                 self.blocks.push(Block::new(Kind::Note, Live::No, text));
                 self.relayout = true;
             }
-            Event::Looked(text) => self.looked(text),
+            Event::Looked(text) => {
+                self.action(text.clone());
+                self.looked(text);
+            }
         }
     }
 
@@ -1054,6 +1276,9 @@ impl Chat {
         }
         self.started = true;
         self.blocks.clear();
+        if let Some((_, first)) = turns.iter().find(|(you, _)| *you) {
+            self.set_chat_title(Some(first.clone()));
+        }
         for (you, text) in turns {
             self.blocks.push(Block::new(if *you { Kind::You } else { Kind::Answer }, Live::No, text.clone()));
         }

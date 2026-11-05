@@ -337,6 +337,8 @@ class VirtualPC:
 
 # Chat Computer's colours (theme.css): the background, the words, your messages' bubbles, the message box.
 GROUND, INK, BUBBLE, PAPER = (25, 25, 25), (240, 240, 240), (37, 37, 37), (48, 48, 48)
+# The sidebars' a shade lighter, where they fit (theme.css --side).
+SIDE = (31, 31, 31)
 
 
 def colours(image) -> dict:
@@ -356,8 +358,9 @@ def check_colours(a, size: str) -> list[str]:
     foreign = [c for c in seen if not (c[0] >= c[1] >= c[2])]
     if foreign:
         problems.append(f"{len(foreign)} colours that aren't Chat Computer's, e.g. {foreign[:3]}")
-    if seen.get(GROUND, 0) < total * 0.6:
-        problems.append(f"only {seen.get(GROUND, 0) * 100 // total}% of the screen is the background")
+    background = seen.get(GROUND, 0) + seen.get(SIDE, 0)
+    if background < total * 0.6:
+        problems.append(f"only {background * 100 // total}% of the screen is the background (the sidebars' with it)")
     # (Light pixels, not only the words' white itself: Lora's strokes are thin, so two short lines have few pixels
     # wholly inked, and the rest of each stroke is lighter grey than anything but words on this screen.)
     if sum(n for c, n in seen.items() if min(c) >= 200) < 500:

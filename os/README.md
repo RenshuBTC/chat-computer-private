@@ -756,13 +756,14 @@ writes for each person, in place of Ubuntu's catalogue.
    Qwen 3.5's vision part, run by the engine, checked against the reference implementation; in the kernel, checked
    in a virtual PC against the engine on Linux). To do: trying the web and pictures on a real PC (and how long a
    picture takes there to be seen), and JPEG 2000's and JBIG2's scans.
-9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the formatting the model's answers use
-   (Markdown, with bold from the variable font), ✓ kerning, as a browser sets the same font, ✓ pictures in the
-   conversation (JPEG, PNG, GIF), ✓ accents typed as two characters (composed, or placed by GPOS's mark positioning,
-   as HarfBuzz does), ✓ Chinese, Japanese and Korean (their ideographs in mainland China's forms, wrapped between
-   characters as Chromium wraps them). To do: the forms of ideographs Japan and Taiwan write (mainland China's now),
-   rarer ideographs (boxes now), and the font's own glyph substitutions for marks (GSUB: a capital's flatter
-   accents).
+9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the app's sidebars where the screen is
+   wide enough (messages on the left; what it did for you, with the date and time, and the chats on the right),
+   ✓ the formatting the model's answers use (Markdown, with bold from the variable font), ✓ kerning, as a browser
+   sets the same font, ✓ pictures in the conversation (JPEG, PNG, GIF), ✓ accents typed as two characters
+   (composed, or placed by GPOS's mark positioning, as HarfBuzz does), ✓ Chinese, Japanese and Korean (their
+   ideographs in mainland China's forms, wrapped between characters as Chromium wraps them). To do: the forms of
+   ideographs Japan and Taiwan write (mainland China's now), rarer ideographs (boxes now), and the font's own glyph
+   substitutions for marks (GSUB: a capital's flatter accents).
 10. Sound and AirPods: ✓ HD Audio's outputs, for the chimes of timers and reminders (checked with QEMU's
     controllers and codecs), ✓ its microphones (the one to listen to found and recorded, for the speech recognition
     to come; checked with QEMU's codecs fed tones), ✓ USB sound cards (class 1's: the chimes play on one while it's

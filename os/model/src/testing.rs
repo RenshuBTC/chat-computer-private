@@ -25,7 +25,7 @@ impl Rng {
     }
 }
 
-const SPECIALS: [&str; 9] = [
+pub const SPECIALS: [&str; 9] = [
     "<|endoftext|>",
     "<|im_start|>",
     "<|im_end|>",

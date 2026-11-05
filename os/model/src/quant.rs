@@ -268,17 +268,32 @@ pub fn dot_row_many_at(level: crate::cpu::Level, dtype: Dtype, data: &[u8], cols
         let q4 = dtype == Dtype::Q4;
         let bytes = if q4 { Q4_BYTES } else { Q8_BYTES };
         let row = &data[r * cols / BLOCK * bytes..(r + 1) * cols / BLOCK * bytes];
+        let fits = |x: &Prepared| x.q.len() == cols / BLOCK * Q8_BYTES && (level < crate::cpu::Level::AvxVnni || x.qu.len() == cols);
+        // (With VNNI, eight at a time: what's worked out once a block serves more of them.)
+        while level >= crate::cpu::Level::AvxVnni && t + 8 <= n && xs[t..t + 8].iter().all(|x| fits(x)) {
+            let eight: [&Prepared; 8] = core::array::from_fn(|k| xs[t + k]);
+            let res = unsafe {
+                match (level, q4) {
+                    (crate::cpu::Level::AvxVnni, false) => simd::dot_avxvnni::<false, 8>(row, eight),
+                    (crate::cpu::Level::AvxVnni, true) => simd::dot_avxvnni::<true, 8>(row, eight),
+                    (_, false) => simd::dot_avx512vnni::<false, 8>(row, eight),
+                    (_, true) => simd::dot_avx512vnni::<true, 8>(row, eight),
+                }
+            };
+            out[t..t + 8].copy_from_slice(&res);
+            t += 8;
+        }
         while t + 4 <= n {
             let four = [xs[t], xs[t + 1], xs[t + 2], xs[t + 3]];
-            if four.iter().any(|x| x.q.len() != cols / BLOCK * Q8_BYTES || (level >= crate::cpu::Level::AvxVnni && x.qu.len() != cols)) {
+            if !four.iter().all(|x| fits(x)) {
                 break;
             }
             let res = unsafe {
                 match (level, q4) {
-                    (crate::cpu::Level::AvxVnni, false) => simd::dot4_avxvnni::<false>(row, four),
-                    (crate::cpu::Level::AvxVnni, true) => simd::dot4_avxvnni::<true>(row, four),
-                    (crate::cpu::Level::Avx512Vnni, false) => simd::dot4_avx512vnni::<false>(row, four),
-                    (crate::cpu::Level::Avx512Vnni, true) => simd::dot4_avx512vnni::<true>(row, four),
+                    (crate::cpu::Level::AvxVnni, false) => simd::dot_avxvnni::<false, 4>(row, four),
+                    (crate::cpu::Level::AvxVnni, true) => simd::dot_avxvnni::<true, 4>(row, four),
+                    (crate::cpu::Level::Avx512Vnni, false) => simd::dot_avx512vnni::<false, 4>(row, four),
+                    (crate::cpu::Level::Avx512Vnni, true) => simd::dot_avx512vnni::<true, 4>(row, four),
                     (_, false) => simd::dot4_avx2::<false>(row, four),
                     (_, true) => simd::dot4_avx2::<true>(row, four),
                 }
@@ -502,42 +517,42 @@ mod simd {
         }
     }
 
-    /// The same with VNNI: the activations as unsigned bytes (plus 128) times the weights, in one instruction;
-    /// 128 times the weights' sums taken off again.
-    macro_rules! dot4_vnni {
+    /// The same with VNNI, for `N` vectors at once: the activations as unsigned bytes (plus 128) times the weights, in
+    /// one instruction, each dot product starting from minus 128 times the weights' sums (worked out once a block, for
+    /// all N); each block's scale the weights' times the vector's, made in vector registers (the same numbers as made
+    /// one at a time: dot_q4_avx2's). Each vector's sum is exactly what it is done alone.
+    macro_rules! dot_vnni {
         ($name:ident, $features:literal, $dp:ident) => {
             #[target_feature(enable = $features)]
-            pub unsafe fn $name<const Q4: bool>(row: &[u8], xs: [&Prepared; 4]) -> [f32; 4] {
+            pub unsafe fn $name<const Q4: bool, const N: usize>(row: &[u8], xs: [&Prepared; N]) -> [f32; N] {
                 unsafe {
                     let bytes = if Q4 { Q4_BYTES } else { Q8_BYTES };
-                    let (u0, u1, u2, u3) = (xs[0].qu.as_ptr(), xs[1].qu.as_ptr(), xs[2].qu.as_ptr(), xs[3].qu.as_ptr());
-                    let (s0, s1, s2, s3) = (xs[0].scales.as_ptr(), xs[1].scales.as_ptr(), xs[2].scales.as_ptr(), xs[3].scales.as_ptr());
-                    let (mut a0, mut a1, mut a2, mut a3) = (_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps());
+                    let u: [*const u8; N] = core::array::from_fn(|t| xs[t].qu.as_ptr());
+                    let s: [*const f32; N] = core::array::from_fn(|t| xs[t].scales.as_ptr());
+                    let mut acc = [_mm256_setzero_ps(); N];
                     let offset = _mm256_set1_epi8(-128i8);
                     let zero = _mm256_setzero_si256();
                     let mut w = row.as_ptr();
                     for i in 0..row.len() / bytes {
-                        let dw = half(w);
+                        let dw = _mm256_cvtph_ps(_mm_set1_epi16(u16::from_le_bytes([*w, *w.add(1)]) as i16));
                         let a = weights::<Q4>(w);
-                        let corr = $dp(zero, offset, a);
+                        let start = _mm256_sub_epi32(zero, $dp(zero, offset, a));
                         let at = i * BLOCK;
-                        let dot = |u: *const u8| {
-                            let x = _mm256_loadu_si256(u.add(at) as *const __m256i);
-                            _mm256_cvtepi32_ps(_mm256_sub_epi32($dp(zero, x, a), corr))
-                        };
-                        a0 = _mm256_fmadd_ps(_mm256_set1_ps(dw * *s0.add(i)), dot(u0), a0);
-                        a1 = _mm256_fmadd_ps(_mm256_set1_ps(dw * *s1.add(i)), dot(u1), a1);
-                        a2 = _mm256_fmadd_ps(_mm256_set1_ps(dw * *s2.add(i)), dot(u2), a2);
-                        a3 = _mm256_fmadd_ps(_mm256_set1_ps(dw * *s3.add(i)), dot(u3), a3);
+                        for t in 0..N {
+                            let x = _mm256_loadu_si256(u[t].add(at) as *const __m256i);
+                            let d = _mm256_cvtepi32_ps($dp(start, x, a));
+                            let scale = _mm256_mul_ps(dw, _mm256_broadcast_ss(&*s[t].add(i)));
+                            acc[t] = _mm256_fmadd_ps(scale, d, acc[t]);
+                        }
                         w = w.add(bytes);
                     }
-                    [sum8(a0), sum8(a1), sum8(a2), sum8(a3)]
+                    core::array::from_fn(|t| sum8(acc[t]))
                 }
             }
         };
     }
-    dot4_vnni!(dot4_avxvnni, "avx2,fma,f16c,avxvnni", _mm256_dpbusd_avx_epi32);
-    dot4_vnni!(dot4_avx512vnni, "avx2,fma,f16c,avx512vnni,avx512vl", _mm256_dpbusd_epi32);
+    dot_vnni!(dot_avxvnni, "avx2,fma,f16c,avxvnni", _mm256_dpbusd_avx_epi32);
+    dot_vnni!(dot_avx512vnni, "avx2,fma,f16c,avx512vnni,avx512vl", _mm256_dpbusd_epi32);
 }
 
 /// A plain f32 dot product.

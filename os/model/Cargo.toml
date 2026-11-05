@@ -53,6 +53,10 @@ name = "bench_mm"
 required-features = ["std"]
 
 [[example]]
+name = "bench_forward"
+required-features = ["std"]
+
+[[example]]
 name = "tiny_model"
 required-features = ["std"]
 

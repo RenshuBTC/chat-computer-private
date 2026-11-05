@@ -180,6 +180,32 @@ fn the_kernels_agree() {
 }
 
 #[test]
+fn a_row_times_many_vectors_is_each_one_alone_exactly() {
+    use crate::cpu::Level;
+    let mut r = Rng(9);
+    for (dtype, cols) in [(Dtype::Q8, 256usize), (Dtype::Q4, 256), (Dtype::Q4, 2560), (Dtype::Q8, 96)] {
+        let rows = 3;
+        let w = r.vec(rows * cols, 1.0);
+        let mut data = Vec::new();
+        if dtype == Dtype::Q8 { quant::quantize_q8(&w, &mut data) } else { quant::quantize_q4(&w, &mut data) }
+        // (21: eight, eight, four and one, at the levels that take eight.)
+        let xs: Vec<Prepared> = (0..21).map(|_| Prepared::new(&r.vec(cols, 2.0))).collect();
+        let refs: Vec<&Prepared> = xs.iter().collect();
+        for level in [Level::Plain, Level::Avx2, Level::AvxVnni, Level::Avx512Vnni] {
+            for row in 0..rows {
+                let mut many = vec![0.0f32; xs.len()];
+                quant::dot_row_many_at(level, dtype, &data, cols, row, &refs, &mut many);
+                for (t, x) in refs.iter().enumerate() {
+                    let mut one = [0.0f32];
+                    quant::dot_row_many_at(level, dtype, &data, cols, row, &[*x], &mut one);
+                    assert_eq!(many[t].to_bits(), one[0].to_bits(), "{dtype:?} {level:?} row {row} vector {t}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn the_system_prompt_read_ahead_is_read_once() {
     let bytes = tiny(true);
     let file = File::open(&bytes).unwrap();

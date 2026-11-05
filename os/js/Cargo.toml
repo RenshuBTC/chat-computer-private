@@ -1,0 +1,9 @@
+[package]
+name = "js"
+description = "Chat Computer's own JavaScript engine: the language parsed, compiled to bytecode and run, with its built-ins, for web pages in its own system"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]

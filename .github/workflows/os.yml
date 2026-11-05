@@ -49,7 +49,7 @@ jobs:
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
       - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, PDF, picture, BitLocker and registry readers, cryptography, Markdown, memory file, HID, AML, Claude API, web and browser engine tests
-        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p pdf -p picture -p bitlocker -p crypto -p registry -p markdown -p remember -p hid -p aml -p claude -p web -p browser
+        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p pdf -p picture -p bitlocker -p crypto -p registry -p markdown -p remember -p hid -p aml -p claude -p web -p browser -p js
       - name: The model engine's tests (on small models with random weights)
         run: cargo test -p model --features std
       - name: The engine's programs for Linux (x86-64 and ARM) and the tiny test model are what this source builds

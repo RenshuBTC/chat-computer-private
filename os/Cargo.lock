@@ -94,6 +94,10 @@ name = "hid"
 version = "0.1.0"
 
 [[package]]
+name = "js"
+version = "0.1.0"
+
+[[package]]
 name = "markdown"
 version = "0.1.0"
 

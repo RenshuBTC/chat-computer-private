@@ -162,7 +162,8 @@ fn the_kernels_agree() {
             let mut want = vec![0.0f32; xs.len()];
             quant::dot_row_many_at(Level::Plain, dtype, &data, cols, row, &refs, &mut want);
             // Exactly the same integer sums; the floats only in their order of adding up.
-            for level in [Level::Avx2, Level::AvxVnni, Level::Avx512Vnni] {
+            // (Each level the processor has: an instruction it hasn't would stop the test.)
+            for level in [Level::Avx2, Level::AvxVnni, Level::Avx512Vnni].into_iter().filter(|l| crate::cpu::supports(*l)) {
                 let mut got = vec![0.0f32; xs.len()];
                 quant::dot_row_many_at(level, dtype, &data, cols, row, &refs, &mut got);
                 for (g, e) in got.iter().zip(&want) {
@@ -191,7 +192,7 @@ fn a_row_times_many_vectors_is_each_one_alone_exactly() {
         // (21: eight, eight, four and one, at the levels that take eight.)
         let xs: Vec<Prepared> = (0..21).map(|_| Prepared::new(&r.vec(cols, 2.0))).collect();
         let refs: Vec<&Prepared> = xs.iter().collect();
-        for level in [Level::Plain, Level::Avx2, Level::AvxVnni, Level::Avx512Vnni] {
+        for level in [Level::Plain, Level::Avx2, Level::AvxVnni, Level::Avx512Vnni].into_iter().filter(|l| crate::cpu::supports(*l)) {
             for row in 0..rows {
                 let mut many = vec![0.0f32; xs.len()];
                 quant::dot_row_many_at(level, dtype, &data, cols, row, &refs, &mut many);

@@ -3,10 +3,10 @@
 //! what they said is heard by Chat Computer's own speech recognition (OpenAI's Whisper, run by the engine:
 //! model/src/whisper.rs), a step at a time beside the screen and the keyboard, and sent as their message.
 //!
-//! The model is the one Chat Computer's app got ready on Windows, in its models folder's speech folder
-//! (whisper-small.en.ccm, say), read into memory the first time it's needed. When they've begun to speak and then
-//! pause for 0.8 seconds, what they said is heard (with a little of the quiet before it and after); if they say
-//! nothing for 8 seconds, it stops. What it heard is let go of as soon as it's words: nothing is kept or sent
+//! The model is the one Chat Computer's setup (Chat Computer Own System) got ready on Windows, in the app's models
+//! folder's speech folder (whisper-small.en.ccm), read into memory the first time it's needed. When they've begun to
+//! speak and then pause for 0.8 seconds, what they said is heard (with a little of the quiet before it and after); if
+//! they say nothing for 8 seconds, it stops. What it heard is let go of as soon as it's words: nothing is kept or sent
 //! anywhere. A transcript that's no words, or one of the phrases Whisper makes up from noise, isn't sent (the same
 //! rules as Chat Computer's app's).
 
@@ -123,7 +123,8 @@ fn choose() -> Result<String, String> {
     match fits {
         Some((path, _)) => Ok(path.clone()),
         None if found.is_empty() => Err(String::from(
-            "Chat Computer's own speech recognition needs its model, which Chat Computer's app gets ready on Windows",
+            "Chat Computer's own speech recognition needs its model, which it gets on Windows: go back there (restart \
+             the PC) and double-click Chat Computer Own System, which gets it ready",
         )),
         None => Err(String::from("this PC's memory isn't enough for Chat Computer's speech recognition as well as its model")),
     }

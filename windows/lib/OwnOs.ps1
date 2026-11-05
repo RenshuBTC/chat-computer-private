@@ -69,6 +69,19 @@ function Find-OwnModel {
 # Chat Computer's model engine for Windows (windows\bin, built from os/model as the app's is): with no model on this
 # PC yet, it gets one ready in the app's models folder, where the own system finds it, as the app does.
 $Script:OwnEngine = 'chat-computer-model.exe'
+# What the own system hears with (Windows+H): Whisper, which the engine gets ready in the models folder's speech folder
+# (chatcomputer/brain/models.json's "speech"), where the kernel looks (os/kernel/src/listening.rs).
+$Script:OwnSpeechModel = 'whisper-small.en'
+
+function Find-OwnSpeech {
+    # The speech recognition model's file in the models folder's speech folder (the biggest, as the kernel picks the
+    # biggest that fits); $null if there's none.
+    param([string]$Dir = (Join-Path (Join-Path $env:LOCALAPPDATA $Script:OwnModels) 'speech'))
+    if (-not (Test-Path -LiteralPath $Dir)) { return $null }
+    $files = @(Get-ChildItem -LiteralPath $Dir -Filter '*.ccm' -File -ErrorAction SilentlyContinue | Sort-Object -Property Length -Descending)
+    if ($files.Count -eq 0) { return $null }
+    return [string]$files[0].FullName
+}
 
 function Get-OwnEngine {
     # The engine program in this folder (windows\bin\chat-computer-model.exe), checked against its SHA-256; $null if
@@ -123,17 +136,25 @@ function Format-OwnPrepareLine {
     }
 }
 
+function Get-OwnPrepareArguments {
+    # The engine's command line for getting model $Name ready in $Dir (-Speech: a speech recognition model, which it
+    # puts in $Dir's speech folder).
+    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][string]$Name, [switch]$Speech)
+    return ('prepare "' + $Dir + '"' + $(if ($Speech) { ' --speech' } else { '' }) + ' --model ' + $Name + ' --exit-with-stdin')
+}
+
 function Install-OwnModel {
     # Gets model $Name ready in Chat Computer's app's models folder with the engine ($Engine), as the app does:
     # downloaded from Qwen's repository at the pinned revision, each file checked against its SHA-256, converted,
-    # its refusals taken out. How it goes is said on one line. Returns whether it's ready. (Stopped, by closing the
-    # window, it carries on where it stopped the next time: the engine ends with this window.)
-    param([Parameter(Mandatory = $true)][string]$Engine, [Parameter(Mandatory = $true)][string]$Name)
+    # its refusals taken out (-Speech: the speech recognition model, Whisper, in the folder's speech folder). How it
+    # goes is said on one line. Returns whether it's ready. (Stopped, by closing the window, it carries on where it
+    # stopped the next time: the engine ends with this window.)
+    param([Parameter(Mandatory = $true)][string]$Engine, [Parameter(Mandatory = $true)][string]$Name, [switch]$Speech)
     $dir = Join-Path $env:LOCALAPPDATA $Script:OwnModels
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Engine
-    $psi.Arguments = 'prepare "' + $dir + '" --model ' + $Name + ' --exit-with-stdin'
+    $psi.Arguments = Get-OwnPrepareArguments -Dir $dir -Name $Name -Speech:$Speech
     $psi.UseShellExecute = $false
     $psi.RedirectStandardError = $true
     $psi.RedirectStandardOutput = $true
@@ -1284,6 +1305,17 @@ function Start-OwnSystem {
                 $model = Find-OwnModel
             } else {
                 Write-Warn 'Its model couldn''t be got ready now, so it starts without it and says how to get one.'
+            }
+        }
+    }
+    if ($model -and -not $Unattended -and -not (Find-OwnSpeech)) {
+        # (It hears what's said to it, Windows+H, with Whisper, got ready the same way beside the model.)
+        $engine = Get-OwnEngine -RepoRoot $RepoRoot
+        if ($engine) {
+            Write-Step 'Getting its listening ready'
+            Write-Line 'It hears what you say (Windows+H) on this PC itself too, with Whisper, made by OpenAI: about 1 GB to download.'
+            if (-not (Install-OwnModel -Engine $engine -Name $Script:OwnSpeechModel -Speech)) {
+                Write-Warn 'Its listening couldn''t be got ready now: typing works, and double-clicking this again gets it ready.'
             }
         }
     }

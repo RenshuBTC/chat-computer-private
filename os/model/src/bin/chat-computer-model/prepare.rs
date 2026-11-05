@@ -12,12 +12,17 @@
 //!
 //!     chat-computer-model models DIR [--catalogue FILE]
 //!     chat-computer-model prepare DIR [--model NAME|auto] [--catalogue FILE] [--threads N]
+//!     chat-computer-model prepare DIR --speech [--model NAME|auto] [--catalogue FILE]
 //!
 //! DIR holds the models: NAME.ccm, NAME.refusal, and download-NAME/ while one comes. `models` says (JSON) which
 //! there are, which are here (and which of those are to be made again: "outdated"), and which this computer would
 //! get, having put any file made again in its place first; `prepare` gets one ready, saying how it goes on
 //! stderr, a line at a time ("downloading DONE TOTAL"; "converting", then its "STEP/STEPS weight"; "uncensoring",
 //! then the refusal search's "STEP/STEPS what"; "ready FILE", or "failed WHY"), and the file on stdout.
+//!
+//! With --speech, the speech recognition model (the catalogue's "speech": OpenAI's Whisper, as transformers publishes
+//! it) is got ready the same way, in DIR's speech folder, where Chat Computer's own system finds it to hear with
+//! (Windows+H): it has no refusals to take out.
 //!
 //! Downloads go over Chat Computer's own HTTPS (fetch.rs).
 
@@ -59,6 +64,10 @@ pub struct Model {
     pub files: Vec<FileSpec>,
     /// Whether it sees (its weights have a vision part the engine runs: the catalogue says).
     pub sees: bool,
+    /// Whether it's a speech recognition model (the catalogue's "speech"), which has no refusals to take out.
+    pub speech: bool,
+    /// The bits a weight its published files have (16; Whisper's, 32).
+    pub source_bits: u32,
 }
 
 impl Model {
@@ -70,14 +79,24 @@ impl Model {
     /// them, at 8 even in a 4-bit model: a little more than this says).
     pub fn file_bytes(&self) -> u64 {
         let weights: u64 = self.files.iter().filter(|f| f.name.ends_with(".safetensors")).map(|f| f.size).sum();
-        (weights as f64 / 2.0 * (self.bits as f64 + 0.5) / 8.0 * 1.02) as u64
+        (weights as f64 / (self.source_bits as f64 / 8.0) * (self.bits as f64 + 0.5) / 8.0 * 1.02) as u64
     }
 }
 
 /// The models in a catalogue (biggest first).
 pub fn catalogue(text: &str) -> Result<Vec<Model>, String> {
+    catalogue_of(text, "models")
+}
+
+/// The speech recognition models in a catalogue (its "speech", biggest first).
+pub fn speech_catalogue(text: &str) -> Result<Vec<Model>, String> {
+    catalogue_of(text, "speech")
+}
+
+fn catalogue_of(text: &str, list: &str) -> Result<Vec<Model>, String> {
     let j = json::parse(text).ok_or("the catalogue isn't JSON")?;
-    let list = j.get("models").and_then(Json::array).ok_or("the catalogue has no models")?;
+    let speech = list == "speech";
+    let list = j.get(list).and_then(Json::array).ok_or(format!("the catalogue has no {list}"))?;
     let mut out = Vec::new();
     for m in list {
         let s = |k: &str| m.get(k).and_then(Json::str).map(str::to_string).ok_or(format!("a model without {k}"));
@@ -107,6 +126,8 @@ pub fn catalogue(text: &str) -> Result<Vec<Model>, String> {
             bits: m.get("bits").and_then(Json::num).unwrap_or(4.0) as u32,
             files,
             sees: m.get("sees").and_then(Json::bool).unwrap_or(false),
+            speech,
+            source_bits: m.get("source_bits").and_then(Json::num).unwrap_or(16.0) as u32,
         });
     }
     Ok(out)
@@ -240,14 +261,21 @@ struct Args {
     model: String,
     catalogue: Option<PathBuf>,
     threads: Option<usize>,
+    /// The speech recognition model, in DIR's speech folder.
+    speech: bool,
 }
 
 fn args(command: &str, a: Vec<String>) -> Result<Args, String> {
-    let (mut dir, mut model, mut catalogue, mut threads) = (None, "auto".to_string(), None, None);
+    let (mut dir, mut model, mut catalogue, mut threads, mut speech) = (None, "auto".to_string(), None, None, false);
     let mut i = 0;
     while i < a.len() {
         let value = a.get(i + 1).cloned().unwrap_or_default();
         match a[i].as_str() {
+            "--speech" => {
+                speech = true;
+                i += 1;
+                continue;
+            }
             "--model" => model = value,
             "--catalogue" => catalogue = Some(PathBuf::from(value)),
             "--threads" => threads = value.parse().ok(),
@@ -260,17 +288,18 @@ fn args(command: &str, a: Vec<String>) -> Result<Args, String> {
         }
         i += 2;
     }
-    Ok(Args { dir: dir.ok_or(format!("{command}: which folder?"))?, model, catalogue, threads })
+    Ok(Args { dir: dir.ok_or(format!("{command}: which folder?"))?, model, catalogue, threads, speech })
 }
 
+/// The catalogue's models (with --speech, its speech recognition models).
 fn load(a: &Args) -> Result<Vec<Model>, String> {
     let text = match &a.catalogue {
         Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?,
         None => CATALOGUE.to_string(),
     };
-    let models = catalogue(&text)?;
+    let models = if a.speech { speech_catalogue(&text)? } else { catalogue(&text)? };
     if models.is_empty() {
-        return Err("the catalogue has no models".into());
+        return Err(format!("the catalogue has no {}", if a.speech { "speech recognition models" } else { "models" }));
     }
     Ok(models)
 }
@@ -320,7 +349,8 @@ pub fn prepare_main(a: Vec<String>) -> i32 {
     let run = || -> Result<PathBuf, String> {
         let a = args("prepare", a)?;
         let models = load(&a)?;
-        let store = Store { dir: a.dir.clone() };
+        // (A speech recognition model goes in the models folder's speech folder, where the own system looks.)
+        let store = Store { dir: if a.speech { a.dir.join("speech") } else { a.dir.clone() } };
         std::fs::create_dir_all(&store.dir).map_err(|e| format!("{}: {e}", store.dir.display()))?;
         let m = if a.model == "auto" || a.model.is_empty() {
             store.pick(&models, sys::memory_bytes(), sys::free_bytes(&store.dir))
@@ -352,7 +382,7 @@ fn prepare(store: &Store, m: &Model, threads: Option<usize>) -> Result<PathBuf, 
     // One made before the engine kept the part that sees is made again; the one here answers meanwhile.
     let again = store.outdated(m);
     if let Some(p) = store.ready(m).filter(|_| !again) {
-        if !store.uncensored(m) {
+        if !m.speech && !store.uncensored(m) {
             uncensor(&p, &store.refusal_path(m), threads)?;
         }
         eprintln!("ready {}", p.display());
@@ -392,7 +422,9 @@ fn prepare(store: &Store, m: &Model, threads: Option<usize>) -> Result<PathBuf, 
         eprintln!("ready {}", done.display());
         return Ok(done);
     }
-    uncensor(&tmp, &store.refusal_path(m), threads)?;
+    if !m.speech {
+        uncensor(&tmp, &store.refusal_path(m), threads)?;
+    }
     std::fs::rename(&tmp, &out).map_err(|e| format!("{}: {e}", out.display()))?;
     let _ = std::fs::remove_dir_all(&d);
     eprintln!("ready {}", out.display());
@@ -595,6 +627,27 @@ mod tests {
         std::fs::write(store.path(m), b"not a model file").unwrap();
         assert!(settings_of(&store.path(m)).is_none() && !store.outdated(m));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_speech_recognition_model_is_pinned_beside_them() {
+        let speech = speech_catalogue(CATALOGUE).unwrap();
+        let names: Vec<&str> = speech.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["whisper-small.en"]);
+        let m = &speech[0];
+        assert!(m.speech && !m.sees && m.bits == 8 && m.source_bits == 32 && m.repo == "openai/whisper-small.en");
+        // What the converter reads, each pinned.
+        for f in ["config.json", "generation_config.json", "tokenizer.json", "model.safetensors"] {
+            assert!(m.files.iter().any(|x| x.name == f), "{f}");
+        }
+        // Its file: its weights (32 bits each, published) at 8 and a half bits, about 260 MB, not twice that.
+        assert!((240_000_000..280_000_000).contains(&m.file_bytes()), "{}", m.file_bytes());
+        // Qwen's are 16 bits a weight, as before.
+        assert!(catalogue(CATALOGUE).unwrap().iter().all(|m| !m.speech && m.source_bits == 16));
+        // And the models aren't speech recognition's, nor the other way round.
+        let a = args("prepare", vec!["D".into(), "--speech".into(), "--model".into(), "whisper-small.en".into()]).unwrap();
+        assert!(a.speech && a.model == "whisper-small.en" && a.dir == Path::new("D"));
+        assert!(!args("prepare", vec!["D".into()]).unwrap().speech);
     }
 
     #[test]

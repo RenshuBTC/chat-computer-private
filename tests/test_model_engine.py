@@ -623,7 +623,7 @@ def test_the_engine_downloads_a_model_over_its_own_https(tmp_path):
     proxy's would be), following the hub's redirect to its storage, carried on where it broke off, checked against
     its SHA-256; then converting (these files aren't a model: it says so, and the downloads are kept)."""
     prog = _engine()
-    files = {"config.json": b'{"x": 1}', "tokenizer.json": b"{}" * 10, "model.safetensors": os.urandom(400_000)}
+    files = {"config.json": b'{"x": 1}', "tokenizer.json": b'{"model": {}}', "model.safetensors": os.urandom(400_000)}
     hub = _https_hub(tmp_path, files)
     try:
         hub.break_after = 150_000
@@ -638,6 +638,42 @@ def test_the_engine_downloads_a_model_over_its_own_https(tmp_path):
     assert weights[0] is None and weights[1] == "bytes=150000-"                 # carried on where it broke off
     assert all(path.startswith("/Qwen/Tiny/resolve/" + "0" * 40 + "/") or path.startswith("/storage/") for path, _ in hub.asked)
     assert "downloading" in r.stderr and "converting" in r.stderr and not (tmp_path / "models" / "tiny.ccm").exists()
+
+
+def test_the_speech_recognition_model_goes_in_the_speech_folder(tmp_path):
+    """prepare --speech: the catalogue's speech recognition model (Whisper's files), downloaded and checked the same
+    way, into the models folder's speech folder, where Chat Computer's own system looks for it; nothing of the
+    models' (these files aren't a model either: converting says so)."""
+    import subprocess
+    prog = _engine()
+    files = {"config.json": b'{"model_type": "whisper"}', "model.safetensors": os.urandom(20_000)}
+    hub = _https_hub(tmp_path, files)
+    cat = tmp_path / "models.json"
+    pinned = [{"name": n, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()} for n, b in files.items()]
+    cat.write_text(json.dumps({
+        "models": [{"name": "tiny", "label": "Tiny", "repo": "Qwen/Tiny", "revision": "0" * 40, "memory_gb": 0, "bits": 8,
+                    "files": []}],
+        "speech": [{"name": "whisper-tiny", "label": "Whisper tiny", "repo": "openai/whisper-tiny", "revision": "1" * 40,
+                    "memory_gb": 0, "bits": 8, "source_bits": 32, "files": pinned}]}))
+    env = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy", "all_proxy")}
+    env.update(CHATCOMPUTER_HUB=f"https://localhost:{hub.port}", CHATCOMPUTER_EXTRA_CA=hub.ca)
+    try:
+        r = subprocess.run([prog, "prepare", str(tmp_path / "models"), "--speech", "--catalogue", str(cat)],
+                           capture_output=True, text=True, timeout=120, env=env)
+    finally:
+        hub.stop()
+    lines = r.stderr.strip().splitlines()
+    assert r.returncode == 1 and lines[-2] == "converting" and "uncensoring" not in r.stderr, r.stderr[-800:]
+    d = tmp_path / "models" / "speech" / "download-whisper-tiny"
+    assert {p.name: p.read_bytes() for p in d.iterdir()} == files
+    assert all(path.startswith("/openai/whisper-tiny/resolve/" + "1" * 40 + "/") or path.startswith("/storage/")
+               for path, _ in hub.asked)
+    assert sorted(p.name for p in (tmp_path / "models").iterdir()) == ["speech"]
+    # A catalogue without speech recognition models says so.
+    cat.write_text(json.dumps({"models": []}))
+    r = subprocess.run([prog, "prepare", str(tmp_path / "other"), "--speech", "--catalogue", str(cat)],
+                       capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 1 and "the catalogue has no speech" in r.stderr, r.stderr
 
 
 def test_a_file_that_comes_down_different_is_not_used(tmp_path):

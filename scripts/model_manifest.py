@@ -1,6 +1,8 @@
 """Writes chatcomputer/brain/models.json: the models Chat Computer can think with, each pinned to one revision of
 Qwen's own repository on Hugging Face, with every file needed (its size and SHA-256), so what's downloaded is
-checked against what was pinned here, not against what a server says at the time.
+checked against what was pinned here, not against what a server says at the time; and ("speech") the speech
+recognition model Chat Computer's own system hears with (OpenAI's Whisper, as transformers publishes it), pinned the
+same way.
 
     python3 scripts/model_manifest.py
 
@@ -24,6 +26,10 @@ REVISIONS = {
     "qwen3.5-2b": ("Qwen3.5 2B", "Qwen/Qwen3.5-2B", "15852e8c16360a2fea060d615a32b45270f8a8fc", 4, 4),
     "qwen3.5-0.8b": ("Qwen3.5 0.8B", "Qwen/Qwen3.5-0.8B", "2fc06364715b967f1860aea9cf38778875588b17", 0, 8),
 }
+# The speech recognition models, the same way (and the bits a weight its published files have: Whisper's are 32).
+SPEECH = {
+    "whisper-small.en": ("Whisper small.en", "openai/whisper-small.en", "e8727524f962ee844a7319d92be39ac1bd25655a", 0, 8, 32),
+}
 KEEP = ("config.json", "tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "generation_config.json")
 OUT = os.path.join(os.path.dirname(__file__), "..", "chatcomputer", "brain", "models.json")
 
@@ -37,6 +43,7 @@ def files_of(repo: str, revision: str) -> list[dict]:
     out = []
     for s in info["siblings"]:
         name = s["rfilename"]
+        # (Whisper's weights are published in several forms besides: the converter reads safetensors.)
         if name in KEEP or name.endswith(".safetensors"):
             lfs = s.get("lfs") or {}
             sha = lfs.get("sha256")
@@ -69,8 +76,15 @@ def main() -> None:
         print(f"{name}: {len(files)} files, {weights / 1e9:.1f} GB of weights")
         models.append({"name": name, "label": label, "repo": repo, "revision": revision, "memory_gb": memory,
                        "bits": bits, "sees": sees(repo, revision), "files": files})
+    speech = []
+    for name, (label, repo, revision, memory, bits, source_bits) in SPEECH.items():
+        files = files_of(repo, revision)
+        weights = sum(f["size"] for f in files if f["name"].endswith(".safetensors"))
+        print(f"{name}: {len(files)} files, {weights / 1e9:.1f} GB of weights")
+        speech.append({"name": name, "label": label, "repo": repo, "revision": revision, "memory_gb": memory,
+                       "bits": bits, "source_bits": source_bits, "files": files})
     with open(OUT, "w") as f:
-        json.dump({"models": models}, f, indent=1)
+        json.dump({"models": models, "speech": speech}, f, indent=1)
         f.write("\n")
 
 

@@ -14,13 +14,14 @@ everywhere, and PCs move to the own kernel as its drivers grow (see "Reaching ev
 ## What it does today
 
 You type to Chat Computer on it, and its own model answers, on the PC itself: an open model of Qwen's, run by Chat
-Computer's own engine (`model/`), from the file Chat Computer's app gets ready on Windows, read into memory as it
-starts. There's no account, no internet needed and nothing to pay, and nothing you type leaves the PC, unless the
+Computer's own engine (`model/`), from the file its setup gets ready on Windows (as Chat Computer's app does), read
+into memory as it starts. There's no account, no internet needed and nothing to pay, and nothing you type leaves the PC, unless the
 model looks something up on the web for you, which the screen shows. The answer streams onto a screen that looks
 like Chat Computer's. The model acts on the computer through tools: it sees how it's doing, makes the text bigger or
 smaller, sets timers, reads your files on Windows' drive and USB drives and sees your pictures in them (photos,
-screenshots, scanned pages), searches the web and reads web pages, shows you a picture, and restarts it. The PC's UEFI firmware starts it. So far it has only run in a virtual PC (QEMU with OVMF,
-the open-source UEFI firmware). It has its own network stack, with drivers for the wired network chips most PCs have
+screenshots, scanned pages), searches the web and reads web pages, shows you a picture, and restarts it. The PC's UEFI firmware starts it. It has started on a real PC (a desktop,
+with Secure Boot on: step 2); most of the rest has so far been checked only in a virtual PC (QEMU with OVMF, the
+open-source UEFI firmware). It has its own network stack, with drivers for the wired network chips most PCs have
 (Intel's I219, I210, I211, I225 and I226, Realtek's RTL8111/8168 and RTL8125: written to the makers' datasheets and
 the open-source drivers, not yet tried on a real PC), USB network adapters, Android phones sharing their connection
 over USB, and virtual machines' network cards, over which the model reads the web. It keeps the
@@ -495,9 +496,12 @@ system. Nothing else is asked, and no USB stick is needed.
 2. It signs `release/chatcomputer.efi` with a key that Windows makes on that PC and won't let be copied off: the one
    the PC's Secure Boot already trusts, where there is one, the key it made for ClaudeOS (Chat Computer's name until
    2026-10-19) too, so a PC that approved that one starts Chat Computer with nothing more to approve.
-3. It says which model the own system will answer with: the one Chat Computer's app got ready on the PC (install
-   the app from chatcomputer.ai/get first; it gets its model by itself). With none yet, the own system starts all
-   the same and says how to get one.
+3. It says which model the own system will answer with: the one Chat Computer's app got ready on the PC. With none
+   yet, it gets one ready itself, before Enter, as the app does, with the engine in `windows\bin`: Qwen3.5 4B on a
+   PC with 8 GB of memory or more (a 9.3 GB download), from Qwen's repository at the revision Chat Computer pins,
+   each file checked against its SHA-256, then converted and its refusals taken out. Then the speech recognition
+   model the own system hears with (Windows+H): Whisper small.en, about 1 GB to download, the same way, in the
+   models folder's `speech` folder. Closing the window stops it; it carries on where it stopped the next time.
 4. It puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from (with shim beside it,
    when it starts through shim: see below), next to Windows' own files, with `settings.txt` (how far the PC's clock is from UTC, as Windows keeps that
    clock in local time, and the memory and log files' ids; a model's file named there by hand, `model = ...`, and
@@ -726,7 +730,9 @@ writes for each person, in place of Ubuntu's catalogue.
 1. ✓ The start-up stage, the kernel's core, interrupts and timer, the font engine and the first screen.
 2. The real PC: start from its own start-up partition (no USB stick) and show the first screen on its
    monitor, with Secure Boot on and Chat Computer's own key approved, once, on shim's blue screen (or in the PC's
-   setup screen). Ready to try: see "Starting it on a PC".
+   setup screen). ✓ Started on a real PC (a desktop, 5 November 2026: Secure Boot on, its key approved on shim's
+   blue screen; see "Starting it on a PC"). To do there: typing (its keyboards are read as their report descriptors
+   say since), and its model and listening, which setup now gets ready.
 3. ✓ Keyboard: USB (the xHCI controllers, hubs and keyboards) and PS/2 (laptops' built-in keyboards).
    Checked in virtual PCs; on the real PC with step 2.
 4. ✓ All processor cores, for the model's arithmetic (checked in virtual PCs of 2 and 4 cores: the same answer as
@@ -769,9 +775,9 @@ writes for each person, in place of Ubuntu's catalogue.
     to come; checked with QEMU's codecs fed tones), ✓ USB sound cards (class 1's: the chimes play on one while it's
     plugged in; checked with QEMU's). To do: trying it on real PCs, USB sound cards' microphones and class 2's, then
     Bluetooth (HCI over USB, the controllers' firmware, L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.
-11. Speech: ✓ listening (Windows+H: the microphone recorded and heard by the engine's Whisper, a step at a time,
-    and the words sent as the person's message; checked in a virtual PC against the engine on Linux). To do: its own
-    voice, running the model itself.
+11. Speech: ✓ listening (Windows+H: the microphone recorded and heard by the engine's Whisper, small.en, which
+    setup gets ready on Windows, a step at a time, and the words sent as the person's message; checked in a virtual
+    PC against the engine on Linux). To do: its own voice, running the model itself.
 12. Power: ✓ restart, ✓ turning off (ACPI's S5, with the firmware's _TTS and _PTS), ✓ the firmware's own programs
     (AML) run by Chat Computer's own interpreter: ✓ the power button, ✓ laptops' batteries, AC adapters and lids, ✓
     the firmware's events (GPEs, the embedded controller's queries), ✓ its critical temperature. Checked against

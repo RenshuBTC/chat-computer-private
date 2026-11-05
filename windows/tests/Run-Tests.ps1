@@ -681,6 +681,17 @@ $modelDir = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPat
 [IO.File]::WriteAllBytes((Join-Path $modelDir.FullName 'qwen3.5-0.8b.refusal'), (New-Object byte[] 9))
 [IO.File]::WriteAllBytes((Join-Path $modelDir.FullName 'qwen3.5-4b.ccm'), (New-Object byte[] 5))
 Assert-Equal 'Qwen3.5 4B' (Find-OwnModel -Dir $modelDir.FullName).Label 'own model: found in the app''s folder, the biggest'
+# Its listening: Whisper in the models folder's speech folder, where the kernel looks (os/kernel/src/listening.rs).
+Assert-Equal $null (Find-OwnSpeech -Dir (Join-Path $modelDir.FullName 'speech')) 'own listening: none where there''s no folder'
+$speechDir = New-Item -ItemType Directory -Path (Join-Path $modelDir.FullName 'speech') -Force
+Assert-Equal $null (Find-OwnSpeech -Dir $speechDir.FullName) 'own listening: none in an empty folder'
+[IO.File]::WriteAllBytes((Join-Path $speechDir.FullName 'whisper-small.en.ccm'), (New-Object byte[] 7))
+New-Item -ItemType Directory -Path (Join-Path $speechDir.FullName 'download-whisper-small.en') -Force | Out-Null
+Assert-Equal (Join-Path $speechDir.FullName 'whisper-small.en.ccm') (Find-OwnSpeech -Dir $speechDir.FullName) 'own listening: found'
+Assert-Equal 'Qwen3.5 4B' (Find-OwnModel -Dir $modelDir.FullName).Label 'own model: not the speech folder''s'
+Assert-Equal 'prepare "C:\m" --speech --model whisper-small.en --exit-with-stdin' (Get-OwnPrepareArguments -Dir 'C:\m' -Name 'whisper-small.en' -Speech) 'own listening: the engine asked for it'
+Assert-Equal 'prepare "C:\m" --model qwen3.5-4b --exit-with-stdin' (Get-OwnPrepareArguments -Dir 'C:\m' -Name 'qwen3.5-4b') 'own model: the engine asked for it'
+Assert-Equal 'whisper-small.en' $Script:OwnSpeechModel 'own listening: the one models.json pins'
 Remove-Item -LiteralPath $modelDir.FullName -Recurse -Force
 # Its settings: the clock, a model named by hand, as the kernel reads them (os/kernel/src/settings.rs).
 $ownText = New-OwnSettingsText -Model '' -ClockOffsetMinutes 480

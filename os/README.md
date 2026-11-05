@@ -27,6 +27,11 @@ over USB, and virtual machines' network cards, over which the model reads the we
 conversation across restarts, in a file on the PC's start-up partition that it writes through its own NVMe and SATA
 drivers.
 
+With a key for Meta's Model API in its settings (`meta-api-key`), Meta's Muse Spark answers instead, over the
+internet: each round of an answer is a POST of the conversation and the same tools to Meta's Model API, made by the
+kernel's own network stack and TLS 1.3, and Muse Spark's tool calls run here as the local model's do (`assistant.rs`).
+The start screen and the status say that what's typed goes to Meta. `try-muse-spark.sh` starts it in a virtual PC.
+
 * `boot/` is the start-up stage, a UEFI program (`\EFI\BOOT\BOOTX64.EFI`) that carries the kernel inside
   it.
   * It asks the firmware for the screen, the monitor's description (EDID), the memory map, where the

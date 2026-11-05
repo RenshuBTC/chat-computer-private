@@ -405,6 +405,8 @@ struct Shown {
     busy: bool,
     /// It has work to do (so the main loop doesn't wait for an interrupt).
     working: bool,
+    /// Meta's model answers, over the internet (not the model on this PC).
+    remote: bool,
 }
 
 static ASSISTANT: SpinLock<Option<Assistant>> = SpinLock::new(None);
@@ -477,6 +479,11 @@ pub fn ready() -> Ready {
 /// The model's line in the computer's status.
 pub fn status() -> String {
     SHOWN.lock().as_ref().map_or_else(|| String::from("Model: none"), |s| s.status.clone())
+}
+
+/// Whether Meta's model answers, over the internet (what's typed goes to Meta), rather than the model on this PC.
+pub fn remote() -> bool {
+    SHOWN.lock().as_ref().is_some_and(|s| s.remote)
 }
 
 /// Whether an answer is on its way.
@@ -745,7 +752,8 @@ impl Assistant {
         let working = self.job.is_some()
             || matches!(&self.brain, Brain::Reading(_))
             || matches!(&self.brain, Brain::Ready(m) if !m.ahead.is_empty());
-        *SHOWN.lock() = Some(Shown { ready, status, busy: self.job.is_some(), working });
+        let remote = matches!(self.brain, Brain::Meta(_));
+        *SHOWN.lock() = Some(Shown { ready, status, busy: self.job.is_some(), working, remote });
     }
 
     /// The system prompt for a conversation: the instructions, and the model's notes about the person.

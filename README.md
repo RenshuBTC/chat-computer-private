@@ -45,6 +45,26 @@ The code: [assistant.rs](os/kernel/src/assistant.rs) (`meta_step`, `meta_body`, 
 [web.rs](os/kernel/src/web.rs) (HTTPS requests), [http.rs](os/web/src/http.rs), [tls](os/tls),
 [net](os/net), [tools.json](os/kernel/src/tools.json).
 
+## Muse Spark on everyday requests
+
+Our Meta developer credits went into testing. [evals/meta](evals/meta) asks Meta's models the own system's 53
+everyday requests ([evals/os/cases.json](evals/os/cases.json), such as "Find the tax letter I got in March and open
+it"), again and again, with exactly the tools and instructions the kernel gives its model. Muse Spark 1.3 grades
+each answer: **done** (a fitting tool called), **honest** (no combination of the tools could do it, and the answer
+said so) or **wrong**.
+
+| Model | Answers | Done | Honest | Wrong | Done or honest |
+| --- | --- | --- | --- | --- | --- |
+| Muse Spark 1.3 | 4,098 | 31% | 27% | 39% | 59% |
+| Muse Wonder 1.0 | 3,963 | 33% | 28% | 34% | 61% |
+| Muse Spark 1.2 | 4,081 | 28% | 11% | 58% | 40% |
+
+That is 12,142 answers and 24,082 calls to Meta's Model API, about $126 at publicly reported prices. The requests
+still answered wrong show what the own system needs next: tools it doesn't have yet (renaming and deleting files,
+USB sticks, backups, printing, the time zone and the keyboard's layout, and going back to Windows for a while), and
+asking before it turns the PC off. Every request's results are in
+[results-2026-11-05.json](evals/meta/results-2026-11-05.json).
+
 ## Try it
 
 In a virtual PC (Linux with QEMU and OVMF; the script builds the system with the Rust toolchain that

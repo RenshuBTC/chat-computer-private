@@ -1,0 +1,1852 @@
+{
+ "models": {
+  "muse-spark-1.2": {
+   "answers": 4081,
+   "DONE": 1142,
+   "HONEST": 468,
+   "WRONG": 2372,
+   "UNGRADED": 99,
+   "done_or_honest": 0.395
+  },
+  "muse-wonder-1.0": {
+   "answers": 3963,
+   "DONE": 1300,
+   "HONEST": 1103,
+   "WRONG": 1356,
+   "UNGRADED": 204,
+   "done_or_honest": 0.606
+  },
+  "muse-spark-1.3": {
+   "answers": 4098,
+   "DONE": 1289,
+   "HONEST": 1116,
+   "WRONG": 1599,
+   "UNGRADED": 94,
+   "done_or_honest": 0.587
+  }
+ },
+ "cases": {
+  "alarm": {
+   "query": "Wake me up at seven tomorrow.",
+   "muse-wonder-1.0": {
+    "answers": 79,
+    "DONE": 18,
+    "HONEST": 0,
+    "WRONG": 47,
+    "UNGRADED": 14,
+    "tools": {
+     "computer_status": 79
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 70,
+    "DONE": 26,
+    "HONEST": 0,
+    "WRONG": 34,
+    "UNGRADED": 10,
+    "tools": {
+     "computer_status": 69,
+     "reminders": 1
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 83,
+    "DONE": 14,
+    "HONEST": 0,
+    "WRONG": 52,
+    "UNGRADED": 17,
+    "tools": {
+     "computer_status": 76,
+     "reminders": 7
+    }
+   }
+  },
+  "backup-status": {
+   "query": "Are my files backed up?",
+   "muse-wonder-1.0": {
+    "answers": 87,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 87,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 87,
+     "list_files": 12
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 68,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 68,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 68,
+     "list_files": 36
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 88,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 88,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 88,
+     "list_files": 1
+    }
+   }
+  },
+  "backup-usb": {
+   "query": "Back up my documents to the USB drive",
+   "muse-spark-1.2": {
+    "answers": 77,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 77,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 77
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 86,
+    "DONE": 0,
+    "HONEST": 3,
+    "WRONG": 82,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 86,
+     "list_files": 1
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 69,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 69,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 69,
+     "list_files": 5
+    }
+   }
+  },
+  "battery-desktop": {
+   "query": "how's my battery",
+   "muse-wonder-1.0": {
+    "answers": 79,
+    "DONE": 78,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 79
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 83,
+    "DONE": 83,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 83
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 77,
+    "DONE": 77,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 77
+    }
+   }
+  },
+  "battery-left": {
+   "query": "How much battery have I got left?",
+   "muse-spark-1.2": {
+    "answers": 90,
+    "DONE": 90,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 90
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 72,
+    "DONE": 72,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 72
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 70,
+    "DONE": 70,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 70
+    }
+   }
+  },
+  "brightness-desktop": {
+   "query": "Make the screen dimmer.",
+   "muse-spark-1.2": {
+    "answers": 74,
+    "DONE": 26,
+    "HONEST": 12,
+    "WRONG": 35,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 54
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 79,
+    "DONE": 0,
+    "HONEST": 77,
+    "WRONG": 2,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 2
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 69,
+    "DONE": 0,
+    "HONEST": 68,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {}
+   }
+  },
+  "brightness-set": {
+   "query": "set brightness to 30%",
+   "muse-spark-1.3": {
+    "answers": 88,
+    "DONE": 0,
+    "HONEST": 87,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 1
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 78,
+    "DONE": 0,
+    "HONEST": 75,
+    "WRONG": 3,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 4
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 77,
+    "DONE": 0,
+    "HONEST": 77,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   }
+  },
+  "brightness-too-bright": {
+   "query": "The screen is way too bright.",
+   "muse-spark-1.2": {
+    "answers": 71,
+    "DONE": 0,
+    "HONEST": 20,
+    "WRONG": 50,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 50
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 72,
+    "DONE": 0,
+    "HONEST": 44,
+    "WRONG": 27,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 28
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 75,
+    "DONE": 0,
+    "HONEST": 59,
+    "WRONG": 13,
+    "UNGRADED": 3,
+    "tools": {
+     "computer_status": 27
+    }
+   }
+  },
+  "bt-airpods": {
+   "query": "connect my airpods",
+   "muse-spark-1.2": {
+    "answers": 80,
+    "DONE": 7,
+    "HONEST": 0,
+    "WRONG": 68,
+    "UNGRADED": 5,
+    "tools": {
+     "computer_status": 80
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 82,
+    "DONE": 8,
+    "HONEST": 41,
+    "WRONG": 30,
+    "UNGRADED": 3,
+    "tools": {
+     "computer_status": 39
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 67,
+    "DONE": 4,
+    "HONEST": 45,
+    "WRONG": 11,
+    "UNGRADED": 7,
+    "tools": {
+     "computer_status": 24
+    }
+   }
+  },
+  "bt-keyboard": {
+   "query": "Pair my Magic Keyboard. It's in pairing mode.",
+   "muse-spark-1.3": {
+    "answers": 81,
+    "DONE": 1,
+    "HONEST": 19,
+    "WRONG": 57,
+    "UNGRADED": 4,
+    "tools": {
+     "computer_status": 62
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 87,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 87,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 87
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 63,
+    "DONE": 0,
+    "HONEST": 6,
+    "WRONG": 47,
+    "UNGRADED": 10,
+    "tools": {
+     "computer_status": 63
+    }
+   }
+  },
+  "camera-on": {
+   "query": "Is the camera on right now?",
+   "muse-spark-1.2": {
+    "answers": 79,
+    "DONE": 79,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 79
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 73,
+    "DONE": 38,
+    "HONEST": 0,
+    "WRONG": 35,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 38
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 88,
+    "DONE": 82,
+    "HONEST": 0,
+    "WRONG": 6,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 82
+    }
+   }
+  },
+  "dark-mode": {
+   "query": "Turn on dark mode",
+   "muse-wonder-1.0": {
+    "answers": 71,
+    "DONE": 0,
+    "HONEST": 71,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   },
+   "muse-spark-1.3": {
+    "answers": 84,
+    "DONE": 0,
+    "HONEST": 83,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 1
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 87,
+    "DONE": 0,
+    "HONEST": 36,
+    "WRONG": 45,
+    "UNGRADED": 6,
+    "tools": {
+     "computer_status": 28
+    }
+   }
+  },
+  "default-windows": {
+   "query": "Make Windows start by default when I turn the PC on",
+   "muse-spark-1.2": {
+    "answers": 84,
+    "DONE": 9,
+    "HONEST": 0,
+    "WRONG": 66,
+    "UNGRADED": 9,
+    "tools": {
+     "computer_status": 84,
+     "list_files": 1
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 64,
+    "DONE": 0,
+    "HONEST": 18,
+    "WRONG": 28,
+    "UNGRADED": 18,
+    "tools": {
+     "computer_status": 1,
+     "restart_computer": 26
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 77,
+    "DONE": 12,
+    "HONEST": 17,
+    "WRONG": 35,
+    "UNGRADED": 13,
+    "tools": {
+     "computer_status": 54
+    }
+   }
+  },
+  "feels-slow": {
+   "query": "the computer feels slow",
+   "muse-spark-1.2": {
+    "answers": 81,
+    "DONE": 81,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 81
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 71,
+    "DONE": 71,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 71
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 88,
+    "DONE": 88,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 88
+    }
+   }
+  },
+  "files-find-open": {
+   "query": "Find the tax letter I got in March and open it",
+   "muse-wonder-1.0": {
+    "answers": 73,
+    "DONE": 62,
+    "HONEST": 0,
+    "WRONG": 10,
+    "UNGRADED": 1,
+    "tools": {
+     "find_files": 30,
+     "computer_status": 9,
+     "list_files": 40
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 84,
+    "DONE": 7,
+    "HONEST": 0,
+    "WRONG": 77,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 81,
+     "find_files": 9,
+     "list_files": 3
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 60,
+    "DONE": 45,
+    "HONEST": 0,
+    "WRONG": 14,
+    "UNGRADED": 1,
+    "tools": {
+     "list_files": 49,
+     "computer_status": 15,
+     "find_files": 8
+    }
+   }
+  },
+  "files-recent": {
+   "query": "where's that boarding pass i downloaded",
+   "muse-wonder-1.0": {
+    "answers": 84,
+    "DONE": 79,
+    "HONEST": 0,
+    "WRONG": 5,
+    "UNGRADED": 0,
+    "tools": {
+     "find_files": 74,
+     "list_files": 22,
+     "computer_status": 5
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 73,
+    "DONE": 19,
+    "HONEST": 0,
+    "WRONG": 54,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 60,
+     "list_files": 3,
+     "find_files": 24
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 77,
+    "DONE": 76,
+    "HONEST": 0,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {
+     "list_files": 66,
+     "find_files": 44,
+     "computer_status": 1
+    }
+   }
+  },
+  "files-rename": {
+   "query": "Rename my CV to Sam Lee CV 2026.",
+   "muse-spark-1.2": {
+    "answers": 74,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 74,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 41,
+     "find_files": 44,
+     "list_files": 2
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 75,
+    "DONE": 0,
+    "HONEST": 8,
+    "WRONG": 57,
+    "UNGRADED": 10,
+    "tools": {
+     "find_files": 75
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 68,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 68,
+    "UNGRADED": 0,
+    "tools": {
+     "list_files": 37,
+     "find_files": 39
+    }
+   }
+  },
+  "files-tidy-screenshots": {
+   "query": "My desktop is full of old screenshots, get rid of them.",
+   "muse-spark-1.3": {
+    "answers": 75,
+    "DONE": 1,
+    "HONEST": 0,
+    "WRONG": 72,
+    "UNGRADED": 2,
+    "tools": {
+     "list_files": 74,
+     "computer_status": 1
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 71,
+    "DONE": 0,
+    "HONEST": 1,
+    "WRONG": 57,
+    "UNGRADED": 13,
+    "tools": {
+     "computer_status": 18,
+     "list_files": 64
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 78,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 78,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 77,
+     "list_files": 1
+    }
+   }
+  },
+  "install-spotify": {
+   "query": "install spotify",
+   "muse-wonder-1.0": {
+    "answers": 72,
+    "DONE": 14,
+    "HONEST": 0,
+    "WRONG": 48,
+    "UNGRADED": 10,
+    "tools": {
+     "find_files": 67,
+     "search_web": 3,
+     "computer_status": 3
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 84,
+    "DONE": 1,
+    "HONEST": 0,
+    "WRONG": 82,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 83,
+     "search_web": 26,
+     "find_files": 6
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 76,
+    "DONE": 16,
+    "HONEST": 0,
+    "WRONG": 49,
+    "UNGRADED": 11,
+    "tools": {
+     "computer_status": 39,
+     "find_files": 38,
+     "search_web": 35
+    }
+   }
+  },
+  "install-vlc": {
+   "query": "Install VLC so I can watch my old videos.",
+   "muse-spark-1.3": {
+    "answers": 89,
+    "DONE": 35,
+    "HONEST": 0,
+    "WRONG": 41,
+    "UNGRADED": 13,
+    "tools": {
+     "computer_status": 78,
+     "find_files": 59,
+     "search_web": 28,
+     "list_files": 4
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 80,
+    "DONE": 11,
+    "HONEST": 0,
+    "WRONG": 63,
+    "UNGRADED": 6,
+    "tools": {
+     "computer_status": 80,
+     "search_web": 9,
+     "find_files": 21,
+     "list_files": 17
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 70,
+    "DONE": 54,
+    "HONEST": 0,
+    "WRONG": 4,
+    "UNGRADED": 12,
+    "tools": {
+     "find_files": 69,
+     "list_files": 23,
+     "search_web": 2,
+     "computer_status": 14
+    }
+   }
+  },
+  "keyboard-azerty": {
+   "query": "my keyboard is a french azerty one and the letters come out wrong",
+   "muse-wonder-1.0": {
+    "answers": 79,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 79,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 79
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 77,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 77,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 77
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 81,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 80,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 80
+    }
+   }
+  },
+  "language-chinese": {
+   "query": "Can you talk to me in Chinese from now on?",
+   "muse-spark-1.2": {
+    "answers": 73,
+    "DONE": 36,
+    "HONEST": 0,
+    "WRONG": 32,
+    "UNGRADED": 5,
+    "tools": {
+     "remember": 42
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 86,
+    "DONE": 78,
+    "HONEST": 0,
+    "WRONG": 4,
+    "UNGRADED": 4,
+    "tools": {
+     "remember": 85
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 74,
+    "DONE": 41,
+    "HONEST": 0,
+    "WRONG": 17,
+    "UNGRADED": 16,
+    "tools": {
+     "remember": 74
+    }
+   }
+  },
+  "lock-screen": {
+   "query": "Lock the screen, I'm popping out.",
+   "muse-spark-1.3": {
+    "answers": 82,
+    "DONE": 0,
+    "HONEST": 82,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   },
+   "muse-wonder-1.0": {
+    "answers": 79,
+    "DONE": 0,
+    "HONEST": 79,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   },
+   "muse-spark-1.2": {
+    "answers": 82,
+    "DONE": 0,
+    "HONEST": 82,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   }
+  },
+  "night-light": {
+   "query": "My eyes hurt in the evenings, can you make the screen warmer at night?",
+   "muse-spark-1.3": {
+    "answers": 81,
+    "DONE": 0,
+    "HONEST": 81,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   },
+   "muse-spark-1.2": {
+    "answers": 70,
+    "DONE": 0,
+    "HONEST": 11,
+    "WRONG": 59,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 59
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 77,
+    "DONE": 0,
+    "HONEST": 76,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 1
+    }
+   }
+  },
+  "open-gmail": {
+   "query": "Open my Gmail.",
+   "muse-spark-1.3": {
+    "answers": 88,
+    "DONE": 0,
+    "HONEST": 85,
+    "WRONG": 3,
+    "UNGRADED": 0,
+    "tools": {
+     "read_web_page": 2
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 69,
+    "DONE": 0,
+    "HONEST": 64,
+    "WRONG": 4,
+    "UNGRADED": 1,
+    "tools": {
+     "read_web_page": 1
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 77,
+    "DONE": 0,
+    "HONEST": 73,
+    "WRONG": 4,
+    "UNGRADED": 0,
+    "tools": {
+     "read_web_page": 1
+    }
+   }
+  },
+  "password-kids": {
+   "query": "Can I set a password so my kids can't use the computer when I'm not here?",
+   "muse-wonder-1.0": {
+    "answers": 67,
+    "DONE": 0,
+    "HONEST": 36,
+    "WRONG": 25,
+    "UNGRADED": 6,
+    "tools": {
+     "computer_status": 34
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 75,
+    "DONE": 0,
+    "HONEST": 74,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 1
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 61,
+    "DONE": 0,
+    "HONEST": 13,
+    "WRONG": 46,
+    "UNGRADED": 2,
+    "tools": {
+     "computer_status": 42
+    }
+   }
+  },
+  "print-boarding-pass": {
+   "query": "Print my boarding pass",
+   "muse-spark-1.3": {
+    "answers": 68,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 66,
+    "UNGRADED": 2,
+    "tools": {
+     "computer_status": 9,
+     "find_files": 51,
+     "list_files": 35
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 71,
+    "DONE": 1,
+    "HONEST": 0,
+    "WRONG": 70,
+    "UNGRADED": 0,
+    "tools": {
+     "find_files": 41,
+     "computer_status": 42,
+     "list_files": 7
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 80,
+    "DONE": 0,
+    "HONEST": 9,
+    "WRONG": 65,
+    "UNGRADED": 6,
+    "tools": {
+     "find_files": 83,
+     "computer_status": 2
+    }
+   }
+  },
+  "print-no-printer": {
+   "query": "print my CV please",
+   "muse-spark-1.2": {
+    "answers": 88,
+    "DONE": 25,
+    "HONEST": 0,
+    "WRONG": 55,
+    "UNGRADED": 8,
+    "tools": {
+     "find_files": 47,
+     "computer_status": 54,
+     "list_files": 8
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 71,
+    "DONE": 3,
+    "HONEST": 0,
+    "WRONG": 65,
+    "UNGRADED": 3,
+    "tools": {
+     "find_files": 42,
+     "list_files": 38,
+     "computer_status": 5
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 74,
+    "DONE": 2,
+    "HONEST": 0,
+    "WRONG": 63,
+    "UNGRADED": 9,
+    "tools": {
+     "find_files": 77
+    }
+   }
+  },
+  "print-photo": {
+   "query": "Print the beach photo.",
+   "muse-wonder-1.0": {
+    "answers": 75,
+    "DONE": 3,
+    "HONEST": 11,
+    "WRONG": 46,
+    "UNGRADED": 15,
+    "tools": {
+     "find_files": 75,
+     "list_files": 1
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 70,
+    "DONE": 2,
+    "HONEST": 2,
+    "WRONG": 65,
+    "UNGRADED": 1,
+    "tools": {
+     "find_files": 63,
+     "list_files": 9,
+     "computer_status": 2
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 72,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 71,
+    "UNGRADED": 1,
+    "tools": {
+     "find_files": 55,
+     "list_files": 4,
+     "computer_status": 18
+    }
+   }
+  },
+  "print-two-copies": {
+   "query": "Can you print two copies of the tax letter?",
+   "muse-spark-1.2": {
+    "answers": 61,
+    "DONE": 2,
+    "HONEST": 0,
+    "WRONG": 58,
+    "UNGRADED": 1,
+    "tools": {
+     "find_files": 54,
+     "list_files": 1,
+     "computer_status": 8
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 88,
+    "DONE": 3,
+    "HONEST": 57,
+    "WRONG": 15,
+    "UNGRADED": 13,
+    "tools": {
+     "find_files": 53
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 71,
+    "DONE": 1,
+    "HONEST": 0,
+    "WRONG": 66,
+    "UNGRADED": 4,
+    "tools": {
+     "find_files": 67,
+     "list_files": 7,
+     "computer_status": 1
+    }
+   }
+  },
+  "reminder": {
+   "query": "Remind me to call mum at 6pm",
+   "muse-wonder-1.0": {
+    "answers": 70,
+    "DONE": 70,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "reminders": 70
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 62,
+    "DONE": 62,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "reminders": 61,
+     "computer_status": 1
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 60,
+    "DONE": 41,
+    "HONEST": 0,
+    "WRONG": 19,
+    "UNGRADED": 0,
+    "tools": {
+     "reminders": 38,
+     "computer_status": 23
+    }
+   }
+  },
+  "screenshot-of-page": {
+   "query": "screenshot this page and put it on my desktop",
+   "muse-spark-1.2": {
+    "answers": 85,
+    "DONE": 0,
+    "HONEST": 30,
+    "WRONG": 55,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 56
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 91,
+    "DONE": 0,
+    "HONEST": 90,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 1
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 64,
+    "DONE": 0,
+    "HONEST": 64,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   }
+  },
+  "screenshot-save": {
+   "query": "Take a screenshot and save it in my Pictures.",
+   "muse-spark-1.3": {
+    "answers": 75,
+    "DONE": 0,
+    "HONEST": 75,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   },
+   "muse-wonder-1.0": {
+    "answers": 81,
+    "DONE": 0,
+    "HONEST": 80,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {
+     "list_files": 1
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 75,
+    "DONE": 0,
+    "HONEST": 2,
+    "WRONG": 73,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 73,
+     "list_files": 3
+    }
+   }
+  },
+  "shutdown": {
+   "query": "Shut down the computer.",
+   "muse-spark-1.3": {
+    "answers": 82,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 82,
+    "UNGRADED": 0,
+    "tools": {
+     "turn_off_computer": 81
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 88,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 88,
+    "UNGRADED": 0,
+    "tools": {
+     "turn_off_computer": 87
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 74,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 74,
+    "UNGRADED": 0,
+    "tools": {
+     "turn_off_computer": 74
+    }
+   }
+  },
+  "sound-mute": {
+   "query": "Mute everything for a bit.",
+   "muse-spark-1.2": {
+    "answers": 82,
+    "DONE": 82,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "set_volume": 82
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 65,
+    "DONE": 65,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "set_volume": 65
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 86,
+    "DONE": 81,
+    "HONEST": 0,
+    "WRONG": 5,
+    "UNGRADED": 0,
+    "tools": {
+     "set_volume": 81,
+     "computer_status": 5,
+     "reminders": 2
+    }
+   }
+  },
+  "sound-speakers": {
+   "query": "Play the sound through the laptop speakers instead of my AirPods",
+   "muse-spark-1.3": {
+    "answers": 69,
+    "DONE": 0,
+    "HONEST": 66,
+    "WRONG": 3,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 3
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 68,
+    "DONE": 0,
+    "HONEST": 16,
+    "WRONG": 51,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 52
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 73,
+    "DONE": 0,
+    "HONEST": 73,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 2
+    }
+   }
+  },
+  "sound-too-loud": {
+   "query": "It's too loud.",
+   "muse-spark-1.3": {
+    "answers": 78,
+    "DONE": 70,
+    "HONEST": 0,
+    "WRONG": 8,
+    "UNGRADED": 0,
+    "tools": {
+     "set_volume": 71,
+     "computer_status": 5,
+     "reminders": 6
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 75,
+    "DONE": 75,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "set_volume": 72,
+     "computer_status": 3
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 75,
+    "DONE": 68,
+    "HONEST": 0,
+    "WRONG": 7,
+    "UNGRADED": 0,
+    "tools": {
+     "set_volume": 71,
+     "computer_status": 4,
+     "reminders": 1
+    }
+   }
+  },
+  "storage-left": {
+   "query": "How much space is left on the computer?",
+   "muse-spark-1.3": {
+    "answers": 83,
+    "DONE": 83,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 83
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 75,
+    "DONE": 75,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 75
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 79,
+    "DONE": 79,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 79
+    }
+   }
+  },
+  "text-bigger": {
+   "query": "I can't read anything, everything is so small",
+   "muse-wonder-1.0": {
+    "answers": 75,
+    "DONE": 73,
+    "HONEST": 0,
+    "WRONG": 2,
+    "UNGRADED": 0,
+    "tools": {
+     "set_text_size": 73,
+     "computer_status": 2
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 79,
+    "DONE": 41,
+    "HONEST": 0,
+    "WRONG": 37,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 54,
+     "set_text_size": 27
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 79,
+    "DONE": 69,
+    "HONEST": 0,
+    "WRONG": 10,
+    "UNGRADED": 0,
+    "tools": {
+     "set_text_size": 69,
+     "computer_status": 10
+    }
+   }
+  },
+  "timer": {
+   "query": "Set a timer for 10 minutes.",
+   "muse-spark-1.3": {
+    "answers": 78,
+    "DONE": 75,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 3,
+    "tools": {
+     "reminders": 78
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 72,
+    "DONE": 65,
+    "HONEST": 0,
+    "WRONG": 4,
+    "UNGRADED": 3,
+    "tools": {
+     "reminders": 72
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 65,
+    "DONE": 63,
+    "HONEST": 0,
+    "WRONG": 1,
+    "UNGRADED": 1,
+    "tools": {
+     "reminders": 65
+    }
+   }
+  },
+  "timezone": {
+   "query": "I'm in London this week, the clock is wrong",
+   "muse-spark-1.2": {
+    "answers": 79,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 79,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 79
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 84,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 84,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 84,
+     "search_web": 1
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 76,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 76,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 76
+    }
+   }
+  },
+  "updates": {
+   "query": "Check for updates.",
+   "muse-spark-1.3": {
+    "answers": 78,
+    "DONE": 14,
+    "HONEST": 37,
+    "WRONG": 26,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 39
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 78,
+    "DONE": 22,
+    "HONEST": 3,
+    "WRONG": 52,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 75
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 69,
+    "DONE": 10,
+    "HONEST": 17,
+    "WRONG": 36,
+    "UNGRADED": 6,
+    "tools": {
+     "computer_status": 53
+    }
+   }
+  },
+  "usb-copy-photos": {
+   "query": "Copy my Bali photos onto the USB drive",
+   "muse-spark-1.3": {
+    "answers": 81,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 81,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 81,
+     "find_files": 25,
+     "list_files": 11
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 81,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 81,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 81,
+     "list_files": 2,
+     "find_files": 2
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 64,
+    "DONE": 0,
+    "HONEST": 3,
+    "WRONG": 59,
+    "UNGRADED": 2,
+    "tools": {
+     "find_files": 45,
+     "computer_status": 64
+    }
+   }
+  },
+  "usb-eject": {
+   "query": "Is it safe to pull the USB stick out now?",
+   "muse-spark-1.2": {
+    "answers": 85,
+    "DONE": 1,
+    "HONEST": 0,
+    "WRONG": 84,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 85
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 88,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 88,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 88
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 85,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 85,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 85
+    }
+   }
+  },
+  "usb-none": {
+   "query": "Show me the photos on my memory card.",
+   "muse-wonder-1.0": {
+    "answers": 88,
+    "DONE": 43,
+    "HONEST": 0,
+    "WRONG": 33,
+    "UNGRADED": 12,
+    "tools": {
+     "computer_status": 88
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 70,
+    "DONE": 15,
+    "HONEST": 0,
+    "WRONG": 50,
+    "UNGRADED": 5,
+    "tools": {
+     "computer_status": 70
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 73,
+    "DONE": 18,
+    "HONEST": 0,
+    "WRONG": 44,
+    "UNGRADED": 11,
+    "tools": {
+     "computer_status": 73
+    }
+   }
+  },
+  "usb-whats-on": {
+   "query": "What's on my USB stick?",
+   "muse-spark-1.2": {
+    "answers": 70,
+    "DONE": 10,
+    "HONEST": 0,
+    "WRONG": 60,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 70
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 71,
+    "DONE": 38,
+    "HONEST": 0,
+    "WRONG": 32,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 71
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 81,
+    "DONE": 10,
+    "HONEST": 0,
+    "WRONG": 70,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 81
+    }
+   }
+  },
+  "vpn": {
+   "query": "Turn on my VPN",
+   "muse-spark-1.3": {
+    "answers": 83,
+    "DONE": 0,
+    "HONEST": 73,
+    "WRONG": 3,
+    "UNGRADED": 7,
+    "tools": {}
+   },
+   "muse-wonder-1.0": {
+    "answers": 76,
+    "DONE": 1,
+    "HONEST": 65,
+    "WRONG": 1,
+    "UNGRADED": 9,
+    "tools": {
+     "find_files": 1
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 68,
+    "DONE": 9,
+    "HONEST": 26,
+    "WRONG": 15,
+    "UNGRADED": 18,
+    "tools": {
+     "computer_status": 12,
+     "find_files": 2
+    }
+   }
+  },
+  "weather": {
+   "query": "what's the weather in Singapore tomorrow",
+   "muse-spark-1.3": {
+    "answers": 77,
+    "DONE": 77,
+    "HONEST": 0,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {
+     "search_web": 77
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 81,
+    "DONE": 72,
+    "HONEST": 0,
+    "WRONG": 9,
+    "UNGRADED": 0,
+    "tools": {
+     "search_web": 79,
+     "computer_status": 10
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 79,
+    "DONE": 70,
+    "HONEST": 0,
+    "WRONG": 9,
+    "UNGRADED": 0,
+    "tools": {
+     "search_web": 79,
+     "computer_status": 10
+    }
+   }
+  },
+  "which-version": {
+   "query": "Which version of Chat Computer is this?",
+   "muse-spark-1.2": {
+    "answers": 85,
+    "DONE": 69,
+    "HONEST": 0,
+    "WRONG": 14,
+    "UNGRADED": 2,
+    "tools": {
+     "computer_status": 81
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 74,
+    "DONE": 71,
+    "HONEST": 0,
+    "WRONG": 3,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 74
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 68,
+    "DONE": 64,
+    "HONEST": 0,
+    "WRONG": 2,
+    "UNGRADED": 2,
+    "tools": {
+     "computer_status": 68
+    }
+   }
+  },
+  "wifi-join": {
+   "query": "Connect to the CoffeeBean wifi, the password is latte2026.",
+   "muse-spark-1.2": {
+    "answers": 77,
+    "DONE": 0,
+    "HONEST": 69,
+    "WRONG": 8,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 8
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 77,
+    "DONE": 0,
+    "HONEST": 75,
+    "WRONG": 2,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 2
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 69,
+    "DONE": 0,
+    "HONEST": 69,
+    "WRONG": 0,
+    "UNGRADED": 0,
+    "tools": {}
+   }
+  },
+  "wifi-slow": {
+   "query": "why is the internet so slow today",
+   "muse-wonder-1.0": {
+    "answers": 78,
+    "DONE": 65,
+    "HONEST": 0,
+    "WRONG": 10,
+    "UNGRADED": 3,
+    "tools": {
+     "computer_status": 78,
+     "search_web": 3
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 76,
+    "DONE": 75,
+    "HONEST": 0,
+    "WRONG": 1,
+    "UNGRADED": 0,
+    "tools": {
+     "computer_status": 76,
+     "search_web": 57
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 82,
+    "DONE": 79,
+    "HONEST": 0,
+    "WRONG": 2,
+    "UNGRADED": 1,
+    "tools": {
+     "computer_status": 82,
+     "search_web": 55
+    }
+   }
+  },
+  "windows-briefly": {
+   "query": "I need Windows for a minute to do my taxes",
+   "muse-wonder-1.0": {
+    "answers": 76,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 76,
+    "UNGRADED": 0,
+    "tools": {
+     "restart_computer": 76
+    }
+   },
+   "muse-spark-1.2": {
+    "answers": 70,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 70,
+    "UNGRADED": 0,
+    "tools": {
+     "restart_computer": 69
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 91,
+    "DONE": 0,
+    "HONEST": 0,
+    "WRONG": 91,
+    "UNGRADED": 0,
+    "tools": {
+     "restart_computer": 78
+    }
+   }
+  },
+  "youtube-jazz": {
+   "query": "Play some relaxing jazz on YouTube.",
+   "muse-spark-1.2": {
+    "answers": 61,
+    "DONE": 4,
+    "HONEST": 0,
+    "WRONG": 57,
+    "UNGRADED": 0,
+    "tools": {
+     "search_web": 61
+    }
+   },
+   "muse-wonder-1.0": {
+    "answers": 69,
+    "DONE": 1,
+    "HONEST": 44,
+    "WRONG": 22,
+    "UNGRADED": 2,
+    "tools": {
+     "search_web": 25
+    }
+   },
+   "muse-spark-1.3": {
+    "answers": 63,
+    "DONE": 5,
+    "HONEST": 8,
+    "WRONG": 48,
+    "UNGRADED": 2,
+    "tools": {
+     "search_web": 57
+    }
+   }
+  }
+ },
+ "usage": {
+  "calls": 24082,
+  "in": 8325634,
+  "out": 6294343,
+  "usd": 125.91,
+  "partial": 1,
+  "errors": 0,
+  "note": "usd is an estimate from the tokens Meta's API reported, at publicly reported prices (Muse Spark $1.25 a million tokens read, $4.25 written; Muse Wonder assumed $5 and $15)"
+ },
+ "how": "Each of evals/os/cases.json's requests asked of each model many times, with os/kernel/src/tools.json and the kernel's instructions; graded by muse-spark-1.3: DONE (a fitting first tool call), HONEST (no combination of the tools could do it, and it said so), WRONG, or UNGRADED."
+}

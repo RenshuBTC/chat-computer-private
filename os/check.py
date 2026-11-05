@@ -621,8 +621,9 @@ def keyboard(args) -> list[str]:
         # interrupts at all.
         problems += keyboard_run("MSI-X", "qemu-xhci", args, plug=True)
         problems += keyboard_run("MSI", "nec-usb-xhci,msix=off", args, plug=False)
-        # A build that reads mice by the boot protocol, as it reads a mouse whose report descriptor can't be used.
-        build("keyboard", {"CHATCOMPUTER_TEST_USB_MOUSE": "boot"})
+        # A build that reads keyboards and mice by the boot protocol, as it reads one whose report descriptor can't
+        # be used (the others read them by their descriptors, as Windows does).
+        build("keyboard", {"CHATCOMPUTER_TEST_USB_MOUSE": "boot", "CHATCOMPUTER_TEST_USB_KEYBOARD": "boot"})
         problems += keyboard_run("none", "nec-usb-xhci,msix=off,msi=off", args, plug=False, boot_mice=True)
     finally:
         build()  # never leave a test build in out/

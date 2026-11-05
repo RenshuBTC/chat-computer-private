@@ -116,7 +116,11 @@ drivers.
     * USB 2 ports are reset; USB 3 ports enable themselves (a warm reset if one doesn't);
     * hubs, up to five in a row. This includes the USB 2 side of USB 3 hubs, where keyboards appear, and
       the "transaction translator" fields that slow devices behind fast hubs need;
-    * keyboards, in the boot protocol every keyboard supports, with their Caps Lock light;
+    * keyboards, read as each one's report descriptor says (`hid/`), as Windows reads them: six keys at once, or
+      every key a bit of its own (gaming keyboards' n-key rollover, which may come through another of a keyboard's
+      interfaces than its boot one: the Razer Ornata V3 X's, on the first real PC tried), from every interface that
+      has keys; by the boot protocol every keyboard supports when a descriptor can't be used. With their Caps Lock
+      light. The log says which interface first sent a report (never what was typed);
     * mice, read as each one's report descriptor says (`hid/`), or by the boot protocol if it can't be used. Their
       wheels scroll the conversation (`mouse.rs`); there is no pointer on the screen yet. A wireless receiver's
       keyboard and mouse both work;
@@ -435,9 +439,11 @@ drivers.
   sample rate. Made with sine recurrences (each sample from the two before), as the kernel's floating point is
   done in software. Tested against the main Chat Computer's formula worked out by numpy.
 * `hid/` reads USB HID report descriptors: the description each mouse gives of its own reports (how many
-  buttons, how fine its movement, whether it has a wheel, and where each is), by the HID specification and the way
-  Linux reads the usages some devices declare out of order. Tested with QEMU's mouse and tablet, a wireless
-  receiver's and a high-resolution wheel's layouts, descriptors cut short, and random ones.
+  buttons, how fine its movement, whether it has a wheel, and where each is), and each keyboard of its (its
+  modifiers, its keys as a list or a bit each, its lights), by the HID specification and the way Linux reads the
+  usages some devices declare out of order. Tested with QEMU's mouse and tablet, a wireless receiver's and a
+  high-resolution wheel's layouts, the boot keyboard's and a gaming keyboard's, descriptors cut short, and random
+  ones.
 * `remember/` is the memory file's format: 512-byte chunks, each tagged with the file's id (a random number setup
   chose) and the chunk's place, so nothing but this file is ever written; two copies written in turn, each with a
   hash, so a restart in the middle of a write leaves the last whole copy. Tested with writes cut short and with

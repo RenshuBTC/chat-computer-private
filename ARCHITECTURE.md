@@ -70,7 +70,8 @@ chat-computer/
                             box drawing), cut and merged from Noto fonts by build.py
     markdown/               The model's Markdown read by md.js's rules (tested against md.js itself: markdown/gen/gen.js)
     fat/                    Own FAT12/16/32 reader: a file's blocks on the start-up partition
-    hid/                    USB HID report descriptors: where a mouse's buttons, movement and wheel are in its reports
+    hid/                    USB HID report descriptors: where a mouse's buttons, movement and wheel are in its reports,
+                            and a keyboard's modifiers, keys (a list, or a bit each: n-key rollover) and lights
     remember/               The memory file's format (memory.bin): 512-byte chunks tagged "CCMEMORY" + file id
                             (u32 LE) + chunk number (u32 LE), 496 data bytes each; two halves written in turn, each
                             headed "CCMEMDAT" + version + sequence + length + FNV-1a 64 (header written last); a

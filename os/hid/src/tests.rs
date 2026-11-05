@@ -220,3 +220,77 @@ fn the_boot_protocol() {
     let qemu = parse(QEMU_MOUSE).unwrap();
     assert_eq!((qemu.x, qemu.y, qemu.wheel), (p.x, p.y, p.wheel));
 }
+
+/// A gaming keyboard's second interface, in the style of the Razer Ornata V3 X's (which Windows shows as a keyboard,
+/// a consumer control and a system control in one interface): report 1 the modifiers and every key a bit of its
+/// own, with the lights; report 2 the consumer page's keys, as a list.
+const NKRO_KEYBOARD: &[u8] = &[
+    0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x85, 0x01, 0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01, 0x75,
+    0x01, 0x95, 0x08, 0x81, 0x02, 0x19, 0x00, 0x29, 0x77, 0x95, 0x78, 0x81, 0x02, 0x05, 0x08, 0x19, 0x01, 0x29, 0x05,
+    0x95, 0x05, 0x91, 0x02, 0x95, 0x03, 0x91, 0x01, 0xC0, // the keyboard
+    0x05, 0x0C, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x02, 0x19, 0x00, 0x2A, 0x3C, 0x02, 0x15, 0x00, 0x26, 0x3C, 0x02, 0x95,
+    0x01, 0x75, 0x10, 0x81, 0x00, 0xC0, // the consumer page's keys
+];
+
+#[test]
+fn a_boot_keyboard_s_keys() {
+    let k = parse_keys(KEYBOARD).expect("a keyboard");
+    assert!(!k.numbered);
+    assert_eq!(k.bits, alloc::vec![(field(0, 0, 1, false, false), 0xE0, 8)]);
+    assert_eq!(k.arrays.len(), 1);
+    assert_eq!(k.arrays[0].first, field(0, 16, 8, false, false));
+    assert_eq!((k.arrays[0].count, k.arrays[0].minimum, k.arrays[0].usages.clone()), (6, 0, alloc::vec![(0, 0x65)]));
+    // Left Shift and A, then Z too.
+    let h = k.held(&[0x02, 0, 0x04, 0, 0, 0, 0, 0]).unwrap();
+    assert_eq!((h.modifiers, h.keys.clone(), h.rollover), (0x02, alloc::vec![4], false));
+    assert_eq!(k.held(&[0, 0, 0x04, 0x1D, 0, 0, 0, 0]).unwrap().keys, alloc::vec![4, 0x1D]);
+    // Too many keys at once.
+    assert!(k.held(&[0, 0, 1, 1, 1, 1, 1, 1]).unwrap().rollover);
+    // A report cut short has none of its list.
+    assert_eq!(k.held(&[0x01]).unwrap().keys, alloc::vec![]);
+    // Its lights: Num, Caps and Scroll Lock, the first three bits of a byte.
+    assert_eq!(k.lights.len(), 3);
+    assert_eq!(k.lights_report(0b010), Some((0, alloc::vec![0x02])));
+    assert_eq!(k.lights_report(0b101), Some((0, alloc::vec![0x05])));
+    // A mouse is no keyboard.
+    assert_eq!(parse_keys(QEMU_MOUSE), None);
+    assert_eq!(parse_keys(JOYSTICK), None);
+}
+
+#[test]
+fn every_key_a_bit_of_its_own() {
+    let k = parse_keys(NKRO_KEYBOARD).expect("a keyboard");
+    assert!(k.numbered);
+    assert!(k.arrays.is_empty(), "the consumer page's list isn't the keyboard's");
+    assert_eq!(k.bits, alloc::vec![(field(1, 0, 1, false, false), 0xE0, 8), (field(1, 8, 1, false, false), 0, 120)]);
+    // Report 1: right Alt held, A (usage 4: bit 12) and Z (0x1D: bit 37) down.
+    let mut report = [0u8; 17];
+    report[0] = 1;
+    report[1] = 0x40;
+    report[1 + 12 / 8] |= 1 << (12 % 8);
+    report[1 + 37 / 8] |= 1 << (37 % 8);
+    let h = k.held(&report).unwrap();
+    assert_eq!((h.modifiers, h.keys), (0x40, alloc::vec![4, 0x1D]));
+    // Report 2 (the volume, say) isn't the keyboard's.
+    assert_eq!(k.held(&[2, 0xE9, 0]), None);
+    // Its lights are in its output report 1.
+    assert_eq!(k.lights_report(0b011), Some((1, alloc::vec![1, 0x03])));
+    // Nothing in it is a mouse.
+    assert_eq!(parse(NKRO_KEYBOARD), None);
+}
+
+#[test]
+fn keys_cut_short_or_garbled_are_safe() {
+    for d in [NKRO_KEYBOARD, KEYBOARD] {
+        for n in 0..d.len() {
+            if let Some(k) = parse_keys(&d[..n]) {
+                let _ = k.held(&[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+                let _ = k.lights_report(7);
+            }
+        }
+    }
+    // A list whose elements claim to be 32 bits, and huge counts: nothing reads past the report.
+    let wide: &[u8] = &[0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x05, 0x07, 0x19, 0x00, 0x29, 0xFF, 0x75, 0x20, 0x96, 0xFF, 0xFF, 0x81, 0x00, 0xC0];
+    let k = parse_keys(wide).expect("a keyboard");
+    assert_eq!(k.held(&[0xFF; 9]).map(|h| h.keys.len()), Some(0));
+}

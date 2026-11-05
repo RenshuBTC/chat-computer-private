@@ -41,15 +41,22 @@ const REPEAT_EVERY_MS: u64 = 33;
 const QUEUE_MAX: usize = 256;
 const CAPS_LOCK: u8 = 0x39;
 
+/// A key pressed this soon after the same key through another of a keyboard's interfaces is the same press: a gaming
+/// keyboard may tell a key through its boot interface and its every-key-a-bit one alike.
+const SAME_PRESS_MS: u64 = 40;
+
 struct State {
     queue: VecDeque<Press>,
     /// The modifier keys held down (the report's first byte).
     modifiers: u8,
     /// The key that repeats while held, and when it repeats next.
     repeat: Option<(u8, u64)>,
+    /// The last key pressed: its usage, when, and through what (a keyboard's interface's number, from `source`).
+    last_press: (u8, u64, u32),
 }
 
-static STATE: SpinLock<State> = SpinLock::new(State { queue: VecDeque::new(), modifiers: 0, repeat: None });
+static STATE: SpinLock<State> =
+    SpinLock::new(State { queue: VecDeque::new(), modifiers: 0, repeat: None, last_press: (0, 0, 0) });
 static CAPS: AtomicBool = AtomicBool::new(false);
 
 /// A keyboard's report in the boot format: modifier keys, a reserved byte, then up to six keys held
@@ -58,19 +65,36 @@ pub fn report(last: &mut [u8; 8], now: &[u8; 8]) {
     if now[2..].contains(&1) {
         return; // too many keys at once for the keyboard to tell which
     }
+    let keys = |r: &[u8; 8]| -> alloc::vec::Vec<u16> { r[2..].iter().filter(|&&k| k >= 4).map(|&k| k as u16).collect() };
+    let mut held = keys(last);
+    held_now(&mut held, now[0], &keys(now), 0);
+    *last = *now;
+}
+
+/// What a keyboard's report says is held (as the HID descriptor reads it: in any format): the modifiers (in the boot
+/// format's bits) and the other keys. `held` is what its last report held, and becomes this one's; `source` tells
+/// keyboards' interfaces apart (0 for one that's alone), so that one press told by two of them counts once.
+pub fn held_now(held: &mut alloc::vec::Vec<u16>, modifiers: u8, now: &[u16], source: u32) {
     let mut s = STATE.lock();
-    s.modifiers = now[0];
-    for &k in &now[2..] {
-        if k >= 4 && !last[2..].contains(&k) {
-            s.down(k);
+    s.modifiers = modifiers;
+    let at = time::uptime_ms();
+    for &k in now {
+        if k >= 4 && k < 0x100 && !held.contains(&k) {
+            let (usage, when, from) = s.last_press;
+            if usage == k as u8 && from != source && at < when + SAME_PRESS_MS {
+                continue;
+            }
+            s.last_press = (k as u8, at, source);
+            s.down(k as u8);
         }
     }
-    for &k in &last[2..] {
-        if k >= 4 && !now[2..].contains(&k) && s.repeat.map(|r| r.0) == Some(k) {
+    for &k in held.iter() {
+        if k < 0x100 && !now.contains(&k) && s.repeat.map(|r| r.0) == Some(k as u8) {
             s.repeat = None;
         }
     }
-    *last = *now;
+    held.clear();
+    held.extend_from_slice(now);
 }
 
 impl State {

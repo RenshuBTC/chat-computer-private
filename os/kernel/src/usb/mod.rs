@@ -15,6 +15,7 @@ mod xhci;
 
 use crate::sync::SpinLock;
 use crate::{cpu, idt, keyboard, pci, time};
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -224,23 +225,52 @@ fn pass(hc: usize) -> bool {
         device::restart_endpoint(hc, slot, dci);
     }
     let lights = keyboard::lights();
-    let keyboards: Vec<(u8, u8)> = with(hc, |c| {
+    let (keyboards, said) = with(hc, |c| {
         let mut out = Vec::new();
+        let mut said = Vec::new();
         for d in c.devices.iter_mut().flatten() {
             let Role::Input(inputs) = &mut d.role else { continue };
             for i in inputs.iter_mut() {
-                if let InputKind::Keyboard { lights: shown, .. } = &mut i.kind
-                    && *shown != lights
+                match &mut i.kind {
+                    InputKind::Keyboard { lights: shown, .. } if *shown != lights => {
+                        *shown = lights;
+                        out.push((d.slot, i.interface, None::<(u8, Vec<u8>)>));
+                    }
+                    InputKind::Keys { layout, lights: shown, .. } if *shown != lights => {
+                        *shown = lights;
+                        if let Some(report) = layout.lights_report(lights) {
+                            out.push((d.slot, i.interface, Some(report)));
+                        }
+                    }
+                    _ => {}
+                }
+                // What a keyboard's interface did, said once each (so a log tells which interface a keyboard types
+                // through: never what it typed).
+                if i.kind.keyboard() && i.reports > 0 && i.said & 1 == 0 {
+                    i.said |= 1;
+                    said.push(format!("slot {}: its interface {} sent its first report ({} bytes)", d.slot, i.interface, i.first_length));
+                }
+                if let Some(code) = i.error
+                    && i.said & 2 == 0
                 {
-                    *shown = lights;
-                    out.push((d.slot, i.interface));
+                    i.said |= 2;
+                    said.push(format!("slot {}: its interface {}'s reports stopped: {} (restarted)", d.slot, i.interface, xhci::code_name(code)));
                 }
             }
         }
-        out
+        (out, said)
     });
-    for (slot, interface) in keyboards {
-        device::set_lights(hc, slot, interface, lights);
+    for (slot, interface, report) in keyboards {
+        match report {
+            None => device::set_lights(hc, slot, interface, lights),
+            Some((id, data)) => device::set_lights_report(hc, slot, interface, id, &data),
+        }
+    }
+    if !said.is_empty() {
+        let name = with(hc, |c| c.host.name.clone());
+        for line in said {
+            crate::log!("Chat Computer kernel: USB {name} {line}");
+        }
     }
     busy
 }
@@ -300,10 +330,10 @@ pub fn status() -> Status {
             let Role::Input(inputs) = &d.role else { continue };
             // A keyboard if its first interface is one: a wireless receiver's is (its mouse comes second), while a
             // gaming mouse's keys (for its macros) come after its mouse.
-            if inputs.first().is_some_and(|i| matches!(i.kind, InputKind::Keyboard { .. })) {
+            if inputs.first().is_some_and(|i| i.kind.keyboard()) {
                 keyboards.push(d.name.clone());
             }
-            if inputs.iter().any(|i| matches!(i.kind, InputKind::Mouse(_))) {
+            if inputs.iter().any(|i| i.kind.mouse()) {
                 mice.push(d.name.clone());
             }
         }

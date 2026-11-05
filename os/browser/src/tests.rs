@@ -188,6 +188,36 @@ fn a_form_sent_by_get_and_by_post() {
 }
 
 #[test]
+fn the_persons_form_is_sent_after_its_submit_event() {
+    // A page with scripts: its submit event first. One that cancels it keeps the page (sending what it must itself);
+    // one that doesn't lets the form go, with what its handler changed.
+    let mut p = scripted(
+        "<body><form id=a action='/note' method=post><input name=n value='hi'><button>Add</button></form>\
+         <form id=b action='/find'><input name=q value='x'></form><script>\
+         document.getElementById('a').addEventListener('submit', function (e) { e.preventDefault(); \
+           console.log('added ' + e.target.n.value + ' by ' + (e.submitter ? e.submitter.textContent : 'none')); });\
+         document.getElementById('b').onsubmit = function (e) { e.target.q.value = 'y'; console.log('finding'); };\
+         var a = document.forms[0]; console.log([a === document.getElementById('a'), a instanceof HTMLFormElement, \
+           'n' in a, 'm' in a, a.elements.n === a.n, a.n.form === a, a.method, a.action, a.nodeName, typeof a.submit].join(' '));\
+         </script></body>",
+    );
+    p.run(0.0);
+    assert_eq!(p.take_console(), ["true true true false true true post https://example.com/note FORM function"]);
+    let id = |p: &Page, id: &str| p.doc.descendants(0).find(|&n| p.doc.element(n).is_some_and(|e| e.attr("id") == Some(id))).unwrap();
+    let (a, b) = (id(&p, "a"), id(&p, "b"));
+    let button = p.doc.descendants(a).find(|&n| p.doc.name(n) == "button").unwrap();
+    assert_eq!(p.person_submits(a, Some(button)), None, "its script cancelled it");
+    assert_eq!(p.take_console(), ["added hi by Add"]);
+    let r = p.person_submits(b, None).expect("nothing cancelled it");
+    assert_eq!(r, Request { url: Url::parse("https://example.com/find?q=y").unwrap(), body: None });
+    assert_eq!(p.take_console(), ["finding"]);
+    // A page without scripts: the form at once.
+    let mut p = page("<body><form action='/find'><input name=q value='z'></form></body>");
+    let f = p.doc.descendants(0).find(|&n| p.doc.name(n) == "form").unwrap();
+    assert_eq!(p.person_submits(f, None).map(|r| r.url), Some(Url::parse("https://example.com/find?q=z").unwrap()));
+}
+
+#[test]
 fn a_page_that_sends_itself_on() {
     let p = page("<head><meta http-equiv='refresh' content='0; url=/next'></head><body>Moved</body>");
     assert_eq!(p.refresh(), Some(Url::parse("https://example.com/next").unwrap()));

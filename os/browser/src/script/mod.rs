@@ -393,7 +393,13 @@ pub fn wrap(vm: &mut Vm, id: NodeId) -> Value {
         return Value::Obj(*g);
     }
     let proto = dom::proto_for(vm, id);
-    let g = vm.alloc(Some(proto), Class::Host(NODE, id as u64));
+    let mut g = vm.alloc(Some(proto), Class::Host(NODE, id as u64));
+    // (A form's a proxy over that, for its controls by name too, as browsers have them: form.amount.)
+    if host_ref(vm).doc.name(id) == "form"
+        && let Some(handler) = host_ref(vm).proto("(form handler)")
+    {
+        g = vm.alloc(None, Class::Proxy(Some((g, handler)), 0));
+    }
     let h = host(vm);
     if h.wrappers.len() <= id {
         h.wrappers.resize(id + 1, None);
@@ -414,6 +420,11 @@ pub fn node_of(vm: &Vm, v: &Value) -> Option<NodeId> {
     match v {
         Value::Obj(g) => match vm.heap.get(*g).class {
             Class::Host(NODE, id) => Some(id as usize),
+            // (A form's proxy: the node under it.)
+            Class::Proxy(Some((t, _)), _) => match vm.heap.get(t).class {
+                Class::Host(NODE, id) => Some(id as usize),
+                _ => None,
+            },
             _ => None,
         },
         _ => None,
@@ -697,6 +708,13 @@ impl Script {
         let ok = events::fire(vm, &t, init);
         self.checkpoint();
         ok
+    }
+
+    /// The person sends a form (its submit button clicked, or Enter in one of its fields): its submit event first,
+    /// which a script may cancel (sending what it must itself, with fetch); if none does, the form goes.
+    pub fn submit_form(&mut self, form: NodeId, submitter: Option<NodeId>) {
+        dom::submit_form(&mut self.vm, form, submitter);
+        self.checkpoint();
     }
 
     /// Runs what's due: timers whose time has come, tasks posted. True if anything ran.

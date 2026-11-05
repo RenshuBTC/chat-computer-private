@@ -46,6 +46,12 @@ pub fn init(vm: &mut Vm) {
     method(vm, h, "set", 4, trap_set);
     method(vm, h, "deleteProperty", 2, trap_delete);
     host(vm).protos.insert("(list handler)", h);
+    // The handler forms' proxies share: a form's controls by name or id (form.amount), when it has nothing of its
+    // own by that name.
+    let fh = vm.new_object();
+    method(vm, fh, "get", 3, form_get);
+    method(vm, fh, "has", 2, form_has);
+    host(vm).protos.insert("(form handler)", fh);
 
     // DOMTokenList.
     let tl = interface(vm, "DOMTokenList", None, 0, None);
@@ -225,6 +231,38 @@ fn list_idx(vm: &Vm, target: &Value) -> Option<usize> {
 fn named(vm: &mut Vm, list: &[NodeId], name: &str) -> Option<NodeId> {
     let d = &host_ref(vm).doc;
     list.iter().copied().find(|&e| d.element(e).is_some_and(|el| el.attr("id") == Some(name) || (el.attr("name") == Some(name) && matches!(d.name(e), "a" | "button" | "embed" | "form" | "frame" | "frameset" | "iframe" | "img" | "input" | "map" | "meta" | "object" | "select" | "textarea"))))
+}
+
+/// The control of a form's named (or with the id) `key`, if the form has nothing of its own by that name.
+fn form_control(vm: &mut Vm, target: &Value, key: &Value) -> Result<Option<NodeId>, Value> {
+    let (Value::Obj(t), Value::Str(s)) = (target, key) else { return Ok(None) };
+    let Some(form) = super::node_of(vm, target) else { return Ok(None) };
+    let k = vm.to_key(key)?;
+    if vm.has_property(*t, k)? {
+        return Ok(None);
+    }
+    let list = controls(&host_ref(vm).doc, form);
+    Ok(named(vm, &list, &s.to_rust()))
+}
+
+fn form_get(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    let (target, key, receiver) = (arg(args, 0), arg(args, 1), arg(args, 2));
+    if let Some(n) = form_control(vm, &target, &key)? {
+        return Ok(wrap(vm, n));
+    }
+    let Value::Obj(t) = target else { return Ok(Value::Undefined) };
+    let k = vm.to_key(&key)?;
+    vm.get(t, k, &receiver)
+}
+
+fn form_has(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    let (target, key) = (arg(args, 0), arg(args, 1));
+    if form_control(vm, &target, &key)?.is_some() {
+        return Ok(Value::Bool(true));
+    }
+    let Value::Obj(t) = target else { return Ok(Value::Bool(false)) };
+    let k = vm.to_key(&key)?;
+    Ok(Value::Bool(vm.has_property(t, k)?))
 }
 
 fn trap_get(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {

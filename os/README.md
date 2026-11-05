@@ -311,13 +311,21 @@ drivers.
       the ones it fetches from (`sites`, at most 8 host names), and then only once the person presses the Allow
       button over it (only they can; a site added when the app is changed waits for them again): the kernel answers
       its scripts' requests to any other site, or before then, with an error, sends them with no cookies (and keeps
-      none they set), and follows no redirect elsewhere. The Actions sidebar says when the person allowed it (and
-      what they'd asked it for) and when it fetched from each site. The apps are listed at the left, under Messages,
-      to open with a click, and named in the model's instructions (with the sites they reach), to open or change. At
-      most 40 apps, 256 KB each. `check.py --apps` has a test's script make two, then checks them on the screen: one
-      that needs no site reaching none; one that needs a stand-in site blocked, then, its Allow button clicked,
-      fetching from it twice without cookies, and reaching no other; their data and sites in the memory file; and
-      after a restart, the apps in the model's instructions, one opened again with its data.
+      none they set), and follows no redirect elsewhere. What it sends (any request but a GET or a HEAD: a message,
+      a form's fields, something deleted) the kernel holds, and asks the person about in a box over the app: which
+      app sends what (a form's fields a line each, text as it is) to which site and path, with Don't send and Send
+      buttons that only their pointer presses, and not in the first 0.6 seconds the box shows (so a click meant for
+      the page under it can't press one); one they don't send fails for its script. Its page goes nowhere by itself:
+      its forms and its script reach no page but the app's own (it sends with fetch), and only the person's click
+      on a link takes them elsewhere. The Actions sidebar says when the person allowed it (and what they'd asked it
+      for), when it fetched from each site, and each send they let it make or didn't. The apps are listed at the
+      left, under Messages, to open with a click, and named in the model's instructions (with the sites they reach),
+      to open or change. At most 40 apps, 256 KB each. `check.py --apps` has a test's script make two, then checks
+      them on the screen: one that needs no site reaching none; one that needs a stand-in site blocked, then, its
+      Allow button clicked, fetching from it twice without cookies, and reaching no other; its two notes held, the
+      first sent when Send is clicked (just the once, without cookies) and the second not (Don't send), and its
+      script's way to another site refused; their data and sites in the memory file; and after a restart, the apps
+      in the model's instructions, one opened again with its data.
 
     The model may use tools up to 8 times for one message: what its eighth round of tools says back ends by telling it
     so, and its next round is its answer, in words (a tool it calls then isn't run, and a line under the answer says it
@@ -371,8 +379,8 @@ drivers.
   the code font; its pictures JPEG, PNG, GIF or SVG, an <svg> in the page drawn as a picture too, see-through where
   they are) and laid out: blocks with their margins collapsing, lines of words wrapping round floats,
   flex, grid, tables, positioned boxes, lists; borders solid, dashed, dotted or double, rounded, inset or outset. It scrolls with the wheel, the arrows and Page Up and Down; a click
-  follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter sends its form (GET or
-  POST). Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
+  follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter (or its button) sends its
+  form (GET or POST), its submit event first. Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
   (`browser/src/script/`: the document's nodes and elements, events, timers and animation frames, fetch,
   XMLHttpRequest and WebSockets through the kernel's own connections, URL, cookies (the system's, but the HttpOnly ones), storage
   (localStorage kept from page to page of a site while Chat Computer runs), custom elements and their shadow trees
@@ -886,8 +894,10 @@ writes for each person, in place of Ubuntu's catalogue.
     firmware's tables).
 13. Wi-Fi: Intel's chips (the AX200, AX201, AX210 and AX211, and the BE200), then MediaTek's, which most laptops
     have between them.
-14. The model faster: the fast cores of Intel's hybrid processors given more of the arithmetic (each matrix's rows
-    shared by how fast each core is), then Intel's built-in graphics doing the model's arithmetic.
+14. The model faster: ✓ the fast cores of Intel's hybrid processors given more of the arithmetic: each matrix's
+    rows are shared out 64 at a time, each core taking the next 64 as it finishes, so a faster core does more of
+    them (the same answer on any number of cores; to be timed on a hybrid processor). To do: Intel's built-in
+    graphics doing the model's arithmetic.
 15. ✓ Showing websites (Chat Computer's own browser engine: HTML, CSS, its layout and drawing; links, forms,
     cookies; checked in a virtual PC against a stand-in site, and on Wikipedia's, Hacker News' and Google's pages).
     ✓ Scripts: a JavaScript engine of its own (96% of Ecma's test262's language tests, 96% of its built-ins'), the
@@ -907,8 +917,10 @@ writes for each person, in place of Ubuntu's catalogue.
     model makes (`make_app`: one HTML page, run by the browser engine), shown at once, listed to open with a click,
     their data kept across restarts and when they change; ✓ the sites an app needs, declared by the model and reached
     only once the person allows it (checked in the kernel, with no cookies), its fetches, WebSockets and the person's
-    say-so in the Actions sidebar, traced to what they asked for. To do: actions beyond reading public data (an app sending a
-    message or filling in a form as the person), each asked for and confirmed.
+    say-so in the Actions sidebar, traced to what they asked for; ✓ what an app sends (a message, a form's fields:
+    any request but a GET) shown to the person over it each time, what it is and where it goes, and sent only when
+    they press Send (checked in the kernel; its page can't take them anywhere by itself). To do: an app acting on
+    a site the person is signed in to, as them.
 17. Updates: signed, with a way back.
 
 ## Reaching everybody's PC

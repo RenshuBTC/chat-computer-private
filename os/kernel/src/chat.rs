@@ -320,10 +320,29 @@ pub struct Chat {
     site_logged: Option<Rect>,
     /// Where an app's Allow button was last said to be (test builds).
     allow_logged: Option<Rect>,
+    /// The send an app asks to make that the question over it is about (its number), and when it was first shown
+    /// (uptime ms); where its Send button was last said to be (test builds).
+    send_shown: Option<(u32, u64)>,
+    send_logged: Option<(u32, Rect)>,
 }
 
 /// How long the start screen's word logo and greeting take to fade, as the website's (chat.css: #welcome).
 const WELCOME_FADE_MS: u64 = 500;
+
+/// The question over an app that asks to send something: its buttons press only once it's been shown this long (ms),
+/// so a click meant for the page under it can't press one; and at most this many lines of what it sends.
+const SEND_WAIT_MS: u64 = 600;
+const SEND_LINES: usize = 10;
+
+/// The question over an app that asks to send something (site::SendAsked), laid out: its box, its lines (each one's
+/// words, face, top and colour), and its two buttons, Don't send and Send.
+struct SendBox {
+    id: u32,
+    rect: Rect,
+    lines: Vec<(String, Face, i32, u32)>,
+    dont: Rect,
+    send: Rect,
+}
 
 /// The website's greetings (chat.js: GREETINGS, without a name): what, from and until which hour, and on which days
 /// (0 Sunday; empty: any).
@@ -549,6 +568,8 @@ impl Chat {
             site: None,
             site_logged: None,
             allow_logged: None,
+            send_shown: None,
+            send_logged: None,
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -997,6 +1018,16 @@ impl Chat {
             let inside = |r: Rect| px >= r.x && px < r.right() && py >= r.y && py < r.bottom();
             if inside(close) {
                 return self.close_site();
+            }
+            // An app's question: its Send and Don't send buttons (only the person's pointer presses them); the rest
+            // of its box does nothing.
+            if let Some(b) = self.send_box() {
+                if inside(b.send) || inside(b.dont) {
+                    return self.answer_send(b.id, inside(b.send));
+                }
+                if inside(b.rect) {
+                    return;
+                }
             }
             if let Some((allow, _)) = self.allow_rect()
                 && inside(allow)
@@ -2199,6 +2230,36 @@ impl Chat {
                 y += m.line;
             }
         }
+        // An app's question, over its page: what it asks to send, and where; Don't send and Send.
+        if let Some(b) = self.send_box() {
+            if self.send_shown.map(|(i, _)| i) != Some(b.id) {
+                self.send_shown = Some((b.id, time::uptime_ms()));
+            }
+            self.canvas.set_clip(inside);
+            let r = m.px(0.8);
+            self.canvas.round_rect(b.rect, r, BOX_LINE);
+            self.canvas.round_rect(Rect::new(b.rect.x + rule, b.rect.y + rule, b.rect.w - 2 * rule, b.rect.h - 2 * rule), (r - rule).max(0), BOX_GROUND);
+            let pad = m.px(1.0);
+            self.canvas.set_clip(inside.intersect(&Rect::new(b.rect.x + pad, b.rect.y, b.rect.w - 2 * pad, b.rect.h)));
+            for (words, face, y, colour) in &b.lines {
+                let ink = self.ty.ink_in(words, *face, m.body, 0);
+                self.canvas.ink(b.rect.x + pad - ink.left as i32, *y, &ink, *colour);
+            }
+            for (r, label) in [(b.dont, "Don't send"), (b.send, "Send")] {
+                self.canvas.set_clip(inside);
+                self.canvas.round_rect(r, r.h / 2, CHOSEN);
+                let ink = self.ty.ink_in(label, Face::Bold, style, 0);
+                let lw = self.ty.width_in(label, Face::Bold, style.size) / ONE;
+                self.canvas.set_clip(inside.intersect(&r));
+                self.canvas.ink(r.x + (r.w - lw) / 2 - ink.left as i32, r.y + (r.h - style.line_height / ONE) / 2, &ink, INK);
+            }
+            // (A test build says where its buttons are, for the test to press them.)
+            if option_env!("CHATCOMPUTER_TEST").is_some() && self.send_logged != Some((b.id, b.send)) {
+                self.send_logged = Some((b.id, b.send));
+                let (s, d) = (b.send, b.dont);
+                crate::log!("Chat Computer kernel: site: send button at {},{} {}x{}; don't-send button at {},{} {}x{}", s.x, s.y, s.w, s.h, d.x, d.y, d.w, d.h);
+            }
+        }
         // (A test build says where the page is, for the test to click in it.)
         if option_env!("CHATCOMPUTER_TEST").is_some() && self.site_logged != Some(page) {
             self.site_logged = Some(page);
@@ -2335,6 +2396,91 @@ impl Chat {
         let size = fx(self.m.rem * 0.8);
         let w = (self.ty.width_in(&label, Face::Bold, size) / ONE + self.m.px(1.6)).min((close.x - frame.x) / 2);
         Some((Rect::new(close.x - self.m.px(0.6) - w, close.y, w, close.h), label))
+    }
+
+    /// The question over an app that asks to send something, if one does: a box at the top of its page (at most 40
+    /// rem wide), "The Notes app asks to send this to api.example.com/note:" in bold, what it sends under that (at
+    /// most SEND_LINES lines, and as many as the page has room for), and its two buttons at its bottom right, Don't
+    /// send and Send, as the Allow button is.
+    fn send_box(&self) -> Option<SendBox> {
+        let ask = self.site.as_ref()?.send_asked()?;
+        let (_, close, page) = self.site_rects();
+        let m = self.m;
+        let (margin, pad) = (m.px(1.0), m.px(1.0));
+        let w = (page.w - 2 * margin).min(m.px(40.0)).max(m.px(12.0)).min(page.w);
+        let x = page.x + (page.w - w) / 2;
+        let y = page.y + margin.min(page.h / 8);
+        let tw = (w - 2 * pad).max(1) * ONE;
+        let mut lines = Vec::new();
+        let mut at = y + pad;
+        let mut head = if ask.deletes {
+            format!("The {} app asks to delete {}.", ask.app, ask.to)
+        } else {
+            format!("The {} app asks to send this to {}:", ask.app, ask.to)
+        };
+        if ask.more > 0 {
+            head.push_str(&format!(" ({} more after it.)", ask.more));
+        }
+        let chars: Vec<(char, Face)> = head.chars().map(|c| (c, Face::Bold)).collect();
+        let rs = self.ty.breaks_styled(&chars, m.body.size, tw);
+        for (i, r) in rs.iter().take(4).enumerate() {
+            let mut line: String = chars[r.clone()].iter().map(|(c, _)| *c).collect();
+            if i == 3 && rs.len() > 4 {
+                line.push('\u{2026}');
+            }
+            lines.push((line, Face::Bold, at, INK));
+            at += m.line;
+        }
+        // What it sends, in as many lines as there's room for.
+        let button_h = close.h;
+        let room = ((page.bottom() - at - m.px(0.4) - m.px(0.8) - button_h - pad - margin) / m.line.max(1)).max(1) as usize;
+        let most = SEND_LINES.min(room);
+        let (what, colour) = if !ask.what.is_empty() {
+            (ask.what.as_str(), INK)
+        } else if ask.deletes {
+            ("", INK)
+        } else {
+            ("Nothing but its address.", MUTED)
+        };
+        if !what.is_empty() {
+            at += m.px(0.4);
+            let rs = self.ty.breaks(what, m.body.size, tw);
+            let cut = rs.len() > most;
+            for r in rs.iter().take(if cut { most.saturating_sub(1).max(1) } else { most }) {
+                lines.push((String::from(what[r.clone()].trim_end()), Face::Regular, at, colour));
+                at += m.line;
+            }
+            if cut {
+                let shown = most.saturating_sub(1).max(1);
+                lines.push((format!("(and {} lines more)", rs.len() - shown), Face::Regular, at, MUTED));
+                at += m.line;
+            }
+        }
+        at += m.px(0.8);
+        let size = fx(m.rem * 0.8);
+        let send_w = self.ty.width_in("Send", Face::Bold, size) / ONE + m.px(2.4);
+        let dont_w = self.ty.width_in("Don't send", Face::Bold, size) / ONE + m.px(1.6);
+        let send = Rect::new(x + w - pad - send_w, at, send_w, button_h);
+        let dont = Rect::new(send.x - m.px(0.6) - dont_w, at, dont_w, button_h);
+        at += button_h + pad;
+        Some(SendBox { id: ask.id, rect: Rect::new(x, y, w, at - y), lines, dont, send })
+    }
+
+    /// The person pressed Send or Don't send over an app that asks to send something (once its question has been
+    /// shown SEND_WAIT_MS): it's sent or not, and the Actions sidebar says which.
+    fn answer_send(&mut self, id: u32, send: bool) {
+        let ready = self.send_shown.is_some_and(|(i, at)| i == id && time::uptime_ms().saturating_sub(at) >= SEND_WAIT_MS);
+        if !ready {
+            return;
+        }
+        if let Some(s) = self.site.as_mut() {
+            s.answer_send(send);
+        }
+        for what in self.site.as_mut().map(|s| s.take_actions()).unwrap_or_default() {
+            self.action(what);
+        }
+        let (frame, _, _) = self.site_rects();
+        self.dirty = self.dirty.union(&frame);
     }
 
     /// The person pressed an app's Allow button: it reaches the sites it needs from now on (opened again, so what it

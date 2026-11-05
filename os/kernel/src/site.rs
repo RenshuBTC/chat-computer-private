@@ -7,7 +7,10 @@
 //! cancel what they'd do), their timers run as the main loop goes round, what they fetch is fetched here, and their
 //! WebSockets are kept open here (web::WebSocket) for as long as the page is shown. It
 //! scrolls with the mouse's wheel and the keys; a click follows a link, ticks a box, or puts the caret in a field to
-//! type in; Enter in a field sends its form (GET or POST, with the site's cookies).
+//! type in; Enter in a field sends its form (GET or POST, with the site's cookies). An app the model made is shown the
+//! same way, but it reaches only the sites the person allowed it, without cookies; what it sends (any request but a
+//! GET: a message, a form's fields) waits for the person to press Send over it, each time; and its page leaves it
+//! only by the person's click on a link.
 
 use crate::web::Fetch;
 use crate::{clock, time};
@@ -127,6 +130,133 @@ fn socket_allowed(address: &str, app: Option<&str>, allowed: &[String], pending:
     Ok(u)
 }
 
+/// The most sends an app may have waiting for the person at once (more fail at once).
+const MOST_HELD: usize = 8;
+
+/// A send an app asks to make (any request but a GET or a HEAD: a message, a form's fields, something deleted),
+/// held until the person says whether it goes (`Site::answer_send`): its request's number, and the request.
+struct Held {
+    id: u32,
+    url: Url,
+    method: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+}
+
+impl Held {
+    fn deletes(&self) -> bool {
+        self.method.eq_ignore_ascii_case("DELETE")
+    }
+
+    /// What it does, in a few words, for the Actions sidebar: "send “hello” to api.example.com".
+    fn told(&self) -> String {
+        if self.deletes() {
+            return format!("delete {}{}", self.url.host, self.url.path);
+        }
+        let words = send_words(&self.headers, self.body.as_deref());
+        let mut said = words.split_whitespace().collect::<Vec<_>>().join(" ");
+        if said.chars().count() > 60 {
+            said = said.chars().take(59).collect();
+            said.push('\u{2026}');
+        }
+        if said.is_empty() { format!("send to {}{}", self.url.host, self.url.path) } else { format!("send \u{201c}{said}\u{201d} to {}", self.url.host) }
+    }
+}
+
+/// A send an app asks to make, as the person is asked about it: its number, the app's name, where it goes (the site
+/// and the path there), what it sends (as words: a form's fields a line each), whether it deletes what's there, and
+/// how many more wait after it.
+pub struct SendAsked {
+    pub id: u32,
+    pub app: String,
+    pub to: String,
+    pub what: String,
+    pub deletes: bool,
+    pub more: usize,
+}
+
+/// What a send carries, as the person reads it: a form's fields a line each ("name: value"), text (JSON too) as it
+/// is, else its size and kind. Nothing for no body.
+fn send_words(headers: &[(String, String)], body: Option<&[u8]>) -> String {
+    let Some(b) = body.filter(|b| !b.is_empty()) else { return String::new() };
+    let kind = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-type")).map(|(_, v)| v.clone()).unwrap_or_default();
+    let lower = kind.to_ascii_lowercase();
+    let text = |s: &str| -> String {
+        s.chars().filter(|&c| c != '\r').map(|c| if c == '\t' || (c.is_control() && c != '\n') { ' ' } else { c }).collect()
+    };
+    if lower.contains("x-www-form-urlencoded")
+        && let Ok(s) = core::str::from_utf8(b)
+    {
+        let lines: Vec<String> = s
+            .split('&')
+            .filter(|p| !p.is_empty())
+            .map(|p| {
+                let (k, v) = p.split_once('=').unwrap_or((p, ""));
+                text(&format!("{}: {}", form_decode(k), form_decode(v)))
+            })
+            .collect();
+        return lines.join("\n");
+    }
+    if lower.contains("multipart/form-data")
+        && let Some(at) = lower.find("boundary=")
+    {
+        let boundary = kind[at + 9..].split(';').next().unwrap_or("").trim().trim_matches('"');
+        let mut lines = Vec::new();
+        let marker = format!("--{boundary}");
+        let all = String::from_utf8_lossy(b);
+        for part in all.split(marker.as_str()).skip(1) {
+            let Some((head, value)) = part.split_once("\r\n\r\n") else { continue };
+            let field = |key: &str| {
+                let at = head.find(&format!("{key}=\""))? + key.len() + 2;
+                head[at..].split('"').next().map(String::from)
+            };
+            let Some(name) = field("name") else { continue };
+            let value = value.strip_suffix("\r\n").unwrap_or(value);
+            lines.push(match field("filename") {
+                Some(file) => format!("{name}: the file {file} ({} bytes)", value.len()),
+                None => text(&format!("{name}: {value}")),
+            });
+        }
+        return lines.join("\n");
+    }
+    match core::str::from_utf8(b) {
+        Ok(s) => text(s),
+        Err(_) => {
+            let what = lower.split(';').next().unwrap_or("").trim();
+            if what.is_empty() { format!("{} bytes", b.len()) } else { format!("{} bytes of {what}", b.len()) }
+        }
+    }
+}
+
+/// A form's field's name or value as it's sent (+ for spaces, %XX for other bytes), as it reads.
+fn form_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() && hex(b[i + 1]).is_some() && hex(b[i + 2]).is_some() => {
+                out.push(hex(b[i + 1]).unwrap_or(0) * 16 + hex(b[i + 2]).unwrap_or(0));
+                i += 2;
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Who sends the site to another page: the person (an address typed, a link clicked), the page's form (sent by the
+/// person or its script), or its script (or its <meta refresh>).
+#[derive(PartialEq, Clone, Copy)]
+enum By {
+    Person,
+    Form,
+    Script,
+}
+
 /// What a click on the site did, for the screen.
 pub enum Clicked {
     Nothing,
@@ -186,6 +316,8 @@ pub struct Site {
     actions: Vec<String>,
     /// Its page's scripts' WebSockets: (their number for it, the connection).
     sockets: Vec<(u32, crate::web::WebSocket)>,
+    /// What its app asks to send, waiting for the person's say-so, the first asked first.
+    held: Vec<Held>,
 }
 
 impl Site {
@@ -248,6 +380,7 @@ impl Site {
             app_pending: Vec::new(),
             actions: Vec::new(),
             sockets: Vec::new(),
+            held: Vec::new(),
         }
     }
 
@@ -264,6 +397,39 @@ impl Site {
     /// What its app did that the person should see, for the Actions sidebar.
     pub fn take_actions(&mut self) -> Vec<String> {
         core::mem::take(&mut self.actions)
+    }
+
+    /// What its app asks to send that's waiting for the person (the first, if there are more), to ask them.
+    pub fn send_asked(&self) -> Option<SendAsked> {
+        let app = self.app.as_ref()?;
+        let h = self.held.first()?;
+        Some(SendAsked {
+            id: h.id,
+            app: app.clone(),
+            to: format!("{}{}", h.url.host, h.url.path),
+            what: send_words(&h.headers, h.body.as_deref()),
+            deletes: h.deletes(),
+            more: self.held.len() - 1,
+        })
+    }
+
+    /// The person said whether the send its app asks to make goes (they pressed Send, or Don't send): sent (as its
+    /// fetches are, without cookies), or failed for its script; the Actions sidebar says which.
+    pub fn answer_send(&mut self, send: bool) {
+        let Some(app) = self.app.clone() else { return };
+        if self.held.is_empty() {
+            return;
+        }
+        let h = self.held.remove(0);
+        let what = if send { format!("You let the {app} app {}", h.told()) } else { format!("You didn't let the {app} app {}", h.told()) };
+        log!("Chat Computer kernel: site: {what}");
+        self.actions.push(what);
+        if send {
+            self.script_fetches.push((h.id, Fetch::app(h.url, &h.method, h.headers, h.body, self.app_allowed.clone())));
+        } else if let Some(page) = self.page.as_mut() {
+            page.answer(h.id, Err(format!("the person didn't let the {app} app send it")));
+        }
+        self.dirty = true;
     }
 
     /// Whether a page has come to show.
@@ -291,11 +457,25 @@ impl Site {
         self.loading.is_some() || !self.fetching.is_empty()
     }
 
-    /// Goes to another page (a link, a form sent, an address typed), keeping this one to go back to.
+    /// Goes to another page as the person asks (an address typed, a link clicked), keeping this one to go back to.
     pub fn go(&mut self, r: Request, fragment: Option<String>, keep: bool) {
-        // (Away from an app: a site, which can reach the internet.)
-        if !is_app(&r.url) {
-            self.app = None;
+        self.go_by(r, fragment, keep, By::Person);
+    }
+
+    /// Goes to another page (`by` the person, a form, or the page's script), keeping this one to go back to. An app's
+    /// page leaves it only by the person's click on a link: its forms and its script go nowhere but the app itself
+    /// (opened again there), since what an app sends it sends with fetch, which the person says yes to.
+    fn go_by(&mut self, r: Request, fragment: Option<String>, keep: bool, by: By) {
+        if let Some(app) = &self.app
+            && by != By::Person
+            && r.url.host != self.url.host
+        {
+            log!(
+                "Chat Computer kernel: site: the {app} app's {} can't take the person to {}: an app's page goes elsewhere only by their click on a link",
+                if by == By::Form { "form" } else { "script" },
+                r.url.host
+            );
+            return;
         }
         if keep
             && let Some(p) = &self.page
@@ -305,6 +485,13 @@ impl Site {
                 self.back.remove(0);
             }
         }
+        // An app's address: the app shown (again), with what it may reach now; it isn't on the internet.
+        if is_app(&r.url) {
+            self.show_app_at(r.url, fragment);
+            return;
+        }
+        // (Away from an app: a site, which can reach the internet.)
+        self.app = None;
         let referer = self.page.as_ref().map(|p| p.url.clone());
         self.stop();
         self.url = r.url.clone();
@@ -314,9 +501,33 @@ impl Site {
         self.dirty = true;
     }
 
+    /// The app at `url` shown, as it is now (the sites it may reach as the person allowed them), or why it can't be.
+    fn show_app_at(&mut self, url: Url, fragment: Option<String>) {
+        self.stop();
+        self.url = url.clone();
+        let name = crate::assistant::apps().into_iter().find(|n| app_url(n).host == url.host);
+        let Some((name, html)) = name.and_then(|n| crate::assistant::app(&n).map(|h| (n, h))) else {
+            self.app = None;
+            self.page = None;
+            self.note = Some(String::from("That app isn't there any more."));
+            self.dirty = true;
+            return;
+        };
+        let (sites, allowed, _) = crate::assistant::app_sites(&name);
+        self.app_allowed = sites.iter().filter(|h| allowed.contains(h)).cloned().collect();
+        self.app_pending = sites.iter().filter(|h| !allowed.contains(h)).cloned().collect();
+        self.app = Some(name);
+        self.page_came(crate::web::Page { url, kind: String::from("text/html; charset=utf-8"), bytes: html.into_bytes(), cut: false, status: 200, headers: Vec::new() }, fragment);
+    }
+
     /// Back to the page before, if there is one.
     pub fn go_back(&mut self) -> bool {
         let Some(u) = self.back.pop() else { return false };
+        if is_app(&u) {
+            self.show_app_at(u, None);
+            return true;
+        }
+        self.app = None;
         self.stop();
         self.url = u.clone();
         self.loading = Some((Fetch::request(u, web::http::ACCEPT_PAGE, None, None), None));
@@ -338,6 +549,8 @@ impl Site {
         for (_, mut w) in self.sockets.drain(..) {
             w.stop();
         }
+        // (What its app asked to send goes nowhere: the page that asked is gone.)
+        self.held.clear();
     }
 
     /// The page's clock: ms since it came.
@@ -416,10 +629,25 @@ impl Site {
                     changed = true;
                 }
                 for (id, address, method, headers, body) in page.take_requests() {
-                    // An app reaches only the sites the person allowed it, over HTTPS, without cookies.
+                    // An app reaches only the sites the person allowed it, over HTTPS, without cookies; what it
+                    // sends (any request but a GET or a HEAD) waits for the person to say it goes.
                     if let Some(app) = &self.app {
                         let to = Url::parse(&address).ok().filter(|u| u.port == 443 && address.starts_with("https:"));
+                        let reads = method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD");
                         match to {
+                            Some(u) if self.app_allowed.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) && !reads => {
+                                if self.held.len() >= MOST_HELD {
+                                    page.answer(id, Err(format!("the {app} app asked to send too much at once: the person says yes to one thing at a time")));
+                                    continue;
+                                }
+                                log!(
+                                    "Chat Computer kernel: site: the {app} app asks to send {} bytes to {} ({method}): waiting for the person",
+                                    body.as_ref().map_or(0, Vec::len),
+                                    u.host
+                                );
+                                self.held.push(Held { id, url: u, method, headers, body });
+                                changed = true;
+                            }
                             Some(u) if self.app_allowed.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) && self.script_fetches.len() < 64 => {
                                 let what = format!("The {app} app fetched from {}", u.host);
                                 if !self.actions.contains(&what) {
@@ -427,6 +655,9 @@ impl Site {
                                     self.actions.push(what);
                                 }
                                 self.script_fetches.push((id, Fetch::app(u, &method, headers, body, self.app_allowed.clone())));
+                            }
+                            Some(u) if self.app_allowed.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) => {
+                                page.answer(id, Err(format!("the {app} app asked for too much at once")));
                             }
                             Some(u) if self.app_pending.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) => {
                                 page.answer(id, Err(format!("the person hasn't allowed the {app} app to reach {} yet", u.host)));
@@ -558,7 +789,7 @@ impl Site {
                 }
                 if let Some(r) = page.navigation.take() {
                     log!("Chat Computer kernel: site: the page's script goes to {}", r.url);
-                    self.go(r, None, true);
+                    self.go_by(r, None, true, By::Script);
                     return true;
                 }
             }
@@ -630,15 +861,16 @@ impl Site {
             Page::new(got.url.clone(), &html)
         };
         log!("Chat Computer kernel: site: read {} ({} bytes{}): {:?}", got.url, got.bytes.len(), if got.cut { ", cut" } else { "" }, page.title());
-        // A page that sends itself on at once (<meta http-equiv=refresh>), followed.
+        // A page that sends itself on at once (<meta http-equiv=refresh>), followed (never an app's: it stays).
         if let Some(to) = page.refresh()
             && self.refreshes < MOST_REFRESHES
             && to != got.url
+            && self.app.is_none()
         {
             self.refreshes += 1;
             log!("Chat Computer kernel: site: the page sends itself on to {to}");
             self.page = Some(page);
-            self.go(Request { url: to, body: None }, None, false);
+            self.go_by(Request { url: to, body: None }, None, false, By::Script);
             return;
         }
         self.refreshes = 0;
@@ -805,13 +1037,17 @@ impl Site {
                 }
                 Clicked::Changed
             }
-            Hit::Submit(form, button) => match page.submit(form, Some(button)) {
+            // (Its submit event first: a script that cancels it keeps the page.)
+            Hit::Submit(form, button) => match page.person_submits(form, Some(button)) {
                 Some(r) => {
                     log!("Chat Computer kernel: site: form sent to {} ({})", r.url, if r.body.is_some() { "POST" } else { "GET" });
-                    self.go(r, None, true);
+                    self.go_by(r, None, true, By::Form);
                     Clicked::Going
                 }
-                None => Clicked::Nothing,
+                None => {
+                    self.dirty = true;
+                    Clicked::Changed
+                }
             },
             Hit::Nothing => {
                 if self.focus.take().is_some() {
@@ -882,10 +1118,12 @@ impl Site {
                     self.caret = at + 1;
                     page.set_value(f, &value);
                 } else if let Some(form) = page.form_of(f)
-                    && let Some(r) = page.submit(form, None)
+                    && let Some(r) = page.person_submits(form, None)
                 {
                     log!("Chat Computer kernel: site: form sent to {} ({})", r.url, if r.body.is_some() { "POST" } else { "GET" });
-                    self.go(r, None, true);
+                    self.go_by(r, None, true, By::Form);
+                    self.dirty = true;
+                    return true;
                 }
             }
             _ => return false,

@@ -2628,7 +2628,7 @@ fn app_tool(name: &str, input: &Json, apps: &mut Vec<App>, because: &str, events
     } else {
         format!(
             " It can't reach {} until the person allows it, with the Allow button over it (only they can): tell them \
-             what it fetches from there, and why.",
+             what it fetches from there (and what it sends, which they'll be asked about each time), and why.",
             sites.join(", ")
         )
     };

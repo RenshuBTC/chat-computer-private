@@ -1475,6 +1475,17 @@ impl Page {
         laid.items.iter().find(|i| i.node == Some(node) || i.node.is_some_and(|n| inside.contains(&n))).map(|i| bounds(i).y)
     }
 
+    /// The person sends a form (`submitter` clicked, or Enter in one of its fields): on a page with scripts, its
+    /// submit event first (a script that cancels it sends what it must itself, and the page stays); then where it
+    /// goes, if it goes (as `submit`).
+    pub fn person_submits(&mut self, form: NodeId, submitter: Option<NodeId>) -> Option<Request> {
+        if self.script.is_none() {
+            return self.submit(form, submitter);
+        }
+        self.with_script(|s| s.submit_form(form, submitter));
+        self.navigation.take()
+    }
+
     /// A form sent (by `submitter`, the button clicked, if any): where to, and for a POST, what.
     pub fn submit(&self, form: NodeId, submitter: Option<NodeId>) -> Option<Request> {
         let f = self.doc.element(form)?;

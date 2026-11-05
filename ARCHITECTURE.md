@@ -97,15 +97,13 @@ chat-computer/
                             tiny model with random weights for the real engine: tests/data/tiny-model.ccm)
   docs/                     The browser demo (GitHub Pages): Chat Computer's own screen with docs/demo/host.js standing
                             in for the computer; scripts/build_demo.py copies the screen, tests/test_demo.py checks
-  docs/get/                 chatcomputer.ai/get: the apps to download (as Annotated's page offers its extension); on
+  docs/get/                 chatcomputer.ai/get: the app to download: on
                             Windows and Mac one Setup each (the app's installer; mac.sh, a line of Terminal for the
                             Mac, pinned to the disk image's SHA-256 by build_apps.py)
-  apps/chrome/              The Chrome extension: the website in Chrome's side panel (?app=chrome), its sites in
-                            real Chrome tabs; scripts/build_apps.py zips it into docs/get, tests/test_apps.py checks
   apps/desktop/             The Windows and Mac app (Tauri 2), which is Chat Computer Setup on both: start/ (its first
-                            page: how you want Chat Computer, as a Chrome extension, your browser, an app or its own
-                            system; src-tauri/src/ways.rs does each), src-tauri/ (Rust: the window, the site's own view
-                            laid over the page's frame, and in the browser a view per tab, "/" file search, the Mac's
+                            page: how you want Chat Computer, as an app or as its own system; src-tauri/src/ways.rs
+                            does each), src-tauri/ (Rust: the window, the site's own view laid over the page's frame,
+                            "/" file search, the Mac's
                             127.0.0.1 page server,
                             Messages from Gmail, Outlook, Telegram, WhatsApp, WeChat and Discord: each service's
                             own view, signed in by you and kept aside, read by reader.js for messages.rs;
@@ -114,16 +112,11 @@ chat-computer/
                             build_apps.py desktop: the website's page, with Heart's code), binaries/ (made by
                             build_apps.py engine: os/model's engine, which comes with the app; engine.rs runs
                             it), src-tauri/setup/ (made by build_apps.py desktop --for windows|mac: Chat Computer
-                            Setup, for the own system), src-tauri/nsis/hooks.nsh (the installer's words, and the
-                            browser's registration taken out on uninstall), get/mac.sh (the Mac's line of Terminal,
+                            Setup, for the own system), src-tauri/nsis/hooks.nsh (the installer's words), get/mac.sh (the Mac's line of Terminal,
                             filled in into docs/get), make-signing-identity.sh (the Mac's self-signed identity, made
                             once by the owner, kept as GitHub secrets), smoke/ (a site for
                             CI's real start-up pictures); .github/workflows/apps.yml builds both on GitHub;
                             tests/test_desktop.py checks it, driving a Linux build with WebDriver where there is one
-  apps/android/             The Android app: chatcomputer.ai full screen in Chrome (a Trusted Web Activity, Google's
-                            androidbrowserhelper; docs/.well-known/assetlinks.json vouches for its key), Gradle
-  apps/ios/                 The iPhone app: chatcomputer.ai in a WKWebView (SwiftUI), other sites in Safari's view;
-                            XcodeGen's project.yml, built for the simulator by .github/workflows/ios.yml
 ```
 
 ## The Windows and Mac app
@@ -165,30 +158,13 @@ model is downloaded by the page. The model that answers is the engine's (below).
   address opened in the middle.
 
 * How you have Chat Computer (`ways.rs`; its page, `start/`, the app's first page): `way_status`, `choose_way`,
-  `make_default_browser`, `show_folder`. The way chosen is kept in the app's config folder (`way.json`); the app opens
-  on the conversation for `app` and `browser` and on `start/index.html` otherwise (or with none chosen; where the
-  app's `models` folder is there already, from before the choice existed, the way is `app`). The model's engine
-  starts only once the way is `app` or `browser`. `chrome`: apps/chrome's files (`include_str!`) written to `Chrome
-  extension` in the app's data folder, Chrome started in a new window at docs/get/chrome.html#folder=<the folder>
-  (Chrome drops chrome:// addresses given on its command line, so that page and the app's show the steps, with the
-  folder's path copied). `browser`: on Windows the app writes
-  StartMenuInternet\Chat Computer (with Capabilities: URLAssociations http and https to the ProgID ChatComputerURL),
-  RegisteredApplications and Software\Classes\ChatComputerURL (`"exe" --url "%1"`) under HKCU, again at each start
-  as a browser, and takes them out when another way is chosen (the NSIS uninstaller too, `nsis/hooks.nsh`, unless
-  updating); `make_default_browser` opens `ms-settings:defaultapps?registeredAppUser=Chat%20Computer` (Windows) or
-  calls LSSetDefaultHandlerForURLScheme for http and https (macOS asks the person). `os`: `setup/` (Tauri's
-  resources) copied to `Chat Computer Setup` in the app's data folder and run: `windows\Chat Computer Setup.cmd`
-  (ShellExecute), or, on a Mac whose chip is M1, M2 or M3 (not M3 Ultra: `sysctl machdep.cpu.brand_string`), a
-  `.command` file the app writes (`exec bash mac/setup.sh`) opened by Terminal.
-* The app as a browser (way `browser`, told to the page by `about`): host.js draws a row of tabs (`#tabs`) above the
-  middle; chat.js lays the frame under it, and a tab's frame has no bar (`body.on-tab`). Each tab is a webview of its
-  own, `tab-<n>` (n 1 to 500, chosen by the page): `open_tab` (made, or navigated: what the model opens goes in the tab
-  it last opened, `browser.mine`; what the person opens, a new tab), `show_tab`, `close_tab`, `tab_back`
-  (`history.back()`/`forward()`, fixed scripts). Another view taking the middle hides a tab (a service's is put
-  aside, the app's own site view closes); the page loading again closes them all. Links from outside: the command
-  line's (`--url`, or CHATCOMPUTER_OPEN), Windows' second start (tauri-plugin-single-instance passes its arguments)
-  and macOS's `RunEvent::Opened` wait in `Outside` until the conversation's page asks (`take_opening`), then are told
-  to it as they come (`chatcomputerApp({open})`), the window brought to the front.
+  `show_folder`. The way chosen is kept in the app's config folder (`way.json`); the app opens on the conversation for
+  `app` and on `start/index.html` otherwise (or with none chosen; where the app's `models` folder is there already,
+  from before the choice existed, the way is `app`). The model's engine starts only once the way is `app`. `os`:
+  `setup/` (Tauri's resources) copied to `Chat Computer Setup` in the app's data folder and run: `windows\Chat Computer
+  Own System.cmd` (ShellExecute: Windows asks for its permission, then one "Go ahead?" that Enter accepts), or, on a
+  Mac whose chip is M1, M2 or M3 (not M3 Ultra: `sysctl machdep.cpu.brand_string`), a `.command` file the app writes
+  (`exec bash mac/setup.sh`) opened by Terminal.
 
 Only the app's own page can ask for these: `build.rs` makes each command a permission, `capabilities/` give them
 to the webview `main` alone (never to a window, which would include the site's view), and each command checks the

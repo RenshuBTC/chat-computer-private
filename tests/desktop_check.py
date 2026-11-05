@@ -8,12 +8,9 @@ random weights, tests/data/tiny-model.ccm, in a folder of models and a catalogue
 testing takes CHATCOMPUTER_MODELS_DIR and CHATCOMPUTER_ENGINE_CATALOGUE), the page hears it's ready, "/" names it,
 and something asked is answered by it; when the app closes, the engine ends with it.
 
-How you want Chat Computer: the app starts on the page that asks (no way chosen yet), the four ways there; an address
-to open (CHATCOMPUTER_OPEN, as a link from another app would be) waits for the conversation's page; the Chrome
-extension chosen puts the extension in its folder (in the pretend home) and opens Chrome (a stand-in on the PATH);
-the own system can't be chosen on Linux, and says why; the app chosen, the conversation, which opens the address that
-waited. At the end, the browser chosen ("/" lists how you have Chat Computer): sites in tabs, each a view of its own
-in the app (their pages' titles come back by tab), shown in turn, closed.
+How you want Chat Computer: the app starts on the page that asks (no way chosen yet), the two ways there (the app,
+or its own system); the own system can't be chosen on Linux, and says why; the app chosen, the conversation. At the
+end, "/" lists how you have Chat Computer, and its page shows the way chosen.
 
 What it does, as the app's own page would: starts with the greeting; is told the computer's name; "/" finds files
 in Documents and opens one (with a stand-in for the system's opener); refuses a file "/" didn't find, and a program;
@@ -134,10 +131,6 @@ def main() -> None:
     opener = bin_dir / "xdg-open"
     opener.write_text(f"#!/bin/sh\necho \"$1\" >> {work / 'opened.txt'}\n")
     opener.chmod(0o755)
-    # Chrome, standing in: how it was started.
-    chrome = bin_dir / "google-chrome"
-    chrome.write_text(f"#!/bin/sh\necho \"$@\" >> {work / 'chrome.txt'}\n")
-    chrome.chmod(0o755)
     env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "PATH": f"{bin_dir}:{os.environ['PATH']}",
            "XDG_DATA_HOME": str(home / ".local/share"), "XDG_CACHE_HOME": str(home / ".cache")}
     for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
@@ -146,7 +139,6 @@ def main() -> None:
     if loopback:
         env["CHATCOMPUTER_LOOPBACK"] = "1"
     env["CHATCOMPUTER_SERVICES_AT"] = f"http://127.0.0.1:{SITE_PORT}/"      # (the services: this check's own pages)
-    env["CHATCOMPUTER_OPEN"] = f"http://127.0.0.1:{SITE_PORT}/b.html"       # (as a link from another app: it waits)
     # The models: a tiny one, here already (nothing to download), in a catalogue of its own.
     models = work / "models"
     models.mkdir()
@@ -195,33 +187,19 @@ def main() -> None:
             js("window.__seen = window.__seen || []; if (!window.__recording) { window.__recording = true;"
                " var was = window.chatcomputerApp; window.chatcomputerApp = function (m) { window.__seen.push(m); was(m); }; }")
 
-        # How you want Chat Computer: asked first (nothing chosen yet), the four ways.
+        # How you want Chat Computer: asked first (nothing chosen yet), the two ways.
         until("document.querySelector('#choose') && !document.getElementById('choose').hidden")
         out["first_page"] = js("return location.pathname")
         out["ways"] = js("return Array.from(document.querySelectorAll('.way')).map(function (b) { return [b.getAttribute('data-way'),"
                          " b.classList.contains('cannot')]; })")
         out["way_status"] = invoke("way_status").get("ok")
-        # The Chrome extension: its folder (in the app's own), Chrome opened; the steps.
-        js("document.querySelector('.way[data-way=\"chrome\"]').click()")
-        until("!document.getElementById('way-chrome').hidden", 15)
-        ext = home / ".local" / "share" / "ai.chatcomputer.desktop" / "Chrome extension"
-        out["extension"] = {"shown": js("return document.getElementById('extension-folder').textContent"),
-                            "files": sorted(p.name for p in ext.iterdir()) if ext.is_dir() else [],
-                            "kept": json.loads((home / ".config" / "ai.chatcomputer.desktop" / "way.json").read_text())}
-        time.sleep(1)
-        out["chrome_started"] = (work / "chrome.txt").read_text().split() if (work / "chrome.txt").exists() else []
-        out["show_folder"] = invoke("show_folder", {"which": "extension"})
-        js("document.querySelector('#way-chrome button[data-act=\"choose\"]').click()")
         # The own system: not from Linux, and it says why (nothing kept).
         js("document.querySelector('.way[data-way=\"os\"]').click()")
         out["os"] = until("document.getElementById('error').textContent")
         out["os_choose"] = invoke("choose_way", {"way": "os"})
-        # The app: the conversation, which then opens the address that waited.
+        # The app: the conversation.
         js("document.querySelector('.way[data-way=\"app\"]').click()")
         until("location.pathname === '/index.html' && window.CO && document.getElementById('input')", 20)
-        out["waited"] = until("document.body.classList.contains('content') && document.getElementById('frame-title').textContent", 20)
-        js("document.getElementById('frame-close').click()")
-        until("!document.body.classList.contains('content')", 10)
         out["about_way"] = invoke("about").get("ok", {}).get("way")
         # The app's own page, from the app: the greeting.
         until("window.CO && document.getElementById('greeting').classList.contains('shown')")
@@ -336,33 +314,12 @@ def main() -> None:
             same, last = (same + 1 if now == last else 0), now
             time.sleep(0.25)
         out["model_answer"] = last
-        # The browser: chosen on the page that asks ("/" lists it: how you have Chat Computer); sites in tabs, each a view
-        # of its own in the app, their titles coming back by tab; one shown again; one closed (the app has it no more).
+        # How you have Chat Computer: "/" lists it, and its page shows the way chosen.
         js("var i = document.getElementById('input'); i.focus(); i.value = '/how you have'; i.dispatchEvent(new Event('input', {bubbles: true}));")
         out["way_slash"] = until("(document.querySelector('#results .res .res-name') || {}).textContent")
         js("document.querySelector('#results .res').click()")
         until("location.pathname === '/start/index.html' && !document.getElementById('choose').hidden && document.querySelector('.way.now')", 20)
         out["way_now"] = js("return document.querySelector('.way.now').getAttribute('data-way')")
-        js("document.querySelector('.way[data-way=\"browser\"]').click()")
-        until("!document.getElementById('way-browser').hidden", 15)
-        js("document.querySelector('#way-browser button[data-act=\"start\"]').click()")
-        until("location.pathname === '/index.html' && document.getElementById('tabs')", 20)
-        record()
-        js("window.chatcomputerApp({ open: 'http://127.0.0.1:%d/a.html' })" % SITE_PORT)
-        until("(window.__seen || []).some(function (m) { return m.view === 'tab-1' && /^A test page/.test(m.title || ''); })", 20)
-        js("window.chatcomputerApp({ open: 'http://127.0.0.1:%d/d.html' })" % SITE_PORT)
-        until("(window.__seen || []).some(function (m) { return m.view === 'tab-2' && m.title === 'D page'; })", 20)
-        out["tabs"] = until("Array.from(document.querySelectorAll('#tab-list .tab')).length === 3 && Array.from(document.querySelectorAll("
-                            "'#tab-list .tab')).map(function (t) { return [t.getAttribute('data-tab'), t.textContent, t.classList.contains('on')]; })", 10)
-        js("document.querySelector('#tab-list .tab[data-tab=\"1\"]').click()")
-        out["tab_picked"] = until("document.querySelector('#tab-list .tab.on') && document.querySelector('#tab-list .tab.on').getAttribute('data-tab')", 10)
-        out["tab_back"] = invoke("tab_back", {"tab": 1, "forward": False})
-        js("document.querySelector('#tab-list .tab[data-tab=\"2\"] .tab-close').click()")
-        until("!document.querySelector('#tab-list .tab[data-tab=\"2\"]')", 10)
-        time.sleep(1)
-        out["tab_closed"] = invoke("tab_back", {"tab": 2, "forward": False})
-        out["tab_open_shown"] = invoke("show_tab", {"tab": 1, "x": 300, "y": 60, "w": 800, "h": 600})
-        out["about_browser"] = invoke("about").get("ok", {}).get("way")
         if loopback:
             port = int(out["page"].rsplit(":", 1)[1])
             req = urllib.request.Request(f"http://127.0.0.1:{port}/index.html", headers={"Host": "evil.example"})

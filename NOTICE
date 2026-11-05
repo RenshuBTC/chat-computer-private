@@ -35,10 +35,6 @@ Unicode data (Unicode License v3)
   the Unicode Character Database (through Python's unicodedata module). Copyright Unicode, Inc.
   Licence: https://www.unicode.org/license.txt
 
-Gradle Wrapper (Apache License 2.0)
-- apps/android/gradlew, apps/android/gradlew.bat and apps/android/gradle/wrapper/gradle-wrapper.jar.
-  Copyright 2015-2021 the original authors (Gradle).
-
 Test data
 - windows/tests/data/ubuntu-24.04.5-grub.cfg and windows/tests/data/SHA256SUMS: copied from
   Ubuntu's release files (Canonical Ltd.).
@@ -49,8 +45,7 @@ The prebuilt programs in docs/get/, chatcomputer/brain/bin/, os/release/ and doc
 are built from this repository's code together with open-source components under their own
 licences: the Rust standard library (MIT or Apache-2.0); in the Windows and Mac apps, Tauri and the
 other crates listed in apps/desktop/src-tauri/Cargo.lock (mostly MIT or Apache-2.0), and NSIS in
-the Windows installer (zlib licence); in the Android app, Android Browser Helper and the AndroidX
-libraries (Apache-2.0).
+the Windows installer (zlib licence).
 
 The AI models Chat Computer runs (for example Qwen's, under the Apache License 2.0) are downloaded
 when needed and are not part of this repository.

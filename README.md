@@ -2,12 +2,22 @@
 
 **A computer you talk to, with an operating system of its own and Meta's Muse Spark at its heart.**
 
-Chat Computer is an operating system written from scratch in Rust. It has its own kernel, drivers, network stack,
-TLS 1.3, file systems and model engine, and its whole interface is one conversation. You type or speak, and the
-computer answers and acts. This is our entry to the **Meta Global AI Developer Hackathon**.
+Our goal is a chat-centred computer: one conversation as the whole user experience of a full computer. You say what
+you want, and it finds your files, opens sites, brings your messages from every chat app together and changes its
+own settings, with everything it did listed so you can revert it. Underneath, the goal is an AI-native operating
+system that is free and open source.
 
-**Demo video (2:36):** [watch it](https://renshubtc.github.io/chat-computer/media/), or download
-[media/chat-computer-demo.mp4](media/chat-computer-demo.mp4).
+Chat Computer is an operating system written from scratch in Rust. It has its own kernel, drivers, network stack,
+TLS 1.3, file systems and model engine, and its whole interface is one conversation. This is our entry to the
+**Meta Global AI Developer Hackathon**.
+
+**Chat Computer is still a work in progress.** The own system runs in virtual PCs so far; real PCs, more tools and
+more of the everyday requests in our tests come next.
+
+**Demo video (1:39):** [watch it](https://renshubtc.github.io/chat-computer/media/), or download
+[media/chat-computer-demo.mp4](media/chat-computer-demo.mp4). It shows the full screen: your messages from every
+chat app on the left, every action on the right (each one can be reverted), and websites like google.com opened by
+typing them in the chat box.
 
 ## How it uses Meta's Muse Spark
 
@@ -57,8 +67,6 @@ On a PC with Chat Computer's own system installed, add this line to `\EFI\chatco
 meta-api-key = your-key
 ```
 
-So far the own system has run in virtual PCs (QEMU). Real PCs come next on the roadmap.
-
 ## What's inside
 
 | Folder | What it is |
@@ -69,10 +77,33 @@ So far the own system has run in virtual PCs (QEMU). Real PCs come next on the r
 | [os/model](os/model) | The model engine: Qwen's open models (with vision) and Whisper speech recognition, AVX2 and AVX-512 |
 | [os/ntfs](os/ntfs), [os/fat](os/fat), [os/exfat](os/exfat), [os/bitlocker](os/bitlocker) | Reading Windows' and USB drives |
 | [os/check.py](os/check.py) | Checks that boot the system in virtual PCs and test each part |
-| [apps](apps), [docs](docs), [windows](windows) | The Windows app and setup, and the website |
+| [apps](apps), [docs](docs), [windows](windows) | The Windows and Mac app, the own system's setup, and the website |
 | [chatcomputer](chatcomputer), [linux](linux) | The earlier Chat Computer, an app on a thin Linux base |
 
 [os/README.md](os/README.md) describes the system in full, with its roadmap.
+
+## Built with frontier models from Anthropic, OpenAI and Meta
+
+Chat Computer is built with today's frontier models, and it works with each of them:
+
+* **Anthropic's Claude** writes and reviews much of the code with us (Claude Code), and answers in Chat Computer
+  with an Anthropic API key.
+* **OpenAI's models** help build it too, and answer in Chat Computer with an OpenAI API key, or in the app when you
+  sign in with your ChatGPT plan.
+* **Meta's Muse Spark and Muse Wonder** are the own system's brain through Meta's Model API, answer on
+  [chatcomputer.ai](https://chatcomputer.ai), and test it: [evals/meta](evals/meta) asks them the own system's
+  everyday requests, with its real tools, and Muse Spark grades each answer.
+
+Without a key, an open model (Qwen) answers on the computer itself, offline.
+
+## Contributors
+
+* RenshuBTC, the author
+* Claude (Anthropic)
+* OpenAI's GPT models
+* Muse Spark and Muse Wonder (Meta)
+
+GitHub's own contributor list shows only accounts tied to the commits, so the models are listed here.
 
 ## Licence
 

@@ -1,13 +1,10 @@
 """Builds what chatcomputer.ai/get offers from what's in apps/ (docs/get/):
 
-- Chat-Computer-Chrome.zip: the Chrome extension (apps/chrome), in a folder of its own, for "Load unpacked" (as
-  Annotated's "Add to Chrome" is). It's small: its side panel shows the website itself (chatcomputer.ai, so it's
-  always the newest), and opens the sites asked for in real Chrome tabs.
 - mac.sh: Chat Computer Setup for Mac, in one line of Terminal (curl -fsSL https://chatcomputer.ai/get/mac.sh | bash):
   apps/desktop/get/mac.sh, with the SHA-256 of the disk image beside it (Chat-Computer-Mac.dmg, which GitHub builds:
   run this again when it's replaced).
 
-The same bytes each time (fixed dates in the zip), so tests/test_apps.py can check docs/get is what this makes.
+The same bytes each time, so tests/test_apps.py can check docs/get is what this makes.
 Run it after changing apps/:  python scripts/build_apps.py
 
 And what the Windows and Mac app bundles, before building it (.github/workflows/apps.yml does it on each):
@@ -27,20 +24,16 @@ python scripts/build_apps.py desktop [--for windows|mac];  python scripts/build_
 from __future__ import annotations
 
 import hashlib
-import io
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
-import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APPS = ROOT / "apps"
 GET = ROOT / "docs" / "get"
-CHROME_FILES = ["manifest.json", "background.js", "panel.html", "panel.css", "panel.js"]
-CHROME_FOLDER = "Chat Computer"
 DOCS = ROOT / "docs"
 FRONTEND = APPS / "desktop" / "frontend"
 START = APPS / "desktop" / "start"
@@ -57,18 +50,6 @@ LM = {
 }
 
 
-def chrome_zip() -> bytes:
-    """The extension's files, under one folder, with fixed dates: the same zip for the same files."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in CHROME_FILES:
-            info = zipfile.ZipInfo(f"{CHROME_FOLDER}/{name}", date_time=(2026, 1, 1, 0, 0, 0))
-            info.external_attr = 0o644 << 16
-            info.compress_type = zipfile.ZIP_DEFLATED
-            z.writestr(info, (APPS / "chrome" / name).read_bytes())
-    return buf.getvalue()
-
-
 def mac_sh() -> bytes:
     """Chat Computer Setup for Mac in one line of Terminal: the disk image beside it, pinned by its SHA-256."""
     sha = hashlib.sha256((GET / MAC_DMG).read_bytes()).hexdigest()
@@ -76,7 +57,7 @@ def mac_sh() -> bytes:
 
 
 def files() -> dict[Path, bytes]:
-    return {GET / "Chat-Computer-Chrome.zip": chrome_zip(), GET / "mac.sh": mac_sh()}
+    return {GET / "mac.sh": mac_sh()}
 
 
 def desktop_frontend(lm: bool = True) -> Path:

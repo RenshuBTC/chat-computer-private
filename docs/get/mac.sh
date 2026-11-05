@@ -3,8 +3,8 @@
 #     curl -fsSL https://chatcomputer.ai/get/mac.sh | bash
 # It downloads the app (one disk image, Chat-Computer-Mac.dmg), checks its SHA-256 against the one written here, puts Chat Computer
 # in Applications (the Mac's, or your own ~/Applications where that isn't yours to change: no administrator password
-# either way) and opens it. The app then asks how you want Chat Computer: as a Chrome extension, as your browser, as
-# an app, or as its own system next to macOS (on a Mac with M1, M2 or M3).
+# either way) and opens it. The app then asks how you want Chat Computer: as an app, or as its own system next to
+# macOS (on a Mac with M1, M2 or M3).
 # A file curl downloads isn't marked as coming from the internet, so macOS opens the app without asking you to choose
 # Open Anyway in System Settings (it isn't signed with a paid Apple certificate yet).
 # Made by scripts/build_apps.py from the disk image beside it on chatcomputer.ai/get: don't change it by hand.

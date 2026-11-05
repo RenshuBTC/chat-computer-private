@@ -2543,9 +2543,10 @@ impl<'a> Layout<'a> {
             }
             Self::fade(c, opacity)
         };
+        let patterned = |k: usize| matches!(s.border_style[k], BorderStyle::Dashed | BorderStyle::Dotted | BorderStyle::Double);
         let uniform = sides.len() == 4
             && border.iter().all(|&w| (w - border[0]).abs() < 0.01)
-            && (0..4).all(|k| shade(k) == shade(0));
+            && (0..4).all(|k| shade(k) == shade(0) && !patterned(k));
         if uniform {
             out.push(Paint::Border { x: bx, y: by, w: bw, h: bh, width: border[0], color: shade(0), radius });
         } else {
@@ -2556,7 +2557,9 @@ impl<'a> Layout<'a> {
                     2 => Rect::new(bx, by + bh - border[2], bw, border[2]),
                     _ => Rect::new(bx, by, border[3], bh),
                 };
-                out.push(Paint::Rect { x: r.x, y: r.y, w: r.w, h: r.h, color: shade(k), radius: 0.0 });
+                for (piece, round) in border_pieces(r, k, s.border_style[k]) {
+                    out.push(Paint::Rect { x: piece.x, y: piece.y, w: piece.w, h: piece.h, color: shade(k), radius: round });
+                }
             }
         }
         for paint in out {
@@ -2755,6 +2758,42 @@ fn roman(n: i64) -> String {
     out
 }
 
+
+
+/// A border's side (`r`, side k: 0 top, 1 right, 2 bottom, 3 left) as the pieces its style draws, each with its
+/// corners' radius: solid, one piece; dashed, dashes three times as long as the border is thick, spaced evenly
+/// with a whole dash at each end; dotted, dots as wide as the border (round once they're 3 pixels or more), the same;
+/// double, two lines a third as thick, a third apart (solid, when it's thinner than 3 pixels).
+fn border_pieces(r: Rect, k: usize, style: BorderStyle) -> Vec<(Rect, f32)> {
+    let across = k == 0 || k == 2;
+    let (length, thick) = if across { (r.w, r.h) } else { (r.h, r.w) };
+    let piece = |at: f32, len: f32| if across { Rect::new(r.x + at, r.y, len, r.h) } else { Rect::new(r.x, r.y + at, r.w, len) };
+    match style {
+        BorderStyle::Dashed | BorderStyle::Dotted if thick > 0.0 && length > 0.0 => {
+            let dotted = style == BorderStyle::Dotted;
+            let unit = if dotted { thick } else { (3.0 * thick).max(3.0) };
+            // (Truncated: the whole dashes that fit, with a gap between each.)
+            let count = (((length + unit) / (2.0 * unit)) as usize).clamp(1, 4096);
+            if count == 1 {
+                return vec![(piece(0.0, length), 0.0)];
+            }
+            let gap = (length - count as f32 * unit) / (count - 1) as f32;
+            let round = if dotted && thick >= 3.0 { thick / 2.0 } else { 0.0 };
+            (0..count).map(|i| (piece(i as f32 * (unit + gap), unit), round)).collect()
+        }
+        BorderStyle::Double if thick >= 3.0 => {
+            let line = thick / 3.0;
+            let (outer, inner) = match k {
+                0 => (Rect::new(r.x, r.y, r.w, line), Rect::new(r.x, r.y + 2.0 * line, r.w, line)),
+                1 => (Rect::new(r.x + 2.0 * line, r.y, line, r.h), Rect::new(r.x, r.y, line, r.h)),
+                2 => (Rect::new(r.x, r.y + 2.0 * line, r.w, line), Rect::new(r.x, r.y, r.w, line)),
+                _ => (Rect::new(r.x, r.y, line, r.h), Rect::new(r.x + 2.0 * line, r.y, line, r.h)),
+            };
+            vec![(outer, 0.0), (inner, 0.0)]
+        }
+        _ => vec![(r, 0.0)],
+    }
+}
 
 #[cfg(test)]
 mod tests {

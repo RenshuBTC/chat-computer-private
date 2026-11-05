@@ -370,7 +370,7 @@ drivers.
   calc(), modern colours; its text in Lora, or Atkinson Hyperlegible Next where it asks for a sans-serif family, or
   the code font; its pictures JPEG, PNG, GIF or SVG, an <svg> in the page drawn as a picture too, see-through where
   they are) and laid out: blocks with their margins collapsing, lines of words wrapping round floats,
-  flex, grid, tables, positioned boxes, lists. It scrolls with the wheel, the arrows and Page Up and Down; a click
+  flex, grid, tables, positioned boxes, lists; borders solid, dashed, dotted or double, rounded, inset or outset. It scrolls with the wheel, the arrows and Page Up and Down; a click
   follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter sends its form (GET or
   POST). Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
   (`browser/src/script/`: the document's nodes and elements, events, timers and animation frames, fetch and

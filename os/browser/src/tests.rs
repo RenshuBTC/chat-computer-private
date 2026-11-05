@@ -471,3 +471,31 @@ fn css_in_js_rules_templates_and_tree_walkers() {
     let blue = l.items.iter().any(|i| matches!(&i.paint, Paint::Text { text, color, .. } if text == "x" && color & 0xFF_FFFF == 0x0000FF));
     assert!(blue, "the rule a script inserted styles the page");
 }
+
+#[test]
+fn dashed_dotted_and_double_borders_are_drawn_as_their_pieces() {
+    // A 100 × 50 box (its border inside it): 2-pixel dashes 6 long, 3-pixel round dots, a 6-pixel double line.
+    let mut p = page(
+        "<body style='margin:0'><div style='box-sizing:border-box;width:100px;height:50px;border:2px dashed red'></div>\
+         <div style='box-sizing:border-box;width:100px;height:50px;border:3px dotted blue'></div>\
+         <div style='box-sizing:border-box;width:100px;height:50px;border:6px double green'></div></body>",
+    );
+    let l = laid(&mut p);
+    let dashes: Vec<_> = rects(l, RED).into_iter().filter(|r| r.1 == 0.0 && r.3 == 2.0).collect();
+    // (Along the top, 100 long: 8 dashes of 6, a whole one at each end, the gaps between them the same.)
+    assert_eq!(dashes.len(), 8, "{dashes:?}");
+    assert_eq!((dashes[0].0, dashes[0].2), (0.0, 6.0));
+    assert!((dashes[7].0 + dashes[7].2 - 100.0).abs() < 0.01, "{dashes:?}");
+    let dots: Vec<_> = l
+        .items
+        .iter()
+        .filter_map(|i| match &i.paint {
+            Paint::Rect { y, w, h, color, radius, .. } if *color == BLUE && *y == 50.0 => Some((*w, *h, *radius)),
+            _ => None,
+        })
+        .collect();
+    assert!(dots.len() > 10 && dots.iter().all(|d| *d == (3.0, 3.0, 1.5)), "{dots:?}");
+    // The double line's top: two lines 2 pixels thick, 2 apart.
+    let lines: Vec<_> = rects(l, GREEN).into_iter().filter(|r| r.2 == 100.0).collect();
+    assert!(lines.iter().any(|r| r.1 == 100.0 && r.3 == 2.0) && lines.iter().any(|r| r.1 == 104.0 && r.3 == 2.0), "{lines:?}");
+}

@@ -1,6 +1,8 @@
 //! Against documents made by python-docx, openpyxl and python-pptx, the same saved by LibreOffice (which works out
 //! formulas and writes everything its own way), and three written by hand with what programs write less often
-//! (tests/make.py): what each says, read back. Damaged ones give errors or what could be read, never a crash.
+//! (tests/make.py): what each says, read back. The same saved by LibreOffice 24.2 in Office's formats from before
+//! 2007 (letter.doc, budget.xls, talk.ppt) read back the same; and with a password ("secret": letter-password.docx,
+//! .doc and budget-password.xls) say so. Damaged ones give errors or what could be read, never a crash.
 
 extern crate std;
 
@@ -99,6 +101,44 @@ Notes: Say hello first.
 | 2026 | 1 |",
             "{name}"
         );
+    }
+}
+
+#[test]
+fn reads_office_files_from_before_2007() {
+    let (kind, text) = text_of("letter.doc");
+    assert_eq!(kind, Kind::Word);
+    assert!(text.starts_with(LETTER), "letter.doc:\n{text}");
+    assert!(text.trim_end().ends_with("Yours faithfully,"), "letter.doc:\n{text}");
+    // The workbook as LibreOffice wrote it as .xlsx, formulas written out from their tokens.
+    let (kind, text) = text_of("budget.xls");
+    assert_eq!((kind, text), (Kind::Excel, text_of("budget-libreoffice.xlsx").1));
+    let (kind, text) = text_of("talk.ppt");
+    assert_eq!((kind, text), (Kind::PowerPoint, text_of("talk.pptx").1));
+}
+
+#[test]
+fn says_when_a_password_protects_a_file() {
+    for name in ["letter-password.docx", "letter-password.doc", "budget-password.xls"] {
+        assert_eq!(read(&file(name)).err(), Some(Error::Encrypted), "{name}");
+    }
+}
+
+#[test]
+fn damaged_compound_files_give_errors_or_words_never_a_crash() {
+    for name in ["letter.doc", "budget.xls", "talk.ppt"] {
+        let data = file(name);
+        // Cut short, and with bytes changed throughout (the header, the FAT, the directory, the streams).
+        for end in (0..data.len()).step_by(data.len() / 97 + 1) {
+            let _ = read(&data[..end]);
+        }
+        for i in (0..data.len()).step_by(data.len() / 1500 + 1) {
+            for flip in [0x01u8, 0x80, 0xFF] {
+                let mut d = data.clone();
+                d[i] ^= flip;
+                let _ = read(&d);
+            }
+        }
     }
 }
 

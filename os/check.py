@@ -2401,7 +2401,7 @@ def files_check(args) -> list[str]:
     online only when they aren't, a file Windows compressed itself said to be one, and a search that finds the
     shopping list (and the link to it) but not the one in AppData (a hidden folder). Word, Excel and PowerPoint files
     and a PDF come back as their words; a ZIP archive as its list; a photo and a wide picture as what they are (the model
-    reads words only); what can't be read (a damaged Word file, one from before 2007, an iPhone's photo) says why.
+    reads words only); what can't be read (a damaged Word file, a damaged one from before 2007, an iPhone's photo) says why.
     computer_status says what the drive is. Last, a photo shown on the screen (show_picture): its sun's yellow must be
     there in the picture of the screen."""
     import re
@@ -2526,8 +2526,8 @@ def files_check(args) -> list[str]:
                    r"## Page 1\nReceipt: 3 coffees, 12\.50",
             "zip": r"C:\\Users\\Sam\\Downloads\\photos\.zip is a ZIP archive \(4 KB\) of 2 files:\nBeach\.jpg \(10 KB\)\n"
                    r"notes\.txt \(23 bytes\)\n\[What's in it isn't opened here\.\]",
-            "olddoc": r"C:\\Users\\Sam\\Documents\\Work\\Old letter\.doc \(5 KB\) is in Office's format from before 2007 "
-                      r"\(\.doc, \.xls, \.ppt\), which Chat Computer's own system can't read inside yet\.",
+            "olddoc": r"C:\\Users\\Sam\\Documents\\Work\\Old letter\.doc \(5 KB\) should be a Word, Excel or PowerPoint file, "
+                      r"but Chat Computer's own system can't read it: it may be damaged\.",
             "heic": r"C:\\Users\\Sam\\Pictures\\IMG_0001\.HEIC \(3 KB\) is a HEIC picture \(as iPhones take them\), which "
                     r"Chat Computer's own system can't open yet\.",
             "wide": rf"C:\\Users\\Sam\\Pictures\\Panorama\.png \(\d+ KB, 9000×40 pixels, changed {day}\): the picture "

@@ -84,7 +84,7 @@ pub fn status() -> String {
     lines.push(if u.mice.is_empty() {
         String::from("Mice: none found (a USB mouse's wheel would scroll the conversation)")
     } else {
-        format!("Mice: {} (the wheel scrolls the conversation; there is no pointer on the screen to move or click yet)", u.mice.join(", "))
+        format!("Mice: {} (the pointer clicks the buttons, the lists at the sides, the apps and what's on the websites shown; the wheel scrolls)", u.mice.join(", "))
     });
     lines.push(format!("Sound: {}", crate::sound::status()));
     lines.push(crate::schedule::status());
@@ -93,9 +93,8 @@ pub fn status() -> String {
     lines.push(crate::assistant::status());
     lines.push(crate::listening::status());
     lines.push(String::from(
-        "Not yet in Chat Computer's own system: showing websites (it searches the web and reads pages' words), \
-         changing files (it reads Windows' drives and USB drives, and writes only its own memory and log files), seeing \
-         pictures (so a scanned page's words), Office's files from before 2007, sound other than its chimes (no speech, music or microphones), Wi-Fi, Bluetooth, sleep (it can turn \
+        "Not yet in Chat Computer's own system: changing files (it reads Windows' drives and USB drives, and writes only \
+         its own memory and log files), speaking aloud, playing music and videos, Wi-Fi, Bluetooth, sleep (it can turn \
          off), and the screen's brightness",
     ));
     lines.join("\n")

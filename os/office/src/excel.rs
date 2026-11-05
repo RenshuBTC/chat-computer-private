@@ -120,7 +120,7 @@ fn formats(xml: &str) -> Vec<Format> {
 }
 
 /// What a number format shows: Excel's built-in ones by number (ECMA-376, 18.8.30), others by their code.
-fn format_of(id: u32, code: Option<&str>) -> Format {
+pub(crate) fn format_of(id: u32, code: Option<&str>) -> Format {
     match id {
         9 => return Format::Percent(0),
         10 => return Format::Percent(2),
@@ -288,7 +288,7 @@ fn value(c: &Cell, shared: &[String], formats: &[Format], date1904: bool) -> Str
 }
 
 /// A number as its format shows it: a date ("2026-10-01"), a time ("18:30"), both, a percentage, or as it is.
-fn number(v: &str, format: Format, date1904: bool) -> String {
+pub(crate) fn number(v: &str, format: Format, date1904: bool) -> String {
     let Ok(n) = v.parse::<f64>() else { return String::from(v) };
     match format {
         Format::Percent(d) => format!("{:.*}%", d as usize, n * 100.0),

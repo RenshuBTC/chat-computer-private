@@ -1386,11 +1386,14 @@ pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>, blin
                 }
                 said(out)
             }
-            Kind::Office => {
+            which @ (Kind::Office | Kind::OldOffice) => {
                 let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
                 match office::read(&data) {
                     Ok((kind, words)) => said(part_of(&words, from, &format!("{name} ({}, {}, changed {}), its words", kind.name(), size(f.size), date(e.modified)))),
-                    Err(office::Error::Zip(zip::Error::Encrypted)) => said(format!("{name}: a password protects it, so it can't be read here.")),
+                    Err(office::Error::Encrypted | office::Error::Zip(zip::Error::Encrypted)) => said(format!("{name}: a password protects it, so it can't be read here.")),
+                    Err(office::Error::NotOffice) if which == Kind::OldOffice => {
+                        said(format!("{name} ({}) is a compound file (as Outlook's messages and some programs' files are), not a Word, Excel or PowerPoint file: Chat Computer's own system can't read inside it.", size(f.size)))
+                    }
                     Err(_) => said(format!("{name} ({}) should be a Word, Excel or PowerPoint file, but Chat Computer's own system can't read it: it may be damaged.", size(f.size))),
                 }
             }
@@ -1411,14 +1414,6 @@ pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>, blin
                     }
                     Err(_) => said(format!("{name} ({}) isn't a ZIP archive Chat Computer's own system can read: it may be damaged.", size(f.size))),
                 }
-            }
-            Kind::OldOffice => {
-                let ext = rel.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-                said(if ext.ends_with('x') || ext.ends_with('m') {
-                    format!("{name}: a password protects it, so it can't be read here.")
-                } else {
-                    format!("{name} ({}) is in Office's format from before 2007 (.doc, .xls, .ppt), which Chat Computer's own system can't read inside yet.", size(f.size))
-                })
             }
             Kind::Media(what) => said(format!("{name} ({}) is {what}, which Chat Computer's own system can't open yet.", size(f.size))),
             Kind::Other => {
@@ -1525,11 +1520,12 @@ pub fn view(path: &str) -> Result<View, String> {
                     Err(_) => note(String::from("It should be a PDF, but Chat Computer's own system can't read it: it may be damaged.")),
                 }
             }
-            Kind::Office => {
+            which @ (Kind::Office | Kind::OldOffice) => {
                 let data = whole(fs, p, &f, MOST_OFFICE).map_err(fail)?;
                 match office::read(&data) {
                     Ok((_, text)) => words(&text),
-                    Err(office::Error::Zip(zip::Error::Encrypted)) => note(String::from("A password protects it, so it can't be opened here.")),
+                    Err(office::Error::Encrypted | office::Error::Zip(zip::Error::Encrypted)) => note(String::from("A password protects it, so it can't be opened here.")),
+                    Err(office::Error::NotOffice) if which == Kind::OldOffice => note(String::from("It's a compound file (as Outlook's messages and some programs' files are), not a Word, Excel or PowerPoint file: it can't be opened here.")),
                     Err(_) => note(String::from("It should be a Word, Excel or PowerPoint file, but it can't be read: it may be damaged.")),
                 }
             }
@@ -1546,7 +1542,6 @@ pub fn view(path: &str) -> Result<View, String> {
                     Err(_) => note(String::from("It isn't a ZIP archive Chat Computer's own system can read: it may be damaged.")),
                 }
             }
-            Kind::OldOffice => note(String::from("It's in Office's format from before 2007 (or a password protects it), which Chat Computer's own system can't read inside yet.")),
             Kind::Media(what) => note(format!("It's {what}, which Chat Computer's own system can't play yet.")),
             Kind::Other => {
                 let mut buf = vec![0u8; f.size.min(VIEW_WORDS as u64) as usize];

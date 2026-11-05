@@ -201,8 +201,8 @@ drivers.
     is taken out of the message there and never given to the model, shown or kept (so it's typed again after a
     restart);
     a wrong one is refused, naming the key ID that unlocks the drive (each locked drive is tried; a USB drive's
-    "BitLocker To Go" too). Not yet: a drive Windows is still encrypting as it's written to, files Windows compressed
-    itself ("Compact OS", mostly its own), and Office's files from before 2007;
+    "BitLocker To Go" too). Not yet: a drive Windows is still encrypting as it's written to, and files Windows
+    compressed itself ("Compact OS", mostly its own);
   * the sound controller (`sound/hda.rs`): HD Audio, Intel's High Definition Audio, which nearly every PC's chipset
     has, Intel's and AMD's alike. It's reset and its codecs found on its link; the first codec with an audio function
     that has outputs is used (a graphics card's controller has only its screens' digital ones). Each codec
@@ -484,8 +484,15 @@ drivers.
   enough XML of its own: a document's paragraphs (headings and lists by their styles, tables, text boxes once,
   tracked deletions and field codes left out, footnotes after), a workbook's cells (shared strings, number formats
   that make dates, times and percentages, both of Excel's date systems, formulas), a presentation's slides in order
-  with their notes. Tested against documents made by python-docx, openpyxl and python-pptx, the same saved by
-  LibreOffice, and documents written by hand with what programs write less often (`office/tests/make.py`).
+  with their notes. Office's files from before 2007 too (.doc, .xls, .ppt: compound files, `cfb.rs`, read into the
+  same text): Word 97 to 2003's piece table, paragraphs' properties and styles (Word 6 and 95's text more simply),
+  Excel's BIFF8 records (shared strings running across records, formulas written out from their tokens, shared
+  formulas) and BIFF5's, PowerPoint's slides found through the last edit's persist directory, with their outline,
+  bullets' levels, tables and notes; a file a password protects says so. Tested against documents made by
+  python-docx, openpyxl and python-pptx, the same saved by LibreOffice (as .docx, .xlsx and .pptx, and as .doc, .xls
+  and .ppt, which read back the same), documents written by hand with what programs write less often
+  (`office/tests/make.py`), and damaged ones (every byte changed in turn: an error or words, never a crash); and
+  tried on files Word, Excel and PowerPoint made, Word 6's and 95's among them (Apache POI's test files).
 * `pdf/` reads the words in PDFs, its own way from ISO 32000, and makes a page's pictures one picture for the model
   to see: the file's objects through its cross-reference tables
   or streams (updates appended to it followed, objects packed in object streams), or, in a damaged file (offsets
@@ -825,10 +832,11 @@ writes for each person, in place of Ubuntu's catalogue.
    the start-up partition, ✓ Windows' drive read (NTFS), for the model to read the person's files (and its own).
    Checked in virtual PCs. ✓ Word, Excel and PowerPoint files' words. ✓ A drive BitLocker
    encrypts, with its recovery key. ✓ The PC's other drives (NVMe and SATA), by Windows' letters. ✓ USB drives
-   (sticks, external disks, card readers) as they come and go, and exFAT and FAT besides NTFS. To do: USB 3 hubs'
+   (sticks, external disks, card readers) as they come and go, and exFAT and FAT besides NTFS. ✓ Office's files from
+   before 2007 (.doc, .xls, .ppt). To do: USB 3 hubs'
    own side (for USB 3 drives behind one), UAS (USB-attached SCSI, faster), memory card
    readers on PCI Express (Realtek's, in many laptops), a drive still being encrypted as it's written to, unlocking with the PC's TPM (for Chat Computer's own start-up,
-   measured), files Windows compressed itself (XPRESS and LZX), Office's files from before 2007, Chat Computer's own
+   measured), files Windows compressed itself (XPRESS and LZX), Chat Computer's own
    file system for memory and logs, and keeping them encrypted.
 6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e, igb); the internet over
    a USB cable (USB Ethernet adapters and Android phones' tethering: CDC ECM, NCM and RNDIS); written, not yet tried

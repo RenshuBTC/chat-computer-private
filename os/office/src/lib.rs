@@ -8,18 +8,25 @@
 //! part which others go with it (its styles, a workbook's sheets and their shared strings, a presentation's slides
 //! and their notes), in "relationships" (a part's `_rels/<name>.rels`). OpenDocument keeps the words in content.xml.
 //!
-//! As ECMA-376 and OASIS's OpenDocument standard describe them. What isn't words (pictures, charts, fonts, formatting)
-//! is passed over, except pictures' descriptions on slides. Damaged files give an error, never a crash, and what
-//! comes out is capped.
+//! Office's files from before 2007 (.doc, .xls, .ppt) are compound files (`cfb`): Word's (`doc`), Excel's (`xls`)
+//! and PowerPoint's (`ppt`) binary formats, read into the same text.
+//!
+//! As ECMA-376, OASIS's OpenDocument standard and Microsoft's [MS-CFB], [MS-DOC], [MS-XLS] and [MS-PPT] describe
+//! them. What isn't words (pictures, charts, fonts, formatting) is passed over, except pictures' descriptions on
+//! slides. Damaged files give an error, never a crash, and what comes out is capped.
 
 #![no_std]
 
 extern crate alloc;
 
+mod cfb;
+mod doc;
 mod excel;
 mod odf;
+mod ppt;
 mod slides;
 mod word;
+mod xls;
 mod xml;
 
 #[cfg(test)]
@@ -32,8 +39,10 @@ use zip::Archive;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
-    /// Not a Word, Excel, PowerPoint or OpenDocument file (or a password protects it: then it isn't a ZIP).
+    /// Not a Word, Excel, PowerPoint or OpenDocument file.
     NotOffice,
+    /// A password protects it (its words are encrypted).
+    Encrypted,
     /// The ZIP couldn't be read.
     Zip(zip::Error),
     /// A part that has to be there isn't, or isn't XML.
@@ -71,6 +80,9 @@ const MOST_TEXT: usize = 8 << 20;
 
 /// What `data` is, and its words.
 pub fn read(data: &[u8]) -> Result<(Kind, String), Error> {
+    if data.starts_with(&cfb::SIGNATURE) {
+        return old(data);
+    }
     let archive = Archive::open(data).map_err(|_| Error::NotOffice)?;
     // OpenDocument's first file, "mimetype", says what it is.
     if let Some(e) = archive.find("mimetype") {
@@ -95,6 +107,25 @@ pub fn read(data: &[u8]) -> Result<(Kind, String), Error> {
         _ => return Err(Error::NotOffice),
     };
     Ok((kind, text))
+}
+
+/// A compound file: Word, Excel or PowerPoint's from before 2007, by the stream it has; or an Office Open XML file
+/// a password protects (its package encrypted, in a compound file).
+fn old(data: &[u8]) -> Result<(Kind, String), Error> {
+    let cf = cfb::Compound::open(data).ok_or(Error::Damaged)?;
+    if cf.has("EncryptedPackage") || cf.has("EncryptionInfo") {
+        return Err(Error::Encrypted);
+    }
+    if cf.has("WordDocument") {
+        return Ok((Kind::Word, doc::read(&cf)?));
+    }
+    if cf.has("Workbook") || cf.has("Book") {
+        return Ok((Kind::Excel, xls::read(&cf)?));
+    }
+    if cf.has("PowerPoint Document") {
+        return Ok((Kind::PowerPoint, ppt::read(&cf)?));
+    }
+    Err(Error::NotOffice)
 }
 
 /// A part, as text (None if the package hasn't got it).

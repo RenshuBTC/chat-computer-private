@@ -168,6 +168,7 @@ if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
             catch { Write-Host ('short path: Remove-Item -Recurse failed here: ' + $_.Exception.Message) }
             # Setup spells %TEMP% out at the start.
             $savedTmp = $env:TMP
+            $env:TEMP = $short
             $env:TMP = $short
             Use-LongTempPath
             Assert-Equal $long.ToLowerInvariant() $env:TEMP.ToLowerInvariant() 'short path: %TEMP% spelled out'
@@ -597,6 +598,18 @@ Assert-Equal 'NEW' (Select-OwnKey -Keys @($kOld, $kNew)).Thumbprint 'own key: Se
 Assert-Equal $null (Select-OwnKey -Keys @($kOld)) 'own key: only an untrusted ClaudeOS key: a new one is made'
 Assert-Equal $null (Select-OwnKey -Keys @()) 'own key: none yet'
 Assert-True (Wait-OwnCountdown 10 -Unattended) 'own restart: no countdown to wait through, unattended'
+# ClaudeOS's entries in the power-on menu: its own system's and installers', and Ubuntu's boot loader only when it's
+# ClaudeOS's (its mark is on the start-up partition); never Windows' or Chat Computer's own system's.
+$menu = @(
+    [pscustomobject]@{ Id = '{bootmgr}'; Path = '\EFI\Microsoft\Boot\bootmgfw.efi' },
+    [pscustomobject]@{ Id = '{a}'; Path = '\EFI\ubuntu\shimx64.efi' },
+    [pscustomobject]@{ Id = '{b}'; Path = '\EFI\chatcomputer-own\chatcomputer.efi' },
+    [pscustomobject]@{ Id = '{c}'; Path = '\EFI\claudeos-own\claudeos.efi' },
+    [pscustomobject]@{ Id = '{d}'; Path = '\EFI\ChatComputer-Setup\shimx64.efi' },
+    [pscustomobject]@{ Id = '{e}'; Path = '' })
+Assert-Equal '{c},{d}' ((Select-OldClaudeOsEntries -Entries $menu -Ubuntu $false | ForEach-Object { $_.Id }) -join ',') 'ClaudeOS out of the menu: not a Ubuntu of the person''s own'
+Assert-Equal '{a},{c},{d}' ((Select-OldClaudeOsEntries -Entries $menu -Ubuntu $true | ForEach-Object { $_.Id }) -join ',') 'ClaudeOS out of the menu: Ubuntu''s boot loader too, when it''s ClaudeOS''s'
+Assert-Equal 0 (Select-OldClaudeOsEntries -Entries @() -Ubuntu $true).Count 'ClaudeOS out of the menu: none there'
 # Its model: the one Chat Computer's app got ready, picked as the kernel picks (os/kernel/src/assistant.rs).
 function New-FakeModel([string]$Name, [int64]$Length) { [pscustomobject]@{ Name = $Name; Length = $Length; FullName = ('C:\m\' + $Name) } }
 Assert-Equal 'Qwen3.5 4B' (Get-OwnModelLabel 'qwen3.5-4b.ccm') 'own model: its name'

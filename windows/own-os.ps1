@@ -12,10 +12,15 @@ scratch) on this PC, without a USB stick:
      when this runs again) and its log file (read back when this next runs, to last-run.txt in its work folder, and
      said in a line) on the partition the PC starts from (\EFI\chatcomputer-own), next to Windows' own files,
      and keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu), to choose whenever you like,
-  5. restarts into it after a 10-second countdown (any key stays in Windows; with no model yet, it opens
-     chatcomputer.ai/get to get the app, which gets it, and doesn't restart).
-One double-click, no questions: with Secure Boot on and a key the PC doesn't trust yet, it first needs one approval
-in the PC's setup screen (or Secure Boot turned off there), and asks which. The restart after it is Windows.
+     taking ClaudeOS's old entries out of it (its own system's, its installers', and "Ubuntu" when that's the
+     Ubuntu-based ClaudeOS: its mark is on the start-up partition), with Windows first; their files stay,
+  5. restarts into it when you press Enter (closing the window stays in Windows). With no model on the PC yet, it
+     starts all the same and says how to get one.
+Windows' permission, then Enter: nothing else is asked. With Secure Boot on and no key the PC trusts (it reuses
+the one approved for ClaudeOS), the key needs approving once in the PC's setup screen: it shows the steps (the
+certificate is at the top of the start-up partition, the first file the setup screen lists), and Enter restarts
+there. From then on, Enter here or "Chat Computer (own system)" in the boot menu starts it. The restart after it
+is Windows.
 
   -Remove       take it off this PC again
   -Unattended   answer yes to everything (for tests); add -NoRestart so nothing restarts
@@ -70,11 +75,8 @@ try {
     try { $host.UI.RawUI.WindowTitle = 'Chat Computer Own System' } catch { $null = $_ }
     Write-Line ''
     Write-Host 'Chat Computer''s own system' -ForegroundColor White
-    Write-Line 'This starts Chat Computer''s own operating system on this PC: its own start-up and kernel, written from'
-    Write-Line 'scratch, with nothing from Linux or other projects. You type to Chat Computer there, and its own model'
-    Write-Line '(the one Chat Computer''s app gets ready) answers on the PC itself: no account, no internet, nothing to pay.'
-    Write-Line 'No USB stick is needed, and Windows isn''t changed: a few small files go on the partition the PC starts'
-    Write-Line 'from, next to Windows'' own files.'
+    Write-Line 'This starts Chat Computer''s own operating system on this PC. Windows isn''t changed: a few small files go'
+    Write-Line 'on the partition the PC starts from, next to Windows'' own files.'
     # (A double-click starts it, with the newest files in this folder, every time: taking it off is -Remove.)
     if ($Remove) {
         Remove-OwnSystem -Unattended:$Unattended -WorkDir $WorkDir

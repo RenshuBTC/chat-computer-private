@@ -55,6 +55,7 @@ if ($fw -eq 'UEFI') {
         Check (Test-Path -LiteralPath $file) 'the signed file is on the start-up partition'
         if (Test-Path -LiteralPath $file) { Check (Test-PeSigned $file) 'and it is signed' }
         Check (Test-Path -LiteralPath (Join-Path $dir $Script:OwnCert)) 'the certificate is next to it'
+        Check (Test-Path -LiteralPath (Join-Path $m.Root $Script:OwnCert)) 'and at the partition''s top, for the setup screen'
         Check (Test-Path -LiteralPath ([IO.Path]::Combine($m.Root, 'EFI', 'Microsoft', 'Boot', 'bootmgfw.efi'))) 'Windows'' own start-up file is still there'
         # The memory file (the conversation, kept across restarts): there, with the settings' id in its tags, unless
         # the partition is short of room.
@@ -90,6 +91,7 @@ if ($fw -eq 'UEFI') {
     $m = Mount-EspPartition $esp
     try {
         Check (-not (Test-Path -LiteralPath ([IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir)))) 'its folder is gone from the start-up partition'
+        Check (-not (Test-Path -LiteralPath (Join-Path $m.Root $Script:OwnCert))) 'and the certificate at its top'
     } finally {
         Dismount-EspPartition $m
     }

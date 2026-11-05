@@ -514,9 +514,12 @@ questions (Windows asks for permission, as for any change to how the PC starts).
    there and starts it.
 
 With Secure Boot on and no key the PC trusts yet, the PC first has to trust Chat Computer's key. That takes one
-approval in the PC's setup screen: Secure Boot, then Key Management, then Authorized Signatures (db), then Append
-`ChatComputer.cer`. You can turn Secure Boot off there instead. The script asks which, shows the steps and restarts
-into the setup screen.
+approval in the PC's setup screen: Secure Boot (Secure Boot Mode: Custom), then Key Management, then Authorized
+Signatures (db), then Append `ChatComputer.cer`, which setup also puts at the top of the start-up partition, the
+first list of files the setup screen shows. Setup asks nothing: it shows the steps in the words of the
+motherboard's maker's setup screen (MSI's, Gigabyte's, or the usual ones), and Enter restarts into the setup
+screen. From then on, "Chat Computer (own system)" in the boot menu starts it, with Secure Boot still on. A PC that
+can't add a key can have Secure Boot turned off there instead; the steps say so.
 
 Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock's), and so do most
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:

@@ -7,15 +7,18 @@ scratch) on this PC, without a USB stick:
   2. signs Chat Computer's start-up file with a key made on this PC (the key never leaves it): the one the PC's
      Secure Boot already trusts, where there is one (ClaudeOS's, made by this before the name changed, too),
   3. says which model it answers with there: the one Chat Computer's app got ready on this PC (free, run on the PC
-     itself, so nothing you type leaves it),
+     itself, so nothing you type leaves it), or Meta's Muse Spark with a key for Meta's Model API (asked for only
+     when there's neither yet; kept for next time),
   4. puts the signed file, its settings, its memory file (where it keeps the conversation across restarts; kept
      when this runs again) and its log file (read back when this next runs, to last-run.txt in its work folder, and
      said in a line) on the partition the PC starts from (\EFI\chatcomputer-own), next to Windows' own files,
      and keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu), to choose whenever you like,
   5. restarts into it after a 10-second countdown (any key stays in Windows; with no model yet, it opens
      chatcomputer.ai/get to get the app, which gets it, and doesn't restart).
-One double-click, no questions: with Secure Boot on and a key the PC doesn't trust yet, it first needs one approval
-in the PC's setup screen (or Secure Boot turned off there), and asks which. The restart after it is Windows.
+One double-click, no questions: with Secure Boot on and a key the PC doesn't trust yet, it first needs the key
+approved once in the PC's setup screen. It shows the steps (the certificate is at the top of the start-up
+partition, the first thing the setup screen's file list shows), and Enter restarts into the setup screen. From
+then on, "Chat Computer (own system)" in the boot menu starts it, every time. The restart after it is Windows.
 
   -Remove       take it off this PC again
   -Unattended   answer yes to everything (for tests); add -NoRestart so nothing restarts

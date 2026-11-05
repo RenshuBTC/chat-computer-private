@@ -88,7 +88,8 @@ chat-computer/
                             memory.bin (made at full size, 4 MiB, else 1 MiB, only if 16 MiB stay free; kept when
                             its first and last tags carry the settings' id), adds "Chat Computer (own system)" last in the power-on
                             menu and sets it as bootsequence (once); with Secure Boot on and the key not in db,
-                            guides approving it (db Append) or turning Secure Boot off, then shutdown /r /fw
+                            shows the steps for approving it (db Append, the certificate also at the partition's
+                            top) and, after Enter, shutdown /r /fw
   requirements-linux.txt    Pinned Python deps for the Linux runtime
   requirements-dev.txt      What its tests need besides those (pytest, the stand-in model server's aiohttp); the runtime's
                             tests run as .github/workflows/python.yml does: a venv with the system's python3-gi and

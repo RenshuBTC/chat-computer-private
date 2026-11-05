@@ -24,7 +24,6 @@ FONTS = ["Lora.ttf", "Lora-Italic.ttf", "AtkinsonHyperlegibleMono.ttf",
          "AtkinsonHyperlegibleMono-Italic.ttf", "OFL-Lora.txt", "OFL-AtkinsonHyperlegibleMono.txt",
          "README.md"]
 TITLE = "Chat Computer"
-DOMAIN = "chatcomputer.ai"                 # where GitHub Pages serves docs/
 DESCRIPTION = ("Chat Computer runs a whole computer for you, free, with its own model on your computer: you talk, type "
                "or touch, and it does things for you. Try its screen here, in your browser.")
 
@@ -59,7 +58,8 @@ def files() -> dict[Path, bytes]:
     for name in FONTS:
         out[DEMO / "fonts" / name] = (ASSETS / "fonts" / name).read_bytes()
     out[DOCS / ".nojekyll"] = b""            # GitHub Pages serves the files as they are
-    out[DOCS / "CNAME"] = DOMAIN.encode()    # ...at this address (as GitHub writes it: the name alone)
+    # (No CNAME: which address the site is served at is set where it's published, in the repository's Pages settings,
+    # and chatcomputer.ai is published from elsewhere now.)
     return out
 
 

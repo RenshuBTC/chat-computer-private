@@ -17,8 +17,8 @@ Anthropic (Claude), OpenAI, Meta, Moonshot (Kimi), xAI (Grok), Alibaba (Qwen), D
 **[Try it in your browser](https://chatcomputer.ai)**: Chat Computer's own screen (see
 [The demo](#the-demo)).
 
-**[Get it](https://chatcomputer.ai/get)**: on Windows, one Setup, which asks how you want Chat Computer: as a Chrome
-extension, as your web browser, as an app, or as its own system, next to Windows. On a Mac, the same from the Mac app's
+**[Get it](https://chatcomputer.ai/get)**: on Windows, one Setup, which asks how you want Chat Computer: as an app,
+or as its own system, next to Windows. On a Mac, the same from the Mac app's
 next version; until then /get has the Mac app (see [The apps](#the-apps)).
 
 * **On a Windows PC** it sits next to Windows. When you press the power button, Chat Computer starts by
@@ -510,27 +510,9 @@ Chat Computer:
   app without asking for Open Anyway (the disk image is still there to download, and then macOS does ask). The app's
   first page (`apps/desktop/start`) asks **How do you want Chat Computer?** (on a Mac, from the app's next build:
   the disk image on /get is still the earlier app, and the page says so), and the app does it
-  (`apps/desktop/src-tauri/src/ways.rs`), keeps the answer, and starts there next time: on the conversation (the app,
-  the browser), or on the way's steps (the extension, the own system). To change it: type **/** in Chat Computer and
+  (`apps/desktop/src-tauri/src/ways.rs`), keeps the answer, and starts there next time: on the conversation (the
+  app), or on the way's steps (the own system). To change it: type **/** in Chat Computer and
   choose **How you have Chat Computer**, or open the app again.
-  * **Chrome extension**: the extension (`apps/chrome`, which comes with the app) is put in a folder of the app's
-    own that stays (`Chrome extension` in its data folder), the folder's path is copied, Chrome is opened (at
-    `docs/get/chrome.html`, the same steps, with the folder's path after `#folder=`, which a browser doesn't send to
-    the site), and the page shows the three steps: go to chrome://extensions, turn on Developer mode, choose Load
-    unpacked and that folder (paste its path). Chrome adds an extension by itself only from its Web Store, and doesn't let another app
-    open chrome://extensions (it drops such an address from its command line: tried), so those steps are yours. In
-    the Chrome Web Store it would be one click, which needs the owner's developer account.
-  * **Browser**: the app as your web browser. Sites stay open in tabs, in a row above the middle (each a view of the
-    web of its own in the app, `open_tab`, shown in turn): back and forward, the conversation's own tab, the sites'
-    tabs with their x, and + for a new tab (the conversation, its box ready for an address). An address typed opens
-    in a new tab, and so does a link, a link for a new window and a link clicked in another app; what Chat Computer
-    opens goes in the tab it opened the last in. Ctrl+T, Ctrl+W and Ctrl+Tab work too. The app is listed with the
-    system as a browser: on Windows for your account (StartMenuInternet, Capabilities, RegisteredApplications and the
-    ChatComputerURL kind of link, under HKEY_CURRENT_USER; one Chat Computer at a time, so a link clicked while it
-    runs reaches the one running; taken out again by another way, and by the uninstaller), on a Mac by its
-    Info.plist (http and https; macOS sends the link to the app). The page offers to make it the default browser:
-    Windows doesn't let an app do that itself, so Settings opens at Default apps for Chat Computer, where you choose
-    it; a Mac asks you to confirm (LSSetDefaultHandlerForURLScheme).
   * **App**: the app as it was (below).
   * **Its own system**: Chat Computer Setup, which comes with the app (the repository's files it uses, put beside
     the app by `scripts/build_apps.py desktop --for windows|mac`: the repository is private, so its archive on
@@ -540,12 +522,6 @@ Chat Computer:
     [Installing on a Windows PC](#installing-on-a-windows-pc)); on a Mac with M1, M2 or M3, `mac/setup.sh`, in
     Terminal (see [Installing on a Mac](#installing-on-a-mac)). On another Mac the page says plainly why it can't.
 
-* **Chrome**: an extension (`apps/chrome`) that shows Chat Computer in Chrome's side panel. The panel is the
-  website itself (chatcomputer.ai, in its frame with `?app=chrome`, so it's always the newest), at a side panel's
-  text size, and the sites asked for open in real Chrome tabs, any site, without a click: the website asks the
-  extension, which opens them (only chatcomputer.ai can ask, and only for a web address). It asks for one
-  permission, the side panel. Add to Chrome downloads it as a zip (`scripts/build_apps.py` makes it): unzip it, open
-  chrome://extensions, turn on Developer mode and choose Load unpacked, until it's in the Chrome Web Store.
 * **Windows and Mac**: the Chat Computer app (`apps/desktop`, made with Tauri): the website's page, bundled into
   a window of its own (so nothing that runs with the app's powers comes from elsewhere), with what a website can't
   do. Any site opens right in the middle, in the app's own browser view laid over the frame the page draws (sites
@@ -581,13 +557,6 @@ Chat Computer:
   signed with one self-signed identity, kept as the repository's secrets, it stays the same app: run
   `bash apps/desktop/make-signing-identity.sh` once on a Mac (it makes the identity and gives GitHub the secrets
   MAC_SIGNING_P12 and MAC_SIGNING_PASSWORD, which the workflow then signs with).
-* **Android**: the Chat Computer app (`apps/android`), chatcomputer.ai full screen in Chrome, with no address bar (a
-  Trusted Web Activity: the site says the app is its own, in `docs/.well-known/assetlinks.json`, by its signing
-  key's fingerprint). Downloaded from /get as an APK until it's on Google Play: Android asks once to allow
-  installing from the browser. Its signing key is kept outside the repository.
-* **iPhone**: the Chat Computer app (`apps/ios`), chatcomputer.ai full screen, other sites in Safari's own view
-  over it; built for the simulator by `.github/workflows/ios.yml` (with a picture of it running). Coming to the
-  App Store, which needs Apple's developer account.
 
 ## For the curious
 

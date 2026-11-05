@@ -1,3 +1,0 @@
-/* Chat Computer's own page fills the side panel, on its own background while it loads. */
-html, body { margin: 0; height: 100%; overflow: hidden; background: #191919; }
-iframe { display: block; width: 100%; height: 100%; border: 0; }

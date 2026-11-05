@@ -22,13 +22,7 @@ fn main() {
         "chatgpt_ask",
         "way_status",
         "choose_way",
-        "make_default_browser",
         "show_folder",
-        "open_tab",
-        "show_tab",
-        "close_tab",
-        "tab_back",
-        "take_opening",
         "messages_found",
     ])))
     .expect("tauri-build couldn't run");

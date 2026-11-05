@@ -62,6 +62,10 @@ starts 20 seconds before a minute ends). Pictures and the kernel's log go to out
                                      its instructions), then the PC turned off (ACPI's S5); the memory
                                      file's two copies, and nothing else on the disk changed (fsck.vfat too, so also
                                      needs dosfstools, mtools and gdisk)
+    ./check.py --apps                an app the model makes (make_app, a test's script in place of the model): shown
+                                     in the middle at once, what its script keeps (localStorage) in the memory file,
+                                     and after a restart in the model's instructions and opened again (open_app) with
+                                     its data; it can't reach the internet
     ./check.py --files               Windows' drive read: a disk like a PC's, with Windows' NTFS partition after the
                                      start-up one (the ntfs crate's test volume), and a test's script in place of
                                      the model that lists a folder, reads files (UTF-8 and UTF-16, Office's files and a
@@ -2063,6 +2067,88 @@ def remember(args) -> list[str]:
     return problems
 
 
+# The app the test's script has the model make: its data (how often it's been opened) kept in localStorage, the
+# number big on a teal page; and whether it reaches the internet (it mustn't).
+APP_HTML = """<!doctype html><html><head><title>Counter</title><style>body { margin: 0; background: #2a9d8f; color: #fff;
+font: 24px sans-serif } #n { font-size: 48px; padding: 40px }</style></head><body><div id="n">?</div><script>
+var n = Number(localStorage.getItem('opens') || 0) + 1;
+localStorage.setItem('opens', String(n));
+document.getElementById('n').textContent = 'Opened ' + n + (n == 1 ? ' time' : ' times');
+console.log('opens ' + n);
+fetch('https://www.example.com/').then(function () { console.log('the app reached the internet'); },
+  function () { console.log('the app has no internet'); });
+</script></body></html>"""
+
+
+def apps_check(args) -> list[str]:
+    """An app the model makes for the person (make_app; a test's script in place of the model): shown in the middle
+    at once, its script's data (localStorage) kept in the memory file; after a restart, the app in the model's
+    instructions, opened again (open_app) with its data, the Apps list beside it; and no internet for it."""
+    tmp = Path(tempfile.mkdtemp(prefix="cc-apps-"))
+    script = {
+        "app": [{"calls": [["make_app", {"name": "Counter", "html": APP_HTML}]]}, {"text": "Here's your counter."}],
+        "open": [{"calls": [["open_app", {"name": "counter"}]]}, {"text": "It's open."}],
+        "else": [{"text": "OK."}],
+    }
+    script_build(script, tmp)
+    problems: list[str] = []
+    teal = (0x2A, 0x9D, 0x8F)
+    try:
+        disk = tmp / "nvme.img"
+        settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\nlog-id = {LOG_ID:08x}\r\n"
+        files = memory_disk(disk, BUILT, settings, MEMORY_ID)
+        texts, held = [], []
+        for start, question in ((1, "app"), (2, "open")):
+            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, "nvme"))
+            picture = None
+            try:
+                if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                    print(pc.text())
+                    return problems + [f"start {start}: the kernel didn't say it was ready"]
+                time.sleep(1)
+                monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
+                wait_for(pc.log, ("site: console: the app has no internet", "site: console: the app reached"), 90)
+                # (The conversation kept when the answer's over, and the app's data with it, or a few seconds after
+                # it changed if that was later.)
+                wait_for(pc.log, ("memory: the conversation kept",), 60)
+                time.sleep(4.5)
+                picture = pc.settled_picture(f"apps-{start}")
+            finally:
+                pc.stop()
+            texts.append(pc.text())
+            print(pc.text())
+            fs_problems, memory_file = esp_now(disk, files)
+            problems += [f"start {start}: {p}" for p in fs_problems]
+            try:
+                kept = kept_in(memory_file, MEMORY_ID)
+            except ValueError as e:
+                problems.append(f"start {start}: {e}")
+                kept = None
+            held.append(json.loads(kept[1]) if kept else {})
+            if picture is None or sum(1 for p in picture.getdata() if all(abs(a - b) <= 6 for a, b in zip(p, teal))) < 50000:
+                problems.append(f"start {start}: the app isn't on the screen")
+        first, second = texts
+        for note in ("model: uses make_app", "model: the Counter app", "site: Opened the Counter app", "site: console: opens 1",
+                     "site: console: the app has no internet"):
+            if note not in first:
+                problems.append(f"start 1: the log doesn't say {note!r}")
+        for note in ("model: 1 app from before", "model: uses open_app", "site: Opened the Counter app", "site: console: opens 2"):
+            if note not in second:
+                problems.append(f"start 2: the log doesn't say {note!r}")
+        for start, kept in ((1, held[0]), (2, held[1])):
+            want = [{"name": "Counter", "html": APP_HTML, "data": {"opens": str(start)}}]
+            if kept.get("apps") != want:
+                problems.append(f"start {start}: the memory file's apps are {kept.get('apps')!r}"[:2000])
+        asked = [plain(r) for r in logged(second, "asked")]
+        line = "The apps you've made for the person (make_app; open_app opens one): Counter."
+        if not asked or line not in asked[0][0]["content"]:
+            problems.append("after the restart, the app wasn't in the model's instructions")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
 def fnv1a(data: bytes) -> int:
     """FNV-1a, 64 bits: the hash the ntfs crate's test volumes list each file's bytes by."""
     h = 0xCBF29CE484222325
@@ -3347,6 +3433,7 @@ def main() -> int:
     ap.add_argument("--claude", action="store_true", help="Claude answering with your key, against a stand-in for its API")
     ap.add_argument("--site", action="store_true", help="a website typed in the box: shown, typed in, a link clicked")
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
+    ap.add_argument("--apps", action="store_true", help="an app the model makes: shown, its data kept across a restart")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
     ap.add_argument("--microphone", action="store_true", help="what QEMU's HD Audio inputs hear, fed a tone")
     ap.add_argument("--listen", action="store_true", help="speech recognition: Windows+H, a voice heard, the same as the engine on Linux")
@@ -3381,6 +3468,8 @@ def main() -> int:
         problems = chat(args) + chat_limits(args)
     elif args.remember:
         problems = remember(args)
+    elif args.apps:
+        problems = apps_check(args)
     elif args.sound:
         problems = sound(args)
     elif args.microphone:

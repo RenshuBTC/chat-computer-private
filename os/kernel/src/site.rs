@@ -38,8 +38,50 @@ const FRAME_MS: u64 = 16;
 /// The most sites whose scripts' storage (localStorage) is kept while Chat Computer runs.
 const MOST_STORED: usize = 64;
 
-/// Sites' scripts' storage (localStorage), by origin: kept from page to page, while Chat Computer runs.
+/// Sites' scripts' storage (localStorage), by origin: kept from page to page, while Chat Computer runs (an app's,
+/// across restarts too, with the app: assistant.rs keeps it).
 static STORED: crate::sync::SpinLock<BTreeMap<String, BTreeMap<String, String>>> = crate::sync::SpinLock::new(BTreeMap::new());
+
+/// Where the apps the model makes are, as pages: each at a host of its own under this name (which isn't one on the
+/// internet), so each has its own storage.
+const APPS_HOST: &str = "apps.chatcomputer";
+
+/// An app's name as part of its address: lower case letters and digits, words joined by hyphens.
+fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = String::from(out.trim_end_matches('-'));
+    if out.is_empty() { String::from("app") } else { out }
+}
+
+/// An app's address, and its origin (where its storage is kept).
+pub fn app_url(name: &str) -> Url {
+    Url { host: format!("{}.{APPS_HOST}", slug(name)), port: 443, path: String::from("/") }
+}
+
+pub fn app_origin(name: &str) -> String {
+    format!("https://{}.{APPS_HOST}", slug(name))
+}
+
+fn is_app(url: &Url) -> bool {
+    url.host.ends_with(&format!(".{APPS_HOST}"))
+}
+
+/// What a site's (or an app's) scripts keep in localStorage now.
+pub fn storage_of(origin: &str) -> Option<BTreeMap<String, String>> {
+    STORED.lock().get(origin).cloned()
+}
+
+/// What an app kept before the last restart, back in its storage.
+pub fn restore_storage(origin: &str, data: BTreeMap<String, String>) {
+    STORED.lock().insert(String::from(origin), data);
+}
 /// The most pages kept to go back to.
 const MOST_BACK: usize = 50;
 /// While a page loads, it's laid out again at most this often (each style sheet or picture that comes changes it).
@@ -110,6 +152,8 @@ pub struct Site {
     frame_at: u64,
     /// Its pages' scripts' sessionStorage, by origin (for as long as the site is open).
     session: BTreeMap<String, BTreeMap<String, String>>,
+    /// The app it shows, if it's one the model made (its name): it can't reach the internet.
+    app: Option<String>,
 }
 
 impl Site {
@@ -126,6 +170,14 @@ impl Site {
     pub fn local(url: Url, html: &str) -> Site {
         let mut s = Site::blank(url.clone());
         s.page_came(crate::web::Page { url, kind: String::from("text/html; charset=utf-8"), bytes: html.as_bytes().to_vec(), cut: false, status: 200, headers: Vec::new() }, None);
+        s
+    }
+
+    /// An app the model made: its page shown as a site's is, at its own address.
+    pub fn app(name: &str, html: &str) -> Site {
+        let mut s = Site::blank(app_url(name));
+        s.app = Some(String::from(name));
+        s.page_came(crate::web::Page { url: app_url(name), kind: String::from("text/html; charset=utf-8"), bytes: html.as_bytes().to_vec(), cut: false, status: 200, headers: Vec::new() }, None);
         s
     }
 
@@ -156,6 +208,7 @@ impl Site {
             come_logged: false,
             frame_at: 0,
             session: BTreeMap::new(),
+            app: None,
         }
     }
 
@@ -169,9 +222,13 @@ impl Site {
         match &self.page {
             Some(p) if !self.loading.is_some() => {
                 let t = p.title();
-                if t.is_empty() { name_of(&self.url) } else { t }
+                match (&self.app, t.is_empty()) {
+                    (Some(app), true) => app.clone(),
+                    (_, true) => name_of(&self.url),
+                    _ => t,
+                }
             }
-            _ => name_of(&self.url),
+            _ => self.app.clone().unwrap_or_else(|| name_of(&self.url)),
         }
     }
 
@@ -182,6 +239,10 @@ impl Site {
 
     /// Goes to another page (a link, a form sent, an address typed), keeping this one to go back to.
     pub fn go(&mut self, r: Request, fragment: Option<String>, keep: bool) {
+        // (Away from an app: a site, which can reach the internet.)
+        if !is_app(&r.url) {
+            self.app = None;
+        }
         if keep
             && let Some(p) = &self.page
         {
@@ -298,6 +359,11 @@ impl Site {
                     changed = true;
                 }
                 for (id, address, method, headers, body) in page.take_requests() {
+                    // (An app can't reach the internet.)
+                    if self.app.is_some() {
+                        page.answer(id, Err(String::from("an app made here can't reach the internet")));
+                        continue;
+                    }
                     match Url::parse(&address) {
                         Ok(u) if self.script_fetches.len() < 64 => {
                             self.script_fetches.push((id, Fetch::script(u, &method, headers, body, Some(page.url.clone()))));
@@ -337,14 +403,20 @@ impl Site {
                 }
                 if let Some((local, session)) = page.take_storage() {
                     let origin = page.origin();
-                    let mut stored = STORED.lock();
-                    if !stored.contains_key(&origin) && stored.len() >= MOST_STORED
-                        && let Some(k) = stored.keys().next().cloned()
                     {
-                        stored.remove(&k);
+                        let mut stored = STORED.lock();
+                        // (The oldest site's let go when there are many; never an app's.)
+                        if !stored.contains_key(&origin) && stored.len() >= MOST_STORED
+                            && let Some(k) = stored.keys().find(|k| !k.ends_with(&format!(".{APPS_HOST}"))).cloned()
+                        {
+                            stored.remove(&k);
+                        }
+                        stored.insert(origin.clone(), local);
                     }
-                    stored.insert(origin.clone(), local);
                     self.session.insert(origin, session);
+                    if is_app(&page.url) {
+                        crate::assistant::app_data_changed();
+                    }
                 }
                 for line in page.take_console() {
                     if self.console_logged < CONSOLE_LOGGED {

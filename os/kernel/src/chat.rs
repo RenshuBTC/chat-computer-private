@@ -284,6 +284,9 @@ pub struct Chat {
     actions: Vec<(String, String)>,
     clock_shown: (String, String),
     chat_title: Option<String>,
+    /// The apps the model made (their names), listed under Messages; and where each is in the list, for a click.
+    apps: Vec<String>,
+    app_rows: Vec<(Rect, String)>,
     /// Which of the message box's round buttons the pointer is over (it's lighter). (The pointer itself is drawn by
     /// pointer.rs, over the screen, as the mouse's reports come.)
     tool_lit: Option<usize>,
@@ -524,6 +527,8 @@ impl Chat {
             model_checked: 0,
             dot_alpha: 0,
             actions: Vec::new(),
+            apps: Vec::new(),
+            app_rows: Vec::new(),
             clock_shown: clock_now(),
             chat_title: None,
             tool_lit: None,
@@ -976,6 +981,13 @@ impl Chat {
             }
             self.close_menu();
         }
+        // An app in the Apps list: opened.
+        if let Some((_, name)) = self.app_rows.iter().find(|(r, _)| px >= r.x && px < r.right() && py >= r.y && py < r.bottom()).cloned() {
+            if let Some(html) = assistant::app(&name) {
+                self.open_app(name, html);
+            }
+            return;
+        }
         // In a website's frame: its x closes it; in its page, a link followed, a field to type in, a box ticked.
         if self.site.is_some() {
             let (frame, close, page) = self.site_rects();
@@ -1034,7 +1046,7 @@ impl Chat {
         let sides = self.sides;
         let switches = [self.switch_rect(0), self.switch_rect(1)];
         let lit = self.switch_lit;
-        let Chat { canvas, ty, actions, clock_shown, chat_title, .. } = self;
+        let Chat { canvas, ty, actions, clock_shown, chat_title, apps, app_rows, .. } = self;
         canvas.set_clip(clip);
         for (k, (side, line_x)) in [(left, left.right() - hair), (right, right.x)].into_iter().enumerate() {
             if sides[k] {
@@ -1073,10 +1085,38 @@ impl Chat {
             text(canvas, title, Face::Bold, x + inset, y + (head_h - m.small_line) / 2, INK);
             y + head_h + m.px(0.75)
         };
-        // Messages.
+        // Messages, over the apps the model made (when there are any): each a row to click, its name cut to fit.
+        app_rows.clear();
         if sides[0] {
             let y = head(canvas, "Messages", left.x + pad_l, pad_t);
             wrapped(canvas, MESSAGES_EMPTY, left.x + pad_l + inset, y, words_w, INK);
+            if !apps.is_empty() {
+                let half = h / 2;
+                canvas.fill(Rect::new(left.x, half, m.side_w - hair, hair), LINE);
+                let x = left.x + pad_l;
+                let mut y = head(canvas, "Apps", x, half + hair + pad_t);
+                let pad = (0.4 * em + 0.5) as i32;
+                let item_h = m.small_line + 2 * (0.5 * em) as i32;
+                let row_w = m.side_w - hair - pad_l - pad_r;
+                for name in apps.iter() {
+                    if y + item_h > h - pad_t {
+                        break;
+                    }
+                    let row = Rect::new(x, y, row_w, item_h);
+                    canvas.round_rect(row, (0.5 * em) as i32, CHOSEN);
+                    let max = row_w - 2 * pad;
+                    let mut shown = name.clone();
+                    if ty.width(&shown, small.size) > max * ONE {
+                        while !shown.is_empty() && ty.width(&format!("{shown}\u{2026}"), small.size) > max * ONE {
+                            shown.pop();
+                        }
+                        shown = format!("{}\u{2026}", shown.trim_end());
+                    }
+                    text(canvas, &shown, Face::Regular, x + pad, y + (0.5 * em) as i32, INK);
+                    app_rows.push((row, name.clone()));
+                    y += item_h + m.px(0.4);
+                }
+            }
         }
         if !sides[1] {
             return;
@@ -2237,6 +2277,28 @@ impl Chat {
         self.dirty = self.canvas.whole();
     }
 
+    /// Opens an app the model made (or opens it again, changed): in the middle, as a website is, until it's closed.
+    fn open_app(&mut self, name: String, html: String) {
+        let what = format!("Opened the {name} app");
+        crate::log!("Chat Computer kernel: site: {what}");
+        self.action(what);
+        if let Some(mut s) = self.site.take() {
+            s.stop();
+        }
+        self.site = Some(Site::app(&name, &html));
+        self.lay_out_box();
+        self.dirty = self.canvas.whole();
+    }
+
+    /// The apps there are (their names), for the Apps list.
+    fn set_apps(&mut self, apps: Vec<String>) {
+        if self.apps != apps {
+            self.apps = apps;
+            let h = self.screen.height as i32;
+            self.dirty = self.dirty.union(&Rect::new(0, 0, self.m.side_w, h));
+        }
+    }
+
     /// Closes the website open: the conversation shows again.
     fn close_site(&mut self) {
         if let Some(mut s) = self.site.take() {
@@ -2328,6 +2390,8 @@ impl Chat {
                 self.dirty = self.dirty.union(&area);
             }
             Event::Picture(p) => self.show_picture(p),
+            Event::App(name, html) => self.open_app(name, html),
+            Event::Apps(names) => self.set_apps(names),
             Event::Restarting(seconds) => {
                 self.blocks.push(Block::new(Kind::Note, Live::No, format!("Restarting in {seconds} seconds\u{2026}")));
                 self.relayout = true;
@@ -2471,8 +2535,10 @@ pub fn starting(what: &str) {
 
 /// The main loop has started: keys are taken as they come; a message sent before then goes now.
 pub fn looping() {
+    let apps = assistant::apps();
     if let Some(c) = CHAT.lock().as_mut() {
         c.looping = true;
+        c.apps = apps;
         if core::mem::take(&mut c.send_later) {
             c.send();
         }

@@ -303,7 +303,14 @@ drivers.
     * `remember` and `forget`: the model's notes about the person (their name, what they like), kept in the memory
       file with the conversation and in its instructions in every conversation after, new ones and restarts included
       (each conversation's instructions stay as they began, so they're read once). The screen says when the model
-      notes or forgets something. At most 40 notes, 8,000 characters in all.
+      notes or forgets something. At most 40 notes, 8,000 characters in all;
+    * `make_app` and `open_app`: an app the model makes for the person (a budget, a log, a planner: a tool they'll
+      come back to), one HTML page with its CSS and JavaScript, shown in the middle at once as a website is, by the
+      browser engine. Its data is what its scripts keep in localStorage, kept in the memory file with the app (a few
+      seconds after it changes, and when the app is changed); it can't reach the internet. The apps are listed at the
+      left, under Messages, to open with a click, and named in the model's instructions, to open or change. At most
+      40 apps, 256 KB each. `check.py --apps` has a test's script make one, then checks it on the screen, its data in
+      the memory file, and after a restart, the app opened again with its data.
 
     The model may use tools up to 8 times for one message: what its eighth round of tools says back ends by telling it
     so, and its next round is its answer, in words (a tool it calls then isn't run, and a line under the answer says it
@@ -868,7 +875,10 @@ writes for each person, in place of Ubuntu's catalogue.
     data, how its data changes, and its screen); its data is kept when the app changes; what it may do (which site
     a password may go to) is declared, and checked before it runs, in the kernel; and every action it takes is
     traced to the person's request that allowed it, never a page's or a file's. The person watches it work through
-    the app's own screen. Chat Computer's answer to the thousands of apps Ubuntu has.
+    the app's own screen. Chat Computer's answer to the thousands of apps Ubuntu has. ✓ The first of it: apps the
+    model makes (`make_app`: one HTML page, run by the browser engine), shown at once, listed to open with a click,
+    their data kept across restarts and when they change, with no internet. To do: what an app may do declared and
+    checked (the sites it may reach), and its actions traced to the person's requests.
 17. Updates: signed, with a way back.
 
 ## Reaching everybody's PC

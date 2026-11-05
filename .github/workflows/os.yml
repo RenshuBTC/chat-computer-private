@@ -95,6 +95,8 @@ jobs:
         run: ./check.py --site
       - name: The conversation kept across a restart (NVMe and SATA)
         run: ./check.py --remember
+      - name: An app the model makes (shown, its data kept across a restart, opened again; no internet)
+        run: ./check.py --apps
       - name: Files (Windows' drive, NTFS, read by the model's tools; a test's script asks)
         run: ./check.py --files
       - name: BitLocker (Windows' drive encrypted, unlocked with its recovery key typed, or its key in the clear)

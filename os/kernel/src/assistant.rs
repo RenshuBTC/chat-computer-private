@@ -78,6 +78,17 @@ pub enum Event {
     /// What the model looked up on the web (a search, or a site read): a line where it happens in the answer, so the
     /// person sees what left the computer.
     Looked(String),
+    /// An app the model made (or changed, or was asked to open): its name and its page, to open in the middle.
+    App(String, String),
+    /// The apps there are now (their names), for the Apps list.
+    Apps(Vec<String>),
+}
+
+/// An app the model made for the person (make_app): its name and its page (one HTML file).
+#[derive(Clone, PartialEq)]
+pub struct App {
+    pub name: String,
+    pub html: String,
 }
 
 /// Whether the model can be asked now.
@@ -110,8 +121,9 @@ computer unless you look something up on the web, which they see.
 With your tools you can see how this computer is doing, change the text size, set timers, reminders and alarms (and \
 how loud they ring), read the files on its drives (Windows' C: and the others, USB sticks and memory cards included; \
 nothing can be changed){sees}, search the web and read web pages (when this computer is connected), show the person a \
-picture, note things about them to remember in later conversations, start a new conversation, and restart this \
-computer (to go back to Windows) or turn it off. Use a tool rather than saying \
+picture, note things about them to remember in later conversations, make them small apps they'll use again (a budget, \
+a log, a planner) and open those, start a new conversation, and restart this computer (to go back to Windows) or turn \
+it off. Use a tool rather than saying \
 how; don't say you're about to use one, just use it.
 
 Each message from the person starts with when they sent it, like [Tue 3 Nov 2026 19:02]. Answer in their language, \
@@ -471,7 +483,18 @@ struct Assistant {
     claude_tools: Vec<claude::api::Tool>,
     /// Whether each sidebar shows (Messages, then Actions and Chats), as their switches left them.
     sides: [bool; 2],
+    /// The apps the model made for the person, kept with the conversation (and each one's data, its localStorage).
+    apps: Vec<App>,
+    /// When the conversation was last kept (uptime ms), and whether an app's data changed since: kept again, at most
+    /// every APP_DATA_MS.
+    kept_at: u64,
+    app_data: bool,
 }
+
+/// The most apps, the biggest an app's page may be, and how often an app's data is kept while it's used.
+const MOST_APPS: usize = 40;
+const APP_BYTES: usize = 256 << 10;
+const APP_DATA_MS: u64 = 3000;
 
 /// Claude, as chosen: its model ("claude-opus-5-5") and its effort ("max"; None: the model's default).
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -610,7 +633,22 @@ pub fn init(setting: Option<String>, settings_key: Option<String>, ai: Option<St
         claude: None,
         claude_tools,
         sides: [true, true],
+        apps: Vec::new(),
+        kept_at: 0,
+        app_data: false,
     };
+    // The apps made before, and their data (each one's site storage).
+    if let Some(Json::Array(list)) = kept_json.as_ref().and_then(|j| j.get("apps")) {
+        for app in list {
+            let (Some(name), Some(html)) = (app.get("name").and_then(Json::str), app.get("html").and_then(Json::str)) else { continue };
+            if let Some(Json::Object(data)) = app.get("data") {
+                let map = data.iter().filter_map(|(k, v)| Some((k.clone(), String::from(v.str()?)))).collect();
+                crate::site::restore_storage(&crate::site::app_origin(name), map);
+            }
+            a.apps.push(App { name: String::from(name), html: String::from(html) });
+        }
+        crate::log!("Chat Computer kernel: model: {} app{} from before", a.apps.len(), if a.apps.len() == 1 { "" } else { "s" });
+    }
     if let Some(Json::Array(s)) = kept_sides.as_ref() {
         for (k, v) in s.iter().take(2).enumerate() {
             if let Json::Bool(b) = v {
@@ -798,17 +836,22 @@ pub fn keep() {
     let text = {
         let mut guard = ASSISTANT.lock();
         let Some(a) = guard.as_mut() else { return };
-        if !a.unkept || a.job.is_some() {
+        let now = crate::time::uptime_ms();
+        let data_due = a.app_data && now.saturating_sub(a.kept_at) >= APP_DATA_MS;
+        if !(a.unkept || data_due) || a.job.is_some() {
             return;
         }
         a.unkept = false;
+        a.app_data = false;
+        a.kept_at = now;
         let capacity = crate::keep::capacity();
         if capacity == 0 {
             return;
         }
+        let apps = kept_apps(&a.apps);
         let mut start = 0;
         loop {
-            let text = kept_text(&a.notes, &a.parts[start..], a.ai_kept(), a.sides);
+            let text = kept_text(&a.notes, &a.parts[start..], a.ai_kept(), a.sides, &apps);
             if text.len() <= capacity || start >= a.parts.len() {
                 break text;
             }
@@ -1068,7 +1111,17 @@ impl Assistant {
                 system.push_str(n);
             }
         }
+        system.push_str(&self.apps_line());
         system
+    }
+
+    /// The apps made for the person, for the model to know (and open, or change).
+    fn apps_line(&self) -> String {
+        if self.apps.is_empty() {
+            return String::new();
+        }
+        let names: Vec<&str> = self.apps.iter().map(|a| a.name.as_str()).collect();
+        format!("\n\nThe apps you've made for the person (make_app; open_app opens one): {}.", names.join(", "))
     }
 
     /// The conversation as Claude's API has it: what was typed (with when), each round of the answers (Claude's own
@@ -1238,6 +1291,7 @@ impl Assistant {
                 system.push_str(n);
             }
         }
+        system.push_str(&self.apps_line());
         system
     }
 
@@ -1657,8 +1711,9 @@ impl Assistant {
             }
             let notes = self.notes.clone();
             let (sight, blind) = (self.sight(), self.blind());
-            let (said, error, picture) = run_tool(&call.name, &input, job, &mut self.notes, events, sight, blind);
-            self.unkept |= self.notes != notes;
+            let apps = self.apps.len();
+            let (said, error, picture) = run_tool(&call.name, &input, job, &mut self.notes, &mut self.apps, events, sight, blind);
+            self.unkept |= self.notes != notes || matches!(call.name.as_str(), "make_app") || self.apps.len() != apps;
             self.tool_said(&call.name, said, error, picture);
         }
         job.rounds += 1;
@@ -2336,7 +2391,23 @@ fn claude_answer(a: &crate::remote::Answered) -> (Answer, String) {
 /// What the memory file keeps: the model's notes and the conversation, as {"notes": [...], "chat": [{"you": words,
 /// "at": seconds since 1970}, {"said": words}, ...]}: each question, and the words of its answer (not the tools it
 /// used along the way).
-fn kept_text(notes: &[String], parts: &[Part], ai: Option<Json>, sides: [bool; 2]) -> String {
+/// The apps as they're kept: each one's name, page and data (its localStorage now).
+fn kept_apps(apps: &[App]) -> Json {
+    Json::Array(
+        apps.iter()
+            .map(|app| {
+                let data = crate::site::storage_of(&crate::site::app_origin(&app.name)).unwrap_or_default();
+                Json::Object(vec![
+                    (String::from("name"), Json::Str(app.name.clone())),
+                    (String::from("html"), Json::Str(app.html.clone())),
+                    (String::from("data"), Json::Object(data.into_iter().map(|(k, v)| (k, Json::Str(v))).collect())),
+                ])
+            })
+            .collect(),
+    )
+}
+
+fn kept_text(notes: &[String], parts: &[Part], ai: Option<Json>, sides: [bool; 2], apps: &Json) -> String {
     let mut chat: Vec<Json> = Vec::new();
     for p in parts {
         match p {
@@ -2369,6 +2440,9 @@ fn kept_text(notes: &[String], parts: &[Part], ai: Option<Json>, sides: [bool; 2
     }
     if sides != [true, true] {
         kept.push((String::from("sides"), Json::Array(vec![Json::Bool(sides[0]), Json::Bool(sides[1])])));
+    }
+    if matches!(apps, Json::Array(list) if !list.is_empty()) {
+        kept.push((String::from("apps"), apps.clone()));
     }
     json::compact(&Json::Object(kept))
 }
@@ -2427,11 +2501,13 @@ fn from_kept(text: &str) -> Option<(Vec<String>, Vec<Part>)> {
 
 /// Runs a tool the model called: what it says back, whether that's an error, and a picture it gives the model to see
 /// (read_file's, when the model can: `sight`; else why it can't, `blind`).
+#[allow(clippy::too_many_arguments)]
 fn run_tool(
     name: &str,
     input: &Json,
     job: &mut Job,
     notes: &mut Vec<String>,
+    apps: &mut Vec<App>,
     events: &mut Vec<Event>,
     sight: Option<Sight>,
     blind: &str,
@@ -2448,8 +2524,76 @@ fn run_tool(
             Err(e) => (e, true, None),
         };
     }
+    if matches!(name, "make_app" | "open_app") {
+        let (said, error) = app_tool(name, input, apps, events);
+        return (said, error, None);
+    }
     let (said, error) = run_other_tool(name, input, job, notes, events);
     (said, error, None)
+}
+
+/// make_app and open_app: an app made (or changed) and opened, or one made before opened.
+fn app_tool(name: &str, input: &Json, apps: &mut Vec<App>, events: &mut Vec<Event>) -> (String, bool) {
+    crate::log!("Chat Computer kernel: model: uses {name}");
+    let text = |key: &str| input.get(key).and_then(Json::str).unwrap_or("");
+    let app_name: String = text("name").trim().chars().take(40).collect();
+    let names = |apps: &[App]| apps.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+    let found = apps.iter().position(|a| a.name.eq_ignore_ascii_case(&app_name));
+    if name == "open_app" {
+        return match found {
+            Some(i) => {
+                events.push(Event::App(apps[i].name.clone(), apps[i].html.clone()));
+                (format!("The {} app is open in the middle of the screen.", apps[i].name), false)
+            }
+            None if apps.is_empty() => (String::from("You haven't made any apps for the person yet (make_app makes one)."), true),
+            None => (format!("There's no app called {app_name:?}. The apps: {}.", names(apps)), true),
+        };
+    }
+    let html = text("html");
+    if app_name.is_empty() {
+        return (String::from("name must be the app's name, a few words"), true);
+    }
+    if !html.to_ascii_lowercase().contains("<") {
+        return (String::from("html must be the app's whole page: <!doctype html>, its <style> and its <script>"), true);
+    }
+    if html.len() > APP_BYTES {
+        return (format!("An app's page can be at most {} KB: make it smaller.", APP_BYTES >> 10), true);
+    }
+    let said = match found {
+        Some(i) => {
+            apps[i].html = String::from(html);
+            format!("The {} app is changed (its data kept), and open in the middle of the screen.", apps[i].name)
+        }
+        None if apps.len() >= MOST_APPS => return (format!("There's no room for more apps ({MOST_APPS} at most): change one of them instead."), true),
+        None => {
+            apps.push(App { name: app_name.clone(), html: String::from(html) });
+            format!(
+                "The {app_name} app is made, and open in the middle of the screen; it stays in the Apps list at the \
+                 left, for the person to open again."
+            )
+        }
+    };
+    let app = apps.iter().find(|a| a.name.eq_ignore_ascii_case(&app_name)).cloned().expect("just made");
+    crate::log!("Chat Computer kernel: model: the {} app ({} bytes)", app.name, app.html.len());
+    events.push(Event::App(app.name, app.html));
+    events.push(Event::Apps(apps.iter().map(|a| a.name.clone()).collect()));
+    (said, false)
+}
+
+/// The apps' names (for the Apps list), and one's page.
+pub fn apps() -> Vec<String> {
+    ASSISTANT.lock().as_ref().map(|a| a.apps.iter().map(|app| app.name.clone()).collect()).unwrap_or_default()
+}
+
+pub fn app(name: &str) -> Option<String> {
+    ASSISTANT.lock().as_ref().and_then(|a| a.apps.iter().find(|app| app.name == name).map(|app| app.html.clone()))
+}
+
+/// An app's data changed (its scripts' localStorage): kept again soon.
+pub fn app_data_changed() {
+    if let Some(a) = ASSISTANT.lock().as_mut() {
+        a.app_data = true;
+    }
 }
 
 /// Runs a tool other than read_file.

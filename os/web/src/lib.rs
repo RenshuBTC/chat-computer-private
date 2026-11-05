@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+pub mod cookies;
 pub mod http;
 pub mod page;
 pub mod search;

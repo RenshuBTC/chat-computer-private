@@ -204,7 +204,7 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
         info.secure_boot = secure;
         (info.time, info.time_zone) = clock(st);
         // (When it was read: the kernel adds the time from then to when its timer starts.)
-        info.time_tsc = unsafe { core::arch::x86_64::_rdtsc() };
+        info.time_tsc = core::arch::x86_64::_rdtsc();
         info.settings_len = settings(bs, image, &mut info.settings) as u32;
         info.start_disk = start_disk(bs, image);
     }

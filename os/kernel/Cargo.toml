@@ -30,6 +30,7 @@ tls = { path = "../tls" }
 web = { path = "../web" }
 pdf = { path = "../pdf" }
 claude = { path = "../claude" }
+browser = { path = "../browser" }
 
 [[bin]]
 name = "chatcomputer-kernel"

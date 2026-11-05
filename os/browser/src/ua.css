@@ -1,0 +1,84 @@
+/* The browser's own style sheet: how elements look before a page says otherwise (the HTML standard's "rendering"
+   section, the parts drawn here). */
+
+html, address, blockquote, body, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing,
+main, p, plaintext, pre, search, xmp, details, summary, article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section,
+dir, dd, dl, dt, menu, ol, ul, fieldset, optgroup, frameset, frame, address { display: block; }
+li { display: list-item; }
+head, link, meta, script, style, title, template, base, datalist, noembed, noframes, param, rp, area, slot,
+[hidden], input[type=hidden i], dialog:not([open]), details:not([open]) > :not(summary:first-of-type) { display: none; }
+[hidden=until-found] { display: none; }
+
+html { color: CanvasText; }
+body { margin: 8px; }
+
+p, blockquote, figure, dl, ul, ol, menu, dir, pre, listing, xmp, plaintext { margin-top: 1em; margin-bottom: 1em; }
+blockquote, figure { margin-left: 40px; margin-right: 40px; }
+dd { margin-left: 40px; }
+address, i, cite, em, var, dfn { font-style: italic; }
+h1 { font-size: 2em; margin-top: 0.67em; margin-bottom: 0.67em; font-weight: bold; }
+h2 { font-size: 1.5em; margin-top: 0.83em; margin-bottom: 0.83em; font-weight: bold; }
+h3 { font-size: 1.17em; margin-top: 1em; margin-bottom: 1em; font-weight: bold; }
+h4 { font-size: 1em; margin-top: 1.33em; margin-bottom: 1.33em; font-weight: bold; }
+h5 { font-size: 0.83em; margin-top: 1.67em; margin-bottom: 1.67em; font-weight: bold; }
+h6 { font-size: 0.67em; margin-top: 2.33em; margin-bottom: 2.33em; font-weight: bold; }
+article h1, aside h1, nav h1, section h1 { font-size: 1.5em; margin-top: 0.83em; margin-bottom: 0.83em; }
+ul, ol, menu, dir { padding-left: 40px; }
+ol { list-style-type: decimal; }
+ul, menu, dir { list-style-type: disc; }
+ul ul, ol ul, menu ul, ul menu { list-style-type: circle; }
+ul ul ul, ul ol ul, ol ul ul, ol ol ul { list-style-type: square; }
+ul ul, ul ol, ol ol, ol ul, menu menu { margin-top: 0; margin-bottom: 0; }
+hr { color: gray; border-style: inset; border-width: 1px; margin: 0.5em auto; overflow: hidden; }
+pre, listing, xmp, plaintext, code, kbd, samp, tt { font-family: monospace; }
+pre, listing, xmp, plaintext { white-space: pre; }
+textarea { white-space: pre-wrap; }
+b, strong { font-weight: bolder; }
+u, ins { text-decoration: underline; }
+s, strike, del { text-decoration: line-through; }
+abbr[title], acronym[title] { text-decoration: underline; }
+small { font-size: smaller; }
+big { font-size: larger; }
+sub { vertical-align: sub; font-size: smaller; }
+sup { vertical-align: super; font-size: smaller; }
+mark { background-color: Mark; color: MarkText; }
+center { text-align: center; }
+nobr { white-space: nowrap; }
+a:link { color: LinkText; text-decoration: underline; }
+q::before { content: open-quote; }
+q::after { content: close-quote; }
+ruby { display: ruby; }
+rt { font-size: 50%; }
+
+table { display: table; border-collapse: separate; border-spacing: 2px; box-sizing: border-box; }
+caption { display: table-caption; text-align: center; }
+colgroup { display: table-column-group; }
+col { display: table-column; }
+thead { display: table-header-group; vertical-align: middle; }
+tbody { display: table-row-group; vertical-align: middle; }
+tfoot { display: table-footer-group; vertical-align: middle; }
+tr { display: table-row; vertical-align: inherit; }
+td, th { display: table-cell; vertical-align: inherit; padding: 1px; }
+th { font-weight: bold; text-align: center; }
+table > tr, table > thead, table > tbody, table > tfoot { vertical-align: middle; }
+
+input, select, button, textarea, meter, progress { display: inline-block; }
+input, select, textarea, button { font-size: 13.333px; font-family: sans-serif; color: FieldText; letter-spacing: normal; }
+input, textarea { background-color: Field; border: 2px inset #767676; padding: 1px 2px; }
+select { background-color: Field; border: 1px solid #767676; border-radius: 3px; padding: 1px 2px; }
+button, input[type=submit i], input[type=button i], input[type=reset i], input[type=file i]::file-selector-button {
+  background-color: ButtonFace; color: ButtonText; border: 2px outset ButtonBorder; padding: 1px 6px; text-align: center;
+}
+input[type=checkbox i], input[type=radio i] { margin: 3px 3px 3px 4px; padding: 0; border: 0; }
+input[type=image i] { border: 0; padding: 0; }
+fieldset { margin-left: 2px; margin-right: 2px; padding: 0.35em 0.75em 0.625em; border: 2px groove ThreeDFace; }
+legend { padding-left: 2px; padding-right: 2px; }
+iframe { border: 2px inset; }
+video, audio, canvas, embed, object { display: inline-block; }
+img, svg, video, canvas, iframe, embed, object { overflow: clip; }
+summary { display: block; }
+dialog[open] { display: block; position: absolute; left: 0; right: 0; margin: auto; border: solid; padding: 1em;
+  background-color: Canvas; color: CanvasText; width: fit-content; }
+marquee { display: inline-block; }
+optgroup, option { display: block; }
+select option, select optgroup { display: none; }

@@ -1,0 +1,2485 @@
+//! Each element's style, worked out as a browser does it: the rules whose selectors match it (the browser's own sheet,
+//! then the page's sheets, then its style attribute), in the cascade's order (importance, origin, specificity, then
+//! order of appearance), on top of what it inherits from its parent; custom properties (--x) and var() included.
+//! Lengths are worked out to device pixels here (em, rem, vw...), but for percentages, which wait for the layout.
+
+use crate::css::{self, AttrOp, Combinator, Compound, Decl, Pseudo, PseudoElement, Selector, Sheet, Tok, Viewport};
+use crate::dom::{Data, Document, NodeId};
+use crate::values::{self, Color, Len, Units};
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Display {
+    None,
+    Contents,
+    Block,
+    /// A block that's a new formatting context ("flow-root").
+    FlowRoot,
+    Inline,
+    InlineBlock,
+    ListItem,
+    Flex,
+    InlineFlex,
+    Grid,
+    InlineGrid,
+    Table,
+    InlineTable,
+    TableRow,
+    TableCell,
+    TableRowGroup,
+    TableHeaderGroup,
+    TableFooterGroup,
+    TableColumn,
+    TableColumnGroup,
+    TableCaption,
+}
+
+impl Display {
+    pub fn is_inline_level(self) -> bool {
+        matches!(self, Display::Inline | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::InlineTable)
+    }
+
+    /// The block-level one of an inline-level display (floats, absolutely positioned boxes, and flex and grid items
+    /// are "blockified").
+    pub fn blockified(self) -> Display {
+        match self {
+            Display::Inline | Display::InlineBlock => Display::Block,
+            Display::InlineFlex => Display::Flex,
+            Display::InlineGrid => Display::Grid,
+            Display::InlineTable => Display::Table,
+            Display::TableRow | Display::TableCell | Display::TableRowGroup | Display::TableHeaderGroup
+            | Display::TableFooterGroup | Display::TableCaption => Display::Block,
+            d => d,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Position {
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+    Sticky,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Float {
+    None,
+    Left,
+    Right,
+}
+
+/// A size: width, height, their minimums and maximums, margins and offsets.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Size {
+    Auto,
+    Len(Len),
+    MinContent,
+    MaxContent,
+    FitContent,
+    /// max-width's and max-height's "none".
+    None,
+}
+
+impl Size {
+    pub fn len(self) -> Option<Len> {
+        match self {
+            Size::Len(l) => Some(l),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TextAlign {
+    Left,
+    Right,
+    Center,
+    Justify,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WhiteSpace {
+    Normal,
+    NoWrap,
+    Pre,
+    PreWrap,
+    PreLine,
+}
+
+impl WhiteSpace {
+    /// Whether spaces and line breaks are kept as they are.
+    pub fn keeps_spaces(self) -> bool {
+        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap)
+    }
+    pub fn keeps_breaks(self) -> bool {
+        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::PreLine)
+    }
+    pub fn wraps(self) -> bool {
+        !matches!(self, WhiteSpace::NoWrap | WhiteSpace::Pre)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum LineHeight {
+    Normal,
+    /// A multiple of the font's size (inherited as the multiple).
+    Factor(f32),
+    Px(f32),
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum VAlign {
+    Baseline,
+    Top,
+    Middle,
+    Bottom,
+    TextTop,
+    TextBottom,
+    Sub,
+    Super,
+    Len(f32),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ListStyle {
+    None,
+    Disc,
+    Circle,
+    Square,
+    Decimal,
+    LowerAlpha,
+    UpperAlpha,
+    LowerRoman,
+    UpperRoman,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Transform {
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BorderStyle {
+    None,
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+    Inset,
+    Outset,
+    Groove,
+    Ridge,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FlexDirection {
+    Row,
+    RowReverse,
+    Column,
+    ColumnReverse,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Align {
+    Normal,
+    Start,
+    End,
+    Center,
+    Stretch,
+    Baseline,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// A background layer that isn't a plain colour.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Image {
+    Url(String),
+    /// A linear gradient: its angle (degrees, 180 down) and its colours with where they stop (0..1, or negative
+    /// where not said).
+    Linear(f32, Vec<(Color, f32)>),
+}
+
+/// grid-template-columns' and -rows' tracks.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Track {
+    Len(Len),
+    Fr(f32),
+    Auto,
+    MinContent,
+    MaxContent,
+    /// minmax(min, max).
+    MinMax(Box2<Track>),
+    /// repeat(auto-fill or auto-fit, tracks).
+    AutoRepeat(Vec<Track>),
+}
+
+/// Two of something (minmax()'s ends), boxed for the recursion's sake.
+pub type Box2<T> = alloc::boxed::Box<(T, T)>;
+
+/// Where a grid item goes: its start line (1-based, negative from the end, 0 for auto) and span.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct GridPlace {
+    pub start: i32,
+    pub end: i32,
+    pub span: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Style {
+    pub display: Display,
+    pub position: Position,
+    pub float: Float,
+    pub clear: Float,
+    pub clear_both: bool,
+    /// top, right, bottom, left.
+    pub inset: [Size; 4],
+    pub width: Size,
+    pub height: Size,
+    pub min_width: Size,
+    pub min_height: Size,
+    pub max_width: Size,
+    pub max_height: Size,
+    pub margin: [Size; 4],
+    pub padding: [Len; 4],
+    pub border_width: [f32; 4],
+    pub border_style: [BorderStyle; 4],
+    pub border_color: [Color; 4],
+    pub radius: f32,
+    pub border_box: bool,
+    pub color: Color,
+    pub background: Color,
+    pub background_image: Option<Image>,
+    pub font_size: f32,
+    pub font_weight: u16,
+    pub italic: bool,
+    pub mono: bool,
+    pub line_height: LineHeight,
+    pub text_align: TextAlign,
+    pub text_indent: Len,
+    pub underline: bool,
+    pub line_through: bool,
+    pub overline: bool,
+    pub decoration_color: Option<Color>,
+    pub transform_text: Transform,
+    pub white_space: WhiteSpace,
+    pub vertical_align: VAlign,
+    pub list_style: ListStyle,
+    pub list_inside: bool,
+    pub list_image: bool,
+    pub visible: bool,
+    pub opacity: f32,
+    pub clip: bool,
+    pub z_index: Option<i32>,
+    pub aspect_ratio: Option<f32>,
+    pub object_cover: bool,
+    pub flex_direction: FlexDirection,
+    pub flex_wrap: bool,
+    pub justify_content: Align,
+    pub align_items: Align,
+    pub align_self: Align,
+    pub align_content: Align,
+    pub justify_items: Align,
+    pub justify_self: Align,
+    pub grow: f32,
+    pub shrink: f32,
+    pub basis: Size,
+    pub order: i32,
+    pub row_gap: Len,
+    pub column_gap: Len,
+    pub grid_columns: Vec<Track>,
+    pub grid_rows: Vec<Track>,
+    pub grid_areas: Vec<Vec<String>>,
+    pub grid_area: Option<String>,
+    pub grid_column: GridPlace,
+    pub grid_row: GridPlace,
+    pub grid_auto_columns: bool,
+    pub border_collapse: bool,
+    pub border_spacing: f32,
+    /// ::before's and ::after's content, as words.
+    pub content: Option<String>,
+    /// transform: translate(x, y), as lengths (% of its own size).
+    pub translate: (Len, Len),
+    pub custom: Arc<BTreeMap<String, Arc<Vec<Tok>>>>,
+    pub hidden_text: bool,
+    /// A mask shapes its background (an icon): masks aren't drawn, so neither is the background.
+    pub masked: bool,
+    /// A table's caption goes under it (caption-side: bottom).
+    pub caption_bottom: bool,
+}
+
+impl Style {
+    /// The initial values (for the root; what isn't inherited starts as these everywhere).
+    pub fn initial(dpr: f32) -> Style {
+        Style {
+            display: Display::Inline,
+            position: Position::Static,
+            float: Float::None,
+            clear: Float::None,
+            clear_both: false,
+            inset: [Size::Auto; 4],
+            width: Size::Auto,
+            height: Size::Auto,
+            min_width: Size::Auto,
+            min_height: Size::Auto,
+            max_width: Size::None,
+            max_height: Size::None,
+            margin: [Size::Len(Len::ZERO); 4],
+            padding: [Len::ZERO; 4],
+            border_width: [0.0; 4],
+            border_style: [BorderStyle::None; 4],
+            border_color: [values::BLACK; 4],
+            radius: 0.0,
+            border_box: false,
+            color: values::BLACK,
+            background: values::TRANSPARENT,
+            background_image: None,
+            font_size: 16.0 * dpr,
+            font_weight: 400,
+            italic: false,
+            mono: false,
+            line_height: LineHeight::Normal,
+            text_align: TextAlign::Left,
+            text_indent: Len::ZERO,
+            underline: false,
+            line_through: false,
+            overline: false,
+            decoration_color: None,
+            transform_text: Transform::None,
+            white_space: WhiteSpace::Normal,
+            vertical_align: VAlign::Baseline,
+            list_style: ListStyle::Disc,
+            list_inside: false,
+            list_image: false,
+            visible: true,
+            opacity: 1.0,
+            clip: false,
+            z_index: None,
+            aspect_ratio: None,
+            object_cover: false,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: false,
+            justify_content: Align::Normal,
+            align_items: Align::Normal,
+            align_self: Align::Normal,
+            align_content: Align::Normal,
+            justify_items: Align::Normal,
+            justify_self: Align::Normal,
+            grow: 0.0,
+            shrink: 1.0,
+            basis: Size::Auto,
+            order: 0,
+            row_gap: Len::ZERO,
+            column_gap: Len::ZERO,
+            grid_columns: Vec::new(),
+            grid_rows: Vec::new(),
+            grid_areas: Vec::new(),
+            grid_area: None,
+            grid_column: GridPlace::default(),
+            grid_row: GridPlace::default(),
+            grid_auto_columns: false,
+            border_collapse: false,
+            border_spacing: 0.0,
+            content: None,
+            translate: (Len::ZERO, Len::ZERO),
+            custom: Arc::new(BTreeMap::new()),
+            hidden_text: false,
+            masked: false,
+            caption_bottom: false,
+        }
+    }
+
+    /// What a child starts from: the inherited properties of this one, the rest initial.
+    pub fn inherit(&self, dpr: f32) -> Style {
+        let mut s = Style::initial(dpr);
+        s.color = self.color;
+        s.font_size = self.font_size;
+        s.font_weight = self.font_weight;
+        s.italic = self.italic;
+        s.mono = self.mono;
+        s.line_height = self.line_height;
+        s.text_align = self.text_align;
+        s.text_indent = self.text_indent;
+        s.transform_text = self.transform_text;
+        s.white_space = self.white_space;
+        s.list_style = self.list_style;
+        s.list_inside = self.list_inside;
+        s.list_image = self.list_image;
+        s.visible = self.visible;
+        s.border_collapse = self.border_collapse;
+        s.caption_bottom = self.caption_bottom;
+        s.border_spacing = self.border_spacing;
+        s.justify_items = Align::Normal;
+        s.custom = self.custom.clone();
+        // (Text decorations are drawn through the boxes inside, as if inherited.)
+        s.underline = self.underline;
+        s.line_through = self.line_through;
+        s.overline = self.overline;
+        s.decoration_color = self.decoration_color;
+        s.hidden_text = self.hidden_text;
+        s
+    }
+
+    /// The line height in device pixels.
+    pub fn line_px(&self) -> f32 {
+        match self.line_height {
+            LineHeight::Normal => self.font_size * 1.25,
+            LineHeight::Factor(f) => self.font_size * f,
+            LineHeight::Px(p) => p,
+        }
+    }
+
+    pub fn is_positioned(&self) -> bool {
+        self.position != Position::Static
+    }
+
+    pub fn out_of_flow(&self) -> bool {
+        matches!(self.position, Position::Absolute | Position::Fixed)
+    }
+
+    pub fn is_bold(&self) -> bool {
+        self.font_weight >= 600
+    }
+
+    /// Whether it starts a new block formatting context (its floats and margins kept inside).
+    pub fn new_context(&self) -> bool {
+        self.clip
+            || self.float != Float::None
+            || self.out_of_flow()
+            || matches!(self.display, Display::FlowRoot | Display::InlineBlock | Display::Flex | Display::Grid
+                | Display::Table | Display::TableCell | Display::InlineFlex | Display::InlineGrid)
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ the cascade
+
+/// Every element's style (and its ::before's and ::after's, where they have content).
+pub struct Styles {
+    pub of: Vec<Option<Arc<Style>>>,
+    pub before: BTreeMap<NodeId, Arc<Style>>,
+    pub after: BTreeMap<NodeId, Arc<Style>>,
+}
+
+/// One selector of one rule, ready to match: which sheet and rule it's from, and its order in the cascade.
+struct Entry {
+    sheet: usize,
+    rule: usize,
+    selector: usize,
+    order: u32,
+}
+
+/// The rules, by the last part of each selector (its id, else a class, else its element's name), so an element only
+/// tries those it could match.
+#[derive(Default)]
+struct Index {
+    by_id: BTreeMap<String, Vec<usize>>,
+    by_class: BTreeMap<String, Vec<usize>>,
+    by_tag: BTreeMap<String, Vec<usize>>,
+    any: Vec<usize>,
+    pseudo: Vec<usize>,
+}
+
+/// What styles are worked out from: the browser's sheet, then the page's.
+pub struct Sheets<'a> {
+    pub ua: &'a Sheet,
+    pub author: &'a [Sheet],
+}
+
+pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Styles {
+    let all: Vec<&Sheet> = core::iter::once(sheets.ua).chain(sheets.author.iter()).collect();
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut index = Index::default();
+    let mut order = 0u32;
+    for (si, sheet) in all.iter().enumerate() {
+        for (ri, rule) in sheet.rules.iter().enumerate() {
+            order += 1;
+            for (k, sel) in rule.selectors.iter().enumerate() {
+                let e = entries.len();
+                entries.push(Entry { sheet: si, rule: ri, selector: k, order });
+                if sel.pseudo_element.is_some() {
+                    index.pseudo.push(e);
+                    continue;
+                }
+                let Some(last) = sel.compounds.last() else { continue };
+                if let Some(id) = last.ids.first() {
+                    index.by_id.entry(id.clone()).or_default().push(e);
+                } else if let Some(c) = last.classes.first() {
+                    index.by_class.entry(c.clone()).or_default().push(e);
+                } else if let Some(t) = &last.tag {
+                    index.by_tag.entry(t.clone()).or_default().push(e);
+                } else {
+                    index.any.push(e);
+                }
+            }
+        }
+    }
+    let units_root = Units { em: 16.0 * dpr, rem: 16.0 * dpr, vw: view.width * dpr, vh: view.height * dpr, dpr };
+    let mut c = Cascade {
+        doc,
+        sheets: all,
+        entries,
+        index,
+        view,
+        dpr,
+        rem: units_root.rem,
+        out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new() },
+        sibling: SiblingInfo::new(doc),
+    };
+    // In the order they come, parents before children (no recursion: a page's elements can be deep).
+    let root_style = Arc::new(Style::initial(dpr));
+    let mut stack: Vec<(NodeId, Arc<Style>)> = vec![(0, root_style)];
+    while let Some((id, parent)) = stack.pop() {
+        let mine = if c.doc.element(id).is_some() {
+            let s = Arc::new(c.style_of(id, &parent));
+            c.out.of[id] = Some(s.clone());
+            s
+        } else {
+            parent
+        };
+        for &child in c.doc.children(id).iter().rev() {
+            if c.doc.element(child).is_some() {
+                stack.push((child, mine.clone()));
+            }
+        }
+    }
+    c.out
+}
+
+/// Each element's place among its parent's elements, and how many there are.
+pub(crate) struct SiblingInfo {
+    index: Vec<u32>,
+    count: Vec<u32>,
+}
+
+impl SiblingInfo {
+    fn new(doc: &Document) -> SiblingInfo {
+        let mut index = vec![0u32; doc.nodes.len()];
+        let mut count = vec![0u32; doc.nodes.len()];
+        for n in &doc.nodes {
+            let kids: Vec<NodeId> = n.children.iter().copied().filter(|&k| doc.element(k).is_some()).collect();
+            for (i, &k) in kids.iter().enumerate() {
+                index[k] = i as u32 + 1;
+                count[k] = kids.len() as u32;
+            }
+        }
+        SiblingInfo { index, count }
+    }
+}
+
+struct Cascade<'a> {
+    doc: &'a Document,
+    sheets: Vec<&'a Sheet>,
+    entries: Vec<Entry>,
+    index: Index,
+    view: Viewport,
+    dpr: f32,
+    rem: f32,
+    out: Styles,
+    sibling: SiblingInfo,
+}
+
+/// A declaration's place in the cascade: (tier, specificity, order), lowest first.
+type Rank = (u8, u32, u32);
+
+impl Cascade<'_> {
+    fn decl(&self, e: &Entry) -> &[Decl] {
+        &self.sheets[e.sheet].rules[e.rule].decls
+    }
+
+    fn selector(&self, e: &Entry) -> &Selector {
+        &self.sheets[e.sheet].rules[e.rule].selectors[e.selector]
+    }
+
+    fn style_of(&mut self, id: NodeId, parent: &Style) -> Style {
+        let Some(el) = self.doc.element(id) else { return parent.inherit(self.dpr) };
+        let mut found: Vec<(Rank, &Decl)> = Vec::new();
+        let mut candidates: Vec<usize> = Vec::new();
+        if let Some(i) = el.id()
+            && let Some(v) = self.index.by_id.get(i)
+        {
+            candidates.extend(v);
+        }
+        for class in el.classes() {
+            if let Some(v) = self.index.by_class.get(class) {
+                candidates.extend(v);
+            }
+        }
+        if let Some(v) = self.index.by_tag.get(&el.name) {
+            candidates.extend(v);
+        }
+        candidates.extend(&self.index.any);
+        candidates.sort_unstable();
+        candidates.dedup();
+        for &e in &candidates {
+            let entry = &self.entries[e];
+            let sel = self.selector(entry);
+            if matches(self.doc, &self.sibling, id, sel) {
+                let ua = entry.sheet == 0;
+                for d in self.decl(entry) {
+                    let tier = match (ua, d.important) {
+                        (true, false) => 0,
+                        (false, false) => 1,
+                        (false, true) => 3,
+                        (true, true) => 5,
+                    };
+                    found.push(((tier, sel.specificity, entry.order), d));
+                }
+            }
+        }
+        // The style attribute.
+        let inline: Vec<Decl> = el.attr("style").map(css::inline_style).unwrap_or_default();
+        for d in &inline {
+            found.push(((if d.important { 4 } else { 2 }, 0, u32::MAX), d));
+        }
+        // HTML's attributes that style (presentational hints), below the page's own rules.
+        let hints = hints(self.doc, id);
+        for d in &hints {
+            found.push(((1, 0, 0), d));
+        }
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut s = self.apply(id, parent, &found);
+        // ::before and ::after.
+        let pseudo: Vec<usize> = self.index.pseudo.clone();
+        for which in [PseudoElement::Before, PseudoElement::After] {
+            let mut pf: Vec<(Rank, &Decl)> = Vec::new();
+            for &e in &pseudo {
+                let entry = &self.entries[e];
+                let sel = self.selector(entry);
+                if sel.pseudo_element == Some(which) && matches(self.doc, &self.sibling, id, sel) {
+                    let ua = entry.sheet == 0;
+                    for d in self.decl(entry) {
+                        let tier = if d.important { if ua { 5 } else { 3 } } else if ua { 0 } else { 1 };
+                        pf.push(((tier, sel.specificity, entry.order), d));
+                    }
+                }
+            }
+            if pf.is_empty() {
+                continue;
+            }
+            pf.sort_by(|a, b| a.0.cmp(&b.0));
+            let ps = self.apply_pseudo(id, &s, &pf);
+            if let Some(ps) = ps {
+                let map = if which == PseudoElement::Before { &mut self.out.before } else { &mut self.out.after };
+                map.insert(id, Arc::new(ps));
+            }
+        }
+        if s.display == Display::None {
+            s.content = None;
+        }
+        s
+    }
+
+    fn apply_pseudo(&self, id: NodeId, parent: &Style, found: &[(Rank, &Decl)]) -> Option<Style> {
+        let s = self.apply_with(id, parent, found, true);
+        let text = s.content.as_ref()?;
+        if s.display == Display::None {
+            return None;
+        }
+        // (Icon fonts' characters, which no font here has, and empty content that only draws a box with no size.)
+        let shown = text.chars().any(|c| !matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..=0x10FFFF));
+        let has_box = s.width.len().is_some() || s.height.len().is_some() || s.background != values::TRANSPARENT
+            || s.border_width.iter().any(|&w| w > 0.0);
+        if !shown && !has_box {
+            return None;
+        }
+        Some(s)
+    }
+
+    fn apply(&self, id: NodeId, parent: &Style, found: &[(Rank, &Decl)]) -> Style {
+        self.apply_with(id, parent, found, false)
+    }
+
+    fn apply_with(&self, id: NodeId, parent: &Style, found: &[(Rank, &Decl)], pseudo: bool) -> Style {
+        let mut s = parent.inherit(self.dpr);
+        // Custom properties first (var() needs them), then font-size (em needs it), then color (currentColor), then
+        // the rest, each in cascade order.
+        let customs: Vec<&Decl> = found.iter().filter(|(_, d)| d.name.starts_with("--")).map(|(_, d)| *d).collect();
+        if !customs.is_empty() {
+            let mut map = (*s.custom).clone();
+            for d in customs {
+                let value = substitute(&d.value, &map, 0).unwrap_or_default();
+                map.insert(d.name.clone(), Arc::new(value));
+            }
+            s.custom = Arc::new(map);
+        }
+        let is_root = self.doc.parent(id) == Some(0);
+        let mut ctx = Ctx { parent, units: Units { em: parent.font_size, rem: self.rem, vw: self.view.width * self.dpr, vh: self.view.height * self.dpr, dpr: self.dpr } };
+        for pass in 0..3 {
+            for (_, d) in found {
+                if d.name.starts_with("--") {
+                    continue;
+                }
+                let early = matches!(d.name.as_str(), "font-size" | "font");
+                let colour = d.name == "color";
+                let wanted = match pass {
+                    0 => early,
+                    1 => colour,
+                    _ => !early && !colour,
+                };
+                if !wanted {
+                    continue;
+                }
+                let value: Vec<Tok>;
+                let v: &[Tok] = if has_var(&d.value) {
+                    match substitute(&d.value, &s.custom, 0) {
+                        Some(x) => {
+                            value = x;
+                            &value
+                        }
+                        None => continue,
+                    }
+                } else {
+                    &d.value
+                };
+                apply_one(&mut s, &d.name, v, &ctx);
+            }
+            if pass == 0 {
+                ctx.units.em = s.font_size;
+                if is_root {
+                    // (rem is the root's font size.)
+                    ctx.units.rem = s.font_size;
+                }
+            }
+        }
+        let _ = pseudo;
+        // Blockified: floats, absolutely positioned boxes, the root, and flex and grid items.
+        let parent_display = self.doc.parent_element(id).and_then(|p| self.out.of.get(p).and_then(|x| x.as_ref())).map(|p| p.display);
+        let in_flex = matches!(parent_display, Some(Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid));
+        if (s.float != Float::None || s.out_of_flow() || is_root || in_flex) && !pseudo {
+            s.display = s.display.blockified();
+        }
+        if s.out_of_flow() {
+            s.float = Float::None;
+        }
+        if s.display == Display::None {
+            return s;
+        }
+        // Text hidden off the screen ("text-indent: -9999px", or clipped to nothing) isn't drawn.
+        if s.text_indent.px < -1000.0 {
+            s.hidden_text = true;
+        }
+        s
+    }
+}
+
+/// HTML attributes that style: width and height (of pictures, tables, cells...), align, bgcolor, border, color...
+fn hints(doc: &Document, id: NodeId) -> Vec<Decl> {
+    let Some(el) = doc.element(id) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut add = |name: &str, css: String| {
+        for mut d in css::inline_style(&alloc::format!("{name}: {css}")) {
+            d.important = false;
+            out.push(d);
+        }
+    };
+    let dim = |v: &str| -> Option<String> {
+        let v = v.trim();
+        if let Some(p) = v.strip_suffix('%') {
+            p.trim().parse::<f32>().ok().map(|n| alloc::format!("{n}%"))
+        } else {
+            let n: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            n.parse::<f32>().ok().map(|n| alloc::format!("{n}px"))
+        }
+    };
+    let name = el.name.as_str();
+    if matches!(name, "img" | "table" | "td" | "th" | "col" | "iframe" | "video" | "canvas" | "embed" | "object" | "svg" | "input" | "hr" | "image") {
+        if let Some(w) = el.attr("width").and_then(dim) {
+            add("width", w);
+        }
+        if let Some(h) = el.attr("height").and_then(dim)
+            && name != "hr"
+        {
+            add("height", h);
+        }
+    }
+    if let Some(a) = el.attr("align") {
+        let a = a.to_ascii_lowercase();
+        match (name, a.as_str()) {
+            ("img" | "iframe" | "object" | "embed" | "table", "left") => add("float", String::from("left")),
+            ("img" | "iframe" | "object" | "embed" | "table", "right") => add("float", String::from("right")),
+            ("table", "center") => {
+                add("margin-left", String::from("auto"));
+                add("margin-right", String::from("auto"));
+            }
+            ("img", "middle" | "absmiddle" | "center") => add("vertical-align", String::from("middle")),
+            ("img", "top") => add("vertical-align", String::from("top")),
+            (_, "center" | "middle") => add("text-align", String::from("center")),
+            (_, "left" | "right" | "justify") => add("text-align", a.clone()),
+            _ => {}
+        }
+    }
+    if let Some(v) = el.attr("valign") {
+        add("vertical-align", v.to_ascii_lowercase());
+    }
+    if let Some(c) = el.attr("bgcolor") {
+        add("background-color", legacy_color(c));
+    }
+    if name == "font" {
+        if let Some(c) = el.attr("color") {
+            add("color", legacy_color(c));
+        }
+        if let Some(sz) = el.attr("size") {
+            let sz = sz.trim();
+            let n: i32 = sz.trim_start_matches(['+', '-']).parse().unwrap_or(3);
+            let n = if sz.starts_with('+') { 3 + n } else if sz.starts_with('-') { 3 - n } else { n };
+            let size = match n.clamp(1, 7) {
+                1 => "x-small",
+                2 => "small",
+                3 => "medium",
+                4 => "large",
+                5 => "x-large",
+                6 => "xx-large",
+                _ => "xxx-large",
+            };
+            add("font-size", String::from(size));
+        }
+        if let Some(f) = el.attr("face") {
+            add("font-family", String::from(f));
+        }
+    }
+    if name == "body" {
+        if let Some(c) = el.attr("text") {
+            add("color", legacy_color(c));
+        }
+        if let Some(m) = el.attr("marginwidth").or(el.attr("leftmargin")).and_then(dim) {
+            add("margin-left", m.clone());
+            add("margin-right", m);
+        }
+        if let Some(m) = el.attr("marginheight").or(el.attr("topmargin")).and_then(dim) {
+            add("margin-top", m.clone());
+            add("margin-bottom", m);
+        }
+    }
+    if name == "table" && el.attr("align").is_none() {
+        let mut at = doc.parent(id);
+        while let Some(p) = at {
+            let Some(e) = doc.element(p) else { break };
+            if e.name == "center" || e.attr("align").is_some_and(|a| a.eq_ignore_ascii_case("center")) {
+                add("margin-left", String::from("auto"));
+                add("margin-right", String::from("auto"));
+                break;
+            }
+            if e.attr("align").is_some() || matches!(e.name.as_str(), "td" | "th" | "table" | "body") {
+                break;
+            }
+            at = doc.parent(p);
+        }
+    }
+    if name == "table" {
+        if let Some(b) = el.attr("border") {
+            let w = b.trim().parse::<f32>().unwrap_or(1.0);
+            if w > 0.0 {
+                add("border", alloc::format!("{w}px outset grey"));
+            }
+        }
+        if let Some(cs) = el.attr("cellspacing").and_then(dim) {
+            add("border-spacing", cs);
+        }
+    }
+    if matches!(name, "td" | "th") {
+        // A table's cellpadding and border reach its cells.
+        if let Some(table) = doc.ancestor_named(id, "table").and_then(|t| doc.element(t)) {
+            if let Some(p) = table.attr("cellpadding").and_then(dim) {
+                add("padding", p);
+            }
+            if table.attr("border").and_then(|b| b.trim().parse::<f32>().ok()).unwrap_or(0.0) > 0.0 {
+                add("border", String::from("1px inset grey"));
+            }
+        }
+        if el.has_attr("nowrap") {
+            add("white-space", String::from("nowrap"));
+        }
+    }
+    if matches!(name, "ul" | "ol") && let Some(t) = el.attr("type") {
+        let ls = match t {
+            "1" => "decimal",
+            "a" => "lower-alpha",
+            "A" => "upper-alpha",
+            "i" => "lower-roman",
+            "I" => "upper-roman",
+            "circle" => "circle",
+            "square" => "square",
+            _ => "disc",
+        };
+        add("list-style-type", String::from(ls));
+    }
+    if name == "hr" && let Some(w) = el.attr("width").and_then(dim) {
+        add("width", w);
+    }
+    if name == "input" && let Some(sz) = el.attr("size").and_then(|s| s.trim().parse::<f32>().ok()) {
+        add("width", alloc::format!("{}em", sz * 0.55 + 0.5));
+    }
+    if name == "textarea" {
+        let cols = el.attr("cols").and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(20.0);
+        let rows = el.attr("rows").and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(2.0);
+        add("width", alloc::format!("{}em", cols * 0.55));
+        add("height", alloc::format!("{}em", rows * 1.25));
+    }
+    out
+}
+
+/// A colour as old HTML attributes write it ("red", "#fff", "ff0000").
+fn legacy_color(c: &str) -> String {
+    let c = c.trim();
+    if c.len() == 6 && c.chars().all(|x| x.is_ascii_hexdigit()) {
+        return alloc::format!("#{c}");
+    }
+    String::from(c)
+}
+
+fn has_var(t: &[Tok]) -> bool {
+    t.iter().any(|x| matches!(x, Tok::Function(f) if f == "var" || f == "env"))
+}
+
+/// var(--x, fallback) (and env(), as its fallback) replaced by what it stands for: None if one can't be.
+fn substitute(t: &[Tok], custom: &BTreeMap<String, Arc<Vec<Tok>>>, depth: u32) -> Option<Vec<Tok>> {
+    if depth > 8 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(t.len());
+    let mut i = 0;
+    while i < t.len() {
+        if let Tok::Function(f) = &t[i]
+            && (f == "var" || f == "env")
+        {
+            // Its arguments, to its ")".
+            let mut depth_b = 0;
+            let mut end = t.len();
+            for (k, tok) in t.iter().enumerate().skip(i) {
+                match tok {
+                    Tok::Function(_) | Tok::OpenParen => depth_b += 1,
+                    Tok::CloseParen => {
+                        depth_b -= 1;
+                        if depth_b == 0 {
+                            end = k;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let inner = &t[(i + 1).min(t.len())..end.min(t.len())];
+            let comma = inner.iter().position(|x| *x == Tok::Comma);
+            let name_part = values::trim(&inner[..comma.unwrap_or(inner.len())]);
+            let fallback = comma.map(|c| &inner[c + 1..]);
+            let value = match (f.as_str(), name_part) {
+                ("var", [Tok::Ident(name)]) => custom.get(name.as_str()).map(|v| v.as_slice()).filter(|v| !v.is_empty() && !(v.len() == 1 && matches!(&v[0], Tok::Ident(i) if i == "initial"))),
+                _ => None,
+            };
+            match (value, fallback) {
+                (Some(v), _) => out.extend(substitute(v, custom, depth + 1)?),
+                (None, Some(fb)) => out.extend(substitute(values::trim(fb), custom, depth + 1)?),
+                (None, None) => return None,
+            }
+            i = end + 1;
+            continue;
+        }
+        out.push(t[i].clone());
+        i += 1;
+    }
+    Some(out)
+}
+
+// ------------------------------------------------------------------------------------------------ matching
+
+pub(crate) fn matches(doc: &Document, sib: &SiblingInfoRef, id: NodeId, sel: &Selector) -> bool {
+    let n = sel.compounds.len();
+    if n == 0 {
+        return false;
+    }
+    match_from(doc, sib, id, sel, n - 1, 0)
+}
+
+type SiblingInfoRef = SiblingInfo;
+
+/// Whether the compounds up to `k` match with the `k`th on `id`.
+fn match_from(doc: &Document, sib: &SiblingInfo, id: NodeId, sel: &Selector, k: usize, depth: u32) -> bool {
+    if depth > 64 || !compound(doc, sib, id, &sel.compounds[k]) {
+        return false;
+    }
+    if k == 0 {
+        return true;
+    }
+    match sel.combinators.get(k - 1) {
+        Some(Combinator::Child) => doc.parent_element(id).is_some_and(|p| match_from(doc, sib, p, sel, k - 1, depth + 1)),
+        Some(Combinator::Descendant) | None => {
+            let mut at = doc.parent_element(id);
+            while let Some(p) = at {
+                if match_from(doc, sib, p, sel, k - 1, depth + 1) {
+                    return true;
+                }
+                at = doc.parent_element(p);
+            }
+            false
+        }
+        Some(Combinator::Next) => previous_element(doc, id).is_some_and(|p| match_from(doc, sib, p, sel, k - 1, depth + 1)),
+        Some(Combinator::Later) => {
+            let mut at = previous_element(doc, id);
+            while let Some(p) = at {
+                if match_from(doc, sib, p, sel, k - 1, depth + 1) {
+                    return true;
+                }
+                at = previous_element(doc, p);
+            }
+            false
+        }
+    }
+}
+
+fn previous_element(doc: &Document, id: NodeId) -> Option<NodeId> {
+    let p = doc.parent(id)?;
+    let kids = doc.children(p);
+    let at = kids.iter().position(|&k| k == id)?;
+    kids[..at].iter().rev().copied().find(|&k| doc.element(k).is_some())
+}
+
+fn compound(doc: &Document, sib: &SiblingInfo, id: NodeId, c: &Compound) -> bool {
+    let Some(el) = doc.element(id) else { return false };
+    if let Some(t) = &c.tag
+        && *t != el.name
+    {
+        return false;
+    }
+    for i in &c.ids {
+        if el.id() != Some(i.as_str()) {
+            return false;
+        }
+    }
+    for cl in &c.classes {
+        if !el.has_class(cl) {
+            return false;
+        }
+    }
+    for a in &c.attrs {
+        let Some(v) = el.attr(&a.name) else { return false };
+        let (v, want) = if a.ci { (v.to_ascii_lowercase(), a.value.to_ascii_lowercase()) } else { (String::from(v), a.value.clone()) };
+        let ok = match a.op {
+            AttrOp::Exists => true,
+            AttrOp::Equals => v == want,
+            AttrOp::Includes => v.split_ascii_whitespace().any(|w| w == want),
+            AttrOp::Dash => v == want || v.starts_with(&alloc::format!("{want}-")),
+            AttrOp::Prefix => !want.is_empty() && v.starts_with(&want),
+            AttrOp::Suffix => !want.is_empty() && v.ends_with(&want),
+            AttrOp::Substring => !want.is_empty() && v.contains(&want),
+        };
+        if !ok {
+            return false;
+        }
+    }
+    for p in &c.pseudos {
+        if !pseudo(doc, sib, id, p) {
+            return false;
+        }
+    }
+    true
+}
+
+fn nth(a: i32, b: i32, n: i32) -> bool {
+    if a == 0 {
+        return n == b;
+    }
+    let d = n - b;
+    d % a == 0 && d / a >= 0
+}
+
+fn pseudo(doc: &Document, sib: &SiblingInfo, id: NodeId, p: &Pseudo) -> bool {
+    let Some(el) = doc.element(id) else { return false };
+    let index = sib.index.get(id).copied().unwrap_or(1) as i32;
+    let count = sib.count.get(id).copied().unwrap_or(1) as i32;
+    match p {
+        Pseudo::FirstChild => index == 1,
+        Pseudo::LastChild => index == count,
+        Pseudo::OnlyChild => count == 1,
+        Pseudo::Nth(a, b, last) => nth(*a, *b, if *last { count - index + 1 } else { index }),
+        Pseudo::NthOfType(a, b, last) => {
+            let (all, at) = doc.element_siblings(id);
+            let same: Vec<NodeId> = all.iter().copied().filter(|&s| doc.name(s) == el.name).collect();
+            let pos = same.iter().position(|&s| s == id).unwrap_or(0) as i32;
+            let _ = at;
+            let n = if *last { same.len() as i32 - pos } else { pos + 1 };
+            nth(*a, *b, n)
+        }
+        Pseudo::OnlyOfType => {
+            let (all, _) = doc.element_siblings(id);
+            all.iter().filter(|&&s| doc.name(s) == el.name).count() == 1
+        }
+        Pseudo::Not(list) => !list.iter().any(|s| matches(doc, sib, id, s)),
+        Pseudo::Is(list) => list.iter().any(|s| matches(doc, sib, id, s)),
+        Pseudo::Has(list) => {
+            // Anything inside it matching (the relative part's combinator aside), at most a few thousand looked at.
+            doc.descendants(id).skip(1).take(4000).any(|d| doc.element(d).is_some() && list.iter().any(|s| {
+                let last = Selector { compounds: s.compounds.last().cloned().into_iter().collect(), combinators: Vec::new(), specificity: 0, pseudo_element: None };
+                matches(doc, sib, d, if s.compounds.len() > 1 && s.compounds[0].tag.is_none() && s.compounds[0].classes.is_empty() && s.compounds[0].ids.is_empty() { &last } else { s })
+            }))
+        }
+        Pseudo::Root => doc.parent(id) == Some(0),
+        Pseudo::Empty => doc.children(id).iter().all(|&k| match &doc.nodes[k].data {
+            Data::Element(_) => false,
+            Data::Text(t) => t.is_empty(),
+            Data::Document => true,
+        }),
+        Pseudo::Link => matches!(el.name.as_str(), "a" | "area") && el.has_attr("href"),
+        Pseudo::Checked => (el.name == "input" && el.has_attr("checked")) || (el.name == "option" && el.has_attr("selected")),
+        Pseudo::Disabled => el.has_attr("disabled") && matches!(el.name.as_str(), "input" | "button" | "select" | "textarea" | "option" | "fieldset"),
+        Pseudo::Enabled => !el.has_attr("disabled") && matches!(el.name.as_str(), "input" | "button" | "select" | "textarea" | "option"),
+        Pseudo::Required => el.has_attr("required"),
+        Pseudo::Optional => !el.has_attr("required") && matches!(el.name.as_str(), "input" | "select" | "textarea"),
+        Pseudo::PlaceholderShown => el.has_attr("placeholder") && el.attr("value").unwrap_or("").is_empty(),
+        Pseudo::Never => false,
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ properties
+
+struct Ctx<'a> {
+    parent: &'a Style,
+    units: Units,
+}
+
+fn ident(v: &[Tok]) -> Option<String> {
+    match values::trim(v) {
+        [Tok::Ident(i)] => Some(i.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+/// The value's parts, split at spaces (a function and what's in it are one part).
+fn parts(v: &[Tok]) -> Vec<&[Tok]> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let v = values::trim(v);
+    while i < v.len() {
+        if v[i] == Tok::Ws {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        if matches!(v[i], Tok::Function(_) | Tok::OpenParen | Tok::OpenSquare) {
+            let mut depth = 0;
+            while i < v.len() {
+                match v[i] {
+                    Tok::Function(_) | Tok::OpenParen | Tok::OpenSquare => depth += 1,
+                    Tok::CloseParen | Tok::CloseSquare => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+        out.push(&v[start..i.min(v.len())]);
+    }
+    out
+}
+
+fn size_value(v: &[Tok], c: &Ctx, base: f32) -> Option<Size> {
+    if let Some(i) = ident(v) {
+        return Some(match i.as_str() {
+            "auto" => Size::Auto,
+            "none" => Size::None,
+            "min-content" => Size::MinContent,
+            "max-content" => Size::MaxContent,
+            "fit-content" | "-webkit-fit-content" | "-moz-fit-content" | "stretch" | "-webkit-fill-available" | "-moz-available" => {
+                if i.contains("fill") || i == "stretch" || i.contains("available") { Size::Auto } else { Size::FitContent }
+            }
+            _ => return None,
+        });
+    }
+    if let [Tok::Function(f), ..] = values::trim(v)
+        && f == "fit-content"
+    {
+        return Some(Size::FitContent);
+    }
+    values::length(v, &c.units, base).map(Size::Len)
+}
+
+/// One, two, three or four values for the four sides (top, right, bottom, left).
+fn four<T: Copy>(v: &[Tok], f: impl Fn(&[Tok]) -> Option<T>) -> Option<[T; 4]> {
+    let p = parts(v);
+    let vals: Vec<T> = p.iter().map(|x| f(x)).collect::<Option<_>>()?;
+    Some(match vals.len() {
+        1 => [vals[0]; 4],
+        2 => [vals[0], vals[1], vals[0], vals[1]],
+        3 => [vals[0], vals[1], vals[2], vals[1]],
+        4 => [vals[0], vals[1], vals[2], vals[3]],
+        _ => return None,
+    })
+}
+
+fn border_style(i: &str) -> Option<BorderStyle> {
+    Some(match i {
+        "none" | "hidden" => BorderStyle::None,
+        "solid" => BorderStyle::Solid,
+        "dashed" => BorderStyle::Dashed,
+        "dotted" => BorderStyle::Dotted,
+        "double" => BorderStyle::Double,
+        "inset" => BorderStyle::Inset,
+        "outset" => BorderStyle::Outset,
+        "groove" => BorderStyle::Groove,
+        "ridge" => BorderStyle::Ridge,
+        _ => return None,
+    })
+}
+
+fn border_width(v: &[Tok], c: &Ctx) -> Option<f32> {
+    match ident(v).as_deref() {
+        Some("thin") => Some(1.0 * c.units.dpr),
+        Some("medium") => Some(3.0 * c.units.dpr),
+        Some("thick") => Some(5.0 * c.units.dpr),
+        _ => values::length(v, &c.units, 0.0).map(|l| l.px.max(0.0)),
+    }
+}
+
+/// "1px solid red" in any order: (width, style, colour).
+fn border_parts(v: &[Tok], c: &Ctx, current: Color) -> Option<(Option<f32>, Option<BorderStyle>, Option<Color>)> {
+    let (mut w, mut st, mut col) = (None, None, None);
+    for p in parts(v) {
+        if let Some(i) = ident(p)
+            && let Some(s) = border_style(&i)
+        {
+            st = Some(s);
+        } else if let Some(x) = border_width(p, c) {
+            w = Some(x);
+        } else if let Some(x) = values::color(p, current) {
+            col = Some(x);
+        } else {
+            return None;
+        }
+    }
+    Some((w, st, col))
+}
+
+fn align(i: &str) -> Option<Align> {
+    Some(match i {
+        "normal" | "auto" => Align::Normal,
+        "start" | "flex-start" | "self-start" | "left" | "top" => Align::Start,
+        "end" | "flex-end" | "self-end" | "right" | "bottom" => Align::End,
+        "center" => Align::Center,
+        "stretch" => Align::Stretch,
+        "baseline" | "first" | "last" => Align::Baseline,
+        "space-between" => Align::SpaceBetween,
+        "space-around" => Align::SpaceAround,
+        "space-evenly" => Align::SpaceEvenly,
+        "safe" | "unsafe" => return None,
+        _ => return None,
+    })
+}
+
+fn align_value(v: &[Tok]) -> Option<Align> {
+    // ("safe center", "first baseline": the last word that means something.)
+    parts(v).iter().filter_map(|p| ident(p)).filter_map(|i| align(&i)).last()
+}
+
+fn display_value(i: &str) -> Option<Display> {
+    Some(match i {
+        "none" => Display::None,
+        "contents" => Display::Contents,
+        "block" | "block flow" => Display::Block,
+        "flow-root" | "block flow-root" => Display::FlowRoot,
+        "inline" | "inline flow" | "ruby" | "ruby-text" | "ruby-base" => Display::Inline,
+        "inline-block" | "inline flow-root" => Display::InlineBlock,
+        "list-item" | "block list-item" | "list-item block" => Display::ListItem,
+        "flex" | "block flex" | "-webkit-box" | "-webkit-flex" | "-ms-flexbox" => Display::Flex,
+        "inline-flex" | "inline flex" | "-webkit-inline-box" | "-webkit-inline-flex" => Display::InlineFlex,
+        "grid" | "block grid" => Display::Grid,
+        "inline-grid" | "inline grid" => Display::InlineGrid,
+        "table" | "block table" => Display::Table,
+        "inline-table" | "inline table" => Display::InlineTable,
+        "table-row" => Display::TableRow,
+        "table-cell" => Display::TableCell,
+        "table-row-group" => Display::TableRowGroup,
+        "table-header-group" => Display::TableHeaderGroup,
+        "table-footer-group" => Display::TableFooterGroup,
+        "table-column" => Display::TableColumn,
+        "table-column-group" => Display::TableColumnGroup,
+        "table-caption" => Display::TableCaption,
+        _ => return None,
+    })
+}
+
+fn list_style(i: &str) -> Option<ListStyle> {
+    Some(match i {
+        "none" => ListStyle::None,
+        "disc" => ListStyle::Disc,
+        "circle" => ListStyle::Circle,
+        "square" => ListStyle::Square,
+        "decimal" | "decimal-leading-zero" | "arabic-indic" => ListStyle::Decimal,
+        "lower-alpha" | "lower-latin" => ListStyle::LowerAlpha,
+        "upper-alpha" | "upper-latin" => ListStyle::UpperAlpha,
+        "lower-roman" => ListStyle::LowerRoman,
+        "upper-roman" => ListStyle::UpperRoman,
+        _ => return None,
+    })
+}
+
+fn font_size(v: &[Tok], c: &Ctx) -> Option<f32> {
+    let parent = c.parent.font_size;
+    let dpr = c.units.dpr;
+    if let Some(i) = ident(v) {
+        return Some(match i.as_str() {
+            "xx-small" => 9.0 * dpr,
+            "x-small" => 10.0 * dpr,
+            "small" => 13.0 * dpr,
+            "medium" => 16.0 * dpr,
+            "large" => 18.0 * dpr,
+            "x-large" => 24.0 * dpr,
+            "xx-large" => 32.0 * dpr,
+            "xxx-large" => 48.0 * dpr,
+            "smaller" => parent / 1.2,
+            "larger" => parent * 1.2,
+            _ => return None,
+        });
+    }
+    // em and % are of the parent's size here.
+    let u = Units { em: parent, ..c.units };
+    let l = values::length(v, &u, 0.0)?;
+    Some((l.px + l.pct * parent / 100.0).max(0.0))
+}
+
+fn font_weight(v: &[Tok], parent: u16) -> Option<u16> {
+    if let Some(i) = ident(v) {
+        return Some(match i.as_str() {
+            "normal" => 400,
+            "bold" => 700,
+            "bolder" => {
+                if parent < 350 {
+                    400
+                } else if parent < 550 {
+                    700
+                } else {
+                    900
+                }
+            }
+            "lighter" => {
+                if parent < 550 {
+                    100
+                } else if parent < 750 {
+                    400
+                } else {
+                    700
+                }
+            }
+            _ => return None,
+        });
+    }
+    match values::trim(v) {
+        [Tok::Number(n)] => Some(n.clamp(1.0, 1000.0) as u16),
+        _ => None,
+    }
+}
+
+fn family_is_mono(v: &[Tok]) -> bool {
+    let mut words = String::new();
+    for t in v {
+        match t {
+            Tok::Ident(i) | Tok::Str(i) => {
+                words.push_str(&i.to_ascii_lowercase());
+                words.push(' ');
+            }
+            Tok::Comma => break,
+            _ => {}
+        }
+    }
+    ["mono", "courier", "consolas", "menlo", "monaco", "code", "fixed", "terminal"].iter().any(|m| words.contains(m))
+}
+
+fn line_height(v: &[Tok], c: &Ctx, size: f32) -> Option<LineHeight> {
+    if ident(v).as_deref() == Some("normal") {
+        return Some(LineHeight::Normal);
+    }
+    if let Some(n) = values::number(v, &c.units) {
+        return Some(LineHeight::Factor(n.max(0.0)));
+    }
+    let u = Units { em: size, ..c.units };
+    let l = values::length(v, &u, 0.0)?;
+    Some(LineHeight::Px((l.px + l.pct * size / 100.0).max(0.0)))
+}
+
+fn gradient(f: &str, inner: &[Tok], current: Color) -> Option<Image> {
+    let args = css::split_commas(inner);
+    let mut angle = 180.0f32;
+    let mut stops_from = 0;
+    if let Some(first) = args.first() {
+        let p = parts(first);
+        if let Some(a) = p.first().and_then(|t| t.first()).and_then(values::angle).filter(|_| matches!(p.first().and_then(|t| t.first()), Some(Tok::Dimension(..)))) {
+            angle = a;
+            stops_from = 1;
+        } else if let Some(Tok::Ident(to)) = p.first().and_then(|t| t.first())
+            && to.eq_ignore_ascii_case("to")
+        {
+            let words: Vec<String> = p.iter().skip(1).filter_map(|x| ident(x)).collect();
+            let has = |w: &str| words.iter().any(|x| x == w);
+            angle = match (has("top"), has("bottom"), has("left"), has("right")) {
+                (true, _, false, false) => 0.0,
+                (_, true, false, false) => 180.0,
+                (false, false, true, _) => 270.0,
+                (false, false, _, true) => 90.0,
+                (true, _, _, true) => 45.0,
+                (_, true, _, true) => 135.0,
+                (_, true, true, _) => 225.0,
+                (true, _, true, _) => 315.0,
+                _ => 180.0,
+            };
+            stops_from = 1;
+        }
+    }
+    if f.contains("radial") || f.contains("conic") {
+        // A radial or conic gradient: its colours, drawn as a linear one from the first to the last.
+        stops_from = usize::from(args.first().is_some_and(|a| values::color(values::trim(parts(a).first().copied().unwrap_or(&[])), current).is_none()));
+        angle = 180.0;
+    }
+    let mut stops = Vec::new();
+    for a in args.iter().skip(stops_from) {
+        let p = parts(a);
+        let Some(col) = p.first().and_then(|x| values::color(x, current)) else { continue };
+        let at = p.get(1).and_then(|x| match x.first() {
+            Some(Tok::Percent(n)) => Some(n / 100.0),
+            _ => None,
+        });
+        stops.push((col, at.unwrap_or(-1.0)));
+    }
+    if stops.is_empty() {
+        return None;
+    }
+    Some(Image::Linear(angle, stops))
+}
+
+fn background_layers(v: &[Tok], s: &mut Style, current: Color, colour_too: bool) {
+    // The last layer's colour; the first image (url() or a gradient).
+    let layers = css::split_commas(v);
+    let mut image = None;
+    for (n, layer) in layers.iter().enumerate() {
+        for p in parts(layer) {
+            match values::trim(p) {
+                [Tok::Url(u)] if image.is_none() => image = Some(Image::Url(u.clone())),
+                [Tok::Function(f), Tok::Str(u), Tok::CloseParen] if f == "url" && image.is_none() => image = Some(Image::Url(u.clone())),
+                [Tok::Function(f), rest @ ..] if f.contains("gradient") && image.is_none() => {
+                    image = gradient(f, &rest[..rest.len().saturating_sub(1)], current);
+                }
+                _ => {
+                    if colour_too && n == layers.len() - 1
+                        && let Some(c) = values::color(p, current)
+                    {
+                        s.background = c;
+                    }
+                }
+            }
+        }
+    }
+    s.background_image = image;
+}
+
+fn grid_place(v: &[Tok]) -> GridPlace {
+    // "span 2", "1 / 3", "1 / -1", "2", "auto", "1 / span 2".
+    let halves = {
+        let mut out: Vec<Vec<Tok>> = vec![Vec::new()];
+        for t in v {
+            if *t == Tok::Delim('/') {
+                out.push(Vec::new());
+            } else if let Some(last) = out.last_mut() {
+                last.push(t.clone());
+            }
+        }
+        out
+    };
+    let read = |t: &[Tok]| -> (i32, u32) {
+        let mut line = 0;
+        let mut span = 0;
+        let mut spanning = false;
+        for p in parts(t) {
+            match values::trim(p) {
+                [Tok::Ident(i)] if i.eq_ignore_ascii_case("span") => spanning = true,
+                [Tok::Number(n)] => {
+                    if spanning {
+                        span = (*n as i32).max(1) as u32;
+                    } else {
+                        line = *n as i32;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if spanning && span == 0 {
+            span = 1;
+        }
+        (line, span)
+    };
+    let (start, s1) = read(&halves[0]);
+    let (end, s2) = halves.get(1).map(|h| read(h)).unwrap_or((0, 0));
+    let span = if s1 > 0 { s1 } else if s2 > 0 { s2 } else if start != 0 && end != 0 && end > start { (end - start) as u32 } else { 0 };
+    GridPlace { start, end, span }
+}
+
+fn tracks(v: &[Tok], c: &Ctx) -> Vec<Track> {
+    let mut out = Vec::new();
+    for p in parts(v) {
+        match values::trim(p) {
+            [Tok::OpenSquare, ..] => {} // a line's name
+            [Tok::Function(f), rest @ ..] if f == "repeat" => {
+                let inner = &rest[..rest.len().saturating_sub(1)];
+                let args = css::split_commas(inner);
+                if args.len() < 2 {
+                    continue;
+                }
+                let what = tracks(args[1], c);
+                match values::trim(args[0]) {
+                    [Tok::Number(n)] => {
+                        for _ in 0..(*n as usize).min(100) {
+                            out.extend(what.iter().cloned());
+                        }
+                    }
+                    _ => out.push(Track::AutoRepeat(what)),
+                }
+            }
+            [Tok::Function(f), rest @ ..] if f == "minmax" => {
+                let inner = &rest[..rest.len().saturating_sub(1)];
+                let args = css::split_commas(inner);
+                if args.len() == 2 {
+                    let a = tracks(args[0], c).into_iter().next().unwrap_or(Track::Auto);
+                    let b = tracks(args[1], c).into_iter().next().unwrap_or(Track::Auto);
+                    out.push(Track::MinMax(alloc::boxed::Box::new((a, b))));
+                }
+            }
+            [Tok::Function(f), ..] if f == "fit-content" => out.push(Track::Auto),
+            [Tok::Dimension(n, u)] if u == "fr" => out.push(Track::Fr(*n)),
+            [Tok::Ident(i)] => out.push(match i.to_ascii_lowercase().as_str() {
+                "min-content" => Track::MinContent,
+                "max-content" => Track::MaxContent,
+                _ => Track::Auto,
+            }),
+            x => {
+                if let Some(l) = values::length(x, &c.units, 0.0) {
+                    out.push(Track::Len(l));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn content(v: &[Tok], el_attr: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let mut out = String::new();
+    let mut any = false;
+    for p in parts(v) {
+        match values::trim(p) {
+            [Tok::Str(s)] => {
+                out.push_str(s);
+                any = true;
+            }
+            [Tok::Ident(i)] => match i.to_ascii_lowercase().as_str() {
+                "none" | "normal" => return None,
+                "open-quote" => {
+                    out.push('“');
+                    any = true;
+                }
+                "close-quote" => {
+                    out.push('”');
+                    any = true;
+                }
+                _ => {}
+            },
+            [Tok::Function(f), Tok::Ident(a), Tok::CloseParen] if f == "attr" => {
+                out.push_str(&el_attr(a).unwrap_or_default());
+                any = true;
+            }
+            [Tok::Function(_), ..] => any = true,
+            [Tok::Delim('/'), ..] => break,
+            _ => {}
+        }
+    }
+    any.then_some(out)
+}
+
+/// One declaration on the style being worked out.
+fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
+    let p = c.parent;
+    // The keywords every property takes.
+    if let Some(kw) = ident(v) {
+        match kw.as_str() {
+            "inherit" => {
+                inherit_one(s, p, name);
+                return;
+            }
+            "initial" | "unset" | "revert" | "revert-layer" => {
+                let init = Style::initial(c.units.dpr);
+                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "visibility" | "list-style-type" | "text-transform" | "font-family" | "font");
+                if kw == "initial" || !inherited {
+                    inherit_one(s, &init, name);
+                } else {
+                    inherit_one(s, p, name);
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
+    let cur = s.color;
+    let units = &c.units;
+    match name {
+        "display" => {
+            let words: Vec<String> = parts(v).iter().filter_map(|x| ident(x)).collect();
+            if let Some(d) = display_value(&words.join(" ")) {
+                s.display = d;
+            }
+        }
+        "position" => {
+            if let Some(i) = ident(v) {
+                s.position = match i.as_str() {
+                    "relative" => Position::Relative,
+                    "absolute" => Position::Absolute,
+                    "fixed" => Position::Fixed,
+                    "sticky" | "-webkit-sticky" => Position::Sticky,
+                    _ => Position::Static,
+                };
+            }
+        }
+        "float" => {
+            if let Some(i) = ident(v) {
+                s.float = match i.as_str() {
+                    "left" | "inline-start" => Float::Left,
+                    "right" | "inline-end" => Float::Right,
+                    _ => Float::None,
+                };
+            }
+        }
+        "clear" => {
+            if let Some(i) = ident(v) {
+                s.clear_both = i == "both";
+                s.clear = match i.as_str() {
+                    "left" | "inline-start" => Float::Left,
+                    "right" | "inline-end" => Float::Right,
+                    _ => Float::None,
+                };
+            }
+        }
+        "top" | "right" | "bottom" | "left" | "inset-block-start" | "inset-inline-end" | "inset-block-end" | "inset-inline-start" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                let k = match name {
+                    "top" | "inset-block-start" => 0,
+                    "right" | "inset-inline-end" => 1,
+                    "bottom" | "inset-block-end" => 2,
+                    _ => 3,
+                };
+                s.inset[k] = x;
+            }
+        }
+        "inset" => {
+            if let Some(x) = four(v, |t| size_value(t, c, 0.0)) {
+                s.inset = x;
+            }
+        }
+        "inset-inline" | "inset-block" => {
+            let ps = parts(v);
+            if let Some(a) = ps.first().and_then(|t| size_value(t, c, 0.0)) {
+                let b = ps.get(1).and_then(|t| size_value(t, c, 0.0)).unwrap_or(a);
+                if name == "inset-inline" {
+                    s.inset[3] = a;
+                    s.inset[1] = b;
+                } else {
+                    s.inset[0] = a;
+                    s.inset[2] = b;
+                }
+            }
+        }
+        "width" | "inline-size" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                s.width = x;
+            }
+        }
+        "height" | "block-size" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                s.height = x;
+            }
+        }
+        "min-width" | "min-inline-size" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                s.min_width = x;
+            }
+        }
+        "min-height" | "min-block-size" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                s.min_height = x;
+            }
+        }
+        "max-width" | "max-inline-size" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                s.max_width = x;
+            }
+        }
+        "max-height" | "max-block-size" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                s.max_height = x;
+            }
+        }
+        "margin" => {
+            if let Some(x) = four(v, |t| size_value(t, c, 0.0)) {
+                s.margin = x;
+            }
+        }
+        "margin-top" | "margin-right" | "margin-bottom" | "margin-left" | "margin-block-start" | "margin-inline-end"
+        | "margin-block-end" | "margin-inline-start" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                s.margin[side(name)] = x;
+            }
+        }
+        "margin-inline" | "margin-block" => {
+            let ps = parts(v);
+            if let Some(a) = ps.first().and_then(|t| size_value(t, c, 0.0)) {
+                let b = ps.get(1).and_then(|t| size_value(t, c, 0.0)).unwrap_or(a);
+                if name == "margin-inline" {
+                    s.margin[3] = a;
+                    s.margin[1] = b;
+                } else {
+                    s.margin[0] = a;
+                    s.margin[2] = b;
+                }
+            }
+        }
+        "padding" => {
+            if let Some(x) = four(v, |t| values::length(t, units, 0.0)) {
+                s.padding = x.map(|l| Len { px: l.px.max(0.0), pct: l.pct.max(0.0) });
+            }
+        }
+        "padding-top" | "padding-right" | "padding-bottom" | "padding-left" | "padding-block-start"
+        | "padding-inline-end" | "padding-block-end" | "padding-inline-start" => {
+            if let Some(x) = values::length(v, units, 0.0) {
+                s.padding[side(name)] = Len { px: x.px.max(0.0), pct: x.pct.max(0.0) };
+            }
+        }
+        "padding-inline" | "padding-block" => {
+            let ps = parts(v);
+            if let Some(a) = ps.first().and_then(|t| values::length(t, units, 0.0)) {
+                let b = ps.get(1).and_then(|t| values::length(t, units, 0.0)).unwrap_or(a);
+                if name == "padding-inline" {
+                    s.padding[3] = a;
+                    s.padding[1] = b;
+                } else {
+                    s.padding[0] = a;
+                    s.padding[2] = b;
+                }
+            }
+        }
+        "border" | "border-top" | "border-right" | "border-bottom" | "border-left" | "border-block-start"
+        | "border-inline-end" | "border-block-end" | "border-inline-start" | "border-inline" | "border-block" => {
+            if let Some((w, st, col)) = border_parts(v, c, cur) {
+                let sides: &[usize] = match name {
+                    "border" => &[0, 1, 2, 3],
+                    "border-inline" => &[1, 3],
+                    "border-block" => &[0, 2],
+                    n => match side(n) {
+                        0 => &[0],
+                        1 => &[1],
+                        2 => &[2],
+                        _ => &[3],
+                    },
+                };
+                for &k in sides {
+                    s.border_width[k] = w.unwrap_or(3.0 * c.units.dpr);
+                    s.border_style[k] = st.unwrap_or(BorderStyle::None);
+                    s.border_color[k] = col.unwrap_or(cur);
+                }
+            }
+        }
+        "border-width" => {
+            if let Some(x) = four(v, |t| border_width(t, c)) {
+                s.border_width = x;
+            }
+        }
+        "border-style" => {
+            if let Some(x) = four(v, |t| ident(t).and_then(|i| border_style(&i))) {
+                s.border_style = x;
+            }
+        }
+        "border-color" => {
+            if let Some(x) = four(v, |t| values::color(t, cur)) {
+                s.border_color = x;
+            }
+        }
+        "border-top-width" | "border-right-width" | "border-bottom-width" | "border-left-width" | "border-block-start-width"
+        | "border-inline-end-width" | "border-block-end-width" | "border-inline-start-width" => {
+            if let Some(x) = border_width(v, c) {
+                s.border_width[side(name)] = x;
+            }
+        }
+        "border-top-style" | "border-right-style" | "border-bottom-style" | "border-left-style" => {
+            if let Some(x) = ident(v).and_then(|i| border_style(&i)) {
+                s.border_style[side(name)] = x;
+            }
+        }
+        "border-top-color" | "border-right-color" | "border-bottom-color" | "border-left-color" => {
+            if let Some(x) = values::color(v, cur) {
+                s.border_color[side(name)] = x;
+            }
+        }
+        "border-radius" | "border-top-left-radius" | "-webkit-border-radius" => {
+            if let Some(first) = parts(v).first()
+                && let Some(l) = values::length(first, units, 0.0)
+            {
+                // (A percentage: of its size, which isn't known yet; 50% makes a circle of a square.)
+                s.radius = if l.pct >= 50.0 { 1.0e6 } else { l.px + l.pct * 0.1 * units.em };
+            }
+        }
+        "box-sizing" => s.border_box = ident(v).as_deref() == Some("border-box"),
+        "color" => {
+            if let Some(x) = values::color(v, p.color) {
+                s.color = x;
+            }
+        }
+        "background-color" => {
+            if let Some(x) = values::color(v, cur) {
+                s.background = x;
+            }
+        }
+        "background" => {
+            s.background = values::TRANSPARENT;
+            background_layers(v, s, cur, true);
+        }
+        "background-image" => background_layers(v, s, cur, false),
+        "mask" | "mask-image" | "-webkit-mask" | "-webkit-mask-image" | "-webkit-mask-box-image" => {
+            s.masked = !matches!(ident(v).as_deref(), Some("none" | "initial" | "unset"));
+        }
+        "font-size" => {
+            if let Some(x) = font_size(v, c) {
+                s.font_size = x;
+            }
+        }
+        "font-weight" => {
+            if let Some(x) = font_weight(v, p.font_weight) {
+                s.font_weight = x;
+            }
+        }
+        "font-style" => {
+            if let Some(i) = parts(v).first().and_then(|t| ident(t)) {
+                s.italic = i == "italic" || i == "oblique";
+            }
+        }
+        "font-family" => s.mono = family_is_mono(v),
+        "font" => {
+            // [style] [variant] [weight] [stretch] size[/line-height] family
+            let ps = parts(v);
+            let mut k = 0;
+            s.italic = false;
+            s.font_weight = 400;
+            s.line_height = LineHeight::Normal;
+            if let Some(i) = ident(v) {
+                // A system font ("caption", "menu"...).
+                if matches!(i.as_str(), "caption" | "icon" | "menu" | "message-box" | "small-caption" | "status-bar") {
+                    s.font_size = 13.333 * units.dpr;
+                }
+                return;
+            }
+            while k < ps.len() {
+                let t = ps[k];
+                if let Some(i) = ident(t) {
+                    match i.as_str() {
+                        "italic" | "oblique" => s.italic = true,
+                        "bold" | "bolder" | "lighter" => s.font_weight = font_weight(t, p.font_weight).unwrap_or(700),
+                        "normal" | "small-caps" | "condensed" | "expanded" | "semi-condensed" | "semi-expanded" => {}
+                        _ => {
+                            if let Some(sz) = font_size(t, c) {
+                                s.font_size = sz;
+                                k += 1;
+                                break;
+                            }
+                            break;
+                        }
+                    }
+                } else if let [Tok::Number(n)] = values::trim(t) {
+                    s.font_weight = n.clamp(1.0, 1000.0) as u16;
+                } else if let Some(sz) = font_size(t, c) {
+                    s.font_size = sz;
+                    k += 1;
+                    break;
+                } else {
+                    break;
+                }
+                k += 1;
+            }
+            // "/line-height".
+            if let Some(t) = ps.get(k)
+                && values::trim(t).first() == Some(&Tok::Delim('/'))
+            {
+                if let Some(lh) = ps.get(k + 1).and_then(|x| line_height(x, c, s.font_size)) {
+                    s.line_height = lh;
+                }
+                k += 2;
+            }
+            let rest: Vec<Tok> = ps.iter().skip(k).flat_map(|x| x.iter().cloned().chain(core::iter::once(Tok::Ws))).collect();
+            s.mono = family_is_mono(&rest);
+        }
+        "line-height" => {
+            if let Some(x) = line_height(v, c, s.font_size) {
+                s.line_height = x;
+            }
+        }
+        "text-align" => {
+            if let Some(i) = ident(v) {
+                s.text_align = match i.as_str() {
+                    "right" | "end" | "-webkit-right" => TextAlign::Right,
+                    "center" | "-webkit-center" | "-moz-center" | "match-parent" if i != "match-parent" => TextAlign::Center,
+                    "justify" => TextAlign::Justify,
+                    "match-parent" => p.text_align,
+                    _ => TextAlign::Left,
+                };
+            }
+        }
+        "text-indent" => {
+            if let Some(x) = values::length(v, units, 0.0) {
+                s.text_indent = x;
+            }
+        }
+        "text-decoration" | "text-decoration-line" | "-webkit-text-decoration" => {
+            let words: Vec<String> = parts(v).iter().filter_map(|x| ident(x)).collect();
+            if words.iter().any(|w| w == "none") {
+                s.underline = false;
+                s.line_through = false;
+                s.overline = false;
+            }
+            if words.iter().any(|w| w == "underline") {
+                s.underline = true;
+            }
+            if words.iter().any(|w| w == "line-through") {
+                s.line_through = true;
+            }
+            if words.iter().any(|w| w == "overline") {
+                s.overline = true;
+            }
+            if name == "text-decoration" {
+                if let Some(col) = parts(v).iter().find_map(|x| values::color(x, cur)) {
+                    s.decoration_color = Some(col);
+                }
+            }
+        }
+        "text-decoration-color" => s.decoration_color = values::color(v, cur),
+        "text-transform" => {
+            if let Some(i) = ident(v) {
+                s.transform_text = match i.as_str() {
+                    "uppercase" => Transform::Uppercase,
+                    "lowercase" => Transform::Lowercase,
+                    "capitalize" => Transform::Capitalize,
+                    _ => Transform::None,
+                };
+            }
+        }
+        "white-space" | "white-space-collapse" | "text-wrap-mode" | "text-wrap" => {
+            let words: Vec<String> = parts(v).iter().filter_map(|x| ident(x)).collect();
+            let has = |w: &str| words.iter().any(|x| x == w);
+            s.white_space = match name {
+                "text-wrap-mode" | "text-wrap" => {
+                    if has("nowrap") {
+                        match s.white_space {
+                            WhiteSpace::PreWrap | WhiteSpace::Pre => WhiteSpace::Pre,
+                            _ => WhiteSpace::NoWrap,
+                        }
+                    } else if has("wrap") || has("balance") || has("pretty") || has("stable") {
+                        match s.white_space {
+                            WhiteSpace::Pre => WhiteSpace::PreWrap,
+                            WhiteSpace::NoWrap => WhiteSpace::Normal,
+                            w => w,
+                        }
+                    } else {
+                        s.white_space
+                    }
+                }
+                "white-space-collapse" => {
+                    if has("preserve") || has("break-spaces") {
+                        if s.white_space.wraps() { WhiteSpace::PreWrap } else { WhiteSpace::Pre }
+                    } else if has("preserve-breaks") {
+                        WhiteSpace::PreLine
+                    } else if s.white_space.wraps() {
+                        WhiteSpace::Normal
+                    } else {
+                        WhiteSpace::NoWrap
+                    }
+                }
+                _ => {
+                    if has("nowrap") && has("preserve") {
+                        WhiteSpace::Pre
+                    } else if has("nowrap") {
+                        WhiteSpace::NoWrap
+                    } else if has("pre") {
+                        WhiteSpace::Pre
+                    } else if has("pre-wrap") || has("break-spaces") {
+                        WhiteSpace::PreWrap
+                    } else if has("pre-line") {
+                        WhiteSpace::PreLine
+                    } else {
+                        WhiteSpace::Normal
+                    }
+                }
+            };
+        }
+        "vertical-align" => {
+            if let Some(i) = ident(v) {
+                s.vertical_align = match i.as_str() {
+                    "top" => VAlign::Top,
+                    "middle" => VAlign::Middle,
+                    "bottom" => VAlign::Bottom,
+                    "text-top" => VAlign::TextTop,
+                    "text-bottom" => VAlign::TextBottom,
+                    "sub" => VAlign::Sub,
+                    "super" => VAlign::Super,
+                    _ => VAlign::Baseline,
+                };
+            } else if let Some(l) = values::length(v, units, 0.0) {
+                s.vertical_align = VAlign::Len(l.px + l.pct * s.line_px() / 100.0);
+            }
+        }
+        "list-style-type" => {
+            if let Some(x) = ident(v).and_then(|i| list_style(&i)) {
+                s.list_style = x;
+            } else if let [Tok::Str(_)] = values::trim(v) {
+                s.list_style = ListStyle::None;
+            }
+        }
+        "list-style-position" => s.list_inside = ident(v).as_deref() == Some("inside"),
+        "list-style" => {
+            for t in parts(v) {
+                if let Some(i) = ident(t) {
+                    if i == "inside" {
+                        s.list_inside = true;
+                    } else if i == "outside" {
+                        s.list_inside = false;
+                    } else if let Some(x) = list_style(&i) {
+                        s.list_style = x;
+                    }
+                } else if matches!(values::trim(t).first(), Some(Tok::Url(_))) {
+                    s.list_image = true;
+                }
+            }
+        }
+        "list-style-image" => s.list_image = !matches!(ident(v).as_deref(), Some("none")),
+        "visibility" => {
+            if let Some(i) = ident(v) {
+                s.visible = i == "visible";
+            }
+        }
+        "opacity" => {
+            if let Some(n) = values::number(v, units) {
+                s.opacity = n.clamp(0.0, 1.0);
+            } else if let [Tok::Percent(pc)] = values::trim(v) {
+                s.opacity = (pc / 100.0).clamp(0.0, 1.0);
+            }
+        }
+        "overflow" | "overflow-x" | "overflow-y" => {
+            let words: Vec<String> = parts(v).iter().filter_map(|x| ident(x)).collect();
+            if name == "overflow" || name == "overflow-x" || words.iter().any(|w| w != "visible") {
+                s.clip = words.iter().any(|w| matches!(w.as_str(), "hidden" | "clip" | "auto" | "scroll" | "overlay"));
+            }
+        }
+        "clip" => {
+            // clip: rect(0 0 0 0), hiding what's in it ("visually hidden").
+            if let [Tok::Function(f), rest @ ..] = values::trim(v)
+                && f == "rect"
+            {
+                let n: Vec<f32> = rest.iter().filter_map(|t| match t {
+                    Tok::Dimension(x, _) | Tok::Number(x) => Some(*x),
+                    _ => None,
+                }).collect();
+                if n.len() == 4 && n[2] - n[0] <= 1.0 && n[1] - n[3] <= 1.0 {
+                    s.hidden_text = true;
+                }
+            }
+        }
+        "clip-path" => {
+            if let [Tok::Function(f), rest @ ..] = values::trim(v)
+                && f == "inset"
+                && matches!(rest.first(), Some(Tok::Percent(p)) if *p >= 50.0)
+            {
+                s.hidden_text = true;
+            }
+        }
+        "z-index" => {
+            s.z_index = match values::trim(v) {
+                [Tok::Number(n)] => Some(*n as i32),
+                _ => None,
+            };
+        }
+        "aspect-ratio" => {
+            let nums: Vec<f32> = v.iter().filter_map(|t| if let Tok::Number(n) = t { Some(*n) } else { None }).collect();
+            s.aspect_ratio = match nums.as_slice() {
+                [a] if *a > 0.0 => Some(*a),
+                [a, b, ..] if *a > 0.0 && *b > 0.0 => Some(a / b),
+                _ => None,
+            };
+        }
+        "object-fit" => s.object_cover = ident(v).as_deref() == Some("cover"),
+        "flex-direction" | "-webkit-flex-direction" => {
+            if let Some(i) = ident(v) {
+                s.flex_direction = match i.as_str() {
+                    "row-reverse" => FlexDirection::RowReverse,
+                    "column" => FlexDirection::Column,
+                    "column-reverse" => FlexDirection::ColumnReverse,
+                    _ => FlexDirection::Row,
+                };
+            }
+        }
+        "-webkit-box-orient" => {
+            if ident(v).as_deref() == Some("vertical") {
+                s.flex_direction = FlexDirection::Column;
+            }
+        }
+        "flex-wrap" => s.flex_wrap = matches!(ident(v).as_deref(), Some("wrap" | "wrap-reverse")),
+        "flex-flow" => {
+            for t in parts(v) {
+                match ident(t).as_deref() {
+                    Some("row") => s.flex_direction = FlexDirection::Row,
+                    Some("row-reverse") => s.flex_direction = FlexDirection::RowReverse,
+                    Some("column") => s.flex_direction = FlexDirection::Column,
+                    Some("column-reverse") => s.flex_direction = FlexDirection::ColumnReverse,
+                    Some("wrap" | "wrap-reverse") => s.flex_wrap = true,
+                    Some("nowrap") => s.flex_wrap = false,
+                    _ => {}
+                }
+            }
+        }
+        "justify-content" => {
+            if let Some(a) = align_value(v) {
+                s.justify_content = a;
+            }
+        }
+        "align-items" => {
+            if let Some(a) = align_value(v) {
+                s.align_items = a;
+            }
+        }
+        "align-self" => {
+            if let Some(a) = align_value(v) {
+                s.align_self = a;
+            }
+        }
+        "align-content" => {
+            if let Some(a) = align_value(v) {
+                s.align_content = a;
+            }
+        }
+        "justify-items" => {
+            if let Some(a) = align_value(v) {
+                s.justify_items = a;
+            }
+        }
+        "justify-self" => {
+            if let Some(a) = align_value(v) {
+                s.justify_self = a;
+            }
+        }
+        "place-items" | "place-content" | "place-self" => {
+            let ps = parts(v);
+            let a = ps.first().and_then(|t| align_value(t));
+            let b = ps.get(1).and_then(|t| align_value(t)).or(a);
+            match name {
+                "place-items" => {
+                    if let Some(a) = a {
+                        s.align_items = a;
+                    }
+                    if let Some(b) = b {
+                        s.justify_items = b;
+                    }
+                }
+                "place-content" => {
+                    if let Some(a) = a {
+                        s.align_content = a;
+                    }
+                    if let Some(b) = b {
+                        s.justify_content = b;
+                    }
+                }
+                _ => {
+                    if let Some(a) = a {
+                        s.align_self = a;
+                    }
+                    if let Some(b) = b {
+                        s.justify_self = b;
+                    }
+                }
+            }
+        }
+        "flex" => {
+            // none | auto | grow [shrink] [basis] | basis
+            match ident(v).as_deref() {
+                Some("none") => {
+                    s.grow = 0.0;
+                    s.shrink = 0.0;
+                    s.basis = Size::Auto;
+                }
+                Some("auto") => {
+                    s.grow = 1.0;
+                    s.shrink = 1.0;
+                    s.basis = Size::Auto;
+                }
+                Some("initial") => {
+                    s.grow = 0.0;
+                    s.shrink = 1.0;
+                    s.basis = Size::Auto;
+                }
+                _ => {
+                    let mut nums = Vec::new();
+                    let mut basis = None;
+                    for t in parts(v) {
+                        match values::trim(t) {
+                            [Tok::Number(n)] => nums.push(*n),
+                            x => {
+                                if let Some(b) = size_value(x, c, 0.0) {
+                                    basis = Some(b);
+                                }
+                            }
+                        }
+                    }
+                    s.grow = nums.first().copied().unwrap_or(1.0).max(0.0);
+                    s.shrink = nums.get(1).copied().unwrap_or(1.0).max(0.0);
+                    s.basis = basis.unwrap_or(Size::Len(Len::ZERO));
+                }
+            }
+        }
+        "flex-grow" | "-webkit-box-flex" => {
+            if let Some(n) = values::number(v, units) {
+                s.grow = n.max(0.0);
+            }
+        }
+        "flex-shrink" => {
+            if let Some(n) = values::number(v, units) {
+                s.shrink = n.max(0.0);
+            }
+        }
+        "flex-basis" => {
+            if let Some(x) = size_value(v, c, 0.0) {
+                s.basis = if ident(v).as_deref() == Some("content") { Size::Auto } else { x };
+            }
+        }
+        "order" => {
+            if let [Tok::Number(n)] = values::trim(v) {
+                s.order = *n as i32;
+            }
+        }
+        "gap" | "grid-gap" => {
+            let ps = parts(v);
+            if let Some(a) = ps.first().and_then(|t| values::length(t, units, 0.0)) {
+                s.row_gap = a;
+                s.column_gap = ps.get(1).and_then(|t| values::length(t, units, 0.0)).unwrap_or(a);
+            }
+        }
+        "row-gap" | "grid-row-gap" => {
+            if let Some(a) = values::length(v, units, 0.0) {
+                s.row_gap = a;
+            }
+        }
+        "column-gap" | "grid-column-gap" => {
+            if let Some(a) = values::length(v, units, 0.0) {
+                s.column_gap = a;
+            }
+        }
+        "grid-template-columns" => s.grid_columns = tracks(v, c),
+        "grid-template-rows" => s.grid_rows = tracks(v, c),
+        "grid-template-areas" => {
+            s.grid_areas = v.iter().filter_map(|t| if let Tok::Str(row) = t { Some(row.split_ascii_whitespace().map(String::from).collect()) } else { None }).collect();
+        }
+        "grid-template" => {
+            // "areas / columns" or "rows / columns".
+            let areas: Vec<Vec<String>> = v.iter().filter_map(|t| if let Tok::Str(row) = t { Some(row.split_ascii_whitespace().map(String::from).collect()) } else { None }).collect();
+            if !areas.is_empty() {
+                s.grid_areas = areas;
+            }
+            if let Some(slash) = v.iter().position(|t| *t == Tok::Delim('/')) {
+                s.grid_columns = tracks(&v[slash + 1..], c);
+            }
+        }
+        "grid-area" => {
+            if let Some(i) = ident(v)
+                && i != "auto"
+            {
+                s.grid_area = Some(match values::trim(v) {
+                    [Tok::Ident(raw)] => raw.clone(),
+                    _ => i,
+                });
+            } else {
+                // "row-start / column-start / row-end / column-end".
+                let nums: Vec<Vec<Tok>> = {
+                    let mut out: Vec<Vec<Tok>> = vec![Vec::new()];
+                    for t in v {
+                        if *t == Tok::Delim('/') {
+                            out.push(Vec::new());
+                        } else if let Some(l) = out.last_mut() {
+                            l.push(t.clone());
+                        }
+                    }
+                    out
+                };
+                if nums.len() >= 2 {
+                    let mut row = nums[0].clone();
+                    let mut col = nums[1].clone();
+                    if let Some(r2) = nums.get(2) {
+                        row.push(Tok::Delim('/'));
+                        row.extend(r2.iter().cloned());
+                    }
+                    if let Some(c2) = nums.get(3) {
+                        col.push(Tok::Delim('/'));
+                        col.extend(c2.iter().cloned());
+                    }
+                    s.grid_row = grid_place(&row);
+                    s.grid_column = grid_place(&col);
+                }
+            }
+        }
+        "grid-column" => s.grid_column = grid_place(v),
+        "grid-row" => s.grid_row = grid_place(v),
+        "grid-column-start" => s.grid_column.start = grid_place(v).start.max(s.grid_column.start),
+        "grid-column-end" => {
+            let g = grid_place(v);
+            s.grid_column.end = g.start;
+            if g.span > 0 {
+                s.grid_column.span = g.span;
+            } else if s.grid_column.start > 0 && g.start > s.grid_column.start {
+                s.grid_column.span = (g.start - s.grid_column.start) as u32;
+            }
+        }
+        "grid-row-start" => s.grid_row.start = grid_place(v).start,
+        "grid-row-end" => {
+            let g = grid_place(v);
+            s.grid_row.end = g.start;
+            if g.span > 0 {
+                s.grid_row.span = g.span;
+            }
+        }
+        "grid-auto-flow" => s.grid_auto_columns = parts(v).iter().any(|t| ident(t).as_deref() == Some("column")),
+        "border-collapse" => s.border_collapse = ident(v).as_deref() == Some("collapse"),
+        "caption-side" => s.caption_bottom = ident(v).as_deref() == Some("bottom"),
+        "border-spacing" => {
+            if let Some(l) = parts(v).first().and_then(|t| values::length(t, units, 0.0)) {
+                s.border_spacing = l.px.max(0.0);
+            }
+        }
+        "content" => {
+            s.content = content(v, |_| None);
+        }
+        "transform" | "translate" => {
+            let mut tx = Len::ZERO;
+            let mut ty = Len::ZERO;
+            if name == "translate" {
+                let ps = parts(v);
+                if let Some(x) = ps.first().and_then(|t| values::length(t, units, 0.0)) {
+                    tx = x;
+                }
+                if let Some(y) = ps.get(1).and_then(|t| values::length(t, units, 0.0)) {
+                    ty = y;
+                }
+            } else {
+                for t in parts(v) {
+                    if let [Tok::Function(f), rest @ ..] = values::trim(t) {
+                        let inner = &rest[..rest.len().saturating_sub(1)];
+                        let args = css::split_commas(inner);
+                        let a = |k: usize| args.get(k).and_then(|x| values::length(x, units, 0.0)).unwrap_or(Len::ZERO);
+                        match f.as_str() {
+                            "translate" | "translate3d" => {
+                                tx = Len { px: tx.px + a(0).px, pct: tx.pct + a(0).pct };
+                                ty = Len { px: ty.px + a(1).px, pct: ty.pct + a(1).pct };
+                            }
+                            "translatex" => tx = Len { px: tx.px + a(0).px, pct: tx.pct + a(0).pct },
+                            "translatey" => ty = Len { px: ty.px + a(0).px, pct: ty.pct + a(0).pct },
+                            "scale" | "scalex" | "scaley" => {
+                                // scale(0): nothing to see.
+                                if matches!(args.first().map(|x| values::trim(x)), Some([Tok::Number(n)]) if *n == 0.0) {
+                                    s.opacity = 0.0;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            s.translate = (tx, ty);
+        }
+        _ => {}
+    }
+}
+
+/// Which side a property's name is for: 0 top, 1 right, 2 bottom, 3 left (logical sides as left-to-right text has).
+fn side(name: &str) -> usize {
+    if name.contains("top") || name.contains("block-start") {
+        0
+    } else if name.contains("right") || name.contains("inline-end") {
+        1
+    } else if name.contains("bottom") || name.contains("block-end") {
+        2
+    } else {
+        3
+    }
+}
+
+/// A property taken from `from` (for "inherit", and the like).
+fn inherit_one(s: &mut Style, from: &Style, name: &str) {
+    match name {
+        "color" => s.color = from.color,
+        "font-size" => s.font_size = from.font_size,
+        "font-weight" => s.font_weight = from.font_weight,
+        "font-style" => s.italic = from.italic,
+        "font-family" => s.mono = from.mono,
+        "font" => {
+            s.font_size = from.font_size;
+            s.font_weight = from.font_weight;
+            s.italic = from.italic;
+            s.mono = from.mono;
+            s.line_height = from.line_height;
+        }
+        "line-height" => s.line_height = from.line_height,
+        "text-align" => s.text_align = from.text_align,
+        "white-space" => s.white_space = from.white_space,
+        "visibility" => s.visible = from.visible,
+        "display" => s.display = from.display,
+        "position" => s.position = from.position,
+        "width" => s.width = from.width,
+        "height" => s.height = from.height,
+        "max-width" => s.max_width = from.max_width,
+        "min-width" => s.min_width = from.min_width,
+        "max-height" => s.max_height = from.max_height,
+        "min-height" => s.min_height = from.min_height,
+        "margin" => s.margin = from.margin,
+        "padding" => s.padding = from.padding,
+        "background" | "background-color" => {
+            s.background = from.background;
+            if name == "background" {
+                s.background_image = from.background_image.clone();
+            }
+        }
+        "background-image" => s.background_image = from.background_image.clone(),
+        "border" => {
+            s.border_width = from.border_width;
+            s.border_style = from.border_style;
+            s.border_color = from.border_color;
+        }
+        "float" => s.float = from.float,
+        "opacity" => s.opacity = from.opacity,
+        "text-decoration" | "text-decoration-line" => {
+            s.underline = from.underline;
+            s.line_through = from.line_through;
+            s.overline = from.overline;
+        }
+        "list-style-type" | "list-style" => s.list_style = from.list_style,
+        "text-transform" => s.transform_text = from.transform_text,
+        "overflow" => s.clip = from.clip,
+        "flex-direction" => s.flex_direction = from.flex_direction,
+        "justify-content" => s.justify_content = from.justify_content,
+        "align-items" => s.align_items = from.align_items,
+        "transform" => s.translate = from.translate,
+        "border-radius" => s.radius = from.radius,
+        "z-index" => s.z_index = from.z_index,
+        "content" => s.content = from.content.clone(),
+        "vertical-align" => s.vertical_align = from.vertical_align,
+        _ => {}
+    }
+}

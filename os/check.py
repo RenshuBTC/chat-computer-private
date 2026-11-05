@@ -1408,6 +1408,194 @@ def web_check(args) -> list[str]:
     return problems
 
 
+SITE_PORT = 8474
+# The stand-in's site: a page with a style sheet (a flex row, a float), a picture, a link across its top and a
+# search form whose field asks for the caret (autofocus); the page the link leads to; and the search's results.
+SITE_HOME = """<!doctype html><html><head><title>Example Site</title>
+<link rel="stylesheet" href="/style.css"><style>.note { color: #333 }</style></head>
+<body><a id="next" href="/second">To the second page</a>
+<div class="row"><div class="cell">One</div><div class="cell">Two</div><div class="cell">Three</div></div>
+<p><img src="/sun.png" alt="The sun" width="96" height="64" class="pic"> A paragraph beside a floated picture, long
+enough to wrap round it on a few lines in the middle of the screen, as a browser lays it out.</p>
+<form action="/search"><input name="q" autofocus placeholder="Search"> <button>Search</button></form>
+<p class="note">The end of the page.</p></body></html>"""
+SITE_CSS = """body { margin: 0; background: #fff4e0; font-family: serif; }
+#next { display: block; height: 200px; line-height: 200px; padding-left: 20px; background: #2050c0; color: #fff; }
+.row { display: flex; gap: 10px; padding: 10px; }
+.cell { flex: 1; height: 40px; background: #20a040; }
+.pic { float: left; margin: 0 12px 6px 0; }
+form { clear: both; padding: 10px; }"""
+SITE_SECOND = """<!doctype html><html><head><title>Second Page</title></head>
+<body style="background:#e0f0ff"><h1>The second page</h1><p><a href="/">Back home</a></p></body></html>"""
+
+
+def site_check(args) -> list[str]:
+    """A website, typed in the message box: shown in the middle in its frame, with its style sheet and picture (a
+    test build trusting a test authority, the site a stand-in here over TLS 1.3, its cookie kept and sent back); its
+    field has the caret, so what's typed goes there, and Enter sends its form (GET /search?q=...); the page that comes
+    shows; a click on a link opens the page it's for; Esc in the empty message box closes the site, and the
+    conversation shows again."""
+    import http.server
+    import io
+    import ssl
+    import threading
+    from urllib.parse import parse_qs, urlparse
+
+    from PIL import Image
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-site-"))
+    test_authority(tmp, ["www.example.com"])
+    sun = io.BytesIO()
+    Image.new("RGB", (48, 32), (230, 30, 30)).save(sun, "PNG")
+    asked: list[dict] = []
+
+    class Stand(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            url = urlparse(self.path)
+            asked.append({"path": url.path, "query": url.query, "cookie": self.headers.get("Cookie", ""),
+                          "referer": self.headers.get("Referer", ""), "accept": self.headers.get("Accept", "")})
+            kind, body, more = "text/html; charset=utf-8", b"", []
+            if url.path == "/":
+                body, more = SITE_HOME.encode(), [("Set-Cookie", "seen=1; Path=/; Secure; HttpOnly")]
+            elif url.path == "/style.css":
+                kind, body = "text/css", SITE_CSS.encode()
+            elif url.path == "/sun.png":
+                kind, body = "image/png", sun.getvalue()
+            elif url.path == "/second":
+                body = SITE_SECOND.encode()
+            elif url.path == "/search":
+                q = parse_qs(url.query).get("q", [""])[0]
+                body = (f"<html><head><title>Results for {q}</title></head><body style='background:#f0e0ff'>"
+                        f"<h1>Results for {q}</h1></body></html>").encode()
+            else:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                self.close_connection = True
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", kind)
+            for k, v in more:
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", SITE_PORT), Stand)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.load_cert_chain(tmp / "leaf.pem", tmp / "leaf.key")
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    problems: list[str] = []
+    pictures = {}
+    try:
+        (tmp / "script.json").write_text(json.dumps({"site": [{"text": "Nothing to say."}]}))
+        build("chat", {"CHATCOMPUTER_TEST_SCRIPT": str(tmp / "script.json"), "CHATCOMPUTER_TEST_CA": str(tmp / "ca.der"),
+                       "CHATCOMPUTER_TEST_PORT": str(SITE_PORT)})
+        extra = ("-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
+                 "-device", "qemu-xhci,id=xhci", "-device", "usb-mouse,bus=xhci.0")
+        pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra)
+        try:
+            if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                print(pc.text())
+                return ["the kernel didn't say it was ready"]
+            wait_for(pc.log, ("network: address",), 60)
+            monitor_many(pc.mon, keys_for("www.example.com") + ["sendkey ret"])
+            got = wait_for(pc.log, ("site: https://www.example.com/ has come", "site: couldn't open", "stopped"), 120)
+            if got != "site: https://www.example.com/ has come":
+                print(pc.text())
+                return [f"the site didn't come (the log says {got!r})"]
+            time.sleep(1.5)
+            pictures["home"] = pc.settled_picture("site-home")
+            # Typed: into the field with the caret (autofocus), and Enter sends its form.
+            monitor_many(pc.mon, keys_for("sunny day") + ["sendkey ret"])
+            wait_for(pc.log, ("site: read https://www.example.com/search",), 60)
+            wait_for(pc.log, ("site: laid out https://www.example.com/search",), 30)
+            time.sleep(1)
+            pictures["results"] = pc.settled_picture("site-results")
+            # Back home (Alt+Left), then a click on the link across the page's top.
+            monitor_many(pc.mon, ["sendkey alt-left"])
+            wait_for(pc.log, ("site: laid out https://www.example.com/",), 30, times=2)
+            time.sleep(1)
+            text = pc.text()
+            import re
+            m = re.findall(r"site: page at (\d+),(\d+) (\d+)x(\d+)", text)
+            if m and use_mouse(pc.mon, "QEMU HID Mouse"):
+                x, y, w, h = (int(v) for v in m[-1])
+                sw, sh = (int(v) for v in args.size.split("x"))
+                # (From the middle of the screen, about 24 pixels a move: to the middle of the link, 200 pixels tall
+                # across the top of the page.)
+                dx, dy = round((x + w // 2 - sw // 2) / 24), round((y + 100 - sh // 2) / 24)
+                moves = [f"mouse_move {12 if dx > 0 else -12} 0"] * abs(dx) + [f"mouse_move 0 {12 if dy > 0 else -12}"] * abs(dy)
+                monitor_many(pc.mon, moves, gap=0.05)
+                time.sleep(0.5)
+                monitor_many(pc.mon, ["mouse_button 1", "mouse_button 0"])
+                wait_for(pc.log, ("site: read https://www.example.com/second",), 60)
+                wait_for(pc.log, ("site: laid out https://www.example.com/second",), 30)
+                time.sleep(1)
+                pictures["second"] = pc.settled_picture("site-second")
+            else:
+                problems.append("the page's place on the screen wasn't logged, or there's no mouse")
+            # Esc in the empty box: the site closes, and the conversation shows.
+            monitor_many(pc.mon, ["sendkey esc"])
+            time.sleep(1.5)
+            pictures["closed"] = pc.settled_picture("site-closed")
+        finally:
+            pc.stop()
+        text = pc.text()
+        print(text)
+        problems += stack_problems(text)
+
+        def area_has(picture, colour, at_least: int) -> bool:
+            want = sum(1 for p in picture.getdata() if all(abs(a - b) <= 6 for a, b in zip(p, colour)))
+            return want >= at_least
+
+        home = pictures.get("home")
+        if home is None:
+            problems.append("no picture of the site")
+        else:
+            for name, colour, n in (("the page's background", (0xFF, 0xF4, 0xE0), 50000),
+                                    ("the link's background", (0x20, 0x50, 0xC0), 20000),
+                                    ("the flex row's cells", (0x20, 0xA0, 0x40), 6000),
+                                    ("the picture", (230, 30, 30), 4000)):
+                if not area_has(home, colour, n):
+                    problems.append(f"{name} isn't on the screen (at least {n} pixels of {colour})")
+        if pictures.get("results") is not None and not area_has(pictures["results"], (0xF0, 0xE0, 0xFF), 50000):
+            problems.append("the search's results page isn't on the screen")
+        if pictures.get("second") is not None and not area_has(pictures["second"], (0xE0, 0xF0, 0xFF), 50000):
+            problems.append("the second page isn't on the screen after the link was clicked")
+        if pictures.get("closed") is not None and area_has(pictures["closed"], (0xE0, 0xF0, 0xFF), 2000):
+            problems.append("the site is still on the screen after Esc")
+        searches = [a for a in asked if a["path"] == "/search"]
+        if not searches or parse_qs(searches[0]["query"]).get("q") != ["sunny day"]:
+            problems.append(f"the form wasn't sent with what was typed: {asked!r}"[:2000])
+        elif searches[0]["cookie"] != "seen=1":
+            problems.append(f"the site's cookie didn't go back to it: {searches[0]!r}")
+        sheet = [a for a in asked if a["path"] == "/style.css"]
+        if not sheet or not sheet[0]["referer"].startswith("https://www.example.com/") or "text/css" not in sheet[0]["accept"]:
+            problems.append(f"the style sheet wasn't asked for as a page's: {sheet!r}")
+        if not [a for a in asked if a["path"] == "/sun.png"]:
+            problems.append("the picture wasn't asked for")
+        if not [a for a in asked if a["path"] == "/second"]:
+            problems.append("the link wasn't followed")
+        for note in ("site: opening https://www.example.com/", "1 style sheets, 1 pictures (0 couldn't be had)",
+                     "site: form sent to https://www.example.com/search?q=sunny+day (GET)", "Opened www.example.com"):
+            if note not in text:
+                problems.append(f"the log doesn't say {note!r}")
+    finally:
+        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
 CLAUDE_KEY = "sk-ant-test-0123456789"
 
 
@@ -3097,6 +3285,7 @@ def main() -> int:
     ap.add_argument("--chat", action="store_true", help="a conversation answered by a test's script in place of the model")
     ap.add_argument("--web", action="store_true", help="the model's web tools, against a stand-in for its sites")
     ap.add_argument("--claude", action="store_true", help="Claude answering with your key, against a stand-in for its API")
+    ap.add_argument("--site", action="store_true", help="a website typed in the box: shown, typed in, a link clicked")
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
     ap.add_argument("--microphone", action="store_true", help="what QEMU's HD Audio inputs hear, fed a tone")
@@ -3124,6 +3313,8 @@ def main() -> int:
         problems = model_check(args)
     elif args.web:
         problems = web_check(args)
+    elif args.site:
+        problems = site_check(args)
     elif args.claude:
         problems = claude_check(args)
     elif args.chat:

@@ -42,6 +42,7 @@ mod power;
 mod ps2;
 mod random;
 mod remote;
+mod site;
 mod rich;
 mod screen;
 mod schedule;

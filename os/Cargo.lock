@@ -18,6 +18,15 @@ name = "bootinfo"
 version = "0.1.0"
 
 [[package]]
+name = "browser"
+version = "0.1.0"
+dependencies = [
+ "picture",
+ "text",
+ "web",
+]
+
+[[package]]
 name = "chatcomputer-boot"
 version = "0.1.0"
 dependencies = [
@@ -31,6 +40,7 @@ dependencies = [
  "aml",
  "bitlocker",
  "bootinfo",
+ "browser",
  "chime",
  "claude",
  "exfat",

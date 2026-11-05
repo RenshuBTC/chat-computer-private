@@ -9,15 +9,44 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// What a page reads: pages and text (the model's tools, and a site's pages).
+pub const ACCEPT_PAGE: &str = "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5";
+/// A style sheet, and a picture (in the forms Chat Computer reads).
+pub const ACCEPT_CSS: &str = "text/css,*/*;q=0.1";
+pub const ACCEPT_PICTURE: &str = "image/png,image/jpeg,image/gif;q=0.9,*/*;q=0.1";
+
 /// The request for `url`'s page: GET, with who's asking, what it reads (pages, text) and how it may be compressed.
 pub fn get(url: &Url) -> Vec<u8> {
+    request(url, ACCEPT_PAGE, None, None, None)
+}
+
+/// A request for `url`: GET, or POST with `form`'s bytes (a form's fields, application/x-www-form-urlencoded); what
+/// it accepts, the cookies the site set (`cookies`: the Cookie header's value), and the page it's asked from
+/// (`referer`, its site only, as browsers send it to another site).
+pub fn request(url: &Url, accept: &str, cookies: Option<&str>, form: Option<&[u8]>, referer: Option<&Url>) -> Vec<u8> {
     let host = if url.port == 443 { url.host.clone() } else { format!("{}:{}", url.host, url.port) };
-    format!(
-        "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: text/html,application/xhtml+xml,\
-         text/plain;q=0.9,*/*;q=0.5\r\nAccept-Language: en\r\nAccept-Encoding: gzip, deflate\r\nConnection: close\r\n\r\n",
+    let mut head = format!(
+        "{} {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: {accept}\r\nAccept-Language: en\r\n\
+         Accept-Encoding: gzip, deflate\r\nConnection: close\r\n",
+        if form.is_some() { "POST" } else { "GET" },
         url.path
-    )
-    .into_bytes()
+    );
+    if let Some(c) = cookies {
+        head.push_str(&format!("Cookie: {c}\r\n"));
+    }
+    if let Some(r) = referer {
+        let from = if r.host == url.host { format!("{r}") } else { format!("https://{}/", r.host) };
+        head.push_str(&format!("Referer: {from}\r\n"));
+    }
+    if let Some(body) = form {
+        head.push_str(&format!("Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n", body.len()));
+    }
+    head.push_str("\r\n");
+    let mut out = head.into_bytes();
+    if let Some(body) = form {
+        out.extend_from_slice(body);
+    }
+    out
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -63,6 +92,11 @@ impl Response {
 
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+
+    /// Every value of a header that can come more than once (Set-Cookie).
+    pub fn headers_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.headers.iter().filter(move |(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
     }
 
     /// Whether the whole response has arrived (or as much of it as is kept).

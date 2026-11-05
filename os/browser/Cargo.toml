@@ -1,0 +1,14 @@
+[package]
+name = "browser"
+description = "Chat Computer's own web browser engine: a page's HTML and CSS read, laid out and drawn, for its own system"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+web = { path = "../web" }
+text = { path = "../text" }
+
+[dev-dependencies]
+picture = { path = "../picture" }

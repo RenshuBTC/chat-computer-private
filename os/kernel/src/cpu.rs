@@ -175,3 +175,38 @@ pub fn stop() -> ! {
         unsafe { asm!("cli", "hlt", options(nomem, nostack)) };
     }
 }
+
+/// Runs `f` on a stack of its own, `size` bytes taken from the heap: for work that goes as deep as what it's given
+/// nests (a web page's elements, laid out: site.rs), deeper than the kernel's own stack is meant to go. (No guard page
+/// below it: `size` is far more than the work's own limits let it reach.)
+pub fn on_own_stack<F: FnOnce() -> R, R>(size: usize, f: F) -> R {
+    struct Call<F, R> {
+        f: Option<F>,
+        out: Option<R>,
+    }
+    extern "sysv64" fn run<F: FnOnce() -> R, R>(call: *mut Call<F, R>) {
+        let c = unsafe { &mut *call };
+        if let Some(f) = c.f.take() {
+            c.out = Some(f());
+        }
+    }
+    let mut stack: alloc::vec::Vec<u64> = alloc::vec![0; size / 8];
+    let top = (stack.as_mut_ptr() as usize + stack.len() * 8) & !15;
+    let mut call: Call<F, R> = Call { f: Some(f), out: None };
+    let at: *mut Call<F, R> = &mut call;
+    unsafe {
+        asm!(
+            "mov r12, rsp",
+            "mov rsp, {top}",
+            "call {run}",
+            "mov rsp, r12",
+            top = in(reg) top,
+            run = sym run::<F, R>,
+            in("rdi") at,
+            out("r12") _,
+            clobber_abi("sysv64"),
+        );
+    }
+    drop(stack);
+    call.out.expect("the call on its own stack ran")
+}

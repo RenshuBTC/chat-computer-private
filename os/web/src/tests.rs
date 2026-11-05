@@ -59,6 +59,28 @@ fn request() {
     assert!(r.contains("\r\nHost: localhost:8472\r\n"), "{r}");
 }
 
+#[test]
+fn a_form_sent_with_cookies() {
+    let to = Url::parse("https://example.com/login").unwrap();
+    let from = Url::parse("https://example.com/start?x=1").unwrap();
+    let r = String::from_utf8(http::request(&to, http::ACCEPT_PAGE, Some("a=1; b=2"), Some(b"name=Sam&q=a+b"), Some(&from))).unwrap();
+    assert!(r.starts_with("POST /login HTTP/1.1\r\nHost: example.com\r\n"), "{r}");
+    assert!(r.contains("\r\nCookie: a=1; b=2\r\n"), "{r}");
+    assert!(r.contains("\r\nReferer: https://example.com/start?x=1\r\n"), "{r}");
+    assert!(r.contains("\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 14\r\n"), "{r}");
+    assert!(r.ends_with("\r\n\r\nname=Sam&q=a+b"), "{r}");
+    // Another site is told only which site the link was on.
+    let elsewhere = Url::parse("https://other.org/").unwrap();
+    let r = String::from_utf8(http::request(&elsewhere, http::ACCEPT_CSS, None, None, Some(&from))).unwrap();
+    assert!(r.starts_with("GET / HTTP/1.1\r\n") && r.contains("\r\nReferer: https://example.com/\r\n") && !r.contains("Cookie"), "{r}");
+}
+
+#[test]
+fn every_set_cookie_is_read() {
+    let r = fed(&[b"HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nContent-Length: 0\r\nset-cookie: b=2; Path=/\r\n\r\n"]);
+    assert_eq!(r.headers_named("set-cookie").collect::<alloc::vec::Vec<_>>(), ["a=1", "b=2; Path=/"]);
+}
+
 fn fed(pieces: &[&[u8]]) -> Response {
     let mut r = Response::new();
     for p in pieces {

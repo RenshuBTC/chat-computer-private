@@ -48,8 +48,8 @@ jobs:
           sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil python3-cryptography sbsigntool dosfstools mtools gdisk xz-utils zip ntfs-3g acpica-tools
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
-      - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, PDF, picture, BitLocker and registry readers, cryptography, Markdown, memory file, HID, AML and Claude API tests
-        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p pdf -p picture -p bitlocker -p crypto -p registry -p markdown -p remember -p hid -p aml -p claude
+      - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, PDF, picture, BitLocker and registry readers, cryptography, Markdown, memory file, HID, AML, Claude API, web and browser engine tests
+        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p pdf -p picture -p bitlocker -p crypto -p registry -p markdown -p remember -p hid -p aml -p claude -p web -p browser
       - name: The model engine's tests (on small models with random weights)
         run: cargo test -p model --features std
       - name: The engine's programs for Linux (x86-64 and ARM) and the tiny test model are what this source builds
@@ -91,6 +91,8 @@ jobs:
         run: ./check.py --web
       - name: Claude answering with the person's own key (against a stand-in for Anthropic's API over TLS 1.3)
         run: ./check.py --claude
+      - name: A website typed in the message box (a stand-in site over TLS 1.3: shown, a form sent, a link clicked)
+        run: ./check.py --site
       - name: The conversation kept across a restart (NVMe and SATA)
         run: ./check.py --remember
       - name: Files (Windows' drive, NTFS, read by the model's tools; a test's script asks)

@@ -9,6 +9,7 @@
 //! trusts that one instead of Mozilla's, and reaches every site at a test server on the computer running the virtual
 //! PC (10.0.2.2), still checking its certificate for the site's name.
 
+use crate::sync::SpinLock;
 use crate::{clock, network, random, time};
 use alloc::boxed::Box;
 use alloc::format;
@@ -18,8 +19,12 @@ use alloc::vec::Vec;
 use net::tcp::{Socket, State as TcpState};
 use net::{Ipv4, Stack};
 use tls::Cert;
+use web::cookies::Jar;
 use web::http::Response;
 use web::Url;
+
+/// The cookies sites set, while Chat Computer runs (never kept on the disk): sent back to the site that set them.
+static COOKIES: SpinLock<Option<Jar>> = SpinLock::new(None);
 
 /// Waiting for a network address; finding the site and connecting to it; silence from it once connected.
 const NETWORK_MS: u64 = 30_000;
@@ -76,6 +81,8 @@ struct Talk {
     tls: Box<tls::Client>,
     /// For the site, not yet taken by TCP.
     out: Vec<u8>,
+    /// The request, written once the secure connection is open.
+    request: Vec<u8>,
     sent: bool,
     response: Response,
     /// When the site last sent anything.
@@ -86,16 +93,40 @@ pub struct Fetch {
     url: Url,
     phase: Phase,
     redirects: u32,
+    /// What it accepts; a form's fields it sends (POST); the page it's asked from.
+    accept: &'static str,
+    form: Option<Vec<u8>>,
+    referer: Option<Url>,
 }
 
 impl Fetch {
+    /// A page (GET), as the model's tools read one.
     pub fn new(url: Url) -> Fetch {
-        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0 }
+        Fetch::request(url, web::http::ACCEPT_PAGE, None, None)
+    }
+
+    /// A page, a style sheet or a picture (`accept` says which), for a site shown on the screen: a form's fields
+    /// sent with it (POST) when `form` has them, and the page it's asked from.
+    pub fn request(url: Url, accept: &'static str, form: Option<Vec<u8>>, referer: Option<Url>) -> Fetch {
+        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, accept, form, referer }
     }
 
     /// The site being fetched from now (after any redirects).
     pub fn host(&self) -> &str {
         &self.url.host
+    }
+
+    /// Stops it: its connection broken off and let go (a page left before it all came).
+    pub fn stop(&mut self) {
+        let phase = core::mem::replace(&mut self.phase, Phase::Network(0));
+        let socket = match phase {
+            Phase::Connecting(s, _) => Some(s),
+            Phase::Talking(t) => Some(t.socket),
+            _ => None,
+        };
+        if let Some(s) = socket {
+            network::with(|stack| stack.release(s));
+        }
     }
 
     /// Moves the fetch on as far as it goes now: Some when it's over (the page, or why there's none).
@@ -106,13 +137,16 @@ impl Fetch {
         };
         let result = over?;
         match result {
-            // A redirect: the same again, from where it says.
-            Ok(Got::Redirect(to)) => {
+            // A redirect: the same again, from where it says (a form sent on, but for 307 and 308, as a GET).
+            Ok(Got::Redirect(to, status)) => {
                 self.redirects += 1;
                 if self.redirects > MOST_REDIRECTS {
                     return Some(Err(String::from("the site sent it on too many times (more than five redirects)")));
                 }
                 crate::log!("Chat Computer kernel: web: sent on to {}", to.host);
+                if !matches!(status, 307 | 308) {
+                    self.form = None;
+                }
                 self.url = to;
                 self.phase = Phase::Network(now);
                 None
@@ -170,10 +204,14 @@ impl Fetch {
                             let mut tls = Box::new(tls::Client::new(&self.url.host, when, roots(), &mut random::fill));
                             tls.allow_clock_error(clock::error());
                             let out = tls.outgoing();
+                            let cookies = COOKIES.lock().as_ref().and_then(|j| j.header(&self.url, clock::now()));
+                            let request =
+                                web::http::request(&self.url, self.accept, cookies.as_deref(), self.form.as_deref(), self.referer.as_ref());
                             self.phase = Phase::Talking(Box::new(Talk {
                                 socket: s,
                                 tls,
                                 out,
+                                request,
                                 sent: false,
                                 response: Response::new(),
                                 heard: now,
@@ -199,7 +237,8 @@ impl Fetch {
 
 enum Got {
     Page(Page),
-    Redirect(Url),
+    /// Sent on: to where, and how (301, 302, 303, 307, 308).
+    Redirect(Url, u16),
 }
 
 /// Opens a connection to `host` at `ip` (the next phase), or says why it can't.
@@ -225,7 +264,7 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url) -> Option<Result<G
         return Some(Err(tls_text(e, &url.host)));
     }
     if t.tls.is_open() && !t.sent {
-        t.tls.write(&web::http::get(url));
+        t.tls.write(&t.request);
         t.sent = true;
     }
     loop {
@@ -267,11 +306,24 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url) -> Option<Result<G
 /// What a whole response comes to: a redirect, the page, or why there's none.
 fn answered(r: &Response, url: &Url) -> Result<Got, String> {
     let status = r.status().unwrap_or(0);
+    // The cookies it set, kept for the next request to it.
+    let mut set = r.headers_named("set-cookie").peekable();
+    if set.peek().is_some() {
+        let mut jar = COOKIES.lock();
+        let jar = jar.get_or_insert_with(Jar::new);
+        for c in set {
+            jar.set(url, c, clock::now());
+        }
+    }
     if matches!(status, 301 | 302 | 303 | 307 | 308) {
         let Some(to) = r.header("location") else {
             return Err(format!("{} sent it on without saying where", url.host));
         };
-        return url.join(to).map(Got::Redirect).map_err(|why| format!("{} sent it on to an address that can't be read: {why}", url.host));
+        let to = to.split('#').next().unwrap_or("");
+        return url
+            .join(to)
+            .map(|u| Got::Redirect(u, status))
+            .map_err(|why| format!("{} sent it on to an address that can't be read: {why}", url.host));
     }
     if status >= 400 {
         return Err(match status {

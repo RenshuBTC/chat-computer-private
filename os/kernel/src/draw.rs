@@ -158,6 +158,11 @@ impl Canvas {
         &self.pixels
     }
 
+    /// The pixels themselves, to draw into directly (a website's page: site.rs), `width` to a row.
+    pub fn pixels_mut(&mut self) -> &mut [u32] {
+        &mut self.pixels
+    }
+
     /// Where drawing goes from now on (within the canvas).
     pub fn set_clip(&mut self, r: Rect) {
         self.clip = r.intersect(&self.whole());

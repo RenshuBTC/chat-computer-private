@@ -25,6 +25,7 @@ use crate::layout::{self, Layout};
 use crate::screen::Screen;
 use crate::sync::SpinLock;
 use text::{Face, Ink, Style, Type};
+use crate::site::{self, Site};
 use crate::{files, heap, memory, rich, time, usb};
 use alloc::format;
 use alloc::string::String;
@@ -306,6 +307,10 @@ pub struct Chat {
     switch_lit: Option<usize>,
     /// The files "/" searches (read from the drives once each time it's typed).
     search_files: Vec<files::Recent>,
+    /// A website open in the middle, in place of the conversation (site.rs), until it's closed.
+    site: Option<Site>,
+    /// The page's place on the screen as last logged (a test build logs it, for the test to click in it).
+    site_logged: Option<Rect>,
 }
 
 /// How long the start screen's word logo and greeting take to fade, as the website's (chat.css: #welcome).
@@ -536,6 +541,8 @@ impl Chat {
             sides_read: false,
             switch_lit: None,
             search_files: Vec::new(),
+            site: None,
+            site_logged: None,
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -789,6 +796,14 @@ impl Chat {
         if m.side_w > 0 && !self.stopped {
             self.render_sides(clip);
         }
+        // A website open: in its frame, in place of the conversation.
+        if self.site.is_some() && !self.stopped {
+            self.render_site(clip.intersect(&log));
+            self.canvas.set_clip(clip);
+            self.render_box();
+            self.render_pointer(clip);
+            return;
+        }
         // The start screen: the word logo and the greeting (fading as the first message goes).
         let welcome = if self.stopped {
             None
@@ -993,6 +1008,27 @@ impl Chat {
                 return self.pick(k);
             }
             self.close_menu();
+        }
+        // In a website's frame: its x closes it; in its page, a link followed, a field to type in, a box ticked.
+        if self.site.is_some() {
+            let (frame, close, page) = self.site_rects();
+            let inside = |r: Rect| px >= r.x && px < r.right() && py >= r.y && py < r.bottom();
+            if inside(close) {
+                return self.close_site();
+            }
+            if inside(page) {
+                if let Some(s) = self.site.as_mut() {
+                    s.click((px - page.x) as f32, (py - page.y) as f32);
+                }
+                self.dirty = self.dirty.union(&frame);
+                return;
+            }
+            // (Elsewhere: what's typed goes to the message box again.)
+            if let Some(s) = self.site.as_mut()
+                && s.focus.take().is_some()
+            {
+                self.dirty = self.dirty.union(&page);
+            }
         }
         // A chip's x: the file taken off.
         if let Some(i) = self.composer.chips.iter().position(|(_, x)| px >= x.x && px < x.right() && py >= x.y && py < x.bottom()) {
@@ -1675,6 +1711,13 @@ impl Chat {
                 self.dirty = self.dirty.union(&self.canvas.whole());
             }
         }
+        // A website's page and what it asks for, fetched; drawn again when something came.
+        if let Some(s) = self.site.as_mut()
+            && s.work(&self.ty)
+        {
+            let (frame, _, _) = self.site_rects();
+            self.dirty = self.dirty.union(&frame);
+        }
         let shown = clock_now();
         if shown != self.clock_shown {
             self.clock_shown = shown;
@@ -1755,6 +1798,9 @@ impl Chat {
     }
 
     fn edit(&mut self, p: Press) {
+        if self.site.is_some() && self.menu.is_none() && self.key_typed.is_none() && self.site_key(p) {
+            return;
+        }
         // A list open above the box: the arrows choose in it, Enter picks, Esc closes it; anything else closes it and
         // goes to the box.
         if let Some(menu) = self.menu.as_mut() {
@@ -1984,6 +2030,17 @@ impl Chat {
             self.draw(true);
             return;
         }
+        // A site's address alone ("google.com", "open en.wikipedia.org"): the site opens, in the middle.
+        if self.attached.is_empty()
+            && let Some(url) = browser::address::address(&self.typed)
+        {
+            let text = String::from(self.typed.trim());
+            self.typed.clear();
+            self.cursor = 0;
+            return self.open_site(text, url);
+        }
+        // Anything else goes to Chat Computer: the site closes, so its answer shows.
+        self.close_site();
         let mut text = String::from(self.typed.trim());
         self.typed.clear();
         self.cursor = 0;
@@ -2012,6 +2069,181 @@ impl Chat {
         self.anchor = self.pin_top(you);
         self.scroll = None;
         self.dirty = self.canvas.whole();
+    }
+
+    // ---------------------------------------------------------------------------------------------- websites
+
+    /// A website's frame (as chat.css's #frame: from the top of the screen down to the message box, between the
+    /// sidebars, 0.75 rem from each), its close button (x), and where its page shows (under the frame's bar, inside its
+    /// border and clear of its bottom corners' curve).
+    fn site_rects(&self) -> (Rect, Rect, Rect) {
+        let m = self.m;
+        let gap = m.px(0.75);
+        let rule = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
+        let (left, right) = (m.mid_x + gap, m.mid_x + m.mid_w - gap);
+        let (top, bottom) = (gap, (self.composer.card.y - gap).max(gap + m.px(6.0)));
+        let frame = Rect::new(left, top, (right - left).max(0), bottom - top);
+        let bar = m.px(2.4);
+        let size = m.px(1.75);
+        let close = Rect::new(right - rule - m.px(0.45) - size, top + rule + (bar - size) / 2, size, size);
+        let inset = rule + m.px(0.4);
+        let page = Rect::new(left + inset, top + rule + bar, (right - left - 2 * inset).max(0), (bottom - top - rule - bar - inset).max(0));
+        (frame, close, page)
+    }
+
+    /// The website open, in its frame: a 2-pixel line round it (rounded 1.1 rem), its name in bold at the left of its
+    /// bar and its close button at the right, and the page under them (or, until it comes, what's happening).
+    fn render_site(&mut self, clip: Rect) {
+        let (frame, close, page) = self.site_rects();
+        let m = self.m;
+        let rule = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
+        let radius = m.px(1.1);
+        self.canvas.set_clip(clip);
+        self.canvas.round_rect(frame, radius, LINE);
+        self.canvas.round_rect(Rect::new(frame.x + rule, frame.y + rule, frame.w - 2 * rule, frame.h - 2 * rule), (radius - rule).max(0), GROUND);
+        // The bar: the page's name, cut to fit before the x.
+        let Some(site) = self.site.as_mut() else { return };
+        let title = site.title();
+        let size = m.rem * 0.8;
+        let style = Style { size: fx(size), line_height: ((size * 1.2 + 0.5) as i32) * ONE };
+        let bar_h = page.y - frame.y - rule;
+        let x = frame.x + rule + m.px(1.1);
+        let room = (close.x - m.px(0.75) - x).max(0);
+        let mut shown = title.clone();
+        while !shown.is_empty() && self.ty.width_in(&shown, Face::Bold, style.size) / ONE > room {
+            shown.pop();
+            while shown.ends_with(' ') {
+                shown.pop();
+            }
+            if shown.chars().count() < title.chars().count() && !shown.is_empty() {
+                // (Cut: an ellipsis where the rest was.)
+                let mut cut = shown.clone();
+                cut.push('\u{2026}');
+                if self.ty.width_in(&cut, Face::Bold, style.size) / ONE <= room {
+                    shown = cut;
+                    break;
+                }
+            }
+        }
+        let ink = self.ty.ink_in(&shown, Face::Bold, style, 0);
+        let ty_ = frame.y + rule + (bar_h - style.line_height / ONE) / 2;
+        self.canvas.set_clip(clip.intersect(&Rect::new(frame.x, frame.y, frame.w, bar_h + rule)));
+        self.canvas.ink(x - ink.left as i32, ty_, &ink, INK);
+        // The x: two strokes across the button's middle.
+        let (cx, cy) = ((close.x * 2 + close.w) * 4, (close.y * 2 + close.h) * 4);
+        let half = m.px(0.32) * 8;
+        let width8 = ((1.6 * self.layout.scale * 8.0) as i32).max(8);
+        self.canvas.strokes(&[((cx - half, cy - half), (cx + half, cy + half)), ((cx - half, cy + half), (cx + half, cy - half))], width8, INK);
+        // The page.
+        let inside = clip.intersect(&page);
+        if inside.is_empty() {
+            return;
+        }
+        let dpr = self.layout.scale as f32;
+        let (w, h) = (self.canvas.width, self.canvas.height);
+        if site.has_page() {
+            let (pixels, ty) = (self.canvas.pixels_mut(), &self.ty);
+            site.draw(ty, pixels, w, h, (page.x, page.y, page.w, page.h), (inside.x, inside.y, inside.w, inside.h), dpr);
+        } else {
+            site.dirty = false;
+            let note = site.note.clone().unwrap_or_default();
+            self.canvas.set_clip(inside);
+            let lines = self.ty.breaks(&note, m.body.size, (page.w - m.px(2.0)).max(1) * ONE);
+            let mut y = page.y + (page.h - lines.len() as i32 * m.line) / 2;
+            for r in lines {
+                let part = String::from(note[r].trim_end());
+                let ink = self.ty.ink_in(&part, Face::Regular, m.body, 0);
+                let lw = self.ty.width(&part, m.body.size) / ONE;
+                self.canvas.ink(page.x + (page.w - lw) / 2 - ink.left as i32, y, &ink, MUTED);
+                y += m.line;
+            }
+        }
+        // (A test build says where the page is, for the test to click in it.)
+        if option_env!("CHATCOMPUTER_TEST").is_some() && self.site_logged != Some(page) {
+            self.site_logged = Some(page);
+            crate::log!("Chat Computer kernel: site: page at {},{} {}x{}", page.x, page.y, page.w, page.h);
+        }
+    }
+
+    /// A key, with a website open: typed into its field (when one has the caret), or scrolling it (the arrows and
+    /// Page Up and Down, with nothing typed in the box), Alt+Left back to the page before, Tab to its first field, and
+    /// Esc (with nothing typed) closing it. True if it was the site's.
+    fn site_key(&mut self, p: Press) -> bool {
+        let (frame, _, page) = self.site_rects();
+        let empty = self.typed.is_empty();
+        let Some(s) = self.site.as_mut() else { return false };
+        if s.focus.is_some() && s.key(p) {
+            self.dirty = self.dirty.union(&frame);
+            return true;
+        }
+        let line = 3.0 * self.m.line as f32;
+        let screen = (page.h as f32 * 0.85).max(line);
+        let moved = match p.key {
+            Key::Left if p.alt => {
+                if s.go_back() {
+                    self.dirty = self.dirty.union(&frame);
+                }
+                return true;
+            }
+            Key::Tab => {
+                if s.first_field() {
+                    self.dirty = self.dirty.union(&frame);
+                }
+                return true;
+            }
+            Key::Escape if empty => {
+                self.close_site();
+                return true;
+            }
+            Key::PageDown => s.scroll_by(screen),
+            Key::PageUp => s.scroll_by(-screen),
+            Key::Down if empty => s.scroll_by(line),
+            Key::Up if empty => s.scroll_by(-line),
+            Key::Char(' ') if empty && p.ctrl => s.scroll_by(screen),
+            _ => return false,
+        };
+        if moved {
+            self.dirty = self.dirty.union(&page);
+        }
+        true
+    }
+
+    /// Opens a site (an address typed): what was typed and what's said go in the conversation, as the website's do,
+    /// and the site shows in its frame, in place of the conversation (in the one open, if one is).
+    fn open_site(&mut self, text: String, url: web::Url) {
+        if self.chat_title.is_none() {
+            self.set_chat_title(Some(text.clone()));
+        }
+        let name = site::name_of(&url);
+        self.blocks.push(Block::new(Kind::You, Live::No, text));
+        let you = self.blocks.len() - 1;
+        self.blocks.push(Block::new(
+            Kind::Answer,
+            Live::No,
+            format!("Here's {name}. Click in it to type, and scroll it as you'd scroll any page."),
+        ));
+        let what = format!("Opened {}", url.host);
+        crate::log!("Chat Computer kernel: site: {what}");
+        self.action(what);
+        match self.site.as_mut() {
+            Some(s) => s.go(browser::Request { url, body: None }, None, true),
+            None => self.site = Some(Site::open(url)),
+        }
+        self.lay_out_box();
+        self.lay_out();
+        self.anchor = self.pin_top(you);
+        self.scroll = None;
+        self.dirty = self.canvas.whole();
+    }
+
+    /// Closes the website open: the conversation shows again.
+    fn close_site(&mut self) {
+        if let Some(mut s) = self.site.take() {
+            s.stop();
+            crate::log!("Chat Computer kernel: site: closed");
+            self.site_logged = None;
+            self.dirty = self.canvas.whole();
+        }
     }
 
     /// Where the screen's top goes for block `i` pinned to it: 2 rem above it, but never so far up that any of what
@@ -2259,6 +2491,14 @@ pub fn wheel(notches: i32) {
     }
     if let Some(c) = CHAT.lock().as_mut() {
         let lines = 3 * c.m.line;
+        // A website open: it scrolls.
+        if c.site.is_some() {
+            let (_, _, page) = c.site_rects();
+            if c.site.as_mut().is_some_and(|s| s.scroll_by(notches.saturating_mul(lines).saturating_neg() as f32)) {
+                c.dirty = c.dirty.union(&page);
+            }
+            return;
+        }
         c.scroll_by(notches.saturating_mul(lines).saturating_neg());
     }
 }

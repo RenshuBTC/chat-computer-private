@@ -17,6 +17,7 @@ mod convert;
 mod generators;
 pub mod lexer;
 pub mod math;
+pub mod module;
 pub mod names;
 pub mod object;
 pub mod parser;

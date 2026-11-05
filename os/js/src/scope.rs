@@ -12,7 +12,7 @@
 
 use crate::ast::*;
 use crate::names as n;
-use crate::object::{CONST, FUNC_NAME, LET, VAR};
+use crate::object::{CONST, FUNC_NAME, IMPORT, LET, VAR};
 use crate::parser::bound_names;
 use crate::string::Atom;
 use alloc::collections::BTreeMap;
@@ -23,6 +23,8 @@ use alloc::vec::Vec;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScopeKind {
     Script,
+    /// A module's top level: its names (all in its environment) are its own, not the global object's.
+    Module,
     Function,
     Block,
     Catch,
@@ -147,6 +149,112 @@ pub fn analyze(body: &[Stmt], strict: bool, eval: bool) -> Result<Scopes, String
         names.retain(|x| !lex.contains(x));
         a.s.funcs[0].annex = names;
     }
+    a.statements(body)?;
+    a.finish();
+    Ok(a.s)
+}
+
+/// Works out the scopes of a module. Its own top-level names (what it imports, its vars, functions, lets, consts
+/// and classes, its default export's `*default*`, and `*module*`, its number, which import.meta and import() look
+/// for) all live in its environment, made when it's linked: other modules' imports find them there. A module's
+/// early errors about names are found here: a name declared twice, an export of a name it doesn't declare, a name
+/// exported twice.
+pub fn analyze_module(body: &[Stmt]) -> Result<Scopes, String> {
+    let mut a = Analyzer { s: Scopes { scopes: Vec::new(), funcs: Vec::new(), map: BTreeMap::new(), fmap: BTreeMap::new() }, cur: 0, func: 0, strict: true };
+    a.s.funcs.push(FuncInfo::default());
+    let top = a.new_scope(ScopeKind::Module, body.as_ptr() as usize, None);
+    a.s.funcs[0].top = top;
+    a.s.funcs[0].body = top;
+    a.cur = top;
+    // Its lexically declared names (imports, lets, consts, classes and functions: a module's functions are lexical).
+    let mut lexical: Vec<(Atom, u8)> = Vec::new();
+    for s in body {
+        match s {
+            Stmt::Import(im) => {
+                for (imported, local) in &im.names {
+                    lexical.push((*local, if imported.is_some() { IMPORT } else { CONST }));
+                }
+            }
+            Stmt::Export(Export::Default(e, name)) => match &**e {
+                Expr::Func(_) => lexical.push((name.unwrap_or(n::DEFAULT_EXPORT), VAR)),
+                Expr::Class(_) => lexical.push((name.unwrap_or(n::DEFAULT_EXPORT), LET)),
+                _ => lexical.push((n::DEFAULT_EXPORT, LET)),
+            },
+            _ => {
+                let d = match s {
+                    Stmt::Export(Export::Decl(d)) => &**d,
+                    s => s,
+                };
+                match d {
+                    Stmt::Var(k @ (VarKind::Let | VarKind::Const), decls) => {
+                        for d in decls {
+                            let mut names = Vec::new();
+                            bound_names(&d.pat, &mut names);
+                            for x in names {
+                                lexical.push((x, if *k == VarKind::Let { LET } else { CONST }));
+                            }
+                        }
+                    }
+                    Stmt::Class(c) => {
+                        if let Some(x) = c.name {
+                            lexical.push((x, LET));
+                        }
+                    }
+                    Stmt::Func(f) => {
+                        if let Some(x) = f.name {
+                            lexical.push((x, VAR));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let vars = var_names(body);
+    for (i, (x, _)) in lexical.iter().enumerate() {
+        if lexical[..i].iter().any(|(y, _)| y == x) || vars.contains(x) {
+            return Err(String::from("Identifier has already been declared"));
+        }
+    }
+    let declared = |x: &Atom| lexical.iter().any(|(y, _)| y == x) || vars.contains(x);
+    // The names it exports: each of its own declared here, none twice.
+    let mut exported: Vec<Atom> = Vec::new();
+    for s in body {
+        let Stmt::Export(e) = s else { continue };
+        match e {
+            Export::Decl(d) => match &**d {
+                Stmt::Var(_, decls) => {
+                    for d in decls {
+                        bound_names(&d.pat, &mut exported);
+                    }
+                }
+                Stmt::Class(c) => exported.extend(c.name),
+                Stmt::Func(f) => exported.extend(f.name),
+                _ => {}
+            },
+            Export::Default(..) => exported.push(n::DEFAULT),
+            Export::Names(names, from) => {
+                for (local, ex) in names {
+                    if from.is_none() && !declared(local) {
+                        return Err(String::from("Export of a name the module doesn't declare"));
+                    }
+                    exported.push(*ex);
+                }
+            }
+            Export::All(Some(alias), _) => exported.push(*alias),
+            Export::All(None, _) => {}
+        }
+    }
+    for (i, x) in exported.iter().enumerate() {
+        if exported[..i].contains(x) {
+            return Err(String::from("Duplicate export"));
+        }
+    }
+    let bind = |name: Atom, kind: u8| Binding { name, kind, captured: true, reg: 0, slot: 0 };
+    let mut bindings = alloc::vec![bind(n::MODULE_SLOT, VAR)];
+    bindings.extend(lexical.iter().map(|(x, k)| bind(*x, *k)));
+    bindings.extend(vars.iter().map(|x| bind(*x, VAR)));
+    a.s.scopes[top].bindings = bindings;
     a.statements(body)?;
     a.finish();
     Ok(a.s)
@@ -406,7 +514,11 @@ impl Analyzer {
             Stmt::Import(_) => {}
             Stmt::Export(e) => match e {
                 Export::Decl(d) => self.statement(d)?,
-                Export::Default(e, _) => self.expr(e)?,
+                // (`export default function` declares a function: it has no name scope of its own.)
+                Export::Default(e, _) => match &**e {
+                    Expr::Func(f) => self.function(f, false)?,
+                    _ => self.expr(e)?,
+                },
                 Export::Names(names, from) => {
                     if from.is_none() {
                         for (local, _) in names {
@@ -724,7 +836,13 @@ impl Analyzer {
             }
             Expr::Func(f) => self.function(f, true)?,
             Expr::Class(c) => self.class(c)?,
-            Expr::Unary(_, x) | Expr::Await(x) | Expr::Paren(x) | Expr::Chain(x) | Expr::ImportCall(x) | Expr::SuperIndex(x) | Expr::Update(x, _, _) => self.expr(x)?,
+            Expr::ImportCall(x, o) => {
+                self.expr(x)?;
+                if let Some(o) = o {
+                    self.expr(o)?;
+                }
+            }
+            Expr::Unary(_, x) | Expr::Await(x) | Expr::Paren(x) | Expr::Chain(x) | Expr::SuperIndex(x) | Expr::Update(x, _, _) => self.expr(x)?,
             Expr::Binary(_, a, b) | Expr::Logical(_, a, b) => {
                 self.expr(a)?;
                 self.expr(b)?;
@@ -1196,7 +1314,13 @@ fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Expr::Class(c) => walk_class(c, f),
-        Expr::Unary(_, x) | Expr::Await(x) | Expr::Paren(x) | Expr::Chain(x) | Expr::ImportCall(x) | Expr::SuperIndex(x) | Expr::Update(x, _, _) => walk_expr(x, f),
+        Expr::ImportCall(x, o) => {
+            walk_expr(x, f);
+            if let Some(o) = o {
+                walk_expr(o, f);
+            }
+        }
+        Expr::Unary(_, x) | Expr::Await(x) | Expr::Paren(x) | Expr::Chain(x) | Expr::SuperIndex(x) | Expr::Update(x, _, _) => walk_expr(x, f),
         Expr::Binary(_, a, b) | Expr::Logical(_, a, b) => {
             walk_expr(a, f);
             walk_expr(b, f);

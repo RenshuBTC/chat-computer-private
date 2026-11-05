@@ -129,6 +129,7 @@ predefined! {
     EMPTY = "",
     ANONYMOUS = "anonymous",
     DEFAULT_EXPORT = "*default*",
+    MODULE_SLOT = "*module*",
     ADD = "add",
     SIZE = "size",
     RESOLVE = "resolve",

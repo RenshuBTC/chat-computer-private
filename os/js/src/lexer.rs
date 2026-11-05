@@ -120,6 +120,8 @@ pub struct Lexer<'a> {
     templates: Vec<u32>,
     /// Whether the token before allows a regular expression next (where an expression may start).
     regex_ok: bool,
+    /// HTML-like comments (`<!--`, `-->`) are comments (not in a module).
+    pub html_comments: bool,
 }
 
 fn is_id_start(c: char) -> bool {
@@ -142,7 +144,7 @@ const BEFORE_EXPRESSION: [&str; 17] =
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str) -> Lexer<'a> {
-        let mut l = Lexer { src, pos: 0, templates: Vec::new(), regex_ok: true };
+        let mut l = Lexer { src, pos: 0, templates: Vec::new(), regex_ok: true, html_comments: true };
         // (A hashbang line first is a comment.)
         if src.starts_with("#!") {
             l.pos = src.find(['\n', '\r', '\u{2028}', '\u{2029}']).unwrap_or(src.len());
@@ -191,11 +193,11 @@ impl<'a> Lexer<'a> {
                 // (An HTML-like closing comment at a line's start: the rest of the line.)
                 let rest = &self.src[self.pos..];
                 let trimmed = rest.trim_start_matches([' ', '\t']);
-                if trimmed.starts_with("-->") {
+                if self.html_comments && trimmed.starts_with("-->") {
                     self.pos += rest.len() - trimmed.len() + 3;
                     self.line_comment();
                 }
-            } else if self.src[self.pos..].starts_with("//") || self.src[self.pos..].starts_with("<!--") {
+            } else if self.src[self.pos..].starts_with("//") || (self.html_comments && self.src[self.pos..].starts_with("<!--")) {
                 self.line_comment();
             } else if self.src[self.pos..].starts_with("/*") {
                 let Some(end) = self.src[self.pos + 2..].find("*/") else { return Err(self.err("a comment isn't closed")) };
@@ -204,7 +206,7 @@ impl<'a> Lexer<'a> {
                     newline = true;
                 }
                 self.pos += 2 + end + 2;
-            } else if at_start && self.pos == 0 && self.src.starts_with("-->") {
+            } else if at_start && self.pos == 0 && self.html_comments && self.src.starts_with("-->") {
                 self.line_comment();
             } else {
                 break;

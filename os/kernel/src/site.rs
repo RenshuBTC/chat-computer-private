@@ -241,7 +241,7 @@ impl Site {
                     (None, Some(u)) => {
                         let accept = match kind {
                             Kind::Sheet => web::http::ACCEPT_CSS,
-                            Kind::Script => web::http::ACCEPT_SCRIPT,
+                            Kind::Script | Kind::Module => web::http::ACCEPT_SCRIPT,
                             Kind::Picture => web::http::ACCEPT_PICTURE,
                         };
                         self.fetching.push((i, Fetch::request(u, accept, None, Some(page.url.clone()))));
@@ -264,7 +264,7 @@ impl Site {
                         page.sheet_came(i, css);
                     }
                     (Ok(got), Some(Kind::Picture)) => picture_came(page, &mut self.pictures, &mut self.pictures_bytes, i, &got.bytes),
-                    (Ok(got), Some(Kind::Script)) => {
+                    (Ok(got), Some(Kind::Script | Kind::Module)) => {
                         let js = web::page::decode(&got.bytes, &got.kind);
                         page.script_came(i, js);
                     }

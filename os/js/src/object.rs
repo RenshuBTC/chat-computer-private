@@ -234,6 +234,9 @@ pub const LET: u8 = 1;
 pub const CONST: u8 = 2;
 /// A function's own name in a named function expression: assigning to it does nothing (throws in strict code).
 pub const FUNC_NAME: u8 = 3;
+/// A module's name imported from another module: its slot holds an ImportCell (where the other module keeps the
+/// value), or the other module's namespace object.
+pub const IMPORT: u8 = 4;
 
 /// The entries of a Map or Set, in the order they were added (deleted ones left as None, so iterators going over it
 /// keep their place), with an index from key to place.
@@ -367,8 +370,10 @@ pub enum Class {
     RegExpStringIter(Value, JsStr, bool, bool, bool),
     /// An object of the host's (the browser's DOM, its window), with its kind and number.
     Host(u32, u64),
-    /// A module's namespace object.
-    Namespace,
+    /// A module's namespace object (the module's number in Vm::modules).
+    Namespace(u32),
+    /// Where an imported name's value is: the exporting module's environment, and the slot there.
+    ImportCell(Gc, u16),
     /// An async-from-sync iterator (for await over a sync iterator): the iterator, and its next method.
     AsyncFromSync(Value, Value),
 }
@@ -604,6 +609,7 @@ fn trace(o: &Object, work: &mut Vec<Gc>) {
             }
         }
         Class::Arguments(Some(m)) => work.push(m.env),
+        Class::ImportCell(e, _) => work.push(*e),
         Class::Env(e) => {
             g(e.parent);
             g(e.with);

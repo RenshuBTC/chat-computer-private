@@ -236,6 +236,30 @@ pub struct Ink {
 }
 
 impl Type {
+    /// One Type of the built-in fonts for all who share it (made the first time it's asked for): for work that
+    /// isn't handed one (a page's scripts asking where an element is).
+    pub fn shared() -> &'static Type {
+        use core::sync::atomic::{AtomicPtr, Ordering};
+        static SHARED: AtomicPtr<Type> = AtomicPtr::new(core::ptr::null_mut());
+        let p = SHARED.load(Ordering::Acquire);
+        if !p.is_null() {
+            // SAFETY: a non-null pointer here is a Type leaked below, never freed or changed.
+            return unsafe { &*p };
+        }
+        let fresh = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Type::builtin()));
+        match SHARED.compare_exchange(core::ptr::null_mut(), fresh, Ordering::AcqRel, Ordering::Acquire) {
+            // SAFETY: just made from a Box, and kept for good.
+            Ok(_) => unsafe { &*fresh },
+            Err(other) => {
+                // (Another core made one first: this one goes, theirs is kept.)
+                // SAFETY: `fresh` came from Box::into_raw above and was never shared.
+                drop(unsafe { alloc::boxed::Box::from_raw(fresh) });
+                // SAFETY: as above, a leaked Type.
+                unsafe { &*other }
+            }
+        }
+    }
+
     /// Chat Computer's own fonts: Lora, Atkinson Hyperlegible Mono for code, and the fallbacks.
     pub fn builtin() -> Type {
         let font = Font::parse(LORA).expect("the built-in font is damaged");

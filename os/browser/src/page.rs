@@ -4,14 +4,15 @@
 //! typing, the page loading), its timers, and what its scripts ask of the network; where a click lands (a link, a
 //! field, a button), what's typed into its fields, and its forms sent (the address, and for a POST its body).
 
-use crate::boxes::{Pictures, Tree};
+use crate::boxes::Tree;
 use crate::css::{self, Sheet, Viewport};
 use crate::dom::{Data, Document, NodeId};
 use crate::html;
 use crate::layout::{Item, Laid, Layout, Paint, Rect, Sizes};
-use crate::script::{EventInit, Script};
+use crate::script::{EventInit, Picker, Script, ScriptKind};
 use crate::style::{self, Sheets, Styles};
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -32,6 +33,8 @@ pub enum Kind {
     Sheet,
     Picture,
     Script,
+    /// A module a module script imports (its text goes to the scripts' module loader).
+    Module,
 }
 
 /// Something the page asks for.
@@ -82,6 +85,8 @@ struct PageScript {
     /// Its text, for one in the page; its resource, for one with an address.
     text: Option<String>,
     resource: Option<usize>,
+    /// A module script's load (the scripts' module loader fetches its modules), and whether it has an address.
+    module: Option<(u32, bool)>,
     when: When,
     done: bool,
 }
@@ -124,11 +129,17 @@ pub struct Page {
     laid_for: (f32, f32, f32),
     /// The styles worked out (kept while the sheets and the width stay the same: typing in a field doesn't change
     /// them).
-    styles: Option<Styles>,
+    styles: Option<Arc<Styles>>,
     /// Something changed that needs the page laid out again.
     pub changed: bool,
-    ua: Sheet,
-    ua_for: f32,
+    ua: Arc<Sheet>,
+    /// The page's own style sheets, parsed (again when they change, or the view does: their @media rules), and the
+    /// view they're parsed for.
+    author: Arc<Vec<Sheet>>,
+    sheets_for: (f32, f32),
+    sheets_stale: bool,
+    /// What its scripts lay the page out from on the spot needs giving them again.
+    inputs_stale: bool,
     /// The page's scripting (None where its scripts don't run), and its scripts in the page's order.
     script: Option<Box<Script>>,
     scripts: Vec<PageScript>,
@@ -144,6 +155,8 @@ pub struct Page {
     pub scrolled: Option<f32>,
     /// The page's scale (device pixels to a CSS pixel), as last laid out.
     dpr: f32,
+    /// The modules being fetched for its scripts: their resources, and their keys in the module loader's map.
+    module_keys: Vec<(usize, String)>,
 }
 
 /// The pictures' sizes, for the layout.
@@ -158,16 +171,6 @@ impl Sizes for Known<'_> {
     }
 }
 
-/// A page's pictures by element, for the box tree.
-struct Picker<'a> {
-    of: &'a [(NodeId, usize)],
-}
-
-impl Pictures for Picker<'_> {
-    fn picture(&mut self, _doc: &Document, node: NodeId) -> Option<usize> {
-        self.of.iter().find(|(n, _)| *n == node).map(|(_, r)| *r)
-    }
-}
 
 impl Page {
     /// A page from its address and HTML (already decoded to text), its scripts not run.
@@ -194,8 +197,11 @@ impl Page {
             laid_for: (0.0, 0.0, 0.0),
             styles: None,
             changed: true,
-            ua: Sheet::default(),
-            ua_for: -1.0,
+            ua: Arc::new(Sheet::default()),
+            author: Arc::new(Vec::new()),
+            sheets_for: (-1.0, -1.0),
+            sheets_stale: true,
+            inputs_stale: true,
             script: None,
             scripts: Vec::new(),
             imports_of: Vec::new(),
@@ -205,6 +211,7 @@ impl Page {
             go_back: false,
             scrolled: None,
             dpr: view.2,
+            module_keys: Vec::new(),
         };
         if scripting {
             p.script = Some(Box::new(Script::new(&p.url.to_string(), epoch, view)));
@@ -256,6 +263,8 @@ impl Page {
     fn scan(&mut self) {
         self.sources.clear();
         self.picture_of.clear();
+        self.sheets_stale = true;
+        self.inputs_stale = true;
         let nodes: Vec<NodeId> = self.doc.descendants(0).collect();
         for n in nodes {
             let Some(e) = self.doc.element(n) else { continue };
@@ -381,7 +390,7 @@ impl Page {
         // (url()s inside it are relative to it: made whole now, as the page's own are relative to the page.)
         let css_text = absolute_urls(&css_text, &base);
         self.resources[i].state = State::Css(css_text);
-        self.styles = None;
+        self.sheets_changed();
         self.changed = true;
     }
 
@@ -390,6 +399,7 @@ impl Page {
         if let Some(r) = self.resources.get_mut(i) {
             r.state = State::Picture(w, h);
             self.changed = true;
+            self.inputs_stale = true;
         }
     }
 
@@ -399,10 +409,19 @@ impl Page {
                 r.state = State::Failed;
                 return;
             }
+            if r.kind == Kind::Module {
+                r.state = State::Failed;
+                let key = self.module_keys.iter().find(|(k, _)| *k == i).map(|(_, key)| key.clone()).unwrap_or_default();
+                self.with_script(|s| {
+                    s.module_came(&key, None);
+                    s.checkpoint();
+                });
+                return;
+            }
             let was_sheet = r.kind == Kind::Sheet;
             r.state = State::Failed;
             if was_sheet {
-                self.styles = None;
+                self.sheets_changed();
             }
             self.changed = true;
         }
@@ -418,32 +437,8 @@ impl Page {
         if self.laid.is_none() || self.changed || size_changed {
             let view = Viewport { width: w / dpr, height: h / dpr };
             if self.styles.is_none() {
-                if self.ua_for != view.width {
-                    self.ua = if self.doc.quirks { css::sheet(&format!("{UA}\n{QUIRKS}"), view) } else { css::sheet(UA, view) };
-                    self.ua_for = view.width;
-                }
-                let mut text = String::new();
-                let mut author: Vec<Sheet> = Vec::new();
-                // (Sheets one after another, in one piece where a link's media wrapped it.)
-                for s in &self.sources {
-                    match s {
-                        Source::Inline(css) => text.push_str(css),
-                        Source::Linked(r) => {
-                            if let Some(State::Css(css)) = self.resources.get(*r).map(|r| &r.state) {
-                                text.push_str(css);
-                            }
-                        }
-                    }
-                    text.push('\n');
-                    if brackets_closed(&text) {
-                        author.push(css::sheet(&text, view));
-                        text.clear();
-                    }
-                }
-                if !text.trim().is_empty() {
-                    author.push(css::sheet(&text, view));
-                }
-                self.styles = Some(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &author }, view, dpr));
+                self.parse_sheets(view);
+                self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author }, view, dpr)));
             }
             let styles = self.styles.as_ref().expect("worked out above");
             let mut tree = Tree::build(&self.doc, styles, &mut Picker { of: &self.picture_of });
@@ -457,48 +452,75 @@ impl Page {
         self.laid.as_ref().expect("laid out above")
     }
 
-    /// Where each node's box is, and the view's size, for the page's scripts (getBoundingClientRect, offsetWidth...).
+    /// The page's style sheets parsed for a view (again only if they or the view changed).
+    fn parse_sheets(&mut self, view: Viewport) {
+        if !self.sheets_stale && self.sheets_for == (view.width, view.height) {
+            return;
+        }
+        self.ua = Arc::new(if self.doc.quirks { css::sheet(&format!("{UA}\n{QUIRKS}"), view) } else { css::sheet(UA, view) });
+        let mut text = String::new();
+        let mut author: Vec<Sheet> = Vec::new();
+        // (Sheets one after another, in one piece where a link's media wrapped it.)
+        for s in &self.sources {
+            match s {
+                Source::Inline(css) => text.push_str(css),
+                Source::Linked(r) => {
+                    if let Some(State::Css(css)) = self.resources.get(*r).map(|r| &r.state) {
+                        text.push_str(css);
+                    }
+                }
+            }
+            text.push('\n');
+            if brackets_closed(&text) {
+                author.push(css::sheet(&text, view));
+                text.clear();
+            }
+        }
+        if !text.trim().is_empty() {
+            author.push(css::sheet(&text, view));
+        }
+        self.author = Arc::new(author);
+        self.sheets_for = (view.width, view.height);
+        self.sheets_stale = false;
+        self.inputs_stale = true;
+    }
+
+    /// The sheets changed (or which there are): parsed again when next needed.
+    fn sheets_changed(&mut self) {
+        self.sheets_stale = true;
+        self.inputs_stale = true;
+        self.styles = None;
+    }
+
+    /// Where each node's box is, the styles, and the view's size, for the page's scripts (getBoundingClientRect,
+    /// offsetWidth, getComputedStyle...).
     fn share_layout(&mut self, w: f32, h: f32, dpr: f32) {
         let (Some(laid), Some(s)) = (&self.laid, self.script.as_mut()) else { return };
-        let n = self.doc.nodes.len();
-        let mut rects: Vec<Option<(f32, f32, f32, f32)>> = alloc::vec![None; n];
-        let grow = |rects: &mut Vec<Option<(f32, f32, f32, f32)>>, node: usize, r: Rect| {
-            if node >= rects.len() || (r.w <= 0.0 && r.h <= 0.0) {
-                return;
-            }
-            rects[node] = Some(match rects[node] {
-                None => (r.x, r.y, r.w, r.h),
-                Some((x, y, rw, rh)) => {
-                    let (x0, y0) = (x.min(r.x), y.min(r.y));
-                    (x0, y0, (x + rw).max(r.x + r.w) - x0, (y + rh).max(r.y + r.h) - y0)
-                }
-            });
-        };
-        for (node, r) in &laid.boxes {
-            grow(&mut rects, *node, *r);
-        }
-        for i in &laid.items {
-            if let Some(node) = i.node {
-                grow(&mut rects, node, bounds(i));
-            }
-        }
-        // (An element with no box of its own: as big as what's inside it.)
-        let order: Vec<NodeId> = self.doc.descendants(0).collect();
-        for &node in order.iter().rev() {
-            if let (Some(r), Some(p)) = (rects[node], self.doc.parent(node))
-                && p < n
-                && rects[p].is_none_or(|_| self.doc.element(p).is_none())
-            {
-                let (x, y, w2, h2) = r;
-                grow(&mut rects, p, Rect::new(x, y, w2, h2));
-            }
-        }
-        rects[0] = Some((0.0, 0.0, w, laid.height));
         let scale = if dpr > 0.0 { dpr } else { 1.0 };
-        let css: Vec<Option<(f32, f32, f32, f32)>> = rects.into_iter().map(|r| r.map(|(x, y, w2, h2)| (x / scale, y / scale, w2 / scale, h2 / scale))).collect();
         let host = s.host();
-        host.rects = css;
+        host.rects = crate::script::rects_of(laid, &self.doc, w, dpr);
         host.view = (w / scale, h / scale, scale);
+        host.styles = self.styles.clone();
+        host.laid_version = self.doc.version;
+    }
+
+    /// What the page's scripts need to lay it out on the spot (its sheets, parsed for its view, and its pictures),
+    /// given to them again if it changed.
+    fn share_inputs(&mut self) {
+        let Some(s) = self.script.as_mut() else { return };
+        let h = s.host();
+        h.forced_layouts = 0;
+        if !self.inputs_stale && h.layout_inputs.is_some() {
+            return;
+        }
+        let (w, ht, _) = h.view;
+        self.parse_sheets(Viewport { width: w, height: ht });
+        let sizes = self.resources.iter().map(|r| if let State::Picture(w, h) = r.state { Some((w, h)) } else { None }).collect();
+        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), picture_of: self.picture_of.clone(), sizes };
+        if let Some(s) = self.script.as_mut() {
+            s.host().layout_inputs = Some(alloc::rc::Rc::new(inputs));
+        }
+        self.inputs_stale = false;
     }
 
     // ---------------------------------------------------------------------------------------------- scripts
@@ -511,13 +533,40 @@ impl Page {
         }
     }
 
-    /// A <script> to run: in the page's order, deferred, or as soon as it comes.
+    /// A <script> to run: in the page's order, deferred, or as soon as it comes. (A module script is deferred
+    /// unless it's async; an import map is taken in at once.)
     fn add_script(&mut self, n: NodeId, inserted: bool) {
         let Some(e) = self.doc.element(n) else { return };
-        if !crate::script::runnable_type(e.attr("type")) || self.scripts.iter().any(|s| s.node == n) {
+        let kind = crate::script::script_kind(e.attr("type"));
+        if self.scripts.iter().any(|s| s.node == n) || kind == ScriptKind::Data || (kind == ScriptKind::Classic && e.has_attr("nomodule")) {
             return;
         }
         let src = e.attr("src").map(|s| String::from(s.trim()));
+        if kind == ScriptKind::ImportMap {
+            let text = self.doc.text_of(n);
+            if let Some(s) = self.script.as_mut() {
+                s.host().started.push(n);
+                s.add_import_map(&text);
+            }
+            return;
+        }
+        if kind == ScriptKind::Module {
+            let when = if inserted || e.has_attr("async") { When::Soon } else { When::Deferred };
+            let address = match &src {
+                Some(s) => match self.url.join(s) {
+                    Ok(u) => Some(u.to_string()),
+                    Err(_) => return,
+                },
+                None => None,
+            };
+            let text = if address.is_none() { Some(self.doc.text_of(n)) } else { None };
+            let Some(s) = self.script.as_mut() else { return };
+            s.host().started.push(n);
+            let id = s.load_module(address.as_deref(), text.as_deref());
+            self.scripts.push(PageScript { node: n, text: None, resource: None, module: Some((id, address.is_some())), when, done: false });
+            self.modules_wanted();
+            return;
+        }
         let when = match &src {
             _ if inserted || e.has_attr("async") && src.is_some() => When::Soon,
             Some(_) if e.has_attr("defer") => When::Deferred,
@@ -533,13 +582,42 @@ impl Page {
         if let Some(s) = self.script.as_mut() {
             s.host().started.push(n);
         }
-        self.scripts.push(PageScript { node: n, text, resource, when, done: false });
+        self.scripts.push(PageScript { node: n, text, resource, module: None, when, done: false });
     }
 
-    /// A script came: its text, to run in its turn.
+    /// A script came: its text, to run in its turn (a module's, to the module loader).
     pub fn script_came(&mut self, i: usize, text: String) {
         if let Some(r) = self.resources.get_mut(i) {
+            if r.kind == Kind::Module {
+                // (Its text is the module loader's now.)
+                r.state = State::Script(String::new());
+                let key = self.module_keys.iter().find(|(k, _)| *k == i).map(|(_, key)| key.clone()).unwrap_or_default();
+                self.with_script(|s| {
+                    s.module_came(&key, Some(&text));
+                    s.checkpoint();
+                });
+                return;
+            }
             r.state = State::Script(text);
+        }
+    }
+
+    /// The modules the module loader wants fetched, asked for.
+    fn modules_wanted(&mut self) {
+        let Some(s) = self.script.as_mut() else { return };
+        let wanted = s.modules_wanted();
+        for key in wanted {
+            match Url::parse(js::module::split_key(&key).0) {
+                Ok(url) => {
+                    let i = self.add(Kind::Module, Some(url), None);
+                    self.module_keys.push((i, key));
+                }
+                Err(_) => {
+                    if let Some(s) = self.script.as_mut() {
+                        s.module_came(&key, None);
+                    }
+                }
+            }
         }
     }
 
@@ -550,6 +628,7 @@ impl Page {
 
     /// Runs something with the page's scripting (its tree lent to it), then takes in what it changed.
     fn with_script<T>(&mut self, f: impl FnOnce(&mut Script) -> T) -> Option<T> {
+        self.share_inputs();
         let mut s = self.script.take()?;
         s.lend(&mut self.doc);
         let r = f(&mut s);
@@ -579,12 +658,13 @@ impl Page {
         }
         if rescan {
             self.scan();
-            self.styles = None;
+            self.sheets_changed();
             self.changed = true;
         }
         for n in new_scripts {
             self.add_script(n, true);
         }
+        self.modules_wanted();
         if let Some(u) = navigate.and_then(|u| u.to_web()) {
             self.navigation = Some(Request { url: u, body: None });
         }
@@ -628,6 +708,20 @@ impl Page {
         loop {
             let next = self.next_script();
             let Some(k) = next else { break };
+            if let Some((id, has_src)) = self.scripts[k].module {
+                self.scripts[k].done = true;
+                let node = self.scripts[k].node;
+                let fetched = self.with_script(|s| {
+                    s.set_now(now);
+                    s.run_module(id, "a module")
+                });
+                let event = if fetched == Some(false) { "error" } else { "load" };
+                if has_src || event == "error" {
+                    self.with_script(|s| s.fire(Some(node), &EventInit::new(event, "Event", false, false)));
+                }
+                ran = true;
+                continue;
+            }
             let (node, text) = {
                 let ps = &mut self.scripts[k];
                 ps.done = true;
@@ -685,9 +779,10 @@ impl Page {
     /// The next script to run: the first in-order one if it's ready (none, if it isn't); then deferred ones; any
     /// that runs as soon as it comes, once it has.
     fn next_script(&self) -> Option<usize> {
-        let ready = |s: &PageScript| match s.resource {
-            Some(r) => matches!(self.resources[r].state, State::Script(_) | State::Failed),
-            None => true,
+        let ready = |s: &PageScript| match (s.module, s.resource) {
+            (Some((id, _)), _) => self.script.as_ref().is_some_and(|sc| sc.module_ready(id)),
+            (None, Some(r)) => matches!(self.resources[r].state, State::Script(_) | State::Failed),
+            (None, None) => true,
         };
         for (k, s) in self.scripts.iter().enumerate() {
             if s.done || s.when != When::InOrder {
@@ -833,6 +928,7 @@ impl Page {
 
     /// The window's size changed: its resize event.
     pub fn resized(&mut self) {
+        self.inputs_stale = true;
         self.with_script(|s| s.fire(None, &EventInit::new("resize", "UIEvent", false, false)));
     }
 

@@ -279,6 +279,8 @@ pub struct Vm {
     /// Whether an element (an index's property) was ever put on Array.prototype or Object.prototype: arrays' fast
     /// paths then go the long way, through the prototypes' setters.
     pub proto_indexes: bool,
+    /// The modules loaded, and those being loaded (module.rs).
+    pub modules: crate::module::Modules,
 }
 
 fn no_clock() -> f64 {
@@ -320,6 +322,7 @@ impl Vm {
             step_limit: u64::MAX,
             now: no_clock,
             tz_offset: 0,
+            modules: crate::module::Modules::default(),
         };
         crate::builtins::init(&mut vm);
         vm
@@ -1027,6 +1030,14 @@ impl Vm {
                     }
                     let v = self.top().clone();
                     self.env_set(h, s, v);
+                }
+                Op::GetImport(h, s, name) => {
+                    let cell = self.env_get(h, s);
+                    let v = self.import_value(&cell);
+                    if matches!(v, Value::Empty) {
+                        return Err(self.tdz(name));
+                    }
+                    self.stack.push(v);
                 }
                 Op::PushEnv(t) => {
                     let (names, var) = self.frames[fi].code.scopes[t as usize].clone();
@@ -1850,15 +1861,16 @@ impl Vm {
                 }
                 Op::Debugger => {}
                 Op::ImportMeta => {
-                    let g = self.new_object();
+                    let Some(m) = self.current_module() else { return Err(self.syntax_error("import.meta outside a module")) };
+                    let g = self.import_meta(m);
                     self.stack.push(Value::Obj(g));
                 }
                 Op::ImportCall => {
-                    let _spec = self.pop();
-                    let p = self.new_promise();
-                    let e = self.type_error("Modules aren't supported yet");
-                    self.reject_promise(p, e);
-                    self.stack.push(Value::Obj(p));
+                    let options = self.pop();
+                    let spec = self.pop();
+                    let m = self.current_module();
+                    let p = self.dynamic_import(m, spec, options);
+                    self.stack.push(p);
                 }
                 Op::ToObject => {
                     let v = self.pop();
@@ -2324,6 +2336,7 @@ impl Vm {
         match r {
             NameRef::Env(g, s) => {
                 let v = match &self.heap.get(g).class {
+                    Class::Env(env) if env.names[s].1 == IMPORT => self.import_value(&env.vars[s]),
                     Class::Env(env) => env.vars[s].clone(),
                     _ => Value::Undefined,
                 };
@@ -2354,6 +2367,9 @@ impl Vm {
                     Class::Env(env) => env.names[s].1,
                     _ => VAR,
                 };
+                if kind == IMPORT {
+                    return Err(self.type_error("Assignment to constant variable."));
+                }
                 let cur_empty = matches!(&self.heap.get(g).class, Class::Env(env) if matches!(env.vars[s], Value::Empty));
                 if cur_empty {
                     return Err(self.reference_error(&format!("Cannot access '{}' before initialization", self.str_of(a))));
@@ -2551,6 +2567,7 @@ impl Vm {
             f.trace(&mut more);
         }
         let mut roots: Vec<Value> = self.stack.clone();
+        self.modules.trace(&mut more, &mut roots);
         roots.extend(self.roots.iter().cloned());
         if let (Some(trace), Some(h)) = (self.host_trace, self.host.as_deref()) {
             trace(h, &mut roots);

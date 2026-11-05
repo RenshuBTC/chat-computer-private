@@ -1419,7 +1419,8 @@ SITE_HOME = """<!doctype html><html><head><title>Example Site</title>
 <p><img src="/sun.png" alt="The sun" width="96" height="64" class="pic"> A paragraph beside a floated picture, long
 enough to wrap round it on a few lines in the middle of the screen, as a browser lays it out.</p>
 <form action="/search"><input name="q" autofocus placeholder="Search"> <button>Search</button></form>
-<p class="note">The end of the page.</p><script src="/app.js"></script></body></html>"""
+<p class="note">The end of the page.</p><script src="/app.js"></script>
+<script type="module">import { word } from './mod.js'; console.log('module says ' + word);</script></body></html>"""
 # Its script: a block it makes (purple), then (once a fetch of the stand-in's JSON has come) turns teal, a timer, and
 # the console's lines.
 SITE_JS = """document.addEventListener('DOMContentLoaded', function () {
@@ -1484,6 +1485,9 @@ def site_check(args) -> list[str]:
                 kind, body = "text/javascript", SITE_JS.encode()
             elif url.path == "/data.json":
                 kind, body = "application/json", b'{"word": "hello"}'
+            elif url.path == "/mod.js":
+                kind, body = "text/javascript", b"export const word = 'hi from a module';"
+
             elif url.path == "/sun.png":
                 kind, body = "image/png", sun.getvalue()
             elif url.path == "/second":
@@ -1610,7 +1614,8 @@ def site_check(args) -> list[str]:
             problems.append("the page's script's fetch didn't reach the site")
         for note in ("site: opening https://www.example.com/", "1 style sheets, 1 pictures (0 couldn't be had)",
                      "site: form sent to https://www.example.com/search?q=sunny+day (GET)", "Opened www.example.com",
-                     "site: console: made 3 cells later", "site: console: fetched hello", "site: console: timer fired"):
+                     "site: console: made 3 cells later", "site: console: fetched hello", "site: console: timer fired",
+                     "site: console: module says hi from a module"):
             if note not in text:
                 problems.append(f"the log doesn't say {note!r}")
     finally:

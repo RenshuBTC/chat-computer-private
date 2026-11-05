@@ -51,6 +51,9 @@ pub enum Op {
     InitEnv(u16, u16),
     GetEnvChecked(u16, u16, u32),
     SetEnvChecked(u16, u16, u32),
+    /// A module's imported name (its slot holds where the exporting module keeps it): throws if that isn't
+    /// initialized yet (its name is string n).
+    GetImport(u16, u16, u32),
     /// A new scope (its names: scopes[n]) inside the current one.
     PushEnv(u32),
     PopEnv,
@@ -281,8 +284,9 @@ pub enum Op {
     AsyncYield,
     // -- the rest
     Debugger,
+    /// -> the module's import.meta object (the module: the one whose environment is around the code).
     ImportMeta,
-    /// specifier -> promise
+    /// specifier -> promise: import(), from the module around the code (or a script).
     ImportCall,
     /// v -> object (a with's object: ToObject, throwing on null and undefined)
     ToObject,

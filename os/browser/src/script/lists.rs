@@ -615,6 +615,9 @@ fn style_decls(vm: &Vm, n: NodeId) -> Vec<(String, String, bool)> {
 /// A property's value in a style: the inline one, or (for a computed style) what the page worked out, or the
 /// property's initial value.
 fn value_of(vm: &mut Vm, n: NodeId, computed: bool, prop: &str) -> String {
+    if computed && let Some(v) = super::window::styled_value(vm, n, prop) {
+        return v;
+    }
     if let Some((_, v, _)) = style_decls(vm, n).into_iter().find(|(k, _, _)| k == prop) {
         return v;
     }

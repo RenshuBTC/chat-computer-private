@@ -273,3 +273,37 @@ fn scripts_fetch_through_the_page() {
     p.answer(reqs[0].0, Ok(r));
     assert_eq!(p.take_console(), ["got 5"]);
 }
+
+#[test]
+fn module_scripts_import_what_the_page_fetches() {
+    let mut p = scripted(
+        "<head><script type=importmap>{\"imports\": {\"lib\": \"/m/lib.js\"}}</script>\
+         <script type=module>import { n, add } from 'lib'; add(); console.log('module sees ' + n + ' at ' + import.meta.url);</script>\
+         <script nomodule>console.log('nomodule ran')</script>\
+         <script>console.log('classic first')</script></head><body></body>",
+    );
+    let (i, kind, url, _) = p.next_wanted().unwrap();
+    assert_eq!(kind, crate::page::Kind::Module);
+    assert_eq!(url.unwrap().path, "/m/lib.js");
+    p.run(0.0);
+    assert_eq!(p.take_console(), ["classic first"], "the module waits for what it imports");
+    p.script_came(i, String::from("export let n = 1; export function add() { n += 1; }"));
+    p.run(1.0);
+    assert_eq!(p.take_console(), ["module sees 2 at https://example.com/a/page"]);
+}
+
+#[test]
+fn scripts_see_where_boxes_are_at_once() {
+    let mut p = scripted(
+        "<head><style>body { margin: 8px } .box { width: 120px; height: 30px; padding: 5px; border: 2px solid red }\
+         .gone { display: none }</style></head><body><div id=a class=box>x</div><script>\
+         var a = document.getElementById('a');\
+         var b = document.createElement('div'); b.style.height = '20px'; document.body.appendChild(b);\
+         console.log(a.offsetWidth + ' ' + a.offsetHeight + ' ' + b.getBoundingClientRect().top);\
+         a.className = 'gone';\
+         console.log(a.offsetWidth + ' ' + getComputedStyle(a).display + ' ' + b.getBoundingClientRect().top);\
+         </script></body>",
+    );
+    p.run(0.0);
+    assert_eq!(p.take_console(), ["134 44 52", "0 none 8"], "laid out on the spot, before the page itself is");
+}

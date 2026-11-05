@@ -85,7 +85,7 @@ fn main() {
             };
             match (kind, bytes) {
                 (Kind::Sheet, Some(b)) => page.sheet_came(i, String::from_utf8_lossy(&b).into_owned()),
-                (Kind::Script, Some(b)) => page.script_came(i, String::from_utf8_lossy(&b).into_owned()),
+                (Kind::Script | Kind::Module, Some(b)) => page.script_came(i, String::from_utf8_lossy(&b).into_owned()),
                 (Kind::Picture, Some(b)) => match picture::decode(&b, 4000, 4000, [255, 255, 255]) {
                     Ok(p) => {
                         let (w, h) = picture::size(&b).unwrap_or((p.width, p.height));

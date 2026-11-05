@@ -6,7 +6,9 @@
 
 mod dom;
 mod events;
+mod geometry;
 mod lists;
+mod modules;
 mod net;
 pub mod url;
 mod window;
@@ -22,8 +24,9 @@ use js::string::JsStr;
 use js::value::{Gc, Value};
 use js::vm::{I, Sym, Vm};
 
-pub use dom::runnable_type;
+pub use dom::{ScriptKind, runnable_type, script_kind};
 pub use events::{EvValue, EventInit};
+pub use geometry::{LayoutInputs, Picker, fresh_layout, rects_of};
 pub use net::{NetKind, NetRequest, Response};
 pub use window::seed;
 
@@ -153,6 +156,14 @@ pub struct Host {
     pub storage_changed: bool,
     /// Styles the page worked out at its last layout, by (element, property), for getComputedStyle.
     pub computed: BTreeMap<(NodeId, String), String>,
+    /// The page's import maps, merged.
+    pub import_map: modules::ImportMap,
+    /// What a layout on the spot takes (the page's sheets and pictures), the tree's version `rects` (and `styles`)
+    /// are of, the styles worked out then, and how many layouts this task has made on the spot.
+    pub layout_inputs: Option<alloc::rc::Rc<LayoutInputs>>,
+    pub laid_version: u64,
+    pub styles: Option<alloc::sync::Arc<crate::style::Styles>>,
+    pub forced_layouts: u32,
 }
 
 /// The private symbols holding objects' inner state (scripts never see these keys).
@@ -209,6 +220,11 @@ impl Host {
             history_go: None,
             storage_changed: false,
             computed: BTreeMap::new(),
+            import_map: modules::ImportMap::default(),
+            layout_inputs: None,
+            laid_version: u64::MAX,
+            styles: None,
+            forced_layouts: 0,
         }
     }
 
@@ -548,7 +564,9 @@ impl Script {
         // The document's object is node 0's.
         let d = wrap(&mut vm, 0);
         vm.put(window, "document", d, js::object::ENUMERABLE);
-        Script { vm }
+        let mut s = Script { vm };
+        s.init_modules();
+        s
     }
 
     pub fn host(&mut self) -> &mut Host {

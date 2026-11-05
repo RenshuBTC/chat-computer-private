@@ -261,8 +261,10 @@ impl Vm {
 
     /// [[GetOwnProperty]].
     pub fn get_own_property(&mut self, g: Gc, k: Key) -> Result<Option<Prop>, Value> {
-        if let Class::Proxy(..) = self.heap.get(g).class {
-            return self.proxy_get_own(g, k);
+        match self.heap.get(g).class {
+            Class::Proxy(..) => return self.proxy_get_own(g, k),
+            Class::Namespace(_) => return self.ns_own(g, k),
+            _ => {}
         }
         Ok(self.own_prop(g, k))
     }
@@ -272,8 +274,10 @@ impl Vm {
         let mut cur = g;
         loop {
             let o = self.heap.get(cur);
-            if let Class::Proxy(..) = o.class {
-                return self.proxy_get(cur, k, receiver);
+            match o.class {
+                Class::Proxy(..) => return self.proxy_get(cur, k, receiver),
+                Class::Namespace(_) => return self.ns_get(cur, k),
+                _ => {}
             }
             // (The common case first: an ordinary object's own data property.)
             let p = match (&o.class, k) {
@@ -387,8 +391,10 @@ impl Vm {
         }
         let mut cur = g;
         let found = loop {
-            if let Class::Proxy(..) = self.heap.get(cur).class {
-                return self.proxy_set(cur, k, v, receiver);
+            match self.heap.get(cur).class {
+                Class::Proxy(..) => return self.proxy_set(cur, k, v, receiver),
+                Class::Namespace(_) => return Ok(false),
+                _ => {}
             }
             if let Class::TypedArray(_) = self.heap.get(cur).class
                 && let Some(i) = self.typed_key(k)
@@ -481,8 +487,10 @@ impl Vm {
     pub fn has_property(&mut self, g: Gc, k: Key) -> Result<bool, Value> {
         let mut cur = g;
         loop {
-            if let Class::Proxy(..) = self.heap.get(cur).class {
-                return self.proxy_has(cur, k);
+            match self.heap.get(cur).class {
+                Class::Proxy(..) => return self.proxy_has(cur, k),
+                Class::Namespace(_) => return Ok(self.ns_has(cur, k)),
+                _ => {}
             }
             if let Class::TypedArray(_) = self.heap.get(cur).class
                 && let Some(i) = self.typed_key(k)
@@ -508,6 +516,7 @@ impl Vm {
         let o = self.heap.get_mut(g);
         match (&mut o.class, k) {
             (Class::Proxy(..), _) => return self.proxy_delete(g, k),
+            (Class::Namespace(_), Key::Str(_) | Key::Index(_)) => return Ok(self.ns_delete(g, k)),
             (Class::Array(els, _), Key::Index(i)) => {
                 let i = i as usize;
                 if i < els.len() && !matches!(els[i], Value::Empty) {
@@ -559,8 +568,10 @@ impl Vm {
 
     /// [[OwnPropertyKeys]]: indices ascending, then names and symbols in the order they were made.
     pub fn own_keys(&mut self, g: Gc) -> Result<Vec<Key>, Value> {
-        if let Class::Proxy(..) = self.heap.get(g).class {
-            return self.proxy_own_keys(g);
+        match self.heap.get(g).class {
+            Class::Proxy(..) => return self.proxy_own_keys(g),
+            Class::Namespace(_) => return Ok(self.ns_keys(g)),
+            _ => {}
         }
         Ok(self.own_keys_plain(g))
     }
@@ -615,6 +626,7 @@ impl Vm {
     pub fn define_own_property(&mut self, g: Gc, k: Key, desc: Desc) -> Result<bool, Value> {
         match (&self.heap.get(g).class, k) {
             (Class::Proxy(..), _) => return self.proxy_define(g, k, desc),
+            (Class::Namespace(_), Key::Str(_) | Key::Index(_)) => return self.ns_define(g, k, desc),
             (Class::Array(..), Key::Str(n::LENGTH)) => return self.array_define_length(g, desc),
             (Class::Array(_, len), Key::Index(i)) => {
                 let len = *len;

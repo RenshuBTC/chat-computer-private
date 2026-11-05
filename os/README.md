@@ -359,11 +359,13 @@ drivers.
   POST). Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
   (`browser/src/script/`: the document's nodes and elements, events, timers and animation frames, fetch and
   XMLHttpRequest through the kernel's own connections, URL, storage, custom elements, mutation observers): the
-  page's scripts in their order, its clicks and keys going to them first (and doing nothing more when they cancel
-  them), and what they change laid out again. jQuery, React and Preact pages work. `check.py --site` types an
+  page's scripts in their order, its modules (`<script type="module">`, import maps, `import()`) fetched as they're
+  imported, its clicks and keys going to them first (and doing nothing more when they cancel them), and what they
+  change laid out again (on the spot when a script asks where a box is: offsetWidth, getBoundingClientRect,
+  getComputedStyle). jQuery, React and Preact pages work. `check.py --site` types an
   address, and a stand-in for the site (over TLS 1.3, with a test authority) checks its style sheet, picture and
   cookie, its script (a block it makes, turned another colour by what it fetches, a timer, its console's lines in
-  the log), a form sent with what was typed, and a link clicked.
+  the log) and its module, a form sent with what was typed, and a link clicked.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
   retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
   its own with lost, repeated and reordered packets.
@@ -845,9 +847,9 @@ writes for each person, in place of Ubuntu's catalogue.
     shared by how fast each core is), then Intel's built-in graphics doing the model's arithmetic.
 15. ✓ Showing websites (Chat Computer's own browser engine: HTML, CSS, its layout and drawing; links, forms,
     cookies; checked in a virtual PC against a stand-in site, and on Wikipedia's, Hacker News' and Google's pages).
-    ✓ Scripts: a JavaScript engine of its own (94% of Ecma's test262), the DOM, events, timers, fetch. To do:
-    JavaScript modules, layout worked out when a script asks for a box's size, canvas, SVG pictures, a sans-serif
-    font for pages that ask for one, and touchpads.
+    ✓ Scripts: a JavaScript engine of its own (96% of Ecma's test262's language tests), the DOM, events, timers,
+    fetch, modules, layout worked out when a script asks for a box's size. To do: canvas, SVG pictures, a
+    sans-serif font for pages that ask for one, and touchpads.
 16. Apps Chat Computer writes for you: when a person needs a tool (a budget, a study plan, their taxes), the model
     builds a small app of its own for it and keeps it up to date as things change, so asking again is a button, not
     another answer from scratch. Each app is one file in a form simple enough for a small model to write well (its

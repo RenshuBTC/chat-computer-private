@@ -1145,6 +1145,120 @@ fn get_computed_style(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
     Ok(super::lists::computed_style(vm, n))
 }
 
+/// A CSS keyword from a Rust enum's name ("InlineBlock" as "inline-block").
+fn keyword(name: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('-');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    if out == "no-wrap" { String::from("nowrap") } else { out }
+}
+
+/// A number of CSS pixels as CSS writes it ("12px", "12.5px").
+fn css_px(v: f32) -> String {
+    let r = crate::num::round(v * 1000.0) / 1000.0;
+    format!("{}px", js::value::number_to_string(r as f64))
+}
+
+/// A colour as a computed style gives it: rgb(), or rgba() if it isn't opaque.
+fn css_color(c: u32) -> String {
+    let (a, r, g, b) = (c >> 24, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+    if a == 0xFF {
+        format!("rgb({r}, {g}, {b})")
+    } else {
+        let alpha = crate::num::round(a as f32 / 255.0 * 1000.0) / 1000.0;
+        format!("rgba({r}, {g}, {b}, {})", js::value::number_to_string(alpha as f64))
+    }
+}
+
+/// A property's value from the styles the page worked out for an element (laid out again first if a script
+/// changed the page), for the properties the browser works out; None for the rest.
+pub fn styled_value(vm: &mut Vm, n: NodeId, prop: &str) -> Option<String> {
+    use crate::style::{LineHeight, Size};
+    super::fresh_layout(vm);
+    let h = host_ref(vm);
+    let st = h.styles.as_ref()?.of.get(n)?.clone()?;
+    let dpr = if h.view.2 > 0.0 { h.view.2 } else { 1.0 };
+    let rect = h.rects.get(n).copied().flatten();
+    let px = |v: f32| css_px(v / dpr);
+    let side = |p: &str| ["top", "right", "bottom", "left"].iter().position(|s| *s == p);
+    let size = |s: Size| match s {
+        Size::Len(l) => px(l.px),
+        Size::None => String::from("none"),
+        _ => String::from("auto"),
+    };
+    // (The sides' order in the style: top, right, bottom, left.)
+    let parts: Vec<&str> = prop.split('-').collect();
+    Some(match prop {
+        "display" => keyword(&format!("{:?}", st.display)),
+        "position" => keyword(&format!("{:?}", st.position)),
+        "float" => keyword(&format!("{:?}", st.float)),
+        "clear" => {
+            if st.clear_both {
+                String::from("both")
+            } else {
+                keyword(&format!("{:?}", st.clear))
+            }
+        }
+        "visibility" => String::from(if st.visible { "visible" } else { "hidden" }),
+        "opacity" => js::value::number_to_string(st.opacity as f64),
+        "z-index" => st.z_index.map_or(String::from("auto"), |z| format!("{z}")),
+        "color" => css_color(st.color),
+        "background-color" => css_color(st.background),
+        "font-size" => px(st.font_size),
+        "font-weight" => format!("{}", st.font_weight),
+        "font-style" => String::from(if st.italic { "italic" } else { "normal" }),
+        "line-height" => match st.line_height {
+            LineHeight::Normal => String::from("normal"),
+            LineHeight::Factor(f) => px(f * st.font_size),
+            LineHeight::Px(p) => px(p),
+        },
+        "text-align" => keyword(&format!("{:?}", st.text_align)),
+        "white-space" => keyword(&format!("{:?}", st.white_space)),
+        "overflow" | "overflow-x" | "overflow-y" => String::from(if st.clip { "hidden" } else { "visible" }),
+        "box-sizing" => String::from(if st.border_box { "border-box" } else { "content-box" }),
+        "flex-direction" => keyword(&format!("{:?}", st.flex_direction)),
+        "flex-grow" => js::value::number_to_string(st.grow as f64),
+        "flex-shrink" => js::value::number_to_string(st.shrink as f64),
+        "order" => format!("{}", st.order),
+        "width" | "height" => {
+            let tall = prop == "height";
+            match rect {
+                Some(r) if st.display != crate::style::Display::None && !st.display.is_inline_level() || st.display == crate::style::Display::InlineBlock => {
+                    let whole = if tall { r.3 } else { r.2 };
+                    let (a, b) = if tall { (0, 2) } else { (3, 1) };
+                    let inner = whole * dpr - st.padding[a].px - st.padding[b].px - st.border_width[a] - st.border_width[b];
+                    if st.border_box { css_px(whole) } else { px(inner.max(0.0)) }
+                }
+                _ => size(if tall { st.height } else { st.width }),
+            }
+        }
+        "top" | "right" | "bottom" | "left" => size(st.inset[side(prop)?]),
+        _ if parts.len() == 2 && parts[0] == "margin" => match st.margin[side(parts[1])?] {
+            Size::Len(l) => px(l.px),
+            _ => String::from("0px"),
+        },
+        _ if parts.len() == 2 && parts[0] == "padding" => px(st.padding[side(parts[1])?].px),
+        _ if parts.len() == 3 && parts[0] == "border" => {
+            let i = side(parts[1])?;
+            match parts[2] {
+                "width" => px(if st.border_style[i] == crate::style::BorderStyle::None { 0.0 } else { st.border_width[i] }),
+                "style" => keyword(&format!("{:?}", st.border_style[i])),
+                "color" => css_color(st.border_color[i]),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    })
+}
+
 /// A property's value as the page worked it out for an element (what the system gave the scripts after the last
 /// layout), else a value that fits what the element is.
 pub fn computed_value(vm: &mut Vm, n: NodeId, prop: &str) -> String {
@@ -2160,6 +2274,7 @@ fn observer_observe(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let cb = slot(vm, this, host_ref(vm).syms.data);
     let kind = string(vm, &slot(vm, this, host_ref(vm).syms.target))?;
     let target = arg(args, 0);
+    super::fresh_layout(vm);
     let r = host_ref(vm).rects.get(n).copied().flatten().unwrap_or((0.0, 0.0, 0.0, 0.0));
     let (sx, sy) = host_ref(vm).scroll;
     let e = vm.new_object();

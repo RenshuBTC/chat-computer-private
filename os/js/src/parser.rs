@@ -40,6 +40,8 @@ struct Ctx {
     class: bool,
     /// A class field's initializer, or a static block: `arguments` isn't allowed; `await` isn't in a static block.
     field: bool,
+    /// A module's own top level (not in any function): an `await` here is the module's (it's run as an async one).
+    top: bool,
 }
 
 pub struct Parser<'a, 'b> {
@@ -59,6 +61,10 @@ pub struct Parser<'a, 'b> {
     cover_ok: bool,
     /// The assignment expression about to be read is an array's or object's element.
     literal_element: bool,
+    /// The module awaits at its top level.
+    tla: bool,
+    /// The classes being read, inner last: the private names each declares, and those used in it (where).
+    privates: Vec<(Vec<Atom>, Vec<(Atom, usize)>)>,
 }
 
 /// Parses a script.
@@ -77,8 +83,15 @@ pub fn parse(src: &str, atoms: &mut Atoms, module: bool, strict: bool) -> R<Scri
     p.ctx.module = module;
     p.ctx.strict = strict || module;
     p.ctx.is_async = module;
+    p.ctx.top = module;
+    if module {
+        // (No HTML-like comments in a module: its first token read again without them.)
+        p.lx = Lexer::new(src);
+        p.lx.html_comments = false;
+        p.tok = p.lx.next(p.atoms)?;
+    }
     let body = p.statements_until_end(true)?;
-    Ok(Script { body, strict: p.ctx.strict, module })
+    Ok(Script { body, strict: p.ctx.strict, module, tla: p.tla })
 }
 
 /// Parses a function's parameters and body, as `new Function(params, body)` makes one (`kind`: "function",
@@ -111,7 +124,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     pub fn new(src: &'a str, atoms: &'b mut Atoms) -> R<Parser<'a, 'b>> {
         let mut lx = Lexer::new(src);
         let tok = lx.next(atoms)?;
-        Ok(Parser { lx, atoms, tok, prev_end: 0, ctx: Ctx::default(), labels: Vec::new(), loops: 0, switches: 0, key_was_string: false, cover_ok: false, literal_element: false })
+        Ok(Parser { lx, atoms, tok, prev_end: 0, ctx: Ctx::default(), labels: Vec::new(), loops: 0, switches: 0, key_was_string: false, cover_ok: false, literal_element: false, tla: false, privates: Vec::new() })
     }
 
     fn err(&self, message: &str) -> SyntaxError {
@@ -550,8 +563,9 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn for_statement(&mut self) -> R<Stmt> {
         self.next()?;
-        let is_await = if self.is_word(n::AWAIT) && (self.ctx.is_async || self.ctx.module) {
+        let is_await = if self.is_word(n::AWAIT) && self.ctx.is_async {
             self.next()?;
+            self.tla |= self.ctx.top;
             true
         } else {
             false
@@ -712,6 +726,16 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn export_name(&mut self) -> R<Atom> {
         match self.tok.tok.clone() {
             Tok::Str(s, _) => {
+                // (A string naming an export is Unicode: no surrogate alone.)
+                let u = s.units();
+                let mut i = 0;
+                while i < u.len() {
+                    match u[i] {
+                        0xD800..=0xDBFF if i + 1 < u.len() && (0xDC00..=0xDFFF).contains(&u[i + 1]) => i += 2,
+                        0xD800..=0xDFFF => return Err(self.err("an export's name has a surrogate alone")),
+                        _ => i += 1,
+                    }
+                }
                 self.next()?;
                 Ok(self.atoms.intern(&s))
             }
@@ -723,10 +747,10 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.next()?;
         let mut names = Vec::new();
         if let Tok::Str(..) = self.tok.tok {
-            let from = self.module_name()?;
-            self.with_clause()?;
+            let spec = self.module_name()?;
+            let attrs = self.with_clause()?;
             self.semicolon()?;
-            return Ok(Stmt::Import(Import { from, names }));
+            return Ok(Stmt::Import(Import { from: Request { spec, attrs }, names }));
         }
         if self.is_ident() {
             let local = self.binding_ident()?;
@@ -749,6 +773,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                     if is_string || !self.ident_ok(imported) {
                         return Err(self.err("an import of that name needs `as`"));
                     }
+                    if matches!(imported, n::EVAL | n::ARGUMENTS) {
+                        return Err(self.err("eval and arguments can't be bound in strict code"));
+                    }
                     imported
                 };
                 names.push((Some(imported), local));
@@ -765,29 +792,37 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn import_from(&mut self, names: Vec<(Option<Atom>, Atom)>) -> R<Stmt> {
         self.expect_word(n::FROM)?;
-        let from = self.module_name()?;
-        self.with_clause()?;
+        let spec = self.module_name()?;
+        let attrs = self.with_clause()?;
         self.semicolon()?;
-        Ok(Stmt::Import(Import { from, names }))
+        Ok(Stmt::Import(Import { from: Request { spec, attrs }, names }))
     }
 
-    /// An import's attributes (`with { type: "json" }`), read and set aside.
-    fn with_clause(&mut self) -> R<()> {
+    /// An import's attributes (`with { type: "json" }`): each key once; sorted by key.
+    fn with_clause(&mut self) -> R<Vec<(JsStr, JsStr)>> {
+        let mut attrs: Vec<(JsStr, JsStr)> = Vec::new();
         let assert = self.atoms.intern_str("assert");
-        if (self.is_word(n::WITH) || self.is_word(assert)) && !self.tok.newline {
+        if self.is_word(n::WITH) || (self.is_word(assert) && !self.tok.newline) {
             self.next()?;
             self.expect(P::LBrace)?;
             while !self.is(P::RBrace) {
-                self.export_name()?;
+                let at = self.tok.start;
+                let key = self.export_name()?;
+                let key = self.atoms.get(key).clone();
                 self.expect(P::Colon)?;
-                self.module_name()?;
+                let value = self.module_name()?;
+                if attrs.iter().any(|(k, _)| *k == key) {
+                    return Err(SyntaxError { message: String::from("an import attribute's key is given twice"), at });
+                }
+                attrs.push((key, value));
                 if !self.eat(P::Comma)? {
                     break;
                 }
             }
             self.expect(P::RBrace)?;
         }
-        Ok(())
+        attrs.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(attrs)
     }
 
     fn export(&mut self) -> R<Stmt> {
@@ -795,10 +830,10 @@ impl<'a, 'b> Parser<'a, 'b> {
         if self.eat(P::Star)? {
             let alias = if self.eat_word(n::AS)? { Some(self.export_name()?) } else { None };
             self.expect_word(n::FROM)?;
-            let from = self.module_name()?;
-            self.with_clause()?;
+            let spec = self.module_name()?;
+            let attrs = self.with_clause()?;
             self.semicolon()?;
-            return Ok(Stmt::Export(Export::All(alias, from)));
+            return Ok(Stmt::Export(Export::All(alias, Request { spec, attrs })));
         }
         if self.eat_word(n::DEFAULT)? {
             if self.is_word(n::FUNCTION) || (self.is_word(n::ASYNC) && self.async_function_ahead()?) {
@@ -818,8 +853,15 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
         if self.eat(P::LBrace)? {
             let mut names = Vec::new();
+            // (Without `from`, each name exported is the module's own: a name, not a string or a reserved word.)
+            let mut not_local = None;
             while !self.is(P::RBrace) {
+                let at = self.tok.start;
+                let is_string = matches!(self.tok.tok, Tok::Str(..));
                 let local = self.export_name()?;
+                if not_local.is_none() && (is_string || !self.ident_ok(local)) {
+                    not_local = Some(at);
+                }
                 let exported = if self.eat_word(n::AS)? { self.export_name()? } else { local };
                 names.push((local, exported));
                 if !self.eat(P::Comma)? {
@@ -828,10 +870,13 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
             self.expect(P::RBrace)?;
             let from = if self.eat_word(n::FROM)? {
-                let f = self.module_name()?;
-                self.with_clause()?;
-                Some(f)
+                let spec = self.module_name()?;
+                let attrs = self.with_clause()?;
+                Some(Request { spec, attrs })
             } else {
+                if let Some(at) = not_local {
+                    return Err(SyntaxError { message: String::from("only a name of the module's own can be exported without from"), at });
+                }
                 None
             };
             self.semicolon()?;
@@ -889,6 +934,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.ctx.is_async = is_async;
         self.ctx.new_target = true;
         self.ctx.field = false;
+        self.ctx.top = false;
         match kind {
             FuncKind::Method | FuncKind::Getter | FuncKind::Setter => self.ctx.super_prop = true,
             FuncKind::Constructor { derived } => {
@@ -1027,6 +1073,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.switches = 0;
         self.ctx.is_async = is_async;
         self.ctx.generator = false;
+        self.ctx.top = false;
         let was_strict = self.ctx.strict;
         let r = if self.is(P::LBrace) {
             self.ctx.function = true;
@@ -1097,7 +1144,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         } else {
             None
         };
-        let extends = if self.eat_word(n::EXTENDS)? { Some(self.lhs(false)?) } else { None };
+        let extends = if self.eat_word(n::EXTENDS)? { Some(self.lhs(true)?) } else { None };
         let r = self.class_body(name, extends.is_some(), start);
         self.ctx = saved;
         let (constructor, members, end) = r?;
@@ -1107,6 +1154,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn class_body(&mut self, name: Option<Atom>, derived: bool, _start: usize) -> R<(Option<Rc<Func>>, Vec<Member>, usize)> {
         self.expect(P::LBrace)?;
         self.ctx.class = true;
+        self.privates.push((Vec::new(), Vec::new()));
         let mut constructor = None;
         let mut members = Vec::new();
         let _ = name;
@@ -1127,6 +1175,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                         let saved = self.ctx;
                         self.ctx.function = false;
                         self.ctx.field = true;
+                        self.ctx.top = false;
                         self.ctx.is_async = false;
                         self.ctx.generator = false;
                         self.ctx.super_prop = true;
@@ -1197,6 +1246,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let saved = self.ctx;
                 self.ctx.field = true;
                 self.ctx.function = false;
+                self.ctx.top = false;
                 self.ctx.is_async = false;
                 self.ctx.generator = false;
                 self.ctx.super_prop = true;
@@ -1212,6 +1262,17 @@ impl<'a, 'b> Parser<'a, 'b> {
             members.push(Member::Field { key, value, is_static });
         }
         let end = self.tok.end;
+        // Its private names used: each declared by it, or (left to it) by a class around it.
+        let (declared, used) = self.privates.pop().unwrap_or_default();
+        for (a, at) in used {
+            if declared.contains(&a) {
+                continue;
+            }
+            match self.privates.last_mut() {
+                Some(outer) => outer.1.push((a, at)),
+                None => return Err(SyntaxError { message: format!("{} isn't declared by a class around it", self.atoms.get(a).to_rust()), at }),
+            }
+        }
         self.next()?;
         Ok((constructor, members, end))
     }
@@ -1271,6 +1332,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Ok(PropKey::Computed(Box::new(e)))
             }
             Tok::Private(a) if class => {
+                if let Some(f) = self.privates.last_mut() {
+                    f.0.push(a);
+                }
                 self.next()?;
                 Ok(PropKey::Private(a))
             }
@@ -1619,6 +1683,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             if self.peek()?.tok != Tok::Name(n::IN, false) || no_in {
                 return Err(self.unexpected());
             }
+            self.check_private(a)?;
             self.next()?;
             self.next()?;
             let right = self.binary(8, no_in)?;
@@ -1679,11 +1744,12 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.check_update_target(&arg)?;
             return Ok(Expr::Update(Box::new(arg), add, true));
         }
-        if self.is_word(n::AWAIT) && (self.ctx.is_async || (self.ctx.module && !self.ctx.function)) {
+        if self.is_word(n::AWAIT) && (self.ctx.is_async || self.ctx.top) {
             if self.ctx.field {
                 return Err(self.err("await in a class field or static block"));
             }
             self.next()?;
+            self.tla |= self.ctx.top;
             let arg = self.unary()?;
             return Ok(Expr::Await(Box::new(arg)));
         }
@@ -1733,7 +1799,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     self.next()?;
                     e = match self.tok.tok {
                         Tok::Private(a) => {
-                            self.check_private()?;
+                            self.check_private(a)?;
                             self.next()?;
                             Expr::Private(Box::new(e), a, false)
                         }
@@ -1761,7 +1827,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                             Expr::Index(Box::new(e), Box::new(k), true)
                         }
                         Tok::Private(a) => {
-                            self.check_private()?;
+                            self.check_private(a)?;
                             self.next()?;
                             Expr::Private(Box::new(e), a, true)
                         }
@@ -1795,9 +1861,15 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(if chained { Expr::Chain(Box::new(e)) } else { e })
     }
 
-    fn check_private(&self) -> R<()> {
+    /// A private name used: it must be in a class (and declared by it, or by one around it: checked as the
+    /// outermost class ends).
+    fn check_private(&mut self, a: Atom) -> R<()> {
         if !self.ctx.class {
             return Err(self.err("a private name outside a class"));
+        }
+        let at = self.tok.start;
+        if let Some(f) = self.privates.last_mut() {
+            f.1.push((a, at));
         }
         Ok(())
     }
@@ -1821,7 +1893,11 @@ impl<'a, 'b> Parser<'a, 'b> {
             let mut c = if self.is_word(n::SUPER) {
                 self.super_expr()?
             } else if self.is_word(n::IMPORT) {
-                return Err(self.err("import() can't be new's callee"));
+                // (`new import.meta` is fine, if odd; `new import(...)` isn't.)
+                if !matches!(self.peek()?.tok, Tok::Punct(P::Dot)) {
+                    return Err(self.err("import() can't be new's callee"));
+                }
+                self.import_expr()?
             } else {
                 self.primary()?
             };
@@ -1831,7 +1907,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                         self.next()?;
                         c = match self.tok.tok {
                             Tok::Private(a) => {
-                                self.check_private()?;
+                                self.check_private(a)?;
                                 self.next()?;
                                 Expr::Private(Box::new(c), a, false)
                             }
@@ -1901,15 +1977,15 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
         self.expect(P::LParen)?;
         let spec = self.assign(false)?;
-        // (A second argument: the import's options, evaluated and set aside.)
+        // (A second argument: the import's options.)
         if self.eat(P::Comma)? && !self.is(P::RParen) {
             let opts = self.assign(false)?;
             self.eat(P::Comma)?;
             self.expect(P::RParen)?;
-            return Ok(Expr::Seq(vec![Expr::ImportCall(Box::new(spec)), opts]).first_of_seq());
+            return Ok(Expr::ImportCall(Box::new(spec), Some(Box::new(opts))));
         }
         self.expect(P::RParen)?;
-        Ok(Expr::ImportCall(Box::new(spec)))
+        Ok(Expr::ImportCall(Box::new(spec), None))
     }
 
     /// `(a, ...b)`: a call's arguments.
@@ -2134,8 +2210,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 }
 
 impl Expr {
-    /// A sequence's first expression (import()'s options set aside): the sequence's value is its last, so this one
-    /// is moved last.
+    #[allow(dead_code)]
     fn first_of_seq(self) -> Expr {
         match self {
             Expr::Seq(mut v) if v.len() == 2 => {

@@ -984,15 +984,28 @@ fn script_inserted(vm: &mut Vm, id: NodeId) {
     if host_ref(vm).started.contains(&id) {
         return;
     }
-    let (src, ty) = {
+    let (src, ty, nomodule) = {
         let e = element_of(vm, id);
-        (e.and_then(|e| e.attr("src")).map(String::from), e.and_then(|e| e.attr("type")).map(String::from))
+        (e.and_then(|e| e.attr("src")).map(String::from), e.and_then(|e| e.attr("type")).map(String::from), e.is_some_and(|e| e.has_attr("nomodule")))
     };
-    if !runnable_type(ty.as_deref()) {
+    let kind = script_kind(ty.as_deref());
+    if kind == ScriptKind::Data || (kind == ScriptKind::Classic && nomodule) {
+        return;
+    }
+    if kind == ScriptKind::ImportMap {
+        let text = super::text_of(doc(vm), id);
+        if !text.trim().is_empty() {
+            host(vm).started.push(id);
+            host(vm).new_scripts.push(id);
+        }
+        return;
+    }
+    // (A module, inline or not, is loaded by the page and runs once its modules have come.)
+    if kind == ScriptKind::Module && src.is_none() && super::text_of(doc(vm), id).trim().is_empty() {
         return;
     }
     host(vm).started.push(id);
-    if src.is_some() {
+    if src.is_some() || kind == ScriptKind::Module {
         host(vm).new_scripts.push(id);
         host(vm).rescan = true;
         return;
@@ -1009,6 +1022,27 @@ fn script_inserted(vm: &mut Vm, id: NodeId) {
     host(vm).current_script = saved;
     if let Err(e) = r {
         super::report(vm, &e, "an inline script");
+    }
+}
+
+/// What a <script> is, by its type attribute.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScriptKind {
+    Classic,
+    Module,
+    ImportMap,
+    /// Not a script (a template's text, JSON data...).
+    Data,
+}
+
+pub fn script_kind(ty: Option<&str>) -> ScriptKind {
+    if runnable_type(ty) {
+        return ScriptKind::Classic;
+    }
+    match ty.map(|t| t.trim().to_ascii_lowercase()).as_deref() {
+        Some("module") => ScriptKind::Module,
+        Some("importmap") => ScriptKind::ImportMap,
+        _ => ScriptKind::Data,
     }
 }
 
@@ -2095,8 +2129,9 @@ fn is_content_editable(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R 
     Ok(Value::Bool(false))
 }
 
-/// Where a node's box was at the last layout (x, y, width, height), if it had one.
-fn rect(vm: &Vm, n: NodeId) -> Option<(f32, f32, f32, f32)> {
+/// Where a node's box is (x, y, width, height), if it has one: the page laid out again first if it changed.
+fn rect(vm: &mut Vm, n: NodeId) -> Option<(f32, f32, f32, f32)> {
+    super::fresh_layout(vm);
     host_ref(vm).rects.get(n).copied().flatten()
 }
 
@@ -2152,6 +2187,7 @@ fn scroll_width(vm: &mut Vm, this: &Value, _args: &[Value], f: Gc) -> R {
 fn scroll_height(vm: &mut Vm, this: &Value, _args: &[Value], f: Gc) -> R {
     let n = this_element(vm, this)?;
     if matches!(doc(vm).name(n), "html" | "body") {
+        super::fresh_layout(vm);
         let tall = host_ref(vm).rects.get(0).copied().flatten().map_or(0.0, |r| r.3);
         return Ok(Value::Num(tall.max(host_ref(vm).view.1) as f64));
     }
@@ -3039,6 +3075,7 @@ fn get_elements_by_name(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R
 fn at_point(vm: &mut Vm, args: &[Value]) -> Result<Vec<NodeId>, Value> {
     let x = vm.to_number(&arg(args, 0))? as f32;
     let y = vm.to_number(&arg(args, 1))? as f32;
+    super::fresh_layout(vm);
     let (sx, sy) = host_ref(vm).scroll;
     let (px, py) = (x + sx, y + sy);
     let h = host_ref(vm);

@@ -1,6 +1,7 @@
 //! Runs a script with the engine: `cargo run -p js --example run -- FILE` (or `-e 'code'`), printing what it
-//! prints (`print(...)`, `console.log(...)`) and its result or the exception it threw.
-use js::object::{Class, Key};
+//! prints (`print(...)`, `console.log(...)`) and its result or the exception it threw. With `-m FILE` it runs the
+//! file as a module (the modules it imports read from their files).
+use js::object::{Class, Key, PromiseState};
 use js::value::{Gc, Value};
 use js::vm::Vm;
 
@@ -25,9 +26,35 @@ fn print(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> Result<Value, Va
     Ok(Value::Undefined)
 }
 
+fn read_module(_vm: &mut Vm, key: &str) -> Result<String, String> {
+    let url = js::module::split_key(key).0;
+    std::fs::read_to_string(url).map_err(|e| format!("Couldn't read {url}: {e}"))
+}
+
+/// A module run: its graph loaded, linked and evaluated (the promise of its evaluation, once the jobs have run).
+fn run_module(vm: &mut Vm, path: &str) -> Result<Value, Value> {
+    let path = std::fs::canonicalize(path).map(|p| p.to_string_lossy().to_string()).unwrap_or(path.to_string());
+    vm.modules.script_base = path.clone();
+    vm.modules.fetch_sync = Some(read_module);
+    let id = vm.module_load(&path);
+    let Some(pos) = vm.modules.ready.iter().position(|(i, _)| *i == id) else { return Err(Value::str("the module's graph didn't load")) };
+    let (_, r) = vm.modules.ready.remove(pos);
+    let m = r?;
+    vm.module_link(m)?;
+    let p = vm.module_evaluate(m);
+    vm.run_jobs();
+    match &vm.heap.get(p).class {
+        Class::Promise(d) => match &d.state {
+            PromiseState::Rejected(e) => Err(e.clone()),
+            PromiseState::Fulfilled(v) => Ok(v.clone()),
+            PromiseState::Pending => Ok(Value::str("(still waiting)")),
+        },
+        _ => Ok(Value::Undefined),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let src = if args.get(1).map(|s| s.as_str()) == Some("-e") { args[2].clone() } else { std::fs::read_to_string(&args[1]).expect("a script") };
     let mut vm = Vm::new();
     vm.now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
     let g = vm.global;
@@ -36,7 +63,14 @@ fn main() {
     vm.method(console, "log", 1, print);
     vm.put(g, "console", Value::Obj(console), js::object::HIDDEN);
     let t = std::time::Instant::now();
-    let r = vm.run_script(&src, "script");
+    let r = match args.get(1).map(|s| s.as_str()) {
+        Some("-m") => run_module(&mut vm, &args[2]),
+        Some("-e") => vm.run_script(&args[2], "script"),
+        _ => {
+            let src = std::fs::read_to_string(&args[1]).expect("a script");
+            vm.run_script(&src, "script")
+        }
+    };
     vm.run_jobs();
     match r {
         Ok(v) => {

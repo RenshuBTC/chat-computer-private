@@ -39,8 +39,8 @@ const SKIP_FEATURES: &[&str] = &[
     "import-defer",
     "explicit-resource-management",
     "import-assertions",
-    "import-attributes",
-    "json-modules",
+    "import-text",
+    "import-bytes",
     "cross-realm",
     "Intl",
     "IsHTMLDDA",
@@ -183,10 +183,17 @@ fn message(vm: &mut Vm, e: &Value) -> String {
     }
 }
 
+/// A module's text, from its file (its address is its path).
+fn read_module(_vm: &mut Vm, key: &str) -> Result<String, String> {
+    let url = js::module::split_key(key).0;
+    std::fs::read_to_string(url).map_err(|e| format!("Couldn't read {url}: {e}"))
+}
+
 /// Runs one test in one mode: None if it passed, else why not.
-fn run_one(root: &Path, src: &str, m: &Meta, strict: bool, harness: &mut BTreeMap<String, String>) -> Option<String> {
+fn run_one(root: &Path, path: &Path, src: &str, m: &Meta, strict: bool, harness: &mut BTreeMap<String, String>) -> Option<String> {
+    let module = m.flags.contains("module");
     let mut text = String::new();
-    if strict {
+    if strict && !module {
         text.push_str("\"use strict\";\n");
     }
     let raw = m.flags.contains("raw");
@@ -202,8 +209,13 @@ fn run_one(root: &Path, src: &str, m: &Meta, strict: bool, harness: &mut BTreeMa
             text.push('\n');
         }
     }
-    text.push_str(src);
+    if !module {
+        text.push_str(src);
+    }
+    let path = std::fs::canonicalize(path).unwrap_or(path.to_path_buf()).to_string_lossy().to_string();
     let mut vm = Vm::new();
+    vm.modules.script_base = path.clone();
+    vm.modules.fetch_sync = Some(read_module);
     vm.now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
     vm.step_limit = 20_000_000;
     vm.max_nesting = 120;
@@ -219,6 +231,18 @@ fn run_one(root: &Path, src: &str, m: &Meta, strict: bool, harness: &mut BTreeMa
     // A parse-phase negative test: the parser must refuse it.
     if let Some((phase, _)) = &negative
         && (phase == "parse" || phase == "early")
+        && module
+    {
+        let mut atoms = js::string::Atoms::new();
+        if let Ok(script) = js::parser::parse_module(src, &mut atoms)
+            && js::compiler::compile_module(&script, &mut atoms, std::rc::Rc::from(src)).is_ok()
+        {
+            return Some(String::from("parsed, but must not"));
+        }
+        return None;
+    }
+    if let Some((phase, _)) = &negative
+        && (phase == "parse" || phase == "early")
     {
         let mut atoms = js::string::Atoms::new();
         let parsed = js::parser::parse(&text, &mut atoms, false, false);
@@ -230,8 +254,33 @@ fn run_one(root: &Path, src: &str, m: &Meta, strict: bool, harness: &mut BTreeMa
         }
         return None;
     }
-    let r = vm.run_script(&text, "test");
+    let r = if module {
+        // The harness as a script, then the test as a module (and those it imports, from their files).
+        match vm.run_script(&text, "harness") {
+            Err(e) => Err(e),
+            Ok(_) => run_module(&mut vm, &path, src),
+        }
+    } else {
+        vm.run_script(&text, "test")
+    };
     vm.run_jobs();
+    let r = match (r, module) {
+        (Ok(Value::Obj(p)), true) => match &vm.heap.get(p).class {
+            Class::Promise(d) => match &d.state {
+                js::object::PromiseState::Rejected(e) => Err(e.clone()),
+                js::object::PromiseState::Fulfilled(_) => Ok(Value::Undefined),
+                js::object::PromiseState::Pending => {
+                    if m.flags.contains("async") {
+                        Ok(Value::Undefined)
+                    } else {
+                        return Some(String::from("the module's evaluation never finished"));
+                    }
+                }
+            },
+            _ => Ok(Value::Undefined),
+        },
+        (r, _) => r,
+    };
     match (r, &negative) {
         (Ok(_), None) => {
             if m.flags.contains("async") {
@@ -259,6 +308,17 @@ fn run_one(root: &Path, src: &str, m: &Meta, strict: bool, harness: &mut BTreeMa
     }
 }
 
+/// A module test: its graph loaded, linked and evaluated (the promise of its evaluation).
+fn run_module(vm: &mut Vm, path: &str, src: &str) -> Result<Value, Value> {
+    vm.module_add(path, path, src);
+    let id = vm.module_load(path);
+    let Some(pos) = vm.modules.ready.iter().position(|(i, _)| *i == id) else { return Err(Value::str("the module's graph didn't load")) };
+    let (_, r) = vm.modules.ready.remove(pos);
+    let m = r?;
+    vm.module_link(m)?;
+    Ok(Value::Obj(vm.module_evaluate(m)))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let root = PathBuf::from(&args[1]);
@@ -276,7 +336,7 @@ fn main() {
     for f in &files {
         let Ok(src) = std::fs::read_to_string(f) else { continue };
         let m = meta(&src);
-        if m.flags.contains("module") || SKIP_FEATURES.iter().any(|x| m.features.split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace()).any(|w| w == *x)) {
+        if SKIP_FEATURES.iter().any(|x| m.features.split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace()).any(|w| w == *x)) {
             skipped += 1;
             continue;
         }
@@ -292,10 +352,10 @@ fn main() {
         for strict in modes {
             // A thread with a deep stack, and a panic caught as a failure.
             let (tx, rx) = mpsc::channel();
-            let (root2, src2, mut h2) = (root.clone(), src.clone(), harness.clone());
+            let (root2, src2, mut h2, f2) = (root.clone(), src.clone(), harness.clone(), f.clone());
             let m2 = Meta { includes: m.includes.clone(), flags: m.flags.clone(), negative: m.negative.clone(), features: m.features.clone() };
             let t = std::thread::Builder::new().stack_size(256 << 20).spawn(move || {
-                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_one(&root2, &src2, &m2, strict, &mut h2)));
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_one(&root2, &f2, &src2, &m2, strict, &mut h2)));
                 let _ = tx.send((r.unwrap_or_else(|p| Some(format!("PANIC {}", p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()))), h2));
             });
             let r = match t {

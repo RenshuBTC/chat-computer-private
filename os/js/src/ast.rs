@@ -11,6 +11,8 @@ pub struct Script {
     pub body: Vec<Stmt>,
     pub strict: bool,
     pub module: bool,
+    /// A module that awaits at its top level (it's run as an async function).
+    pub tla: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -219,7 +221,8 @@ pub enum Expr {
     Seq(Vec<Expr>),
     Yield(Option<Box<Expr>>, bool),
     Await(Box<Expr>),
-    ImportCall(Box<Expr>),
+    /// import(specifier, options).
+    ImportCall(Box<Expr>, Option<Box<Expr>>),
     /// `(x)`: kept until the parser knows whether it's an expression or a pattern.
     Paren(Box<Expr>),
 }
@@ -299,7 +302,7 @@ pub enum Stmt {
 
 #[derive(Debug)]
 pub struct Import {
-    pub from: JsStr,
+    pub from: Request,
     /// (imported name, local name); imported None: the namespace (`* as x`); Some("default") for a default.
     pub names: Vec<(Option<Atom>, Atom)>,
 }
@@ -311,7 +314,14 @@ pub enum Export {
     /// `export default <expression>` (a function or class declared too, under its name if it has one).
     Default(Box<Expr>, Option<Atom>),
     /// `export { a as b, c } [from "m"]`.
-    Names(Vec<(Atom, Atom)>, Option<JsStr>),
+    Names(Vec<(Atom, Atom)>, Option<Request>),
     /// `export * [as x] from "m"`.
-    All(Option<Atom>, JsStr),
+    All(Option<Atom>, Request),
+}
+
+/// A module asked for: its specifier, and its attributes (`with { type: "json" }`: key and value, sorted by key).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Request {
+    pub spec: JsStr,
+    pub attrs: Vec<(JsStr, JsStr)>,
 }

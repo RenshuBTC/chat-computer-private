@@ -11,7 +11,7 @@ use crate::ast::*;
 use crate::bigint::BigInt;
 use crate::code::{ClassInfo, Code, Kind, Op};
 use crate::names as n;
-use crate::object::{CONST, FUNC_NAME, LET, VAR};
+use crate::object::{CONST, FUNC_NAME, IMPORT, LET, VAR};
 use crate::scope::{self, ScopeKind, Scopes, HIDDEN, addr, fields_addr, hidden, rc_addr};
 use crate::string::{Atom, Atoms, JsStr};
 use crate::value::number_to_string;
@@ -120,6 +120,162 @@ pub fn compile_script(script: &Script, atoms: &mut Atoms, source: Rc<str>, eval:
     c.emit(Op::GetLocal(completion));
     c.emit(Op::Return);
     Ok(Rc::new(c.end()))
+}
+
+/// A module compiled: the code that makes its functions (run as it's linked, so that the modules importing them can
+/// call them before it runs), its own code, its environment's names, and what it imports and exports.
+pub struct ModuleCode {
+    pub init: Rc<Code>,
+    /// (An async function's code, if it awaits at its top level.)
+    pub body: Rc<Code>,
+    /// Its environment's names, by slot, and how each is declared (slot 0: `*module*`).
+    pub names: Rc<[(Atom, u8)]>,
+    /// The modules it imports from, as written (and their attributes), in the order they're first named.
+    pub requests: Vec<Request>,
+    /// Its imports: the request, the name imported (None: the module's namespace), and the slot it goes in.
+    pub imports: Vec<(usize, Option<JsStr>, u16)>,
+    /// Its own names it exports: the name exported, and the name's slot.
+    pub locals: Vec<(JsStr, u16)>,
+    /// Other modules' names it exports: the name exported, the request, and the name there (None: the other
+    /// module's namespace, `export * as x from`).
+    pub indirect: Vec<(JsStr, usize, Option<JsStr>)>,
+    /// `export * from`'s requests.
+    pub stars: Vec<usize>,
+    pub tla: bool,
+}
+
+/// Compiles a module.
+pub fn compile_module(script: &Script, atoms: &mut Atoms, source: Rc<str>) -> R<ModuleCode> {
+    let sc = scope::analyze_module(&script.body).map_err(|m| CompileError { message: m })?;
+    let mut c = Compiler { atoms, sc, source: source.clone(), eval: false, fs: Vec::new() };
+    let top = c.sc.funcs[0].body;
+    let slot = |c: &Compiler, a: Atom| c.sc.scopes[top].bindings.iter().find(|b| b.name == a).map_or(0, |b| b.slot);
+    // Its functions, made as it's linked (its environment is the frame's from the start: no PushEnv).
+    c.begin(0, n::EMPTY, Kind::Module, true);
+    c.f().code.end = source.len();
+    c.f().scope = top;
+    for s in &script.body {
+        let found = match s {
+            Stmt::Func(f) => f.name.map(|a| (f, a)),
+            Stmt::Export(Export::Decl(d)) => match &**d {
+                Stmt::Func(f) => f.name.map(|a| (f, a)),
+                _ => None,
+            },
+            Stmt::Export(Export::Default(e, name)) => match &**e {
+                Expr::Func(f) => Some((f, name.unwrap_or(n::DEFAULT_EXPORT))),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((f, binding)) = found {
+            let i = c.function(f, f.name.unwrap_or(n::DEFAULT))?;
+            c.emit(Op::Closure(i));
+            c.store(binding, Store::Init, false);
+        }
+    }
+    c.emit(Op::Undefined);
+    c.emit(Op::Return);
+    let init = Rc::new(c.end());
+    // Its own code.
+    c.begin(0, n::EMPTY, Kind::Module, true);
+    c.f().code.is_async = script.tla;
+    c.f().code.end = source.len();
+    c.f().scope = top;
+    c.statements(&script.body)?;
+    c.emit(Op::Undefined);
+    c.emit(Op::Return);
+    let body = Rc::new(c.end());
+    let mut names: Vec<(Atom, u8, u16)> = c.sc.scopes[top].bindings.iter().map(|b| (b.name, b.kind, b.slot)).collect();
+    names.sort_by_key(|x| x.2);
+    let names: Rc<[(Atom, u8)]> = names.into_iter().map(|(a, k, _)| (a, k)).collect();
+    // What it imports and exports (ParseModule's entries).
+    let mut requests: Vec<Request> = Vec::new();
+    let request = |requests: &mut Vec<Request>, s: &Request| match requests.iter().position(|r| r == s) {
+        Some(i) => i,
+        None => {
+            requests.push(s.clone());
+            requests.len() - 1
+        }
+    };
+    let mut imports = Vec::new();
+    // (local, request, imported name)
+    let mut imported: Vec<(Atom, usize, Option<Atom>)> = Vec::new();
+    for s in &script.body {
+        match s {
+            Stmt::Import(im) => {
+                let r = request(&mut requests, &im.from);
+                for (name, local) in &im.names {
+                    imports.push((r, name.map(|a| c.atoms.get(a).clone()), slot(&c, *local)));
+                    imported.push((*local, r, *name));
+                }
+            }
+            Stmt::Export(Export::Names(_, Some(from)) | Export::All(_, from)) => {
+                request(&mut requests, from);
+            }
+            _ => {}
+        }
+    }
+    let mut locals = Vec::new();
+    let mut indirect = Vec::new();
+    let mut stars = Vec::new();
+    let text = |c: &Compiler, a: Atom| c.atoms.get(a).clone();
+    let local_export = |c: &Compiler, locals: &mut Vec<(JsStr, u16)>, indirect: &mut Vec<(JsStr, usize, Option<JsStr>)>, ex: Atom, local: Atom| match imported.iter().find(|i| i.0 == local) {
+        // (An imported name exported again: the other module's, or its namespace.)
+        Some((_, r, name)) => indirect.push((text(c, ex), *r, name.map(|n| text(c, n)))),
+        None => locals.push((text(c, ex), slot(c, local))),
+    };
+    for s in &script.body {
+        let Stmt::Export(e) = s else { continue };
+        match e {
+            Export::Decl(d) => {
+                let mut bound = Vec::new();
+                match &**d {
+                    Stmt::Var(_, decls) => {
+                        for d in decls {
+                            crate::parser::bound_names(&d.pat, &mut bound);
+                        }
+                    }
+                    Stmt::Class(cl) => bound.extend(cl.name),
+                    Stmt::Func(f) => bound.extend(f.name),
+                    _ => {}
+                }
+                for a in bound {
+                    local_export(&c, &mut locals, &mut indirect, a, a);
+                }
+            }
+            Export::Default(e, name) => {
+                let local = match &**e {
+                    Expr::Func(_) | Expr::Class(_) => name.unwrap_or(n::DEFAULT_EXPORT),
+                    _ => n::DEFAULT_EXPORT,
+                };
+                locals.push((text(&c, n::DEFAULT), slot(&c, local)));
+            }
+            Export::Names(names, None) => {
+                for (local, ex) in names {
+                    local_export(&c, &mut locals, &mut indirect, *ex, *local);
+                }
+            }
+            Export::Names(names, Some(from)) => {
+                let r = request(&mut requests, from);
+                for (name, ex) in names {
+                    indirect.push((text(&c, *ex), r, Some(text(&c, *name))));
+                }
+            }
+            Export::All(Some(alias), from) => {
+                let r = request(&mut requests, from);
+                indirect.push((text(&c, *alias), r, None));
+            }
+            Export::All(None, from) => {
+                let r = request(&mut requests, from);
+                stars.push(r);
+            }
+        }
+    }
+    // (The only attribute there is: a module's type.)
+    if let Some((k, _)) = requests.iter().flat_map(|r| r.attrs.iter()).find(|(k, _)| !k.is("type")) {
+        return Err(CompileError { message: alloc::format!("The import attribute \"{}\" isn't supported", k.to_rust()) });
+    }
+    Ok(ModuleCode { init, body, names, requests, imports, locals, indirect, stars, tla: script.tla })
 }
 
 /// Compiles a function made by `Function(...)` (its free names are the global ones).
@@ -346,7 +502,7 @@ impl<'a> Compiler<'a> {
         let mut names: Vec<(Atom, u8, u16)> = sc.bindings.iter().filter(|b| b.captured).map(|b| (b.name, b.kind, b.slot)).collect();
         names.sort_by_key(|x| x.2);
         let names: Rc<[(Atom, u8)]> = names.into_iter().map(|(a, k, _)| (a, k)).collect();
-        let var = matches!(sc.kind, ScopeKind::Function | ScopeKind::Script);
+        let var = matches!(sc.kind, ScopeKind::Function | ScopeKind::Script | ScopeKind::Module);
         let scopes = &mut self.f().code.scopes;
         scopes.push((names, var));
         scopes.len() as u32 - 1
@@ -379,7 +535,7 @@ impl<'a> Compiler<'a> {
             }
             // (A direct eval in a function may add vars to it; at the top level, it adds globals, which a global
             // lookup finds anyway.)
-            if sc.forced && sc.kind != ScopeKind::Script {
+            if sc.forced && sc.kind != ScopeKind::Script && sc.kind != ScopeKind::Module {
                 dynamic = true;
             }
             if sc.env {
@@ -418,6 +574,10 @@ impl<'a> Compiler<'a> {
             Loc::Env(h, sl, k) if k == LET || k == CONST => {
                 let s = self.atom_str(name);
                 self.emit(Op::GetEnvChecked(h, sl, s));
+            }
+            Loc::Env(h, sl, IMPORT) => {
+                let s = self.atom_str(name);
+                self.emit(Op::GetImport(h, sl, s));
             }
             Loc::Env(h, sl, _) => {
                 self.emit(Op::GetEnv(h, sl));
@@ -513,6 +673,10 @@ impl<'a> Compiler<'a> {
                         if strict {
                             self.emit(Op::ConstAssign(s));
                         }
+                    }
+                    // (An import is always initialized, and never assignable.)
+                    IMPORT => {
+                        self.emit(Op::ConstAssign(s));
                     }
                     LET => {
                         self.emit(Op::SetEnvChecked(h, sl, s));
@@ -1159,15 +1323,18 @@ impl<'a> Compiler<'a> {
             Stmt::Import(_) => {}
             Stmt::Export(e) => match e {
                 Export::Decl(d) => self.stmt(d)?,
-                Export::Default(e, name) => {
-                    let name = name.unwrap_or(n::DEFAULT_EXPORT);
-                    self.expr_named(e, name)?;
-                    if matches!(self.resolve(name), Loc::Global) {
-                        self.emit(Op::Pop);
-                    } else {
-                        self.store(name, Store::Init, false);
+                Export::Default(e, name) => match &**e {
+                    // (Made as the module was linked.)
+                    Expr::Func(_) => {}
+                    Expr::Class(c) => {
+                        self.class(c, if c.name.is_none() { Some(n::DEFAULT) } else { None })?;
+                        self.store(name.unwrap_or(n::DEFAULT_EXPORT), Store::Init, false);
                     }
-                }
+                    _ => {
+                        self.expr_named(e, n::DEFAULT)?;
+                        self.store(n::DEFAULT_EXPORT, Store::Init, false);
+                    }
+                },
                 Export::Names(..) | Export::All(..) => {}
             },
         }
@@ -1711,8 +1878,14 @@ impl<'a> Compiler<'a> {
                 self.expr(x)?;
                 self.emit(Op::Await);
             }
-            Expr::ImportCall(x) => {
+            Expr::ImportCall(x, o) => {
                 self.expr(x)?;
+                match o {
+                    Some(o) => self.expr(o)?,
+                    None => {
+                        self.emit(Op::Undefined);
+                    }
+                }
                 self.emit(Op::ImportCall);
             }
             Expr::Paren(x) => self.expr(x)?,

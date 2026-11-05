@@ -1,0 +1,782 @@
+{
+ "by": "Claude, as the annotator, for the owner to review",
+ "traces": "before (system at 8545537)",
+ "labels": [
+  {
+   "id": "os-files-find-open",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and 6 listings before reading the letter; answer right"
+  },
+  {
+   "id": "os-files-rename",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status for a rename; honest that it can't rename"
+  },
+  {
+   "id": "os-files-tidy-screenshots",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-files-recent",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-usb-whats-on",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-usb-copy-photos",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-usb-eject",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-usb-none",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-print-boarding-pass",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-print-two-copies",
+   "modes": [
+    "asks-or-gives-up"
+   ],
+   "first_failure": "asks-or-gives-up",
+   "note": "asks which tax file when the IRAS notice is plainly the tax letter"
+  },
+  {
+   "id": "os-print-photo",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-print-no-printer",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status to find a CV; honest about printing"
+  },
+  {
+   "id": "os-brightness-too-bright",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-brightness-set",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-brightness-desktop",
+   "modes": [
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "claims-or-suggests-the-impossible",
+   "note": "tells them to use the brightness key, which the own system may not support (status: brightness not yet)"
+  },
+  {
+   "id": "os-night-light",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-text-bigger",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-sound-too-loud",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-sound-speakers",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-sound-mute",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-wifi-join",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-wifi-slow",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-vpn",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-bt-keyboard",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-bt-airpods",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-battery-left",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-battery-desktop",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-shutdown",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-windows-briefly",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-timer",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-reminder",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-alarm",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-timezone",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "searches the web and reads pages to learn London is on GMT"
+  },
+  {
+   "id": "os-install-vlc",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "web search though it can't install"
+  },
+  {
+   "id": "os-install-spotify",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "web search and computer_status though it can't install"
+  },
+  {
+   "id": "os-updates",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-screenshot-save",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-screenshot-of-page",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-dark-mode",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-keyboard-azerty",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-language-chinese",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-default-windows",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-lock-screen",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-password-kids",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-camera-on",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-backup-usb",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-backup-status",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "12 calls, listing every folder"
+  },
+  {
+   "id": "os-storage-left",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-feels-slow",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-which-version",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-youtube-jazz",
+   "modes": [
+    "extra-calls",
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "extra-calls",
+   "note": "searches though it can't play; then says to open youtube.com on this computer, which can't show websites"
+  },
+  {
+   "id": "os-weather",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-open-gmail",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-cv-age",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "8 calls for a file's date"
+  },
+  {
+   "id": "syn-lease-notice",
+   "modes": [
+    "asks-or-gives-up"
+   ],
+   "first_failure": "asks-or-gives-up",
+   "note": "asks where they live instead of reading the lease in Documents (2 months' notice)"
+  },
+  {
+   "id": "syn-budget-food",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "lists C:\\Users and C:\\Users\\Sam before searching (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "syn-invoice-due",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-monday-notes",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "reminders, computer_status, 6 listings before finding the note"
+  },
+  {
+   "id": "syn-lost-file-gran",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status before searching"
+  },
+  {
+   "id": "syn-recipe-file",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-usb-essay",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-delete-old",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-email-cv",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "three searches and computer_status for an email it can't send"
+  },
+  {
+   "id": "syn-tax-and-remind",
+   "modes": [],
+   "first_failure": null,
+   "note": "one unneeded call (computer_status): a pass under the two-call rule (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "syn-whats-on-c",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "all 8 rounds, the USB stick too"
+  },
+  {
+   "id": "syn-video-play",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-song",
+   "modes": [],
+   "first_failure": null,
+   "note": "one unneeded call (computer_status): a pass under the two-call rule (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "syn-exe-run",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-prize-file",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-prize-follow",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-mum-photo",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status, D:, four listings before showing the photo"
+  },
+  {
+   "id": "syn-beach-photo",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "lists four folders one by one where one search would do (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "syn-photo-describe",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-photos-count",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "lists three folders one by one before searching (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "syn-weather-zh",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-weather-ms",
+   "modes": [],
+   "first_failure": null,
+   "note": "asks where, rather than looking up Singapore (where the PC's clock and files are) (relabelled pass on a second look: the system has no way to know where they are, so one short question is fair; criteria drift, as the FAQ expects)"
+  },
+  {
+   "id": "syn-airport-train",
+   "modes": [],
+   "first_failure": null,
+   "note": "asks which airport, when everything says Singapore (relabelled pass on a second look: the system has no way to know where they are, so one short question is fair; criteria drift, as the FAQ expects)"
+  },
+  {
+   "id": "syn-pharmacy",
+   "modes": [],
+   "first_failure": null,
+   "note": "one unneeded call (computer_status for the time): under the two-call rule, a pass (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "syn-exchange",
+   "modes": [
+    "wrong-assumption",
+    "extra-calls"
+   ],
+   "first_failure": "wrong-assumption",
+   "note": "assumes US dollars when the person is in Singapore and found the SGD rate; six calls"
+  },
+  {
+   "id": "syn-news",
+   "modes": [
+    "asks-or-gives-up",
+    "wrong-assumption",
+    "extra-calls"
+   ],
+   "first_failure": "asks-or-gives-up",
+   "note": "ignores the CNA result's top stories, looks for US news, gives up"
+  },
+  {
+   "id": "syn-read-url",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-book-flight",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-timer-typo",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-two-timers",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-meds",
+   "modes": [
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "claims-or-suggests-the-impossible",
+   "note": "says it will remind every night: one alarm, which doesn't repeat"
+  },
+  {
+   "id": "syn-flight-remind",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-alarm-zh",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-cancel-all",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-whats-set",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-battery-older",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-hot",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-specs",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-is-online",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-time-now",
+   "modes": [],
+   "first_failure": null,
+   "note": "one unneeded call (computer_status for the date): a pass under the two-call rule (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "syn-text-small-old",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-text-back",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-text-max",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-chime-quiet",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-music-loud",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-name",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-diet",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-forget-diet",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-use-notes",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-what-know",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-back-windows",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-bedtime",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-restart-why",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-off-confirm",
+   "modes": [
+    "asks-or-gives-up"
+   ],
+   "first_failure": "asks-or-gives-up",
+   "note": "asks what to turn off, then asks again after 'yes please'"
+  },
+  {
+   "id": "syn-new-chat",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-forget-chat",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-dino",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-homework",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-who-are-you",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-private",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-install-zoom",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "search, page, Program Files though it can't install"
+  },
+  {
+   "id": "syn-wifi-pass",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-whatsapp",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-brightness-zh",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-scan-doc",
+   "modes": [
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "claims-or-suggests-the-impossible",
+   "note": "offers to read a scan, which the own system can't see yet"
+  },
+  {
+   "id": "syn-hack",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  }
+ ]
+}

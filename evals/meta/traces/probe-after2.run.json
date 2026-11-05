@@ -1,0 +1,16 @@
+{
+ "model": "muse-spark-1.3",
+ "kernel": "working tree",
+ "hides_narration": true,
+ "queries": "evals/meta/probe.json",
+ "traces": 40,
+ "errors": 0,
+ "prompt_sha": "93647ecf9e0b",
+ "commit": "8545537",
+ "usage": {
+  "usd": 0.361,
+  "in": 383281,
+  "out": 55780,
+  "calls": 119
+ }
+}

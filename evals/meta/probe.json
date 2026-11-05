@@ -1,0 +1,322 @@
+[
+ {
+  "id": "probe-bright",
+  "text": "Make the screen less bright, it hurts my eyes",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-video",
+  "text": "Play the Bali snorkelling video",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-lofi",
+  "text": "Open youtube and play lo-fi beats",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-hotspot",
+  "text": "Connect to my phone's hotspot",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-stretch",
+  "text": "Remind me to stretch every hour",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-weekday-alarm",
+  "text": "Wake me up every weekday at 6:30",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-print-lease",
+  "text": "Print my lease",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-copy-cv",
+  "text": "Copy my CV to the USB stick",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-rename-shots",
+  "text": "Rename the screenshots on my desktop to something sensible",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-delete-installers",
+  "text": "Clear out the old installers in my Downloads",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-read-aloud",
+  "text": "Read me my boarding pass out loud",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-teams",
+  "text": "Install Microsoft Teams",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-backlight",
+  "text": "Can you turn on the keyboard backlight",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-edit-budget",
+  "text": "Open the budget spreadsheet so I can edit it",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-send-invoice",
+  "text": "Send the invoice to my accountant",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-save-note",
+  "text": "Save a note on my desktop with my shopping list: eggs, milk, bread",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-who-in-photo",
+  "text": "Who's in the photo from Mum's 70th birthday?",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-bt-speaker",
+  "text": "Turn on Bluetooth so my speaker connects",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-translate-save",
+  "text": "Translate my lease into Chinese and save it as a new file",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-auto-dim",
+  "text": "Lower the brightness to 20% every night automatically",
+  "dims": {
+   "targets": "claims",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-lease-end",
+  "text": "When does my lease end?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-aircon-bill",
+  "text": "How much is the aircon servicing bill?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-gate",
+  "text": "What gate is my flight from?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-income",
+  "text": "What was my chargeable income?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-rent",
+  "text": "How much rent do I pay?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-landlord",
+  "text": "Who's my landlord?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-flight-when",
+  "text": "When is my flight to Bali?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-fun-feb",
+  "text": "What did I spend on fun in February?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-todo-monday",
+  "text": "What's on my to-do list for Monday?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-donations",
+  "text": "Do I have any donation receipts?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-prev-job",
+  "text": "Where did I work before Ninja Freight?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-rain",
+  "text": "Is it going to rain this afternoon?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-trip-money",
+  "text": "What's the exchange rate for my trip?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-mrt-sunday",
+  "text": "Can I get to the airport by MRT early on Sunday morning?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-sg-news",
+  "text": "What's in the news in Singapore today?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-laksa-simmer",
+  "text": "How long do I simmer the laksa?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-tax-paid",
+  "text": "Have I paid my tax already?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-seat",
+  "text": "What seat am I in?",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-turn-it-off",
+  "text": "turn it off",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ },
+ {
+  "id": "probe-shut-it-down",
+  "text": "please shut it down for me",
+  "dims": {
+   "targets": "asks",
+   "source": "targeted sampling for the judges' labels"
+  }
+ }
+]

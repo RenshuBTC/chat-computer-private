@@ -1,0 +1,746 @@
+{
+ "by": "Claude, as the annotator, for the owner to review",
+ "traces": "after the first instruction fix (prompt sha 604437e5c6aa)",
+ "labels": [
+  {
+   "id": "os-files-find-open",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-files-rename",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-files-tidy-screenshots",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-files-recent",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-usb-whats-on",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-usb-copy-photos",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-usb-eject",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-usb-none",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-print-boarding-pass",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-print-two-copies",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-print-photo",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-print-no-printer",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-brightness-too-bright",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-brightness-set",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-brightness-desktop",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-night-light",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-text-bigger",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-sound-too-loud",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-sound-speakers",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-sound-mute",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-wifi-join",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-wifi-slow",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-vpn",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-bt-keyboard",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-bt-airpods",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-battery-left",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-battery-desktop",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-shutdown",
+   "modes": [
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "claims-or-suggests-the-impossible",
+   "note": "says 'Shutting down now.' and never calls turn_off_computer: the PC stays on"
+  },
+  {
+   "id": "os-windows-briefly",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-timer",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-reminder",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-alarm",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-timezone",
+   "modes": [
+    "wrong-assumption"
+   ],
+   "first_failure": "wrong-assumption",
+   "note": "says the clock is right for London (GMT); the stand-in's status then lacked the clock's UTC offset, which the real one gives, so partly the stand-in's fault"
+  },
+  {
+   "id": "os-install-vlc",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-install-spotify",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-updates",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-screenshot-save",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-screenshot-of-page",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-dark-mode",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-keyboard-azerty",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-language-chinese",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-default-windows",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-lock-screen",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-password-kids",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-camera-on",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-backup-usb",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-backup-status",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-storage-left",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-feels-slow",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-which-version",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-youtube-jazz",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-weather",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "os-open-gmail",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-cv-age",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "find found it, then two more searches and a listing"
+  },
+  {
+   "id": "syn-lease-notice",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "reads the lease and answers (2 months), but searches twice more after finding it (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "syn-budget-food",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-invoice-due",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-monday-notes",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "lists reminders and C:\\Users before searching"
+  },
+  {
+   "id": "syn-lost-file-gran",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-recipe-file",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-usb-essay",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-delete-old",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-email-cv",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-tax-and-remind",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-whats-on-c",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-video-play",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-song",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-exe-run",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-prize-file",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-prize-follow",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-mum-photo",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-beach-photo",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-photo-describe",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-photos-count",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-weather-zh",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-weather-ms",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-airport-train",
+   "modes": [
+    "extra-calls",
+    "asks-or-gives-up"
+   ],
+   "first_failure": "extra-calls",
+   "note": "21 calls reading unrelated files (an invoice, the prize scam) for a train time, never searches the web, then asks whether to: the new 'look in their files first' line over-applied"
+  },
+  {
+   "id": "syn-pharmacy",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-exchange",
+   "modes": [
+    "wrong-assumption",
+    "extra-calls"
+   ],
+   "first_failure": "wrong-assumption",
+   "note": "assumes US dollars again, seven calls"
+  },
+  {
+   "id": "syn-news",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "three failed world-news searches before the Singapore stories it had"
+  },
+  {
+   "id": "syn-read-url",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-book-flight",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-timer-typo",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-two-timers",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-meds",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-flight-remind",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-alarm-zh",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-cancel-all",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-whats-set",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-battery-older",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-hot",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-specs",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-is-online",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-time-now",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-text-small-old",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-text-back",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-text-max",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-chime-quiet",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-music-loud",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-name",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-diet",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-forget-diet",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-use-notes",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-what-know",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-back-windows",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-bedtime",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-restart-why",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-off-confirm",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-new-chat",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-forget-chat",
+   "modes": [
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "claims-or-suggests-the-impossible",
+   "note": "says it doesn't keep what they say, though the conversation is kept until a new one starts"
+  },
+  {
+   "id": "syn-dino",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-homework",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-who-are-you",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-private",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-install-zoom",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-wifi-pass",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-whatsapp",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-brightness-zh",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-scan-doc",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "syn-hack",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  }
+ ]
+}

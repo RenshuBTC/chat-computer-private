@@ -1,0 +1,290 @@
+{
+ "by": "Claude, as the annotator, for the owner to review",
+ "traces": "targeted queries, system at 8545537",
+ "labels": [
+  {
+   "id": "probe-bright",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-video",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "two redundant searches and a listing"
+  },
+  {
+   "id": "probe-lofi",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "searches and reads YouTube though it can't play"
+  },
+  {
+   "id": "probe-hotspot",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-stretch",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-weekday-alarm",
+   "modes": [
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "claims-or-suggests-the-impossible",
+   "note": "says the alarm repeats daily (it doesn't repeat at all)"
+  },
+  {
+   "id": "probe-print-lease",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-copy-cv",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and C:\\Users listing for a copy it can't do"
+  },
+  {
+   "id": "probe-rename-shots",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-delete-installers",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "lists C:\\Users and C:\\Users\\Sam after Downloads"
+  },
+  {
+   "id": "probe-read-aloud",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-teams",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "status, search, page, three listings though it can't install"
+  },
+  {
+   "id": "probe-backlight",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-edit-budget",
+   "modes": [],
+   "first_failure": null,
+   "note": "one unneeded call (computer_status): a pass under the two-call rule (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "probe-send-invoice",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and C:\\Users listing"
+  },
+  {
+   "id": "probe-save-note",
+   "modes": [],
+   "first_failure": null,
+   "note": "one unneeded call (computer_status): a pass under the two-call rule (relabelled: the two-call rule, written after the first labels, applied the same way everywhere)"
+  },
+  {
+   "id": "probe-who-in-photo",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "three listings where one search would do"
+  },
+  {
+   "id": "probe-bt-speaker",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-translate-save",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-auto-dim",
+   "modes": [
+    "claims-or-suggests-the-impossible"
+   ],
+   "first_failure": "claims-or-suggests-the-impossible",
+   "note": "offers a nightly reminder, which can't repeat"
+  },
+  {
+   "id": "probe-lease-end",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-aircon-bill",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and five listings"
+  },
+  {
+   "id": "probe-gate",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and five listings"
+  },
+  {
+   "id": "probe-income",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and six listings"
+  },
+  {
+   "id": "probe-rent",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "five listings"
+  },
+  {
+   "id": "probe-landlord",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and three listings"
+  },
+  {
+   "id": "probe-flight-when",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and many listings"
+  },
+  {
+   "id": "probe-fun-feb",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "five listings"
+  },
+  {
+   "id": "probe-todo-monday",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status, reminders, listings"
+  },
+  {
+   "id": "probe-donations",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "two searches after it had found it"
+  },
+  {
+   "id": "probe-prev-job",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and six listings"
+  },
+  {
+   "id": "probe-rain",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-trip-money",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "reads the prize scam and Monday notes to learn about the trip"
+  },
+  {
+   "id": "probe-mrt-sunday",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-sg-news",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-laksa-simmer",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-tax-paid",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "20 calls, reads every file"
+  },
+  {
+   "id": "probe-seat",
+   "modes": [
+    "extra-calls"
+   ],
+   "first_failure": "extra-calls",
+   "note": "computer_status and seven listings"
+  },
+  {
+   "id": "probe-turn-it-off",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  },
+  {
+   "id": "probe-shut-it-down",
+   "modes": [],
+   "first_failure": null,
+   "note": "fine"
+  }
+ ]
+}

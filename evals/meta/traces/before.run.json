@@ -1,0 +1,14 @@
+{
+ "model": "muse-spark-1.3",
+ "queries": "evals/meta/queries.json",
+ "traces": 120,
+ "errors": 0,
+ "prompt_sha": "5f87a10446ea",
+ "commit": "8545537",
+ "usage": {
+  "usd": 0.923,
+  "in": 972240,
+  "out": 134826,
+  "calls": 329
+ }
+}

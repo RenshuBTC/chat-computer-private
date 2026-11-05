@@ -104,8 +104,18 @@ With your tools you can see how this computer is doing, change the text size, se
 how loud they ring), read the files on its drives (Windows' C: and the others, USB sticks and memory cards included; \
 nothing can be changed){sees}, search the web and read web pages (when this computer is connected), show the person a \
 picture, note things about them to remember in later conversations, start a new conversation, and restart this \
-computer (to go back to Windows) or turn it off. Use a tool rather than saying \
-how; don't say you're about to use one, just use it.
+computer (to go back to Windows) or turn it off. Chat Computer's own system can't yet show websites, play any sound \
+but its chimes (no music, videos or speech), use Wi-Fi or Bluetooth, change the screen's brightness, print or scan, \
+install or run programs, or change, copy, move or delete files: for those, say plainly that it can't, and that \
+Windows can (restart_computer goes back to it); don't suggest a way to do them here.
+
+Use a tool rather than saying how. When you call tools, write nothing else in that message: every word you write is \
+on the screen, so say what you found once, in your answer, when you're done. Look a file up with find_files, by a word \
+of its name, rather than folder by folder; use computer_status only when they ask about this computer itself (the \
+date and time are in their message). When the answer may be in their own papers (a letter, a bill, a lease, their \
+notes), look in their files before asking them; for what changes (timetables, prices, news, the weather), search the \
+web. If an answer depends on something they didn't say (which city, which currency), say what you took it to be. When \
+they ask you to restart or turn off the computer, call the tool that does it.
 
 Each message from the person starts with when they sent it, like [Tue 3 Nov 2026 19:02]. Answer in their language, \
 briefly unless they ask for more. The screen shows Markdown (headings, bold and italic, lists, code, quotes and simple \
@@ -129,6 +139,8 @@ const META_PIECE: usize = 12;
 /// How many times a round is asked again when Meta's Model API answers with what may pass (now and then it says it
 /// has no such model, or that it's busy).
 const META_TRIES: u32 = 4;
+/// The most of the words written with a round's tool calls shown as what the model is doing (Meta's model).
+const MOST_DOING: usize = 90;
 
 /// Said when the oldest part of a long conversation is no longer given to the model.
 const SHORTENED: &str = "\n\nThis conversation began earlier: its oldest part is no longer shown to you, to keep it short \
@@ -1348,7 +1360,24 @@ impl Assistant {
                     );
                     job.closed = answer.calls.len();
                     job.meta_tries = 0;
-                    job.script = Some((answer.text.clone(), answer, cut));
+                    // Words written with tool calls that will run ("I'll look for it...") aren't the answer: they'd
+                    // sit on the screen in the middle of it, so they're shown as what it's doing instead, and the
+                    // answer is what it says once it's done (evals/meta found Muse Spark writing them in two
+                    // answers of three, whatever its instructions say). They stay in the conversation it's given.
+                    let shown = if !answer.calls.is_empty() && job.rounds < TOOL_ROUNDS {
+                        let line = answer.text.split('\n').map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+                        if !line.is_empty() {
+                            let mut doing: String = line.chars().take(MOST_DOING).collect();
+                            if line.chars().count() > MOST_DOING {
+                                doing.push('\u{2026}');
+                            }
+                            activity(job, doing, events);
+                        }
+                        String::new()
+                    } else {
+                        answer.text.clone()
+                    };
+                    job.script = Some((shown, answer, cut));
                 }
                 Err((_, true)) if job.meta_tries < META_TRIES => {
                     crate::log!("Chat Computer kernel: model: asks again");

@@ -66,6 +66,107 @@ function Find-OwnModel {
     return (Select-OwnModel @(Get-ChildItem -LiteralPath $Dir -Filter '*.ccm' -File -ErrorAction SilentlyContinue))
 }
 
+# Chat Computer's model engine for Windows (windows\bin, built from os/model as the app's is): with no model on this
+# PC yet, it gets one ready in the app's models folder, where the own system finds it, as the app does.
+$Script:OwnEngine = 'chat-computer-model.exe'
+
+function Get-OwnEngine {
+    # The engine program in this folder (windows\bin\chat-computer-model.exe), checked against its SHA-256; $null if
+    # it isn't here (an older download) or is damaged.
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+    $exe = [IO.Path]::Combine($RepoRoot, 'windows', 'bin', $Script:OwnEngine)
+    $sum = $exe + '.sha256'
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf) -or -not (Test-Path -LiteralPath $sum -PathType Leaf)) { return $null }
+    $expected = ((([IO.File]::ReadAllText($sum)).Trim() -split '\s+')[0]).ToLowerInvariant()
+    if ((Get-OwnSha256 $exe) -ne $expected) {
+        Write-SetupLog ('The model engine in this folder is damaged: ' + $exe)
+        return $null
+    }
+    return $exe
+}
+
+function Select-OwnModelToGet {
+    # The model to get ready for the own system, by the PC's memory ($Bytes): the biggest it answers with quickly
+    # enough on a PC's processor (its file at most $Script:OwnOneCoreMost bytes, as the kernel picks: Qwen3.5 4B, 2.5
+    # GB, downloaded as 9.3), or a smaller one for a PC with less memory (8 GB shows as a little less).
+    param([uint64]$Bytes)
+    if ($Bytes -ge 7GB) { return 'qwen3.5-4b' }
+    if ($Bytes -ge 3GB) { return 'qwen3.5-2b' }
+    return 'qwen3.5-0.8b'
+}
+
+function Format-OwnPrepareLine {
+    # A line of the engine's `prepare` (os/model/src/bin/chat-computer-model/prepare.rs) as said here: how far its
+    # download, its making ready and its refusals' taking out have got. $null for a line that says nothing new.
+    param([AllowEmptyString()][string]$Line)
+    $words = @($Line.Trim() -split '\s+')
+    switch ($words[0]) {
+        'downloading' {
+            if ($words.Count -ge 3) {
+                $done = 0.0; $total = 0.0
+                if ([double]::TryParse($words[1], [ref]$done) -and [double]::TryParse($words[2], [ref]$total) -and $total -gt 0) {
+                    return ('Downloading it: ' + [math]::Floor(100 * $done / $total) + '% of ' + [math]::Round($total / 1e9, 1) + ' GB')
+                }
+            }
+            return $null
+        }
+        'converting' { return 'Making it ready for this PC' }
+        'uncensoring' { return 'Taking out its refusals, so it answers what it''s asked' }
+        'ready' { return 'Ready.' }
+        'failed' { return ('It couldn''t be got ready: ' + ($Line.Trim() -replace '^failed\s*', '')) }
+        default {
+            if ($words[0] -match '^(\d+)/(\d+)$' -and [double]$Matches[2] -gt 0) {
+                return ('  ' + [math]::Floor(100 * [double]$Matches[1] / [double]$Matches[2]) + '%')
+            }
+            return $null
+        }
+    }
+}
+
+function Install-OwnModel {
+    # Gets model $Name ready in Chat Computer's app's models folder with the engine ($Engine), as the app does:
+    # downloaded from Qwen's repository at the pinned revision, each file checked against its SHA-256, converted,
+    # its refusals taken out. How it goes is said on one line. Returns whether it's ready. (Stopped, by closing the
+    # window, it carries on where it stopped the next time: the engine ends with this window.)
+    param([Parameter(Mandatory = $true)][string]$Engine, [Parameter(Mandatory = $true)][string]$Name)
+    $dir = Join-Path $env:LOCALAPPDATA $Script:OwnModels
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Engine
+    $psi.Arguments = 'prepare "' + $dir + '" --model ' + $Name + ' --exit-with-stdin'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardInput = $true
+    $psi.CreateNoWindow = $true
+    Write-SetupLog ('Getting the model ready: ' + $Engine + ' ' + $psi.Arguments)
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $shown = ''
+    $failed = ''
+    try {
+        while ($null -ne ($line = $p.StandardError.ReadLine())) {
+            if ($line -match '^\s*failed') { $failed = $line.Trim() }
+            $say = Format-OwnPrepareLine $line
+            if ($null -eq $say -or $say -eq $shown) { continue }
+            if ($line -match '^\s*downloading' -or $say.StartsWith('  ')) {
+                Write-Host ("`r  " + $say.Trim() + '        ') -NoNewline
+            } else {
+                if ($shown -and ($shown.StartsWith('Downloading') -or $shown.StartsWith('  '))) { Write-Host '' }
+                Write-Line ('  ' + $say)
+                Write-SetupLog ('prepare: ' + $line.Trim())
+            }
+            $shown = $say
+        }
+        $null = $p.StandardOutput.ReadToEnd()
+        $p.WaitForExit()
+    } finally {
+        try { $p.StandardInput.Close() } catch { $null = $_ }
+    }
+    if ($shown.StartsWith('Downloading') -or $shown.StartsWith('  ')) { Write-Host '' }
+    Write-SetupLog ('prepare ended: ' + $p.ExitCode + ' ' + $failed)
+    return ($p.ExitCode -eq 0)
+}
+
 function Get-ClockOffsetMinutes {
     # How far ahead of UTC the clock the PC keeps when it's off is: Windows keeps it in local time (unless
     # RealTimeIsUniversal is set), so it's this time zone's offset now. Chat Computer's kernel reads that clock.
@@ -1168,11 +1269,29 @@ function Start-OwnSystem {
     if ((Remove-OldClaudeOsEntries) -gt 0) {
         Write-Good 'ClaudeOS is out of the boot menu, so only Windows and Chat Computer are there. (Its files stay on the drive.)'
     }
+    if (-not $model -and -not $Unattended) {
+        # (No model yet: it's got ready now, as Chat Computer's app gets it, so the own system can answer.)
+        $engine = Get-OwnEngine -RepoRoot $RepoRoot
+        if ($engine) {
+            $memory = [uint64]0
+            try { $memory = [uint64](Get-Prop (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop | Select-Object -First 1) 'TotalPhysicalMemory') } catch { $null = $_ }
+            $name = Select-OwnModelToGet -Bytes $memory
+            Write-Step 'Getting its model ready'
+            Write-Line ('Chat Computer answers with a model that runs on this PC itself: ' + $name + ', made by Qwen (Alibaba).')
+            Write-Line 'It''s downloaded once (a few GB), then made ready here; this takes a while. Closing this window stops it,'
+            Write-Line 'and it carries on where it stopped the next time.'
+            if (Install-OwnModel -Engine $engine -Name $name) {
+                $model = Find-OwnModel
+            } else {
+                Write-Warn 'Its model couldn''t be got ready now, so it starts without it and says how to get one.'
+            }
+        }
+    }
     if ($model) {
         Write-Line ('It answers with ' + $model.Label + ', on this PC itself: nothing you type leaves it.')
     } else {
-        Write-Line 'It has no model on this PC yet, so it starts and says how to get one (Chat Computer''s app, from'
-        Write-Line 'chatcomputer.ai/get, gets it).'
+        Write-Line 'It has no model on this PC yet, so it starts and says how to get one (double-click Chat Computer Own'
+        Write-Line 'System again, and it gets it ready).'
     }
 
     if (-not $setupScreen -and -not $blueScreen) {

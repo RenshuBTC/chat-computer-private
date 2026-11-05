@@ -81,8 +81,8 @@ pub enum Ready {
 }
 
 /// Said when there's no model.
-pub const NO_MODEL: &str = "Chat Computer's own system needs its model, which Chat Computer's app gets ready on Windows: \
-open the app there once (it gets its model by itself), then start Chat Computer's own system again.";
+pub const NO_MODEL: &str = "Chat Computer's own system needs its model, which it gets on Windows: go back there (restart the PC) \
+and double-click Chat Computer Own System, which gets the model ready, then starts Chat Computer again.";
 
 /// Said when Windows' drive, where the model is, is locked.
 const LOCKED: &str = "Windows' drive is locked with BitLocker, and Chat Computer's model is on it: type the drive's recovery \

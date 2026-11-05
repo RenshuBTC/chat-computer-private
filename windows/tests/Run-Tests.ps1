@@ -655,6 +655,16 @@ try {
 } finally {
     Remove-Item -LiteralPath $shimTmp -Recurse -Force
 }
+# The model it gets ready when there's none: by the PC's memory; how the engine's prepare goes, said in a line.
+Assert-Equal 'qwen3.5-4b' (Select-OwnModelToGet -Bytes ([uint64]33284026368)) 'own model to get: 31 GB of memory, the 4B'
+Assert-Equal 'qwen3.5-4b' (Select-OwnModelToGet -Bytes ([uint64]8000000000)) 'own model to get: 8 GB, the 4B'
+Assert-Equal 'qwen3.5-2b' (Select-OwnModelToGet -Bytes ([uint64]4000000000)) 'own model to get: 4 GB, the 2B'
+Assert-Equal 'qwen3.5-0.8b' (Select-OwnModelToGet -Bytes ([uint64]0)) 'own model to get: memory unknown, the smallest'
+Assert-Equal 'Downloading it: 34% of 9.3 GB' (Format-OwnPrepareLine 'downloading 3162000000 9300000000') 'prepare: a download''s progress'
+Assert-Equal 'Making it ready for this PC' (Format-OwnPrepareLine 'converting') 'prepare: converting'
+Assert-Equal '  50%' (Format-OwnPrepareLine '12/24') 'prepare: a step''s progress'
+Assert-Equal 'It couldn''t be got ready: Qwen3.5 4B needs 11.8 GB of free space' (Format-OwnPrepareLine 'failed Qwen3.5 4B needs 11.8 GB of free space') 'prepare: why it failed'
+Assert-Equal $null (Format-OwnPrepareLine 'download of x broke off (reset): again in 2 s') 'prepare: a line saying nothing new'
 # Its model: the one Chat Computer's app got ready, picked as the kernel picks (os/kernel/src/assistant.rs).
 function New-FakeModel([string]$Name, [int64]$Length) { [pscustomobject]@{ Name = $Name; Length = $Length; FullName = ('C:\m\' + $Name) } }
 Assert-Equal 'Qwen3.5 4B' (Get-OwnModelLabel 'qwen3.5-4b.ccm') 'own model: its name'

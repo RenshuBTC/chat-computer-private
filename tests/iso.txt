@@ -1,0 +1,4 @@
+﻿Made a test image: 67584 bytes
+On the mounted image, grub.cfg is read-only: True
+After setup's copy, grub.cfg is read-only: False
+grub.cfg patched on the copy, as setup does.

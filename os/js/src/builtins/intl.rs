@@ -2849,8 +2849,7 @@ fn list_parts(vm: &mut Vm, o: &ListOpts, v: &Value) -> Result<Parts, Value> {
                 Value::Str(s) => words.push(s.to_rust()),
                 _ => {
                     let e = vm.type_error("Iterable yielded a value that isn't a string");
-                    vm.iterator_close(&it)?;
-                    return Err(e);
+                    return Err(super::iterhelp::close_abrupt(vm, &it, e));
                 }
             }
         }

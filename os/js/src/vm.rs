@@ -113,6 +113,10 @@ pub enum I {
     IntlLocaleProto,
     IntlSegmentsProto,
     IntlSegmentIterProto,
+    // The Iterator helpers' (builtins/iterhelp.rs).
+    IteratorCtor,
+    IteratorHelperProto,
+    WrapForValidIterProto,
     Count,
 }
 

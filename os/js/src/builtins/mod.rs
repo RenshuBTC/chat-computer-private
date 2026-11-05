@@ -7,6 +7,7 @@ pub mod core;
 pub mod date;
 pub mod intl;
 pub mod iter;
+pub mod iterhelp;
 pub mod json;
 pub mod number;
 pub mod promise;
@@ -104,6 +105,7 @@ pub fn init(vm: &mut Vm) {
 
     core::init(vm);
     iter::init(vm);
+    iterhelp::init(vm);
     array::init(vm);
     string::init(vm);
     number::init(vm);

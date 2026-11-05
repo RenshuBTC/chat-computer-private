@@ -30,7 +30,9 @@ shows: written from ECMAScript's specification (ECMA-262), with nothing from oth
 * **Built-ins.** `builtins/`: Object, Function, Error, Symbol, Reflect, Proxy and the global functions (`core.rs`),
   iterators and generators (`iter.rs`), Promise (`promise.rs`), Array (`array.rs`), Number, Math and BigInt
   (`number.rs`, with `math.rs`: Math's functions computed with no library, correctly rounded where it matters),
-  JSON, String, Map, Set and the weak ones (`collections.rs`), RegExp (`regexp.rs`, on the backtracking matcher
+  JSON, String, Map, Set and the weak ones (`collections.rs`), the Iterator helpers (`iterhelp.rs`: Iterator,
+  Iterator.from, and map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every and find, lazy as the
+  specification has them), RegExp (`regexp.rs`, on the backtracking matcher
   of `../regexp.rs` with `unicode_gc.rs`'s General_Category for `\p{…}`), Date (`date.rs`) and ArrayBuffer,
   DataView and the typed arrays (`typed.rs`). Intl (`intl.rs`, ECMA-402): NumberFormat, DateTimeFormat, Collator,
   PluralRules, RelativeTimeFormat, ListFormat, Segmenter, DisplayNames and Locale, and what goes through them
@@ -68,7 +70,7 @@ them; `--failures N` lists N failures, `--strict` runs each test in strict mode 
 read from their files). Tests of features the engine doesn't have yet are skipped (the list is at the top of the
 runner): deferred and source-phase imports, Temporal, SharedArrayBuffer and Atomics, and the newest
 additions. On test262 of 4 November 2026 it passes 96.1% of test/language (22,077 of 22,972 run; all of
-module-code, import and dynamic-import), 94.5% of test/built-ins (16,199 of 17,147) and 87.2% of test/intl402 (944
+module-code, import and dynamic-import), 95.8% of test/built-ins (16,603 of 17,331) and 87.2% of test/intl402 (944
 of 1,082; most of the rest want other languages' ways of writing, which it doesn't have). What's left most: early errors
-(programs it runs that it should refuse), `super` and `new.target` in `eval`'s code, the newest Unicode's
-properties in regular expressions, and the Iterator helpers. `examples/test262.rs` checks the parser alone on the same tests.
+(programs it runs that it should refuse), `super` and `new.target` in `eval`'s code, and the newest Unicode's
+properties in regular expressions. `examples/test262.rs` checks the parser alone on the same tests.

@@ -873,7 +873,8 @@ writes for each person, in place of Ubuntu's catalogue.
     shared by how fast each core is), then Intel's built-in graphics doing the model's arithmetic.
 15. ✓ Showing websites (Chat Computer's own browser engine: HTML, CSS, its layout and drawing; links, forms,
     cookies; checked in a virtual PC against a stand-in site, and on Wikipedia's, Hacker News' and Google's pages).
-    ✓ Scripts: a JavaScript engine of its own (96% of Ecma's test262's language tests), the DOM, events, timers,
+    ✓ Scripts: a JavaScript engine of its own (96% of Ecma's test262's language tests, 96% of its built-ins'), the
+    DOM, events, timers,
     fetch, modules, layout worked out when a script asks for a box's size. ✓ A sans-serif font for pages that ask
     for one. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,

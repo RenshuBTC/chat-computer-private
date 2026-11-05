@@ -378,6 +378,10 @@ pub enum Class {
     AsyncFromSync(Value, Value),
     /// An Intl object (a NumberFormat, a DateTimeFormat...): its settings.
     Intl(Box<crate::builtins::intl::Intl>),
+    /// An Iterator Helper (Iterator.prototype.map's, filter's...), and what Iterator.from wraps an iterator in (it,
+    /// and its next method).
+    IterHelper(Box<crate::builtins::iterhelp::Helper>),
+    IterWrap(Value, Value),
 }
 
 pub struct Object {
@@ -613,6 +617,20 @@ fn trace(o: &Object, work: &mut Vec<Gc>) {
         Class::Arguments(Some(m)) => work.push(m.env),
         Class::ImportCell(e, _) => work.push(*e),
         Class::Intl(i) => g(i.bound),
+        Class::IterHelper(h) => {
+            for x in [&h.it, &h.next, &h.f].into_iter().chain(h.inner.iter().flat_map(|(a, b)| [a, b])) {
+                if let Value::Obj(x) | Value::Sym(x) = x {
+                    work.push(*x);
+                }
+            }
+        }
+        Class::IterWrap(a, b) => {
+            for x in [a, b] {
+                if let Value::Obj(x) | Value::Sym(x) = x {
+                    work.push(*x);
+                }
+            }
+        }
         Class::Env(e) => {
             g(e.parent);
             g(e.with);

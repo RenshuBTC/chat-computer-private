@@ -24,7 +24,9 @@
 //! it) is got ready the same way, in DIR's speech folder, where Chat Computer's own system finds it to hear with
 //! (Windows+H): it has no refusals to take out.
 //!
-//! Downloads go over Chat Computer's own HTTPS (fetch.rs).
+//! Downloads go over Chat Computer's own HTTPS (fetch.rs). A big file comes down in pieces, over several connections
+//! at once (each piece in a part file of its own, carried on where it stopped), so one slow connection can't hold it
+//! up; then the pieces are checked against the pinned SHA-256 and put together.
 
 use crate::{fetch, sys};
 use crypto::Hash;
@@ -45,6 +47,12 @@ fn hub() -> String {
 /// The disk space left for everything else once a model is ready (when choosing one).
 const ROOM_LEFT: u64 = 4 << 30;
 const TRIES: usize = 8;
+/// The connections a big file comes down over at once, and how big a file is to come down in pieces
+/// (CHATCOMPUTER_PIECE_BYTES, for tests: smaller).
+const PIECES: usize = 8;
+fn piece_min() -> u64 {
+    std::env::var("CHATCOMPUTER_PIECE_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(64 << 20)
+}
 
 #[derive(Debug)]
 pub struct FileSpec {
@@ -204,7 +212,8 @@ impl Store {
             .iter()
             .map(|f| {
                 let size = |p: PathBuf| p.metadata().map(|md| md.len()).unwrap_or(0);
-                size(d.join(&f.name)) + size(d.join(format!("{}.part", f.name)))
+                let pieces: u64 = (0..=PIECES).map(|i| size(d.join(format!("{}.part{i}", f.name)))).sum();
+                size(d.join(&f.name)) + size(d.join(format!("{}.part", f.name))) + pieces
             })
             .sum();
         m.download_bytes().saturating_sub(have) + m.file_bytes() + (1 << 30)
@@ -458,6 +467,9 @@ fn download(m: &Model, f: &FileSpec, d: &Path, total: u64, done: &mut u64, told:
         *done += f.size;        // (checked when it finished downloading)
         return Ok(());
     }
+    if f.size >= piece_min() {
+        return download_in_pieces(m, f, d, total, done);
+    }
     let part = d.join(format!("{}.part", f.name));
     let url = format!("{}/{}/resolve/{}/{}", hub().trim_end_matches('/'), m.repo, m.revision, f.name);
     let mut tries = 0;
@@ -547,6 +559,168 @@ fn download(m: &Model, f: &FileSpec, d: &Path, total: u64, done: &mut u64, told:
             }
         }
     }
+}
+
+/// The pieces a big file comes down in: where each starts, and the file's end. Kept beside them (NAME.pieces), so
+/// a download carried on later goes on with the same pieces; a part file of a download in one piece (NAME.part,
+/// from before) is the first piece, the rest shared out after it.
+fn pieces_of(f: &FileSpec, d: &Path) -> Vec<u64> {
+    let plan = d.join(format!("{}.pieces", f.name));
+    if let Ok(text) = std::fs::read_to_string(&plan) {
+        let b: Vec<u64> = text.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        if b.len() >= 2 && b.len() <= PIECES + 2 && b[0] == 0 && b[b.len() - 1] == f.size && b.windows(2).all(|w| w[0] < w[1]) {
+            return b;
+        }
+    }
+    for i in 0..=PIECES {
+        let _ = std::fs::remove_file(d.join(format!("{}.part{i}", f.name)));
+    }
+    let one = d.join(format!("{}.part", f.name));
+    let have = one.metadata().map(|md| md.len()).unwrap_or(0);
+    let mut b = vec![0u64];
+    if have > 0 && have < f.size && std::fs::rename(&one, d.join(format!("{}.part0", f.name))).is_ok() {
+        b.push(have);
+    } else {
+        let _ = std::fs::remove_file(&one);
+    }
+    let start = *b.last().unwrap();
+    let step = (f.size - start).div_ceil(PIECES as u64).max(1);
+    let mut at = start;
+    while at < f.size {
+        at = (at + step).min(f.size);
+        b.push(at);
+    }
+    let text: Vec<String> = b.iter().map(|v| v.to_string()).collect();
+    let _ = std::fs::write(&plan, text.join(" ") + "\n");
+    b
+}
+
+/// A big file, in pieces over several connections at once; then checked against its SHA-256 and put together.
+fn download_in_pieces(m: &Model, f: &FileSpec, d: &Path, total: u64, done: &mut u64) -> Result<(), String> {
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    let url = format!("{}/{}/resolve/{}/{}", hub().trim_end_matches('/'), m.repo, m.revision, f.name);
+    let bounds = pieces_of(f, d);
+    let count = bounds.len() - 1;
+    let piece = |i: usize| d.join(format!("{}.part{i}", f.name));
+    let have = |i: usize| piece(i).metadata().map(|md| md.len()).unwrap_or(0);
+    // What's there already (a piece longer than it is starts again).
+    for i in 0..count {
+        if have(i) > bounds[i + 1] - bounds[i] {
+            let _ = std::fs::remove_file(piece(i));
+        }
+    }
+    let got = AtomicU64::new((0..count).map(have).sum());
+    let finished = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let failure = std::sync::Mutex::new(None::<String>);
+    let base = *done;
+    std::thread::scope(|scope| {
+        for i in 0..count {
+            let (start, len) = (bounds[i], bounds[i + 1] - bounds[i]);
+            let (got, finished, stop, failure, url, path) = (&got, &finished, &stop, &failure, &url, piece(i));
+            scope.spawn(move || {
+                let mut tries = 0;
+                loop {
+                    let have = path.metadata().map(|md| md.len()).unwrap_or(0);
+                    if have >= len || stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let mut out = match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            *failure.lock().unwrap() = Some(format!("{}: {e}", path.display()));
+                            stop.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                    };
+                    let mut wrote = 0u64;
+                    let r = fetch::get(url, start + have, &mut sys::random, &mut |p| match p {
+                        fetch::Part::Head { status, .. } => {
+                            if status == 206 || (status == 200 && start + have == 0) {
+                                Ok(true)
+                            } else {
+                                Err(format!("{}: the server said {status} to a piece", f.name))
+                            }
+                        }
+                        fetch::Part::Body(b) => {
+                            if stop.load(Ordering::Relaxed) {
+                                return Ok(false);
+                            }
+                            let n = (b.len() as u64).min(len - have - wrote) as usize;
+                            out.write_all(&b[..n]).map_err(|e| format!("{}: {e}", path.display()))?;
+                            wrote += n as u64;
+                            got.fetch_add(n as u64, Ordering::Relaxed);
+                            // (Its piece's end: the rest isn't this piece's.)
+                            Ok(have + wrote < len)
+                        }
+                    });
+                    drop(out);
+                    if have + wrote >= len {
+                        break;
+                    }
+                    tries += 1;
+                    let why = r.err().unwrap_or_else(|| "it stopped short".into());
+                    if tries > TRIES {
+                        *failure.lock().unwrap() = Some(format!("downloading {} failed: {why}", f.name));
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    eprintln!("a piece of {} broke off ({why}): again in {} s", f.name, 2 * tries);
+                    std::thread::sleep(Duration::from_secs(2 * tries as u64));
+                }
+                finished.fetch_add(1, Ordering::Relaxed);
+            });
+        }
+        // How far it's got, each second.
+        let mut told = Instant::now();
+        while finished.load(Ordering::Relaxed) < count {
+            std::thread::sleep(Duration::from_millis(100));
+            if told.elapsed() >= Duration::from_secs(1) {
+                told = Instant::now();
+                eprintln!("downloading {} {total}", base + got.load(Ordering::Relaxed));
+            }
+        }
+    });
+    if let Some(why) = failure.into_inner().unwrap() {
+        return Err(why);
+    }
+    // Checked against the pinned SHA-256 as the pieces are put together, in order, into the first.
+    let first = piece(0);
+    let mut h = crypto::Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut hash_file = |path: &Path, h: &mut crypto::Sha256, mut to: Option<&mut std::fs::File>| -> Result<(), String> {
+        let mut r = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        loop {
+            let n = r.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Ok(());
+            }
+            h.update(&buf[..n]);
+            if let Some(t) = to.as_mut() {
+                t.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            }
+        }
+    };
+    hash_file(&first, &mut h, None)?;
+    let mut joined = std::fs::OpenOptions::new().append(true).open(&first).map_err(|e| format!("{}: {e}", first.display()))?;
+    for i in 1..count {
+        hash_file(&piece(i), &mut h, Some(&mut joined))?;
+        let _ = std::fs::remove_file(piece(i));
+    }
+    drop(joined);
+    let mut digest = String::new();
+    for b in h.finish().iter() {
+        digest.push_str(&format!("{b:02x}"));
+    }
+    if digest != f.sha256 || first.metadata().map(|md| md.len()).ok() != Some(f.size) {
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(d.join(format!("{}.pieces", f.name)));
+        return Err(format!("{} came down different from what Chat Computer pinned (its SHA-256): not used", f.name));
+    }
+    std::fs::rename(&first, d.join(&f.name)).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(d.join(format!("{}.pieces", f.name)));
+    *done += f.size;
+    Ok(())
 }
 
 #[cfg(test)]

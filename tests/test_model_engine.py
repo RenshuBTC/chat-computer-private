@@ -606,14 +606,14 @@ def _https_hub(tmp_path, files):
     return hub
 
 
-def _prepare(prog, hub, tmp_path, files, *extra):
+def _prepare(prog, hub, tmp_path, files, *extra, env_extra=None):
     import subprocess
     cat = tmp_path / "models.json"
     cat.write_text(json.dumps({"models": [{
         "name": "tiny", "label": "Tiny", "repo": "Qwen/Tiny", "revision": "0" * 40, "memory_gb": 0, "bits": 8,
         "files": [{"name": n, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()} for n, b in files.items()]}]}))
     env = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy", "all_proxy")}
-    env.update(CHATCOMPUTER_HUB=f"https://localhost:{hub.port}", CHATCOMPUTER_EXTRA_CA=hub.ca)
+    env.update(CHATCOMPUTER_HUB=f"https://localhost:{hub.port}", CHATCOMPUTER_EXTRA_CA=hub.ca, **(env_extra or {}))
     return subprocess.run([prog, "prepare", str(tmp_path / "models"), "--catalogue", str(cat), "--model", "tiny", *extra],
                           capture_output=True, text=True, timeout=120, env=env)
 
@@ -638,6 +638,49 @@ def test_the_engine_downloads_a_model_over_its_own_https(tmp_path):
     assert weights[0] is None and weights[1] == "bytes=150000-"                 # carried on where it broke off
     assert all(path.startswith("/Qwen/Tiny/resolve/" + "0" * 40 + "/") or path.startswith("/storage/") for path, _ in hub.asked)
     assert "downloading" in r.stderr and "converting" in r.stderr and not (tmp_path / "models" / "tiny.ccm").exists()
+
+
+def test_a_big_file_comes_down_in_pieces_at_once(tmp_path):
+    """A big file (here, CHATCOMPUTER_PIECE_BYTES or more) comes down in pieces over as many connections at once,
+    each asked for from where it starts, so one slow connection can't hold it up. A part file an older engine left
+    (a download in one piece, broken off) is the first piece; a piece that breaks off carries on where it stopped;
+    then they're checked against the pinned SHA-256 and put together, and nothing of the pieces is left."""
+    prog = _engine()
+    big = os.urandom(800_000)
+    files = {"config.json": b'{"x": 1}', "tokenizer.json": b'{"model": {}}', "model.safetensors": big}
+    hub = _https_hub(tmp_path, files)
+    d = tmp_path / "models" / "download-tiny"
+    d.mkdir(parents=True)
+    (d / "model.safetensors.part").write_bytes(big[:100_000])
+    try:
+        hub.break_after = 30_000
+        r = _prepare(prog, hub, tmp_path, files, env_extra={"CHATCOMPUTER_PIECE_BYTES": "200000"})
+    finally:
+        hub.stop()
+    lines = r.stderr.strip().splitlines()
+    assert r.returncode == 1 and lines[-2] == "converting", r.stderr[-800:]
+    assert (d / "model.safetensors").read_bytes() == big
+    assert sorted(p.name for p in d.iterdir()) == sorted(files), "no pieces left"
+    asked = [rng for path, rng in hub.asked if path.startswith("/storage/model.safetensors")]
+    starts = sorted(int(rng[6:].split("-")[0]) for rng in asked if rng)
+    pieces = [100_000 + i * 87_500 for i in range(8)]
+    assert set(pieces) <= set(starts), starts                           # each piece from where it starts
+    assert len(starts) == 9 and "a piece of model.safetensors broke off" in r.stderr, (starts, r.stderr[-600:])
+    assert not any(s < 100_000 for s in starts)                         # the older engine's part kept
+
+
+def test_pieces_that_come_down_different_are_not_used(tmp_path):
+    prog = _engine()
+    big = os.urandom(300_000)
+    files = {"config.json": b'{"x": 1}', "model.safetensors": big}
+    hub = _https_hub(tmp_path, dict(files, **{"model.safetensors": big[:-1] + bytes([big[-1] ^ 1])}))
+    try:
+        r = _prepare(prog, hub, tmp_path, files, env_extra={"CHATCOMPUTER_PIECE_BYTES": "100000"})
+    finally:
+        hub.stop()
+    assert r.returncode == 1 and "came down different from what Chat Computer pinned" in r.stderr, r.stderr[-600:]
+    d = tmp_path / "models" / "download-tiny"
+    assert sorted(p.name for p in d.iterdir()) == ["config.json"], "nothing of it kept"
 
 
 def test_the_speech_recognition_model_goes_in_the_speech_folder(tmp_path):

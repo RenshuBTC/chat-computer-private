@@ -81,12 +81,19 @@ Qwen3.5-0.8B is the one the checks use.
                                         [--refusal FILE | --no-refusal]
     chat-computer-model models DIR [--catalogue FILE]
     chat-computer-model prepare DIR [--model NAME|auto] [--catalogue FILE] [--threads N]
+    chat-computer-model prepare DIR --speech [--model NAME|auto] [--catalogue FILE]
 
 `models` says (JSON) which models there are (Chat Computer's `chatcomputer/brain/models.json`, built in), which are
 in DIR, and which this computer gets: the biggest its memory runs well that its disk has room to get ready.
 `prepare` gets one ready: each of its files downloaded from Qwen's repository at the pinned revision, checked
 against its pinned SHA-256 (a download that broke off carries on where it stopped), converted, its refusals found,
-and the downloads removed; the model's file takes its name last, so a model is ready only once it's whole. A file
+and the downloads removed; the model's file takes its name last, so a model is ready only once it's whole. A file of
+64 MB or more comes down in 8 pieces over as many connections at once, each in a part file of its own
+(`NAME.part0`...: carried on where it stopped, and a part file from a download in one piece is the first piece),
+checked and put together at the end: on a PC whose connection to one of Hugging Face's files ran at 0.44 MB/s where
+the one before had run at 11, one slow connection held the whole download up. With `--speech` it gets the speech
+recognition model ready the same way (the catalogue's `speech`: Whisper small.en), in DIR's `speech` folder, where
+Chat Computer's own system finds it; it has no refusals to take out. A file
 made before the engine kept the vision part (one that sees, by the catalogue's `sees`, without that part, and without
 the `converter=2` its settings now start with) is made again the same way, the old one answering meanwhile: the new
 one waits beside it, finished (`NAME.ccm.new`, its refusal direction in `NAME.refusal.new`), until it can take its

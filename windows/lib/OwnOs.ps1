@@ -828,8 +828,8 @@ function Start-OwnSystem {
         Write-Line 'That needs a network cable on this PC (or a USB network adapter, or an Android phone''s USB tethering):'
         Write-Line 'Wi-Fi isn''t supported yet. What you type goes to Meta.'
         if ($model) {
-            Write-Line ('For ' + $model.Label + ', the model on this PC, instead: run this once with -Remove (which takes the key off'
-            Write-Line 'with the rest), then again.')
+            Write-Line ('For ' + $model.Label + ', the model on this PC, instead: run this once with -Remove (which takes the')
+            Write-Line 'key off with the rest), then again.'
         }
     } elseif ($model) {
         Write-Good ('It answers with ' + $model.Label + ' (' + (Format-Size $model.Bytes) + '), the model Chat Computer''s app got ready on this PC.')

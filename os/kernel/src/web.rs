@@ -427,3 +427,329 @@ pub(crate) fn no_address() -> String {
         String::from("this PC is connected to a network, but got no address on it (no DHCP server answered)")
     }
 }
+
+// ------------------------------------------------------------------------------------------------ WebSockets
+
+/// What a page's WebSocket came to: open (with the protocol the server chose), a message (text or binary), or closed
+/// (its code, its reason, and whether both sides said so: a clean close).
+pub enum WsEvent {
+    Open(String),
+    Text(String),
+    Binary(Vec<u8>),
+    Closed(u16, String, bool),
+}
+
+/// The secure connection under a WebSocket, once TCP is up: its TLS, what's to go out, and when it last heard.
+struct Link {
+    socket: Socket,
+    tls: Box<tls::Client>,
+    out: Vec<u8>,
+    heard: u64,
+    sent: bool,
+}
+
+/// A page's script's WebSocket (wss:): reached as a fetch is, its handshake, then its frames both ways.
+pub struct WebSocket {
+    url: Url,
+    phase: Phase,
+    link: Option<Box<Link>>,
+    key: String,
+    protocols: Vec<String>,
+    origin: String,
+    /// Whether the site's cookies go with its handshake (not an app's).
+    cookies: bool,
+    since: u64,
+    answer: Vec<u8>,
+    open: bool,
+    reader: web::websocket::Reader,
+    queue: Vec<Vec<u8>>,
+    /// We've sent our close (and when); the server's close (its code and reason).
+    closing: Option<u64>,
+    close_got: Option<(u16, String)>,
+    closed: bool,
+    events: Vec<WsEvent>,
+}
+
+/// How long a close may wait for the server's, before the connection's simply dropped.
+const CLOSE_MS: u64 = 5_000;
+
+impl WebSocket {
+    /// Opens a WebSocket to `url` (its wss: address as https:), for a page at `origin`.
+    pub fn open(url: Url, protocols: Vec<String>, origin: String, cookies: bool) -> WebSocket {
+        let mut key = [0u8; 16];
+        random::fill(&mut key);
+        let now = time::uptime_ms();
+        WebSocket {
+            url,
+            phase: Phase::Network(now),
+            link: None,
+            key: web::websocket::base64(&key),
+            protocols,
+            origin,
+            cookies,
+            since: now,
+            answer: Vec::new(),
+            open: false,
+            reader: web::websocket::Reader::default(),
+            queue: Vec::new(),
+            closing: None,
+            close_got: None,
+            closed: false,
+            events: Vec::new(),
+        }
+    }
+
+    fn frame(&mut self, opcode: u8, payload: &[u8]) {
+        let mut mask = [0u8; 4];
+        random::fill(&mut mask);
+        self.queue.push(web::websocket::frame(opcode, payload, mask));
+    }
+
+    /// A message from the page's script (text or binary), sent once it's open.
+    pub fn send(&mut self, binary: bool, data: &[u8]) {
+        if self.open && self.closing.is_none() && !self.closed {
+            self.frame(if binary { web::websocket::BINARY } else { web::websocket::TEXT }, data);
+        }
+    }
+
+    /// The script closes it: before it's open, the connection dropped; after, the closing handshake begun.
+    pub fn close(&mut self, code: Option<u16>, reason: &str) {
+        if self.closed || self.closing.is_some() {
+            return;
+        }
+        if !self.open {
+            self.stop();
+            self.end(1006, String::new(), false);
+            return;
+        }
+        let payload = web::websocket::close_payload(code, reason);
+        self.frame(web::websocket::CLOSE, &payload);
+        self.closing = Some(time::uptime_ms());
+    }
+
+    /// Lets the connection go at once (the page left).
+    pub fn stop(&mut self) {
+        if let Some(link) = self.link.take() {
+            network::with(|stack| stack.abort(link.socket));
+        }
+        if let Phase::Connecting(s, _) = core::mem::replace(&mut self.phase, Phase::Network(0)) {
+            network::with(|stack| stack.abort(s));
+        }
+    }
+
+    fn end(&mut self, code: u16, reason: String, clean: bool) {
+        if !self.closed {
+            self.closed = true;
+            self.events.push(WsEvent::Closed(code, reason, clean));
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Moves it on as far as it goes now: what came of it since.
+    pub fn step(&mut self) -> Vec<WsEvent> {
+        if !self.closed {
+            let now = time::uptime_ms();
+            match network::with(|stack| self.step_with(now, stack)) {
+                Some(Ok(())) => {}
+                Some(Err(why)) => {
+                    crate::log!("Chat Computer kernel: web: the WebSocket to {} failed: {why}", self.url.host);
+                    self.stop();
+                    self.end(1006, String::new(), false);
+                }
+                None => {
+                    self.stop();
+                    self.end(1006, String::new(), false);
+                }
+            }
+        }
+        core::mem::take(&mut self.events)
+    }
+
+    fn step_with(&mut self, now: u64, stack: &mut Stack) -> Result<(), String> {
+        if self.link.is_none() {
+            let Some(socket) = reach(&mut self.phase, now, stack, &self.url)? else { return Ok(()) };
+            let when = clock::now().ok_or_else(|| String::from("this PC's clock couldn't be read, so Chat Computer can't check who answers"))?;
+            let mut tls = Box::new(tls::Client::new(&self.url.host, when, roots(), &mut random::fill));
+            tls.allow_clock_error(clock::error());
+            let out = tls.outgoing();
+            self.link = Some(Box::new(Link { socket, tls, out, heard: now, sent: false }));
+        }
+        let Some(link) = self.link.as_mut() else { return Ok(()) };
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            let n = stack.recv(link.socket, &mut buf);
+            if n == 0 {
+                break;
+            }
+            link.heard = now;
+            link.tls.incoming(&buf[..n]);
+        }
+        if let Some(e) = link.tls.error() {
+            let alert = link.tls.outgoing();
+            stack.send(link.socket, &alert);
+            return Err(tls_text(e, &self.url.host));
+        }
+        if link.tls.is_open() && !link.sent {
+            let cookies = if self.cookies { COOKIES.lock().as_ref().and_then(|j| j.header(&self.url, clock::now())) } else { None };
+            link.tls.write(&web::websocket::handshake(&self.url, &self.key, &self.origin, &self.protocols, cookies.as_deref()));
+            link.sent = true;
+        }
+        loop {
+            let n = link.tls.read(&mut buf);
+            if n == 0 {
+                break;
+            }
+            if self.open {
+                self.reader.feed(&buf[..n]);
+            } else {
+                self.answer.extend_from_slice(&buf[..n]);
+            }
+        }
+        if !self.open && !self.answer.is_empty() {
+            match web::websocket::answer(&self.answer, &self.key, &self.protocols) {
+                web::websocket::Answer::More => {}
+                web::websocket::Answer::Refused(why) => return Err(why),
+                web::websocket::Answer::Accepted { protocol, set_cookies, rest } => {
+                    if self.cookies && !set_cookies.is_empty() {
+                        let mut jar = COOKIES.lock();
+                        let jar = jar.get_or_insert_with(Jar::new);
+                        for c in &set_cookies {
+                            jar.set(&self.url, c, clock::now());
+                        }
+                    }
+                    self.open = true;
+                    self.answer = Vec::new();
+                    self.reader.feed(&rest);
+                    crate::log!("Chat Computer kernel: web: a WebSocket to {} is open", self.url.host);
+                    self.events.push(WsEvent::Open(protocol));
+                }
+            }
+        }
+        if !self.open && now.saturating_sub(self.since) > CONNECT_MS + NETWORK_MS {
+            return Err(String::from("the server didn't answer the WebSocket's handshake"));
+        }
+        if self.open {
+            while let Some(m) = self.reader.next() {
+                use web::websocket::Incoming;
+                match m {
+                    Incoming::Text(s) => self.events.push(WsEvent::Text(s)),
+                    Incoming::Binary(b) => self.events.push(WsEvent::Binary(b)),
+                    Incoming::Ping(p) => {
+                        let mut mask = [0u8; 4];
+                        random::fill(&mut mask);
+                        self.queue.insert(0, web::websocket::frame(web::websocket::PONG, &p, mask));
+                    }
+                    Incoming::Pong => {}
+                    Incoming::Close(code, reason) => {
+                        if self.closing.is_none() {
+                            // (Its close answered with the same code.)
+                            let payload = web::websocket::close_payload(code, "");
+                            let mut mask = [0u8; 4];
+                            random::fill(&mut mask);
+                            self.queue.push(web::websocket::frame(web::websocket::CLOSE, &payload, mask));
+                            self.closing = Some(now);
+                        }
+                        self.close_got = Some((code.unwrap_or(1005), reason));
+                        break;
+                    }
+                    Incoming::Error(code, why) => {
+                        crate::log!("Chat Computer kernel: web: the WebSocket to {}: {why}", self.url.host);
+                        let payload = web::websocket::close_payload(Some(code), "");
+                        let mut mask = [0u8; 4];
+                        random::fill(&mut mask);
+                        self.queue.push(web::websocket::frame(web::websocket::CLOSE, &payload, mask));
+                        self.closing = Some(now);
+                        self.close_got = Some((1006, String::new()));
+                        break;
+                    }
+                }
+            }
+        }
+        let link = self.link.as_mut().expect("linked above");
+        for f in self.queue.drain(..) {
+            link.tls.write(&f);
+        }
+        link.out.extend(link.tls.outgoing());
+        if !link.out.is_empty() {
+            let n = stack.send(link.socket, &link.out);
+            link.out.drain(..n);
+        }
+        let ended = stack.state(link.socket) == TcpState::Closed || stack.finished(link.socket) || link.tls.finished();
+        // Both sides have said they're closing: over (the server drops the connection).
+        if let Some((code, reason)) = self.close_got.clone()
+            && link.out.is_empty()
+        {
+            let clean = code != 1006;
+            stack.release(link.socket);
+            self.link = None;
+            self.end(code, reason, clean);
+            return Ok(());
+        }
+        if ended {
+            stack.release(link.socket);
+            self.link = None;
+            self.end(1006, String::new(), false);
+            return Ok(());
+        }
+        if let Some(at) = self.closing
+            && now.saturating_sub(at) > CLOSE_MS
+        {
+            stack.abort(link.socket);
+            self.link = None;
+            self.end(1006, String::new(), false);
+        }
+        Ok(())
+    }
+}
+
+/// Reaches a site's server: its address (looked up), then a TCP connection to it; the connection once it's up.
+fn reach(phase: &mut Phase, now: u64, stack: &mut Stack, url: &Url) -> Result<Option<Socket>, String> {
+    loop {
+        match phase {
+            Phase::Network(since) => {
+                if stack.config().is_none() {
+                    if now.saturating_sub(*since) > NETWORK_MS {
+                        return Err(no_address());
+                    }
+                    return Ok(None);
+                }
+                *phase = if test_build() {
+                    connect(now, stack, TEST_SERVER, test_port(), &url.host)?
+                } else if let Some(ip) = Ipv4::parse(&url.host) {
+                    connect(now, stack, ip, url.port, &url.host)?
+                } else {
+                    Phase::Looking(stack.resolve(now, &url.host), now)
+                };
+            }
+            Phase::Looking(lookup, since) => match stack.resolved(*lookup) {
+                None if now.saturating_sub(*since) > CONNECT_MS => return Err(format!("{} couldn't be found on the network (no answer)", url.host)),
+                None => return Ok(None),
+                Some(Ok(ip)) => *phase = connect(now, stack, ip, url.port, &url.host)?,
+                Some(Err(e)) => return Err(format!("{} couldn't be found on the network: {e}", url.host)),
+            },
+            Phase::Connecting(s, since) => {
+                let s = *s;
+                return match stack.state(s) {
+                    TcpState::Established => {
+                        *phase = Phase::Network(0);
+                        Ok(Some(s))
+                    }
+                    TcpState::Closed => {
+                        let why = stack.error(s).map_or(String::from("the connection closed"), |e| format!("{e}"));
+                        stack.release(s);
+                        Err(format!("couldn't connect to {}: {why}", url.host))
+                    }
+                    _ if now.saturating_sub(*since) > CONNECT_MS => {
+                        stack.abort(s);
+                        Err(format!("couldn't connect to {}: no answer", url.host))
+                    }
+                    _ => Ok(None),
+                };
+            }
+            Phase::Talking(_) => return Ok(None),
+        }
+    }
+}

@@ -1,7 +1,7 @@
 //! A page's scripts, run by Chat Computer's own JavaScript engine (os/js), with what scripts use in a browser: the
 //! window (the global object), the document and its nodes (dom.rs), events (events.rs), timers, the address, the
-//! console, storage and the like (window.rs), the network (net.rs), and live lists, class lists, styles and data
-//! attributes (lists.rs). The engine knows nothing of pages: these are its host's objects, `Class::Host` objects
+//! console, storage and the like (window.rs), the network (net.rs) and WebSockets (socket.rs), and live lists,
+//! class lists, styles and data attributes (lists.rs). The engine knows nothing of pages: these are its host's objects, `Class::Host` objects
 //! whose state is here (the `Host`, in the VM's host slot), and the page's tree is moved into it while scripts run.
 
 mod canvas;
@@ -11,6 +11,7 @@ mod geometry;
 mod lists;
 mod modules;
 mod net;
+mod socket;
 pub mod url;
 mod window;
 
@@ -30,6 +31,7 @@ pub use dom::{ScriptKind, runnable_type, script_kind};
 pub use events::{EvValue, EventInit};
 pub use geometry::{LayoutInputs, Picker, fresh_layout, rects_of};
 pub use net::{NetKind, NetRequest, Response};
+pub use socket::{SocketEvent, SocketOp};
 pub use window::seed;
 
 /// What a `Class::Host` object is (its number is a node's, or a list's).
@@ -116,6 +118,10 @@ pub struct Host {
     /// What scripts asked the network for, not yet handed to the system; and those it has, waiting for answers.
     pub requests: Vec<NetRequest>,
     pub waiting: Vec<NetRequest>,
+    /// The page's WebSockets not yet closed (by their numbers), and what scripts asked of them, not yet handed to
+    /// the system.
+    pub sockets: Vec<(u32, Gc)>,
+    pub socket_ops: Vec<SocketOp>,
     /// Where a script sends the page (location.href = ...).
     pub navigate: Option<url::Url>,
     /// Live lists: (root, kind), by number; and each list's elements as last worked out (with the tree's version).
@@ -216,6 +222,8 @@ impl Host {
             session: BTreeMap::new(),
             requests: Vec::new(),
             waiting: Vec::new(),
+            sockets: Vec::new(),
+            socket_ops: Vec::new(),
             navigate: None,
             lists: Vec::new(),
             list_cache: BTreeMap::new(),
@@ -299,6 +307,7 @@ fn trace(h: &dyn core::any::Any, roots: &mut Vec<Value>) {
     for r in h.requests.iter().chain(h.waiting.iter()) {
         r.trace(roots);
     }
+    roots.extend(h.sockets.iter().map(|(_, g)| Value::Obj(*g)));
     for o in &h.observers {
         o.trace(roots);
     }
@@ -590,6 +599,7 @@ impl Script {
         lists::init(&mut vm);
         window::init(&mut vm);
         net::init(&mut vm);
+        socket::init(&mut vm);
         canvas::init(&mut vm);
         // The document's object is node 0's.
         let d = wrap(&mut vm, 0);
@@ -780,6 +790,24 @@ impl Script {
     /// An answer from the network to a request scripts made.
     pub fn answer(&mut self, id: u32, response: Result<Response, String>) {
         net::answer(&mut self.vm, id, response);
+        self.checkpoint();
+    }
+
+    /// What scripts asked of their WebSockets since last asked (to open one, to send, to close), for the system:
+    /// the messages handed over no longer count in their bufferedAmount.
+    pub fn take_socket_ops(&mut self) -> Vec<SocketOp> {
+        let ops = core::mem::take(&mut self.host().socket_ops);
+        for op in &ops {
+            if let SocketOp::Send { id, data, .. } = op {
+                socket::sent(&mut self.vm, *id, data.len());
+            }
+        }
+        ops
+    }
+
+    /// What came of one of the page's WebSockets (it opened, a message, it closed): its events fired.
+    pub fn socket_event(&mut self, id: u32, ev: SocketEvent) {
+        socket::event(&mut self.vm, id, ev);
         self.checkpoint();
     }
 }

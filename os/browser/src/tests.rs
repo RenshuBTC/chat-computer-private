@@ -275,6 +275,69 @@ fn scripts_fetch_through_the_page() {
 }
 
 #[test]
+fn web_sockets_open_send_receive_and_close_through_the_page() {
+    use crate::script::{SocketEvent, SocketOp};
+    let mut p = scripted(
+        "<body><script>\
+         try { new WebSocket('ftp://example.com/'); } catch (e) { console.log(e.name + ' for ftp'); }\
+         try { new WebSocket('wss://example.com/#x'); } catch (e) { console.log(e.name + ' for a fragment'); }\
+         try { new WebSocket('/s', ['a', 'a']); } catch (e) { console.log(e.name + ' for a protocol twice'); }\
+         try { new WebSocket('/s', 'a b'); } catch (e) { console.log(e.name + ' for a space'); }\
+         var ws = new WebSocket('/chat?room=1', ['chat', 'v2']);\
+         console.log(ws.url + ' ' + ws.readyState + ' ' + WebSocket.OPEN + ' ' + ws.CLOSED + ' ' + ws.binaryType);\
+         try { ws.send('early'); } catch (e) { console.log(e.name + ' while connecting'); }\
+         ws.binaryType = 'nonsense'; ws.binaryType = 'arraybuffer';\
+         ws.onopen = function () { console.log('open ' + ws.protocol + ' ' + ws.readyState); ws.send('hi'); ws.send(new Uint8Array([1, 2, 3])); \
+           console.log('buffered ' + ws.bufferedAmount); };\
+         ws.addEventListener('message', function (e) { console.log('message ' + (typeof e.data === 'string' ? e.data : \
+           Array.prototype.join.call(new Uint8Array(e.data), ',')) + ' from ' + e.origin + ' ' + (e instanceof MessageEvent)); });\
+         ws.onerror = function () { console.log('error'); };\
+         ws.onclose = function (e) { console.log('close ' + e.code + ' ' + e.reason + ' ' + e.wasClean + ' ' + ws.readyState + ' ' + (e instanceof CloseEvent)); };\
+         var lost = new WebSocket('wss://nowhere.example/');\
+         lost.onerror = function () { console.log('lost: error ' + lost.readyState); };\
+         lost.onclose = function (e) { console.log('lost: close ' + e.code + ' ' + e.wasClean); };\
+         setTimeout(function () { try { ws.close(1001); } catch (e) { console.log(e.name + ' for 1001'); } ws.close(1000, 'bye'); \
+           console.log('closing ' + ws.readyState); ws.send('late'); console.log('buffered ' + ws.bufferedAmount); }, 50);\
+         </script></body>",
+    );
+    p.run(0.0);
+    assert_eq!(
+        p.take_console(),
+        [
+            "SyntaxError for ftp",
+            "SyntaxError for a fragment",
+            "SyntaxError for a protocol twice",
+            "SyntaxError for a space",
+            "wss://example.com/chat?room=1 0 1 3 blob",
+            "InvalidStateError while connecting",
+        ]
+    );
+    let ops = p.take_socket_ops();
+    assert_eq!(ops.len(), 2);
+    let SocketOp::Open { id, url, protocols } = ops[0].clone() else { panic!("an open first: {ops:?}") };
+    assert_eq!((url.as_str(), protocols), ("wss://example.com/chat?room=1", vec![String::from("chat"), String::from("v2")]));
+    let SocketOp::Open { id: lost, .. } = ops[1].clone() else { panic!("then the other") };
+    p.socket_event(id, SocketEvent::Open(String::from("v2")));
+    assert_eq!(p.take_console(), ["open v2 1", "buffered 5"]);
+    assert_eq!(
+        p.take_socket_ops(),
+        [SocketOp::Send { id, binary: false, data: b"hi".to_vec() }, SocketOp::Send { id, binary: true, data: vec![1, 2, 3] }]
+    );
+    p.socket_event(id, SocketEvent::Text(String::from("hello")));
+    p.socket_event(id, SocketEvent::Binary(vec![9, 8]));
+    assert_eq!(p.take_console(), ["message hello from wss://example.com true", "message 9,8 from wss://example.com true"]);
+    p.socket_event(lost, SocketEvent::Closed(1006, String::new(), false));
+    assert_eq!(p.take_console(), ["lost: error 3", "lost: close 1006 false"]);
+    // Its script closes it: the closing handshake asked of the system; then it's closed, cleanly.
+    p.run(60.0);
+    assert_eq!(p.take_console(), ["InvalidAccessError for 1001", "closing 2", "buffered 4"]);
+    assert_eq!(p.take_socket_ops(), [SocketOp::Close { id, code: Some(1000), reason: String::from("bye") }]);
+    p.socket_event(id, SocketEvent::Text(String::from("after closing")));
+    p.socket_event(id, SocketEvent::Closed(1000, String::from("bye"), true));
+    assert_eq!(p.take_console(), ["close 1000 bye true 3 true"]);
+}
+
+#[test]
 fn module_scripts_import_what_the_page_fetches() {
     let mut p = scripted(
         "<head><script type=importmap>{\"imports\": {\"lib\": \"/m/lib.js\"}}</script>\

@@ -2340,7 +2340,6 @@ fn misc(vm: &mut Vm, w: Gc) {
     method(vm, bc, "close", 0, ignore);
     interface(vm, "Worker", Some("EventTarget"), 1, Some(no_worker));
     interface(vm, "SharedWorker", Some("EventTarget"), 1, Some(no_worker));
-    interface(vm, "WebSocket", Some("EventTarget"), 1, Some(no_socket));
     interface(vm, "EventSource", Some("EventTarget"), 1, Some(no_socket));
 }
 

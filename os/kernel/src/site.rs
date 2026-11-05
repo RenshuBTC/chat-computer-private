@@ -4,7 +4,8 @@
 //! Chat Computer's own TCP and TLS 1.3 (web.rs), read and laid out by its own browser engine (os/browser: HTML, CSS,
 //! the layout, and its scripts run by its own JavaScript engine), its style sheets, pictures and scripts fetched as it
 //! asks for them, a few at a time, and drawn (browser::paint). Its scripts get its clicks and keys first (and can
-//! cancel what they'd do), their timers run as the main loop goes round, and what they fetch is fetched here. It
+//! cancel what they'd do), their timers run as the main loop goes round, what they fetch is fetched here, and their
+//! WebSockets are kept open here (web::WebSocket) for as long as the page is shown. It
 //! scrolls with the mouse's wheel and the keys; a click follows a link, ticks a box, or puts the caret in a field to
 //! type in; Enter in a field sends its form (GET or POST, with the site's cookies).
 
@@ -17,7 +18,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use browser::page::{Kind, Page, State};
 use browser::paint::{Painter, Shown, Surface};
-use browser::script::Pixels;
+use browser::script::{Pixels, SocketEvent, SocketOp};
 pub use browser::address::name_of;
 use browser::{Hit, Request};
 use text::Type;
@@ -26,6 +27,8 @@ use web::Url;
 /// The most fetches for a page's style sheets, pictures and scripts at once, and for what its scripts fetch.
 const AT_ONCE: usize = 4;
 const SCRIPT_FETCHES: usize = 6;
+/// The most WebSockets a page keeps open at once.
+const MOST_SOCKETS: usize = 16;
 /// The most lines of a page's console logged.
 const CONSOLE_LOGGED: usize = 200;
 /// The most <meta refresh>es followed in a row.
@@ -102,6 +105,28 @@ impl Shown for Pictures {
     }
 }
 
+/// Where a page's WebSocket may go: its address (ws: and wss: are reached as https: is: Chat Computer speaks to the
+/// web only over TLS), if it may be opened: an app's only to the sites the person allowed it (wss:, on port 443); a
+/// page has at most MOST_SOCKETS at once.
+fn socket_allowed(address: &str, app: Option<&str>, allowed: &[String], pending: &[String], open: usize) -> Result<Url, String> {
+    let rest = address.strip_prefix("wss:").or_else(|| address.strip_prefix("ws:")).ok_or_else(|| String::from("it isn't a WebSocket's address"))?;
+    let u = Url::parse(&format!("https:{rest}")).map_err(String::from)?;
+    if open >= MOST_SOCKETS {
+        return Err(format!("the page has {MOST_SOCKETS} open already"));
+    }
+    if let Some(app) = app {
+        let secure = address.starts_with("wss:") && u.port == 443;
+        if !secure || !allowed.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) {
+            return Err(if secure && pending.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) {
+                format!("the person hasn't allowed the {app} app to reach {} yet", u.host)
+            } else {
+                format!("the {app} app may reach only the sites the person allowed it, over wss:")
+            });
+        }
+    }
+    Ok(u)
+}
+
 /// What a click on the site did, for the screen.
 pub enum Clicked {
     Nothing,
@@ -159,6 +184,8 @@ pub struct Site {
     app_pending: Vec<String>,
     /// What its app did that the person should see (in the Actions sidebar), not yet taken.
     actions: Vec<String>,
+    /// Its page's scripts' WebSockets: (their number for it, the connection).
+    sockets: Vec<(u32, crate::web::WebSocket)>,
 }
 
 impl Site {
@@ -220,6 +247,7 @@ impl Site {
             app_allowed: Vec::new(),
             app_pending: Vec::new(),
             actions: Vec::new(),
+            sockets: Vec::new(),
         }
     }
 
@@ -306,6 +334,9 @@ impl Site {
         }
         for (_, mut f) in self.script_fetches.drain(..) {
             f.stop();
+        }
+        for (_, mut w) in self.sockets.drain(..) {
+            w.stop();
         }
     }
 
@@ -412,6 +443,56 @@ impl Site {
                         _ => page.answer(id, Err(String::from("this address can't be fetched here"))),
                     }
                 }
+                // Its WebSockets: opened as it asks (an app's only to the sites the person allowed it, without
+                // cookies), its messages sent, closed; what comes of each told to the page.
+                for op in page.take_socket_ops() {
+                    match op {
+                        SocketOp::Open { id, url, protocols } => {
+                            let origin = page.origin();
+                            match socket_allowed(&url, self.app.as_deref(), &self.app_allowed, &self.app_pending, self.sockets.len()) {
+                                Ok(u) => {
+                                    if let Some(app) = &self.app {
+                                        let what = format!("The {app} app connected to {}", u.host);
+                                        if !self.actions.contains(&what) {
+                                            log!("Chat Computer kernel: site: {what}");
+                                            self.actions.push(what);
+                                        }
+                                    }
+                                    let cookies = self.app.is_none();
+                                    self.sockets.push((id, crate::web::WebSocket::open(u, protocols, origin, cookies)));
+                                }
+                                Err(why) => {
+                                    log!("Chat Computer kernel: site: a WebSocket to {url} wasn't opened: {why}");
+                                    page.socket_event(id, SocketEvent::Closed(1006, String::new(), false));
+                                    changed = true;
+                                }
+                            }
+                        }
+                        SocketOp::Send { id, binary, data } => {
+                            if let Some((_, w)) = self.sockets.iter_mut().find(|(i, _)| *i == id) {
+                                w.send(binary, &data);
+                            }
+                        }
+                        SocketOp::Close { id, code, reason } => {
+                            if let Some((_, w)) = self.sockets.iter_mut().find(|(i, _)| *i == id) {
+                                w.close(code, &reason);
+                            }
+                        }
+                    }
+                }
+                for (id, w) in self.sockets.iter_mut() {
+                    for ev in w.step() {
+                        let ev = match ev {
+                            crate::web::WsEvent::Open(p) => SocketEvent::Open(p),
+                            crate::web::WsEvent::Text(t) => SocketEvent::Text(t),
+                            crate::web::WsEvent::Binary(b) => SocketEvent::Binary(b),
+                            crate::web::WsEvent::Closed(code, reason, clean) => SocketEvent::Closed(code, reason, clean),
+                        };
+                        page.socket_event(*id, ev);
+                        changed = true;
+                    }
+                }
+                self.sockets.retain(|(_, w)| !w.is_closed());
                 let mut k = 0;
                 let mut active = 0;
                 while k < self.script_fetches.len() {

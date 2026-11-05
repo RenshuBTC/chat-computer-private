@@ -1425,8 +1425,8 @@ enough to wrap round it on a few lines in the middle of the screen, as a browser
 <form action="/search"><input name="q" autofocus placeholder="Search"> <button>Search</button></form>
 <p class="note">The end of the page.</p><script src="/app.js"></script>
 <script type="module">import { word } from './mod.js'; console.log('module says ' + word);</script></body></html>"""
-# Its script: a block it makes (purple), then (once a fetch of the stand-in's JSON has come) turns teal, a timer, and
-# the console's lines.
+# Its script: a block it makes (purple), then (once a fetch of the stand-in's JSON has come) turns teal, a timer, a
+# WebSocket (it hears the stand-in's welcome and its echoes, then closes), and the console's lines.
 SITE_JS = """document.addEventListener('DOMContentLoaded', function () {
   var d = document.createElement('div');
   d.id = 'made';
@@ -1439,6 +1439,22 @@ SITE_JS = """document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('made').style.background = '#40c0c0';
   });
   setTimeout(function () { console.log('timer fired'); }, 200);
+  var ws = new WebSocket('wss://www.example.com/socket', ['chat', 'echo']);
+  ws.binaryType = 'arraybuffer';
+  var heard = 0;
+  ws.onopen = function () {
+    console.log('socket open: ' + ws.protocol);
+    ws.send('hello socket');
+    ws.send(new Uint8Array([1, 2, 3, 250]));
+  };
+  ws.onmessage = function (e) {
+    heard++;
+    if (typeof e.data === 'string') console.log('socket heard: ' + e.data);
+    else console.log('socket heard bytes: ' + Array.prototype.join.call(new Uint8Array(e.data), ','));
+    if (heard === 3) ws.close(1000, 'done');
+  };
+  ws.onerror = function () { console.log('socket error'); };
+  ws.onclose = function (e) { console.log('socket closed: ' + e.code + ' ' + e.reason + ' ' + e.wasClean); };
   var cv = document.createElement('canvas');
   cv.width = 120;
   cv.height = 40;
@@ -1471,10 +1487,14 @@ def site_check(args) -> list[str]:
     test build trusting a test authority, the site a stand-in here over TLS 1.3, its cookie kept and sent back); its
     field has the caret, so what's typed goes there, and Enter sends its form (GET /search?q=...); the page that comes
     shows; a click on a link opens the page it's for; Esc in the empty message box closes the site, and the
-    conversation shows again."""
+    conversation shows again. Its script's WebSocket reaches the stand-in (its handshake with the page's origin, the
+    subprotocols it offers and the site's cookies), answers its ping, hears its messages and closes cleanly."""
+    import base64
+    import hashlib
     import http.server
     import io
     import ssl
+    import struct
     import threading
     from urllib.parse import parse_qs, urlparse
 
@@ -1485,6 +1505,25 @@ def site_check(args) -> list[str]:
     sun = io.BytesIO()
     Image.new("RGB", (48, 32), (230, 30, 30)).save(sun, "PNG")
     asked: list[dict] = []
+    sockets: list[dict] = []
+
+    def ws_frame(op: int, payload: bytes) -> bytes:
+        n = len(payload)
+        head = bytes([0x80 | op, n]) if n < 126 else bytes([0x80 | op, 126]) + struct.pack(">H", n)
+        return head + payload
+
+    def ws_read(rfile):
+        head = rfile.read(2)
+        if len(head) < 2:
+            return None
+        op, masked, n = head[0] & 0x0F, bool(head[1] & 0x80), head[1] & 0x7F
+        if n == 126:
+            n = struct.unpack(">H", rfile.read(2))[0]
+        elif n == 127:
+            n = struct.unpack(">Q", rfile.read(8))[0]
+        mask = rfile.read(4) if masked else b"\0\0\0\0"
+        data = rfile.read(n)
+        return op, masked, bytes(b ^ mask[i % 4] for i, b in enumerate(data))
 
     class Stand(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -1507,6 +1546,43 @@ def site_check(args) -> list[str]:
                 kind, body = "application/json", b'{"word": "hello"}'
             elif url.path == "/mod.js":
                 kind, body = "text/javascript", b"export const word = 'hi from a module';"
+            elif url.path == "/socket":
+                # A WebSocket (RFC 6455): its handshake answered, a ping and a welcome sent, then what comes echoed
+                # (text with "echo: " before it, bytes backwards) until it's closed, its close answered.
+                offered = [p.strip() for p in self.headers.get("Sec-WebSocket-Protocol", "").split(",") if p.strip()]
+                s = {"origin": self.headers.get("Origin", ""), "protocols": offered, "cookie": self.headers.get("Cookie", ""),
+                     "version": self.headers.get("Sec-WebSocket-Version", ""), "upgrade": self.headers.get("Upgrade", ""),
+                     "frames": []}
+                sockets.append(s)
+                key = self.headers.get("Sec-WebSocket-Key", "")
+                accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
+                self.send_response(101, "Switching Protocols")
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept.decode())
+                if "echo" in offered:
+                    self.send_header("Sec-WebSocket-Protocol", "echo")
+                self.end_headers()
+                self.connection.settimeout(30)
+                self.wfile.write(ws_frame(0x9, b"are you there") + ws_frame(0x1, b"welcome"))
+                while True:
+                    try:
+                        got = ws_read(self.rfile)
+                    except (OSError, struct.error):
+                        break
+                    if got is None:
+                        break
+                    s["frames"].append(got)
+                    op, _, data = got
+                    if op == 0x1:
+                        self.wfile.write(ws_frame(0x1, b"echo: " + data))
+                    elif op == 0x2:
+                        self.wfile.write(ws_frame(0x2, bytes(reversed(data))))
+                    elif op == 0x8:
+                        self.wfile.write(ws_frame(0x8, data))
+                        break
+                self.close_connection = True
+                return
 
             elif url.path == "/sun.png":
                 kind, body = "image/png", sun.getvalue()
@@ -1633,11 +1709,31 @@ def site_check(args) -> list[str]:
             problems.append("the link wasn't followed")
         if not [a for a in asked if a["path"] == "/data.json"]:
             problems.append("the page's script's fetch didn't reach the site")
+        if not sockets:
+            problems.append("the page's WebSocket didn't reach the stand-in")
+        else:
+            s = sockets[0]
+            if (s["origin"], s["protocols"], s["version"], s["upgrade"].lower()) != ("https://www.example.com", ["chat", "echo"], "13", "websocket"):
+                problems.append(f"the WebSocket's handshake wasn't as the page asked: {s!r}"[:1000])
+            if "seen=1" not in s["cookie"]:
+                problems.append(f"the site's cookies didn't go with the WebSocket's handshake: {s['cookie']!r}")
+            frames = [(op, data) for op, _, data in s["frames"]]
+            if (0xA, b"are you there") not in frames:
+                problems.append(f"the stand-in's ping wasn't answered: {frames!r}")
+            if [f for f in frames if f[0] != 0xA] != [(0x1, b"hello socket"), (0x2, bytes([1, 2, 3, 250])), (0x8, b"\x03\xe8done")]:
+                problems.append(f"the WebSocket didn't send what the page did (then close, 1000): {frames!r}")
+            if not all(masked for _, masked, _ in s["frames"]):
+                problems.append("the WebSocket's frames weren't masked")
+        if "site: console: socket error" in text:
+            problems.append("the page's WebSocket had an error")
         for note in ("site: opening https://www.example.com/", "1 style sheets, 1 pictures (0 couldn't be had)",
                      "site: form sent to https://www.example.com/search?q=sunny+day (GET)", "Opened www.example.com",
                      "site: console: made 3 cells later", "site: console: fetched hello", "site: console: timer fired",
                      "site: console: module says hi from a module", "site: console: canvas drew 224,64,32 data:image/png;",
-                     "site: console: visit 1, cookies: fromscript=1", "site: console: visit 2, cookies: fromscript=2"):
+                     "site: console: visit 1, cookies: fromscript=1", "site: console: visit 2, cookies: fromscript=2",
+                     "web: a WebSocket to www.example.com is open", "site: console: socket open: echo",
+                     "site: console: socket heard: welcome", "site: console: socket heard: echo: hello socket",
+                     "site: console: socket heard bytes: 250,3,2,1", "site: console: socket closed: 1000 done true"):
             if note not in text:
                 problems.append(f"the log doesn't say {note!r}")
     finally:

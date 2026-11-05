@@ -1107,6 +1107,17 @@ impl Page {
         self.with_script(|s| s.answer(id, response));
     }
 
+    /// What the page's scripts asked of their WebSockets (to open one, to send a message, to close it), for the
+    /// system to do. What comes of each is told with `socket_event`.
+    pub fn take_socket_ops(&mut self) -> Vec<crate::script::SocketOp> {
+        self.script.as_mut().map(|s| s.take_socket_ops()).unwrap_or_default()
+    }
+
+    /// What came of one of the page's WebSockets: it opened, a message came, it closed.
+    pub fn socket_event(&mut self, id: u32, ev: crate::script::SocketEvent) {
+        self.with_script(|s| s.socket_event(id, ev));
+    }
+
     /// A click on the page (where it landed, CSS pixels in the view): the mouse's events to the element there,
     /// and whether its default action is to happen (no script cancelled it).
     pub fn click(&mut self, node: Option<NodeId>, x: f32, y: f32) -> bool {

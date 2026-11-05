@@ -373,8 +373,8 @@ drivers.
   flex, grid, tables, positioned boxes, lists; borders solid, dashed, dotted or double, rounded, inset or outset. It scrolls with the wheel, the arrows and Page Up and Down; a click
   follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter sends its form (GET or
   POST). Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
-  (`browser/src/script/`: the document's nodes and elements, events, timers and animation frames, fetch and
-  XMLHttpRequest through the kernel's own connections, URL, cookies (the system's, but the HttpOnly ones), storage
+  (`browser/src/script/`: the document's nodes and elements, events, timers and animation frames, fetch,
+  XMLHttpRequest and WebSockets through the kernel's own connections, URL, cookies (the system's, but the HttpOnly ones), storage
   (localStorage kept from page to page of a site while Chat Computer runs), custom elements and their shadow trees
   (shown in their hosts, with their own style sheets, :host, slots and ::slotted()), style sheets' rules as
   CSS-in-JS libraries add them (insertRule), templates and tree walkers as lit-html uses them, mutation observers;
@@ -390,8 +390,9 @@ drivers.
   and their load and error events fired. jQuery, React, Preact, Lit and Emotion pages work. `check.py --site` types an
   address, and a stand-in for the site (over TLS 1.3, with a test authority) checks its style sheet, picture and
   cookie, its script (a block it makes, turned another colour by what it fetches, a canvas it draws on, a cookie
-  it sets and what it keeps in localStorage, seen again when the page comes back, a timer, its console's lines in
-  the log) and its module, a form sent with what was typed, and a link clicked.
+  it sets and what it keeps in localStorage, seen again when the page comes back, a timer, a WebSocket that answers
+  the stand-in's ping, hears its welcome and echoes and closes cleanly, its console's lines in the log) and its
+  module, a form sent with what was typed, and a link clicked.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
   retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
   its own with lost, repeated and reordered packets.
@@ -889,8 +890,8 @@ writes for each person, in place of Ubuntu's catalogue.
     the app's own screen. Chat Computer's answer to the thousands of apps Ubuntu has. ✓ The first of it: apps the
     model makes (`make_app`: one HTML page, run by the browser engine), shown at once, listed to open with a click,
     their data kept across restarts and when they change; ✓ the sites an app needs, declared by the model and reached
-    only once the person allows it (checked in the kernel, with no cookies), its fetches and the person's say-so in
-    the Actions sidebar, traced to what they asked for. To do: actions beyond reading public data (an app sending a
+    only once the person allows it (checked in the kernel, with no cookies), its fetches, WebSockets and the person's
+    say-so in the Actions sidebar, traced to what they asked for. To do: actions beyond reading public data (an app sending a
     message or filling in a form as the person), each asked for and confirmed.
 17. Updates: signed, with a way back.
 

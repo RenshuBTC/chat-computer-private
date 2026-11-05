@@ -74,6 +74,7 @@ const KINDS: &[(&str, &str, &[(&str, Def)])] = &[
     ("TouchEvent", "UIEvent", &[("touches", Def::Null), ("targetTouches", Def::Null), ("changedTouches", Def::Null)]),
     ("CustomEvent", "Event", &[("detail", Def::Null)]),
     ("MessageEvent", "Event", &[("data", Def::Null), ("origin", Def::Str("")), ("lastEventId", Def::Str("")), ("source", Def::Null), ("ports", Def::Null)]),
+    ("CloseEvent", "Event", &[("wasClean", Def::Bool(false)), ("code", Def::Num(0.0)), ("reason", Def::Str(""))]),
     ("ErrorEvent", "Event", &[("message", Def::Str("")), ("filename", Def::Str("")), ("lineno", Def::Num(0.0)), ("colno", Def::Num(0.0)), ("error", Def::Null)]),
     ("ProgressEvent", "Event", &[("lengthComputable", Def::Bool(false)), ("loaded", Def::Num(0.0)), ("total", Def::Num(0.0))]),
     ("PopStateEvent", "Event", &[("state", Def::Null)]),
@@ -645,6 +646,11 @@ fn get_modifier_state(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
 
 /// An event the page fires at a target (trusted): whether it wasn't cancelled.
 pub fn fire(vm: &mut Vm, target: &Value, init: &EventInit) -> bool {
+    fire_with(vm, target, init, Vec::new())
+}
+
+/// As `fire`, with members whose values are scripts' own (a message's data: a string, an ArrayBuffer, a Blob).
+pub fn fire_with(vm: &mut Vm, target: &Value, init: &EventInit, values: Vec<(&'static str, Value)>) -> bool {
     let proto = host_ref(vm).proto(init.interface).or_else(|| host_ref(vm).proto("Event")).unwrap_or_else(|| vm.proto(I::ObjectProto));
     let mut f = TRUSTED;
     if init.bubbles {
@@ -678,6 +684,9 @@ pub fn fire(vm: &mut Vm, target: &Value, init: &EventInit) -> bool {
             EvValue::Str(s) => js(s),
             EvValue::Node(n) => wrap_opt(vm, *n),
         };
+        vm.put(e, name, v, js::object::CONFIGURABLE);
+    }
+    for (name, v) in values {
         vm.put(e, name, v, js::object::CONFIGURABLE);
     }
     dispatch(vm, target, e)

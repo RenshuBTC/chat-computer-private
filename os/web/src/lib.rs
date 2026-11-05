@@ -1,6 +1,6 @@
 //! Chat Computer's own reading of the web, for its own system's model (kernel/src/web.rs does the fetching, over its
-//! own TCP and TLS): web addresses (`url`), HTTP/1.1's requests and responses (`http`), a page's words (`page`) and
-//! a search's results (`search`), as the main Chat Computer's tools have them (chatcomputer/brain/builtin.py: a
+//! own TCP and TLS): web addresses (`url`), HTTP/1.1's requests and responses (`http`), WebSockets' handshake and
+//! frames (`websocket`), a page's words (`page`) and a search's results (`search`), as the main Chat Computer's tools have them (chatcomputer/brain/builtin.py: a
 //! DuckDuckGo search, and a page read as its words), so the model reads the web the same way on both.
 //!
 //! Nothing here runs anything a page holds: its scripts, styles and pictures are dropped, and only its words kept.
@@ -14,6 +14,7 @@ pub mod http;
 pub mod page;
 pub mod search;
 pub mod url;
+pub mod websocket;
 
 #[cfg(test)]
 mod tests;

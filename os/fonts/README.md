@@ -12,6 +12,9 @@ from Google's Noto fonts:
 | `ChatComputerFallbackMono.ttf` | for code: box drawing, blocks and shapes, arrows, maths, Greek and Cyrillic | Noto Sans Mono, its glyphs stretched from 600 to 632 units wide (Atkinson Hyperlegible Mono's width), so lines meet |
 | `ChatComputerCJK.ttf` | Chinese and Japanese: the 10,269 ideographs of China's GB 2312, Taiwan's Big5 (its commoner first level) and Japan's JIS X 0208 together, kana, Bopomofo, CJK punctuation and full-width forms; Korean: all 11,172 Hangul syllables and Hangul's letters | Noto Sans SC (so the ideographs are in mainland China's forms, Japanese and Taiwan's text among them), and Noto Sans KR |
 
+Web pages that ask for a sans-serif family get Atkinson Hyperlegible Next (`font/testdata`, the font engine's test
+font and Chat Computer's own before Lora), its letters first, then these, then Lora's.
+
 Only characters Lora (for the code one, Atkinson Hyperlegible Mono) lacks are in them (`text/src/lib.rs` looks there
 when it does, the CJK font last: what the first has isn't in it). All three are regular weight only (in bold text
 their glyphs are drawn twice, a little apart, as a browser makes a bold up), with 1000 units to the em, and without

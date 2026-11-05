@@ -307,3 +307,27 @@ fn scripts_see_where_boxes_are_at_once() {
     p.run(0.0);
     assert_eq!(p.take_console(), ["134 44 52", "0 none 8"], "laid out on the spot, before the page itself is");
 }
+
+#[test]
+fn a_family_list_gets_the_kind_of_font_it_asks_for() {
+    let mut p = page(
+        "<p style=\"font-family: -apple-system, 'Segoe UI', Roboto, sans-serif\">sans</p>\
+         <p style=\"font-family: 'Unknown Web Font', Georgia, serif\"><b>serif</b></p><p>default</p>\
+         <p style=\"font-family: 'Proxima Nova', sans-serif\"><b>webfont</b></p><code>code</code>",
+    );
+    let l = laid(&mut p);
+    let face = |text: &str| {
+        l.items
+            .iter()
+            .find_map(|i| match &i.paint {
+                Paint::Text { text: t, face, .. } if t.contains(text) => Some(*face),
+                _ => None,
+            })
+            .unwrap()
+    };
+    use text::Face;
+    assert_eq!(
+        [face("sans"), face("serif"), face("default"), face("webfont"), face("code")],
+        [Face::Sans, Face::Bold, Face::Regular, Face::SansBold, Face::Mono]
+    );
+}

@@ -28,6 +28,9 @@ static MONO: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/Atkin
 static FALLBACK: &[u8] = include_bytes!("../../fonts/ChatComputerFallback.ttf");
 static FALLBACK_MONO: &[u8] = include_bytes!("../../fonts/ChatComputerFallbackMono.ttf");
 static CJK: &[u8] = include_bytes!("../../fonts/ChatComputerCJK.ttf");
+/// The sans-serif family, for web pages that ask for one: Atkinson Hyperlegible Next (the font engine's test font,
+/// and Chat Computer's own before Lora; a variable font from weight 200 to 800, OFL: `font/testdata`).
+static SANS: &[u8] = include_bytes!("../../font/testdata/AtkinsonHyperlegibleNext.ttf");
 
 /// Some letters reach a little past their own width (an italic f, an accent); the drawn line keeps
 /// this much room on each side, in pixels.
@@ -40,7 +43,8 @@ pub struct Style {
 }
 
 /// Which of the fonts: the text's own, bold (weight 700), slanted ("italic": the regular or bold glyphs leaned 12°,
-/// as browsers do for a font without its italic), or the code font.
+/// as browsers do for a font without its italic), or the code font; or the sans-serif font, in the same four (for
+/// web pages).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Face {
     Regular,
@@ -48,14 +52,21 @@ pub enum Face {
     Italic,
     BoldItalic,
     Mono,
+    Sans,
+    SansBold,
+    SansItalic,
+    SansBoldItalic,
 }
 
 impl Face {
     fn bold(self) -> bool {
-        matches!(self, Face::Bold | Face::BoldItalic)
+        matches!(self, Face::Bold | Face::BoldItalic | Face::SansBold | Face::SansBoldItalic)
     }
     fn slanted(self) -> bool {
-        matches!(self, Face::Italic | Face::BoldItalic)
+        matches!(self, Face::Italic | Face::BoldItalic | Face::SansItalic | Face::SansBoldItalic)
+    }
+    fn sans(self) -> bool {
+        matches!(self, Face::Sans | Face::SansBold | Face::SansItalic | Face::SansBoldItalic)
     }
 }
 
@@ -102,6 +113,7 @@ impl Outline for Slant<'_> {
 enum Source {
     Text,
     Mono,
+    Sans,
     /// Characters the text font lacks (in its weight only: there's no bold of them).
     Fallback,
     /// Characters the code font lacks, a code character wide (box drawing lines meet).
@@ -183,6 +195,14 @@ pub struct Type {
     /// The text font's mark positioning, at its regular weight and its bold (the others have none).
     marks: Marks<'static>,
     bold_marks: Marks<'static>,
+    /// The sans-serif font, with the same: its bold, its bold's advances, its kerning and mark positioning.
+    sans: Font<'static>,
+    sans_bold: Option<Instance>,
+    sans_bold_advances: Vec<u16>,
+    sans_kerning: Kerning<'static>,
+    sans_bold_kerning: Kerning<'static>,
+    sans_marks: Marks<'static>,
+    sans_bold_marks: Marks<'static>,
 }
 
 /// How a character is set on a line: where the pen is at it (font units from the line's start, kerned with the
@@ -277,7 +297,35 @@ impl Type {
         };
         let (kerning, bold_kerning) = (font.kerning(None), font.kerning(bold.as_ref()));
         let (marks, bold_marks) = (font.marks(None), font.marks(bold.as_ref()));
-        Type { font, mono, fallback, fallback_mono, cjk, bold, bold_advances, kerning, bold_kerning, marks, bold_marks }
+        let sans = Font::parse(SANS).expect("the built-in sans-serif font is damaged");
+        assert!(sans.metrics.units_per_em == upem, "the sans-serif font's size differs");
+        let sans_bold = sans.instance(b"wght", 700);
+        let sans_bold_advances = match &sans_bold {
+            Some(at) => sans.advances_at(at, 0..sans.glyph_count()),
+            None => Vec::new(),
+        };
+        let (sans_kerning, sans_bold_kerning) = (sans.kerning(None), sans.kerning(sans_bold.as_ref()));
+        let (sans_marks, sans_bold_marks) = (sans.marks(None), sans.marks(sans_bold.as_ref()));
+        Type {
+            font,
+            mono,
+            fallback,
+            fallback_mono,
+            cjk,
+            bold,
+            bold_advances,
+            kerning,
+            bold_kerning,
+            marks,
+            bold_marks,
+            sans,
+            sans_bold,
+            sans_bold_advances,
+            sans_kerning,
+            sans_bold_kerning,
+            sans_marks,
+            sans_bold_marks,
+        }
     }
 
     fn scale(&self, units: i32, size: i32) -> i32 {
@@ -288,6 +336,7 @@ impl Type {
         match source {
             Source::Text => &self.font,
             Source::Mono => &self.mono,
+            Source::Sans => &self.sans,
             Source::Fallback => &self.fallback,
             Source::FallbackMono => &self.fallback_mono,
             Source::Cjk => &self.cjk,
@@ -297,12 +346,16 @@ impl Type {
     /// Where a character's glyph is for `face`: in the face's own font, else in a fallback font; else the face's own
     /// "missing" glyph (a box), for characters none has.
     fn glyph(&self, c: char, face: Face) -> (Source, u16) {
-        let order: [Source; 4] = if face == Face::Mono {
-            [Source::Mono, Source::FallbackMono, Source::Fallback, Source::Cjk]
+        // (The sans-serif font has fewer letters than the text font: the fallbacks have only what the text font
+        // lacks, so the text font's come before them.)
+        let order: &[Source] = if face == Face::Mono {
+            &[Source::Mono, Source::FallbackMono, Source::Fallback, Source::Cjk]
+        } else if face.sans() {
+            &[Source::Sans, Source::Fallback, Source::Text, Source::FallbackMono, Source::Cjk]
         } else {
-            [Source::Text, Source::Fallback, Source::FallbackMono, Source::Cjk]
+            &[Source::Text, Source::Fallback, Source::FallbackMono, Source::Cjk]
         };
-        for source in order {
+        for &source in order {
             let glyph = self.font_of(source).glyph_index(c);
             if glyph != 0 {
                 return (source, glyph);
@@ -322,6 +375,10 @@ impl Type {
                 Some(&a) if face.bold() => a,
                 _ => self.font.advance(glyph),
             },
+            Source::Sans => match self.sans_bold_advances.get(glyph as usize) {
+                Some(&a) if face.bold() => a,
+                _ => self.sans.advance(glyph),
+            },
             _ => self.font_of(source).advance(glyph),
         };
         Some(Set { source, glyph, face, advance: advance as i32 })
@@ -330,10 +387,16 @@ impl Type {
     /// The kerning between two characters set side by side, in font units: the text font's own, between its glyphs in
     /// one face (as a browser shapes each run of one font and style by itself).
     fn kern(&self, a: Set, b: Set) -> i32 {
-        if a.face != b.face || a.source != Source::Text || b.source != Source::Text {
+        if a.face != b.face || a.source != b.source {
             return 0;
         }
-        if a.face.bold() { self.bold_kerning.pair(a.glyph, b.glyph) } else { self.kerning.pair(a.glyph, b.glyph) }
+        match (a.source, a.face.bold()) {
+            (Source::Text, true) => self.bold_kerning.pair(a.glyph, b.glyph),
+            (Source::Text, false) => self.kerning.pair(a.glyph, b.glyph),
+            (Source::Sans, true) => self.sans_bold_kerning.pair(a.glyph, b.glyph),
+            (Source::Sans, false) => self.sans_kerning.pair(a.glyph, b.glyph),
+            _ => 0,
+        }
     }
 
     /// The mark positioning of the font a glyph is from, in `face` (only the text font has any: the fallbacks are made
@@ -342,6 +405,8 @@ impl Type {
         match source {
             Source::Text if face.bold() => Some(&self.bold_marks),
             Source::Text => Some(&self.marks),
+            Source::Sans if face.bold() => Some(&self.sans_bold_marks),
+            Source::Sans => Some(&self.sans_marks),
             _ => None,
         }
     }
@@ -655,12 +720,17 @@ impl Type {
         let apart = made_up_bold(style.size);
         for (units, up, s) in self.line(text, face) {
             let font = self.font_of(s.source);
-            let draw = |out: &mut dyn Outline| match &self.bold {
-                Some(at) if face.bold() && s.source == Source::Text => font.outline_at(s.glyph, at, out),
+            let bold = match s.source {
+                Source::Text => self.bold.as_ref(),
+                Source::Sans => self.sans_bold.as_ref(),
+                _ => None,
+            };
+            let draw = |out: &mut dyn Outline| match bold {
+                Some(at) if face.bold() => font.outline_at(s.glyph, at, out),
                 _ => font.outline(s.glyph, out),
             };
             // (In bold, a fallback font's glyph drawn twice, a little apart, as browsers make a bold up: it has none.)
-            let strikes: &[i32] = if face.bold() && s.source != Source::Text { &[0, apart] } else { &[0] };
+            let strikes: &[i32] = if face.bold() && bold.is_none() { &[0, apart] } else { &[0] };
             for &dx in strikes {
                 pen.x = PAD as i32 * ONE + self.scale(units, style.size) + dx;
                 pen.y = baseline - self.scale(up, style.size);

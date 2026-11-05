@@ -131,11 +131,15 @@ fn face_of(s: &Style) -> Face {
     if s.mono {
         return Face::Mono;
     }
-    match (s.is_bold(), s.italic) {
-        (true, true) => Face::BoldItalic,
-        (true, false) => Face::Bold,
-        (false, true) => Face::Italic,
-        _ => Face::Regular,
+    match (s.is_bold(), s.italic, s.sans) {
+        (true, true, false) => Face::BoldItalic,
+        (true, false, false) => Face::Bold,
+        (false, true, false) => Face::Italic,
+        (false, false, false) => Face::Regular,
+        (true, true, true) => Face::SansBoldItalic,
+        (true, false, true) => Face::SansBold,
+        (false, true, true) => Face::SansItalic,
+        (false, false, true) => Face::Sans,
     }
 }
 
@@ -146,6 +150,10 @@ fn face_key(f: Face) -> u8 {
         Face::Italic => 2,
         Face::BoldItalic => 3,
         Face::Mono => 4,
+        Face::Sans => 5,
+        Face::SansBold => 6,
+        Face::SansItalic => 7,
+        Face::SansBoldItalic => 8,
     }
 }
 

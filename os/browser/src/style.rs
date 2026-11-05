@@ -264,6 +264,8 @@ pub struct Style {
     pub font_weight: u16,
     pub italic: bool,
     pub mono: bool,
+    /// The family asked for is sans-serif (drawn in the system's sans-serif font; else its serif one).
+    pub sans: bool,
     pub line_height: LineHeight,
     pub text_align: TextAlign,
     pub text_indent: Len,
@@ -348,6 +350,7 @@ impl Style {
             font_weight: 400,
             italic: false,
             mono: false,
+            sans: false,
             line_height: LineHeight::Normal,
             text_align: TextAlign::Left,
             text_indent: Len::ZERO,
@@ -407,6 +410,7 @@ impl Style {
         s.font_weight = self.font_weight;
         s.italic = self.italic;
         s.mono = self.mono;
+        s.sans = self.sans;
         s.line_height = self.line_height;
         s.text_align = self.text_align;
         s.text_indent = self.text_indent;
@@ -1384,19 +1388,51 @@ fn font_weight(v: &[Tok], parent: u16) -> Option<u16> {
     }
 }
 
-fn family_is_mono(v: &[Tok]) -> bool {
-    let mut words = String::new();
+/// Families by kind, by a word in their names: monospace, sans-serif and serif ones.
+const MONO_WORDS: &[&str] = &["mono", "courier", "consolas", "menlo", "monaco", "code", "fixed", "terminal"];
+const SANS_WORDS: &[&str] = &[
+    "sans", "system-ui", "-apple-system", "blinkmacsystemfont", "segoe", "roboto", "helvetica", "arial", "inter",
+    "lato", "verdana", "tahoma", "trebuchet", "ubuntu", "cantarell", "montserrat", "poppins", "nunito", "raleway",
+    "avenir", "gill", "lucida", "calibri", "oxygen", "geist", "futura", "franklin", "proxima", "manrope", "figtree",
+    "karla", "rubik", "barlow", "mulish", "quicksand", "graphik", "circular", "hiragino", "meiryo", "gothic", "yahei",
+    "pingfang", "malgun", "atkinson",
+];
+const SERIF_WORDS: &[&str] = &[
+    "serif", "times", "georgia", "garamond", "palatino", "baskerville", "cambria", "merriweather", "lora", "playfair",
+    "book", "charter", "iowan", "crimson", "caslon", "didot", "bodoni", "minion", "constantia", "spectral",
+    "literata", "new york", "tiempos", "mincho", "songti",
+];
+
+/// What a font-family list asks for: (monospace, sans-serif); neither is serif. Its first family of a kind this
+/// browser can tell (the others are fonts it hasn't, which the list's later ones stand in for).
+fn family_kind(v: &[Tok]) -> (bool, bool) {
+    let mut families: Vec<String> = Vec::new();
+    let mut name = String::new();
     for t in v {
         match t {
             Tok::Ident(i) | Tok::Str(i) => {
-                words.push_str(&i.to_ascii_lowercase());
-                words.push(' ');
+                if !name.is_empty() {
+                    name.push(' ');
+                }
+                name.push_str(&i.to_ascii_lowercase());
             }
-            Tok::Comma => break,
+            Tok::Comma => families.push(core::mem::take(&mut name)),
             _ => {}
         }
     }
-    ["mono", "courier", "consolas", "menlo", "monaco", "code", "fixed", "terminal"].iter().any(|m| words.contains(m))
+    families.push(name);
+    for f in &families {
+        if MONO_WORDS.iter().any(|w| f.contains(w)) {
+            return (true, false);
+        }
+        if SANS_WORDS.iter().any(|w| f.contains(w)) {
+            return (false, true);
+        }
+        if SERIF_WORDS.iter().any(|w| f.contains(w)) {
+            return (false, false);
+        }
+    }
+    (false, false)
 }
 
 fn line_height(v: &[Tok], c: &Ctx, size: f32) -> Option<LineHeight> {
@@ -1869,7 +1905,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 s.italic = i == "italic" || i == "oblique";
             }
         }
-        "font-family" => s.mono = family_is_mono(v),
+        "font-family" => (s.mono, s.sans) = family_kind(v),
         "font" => {
             // [style] [variant] [weight] [stretch] size[/line-height] family
             let ps = parts(v);
@@ -1921,7 +1957,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 k += 2;
             }
             let rest: Vec<Tok> = ps.iter().skip(k).flat_map(|x| x.iter().cloned().chain(core::iter::once(Tok::Ws))).collect();
-            s.mono = family_is_mono(&rest);
+            (s.mono, s.sans) = family_kind(&rest);
         }
         "line-height" => {
             if let Some(x) = line_height(v, c, s.font_size) {
@@ -2428,12 +2464,16 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "font-size" => s.font_size = from.font_size,
         "font-weight" => s.font_weight = from.font_weight,
         "font-style" => s.italic = from.italic,
-        "font-family" => s.mono = from.mono,
+        "font-family" => {
+            s.mono = from.mono;
+            s.sans = from.sans;
+        }
         "font" => {
             s.font_size = from.font_size;
             s.font_weight = from.font_weight;
             s.italic = from.italic;
             s.mono = from.mono;
+            s.sans = from.sans;
             s.line_height = from.line_height;
         }
         "line-height" => s.line_height = from.line_height,

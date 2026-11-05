@@ -719,6 +719,9 @@ function Write-ApproveKeySteps {
     if ($Maker -match '(?i)gigabyte') {
         Write-Line '  2. Open the Boot tab, then "Secure Boot".'
         Write-Line '  3. Set "Secure Boot Mode" to Custom. Then open "Expert Key Management".'
+    } elseif ($Maker -match '(?i)micro-star|\bmsi\b') {
+        Write-Line '  2. (MSI: F7 switches to Advanced Mode.) Open Settings, then Security, then "Secure Boot".'
+        Write-Line '  3. Set "Secure Boot Mode" to Custom. Then open "Key Management".'
     } else {
         Write-Line '  2. Find "Secure Boot". It is usually under Boot, or under Security.'
         Write-Line '  3. If there is a "Secure Boot Mode" setting, set it to Custom. Then open "Key Management"'
@@ -746,6 +749,8 @@ function Write-SecureBootOffSteps {
     Write-Line '     keys you don''t know there: on some boards a single key loads the default settings.'
     if ($Maker -match '(?i)gigabyte') {
         Write-Line '  2. Open the Boot tab, then "Secure Boot".'
+    } elseif ($Maker -match '(?i)micro-star|\bmsi\b') {
+        Write-Line '  2. (MSI: F7 switches to Advanced Mode.) Open Settings, then Security, then "Secure Boot".'
     } else {
         Write-Line '  2. Find "Secure Boot". It is usually under Boot, or under Security.'
     }

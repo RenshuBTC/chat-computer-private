@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat Computer: demo</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #1b1b1b; color: #ececec; font: 17px/1.55 Georgia, "Times New Roman", serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 2.2rem; margin: 0 0 4px; font-weight: 700; }
+  p { margin: 0 0 16px; color: #c8c8c8; }
+  video { display: block; width: 100%; height: auto; background: #000; border-radius: 10px; margin: 20px 0; }
+  a { color: #ececec; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chat Computer</h1>
+  <p>A computer you talk to: an operating system written from scratch in Rust, with Meta's Muse Spark as its brain.
+    Our entry to the Meta Global AI Developer Hackathon.</p>
+  <video controls preload="metadata" src="chat-computer-demo.mp4"></video>
+  <p>Recorded in a virtual PC (QEMU): the system's own kernel sends the conversation and its tools to Meta's Model
+    API over its own network stack and TLS 1.3, and Muse Spark runs the computer through tool calls.</p>
+  <p><a href="https://github.com/RenshuBTC/chat-computer">Source code on GitHub</a> (Apache License 2.0)</p>
+</main>
+</body>
+</html>

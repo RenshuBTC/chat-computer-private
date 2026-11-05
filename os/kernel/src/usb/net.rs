@@ -96,7 +96,7 @@ const GET_NTB_PARAMETERS: u8 = 0x80;
 const SET_NTB_INPUT_SIZE: u8 = 0x86;
 const SEND_ENCAPSULATED_COMMAND: u8 = 0x00;
 const GET_ENCAPSULATED_RESPONSE: u8 = 0x01;
-/// Frames to us, broadcasts, and all multicasts (for IPv6 later).
+/// Frames to us, broadcasts, and all multicasts (IPv6 speaks in them; the stack keeps its own groups').
 const PACKET_FILTER: u16 = 0x04 | 0x08 | 0x02;
 
 // RNDIS messages and the settings (OIDs) used.

@@ -673,7 +673,11 @@ CARDS = [
 def network(args) -> list[str]:
     """A test build with QEMU's virtual network (its DHCP and DNS, and 10.0.2.2 for this computer), once with each
     card in CARDS: it must get 10.0.2.15, look up api.anthropic.com, and talk to a server here (which answers its
-    line)."""
+    line); then get an IPv6 address from QEMU's router (fec0::/64, its advertisements sent to a multicast group,
+    which the card must take), and talk to the same server over IPv6 (fec0::2: this computer's ::1, when it has
+    IPv6)."""
+    import re
+    import socket
     import socketserver
     import threading
 
@@ -685,9 +689,22 @@ def network(args) -> list[str]:
             heard.append(line)
             self.wfile.write(f"hello, Chat Computer: you said {line!r}\n".encode())
 
-    server = socketserver.ThreadingTCPServer(("127.0.0.1", TEST_PORT), Answer)
+    class Server(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True  # (a run just before may have left its connections waiting)
+
+    class Answer6(Server):
+        address_family = socket.AF_INET6
+
+    server = Server(("127.0.0.1", TEST_PORT), Answer)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        server6 = Answer6(("::1", TEST_PORT), Answer)
+        server6.daemon_threads = True
+        threading.Thread(target=server6.serve_forever, daemon=True).start()
+    except OSError as e:
+        server6 = None
+        print(f"(IPv6's conversation isn't checked: this computer has no IPv6 of its own: {e})")
     problems = []
     built = None
     try:
@@ -708,6 +725,7 @@ def network(args) -> list[str]:
                         monitor(pc.mon, f"device_add {later}")
                 got = wait_for(pc.log, ("test: the server said", "test: couldn't", "test: no answer", "never opened", "stopped"),
                                args.timeout)
+                got6 = wait_for(pc.log, ("test: over IPv6, the server said", "over IPv6", "test: no IPv6 address", "stopped"), 60)
                 time.sleep(1)
                 pc.picture(f"network-{device}")
                 if later:
@@ -723,14 +741,21 @@ def network(args) -> list[str]:
                 problems.append(f"{device}: no address from DHCP")
             if "test: api.anthropic.com is at " not in text:
                 problems.append(f"{device}: api.anthropic.com wasn't found with DNS")
-            if heard != ["hello from Chat Computer"]:
+            want_heard = ["hello from Chat Computer"] + (["hello from Chat Computer over IPv6"] if server6 else [])
+            if heard != want_heard:
                 problems.append(f"{device}: the server heard {heard!r}")
             if got != "test: the server said" or "you said 'hello from Chat Computer'" not in text:
                 problems.append(f"{device}: the server's answer didn't come back")
+            if not re.search(r"network: IPv6 address fec0::[0-9a-f:]+ \(on the link fe80::[0-9a-f:]+\), DNS (fec0::3|none)", text):
+                problems.append(f"{device}: no IPv6 address from QEMU's router")
+            if server6 and (got6 != "test: over IPv6, the server said" or "you said 'hello from Chat Computer over IPv6'" not in text):
+                problems.append(f"{device}: the server's answer over IPv6 didn't come back")
             if later and not unplugged:
                 problems.append(f"{device}: unplugging the adapter wasn't noticed")
     finally:
         server.shutdown()
+        if server6:
+            server6.shutdown()
         build()  # never leave a test build in out/
     return problems
 
@@ -892,13 +917,15 @@ def chat(args) -> list[str]:
         if pointed is None:
             problems.append("the mouse wasn't moved")
         else:
-            box = ImageChops.difference(scrolled[-1], pointed).getbbox()
+            # (Left of the right sidebar, whose clock may turn to the next minute between the two.)
             w, h = pointed.size
+            box = ImageChops.difference(scrolled[-1].crop((0, 0, w // 2 + 400, h)), pointed.crop((0, 0, w // 2 + 400, h))).getbbox()
             if box is None or box[2] - box[0] > 60 or box[3] - box[1] > 80 or not (w // 2 < box[0] < w // 2 + 300 and h // 2 < box[1] < h // 2 + 300):
                 problems.append(f"moving the mouse didn't show the pointer where it went, alone (what changed: {box})")
         if not scrolled:
             problems.append("QEMU has no USB mouse to scroll with")
-        elif [ImageChops.difference(scrolled[0], b).getbbox() is None for b in scrolled[1:]] != [False, True]:
+        elif [ImageChops.difference(*(p.crop((0, 0, p.size[0] // 2 + 400, p.size[1])) for p in (scrolled[0], b))).getbbox() is None
+              for b in scrolled[1:]] != [False, True]:
             problems.append("the mouse's wheel didn't scroll the conversation back, then forward to where it was")
         # What the model was given, round by round: the same instructions, then the conversation so far.
         rounds = logged(text, "asked")

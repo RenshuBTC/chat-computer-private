@@ -7,7 +7,7 @@
 //! what's missing comes. No window scaling, so at most 64 KB is ever in flight each way: plenty for
 //! conversations with Claude.
 
-use crate::{be16, be32, put16, put32, transport_checksum, Ipv4, Stack, PROTO_TCP};
+use crate::{be16, be32, put16, put32, transport_checksum_ip, Ip, Ipv4, Stack, PROTO_TCP};
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -58,6 +58,14 @@ const ACK: u8 = 0x10;
 
 /// The biggest segment we take (Ethernet's 1500, less IP's and TCP's headers).
 const OUR_MSS: u16 = 1460;
+
+/// The most we take in one segment over IPv4 or IPv6 (an Ethernet frame's 1,500 bytes, less IPv6's longer header).
+fn our_mss(to: Ip) -> u16 {
+    match to {
+        Ip::V4(_) => OUR_MSS,
+        Ip::V6(_) => OUR_MSS - 20,
+    }
+}
 /// How much we take in before the program reads it.
 const RECV_MAX: usize = 65535;
 /// How much a program can hand over before it's sent.
@@ -107,7 +115,7 @@ pub(crate) struct Conn {
     pub(crate) state: State,
     pub(crate) error: Option<Error>,
     pub(crate) local: u16,
-    pub(crate) remote: Ipv4,
+    pub(crate) remote: Ip,
     pub(crate) remote_port: u16,
     pub(crate) accepted: bool,
     iss: u32,
@@ -146,7 +154,7 @@ pub(crate) struct Conn {
 }
 
 impl Conn {
-    fn new(local: u16, remote: Ipv4, remote_port: u16, iss: u32, state: State) -> Conn {
+    fn new(local: u16, remote: Ip, remote_port: u16, iss: u32, state: State) -> Conn {
         Conn {
             state,
             error: None,
@@ -216,7 +224,7 @@ impl Conn {
     }
 
     fn set_mss(&mut self, mss: Option<u16>) {
-        self.mss = mss.map_or(536, |m| m as usize).clamp(64, OUR_MSS as usize);
+        self.mss = mss.map_or(536, |m| m as usize).clamp(64, our_mss(self.remote) as usize);
         self.cwnd = 10 * self.mss;
     }
 
@@ -594,11 +602,13 @@ impl Stack {
         }
     }
 
-    /// Opens a connection to `to`, port `port`. It's ready once `state` says Established.
-    pub fn connect(&mut self, now: u64, to: Ipv4, port: u16) -> Result<Socket, Error> {
-        let reachable = match &self.config {
-            Some(c) => c.on_link(to) || c.gateway.is_some(),
-            None => false,
+    /// Opens a connection to `to` (an IPv4 or IPv6 address), port `port`. It's ready once `state` says Established.
+    pub fn connect(&mut self, now: u64, to: impl Into<Ip>, port: u16) -> Result<Socket, Error> {
+        let to = to.into();
+        let reachable = match (to, &self.config) {
+            (Ip::V4(a), Some(c)) => c.on_link(a) || c.gateway.is_some(),
+            (Ip::V4(_), None) => false,
+            (Ip::V6(a), _) => self.v6.can_reach(a),
         };
         if !reachable {
             return Err(Error::NoRoute);
@@ -722,8 +732,8 @@ impl Stack {
         }
     }
 
-    pub(crate) fn tcp_in(&mut self, now: u64, src: Ipv4, dst: Ipv4, p: &[u8]) {
-        if p.len() < 20 || transport_checksum(src, dst, PROTO_TCP, p) != 0 {
+    pub(crate) fn tcp_in(&mut self, now: u64, src: Ip, dst: Ip, p: &[u8]) {
+        if p.len() < 20 || transport_checksum_ip(src, dst, PROTO_TCP, p) != Some(0) {
             self.stats.dropped += 1;
             return;
         }
@@ -793,6 +803,17 @@ impl Stack {
         self.tcp_output(now, i);
     }
 
+    /// A router (or the host) says a connection's first segment can't be delivered (ICMP's or ICMPv6's "destination
+    /// unreachable", about a segment from `local` to `to`, `port`): one still opening is given up at once, as refused
+    /// (nothing at that port) or with no way there, rather than after its tries. (One open already goes on: the way
+    /// may come back.)
+    pub(crate) fn tcp_unreachable(&mut self, to: Ip, local: u16, port: u16, refused: bool) {
+        let found = self.tcp.iter_mut().flatten().find(|c| c.local == local && c.remote == to && c.remote_port == port && c.state == State::SynSent);
+        if let Some(c) = found {
+            c.close_now(Some(if refused { Error::Refused } else { Error::NoRoute }));
+        }
+    }
+
     pub(crate) fn tcp_poll(&mut self, now: u64) {
         for i in 0..self.tcp.len() {
             self.tcp_output(now, i);
@@ -807,8 +828,17 @@ impl Stack {
         }
     }
 
-    fn send_segment(&mut self, now: u64, to: Ipv4, local: u16, port: u16, out: Out) {
-        let src = self.config.as_ref().map_or(Ipv4::ANY, |c| c.address);
+    fn send_segment(&mut self, now: u64, to: Ip, local: u16, port: u16, out: Out) {
+        let src = match to {
+            Ip::V4(_) => Ip::V4(self.config.as_ref().map_or(Ipv4::ANY, |c| c.address)),
+            Ip::V6(a) => match self.source6(a) {
+                Some(s) => Ip::V6(s),
+                None => {
+                    self.stats.dropped += 1;
+                    return;
+                }
+            },
+        };
         let head = if out.mss { 24 } else { 20 };
         let mut p = vec![0u8; head + out.data.len()];
         put16(&mut p, 0, local);
@@ -821,11 +851,15 @@ impl Stack {
         if out.mss {
             p[20] = 2;
             p[21] = 4;
-            put16(&mut p, 22, OUR_MSS);
+            put16(&mut p, 22, our_mss(to));
         }
         p[head..].copy_from_slice(&out.data);
-        let c = transport_checksum(src, to, PROTO_TCP, &p);
+        let c = transport_checksum_ip(src, to, PROTO_TCP, &p).unwrap_or(0);
         put16(&mut p, 16, c);
-        self.send_ip(now, to, PROTO_TCP, &p);
+        match (src, to) {
+            (Ip::V6(s), Ip::V6(d)) => self.send_ip6(now, s, d, PROTO_TCP, 64, &p),
+            (_, Ip::V4(d)) => self.send_ip(now, d, PROTO_TCP, &p),
+            _ => self.stats.dropped += 1,
+        }
     }
 }

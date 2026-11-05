@@ -1,10 +1,11 @@
-//! DNS (RFC 1035): a name's IPv4 address, asked of the servers DHCP named, over UDP. Each question goes out from
-//! its own random port with a random id, and an answer counts only if it comes from the server asked, to that
-//! port, with that id and about that name. Not answered in 2 seconds, it's asked again (the next server, if
-//! there's more than one), up to four times. Answers are kept for as long as they say (at least 30 seconds, at
-//! most a day).
+//! DNS (RFC 1035): a name's address, asked of the servers DHCP named (and IPv6's routers), over UDP: its IPv4
+//! address (A) while this computer has one of its own, else (or when the name has none) its IPv6 address (AAAA,
+//! RFC 3596) when it can reach those. Each question goes out from its own random port with a random id, and an
+//! answer counts only if it comes from the server asked, to that port, with that id and about that name. Not
+//! answered in 2 seconds, it's asked again (the next server, if there's more than one), up to four times. Answers
+//! are kept for as long as they say (at least 30 seconds, at most a day).
 
-use crate::{be16, be32, put16, Ipv4, Random};
+use crate::{be16, be32, put16, Ip, Ipv4, Ipv6, Random};
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -14,7 +15,7 @@ use core::fmt;
 pub enum Error {
     /// There's no DNS server to ask (no network address yet).
     NoServer,
-    /// The name doesn't exist, or has no IPv4 address.
+    /// The name doesn't exist, or has no address this computer can reach.
     NotFound,
     /// The server couldn't answer.
     Failed,
@@ -41,20 +42,27 @@ const TRIES: u32 = 4;
 /// How long to wait for a DNS server to be known (DHCP may still be at work).
 const NO_SERVER_MS: u64 = 15_000;
 
+/// DNS's record types: an IPv4 address, an IPv6 one.
+const A: u16 = 1;
+const AAAA: u16 = 28;
+
 struct Query {
     id: u32,
     name: String,
     txid: u16,
     port: u16,
     created: Option<u64>,
-    sent: Option<(u64, Ipv4)>,
+    sent: Option<(u64, Ip)>,
     tries: u32,
-    result: Option<Result<Ipv4, Error>>,
+    /// What it asks for (A or AAAA; 0 until it's first sent), and whether it may ask for AAAA when there's no A.
+    kind: u16,
+    then_aaaa: bool,
+    result: Option<Result<Ip, Error>>,
 }
 
 pub(crate) struct Resolver {
     queries: Vec<Query>,
-    cache: Vec<(String, Ipv4, u64)>,
+    cache: Vec<(String, Ip, u64)>,
     next: u32,
 }
 
@@ -105,7 +113,7 @@ impl Resolver {
         let id = self.next;
         self.next = self.next.wrapping_add(1).max(1);
         let name = String::from(name.trim().trim_end_matches('.')).to_ascii_lowercase();
-        let result = if let Some(ip) = Ipv4::parse(&name) {
+        let result = if let Some(ip) = Ip::parse(&name) {
             Some(Ok(ip))
         } else if !valid(&name) {
             Some(Err(Error::BadName))
@@ -121,12 +129,14 @@ impl Resolver {
             created: None,
             sent: None,
             tries: 0,
+            kind: 0,
+            then_aaaa: false,
             result,
         });
         id
     }
 
-    pub(crate) fn take(&mut self, id: u32) -> Option<Result<Ipv4, Error>> {
+    pub(crate) fn take(&mut self, id: u32) -> Option<Result<Ip, Error>> {
         let i = self.queries.iter().position(|q| q.id == id && q.result.is_some())?;
         self.queries.swap_remove(i).result
     }
@@ -140,18 +150,30 @@ impl Resolver {
             p.push(label.len() as u8);
             p.extend_from_slice(label.as_bytes());
         }
-        p.extend_from_slice(&[0, 0, 1, 0, 1]); // the root; type A, class IN
+        p.push(0); // the root
+        p.extend_from_slice(&q.kind.to_be_bytes());
+        p.extend_from_slice(&[0, 1]); // class IN
         p
     }
 
-    /// What to send now: (server, our port, the question). Also gives up on what waited too long.
-    pub(crate) fn due(&mut self, now: u64, servers: &[Ipv4]) -> Vec<(Ipv4, u16, Vec<u8>)> {
+    /// What to send now: (server, our port, the question), with an IPv4 address of this computer's own (`v4`) and
+    /// a way to IPv6's internet (`v6`). Also gives up on what waited too long.
+    pub(crate) fn due(&mut self, now: u64, servers: &[Ip], v4: bool, v6: bool) -> Vec<(Ip, u16, Vec<u8>)> {
         self.cache.retain(|c| c.2 > now);
         let mut out = Vec::new();
         for q in self.queries.iter_mut().filter(|q| q.result.is_none()) {
-            if let Some(c) = self.cache.iter().find(|c| c.0 == q.name) {
+            // (An answer kept is used if this computer can reach it now.)
+            let usable = |ip: &Ip| match ip {
+                Ip::V4(_) => v4,
+                Ip::V6(_) => v6,
+            };
+            if let Some(c) = self.cache.iter().find(|c| c.0 == q.name && usable(&c.1)) {
                 q.result = Some(Ok(c.1));
                 continue;
+            }
+            if q.kind == 0 && (v4 || v6) {
+                q.kind = if v4 { A } else { AAAA };
+                q.then_aaaa = v4 && v6;
             }
             let created = *q.created.get_or_insert(now);
             if servers.is_empty() {
@@ -169,6 +191,9 @@ impl Resolver {
                 q.result = Some(Err(Error::TimedOut));
                 continue;
             }
+            if q.kind == 0 {
+                q.kind = A;
+            }
             let server = servers[q.tries as usize % servers.len()];
             q.tries += 1;
             q.sent = Some((now, server));
@@ -178,7 +203,7 @@ impl Resolver {
     }
 
     /// An answer that came to our `port` from `src`: whether it was one we were waiting for.
-    pub(crate) fn answer(&mut self, now: u64, src: Ipv4, port: u16, d: &[u8]) -> bool {
+    pub(crate) fn answer(&mut self, now: u64, src: Ip, port: u16, d: &[u8]) -> bool {
         if d.len() < 12 {
             return false;
         }
@@ -199,14 +224,14 @@ impl Resolver {
             return false;
         }
         let Some((asked, mut at)) = read_name(d, 12) else { return false };
-        if asked != q.name || d.len() < at + 4 || be16(d, at) != 1 || be16(d, at + 2) != 1 {
+        if asked != q.name || d.len() < at + 4 || be16(d, at) != q.kind || be16(d, at + 2) != 1 {
             return false;
         }
         at += 4;
         let result = match flags & 0xF {
             0 if flags & 0x0200 != 0 => Err(Error::Failed), // cut short: it would need TCP
             0 => {
-                let mut found: Option<(Ipv4, u32)> = None;
+                let mut found: Option<(Ip, u32)> = None;
                 for _ in 0..be16(d, 6) {
                     let Some((_, after)) = read_name(d, at) else { break };
                     if d.len() < after + 10 {
@@ -217,8 +242,13 @@ impl Resolver {
                     if d.len() < data + len {
                         break;
                     }
-                    if kind == 1 && class == 1 && len == 4 && found.is_none() {
-                        found = Some((Ipv4([d[data], d[data + 1], d[data + 2], d[data + 3]]), ttl));
+                    if kind == A && q.kind == A && class == 1 && len == 4 && found.is_none() {
+                        found = Some((Ip::V4(Ipv4([d[data], d[data + 1], d[data + 2], d[data + 3]])), ttl));
+                    }
+                    if kind == AAAA && q.kind == AAAA && class == 1 && len == 16 && found.is_none() {
+                        let mut a = Ipv6::ANY;
+                        a.0.copy_from_slice(&d[data..data + 16]);
+                        found = Some((Ip::V6(a), ttl));
                     }
                     at = data + len;
                 }
@@ -232,6 +262,14 @@ impl Resolver {
                         }
                         self.cache.retain(|c| c.0 != name);
                         self.cache.push((name, ip, now + keep));
+                        return true;
+                    }
+                    // (No IPv4 address: its IPv6 one, if this computer can reach those.)
+                    None if q.kind == A && q.then_aaaa => {
+                        q.kind = AAAA;
+                        q.then_aaaa = false;
+                        q.tries = 0;
+                        q.sent = None;
                         return true;
                     }
                     None => Err(Error::NotFound),

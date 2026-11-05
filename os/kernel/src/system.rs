@@ -71,7 +71,11 @@ pub fn status() -> String {
     let n = network::status();
     lines.push(match (&n.describe, n.address) {
         (None, _) => String::from("Network: no card Chat Computer has a driver for"),
-        (Some(d), Some(a)) => format!("Network: {d}; address {a}"),
+        (Some(d), Some(a)) => match n.address6 {
+            Some(a6) => format!("Network: {d}; address {a}, and IPv6's {a6}"),
+            None => format!("Network: {d}; address {a}"),
+        },
+        (Some(d), None) if n.address6.is_some() => format!("Network: {d}; IPv6 address {} (no IPv4 address)", n.address6.map(|a| format!("{a}")).unwrap_or_default()),
         (Some(d), None) if !n.link => format!("Network: {d}; no cable connected"),
         (Some(d), None) => format!("Network: {d}; no address yet"),
     });

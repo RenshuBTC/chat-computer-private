@@ -128,8 +128,9 @@ const TXCFG_EMPTY: u32 = 1 << 11;
 const TXCFG_AUTO_FIFO: u32 = 1 << 7;
 /// TxConfig: the standard gap between frames (3) and unlimited DMA bursts (7).
 const TXCFG: u32 = 3 << 24 | 7 << 8;
-/// RxConfig: accept broadcasts (AB) and frames to this address (APM).
-const RX_ACCEPT: u32 = 1 << 3 | 1 << 1;
+/// RxConfig: accept broadcasts (AB), multicasts (AM: those the filter passes, which is all of them) and frames to
+/// this address (APM).
+const RX_ACCEPT: u32 = 1 << 3 | 1 << 2 | 1 << 1;
 const LOCK: u8 = 0x00;
 const UNLOCK: u8 = 0xC0;
 const PHY_LINK: u16 = 1 << 1;
@@ -693,8 +694,9 @@ impl Realtek {
         card.w32(RX_CONFIG, card.rx_config_base());
         let auto_fifo = if (34..=52).contains(&version) { TXCFG_AUTO_FIFO } else { 0 };
         card.w32(TX_CONFIG, TXCFG | auto_fifo);
-        card.w32(MAR0 + 4, 0); // no multicast groups
-        card.w32(MAR0, 0);
+        // Every multicast group (IPv6's neighbours and routers speak in them; the stack keeps its own groups').
+        card.w32(MAR0 + 4, 0xFFFF_FFFF);
+        card.w32(MAR0, 0xFFFF_FFFF);
         card.w32(RX_CONFIG, card.rx_config_base() | RX_ACCEPT);
 
         // Interrupts by MSI; the main loop, woken by them, looks at the rings. Acknowledging what happened (in

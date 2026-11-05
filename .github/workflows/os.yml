@@ -48,8 +48,8 @@ jobs:
           sudo apt-get install -y -q qemu-system-x86 ovmf python3-pil python3-cryptography sbsigntool dosfstools mtools gdisk xz-utils zip ntfs-3g acpica-tools
           pipx install virt-firmware
           rustup show   # installs the compiler pinned in os/rust-toolchain.toml
-      - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, PDF, picture, BitLocker and registry readers, cryptography, Markdown, memory file, HID, AML, Claude API, web and browser engine tests
-        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p pdf -p picture -p bitlocker -p crypto -p registry -p markdown -p remember -p hid -p aml -p claude -p web -p browser -p js
+      - name: Font engine, text setting, chimes, FAT, exFAT, NTFS, ZIP, Office, PDF, picture, BitLocker and registry readers, cryptography, Markdown, memory file, HID, AML, network stack, Claude API, web and browser engine tests
+        run: cargo test -p font -p text -p chime -p fat -p exfat -p ntfs -p zip -p office -p pdf -p picture -p bitlocker -p crypto -p registry -p markdown -p remember -p hid -p aml -p net -p claude -p web -p browser -p js
       - name: The model engine's tests (on small models with random weights)
         run: cargo test -p model --features std
       - name: The engine's programs for Linux (x86-64 and ARM) and the tiny test model are what this source builds
@@ -83,6 +83,8 @@ jobs:
         run: ./check.py --sound
       - name: Keyboards (PS/2; USB on ports and behind a hub, with MSI-X, MSI and no interrupts; IOMMUs)
         run: ./check.py --keyboard
+      - name: The network (a virtio card; DHCP, DNS and a connection over IPv4, an address from QEMU's router and a connection over IPv6)
+        run: ./check.py --network --card virtio
       - name: The own model (a tiny one, found, read and asked; its answer the same as the engine's on Linux)
         run: ./check.py --model
       - name: A conversation (a test's script in place of the model; its tools, the screen, a mouse's wheel)

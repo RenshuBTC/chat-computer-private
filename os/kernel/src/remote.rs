@@ -9,7 +9,7 @@
 //! and asks a stand-in on the computer running the virtual PC (10.0.2.2), still checking its certificate for
 //! api.anthropic.com.
 
-use crate::web::{no_address, no_network, roots, test_build, test_port, TEST_SERVER};
+use crate::web::{network_ready, no_address, no_network, roots, test_build, test_port, test_server};
 use crate::{clock, network, random, time};
 use alloc::boxed::Box;
 use alloc::format;
@@ -124,14 +124,15 @@ impl Call {
             match &mut self.phase {
                 Phase::Over => return true,
                 Phase::Network(since) => {
-                    if stack.config().is_none() {
+                    if !network_ready(stack, now.saturating_sub(*since)) {
                         if now.saturating_sub(*since) > NETWORK_MS {
                             return fail(out, no_address());
                         }
                         return false;
                     }
                     if test_build() {
-                        match stack.connect(now, TEST_SERVER, test_port()) {
+                        let to = test_server(stack);
+                        match stack.connect(now, to, test_port()) {
                             Ok(s) => self.phase = Phase::Connecting(s, now),
                             Err(e) => return fail(out, format!("Couldn't connect to Claude's API: {e}.")),
                         }

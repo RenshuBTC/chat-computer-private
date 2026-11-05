@@ -136,6 +136,7 @@ const STATUS_LU: u32 = 1 << 1;
 const RAH_AV: u32 = 1 << 31;
 
 const RCTL_EN: u32 = 1 << 1;
+const RCTL_MPE: u32 = 1 << 4; // every multicast frame (IPv6's neighbours and routers speak in them; the stack keeps its own groups')
 const RCTL_BAM: u32 = 1 << 15; // broadcasts too
 const RCTL_SECRC: u32 = 1 << 26; // the card takes the Ethernet checksum off
 const TCTL_EN: u32 = 1 << 1;
@@ -289,7 +290,7 @@ impl E1000 {
         card.w(RAL0, u32::from_le_bytes([m[0], m[1], m[2], m[3]]));
         card.w(RAH0, u32::from_le_bytes([m[4], m[5], 0, 0]) | RAH_AV);
         for i in 0..128 {
-            card.w(MTA + 4 * i, 0); // no multicast groups
+            card.w(MTA + 4 * i, 0); // no multicast groups (all of them are taken: RCTL_MPE)
         }
 
         // Receiving: every descriptor gets an empty buffer; the card may fill all but one.
@@ -306,7 +307,7 @@ impl E1000 {
         card.w(RDLEN, (RING * 16) as u32);
         card.w(RDH, 0);
         card.w(RDT, (RING - 1) as u32);
-        card.w(RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC); // 2 KB buffers (BSIZE 0)
+        card.w(RCTL, RCTL_EN | RCTL_MPE | RCTL_BAM | RCTL_SECRC); // 2 KB buffers (BSIZE 0)
 
         // Sending.
         card.w(TDBAL, card.tx.desc.phys as u32);

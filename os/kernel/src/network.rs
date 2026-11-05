@@ -1,6 +1,6 @@
 //! The network: the first card that started (or, without one, a USB network adapter plugged in, at any time), and
-//! Chat Computer's own stack on it (the `net` crate: ARP, IPv4, DHCP, DNS, TCP), run from the kernel's main loop: the
-//! frames that arrived go in, the time moves on, the frames to send go out.
+//! Chat Computer's own stack on it (the `net` crate: ARP, IPv4 and IPv6, DHCP, DNS, TCP), run from the kernel's main
+//! loop: the frames that arrived go in, the time moves on, the frames to send go out.
 
 use crate::netcard::{self, Card};
 use crate::sync::SpinLock;
@@ -9,12 +9,14 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use net::{Ipv4, Mac, Stack};
+use net::{Ipv4, Ipv6, Mac, Stack};
 
 struct Network {
     card: Box<dyn Card>,
     stack: Stack,
     shown: u64,
+    /// The IPv6 addresses (from routers) last logged.
+    shown6: Vec<Ipv6>,
     link: Option<bool>,
     test: Test,
 }
@@ -29,6 +31,8 @@ pub struct Status {
     pub describe: Option<String>,
     pub link: bool,
     pub address: Option<Ipv4>,
+    /// Its IPv6 address from a router, if it has one.
+    pub address6: Option<Ipv6>,
 }
 
 /// Starts the cards there are drivers for, and the stack on the first. Returns how many cards started.
@@ -44,7 +48,7 @@ pub fn init() -> usize {
     let card = cards.remove(0);
     let stack = Stack::new(Mac(card.mac()), random::u64(), true);
     crate::log!("Chat Computer kernel: network: random numbers from {}", random::source());
-    *NETWORK.lock() = Some(Network { card, stack, shown: 0, link: None, test: Test::Start });
+    *NETWORK.lock() = Some(Network { card, stack, shown: 0, shown6: Vec::new(), link: None, test: Test::Start });
     count
 }
 
@@ -65,7 +69,7 @@ fn usb_adapters() {
         let card: Box<dyn Card> = Box::new(netcard::UsbNet::new(a));
         crate::log!("Chat Computer kernel: network: {}", card.describe());
         let stack = Stack::new(Mac(card.mac()), random::u64(), true);
-        *guard = Some(Network { card, stack, shown: 0, link: None, test: Test::Start });
+        *guard = Some(Network { card, stack, shown: 0, shown6: Vec::new(), link: None, test: Test::Start });
     }
 }
 
@@ -106,6 +110,21 @@ pub fn work() {
             }
             None => crate::log!("Chat Computer kernel: network: no address ({})", n.stack.dhcp_state()),
         }
+        // IPv6's, from a router's advertisement.
+        let v6: Vec<Ipv6> = n.stack.ipv6_addresses().into_iter().skip(1).collect();
+        if v6 != n.shown6 {
+            n.shown6 = v6.clone();
+            if !v6.is_empty() {
+                let list = |a: &[Ipv6]| a.iter().map(|x| alloc::format!("{x}")).collect::<Vec<String>>().join(", ");
+                let dns = n.stack.ipv6_dns();
+                crate::log!(
+                    "Chat Computer kernel: network: IPv6 address {} (on the link {}), DNS {}",
+                    list(&v6),
+                    n.stack.ipv6_addresses()[0],
+                    if dns.is_empty() { String::from("none") } else { list(&dns) }
+                );
+            }
+        }
     }
 }
 
@@ -127,19 +146,24 @@ pub fn status() -> Status {
             describe: Some(n.card.describe()),
             link: n.link.unwrap_or(false),
             address: n.stack.config().map(|c| c.address),
+            address6: n.stack.ipv6_addresses().get(1).copied(),
         },
-        None => Status { describe: None, link: false, address: None },
+        None => Status { describe: None, link: false, address: None, address6: None },
     }
 }
 
 /// A test build's check of the whole path (CHATCOMPUTER_TEST=network, by `check.py --network`): an address
 /// from DHCP, a name looked up, and a conversation with a server on the computer running the virtual PC
-/// (10.0.2.2 is that computer, to QEMU's virtual network).
+/// (10.0.2.2 is that computer, to QEMU's virtual network); then an IPv6 address from QEMU's router, and the same
+/// conversation over IPv6 (with fec0::2, the same computer).
 enum Test {
     Start,
     Looking(net::Lookup),
-    Connecting(net::tcp::Socket, u64),
-    Reading(net::tcp::Socket, Vec<u8>, u64),
+    /// The connection, since when, and whether it's over IPv6.
+    Connecting(net::tcp::Socket, u64, bool),
+    Reading(net::tcp::Socket, Vec<u8>, u64, bool),
+    /// Waiting for an IPv6 address, since.
+    Start6(u64),
     Done,
 }
 
@@ -167,7 +191,7 @@ impl Test {
                         Err(e) => crate::log!("Chat Computer kernel: test: looking up api.anthropic.com: {e}"),
                     }
                     match stack.connect(now, TEST_SERVER, test_port()) {
-                        Ok(s) => Test::Connecting(s, now),
+                        Ok(s) => Test::Connecting(s, now, false),
                         Err(e) => {
                             crate::log!("Chat Computer kernel: test: couldn't connect: {e}");
                             Test::Done
@@ -175,34 +199,51 @@ impl Test {
                     }
                 }
             },
-            Test::Connecting(s, since) => match stack.state(s) {
+            Test::Start6(since) => {
+                if stack.ipv6_ready() {
+                    match stack.connect(now, crate::web::TEST_SERVER6, test_port()) {
+                        Ok(s) => Test::Connecting(s, now, true),
+                        Err(e) => {
+                            crate::log!("Chat Computer kernel: test: couldn't connect over IPv6: {e}");
+                            Test::Done
+                        }
+                    }
+                } else if now - since > 30_000 {
+                    crate::log!("Chat Computer kernel: test: no IPv6 address from a router");
+                    Test::Done
+                } else {
+                    Test::Start6(since)
+                }
+            }
+            Test::Connecting(s, since, v6) => match stack.state(s) {
                 net::TcpState::Established => {
-                    stack.send(s, b"hello from Chat Computer\n");
-                    Test::Reading(s, Vec::new(), now)
+                    stack.send(s, if v6 { b"hello from Chat Computer over IPv6\n" as &[u8] } else { b"hello from Chat Computer\n" });
+                    Test::Reading(s, Vec::new(), now, v6)
                 }
                 net::TcpState::Closed => {
-                    crate::log!("Chat Computer kernel: test: couldn't connect: {:?}", stack.error(s));
+                    crate::log!("Chat Computer kernel: test: couldn't connect{}: {:?}", if v6 { " over IPv6" } else { "" }, stack.error(s));
                     Test::Done
                 }
                 _ if now - since > 20_000 => {
-                    crate::log!("Chat Computer kernel: test: the connection never opened");
+                    crate::log!("Chat Computer kernel: test: the connection never opened{}", if v6 { " over IPv6" } else { "" });
                     Test::Done
                 }
-                _ => Test::Connecting(s, since),
+                _ => Test::Connecting(s, since, v6),
             },
-            Test::Reading(s, mut got, since) => {
+            Test::Reading(s, mut got, since, v6) => {
                 let mut buf = [0u8; 512];
                 let n = stack.recv(s, &mut buf);
                 got.extend_from_slice(&buf[..n]);
                 if let Some(end) = got.iter().position(|&b| b == b'\n') {
-                    crate::log!("Chat Computer kernel: test: the server said {:?}", String::from_utf8_lossy(&got[..end]));
+                    let over = if v6 { "over IPv6, " } else { "" };
+                    crate::log!("Chat Computer kernel: test: {over}the server said {:?}", String::from_utf8_lossy(&got[..end]));
                     stack.close(s);
-                    Test::Done
+                    if v6 { Test::Done } else { Test::Start6(now) }
                 } else if stack.state(s) == net::TcpState::Closed || now - since > 20_000 {
-                    crate::log!("Chat Computer kernel: test: no answer from the server ({:?})", stack.error(s));
+                    crate::log!("Chat Computer kernel: test: no answer from the server{} ({:?})", if v6 { " over IPv6" } else { "" }, stack.error(s));
                     Test::Done
                 } else {
-                    Test::Reading(s, got, since)
+                    Test::Reading(s, got, since, v6)
                 }
             }
             Test::Done => Test::Done,

@@ -408,8 +408,17 @@ drivers.
   the stand-in's ping, hears its welcome and echoes and closes cleanly, its console's lines in the log) and its
   module, a form sent with what was typed, and a link clicked.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
-  retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
-  its own with lost, repeated and reordered packets.
+  retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept); and IPv6
+  beside IPv4 (`net/src/ipv6.rs`): an address on the link from a random identifier made each start (so it doesn't
+  follow the person from network to network), others from routers' advertisements (SLAAC), which also name the way
+  out, the link's own prefixes and its DNS servers (RDNSS); Neighbor Discovery both ways; the solicited-node group
+  reported with MLDv2 (so switches that watch for it pass it on); ICMPv6's echo; DNS's AAAA records (asked for when
+  there's no IPv4 address, or a name has none); UDP and TCP over it; and a connection still opening given up at once
+  when a router says its far end can't be reached (ICMP's and ICMPv6's "destination unreachable"). The cards take
+  multicast frames for it, and the stack keeps those of its own groups. Tested on its own with lost, repeated and
+  reordered packets, two computers on one wire (IPv4 and IPv6), and stand-ins for routers and DHCP and DNS servers;
+  and in virtual PCs (`check.py --network`, with each card): an IPv6 address from QEMU's router, and a connection
+  to the computer running the virtual PC over IPv6 (where that computer has IPv6).
 * `web/` is Chat Computer's own reading of the web, for the kernel's web tools: web addresses (HTTPS only, links and
   redirects joined to the page they're on), HTTP/1.1's requests and responses (a length, chunks or until the
   connection closes, interim responses, gzip and DEFLATE), a page's words from its HTML (entities, Latin-1 and
@@ -865,8 +874,9 @@ writes for each person, in place of Ubuntu's catalogue.
    measured), Chat Computer's own file system for memory and logs, and keeping them encrypted.
 6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e, igb); the internet over
    a USB cable (USB Ethernet adapters and Android phones' tethering: CDC ECM, NCM and RNDIS); written, not yet tried
-   on a real PC: Intel's I219, I210, I211, I225 and I226, and Realtek's RTL8111/8168 and RTL8125. To do: trying those
-   on real PCs, Realtek's PCI Express PHY tuning and PHY firmware, then IPv6.
+   on a real PC: Intel's I219, I210, I211, I225 and I226, and Realtek's RTL8111/8168 and RTL8125. ✓ IPv6 (addresses
+   from routers, Neighbor Discovery, MLDv2, DNS's AAAA, TCP over it). To do: trying those on real PCs, and Realtek's
+   PCI Express PHY tuning and PHY firmware.
 7. ✓ Encryption: SHA-2, HMAC and HKDF, X25519, AES-GCM, ChaCha20-Poly1305, ECDSA and RSA signatures,
    certificate checks against Mozilla's authorities, and TLS 1.3.
 8. ✓ Chat Computer's own model engine (model/, see its README.md): Qwen's open models on the PC's own processor,

@@ -2,6 +2,7 @@
 //! stand-ins for a DHCP server and a DNS server.
 
 use super::*;
+use crate::ipv6::checksum6;
 
 fn mac(n: u8) -> Mac {
     Mac([0x52, 0x54, 0, 0x12, 0x34, n])
@@ -104,7 +105,7 @@ fn neighbours_are_found_and_pings_answered() {
     let mut w = Wire::new();
     w.a.ping(w.now, Ipv4([10, 0, 0, 5]), 7, 1);
     w.run(10);
-    assert_eq!(w.a.pongs(), vec![Pong { from: Ipv4([10, 0, 0, 5]), id: 7, seq: 1 }]);
+    assert_eq!(w.a.pongs(), vec![Pong { from: Ip::V4(Ipv4([10, 0, 0, 5])), id: 7, seq: 1 }]);
     // Both now know each other (b learned a from a's question).
     assert!(w.a.neighbours.iter().any(|n| n.mac == mac(5)) && w.b.neighbours.iter().any(|n| n.mac == mac(2)));
     // An address no one has: asked about once a second, and given up on after three.
@@ -242,7 +243,7 @@ fn a_forged_reset_or_data_out_of_the_window_does_nothing() {
     seg[13] = 0x04;
     let sum = transport_checksum(Ipv4([10, 0, 0, 5]), Ipv4([10, 0, 0, 2]), PROTO_TCP, &seg);
     put16(&mut seg, 16, sum);
-    w.a.tcp_in(w.now, Ipv4([10, 0, 0, 5]), Ipv4([10, 0, 0, 2]), &seg);
+    w.a.tcp_in(w.now, Ip::V4(Ipv4([10, 0, 0, 5])), Ip::V4(Ipv4([10, 0, 0, 2])), &seg);
     assert_eq!(w.a.state(s), TcpState::Established);
     // Data far outside the window: not taken.
     let mut seg = vec![0u8; 25];
@@ -254,13 +255,13 @@ fn a_forged_reset_or_data_out_of_the_window_does_nothing() {
     seg[20..].copy_from_slice(b"evil!");
     let sum = transport_checksum(Ipv4([10, 0, 0, 5]), Ipv4([10, 0, 0, 2]), PROTO_TCP, &seg);
     put16(&mut seg, 16, sum);
-    w.a.tcp_in(w.now, Ipv4([10, 0, 0, 5]), Ipv4([10, 0, 0, 2]), &seg);
+    w.a.tcp_in(w.now, Ip::V4(Ipv4([10, 0, 0, 5])), Ip::V4(Ipv4([10, 0, 0, 2])), &seg);
     let mut buf = [0u8; 10];
     assert_eq!(w.a.recv(s, &mut buf), 0);
     // A damaged segment: dropped.
     let before = w.a.stats.dropped;
     seg[21] ^= 1;
-    w.a.tcp_in(w.now, Ipv4([10, 0, 0, 5]), Ipv4([10, 0, 0, 2]), &seg);
+    w.a.tcp_in(w.now, Ip::V4(Ipv4([10, 0, 0, 5])), Ip::V4(Ipv4([10, 0, 0, 2])), &seg);
     assert_eq!(w.a.stats.dropped, before + 1);
 }
 
@@ -364,27 +365,37 @@ fn option(m: &[u8], code: u8) -> Option<Vec<u8>> {
     None
 }
 
+/// The next frame it sends that isn't IPv6's (which starts on its own: its group reported, a router asked for).
+fn transmit4(st: &mut Stack) -> Option<Vec<u8>> {
+    while let Some(f) = st.transmit() {
+        if be16(&f, 12) != 0x86DD {
+            return Some(f);
+        }
+    }
+    None
+}
+
 #[test]
 fn dhcp_gets_an_address_and_keeps_it() {
     let mut st = Stack::new(mac(2), 7, true);
     let server = Ipv4([10, 0, 2, 2]);
     st.poll(0);
     // DISCOVER, broadcast.
-    let f = st.transmit().expect("a discover");
+    let f = transmit4(&mut st).expect("a discover");
     let (dst, d) = udp_to(&f, 67).unwrap();
     assert_eq!((dst, option(&d, 53)), (Ipv4::BROADCAST, Some(vec![1])));
     assert_eq!(&d[28..34], &mac(2).0);
     assert!(st.dhcp_busy() && st.config().is_none());
     // Unanswered: asked again about 4 seconds later.
     st.poll(2900);
-    assert!(st.transmit().is_none());
+    assert!(transmit4(&mut st).is_none());
     st.poll(5100);
-    let f = st.transmit().expect("asked again");
+    let f = transmit4(&mut st).expect("asked again");
     let (_, d) = udp_to(&f, 67).unwrap();
     // OFFER, then REQUEST for it.
     let offer = dhcp_reply(&d, 2, Ipv4([10, 0, 2, 15]), 86400);
     st.receive(5200, &udp_frame(Mac::BROADCAST, server, Ipv4::BROADCAST, 67, 68, &offer));
-    let f = st.transmit().expect("a request");
+    let f = transmit4(&mut st).expect("a request");
     let (_, r) = udp_to(&f, 67).unwrap();
     assert_eq!(option(&r, 53), Some(vec![3]));
     assert_eq!(option(&r, 50), Some(vec![10, 0, 2, 15]));
@@ -404,7 +415,7 @@ fn dhcp_gets_an_address_and_keeps_it() {
     st.learn(5400, server, Mac([2, 0, 0, 0, 0, 1])); // (the server's card address, as ARP would find it)
     // Halfway through the lease: renewed with that server, from the address.
     st.poll(5400 + 43_200_000 + 10);
-    let f = st.transmit().expect("a renewal");
+    let f = transmit4(&mut st).expect("a renewal");
     let (dst, r) = udp_to(&f, 67).unwrap();
     assert_eq!((dst, option(&r, 53)), (server, Some(vec![3])));
     assert_eq!(&r[12..16], &[10, 0, 2, 15]);
@@ -412,7 +423,7 @@ fn dhcp_gets_an_address_and_keeps_it() {
     let nak = dhcp_reply(&r, 6, Ipv4::ANY, 0);
     st.receive(5400 + 43_200_000 + 20, &udp_frame(mac(2), server, Ipv4([10, 0, 2, 15]), 67, 68, &nak));
     assert!(st.config().is_none() && st.dhcp_busy());
-    let f = st.transmit().expect("looking again");
+    let f = transmit4(&mut st).expect("looking again");
     assert_eq!(option(&udp_to(&f, 67).unwrap().1, 53), Some(vec![1]));
 }
 
@@ -457,15 +468,15 @@ fn dns_finds_addresses_and_trusts_only_real_answers() {
     assert_eq!(st.resolved(l), None);
     // The real one.
     st.receive(20, &udp_frame(mac(2), Ipv4([10, 0, 0, 3]), Ipv4([10, 0, 0, 2]), 53, port, &dns_reply(&q, 0, &[[160, 79, 104, 10], [1, 2, 3, 4]], 0)));
-    assert_eq!(st.resolved(l), Some(Ok(Ipv4([160, 79, 104, 10]))));
+    assert_eq!(st.resolved(l), Some(Ok(Ip::V4(Ipv4([160, 79, 104, 10])))));
     assert_eq!(st.resolved(l), None);
     // Asked again: from what was kept, nothing sent.
     let l = st.resolve(30, "api.anthropic.com");
     assert!(st.transmit().is_none());
-    assert_eq!(st.resolved(l), Some(Ok(Ipv4([160, 79, 104, 10]))));
+    assert_eq!(st.resolved(l), Some(Ok(Ip::V4(Ipv4([160, 79, 104, 10])))));
     // An address is its own answer; nonsense isn't asked.
     let l = st.resolve(40, "10.0.2.2");
-    assert_eq!(st.resolved(l), Some(Ok(Ipv4([10, 0, 2, 2]))));
+    assert_eq!(st.resolved(l), Some(Ok(Ip::V4(Ipv4([10, 0, 2, 2])))));
     let l = st.resolve(40, "not a name!");
     assert_eq!(st.resolved(l), Some(Err(DnsError::BadName)));
     // No such name.
@@ -495,4 +506,244 @@ fn dns_asks_again_then_gives_up() {
         }
     }
     panic!("never gave up");
+}
+
+// ---------------------------------------------------------------- IPv6
+
+fn v6(s: &str) -> Ipv6 {
+    Ipv6::parse(s).unwrap()
+}
+
+/// An IPv6 packet in a frame, from `smac` to `dmac`, its ICMPv6 checksum made (`next` 58) or UDP's (17).
+fn ip6_frame(smac: Mac, dmac: Mac, src: Ipv6, dst: Ipv6, next: u8, hops: u8, payload: &[u8]) -> Vec<u8> {
+    let mut body = payload.to_vec();
+    let at = if next == 58 { 2 } else { 6 };
+    body[at] = 0;
+    body[at + 1] = 0;
+    let c = ipv6::checksum6(src, dst, next, &body);
+    body[at..at + 2].copy_from_slice(&c.to_be_bytes());
+    let mut f = Vec::new();
+    f.extend_from_slice(&dmac.0);
+    f.extend_from_slice(&smac.0);
+    f.extend_from_slice(&[0x86, 0xDD, 0x60, 0, 0, 0]);
+    f.extend_from_slice(&(body.len() as u16).to_be_bytes());
+    f.extend_from_slice(&[next, hops]);
+    f.extend_from_slice(&src.0);
+    f.extend_from_slice(&dst.0);
+    f.extend_from_slice(&body);
+    f
+}
+
+/// A router's advertisement (from fe80::1, at card `router`): default router for `life` seconds, `prefix`/64 on
+/// the link and for SLAAC, the link's MTU, and a DNS server.
+fn router_advertisement(router: Mac, prefix: &str, life: u16, dns: &str) -> Vec<u8> {
+    let mut m = vec![134, 0, 0, 0, 64, 0];
+    m.extend_from_slice(&life.to_be_bytes());
+    m.extend_from_slice(&[0; 8]);
+    m.extend_from_slice(&[1, 1]);
+    m.extend_from_slice(&router.0);
+    m.extend_from_slice(&[3, 4, 64, 0xC0]);
+    m.extend_from_slice(&86400u32.to_be_bytes());
+    m.extend_from_slice(&14400u32.to_be_bytes());
+    m.extend_from_slice(&[0; 4]);
+    m.extend_from_slice(&v6(prefix).0);
+    m.extend_from_slice(&[5, 1, 0, 0]);
+    m.extend_from_slice(&1480u32.to_be_bytes());
+    m.extend_from_slice(&[25, 3, 0, 0]);
+    m.extend_from_slice(&3600u32.to_be_bytes());
+    m.extend_from_slice(&v6(dns).0);
+    ip6_frame(router, Ipv6::ALL_NODES.multicast_mac(), v6("fe80::1"), Ipv6::ALL_NODES, 58, 255, &m)
+}
+
+/// An IPv6 frame's (source, destination, next header, hop limit, payload).
+fn ip6_of(f: &[u8]) -> Option<(Ipv6, Ipv6, u8, u8, Vec<u8>)> {
+    if f.len() < 54 || be16(f, 12) != 0x86DD {
+        return None;
+    }
+    let p = &f[14..];
+    let len = be16(p, 4) as usize;
+    let (mut src, mut dst) = (Ipv6::ANY, Ipv6::ANY);
+    src.0.copy_from_slice(&p[8..24]);
+    dst.0.copy_from_slice(&p[24..40]);
+    Some((src, dst, p[6], p[7], p[40..40 + len].to_vec()))
+}
+
+#[test]
+fn ipv6_addresses_read_and_print() {
+    for (s, shown) in [
+        ("fe80::1", "fe80::1"),
+        ("2001:DB8::5:1", "2001:db8::5:1"),
+        ("::", "::"),
+        ("::1", "::1"),
+        ("2001:db8:0:0:1:0:0:1", "2001:db8::1:0:0:1"),
+        ("2001:db8:0:1:1:1:1:1", "2001:db8:0:1:1:1:1:1"),
+        ("2001:0db8:0000:0000:0000:ff00:0042:8329", "2001:db8::ff00:42:8329"),
+        ("1:0:0:2:0:0:0:3", "1:0:0:2::3"),
+        ("fe80::", "fe80::"),
+    ] {
+        assert_eq!(format!("{}", v6(s)), shown, "{s}");
+        assert_eq!(v6(shown), v6(s));
+    }
+    for bad in [":::", "1::2::3", "12345::", "g::", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "", "1:2:3:4:5:6:7::8", "::1:2:3:4:5:6:7:8"] {
+        assert_eq!(Ipv6::parse(bad), None, "{bad}");
+    }
+    assert_eq!(Ip::parse("[fe80::1]"), Some(Ip::V6(v6("fe80::1"))));
+    assert_eq!(Ip::parse("10.0.2.2"), Some(Ip::V4(Ipv4([10, 0, 2, 2]))));
+    assert_eq!(v6("2001:db8::1:2:3").solicited_node(), v6("ff02::1:ff02:3"));
+}
+
+#[test]
+fn ipv6_gets_its_addresses_from_a_router() {
+    let mut st = Stack::new(mac(2), 9, false);
+    let ll = st.ipv6_addresses()[0];
+    assert!(ll.is_link_local() && !st.ipv6_ready());
+    // As it starts: its group reported (MLDv2, through a hop-by-hop header with Router Alert), a router asked for.
+    st.poll(0);
+    let frames: Vec<Vec<u8>> = core::iter::from_fn(|| st.transmit()).collect();
+    let report = frames.iter().find_map(|f| ip6_of(f).filter(|p| p.1 == Ipv6::MLDV2_ROUTERS)).expect("an MLDv2 report");
+    assert_eq!((report.0, report.2, report.3), (ll, 0, 1));
+    assert_eq!(&report.4[..8], &[58, 0, 5, 2, 0, 0, 1, 0]);
+    assert_eq!(checksum6(ll, Ipv6::MLDV2_ROUTERS, 58, &report.4[8..]), 0);
+    assert_eq!(&report.4[8 + 12..8 + 28], &ll.solicited_node().0);
+    let rs = frames.iter().find_map(|f| ip6_of(f).filter(|p| p.1 == Ipv6::ALL_ROUTERS)).expect("a router solicitation");
+    assert_eq!((rs.0, rs.2, rs.3, rs.4[0]), (ll, 58, 255, 133));
+    assert_eq!(&rs.4[8..16], &[1, 1, 0x52, 0x54, 0, 0x12, 0x34, 2]);
+    // Asked again 4 seconds later, then at most 3 times in all.
+    st.poll(3000);
+    assert!(st.transmit().is_none());
+    let mut asked = 1;
+    for t in (4000..20_000).step_by(500) {
+        st.poll(t);
+        asked += core::iter::from_fn(|| st.transmit()).filter(|f| ip6_of(f).is_some_and(|p| p.1 == Ipv6::ALL_ROUTERS)).count();
+    }
+    assert_eq!(asked, 3);
+    // An advertisement whose hop limit isn't 255 came from off the link: ignored.
+    let changes = st.changes();
+    let mut forged = router_advertisement(mac(1), "2001:db8:1::", 1800, "2001:db8:1::53");
+    forged[14 + 7] = 64;
+    st.receive(20_000, &forged);
+    assert!(!st.ipv6_ready() && st.changes() == changes);
+    // The router's: an address from its prefix (the same identifier as on the link), it as the way out, its DNS.
+    st.receive(20_000, &router_advertisement(mac(1), "2001:db8:1::", 1800, "2001:db8:1::53"));
+    let addresses = st.ipv6_addresses();
+    assert_eq!(addresses.len(), 2);
+    assert_eq!(&addresses[1].0[..8], &v6("2001:db8:1::").0[..8]);
+    assert_eq!(&addresses[1].0[8..], &ll.0[8..]);
+    assert!(st.ipv6_ready() && st.changes() > changes);
+    assert_eq!(st.ipv6_dns(), vec![v6("2001:db8:1::53")]);
+    assert_eq!(st.v6.mtu, 1480);
+    // The router stops being one (a lifetime of 0): no way out, though the address stays.
+    st.receive(21_000, &router_advertisement(mac(1), "2001:db8:1::", 0, "2001:db8:1::53"));
+    assert!(!st.ipv6_ready() && st.ipv6_addresses().len() == 2);
+}
+
+#[test]
+fn ipv6_neighbours_are_found_and_pings_answered() {
+    let mut w = Wire::new();
+    let b = w.b.ipv6_addresses()[0];
+    w.run(5);
+    w.a.ping6(w.now, b, 3, 1);
+    w.run(10);
+    assert_eq!(w.a.pongs(), vec![Pong { from: Ip::V6(b), id: 3, seq: 1 }]);
+    // Each now knows the other's card (b from a's solicitation).
+    assert!(w.a.v6_knows(b) && w.b.v6_knows(w.a.ipv6_addresses()[0]));
+    // An address no one has: asked about once a second, given up on after three.
+    w.a.ping6(w.now, v6("fe80::99"), 3, 2);
+    w.run(5000);
+    assert!(w.a.pongs().is_empty());
+}
+
+#[test]
+fn a_connection_over_ipv6() {
+    let mut w = Wire::new();
+    for t in [0, 1] {
+        let ra = router_advertisement(mac(1), "2001:db8:7::", 1800, "2001:db8:7::53");
+        if t == 0 { w.a.receive(w.now, &ra) } else { w.b.receive(w.now, &ra) }
+    }
+    let b = w.b.ipv6_addresses()[1];
+    w.b.listen(443);
+    let s = w.a.connect(w.now, b, 443).unwrap();
+    assert!(w.until(200, |w| w.a.state(s) == TcpState::Established));
+    let mut t = None;
+    assert!(w.until(100, |w| { t = w.b.accept(443); t.is_some() }));
+    let t = t.unwrap();
+    // Its segments carry IPv6's smaller maximum (1,440 bytes).
+    let big = vec![7u8; 5000];
+    assert_eq!(w.a.send(s, &big), 5000);
+    let mut got = Vec::new();
+    let mut buf = [0u8; 2000];
+    assert!(w.until(500, |w| {
+        let n = w.b.recv(t, &mut buf);
+        got.extend_from_slice(&buf[..n]);
+        got.len() == 5000
+    }));
+    assert_eq!(got, big);
+    assert_eq!(w.b.tcp[t.0].as_ref().unwrap().remote, Ip::V6(w.a.ipv6_addresses()[1]));
+    w.a.close(s);
+    w.b.close(t);
+    assert!(w.until(3000, |w| w.a.state(s) == TcpState::Closed || w.a.state(s) == TcpState::TimeWait));
+}
+
+#[test]
+fn dns_finds_ipv6_addresses() {
+    // Only IPv6 (no address from DHCP): AAAA asked of the router's DNS server, over IPv6.
+    let mut st = Stack::new(mac(2), 4, false);
+    st.receive(0, &router_advertisement(mac(1), "2001:db8:1::", 1800, "2001:db8:1::53"));
+    st.learn6(0, v6("2001:db8:1::53"), mac(1));
+    while st.transmit().is_some() {}
+    let l = st.resolve(1, "example.org");
+    let f = st.transmit().expect("a question");
+    let (src, dst, next, _, u) = ip6_of(&f).expect("over IPv6");
+    assert_eq!((dst, next, be16(&u, 2)), (v6("2001:db8:1::53"), 17, 53));
+    assert_eq!(src, st.ipv6_addresses()[1]);
+    let q = u[8..].to_vec();
+    assert_eq!(&q[q.len() - 4..], &[0, 28, 0, 1]);
+    let mut answer = dns_reply(&q, 0, &[], 0);
+    // (dns_reply writes a CNAME and A records: an AAAA one after the CNAME, by hand.)
+    answer[7] = 2;
+    answer.extend_from_slice(&[0xC0, 12, 0, 28, 0, 1, 0, 0, 1, 0, 0, 16]);
+    answer.extend_from_slice(&v6("2606:2800:21f:cb07:6820:80da:af6b:8b2c").0);
+    let mut reply = vec![0u8; 8];
+    reply[0..2].copy_from_slice(&53u16.to_be_bytes());
+    reply[2..4].copy_from_slice(&u[0..2]);
+    reply[4..6].copy_from_slice(&((8 + answer.len()) as u16).to_be_bytes());
+    reply.extend_from_slice(&answer);
+    st.receive(2, &ip6_frame(mac(1), mac(2), dst, src, 17, 64, &reply));
+    assert_eq!(st.resolved(l), Some(Ok(Ip::V6(v6("2606:2800:21f:cb07:6820:80da:af6b:8b2c")))));
+    // With IPv4 too: A first; a name with none (an answer without records), then AAAA.
+    let mut st = dns_stack();
+    st.receive(0, &router_advertisement(mac(1), "2001:db8:1::", 1800, "2001:db8:1::53"));
+    while st.transmit().is_some() {}
+    let l = st.resolve(1, "v6only.example");
+    let f = st.transmit().expect("a question");
+    let (_, q) = udp_to(&f, 53).expect("over IPv4");
+    assert_eq!(&q[q.len() - 4..], &[0, 1, 0, 1]);
+    st.receive(2, &udp_frame(mac(2), Ipv4([10, 0, 0, 3]), Ipv4([10, 0, 0, 2]), 53, be16(&f, 34), &dns_reply(&q, 0, &[], 0)));
+    assert_eq!(st.resolved(l), None);
+    st.poll(3);
+    let f = core::iter::from_fn(|| st.transmit()).find(|f| udp_to(f, 53).is_some()).expect("asked again, for AAAA");
+    let (_, q) = udp_to(&f, 53).unwrap();
+    assert_eq!(&q[q.len() - 4..], &[0, 28, 0, 1]);
+}
+
+#[test]
+fn unreachable_gives_up_a_connection_opening() {
+    // A router says there's nothing at the far end (ICMPv6 "destination unreachable", port unreachable, with the
+    // start of our SYN in it): the connection is given up at once, refused.
+    let mut st = Stack::new(mac(2), 4, false);
+    st.receive(0, &router_advertisement(mac(1), "2001:db8:1::", 1800, "2001:db8:1::53"));
+    st.learn6(0, v6("fe80::1"), mac(1));
+    while st.transmit().is_some() {}
+    let far = v6("2001:db8:99::7");
+    let s = st.connect(1, far, 443).unwrap();
+    let syn = core::iter::from_fn(|| st.transmit()).find_map(|f| ip6_of(&f).filter(|p| p.2 == 6)).expect("a SYN");
+    let mut m = vec![1, 4, 0, 0, 0, 0, 0, 0];
+    m.extend_from_slice(&[0x60, 0, 0, 0]);
+    m.extend_from_slice(&(syn.4.len() as u16).to_be_bytes());
+    m.extend_from_slice(&[6, 64]);
+    m.extend_from_slice(&syn.0.0);
+    m.extend_from_slice(&syn.1.0);
+    m.extend_from_slice(&syn.4[..8]);
+    st.receive(2, &ip6_frame(mac(1), mac(2), v6("fe80::1"), syn.0, 58, 64, &m));
+    assert_eq!((st.state(s), st.error(s)), (TcpState::Closed, Some(TcpError::Refused)));
 }

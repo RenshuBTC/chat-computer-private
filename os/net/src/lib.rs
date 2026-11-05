@@ -1,17 +1,19 @@
 //! Chat Computer's own network stack, from Ethernet frames up to TCP connections: ARP, IPv4, ICMP (answering
 //! pings), UDP, DHCP (an address from the network), DNS (names to addresses) and TCP (connections, with what
-//! was lost sent again). No code from other projects.
+//! was lost sent again); and IPv6 beside IPv4 (ipv6.rs: its addresses from routers' advertisements, Neighbor
+//! Discovery, ICMPv6, MLDv2), for UDP and TCP alike. No code from other projects.
 //!
 //! It knows nothing of network cards or time: the kernel's main loop hands it the frames that arrived
 //! (`receive`), tells it the time now and then (`poll`), and takes the frames it wants sent (`transmit`) to the
 //! card's driver. Nothing in it waits. Everything is bounds-checked: a malformed frame is dropped, never a
-//! crash. IPv4 only for now; no IP fragments (Chat Computer never sends them and drops those it gets).
+//! crash. No IP fragments (Chat Computer never sends them and drops those it gets).
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
 mod dhcp;
 mod dns;
+mod ipv6;
 pub mod tcp;
 #[cfg(test)]
 mod tests;
@@ -23,6 +25,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 pub use dns::Error as DnsError;
+pub use ipv6::Ipv6;
 pub use tcp::{Error as TcpError, State as TcpState};
 
 /// An IPv4 address.
@@ -63,6 +66,51 @@ impl fmt::Display for Ipv4 {
 }
 
 impl fmt::Debug for Ipv4 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+/// An IP address: IPv4's or IPv6's.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Ip {
+    V4(Ipv4),
+    V6(Ipv6),
+}
+
+impl From<Ipv4> for Ip {
+    fn from(a: Ipv4) -> Ip {
+        Ip::V4(a)
+    }
+}
+
+impl From<Ipv6> for Ip {
+    fn from(a: Ipv6) -> Ip {
+        Ip::V6(a)
+    }
+}
+
+impl Ip {
+    /// "10.0.2.2", "fe80::1" or "[fe80::1]" as an address; None for anything else.
+    pub fn parse(s: &str) -> Option<Ip> {
+        if let Some(a) = Ipv4::parse(s) {
+            return Some(Ip::V4(a));
+        }
+        let s = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(s);
+        Ipv6::parse(s).map(Ip::V6)
+    }
+}
+
+impl fmt::Display for Ip {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Ip::V4(a) => fmt::Display::fmt(a, f),
+            Ip::V6(a) => fmt::Display::fmt(a, f),
+        }
+    }
+}
+
+impl fmt::Debug for Ip {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
@@ -179,6 +227,15 @@ pub(crate) fn transport_checksum(src: Ipv4, dst: Ipv4, protocol: u8, packet: &[u
     checksum(&[&pseudo, packet])
 }
 
+/// The same over IPv4 or IPv6 (None for addresses of each).
+pub(crate) fn transport_checksum_ip(src: Ip, dst: Ip, protocol: u8, packet: &[u8]) -> Option<u16> {
+    match (src, dst) {
+        (Ip::V4(s), Ip::V4(d)) => Some(transport_checksum(s, d, protocol, packet)),
+        (Ip::V6(s), Ip::V6(d)) => Some(ipv6::checksum6(s, d, protocol, packet)),
+        _ => None,
+    }
+}
+
 /// Numbers that are hard to guess (ports, TCP's first sequence numbers, DNS and DHCP ids), from a seed the
 /// kernel gives (xoshiro256**, reseeded by `Stack::mix`).
 pub(crate) struct Random([u64; 4]);
@@ -248,7 +305,7 @@ struct Waiting {
 /// A ping's answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pong {
-    pub from: Ipv4,
+    pub from: Ip,
     pub id: u16,
     pub seq: u16,
 }
@@ -269,8 +326,10 @@ pub struct Stack {
     now: u64,
     pongs: Vec<Pong>,
     pub stats: Stats,
-    /// Changes when the address does (DHCP's lease, or lost), for the screen and the log.
+    /// Changes when the address does (DHCP's lease, or lost; IPv6's from routers), for the screen and the log.
     changes: u64,
+    /// IPv6's addresses, routers, DNS servers and neighbours.
+    pub(crate) v6: ipv6::State,
 }
 
 impl Stack {
@@ -279,6 +338,8 @@ impl Stack {
     pub fn new(mac: Mac, seed: u64, dhcp: bool) -> Stack {
         let mut random = Random::new(seed ^ u64::from_le_bytes([mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5], 0, 0]));
         let ident = random.next() as u16;
+        // (IPv6's interface identifier: random, made anew each start.)
+        let iid = random.next().to_be_bytes();
         Stack {
             mac,
             config: None,
@@ -296,6 +357,7 @@ impl Stack {
             pongs: Vec::new(),
             stats: Stats::default(),
             changes: 0,
+            v6: ipv6::State::new(iid),
         }
     }
 
@@ -346,6 +408,7 @@ impl Stack {
         for hop in hops {
             self.ask(now, hop);
         }
+        self.ip6_poll(now);
         self.dns_poll(now);
         self.tcp_poll(now);
     }
@@ -361,18 +424,20 @@ impl Stack {
         let mut dst = [0u8; 6];
         dst.copy_from_slice(&frame[0..6]);
         let dst = Mac(dst);
-        if dst != self.mac && dst != Mac::BROADCAST {
-            self.stats.dropped += 1; // (multicast isn't joined: nothing here needs it yet)
+        // (Multicast: IPv6's groups this computer is in, and none else.)
+        if dst != self.mac && dst != Mac::BROADCAST && !self.v6.wants_mac(dst) {
+            self.stats.dropped += 1;
             return;
         }
         match be16(frame, 12) {
             ETHERTYPE_ARP => self.arp_in(now, &frame[14..]),
             ETHERTYPE_IPV4 => self.ip_in(now, &frame[14..]),
+            ipv6::ETHERTYPE_IPV6 => self.ip6_in(now, &frame[14..]),
             _ => self.stats.dropped += 1,
         }
     }
 
-    fn frame(&mut self, to: Mac, ethertype: u16, payload: &[u8]) {
+    pub(crate) fn frame(&mut self, to: Mac, ethertype: u16, payload: &[u8]) {
         let mut f = Vec::with_capacity(14 + payload.len().max(46));
         f.extend_from_slice(&to.0);
         f.extend_from_slice(&self.mac.0);
@@ -483,7 +548,7 @@ impl Stack {
         match p[9] {
             PROTO_ICMP => self.icmp_in(now, src, dst, body),
             PROTO_UDP => self.udp_in(now, src, dst, body),
-            PROTO_TCP => self.tcp_in(now, src, dst, body),
+            PROTO_TCP => self.tcp_in(now, Ip::V4(src), Ip::V4(dst), body),
             _ => self.stats.dropped += 1,
         }
     }
@@ -554,8 +619,18 @@ impl Stack {
             }
             0
                 if self.pongs.len() < 64 => {
-                    self.pongs.push(Pong { from: src, id: be16(m, 4), seq: be16(m, 6) });
+                    self.pongs.push(Pong { from: Ip::V4(src), id: be16(m, 4), seq: be16(m, 6) });
                 }
+            // Destination unreachable, about one of our TCP segments (its IP header and first 8 bytes in the
+            // message): a connection still opening there is given up (protocol or port unreachable: refused).
+            3 if m.len() >= 8 + 20 && m[8 + 9] == PROTO_TCP => {
+                let ihl = (m[8] & 0x0F) as usize * 4;
+                if ihl >= 20 && m.len() >= 8 + ihl + 4 {
+                    let to = Ipv4([m[8 + 16], m[8 + 17], m[8 + 18], m[8 + 19]]);
+                    let (local, port) = (be16(m, 8 + ihl), be16(m, 8 + ihl + 2));
+                    self.tcp_unreachable(Ip::V4(to), local, port, matches!(m[1], 2 | 3));
+                }
+            }
             _ => {}
         }
     }
@@ -596,7 +671,7 @@ impl Stack {
         if sport == dhcp::SERVER_PORT && dport == dhcp::CLIENT_PORT {
             self.dhcp_in(now, data);
         } else if sport == 53 {
-            self.dns_in(now, src, dport, data);
+            self.dns_in(now, Ip::V4(src), dport, data);
         } else {
             self.stats.dropped += 1;
         }
@@ -619,26 +694,33 @@ impl Stack {
 
     // ---------------------------------------------------------------- DNS (dns.rs does the work)
 
-    /// Starts finding `name`'s address. An address written as one ("10.0.2.2") is its own answer.
+    /// Starts finding `name`'s address. An address written as one ("10.0.2.2", "fe80::1") is its own answer.
     pub fn resolve(&mut self, now: u64, name: &str) -> Lookup {
         let id = self.dns.start(name, &mut self.random);
         self.dns_poll(now);
         Lookup(id)
     }
 
-    /// The answer to `lookup`, once there is one (asked once: then it's forgotten).
-    pub fn resolved(&mut self, lookup: Lookup) -> Option<Result<Ipv4, DnsError>> {
+    /// The answer to `lookup`, once there is one (asked once: then it's forgotten): an IPv4 address while this
+    /// computer has one and the name does too, else an IPv6 address when it can reach those.
+    pub fn resolved(&mut self, lookup: Lookup) -> Option<Result<Ip, DnsError>> {
         self.dns.take(lookup.0)
     }
 
     fn dns_poll(&mut self, now: u64) {
-        let servers = self.config.as_ref().map(|c| c.dns.clone()).unwrap_or_default();
-        for (server, port, query) in self.dns.due(now, &servers) {
-            self.send_udp(now, port, server, 53, &query);
+        // The servers DHCP named, then those IPv6's routers named.
+        let mut servers: Vec<Ip> = self.config.as_ref().map(|c| c.dns.iter().map(|&a| Ip::V4(a)).collect()).unwrap_or_default();
+        servers.extend(self.v6.dns.iter().map(|d| Ip::V6(d.what)));
+        let (v4, v6) = (self.config.is_some(), self.ipv6_ready());
+        for (server, port, query) in self.dns.due(now, &servers, v4, v6) {
+            match server {
+                Ip::V4(s) => self.send_udp(now, port, s, 53, &query),
+                Ip::V6(s) => self.send_udp6(now, port, s, 53, &query),
+            }
         }
     }
 
-    fn dns_in(&mut self, now: u64, src: Ipv4, port: u16, data: &[u8]) {
+    fn dns_in(&mut self, now: u64, src: Ip, port: u16, data: &[u8]) {
         if !self.dns.answer(now, src, port, data) {
             self.stats.dropped += 1;
         }

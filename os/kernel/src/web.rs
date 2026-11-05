@@ -17,7 +17,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use net::tcp::{Socket, State as TcpState};
-use net::{Ipv4, Stack};
+use net::{Ip, Ipv4, Ipv6, Stack};
 use tls::Cert;
 use web::cookies::Jar;
 use web::http::Response;
@@ -36,6 +36,23 @@ const MOST_REDIRECTS: u32 = 5;
 /// The test's certificate authority (empty in every other build: kernel/build.rs), and its server.
 pub(crate) static TEST_CA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test_ca.der"));
 pub(crate) const TEST_SERVER: Ipv4 = Ipv4([10, 0, 2, 2]);
+/// The same, over QEMU's IPv6 (fec0::2 is the computer running the virtual PC, as 10.0.2.2 is over IPv4).
+pub(crate) const TEST_SERVER6: Ipv6 = Ipv6([0xFE, 0xC0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+
+/// How long something that's to go over the network waits for an IPv4 address (DHCP may still be at work) before it
+/// goes over IPv6, when that's all there is.
+const IPV4_GRACE_MS: u64 = 3000;
+
+/// Whether this computer can reach the internet, for something that's waited `waited` ms to: an IPv4 address (from
+/// DHCP), or IPv6's from a router once DHCP has had a few seconds (IPv4 first, while its address may still come).
+pub(crate) fn network_ready(stack: &Stack, waited: u64) -> bool {
+    stack.config().is_some() || (stack.ipv6_ready() && waited >= IPV4_GRACE_MS)
+}
+
+/// The test's server, over IPv4 while there's an IPv4 address, else IPv6.
+pub(crate) fn test_server(stack: &Stack) -> Ip {
+    if stack.config().is_some() { Ip::V4(TEST_SERVER) } else { Ip::V6(TEST_SERVER6) }
+}
 
 /// The cookies a page's scripts see on the page at `url` (document.cookie: the HttpOnly ones left out).
 pub(crate) fn script_cookies(url: &Url) -> String {
@@ -206,18 +223,18 @@ impl Fetch {
         loop {
             match &mut self.phase {
                 Phase::Network(since) => {
-                    if stack.config().is_none() {
+                    if !network_ready(stack, now.saturating_sub(*since)) {
                         if now.saturating_sub(*since) > NETWORK_MS {
                             return Some(Err(no_address()));
                         }
                         return None;
                     }
                     if test_build() {
-                        match connect(now, stack, TEST_SERVER, test_port(), &self.url.host) {
+                        match connect(now, stack, test_server(stack), test_port(), &self.url.host) {
                             Ok(p) => self.phase = p,
                             Err(why) => return Some(Err(why)),
                         }
-                    } else if let Some(ip) = Ipv4::parse(&self.url.host) {
+                    } else if let Some(ip) = Ip::parse(&self.url.host) {
                         match connect(now, stack, ip, self.url.port, &self.url.host) {
                             Ok(p) => self.phase = p,
                             Err(why) => return Some(Err(why)),
@@ -296,7 +313,7 @@ enum Got {
 }
 
 /// Opens a connection to `host` at `ip` (the next phase), or says why it can't.
-fn connect(now: u64, stack: &mut Stack, ip: Ipv4, port: u16, host: &str) -> Result<Phase, String> {
+fn connect(now: u64, stack: &mut Stack, ip: Ip, port: u16, host: &str) -> Result<Phase, String> {
     stack.connect(now, ip, port).map(|s| Phase::Connecting(s, now)).map_err(|e| format!("couldn't connect to {host}: {e}"))
 }
 
@@ -710,15 +727,15 @@ fn reach(phase: &mut Phase, now: u64, stack: &mut Stack, url: &Url) -> Result<Op
     loop {
         match phase {
             Phase::Network(since) => {
-                if stack.config().is_none() {
+                if !network_ready(stack, now.saturating_sub(*since)) {
                     if now.saturating_sub(*since) > NETWORK_MS {
                         return Err(no_address());
                     }
                     return Ok(None);
                 }
                 *phase = if test_build() {
-                    connect(now, stack, TEST_SERVER, test_port(), &url.host)?
-                } else if let Some(ip) = Ipv4::parse(&url.host) {
+                    connect(now, stack, test_server(stack), test_port(), &url.host)?
+                } else if let Some(ip) = Ip::parse(&url.host) {
                     connect(now, stack, ip, url.port, &url.host)?
                 } else {
                     Phase::Looking(stack.resolve(now, &url.host), now)

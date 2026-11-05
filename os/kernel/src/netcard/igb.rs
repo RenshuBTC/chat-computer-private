@@ -171,11 +171,13 @@ const MANC_BLK_PHY_RST_ON_IDE: u32 = 1 << 18;
 const RAH_AV: u32 = 1 << 31;
 const VMOLR_AUPE: u32 = 1 << 24;
 const VMOLR_BAM: u32 = 1 << 27;
+const VMOLR_MPME: u32 = 1 << 28;
 const IVAR_VALID: u32 = 0x80;
 const SWSM_SMBI: u32 = 1 << 0;
 const SWSM_SWESMBI: u32 = 1 << 1;
 
 const RCTL_EN: u32 = 1 << 1;
+const RCTL_MPE: u32 = 1 << 4; // every multicast frame (IPv6's neighbours and routers speak in them; the stack keeps its own groups')
 const RCTL_BAM: u32 = 1 << 15; // broadcasts too
 const RCTL_SECRC: u32 = 1 << 26; // the chip takes the Ethernet checksum off
 /// Off: storing bad frames, every unicast or multicast frame, long frames, loopback, the multicast table's offset,
@@ -678,7 +680,7 @@ impl Igb {
         let _ = card.r(STATUS); // (two writes in a row could be merged on the way, which some chips get wrong)
         card.w(RAH0, u32::from_le_bytes([m[4], m[5], 0, 0]) | RAH_AV);
         for i in 0..128 {
-            card.w(MTA + 4 * i, 0); // no multicast groups
+            card.w(MTA + 4 * i, 0); // no multicast groups (all of them are taken: RCTL_MPE)
         }
 
         // The link: up, at whatever speed the other end agrees to. The 82580 and later can be told to keep the link
@@ -709,14 +711,14 @@ impl Igb {
         }
 
         // Receiving: queue 0 off while it's set up, then every descriptor gets an empty buffer; the chip may fill all
-        // but one. Frames for this address and broadcasts. (On the igb family, the first pool, all there is without
-        // virtual machines' queues, takes frames without a VLAN tag, and broadcasts.)
+        // but one. Frames for this address, broadcasts and multicasts. (On the igb family, the first pool, all there
+        // is without virtual machines' queues, takes frames without a VLAN tag, broadcasts and multicasts.)
         card.w(RCTL, card.r(RCTL) & !RCTL_EN);
         card.w(RXDCTL, 0);
         if family == Family::I225 {
             card.w(RFCTL, card.r(RFCTL) | RFCTL_IPV6_EX_DIS); // (an erratum, as Linux's igc says)
         } else {
-            card.w(VMOLR0, card.r(VMOLR0) | VMOLR_AUPE | VMOLR_BAM);
+            card.w(VMOLR0, card.r(VMOLR0) | VMOLR_AUPE | VMOLR_BAM | VMOLR_MPME);
         }
         card.w(RDBAL, card.rx.desc.phys as u32);
         card.w(RDBAH, (card.rx.desc.phys >> 32) as u32);
@@ -734,7 +736,7 @@ impl Igb {
             notes.push_str("; its receive queue didn't say it started");
         }
         card.w(RDT, (RING - 1) as u32);
-        card.w(RCTL, (card.r(RCTL) & !RCTL_OFF) | RCTL_EN | RCTL_BAM | RCTL_SECRC);
+        card.w(RCTL, (card.r(RCTL) & !RCTL_OFF) | RCTL_EN | RCTL_MPE | RCTL_BAM | RCTL_SECRC);
 
         // Sending.
         card.w(TXDCTL, 0);

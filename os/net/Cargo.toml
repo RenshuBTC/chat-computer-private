@@ -1,6 +1,6 @@
 [package]
 name = "net"
-description = "Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP"
+description = "Chat Computer's own network stack: Ethernet, ARP, IPv4 and IPv6, ICMP and ICMPv6, UDP, DHCP, DNS and TCP"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

@@ -190,16 +190,16 @@ class HiveWriter:
 
 
 # Default synthetic contents (also importable by tests).
-DEFAULT_ADAPTER = "0a1b2c3d4e5f"          # -> 0A:1B:2C:3D:4E:5F
+DEFAULT_ADAPTER = "d46d6d97629b"          # -> D4:6D:6D:97:62:9B
 DEFAULT_DEVICES = {
     # device-mac-hex : 16-byte classic link key (hex)
-    "a1b2c3d4e5f6": "0123456789abcdef0123456789abcdef",  # -> A1:B2:C3:D4:E5:F6
-    "c0ffee123456": "fedcba9876543210fedcba9876543210",  # -> C0:FF:EE:12:34:56
+    "a4bfc6d0e5ff": "0123456789abcdef0123456789abcdef",  # -> A4:BF:C6:D0:E5:FF
+    "c29e1de23da5": "c486d66a8779afbe72fa81c749dc580c",  # -> C2:9E:1D:E2:3D:A5
 }
 # A non-16-byte blob the importer must skip.
 SKIP_VALUE = ("MasterIRK", "00112233445566778899aabbccddeeff00")
 # What Windows calls the devices (Devices\\<mac>\\Name). The second device has none.
-DEFAULT_NAMES = {"a1b2c3d4e5f6": "Sam\u2019s AirPods Pro"}
+DEFAULT_NAMES = {"a4bfc6d0e5ff": "Ren\u2019s AirPods Pro"}
 
 
 def build(out_path, adapter=DEFAULT_ADAPTER, devices=None, names=None):

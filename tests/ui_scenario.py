@@ -104,7 +104,7 @@ from chatcomputer.journal import setup_logging  # noqa: E402
 setup_logging(paths, verbose=True)
 # The model's server is the stand-in: the controller's ModelService gives its port.
 controller_module.ModelService = lambda *a, **k: FakeModelService(mock)
-settings = Settings(user_name="Sam Lee", windows_user="sammy", stt_model=os.environ.get("CHATCOMPUTER_TEST_STT", "base.en"))
+settings = Settings(user_name="Ren Shu", windows_user="rensh", stt_model=os.environ.get("CHATCOMPUTER_TEST_STT", "base.en"))
 # Pretend-monitor size and viewing distance (the virtual display always reports 96 dpi).
 settings.screen_inches = float(os.environ.get("UITEST_INCHES", "0") or 0)
 settings.viewing_distance_cm = int(os.environ.get("UITEST_DISTANCE_CM", "0") or 0)
@@ -144,7 +144,7 @@ if (MODELS / "kokoro-v1.0.int8.onnx").exists():
 wd = MODELS / "whisper" / f"faster-whisper-{settings.stt_model}"
 if (wd / "model.bin").exists():
     from chatcomputer.voice.stt import STT
-    stt = STT(str(wd), "en", hint="Computer, Sam Lee, YouTube")
+    stt = STT(str(wd), "en", hint="Computer, Ren Shu, YouTube")
 
 result = {"steps": [], "ok": False}
 holder = {}
@@ -254,6 +254,43 @@ def scenario():
         result["steps"].append({"rebuilt_after_renderer_crash": rebuilt,
                                 "drawing_with_processor": os.environ.get("WEBKIT_SKIA_ENABLE_CPU_RENDERING") == "1",
                                 **({} if rebuilt else {"before": before[-800:], "after": after[-800:]})})
+        # 6. AirTouch: the keyboard comes up (a beckon), eight dots on it, two keys typed into the conversation.
+        class FakeAirTouch:
+            keyboards = []
+
+            def set_keyboard(self, spec):
+                self.keyboards.append(spec)
+
+            def stop(self):
+                pass
+        c.airtouch = FakeAirTouch()
+        loop.call_soon_threadsafe(c._on_airtouch, ("gesture", "keyboard up"))
+        time.sleep(1.5)
+        spec = c.airtouch.keyboards[-1]
+        air = c.screen.air
+        px, py = air.panel[0], air.panel[1]
+
+        def key_at(label):
+            k = next(k for k in air.kb.keys if k.label == label)
+            return c.screen._to_display(px + k.x + k.w / 2, py + k.y + k.h / 2)
+        dots = [key_at("j") + ("press",), key_at("f") + ("key",)]      # a dot per index finger, on j and f
+        loop.call_soon_threadsafe(c._on_airtouch, ("dots", dots))
+        time.sleep(0.5)
+        shot("07-airtouch-keyboard")
+        for lbl in ("h", "i"):
+            loop.call_soon_threadsafe(c._on_airtouch, ("key",) + key_at(lbl))
+            time.sleep(0.6)
+        time.sleep(1.0)
+        shot("08-airtouch-typed")
+        typed = page_value(c.screen, "document.getElementById('input').value")
+        loop.call_soon_threadsafe(c._on_airtouch, ("key",) + key_at("hide keyboard"))
+        time.sleep(1.0)
+        loop.call_soon_threadsafe(c._on_airtouch, ("dots", [(400.0, 300.0, "point"), (900.0, 320.0, "pinch")]))
+        time.sleep(0.5)
+        shot("09-airtouch-dots")
+        result["steps"].append({"airtouch_keyboard": spec, "typed_with_fingers": typed,
+                                "keyboard_away": not c.keyboard_up and c.airtouch.keyboards[-1] is None})
+        c.airtouch = None
         result["spoken_chunks"] = len(player.played)
         result["tool_results"] = [json.dumps(tool_results(r))[:300] for r in mock.requests if last_is_tool_result(r)]
         result["ok"] = True

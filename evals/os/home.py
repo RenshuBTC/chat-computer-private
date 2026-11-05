@@ -80,9 +80,9 @@ def files() -> dict[str, tuple[bytes, float]]:
     f: dict[str, tuple[bytes, float]] = {
         "Documents/Tax letter March 2026.pdf": (_pdf([
             "Inland Revenue Authority of Singapore", "Notice of Assessment, Year of Assessment 2026",
-            "Sam Lee", "Chargeable income: S$84,200", "Tax payable: S$3,876.00, due within 30 days.",
+            "Ren Shu", "Chargeable income: S$84,200", "Tax payable: S$3,876.00, due within 30 days.",
             "Date: 14 March 2026"]), _when(2026, 3, 14)),
-        "Documents/CV.docx": (_docx(["Sam Lee", "Curriculum Vitae",
+        "Documents/CV.docx": (_docx(["Ren Shu", "Curriculum Vitae",
                                      "Product designer, 9 years. Singapore.",
                                      "Experience: Grab (2021-2026), Shopee (2017-2021)."]), _when(2026, 5, 2)),
         "Documents/Packing list.md": (b"# Packing list for Bali\n\n- Passport\n- Swimsuit\n- Sunscreen\n- Chargers\n",
@@ -91,7 +91,7 @@ def files() -> dict[str, tuple[bytes, float]]:
                                               ["February", 7000, 4890], ["March", 7000, 6120]]), _when(2026, 4, 1)),
         "Downloads/Boarding pass SQ322.pdf": (_pdf([
             "Singapore Airlines", "Boarding pass", "SQ322 Singapore (SIN) to London (LHR)",
-            "Passenger: LEE / SAM", "Date: 24 October 2026, 23:15", "Seat 41C, Gate C19"]), time.time() - 3 * 3600),
+            "Passenger: SHU / REN", "Date: 24 October 2026, 23:15", "Seat 41C, Gate C19"]), time.time() - 3 * 3600),
         "Pictures/Beach.jpg": (_jpg((40, 120, 200), "Beach"), _when(2026, 7, 6)),
         "Desktop/Notes.txt": (b"Call the bank about the card.\nBuy a birthday present for Mum.\n", _when(2026, 9, 30)),
         "Desktop/Screenshot 2026-01-05 at 10.12.33.png": (_png("Screenshot 1"), _when(2026, 1, 5, 10, 12)),

@@ -77,7 +77,7 @@ def test_the_conversation_reads_and_scrolls_like_a_chat():
 def test_whats_done_takes_you_back_to_where_it_was_asked():
     import re
     # The sidebars from the start. A panel at the right, a sixth of the screen as in the Claude
-    # app, grouped by day. Clicking an item (a real click: the keyboard's layer over everything used to take every
+    # app, grouped by day. Clicking an item (a real click: the AirTouch layer over everything used to take every
     # click) scrolls back to the message that asked for it; one from yesterday puts yesterday's messages back first.
     # Typing stays in the message box.
     import json
@@ -294,7 +294,7 @@ def test_slash_in_the_message_box_searches_this_computer():
     assert s["bold"] == ["rep"] and "sel" in s["results"][0]["cls"] and s["results_box"][3] <= s["box"][1]
     assert "sel" in res["search_down"]["results"][1]["cls"] and "sel" in res["search_up"]["results"][0]["cls"]
     assert not res["opened"]["searching"] and res["opened"]["value"] == ""
-    assert res["events"][:2] == [{"type": "search", "q": "rep"}, {"type": "open_file", "path": "/home/sam/Documents/report.pdf"}]
+    assert res["events"][:2] == [{"type": "search", "q": "rep"}, {"type": "open_file", "path": "/home/ren/Documents/report.pdf"}]
     nothing = res["nothing"]
     assert [r["text"] for r in nothing["results"]] == ["Ask Chat Computer to find \u201czzq\u201d"]
     assert nothing["note"] == "Nothing on this computer matches \u201czzq\u201d."
@@ -338,7 +338,7 @@ def test_the_touchscreen_works_as_an_ipad_s():
     # A sidebar item swiped left shows Pin (the sidebars show from the start); holding a message selects it;
     # a double tap selects a word.
     assert res["swipe"] == {**res["swipe"], "swiped": True, "label": '"Pin"', "visible": "visible"}
-    assert res["hold"]["selected"].strip() == "Hi Sam. The weather is lovely today." and res["hold"]["tapPrevented"]
+    assert res["hold"]["selected"].strip() == "Hi Ren. The weather is lovely today." and res["hold"]["tapPrevented"]
     assert res["double_tap"] == "weather"
     # Messages pulled down from the top where the sidebars aren't showing (the middle filling the screen, or a narrow
     # screen), and gone with a touch elsewhere.
@@ -416,7 +416,7 @@ def test_pdfs_and_where_what_s_open_is():
     assert res["doc"]["ok"] and res["doc_shown"] == "chat"
     d = res["doc_pdf"]
     assert d["exists"] and d["pages"] == 1 and d["size_pt"] in ([595, 842], [612, 792])
-    assert "Sam Lee" in d["text"] and "Curriculum Vitae" in d["text"] and "Designer" in d["text"]
+    assert "Ren Shu" in d["text"] and "Curriculum Vitae" in d["text"] and "Designer" in d["text"]
     # What's open: where it is on the screen, and printed as it is.
     x, y, w, h = res["rect_open"]
     sw, sh = res["screen"]

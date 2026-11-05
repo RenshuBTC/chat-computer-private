@@ -1,11 +1,14 @@
 /* How you want Chat Computer: the app's first page, and where it's changed later ("/" in Chat Computer opens it,
-   with ?change). Two ways; the app does each (src-tauri/src/ways.rs):
-   - App: the conversation, right away.
-   - Its own system: Chat Computer Setup, which comes with the app, started (on a PC, Chat Computer's own system, put
-     next to Windows; on a Mac, in Terminal, only on M1, M2 and M3, and the page says plainly when this Mac can't).
-   The app keeps the way chosen; started again, it opens on the conversation (the app) or on this page, at the own
-   system's steps. The page asks the app with way_status and choose_way (window.__TAURI__, given only to the app's own
-   pages). */
+   with ?change). Four ways; the app does each (src-tauri/src/ways.rs):
+   - Chrome extension: the extension goes in a folder of the app's own, Chrome opens, and this page shows the steps
+     Chrome asks for (it adds extensions by itself only from its Web Store), with the folder's path copied.
+   - Browser: the app as your web browser (sites in tabs above the conversation); it offers to be the default.
+   - App: the app as it was: the conversation, right away.
+   - Its own system: Chat Computer Setup, which comes with the app, started (on a Mac, in Terminal; only on M1, M2
+     and M3, and the page says plainly when this Mac can't).
+   The app keeps the way chosen; started again, it opens on the conversation (the app, the browser) or on this page,
+   at the way's steps (the extension, the own system). The page asks the app with way_status and choose_way
+   (window.__TAURI__, given only to the app's own pages). */
 (function () {
   "use strict";
   var tauri = window.__TAURI__ && window.__TAURI__.core;
@@ -15,12 +18,12 @@
   }
   function $(id) { return document.getElementById(id); }
   var body = document.body;
-  var status = { way: null, setup: "", os: { can: false, why: "", system: "" } };
+  var status = { way: null, chrome: false, extension: "", setup: "", default_browser: null, os: { can: false, why: "", system: "" } };
   var changing = /[?&]change(=|&|$)/.test(location.search);
-  var PANELS = { os: "way-os" };
+  var PANELS = { chrome: "way-chrome", browser: "way-browser", os: "way-os" };
   var busy = false;
 
-  // The two choices, or the own system's steps.
+  // The four choices, or one way's steps.
   function show(which) {
     $("choose").hidden = which !== "choose";
     Object.keys(PANELS).forEach(function (w) { $(PANELS[w]).hidden = which !== w; });
@@ -63,6 +66,17 @@
     return ok;
   }
 
+  function chromeSteps(done, copied) {
+    $("extension-folder").textContent = (done && done.folder) || status.extension;
+    var here = done && "chrome" in done ? done.chrome : status.chrome;
+    $("no-chrome").hidden = !!here;
+    $("chrome-open").hidden = !(done && done.chrome_opened);
+    $("extension-copied").hidden = !copied;
+  }
+  function browserSteps(isDefault) {
+    $("default-yes").hidden = isDefault !== true;
+    $("default-ask").hidden = isDefault === true;
+  }
   function osSteps(done) {
     $("setup-folder").textContent = (done && done.folder) || status.setup;
     $("os-started").hidden = !done;
@@ -73,11 +87,14 @@
     if (busy) return Promise.resolve();
     if (way === "os" && !status.os.can) { $("error").textContent = status.os.why; return Promise.resolve(); }
     $("error").textContent = "";
+    var copied = way === "chrome" && status.extension ? copy(status.extension) : false;
     busy = true;
     if (button) { button.classList.add("busy"); button.disabled = true; }
     return app("choose_way", { way: way }).then(function (done) {
       status.way = way;
       if (way === "app") { location.href = "../index.html"; return; }
+      if (way === "chrome") chromeSteps(done, copied);
+      if (way === "browser") browserSteps(done && done.default_browser);
       if (way === "os") osSteps(done);
       show(way);
     }, function (e) {
@@ -87,6 +104,32 @@
       busy = false;
       if (button) { button.classList.remove("busy"); button.disabled = false; }
     });
+  }
+
+  // Asked to be the default browser: Windows' Settings, or macOS's own question; then, a while, whether it is now.
+  var watching = 0;
+  function askDefault(button) {
+    button.disabled = true;
+    app("make_default_browser").then(function () {
+      $("default-asked").hidden = false;
+      $("default-asked").textContent = status.os.system === "windows" ? "Settings is open: choose Chat Computer there." :
+        "macOS asked you: choose Use “Chat Computer”.";
+      watchDefault(48);
+    }, function (e) {
+      $("default-asked").hidden = false;
+      $("default-asked").textContent = String(e);
+    }).then(function () { button.disabled = false; });
+  }
+  function watchDefault(times) {
+    clearTimeout(watching);
+    if (times <= 0 || $("way-browser").hidden) return;
+    watching = setTimeout(function () {
+      app("way_status").then(function (s) {
+        status.default_browser = s.default_browser;
+        if (s.default_browser === true) { browserSteps(true); return; }
+        watchDefault(times - 1);
+      }, function () {});
+    }, 2500);
   }
 
   document.addEventListener("click", function (e) {
@@ -101,23 +144,26 @@
     }
     if (act === "choose") { changing = true; mark(); show("choose"); return; }
     if (act === "start") { location.href = "../index.html"; return; }
-    if (act === "os") { choose(act, t); return; }
-    if (act === "setup-folder") {
-      app("show_folder", { which: "setup" }).then(function () {}, function (err) {
+    if (act === "chrome" || act === "os") { choose(act, t); return; }
+    if (act === "default") { askDefault(t); return; }
+    if (act === "extension-folder" || act === "setup-folder") {
+      app("show_folder", { which: act === "extension-folder" ? "extension" : "setup" }).then(function () {}, function (err) {
         $("error").textContent = String(err);
       });
     }
   });
 
-  // What the app says: how it is now, and what's here. Started on the own system, this page opens at its steps;
-  // otherwise (the first start, or to change it), at the two.
+  // What the app says: how it is now, and what's here. Started on a way that isn't the conversation (the extension,
+  // the own system), this page opens at its steps; otherwise (the first start, or to change it), at the four.
   app("way_status").then(function (s) {
     status = s;
     status.os = s.os || { can: false, why: "", system: "" };
     if (status.os.system) body.classList.add(status.os.system);
+    chromeSteps(null, false);
+    browserSteps(s.default_browser);
     osSteps(null);
     mark();
-    if (!changing && s.way === "os") show(s.way);
+    if (!changing && (s.way === "chrome" || s.way === "os")) show(s.way);
     else show("choose");
   }, function (e) {
     mark();

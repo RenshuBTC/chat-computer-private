@@ -5,9 +5,6 @@
 //! nothing from the site. A fetch is moved on from the main loop (`Fetch::step`), never waiting, so the screen and the
 //! keyboard go on meanwhile.
 //!
-//! The same way, a POST to an API (Meta's Model API, for the model: assistant.rs): its answer whatever its status, and
-//! never sent on.
-//!
 //! A test build with a certificate authority of its own (check.py --web: CHATCOMPUTER_TEST_CA, kernel/build.rs)
 //! trusts that one instead of Mozilla's, and reaches every site at a test server on the computer running the virtual
 //! PC (10.0.2.2), still checking its certificate for the site's name.
@@ -57,11 +54,10 @@ fn roots() -> &'static [Cert<'static>] {
     r
 }
 
-/// A page, fetched: where it ended up (after redirects), its status (200, or an API's error's), its Content-Type, its
-/// bytes (decompressed), and whether they were cut at web::MOST_BYTES.
+/// A page, fetched: where it ended up (after redirects), its Content-Type, its bytes (decompressed), and whether
+/// they were cut at web::MOST_BYTES.
 pub struct Page {
     pub url: Url,
-    pub status: u16,
     pub kind: String,
     pub bytes: Vec<u8>,
     pub cut: bool,
@@ -78,8 +74,6 @@ enum Phase {
 struct Talk {
     socket: Socket,
     tls: Box<tls::Client>,
-    /// The request, sent once the secure connection is open.
-    request: Vec<u8>,
     /// For the site, not yet taken by TCP.
     out: Vec<u8>,
     sent: bool,
@@ -92,18 +86,11 @@ pub struct Fetch {
     url: Url,
     phase: Phase,
     redirects: u32,
-    /// A POST's headers and body (else it's a GET).
-    post: Option<(Vec<(String, String)>, Vec<u8>)>,
 }
 
 impl Fetch {
     pub fn new(url: Url) -> Fetch {
-        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, post: None }
-    }
-
-    /// A POST of `body` with `headers`: its answer, whatever its status, is the page.
-    pub fn post(url: Url, headers: Vec<(String, String)>, body: Vec<u8>) -> Fetch {
-        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, post: Some((headers, body)) }
+        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0 }
     }
 
     /// The site being fetched from now (after any redirects).
@@ -183,14 +170,9 @@ impl Fetch {
                             let mut tls = Box::new(tls::Client::new(&self.url.host, when, roots(), &mut random::fill));
                             tls.allow_clock_error(clock::error());
                             let out = tls.outgoing();
-                            let request = match &self.post {
-                                Some((headers, body)) => web::http::post(&self.url, headers, body),
-                                None => web::http::get(&self.url),
-                            };
                             self.phase = Phase::Talking(Box::new(Talk {
                                 socket: s,
                                 tls,
-                                request,
                                 out,
                                 sent: false,
                                 response: Response::new(),
@@ -209,7 +191,7 @@ impl Fetch {
                         _ => return None,
                     }
                 }
-                Phase::Talking(t) => return talk(now, stack, t, &self.url, self.post.is_some()),
+                Phase::Talking(t) => return talk(now, stack, t, &self.url),
             }
         }
     }
@@ -226,7 +208,7 @@ fn connect(now: u64, stack: &mut Stack, ip: Ipv4, port: u16, host: &str) -> Resu
 }
 
 /// The connection is open: TLS's set-up, the request, and the response. Some when it's over.
-fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, post: bool) -> Option<Result<Got, String>> {
+fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url) -> Option<Result<Got, String>> {
     let mut buf = vec![0u8; 16 * 1024];
     loop {
         let n = stack.recv(t.socket, &mut buf);
@@ -243,8 +225,7 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, post: bool) -> Opt
         return Some(Err(tls_text(e, &url.host)));
     }
     if t.tls.is_open() && !t.sent {
-        let request = core::mem::take(&mut t.request);
-        t.tls.write(&request);
+        t.tls.write(&web::http::get(url));
         t.sent = true;
     }
     loop {
@@ -264,7 +245,7 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, post: bool) -> Opt
     }
     if t.response.done() {
         stack.release(t.socket);
-        return Some(answered(&t.response, url, post));
+        return Some(answered(&t.response, url));
     }
     t.out.extend(t.tls.outgoing());
     if !t.out.is_empty() {
@@ -284,13 +265,8 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, post: bool) -> Opt
 }
 
 /// What a whole response comes to: a redirect, the page, or why there's none.
-fn answered(r: &Response, url: &Url, post: bool) -> Result<Got, String> {
+fn answered(r: &Response, url: &Url) -> Result<Got, String> {
     let status = r.status().unwrap_or(0);
-    if post {
-        let bytes = r.page().map_err(String::from)?;
-        let kind = String::from(r.header("content-type").unwrap_or(""));
-        return Ok(Got::Page(Page { url: url.clone(), status, kind, bytes, cut: r.cut() }));
-    }
     if matches!(status, 301 | 302 | 303 | 307 | 308) {
         let Some(to) = r.header("location") else {
             return Err(format!("{} sent it on without saying where", url.host));
@@ -308,7 +284,7 @@ fn answered(r: &Response, url: &Url, post: bool) -> Result<Got, String> {
     }
     let bytes = r.page().map_err(String::from)?;
     let kind = String::from(r.header("content-type").unwrap_or(""));
-    Ok(Got::Page(Page { url: url.clone(), status, kind, bytes, cut: r.cut() }))
+    Ok(Got::Page(Page { url: url.clone(), kind, bytes, cut: r.cut() }))
 }
 
 /// A failed secure connection, in words.

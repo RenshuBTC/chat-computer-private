@@ -12,8 +12,9 @@
 //!   this computer runs well ready and serves it to the page (engine.rs). No account, and nothing sent anywhere.
 //! - Or, if you sign in with ChatGPT (the spark beside +), your ChatGPT plan answers: the app signs in on OpenAI's
 //!   page and keeps the tokens, and asks OpenAI for the page (chatgpt.rs).
-//! - How you have Chat Computer, asked the first time it starts (ways.rs, and its page, start/): as this app, or as
-//!   its own system (Chat Computer Setup, which comes with the app).
+//! - How you have Chat Computer, asked the first time it starts (ways.rs, and its page, start/): as a Chrome
+//!   extension, as your browser (sites in tabs: open_tab and the rest; links from other apps open here), as this app,
+//!   or as its own system (Chat Computer Setup, which comes with the app).
 //!
 //! Only the app's own page (the webview called "main") can ask for these: the sites shown in the middle can't
 //! (capabilities/, and each command checks who's asking). A connected service's own pages may hand the app what's
@@ -37,6 +38,7 @@ use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, Webv
 /// The app's own page, and the view of a site laid over it (in the browser, each tab's: "tab-" and its number).
 const MAIN: &str = "main";
 const SITE: &str = "site";
+const TAB: &str = "tab-";
 /// The app's window.
 const WINDOW: &str = "chat-computer";
 /// On a Mac, the view of a site says it's Safari (it is Safari's engine): some sites turn away a browser they don't
@@ -60,8 +62,14 @@ struct Middle(Mutex<String>);
 #[derive(Default)]
 struct Chosen(Mutex<Option<ways::Way>>);
 
-/// The model's engine, started once the way is the app (a model of gigabytes, got ready for this computer: not for
-/// the own system, which doesn't need the app's).
+/// Web addresses from outside (a link clicked in another app, the command line), waiting for the conversation's page
+/// to be there to open them: it asks for them (take_opening) once it knows how to (as tabs, in the browser); after
+/// that, until it loads again, each is told to it as it comes. (Whether it has asked, and those waiting.)
+#[derive(Default)]
+struct Outside(Mutex<(bool, Vec<String>)>);
+
+/// The model's engine, started once the way is the app or the browser (a model of gigabytes, got ready for this
+/// computer: not for the Chrome extension or the own system, which don't need the app's).
 #[derive(Default)]
 struct EngineStart(Mutex<Option<Box<dyn FnOnce() + Send>>>);
 
@@ -73,6 +81,14 @@ fn start_engine(app: &AppHandle) {
 }
 
 /// A tab's view, by its number (the page numbers them: 1 to 500).
+fn tab_label(tab: u32) -> Result<String, String> {
+    if (1..=500).contains(&tab) { Ok(format!("{TAB}{tab}")) } else { Err("That isn't a tab.".into()) }
+}
+
+fn is_tab(label: &str) -> bool {
+    label.strip_prefix(TAB).is_some_and(|n| n.parse::<u32>().is_ok_and(|n| tab_label(n).is_ok()))
+}
+
 fn middle(app: &AppHandle) -> Option<Webview> {
     let label = app.state::<Middle>().0.lock().ok()?.clone();
     app.get_webview(&label)
@@ -139,11 +155,14 @@ fn aside(view: &Webview) -> Result<(), String> {
 }
 
 /// What's in the middle goes, for `label` to take its place: a service's view is put aside (still signed in and
-/// read); the site's closes, as a site does when another opens in its place (what played there stops).
+/// read); a tab is put out of sight (still open, as a browser's other tabs are); the site's closes, as a site does
+/// when another opens in its place (what played there stops).
 fn clear_middle(app: &AppHandle, label: &str) {
     if let Some(view) = middle(app).filter(|v| v.label() != label) {
         if messages::of_view(view.label()).is_some() {
             let _ = aside(&view);
+        } else if is_tab(view.label()) {
+            let _ = view.hide();
         } else {
             let _ = view.close();
         }
@@ -256,6 +275,97 @@ fn close_site(app: AppHandle, webview: Webview) -> Result<(), String> {
     }
 }
 
+// ---------------------------------------------------------------------------------------- tabs (the browser)
+/// A tab: a view of the web of its own, at the frame (x, y, w, h), in the middle in place of what was there (a tab
+/// before it is put out of sight, still open). The first time, it's made with the address; after that the address
+/// is opened in it (a site Chat Computer opens goes in the tab it opened the last one in).
+#[tauri::command]
+fn open_tab(app: AppHandle, webview: Webview, tab: u32, url: String, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    from_main(&webview)?;
+    let url = web_url(&url)?;
+    let label = tab_label(tab)?;
+    clear_middle(&app, &label);
+    set_middle(&app, &label);
+    if let Some(view) = app.get_webview(&label) {
+        view.navigate(url).map_err(err)?;
+        place(&view, x, y, w, h)?;
+        return view.show().map_err(err);
+    }
+    let builder = web_view(&app, &label, url);
+    webview
+        .window()
+        .add_child(builder, LogicalPosition::new(x.max(0.0), y.max(0.0)), LogicalSize::new(w.max(1.0), h.max(1.0)))
+        .map_err(err)?;
+    Ok(())
+}
+
+/// A tab chosen: in the middle again, where it was (at the frame).
+#[tauri::command]
+fn show_tab(app: AppHandle, webview: Webview, tab: u32, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    from_main(&webview)?;
+    let label = tab_label(tab)?;
+    let view = app.get_webview(&label).ok_or("That tab isn't open.")?;
+    clear_middle(&app, &label);
+    set_middle(&app, &label);
+    place(&view, x, y, w, h)?;
+    view.show().map_err(err)
+}
+
+/// A tab closed: its view goes, and what played there stops.
+#[tauri::command]
+fn close_tab(app: AppHandle, webview: Webview, tab: u32) -> Result<(), String> {
+    from_main(&webview)?;
+    let label = tab_label(tab)?;
+    if middle(&app).is_some_and(|m| m.label() == label) {
+        set_middle(&app, "");
+    }
+    match app.get_webview(&label) {
+        Some(v) => v.close().map_err(err),
+        None => Ok(()),
+    }
+}
+
+/// A tab's way back, or forward again (a fixed script in its page, as its own back button would).
+#[tauri::command]
+fn tab_back(app: AppHandle, webview: Webview, tab: u32, forward: bool) -> Result<(), String> {
+    from_main(&webview)?;
+    let view = app.get_webview(&tab_label(tab)?).ok_or("That tab isn't open.")?;
+    view.eval(if forward { "history.forward();" } else { "history.back();" }).map_err(err)
+}
+
+/// The web addresses from outside that came before the page was there (see Outside): from now on, it's told each.
+#[tauri::command]
+fn take_opening(app: AppHandle, webview: Webview) -> Result<Vec<String>, String> {
+    from_main(&webview)?;
+    let out = app.state::<Outside>();
+    let mut o = out.0.lock().map_err(err)?;
+    o.0 = true;
+    Ok(std::mem::take(&mut o.1))
+}
+
+/// Web addresses from outside (a link from another app): opened by the conversation's page when it's there (in tabs,
+/// in the browser), else kept for it; the window comes to the front. (Windows' and the Mac's: elsewhere links don't
+/// come to the app.)
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn from_outside(app: &AppHandle, urls: Vec<String>) {
+    if urls.is_empty() {
+        return;
+    }
+    if let Some(w) = app.get_window(WINDOW) {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+    let out = app.state::<Outside>();
+    let Ok(mut o) = out.0.lock() else { return };
+    if o.0 {
+        for u in urls {
+            tell_main(app, serde_json::json!({ "open": u, "outside": true }));
+        }
+    } else {
+        o.1.extend(urls);
+    }
+}
+
 // ---------------------------------------------------------------------------------------- how you have it (ways.rs)
 /// How you have Chat Computer now, and what's here for each way (for its page, start/).
 #[tauri::command]
@@ -263,19 +373,23 @@ async fn way_status(app: AppHandle, webview: Webview) -> Result<serde_json::Valu
     from_main(&webview)?;
     let data = app.path().app_local_data_dir().map_err(err)?;
     let way = *app.state::<Chosen>().0.lock().map_err(err)?;
+    let id = app.config().identifier.clone();
     tauri::async_runtime::spawn_blocking(move || {
         serde_json::json!({
             "way": way.map(ways::Way::name),
+            "chrome": ways::chrome().is_some(),
+            "extension": ways::extension_dir(&data).to_string_lossy(),
             "setup": ways::setup_dir(&data).to_string_lossy(),
             "os": ways::os_check(),
+            "default_browser": ways::is_default_browser(&id),
         })
     })
     .await
     .map_err(err)
 }
 
-/// A way chosen, and done: kept, and what it needs (see ways.rs). Chosen again, it's done again (Chat Computer Setup
-/// started again).
+/// A way chosen, and done: kept, and what it needs (see ways.rs). Chosen again, it's done again (Chrome opened
+/// again, Chat Computer Setup started again).
 #[tauri::command]
 async fn choose_way(app: AppHandle, webview: Webview, way: String) -> Result<serde_json::Value, String> {
     from_main(&webview)?;
@@ -283,9 +397,21 @@ async fn choose_way(app: AppHandle, webview: Webview, way: String) -> Result<ser
     let data = app.path().app_local_data_dir().map_err(err)?;
     let config = app.path().app_config_dir().map_err(err)?;
     let setup = app.path().resource_dir().map_err(err)?.join("setup");
+    let id = app.config().identifier.clone();
     let mut done = tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let mut done = serde_json::json!({ "way": way.name() });
         match way {
+            ways::Way::Chrome => {
+                let dir = ways::put_extension(&data).map_err(|e| format!("The extension's folder couldn't be made ({e})."))?;
+                done["folder"] = dir.to_string_lossy().into();
+                let chrome = ways::chrome();
+                done["chrome"] = chrome.is_some().into();
+                done["chrome_opened"] = chrome.is_some_and(|c| ways::open_chrome(&c, &ways::chrome_steps(&dir)).is_ok()).into();
+            }
+            ways::Way::Browser => {
+                ways::register_browser()?;
+                done["default_browser"] = ways::is_default_browser(&id).into();
+            }
             ways::Way::App => {}
             ways::Way::Os => {
                 let check = ways::os_check();
@@ -297,6 +423,9 @@ async fn choose_way(app: AppHandle, webview: Webview, way: String) -> Result<ser
                 ways::run_setup(&to)?;
                 done["folder"] = to.to_string_lossy().into();
             }
+        }
+        if way != ways::Way::Browser {
+            ways::unregister_browser();
         }
         Ok(done)
     })
@@ -311,12 +440,21 @@ async fn choose_way(app: AppHandle, webview: Webview, way: String) -> Result<ser
     Ok(done)
 }
 
-/// Chat Computer Setup's folder, shown in File Explorer or Finder.
+/// Asked to be the default browser: Windows' Settings open at Chat Computer; a Mac asks the person itself.
+#[tauri::command]
+async fn make_default_browser(app: AppHandle, webview: Webview) -> Result<(), String> {
+    from_main(&webview)?;
+    let id = app.config().identifier.clone();
+    tauri::async_runtime::spawn_blocking(move || ways::ask_default_browser(&id)).await.map_err(err)?
+}
+
+/// The extension's folder, or Chat Computer Setup's, shown in File Explorer or Finder.
 #[tauri::command]
 fn show_folder(app: AppHandle, webview: Webview, which: String) -> Result<(), String> {
     from_main(&webview)?;
     let data = app.path().app_local_data_dir().map_err(err)?;
     let dir = match which.as_str() {
+        "extension" => ways::extension_dir(&data),
         "setup" => ways::setup_dir(&data),
         _ => return Err("That isn't one of Chat Computer's folders.".into()),
     };
@@ -609,8 +747,9 @@ fn home_url(app: &tauri::App, page: &str) -> Result<WebviewUrl, Box<dyn std::err
     Ok(WebviewUrl::App(page.into()))
 }
 
-/// The page the app opens on: the conversation, when the way is the app; otherwise the one that asks how you want
-/// Chat Computer (the first time), or shows the own system's steps, to change it there.
+/// The page the app opens on: the conversation, when the way is the app or the browser; otherwise the one that
+/// asks how you want Chat Computer (the first time), or shows the steps for the way chosen (the Chrome extension,
+/// the own system), to change it there.
 fn first_page(way: Option<ways::Way>) -> &'static str {
     if way.is_some_and(ways::Way::in_app) { "index.html" } else { "start/index.html" }
 }
@@ -621,16 +760,30 @@ const SCREEN: tauri::window::Color = tauri::window::Color(0x15, 0x15, 0x15, 255)
 pub fn run() {
     let engine = Arc::new(engine::Engine::default());
     let (starting, stopping) = (engine.clone(), engine.clone());
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // On Windows, one Chat Computer at a time: a link clicked in another app while it runs (Windows starts the app
+    // again, with the link) goes to the one running, and so does starting it again. (A Mac does that itself, and
+    // sends the link to the app: RunEvent::Opened, below.)
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        if let Some(w) = app.get_window(WINDOW) {
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+        from_outside(app, ways::urls_in(&argv));
+    }));
+    builder
         .manage(Found::default())
         .manage(Middle::default())
         .manage(Chosen::default())
+        .manage(Outside::default())
         .manage(EngineStart::default())
         .manage(engine)
         .invoke_handler(tauri::generate_handler![
             show_site, place_site, hide_site, unhide_site, close_site, site_media, search_files, open_file, about,
             connect_service, forget_service, open_service_item, model_status, messages_found, chatgpt_status,
-            chatgpt_sign_in, chatgpt_sign_out, chatgpt_ask, way_status, choose_way, show_folder
+            chatgpt_sign_in, chatgpt_sign_out, chatgpt_ask, way_status, choose_way, make_default_browser, show_folder,
+            open_tab, show_tab, close_tab, tab_back, take_opening
         ])
         .setup(move |app| {
             // (A build for testing, pointed at the tests' own pages for the services: those may hand over what's
@@ -654,6 +807,15 @@ pub fn run() {
                 let _ = ways::keep(&config, ways::Way::App);
             }
             *app.state::<Chosen>().0.lock().map_err(|e| e.to_string())? = way;
+            // As a browser, listed with Windows again at each start (the app may have moved, or come again).
+            if way == Some(ways::Way::Browser) {
+                let _ = ways::register_browser();
+            }
+            // Web addresses to open: a link from another app that started it (on its command line), or, as the
+            // app's tests on GitHub's machines do, CHATCOMPUTER_OPEN.
+            let mut first: Vec<String> = std::env::args().skip(1).collect();
+            first.extend(std::env::var("CHATCOMPUTER_OPEN").ok());
+            app.state::<Outside>().0.lock().map_err(|e| e.to_string())?.1 = ways::urls_in(&first);
             let url = home_url(app, first_page(way))?;
             // The whole screen to start with, as a Chat Computer has (and room for both sidebars).
             let window = tauri::window::WindowBuilder::new(app, WINDOW)
@@ -674,7 +836,7 @@ pub fn run() {
             app.manage(Home(home.clone()));
             // The model, on this computer: served (and got ready, where it isn't yet), for the page, which hears how
             // it goes (chatcomputerApp({model})). The page's own origin may use it (on a Mac, the app's server's).
-            // Started now when the way is the app; otherwise once it's chosen.
+            // Started now when the way is the app or the browser; otherwise once one of those is chosen.
             let dir = models_dir(app)?;
             let origins = if home.scheme() == "http" { vec![home.origin().ascii_serialization()] } else { Vec::new() };
             let told = app.handle().clone();
@@ -706,6 +868,21 @@ pub fn run() {
                 .on_page_load(move |wv, load| {
                     if let PageLoadEvent::Started = load.event() {
                         let home = &guard.state::<Home>().0;
+                        // A page of the app's own loading (the conversation's, or the one that asks how you want Chat
+                        // Computer): it starts with no tabs, and what comes from outside waits until it asks for it.
+                        if same_origin(load.url(), home) {
+                            if let Ok(mut o) = guard.state::<Outside>().0.lock() {
+                                o.0 = false;
+                            }
+                            if middle(&guard).is_some_and(|m| is_tab(m.label())) {
+                                set_middle(&guard, "");
+                            }
+                            for (label, view) in guard.webviews() {
+                                if is_tab(&label) {
+                                    let _ = view.close();
+                                }
+                            }
+                        }
                         // Elsewhere, the page itself leaving: back to it, and the address opened in the middle.
                         if !same_origin(load.url(), home) && matches!(load.url().scheme(), "http" | "https") {
                             let away = load.url().to_string();
@@ -734,6 +911,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Chat Computer couldn't start")
         .run(move |app, event| {
+            // A Mac sends a link clicked in another app to the app itself (the default browser's links, or one
+            // opened with it), started or not: opened here.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                from_outside(app, ways::urls_in(&urls.iter().map(|u| u.to_string()).collect::<Vec<_>>()));
+            }
             let _ = app;
             // (The model's engine ends with the app.)
             if let tauri::RunEvent::Exit = event {
@@ -765,10 +948,23 @@ mod tests {
     }
 
     #[test]
-    fn the_app_opens_on_the_conversation_once_it_s_the_app() {
+    fn tabs_are_numbered_views_of_their_own() {
+        assert_eq!(tab_label(1).unwrap(), "tab-1");
+        assert_eq!(tab_label(500).unwrap(), "tab-500");
+        assert!(tab_label(0).is_err() && tab_label(501).is_err());
+        assert!(is_tab("tab-7") && is_tab("tab-500"));
+        for not in ["tab-0", "tab-501", "tab-", "tab-x", "site", "main", "msg-gmail", "tab-7a"] {
+            assert!(!is_tab(not), "{not}");
+        }
+    }
+
+    #[test]
+    fn the_app_opens_on_the_conversation_once_it_s_the_app_or_the_browser() {
         assert_eq!(first_page(None), "start/index.html");
+        assert_eq!(first_page(Some(ways::Way::Chrome)), "start/index.html");
         assert_eq!(first_page(Some(ways::Way::Os)), "start/index.html");
         assert_eq!(first_page(Some(ways::Way::App)), "index.html");
+        assert_eq!(first_page(Some(ways::Way::Browser)), "index.html");
     }
 
     #[test]

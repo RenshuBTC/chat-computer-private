@@ -127,7 +127,7 @@ def test_changing_commands_need_a_yes(cmd):
 @pytest.mark.parametrize("cmd", [
     "cat ~/ChatComputer/secrets/claude_token",
     "cat ~/ChatComputer/.engine/.credentials.json",
-    "cat /mnt/windows/Users/sammy/ChatComputer/claude_login.json",
+    "cat /mnt/windows/Users/rensh/ChatComputer/claude_login.json",
     "echo $CLAUDE_CODE_OAUTH_TOKEN",
     "env",
     "printenv",
@@ -289,8 +289,8 @@ def test_sign_in_files_cant_be_read_with_tools(tmp_path):
     from chatcomputer.journal import Journal
     paths = Paths(tmp_path / "ChatComputer").ensure()
     gate = PermissionGate(paths, Journal(paths), None, {})
-    for f in (paths.engine / ".credentials.json", tmp_path / "Users/sammy/ChatComputer/claude_login.json",
-              tmp_path / "Users/sammy/ChatComputer/claude_token"):
+    for f in (paths.engine / ".credentials.json", tmp_path / "Users/rensh/ChatComputer/claude_login.json",
+              tmp_path / "Users/rensh/ChatComputer/claude_token"):
         res = asyncio.run(gate("Read", {"file_path": str(f)}))
         assert res.behavior == "deny", f
 

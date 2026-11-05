@@ -268,8 +268,8 @@ def _true(v: Any) -> bool:
 
 
 def parse_mounted_at(text: str) -> str | None:
-    """Where udisksctl mounted a drive ("Mounted /dev/sdb1 at /media/sam/SANDISK", with or without a full stop),
-    or where it already was ("...AlreadyMounted: Device /dev/sdb1 is already mounted at `/media/sam/X'.")."""
+    """Where udisksctl mounted a drive ("Mounted /dev/sdb1 at /media/ren/SANDISK", with or without a full stop),
+    or where it already was ("...AlreadyMounted: Device /dev/sdb1 is already mounted at `/media/ren/X'.")."""
     m = re.search(r"^Mounted \S+ at (.+?)\.?\s*$", text, re.M)
     if m:
         return m.group(1)
@@ -1170,7 +1170,7 @@ class LinuxPlatform(Platform):
                     if not os.readlink(f"/proc/{pid}/fd/{fd}").startswith("/dev/video"):
                         continue
                     if int(pid) == me:
-                        name = "Chat Computer"
+                        name = "Chat Computer (AirTouch)"
                     else:
                         with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as f:
                             name = friendly_name(f.read().strip(), [])

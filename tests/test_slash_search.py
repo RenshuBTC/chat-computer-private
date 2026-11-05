@@ -66,7 +66,7 @@ def test_a_file_s_time_as_a_person_says_it():
 def _controller(tmp_path, monkeypatch):
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
-    c = Controller(Paths().ensure(), Settings(user_name="Sam Lee"), FakePlatform(), screen, voice=False, index=False)
+    c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), FakePlatform(), screen, voice=False, index=False)
     return c, screen
 
 

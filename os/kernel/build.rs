@@ -19,14 +19,13 @@ fn main() {
     };
     std::fs::write(out, script).expect("writing the test script");
 
-    // A test build that reads the web from a stand-in on the computer running the virtual PC (check.py --web), or
-    // reaches Meta's Model API through a relay there (check.py --meta), trusts that test's own certificate authority,
-    // named by CHATCOMPUTER_TEST_CA (its certificate, DER), instead of Mozilla's (web.rs). Any other build gets
-    // nothing here.
+    // A test build that reads the web from a stand-in on the computer running the virtual PC (check.py --web) trusts
+    // that test's own certificate authority, named by CHATCOMPUTER_TEST_CA (its certificate, DER), instead of
+    // Mozilla's (web.rs). Any other build gets nothing here.
     println!("cargo:rerun-if-env-changed=CHATCOMPUTER_TEST_CA");
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR")).join("test_ca.der");
     let ca = match (std::env::var("CHATCOMPUTER_TEST").as_deref(), std::env::var("CHATCOMPUTER_TEST_CA")) {
-        (Ok("chat" | "meta" | "listening"), Ok(path)) => {
+        (Ok("chat"), Ok(path)) => {
             println!("cargo:rerun-if-changed={path}");
             std::fs::read(&path).unwrap_or_else(|e| panic!("CHATCOMPUTER_TEST_CA {path}: {e}"))
         }

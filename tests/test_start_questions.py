@@ -57,7 +57,7 @@ class Bluetooth(FakePlatform):
 def _controller(tmp_path, monkeypatch, platform=None, **kw):
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
-    c = Controller(Paths().ensure(), Settings(user_name="Sam Lee"), platform or FakePlatform(), screen, voice=False,
+    c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), platform or FakePlatform(), screen, voice=False,
                    index=False, **kw)
     return c, screen
 
@@ -102,7 +102,7 @@ def _run(c, coro_fn):
 
 
 def _offer(**kw):
-    return update.Offer(**{"source": Path("/mnt/windows/Users/Sam Lee/Downloads/ChatComputer/ChatComputer"), "changed": 3,
+    return update.Offer(**{"source": Path("/mnt/windows/Users/Ren Shu/Downloads/ChatComputer/ChatComputer"), "changed": 3,
                            "version": "0.3.0", "needs_setup": False, **kw})
 
 
@@ -466,7 +466,7 @@ def test_the_note_says_typed_only_when_it_was():
     from chatcomputer.brain.prompt import build_system_prompt, turn_prefix
     assert turn_prefix({"mode": "chat"}, None).endswith("screen: conversation]\n")
     assert turn_prefix({"mode": "chat"}, None, typed=True).endswith("screen: conversation · typed]\n")
-    assert '· typed]' in build_system_prompt(Settings(), "", "/home/sam", None)
+    assert '· typed]' in build_system_prompt(Settings(), "", "/home/ren", None)
 
 
 def test_questions_about_typed_requests_are_shown_not_said(tmp_path, monkeypatch):

@@ -118,7 +118,7 @@ and pixels the same, or it says so).
 
 `serve` answers only requests addressed to this computer by its own name (127.0.0.1, localhost: not a site's name
 pointed here by a DNS trick), from programs on it or from Chat Computer's own pages (chatcomputer.ai, the desktop
-app's page, and origins given with `--allow-origin`); any other page a browser shows is
+app's page, and origins given with `--allow-origin`, such as the Chrome extension's); any other page a browser shows is
 refused, so no site can use the model behind the person's back. The model only writes: it runs and opens nothing.
 
 ## Answering what it's asked

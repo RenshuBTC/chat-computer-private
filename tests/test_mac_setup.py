@@ -74,8 +74,8 @@ esac''')
         groups = "staff admin" if admin else "staff"
         _tool(self.bin, "id", f'''case "$1" in
   -Gn) echo "{groups}" ;;
-  -F) echo "Sam Lee" ;;
-  -un) echo "sammy" ;;
+  -F) echo "Ren Shu" ;;
+  -un) echo "rensh" ;;
   *) exec /usr/bin/id "$@" ;;
 esac''')
         for tool in ("diskutil", "plutil"):
@@ -188,19 +188,19 @@ def test_install_on_a_mac(tmp_path):
     assert "@" not in grub and "vmlinuz-7.1.6-400.asahi.fc44.aarch64+16k" in grub
     assert "root=UUID=9db8788b-4718-404e-a6d0-1c9694d398fd" in grub and "/boot/efi/chatcomputer/firstboot.sh" in grub
     v = _env_values((p / "setup.env").read_text())
-    assert v["USER_NAME"] == "sammy" and v["REAL_NAME"] == "Sam Lee"
+    assert v["USER_NAME"] == "rensh" and v["REAL_NAME"] == "Ren Shu"
     assert v["WIFI_SSID"] == "Home 5G" and v["WIFI_PSK"] == "correct horse"
     assert v["MAC_FILES_PARTUUID"] == drive["uuid"] and re.fullmatch(r"[0-9a-f]{24}", v["INSTALL_ID"])
     assert re.fullmatch(r"[a-km-z2-9]{4}(-[a-km-z2-9]{4}){3}", v["RECOVERY_PASSWORD"])
     assert list((p / "secrets").iterdir()) == []
-    assert json.loads((p / "settings.json").read_text())["user_name"] == "Sam Lee"
+    assert json.loads((p / "settings.json").read_text())["user_name"] == "Ren Shu"
     with tarfile.open(p / "app.tar.gz") as t:
         names = t.getnames()
     assert "chatcomputer/__init__.py" in names and "linux/install-chatcomputer.sh" in names
     assert not any(n.startswith(("mac/", "windows/")) or "__pycache__" in n for n in names)
     # The recovery password, for repairs, where the person finds it; nothing secret left in setup's folder.
     note = (mac.home / "Documents/Chat Computer recovery password.txt").read_text()
-    assert v["RECOVERY_PASSWORD"] in note and "Account: sammy" in note
+    assert v["RECOVERY_PASSWORD"] in note and "Account: rensh" in note
     work = mac.home / ".chatcomputer-setup"
     assert not (work / "os").exists() and not (work / "payload").exists()
     log = (work / "setup.log").read_text()
@@ -441,8 +441,8 @@ def _first_start(tmp_path, setup_env=None, app=True):
     (esp / "EFI/fedora").mkdir(parents=True)
     (esp / "EFI/fedora/grub.cfg").write_text("Chat Computer first start\n")
     (p / "fedora-grub.cfg").write_text("Fedora's own\n")
-    (p / "settings.json").write_text('{"user_name": "Sam Lee"}\n')
-    values = {"USER_NAME": "sammy", "REAL_NAME": "Sam Lee", "RECOVERY_PASSWORD": "abcd-efgh-jkmn-pqrs",
+    (p / "settings.json").write_text('{"user_name": "Ren Shu"}\n')
+    values = {"USER_NAME": "rensh", "REAL_NAME": "Ren Shu", "RECOVERY_PASSWORD": "abcd-efgh-jkmn-pqrs",
               "TIMEZONE": "Asia/Singapore", "INSTALL_ID": "0123456789abcdef01234567",
               "MAC_FILES_PARTUUID": "4B1E2F3A-0000-4000-8000-00000000C0DE", "WIFI_SSID": 'Home "5G"\\',
               "WIFI_PSK": "correct horse"}
@@ -475,17 +475,17 @@ def test_first_start_on_the_mac(tmp_path):
     r, root, esp, calls = _first_start(tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr + (esp / "chatcomputer/firstboot.log").read_text()
     log = calls.read_text()
-    assert "useradd --create-home --comment Sam Lee --groups wheel sammy" in log
-    assert (tmp_path / "chpasswd.in").read_text() == "sammy:abcd-efgh-jkmn-pqrs\n"
+    assert "useradd --create-home --comment Ren Shu --groups wheel rensh" in log
+    assert (tmp_path / "chpasswd.in").read_text() == "rensh:abcd-efgh-jkmn-pqrs\n"
     wifi = root / "etc/NetworkManager/system-connections/chatcomputer-wifi.nmconnection"
     text = wifi.read_text()
     assert 'ssid=Home "5G"\\\\' in text and "psk=correct horse" in text and "key-mgmt=wpa-psk" in text
     assert stat.S_IMODE(wifi.stat().st_mode) == 0o600
     assert (root / "opt/chatcomputer/app/chatcomputer/__init__.py").exists()
-    h = root / "home/sammy/ChatComputer"
+    h = root / "home/rensh/ChatComputer"
     assert stat.S_IMODE((h / "secrets").stat().st_mode) == 0o700 and list((h / "secrets").iterdir()) == []
-    assert (root / "home/sammy/Mac").is_dir()
-    assert (root / "etc/chatcomputer/install-user").read_text() == "sammy\n"
+    assert (root / "home/rensh/Mac").is_dir()
+    assert (root / "etc/chatcomputer/install-user").read_text() == "rensh\n"
     assert (root / "etc/chatcomputer/mac-files-partuuid").read_text() == "4b1e2f3a-0000-4000-8000-00000000c0de\n"
     unit = root / "etc/systemd/system/multi-user.target.wants/chatcomputer-finish-install.service"
     assert os.readlink(unit) == "/etc/systemd/system/chatcomputer-finish-install.service"
@@ -526,7 +526,7 @@ def test_first_start_tries_again_then_falls_back_to_fedora(tmp_path):
 
 
 def test_first_start_refuses_a_bad_account_name(tmp_path):
-    r, root, esp, calls = _first_start(tmp_path, {"USER_NAME": "Sam Lee"})
+    r, root, esp, calls = _first_start(tmp_path, {"USER_NAME": "Ren Shu"})
     assert r.returncode == 1 and not calls.exists()
     assert "account name" in (esp / "chatcomputer/firstboot.log").read_text()
 

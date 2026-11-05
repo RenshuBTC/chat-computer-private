@@ -17,7 +17,7 @@ sets up:
 | Area | What | Why |
 |---|---|---|
 | Display | `xserver-xorg-core`, `xserver-xorg-legacy`, `xinit`, `x11-xserver-utils`, `openbox`, `xdotool`, `wmctrl`, `unclutter-xfixes` | Xorg with **no desktop**; rootless X started from the tty1 autologin; openbox gives borderless, maximized windows and no root menu; a mouse's arrow hidden once the mouse is still for 3 s. |
-| Chat Computer screen | `python3-gi`, `python3-gi-cairo`, `gir1.2-webkit2-4.1`, `gir1.2-gtk-3.0`, `gstreamer1.0-plugins-good/-bad`, `gstreamer1.0-libav` | GTK 3 + WebKitGTK 4.1 render the Chat Computer UI and web media; cairo draws the onscreen keyboard. |
+| Chat Computer screen | `python3-gi`, `python3-gi-cairo`, `gir1.2-webkit2-4.1`, `gir1.2-gtk-3.0`, `gstreamer1.0-plugins-good/-bad`, `gstreamer1.0-libav` | GTK 3 + WebKitGTK 4.1 render the Chat Computer UI and web media; cairo draws AirTouch's dots and keyboard. |
 | Audio + Bluetooth | `pipewire`, `pipewire-pulse`, `pipewire-alsa`, `wireplumber`, `libspa-0.2-bluetooth`, `bluez`, `dbus-user-session`, `bolt` | AirPods over PipeWire; WirePlumber auto-switches to the headset mic profile when Chat Computer listens; mSBC wideband speech enabled. `bolt` lets in Thunderbolt devices, such as an Apple Studio Display's camera, microphones and speakers. |
 | Networking | `network-manager`, `wpasupplicant` | NM manages **all** devices (netplan renderer = NetworkManager); no admin needed. |
 | Windows files | `ntfs-3g`, `cryptsetup-bin`, `efibootmgr` | Mount the Windows partition (rw if clean, ro if dirty, never touching the hiberfile); a BitLocker drive is opened with Chat Computer's own key (cryptsetup's BITLK, the key on stdin); UEFI BootNext to switch to Windows. |

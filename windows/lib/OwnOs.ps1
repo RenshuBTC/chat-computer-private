@@ -73,16 +73,13 @@ function New-OwnSettingsText {
     # file's id (0: there's no memory file); $LogId: the log file's. $Cores: the most processor cores to use, put
     # there by hand ('': all).
     param([AllowEmptyString()][string]$Model, [int]$ClockOffsetMinutes, [uint32]$MemoryId = 0, [uint32]$LogId = 0,
-          [AllowEmptyString()][string]$Cores = '', [AllowEmptyString()][string]$MetaKey = '',
-          [AllowEmptyString()][string]$MetaModel = '')
+          [AllowEmptyString()][string]$Cores = '')
     $lines = @('# Chat Computer''s settings, read by its own system when it starts. Written by Chat Computer Own System.')
     if ($Model) { $lines += ('model = ' + $Model) }
     $lines += ('clock-offset-minutes = ' + $ClockOffsetMinutes)
     if ($MemoryId -ne 0) { $lines += ('memory-id = ' + $MemoryId.ToString('x8')) }
     if ($LogId -ne 0) { $lines += ('log-id = ' + $LogId.ToString('x8')) }
     if ($Cores) { $lines += ('cores = ' + $Cores) }
-    if ($MetaKey) { $lines += ('meta-api-key = ' + $MetaKey) }
-    if ($MetaModel) { $lines += ('meta-model = ' + $MetaModel) }
     return (($lines -join "`r`n") + "`r`n")
 }
 
@@ -105,60 +102,6 @@ function Get-OwnSettingsCores {
     foreach ($line in ($Text -split "`r?`n")) {
         $m = [regex]::Match($line, '(?i)^\s*cores\s*=\s*"*\s*([0-9]{1,3})\s*"*\s*$')
         if ($m.Success -and [int]$m.Groups[1].Value -ge 1) { return [string][int]$m.Groups[1].Value }
-    }
-    return ''
-}
-
-function Get-OwnSettingsValue {
-    # A "name = value" line's value in a settings file's text ('' if none): meta-api-key and meta-model (Meta's Model
-    # API, for Muse Spark to answer), put there by hand or pasted when this asked, and kept when this runs again.
-    param([AllowNull()][string]$Text, [Parameter(Mandatory = $true)][string]$Name)
-    if (-not $Text) { return '' }
-    foreach ($line in ($Text -split "`r?`n")) {
-        $m = [regex]::Match($line, '^\s*' + [regex]::Escape($Name) + '\s*=\s*(\S+)\s*$')
-        if ($m.Success) { return $m.Groups[1].Value }
-    }
-    return ''
-}
-
-function Test-OwnMetaKey {
-    # Whether text can be a key for Meta's Model API as the kernel takes one (os/kernel/src/settings.rs): visible
-    # ASCII characters only, no spaces, at most 512 of them.
-    param([AllowNull()][string]$Key)
-    return ($null -ne $Key -and $Key.Length -ge 8 -and $Key.Length -le 512 -and $Key -cmatch '^[\x21-\x7E]+$')
-}
-
-function Read-OwnSettings {
-    # The settings file on the start-up partition now, as text ('' if there's none, or it can't be read: never an
-    # error, and the partition is closed again).
-    try {
-        $esp = Get-WindowsEsp
-        if (-not $esp) { return '' }
-        $m = Mount-EspPartition $esp
-        try {
-            $settings = [IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir, $Script:OwnSettings)
-            if (Test-Path -LiteralPath $settings -PathType Leaf) { return [IO.File]::ReadAllText($settings) }
-            return ''
-        } finally {
-            Dismount-EspPartition $m
-        }
-    } catch {
-        Write-SetupLog ('Reading the settings: ' + $_.Exception.Message)
-        return ''
-    }
-}
-
-function Read-OwnMetaKey {
-    # A key for Meta's Model API, pasted by the person: not shown as it's typed, never logged. '' for none.
-    Clear-OwnKeys
-    for ($attempt = 0; $attempt -lt 2; $attempt++) {
-        $secure = Read-Host -AsSecureString 'Paste the key and press Enter (or just press Enter to get the app''s model instead)'
-        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-        try { $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-        $key = ([string]$key).Trim()
-        if (-not $key) { return '' }
-        if (Test-OwnMetaKey $key) { return $key }
-        Write-Warn 'That doesn''t look like a key (one word, at most 512 characters). Paste it again, or just press Enter.'
     }
     return ''
 }
@@ -512,17 +455,11 @@ function Select-OwnKey {
     return $null
 }
 
-function Clear-OwnKeys {
-    # Throws away keys pressed while it was working, so that one pressed then doesn't answer what comes next.
-    try { while ([Console]::KeyAvailable) { $null = [Console]::ReadKey($true) } } catch { $null = $_ }
-}
-
 function Wait-OwnCountdown {
     # Counts down $Seconds on the screen; $true when it gets to the end, $false when a key is pressed first (or there's
     # no keyboard to wait on: then it doesn't wait, and goes ahead).
     param([int]$Seconds = 10, [switch]$Unattended)
     if ($Unattended) { return $true }
-    Clear-OwnKeys
     for ($s = $Seconds; $s -gt 0; $s--) {
         Write-Host ("`r  Restarting in " + $s + ' s (press any key to stay in Windows) ') -NoNewline
         for ($t = 0; $t -lt 10; $t++) {
@@ -617,10 +554,8 @@ function Assert-OwnRoom {
 function Install-OwnFiles {
     # The signed start-up file, the key's certificate, the settings and the memory file, in \EFI\chatcomputer-own on
     # the partition Windows starts from. The settings are written anew (a model named in them by hand is kept; an
-    # older setup's Claude API key isn't; Meta's key and model are, or the key pasted now, $MetaKey). Returns whether
-    # there's a memory file (Memory), and whether the settings have a key for Meta's Model API (Meta).
-    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate,
-          [AllowEmptyString()][string]$MetaKey = '')
+    # older setup's Claude API key isn't). Returns whether there's a memory file (Memory).
+    param([Parameter(Mandatory = $true)][string]$Signed, [Parameter(Mandatory = $true)][string]$Certificate)
     $esp = Get-WindowsEsp
     if (-not $esp) { throw 'Windows could not find the partition this PC starts from.' }
     $m = Mount-EspPartition $esp
@@ -631,9 +566,6 @@ function Install-OwnFiles {
         Assert-OwnRoom -Root $m.Root -Path $file -Size (Get-Item -LiteralPath $Signed).Length
         Copy-Item -LiteralPath $Signed -Destination $file -Force
         Copy-Item -LiteralPath $Certificate -Destination (Join-Path $dir $Script:OwnCert) -Force
-        # (And at the partition's top: the setup screen's list of files starts there, so it's the first thing on it
-        # when the key is approved.)
-        Copy-Item -LiteralPath $Certificate -Destination (Join-Path $m.Root $Script:OwnCert) -Force
         if ((Get-OwnSha256 $file) -ne (Get-OwnSha256 $Signed)) { throw 'The copy on the start-up partition is not the same as the original.' }
         $settings = Join-Path $dir $Script:OwnSettings
         $before = ''
@@ -641,14 +573,11 @@ function Install-OwnFiles {
         $model = Get-OwnSettingsModel $before
         $memoryId = Install-OwnMemory -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before)
         $logId = Install-OwnLog -Dir $dir -Root $m.Root -Id (Get-OwnSettingsMemoryId $before -Name 'log-id')
-        $key = $MetaKey
-        if (-not $key) { $key = Get-OwnSettingsValue $before 'meta-api-key' }
         $text = New-OwnSettingsText -Model $model -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId `
-            -LogId $logId -Cores (Get-OwnSettingsCores $before) -MetaKey $key -MetaModel (Get-OwnSettingsValue $before 'meta-model')
+            -LogId $logId -Cores (Get-OwnSettingsCores $before)
         [IO.File]::WriteAllText($settings, $text, [Text.Encoding]::ASCII)
-        Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($model) { 'naming a model' } else { 'naming no model' }) +
-                        $(if ($key) { ', with a key for Meta''s Model API' } else { '' }))
-        return [pscustomobject]@{ Memory = ($memoryId -ne 0); Meta = [bool]$key }
+        Write-SetupLog ('Copied to ' + $dir + '; settings ' + $(if ($model) { 'naming a model' } else { 'naming no model' }))
+        return [pscustomobject]@{ Memory = ($memoryId -ne 0) }
     } finally {
         Dismount-EspPartition $m
     }
@@ -661,8 +590,6 @@ function Remove-OwnFiles {
     try {
         $dir = [IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir)
         if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
-        $top = Join-Path $m.Root $Script:OwnCert
-        if (Test-Path -LiteralPath $top -PathType Leaf) { Remove-Item -LiteralPath $top -Force }
     } finally {
         Dismount-EspPartition $m
     }
@@ -724,42 +651,47 @@ function Save-PcParts {
 
 # ------------------------------------------------------------------ what the person reads
 function Write-ApproveKeySteps {
-    # Approving Chat Computer's key in the PC's setup screen, once: the steps, in the setup screen's own words.
-    # $Maker is the motherboard's maker, whose menus they name. (MSI's, as MSI's setup screen and ccboot.com's guide
-    # to adding a key there have them: Settings, Security, Secure Boot; Secure Boot Mode Custom; Key Management;
-    # Authorized Signatures; Append; No, to load a file; the file system; the file; Public Key Certificate; the
-    # owner's GUID as it is; Yes.) Its certificate is at the top of the start-up partition (Install-OwnFiles), the
-    # first list of files the setup screen shows.
     param([string]$Maker)
-    $msi = $Maker -match '(?i)micro-star|\bmsi\b'
-    Write-Line 'In the setup screen:'
-    if ($msi) {
-        Write-Line '  1. If the top of the screen says "Advanced (F7)", press F7.'
-        Write-Line '  2. Open Settings, then Security, then Secure Boot. Set "Secure Boot Mode" to Custom, then open'
-        Write-Line '     "Key Management".'
-    } elseif ($Maker -match '(?i)gigabyte') {
-        Write-Line '  1. If it opens in a simple view, switch to the advanced one ("Advanced Mode").'
-        Write-Line '  2. Open the Boot tab, then "Secure Boot". Set "Secure Boot Mode" to Custom, then open'
-        Write-Line '     "Expert Key Management".'
+    Write-Line 'In the PC''s setup screen (names differ a little between makers; these are the usual ones):'
+    Write-Line '  1. If it opens in a simple view, switch to the advanced one (click "Advanced Mode"). Don''t press'
+    Write-Line '     keys you don''t know there: on some boards a single key loads the default settings.'
+    if ($Maker -match '(?i)gigabyte') {
+        Write-Line '  2. Open the Boot tab, then "Secure Boot".'
+        Write-Line '  3. Set "Secure Boot Mode" to Custom. Then open "Expert Key Management".'
     } else {
-        Write-Line '  1. If it opens in a simple view, switch to the advanced one ("Advanced Mode").'
-        Write-Line '  2. Find "Secure Boot" (under Boot, or Security). If there''s a "Secure Boot Mode", set it to Custom.'
-        Write-Line '     Then open "Key Management" (on some PCs "Expert Key Management").'
+        Write-Line '  2. Find "Secure Boot". It is usually under Boot, or under Security.'
+        Write-Line '  3. If there is a "Secure Boot Mode" setting, set it to Custom. Then open "Key Management"'
+        Write-Line '     (on some boards "Expert Key Management").'
     }
-    Write-Line '  3. Choose "Authorized Signatures" (on some PCs "DB Management"), then "Append".'
-    Write-Line '  4. Answer No (to load it from a file). Choose the drive it lists, then ChatComputer.cer, then'
-    Write-Line '     "Public Key Certificate". If it asks for a GUID, just press Enter. Answer Yes.'
-    if ($msi) {
-        Write-Line '  5. Press F10 and answer Yes. The PC restarts into Chat Computer.'
+    Write-Line '  4. Choose "Authorized Signatures (db)", then "Append".'
+    Write-Line '     Only Append: "Update", "Set", "Delete" or "Clear" would replace or remove Microsoft''s keys, which'
+    Write-Line '     Windows needs.'
+    Write-Line '  5. When it asks where to load from, choose a file (if it asks whether to load the factory default,'
+    Write-Line '     answer No). Pick the drive it lists, then the folders EFI and chatcomputer-own, then ChatComputer.cer.'
+    Write-Line '  6. If it asks what kind of file it is, choose "Public Key Certificate". Confirm with Yes.'
+    Write-Line '  7. Choose Save & Exit (Save Changes and Reset). The PC restarts into Chat Computer''s own system.'
+    Write-Line 'Leave "Secure Boot Mode" on Custom afterwards: switching back to Standard puts only the factory keys back.'
+    Write-Line 'If a step isn''t there, leave without saving: Windows starts as before, and you can choose to turn'
+    Write-Line 'Secure Boot off instead. If Windows starts instead of Chat Computer after step 7, double-click'
+    Write-Line '"Chat Computer Own System" again: it sees the key is approved and restarts straight into Chat Computer.'
+    Write-Line 'If anything goes wrong, "Restore Factory Keys" (or "Install Default Secure Boot Keys") in the same'
+    Write-Line 'place puts Microsoft''s keys back, and Windows starts as before.'
+}
+
+function Write-SecureBootOffSteps {
+    param([string]$Maker)
+    Write-Line 'In the PC''s setup screen (names differ a little between makers; these are the usual ones):'
+    Write-Line '  1. If it opens in a simple view, switch to the advanced one (click "Advanced Mode"). Don''t press'
+    Write-Line '     keys you don''t know there: on some boards a single key loads the default settings.'
+    if ($Maker -match '(?i)gigabyte') {
+        Write-Line '  2. Open the Boot tab, then "Secure Boot".'
     } else {
-        Write-Line '  5. Save and exit (F10 on most PCs). The PC restarts into Chat Computer.'
+        Write-Line '  2. Find "Secure Boot". It is usually under Boot, or under Security.'
     }
-    Write-Line 'Only Append: Update, Set or Delete there would take out Microsoft''s keys, which Windows needs. Leave'
-    Write-Line '"Secure Boot Mode" on Custom afterwards. If something goes wrong, "Restore Factory Keys" (or "Enroll all'
-    Write-Line 'Factory Default Keys") there puts the PC''s own keys back. If there''s no Append, set Secure Boot itself to'
-    Write-Line 'Disabled on the same page instead.'
-    Write-Line ('From then on, choosing "' + $Script:OwnEntryName + '" in the boot menu as the PC starts (often F12, F11,')
-    Write-Line 'F8 or Esc) starts Chat Computer, every time.'
+    Write-Line '  3. Set Secure Boot to Disabled. (On ASUS boards: set "OS Type" to "Other OS".)'
+    Write-Line '  4. Choose Save & Exit (Save Changes and Reset). The PC restarts into Chat Computer''s own system.'
+    Write-Line 'To turn Secure Boot on again later, change the same setting back. If Windows starts instead of'
+    Write-Line 'Chat Computer, double-click "Chat Computer Own System" again.'
 }
 
 # ------------------------------------------------------------------ the two things it does
@@ -828,28 +760,13 @@ function Start-OwnSystem {
 
     Write-Step 'Its model'
     $model = Find-OwnModel
-    $metaKey = ''
-    # (A key for Meta's Model API in the settings comes first, as the kernel takes it: Muse Spark answers then.)
-    if (Get-OwnSettingsValue (Read-OwnSettings) 'meta-api-key') {
-        Write-Good 'It answers with Meta''s Muse Spark, over the internet, with the key for Meta''s Model API in its settings.'
-        Write-Line 'That needs a network cable on this PC (or a USB network adapter, or an Android phone''s USB tethering):'
-        Write-Line 'Wi-Fi isn''t supported yet. What you type goes to Meta.'
-        if ($model) {
-            Write-Line ('For ' + $model.Label + ', the model on this PC, instead: run this once with -Remove (which takes the')
-            Write-Line 'key off with the rest), then again.'
-        }
-    } elseif ($model) {
+    if ($model) {
         Write-Good ('It answers with ' + $model.Label + ' (' + (Format-Size $model.Bytes) + '), the model Chat Computer''s app got ready on this PC.')
         Write-Line 'It runs on the PC itself, with no account and nothing to pay: nothing you type leaves it. Starting up, it'
         Write-Line 'reads the model into memory, which takes a moment.'
     } else {
         Write-Warn 'Chat Computer''s app hasn''t got its model ready on this PC yet. Open the app once (it gets its model by'
         Write-Warn 'itself, free); Chat Computer''s own system finds it when it starts.'
-        Write-Line 'Or it can answer with Meta''s Muse Spark, over the internet: that needs a key for Meta''s Model API (from'
-        Write-Line 'dev.meta.ai) and a network cable on this PC (Wi-Fi isn''t supported yet), and what you type goes to Meta. The'
-        Write-Line 'key is kept in its settings on the start-up partition, where anyone who can read that partition can read it.'
-        if (-not $Unattended) { $metaKey = Read-OwnMetaKey }
-        if ($metaKey) { Write-Good 'It answers with Meta''s Muse Spark.' }
     }
 
     $approved = $null
@@ -870,27 +787,24 @@ function Start-OwnSystem {
     if ($bitlocker) {
         Write-Line '  * BitLocker pauses for two restarts, so the Secure Boot change doesn''t make it ask for its recovery key.'
     }
-    $installed = Install-OwnFiles -Signed $signed -Certificate $cer -MetaKey $metaKey
+    $installed = Install-OwnFiles -Signed $signed -Certificate $cer
     if (-not $installed.Memory) {
         Write-Warn 'Its memory file couldn''t be made on the start-up partition (too little room, or it couldn''t be written), so the conversation won''t be kept across restarts.'
     }
     $id = Get-OwnBootEntry
     Write-Good ('Chat Computer''s own system is on the start-up partition, and "' + $Script:OwnEntryName + '" is in the power-on menu.')
 
-    if (-not $model -and -not $installed.Meta) {
-        # (Without a model it would start and only say it needs one: it stays in the menu for when it's here, and the
-        # setup screen, if the key needs approving there, comes when this runs again then.)
-        Write-Line ''
-        Write-Line 'Get its model first: install Chat Computer''s app from chatcomputer.ai/get (choose App), and leave it open'
-        Write-Line 'until it says its model is ready. Then double-click this again.'
-        if (-not $NoRestart) {
-            try { Start-Process 'https://chatcomputer.ai/get' } catch { Write-SetupLog ('Opening chatcomputer.ai/get: ' + $_.Exception.Message) }
-        }
-        return
-    }
-
     if (-not $setupScreen) {
         if ($NoRestart) { return }
+        if (-not $model) {
+            # (Without a model it would start and only say it needs one: it stays in the menu for when it's here.)
+            Write-Line ''
+            Write-Line 'Get its model first: install Chat Computer''s app from chatcomputer.ai/get (choose App), and leave it open'
+            Write-Line ('until it says its model is ready. Then choose "' + $Script:OwnEntryName + '" in the boot menu, or double-click')
+            Write-Line 'this again.'
+            try { Start-Process 'https://chatcomputer.ai/get' } catch { Write-SetupLog ('Opening chatcomputer.ai/get: ' + $_.Exception.Message) }
+            return
+        }
         Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
         Write-Line ''
         Write-Line 'To come back to Windows: restart (the next start is Windows), or hold the power button until the PC turns off.'
@@ -902,30 +816,15 @@ function Start-OwnSystem {
         }
         return
     }
+    Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
 
-    # (No choice is asked, as its owner asked: "Make everything easy and direct, i dont want to deal with so many
-    # questions just for chat computer to work". Approving the key keeps Secure Boot on, for Windows and for games
-    # whose anti-cheat needs it, and from then on Chat Computer starts from the boot menu every time; turning Secure
-    # Boot off is in the steps, for a PC that can't add a key. Nothing changes before Enter: closing the window
-    # leaves the next start to Windows, and BitLocker as it was.)
-    Write-Step 'Once: approve Chat Computer''s key in the PC''s setup screen'
-    Write-Line 'Secure Boot is on and doesn''t know Chat Computer''s key yet, so it stops Chat Computer ("Secure Boot'
-    Write-Line 'Violation"). Approve the key once, and Chat Computer starts from then on, with Secure Boot still on.'
-    $maker = ''
-    try { $maker = [string](Get-Prop (Get-CimInstance -ClassName Win32_BaseBoard -ErrorAction Stop | Select-Object -First 1) 'Manufacturer') } catch { $null = $_ }
-    Write-Line ''
-    Write-ApproveKeySteps -Maker $maker
-    Write-Line ''
-    if ($NoRestart) { return }
+    Write-Step 'Secure Boot'
+    Write-Line 'This PC starts only software signed with a key it trusts, and it doesn''t know Chat Computer''s key yet.'
+    $pick = 0
     if (-not $Unattended) {
-        Write-Line 'Take a photo of these steps: this window won''t be there. (To stay in Windows, close this window.)'
-        Clear-OwnKeys
-        $answer = ([string](Read-Host 'Press Enter to restart into the setup screen')).Trim()
-        if ($answer -match '^(?i)n') {
-            Write-SetupLog 'Stayed in Windows before the setup screen'
-            Write-Line 'Staying in Windows. Double-click "Chat Computer Own System" again whenever you''re ready.'
-            return
-        }
+        $pick = Read-Choice 'How should it start Chat Computer?' @(
+            'Approve Chat Computer''s key, once, in the PC''s setup screen (Secure Boot stays on)',
+            'Turn Secure Boot off in the PC''s setup screen (one setting; some games'' anti-cheat needs it on)') 0
     }
     if ($bitlocker) {
         try {
@@ -936,14 +835,22 @@ function Start-OwnSystem {
             Write-Warn 'BitLocker could not be paused, so Windows may ask for its recovery key once after the change.'
         }
     }
-    # (After the setup screen, the PC starts Chat Computer, once: the next start is Windows again.)
-    Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
-    Write-SetupLog 'Restarting into the setup screen'
-    $out = & shutdown.exe /r /fw /t 0 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-SetupLog ('shutdown /fw: ' + (($out | Out-String).Trim()))
-        Write-Line 'Windows can''t open the setup screen on this PC by itself: restart, and press the setup key as the PC'
-        Write-Line 'starts (Del on MSI boards; often Del or F2 on others: the PC''s first screen usually says which).'
+    $maker = ''
+    try { $maker = [string](Get-Prop (Get-CimInstance -ClassName Win32_BaseBoard -ErrorAction Stop | Select-Object -First 1) 'Manufacturer') } catch { $null = $_ }
+    Write-Line ''
+    if ($pick -eq 0) { Write-ApproveKeySteps -Maker $maker } else { Write-SecureBootOffSteps -Maker $maker }
+    Write-Line ''
+    Write-Line 'Take a photo of these steps: the setup screen comes next, and this window won''t be there.'
+    if ($NoRestart) { return }
+    if (Confirm-Own 'Restart into the PC''s setup screen now?' $true -Unattended:$Unattended) {
+        $out = & shutdown.exe /r /fw /t 5 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-SetupLog ('shutdown /fw: ' + (($out | Out-String).Trim()))
+            Write-Line 'Windows can''t open the setup screen on this PC by itself. Restart, and press the setup key as the PC'
+            Write-Line 'starts (often Del or F2; the PC''s first screen usually says which).'
+        }
+    } else {
+        Write-Line 'Whenever you''re ready, run this again, or restart and press the setup key as the PC starts (often Del or F2).'
     }
 }
 

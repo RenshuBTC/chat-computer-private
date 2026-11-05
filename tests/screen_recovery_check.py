@@ -21,7 +21,7 @@ from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 choose_rendering()
 screen = GtkScreen(Paths().ensure(), Settings(), windowed=True)
-screen.apply_settings(0, "Sam")
+screen.apply_settings(0, "Ren")
 screen.user_text("u1", "What's the weather tomorrow?", True)
 screen.ai_delta("a1", "Sunny, ")
 screen.ai_delta("a1", "31 degrees.")

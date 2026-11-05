@@ -130,7 +130,7 @@
     "usb-whats-on": {
      "pass": true,
      "modes": [],
-     "note": "\"The USB stick at /media/sam/SANDISK contains photos and a recipe document.\""
+     "note": "\"The USB stick at /media/ren/SANDISK contains photos and a recipe document.\""
     },
     "dark-mode": {
      "pass": true,

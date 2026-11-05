@@ -168,7 +168,7 @@ while True:
         new[3] &= ~termios.ECHO
         termios.tcsetattr(TTYR, termios.TCSAFLUSH, new)
         try:
-            TTY.write("Password for sammy: ")
+            TTY.write("Password for rensh: ")
             TTY.flush()
             pw = read_line()
         finally:

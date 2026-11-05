@@ -27,11 +27,6 @@ over USB, and virtual machines' network cards, over which the model reads the we
 conversation across restarts, in a file on the PC's start-up partition that it writes through its own NVMe and SATA
 drivers.
 
-With a key for Meta's Model API in its settings (`meta-api-key`), Meta's Muse Spark answers instead, over the
-internet: each round of an answer is a POST of the conversation and the same tools to Meta's Model API, made by the
-kernel's own network stack and TLS 1.3, and Muse Spark's tool calls run here as the local model's do (`assistant.rs`).
-The start screen and the status say that what's typed goes to Meta. `try-muse-spark.sh` starts it in a virtual PC.
-
 * `boot/` is the start-up stage, a UEFI program (`\EFI\BOOT\BOOTX64.EFI`) that carries the kernel inside
   it.
   * It asks the firmware for the screen, the monitor's description (EDID), the memory map, where the
@@ -494,11 +489,8 @@ questions (Windows asks for permission, as for any change to how the PC starts).
    the PC's Secure Boot already trusts, where there is one, the key it made for ClaudeOS (Chat Computer's name until
    2026-10-19) too, so a PC that approved that one starts Chat Computer with nothing more to approve.
 3. It says which model the own system will answer with: the one Chat Computer's app got ready on the PC (install
-   the app from chatcomputer.ai/get first; it gets its model by itself), or Meta's Muse Spark. With no model of the
-   app's yet, it asks for a key for Meta's Model API (from dev.meta.ai; typed out of sight, never logged). The key is
-   kept in `settings.txt` as `meta-api-key`, and Muse Spark then answers over the internet, which needs a network
-   cable on the PC, since Wi-Fi isn't supported yet. A key there comes first, as the kernel takes it. With neither,
-   it opens chatcomputer.ai/get and doesn't restart.
+   the app from chatcomputer.ai/get first; it gets its model by itself). With none yet, it opens that page and
+   doesn't restart.
 4. It puts the signed file in `\EFI\chatcomputer-own` on the partition the PC starts from,
    next to Windows' own files, with `settings.txt` (how far the PC's clock is from UTC, as Windows keeps that
    clock in local time, and the memory and log files' ids; a model's file named there by hand, `model = ...`, and
@@ -514,12 +506,9 @@ questions (Windows asks for permission, as for any change to how the PC starts).
    there and starts it.
 
 With Secure Boot on and no key the PC trusts yet, the PC first has to trust Chat Computer's key. That takes one
-approval in the PC's setup screen: Secure Boot (Secure Boot Mode: Custom), then Key Management, then Authorized
-Signatures (db), then Append `ChatComputer.cer`, which setup also puts at the top of the start-up partition, the
-first list of files the setup screen shows. Setup asks nothing: it shows the steps in the words of the
-motherboard's maker's setup screen (MSI's, Gigabyte's, or the usual ones), and Enter restarts into the setup
-screen. From then on, "Chat Computer (own system)" in the boot menu starts it, with Secure Boot still on. A PC that
-can't add a key can have Secure Boot turned off there instead; the steps say so.
+approval in the PC's setup screen: Secure Boot, then Key Management, then Authorized Signatures (db), then Append
+`ChatComputer.cer`. You can turn Secure Boot off there instead. The script asks which, shows the steps and restarts
+into the setup screen.
 
 Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock's), and so do most
 laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:

@@ -27,8 +27,8 @@ def test_what_was_done_is_said_in_plain_words():
     assert describe(OURS + "show_website", {"url": "https://www.youtube.com/results?search_query=lofi"}) == \
         ("Searched youtube.com for “lofi”", False)
     assert describe("WebSearch", {"query": "trains on Sunday"}) == ("Searched the web for “trains on Sunday”", False)
-    assert describe("Write", {"file_path": "/home/sam/notes.txt"}) == ("Saved notes.txt", False)
-    assert describe("Edit", {"file_path": "/home/sam/plan.md"}) == ("Edited plan.md", False)
+    assert describe("Write", {"file_path": "/home/ren/notes.txt"}) == ("Saved notes.txt", False)
+    assert describe("Edit", {"file_path": "/home/ren/plan.md"}) == ("Edited plan.md", False)
     assert describe(OURS + "move_files", {"items": [{"from": "/a/b.pdf", "to": "/c"}]}) == ("Moved b.pdf", False)
     assert describe(OURS + "trash_files", {"paths": ["/a/1", "/a/2", "/a/3", "/a/4"]}) == \
         ("Moved 1, 2, 3 and 1 more to the trash", False)
@@ -66,8 +66,8 @@ def test_failures_and_looking_arent_kept():
 def test_the_list_keeps_what_was_done_and_finds_it(tmp_path):
     h = History(Paths(tmp_path).ensure())
     h.add("Opened youtube.com", OURS + "show_website", {"url": "https://youtube.com"}, prompt=("u1", "play lofi", 1.0))
-    h.add("Read notes.txt", "Read", {"file_path": "/home/sam/notes.txt"}, minor=True)
-    h.add("Saved notes.txt", "Write", {"file_path": "/home/sam/notes.txt"}, prompt=("u2", "write my list", 2.0))
+    h.add("Read notes.txt", "Read", {"file_path": "/home/ren/notes.txt"}, minor=True)
+    h.add("Saved notes.txt", "Write", {"file_path": "/home/ren/notes.txt"}, prompt=("u2", "write my list", 2.0))
     shown = h.recent()
     assert [e["text"] for e in shown] == ["Opened youtube.com", "Saved notes.txt"]          # not the minor step
     assert shown[0]["prompt_id"] == "u1" and shown[0]["prompt_ts"] == 1.0 and set(shown[0]) == {
@@ -75,7 +75,7 @@ def test_the_list_keeps_what_was_done_and_finds_it(tmp_path):
     rows = h.find()
     assert len(rows) == 2 and rows[-1].endswith("Saved notes.txt (asked: “write my list”)")
     # Words are looked for in what was done, its details (the file's path) and the message; minor steps too.
-    assert len(h.find("notes")) == 2 and len(h.find("home sam notes txt")) == 2 and h.find("lofi")[0].count("youtube")
+    assert len(h.find("notes")) == 2 and len(h.find("home ren notes txt")) == 2 and h.find("lofi")[0].count("youtube")
     assert h.find("nothing like this") == []
     # Older than asked for: left out.
     old = json.loads(h.file.read_text().splitlines()[0])
@@ -143,7 +143,7 @@ def test_the_brain_reports_tool_calls_when_they_finish(tmp_path):
 def _controller(tmp_path, monkeypatch):
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
-    c = Controller(Paths().ensure(), Settings(user_name="Sam Lee"), FakePlatform(), screen, voice=False, index=False)
+    c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), FakePlatform(), screen, voice=False, index=False)
     return c, screen
 
 

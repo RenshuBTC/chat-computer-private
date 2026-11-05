@@ -703,7 +703,7 @@
    "id": "call-me",
    "intent": "small talk",
    "phrasing": "sentence",
-   "query": "call me Sam from now on",
+   "query": "call me Ren from now on",
    "expect": "Keeps the name (the greeting uses it) and says so; Actions lists it."
   },
   {

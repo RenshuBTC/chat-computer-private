@@ -3,7 +3,6 @@ name = "chat-computer"
 version = "1.0.1"
 description = "Chat Computer for Windows and Mac"
 edition = "2024"
-license = "Apache-2.0"
 publish = false
 
 [lib]
@@ -27,6 +26,13 @@ getrandom = "0.3"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 tiny_http = "0.12"
+
+# Windows: the app as a browser (ways.rs): listed with Windows in its registry, for this account (winreg, which the
+# build already has); and one Chat Computer at a time, so a link clicked in another app reaches the one running
+# (Tauri's own plugin).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+tauri-plugin-single-instance = "2.5"
 
 [profile.release]
 codegen-units = 1

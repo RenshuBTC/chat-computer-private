@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The screen's dark (theme.css's ground), for the bars at the top and bottom. -->
+    <color name="ground">#191919</color>
+    <!-- The icon's own background: its letters are dark. -->
+    <color name="icon_ground">#F8F5F0</color>
+</resources>

@@ -79,9 +79,9 @@ def test_answers_only_use_free_space_and_run_chatcomputer_steps(generated):
     assert ai["storage"]["layout"] == {"name": "direct", "mode": "use_gap", "match": {"install-media": True}}
     assert ai["early-commands"] == [["sh", "/cdrom/chatcomputer/guard.sh", "0123456789abcdef01234567"],
                                     ["sh", "/cdrom/chatcomputer/network.sh"]]
-    assert ai["late-commands"] == [["sh", "/cdrom/chatcomputer/finish.sh", "sammy", "0123456789abcdef01234567"]]
-    assert ai["identity"]["username"] == "sammy"
-    assert ai["identity"]["realname"] == 'Sam Lee "é"'
+    assert ai["late-commands"] == [["sh", "/cdrom/chatcomputer/finish.sh", "rensh", "0123456789abcdef01234567"]]
+    assert ai["identity"]["username"] == "rensh"
+    assert ai["identity"]["realname"] == 'Ren Shu "é"'
     assert ai["kernel"] == {"flavor": "hwe"}
     assert ai["shutdown"] == "reboot"
     ap = ai["network"]["wifis"]["any-wifi"]["access-points"]
@@ -124,7 +124,7 @@ def test_boot_menu_is_valid_grub_script(generated):
 
 def test_settings_json(generated):
     data = json.loads((generated / "settings.json").read_text(encoding="utf-8"))
-    assert data == {"user_name": 'Sam "R" Lee', "windows_user": "sammy", "timezone": "Asia/Singapore",
+    assert data == {"user_name": 'Ren "R" Shu', "windows_user": "rensh", "timezone": "Asia/Singapore",
                     "locale": "en_US.UTF-8"}
 
 
@@ -136,11 +136,11 @@ def test_names_and_wifi_with_wide_characters_reach_the_installer_whole(generated
     loaders = [yaml.SafeLoader] + ([yaml.CSafeLoader] if getattr(yaml, "__with_libyaml__", False) else [])
     for loader in loaders:
         ai = yaml.load(text, Loader=loader)["autoinstall"]
-        assert ai["identity"]["realname"] == "Sam \U00020BB7\U0001F600", loader
+        assert ai["identity"]["realname"] == "Ren \U00020BB7\U0001F600", loader
         assert list(ai["network"]["wifis"]["any-wifi"]["access-points"]) == ["\U0001F3E0 Home"], loader
         assert ai["identity"]["realname"].encode("utf-8")
     data = json.loads((generated / "settings-wide.json").read_text(encoding="utf-8"))
-    assert data["user_name"] == "Sam \U00020BB7\U0001F600"
+    assert data["user_name"] == "Ren \U00020BB7\U0001F600"
 
 
 # ------------------------------------------------------------------ scripts in the installer partition
@@ -174,7 +174,7 @@ def _run_finish(tmp_path, installer_works=True, bitlocker_key=None, update_sourc
     for p in src.rglob("*"):
         if p.is_file():
             p.chmod(0o777)        # FAT32 shows every file as executable
-    (target / "home/sammy").mkdir(parents=True)
+    (target / "home/rensh").mkdir(parents=True)
     (target / "boot/efi/EFI").mkdir(parents=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -185,7 +185,7 @@ def _run_finish(tmp_path, installer_works=True, bitlocker_key=None, update_sourc
     fake.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CHATCOMPUTER_FINISH_RETRY_WAIT="0",
                CHATCOMPUTER_FINISH_SRC=str(src), CHATCOMPUTER_FINISH_TARGET=str(target))
-    r = subprocess.run(["sh", str(WIN / "installer/finish.sh"), "sammy", "0123456789abcdef"], env=env,
+    r = subprocess.run(["sh", str(WIN / "installer/finish.sh"), "rensh", "0123456789abcdef"], env=env,
                        capture_output=True, text=True)
     return r, target, calls.read_text().splitlines()
 
@@ -199,19 +199,19 @@ def test_finish_script_against_a_fake_system(tmp_path):
     assert mode(app / "linux/session/chatcomputer-session") == 0o755
     assert mode(app / "linux/session/xinitrc") == 0o644
     assert mode(app / "chatcomputer/__init__.py") == 0o644
-    assert mode(target / "home/sammy/ChatComputer/secrets") == 0o700
-    assert list((target / "home/sammy/ChatComputer/secrets").iterdir()) == []      # nothing to sign in with
-    assert mode(target / "home/sammy/ChatComputer/settings.json") == 0o644
+    assert mode(target / "home/rensh/ChatComputer/secrets") == 0o700
+    assert list((target / "home/rensh/ChatComputer/secrets").iterdir()) == []      # nothing to sign in with
+    assert mode(target / "home/rensh/ChatComputer/settings.json") == 0o644
     # The installer's boot menu (and guard.sh) look for this file to tell that this installer already installed here.
     assert (target / "boot/efi/EFI/chatcomputer/installed-0123456789abcdef").read_text().splitlines()[0] == "id=0123456789abcdef"
-    assert any("chown -R sammy:sammy /home/sammy/ChatComputer" in ln for ln in lines)
+    assert any("chown -R rensh:rensh /home/rensh/ChatComputer" in ln for ln in lines)
     # The first-start safety net is in place (enabled = the wants link)...
-    assert (target / "etc/chatcomputer/install-user").read_text() == "sammy\n"
+    assert (target / "etc/chatcomputer/install-user").read_text() == "rensh\n"
     assert (target / "etc/systemd/system/chatcomputer-finish-install.service").exists()
     link = target / "etc/systemd/system/multi-user.target.wants/chatcomputer-finish-install.service"
     assert os.readlink(link) == "/etc/systemd/system/chatcomputer-finish-install.service"
     # ...and the long step ran once.
-    assert sum("install-chatcomputer.sh --user sammy --from-installer" in ln for ln in lines) == 1
+    assert sum("install-chatcomputer.sh --user rensh --from-installer" in ln for ln in lines) == 1
     # The first start's clean-up of the installer partition: enabled, and told which installer is this one's.
     assert (target / "etc/chatcomputer/install-id").read_text() == "0123456789abcdef\n"
     assert (target / "etc/systemd/system/chatcomputer-reclaim-installer.service").exists()
@@ -232,10 +232,10 @@ def test_finish_script_gives_chatcomputer_its_bitlocker_key(tmp_path):
 
 def test_finish_script_notes_where_updates_come_from(tmp_path):
     # The folder Chat Computer Setup ran from, on Windows' drive: newer versions put there update Chat Computer. Root's file.
-    r, target, _ = _run_finish(tmp_path, update_source="Users/Sam Lee/Downloads/ChatComputer/ChatComputer")
+    r, target, _ = _run_finish(tmp_path, update_source="Users/Ren Shu/Downloads/ChatComputer/ChatComputer")
     assert r.returncode == 0, r.stdout + r.stderr
     f = target / "etc/chatcomputer/update-source"
-    assert f.read_text(encoding="utf-8") == "Users/Sam Lee/Downloads/ChatComputer/ChatComputer\n"
+    assert f.read_text(encoding="utf-8") == "Users/Ren Shu/Downloads/ChatComputer/ChatComputer\n"
     assert stat.S_IMODE(f.stat().st_mode) == 0o644 and f.stat().st_uid == 0
     # Setup not on Windows' own drive: no updates from there.
     r, target, _ = _run_finish(tmp_path / "elsewhere")
@@ -269,7 +269,7 @@ def test_finish_script_leaves_the_rest_to_the_first_start_when_offline(tmp_path)
 
 def test_finish_script_refuses_bad_user_names_and_ids(tmp_path):
     env = dict(os.environ, CHATCOMPUTER_FINISH_SRC=str(tmp_path), CHATCOMPUTER_FINISH_TARGET=str(tmp_path))
-    for args in (["rm -rf /", "0123456789abcdef"], ["sammy", "../../x"], ["sammy", ""]):
+    for args in (["rm -rf /", "0123456789abcdef"], ["rensh", "../../x"], ["rensh", ""]):
         r = subprocess.run(["sh", str(WIN / "installer/finish.sh"), *args], env=env, capture_output=True, text=True)
         assert r.returncode == 2, args
 
@@ -475,7 +475,7 @@ def test_flow_shrink_c_and_make_the_installer(tmp_path):
     # The mark that tells "Remove Chat Computer", and Chat Computer's first start, that this partition is its installer.
     assert (inst / f"chatcomputer/installer-{install_id}").read_text() == f"id={install_id}\n"
     assert ai["network"]["wifis"]["any-wifi"]["access-points"] == {"Home 5G": {"password": "correct horse"}}
-    assert ai["timezone"] == "Asia/Singapore" and ai["identity"]["realname"] == "Sam Lee"
+    assert ai["timezone"] == "Asia/Singapore" and ai["identity"]["realname"] == "Ren Shu"
     # Nothing to sign in to: Chat Computer thinks with a model on the PC itself. No secrets go with it here (no
     # BitLocker on this PC).
     assert list((inst / "chatcomputer/secrets").iterdir()) == []
@@ -506,7 +506,7 @@ def test_flow_shows_the_recovery_password_when_documents_cant_take_it(tmp_path):
     assert res["ok"], res
     assert f"bcdedit /set {{fwbootmgr}} bootsequence {SETUP_ID}" in res["calls"]
     assert res["calls"][-1] == "Q Restart now? [Y/n] -> n"
-    shown = re.search(r"Account: sammy   Password: ([a-z2-9]{4}(?:-[a-z2-9]{4}){3})", res["screen"])
+    shown = re.search(r"Account: rensh   Password: ([a-z2-9]{4}(?:-[a-z2-9]{4}){3})", res["screen"])
     assert shown, res["screen"]
     assert shown.group(1) not in (out / "setup.log").read_text()
     assert not list(out.rglob("Chat Computer recovery password.txt"))
@@ -678,7 +678,7 @@ def test_installer_without_wifi_card_drops_wifi(generated, tmp_path):
     import yaml
     ai = yaml.safe_load(text)["autoinstall"]
     assert "wifis" not in ai["network"]
-    assert ai["identity"]["username"] == "sammy"          # the rest is untouched
+    assert ai["identity"]["username"] == "rensh"          # the rest is untouched
     assert ai["late-commands"][0][1] == "/cdrom/chatcomputer/finish.sh"
 
 
@@ -724,7 +724,7 @@ def test_removing_chatcomputer_gives_windows_everything_back(tmp_path):
     assert (esp / "BOOT/BOOTX64.EFI").read_text() == "Windows Boot Manager"     # Windows back in the fallback slot
     assert not (esp / "BOOT/fbx64.efi").exists()
     assert (esp / "Microsoft/Boot/bootmgfw.efi").exists()
-    assert not (out / "Users/sammy/ChatComputer").exists()       # the sign-in copy an earlier version left
+    assert not (out / "Users/rensh/ChatComputer").exists()       # the sign-in copy an earlier version left
     assert not (out / "Documents/Chat Computer recovery password.txt").exists()
     assert not list((out / "work").iterdir())                                    # downloads
 
@@ -738,7 +738,7 @@ def test_removing_chatcomputer_can_keep_the_downloads_to_install_again(tmp_path)
     assert [c for c in res["calls"] if c.startswith("Q Keep the downloads")][0].endswith("[y/N] -> y")
     assert sorted(f.name for f in (out / "work").iterdir()) == ["ubuntu-24.04.5-live-server-amd64.iso"]
     assert _disk(res, 0) == DISK0 and not (out / "esp/EFI/chatcomputer").exists()  # Chat Computer itself is gone
-    assert not (out / "Users/sammy/ChatComputer").exists()
+    assert not (out / "Users/rensh/ChatComputer").exists()
 
 
 @needs_pwsh
@@ -759,7 +759,7 @@ def test_removing_chatcomputer_before_it_cleaned_up_its_installer(tmp_path):
     assert _disk(res, 0) == DISK0 and res["boot_entries"] == {}
     assert sorted(d.name for d in (out / "esp/EFI").iterdir()) == ["BOOT", "Microsoft"]
     # The sign-in copy goes; a file of the person's own in that folder (and so the folder) stays.
-    assert sorted(f.name for f in (out / "Users/sammy/ChatComputer").iterdir()) == ["notes.txt"]
+    assert sorted(f.name for f in (out / "Users/rensh/ChatComputer").iterdir()) == ["notes.txt"]
 
 
 @needs_pwsh

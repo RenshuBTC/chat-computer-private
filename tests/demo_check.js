@@ -569,11 +569,11 @@ async function ask(page, text, meanwhile) {
     window.__app = { calls: [] };
     window.__TAURI__ = { core: { invoke: (command, args) => {
       window.__app.calls.push([command, args || {}]);
-      if (command === "about") return Promise.resolve({ name: "Sam Lee" });
+      if (command === "about") return Promise.resolve({ name: "Ren Shu" });
       if (command === "model_status") return Promise.resolve({ state: "preparing", label: "", preparing: "Qwen3.5 9B",
         stage: "downloading", done: 1.2e9, total: 9e9, port: 8765, detail: "" });
       if (command === "search_files") return Promise.resolve([{ name: "Taxes 2025.pdf", where: "Documents", kind: "pdf",
-        ts: 1760000000, path: "/home/sam/Documents/Taxes 2025.pdf" }]);
+        ts: 1760000000, path: "/home/ren/Documents/Taxes 2025.pdf" }]);
       return Promise.resolve(null);
     } } };
   });
@@ -620,8 +620,8 @@ async function ask(page, text, meanwhile) {
       window.__gpt.calls.push(command);
       if (command === "about") return Promise.resolve({ name: "" });
       if (command === "model_status") return Promise.resolve({ state: "none", label: "", preparing: "", stage: "", done: 0, total: 0, port: 8765, detail: "x" });
-      if (command === "chatgpt_sign_in") return new Promise((r) => setTimeout(() => r({ signed_in: true, email: "sam@example.com" }), 200));
-      if (command === "chatgpt_status") return Promise.resolve({ signed_in: true, email: "sam@example.com" });
+      if (command === "chatgpt_sign_in") return new Promise((r) => setTimeout(() => r({ signed_in: true, email: "ren@example.com" }), 200));
+      if (command === "chatgpt_status") return Promise.resolve({ signed_in: true, email: "ren@example.com" });
       if (command === "chatgpt_sign_out") return Promise.resolve({ signed_in: false, email: null });
       if (command === "chatgpt_ask") {
         const send = (t) => args.events.onmessage(t);
@@ -1434,7 +1434,7 @@ async function ask(page, text, meanwhile) {
 
   // The greeting, as the Claude app's: for the time and the day, with the name you go by, and for where you are and
   // its weather (Open-Meteo standing in: Singapore, your time zone's city; Penang when you say you live there). A
-  // Friday evening, rain, a warm night, called Sam; a Friday morning, sunny, no name. Then "what's my name?",
+  // Friday evening, rain, a warm night, called Ren; a Friday morning, sunny, no name. Then "what's my name?",
   // "call me", "call me back later" (not a name), "I live in", the weather there, and forgetting the name.
   const sky = { code: 61, temp: 27.4, day: 0 }, meteo = [];
   async function singapore(at) {
@@ -1456,12 +1456,12 @@ async function ask(page, text, meanwhile) {
     return [ctx, p];
   }
   const [eveCtx, eve] = await singapore("2026-10-23T20:30:00+08:00");          // a Friday evening
-  await eve.evaluate(() => localStorage.setItem("chatcomputer-demo-name", JSON.stringify("Sam")));
+  await eve.evaluate(() => localStorage.setItem("chatcomputer-demo-name", JSON.stringify("Ren")));
   await eve.reload();                                                            // (the weather kept from the first)
   out.greet_evening = { said: await greeted(eve), now: await eve.evaluate(() => window.CO.greetingsNow()), meteo: meteo.slice() };
   await eve.click("#input");
   out.name_asked = await ask(eve, "what's my name?");
-  out.name_given = { said: await ask(eve, "call me sam lee"), time: (await eve.evaluate(() => window.CO.greetingsNow())).time };
+  out.name_given = { said: await ask(eve, "call me ren shu"), time: (await eve.evaluate(() => window.CO.greetingsNow())).time };
   out.name_not = await ask(eve, "call me back later");
   out.place_given = { said: await ask(eve, "I live in penang"), here: (await eve.evaluate(() => window.CO.greetingsNow())).here };
   out.place_weather = await ask(eve, "weather");

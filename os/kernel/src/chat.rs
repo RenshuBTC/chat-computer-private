@@ -242,10 +242,6 @@ fn memory_text(bytes: u64) -> String {
 /// What the start screen says about the model.
 fn model_text(ready: Ready) -> String {
     match ready {
-        Ready::Yes(name) if crate::assistant::remote() => format!(
-            "Meta's {name} is ready: it answers over the internet, through Meta's Model API, so what you type goes to \
-             Meta. Type anything below and press Enter."
-        ),
         Ready::Yes(name) => format!(
             "Chat Computer's own model, {name}, is ready, here on this PC: nothing you type leaves it, unless it looks \
              something up on the web for you, which you'll see. Type anything below and press Enter."

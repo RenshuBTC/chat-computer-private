@@ -24,7 +24,7 @@ class Rig:
         self.mock = MockModel()
         self.mock.start()
         self.paths = Paths(home / "ChatComputer").ensure()
-        self.settings = Settings(user_name="Sam Lee")
+        self.settings = Settings(user_name="Ren Shu")
         self.state = State(self.paths)
         self.screen = RecordingScreen()
         self.platform = FakePlatform()

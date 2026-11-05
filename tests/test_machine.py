@@ -35,7 +35,7 @@ LSBLK = {"blockdevices": [
     {"name": "sda", "label": None, "size": 32010928128, "fstype": None, "mountpoints": [None], "rm": True,
      "hotplug": True, "tran": "usb", "type": "disk", "model": "Ultra", "vendor": "SanDisk ", "ro": False, "fsavail": None,
      "children": [{"name": "sda1", "label": "SANDISK", "size": 32009879552, "fstype": "vfat",
-                   "mountpoints": ["/media/sam/SANDISK"], "rm": True, "hotplug": True, "tran": None, "type": "part",
+                   "mountpoints": ["/media/ren/SANDISK"], "rm": True, "hotplug": True, "tran": None, "type": "part",
                    "ro": False, "fsavail": 12500000000}]},
     {"name": "sdb", "label": None, "size": 1000204886016, "fstype": None, "mountpoints": [None], "rm": False,
      "hotplug": True, "tran": "usb", "type": "disk", "model": "My Passport", "vendor": "WD", "ro": False, "fsavail": None,
@@ -52,7 +52,7 @@ def test_drives_that_can_be_unplugged_and_never_the_computer_s_own():
     assert [(d["id"], d["name"], d["kind"], d["mounted"]) for d in ds] == [
         ("sda1", "SANDISK", "USB drive", True), ("sdb1", "WD My Passport", "USB drive", False),
         ("mmcblk0", "CANON", "memory card", False)]
-    assert ds[0]["path"] == "/media/sam/SANDISK" and ds[0]["free_gb"] == 12.5 and ds[0]["size_gb"] == 32.0
+    assert ds[0]["path"] == "/media/ren/SANDISK" and ds[0]["free_gb"] == 12.5 and ds[0]["size_gb"] == 32.0
     assert ds[1]["path"] is None and ds[1]["free_gb"] is None
     # A Chat Computer installed onto a USB disk: its own partitions are still the system's.
     sysdisk = {"blockdevices": [{"name": "sdc", "type": "disk", "rm": True, "hotplug": True, "tran": "usb", "children": [
@@ -63,10 +63,10 @@ def test_drives_that_can_be_unplugged_and_never_the_computer_s_own():
 
 
 def test_where_udisks_opened_a_drive():
-    assert L.parse_mounted_at("Mounted /dev/sda1 at /media/sam/SANDISK\n") == "/media/sam/SANDISK"
-    assert L.parse_mounted_at("Mounted /dev/sda1 at /media/sam/My Stick.\n") == "/media/sam/My Stick"
+    assert L.parse_mounted_at("Mounted /dev/sda1 at /media/ren/SANDISK\n") == "/media/ren/SANDISK"
+    assert L.parse_mounted_at("Mounted /dev/sda1 at /media/ren/My Stick.\n") == "/media/ren/My Stick"
     assert L.parse_mounted_at("Error mounting /dev/sda1: GDBus.Error:org.freedesktop.UDisks2.Error.AlreadyMounted: "
-                              "Device /dev/sda1 is already mounted at `/media/sam/SANDISK'.") == "/media/sam/SANDISK"
+                              "Device /dev/sda1 is already mounted at `/media/ren/SANDISK'.") == "/media/ren/SANDISK"
     assert L.parse_mounted_at("Error mounting /dev/sda1: wrong fs type") is None
 
 
@@ -90,14 +90,14 @@ def test_opening_and_ejecting_a_drive_through_udisks(monkeypatch):
     unmounted["blockdevices"][1]["children"][0]["mountpoints"] = [None]
     state = {"lsblk": unmounted}
     runs = Runs({"lsblk": lambda cmd: CommandResult(0, json.dumps(state["lsblk"]), ""),
-                 "udisksctl mount -b /dev/sda1": (0, "Mounted /dev/sda1 at /media/sam/SANDISK\n", ""),
+                 "udisksctl mount -b /dev/sda1": (0, "Mounted /dev/sda1 at /media/ren/SANDISK\n", ""),
                  "udisksctl unmount -b /dev/sda1": (0, "Unmounted /dev/sda1.\n", ""),
                  "udisksctl power-off -b /dev/sda": (0, "", "")})
     monkeypatch.setattr(L, "run", runs)
     p = L.LinuxPlatform()
-    assert p.open_drive("sandisk") == "/media/sam/SANDISK"
+    assert p.open_drive("sandisk") == "/media/ren/SANDISK"
     state["lsblk"] = LSBLK
-    assert p.open_drive("SANDISK") == "/media/sam/SANDISK"       # already open: nothing run
+    assert p.open_drive("SANDISK") == "/media/ren/SANDISK"       # already open: nothing run
     assert sum(c[:2] == ["udisksctl", "mount"] for c in runs.ran) == 1
 
     def after_unmount(cmd):
@@ -141,7 +141,7 @@ def test_printers_from_cups():
     # One printer and no default: that one.
     one = L.parse_printers("Brother_HL\n", "no system default destination\n", "")
     assert one[0]["default"] and L.choose_printer(one, None)["name"] == "Brother HL"
-    q = L.parse_print_queue("Canon_TS8350-3     sam          1024000   Tue 20 Oct 2026 12:00:00\n")
+    q = L.parse_print_queue("Canon_TS8350-3     ren          1024000   Tue 20 Oct 2026 12:00:00\n")
     assert q == [{"id": "Canon_TS8350-3", "printer": "Canon TS8350", "size_kb": 1000, "since": "Tue 20 Oct 2026 12:00:00"}]
 
 
@@ -325,8 +325,8 @@ def test_drive_tool(tmp_path):
     p.drive_list = [{"id": "sdb1", "name": "SANDISK", "kind": "USB drive", "size_gb": 32.0, "mounted": False,
                      "path": None, "free_gb": None}]
     text, err = call(server, "drives", {"action": "open", "drive": "sandisk"})
-    assert not err and text.endswith("/media/sam/SANDISK")
-    assert json.loads(call(server, "drives", {"action": "list"})[0])[0]["path"] == "/media/sam/SANDISK"
+    assert not err and text.endswith("/media/ren/SANDISK")
+    assert json.loads(call(server, "drives", {"action": "list"})[0])[0]["path"] == "/media/ren/SANDISK"
     text, err = call(server, "drives", {"action": "eject", "drive": "SANDISK"})
     assert not err and "safe to pull it out" in text and p.drive_list == []
     text, err = call(server, "drives", {"action": "eject", "drive": "SANDISK"})
@@ -419,7 +419,7 @@ def test_whats_done_says_what_these_did():
 def _controller(tmp_path, monkeypatch, platform=None):
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
-    c = Controller(Paths().ensure(), Settings(user_name="Sam Lee"), platform or FakePlatform(), screen, voice=False,
+    c = Controller(Paths().ensure(), Settings(user_name="Ren Shu"), platform or FakePlatform(), screen, voice=False,
                    index=False)
     return c, screen
 

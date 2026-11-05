@@ -197,7 +197,7 @@ def stt():
     if not (WHISPER / "model.bin").exists():
         pytest.skip("Whisper model not downloaded")
     from chatcomputer.voice.stt import STT
-    return STT(str(WHISPER), "en", hint="Claude, Sam Lee, YouTube")
+    return STT(str(WHISPER), "en", hint="Claude, Ren Shu, YouTube")
 
 
 def speech16k(tts, text):
@@ -211,7 +211,7 @@ def words(s):
 
 def test_kokoro_speaks(tts):
     t0 = time.time()
-    a = tts.synth("Hello Sam Lee. YouTube is open on the screen.")
+    a = tts.synth("Hello Ren Shu. YouTube is open on the screen.")
     took = time.time() - t0
     secs = a.size / 24000
     assert 2.0 < secs < 6.0

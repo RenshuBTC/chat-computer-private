@@ -2,9 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
   "description": "Chat Computer's own page (bundled with the app), and only it: what it may ask the app for. The sites shown in the middle get nothing.",
-  "webviews": [
-    "main"
-  ],
+  "webviews": ["main"],
   "permissions": [
     "allow-show-site",
     "allow-place-site",
@@ -25,6 +23,12 @@
     "allow-chatgpt-ask",
     "allow-way-status",
     "allow-choose-way",
-    "allow-show-folder"
+    "allow-make-default-browser",
+    "allow-show-folder",
+    "allow-open-tab",
+    "allow-show-tab",
+    "allow-close-tab",
+    "allow-tab-back",
+    "allow-take-opening"
   ]
 }

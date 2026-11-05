@@ -112,7 +112,7 @@ setup_screen() {
   # Black root window so there is never a grey X stipple flash.
   xsetroot -solid black >/dev/null 2>&1 || true
   # Hide the mouse's arrow when the mouse is still, and when a finger touches the screen (the touchscreen
-  # first: a mouse is optional). An unclutter without --hide-on-touch stops at
+  # first: a mouse is optional, and AirTouch draws its own dots). An unclutter without --hide-on-touch stops at
   # once: then the one without it.
   local hider
   for hider in unclutter unclutter-xfixes; do

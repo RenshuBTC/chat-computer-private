@@ -23,8 +23,8 @@ def make(tmp_path, clean=True):
     # (The trash's folder is one for the whole run: tests/conftest.py sets XDG_DATA_HOME once.)
     paths = Paths(home / "ChatComputer").ensure()
     win = tmp_path / "windows"
-    (win / "Users" / "sammy" / "Documents").mkdir(parents=True)
-    settings = Settings(windows_user="sammy", windows_mount=str(win))
+    (win / "Users" / "rensh" / "Documents").mkdir(parents=True)
+    settings = Settings(windows_user="rensh", windows_mount=str(win))
     screen = RecordingScreen()
     ctx = T.ToolContext(paths, settings, FakePlatform(), Journal(paths), screen, Memory(paths), power_delay_s=0.05)
     _, policies, names = T.build(ctx)
@@ -48,8 +48,8 @@ def loop():
 
 def test_windows_paths_are_understood(tmp_path):
     ctx, *_ = make(tmp_path)
-    p = ctx.resolve(r"C:\Users\sammy\Documents\tax.pdf")
-    assert p == str(tmp_path / "windows" / "Users" / "sammy" / "Documents" / "tax.pdf")
+    p = ctx.resolve(r"C:\Users\rensh\Documents\tax.pdf")
+    assert p == str(tmp_path / "windows" / "Users" / "rensh" / "Documents" / "tax.pdf")
     assert ctx.resolve("~/x.txt") == os.path.join(os.path.expanduser("~"), "x.txt")
 
 
@@ -102,7 +102,7 @@ def test_page_tools_need_something_on_screen(tmp_path):
 
 def test_move_copy_trash_and_undo(tmp_path):
     ctx, server, policies, _ = make(tmp_path)
-    docs = tmp_path / "windows" / "Users" / "sammy" / "Documents"
+    docs = tmp_path / "windows" / "Users" / "rensh" / "Documents"
     a = docs / "a.txt"
     a.write_text("A")
     # moving onto an existing file asks first
@@ -131,7 +131,7 @@ def test_windows_system_files_cannot_be_trashed(tmp_path):
     assert policies["trash_files"]({"paths": [str(ctx.paths.secrets / "accounts.json")]}).startswith("DENY:")
     assert policies["move_files"]({"items": [{"from": r"C:\Program Files\x", "to": "~/x"}]}).startswith("DENY:")
     # A folder of the person's own that happens to be called Recovery or Boot is theirs.
-    q = policies["trash_files"]({"paths": [r"C:\Users\sammy\Documents\Recovery"]})
+    q = policies["trash_files"]({"paths": [r"C:\Users\rensh\Documents\Recovery"]})
     assert q.startswith("Move 1 item to the trash"), q
 
 
@@ -184,10 +184,10 @@ def test_the_logs_are_copied_before_the_computer_restarts(tmp_path, loop):
 def test_chatcomputer_own_files_cant_be_moved_or_trashed(tmp_path, monkeypatch):
     from chatcomputer import update
     ctx, server, policies, _ = make(tmp_path)
-    src = Path(ctx.settings.windows_mount) / "Users/sammy/Downloads/ChatComputer"
+    src = Path(ctx.settings.windows_mount) / "Users/rensh/Downloads/ChatComputer"
     (src / "chatcomputer").mkdir(parents=True)
     note = tmp_path / "update-source"
-    note.write_text("Users/sammy/Downloads/ChatComputer\n")
+    note.write_text("Users/rensh/Downloads/ChatComputer\n")
     monkeypatch.setattr(update, "UPDATE_SOURCE", note)
     monkeypatch.setattr(update, "WINDOWS_MOUNT", Path(ctx.settings.windows_mount))
     evil = tmp_path / "evil.py"
@@ -257,7 +257,7 @@ def test_show_page_can_be_saved_and_reopened(tmp_path):
 
 
 def test_file_index_finds_files_by_name_and_content(tmp_path):
-    root = tmp_path / "Users" / "sammy"
+    root = tmp_path / "Users" / "rensh"
     (root / "Documents").mkdir(parents=True)
     (root / "AppData" / "Local").mkdir(parents=True)
     (root / "Documents" / "Tax_Return_2025.txt").write_text("IRAS assessment for year of assessment 2025")
@@ -271,7 +271,7 @@ def test_file_index_finds_files_by_name_and_content(tmp_path):
     idx.extract_contents()
     hits = idx.search("tax return")
     assert hits and hits[0]["path"].endswith("Tax_Return_2025.txt")
-    assert hits[0]["where"].startswith("C:\\Users\\sammy")
+    assert hits[0]["where"].startswith("C:\\Users\\rensh")
     hits = idx.search("durian")
     assert len(hits) == 1 and hits[0]["path"].endswith("notes.md") and "durian" in hits[0]["match"].lower()
     recent = idx.search("", after="30d")
@@ -369,7 +369,7 @@ def test_undo_never_deletes_what_was_there_before(tmp_path, monkeypatch):
     # (send2trash picks its trash folder once, when first used, so look at what undo hands it instead.)
     monkeypatch.setattr(journal, "move_to_trash", lambda p: sh.move(p, bin_ / os.path.basename(p)))
     ctx, server, policies, _ = make(tmp_path)
-    docs = tmp_path / "windows" / "Users" / "sammy" / "Documents"
+    docs = tmp_path / "windows" / "Users" / "rensh" / "Documents"
     (docs / "Photos").mkdir()
     (docs / "Photos" / "mine.jpg").write_text("the person's own photo")
     new = tmp_path / "home" / "Photos"
@@ -491,11 +491,11 @@ def test_copying_pairings_from_windows_says_what_was_copied(monkeypatch):
     from chatcomputer.platform import linux as L
     from chatcomputer.platform.base import CommandResult
     reports = {
-        "two": {"ok": True, "count": 2, "imported": [{"device": "A1:B2:C3:D4:E5:F6", "action": "created"},
-                                                     {"device": "C0:FF:EE:12:34:56", "action": "updated"}],
+        "two": {"ok": True, "count": 2, "imported": [{"device": "A4:BF:C6:D0:E5:FF", "action": "created"},
+                                                     {"device": "C2:9E:1D:E2:3D:A5", "action": "updated"}],
                 "skipped_no_adapter_dir": [], "errors": []},
         "other adapter": {"ok": True, "count": 0, "imported": [], "errors": [],
-                          "skipped_no_adapter_dir": [{"adapter": "0A:1B:2C:3D:4E:5F", "device": "A1:B2:C3:D4:E5:F6"}]},
+                          "skipped_no_adapter_dir": [{"adapter": "D4:6D:6D:97:62:9B", "device": "A4:BF:C6:D0:E5:FF"}]},
         "none": {"ok": True, "controlset": "\\ControlSet001", "imported": [], "note": "no BTHPORT\\Parameters\\Keys"},
     }
     said = {}
@@ -676,7 +676,7 @@ def test_a_search_between_the_wrong_dates_says_what_the_words_find(tmp_path):
         roots: list = []
 
         def search(self, query, kind, after, before, folder, limit):
-            return [] if after or kind else [{"path": "/home/sam/Documents/Tax letter March 2026.pdf"}]
+            return [] if after or kind else [{"path": "/home/ren/Documents/Tax letter March 2026.pdf"}]
     ctx.index = Index()
     out, err = call(ctx, "search_files", {"query": "tax", "modified_after": "2023-03-01"})
     assert not err and "Tax letter March 2026" in out and "Nothing between those dates" in out

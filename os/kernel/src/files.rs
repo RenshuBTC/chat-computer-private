@@ -1033,7 +1033,7 @@ fn with<T>(letter: char, f: impl FnOnce(&Fs, &mut Partition) -> T) -> Result<T, 
     result
 }
 
-/// A path as the model gives it ("C:\Users\Sam", "d:/Photos", "/Users/Sam", "Users\Sam"): its drive's letter (Windows'
+/// A path as the model gives it ("C:\Users\Ren", "d:/Photos", "/Users/Ren", "Users\Ren"): its drive's letter (Windows'
 /// drive's if it has none), and the path in that volume from its root.
 fn inside(path: &str) -> (char, String) {
     let p = path.trim().trim_matches('"');

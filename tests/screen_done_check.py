@@ -51,7 +51,7 @@ with open(paths.transcript, "w", encoding="utf-8") as f:
 
 choose_rendering()
 screen = GtkScreen(paths, Settings(), windowed=True)
-screen.apply_settings(0, "Sam", "Sonnet 5.5")
+screen.apply_settings(0, "Ren", "Sonnet 5.5")
 screen.mic(True)
 loop = asyncio.new_event_loop()
 threading.Thread(target=loop.run_forever, daemon=True).start()

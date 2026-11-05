@@ -30,7 +30,7 @@ from chatcomputer.ui.gtk_app import GtkScreen, choose_rendering  # noqa: E402
 
 choose_rendering()
 screen = GtkScreen(Paths().ensure(), Settings(), windowed=True)
-screen.apply_settings(0, "Sam", "Opus 5.5")
+screen.apply_settings(0, "Ren", "Opus 5.5")
 loop = asyncio.new_event_loop()
 threading.Thread(target=loop.run_forever, daemon=True).start()
 sent: list[str] = []

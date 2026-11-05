@@ -66,7 +66,7 @@ def test_offline_the_place_alone(tmp_path):
 def test_the_screen_is_told_and_claude_can_set_where_they_live(tmp_path, monkeypatch):
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "cc"))
     screen = RecordingScreen()
-    c = Controller(Paths().ensure(), Settings(user_name="Sam Lee", timezone="Asia/Singapore"), FakePlatform(), screen,
+    c = Controller(Paths().ensure(), Settings(user_name="Ren Shu", timezone="Asia/Singapore"), FakePlatform(), screen,
                    voice=False, index=False)
     assert c.weather is False                     # (only the real app looks the weather up)
     c._say_here()

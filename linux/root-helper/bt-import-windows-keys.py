@@ -17,7 +17,7 @@ Format research (cited so the byte order is auditable):
 * Windows stores classic link keys under
     SYSTEM\\ControlSet00N\\Services\\BTHPORT\\Parameters\\Keys\\<adapter>
   where <adapter> is the adapter's MAC with no separators, lowercase
-  (e.g. "0a1b2c3d4e5f"). Each REG_BINARY value under it is named by the
+  (e.g. "d46d6d97629b"). Each REG_BINARY value under it is named by the
   *device* MAC (same 12-hex-lowercase form) and holds the 16-byte link key.
   Source: Microsoft "Bluetooth registry entries" (BTHPORT\\Parameters\\Keys),
   and the x2es/bt-dualboot project (bt_dualboot/bt_windows/devices.py,
@@ -68,7 +68,7 @@ MAC_VALUE_RE = re.compile(r"^[0-9a-fA-F]{12}$")
 
 
 def mac_from_hex(h: str) -> str:
-    """'0a1b2c3d4e5f' -> '0A:1B:2C:3D:4E:5F' (uppercase, colon-separated)."""
+    """'d46d6d97629b' -> 'D4:6D:6D:97:62:9B' (uppercase, colon-separated)."""
     h = h.upper()
     return ":".join(h[i : i + 2] for i in range(0, 12, 2))
 

@@ -110,6 +110,10 @@ class Settings:
     night_light_warmth: int = 50
     # The keyboard's layout (XKB: us, gb, fr, de, fr(azerty)...); "" = as the computer was set up.
     keyboard_layout: str = ""
+    # AirTouch: the hand, through the screen's camera, as the pointer (chatcomputer/airtouch). Off unless asked for: the
+    # touchscreen, a keyboard and the AirPods come first.
+    airtouch: bool = False
+    airtouch_camera: str = ""       # part of the camera's name, or its /dev/video path; "" = the best one
     # Files
     windows_mount: str = "/mnt/windows"
     extra_search_roots: list[str] = field(default_factory=list)

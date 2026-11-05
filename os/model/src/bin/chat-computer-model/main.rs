@@ -1,5 +1,5 @@
 //! Chat Computer's model, as a program: it serves the model to this computer's own programs (Chat Computer, its
-//! desktop app's page) over HTTP on 127.0.0.1, as OpenAI's chat completions API, and makes
+//! desktop app's page, its Chrome extension) over HTTP on 127.0.0.1, as OpenAI's chat completions API, and makes
 //! model files from the published ones.
 //!
 //!     chat-computer-model serve MODEL.ccm [--port 8765] [--threads N] [--cache DIR] [--allow-origin ORIGIN]...
@@ -18,7 +18,7 @@
 //! keeps that open, so a model left running by an app that quit, or crashed, doesn't keep its memory and its port.
 //!
 //! Only this computer can reach it (it listens on 127.0.0.1), and of web pages only Chat Computer's own (its site
-//! and its app, and any origin given with --allow-origin): any other page a browser
+//! and its app, and any origin given with --allow-origin, such as the Chrome extension's): any other page a browser
 //! shows is refused, so no site can use the model behind the person's back. The model only writes: it runs nothing
 //! and opens nothing (what Chat Computer does with its answers is Chat Computer's, with its own permissions).
 

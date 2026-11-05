@@ -11,18 +11,18 @@ from chatcomputer.ui.gtk_app import PAGE_EVENTS, with_files
 
 def test_files_added_with_plus_go_with_the_words():
     assert with_files("read these", []) == "read these"
-    assert with_files("what's in it?", ["/home/sam/Documents/a.pdf"]) == \
-        "what's in it?\n\n[Added: /home/sam/Documents/a.pdf]"
-    two = with_files("", ["/home/sam/a.txt", "/home/sam/b.txt"])
-    assert two == "Here are the files I added.\n\n[Added: /home/sam/a.txt]\n[Added: /home/sam/b.txt]"
-    assert with_files("", ["/home/sam/a.txt"]).startswith("Here's the file I added.")
+    assert with_files("what's in it?", ["/home/ren/Documents/a.pdf"]) == \
+        "what's in it?\n\n[Added: /home/ren/Documents/a.pdf]"
+    two = with_files("", ["/home/ren/a.txt", "/home/ren/b.txt"])
+    assert two == "Here are the files I added.\n\n[Added: /home/ren/a.txt]\n[Added: /home/ren/b.txt]"
+    assert with_files("", ["/home/ren/a.txt"]).startswith("Here's the file I added.")
 
 
 def test_the_microphone_button_stops_and_starts_listening(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CHATCOMPUTER_HOME", str(tmp_path / "ChatComputer"))
     screen = RecordingScreen()
-    c = Controller(Paths().ensure(), Settings(user_name="Sam"), FakePlatform(), screen, voice=False, index=False)
+    c = Controller(Paths().ensure(), Settings(user_name="Ren"), FakePlatform(), screen, voice=False, index=False)
     assert "mic_toggle" in PAGE_EVENTS
 
     async def run():

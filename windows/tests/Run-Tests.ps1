@@ -30,8 +30,8 @@ function Assert-Throws([scriptblock]$Block, [string]$What) {
 }
 
 # ------------------------------------------------------------------ user names
-Assert-Equal 'sammy' (ConvertTo-LinuxUserName 'sammy') 'plain name'
-Assert-Equal 'samlee' (ConvertTo-LinuxUserName 'Sam Lee') 'spaces and capitals'
+Assert-Equal 'rensh' (ConvertTo-LinuxUserName 'rensh') 'plain name'
+Assert-Equal 'renshu' (ConvertTo-LinuxUserName 'Ren Shu') 'spaces and capitals'
 Assert-Equal 'jose' (ConvertTo-LinuxUserName ('Jos' + [char]0x00E9)) 'accent removed'
 Assert-Equal 'u123abc' (ConvertTo-LinuxUserName '123abc') 'leading digit'
 Assert-Equal 'root2' (ConvertTo-LinuxUserName 'root') 'reserved'
@@ -39,8 +39,8 @@ Assert-Equal 'admin2' (ConvertTo-LinuxUserName 'Admin') 'reserved after lowercas
 Assert-Equal 'me' (ConvertTo-LinuxUserName '') 'empty'
 Assert-Equal 'me' (ConvertTo-LinuxUserName ([string][char]0x674E + [char]0x660E)) 'only non-latin letters'
 Assert-True ((ConvertTo-LinuxUserName ('a' * 80)).Length -le 32) 'long names are cut'
-Assert-True (Test-LinuxUserName 'sammy') 'valid name accepted'
-Assert-True (-not (Test-LinuxUserName 'Sammy')) 'capitals rejected'
+Assert-True (Test-LinuxUserName 'rensh') 'valid name accepted'
+Assert-True (-not (Test-LinuxUserName 'Rensh')) 'capitals rejected'
 Assert-True (-not (Test-LinuxUserName 'sudo')) 'reserved rejected'
 
 # ------------------------------------------------------------------ passwords
@@ -146,10 +146,10 @@ Remove-OldSignInFolders -Root $tr
 Assert-True (-not (Test-Path -LiteralPath (Join-Path $tr 'chatcomputer-signin-1')) -and -not (Test-Path -LiteralPath (Join-Path $tr 'chatcomputer-signin-2')) -and
              (Test-Path -LiteralPath (Join-Path $tr 'keep-me'))) 'old sign-in folders: deleted, others kept'
 Remove-Folder $tr
-Assert-Equal 'C:\Users\Sam Lee\x' (Get-LongPath 'C:\Users\Sam Lee\x') 'long path: no short names, unchanged'
+Assert-Equal 'C:\Users\Ren Shu\x' (Get-LongPath 'C:\Users\Ren Shu\x') 'long path: no short names, unchanged'
 Assert-True ([string]::IsNullOrEmpty((Get-LongPath $null))) 'long path: nothing in, nothing out'
 if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-    # The PC that needed this: user folder "Sam Lee", so %TEMP% is C:\Users\SAMLEE~1\AppData\Local\Temp, and setup
+    # The PC that needed this: user folder "Ren Shu", so %TEMP% is C:\Users\RENSHU~1\AppData\Local\Temp, and setup
     # runs in a folder on C:. A folder with a space gets a short name like that (where the drive makes them).
     $base = Get-LongPath ([Environment]::GetFolderPath('LocalApplicationData'))    # on C:, like the user folder
     $long = Join-Path $base ('Chat Computer short ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -235,10 +235,10 @@ Assert-Equal 'Europe/London' (Get-IanaTimeZone 'GMT Standard Time') 'london'
 Assert-Equal 'Asia/Kolkata' (Get-IanaTimeZone 'India Standard Time') 'india'
 Assert-Equal 'Europe/Kyiv' (Get-IanaTimeZone 'FLE Standard Time') 'kyiv'
 Assert-Equal 'Etc/UTC' (Get-IanaTimeZone 'Nowhere Standard Time') 'unknown zone'
-$settings = New-SettingsJson -UserName 'Sam "R" Lee' -WindowsUser 'sammy' -TimeZone 'Asia/Singapore'
+$settings = New-SettingsJson -UserName 'Ren "R" Shu' -WindowsUser 'rensh' -TimeZone 'Asia/Singapore'
 $parsed = $settings | ConvertFrom-Json
-Assert-Equal 'Sam "R" Lee' $parsed.user_name 'settings json user'
-Assert-Equal 'sammy' $parsed.windows_user 'settings json windows user'
+Assert-Equal 'Ren "R" Shu' $parsed.user_name 'settings json user'
+Assert-Equal 'rensh' $parsed.windows_user 'settings json windows user'
 
 # ------------------------------------------------------------------ Ubuntu downloads
 $sums = ConvertFrom-Sha256Sums ([IO.File]::ReadAllText((Join-Path $Here 'data/SHA256SUMS')))
@@ -343,7 +343,7 @@ Assert-Equal (Format-Guid '{3F2A9C1E-5B7D-4E8F-9A0B-1C2D3E4F5A6B}') '3f2a9c1e-5b
 # ------------------------------------------------------------------ the answers file
 $template = [IO.File]::ReadAllText((Join-Path $Win 'autoinstall.template.yaml'))
 $hash = Get-Sha512Crypt -Password 'kq7m-3vtz-p9xa-hc4r' -Salt 'abcdefghijklmnop'
-$yaml = New-AutoinstallYaml -Template $template -Account 'sammy' -RealName ('Sam Lee "' + [char]0x00E9 + '"') -PasswordHash $hash `
+$yaml = New-AutoinstallYaml -Template $template -Account 'rensh' -RealName ('Ren Shu "' + [char]0x00E9 + '"') -PasswordHash $hash `
     -TimeZone 'Asia/Singapore' -InstallId '0123456789abcdef01234567' `
     -WifiSsid 'Home "5G"' -WifiPassword 'p@ss w0rd"\' -WifiAuth 'WPA2PSK'
 Assert-True (-not ($yaml -match '\{\{')) 'all fields filled'
@@ -351,17 +351,17 @@ Assert-True ($yaml.Contains('mode: use_gap')) 'free space only'
 Assert-True ($yaml -match '(?m)^\s+match:\s*\n\s+install-media: true\s*$') 'the disk the installer is on'
 Assert-True (-not $yaml.Contains('reformat_disk')) 'never reformats'
 Assert-Throws { New-AutoinstallYaml -Template $template -Account 'Bad Name' -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef' } 'bad user name refused'
-Assert-Throws { New-AutoinstallYaml -Template 'nothing' -Account 'sammy' -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef' } 'template without fields refused'
-$wiredOnly = New-AutoinstallYaml -Template $template -Account 'sammy' -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef'
+Assert-Throws { New-AutoinstallYaml -Template 'nothing' -Account 'rensh' -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef' } 'template without fields refused'
+$wiredOnly = New-AutoinstallYaml -Template $template -Account 'rensh' -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef'
 # A name as a work PC may have it: the account is made with useradd, which refuses a colon.
-$work = New-AutoinstallYaml -Template $template -Account 'sammy' -RealName ("Lee, Sam (IT: Ops)`t= x") -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef'
-Assert-True ($work.Contains('realname: "Lee Sam (IT Ops) x"')) 'name without : , = or tabs, as the installer''s form takes it'
-Assert-True ((New-AutoinstallYaml -Template $template -Account 'sammy' -RealName ('a' * 200) -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef').Contains(('realname: "' + ('a' * 160) + '"'))) 'name at most 160 characters'
+$work = New-AutoinstallYaml -Template $template -Account 'rensh' -RealName ("Shu, Ren (IT: Ops)`t= x") -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef'
+Assert-True ($work.Contains('realname: "Shu Ren (IT Ops) x"')) 'name without : , = or tabs, as the installer''s form takes it'
+Assert-True ((New-AutoinstallYaml -Template $template -Account 'rensh' -RealName ('a' * 200) -PasswordHash $hash -TimeZone 'Etc/UTC' -InstallId '0123456789abcdef').Contains(('realname: "' + ('a' * 160) + '"'))) 'name at most 160 characters'
 # A name and a Wi-Fi network with characters past the first 65,536 (checked by the Python tests).
 $wide = [char]::ConvertFromUtf32(0x20BB7) + [char]::ConvertFromUtf32(0x1F600)
-$wideYaml = New-AutoinstallYaml -Template $template -Account 'sammy' -RealName ('Sam ' + $wide) -PasswordHash $hash `
+$wideYaml = New-AutoinstallYaml -Template $template -Account 'rensh' -RealName ('Ren ' + $wide) -PasswordHash $hash `
     -TimeZone 'Asia/Singapore' -InstallId '0123456789abcdef01234567' -WifiSsid ([char]::ConvertFromUtf32(0x1F3E0) + ' Home') -WifiPassword 'pw'
-$wideSettings = New-SettingsJson -UserName ('Sam ' + $wide) -WindowsUser 'sammy' -TimeZone 'Asia/Singapore'
+$wideSettings = New-SettingsJson -UserName ('Ren ' + $wide) -WindowsUser 'rensh' -TimeZone 'Asia/Singapore'
 
 # ------------------------------------------------------------------ the installer's power-on entry
 # bcdedit stand-in: a menu that /copy adds to, and calls that can be made to fail.
@@ -636,20 +636,6 @@ Assert-Equal ([uint32]0x0A1B2C3D) (Get-OwnSettingsMemoryId $withMemory) 'own set
 Assert-Equal ([uint32]4294967295) (Get-OwnSettingsMemoryId (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -MemoryId ([uint32]::MaxValue))) 'own settings: the biggest memory id'
 Assert-Equal $null (Get-OwnSettingsMemoryId "memory-id = 0`r`n") 'own settings: a memory id of 0 is none'
 Assert-Equal $named (Get-OwnSettingsModel $withMemory) 'own settings: the model read back next to a memory id'
-# Meta's Model API (Muse Spark answers when its key is there): a key and a model, put there by hand or pasted when setup
-# asked, written as the kernel reads them and read back, kept when setup runs again.
-$withMeta = New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -MetaKey 'mk-Test_key.123' -MetaModel 'muse-spark-1.3'
-Assert-True ($withMeta -match '(?m)^meta-api-key = mk-Test_key\.123\r$') 'own settings: Meta''s key, on a line of its own'
-Assert-True ($withMeta -match '(?m)^meta-model = muse-spark-1\.3\r$') 'own settings: Meta''s model, on a line of its own'
-Assert-Equal 'mk-Test_key.123' (Get-OwnSettingsValue $withMeta 'meta-api-key') 'own settings: Meta''s key read back'
-Assert-Equal 'muse-spark-1.3' (Get-OwnSettingsValue $withMeta 'meta-model') 'own settings: Meta''s model read back'
-Assert-Equal '' (Get-OwnSettingsValue $ownText 'meta-api-key') 'own settings: no key read back unless one was given'
-Assert-True ($ownText -notmatch 'meta') 'own settings: no Meta lines unless given'
-Assert-True (Test-OwnMetaKey 'mk-Test_key.123') 'Meta key: one that can be'
-Assert-True (-not (Test-OwnMetaKey 'two words')) 'Meta key: no spaces'
-Assert-True (-not (Test-OwnMetaKey '')) 'Meta key: not empty'
-Assert-True (-not (Test-OwnMetaKey ('x' * 513))) 'Meta key: at most 512 characters'
-Assert-True (-not (Test-OwnMetaKey ('caf' + [char]0x00E9 + 'keyvalue'))) 'Meta key: ASCII only'
 
 # Its memory file, as Chat Computer's own system reads it (os/remember: 512-byte chunks, each tagged with "CCMEMORY",
 # the file's id and the chunk's number).
@@ -947,21 +933,12 @@ try {
     $Script:FakeEspFails = $false
     [IO.File]::WriteAllText($runSettings, (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -LogId ([uint32]0x10C0FFEE)))
     Assert-Equal $null (Read-OwnLastRun -WorkDir (Join-Path $runWork 'not-there')) 'last run: nothing when it can''t be saved'
-    # The settings there now (for a key for Meta's Model API kept there): read, or '' when they can't be.
-    [IO.File]::WriteAllText($runSettings, (New-OwnSettingsText -Model '' -ClockOffsetMinutes 0 -MetaKey 'mk-Test_key.123'))
-    $Script:FakeEspClosed = 0
-    Assert-Equal 'mk-Test_key.123' (Get-OwnSettingsValue (Read-OwnSettings) 'meta-api-key') 'settings now: Meta''s key read from the start-up partition'
-    Assert-Equal 1 $Script:FakeEspClosed 'settings now: the start-up partition closed again'
-    $Script:FakeEspFails = $true
-    Assert-Equal '' (Read-OwnSettings) 'settings now: nothing when the start-up partition can''t be opened'
-    $Script:FakeEspFails = $false
     # Reading failing part-way (the settings can't be read: here, a folder of that name).
     Remove-Item -LiteralPath $runSettings
     New-Item -ItemType Directory -Path $runSettings | Out-Null
     $Script:FakeEspClosed = 0
     Assert-Equal $null (Read-OwnLastRun -WorkDir $runWork) 'last run: nothing when reading fails part-way'
     Assert-Equal 1 $Script:FakeEspClosed 'last run: the start-up partition closed again then too'
-    Assert-Equal '' (Read-OwnSettings) 'settings now: nothing when the settings aren''t a file'
 } finally {
     Remove-Item -LiteralPath $Script:FakeEsp -Recurse -Force
     Remove-Item Function:\Get-WindowsEsp, Function:\Mount-EspPartition, Function:\Dismount-EspPartition
@@ -1004,7 +981,7 @@ try { throw 'Setup stopped: something.' } catch { $own = Get-ErrorText $_ }
 Assert-Equal 'Setup stopped: something.' $own 'error text: a thrown message as it is'
 
 # ------------------------------------------------------------------ where Chat Computer updates itself from
-Assert-Equal 'Users/Sam Lee/Downloads/ChatComputer/ChatComputer' (ConvertTo-UpdateSource -FullPath 'C:\Users\Sam Lee\Downloads\ChatComputer\ChatComputer' -SystemDrive 'C:') 'update folder below C:'
+Assert-Equal 'Users/Ren Shu/Downloads/ChatComputer/ChatComputer' (ConvertTo-UpdateSource -FullPath 'C:\Users\Ren Shu\Downloads\ChatComputer\ChatComputer' -SystemDrive 'C:') 'update folder below C:'
 Assert-Equal 'Users/x/ChatComputer' (ConvertTo-UpdateSource -FullPath 'c:\Users\x\ChatComputer\' -SystemDrive 'C:') 'update folder: drive letter case, last backslash'
 Assert-Equal '' (ConvertTo-UpdateSource -FullPath 'D:\ChatComputer' -SystemDrive 'C:') 'update folder on another drive: none'
 Assert-Equal '' (ConvertTo-UpdateSource -FullPath '\\server\share\ChatComputer' -SystemDrive 'C:') 'update folder on a network share: none'

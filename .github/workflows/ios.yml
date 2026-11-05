@@ -1,0 +1,48 @@
+# Chat Computer for iPhone and iPad (apps/ios), built on GitHub's Mac machines for the simulator (the App Store
+# needs Apple's developer account), and tried in a simulated iPhone: a picture of it after it starts.
+name: iPhone app
+on:
+  push:
+    branches: [main]
+    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: The Xcode project (XcodeGen, from project.yml)
+        working-directory: apps/ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        working-directory: apps/ios
+        run: |
+          set -o pipefail
+          xcodebuild -project ChatComputer.xcodeproj -scheme ChatComputer -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build | tail -25
+      - name: Try it in a simulated iPhone
+        working-directory: apps/ios
+        run: |
+          dev=$(xcrun simctl list devices available -j | python3 -c "import json, sys; d = json.load(sys.stdin)['devices']; print(next(x['udid'] for k, v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')))")
+          xcrun simctl boot "$dev"
+          xcrun simctl bootstatus "$dev" -b
+          xcrun simctl install "$dev" "build/Build/Products/Debug-iphonesimulator/Chat Computer.app"
+          xcrun simctl launch "$dev" ai.chatcomputer.app
+          sleep 30
+          mkdir -p ../../screens
+          xcrun simctl io "$dev" screenshot ../../screens/iphone.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screens-iphone
+          path: screens/
+          if-no-files-found: ignore

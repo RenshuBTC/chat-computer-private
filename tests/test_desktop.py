@@ -25,7 +25,8 @@ import build_apps  # noqa: E402
 COMMANDS = ["show_site", "place_site", "hide_site", "unhide_site", "close_site", "site_media", "search_files", "open_file", "about",
             "connect_service", "forget_service", "open_service_item", "model_status",
             "chatgpt_status", "chatgpt_sign_in", "chatgpt_sign_out", "chatgpt_ask",
-            "way_status", "choose_way", "show_folder"]
+            "way_status", "choose_way", "make_default_browser", "show_folder", "open_tab", "show_tab", "close_tab", "tab_back",
+            "take_opening"]
 # What a connected service's own pages may ask (what its reader read there), and nothing else.
 SERVICE_COMMANDS = ["messages_found"]
 SERVICES = ["gmail", "outlook", "telegram", "whatsapp", "wechat", "discord"]
@@ -77,9 +78,13 @@ def test_only_the_app_s_own_page_may_ask_the_app():
     # A build for testing alone may point the services at pages on this computer.
     assert "if !cfg!(debug_assertions) {\n        return None;" in lib
     assert len(sorted((TAURI / "capabilities").glob("*.json"))) == 3
-    # The site view: only web pages, a new window's link in its place, and the Mac's view as Safari.
+    # The site view: only web pages, a new window's link in its place, and the Mac's view as Safari. A tab's (the app as
+    # a browser) is made the same way, numbered, and only from an address the page gives (open_tab: web_url).
     assert 'const SITE: &str = "site";' in lib and '.on_navigation(|u| matches!(u.scheme(), "http" | "https" | "about" | "blob"))' in lib
     assert "NewWindowResponse::Deny" in lib and "Version/26.0 Safari/605.1.15" in lib
+    assert 'const TAB: &str = "tab-";' in lib and "let builder = web_view(&app, &label, url);" in lib
+    open_tab = re.search(r"fn open_tab\(([^)]*)\)[^{]*\{(.*?)\n\}", lib, re.S).group(2)
+    assert "let url = web_url(&url)?;" in open_tab and "let label = tab_label(tab)?;" in open_tab
 
 
 def test_how_it_s_made_and_signed():
@@ -186,15 +191,28 @@ def test_the_app_works(loopback):
     assert res["tapped"] == "opened: Mum" and res["c_title"] == "C page: the app said no"
     after = {m[0]: m[1:] for m in res["after_disconnect"]}
     assert "Sam Lee" not in after and after["Mum"] == ["WhatsApp: Dinner at 7 tonight?", False] and len(after) == 4
-    # How you want Chat Computer: asked first, the two ways (the own system not from Linux, saying why); the app
-    # chosen, the app it is, and "/" lists how you have it.
+    # How you want Chat Computer: asked first, the four ways (the own system not from Linux, saying why); the Chrome
+    # extension put in the app's own folder (as apps/chrome has it), Chrome started in a window of its own, the way
+    # kept; the address from outside waiting for the conversation, then opened; the app chosen, the app it is.
     assert res["first_page"] == "/start/index.html"
-    assert res["ways"] == [["app", False], ["os", True]]
+    assert res["ways"] == [["chrome", False], ["browser", False], ["app", False], ["os", True]]
     st = res["way_status"]
-    assert st["way"] is None and st["os"]["can"] is False and st["os"]["system"] == "linux"
+    assert st["way"] is None and st["chrome"] is True and st["os"]["can"] is False and st["os"]["system"] == "linux"
+    assert st["extension"].endswith("/.local/share/ai.chatcomputer.desktop/Chrome extension")
+    ext = res["extension"]
+    assert ext["files"] == sorted(["manifest.json", "background.js", "panel.html", "panel.css", "panel.js"]) and ext["kept"] == {"way": "chrome"}
+    assert ext["shown"] == st["extension"] and res["show_folder"] == {"ok": None}
+    # (Chrome opened at chatcomputer.ai's page with the steps, the folder after #folder=: it opens no chrome:// page.)
+    from urllib.parse import quote
+    assert res["chrome_started"] == ["--new-window", "https://chatcomputer.ai/get/chrome.html#folder=" + quote(st["extension"], safe="-._~")]
     assert "installs from Windows or from macOS" in res["os"] and "installs from Windows or from macOS" in res["os_choose"]["no"]
-    assert res["about_way"] == "app"
-    assert res["way_slash"] == "How you have Chat Computer" and res["way_now"] == "app"
+    assert res["waited"] in ("127.0.0.1", "B page") and res["about_way"] == "app"
+    # The browser, chosen from "/": sites in tabs, each a view of its own (its page's title comes back by tab), one
+    # shown again, one closed (the app hasn't it any more).
+    assert res["way_slash"] == "How you have Chat Computer" and res["way_now"] == "app" and res["about_browser"] == "browser"
+    assert res["tabs"] == [["0", "Chat Computer", False], ["1", "A test page: the app said no", False], ["2", "D page", True]]
+    assert res["tab_picked"] == "1" and res["tab_back"] == {"ok": None} and res["tab_open_shown"] == {"ok": None}
+    assert res["tab_closed"] == {"no": "That tab isn't open."}
     if loopback:
         assert res["other_name"] == 404 and res["own_name"] == 200
 

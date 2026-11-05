@@ -17,7 +17,7 @@ SAMPLES = [
     "Ελληνικά κείμενο", "emoji 😀👍🏽👨‍👩‍👧‍👦🇯🇵 done", "math ∑∫√∞ ≤≥ ±×÷", "fn main() {\n    println!(\"hi\");\n}\n",
     "def f(x):\n\treturn x  # comment\n\n\n", "<html><body class=\"a\">&amp;</body></html>", "    indented\n        more",
     "a\u00a0b\u2003c\u3000d", "zero\u200bwidth\u200djoiner", "combining e\u0301 a\u0308 n\u0303", "\x00\x01\x1f\x7f controls",
-    "URL https://example.com/path?q=1&r=2#frag", "email a.b@c.de", "$PATH ~/x/y.txt C:\\Users\\Sam\\file.txt",
+    "URL https://example.com/path?q=1&r=2#frag", "email a.b@c.de", "$PATH ~/x/y.txt C:\\Users\\Ren\\file.txt",
     "ALLCAPS and MiXeD CaSe", "punctuation!!! ??? ... ,,, ;;; :::", "''''\"\"\"\"", "a'b'c'd", " 's 't 're 've 'm 'll 'd",
     "x\n \n y", "x \n\n y", "  \n  ", " ", "", "\n", "a\r\rb", "\u2028line\u2029para", "１２３ ｆｕｌｌ ｗｉｄｔｈ",
 ]

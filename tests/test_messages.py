@@ -116,7 +116,7 @@ def test_wechat_is_read_from_wechat_for_web():
 # ------------------------------------------------------------------ email over IMAP
 def _raw(subject, frm, text, html=None, attach=None, date="Mon, 19 Oct 2026 10:00:00 +0800"):
     m = email.message.EmailMessage()
-    m["Subject"], m["From"], m["To"], m["Date"] = subject, frm, "sam@example.com", date
+    m["Subject"], m["From"], m["To"], m["Date"] = subject, frm, "ren@example.com", date
     m.set_content(text)
     if html:
         m.add_alternative(html, subtype="html")
@@ -177,8 +177,8 @@ class FakeIMAP:
 
 
 def _account(**kw):
-    a = {"id": "a1", "kind": "imap", "provider": "gmail", "label": "Gmail", "address": "sam@example.com",
-         "user": "sam@example.com", "host": "imap.gmail.com", "port": 993, "password": "right"}
+    a = {"id": "a1", "kind": "imap", "provider": "gmail", "label": "Gmail", "address": "ren@example.com",
+         "user": "ren@example.com", "host": "imap.gmail.com", "port": 993, "password": "right"}
     a.update(kw)
     return a
 
@@ -224,7 +224,7 @@ def test_outlook_signs_in_with_microsoft_s_tokens(monkeypatch):
     a = _account(kind="outlook", provider="outlook", oauth=True, refresh_token="rt1", access_token="old",
                  expires_at=time.time() - 10, client_id="cid", password=None)
     Mailbox(a, save_tokens=saved.append, imap_factory=lambda host, port: server).poll()
-    assert server.auth == ("XOAUTH2", b"user=sam@example.com\x01auth=Bearer new\x01\x01")
+    assert server.auth == ("XOAUTH2", b"user=ren@example.com\x01auth=Bearer new\x01\x01")
     assert saved and saved[0]["refresh_token"] == "rt2" and saved[0]["access_token"] == "new"
 
 
@@ -271,11 +271,11 @@ def test_microsoft_sign_in_with_pkce():
 
     def opener(req, timeout=30):
         sent.append(urllib.parse.parse_qs(req.data.decode()))
-        claims = base64.urlsafe_b64encode(json.dumps({"email": "sam@example.com"}).encode()).decode().rstrip("=")
+        claims = base64.urlsafe_b64encode(json.dumps({"email": "ren@outlook.com"}).encode()).decode().rstrip("=")
         return Reply({"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "id_token": f"h.{claims}.s"})
     tokens = msauth.finish("cid", "abc", flow["verifier"], opener=opener)
     assert sent[0]["grant_type"] == ["authorization_code"] and sent[0]["code_verifier"] == [flow["verifier"]]
-    assert msauth.address_of(tokens) == "sam@example.com" and tokens["expires_at"] > time.time()
+    assert msauth.address_of(tokens) == "ren@outlook.com" and tokens["expires_at"] > time.time()
     with pytest.raises(msauth.SignInError, match="expired"):
         msauth.refresh("cid", "rt", opener=lambda req, timeout=30: Reply({"error": "invalid_grant",
                                                                          "error_description": "expired"}))
@@ -366,8 +366,8 @@ def test_telegram_brings_in_chats_not_channels_or_your_own():
 def test_sign_ins_stay_in_the_secrets_folder(tmp_path):
     paths = Paths(tmp_path / "ChatComputer").ensure()
     acc = Accounts(paths.secrets / "accounts.json")
-    a = acc.add({"kind": "imap", "provider": "gmail", "label": "Gmail", "address": "Sam@example.com", "password": "pw"})
-    b = acc.add({"kind": "imap", "provider": "gmail", "label": "Gmail", "address": "sam@example.com", "password": "pw2"})
+    a = acc.add({"kind": "imap", "provider": "gmail", "label": "Gmail", "address": "Ren@example.com", "password": "pw"})
+    b = acc.add({"kind": "imap", "provider": "gmail", "label": "Gmail", "address": "ren@example.com", "password": "pw2"})
     assert a["id"] == b["id"] and len(acc.all()) == 1 and acc.get(a["id"])["password"] == "pw2"
     assert stat.S_IMODE(os.stat(paths.secrets / "accounts.json").st_mode) == 0o600
     shown = public({**b, "refresh_token": "x", "session": "s", "api_hash": "h", "_last_uid": 4})
@@ -385,7 +385,7 @@ def _inbox(tmp_path, server=None):
 
 
 def test_connecting_email_with_its_own_form(tmp_path):
-    server = FakeIMAP({5: _raw("Hello", "Jane <jane@example.com>", "Hi Sam")})
+    server = FakeIMAP({5: _raw("Hello", "Jane <jane@example.com>", "Hi Ren")})
     inbox, screen, notices = _inbox(tmp_path, server)
 
     async def run():
@@ -393,8 +393,8 @@ def test_connecting_email_with_its_own_form(tmp_path):
         await inbox.connect(None)
         await inbox.connect("gmail")
         fid = screen.events[-1][1]["id"]
-        await inbox.form_submit(fid, {"address": "sam@example.com", "password": "nope"})
-        await inbox.form_submit(fid, {"address": "sam@example.com", "password": "right"})
+        await inbox.form_submit(fid, {"address": "ren@example.com", "password": "nope"})
+        await inbox.form_submit(fid, {"address": "ren@example.com", "password": "right"})
         await asyncio.sleep(0.2)
         await inbox.stop()
     asyncio.run(run())
@@ -404,11 +404,11 @@ def test_connecting_email_with_its_own_form(tmp_path):
     # A wrong password: the same form again, with what went wrong, the address still there and the password not.
     retry = forms[2]
     assert retry["title"] == "Connect Gmail" and "didn't take that" in retry["error"]
-    assert [(f["name"], f.get("value", "")) for f in retry["fields"]] == [("address", "sam@example.com"), ("password", "")]
+    assert [(f["name"], f.get("value", "")) for f in retry["fields"]] == [("address", "ren@example.com"), ("password", "")]
     assert forms[3] is None and "is connected" in notices[-1]
     # Kept with its password in the secrets folder; the screen gets it without.
     saved = json.loads((inbox.paths.secrets / "accounts.json").read_text())["accounts"]
-    assert saved[0]["password"] == "right" and saved[0]["address"] == "sam@example.com"
+    assert saved[0]["password"] == "right" and saved[0]["address"] == "ren@example.com"
     shown = [e[1] for e in screen.events if e[0] == "messages_list"][-1]
     assert shown[1] == ["Gmail"] and "right" not in json.dumps(screen.events, default=str)
     assert [m["who"] for m in inbox.store.recent()] == ["Jane"]

@@ -120,14 +120,13 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
     // The settings file and the clock, as the start-up stage read them.
     let settings = settings::parse(info.settings());
     log!(
-        "Chat Computer kernel: settings: {}{}{}{}",
+        "Chat Computer kernel: settings: {}{}{}",
         match (info.settings_len, &settings.model) {
             (0, _) => "none",
             (_, Some(_)) => "the model's file named",
             (_, None) => "no model's file named",
         },
         if settings.old_key { " (and an older setup's Claude API key, no longer used)" } else { "" },
-        if settings.meta_key.is_some() { " (and a key for Meta's Model API)" } else { "" },
         if settings.not_understood > 0 { alloc::format!(", {} lines not understood", settings.not_understood) } else { String::new() }
     );
     log!("Chat Computer kernel: clock: {}", clock::init(info.time, info.time_zone, settings.clock_offset_minutes));
@@ -248,7 +247,7 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
     log!("Chat Computer kernel: {}", storage::open_others());
     log!("Chat Computer kernel: {}", files::init());
     next("Chat Computer's model");
-    assistant::init(settings.model, settings.meta_key.map(|key| (key, settings.meta_model)));
+    assistant::init(settings.model);
     listening::init();
     chat::restore(&assistant::conversation());
     log!("Chat Computer: ready");

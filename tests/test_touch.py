@@ -2,7 +2,7 @@
 gets, which are held back for a moment (an edge swipe?) and which the screen takes; and what each gesture means."""
 import asyncio
 
-from chatcomputer.config import Paths, Settings
+from chatcomputer.config import Paths, Settings, State
 from chatcomputer.controller import Controller
 from chatcomputer.platform.fake import FakePlatform
 from chatcomputer.screen import RecordingScreen
@@ -146,7 +146,7 @@ def test_pinching_the_conversation_changes_and_keeps_its_text_size(tmp_path, mon
     assert c.settings.text_scale == 3.0
 
 
-def test_the_onscreen_keyboard_types(tmp_path, monkeypatch):
+def test_the_onscreen_keyboard_types_with_or_without_airtouch(tmp_path, monkeypatch):
     c, screen = _controller(tmp_path, monkeypatch)
 
     async def run():
@@ -164,3 +164,16 @@ def test_the_onscreen_keyboard_types(tmp_path, monkeypatch):
     assert not c.keyboard_up
     c._keyboard_moved((0, 600, 1920, 480, 12.35, 4))           # a finger brought it up (the window says)
     assert c.keyboard_up
+
+
+def test_airtouch_is_off_until_asked_for(tmp_path, monkeypatch):
+    assert Settings().airtouch is False
+    # Someone who had it on: off once, the touchscreen first...
+    c, screen = _controller(tmp_path, monkeypatch, airtouch=True)
+    c._settings_moved_on()
+    assert c.settings.airtouch is False and Settings.load(c.paths).airtouch is False
+    assert State(c.paths).get("airtouch_asked_for") is True
+    # ...and asked for again later, it stays on.
+    c.settings.airtouch = True
+    c._settings_moved_on()
+    assert c.settings.airtouch is True

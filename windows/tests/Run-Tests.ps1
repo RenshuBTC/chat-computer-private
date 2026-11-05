@@ -692,6 +692,7 @@ Assert-Equal 'Qwen3.5 4B' (Find-OwnModel -Dir $modelDir.FullName).Label 'own mod
 Assert-Equal 'prepare "C:\m" --speech --model whisper-small.en --exit-with-stdin' (Get-OwnPrepareArguments -Dir 'C:\m' -Name 'whisper-small.en' -Speech) 'own listening: the engine asked for it'
 Assert-Equal 'prepare "C:\m" --model qwen3.5-4b --exit-with-stdin' (Get-OwnPrepareArguments -Dir 'C:\m' -Name 'qwen3.5-4b') 'own model: the engine asked for it'
 Assert-Equal 'whisper-small.en' $Script:OwnSpeechModel 'own listening: the one models.json pins'
+Assert-Equal 'Downloading it: 50% of 1 GB' (Format-OwnPrepareLine 'downloading 484701183 969402366') 'own listening: its download''s progress'
 Remove-Item -LiteralPath $modelDir.FullName -Recurse -Force
 # Its settings: the clock, a model named by hand, as the kernel reads them (os/kernel/src/settings.rs).
 $ownText = New-OwnSettingsText -Model '' -ClockOffsetMinutes 480

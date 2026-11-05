@@ -14,7 +14,8 @@
 //! a link to another file or folder (a symbolic link, or a junction such as "My Documents"), listed with where it
 //! goes (but not followed here: that's for the caller); a file synced with OneDrive (or another cloud service), whose
 //! bytes are on the PC or, for an "online-only" file, aren't (its clusters missing: it's sparse); or a file Windows
-//! compressed itself ("Compact OS"), its bytes in a stream of their own.
+//! compressed itself ("Compact OS"), its bytes in a stream of their own, in chunks compressed with XPRESS or LZX
+//! (wof.rs).
 //!
 //! As described by Microsoft's documentation of its structures and by the Linux-NTFS project's description of the
 //! format. Every number read from the disk is checked before it's used: a damaged volume gives an error, never a
@@ -31,6 +32,7 @@ use alloc::vec::Vec;
 
 #[cfg(test)]
 mod tests;
+mod wof;
 
 /// Where the volume's bytes come from: `buf.len()` bytes at byte `offset` of the volume (offsets and lengths are
 /// multiples of 512). False if they couldn't be read.
@@ -59,7 +61,8 @@ pub enum Error {
     Link,
     /// A placeholder whose bytes aren't all on the PC: an "online-only" OneDrive file, say. Its reparse tag.
     Online(u32),
-    /// Compressed by Windows itself ("Compact OS"), which isn't read yet.
+    /// Compressed by Windows itself in a way that isn't read here: its bytes in a WIM file elsewhere (WIMBoot), or an
+    /// algorithm Compact OS doesn't use.
     Compacted,
     /// A folder with more in it than one listing holds (`MOST_LISTING_BYTES` of entries: millions of files).
     TooMany,
@@ -149,6 +152,14 @@ fn reparse_value(value: &[u8]) -> Result<(u32, Vec<u8>), Error> {
     Ok((tag, value[8..8 + len].to_vec()))
 }
 
+/// An attribute's value's size.
+fn value_size(v: &Value) -> u64 {
+    match v {
+        Value::Resident(b) => b.len() as u64,
+        Value::Clusters { size, .. } => *size,
+    }
+}
+
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?))
 }
@@ -211,6 +222,9 @@ pub struct File {
     pub size: u64,
     data: Value,
     compressed: bool,
+    /// A file Windows compressed itself (WOF): its algorithm (wof::chunk_size's), and the size of the stream its
+    /// bytes are in (`data`).
+    wof: Option<(u32, u64)>,
 }
 
 pub struct Volume {
@@ -534,20 +548,22 @@ impl Volume {
         Ok(self.attributes(disk, n, kind)?.into_iter().find(|a| a.name.is_empty()))
     }
 
-    /// File `n`, to read its bytes (its unnamed $DATA stream). Not a link (`Error::Link`), a placeholder whose bytes
-    /// aren't all here (`Error::Online`), or a file Windows compressed itself (`Error::Compacted`).
+    /// File `n`, to read its bytes (its unnamed $DATA stream, or for a file Windows compressed itself, its
+    /// WofCompressedData). Not a link (`Error::Link`), a placeholder whose bytes aren't all here (`Error::Online`), or
+    /// a file Windows compressed in a way that isn't read here (`Error::Compacted`).
     pub fn open_file(&self, disk: &mut impl Disk, n: u64) -> Result<File, Error> {
         let base = self.record(disk, n)?;
         if u16_at(&base, 0x16).unwrap_or(0) & FOLDER_RECORD != 0 {
             return Err(Error::NotAFile);
         }
         let own = attributes_of(&base)?;
-        let tag = self.reparse_in(disk, n, &own)?.map_or(0, |r| r.0);
+        let reparse = self.reparse_in(disk, n, &own)?;
+        let tag = reparse.as_ref().map_or(0, |r| r.0);
         if tag & NAME_SURROGATE != 0 {
             return Err(Error::Link);
         }
-        if tag == TAG_WOF {
-            return Err(Error::Compacted);
+        if let Some((TAG_WOF, info)) = &reparse {
+            return self.open_compacted(disk, n, &own, info);
         }
         let attrs = self.attributes_in(disk, n, &own, DATA)?;
         let data = attrs.into_iter().find(|a| a.name.is_empty()).ok_or(Error::Damaged)?;
@@ -562,7 +578,31 @@ impl Volume {
         if tag != 0 && !self.all_here(&own, &data.value, compressed, size) {
             return Err(Error::Online(tag));
         }
-        Ok(File { record: n, size, data: data.value, compressed })
+        Ok(File { record: n, size, data: data.value, compressed, wof: None })
+    }
+
+    /// A file Windows compressed itself ("Compact OS"): WOF's reparse point says how (its version, 1; its provider, 2:
+    /// the file's own stream; the provider's version, 1; and the algorithm, wof::chunk_size's); the file's size is
+    /// its unnamed stream's (which is sparse: nothing in it), its bytes in its WofCompressedData stream. One whose
+    /// bytes are in a WIM file elsewhere (WIMBoot's, provider 1), or compressed some other way, isn't read here
+    /// (`Error::Compacted`).
+    fn open_compacted(&self, disk: &mut impl Disk, n: u64, own: &[Attribute], info: &[u8]) -> Result<File, Error> {
+        let algorithm = match (u32_at(info, 0), u32_at(info, 4), u32_at(info, 8), u32_at(info, 12)) {
+            (Some(1), Some(2), Some(1), Some(a)) if wof::chunk_size(a).is_some() => a,
+            _ => return Err(Error::Compacted),
+        };
+        let attrs = self.attributes_in(disk, n, own, DATA)?;
+        let size = attrs.iter().find(|a| a.name.is_empty()).map(|a| value_size(&a.value)).ok_or(Error::Damaged)?;
+        let name: Vec<u16> = "WofCompressedData".encode_utf16().collect();
+        let stream = attrs.into_iter().find(|a| a.name == name).ok_or(Error::Damaged)?;
+        if stream.flags & ENCRYPTED_DATA != 0 {
+            return Err(Error::Encrypted);
+        }
+        if stream.flags & COMPRESSED != 0 {
+            return Err(Error::Damaged);
+        }
+        let stream_size = value_size(&stream.value);
+        Ok(File { record: n, size, data: stream.value, compressed: false, wof: Some((algorithm, stream_size)) })
     }
 
     /// Whether a placeholder's bytes are all on the PC: its file attributes don't say they're elsewhere, and every
@@ -663,6 +703,10 @@ impl Volume {
         }
         let n = ((file.size - offset) as usize).min(buf.len());
         let out = &mut buf[..n];
+        if let Some((algorithm, stream)) = file.wof {
+            self.read_compacted(disk, &file.data, algorithm, stream, file.size, offset, out)?;
+            return Ok(n);
+        }
         match &file.data {
             Value::Resident(b) => out.copy_from_slice(&b[offset as usize..offset as usize + n]),
             Value::Clusters { runs, initialized, compression_unit, .. } => {
@@ -678,6 +722,72 @@ impl Volume {
             }
         }
         Ok(n)
+    }
+
+    /// A file Windows compressed itself: its bytes from `offset`, out of the chunks in its stream (`data`, `stream`
+    /// bytes long) that hold them. The stream starts with a table of where each chunk but the first starts (after
+    /// the table): 4 bytes each, or 8 for a file of 4 GiB or more; each chunk is its part of the file compressed, or
+    /// as it is if it's no smaller.
+    #[allow(clippy::too_many_arguments)]
+    fn read_compacted(&self, disk: &mut impl Disk, data: &Value, algorithm: u32, stream: u64, size: u64, offset: u64, out: &mut [u8]) -> Result<(), Error> {
+        if out.is_empty() {
+            return Ok(());
+        }
+        let chunk = wof::chunk_size(algorithm).ok_or(Error::Compacted)? as u64;
+        let chunks = size.div_ceil(chunk);
+        let entry = if size > u32::MAX as u64 { 8 } else { 4 };
+        let table = chunks.saturating_sub(1).checked_mul(entry).filter(|&t| t <= stream).ok_or(Error::Damaged)?;
+        let body = stream - table;
+        // The table's entries these chunks need, read at once: entry j is where chunk j + 1 starts.
+        let (first, last) = (offset / chunk, (offset + out.len() as u64 - 1) / chunk);
+        let from_entry = first.saturating_sub(1);
+        let mut entries: Vec<u64> = Vec::new();
+        if chunks >= 2 {
+            let to_entry = last.min(chunks - 2);
+            let mut b = vec![0u8; ((to_entry - from_entry + 1) * entry) as usize];
+            self.read_value(disk, data, from_entry * entry, &mut b)?;
+            entries = b.chunks_exact(entry as usize).map(|e| if entry == 4 { u32_at(e, 0).unwrap_or(0) as u64 } else { u64_at(e, 0).unwrap_or(0) }).collect();
+        }
+        let entry_at = |j: u64| entries.get((j - from_entry) as usize).copied().ok_or(Error::Damaged);
+        let mut plain = vec![0u8; chunk as usize];
+        let mut packed = Vec::new();
+        let mut done = 0usize;
+        while done < out.len() {
+            let pos = offset + done as u64;
+            let k = pos / chunk;
+            let start = if k == 0 { 0 } else { entry_at(k - 1)? };
+            let end = if k + 1 == chunks { body } else { entry_at(k)? };
+            let len = (size - k * chunk).min(chunk) as usize;
+            if start > end || end > body || end - start > len as u64 {
+                return Err(Error::Damaged);
+            }
+            packed.resize((end - start) as usize, 0);
+            self.read_value(disk, data, table + start, &mut packed)?;
+            let plain = &mut plain[..len];
+            if packed.len() == len {
+                plain.copy_from_slice(&packed);
+            } else {
+                wof::decompress(algorithm, &packed, plain).ok_or(Error::Damaged)?;
+            }
+            let at = (pos - k * chunk) as usize;
+            let n = (len - at).min(out.len() - done);
+            out[done..done + n].copy_from_slice(&plain[at..at + n]);
+            done += n;
+        }
+        Ok(())
+    }
+
+    /// An attribute's value's bytes at `offset` (in the record or in clusters); Damaged past its end.
+    fn read_value(&self, disk: &mut impl Disk, value: &Value, offset: u64, buf: &mut [u8]) -> Result<(), Error> {
+        let end = offset.checked_add(buf.len() as u64).ok_or(Error::Damaged)?;
+        if end > value_size(value) {
+            return Err(Error::Damaged);
+        }
+        match value {
+            Value::Resident(b) => buf.copy_from_slice(&b[offset as usize..end as usize]),
+            Value::Clusters { runs, initialized, .. } => self.read_runs(disk, runs, *initialized, offset, buf)?,
+        }
+        Ok(())
     }
 
     /// A compressed file's bytes: 2^`unit` clusters at a time, each unit stored as it is (all its clusters there),

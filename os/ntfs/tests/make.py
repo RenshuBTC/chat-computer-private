@@ -4,11 +4,12 @@ ntfs-3g (mounted through FUSE, so this needs root) fills it, as Windows would le
 and Unicode names, long names and 8.3 short names, small files kept in their file records, big ones in clusters, one
 fragmented into hundreds of pieces (so its file record needs an attribute list and others to hold them all), a sparse
 file, compressed files (in a compressed folder), named streams, a hard link, symbolic links, a junction, empty files, a
-folder of 600 files (an index of several blocks, in two levels), OneDrive's files (downloaded, or "online only") and a
-file Windows compressed itself; and documents as people keep them (Word, Excel and PowerPoint files, a PDF, photos, a
-ZIP archive, a Word file from before 2007 and an iPhone's photo). Each volume's contents are listed in tests/<name>.txt: each file's path, what it is
-(a file, a folder, a link, a file "online" only or "compacted" by Windows), its size and a hash of its bytes (FNV-1a,
-64 bits), for the tests to check against.
+folder of 600 files (an index of several blocks, in two levels), OneDrive's files (downloaded, or "online only"), files
+Windows compressed itself (one with LZX, one with XPRESS: compressed by wimlib, as tests/wof.py's chunks are); and
+documents as people keep them (Word, Excel and PowerPoint files, a PDF, photos, a ZIP archive, a Word file from before
+2007 and an iPhone's photo). Each volume's contents are listed in tests/<name>.txt: each file's path, what it is (a
+file, a folder, a link, or a file "online" only), its size and a hash of its bytes (FNV-1a, 64 bits), for the tests to
+check against.
 
     sudo python3 tests/make.py
 """
@@ -26,6 +27,8 @@ import zipfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+
+import wof
 
 HERE = Path(__file__).resolve().parent
 
@@ -204,11 +207,13 @@ def fill(mnt: Path, big_cluster: bool) -> None:
         f.write(b"end")
     put("Users/Sam/OneDrive/Documents/Notes.txt", b"notes\n")
     os.setxattr(mnt / "Users/Sam/OneDrive/Documents/Notes.txt", "system.ntfs_attrib_be", (0x20 | 0x1000).to_bytes(4, "big"))
-    # A file Windows compressed itself ("Compact OS"): sparse, its bytes in a stream of their own (tag() marks it).
-    with open(mnt / "Windows/System32/notepad.exe", "wb") as f:
-        f.truncate(200_000)
-    with open(mnt / "Windows/System32/notepad.exe:WofCompressedData", "wb") as f:
-        f.write(noise(5_000, 16))
+    # Files Windows compressed itself ("Compact OS"): sparse, their bytes compressed in chunks, in a stream of their
+    # own (tag() marks them).
+    for rel, data, algorithm in compacted():
+        with open(mnt / rel, "wb") as f:
+            f.truncate(len(data))
+        with open(mnt / f"{rel}:WofCompressedData", "wb") as f:
+            f.write(wof_stream(data, algorithm))
     # "My Documents", a junction to Documents as Windows has in each person's folder (hidden and system; tag() makes
     # it one), and a symbolic link on the Desktop to a file in Documents, relative to its folder.
     (mnt / "Users/Sam/My Documents").mkdir()
@@ -223,9 +228,36 @@ def fill(mnt: Path, big_cluster: bool) -> None:
     put("Windows/System32/config/SYSTEM", lzma.decompress((HERE.parent.parent / "registry/tests/system.hiv.xz").read_bytes()))
 
 
-def tag(mnt: Path) -> dict[str, str]:
+def compacted() -> list[tuple[str, bytes, int]]:
+    """The files Windows compressed itself: each one's path, its bytes, and WOF's algorithm: Notepad with LZX in
+    chunks of 32 KiB (x86 code, but for a chunk of noise, kept as it is), and the list of services with XPRESS in
+    chunks of 4 KiB (its last chunk shorter)."""
+    services = "".join(f"svc{i:<5} {1000 + i * 7}/{'tcp' if i % 3 else 'udp'}    # service number {i}\r\n" for i in range(400))
+    return [
+        ("Windows/System32/notepad.exe", wof.code(131_072, 16) + noise(32_768, 17) + wof.code(36_160, 18), 1),
+        ("Windows/System32/drivers/etc/services", services.encode(), 0),
+    ]
+
+
+def wof_stream(data: bytes, algorithm: int) -> bytes:
+    """A file's bytes as WOF keeps them: each chunk compressed (by wimlib, as tests/wof.py's), or kept as it is
+    when that's no smaller, after a table of where each chunk but the first starts (4 bytes each)."""
+    kind, chunk = {0: (wof.XPRESS, 4096), 1: (wof.LZX, 32768), 2: (wof.XPRESS, 8192), 3: (wof.XPRESS, 16384)}[algorithm]
+    w = wof.Wimlib()
+    parts = []
+    for i in range(0, len(data), chunk):
+        piece = data[i:i + chunk]
+        parts.append(w.compress(kind, chunk, 50, piece) or piece)
+    table, at = b"", 0
+    for part in parts[:-1]:
+        at += len(part)
+        table += struct.pack("<I", at)
+    return table + b"".join(parts)
+
+
+def tag(mnt: Path) -> dict[str, tuple[str, int, int]]:
     """The reparse points that ntfs-3g can't read through (so they're made after the volume's contents are listed):
-    each path's kind in the listing, now."""
+    each path's kind in the listing, now, its size and the hash of its bytes."""
     def reparse(rel: str, tag: int, body: bytes) -> None:
         os.setxattr(mnt / rel, "system.ntfs_reparse_data", struct.pack("<IHH", tag, len(body), 0) + body)
 
@@ -235,20 +267,22 @@ def tag(mnt: Path) -> dict[str, str]:
     for rel in ["Documents/Budget.txt", "Documents/Plan.docx", "Documents/Half.bin", "Documents/Notes.txt",
                 "Pictures/Big.raw", "Documents", "Pictures", ""]:
         reparse(f"Users/Sam/OneDrive/{rel}".rstrip("/"), 0x9000601A, cloud)
-    # Compact OS's (IO_REPARSE_TAG_WOF): WOF's version and provider (a file's), the provider's version and algorithm
-    # (LZX), no flags.
-    reparse("Windows/System32/notepad.exe", 0x80000017, struct.pack("<IIIII", 1, 2, 1, 1, 0))
+    # Compact OS's (IO_REPARSE_TAG_WOF): WOF's version and provider (a file's), the provider's version and
+    # algorithm, no flags.
+    kinds = {}
+    for rel, data, algorithm in compacted():
+        reparse(rel, 0x80000017, struct.pack("<IIIII", 1, 2, 1, algorithm, 0))
+        kinds[rel] = ("file", len(data), fnv(data))
     # A junction (IO_REPARSE_TAG_MOUNT_POINT): the name Windows follows, and the one shown, each ending in a NUL.
     sub = "\\??\\C:\\Users\\Sam\\Documents".encode("utf-16-le")
     shown = "C:\\Users\\Sam\\Documents".encode("utf-16-le")
     body = struct.pack("<HHHH", 0, len(sub), len(sub) + 2, len(shown)) + sub + b"\0\0" + shown + b"\0\0"
     reparse("Users/Sam/My Documents", 0xA0000003, body)
-    return {
-        "Users/Sam/OneDrive/Documents/Plan.docx": "online",
-        "Users/Sam/OneDrive/Documents/Half.bin": "online",
-        "Users/Sam/OneDrive/Documents/Notes.txt": "online",
-        "Windows/System32/notepad.exe": "compacted",
-        "Users/Sam/My Documents": "link",
+    return kinds | {
+        "Users/Sam/OneDrive/Documents/Plan.docx": ("online", 0, 0),
+        "Users/Sam/OneDrive/Documents/Half.bin": ("online", 0, 0),
+        "Users/Sam/OneDrive/Documents/Notes.txt": ("online", 0, 0),
+        "Users/Sam/My Documents": ("link", 0, 0),
     }
 
 
@@ -282,7 +316,8 @@ def make(name: str, size_mb: int, sector: int, cluster: int) -> None:
             for i, line in enumerate(lines):
                 path = line.split("\t")[0]
                 if path in kinds:
-                    lines[i] = f"{path}\t{kinds[path]}\t0\t0"
+                    kind, size, h = kinds[path]
+                    lines[i] = f"{path}\t{kind}\t{size}\t{h:016x}" if kind == "file" else f"{path}\t{kind}\t0\t0"
         finally:
             subprocess.run(["fusermount", "-u", str(mnt)], check=True)
         (HERE / f"{name}.txt").write_text("\n".join(sorted(lines)) + "\n")

@@ -1081,7 +1081,7 @@ fn error_text(e: ntfs::Error, what: &str) -> String {
             format!("{what}: this file is online only: it's in {service}, not downloaded to this PC (Windows downloads it when it's opened there)")
         }
         ntfs::Error::Online(tag) => format!("{what}: Windows keeps this file's bytes elsewhere, not on this drive (reparse tag {tag:#010X})"),
-        ntfs::Error::Compacted => format!("{what}: Windows compressed this file itself (Compact OS), which Chat Computer's own system can't read yet"),
+        ntfs::Error::Compacted => format!("{what}: Windows keeps this file's bytes compressed in a WIM file elsewhere (WIMBoot), which Chat Computer's own system can't read"),
         ntfs::Error::Damaged => format!("{what}: the drive's file system doesn't add up there"),
         ntfs::Error::TooMany => format!("{what}: this folder has more in it than Chat Computer's own system lists (millions of files)"),
         ntfs::Error::Read => format!("{what}: the drive couldn't be read"),
@@ -1175,7 +1175,7 @@ fn details(fs: &Fs, p: &mut Partition, e: &Entry) -> String {
     } else if e.tag != 0 {
         match fs.open_file(p, e) {
             Err(ntfs::Error::Online(_)) => d += ", online only: not on this PC",
-            Err(ntfs::Error::Compacted) => d += ", compressed by Windows",
+            Err(ntfs::Error::Compacted) => d += ", in a WIM file elsewhere",
             _ => {}
         }
     }

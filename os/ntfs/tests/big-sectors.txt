@@ -681,7 +681,7 @@ Users/Sam/Documents/Work/Old letter.doc	file	4008	21e322186a549b7b
 Users/Sam/Documents/Work/Receipt.pdf	file	600	a06c4b8247168e54
 Users/Sam/Documents/Work/Talk.pptx	file	34883	4d55a2926899c648
 Users/Sam/Downloads	dir	0	0
-Users/Sam/Downloads/photos.zip	file	3020	15d23feddf885c81
+Users/Sam/Downloads/photos.zip	file	3020	a1d57dca0c8a68ad
 Users/Sam/My Documents	link	0	0
 Users/Sam/OneDrive	dir	0	0
 Users/Sam/OneDrive/Documents	dir	0	0
@@ -703,7 +703,8 @@ Windows/System32/config/SYSTEM	file	3084288	34d87fc2e78fd5cd
 Windows/System32/drivers	dir	0	0
 Windows/System32/drivers/etc	dir	0	0
 Windows/System32/drivers/etc/hosts	file	40	be435b33cab523e4
-Windows/System32/notepad.exe	compacted	0	0
+Windows/System32/drivers/etc/services	file	17090	a102e36aee023d4e
+Windows/System32/notepad.exe	file	200000	96e5cd885c544139
 hello.txt	file	17	b28031f5cfd1d8ba
 link to hello	link	0	0
 sparse.bin	file	3000000	4af45af176a8ca4a

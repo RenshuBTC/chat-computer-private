@@ -201,8 +201,9 @@ drivers.
     is taken out of the message there and never given to the model, shown or kept (so it's typed again after a
     restart);
     a wrong one is refused, naming the key ID that unlocks the drive (each locked drive is tried; a USB drive's
-    "BitLocker To Go" too). Not yet: a drive Windows is still encrypting as it's written to, and files Windows
-    compressed itself ("Compact OS", mostly its own);
+    "BitLocker To Go" too). Files Windows compressed itself ("Compact OS", mostly its own) are read as they were.
+    Not yet: a drive Windows is still encrypting as it's written to, and files whose bytes WIMBoot keeps in a WIM
+    file;
   * the sound controller (`sound/hda.rs`): HD Audio, Intel's High Definition Audio, which nearly every PC's chipset
     has, Intel's and AMD's alike. It's reset and its codecs found on its link; the first codec with an audio function
     that has outputs is used (a graphics card's controller has only its screens' digital ones). Each codec
@@ -460,12 +461,16 @@ drivers.
   and in other records, through an attribute list, for a file in hundreds of pieces), folders' indexes (B-trees of
   names, compared in capitals as the volume's own table makes them, as Windows compares them), long and 8.3 names,
   hard links, sparse files, compressed files (LZNT1), the volume's name, and reparse points: links (where they go),
-  and placeholders, such as OneDrive's (whether the file's bytes are on the PC). Encrypted files (EFS) and files
-  Windows compressed itself are recognized, not read; a volume BitLocker encrypts is read through `bitlocker/`. Every
-  number read from the disk is checked first, so a damaged volume gives an error, not a crash. Tested against volumes
-  made by Linux's `mkntfs` and filled by ntfs-3g (`ntfs/tests/make.py`), with 512-byte and 4 KiB sectors, 4 KiB and 64
-  KiB clusters: every file's bytes, against a hash of what ntfs-3g wrote, and every byte of the volume's first records
-  changed in turn.
+  and placeholders, such as OneDrive's (whether the file's bytes are on the PC). Files Windows compressed itself
+  ("Compact OS": a stream of chunks, each compressed with XPRESS's Huffman variant in chunks of 4, 8 or 16 KiB, or
+  with LZX in chunks of 32 KiB, its x86 calls' addresses translated back; `ntfs/src/wof.rs`) are read as they were.
+  Encrypted files (EFS), and files whose bytes WIMBoot keeps in a WIM file, are recognized, not read; a volume
+  BitLocker encrypts is read through `bitlocker/`. Every number read from the disk is checked first, so a damaged
+  volume gives an error, not a crash. Tested against volumes made by Linux's `mkntfs` and filled by ntfs-3g
+  (`ntfs/tests/make.py`), with 512-byte and 4 KiB sectors, 4 KiB and 64 KiB clusters: every file's bytes, against a
+  hash of what ntfs-3g wrote (a compacted file's, of what was compressed), and every byte of the volume's first records
+  changed in turn; and chunks wimlib compressed each way Compact OS does (`ntfs/tests/wof.py`: words, x86 code,
+  records, zeros, and bytes from far back), each decompressed to exactly what was compressed.
 * `bitlocker/` reads a drive BitLocker encrypts, never writing it: its metadata (the first of its three copies
   whose CRC is right), its key protectors, the volume master key opened with the recovery key (stretched by a
   million rounds of SHA-256) or a password, or taken from a clear key, and then the full volume encryption key
@@ -849,11 +854,10 @@ writes for each person, in place of Ubuntu's catalogue.
    Checked in virtual PCs. ✓ Word, Excel and PowerPoint files' words. ✓ A drive BitLocker
    encrypts, with its recovery key. ✓ The PC's other drives (NVMe and SATA), by Windows' letters. ✓ USB drives
    (sticks, external disks, card readers) as they come and go, and exFAT and FAT besides NTFS. ✓ Office's files from
-   before 2007 (.doc, .xls, .ppt). To do: USB 3 hubs'
+   before 2007 (.doc, .xls, .ppt). ✓ Files Windows compressed itself (Compact OS: XPRESS and LZX). To do: USB 3 hubs'
    own side (for USB 3 drives behind one), UAS (USB-attached SCSI, faster), memory card
    readers on PCI Express (Realtek's, in many laptops), a drive still being encrypted as it's written to, unlocking with the PC's TPM (for Chat Computer's own start-up,
-   measured), files Windows compressed itself (XPRESS and LZX), Chat Computer's own
-   file system for memory and logs, and keeping them encrypted.
+   measured), Chat Computer's own file system for memory and logs, and keeping them encrypted.
 6. Network: ✓ IPv4, ARP, DHCP, DNS and TCP; virtual machines' cards (virtio, e1000, e1000e, igb); the internet over
    a USB cable (USB Ethernet adapters and Android phones' tethering: CDC ECM, NCM and RNDIS); written, not yet tried
    on a real PC: Intel's I219, I210, I211, I225 and I226, and Realtek's RTL8111/8168 and RTL8125. To do: trying those

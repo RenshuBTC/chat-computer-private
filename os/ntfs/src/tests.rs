@@ -145,8 +145,7 @@ fn has_what_windows_drives_have() {
     assert_eq!(v.find(&mut disk, "Users/Sam/My Documents/Old note.txt").unwrap_err(), Error::Link);
     assert_eq!(v.link_target(&mut disk, hello).unwrap(), None);
     // OneDrive's folders are folders (each a placeholder), its files read when their bytes are here; not when
-    // they're online only (none of its clusters here, or some not, or its attributes say so). A file Windows
-    // compressed itself isn't read yet.
+    // they're online only (none of its clusters here, or some not, or its attributes say so).
     let onedrive = v.find(&mut disk, "Users/Sam/OneDrive/Documents").unwrap();
     assert!(onedrive.folder && !onedrive.link && is_cloud(onedrive.tag) && onedrive.tag == 0x9000_601A);
     let budget = v.find(&mut disk, "Users/Sam/OneDrive/Documents/Budget.txt").unwrap();
@@ -161,8 +160,18 @@ fn has_what_windows_drives_have() {
     }
     let plan = v.find(&mut disk, "Users/Sam/OneDrive/Documents/Plan.docx").unwrap();
     assert_eq!(plan.size, 50_000);
+    // Files Windows compressed itself read as they were (all their bytes are checked against the listing too):
+    // the list of services (XPRESS, in chunks of 4 KiB) from the middle of a chunk across the next ones.
+    let services = v.find(&mut disk, "Windows/System32/drivers/etc/services").unwrap();
+    assert_eq!((services.tag, services.size), (TAG_WOF, 17_090));
+    let f = v.open_file(&mut disk, services.record).unwrap();
+    let mut b = std::vec![0u8; 9000];
+    assert_eq!(v.read(&mut disk, &f, 4000, &mut b).unwrap(), 9000);
+    let text = std::string::String::from_utf8(b).unwrap();
+    assert!(text.contains("svc103   1721/tcp    # service number 103\r\n"), "{text}");
     let notepad = v.find(&mut disk, "Windows/System32/notepad.exe").unwrap();
-    assert_eq!((notepad.tag, v.open_file(&mut disk, notepad.record).unwrap_err()), (TAG_WOF, Error::Compacted));
+    assert_eq!(notepad.tag, TAG_WOF);
+    assert_eq!(v.open_file(&mut disk, notepad.record).unwrap().size, 200_000);
     let documents = v.find(&mut disk, "Documents").unwrap().record;
     assert_eq!(v.open_file(&mut disk, documents).unwrap_err(), Error::NotAFile);
     assert_eq!(v.list(&mut disk, hello).unwrap_err(), Error::NotAFolder);
@@ -316,4 +325,146 @@ fn decompresses_lznt1() {
     assert_eq!(out, plain);
     // A back-reference before anything was written is refused.
     assert!(lznt1(&[0x02, 0xB0, 0x01, 0x00, 0x00], &mut [0u8; 8]).is_none());
+}
+
+
+/// tests/wof-chunks.bin's chunks: each one's algorithm, size, hash and compressed bytes.
+fn wof_chunks() -> Vec<(u32, usize, u64, &'static [u8])> {
+    let b: &'static [u8] = include_bytes!("../tests/wof-chunks.bin");
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < b.len() {
+        let algorithm = b[at] as u32;
+        let size = u32_at(b, at + 1).unwrap() as usize;
+        let hash = u64_at(b, at + 5).unwrap();
+        let n = u32_at(b, at + 13).unwrap() as usize;
+        out.push((algorithm, size, hash, &b[at + 17..at + 17 + n]));
+        at += 17 + n;
+    }
+    out
+}
+
+#[test]
+fn compacted_files_it_cant_read() {
+    // Notepad's reparse point changed in the volume: its bytes in a WIM file elsewhere (WIMBoot's provider, 1), or an
+    // algorithm WOF doesn't have (7), isn't read (nor is a WIM's file taken for the file's own).
+    let point: Vec<u8> = [0x8000_0017u32, 20, 1, 2, 1, 1, 0].iter().enumerate().flat_map(|(i, v)| if i == 1 { std::vec![20, 0, 0, 0] } else { v.to_le_bytes().to_vec() }).collect();
+    for (at, to) in [(12, 1u32), (20, 7)] {
+        let mut disk = image("small");
+        let i = disk.bytes.windows(point.len()).position(|w| w == &point[..]).expect("Notepad's reparse point in the volume");
+        disk.bytes[i + at..i + at + 4].copy_from_slice(&to.to_le_bytes());
+        let v = open(&mut disk).unwrap();
+        let notepad = v.find(&mut disk, "Windows/System32/notepad.exe").unwrap();
+        assert_eq!(v.open_file(&mut disk, notepad.record).unwrap_err(), Error::Compacted);
+    }
+}
+
+#[test]
+fn decompresses_xpress_and_lzx_as_wimlib_compresses_them() {
+    // Each chunk wimlib compressed (tests/wof.py): words, x86 code, records, bytes from far back and zeros, at each
+    // chunk size and as a file's last chunk.
+    let chunks = wof_chunks();
+    assert_eq!(chunks.len(), 43);
+    for &algorithm in &[0, 1, 2, 3] {
+        assert!(chunks.iter().any(|c| c.0 == algorithm), "no chunks of algorithm {algorithm}");
+    }
+    for (i, &(algorithm, size, hash, packed)) in chunks.iter().enumerate() {
+        let mut out = std::vec![0u8; size];
+        assert!(wof::decompress(algorithm, packed, &mut out).is_some(), "chunk {i} (algorithm {algorithm}, {size} bytes) wasn't decompressed");
+        assert_eq!(fnv(&out), hash, "chunk {i} (algorithm {algorithm}, {size} bytes) isn't what was compressed");
+    }
+}
+
+/// LZX's bits as it reads them: each value's bits from its top one, in 16-bit little-endian words.
+struct BitWriter {
+    words: Vec<u16>,
+    bits: u32,
+    n: u32,
+}
+
+impl BitWriter {
+    fn put(&mut self, value: u32, n: u32) {
+        for k in (0..n).rev() {
+            self.bits = (self.bits << 1) | ((value >> k) & 1);
+            self.n += 1;
+            if self.n == 16 {
+                self.words.push(self.bits as u16);
+                self.bits = 0;
+                self.n = 0;
+            }
+        }
+    }
+
+    fn bytes(mut self) -> Vec<u8> {
+        if self.n > 0 {
+            self.put(0, 16 - self.n);
+        }
+        self.words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+}
+
+#[test]
+fn reads_lzx_uncompressed_blocks() {
+    // Made here (wimlib's compressor writes none): an uncompressed block of 101 bytes, its call's address translated
+    // as LZX's compressor translates them (an E8 at 3 calling 10 bytes on: 3 + 5 + 10 = 18, absolute), then a
+    // verbatim block of one literal after it (the words again from after the odd byte's padding).
+    let mut plain: Vec<u8> = (0..101u32).map(|i| (i * 7 + 1) as u8).collect();
+    plain[3] = 0xE8;
+    plain[4..8].copy_from_slice(&10i32.to_le_bytes());
+    let mut sent = plain.clone();
+    sent[4..8].copy_from_slice(&(3 + 10i32).to_le_bytes());
+    let mut w = BitWriter { words: Vec::new(), bits: 0, n: 0 };
+    w.put(3, 3);
+    w.put(0, 1);
+    w.put(101, 16);
+    let mut packed = w.bytes();
+    for r in [1u32, 2, 3] {
+        packed.extend_from_slice(&r.to_le_bytes());
+    }
+    packed.extend_from_slice(&sent);
+    packed.push(0);
+    // The verbatim block: one literal, 'Z', its code the only one of length 1 (the rest's lengths 0): each of the
+    // three codes' lengths sent by a code of the changes in which only 0 ("no change") and 16 ("16 less, mod 17": 1
+    // from 0) have codes, of length 1 each.
+    let mut w = BitWriter { words: Vec::new(), bits: 0, n: 0 };
+    w.put(1, 3);
+    w.put(0, 1);
+    w.put(1, 16);
+    let lens_part = |w: &mut BitWriter, count: usize, one: Option<usize>| {
+        for k in 0..20 {
+            w.put(if k == 0 || k == 16 { 1 } else { 0 }, 4);
+        }
+        for i in 0..count {
+            w.put(if Some(i) == one { 1 } else { 0 }, 1);
+        }
+    };
+    lens_part(&mut w, 256, Some(b'Z' as usize));
+    lens_part(&mut w, MAIN_MATCHES, None);
+    lens_part(&mut w, 249, None);
+    w.put(0, 1);
+    packed.extend_from_slice(&w.bytes());
+    let mut out = std::vec![0u8; 102];
+    assert!(wof::lzx(&packed, &mut out).is_some());
+    assert_eq!(&out[..101], &plain[..]);
+    assert_eq!(out[101], b'Z');
+}
+
+/// LZX's match headers, after its literals, for a 32 KiB window: 8 for each of 30 offset slots.
+const MAIN_MATCHES: usize = 8 * 30;
+
+#[test]
+fn damaged_chunks_give_none_not_a_crash() {
+    // Every chunk, each of its bytes changed (or it cut short): whatever comes out, nothing panics.
+    for &(algorithm, size, _, packed) in wof_chunks().iter().filter(|c| c.1 <= 4096 || c.0 == 1).take(12) {
+        let mut out = std::vec![0u8; size];
+        for i in (0..packed.len()).step_by(7) {
+            let mut bad = packed.to_vec();
+            bad[i] ^= 0x5A;
+            let _ = wof::decompress(algorithm, &bad, &mut out);
+            let _ = wof::decompress(algorithm, &packed[..i], &mut out);
+        }
+    }
+    assert!(wof::decompress(1, &[], &mut [0u8; 100]).is_none());
+    assert!(wof::decompress(0, &[0u8; 255], &mut [0u8; 100]).is_none());
+    assert!(wof::decompress(7, &[0u8; 300], &mut [0u8; 100]).is_none());
 }

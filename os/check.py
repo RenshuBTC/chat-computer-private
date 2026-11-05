@@ -2482,7 +2482,7 @@ def files_check(args) -> list[str]:
         "od": ("list_files", {"path": "C:\\Users\\Sam\\OneDrive\\Documents"}),
         "budget": ("read_file", {"path": "C:\\Users\\Sam\\OneDrive\\Documents\\Budget.txt"}),
         "plan": ("read_file", {"path": "C:\\Users\\Sam\\OneDrive\\Documents\\Plan.docx"}),
-        "compact": ("read_file", {"path": "C:\\Windows\\System32\\notepad.exe"}),
+        "compact": ("read_file", {"path": "C:\\Windows\\System32\\drivers\\etc\\services"}),
         "docx": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Work\\Letter to the council.docx"}),
         "xlsx": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Work\\Budget.xlsx"}),
         "pptx": ("read_file", {"path": "C:\\Users\\Sam\\Documents\\Work\\Talk.pptx"}),
@@ -2572,8 +2572,9 @@ def files_check(args) -> list[str]:
                       r"Rent 1200\nFood 400\n",
             "plan": r"C:\\Users\\Sam\\OneDrive\\Documents\\Plan\.docx: this file is online only: it's in OneDrive, "
                     r"not downloaded to this PC \(Windows downloads it when it's opened there\)",
-            "compact": r"C:\\Windows\\System32\\notepad\.exe: Windows compressed this file itself \(Compact OS\), which "
-                       r"Chat Computer's own system can't read yet",
+            "compact": rf"C:\\Windows\\System32\\drivers\\etc\\services \(18 KB, changed {day}\):\n"
+                       r"svc0     1000/udp    # service number 0\r\nsvc1     1007/tcp    # service number 1\r\n.*"
+                       r"svc399   3793/udp    # service number 399\r\n",
             "docx": rf"C:\\Users\\Sam\\Documents\\Work\\Letter to the council\.docx \(a Word document, 38 KB, changed {day}\), "
                     r"its words:\n# A letter to the council\n\n# Why I'm writing\n.*\| Week \| Bins \| Emptied \|\n.*Yours faithfully,",
             "xlsx": rf"C:\\Users\\Sam\\Documents\\Work\\Budget\.xlsx \(an Excel workbook, 8 KB, changed {day}\), its words:\n"
@@ -2598,7 +2599,7 @@ def files_check(args) -> list[str]:
         for q, pattern in want.items():
             if not re.fullmatch(pattern, said[q], re.S):
                 problems.append(f"{q}: {said[q][:400]!r}")
-        if errors != {"gone", "plan", "compact", "nopic"}:
+        if errors != {"gone", "plan", "nopic"}:
             problems.append(f"errors came back for {sorted(errors)}, not just for the files that can't be read")
         # The photo on the screen: the sun's yellow (250, 220, 90 as it was drawn), in a good few of its pixels.
         from PIL import Image

@@ -16,6 +16,10 @@
 //! they say goes back to the model, until it has finished. The conversation is kept across restarts in Chat
 //! Computer's memory file (keep.rs), with the model's notes about the person, which it's shown in every conversation.
 //!
+//! Or Claude answers, through Anthropic's API with the person's own key (remote.rs), when they choose it with the
+//! spark beside + (chat.rs): the same conversation, tools and notes; its own model, effort and key kept in the memory
+//! file with the conversation (the key never logged, nor shown). Chat Computer's own model stays the default.
+//!
 //! A test build made with CHATCOMPUTER_TEST=chat (by check.py) answers from a script instead (check.py's, built in:
 //! what its tests have the tools do), so the screen, the tools and the memory file are checked without a model; it
 //! logs what the model would have been asked and what the tools said. One made with CHATCOMPUTER_TEST=model answers
@@ -182,6 +186,8 @@ const SEEN_ROWS: usize = 1024;
 enum Sight {
     Model(&'static model::vision::Vision<'static>),
     Qwen,
+    /// Claude: at most 1,568 pixels a side and about 1.15 million in all (Anthropic's advice for its vision).
+    Claude,
 }
 
 impl Sight {
@@ -190,6 +196,17 @@ impl Sight {
         let (h, w) = match self {
             Sight::Model(v) => v.size_for(h, w, SEEN_ROWS),
             Sight::Qwen => model::vision::smart_resize(h, w, 32, 65_536, SEEN_ROWS * 32 * 32),
+            Sight::Claude => {
+                let (mut w, mut h) = (w.max(1), h.max(1));
+                let long = w.max(h);
+                if long > 1568 {
+                    (w, h) = ((w * 1568 / long).max(1), (h * 1568 / long).max(1));
+                }
+                while w * h > 1_150_000 {
+                    (w, h) = ((w * 9 / 10).max(1), (h * 9 / 10).max(1));
+                }
+                (h, w)
+            }
         };
         (w, h)
     }
@@ -200,8 +217,9 @@ impl Sight {
 enum Part {
     /// What the person typed, and when (seconds since 1970, when the clock was known).
     You { text: String, at: Option<i64> },
-    /// A round of the model's answer: its words, and the tools it called.
-    Said(Answer),
+    /// A round of the model's answer: its words, and the tools it called; and, when Claude gave it, its content
+    /// blocks as they came (a JSON array: its thinking with them, which the API asks to have back).
+    Said(Answer, Option<Arc<String>>),
     /// What a tool said back, and a picture it gave the model to see (read_file's).
     Tool(String, Option<Arc<Picture>>),
 }
@@ -281,6 +299,12 @@ struct Job {
     see_ms: u64,
     /// The round's web tools' calls still being fetched, in order: the next round waits for them.
     web: Vec<WebCall>,
+    /// Claude's answer to the round, on its way (when Claude answers), and its content blocks once whole, for the
+    /// conversation.
+    call: Option<crate::remote::Call>,
+    raw: Option<Arc<String>>,
+    /// Claude answered (not Chat Computer's own model): which.
+    by: Option<String>,
 }
 
 /// One of the round's calls of the web's tools, being fetched: what it was, and where its result goes in the
@@ -331,6 +355,9 @@ impl Job {
             seen: 0,
             see_ms: 0,
             web: Vec::new(),
+            call: None,
+            raw: None,
+            by: None,
         }
     }
 }
@@ -355,6 +382,74 @@ struct Assistant {
     job: Option<Job>,
     /// The conversation changed since it was last kept (keep.rs).
     unkept: bool,
+    /// Your own key for Claude, if there's one (never logged), and the mark of the one the settings gave (so a new
+    /// one pasted in Windows' setup takes the place of the one kept).
+    claude_key: Option<String>,
+    setup_key: u64,
+    /// Claude answers, rather than Chat Computer's own model: its model and effort.
+    claude: Option<Claude>,
+    /// The tools, as Claude's API takes them.
+    claude_tools: Vec<claude::api::Tool>,
+    /// Whether each sidebar shows (Messages, then Actions and Chats), as their switches left them.
+    sides: [bool; 2],
+}
+
+/// Claude, as chosen: its model ("claude-opus-5-5") and its effort ("max"; None: the model's default).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Claude {
+    pub model: String,
+    pub effort: Option<String>,
+}
+
+/// Claude's models the spark offers (Anthropic's newest, as its documentation listed them in November 2026), each
+/// with what it's called and the effort it takes by default (Opus 5.5 and Haiku 5.5: medium; the others: high).
+pub const CLAUDE_MODELS: [(&str, &str, &str); 4] = [
+    ("claude-opus-5-5", "Claude Opus 5.5", "medium"),
+    ("claude-sonnet-5-5", "Claude Sonnet 5.5", "high"),
+    ("claude-haiku-5-5", "Claude Haiku 5.5", "medium"),
+    ("claude-fable-5-1", "Claude Fable 5.1", "high"),
+];
+
+/// The efforts, as the spark names them.
+pub const EFFORT_NAMES: [(&str, &str); 5] = [("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"), ("max", "Max")];
+
+/// A Claude model's name ("Claude Opus 5.5"), or its id if it isn't one of those listed.
+pub fn claude_name(model: &str) -> String {
+    CLAUDE_MODELS.iter().find(|(id, _, _)| *id == model).map_or_else(|| String::from(model), |(_, name, _)| String::from(*name))
+}
+
+/// The effort a model takes when none is chosen.
+pub fn default_effort(model: &str) -> &'static str {
+    CLAUDE_MODELS.iter().find(|(id, _, _)| *id == model).map_or("high", |(_, _, e)| e)
+}
+
+pub fn effort_name(effort: &str) -> &'static str {
+    EFFORT_NAMES.iter().find(|(e, _)| *e == effort).map_or("Default", |(_, n)| n)
+}
+
+/// A mark of a key (FNV-1a), to tell one from another without keeping it twice.
+fn key_mark(key: &str) -> u64 {
+    key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The settings' "ai = claude [model] [effort]" as a choice.
+fn claude_from_setting(ai: &str) -> Option<Claude> {
+    let mut words = ai.split_ascii_whitespace();
+    if words.next()? != "claude" {
+        return None;
+    }
+    let mut c = Claude { model: String::from(CLAUDE_MODELS[0].0), effort: Some(String::from(claude::api::EFFORT)) };
+    for w in words {
+        if EFFORT_NAMES.iter().any(|(e, _)| *e == w) {
+            c.effort = Some(String::from(w));
+        } else {
+            let id = if w.starts_with("claude-") { String::from(w) } else { format!("claude-{w}") };
+            if id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.') {
+                c.model = id;
+            }
+        }
+    }
+    Some(c)
 }
 
 /// What the rest of the kernel sees of it while it works (it's taken out of its lock then).
@@ -371,8 +466,9 @@ struct Shown {
 static ASSISTANT: SpinLock<Option<Assistant>> = SpinLock::new(None);
 static SHOWN: SpinLock<Option<Shown>> = SpinLock::new(None);
 
-/// Starts: finds the model's file (the one `setting` names, if it names one), and starts reading it.
-pub fn init(setting: Option<String>) {
+/// Starts: finds the model's file (the one `setting` names, if it names one), and starts reading it; with your own
+/// key for Claude, if the settings bring one, and who answers at start, if the settings say (`ai`).
+pub fn init(setting: Option<String>, settings_key: Option<String>, ai: Option<String>) {
     // (A model test build gives the model no tools: in a virtual PC without hardware virtualization, the processor
     // is emulated, and their descriptions would take minutes to read.)
     let tools = match json::parse(TOOLS) {
@@ -386,11 +482,17 @@ pub fn init(setting: Option<String>) {
     };
     let names: Vec<&str> = tools.iter().filter_map(|t| t.get("function").and_then(|f| f.get("name")).and_then(Json::str)).collect();
     crate::log!("Chat Computer kernel: model: its tools: {}", if names.is_empty() { String::from("none") } else { names.join(", ") });
-    // The model's notes and the conversation from before the last restart, if they were kept.
-    let (notes, parts) = crate::keep::load()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|text| from_kept(&text))
-        .unwrap_or_default();
+    // The model's notes and the conversation from before the last restart, if they were kept; and who answers, with
+    // Claude's key.
+    let kept = crate::keep::load().and_then(|bytes| String::from_utf8(bytes).ok());
+    let (notes, parts) = kept.as_deref().and_then(from_kept).unwrap_or_default();
+    let kept_json = kept.as_deref().and_then(json::parse);
+    let mut ai_kept = kept_json.as_ref().and_then(|j| j.get("ai").cloned());
+    let kept_sides = kept_json.as_ref().and_then(|j| j.get("sides").cloned());
+    if let Some(k) = kept {
+        let mut k = k.into_bytes();
+        crate::remote::wipe(&mut k);
+    }
     let parts = if parts.first().is_none_or(|p| matches!(p, Part::You { .. })) { parts } else { Vec::new() };
     if !parts.is_empty() {
         crate::log!("Chat Computer kernel: model: the conversation from before the restart ({} parts)", parts.len());
@@ -399,6 +501,17 @@ pub fn init(setting: Option<String>) {
         let n = notes.len();
         crate::log!("Chat Computer kernel: model: {n} note{} from before", if n == 1 { "" } else { "s" });
     }
+    let claude_tools = tools
+        .iter()
+        .filter_map(|t| {
+            let f = t.get("function")?;
+            Some(claude::api::Tool {
+                name: String::from(f.get("name")?.str()?),
+                description: String::from(f.get("description").and_then(Json::str).unwrap_or("")),
+                input_schema: json::compact(f.get("parameters")?),
+            })
+        })
+        .collect();
     let mut a = Assistant {
         brain: Brain::None { why: String::new(), again: false, since: 0 },
         page: None,
@@ -410,7 +523,52 @@ pub fn init(setting: Option<String>) {
         system: String::new(),
         job: None,
         unkept: false,
+        claude_key: None,
+        setup_key: 0,
+        claude: None,
+        claude_tools,
+        sides: [true, true],
     };
+    if let Some(Json::Array(s)) = kept_sides.as_ref() {
+        for (k, v) in s.iter().take(2).enumerate() {
+            if let Json::Bool(b) = v {
+                a.sides[k] = *b;
+            }
+        }
+    }
+    // Claude's key: the one kept, unless the settings bring a new one (pasted in Windows' setup since).
+    if let Some(ai) = ai_kept.take() {
+        a.claude_key = ai.get("key").and_then(Json::str).map(String::from);
+        a.setup_key = ai.get("setup").and_then(Json::str).and_then(|m| u64::from_str_radix(m, 16).ok()).unwrap_or(0);
+        a.claude = ai.get("claude").and_then(|c| {
+            Some(Claude { model: String::from(c.get("model")?.str()?), effort: c.get("effort").and_then(Json::str).map(String::from) })
+        });
+    }
+    if let Some(key) = settings_key {
+        let mark = key_mark(&key);
+        if mark != a.setup_key || a.claude_key.is_none() {
+            a.claude_key = Some(key);
+            a.setup_key = mark;
+            a.unkept = true;
+        }
+    }
+    if a.claude.is_none()
+        && let Some(c) = ai.as_deref().and_then(claude_from_setting)
+    {
+        a.claude = Some(c);
+    }
+    if a.claude_key.is_none() {
+        a.claude = None;
+    }
+    match (&a.claude, &a.claude_key) {
+        (Some(c), _) => crate::log!(
+            "Chat Computer kernel: model: Claude answers ({}, {} effort), with your key",
+            c.model,
+            c.effort.as_deref().unwrap_or("its default")
+        ),
+        (None, Some(_)) => crate::log!("Chat Computer kernel: model: your key for Claude is here (the spark can choose Claude)"),
+        _ => {}
+    }
     if test_build() == Some("chat") {
         let script = core::str::from_utf8(TEST_SCRIPT).ok().and_then(json::parse).unwrap_or(Json::Object(Vec::new()));
         a.brain = Brain::Script(script);
@@ -421,6 +579,78 @@ pub fn init(setting: Option<String>) {
     }
     a.show();
     *ASSISTANT.lock() = Some(a);
+}
+
+/// Whether each sidebar shows (Messages, then Actions and Chats), as kept.
+pub fn sides() -> [bool; 2] {
+    ASSISTANT.lock().as_ref().map_or([true, true], |a| a.sides)
+}
+
+/// The sidebars switched off or on: kept with the conversation.
+pub fn set_sides(sides: [bool; 2]) {
+    let mut guard = ASSISTANT.lock();
+    let Some(a) = guard.as_mut() else { return };
+    if a.sides != sides {
+        a.sides = sides;
+        a.unkept = true;
+    }
+}
+
+/// Who answers, if it's Claude: its model and effort.
+pub fn claude() -> Option<Claude> {
+    ASSISTANT.lock().as_ref().and_then(|a| a.claude.clone())
+}
+
+/// Whether there's a key for Claude.
+pub fn has_claude_key() -> bool {
+    ASSISTANT.lock().as_ref().is_some_and(|a| a.claude_key.is_some())
+}
+
+/// Your own key for Claude, typed (kept in the memory file, never logged). Its words are wiped from `key`.
+pub fn set_claude_key(key: &mut String) {
+    let k = String::from(key.trim());
+    crate::files::wipe(key);
+    let mut guard = ASSISTANT.lock();
+    let Some(a) = guard.as_mut() else { return };
+    a.claude_key = Some(k);
+    a.unkept = true;
+    crate::log!("Chat Computer kernel: model: your key for Claude was typed (it isn't logged)");
+}
+
+/// Forgets your key for Claude (Chat Computer's own model answers then).
+pub fn forget_claude_key() {
+    let mut guard = ASSISTANT.lock();
+    let Some(a) = guard.as_mut() else { return };
+    if let Some(k) = a.claude_key.take() {
+        let mut k = k.into_bytes();
+        crate::remote::wipe(&mut k);
+    }
+    a.claude = None;
+    a.unkept = true;
+    crate::log!("Chat Computer kernel: model: your key for Claude is forgotten");
+    a.show();
+}
+
+/// Who answers from now on: Claude (its model and effort: there must be a key), or Chat Computer's own model (None).
+pub fn choose_ai(who: Option<Claude>) {
+    let mut guard = ASSISTANT.lock();
+    let Some(a) = guard.as_mut() else { return };
+    if who.is_some() && a.claude_key.is_none() {
+        return;
+    }
+    if a.claude != who {
+        match &who {
+            Some(c) => crate::log!(
+                "Chat Computer kernel: model: Claude answers now ({}, {} effort)",
+                c.model,
+                c.effort.as_deref().unwrap_or("its default")
+            ),
+            None => crate::log!("Chat Computer kernel: model: Chat Computer's own model answers now"),
+        }
+        a.claude = who;
+        a.unkept = true;
+        a.show();
+    }
 }
 
 /// The file of the model answering (or being read now), if there is one.
@@ -463,7 +693,7 @@ pub fn conversation() -> Vec<(bool, String)> {
     for p in &a.parts {
         match p {
             Part::You { text, .. } => shown.push((true, text.clone())),
-            Part::Said(answer) => {
+            Part::Said(answer, _) => {
                 let words = answer.text.trim();
                 match shown.last_mut() {
                     Some((false, said)) if !words.is_empty() => {
@@ -496,7 +726,7 @@ pub fn keep() {
         }
         let mut start = 0;
         loop {
-            let text = kept_text(&a.notes, &a.parts[start..]);
+            let text = kept_text(&a.notes, &a.parts[start..], a.ai_kept(), a.sides);
             if text.len() <= capacity || start >= a.parts.len() {
                 break text;
             }
@@ -520,7 +750,9 @@ pub fn ask(text: &str) -> Result<(), String> {
     if a.job.is_some() {
         return Err(String::from("Chat Computer is still answering."));
     }
-    if let Brain::None { why, .. } = &a.brain {
+    if let Brain::None { why, .. } = &a.brain
+        && a.claude.is_none()
+    {
         return Err(why.clone());
     }
     // (A model test build's "look at": a conversation of its own, as check.py asks the engine on Linux it: an earlier
@@ -549,6 +781,9 @@ pub fn stop() {
     let mut guard = ASSISTANT.lock();
     let Some(a) = guard.as_mut() else { return };
     let Some(mut job) = a.job.take() else { return };
+    if let Some(mut call) = job.call.take() {
+        call.stop();
+    }
     if let (Some(mut turn), Brain::Ready(m)) = (job.turn.take(), &mut a.brain) {
         m.session.stop(&mut turn);
         m.session.end(turn);
@@ -574,6 +809,9 @@ impl Assistant {
     fn work(&mut self, events: &mut Vec<Event>) {
         let now = time::uptime_ms();
         let until = now + STEP_MS;
+        if self.claude.is_some() && self.job.is_some() {
+            return self.claude_work(until, events);
+        }
         match &mut self.brain {
             Brain::None { why, again, since } => {
                 if let Some(job) = self.job.take() {
@@ -639,9 +877,210 @@ impl Assistant {
         }
     }
 
+    /// What the memory file keeps of who answers: Claude's key (with the mark of the settings' one), and Claude's
+    /// model and effort when it answers.
+    fn ai_kept(&self) -> Option<Json> {
+        let key = self.claude_key.as_ref()?;
+        let mut ai = vec![
+            (String::from("key"), Json::Str(key.clone())),
+            (String::from("setup"), Json::Str(format!("{:016x}", self.setup_key))),
+        ];
+        if let Some(c) = &self.claude {
+            let mut who = vec![(String::from("model"), Json::Str(c.model.clone()))];
+            if let Some(e) = &c.effort {
+                who.push((String::from("effort"), Json::Str(e.clone())));
+            }
+            ai.push((String::from("claude"), Json::Object(who)));
+        }
+        Some(Json::Object(ai))
+    }
+
+    /// Moves Claude's answer on (Claude answers): its rounds asked one after another, the tools it calls run between
+    /// them, as Chat Computer's own model's are.
+    fn claude_work(&mut self, until: u64, events: &mut Vec<Event>) {
+        let Some(mut job) = self.job.take() else { return };
+        if !self.claude_job(&mut job, until, events) {
+            self.job = Some(job);
+        }
+    }
+
+    /// True when the answer is over (its last event given).
+    fn claude_job(&mut self, job: &mut Job, until: u64, events: &mut Vec<Event>) -> bool {
+        loop {
+            if !self.web_step(job, events) {
+                return false;
+            }
+            if job.call.is_none() {
+                match self.begin_claude(job) {
+                    Ok(call) => job.call = Some(call),
+                    Err(why) => {
+                        self.parts.truncate(job.base);
+                        fail(events, why);
+                        return true;
+                    }
+                }
+            }
+            let mut got = Vec::new();
+            let over = job.call.as_mut().is_none_or(|c| c.step(&mut got));
+            for g in got {
+                match g {
+                    crate::remote::Got::Words(w) => say(job, w, events),
+                    crate::remote::Got::Thinking => {
+                        if !job.said {
+                            activity(job, String::from("Thinking"), events);
+                        }
+                    }
+                    crate::remote::Got::Over(Err(why)) => {
+                        job.call = None;
+                        self.parts.truncate(job.base);
+                        fail(events, why);
+                        return true;
+                    }
+                    crate::remote::Got::Over(Ok(answered)) => {
+                        job.call = None;
+                        let (answer, raw) = claude_answer(&answered);
+                        job.raw = Some(Arc::new(raw));
+                        job.closed = answer.calls.len();
+                        let cut = answered.stop.as_deref() == Some("max_tokens");
+                        if self.round_over(job, answer, cut, events) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            if !over || time::uptime_ms() >= until {
+                return false;
+            }
+        }
+    }
+
+    /// The request for Claude's next round: the conversation so far as Anthropic's API has it.
+    fn begin_claude(&mut self, job: &mut Job) -> Result<crate::remote::Call, String> {
+        let Some(who) = self.claude.clone() else { return Err(String::from(NO_MODEL)) };
+        let Some(key) = self.claude_key.clone() else {
+            return Err(String::from("There's no key for Claude: choose Claude again with the spark beside + to give one."));
+        };
+        job.by = Some(claude_name(&who.model));
+        let mut turns = self.claude_turns(job.base);
+        // (Very long, the oldest questions aren't sent: as Chat Computer's own model's conversation is shortened.)
+        while claude::api::messages(&turns).len() > CLAUDE_SENT_BYTES && self.shorten(job.base) {
+            turns = self.claude_turns(job.base);
+        }
+        let system = self.claude_system(&who);
+        if test_build().is_some() {
+            crate::log!("Chat Computer kernel: test: asked Claude {}", claude::api::messages(&turns));
+        }
+        let ask = claude::api::Ask { model: &who.model, effort: who.effort.as_deref(), max_tokens: claude::api::MAX_TOKENS };
+        let request = claude::api::request(claude::api::HOST, &key, &ask, &system, &turns, &self.claude_tools, &[]);
+        Ok(crate::remote::Call::new(request))
+    }
+
+    /// Claude's instructions: Chat Computer's, as Claude, with the notes about the person.
+    fn claude_system(&self, who: &Claude) -> String {
+        let rest = SYSTEM.split_once("\n\nWith your tools").map_or("", |(_, r)| r);
+        let mut system = format!(
+            "You are Chat Computer: you run this computer for the person using it, who talks to you by typing here. You \
+             are Claude ({}, made by Anthropic), answering through Anthropic's API with the person's own key, which they \
+             chose with the spark beside + (Chat Computer's own model, an open model running on this computer, answers \
+             when they choose it there instead): what they say goes to Anthropic.\n\nWith your tools{}",
+            claude_name(&who.model),
+            rest.replace("{sees}", " and see the pictures among them (scanned pages too)")
+        );
+        if self.from > 0 {
+            system.push_str(SHORTENED);
+        }
+        if !self.notes.is_empty() {
+            system.push_str("\n\nYour notes about the person, from earlier conversations (made with remember):");
+            for n in &self.notes {
+                system.push_str("\n\u{2022} ");
+                system.push_str(n);
+            }
+        }
+        system
+    }
+
+    /// The conversation as Claude's API has it: what was typed (with when), each round of the answers (Claude's own
+    /// blocks as they came; Chat Computer's own model's words and calls as Claude's would be), and what the tools said
+    /// (pictures included, for the question being answered).
+    fn claude_turns(&self, current: usize) -> Vec<claude::api::Turn> {
+        use claude::api::{Content, Role, Turn};
+        use claude::json::Json as CJson;
+        let mut turns: Vec<Turn> = Vec::new();
+        let mut ids: Vec<String> = Vec::new();
+        let mut next_id = 0;
+        let push = |turns: &mut Vec<Turn>, role: Role, blocks: Vec<CJson>| {
+            if blocks.is_empty() {
+                return;
+            }
+            match turns.last_mut() {
+                Some(Turn { role: r, content: Content::Blocks(b) }) if *r == role => b.extend(blocks),
+                _ => turns.push(Turn { role, content: Content::Blocks(blocks) }),
+            }
+        };
+        let text = |t: &str| claude_object(&[("type", CJson::Str(String::from("text"))), ("text", CJson::Str(String::from(if t.is_empty() { " " } else { t })))]);
+        for (i, p) in self.parts.iter().enumerate().skip(self.from.min(self.parts.len())) {
+            match p {
+                Part::You { text: t, at } => {
+                    let words = match at {
+                        Some(when) => format!("[{}] {t}", clock::short_text(*when)),
+                        None => t.clone(),
+                    };
+                    push(&mut turns, Role::User, vec![text(&words)]);
+                }
+                Part::Said(answer, raw) => {
+                    let blocks: Vec<CJson> = match raw.as_deref().and_then(|r| claude::json::parse(r)) {
+                        Some(CJson::Arr(b)) => b,
+                        _ => {
+                            let mut b = Vec::new();
+                            if !answer.text.trim().is_empty() {
+                                b.push(text(answer.text.trim()));
+                            }
+                            for (k, call) in answer.calls.iter().enumerate() {
+                                let tool = self.tools.iter().find(|t| t.get("function").and_then(|f| f.get("name")).and_then(Json::str) == Some(&call.name));
+                                let input = claude::json::parse(&json::compact(&call.arguments(tool))).unwrap_or(CJson::Obj(Vec::new()));
+                                b.push(claude_object(&[
+                                    ("type", CJson::Str(String::from("tool_use"))),
+                                    ("id", CJson::Str(format!("toolu_cc{i}x{k}"))),
+                                    ("name", CJson::Str(call.name.clone())),
+                                    ("input", input),
+                                ]));
+                            }
+                            b
+                        }
+                    };
+                    ids = blocks
+                        .iter()
+                        .filter(|b| b.get("type").and_then(|t| t.str()) == Some("tool_use"))
+                        .filter_map(|b| b.get("id").and_then(|t| t.str()).map(String::from))
+                        .collect();
+                    next_id = 0;
+                    push(&mut turns, Role::Assistant, blocks);
+                }
+                Part::Tool(said, picture) => {
+                    let Some(id) = ids.get(next_id).cloned() else { continue };
+                    next_id += 1;
+                    let error = said.starts_with("Error: ");
+                    let said = said.strip_prefix("Error: ").unwrap_or(said);
+                    let block = match picture {
+                        Some(pic) if i >= current => {
+                            let p = picture::Picture { width: pic.width as u32, height: pic.height as u32, rgb: pic.rgb.clone() };
+                            let jpeg = picture::encode_jpeg(&p, 85);
+                            claude::api::tool_result_with(&id, said, error, vec![claude::api::image("image/jpeg", &jpeg)])
+                        }
+                        Some(_) => claude::api::tool_result(&id, &format!("{said}\n\n[The picture shown here then isn't sent again: read_file shows it again.]"), error),
+                        None => claude::api::tool_result(&id, said, error),
+                    };
+                    push(&mut turns, Role::User, vec![block]);
+                }
+            }
+        }
+        turns
+    }
+
     /// What the rest of the kernel sees, brought up to date.
     fn show(&self) {
         let ready = match &self.brain {
+            _ if self.claude.is_some() => Ready::Yes(claude_name(&self.claude.as_ref().map_or_else(String::new, |c| c.model.clone()))),
             Brain::None { why, .. } => Ready::No(why.clone()),
             Brain::Reading(r) => Ready::Getting(format!(
                 "Getting Chat Computer's own model ready: reading {} from {} ({}%)\u{2026}",
@@ -658,6 +1097,17 @@ impl Assistant {
             Brain::Script(_) => Ready::Yes(String::from("a test's script")),
         };
         let status = match &self.brain {
+            _ if self.claude.is_some() => {
+                let c = self.claude.as_ref().expect("Claude");
+                format!(
+                    "Model: you are {} ({}), at {} effort, answering through Anthropic's API with the person's own key \
+                     (they chose you with the spark beside +; Chat Computer's own model, on this PC, answers when they \
+                     choose it there)",
+                    claude_name(&c.model),
+                    c.model,
+                    c.effort.as_deref().unwrap_or("its default")
+                )
+            }
             Brain::None { why, .. } => format!("Model: none ({why})"),
             Brain::Reading(r) => format!("Model: {}, being read from {} into memory", r.name, r.file.path),
             Brain::Ready(m) => {
@@ -721,7 +1171,7 @@ impl Assistant {
             out.push(match p {
                 Part::You { text, at: Some(t) } => Message::User(format!("[{}] {text}", clock::short_text(*t))),
                 Part::You { text, at: None } => Message::User(text.clone()),
-                Part::Said(a) => Message::Assistant(a.clone()),
+                Part::Said(a, _) => Message::Assistant(a.clone()),
                 Part::Tool(t, None) => Message::Tool(t.clone()),
                 Part::Tool(t, Some(picture)) => Message::ToolParts(vec![Content::Text(t.clone()), Content::Picture(picture.clone())]),
             });
@@ -956,7 +1406,8 @@ impl Assistant {
             fail(events, String::from("Chat Computer's model didn't say anything."));
             return true;
         }
-        self.parts.push(Part::Said(answer));
+        let raw = job.raw.take();
+        self.parts.push(Part::Said(answer, raw));
         if calls.is_empty() {
             if cut {
                 // (The person can't tell by looking that it stopped mid-way: a line says so.)
@@ -1156,6 +1607,9 @@ impl Assistant {
 
     /// How the model sees, if it can (its file has a vision part; a test's script sees as Qwen 3.5 does).
     fn sight(&self) -> Option<Sight> {
+        if self.claude.is_some() {
+            return Some(Sight::Claude);
+        }
         match &self.brain {
             Brain::Ready(m) => {
                 let model: &'static model::Model<'static> = m.session.model;
@@ -1188,14 +1642,17 @@ impl Assistant {
             1 => format!("; a picture seen in {:.1} s", job.see_ms as f64 / 1000.0),
             n => format!("; {n} pictures seen in {:.1} s", job.see_ms as f64 / 1000.0),
         };
-        crate::log!(
-            "Chat Computer kernel: model: answered ({chars} characters; {} tokens read in {:.1} s, {} written in {:.1} s{seen}{})",
-            job.read,
-            job.read_ms as f64 / 1000.0,
-            job.written,
-            job.write_ms as f64 / 1000.0,
-            crate::cores::shared()
-        );
+        match &job.by {
+            Some(who) => crate::log!("Chat Computer kernel: model: answered ({chars} characters, by {who}{seen})"),
+            None => crate::log!(
+                "Chat Computer kernel: model: answered ({chars} characters; {} tokens read in {:.1} s, {} written in {:.1} s{seen}{})",
+                job.read,
+                job.read_ms as f64 / 1000.0,
+                job.written,
+                job.write_ms as f64 / 1000.0,
+                crate::cores::shared()
+            ),
+        }
         if let (Brain::Ready(m), Some(s)) = (&mut self.brain, speed) {
             m.speed = Some(s);
         }
@@ -1595,10 +2052,46 @@ fn calls_json(calls: &[Call]) -> Json {
     )
 }
 
+/// The most of the conversation sent to Claude at once (its JSON), the oldest questions left out past it.
+const CLAUDE_SENT_BYTES: usize = 900_000;
+
+fn claude_object(fields: &[(&str, claude::json::Json)]) -> claude::json::Json {
+    claude::json::Json::Obj(fields.iter().map(|(k, v)| (String::from(*k), v.clone())).collect())
+}
+
+/// Claude's whole answer to a round as the conversation keeps it: its words, and the tools it called (each argument
+/// as a string, as Chat Computer's own model writes them: Call::arguments reads them back by the tool's types), and
+/// its content blocks as they came.
+fn claude_answer(a: &crate::remote::Answered) -> (Answer, String) {
+    let text: String = a
+        .content
+        .iter()
+        .filter(|b| b.get("type").and_then(|t| t.str()) == Some("text"))
+        .filter_map(|b| b.get("text").and_then(|t| t.str()))
+        .collect::<Vec<_>>()
+        .join("");
+    let calls = a
+        .calls
+        .iter()
+        .map(|u| Call {
+            name: u.name.clone(),
+            args: match &u.input {
+                claude::json::Json::Obj(fields) => fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.str().map_or_else(|| v.write(), String::from)))
+                    .collect(),
+                _ => Vec::new(),
+            },
+        })
+        .collect();
+    let raw = claude::json::Json::Arr(a.content.clone()).write();
+    (Answer { text, calls, ..Answer::default() }, raw)
+}
+
 /// What the memory file keeps: the model's notes and the conversation, as {"notes": [...], "chat": [{"you": words,
 /// "at": seconds since 1970}, {"said": words}, ...]}: each question, and the words of its answer (not the tools it
 /// used along the way).
-fn kept_text(notes: &[String], parts: &[Part]) -> String {
+fn kept_text(notes: &[String], parts: &[Part], ai: Option<Json>, sides: [bool; 2]) -> String {
     let mut chat: Vec<Json> = Vec::new();
     for p in parts {
         match p {
@@ -1609,7 +2102,7 @@ fn kept_text(notes: &[String], parts: &[Part]) -> String {
                 }
                 chat.push(Json::Object(item));
             }
-            Part::Said(answer) if !answer.text.trim().is_empty() => {
+            Part::Said(answer, _) if !answer.text.trim().is_empty() => {
                 let words = answer.text.trim();
                 match chat.last_mut() {
                     Some(Json::Object(item)) if item.first().is_some_and(|(k, _)| k == "said") => {
@@ -1625,7 +2118,14 @@ fn kept_text(notes: &[String], parts: &[Part]) -> String {
         }
     }
     let notes = Json::Array(notes.iter().map(|n| Json::Str(n.clone())).collect());
-    json::compact(&Json::Object(vec![(String::from("notes"), notes), (String::from("chat"), Json::Array(chat))]))
+    let mut kept = vec![(String::from("notes"), notes), (String::from("chat"), Json::Array(chat))];
+    if let Some(ai) = ai {
+        kept.push((String::from("ai"), ai));
+    }
+    if sides != [true, true] {
+        kept.push((String::from("sides"), Json::Array(vec![Json::Bool(sides[0]), Json::Bool(sides[1])])));
+    }
+    json::compact(&Json::Object(kept))
 }
 
 /// The notes and conversation in the memory file's text; also as Chat Computer's own system kept them when it talked
@@ -1643,11 +2143,11 @@ fn from_kept(text: &str) -> Option<(Vec<String>, Vec<Part>)> {
             return;
         }
         match parts.last_mut() {
-            Some(Part::Said(a)) => {
+            Some(Part::Said(a, _)) => {
                 a.text.push_str("\n\n");
                 a.text.push_str(words);
             }
-            _ => parts.push(Part::Said(Answer { text: String::from(words), ..Answer::default() })),
+            _ => parts.push(Part::Said(Answer { text: String::from(words), ..Answer::default() }, None)),
         }
     };
     if let Some(chat) = kept.get("chat").and_then(Json::array) {

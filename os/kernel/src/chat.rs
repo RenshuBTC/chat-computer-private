@@ -219,7 +219,20 @@ struct Menu {
 enum MenuKind {
     Files,
     Ai,
+    /// Claude's models (after Claude is chosen), then the effort for the one picked.
+    ClaudeModels,
+    Efforts,
+    /// "/" typed in the box: the files on this PC whose names have what's typed after it, the newest first.
+    Search,
 }
+
+/// The "/" list's last item: Chat Computer asked to find it (in `MenuItem::path`).
+const ASK_FIND: &str = "\u{0}ask-find";
+
+/// The spark's list: Claude's item, and in Claude's list, giving another key and forgetting it (in `MenuItem::path`).
+const CLAUDE_ITEM: &str = "\u{0}claude";
+const NEW_KEY: &str = "\u{0}new-key";
+const FORGET_KEY: &str = "\u{0}forget-key";
 
 struct MenuItem {
     label: String,
@@ -280,6 +293,19 @@ pub struct Chat {
     /// The list open above the message box, if one is; the files attached to the next message.
     menu: Option<Menu>,
     attached: Vec<(String, String)>,
+    /// Your key for Claude being typed: the box shows a dot for each of its characters (`typed` holds the dots), and
+    /// the key itself is here, until Enter gives it to the assistant (never shown, nor logged).
+    key_typed: Option<String>,
+    /// Claude's model picked, its effort still to choose.
+    picked_model: Option<String>,
+    /// Whether each sidebar shows (Messages at the left, Actions and Chats at the right): their switches, as the
+    /// website's, put them away and bring them back; Chat Computer keeps the choice (read once it's started).
+    sides: [bool; 2],
+    sides_read: bool,
+    /// Which switch the pointer is over, to light it up.
+    switch_lit: Option<usize>,
+    /// The files "/" searches (read from the drives once each time it's typed).
+    search_files: Vec<files::Recent>,
 }
 
 /// How long the start screen's word logo and greeting take to fade, as the website's (chat.css: #welcome).
@@ -504,6 +530,12 @@ impl Chat {
             welcome_fading: None,
             menu: None,
             attached: Vec::new(),
+            key_typed: None,
+            picked_model: None,
+            sides: [true, true],
+            sides_read: false,
+            switch_lit: None,
+            search_files: Vec::new(),
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -931,7 +963,25 @@ impl Chat {
         }
         let card = self.composer.card;
         self.dirty = self.dirty.union(&card);
+        // A sidebar's switch under the pointer lights up.
+        let inside = |r: Rect| to.0 as i32 >= r.x && (to.0 as i32) < r.right() && to.1 as i32 >= r.y && (to.1 as i32) < r.bottom();
+        let lit = if self.m.side_w > 0 { (0..2).find(|&k| inside(self.switch_rect(k))) } else { None };
+        if lit != self.switch_lit {
+            for k in [self.switch_lit, lit].into_iter().flatten() {
+                let r = self.switch_rect(k);
+                self.dirty = self.dirty.union(&r);
+            }
+            self.switch_lit = lit;
+        }
         if pressed & 1 == 0 || self.stopped {
+            return;
+        }
+        if let Some(k) = lit {
+            self.switch_side(k);
+            // (Where the switch is now: it moves with its sidebar.)
+            self.switch_lit = inside(self.switch_rect(k)).then_some(k);
+            let r = self.switch_rect(k);
+            self.dirty = self.dirty.union(&r);
             return;
         }
         let (px8, py8) = ((to.0 * 8.0) as i64, (to.1 * 8.0) as i64);
@@ -961,6 +1011,9 @@ impl Chat {
             Some(TOOL_ADD) => self.open_menu(MenuKind::Files),
             Some(TOOL_AI) => self.open_menu(MenuKind::Ai),
             Some(TOOL_MIC) => self.talk(),
+            Some(_) if self.key_typed.is_some() => {
+                self.edit_key(Press { key: Key::Enter, ctrl: false, alt: false, logo: false });
+            }
             Some(_) => {
                 if self.asking.is_some() {
                     assistant::stop();
@@ -979,11 +1032,20 @@ impl Chat {
         let (w, h) = (self.screen.width as i32, self.screen.height as i32);
         let hair = self.hair();
         let (left, right) = (Rect::new(0, 0, m.side_w, h), Rect::new(w - m.side_w, 0, m.side_w, h));
+        let sides = self.sides;
+        let switches = [self.switch_rect(0), self.switch_rect(1)];
+        let lit = self.switch_lit;
         let Chat { canvas, ty, actions, clock_shown, chat_title, .. } = self;
         canvas.set_clip(clip);
-        for (side, line_x) in [(left, left.right() - hair), (right, right.x)] {
-            canvas.fill(side, SIDE);
-            canvas.fill(Rect::new(line_x, 0, hair, h), LINE);
+        for (k, (side, line_x)) in [(left, left.right() - hair), (right, right.x)].into_iter().enumerate() {
+            if sides[k] {
+                canvas.fill(side, SIDE);
+                canvas.fill(Rect::new(line_x, 0, hair, h), LINE);
+            }
+            draw_switch(canvas, switches[k], k, sides[k], lit == Some(k), &m, if sides[k] { SIDE } else { GROUND });
+        }
+        if !sides[0] && !sides[1] {
+            return;
         }
         // Sizes as chat.css's: padding 0.75 rem (0.5 rem on a sidebar's right), words inset 0.4 em, a title's row 1.6
         // em high and 0.75 rem above what follows.
@@ -1013,12 +1075,18 @@ impl Chat {
             y + head_h + m.px(0.75)
         };
         // Messages.
-        let y = head(canvas, "Messages", left.x + pad_l, pad_t);
-        wrapped(canvas, MESSAGES_EMPTY, left.x + pad_l + inset, y, words_w, INK);
-        // Actions, over Chats: two halves of the same height, a line between them.
+        if sides[0] {
+            let y = head(canvas, "Messages", left.x + pad_l, pad_t);
+            wrapped(canvas, MESSAGES_EMPTY, left.x + pad_l + inset, y, words_w, INK);
+        }
+        if !sides[1] {
+            return;
+        }
+        // Actions, over Chats: two halves of the same height, a line between them. (Its title clear of its switch,
+        // as chat.css's #actions .side-head.)
         let x = right.x + hair + pad_l;
         let half = h / 2;
-        let mut y = head(canvas, "Actions", x, pad_t);
+        let mut y = head(canvas, "Actions", x + m.px(1.95), pad_t);
         y -= m.px(0.4);
         text(canvas, &clock_shown.0, Face::Regular, x + inset, y, INK);
         text(canvas, &clock_shown.1, Face::Regular, x + inset, y + m.small_line, INK);
@@ -1084,6 +1152,26 @@ impl Chat {
         }
     }
 
+    /// Where a sidebar's switch is (0: Messages', 1: Actions'): 1.6 rem square, 0.65 rem from the top, 2.2 rem in
+    /// from the sidebar's edge nearest the middle while it shows, else 0.6 rem from the screen's edge (chat.css's
+    /// .toggle).
+    fn switch_rect(&self, k: usize) -> Rect {
+        let m = self.m;
+        let (w, size) = (self.screen.width as i32, m.px(1.6));
+        let inset = if self.sides[k] { (m.side_w - m.px(2.2)).max(m.px(0.6)) } else { m.px(0.6) };
+        let x = if k == 0 { inset } else { w - inset - size };
+        Rect::new(x, m.px(0.65), size, size)
+    }
+
+    /// A sidebar switched off or on with its switch: the middle stays where it is (as the website's).
+    fn switch_side(&mut self, k: usize) {
+        self.sides[k] = !self.sides[k];
+        assistant::set_sides(self.sides);
+        let (w, h) = (self.screen.width as i32, self.screen.height as i32);
+        let area = if k == 0 { Rect::new(0, 0, self.m.side_w, h) } else { Rect::new(w - self.m.side_w, 0, self.m.side_w, h) };
+        self.dirty = self.dirty.union(&area);
+    }
+
     /// The right sidebar's part of the screen (for redrawing it when what it lists changes).
     fn right_side(&self) -> Rect {
         let w = self.screen.width as i32;
@@ -1126,6 +1214,7 @@ impl Chat {
         let caret_w = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
         if self.typed.is_empty() {
             let hint = match crate::listening::state() {
+                _ if self.key_typed.is_some() => "Your key for Claude (made at platform.claude.com/settings/keys), then Enter",
                 Some(false) => "Listening\u{2026} say it, then pause (Esc stops)",
                 Some(true) => "Hearing what you said\u{2026}",
                 None if assistant::busy() => "Esc stops the answer",
@@ -1296,29 +1385,84 @@ impl Chat {
         let (title, items) = match kind {
             MenuKind::Files => (
                 String::from("Attach a file (from Desktop, Documents, Downloads and Pictures)"),
+                // (The newest first, at the top.)
                 crate::files::recent(MENU_FILES)
                     .into_iter()
-                    .map(|f| MenuItem { detail: size_text(f.size), label: f.name, path: f.path, ticked: false })
+                    .map(|f| MenuItem { detail: format!("{}, {}", size_text(f.size), when_text(f.modified)), label: f.name, path: f.path, ticked: false })
                     .collect(),
             ),
+            MenuKind::Search => {
+                if self.search_files.is_empty() {
+                    self.search_files = crate::files::recent(SEARCHED);
+                }
+                (String::from("Files on this PC, the newest first"), self.search_items())
+            }
             MenuKind::Ai => {
                 let answering = assistant::model_path();
+                let claude = assistant::claude();
                 let mut items: Vec<MenuItem> = crate::files::app_models()
                     .unwrap_or_default()
                     .into_iter()
                     .map(|(path, size)| MenuItem {
                         label: model_label(&path),
-                        detail: format!("on this PC, {}", size_text(size)),
-                        ticked: answering.as_deref() == Some(path.as_str()),
+                        detail: format!("on this PC, free: nothing you type leaves it ({})", size_text(size)),
+                        ticked: claude.is_none() && answering.as_deref() == Some(path.as_str()),
                         path,
                     })
                     .collect();
                 if items.is_empty() {
                     items.push(MenuItem { label: String::from("No model on this PC yet"), detail: String::from("setup gets one on Windows"), path: String::new(), ticked: false });
                 }
-                (String::from("Which AI answers (on this PC itself: nothing you type leaves it)"), items)
+                let detail = match (&claude, assistant::has_claude_key()) {
+                    (Some(c), _) => format!(
+                        "{}, {} effort, with your key: what you type goes to Anthropic",
+                        assistant::claude_name(&c.model),
+                        assistant::effort_name(c.effort.as_deref().unwrap_or(assistant::default_effort(&c.model)))
+                    ),
+                    (None, true) => String::from("by Anthropic, with your key: what you type then goes to Anthropic"),
+                    (None, false) => String::from("by Anthropic, with your own key: what you type then goes to Anthropic"),
+                };
+                items.push(MenuItem { label: String::from("Claude"), detail, path: String::from(CLAUDE_ITEM), ticked: claude.is_some() });
+                (String::from("Which AI answers"), items)
+            }
+            MenuKind::ClaudeModels => {
+                let current = assistant::claude().map(|c| c.model);
+                let mut items: Vec<MenuItem> = assistant::CLAUDE_MODELS
+                    .iter()
+                    .map(|(id, name, effort)| MenuItem {
+                        label: String::from(*name),
+                        detail: format!("{id}, {} effort unless you choose", assistant::effort_name(effort).to_ascii_lowercase()),
+                        path: String::from(*id),
+                        ticked: current.as_deref() == Some(*id),
+                    })
+                    .collect();
+                items.push(MenuItem { label: String::from("Give another key"), detail: String::from("for Claude, in place of this one"), path: String::from(NEW_KEY), ticked: false });
+                items.push(MenuItem { label: String::from("Forget your key"), detail: String::from("Chat Computer's own model answers then"), path: String::from(FORGET_KEY), ticked: false });
+                (String::from("Which of Claude's models answers"), items)
+            }
+            MenuKind::Efforts => {
+                let model = self.picked_model.clone().unwrap_or_else(|| String::from(assistant::CLAUDE_MODELS[0].0));
+                let current = assistant::claude().filter(|c| c.model == model).and_then(|c| c.effort);
+                let default = assistant::default_effort(&model);
+                let items = assistant::EFFORT_NAMES
+                    .iter()
+                    .map(|(e, name)| MenuItem {
+                        label: String::from(*name),
+                        detail: String::from(match *e {
+                            "low" => "quickest, and costs the least",
+                            "medium" => "a balance of thought, speed and cost",
+                            "high" => "thinks as much as each question needs",
+                            "xhigh" => "more thought, for long and hard work",
+                            _ => "the most thought, whatever it costs",
+                        }) + if *e == default { " (its default)" } else { "" },
+                        path: String::from(*e),
+                        ticked: current.as_deref().unwrap_or(default) == *e,
+                    })
+                    .collect();
+                (format!("How hard {} thinks (its effort)", assistant::claude_name(&model)), items)
             }
         };
+        // (What's ticked; else the first: in the lists of files, the newest.)
         let chosen = items.iter().position(|i| i.ticked).unwrap_or(0);
         self.menu = Some(Menu { kind, title, items, chosen, first: chosen.saturating_sub(MENU_ROWS - 1) });
         self.dirty = self.dirty.union(&self.canvas.whole());
@@ -1345,7 +1489,18 @@ impl Chat {
                 self.lay_out_box();
             }
             MenuKind::Ai => {
-                if !item.ticked && !item.path.is_empty() {
+                if item.path == CLAUDE_ITEM {
+                    if assistant::has_claude_key() {
+                        self.open_menu(MenuKind::ClaudeModels);
+                    } else {
+                        self.ask_key();
+                    }
+                } else if assistant::claude().is_some() && !item.path.is_empty() {
+                    assistant::choose_ai(None);
+                    self.note_now(String::from(
+                        "Chat Computer's own model answers again, here on this PC: nothing you type leaves it.",
+                    ));
+                } else if !item.ticked && !item.path.is_empty() {
                     let note = format!(
                         "{} is on this PC too. Chat Computer's own system answers with one model each time it starts \
                          (the biggest that answers quickly here); choosing it here comes soon.",
@@ -1354,7 +1509,103 @@ impl Chat {
                     self.note_now(note);
                 }
             }
+            MenuKind::ClaudeModels => match item.path.as_str() {
+                NEW_KEY => self.ask_key(),
+                FORGET_KEY => {
+                    assistant::forget_claude_key();
+                    self.note_now(String::from(
+                        "Your key for Claude is forgotten on this PC. Chat Computer's own model answers: nothing you type \
+                         leaves this PC.",
+                    ));
+                }
+                model => {
+                    self.picked_model = Some(String::from(model));
+                    self.open_menu(MenuKind::Efforts);
+                }
+            },
+            MenuKind::Search => {
+                let query = String::from(self.typed.get(1..).unwrap_or("").trim());
+                self.typed.clear();
+                self.cursor = 0;
+                self.search_files.clear();
+                if item.path == ASK_FIND {
+                    if !query.is_empty() {
+                        self.typed = format!("Find \u{201C}{query}\u{201D} in my files.");
+                        self.cursor = self.typed.len();
+                        self.lay_out_box();
+                        return self.send();
+                    }
+                } else if !self.attached.iter().any(|(p, _)| *p == item.path) {
+                    self.attached.push((item.path.clone(), item.label.clone()));
+                }
+                self.lay_out_box();
+            }
+            MenuKind::Efforts => {
+                let model = self.picked_model.take().unwrap_or_else(|| String::from(assistant::CLAUDE_MODELS[0].0));
+                let effort = item.path.clone();
+                assistant::choose_ai(Some(assistant::Claude { model: model.clone(), effort: Some(effort.clone()) }));
+                if assistant::claude().is_some() {
+                    self.note_now(format!(
+                        "{} answers now, at {} effort, with your key: what you type goes to Anthropic, and is paid for \
+                         from your account there. The spark beside + switches back to Chat Computer's own model.",
+                        assistant::claude_name(&model),
+                        assistant::effort_name(&effort)
+                    ));
+                }
+            }
         }
+    }
+
+    /// The box asks for your key for Claude: what's typed next is it (shown as dots), Enter gives it, Esc doesn't.
+    fn ask_key(&mut self) {
+        files::wipe(&mut self.typed);
+        self.cursor = 0;
+        self.key_typed = Some(String::new());
+        self.lay_out_box();
+        self.dirty = self.dirty.union(&self.canvas.whole());
+    }
+
+    /// A key being typed: its characters (never shown: a dot each), Backspace, Enter, Esc. True if `p` was for it.
+    fn edit_key(&mut self, p: Press) -> bool {
+        let Some(key) = self.key_typed.as_mut() else { return false };
+        match p.key {
+            Key::Char(c) if !p.ctrl && !p.alt && !p.logo => {
+                if !c.is_whitespace() && key.len() < 512 {
+                    key.push(c);
+                    self.typed.push('\u{2022}');
+                }
+            }
+            Key::Backspace => {
+                key.pop();
+                self.typed.pop();
+            }
+            Key::Enter => {
+                let mut key = self.key_typed.take().unwrap_or_default();
+                files::wipe(&mut self.typed);
+                self.cursor = 0;
+                if key.trim().is_empty() {
+                    files::wipe(&mut key);
+                } else {
+                    assistant::set_claude_key(&mut key);
+                    self.lay_out_box();
+                    self.open_menu(MenuKind::ClaudeModels);
+                    return true;
+                }
+            }
+            Key::Escape => {
+                if let Some(mut k) = self.key_typed.take() {
+                    files::wipe(&mut k);
+                }
+                files::wipe(&mut self.typed);
+                self.cursor = 0;
+            }
+            _ => return true,
+        }
+        self.cursor = self.typed.len();
+        self.lay_out_box();
+        let area = self.box_area();
+        self.dirty = self.dirty.union(&area);
+        true
     }
 
     /// A note in the conversation now (the start screen's word logo fading, if it's still there).
@@ -1415,6 +1666,14 @@ impl Chat {
     fn tick(&mut self) {
         if self.stopped {
             return;
+        }
+        if !self.sides_read {
+            self.sides_read = true;
+            let sides = assistant::sides();
+            if sides != self.sides {
+                self.sides = sides;
+                self.dirty = self.dirty.union(&self.canvas.whole());
+            }
         }
         let shown = clock_now();
         if shown != self.clock_shown {
@@ -1516,9 +1775,24 @@ impl Chat {
                     let k = menu.chosen;
                     return self.pick(k);
                 }
+                Key::Escape if menu.kind == MenuKind::Search => {
+                    // (As the website's: Escape clears what was typed.)
+                    self.close_menu();
+                    self.typed.clear();
+                    self.cursor = 0;
+                    self.search_files.clear();
+                    self.lay_out_box();
+                    let area = self.box_area();
+                    self.dirty = self.dirty.union(&area);
+                    return;
+                }
                 Key::Escape => return self.close_menu(),
+                _ if menu.kind == MenuKind::Search => {}
                 _ => self.close_menu(),
             }
+        }
+        if self.edit_key(p) {
+            return;
         }
         // (Backspace in an empty box takes off the last file attached.)
         if matches!(p.key, Key::Backspace) && self.cursor == 0 && self.typed.is_empty() && !self.attached.is_empty() {
@@ -1570,6 +1844,60 @@ impl Chat {
         self.lay_out_box();
         let area = self.box_area();
         self.dirty = self.dirty.union(&area);
+        self.searching();
+    }
+
+    /// "/" at the start of what's typed: the list of files found for what follows it (opened, or brought up to date);
+    /// gone again once the "/" is.
+    fn searching(&mut self) {
+        let on = self.typed.starts_with('/') && self.key_typed.is_none();
+        match self.menu.as_ref().map(|m| m.kind) {
+            Some(MenuKind::Search) if on => {
+                let items = self.search_items();
+                // (Its shadow too, as the list shrinks or grows.)
+                let reach = self.m.px(3.0);
+                let grown = |r: Rect| Rect::new(r.x - reach, r.y - reach, r.w + 2 * reach, r.h + 2 * reach);
+                let area = self.menu_rect().map(grown).unwrap_or_default();
+                if let Some(menu) = self.menu.as_mut() {
+                    menu.items = items;
+                    menu.chosen = 0;
+                    menu.first = 0;
+                }
+                let after = self.menu_rect().map(grown).unwrap_or_default();
+                self.dirty = self.dirty.union(&area.union(&after));
+            }
+            Some(MenuKind::Search) => {
+                self.close_menu();
+                self.search_files.clear();
+            }
+            None if on => self.open_menu(MenuKind::Search),
+            _ => {}
+        }
+    }
+
+    /// The "/" list's items: the files whose names have the words typed after "/" (all of them, for "/" alone), the
+    /// newest first, and last, asking Chat Computer to find it.
+    fn search_items(&self) -> Vec<MenuItem> {
+        let query = self.typed.get(1..).unwrap_or("").trim().to_lowercase();
+        let words: Vec<&str> = query.split_whitespace().collect();
+        let mut items: Vec<MenuItem> = self
+            .search_files
+            .iter()
+            .filter(|f| {
+                let name = f.name.to_lowercase();
+                words.iter().all(|w| name.contains(w))
+            })
+            .take(MENU_FILES)
+            .map(|f| MenuItem {
+                label: f.name.clone(),
+                detail: format!("{}, {}", folder_of(&f.path), when_text(f.modified)),
+                path: f.path.clone(),
+                ticked: false,
+            })
+            .collect();
+        let ask = if query.is_empty() { String::from("Ask Chat Computer to find something") } else { format!("Ask Chat Computer to find \u{201C}{query}\u{201D}") };
+        items.push(MenuItem { label: ask, detail: String::from("it looks through all your files"), path: String::from(ASK_FIND), ticked: false });
+        items
     }
 
     /// The talk key: listening starts (or, while it records, what was said so far is heard).
@@ -2024,6 +2352,89 @@ fn size_text(bytes: u64) -> String {
 }
 
 /// A model's name from its file's: "...\\qwen3.5-4b.ccm" is "Qwen3.5 4B".
+/// A sidebar's switch, as the website's (chat.html's toggle icons): the screen with its sidebar marked, filled in while
+/// the sidebar shows, lighter under the pointer. `k`: 0 Messages' (marked at the left), 1 Actions' (at the right).
+fn draw_switch(canvas: &mut Canvas, r: Rect, k: usize, shown: bool, lit: bool, m: &Metrics, ground: u32) {
+    if lit {
+        canvas.round_rect(r, m.px(0.4), CHOSEN);
+    } else {
+        canvas.fill(r, ground);
+    }
+    // The icon's 24 units, in the button less 0.15 rem round it, in 1/8 pixel.
+    let pad = m.px(0.15);
+    let unit8 = (r.w - 2 * pad) * 8;
+    let (x8, y8) = ((r.x + pad) * 8, (r.y + pad) * 8);
+    let p = |a: f32, b: f32| -> Point { (x8 + (a * unit8 as f32 / 24.0) as i32, y8 + (b * unit8 as f32 / 24.0) as i32) };
+    let px = |a: f32| (r.x + pad) as f32 + a * (r.w - 2 * pad) as f32 / 24.0;
+    let py = |b: f32| (r.y + pad) as f32 + b * (r.w - 2 * pad) as f32 / 24.0;
+    // The sidebar's part, filled while it shows: 6 units of the 18, its outer corners round.
+    let (from, to) = if k == 0 { (3.0f32, 9.0f32) } else { (15.0f32, 21.0f32) };
+    if shown {
+        let (x0, x1, y0, y1) = (px(from) as i32, px(to) as i32, py(5.0) as i32, py(19.0) as i32);
+        let radius = (3.5 * (r.w - 2 * pad) as f32 / 24.0) as i32;
+        canvas.round_rect(Rect::new(x0, y0, x1 - x0, y1 - y0), radius, INK);
+        // (Its inner side square.)
+        let half = (x1 - x0) / 2;
+        let square = if k == 0 { Rect::new(x0 + half, y0, x1 - x0 - half, y1 - y0) } else { Rect::new(x0, y0, x1 - x0 - half, y1 - y0) };
+        canvas.fill(square, INK);
+    }
+    // The screen: a rectangle 18 by 14 with corners of 3.5, and the line at the sidebar's edge.
+    let mut segs: Vec<(Point, Point)> = Vec::new();
+    let mut outline: Vec<(f32, f32)> = Vec::new();
+    let corner = |cx: f32, cy: f32, a0: f32, out: &mut Vec<(f32, f32)>| {
+        for i in 0..=6 {
+            let a = (a0 + i as f32 * 15.0) as f64 * core::f64::consts::PI / 180.0;
+            let (sn, cs) = model::math::sin_cos(a);
+            out.push((cx + 3.5 * cs as f32, cy + 3.5 * sn as f32));
+        }
+    };
+    corner(6.5, 8.5, 180.0, &mut outline);
+    corner(17.5, 8.5, 270.0, &mut outline);
+    corner(17.5, 15.5, 0.0, &mut outline);
+    corner(6.5, 15.5, 90.0, &mut outline);
+    for w in outline.windows(2) {
+        segs.push((p(w[0].0, w[0].1), p(w[1].0, w[1].1)));
+    }
+    if let (Some(first), Some(last)) = (outline.first(), outline.last()) {
+        segs.push((p(last.0, last.1), p(first.0, first.1)));
+    }
+    let line_x = if k == 0 { 9.0 } else { 15.0 };
+    segs.push((p(line_x, 5.0), p(line_x, 19.0)));
+    canvas.strokes(&segs, unit8 * 2 / 24, INK);
+}
+
+/// The most files "/" searches among (the newest on this PC: Desktop, Documents, Downloads, Pictures).
+const SEARCHED: usize = 2000;
+
+/// When a file was changed, short, as the website's list has it: the time today ("3:56 pm"), else the day
+/// ("19 Oct"), with the year when it isn't this year's.
+fn when_text(t: i64) -> String {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let offset = crate::clock::local_now().zip(crate::clock::now()).map_or(0, |(l, n)| l - n);
+    let local = t + offset;
+    let (y, mo, d, h, mi) = crate::clock::civil(local);
+    let now = crate::clock::local_now().or_else(crate::clock::now);
+    let today = now.map(|n| crate::clock::civil(n));
+    match today {
+        Some((ty, tm, td, _, _)) if (ty, tm, td) == (y, mo, d) => {
+            let (h12, half) = (if h % 12 == 0 { 12 } else { h % 12 }, if h < 12 { "am" } else { "pm" });
+            format!("{h12}:{mi:02} {half}")
+        }
+        Some((ty, _, _, _, _)) if ty == y => format!("{d} {}", MONTHS[(mo as usize).clamp(1, 12) - 1]),
+        _ => format!("{d} {} {y}", MONTHS[(mo as usize).clamp(1, 12) - 1]),
+    }
+}
+
+/// The folder a file's in, as its path names it, the drive and Users\NAME left out ("Documents\Work").
+fn folder_of(path: &str) -> String {
+    let parts: Vec<&str> = path.split('\\').collect();
+    let folder = &parts[..parts.len().saturating_sub(1)];
+    // (C:, Users, NAME, then the folders.)
+    let start = if folder.get(1).is_some_and(|p| p.eq_ignore_ascii_case("users")) { 3 } else { 1 };
+    let shown = folder.get(start..).map(|f| f.join("\\")).unwrap_or_default();
+    if shown.is_empty() { String::from(folder.join("\\").as_str()) } else { shown }
+}
+
 fn model_label(path: &str) -> String {
     let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
     let stem = file.strip_suffix(".ccm").unwrap_or(file);

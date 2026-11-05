@@ -43,6 +43,11 @@ starts 20 seconds before a minute ends). Pictures and the kernel's log go to out
                                      the eighth round's said tells it so; the ninth round's call not run, its words
                                      the answer, the question kept), an answer cut short at the most a round says,
                                      and a tool call cut off as it was written (not run, the model told why)
+    ./check.py --claude             Claude answering in place of Chat Computer's own model (the settings' key and
+                                     choice, as Windows' setup and the spark leave them), from a stand-in for
+                                     Anthropic's API over the kernel's own TLS: its answer streamed, a tool it calls run
+                                     and its result sent back with its thinking as it came, the key never logged; and a
+                                     key the API refuses, said to the person
     ./check.py --web                the model's web tools (search_web, read_web_page) over the kernel's own TCP and TLS
                                      1.3, against a stand-in here for DuckDuckGo and a site (a test build trusting the
                                      test's own authority): results read, a redirect followed, a page compressed and in
@@ -418,8 +423,9 @@ def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None
             return ["the kernel didn't say it was ready" + (f" (the log says {got!r})" if got else " in time")]
         time.sleep(1.5)
         a = pc.picture(f"{name}-1")
-        # (3 seconds into the next minute: the kernel counts whole seconds from when it read the clock.)
-        time.sleep(60 - (40 + time.monotonic() - started) % 60 + 3)
+        # (5 seconds into the next minute: the clock is read in whole seconds, and the virtual PC starts a moment
+        # after `started`.)
+        time.sleep(60 - (40 + time.monotonic() - started) % 60 + 5)
         b = pc.picture(f"{name}-2")
     finally:
         pc.stop()
@@ -1395,6 +1401,184 @@ def web_check(args) -> list[str]:
                      "web: Read a page on www.example.com", "web: sent on to www.example.com"):
             if note not in text:
                 problems.append(f"the log doesn't say {note!r}")
+    finally:
+        server.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+        build()  # never leave a test build in out/
+    return problems
+
+
+CLAUDE_KEY = "sk-ant-test-0123456789"
+
+
+def sse(events: list[dict]) -> bytes:
+    """Server-sent events, as Anthropic's API streams an answer: an "event:" line with each one's type, its JSON."""
+    return b"".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events)
+
+
+def claude_answer(blocks: list[dict], stop: str) -> bytes:
+    """An answer streamed as the API streams one: its blocks (thinking, text, tool_use), each started, filled in by
+    deltas and stopped; then why it stopped."""
+    events = [{"type": "message_start", "message": {"id": "msg_test", "type": "message", "role": "assistant", "content": [],
+                                                    "model": "claude-opus-5-5", "stop_reason": None}}]
+    for i, b in enumerate(blocks):
+        if b["type"] == "thinking":
+            events.append({"type": "content_block_start", "index": i, "content_block": {"type": "thinking", "thinking": "", "signature": ""}})
+            events.append({"type": "content_block_delta", "index": i, "delta": {"type": "thinking_delta", "thinking": b["thinking"]}})
+            events.append({"type": "content_block_delta", "index": i, "delta": {"type": "signature_delta", "signature": b["signature"]}})
+        elif b["type"] == "text":
+            events.append({"type": "content_block_start", "index": i, "content_block": {"type": "text", "text": ""}})
+            for word in b["text"].split(" "):
+                events.append({"type": "content_block_delta", "index": i, "delta": {"type": "text_delta", "text": word + " "}})
+        else:
+            events.append({"type": "content_block_start", "index": i, "content_block": {"type": "tool_use", "id": b["id"], "name": b["name"], "input": {}}})
+            text = json.dumps(b["input"])
+            for k in range(0, len(text), 5):
+                events.append({"type": "content_block_delta", "index": i, "delta": {"type": "input_json_delta", "partial_json": text[k:k + 5]}})
+        events.append({"type": "content_block_stop", "index": i})
+        events.append({"type": "ping"})
+    events.append({"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"output_tokens": 10}})
+    events.append({"type": "message_stop"})
+    return sse(events)
+
+
+def claude_check(args) -> list[str]:
+    """Claude answering on Chat Computer's own system, with the person's own key: a test build trusting a test's own
+    certificate authority, whose api.anthropic.com is a stand-in here (10.0.2.2, TLS 1.3), reached over QEMU's virtual
+    network by a virtio card; the settings bring the key and choose Claude (Opus 5.5 at max effort), as Windows' setup
+    and the spark leave them. Asked a question, Claude thinks, says a few words and calls computer_status: the words
+    reach the screen, the tool runs here, and the next request carries its result with Claude's thinking and call as
+    they came, the conversation, the tools and the effort; then it answers. A key the API refuses is said to the
+    person. The key is never in the log."""
+    import http.server
+    import ssl
+    import threading
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-claude-"))
+    test_authority(tmp, ["api.anthropic.com"])
+    asked: list[dict] = []
+    heads: list[dict] = []
+
+    class Stand(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            heads.append({k.lower(): v for k, v in self.headers.items()})
+            try:
+                req = json.loads(body)
+            except ValueError:
+                req = {}
+            asked.append(req)
+            if self.path != "/v1/messages" or self.headers.get("x-api-key") != CLAUDE_KEY:
+                err = json.dumps({"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}).encode()
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                self.close_connection = True
+                return
+            results = [b for m in req.get("messages", []) if isinstance(m.get("content"), list) for b in m["content"] if b.get("type") == "tool_result"]
+            if not results:
+                answer = claude_answer([
+                    {"type": "thinking", "thinking": "They want to know how it's doing.", "signature": "c2lnbmF0dXJl+/="},
+                    {"type": "text", "text": "Let me look at this computer."},
+                    {"type": "tool_use", "id": "toolu_test_1", "name": "computer_status", "input": {}},
+                ], "tool_use")
+            else:
+                answer = claude_answer([{"type": "text", "text": "It's running well, on its own system."}], "end_turn")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for i in range(0, len(answer), 300):
+                piece = answer[i:i + 300]
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(piece), piece))
+                self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+            self.close_connection = True
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", WEB_PORT), Stand)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.load_cert_chain(tmp / "leaf.pem", tmp / "leaf.key")
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    problems: list[str] = []
+    try:
+        (tmp / "script.json").write_text(json.dumps({}))
+        build("chat", {"CHATCOMPUTER_TEST_SCRIPT": str(tmp / "script.json"), "CHATCOMPUTER_TEST_CA": str(tmp / "ca.der"),
+                       "CHATCOMPUTER_TEST_PORT": str(WEB_PORT)})
+        extra = ("-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0")
+        for attempt, key in (("right", CLAUDE_KEY), ("refused", "sk-ant-not-this-one")):
+            settings = SETTINGS_HEAD + f"claude-api-key = {key}\r\nai = claude opus-5-5 max\r\n"
+            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, extra=extra, settings=settings)
+            try:
+                if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
+                    print(pc.text())
+                    return ["the kernel didn't say it was ready"]
+                wait_for(pc.log, ("network: address",), 60)
+                monitor_many(pc.mon, keys_for("how are you doing") + ["sendkey ret"])
+                got = wait_for(pc.log, ("model: answered", "Claude: failed", "stopped"), 180)
+                time.sleep(2)
+                pc.settled_picture(f"claude-{attempt}")
+            finally:
+                pc.stop()
+            text = pc.text()
+            print(text)
+            if key in text or CLAUDE_KEY in text:
+                problems.append(f"the key is in the log ({attempt})")
+            if attempt == "refused":
+                if got != "Claude: failed" or "Claude's API didn't accept your key (invalid x-api-key)" not in text:
+                    problems.append(f"a refused key wasn't said (the log says {got!r})")
+                continue
+            if got != "model: answered":
+                problems.append(f"Claude's answer didn't end (the log says {got!r})")
+                continue
+            if "model: Claude answers (claude-opus-5-5, max effort), with your key" not in text:
+                problems.append("the log doesn't say Claude answers")
+            if "model: answered (" not in text or "by Claude Opus 5.5" not in text:
+                problems.append("the answer isn't said to be Claude's")
+            said = logged(text, "said")
+            if not said or said[-1] != "Let me look at this computer. \n\nIt's running well, on its own system. ":
+                problems.append(f"the words on the screen were {said!r}")
+            tools = logged(text, "tool")
+            if len(tools) != 1 or tools[0]["name"] != "computer_status" or tools[0]["error"]:
+                problems.append(f"the tools that ran were {tools!r}")
+            if len(asked) != 2:
+                problems.append(f"Claude's API was asked {len(asked)} times, not twice")
+                continue
+            first, second = asked[0], asked[1]
+            h = heads[0]
+            if h.get("anthropic-version") != "2023-06-01" or h.get("host") != "api.anthropic.com" or h.get("accept") != "text/event-stream":
+                problems.append(f"the request's headers were {sorted(k for k in h if k != 'x-api-key')!r}")
+            if (first.get("model"), first.get("output_config"), first.get("stream")) != ("claude-opus-5-5", {"effort": "max"}, True):
+                problems.append(f"the request asked for {first.get('model')!r}, {first.get('output_config')!r}")
+            names = [t.get("name") for t in first.get("tools", [])]
+            if "computer_status" not in names or "read_file" not in names:
+                problems.append(f"the tools offered were {names!r}")
+            if not str(first.get("system", "")).startswith("You are Chat Computer") or "You are Claude (Claude Opus 5.5" not in first.get("system", ""):
+                problems.append(f"the instructions were {str(first.get('system'))[:300]!r}")
+            m = second.get("messages", [])
+            if len(m) != 3 or [x.get("role") for x in m] != ["user", "assistant", "user"]:
+                problems.append(f"the second request's conversation was {json.dumps(m)[:800]}")
+            else:
+                you = m[0]["content"][0]["text"]
+                if not you.endswith("] how are you doing"):
+                    problems.append(f"what was typed went as {you!r}")
+                blocks = m[1]["content"]
+                kinds = [b.get("type") for b in blocks]
+                if kinds != ["thinking", "text", "tool_use"] or blocks[0].get("signature") != "c2lnbmF0dXJl+/=" \
+                        or blocks[0].get("thinking") != "They want to know how it's doing." or blocks[2].get("id") != "toolu_test_1":
+                    problems.append(f"Claude's own answer went back as {json.dumps(blocks)[:600]}")
+                result = m[2]["content"][0]
+                if result.get("type") != "tool_result" or result.get("tool_use_id") != "toolu_test_1" \
+                        or "Model: you are Claude Opus 5.5 (claude-opus-5-5), at max effort" not in str(result.get("content")):
+                    problems.append(f"the tool's result went back as {json.dumps(result)[:600]}")
     finally:
         server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
@@ -2912,6 +3096,7 @@ def main() -> int:
     ap.add_argument("--model", action="store_true", help="the own model: a tiny one found, read, asked, its answer the engine's")
     ap.add_argument("--chat", action="store_true", help="a conversation answered by a test's script in place of the model")
     ap.add_argument("--web", action="store_true", help="the model's web tools, against a stand-in for its sites")
+    ap.add_argument("--claude", action="store_true", help="Claude answering with your key, against a stand-in for its API")
     ap.add_argument("--remember", action="store_true", help="the conversation kept across a restart, on NVMe and SATA")
     ap.add_argument("--sound", action="store_true", help="the timer's chime on QEMU's HD Audio controllers and codecs")
     ap.add_argument("--microphone", action="store_true", help="what QEMU's HD Audio inputs hear, fed a tone")
@@ -2939,6 +3124,8 @@ def main() -> int:
         problems = model_check(args)
     elif args.web:
         problems = web_check(args)
+    elif args.claude:
+        problems = claude_check(args)
     elif args.chat:
         problems = chat(args) + chat_limits(args)
     elif args.remember:

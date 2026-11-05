@@ -7,7 +7,7 @@ pub mod edid;
 /// "ChatComp" in ASCII: the first field of [`BootInfo`], so the kernel can tell it got the real thing.
 pub const MAGIC: u64 = u64::from_le_bytes(*b"ChatComp");
 /// Raised whenever [`BootInfo`] changes shape.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 /// All of physical memory is visible to the kernel at this virtual address: physical address `p` is at
 /// `PHYS_OFFSET + p`. It is the start of the upper half of the address space (page-map slot 256).
@@ -171,6 +171,9 @@ pub struct BootInfo {
     pub settings: [u8; SETTINGS_MAX],
     /// Where the start-up partition is.
     pub start_disk: StartDisk,
+    /// The processor's time-stamp counter when the start-up stage read the clock (so the kernel can add the time
+    /// from then to when its own timer started).
+    pub time_tsc: u64,
 }
 
 /// The most of the settings file that's passed on.

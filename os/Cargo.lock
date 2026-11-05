@@ -32,6 +32,7 @@ dependencies = [
  "bitlocker",
  "bootinfo",
  "chime",
+ "claude",
  "exfat",
  "fat",
  "font",
@@ -54,6 +55,13 @@ dependencies = [
 [[package]]
 name = "chime"
 version = "0.1.0"
+
+[[package]]
+name = "claude"
+version = "0.1.0"
+dependencies = [
+ "tls",
+]
 
 [[package]]
 name = "crypto"

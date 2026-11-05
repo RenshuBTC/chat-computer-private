@@ -43,6 +43,8 @@ static MEASURED_TSC_PER_MS: AtomicU64 = AtomicU64::new(0);
 /// (0: the uptime is counted in ticks).
 static UPTIME_TSC_PER_MS: AtomicU64 = AtomicU64::new(0);
 static UPTIME_TSC_START: AtomicU64 = AtomicU64::new(0);
+/// The time-stamp counter when the timer started (uptime 0).
+static STARTED_TSC: AtomicU64 = AtomicU64::new(0);
 
 pub fn tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
@@ -177,6 +179,18 @@ fn measure(wait: impl FnOnce() -> bool) -> Option<u64> {
     (finished && PLAUSIBLE.contains(&per_second)).then_some(per_second)
 }
 
+/// How many milliseconds before the timer started the time-stamp counter read `tsc` (the start-up stage read the
+/// clock then), if the counter's speed was measured and the answer makes sense (under 10 minutes).
+pub fn ms_before_start(tsc: u64) -> Option<u64> {
+    let per_ms = MEASURED_TSC_PER_MS.load(Ordering::Relaxed);
+    let started = STARTED_TSC.load(Ordering::Relaxed);
+    if per_ms == 0 || tsc == 0 || started < tsc {
+        return None;
+    }
+    let ms = (started - tsc) / per_ms;
+    (ms < 600_000).then_some(ms)
+}
+
 /// The time-stamp counter's speed in MHz, and whether it was measured (else it is assumed).
 pub fn tsc_mhz() -> (u64, bool) {
     let n = TSC_PER_US.load(Ordering::Relaxed);
@@ -215,6 +229,7 @@ pub fn init(acpi: &Acpi) -> (u64, &'static str) {
     let (per_second, how) = found.unwrap_or_else(unmeasured);
     apic::write(apic::LVT_TIMER, TIMER_VECTOR as u32 | 1 << 17); // periodic
     apic::write(apic::TIMER_INITIAL, (per_second / HZ) as u32);
+    STARTED_TSC.store(rdtsc(), Ordering::Relaxed);
     let tsc_per_ms = MEASURED_TSC_PER_MS.load(Ordering::Relaxed);
     if tsc_per_ms != 0 && invariant_tsc() {
         UPTIME_TSC_START.store(rdtsc(), Ordering::Relaxed);

@@ -41,6 +41,7 @@ mod pci;
 mod power;
 mod ps2;
 mod random;
+mod remote;
 mod rich;
 mod screen;
 mod schedule;
@@ -126,7 +127,7 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
             (_, Some(_)) => "the model's file named",
             (_, None) => "no model's file named",
         },
-        if settings.old_key { " (and an older setup's Claude API key, no longer used)" } else { "" },
+        if settings.claude_key.is_some() { " (and your key for Claude)" } else { "" },
         if settings.not_understood > 0 { alloc::format!(", {} lines not understood", settings.not_understood) } else { String::new() }
     );
     log!("Chat Computer kernel: clock: {}", clock::init(info.time, info.time_zone, settings.clock_offset_minutes));
@@ -195,6 +196,10 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         if measured { "" } else { " (assumed)" },
         time::uptime_by()
     );
+    if let Some(ms) = time::ms_before_start(info.time_tsc) {
+        clock::started_later(ms);
+        log!("Chat Computer kernel: clock: read {ms} ms before the timer started (added)");
+    }
     // The other processor cores, for the model's arithmetic: before the firmware's memory is reused (where it may
     // have left them waiting).
     log!("Chat Computer kernel: {}", cores::start(&acpi, info, settings.cores));
@@ -247,7 +252,7 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
     log!("Chat Computer kernel: {}", storage::open_others());
     log!("Chat Computer kernel: {}", files::init());
     next("Chat Computer's model");
-    assistant::init(settings.model);
+    assistant::init(settings.model, settings.claude_key, settings.ai);
     listening::init();
     chat::restore(&assistant::conversation());
     log!("Chat Computer: ready");

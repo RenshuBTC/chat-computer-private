@@ -899,6 +899,26 @@ Assert-Equal '7' (Get-OwnSettingsCores "cores = 007`r`n") 'own settings: the mos
 foreach ($junk in @('cores = 0', 'cores = all', 'cores = -1', 'cores = 1.5', 'cores = 2 # core 3 hangs', 'cores =', 'cores')) {
     Assert-Equal '' (Get-OwnSettingsCores ($junk + "`r`n")) ('own settings: not a number of cores: ' + $junk)
 }
+# Your key for Claude, pasted at the last question: kept in the settings for the kernel (claude-api-key), and kept when
+# the settings are written anew; what isn't one of Anthropic's keys isn't taken for one.
+$claudeKey = 'sk-ant-api03-' + ('Ab9_-' * 20)
+Assert-True (Test-OwnClaudeKey $claudeKey) 'own settings: a key for Claude is one'
+foreach ($notKey in @('', 'n', 'no', 'sk-proj-abcdefghijklmnop', 'sk-ant-', 'sk-ant-short', 'sk-ant-api03 with spaces', "sk-ant-api03-abc`r`nmodel = x")) {
+    Assert-True (-not (Test-OwnClaudeKey $notKey)) ('own settings: not a key for Claude: ' + $notKey)
+}
+$withKey = Set-OwnSettingsClaudeKey $withLog $claudeKey
+Assert-True ($withKey -match ('(?m)^claude-api-key = ' + [regex]::Escape($claudeKey) + '\r$')) 'own settings: the key on a line of its own'
+Assert-Equal $claudeKey (Get-OwnSettingsClaudeKey $withKey) 'own settings: the key read back'
+Assert-Equal ([uint32]0x10C0FFEE) (Get-OwnSettingsMemoryId $withKey -Name 'log-id') 'own settings: the rest kept beside the key'
+$newer = 'sk-ant-api03-' + ('Zz' * 30)
+$twice = Set-OwnSettingsClaudeKey $withKey $newer
+Assert-Equal 1 ([regex]::Matches($twice, '(?m)^claude-api-key').Count) 'own settings: a new key takes the old one''s place'
+Assert-Equal $newer (Get-OwnSettingsClaudeKey $twice) 'own settings: the new key read back'
+$again = New-OwnSettingsText -Model '' -ClockOffsetMinutes 60 -ClaudeKey (Get-OwnSettingsClaudeKey $twice)
+Assert-Equal $newer (Get-OwnSettingsClaudeKey $again) 'own settings: the key kept when the settings are written anew'
+Assert-True ($ownText -notmatch '(?m)^claude-api-key') 'own settings: no key unless one was given'
+Assert-Equal '' (Get-OwnSettingsClaudeKey "claude-api-key = not-a-key`r`n") 'own settings: what isn''t a key isn''t kept'
+
 # The kernel reads a setting's name in capitals or not, and its value in quotes or not: written so by hand, kept too.
 Assert-Equal '2' (Get-OwnSettingsCores "Cores = 2`r`n") 'own settings: the most cores, its name in capitals'
 Assert-Equal '2' (Get-OwnSettingsCores "cores = `"2`"`r`n") 'own settings: the most cores, in quotes'

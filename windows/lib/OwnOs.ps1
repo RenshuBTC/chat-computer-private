@@ -205,14 +205,68 @@ function New-OwnSettingsText {
     # file's id (0: there's no memory file); $LogId: the log file's. $Cores: the most processor cores to use, put
     # there by hand ('': all).
     param([AllowEmptyString()][string]$Model, [int]$ClockOffsetMinutes, [uint32]$MemoryId = 0, [uint32]$LogId = 0,
-          [AllowEmptyString()][string]$Cores = '')
+          [AllowEmptyString()][string]$Cores = '', [AllowEmptyString()][string]$ClaudeKey = '')
     $lines = @('# Chat Computer''s settings, read by its own system when it starts. Written by Chat Computer Own System.')
     if ($Model) { $lines += ('model = ' + $Model) }
     $lines += ('clock-offset-minutes = ' + $ClockOffsetMinutes)
     if ($MemoryId -ne 0) { $lines += ('memory-id = ' + $MemoryId.ToString('x8')) }
     if ($LogId -ne 0) { $lines += ('log-id = ' + $LogId.ToString('x8')) }
     if ($Cores) { $lines += ('cores = ' + $Cores) }
+    if ($ClaudeKey) { $lines += ('claude-api-key = ' + $ClaudeKey) }
     return (($lines -join "`r`n") + "`r`n")
+}
+
+function Test-OwnClaudeKey {
+    # Whether what was pasted looks like a key for Claude's API (Anthropic's keys start sk-ant-; nothing else in it but
+    # letters, digits, - and _).
+    param([AllowNull()][string]$Text)
+    return [bool]($Text -and $Text -cmatch '^sk-ant-[A-Za-z0-9_-]{8,500}$')
+}
+
+function Get-OwnSettingsClaudeKey {
+    # Your key for Claude in a settings file's text ('' if none), kept when this runs again.
+    param([AllowNull()][string]$Text)
+    if (-not $Text) { return '' }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $m = [regex]::Match($line, '^\s*claude-api-key\s*=\s*(\S+)\s*$')
+        if ($m.Success -and (Test-OwnClaudeKey $m.Groups[1].Value)) { return $m.Groups[1].Value }
+    }
+    return ''
+}
+
+function Set-OwnSettingsClaudeKey {
+    # A settings file's text with your key for Claude in it (in place of one it had).
+    param([AllowNull()][string]$Text, [string]$Key)
+    $lines = @()
+    if ($Text) { $lines = @($Text -split "`r?`n" | Where-Object { $_ -ne '' -and $_ -notmatch '^\s*claude-api-key\s*=' }) }
+    $lines += ('claude-api-key = ' + $Key)
+    return (($lines -join "`r`n") + "`r`n")
+}
+
+function Save-OwnClaudeKey {
+    # Your key for Claude, pasted at the end, put in Chat Computer's settings on the start-up partition: the spark beside
+    # + can then choose Claude there. It isn't written to the setup's log.
+    param([string]$Key)
+    $esp = Get-WindowsEsp
+    if (-not $esp) { throw 'Windows'' start-up partition was not found.' }
+    $m = Mount-EspPartition $esp
+    try {
+        $settings = [IO.Path]::Combine($m.Root, 'EFI', $Script:OwnDir, $Script:OwnSettings)
+        $before = ''
+        if (Test-Path -LiteralPath $settings) { $before = [IO.File]::ReadAllText($settings) }
+        [IO.File]::WriteAllText($settings, (Set-OwnSettingsClaudeKey $before $Key), [Text.Encoding]::ASCII)
+    } finally {
+        Dismount-EspPartition $m
+    }
+}
+
+function Read-OwnAnswer {
+    # The last question's answer, typed or pasted, without showing it (it may be a key): plain text.
+    param([string]$Prompt)
+    $secure = Read-Host $Prompt -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { return ([string][Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)).Trim() }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
 function Get-OwnSettingsModel {
@@ -1058,7 +1112,7 @@ function Install-OwnFiles {
         $logWas = $(if ($FreshLog) { $null } else { Get-OwnSettingsMemoryId $before -Name 'log-id' })
         $logId = Install-OwnLog -Dir $dir -Root $m.Root -Id $logWas
         $text = New-OwnSettingsText -Model $model -ClockOffsetMinutes (Get-ClockOffsetMinutes) -MemoryId $memoryId `
-            -LogId $logId -Cores (Get-OwnSettingsCores $before)
+            -LogId $logId -Cores (Get-OwnSettingsCores $before) -ClaudeKey (Get-OwnSettingsClaudeKey $before)
         [IO.File]::WriteAllText($settings, $text, [Text.Encoding]::ASCII)
         Write-SetupLog ('Copied to ' + $dir + $(if ($Shim) { ', through shim' } else { '' }) + '; settings ' +
                         $(if ($model) { 'naming a model' } else { 'naming no model' }))
@@ -1333,7 +1387,19 @@ function Start-OwnSystem {
         Write-Line 'boot menu as the PC starts (F12 on many PCs).'
         if (-not $Unattended) {
             Clear-OwnKeys
-            $answer = ([string](Read-Host 'Press Enter to start Chat Computer (or close this window to stay in Windows)')).Trim()
+            Write-Line ''
+            Write-Line 'To choose Claude there too (the spark beside + in the message box), paste your key for Claude here first'
+            Write-Line '(from platform.claude.com/settings/keys; it stays on this PC). Chat Computer''s own model stays the default.'
+            $answer = Read-OwnAnswer 'Press Enter to start Chat Computer (or close this window to stay in Windows)'
+            if (Test-OwnClaudeKey $answer) {
+                Save-OwnClaudeKey $answer
+                $answer = ''
+                Write-SetupLog 'Your key for Claude put in the settings'
+                Write-Line 'Your key for Claude is kept: choose Claude with the spark in Chat Computer.'
+            } elseif ($answer -match '^(?i)sk-') {
+                Write-Line 'That doesn''t look like a key for Claude (they start sk-ant-), so it wasn''t kept.'
+                $answer = ''
+            }
             if ($answer -match '^(?i)n') {
                 Write-SetupLog 'Stayed in Windows'
                 Write-Line 'Staying in Windows.'

@@ -19,9 +19,9 @@ const DRIFT: i64 = 10 * 60;
 const WRITTEN: i64 = 1_792_454_400;
 
 struct Clock {
-    /// Seconds since 1970 (UTC) when the start-up stage read the clock: when the kernel's uptime was 0, near
-    /// enough (the kernel's timer starts a moment later).
-    utc: i64,
+    /// Milliseconds since 1970 (UTC) when the kernel's uptime was 0: when the start-up stage read the clock, and
+    /// (once the kernel's timer has started) the time from then to the timer's start.
+    utc_ms: i64,
     /// How far off that may be, in seconds.
     error: i64,
     /// The local time's offset from UTC, in minutes, if the settings gave it (Windows' time zone when Chat Computer
@@ -45,14 +45,22 @@ pub fn init(raw: i64, zone: i32, offset_minutes: Option<i32>) -> String {
         // A zone the firmware gives, but the specification's versions disagree on which way it goes.
         (None, z) => (raw, (z.unsigned_abs() as i64).min(1440) * 60 + DRIFT, "time zone from the firmware"),
     };
-    *CLOCK.lock() = Some(Clock { utc, error, offset: offset_minutes });
+    *CLOCK.lock() = Some(Clock { utc_ms: utc * 1000, error, offset: offset_minutes });
     let behind = if utc + error < WRITTEN { " (behind: earlier than this kernel was written)" } else { "" };
     format!("{} ({how}){behind}", text(utc, error))
 }
 
+/// The kernel's timer started `ms` milliseconds after the start-up stage read the clock (loading the kernel and
+/// setting up took that long): the clock had moved on that much when the kernel began counting.
+pub fn started_later(ms: u64) {
+    if let Some(c) = CLOCK.lock().as_mut() {
+        c.utc_ms += ms as i64;
+    }
+}
+
 /// Seconds since 1970 (UTC), if the clock could be read.
 pub fn now() -> Option<i64> {
-    CLOCK.lock().as_ref().map(|c| c.utc + (time::uptime_ms() / 1000) as i64)
+    CLOCK.lock().as_ref().map(|c| (c.utc_ms + time::uptime_ms() as i64).div_euclid(1000))
 }
 
 /// How far `now` may be off, in seconds.

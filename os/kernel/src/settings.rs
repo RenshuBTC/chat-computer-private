@@ -12,7 +12,11 @@
 //!     cores = 1                         use at most this many of the processor's cores (cores.rs; all, without it),
 //!                                       for a PC whose other cores don't start well
 //!
-//! A Claude API key an older setup put there (claude-api-key) is no longer used, nor logged.
+//!     claude-api-key = sk-ant-...       your own key for Claude (Anthropic's API), which the setup brings from
+//!                                       Windows when it's pasted there: the spark beside + can then choose Claude
+//!                                       (never logged, nor shown)
+//!     ai = claude                       who answers at start: Claude (with the key), rather than Chat Computer's
+//!                                       own model (the default); "claude opus-5-5 max" names its model and effort
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -21,8 +25,10 @@ use alloc::vec::Vec;
 pub struct Settings {
     /// The model's file, as Windows names it.
     pub model: Option<String>,
-    /// An older setup's Claude API key is there (it isn't used).
-    pub old_key: bool,
+    /// Your own key for Claude's API (never logged).
+    pub claude_key: Option<String>,
+    /// Who answers at start, if not Chat Computer's own model: "claude", and maybe its model and effort.
+    pub ai: Option<String>,
     pub clock_offset_minutes: Option<i32>,
     pub memory_id: Option<u32>,
     pub log_id: Option<u32>,
@@ -64,7 +70,21 @@ pub fn parse(bytes: &[u8]) -> Settings {
                     s.not_understood += 1;
                 }
             }
-            "claude-api-key" => s.old_key = true,
+            "claude-api-key" | "anthropic-api-key" | "anthropic-key" => {
+                // (A key is printable ASCII, without spaces; anything else isn't one.)
+                let ok = !value.is_empty() && value.len() <= 512 && value.bytes().all(|b| b.is_ascii_graphic());
+                s.claude_key = ok.then(|| String::from(value));
+                if !ok {
+                    s.not_understood += 1;
+                }
+            }
+            "ai" => {
+                let v = value.to_ascii_lowercase();
+                s.ai = (v.starts_with("claude") && v.len() <= 100).then_some(v);
+                if s.ai.is_none() && !matches!(value.to_ascii_lowercase().as_str(), "own" | "local" | "qwen" | "") {
+                    s.not_understood += 1;
+                }
+            }
             "clock-offset-minutes" => {
                 s.clock_offset_minutes = value.parse::<i32>().ok().filter(|m| (-1440..=1440).contains(m));
                 if s.clock_offset_minutes.is_none() {

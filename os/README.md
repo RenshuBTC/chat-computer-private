@@ -164,8 +164,9 @@ drivers.
     (`\EFI\chatcomputer-own\memory.bin`, which Windows' setup makes), found through Chat Computer's own FAT reader
     (`fat/`). The conversation and the model's notes are kept there (`keep.rs`, in the format `remember/` defines,
     as JSON: `{"notes": [...], "chat": [{"you": ..., "at": ...}, {"said": ...}, ...]}`: each question, when it was
-    asked, and its answer's words) after every answer, and read back at start-up, so a restart carries on the same
-    conversation (one kept when the own system talked to Claude is read too). Only the memory file's own blocks are
+    asked, and its answer's words; with your key for Claude and which model and effort answer, when you chose Claude,
+    and which sidebars are switched off) after every answer, and read back at start-up, so a restart carries on the
+    same conversation (one kept when the own system talked to Claude's API before is read too). Only the memory file's own blocks are
     ever written, each read and checked first: never the file system, Windows' files or any other partition.
     Before a restart, the drive is told to write what it has cached. It's started before the steps not yet tried on
     many PCs (the firmware's programs, the network cards, the sound), and the kernel's log is kept on it too, in
@@ -310,10 +311,14 @@ drivers.
   a greeting chosen as the website chooses one (by the time of day and the day), both fading as the first message
   goes (what the PC is, its keyboards and its model are in the computer's status, which the model gives). Under what's
   typed, the message box has the website's four round buttons: + attaches a file (a list above the box of the
-  newest in each person's Desktop, Documents, Downloads and Pictures, chosen with the pointer or the arrows; each
-  file a chip over what's typed, named with its path in the message for the model to read), the spark lists the
-  models on the PC (the one answering ticked), the microphone listens (as Windows+H), and send sends (its stop while
-  an answer comes). Type, press Enter, and the model reads the
+  newest in each person's Desktop, Documents, Downloads and Pictures, the newest first, chosen with the pointer or
+  the arrows; each file a chip over what's typed, named with its path in the message for the model to
+  read), the spark chooses who answers (below), the microphone listens (as Windows+H), and send sends (its stop
+  while an answer comes). "/" typed first in the box lists the files on the PC the same way, the newest first,
+  narrowed to those whose names have the words typed after it; Enter attaches the one chosen, and the list's
+  last line asks the model to find it among all the files instead (Esc clears it, as on the website). Each sidebar
+  has the website's switch at its top, on the edge nearest the middle: it puts the sidebar away (leaving just the
+  switch, the middle where it was) and brings it back, and the choice is kept. Type, press Enter, and the model reads the
   message and answers, its words shown as they're written, with a pulsing dot until the first (and, when it's slow,
   what it's doing: reading your message, or a file). Its answers are Markdown, laid
   out as the main screen shows them (`rich.rs`): headings, bold, italics, lists and tasks, code in the code font,
@@ -321,6 +326,17 @@ drivers.
   Page Down, or a mouse's wheel, scroll; what you send goes to the top of the screen, as on the website, with
   nothing of the answer before it showing above it. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and
   key repeat work, in the US layout. Nothing typed or answered is written to the log.
+* Who answers: Chat Computer's own model, on the PC (free, and nothing typed leaves it), unless you choose Claude
+  with the spark (`remote.rs`, `claude/`): pick Claude, give your key for Claude's API (typed in the box, shown as a
+  dot a character, or pasted at the end of Windows' setup, which puts it in the settings), then its model (Opus
+  5.5, Sonnet 5.5, Haiku 5.5 or Fable 5.1) and how hard it thinks (Anthropic's effort: Low to Max). Claude then
+  answers through Anthropic's Messages API over the kernel's own TCP and TLS 1.3, its words streamed as they come,
+  with the same conversation, notes and tools (their results go back to it, pictures read from files with them;
+  its thinking goes back as it came, as the API asks within a turn that uses tools), and the spark switches back
+  to Chat Computer's own model. The key is kept in the memory file and never logged or shown; the log says only
+  that there is one. A test build trusting a test's own certificate authority asks a stand-in for the API here
+  (`check.py --claude`): Claude's answer streamed, a tool it calls run, its thinking and the tool's result sent back,
+  and a key the API refuses said to the person.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
   retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
   its own with lost, repeated and reordered packets.
@@ -523,7 +539,9 @@ system. Nothing else is asked, and no USB stick is needed.
    last step of a start that didn't finish.
 5. It keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu, often F12, F11, F8 or Esc as
    it starts), to choose whenever you like, and restarts into it when Enter is pressed (closing the window stays in
-   Windows). The restart after that starts Windows. Double-clicking it again puts the newest version from the folder
+   Windows). A key for Claude pasted there first (it isn't shown as it's pasted) goes in `settings.txt` as
+   `claude-api-key`, kept when setup runs again, so the spark in the message box can choose Claude without typing
+   the key; Chat Computer's own model stays the default. The restart after that starts Windows. Double-clicking it again puts the newest version from the folder
    there and starts it. ClaudeOS's old entries (Chat Computer's name until 2026-10-19) leave the menu, with Windows
    first: its own system's, its installers', and "Ubuntu" when that's the Ubuntu-based ClaudeOS (its mark,
    `\EFI\claudeos\installed-*`, is on the start-up partition). Their files and partitions stay as they are.

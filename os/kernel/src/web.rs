@@ -29,19 +29,19 @@ const SILENCE_MS: u64 = 20_000;
 const MOST_REDIRECTS: u32 = 5;
 
 /// The test's certificate authority (empty in every other build: kernel/build.rs), and its server.
-static TEST_CA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test_ca.der"));
-const TEST_SERVER: Ipv4 = Ipv4([10, 0, 2, 2]);
+pub(crate) static TEST_CA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test_ca.der"));
+pub(crate) const TEST_SERVER: Ipv4 = Ipv4([10, 0, 2, 2]);
 
-fn test_build() -> bool {
+pub(crate) fn test_build() -> bool {
     !TEST_CA.is_empty()
 }
 
-fn test_port() -> u16 {
+pub(crate) fn test_port() -> u16 {
     option_env!("CHATCOMPUTER_TEST_PORT").and_then(|p| p.parse().ok()).unwrap_or(8473)
 }
 
 /// The authorities trusted: Mozilla's (or the test's), read once.
-fn roots() -> &'static [Cert<'static>] {
+pub(crate) fn roots() -> &'static [Cert<'static>] {
     static ROOTS: crate::sync::SpinLock<Option<&'static [Cert<'static>]>> = crate::sync::SpinLock::new(None);
     let mut roots = ROOTS.lock();
     if let Some(r) = *roots {
@@ -301,7 +301,7 @@ fn tls_text(e: tls::Error, host: &str) -> String {
 }
 
 /// No network card Chat Computer drives.
-fn no_network() -> String {
+pub(crate) fn no_network() -> String {
     String::from(
         "this PC has no network connection Chat Computer can use: Wi-Fi isn't supported yet, and its wired network \
          chip isn't one Chat Computer has a driver for. A network cable to a supported chip, a USB network adapter, \
@@ -310,7 +310,7 @@ fn no_network() -> String {
 }
 
 /// A card, but no address.
-fn no_address() -> String {
+pub(crate) fn no_address() -> String {
     let status = network::status();
     if !status.link {
         String::from(

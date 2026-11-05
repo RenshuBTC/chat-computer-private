@@ -53,7 +53,7 @@ body { padding-left: var(--mid-left, 0px); padding-right: var(--mid-right, 0px);
 .ai .offers button:hover { border-color: var(--ink); }
 .ai .offers button.main { background: var(--ink); color: var(--ground); border-color: var(--ink); }
 .ai .offers button.main:hover { background: var(--box-ink); }
-.ai .offers button:focus-visible { outline: 3px solid var(--dim); outline-offset: 2px; }
+.ai .offers button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
 .ai.thinking .md:empty::after {
   content: ""; display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%;
   background: var(--ink); animation: pulse 1.2s ease-in-out infinite;

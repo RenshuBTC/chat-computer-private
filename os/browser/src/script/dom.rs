@@ -547,8 +547,8 @@ pub fn init(vm: &mut Vm) {
     method(vm, tw, "firstChild", 0, walker_first_child);
     method(vm, tw, "nextSibling", 0, walker_next_sibling);
     let ni = interface(vm, "NodeIterator", None, 0, None);
-    method(vm, ni, "nextNode", 0, walker_next);
-    method(vm, ni, "previousNode", 0, walker_previous);
+    method(vm, ni, "nextNode", 0, iterator_next);
+    method(vm, ni, "previousNode", 0, iterator_previous);
     method(vm, ni, "detach", 0, ignore_fn);
     let nf = interface(vm, "NodeFilter", None, 0, None);
     for (name, v) in [("FILTER_ACCEPT", 1.0), ("FILTER_REJECT", 2.0), ("FILTER_SKIP", 3.0), ("SHOW_ALL", 4294967295.0), ("SHOW_ELEMENT", 1.0), ("SHOW_ATTRIBUTE", 2.0), ("SHOW_TEXT", 4.0), ("SHOW_CDATA_SECTION", 8.0), ("SHOW_PROCESSING_INSTRUCTION", 64.0), ("SHOW_COMMENT", 128.0), ("SHOW_DOCUMENT", 256.0), ("SHOW_DOCUMENT_TYPE", 512.0), ("SHOW_DOCUMENT_FRAGMENT", 1024.0)] {
@@ -1856,7 +1856,9 @@ fn inner_html(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
 pub fn fragment(vm: &mut Vm, html: &str, context: &str) -> NodeId {
     let parsed = crate::html::parse_fragment(html, context, true);
     let f = host(vm).doc.create(Data::Fragment);
-    let kids: Vec<NodeId> = parsed.children(1).to_vec();
+    // (Read in a <template>: what was read went into its contents.)
+    let from = if context == "template" { parsed.templates.iter().find(|(t, _)| *t == 1).map_or(1, |(_, c)| *c) } else { 1 };
+    let kids: Vec<NodeId> = parsed.children(from).to_vec();
     for k in kids {
         let c = import(&mut host(vm).doc, &parsed, k);
         host(vm).doc.insert(f, c, None);
@@ -1896,7 +1898,9 @@ fn set_inner_html(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let context = String::from(doc(vm).name(n));
     let context = if context.is_empty() { String::from("body") } else { context };
     let f = fragment(vm, &html, &context);
-    replace_all(vm, n, Some(f));
+    // (A <template>'s: what's in its content.)
+    let target = if context == "template" && doc(vm).element(n).is_some() { host(vm).doc.template_content(n) } else { n };
+    replace_all(vm, target, Some(f));
     Ok(Value::Undefined)
 }
 
@@ -2550,13 +2554,7 @@ pub fn upgrade(vm: &mut Vm, n: NodeId) {
 
 /// Whether a custom element's class observes an attribute (its static observedAttributes).
 fn observed(vm: &mut Vm, name: &str, attr: &str) -> bool {
-    let Some(Value::Obj(c)) = host_ref(vm).custom.iter().find(|(x, _)| x == name).map(|(_, c)| c.clone()) else { return false };
-    let Ok(list) = get(vm, c, "observedAttributes") else { return false };
-    if list.is_nullish() {
-        return false;
-    }
-    let Ok(items) = vm.iterate_to_vec(&list) else { return false };
-    items.iter().any(|v| matches!(v, Value::Str(s) if s.to_rust() == attr))
+    host_ref(vm).observed.get(name).is_some_and(|list| list.iter().any(|a| a == attr))
 }
 
 /// Calls one of a custom element's lifecycle methods (connectedCallback...), if it has it.
@@ -2585,6 +2583,27 @@ fn ce_define(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
     }
     if host_ref(vm).custom.iter().any(|(n, _)| *n == name) {
         return Err(dom_exception(vm, "NotSupportedError", &format!("Failed to execute 'define' on 'CustomElementRegistry': the name \"{name}\" has already been used with this registry")));
+    }
+    // (As the standard defines one: its prototype's callbacks read, and, if it has attributeChangedCallback, the
+    // attributes it observes, once; Lit sets its classes up when they're asked for.)
+    if let Value::Obj(cg) = c {
+        let proto = get(vm, cg, "prototype")?;
+        let Value::Obj(pg) = proto else {
+            return Err(vm.type_error("Failed to execute 'define' on 'CustomElementRegistry': The 'prototype' property of the constructor is not an object."));
+        };
+        for cb in ["connectedCallback", "disconnectedCallback", "adoptedCallback"] {
+            get(vm, pg, cb)?;
+        }
+        let changed = get(vm, pg, "attributeChangedCallback")?;
+        if !changed.is_undefined() {
+            let list = get(vm, cg, "observedAttributes")?;
+            let names = if list.is_nullish() { Vec::new() } else { vm.iterate_to_vec(&list)? };
+            let mut out = Vec::new();
+            for v in names {
+                out.push(string(vm, &v)?);
+            }
+            host(vm).observed.insert(name.clone(), out);
+        }
     }
     host(vm).custom.push((name.clone(), c));
     // Elements of its name already in the page: upgraded, and told they're connected.
@@ -2951,27 +2970,270 @@ fn document_collection(vm: &mut Vm, _this: &Value, _args: &[Value], f: Gc) -> R 
 }
 
 fn style_sheets(vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
-    // One sheet object per <style> and stylesheet <link> (with no rules a script can read yet).
+    // One sheet object per <style> and stylesheet <link>, the same each time.
     let d = doc(vm);
     let sheets: Vec<NodeId> = d.descendants(0).filter(|&n| d.name(n) == "style" || (d.name(n) == "link" && d.element(n).and_then(|e| e.attr("rel")).is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")))).collect();
-    let mut items = Vec::new();
-    for n in sheets {
-        let o = vm.new_object();
-        let w = wrap(vm, n);
-        vm.put(o, "ownerNode", w, ALL);
-        let rules = vm.new_array(Vec::new());
-        vm.put(o, "cssRules", Value::Obj(rules), ALL);
-        vm.put(o, "rules", Value::Obj(rules), ALL);
-        vm.put(o, "disabled", Value::Bool(false), ALL);
-        let href = attr(vm, n, "href").map_or(Value::Null, |h| js(&resolve(vm, &h)));
-        vm.put(o, "href", href, ALL);
-        method(vm, o, "insertRule", 2, zero_fn);
-        method(vm, o, "deleteRule", 1, ignore_fn);
-        method(vm, o, "addRule", 2, zero_fn);
-        method(vm, o, "replaceSync", 1, ignore_fn);
-        items.push(Value::Obj(o));
-    }
+    let items: Vec<Value> = sheets.into_iter().map(|n| Value::Obj(sheet_object(vm, n))).collect();
     Ok(Value::Obj(vm.new_array(items)))
+}
+
+// ------------------------------------------------------------------------------------------- style sheets
+
+/// Where an element's style sheet object is kept.
+const SHEET_OBJ: u32 = 0x105;
+
+/// A <style>'s or <link>'s sheet (CSSStyleSheet): made once.
+fn sheet_object(vm: &mut Vm, n: NodeId) -> Gc {
+    if let Some(&g) = host_ref(vm).cache.get(&(n, SHEET_OBJ)) {
+        return g;
+    }
+    let p = host_ref(vm).proto("CSSStyleSheet").unwrap_or_else(|| vm.proto(I::ObjectProto));
+    let o = vm.alloc(Some(p), Class::Host(SHEET, n as u64));
+    vm.put(o, "disabled", Value::Bool(false), ALL);
+    vm.put(o, "type", js("text/css"), ALL);
+    let href = attr(vm, n, "href").map_or(Value::Null, |h| js(&resolve(vm, &h)));
+    vm.put(o, "href", href, ALL);
+    host(vm).cache.insert((n, SHEET_OBJ), o);
+    o
+}
+
+/// What a `Class::Host` object is when it's a style sheet.
+const SHEET: u32 = 12;
+
+fn sheet_node(vm: &mut Vm, this: &Value) -> Result<NodeId, Value> {
+    Ok(this_host(vm, this, SHEET)? as NodeId)
+}
+
+/// A sheet's text cut into its rules (each top-level rule or at-rule, with its block).
+pub fn split_rules(css: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let b = css.as_bytes();
+    let (mut depth, mut start, mut i) = (0i32, 0usize, 0usize);
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let end = css[i + 2..].find("*/").map_or(b.len(), |e| i + 2 + e + 2);
+                if depth == 0 && css[start..i].trim().is_empty() {
+                    start = end;
+                }
+                i = end;
+                continue;
+            }
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth <= 0 {
+                    depth = 0;
+                    let r = css[start..=i].trim();
+                    if !r.is_empty() {
+                        out.push(String::from(r));
+                    }
+                    start = i + 1;
+                }
+            }
+            b';' if depth == 0 => {
+                let r = css[start..=i].trim();
+                if !r.is_empty() {
+                    out.push(String::from(r));
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let rest = css[start.min(css.len())..].trim();
+    if !rest.is_empty() {
+        out.push(String::from(rest));
+    }
+    out
+}
+
+/// A <style>'s rules as scripts see and change them (read from its text the first time, and again if its text
+/// changed since).
+fn rules_of(vm: &mut Vm, n: NodeId) -> &mut Vec<String> {
+    let text = if doc(vm).name(n) == "style" { doc(vm).text_of(n) } else { String::new() };
+    let h = host(vm);
+    let fresh = h.cssom.get(&n).is_none_or(|(src, _)| *src != text);
+    if fresh {
+        let rules = split_rules(&text);
+        h.cssom.insert(n, (text, rules));
+    }
+    &mut h.cssom.get_mut(&n).expect("just put there").1
+}
+
+/// What a `Class::Host` object is when it's a sheet's rule list (CSSRuleList): live, by its sheet's element.
+const RULES: u32 = 13;
+const RULES_OBJ: u32 = 0x106;
+
+/// A sheet's rules (cssRules): a live list (its length always the sheet's; each rule made when it's asked for, as
+/// CSS-in-JS libraries ask for the length after every rule they add).
+fn sheet_rules(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    let n = sheet_node(vm, this)?;
+    if let Some(&g) = host_ref(vm).cache.get(&(n, RULES_OBJ)) {
+        return Ok(Value::Obj(g));
+    }
+    let proto = host_ref(vm).proto("CSSRuleList").unwrap_or_else(|| vm.proto(I::ObjectProto));
+    let target = vm.alloc(Some(proto), Class::Host(RULES, n as u64));
+    let handler = host_ref(vm).proto("(rule list handler)").expect("made");
+    let p = vm.alloc(None, Class::Proxy(Some((target, handler)), 0));
+    host(vm).cache.insert((n, RULES_OBJ), p);
+    Ok(Value::Obj(p))
+}
+
+/// A rule's object (CSSRule): its text, its type, its selector.
+fn rule_object(vm: &mut Vm, r: &str) -> Value {
+    let o = vm.new_object();
+    let at = r.starts_with('@');
+    let selector = r.split('{').next().unwrap_or("").trim();
+    vm.put(o, "cssText", js(r), ALL);
+    vm.put(o, "type", Value::Num(if r.starts_with("@media") { 4.0 } else if at { 0.0 } else { 1.0 }), ALL);
+    if !at {
+        vm.put(o, "selectorText", js(selector), ALL);
+    }
+    Value::Obj(o)
+}
+
+fn rules_node(vm: &Vm, target: &Value) -> Option<NodeId> {
+    match target {
+        Value::Obj(g) => match vm.heap.get(*g).class {
+            Class::Host(RULES, n) => Some(n as NodeId),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn rules_trap_get(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    let (target, key, receiver) = (arg(args, 0), arg(args, 1), arg(args, 2));
+    let Some(n) = rules_node(vm, &target) else { return Ok(Value::Undefined) };
+    if let Some(i) = super::lists::index_of(vm, &key) {
+        let r = rules_of(vm, n).get(i).cloned();
+        return Ok(r.map_or(Value::Undefined, |r| rule_object(vm, &r)));
+    }
+    if let Value::Str(s) = &key
+        && s.to_rust() == "length"
+    {
+        return Ok(Value::Num(rules_of(vm, n).len() as f64));
+    }
+    let Value::Obj(t) = target else { return Ok(Value::Undefined) };
+    let k = vm.to_key(&key)?;
+    vm.get(t, k, &receiver)
+}
+
+fn rules_trap_has(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    let (target, key) = (arg(args, 0), arg(args, 1));
+    let Some(n) = rules_node(vm, &target) else { return Ok(Value::Bool(false)) };
+    if let Some(i) = super::lists::index_of(vm, &key) {
+        return Ok(Value::Bool(i < rules_of(vm, n).len()));
+    }
+    let Value::Obj(t) = target else { return Ok(Value::Bool(false)) };
+    let k = vm.to_key(&key)?;
+    Ok(Value::Bool(vm.has_property(t, k)?))
+}
+
+fn rules_trap_keys(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    let Some(n) = rules_node(vm, &arg(args, 0)) else { return Ok(Value::Obj(vm.new_array(Vec::new()))) };
+    let len = rules_of(vm, n).len();
+    let keys: Vec<Value> = (0..len).map(|i| js(&format!("{i}"))).collect();
+    Ok(Value::Obj(vm.new_array(keys)))
+}
+
+fn rules_trap_descriptor(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    let (target, key) = (arg(args, 0), arg(args, 1));
+    let Some(n) = rules_node(vm, &target) else { return Ok(Value::Undefined) };
+    if let Some(i) = super::lists::index_of(vm, &key)
+        && let Some(r) = rules_of(vm, n).get(i).cloned()
+    {
+        let v = rule_object(vm, &r);
+        let d = vm.new_object();
+        vm.put(d, "value", v, ALL);
+        vm.put(d, "writable", Value::Bool(false), ALL);
+        vm.put(d, "enumerable", Value::Bool(true), ALL);
+        vm.put(d, "configurable", Value::Bool(true), ALL);
+        return Ok(Value::Obj(d));
+    }
+    Ok(Value::Undefined)
+}
+
+fn rules_item(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    let Some(n) = rules_node(vm, this) else { return Err(vm.type_error("Illegal invocation")) };
+    let i = vm.to_uint32(&arg(args, 0))? as usize;
+    let r = rules_of(vm, n).get(i).cloned();
+    Ok(r.map_or(Value::Null, |r| rule_object(vm, &r)))
+}
+
+fn sheet_owner(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    let n = sheet_node(vm, this)?;
+    Ok(wrap(vm, n))
+}
+
+/// A sheet's rules changed: the page's styles worked out again.
+fn rules_changed(vm: &mut Vm) {
+    let h = host(vm);
+    h.rescan = true;
+    h.changed();
+}
+
+fn sheet_insert_rule(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    let n = sheet_node(vm, this)?;
+    let rule = str_arg(vm, args, 0, "insertRule")?;
+    let at = match arg(args, 1) {
+        Value::Undefined => 0,
+        v => vm.to_uint32(&v)? as usize,
+    };
+    if split_rules(&rule).len() != 1 {
+        return Err(dom_exception(vm, "SyntaxError", &format!("Failed to execute 'insertRule' on 'CSSStyleSheet': Failed to parse the rule '{rule}'.")));
+    }
+    let rules = rules_of(vm, n);
+    if at > rules.len() {
+        let len = rules.len();
+        return Err(dom_exception(vm, "IndexSizeError", &format!("Failed to execute 'insertRule' on 'CSSStyleSheet': The index provided ({at}) is larger than the maximum index ({len}).")));
+    }
+    rules.insert(at, rule);
+    rules_changed(vm);
+    Ok(Value::Num(at as f64))
+}
+
+fn sheet_add_rule(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    let n = sheet_node(vm, this)?;
+    let selector = string(vm, &arg(args, 0))?;
+    let block = string(vm, &arg(args, 1))?;
+    let rules = rules_of(vm, n);
+    let at = rules.len();
+    rules.push(format!("{selector} {{ {block} }}"));
+    rules_changed(vm);
+    Ok(Value::Num(at as f64))
+}
+
+fn sheet_delete_rule(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    let n = sheet_node(vm, this)?;
+    let at = vm.to_uint32(&arg(args, 0))? as usize;
+    let len = rules_of(vm, n).len();
+    if at >= len {
+        return Err(dom_exception(vm, "IndexSizeError", &format!("Failed to execute 'deleteRule' on 'CSSStyleSheet': The index provided ({at}) is larger than the maximum index ({}).", len.saturating_sub(1))));
+    }
+    rules_of(vm, n).remove(at);
+    rules_changed(vm);
+    Ok(Value::Undefined)
+}
+
+fn sheet_replace_sync(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    let n = sheet_node(vm, this)?;
+    let text = string(vm, &arg(args, 0))?;
+    let rules = split_rules(&text);
+    *rules_of(vm, n) = rules;
+    rules_changed(vm);
+    Ok(Value::Undefined)
 }
 
 fn fonts(vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
@@ -3306,12 +3568,89 @@ fn walker_move(vm: &mut Vm, this: &Value, forward: bool) -> R {
     Ok(Value::Null)
 }
 
-fn walker_next(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+fn iterator_next(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
     walker_move(vm, this, true)
 }
 
-fn walker_previous(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+fn iterator_previous(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
     walker_move(vm, this, false)
+}
+
+/// A walker moved to a node it takes.
+fn walker_to(vm: &mut Vm, g: Gc, n: NodeId) -> R {
+    let w = wrap(vm, n);
+    vm.put(g, "__current", w.clone(), 0);
+    Ok(w)
+}
+
+/// TreeWalker's nextNode, as the DOM standard has it: on from where it is (into what's inside a node it doesn't
+/// reject, else on to the next node after it), never past its root.
+fn walker_next(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    let (g, root, cur, show, filter) = walker_parts(vm, this)?;
+    let mut node = cur;
+    let mut result = 1;
+    loop {
+        while result != 2
+            && let Some(&first) = doc(vm).children(node).first()
+        {
+            node = first;
+            result = accept(vm, node, show, &filter)?;
+            if result == 1 {
+                return walker_to(vm, g, node);
+            }
+        }
+        let mut temp = Some(node);
+        let mut sibling = None;
+        while let Some(t) = temp {
+            if t == root {
+                return Ok(Value::Null);
+            }
+            sibling = doc(vm).next_sibling(t);
+            if sibling.is_some() {
+                break;
+            }
+            temp = doc(vm).parent(t);
+        }
+        let Some(sib) = sibling else { return Ok(Value::Null) };
+        node = sib;
+        result = accept(vm, node, show, &filter)?;
+        if result == 1 {
+            return walker_to(vm, g, node);
+        }
+    }
+}
+
+/// TreeWalker's previousNode: back from where it is (a sibling before, and the last of what's inside it; else the
+/// parent), never past its root.
+fn walker_previous(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    let (g, root, cur, show, filter) = walker_parts(vm, this)?;
+    let mut node = cur;
+    while node != root {
+        let mut sibling = doc(vm).previous_sibling(node);
+        while let Some(s) = sibling {
+            node = s;
+            let mut result = accept(vm, node, show, &filter)?;
+            while result != 2
+                && let Some(&last) = doc(vm).children(node).last()
+            {
+                node = last;
+                result = accept(vm, node, show, &filter)?;
+            }
+            if result == 1 {
+                return walker_to(vm, g, node);
+            }
+            sibling = doc(vm).previous_sibling(node);
+        }
+        let Some(p) = doc(vm).parent(node) else { return Ok(Value::Null) };
+        if node == root {
+            return Ok(Value::Null);
+        }
+        node = p;
+        if accept(vm, node, show, &filter)? == 1 {
+            return walker_to(vm, g, node);
+        }
+    }
+    Ok(Value::Null)
 }
 
 fn walker_parent(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
@@ -3479,6 +3818,23 @@ fn element_specifics(vm: &mut Vm) {
         method(vm, c, "supports", 1, script_supports);
     }
     // Templates, titles, styles, links, iframes, canvases, media, dialogs, tables.
+    let rl = interface(vm, "CSSRuleList", None, 0, None);
+    method(vm, rl, "item", 1, rules_item);
+    let rh = vm.new_object();
+    method(vm, rh, "get", 3, rules_trap_get);
+    method(vm, rh, "has", 2, rules_trap_has);
+    method(vm, rh, "ownKeys", 1, rules_trap_keys);
+    method(vm, rh, "getOwnPropertyDescriptor", 2, rules_trap_descriptor);
+    host(vm).protos.insert("(rule list handler)", rh);
+    let ss = interface(vm, "CSSStyleSheet", None, 0, None);
+    attribute(vm, ss, "cssRules", sheet_rules, None);
+    attribute(vm, ss, "rules", sheet_rules, None);
+    attribute(vm, ss, "ownerNode", sheet_owner, None);
+    method(vm, ss, "insertRule", 1, sheet_insert_rule);
+    method(vm, ss, "deleteRule", 1, sheet_delete_rule);
+    method(vm, ss, "addRule", 2, sheet_add_rule);
+    method(vm, ss, "removeRule", 1, sheet_delete_rule);
+    method(vm, ss, "replaceSync", 1, sheet_replace_sync);
     let tp = p(vm, "HTMLTemplateElement");
     attribute(vm, tp, "content", template_content, None);
     let tt = p(vm, "HTMLTitleElement");
@@ -4132,34 +4488,7 @@ fn template_content(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
 
 fn sheet(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
     let n = this_element(vm, this)?;
-    let o = vm.new_object();
-    let w = wrap(vm, n);
-    vm.put(o, "ownerNode", w, ALL);
-    let rules = vm.new_array(Vec::new());
-    vm.put(o, "cssRules", Value::Obj(rules), ALL);
-    vm.put(o, "disabled", Value::Bool(false), ALL);
-    method(vm, o, "insertRule", 2, sheet_insert_rule);
-    method(vm, o, "deleteRule", 1, ignore_fn);
-    Ok(Value::Obj(o))
-}
-
-/// sheet.insertRule: the rule added to its <style>'s text (so the page's styles have it).
-fn sheet_insert_rule(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
-    let rule = string(vm, &arg(args, 0))?;
-    if let Value::Obj(o) = this {
-        let owner = get(vm, *o, "ownerNode")?;
-        if let Some(n) = node_of(vm, &owner)
-            && doc(vm).name(n) == "style"
-        {
-            let mut t = doc(vm).text_of(n);
-            t.push('\n');
-            t.push_str(&rule);
-            let tn = host(vm).doc.create(Data::Text(t));
-            replace_all(vm, n, Some(tn));
-            host(vm).rescan = true;
-        }
-    }
-    Ok(Value::Num(0.0))
+    Ok(Value::Obj(sheet_object(vm, n)))
 }
 
 fn dialog_show(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {

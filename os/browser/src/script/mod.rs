@@ -148,8 +148,10 @@ pub struct Host {
     pub title_changed: bool,
     /// Whether the page's load event has been fired.
     pub loaded: bool,
-    /// The custom elements defined: (name, constructor).
+    /// The custom elements defined: (name, constructor); and the attributes each observes (its class's
+    /// observedAttributes, read when it was defined).
     pub custom: Vec<(String, Value)>,
+    pub observed: BTreeMap<String, Vec<String>>,
     /// A form a script sent (form.submit(), or its button's click): (the form, the button).
     pub submit: Option<(NodeId, Option<NodeId>)>,
     /// history.back() and the like: how far to go.
@@ -178,6 +180,9 @@ pub struct Host {
     pub settled: BTreeMap<NodeId, Option<(u32, u32)>>,
     /// Cookies its scripts set (document.cookie = ...: as they wrote them), for the system's cookies.
     pub cookies_set: Vec<String>,
+    /// <style> sheets scripts changed through their rules (insertRule, deleteRule): the text each was read from,
+    /// and its rules now.
+    pub cssom: BTreeMap<NodeId, (String, Vec<String>)>,
 }
 
 /// The private symbols holding objects' inner state (scripts never see these keys).
@@ -230,6 +235,7 @@ impl Host {
             title_changed: false,
             loaded: false,
             custom: Vec::new(),
+            observed: BTreeMap::new(),
             submit: None,
             history_go: None,
             storage_changed: false,
@@ -245,6 +251,7 @@ impl Host {
             images: Vec::new(),
             settled: BTreeMap::new(),
             cookies_set: Vec::new(),
+            cssom: BTreeMap::new(),
         }
     }
 

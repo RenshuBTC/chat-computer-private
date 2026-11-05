@@ -67,6 +67,8 @@ enum Source {
     Inline(String),
     /// A <link rel=stylesheet>'s, or an @import's: the resource.
     Linked(usize),
+    /// A <style> in a shadow tree (its rules for that tree): its text, and the tree's shadow root.
+    Scoped(String, NodeId),
 }
 
 /// When a page's script runs.
@@ -310,18 +312,41 @@ impl Page {
         self.picture_of.clear();
         self.sheets_stale = true;
         self.inputs_stale = true;
-        let nodes: Vec<NodeId> = self.doc.descendants(0).collect();
-        for n in nodes {
+        // The page's nodes in order, and its shadow trees' (each after its host), with the tree each is in.
+        let mut nodes: Vec<(NodeId, Option<NodeId>)> = Vec::new();
+        let mut stack: Vec<(NodeId, Option<NodeId>)> = vec![(0, None)];
+        while let Some((n, tree)) = stack.pop() {
+            nodes.push((n, tree));
+            if let Some(root) = self.doc.shadow_of(n) {
+                for &c in self.doc.children(root).iter().rev() {
+                    stack.push((c, Some(root)));
+                }
+            }
+            for &c in self.doc.children(n).iter().rev() {
+                stack.push((c, tree));
+            }
+        }
+        for (n, tree) in nodes {
             let Some(e) = self.doc.element(n) else { continue };
             match e.name.as_str() {
                 "style" => {
                     let media = e.attr("media").map(String::from);
-                    let css = self.doc.text_of(n);
+                    let mut css = self.doc.text_of(n);
+                    // (Its rules as its scripts changed them, if they did, since its text was last set.)
+                    if let Some(s) = self.script.as_mut()
+                        && let Some((src, rules)) = s.host().cssom.get(&n)
+                        && *src == css
+                    {
+                        css = rules.join("\n");
+                    }
                     let css = match media {
                         Some(m) if !m.trim().is_empty() && !m.trim().eq_ignore_ascii_case("all") => format!("@media {m} {{\n{css}\n}}"),
                         _ => css,
                     };
-                    self.sources.push(Source::Inline(css));
+                    match tree {
+                        Some(root) => self.sources.push(Source::Scoped(css, root)),
+                        None => self.sources.push(Source::Inline(css)),
+                    }
                 }
                 "link" => {
                     let rel = e.attr("rel").unwrap_or("").to_ascii_lowercase();
@@ -595,6 +620,7 @@ impl Page {
         self.ua = Arc::new(if self.doc.quirks { css::sheet(&format!("{UA}\n{QUIRKS}"), view) } else { css::sheet(UA, view) });
         let mut text = String::new();
         let mut author: Vec<Sheet> = Vec::new();
+        let mut scoped: Vec<Sheet> = Vec::new();
         // (Sheets one after another, in one piece where a link's media wrapped it.)
         for s in &self.sources {
             match s {
@@ -603,6 +629,12 @@ impl Page {
                     if let Some(State::Css(css)) = self.resources.get(*r).map(|r| &r.state) {
                         text.push_str(css);
                     }
+                }
+                Source::Scoped(css, root) => {
+                    let mut sheet = css::sheet(css, view);
+                    sheet.scope = Some(*root);
+                    scoped.push(sheet);
+                    continue;
                 }
             }
             text.push('\n');
@@ -614,6 +646,7 @@ impl Page {
         if !text.trim().is_empty() {
             author.push(css::sheet(&text, view));
         }
+        author.extend(scoped);
         self.author = Arc::new(author);
         self.sheets_for = (view.width, view.height);
         self.sheets_stale = false;

@@ -319,7 +319,7 @@ impl Builder<'_> {
         if let Some(s) = self.styles.before.get(&node) {
             self.pseudo(s.clone(), node, parent);
         }
-        for &c in self.doc.children(node) {
+        for c in self.flat_children(node) {
             match &self.doc.nodes[c].data {
                 Data::Text(t) => {
                     let style = self.tree.boxes[parent].style.clone();
@@ -338,6 +338,22 @@ impl Builder<'_> {
 
     fn style_of(&self, node: NodeId) -> Option<Arc<Style>> {
         self.styles.of.get(node).cloned().flatten()
+    }
+
+    /// What's shown inside a node: a shadow host's shadow tree (in place of its own children); in a shadow tree, a
+    /// <slot>'s share of the host's children (those with its name in their slot attribute; for the slot with no
+    /// name, those with none, and the host's text), or its own children if it gets none.
+    fn flat_children(&self, node: NodeId) -> Vec<NodeId> {
+        if let Some(root) = self.doc.shadow_of(node) {
+            return self.doc.children(root).to_vec();
+        }
+        if self.doc.name(node) == "slot" {
+            let given = self.doc.assigned(node);
+            if !given.is_empty() {
+                return given;
+            }
+        }
+        self.doc.children(node).to_vec()
     }
 
     fn pseudo(&mut self, s: Arc<Style>, node: NodeId, parent: BoxId) {

@@ -336,6 +336,9 @@ pub struct Sheet {
     pub rules: Vec<Rule>,
     /// @import's addresses (as written), with whether their media matched.
     pub imports: Vec<String>,
+    /// The shadow root whose tree it styles (a <style> inside one: its rules are for that tree alone, its host
+    /// through :host, and what's put in its slots through ::slotted()); None for the page's.
+    pub scope: Option<usize>,
 }
 
 /// The page's window, for @media: its size in CSS pixels.
@@ -931,6 +934,10 @@ pub enum Pseudo {
     Required,
     Optional,
     PlaceholderShown,
+    /// :host, :host(S): a shadow tree's host (from the tree's own style sheets).
+    Host(Vec<Selector>),
+    /// ::slotted(S): an element the host has that its shadow tree shows in a slot.
+    Slotted(Vec<Selector>),
     /// What never matches here (:hover, :focus, :visited, :active, :target...).
     Never,
 }
@@ -1126,6 +1133,15 @@ fn simple(t: &[Tok], c: &mut Compound, spec: &mut (u32, u32, u32), pe: &mut Opti
                 match name.as_str() {
                     "before" => *pe = Some(PseudoElement::Before),
                     "after" => *pe = Some(PseudoElement::After),
+                    "slotted" => {
+                        // (What's slotted; what the compound before it says of the slot isn't checked.)
+                        let end = block_end(t, 2);
+                        let list = selector_list(&t[3..end.min(t.len())])?;
+                        let best = list.iter().map(|s| s.specificity).max().unwrap_or(0);
+                        spec.1 += (best >> 10) & 1023;
+                        spec.2 += best & 1023;
+                        *c = Compound { pseudos: alloc::vec![Pseudo::Slotted(list)], ..Compound::default() };
+                    }
                     // What isn't drawn here (::placeholder, ::marker, ::selection...): never the element itself.
                     _ => c.pseudos.push(Pseudo::Never),
                 }
@@ -1151,6 +1167,7 @@ fn simple(t: &[Tok], c: &mut Compound, spec: &mut (u32, u32, u32), pe: &mut Opti
                         "required" => Pseudo::Required,
                         "optional" => Pseudo::Optional,
                         "placeholder-shown" => Pseudo::PlaceholderShown,
+                        "host" => Pseudo::Host(Vec::new()),
                         // Old pseudo-elements written with one colon.
                         "before" | "after" => {
                             spec.1 -= 1;
@@ -1201,7 +1218,14 @@ fn simple(t: &[Tok], c: &mut Compound, spec: &mut (u32, u32, u32), pe: &mut Opti
                             let last = f.contains("last");
                             if f.ends_with("of-type") { Pseudo::NthOfType(a, b, last) } else { Pseudo::Nth(a, b, last) }
                         }
-                        "lang" | "dir" | "host" | "host-context" | "state" => {
+                        "host" => {
+                            let list = selector_list(args)?;
+                            let best = list.iter().map(|s| s.specificity).max().unwrap_or(0);
+                            spec.1 += 1 + ((best >> 10) & 1023);
+                            spec.2 += best & 1023;
+                            Pseudo::Host(list)
+                        }
+                        "lang" | "dir" | "host-context" | "state" => {
                             spec.1 += 1;
                             Pseudo::Never
                         }

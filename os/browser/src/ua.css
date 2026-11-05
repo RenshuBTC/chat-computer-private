@@ -5,9 +5,10 @@ html, address, blockquote, body, center, dialog, div, figure, figcaption, footer
 main, p, plaintext, pre, search, xmp, details, summary, article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section,
 dir, dd, dl, dt, menu, ol, ul, fieldset, optgroup, frameset, frame, address { display: block; }
 li { display: list-item; }
-head, link, meta, script, style, title, template, base, datalist, noembed, noframes, param, rp, area, slot,
+head, link, meta, script, style, title, template, base, datalist, noembed, noframes, param, rp, area,
 [hidden], input[type=hidden i], dialog:not([open]), details:not([open]) > :not(summary:first-of-type) { display: none; }
 [hidden=until-found] { display: none; }
+slot { display: contents; }
 
 html { color: CanvasText; }
 body { margin: 8px; }

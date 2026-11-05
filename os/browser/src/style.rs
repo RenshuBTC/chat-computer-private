@@ -480,6 +480,9 @@ struct Entry {
     rule: usize,
     selector: usize,
     order: u32,
+    /// What its selector's subject is: 0 an element of its sheet's tree, 1 a shadow tree's host (:host), 2 an
+    /// element a host has, shown in a slot (::slotted()).
+    subject: u8,
 }
 
 /// The rules, by the last part of each selector (its id, else a class, else its element's name), so an element only
@@ -509,7 +512,12 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
             order += 1;
             for (k, sel) in rule.selectors.iter().enumerate() {
                 let e = entries.len();
-                entries.push(Entry { sheet: si, rule: ri, selector: k, order });
+                let subject = match sel.compounds.last().map(|c| c.pseudos.as_slice()).unwrap_or(&[]) {
+                    p if p.iter().any(|p| matches!(p, Pseudo::Host(_))) => 1,
+                    p if p.iter().any(|p| matches!(p, Pseudo::Slotted(_))) => 2,
+                    _ => 0,
+                };
+                entries.push(Entry { sheet: si, rule: ri, selector: k, order, subject });
                 if sel.pseudo_element.is_some() {
                     index.pseudo.push(e);
                     continue;
@@ -550,13 +558,38 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
         } else {
             parent
         };
-        for &child in c.doc.children(id).iter().rev() {
-            if c.doc.element(child).is_some() {
-                stack.push((child, mine.clone()));
+        // (A shadow host's own children inherit from the slots that show them, not from it; its shadow tree's
+        // elements inherit from it.)
+        let shadow = c.doc.shadow_of(id);
+        if shadow.is_none() {
+            for &child in c.doc.children(id).iter().rev() {
+                if c.doc.element(child).is_some() {
+                    stack.push((child, mine.clone()));
+                }
+            }
+        }
+        if let Some(root) = shadow {
+            for &child in c.doc.children(root).iter().rev() {
+                if c.doc.element(child).is_some() {
+                    stack.push((child, mine.clone()));
+                }
+            }
+        }
+        if c.doc.name(id) == "slot" {
+            for child in c.doc.assigned(id).into_iter().rev() {
+                if c.doc.element(child).is_some() {
+                    stack.push((child, mine.clone()));
+                }
             }
         }
     }
     c.out
+}
+
+/// The shadow root whose tree an element is in (None: the page's own tree, or none).
+fn tree_scope(doc: &Document, id: NodeId) -> Option<NodeId> {
+    let r = doc.root_of(id);
+    if r != 0 && doc.shadow_host(r).is_some() { Some(r) } else { None }
 }
 
 /// Each element's place among its parent's elements, and how many there are.
@@ -624,8 +657,12 @@ impl Cascade<'_> {
         candidates.extend(&self.index.any);
         candidates.sort_unstable();
         candidates.dedup();
+        let tree = tree_scope(self.doc, id);
         for &e in &candidates {
             let entry = &self.entries[e];
+            if !self.applies(entry, id, tree) {
+                continue;
+            }
             let sel = self.selector(entry);
             if matches(self.doc, &self.sibling, id, sel) {
                 let ua = entry.sheet == 0;
@@ -636,7 +673,9 @@ impl Cascade<'_> {
                         (false, true) => 3,
                         (true, true) => 5,
                     };
-                    found.push(((tier, sel.specificity, entry.order), d));
+                    // (A shadow tree's rules for its host give way to the page's.)
+                    let rank = if entry.subject == 1 && !d.important { (tier, 0, 0) } else { (tier, sel.specificity, entry.order) };
+                    found.push((rank, d));
                 }
             }
         }
@@ -658,6 +697,9 @@ impl Cascade<'_> {
             let mut pf: Vec<(Rank, &Decl)> = Vec::new();
             for &e in &pseudo {
                 let entry = &self.entries[e];
+                if !self.applies(entry, id, tree) {
+                    continue;
+                }
                 let sel = self.selector(entry);
                 if sel.pseudo_element == Some(which) && matches(self.doc, &self.sibling, id, sel) {
                     let ua = entry.sheet == 0;
@@ -681,6 +723,23 @@ impl Cascade<'_> {
             s.content = None;
         }
         s
+    }
+
+    /// Whether a rule is for an element at all, by the trees they're in: the browser's own rules are for every
+    /// element; the page's for those in its own tree; a shadow tree's for its own elements, its host (:host), and
+    /// what the host shows in its slots (::slotted()).
+    fn applies(&self, entry: &Entry, id: NodeId, tree: Option<NodeId>) -> bool {
+        if entry.sheet == 0 {
+            return entry.subject == 0;
+        }
+        match self.sheets[entry.sheet].scope {
+            None => tree.is_none() && entry.subject == 0,
+            Some(s) => match entry.subject {
+                0 => tree == Some(s),
+                1 => self.doc.shadow_of(id) == Some(s),
+                _ => self.doc.parent(id).and_then(|p| self.doc.shadow_of(p)) == Some(s),
+            },
+        }
     }
 
     fn apply_pseudo(&self, id: NodeId, parent: &Style, found: &[(Rank, &Decl)]) -> Option<Style> {
@@ -1015,14 +1074,14 @@ fn match_from(doc: &Document, sib: &SiblingInfo, id: NodeId, sel: &Selector, k: 
         return true;
     }
     match sel.combinators.get(k - 1) {
-        Some(Combinator::Child) => doc.parent_element(id).is_some_and(|p| match_from(doc, sib, p, sel, k - 1, depth + 1)),
+        Some(Combinator::Child) => up(doc, id).is_some_and(|p| match_from(doc, sib, p, sel, k - 1, depth + 1)),
         Some(Combinator::Descendant) | None => {
-            let mut at = doc.parent_element(id);
+            let mut at = up(doc, id);
             while let Some(p) = at {
                 if match_from(doc, sib, p, sel, k - 1, depth + 1) {
                     return true;
                 }
-                at = doc.parent_element(p);
+                at = up(doc, p);
             }
             false
         }
@@ -1038,6 +1097,12 @@ fn match_from(doc: &Document, sib: &SiblingInfo, id: NodeId, sel: &Selector, k: 
             false
         }
     }
+}
+
+/// An element's parent element, for selectors: at the top of a shadow tree, its host (which only :host matches,
+/// from the tree's own sheets).
+fn up(doc: &Document, id: NodeId) -> Option<NodeId> {
+    doc.parent_element(id).or_else(|| doc.parent(id).and_then(|p| doc.shadow_host(p)))
 }
 
 fn previous_element(doc: &Document, id: NodeId) -> Option<NodeId> {
@@ -1118,6 +1183,8 @@ fn pseudo(doc: &Document, sib: &SiblingInfo, id: NodeId, p: &Pseudo) -> bool {
             all.iter().filter(|&&s| doc.name(s) == el.name).count() == 1
         }
         Pseudo::Not(list) => !list.iter().any(|s| matches(doc, sib, id, s)),
+        Pseudo::Host(list) => doc.shadow_of(id).is_some() && (list.is_empty() || list.iter().any(|s| matches(doc, sib, id, s))),
+        Pseudo::Slotted(list) => doc.parent(id).is_some_and(|p| doc.shadow_of(p).is_some()) && list.iter().any(|s| matches(doc, sib, id, s)),
         Pseudo::Is(list) => list.iter().any(|s| matches(doc, sib, id, s)),
         Pseudo::Has(list) => {
             // Anything inside it matching (the relative part's combinator aside), at most a few thousand looked at.

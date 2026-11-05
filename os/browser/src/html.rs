@@ -97,6 +97,11 @@ fn read(b: &mut Builder, html: &str) {
                 let old = tag.contains("html 2") || tag.contains("html 3") || tag.contains("html level")
                     || ((tag.contains("transitional") || tag.contains("frameset")) && !tag.contains("http"));
                 b.quirks(!old);
+            } else if !tag.starts_with("<!doctype") && !tag.starts_with("<![cdata[") {
+                // ("<?...>" and the like: a comment of their text, as browsers read them; lit-html marks its
+                // templates' places with them.)
+                let inside = &rest[if rest.starts_with("<?") { 1 } else { 2 }..end.saturating_sub(1).max(1)];
+                b.comment(inside);
             }
             i += end;
             continue;

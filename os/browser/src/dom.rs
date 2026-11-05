@@ -207,6 +207,22 @@ impl Document {
         self.shadows.iter().find(|(h, _)| *h == host).map(|(_, f)| *f)
     }
 
+    /// What a <slot> in a shadow tree shows of its host's children: those with its name in their slot attribute
+    /// (for the slot with no name, those with none, and the host's text). Empty for a slot not in a shadow tree.
+    pub fn assigned(&self, slot: NodeId) -> Vec<NodeId> {
+        let Some(host) = self.shadow_host(self.root_of(slot)) else { return Vec::new() };
+        let name = self.element(slot).and_then(|e| e.attr("name")).unwrap_or("");
+        self.children(host)
+            .iter()
+            .copied()
+            .filter(|&c| match &self.nodes[c].data {
+                Data::Element(e) => e.attr("slot").unwrap_or("") == name,
+                Data::Text(_) => name.is_empty(),
+                _ => false,
+            })
+            .collect()
+    }
+
     /// The node after and before `id` among its parent's children.
     pub fn next_sibling(&self, id: NodeId) -> Option<NodeId> {
         let kids = self.children(self.parent(id)?);

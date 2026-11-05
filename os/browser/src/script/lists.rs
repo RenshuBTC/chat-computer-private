@@ -196,7 +196,7 @@ pub fn controls(d: &crate::dom::Document, form: NodeId) -> Vec<NodeId> {
 }
 
 /// A key as an index, if it's one ("0", "1"...).
-fn index_of(vm: &Vm, k: &Value) -> Option<usize> {
+pub fn index_of(vm: &Vm, k: &Value) -> Option<usize> {
     match k {
         Value::Str(s) => {
             let t = s.to_rust();

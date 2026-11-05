@@ -361,7 +361,9 @@ drivers.
   POST). Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
   (`browser/src/script/`: the document's nodes and elements, events, timers and animation frames, fetch and
   XMLHttpRequest through the kernel's own connections, URL, cookies (the system's, but the HttpOnly ones), storage
-  (localStorage kept from page to page of a site while Chat Computer runs), custom elements, mutation observers): the
+  (localStorage kept from page to page of a site while Chat Computer runs), custom elements and their shadow trees
+  (shown in their hosts, with their own style sheets, :host, slots and ::slotted()), style sheets' rules as
+  CSS-in-JS libraries add them (insertRule), templates and tree walkers as lit-html uses them, mutation observers): the
   page's scripts in their order, its modules (`<script type="module">`, import maps, `import()`) fetched as they're
   imported, its clicks and keys going to them first (and doing nothing more when they cancel them), and what they
   change laid out again (on the spot when a script asks where a box is: offsetWidth, getBoundingClientRect,
@@ -370,7 +372,7 @@ drivers.
   clipped, composited by every operation and blend mode, with shadows; text in the page's fonts; pictures and other
   canvases drawn on them; their pixels read, written and saved as PNG or JPEG), with SVG's vector drawing, and
   shown as pictures, drawn again as their animation frames come. Pictures a script makes (new Image()) are fetched,
-  and their load and error events fired. jQuery, React and Preact pages work. `check.py --site` types an
+  and their load and error events fired. jQuery, React, Preact, Lit and Emotion pages work. `check.py --site` types an
   address, and a stand-in for the site (over TLS 1.3, with a test authority) checks its style sheet, picture and
   cookie, its script (a block it makes, turned another colour by what it fetches, a canvas it draws on, a cookie
   it sets and what it keeps in localStorage, seen again when the page comes back, a timer, its console's lines in

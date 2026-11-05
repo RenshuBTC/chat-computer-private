@@ -421,3 +421,53 @@ fn a_canvas_s_paths_paints_and_pixels() {
         ]
     );
 }
+
+#[test]
+fn a_shadow_tree_is_shown_in_its_host_with_its_own_styles_and_slots() {
+    let mut p = scripted(
+        "<head><style>.t { color: #ff0000 } x-card { display: block }</style></head><body style='margin:0'>\
+         <x-card><span slot=role>Role</span>Bio</x-card><p class=t>page</p><script>\
+         customElements.define('x-card', class extends HTMLElement { constructor() { super();\
+           this.attachShadow({ mode: 'open' }).innerHTML = '<style>:host { background: #0000ff } .t { color: #00ff00 }\
+           .r { color: #00ffff } ::slotted(span) { font-weight: bold }</style>\
+           <div class=t>Title</div><div class=r><slot name=role>none</slot></div><div><slot>no bio</slot></div>'; } });\
+         </script></body>",
+    );
+    p.run(0.0);
+    let l = laid(&mut p);
+    let color_of = |text: &str| {
+        l.items
+            .iter()
+            .find_map(|i| match &i.paint {
+                Paint::Text { text: t, color, .. } if t.contains(text) => Some(*color & 0xFF_FFFF),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{text} isn't drawn"))
+    };
+    // The tree's own rule for .t, not the page's; what's slotted inherits from its slot's parent.
+    assert_eq!([color_of("Title"), color_of("Role"), color_of("Bio"), color_of("page")], [0x00FF00, 0x00FFFF, 0x000000, 0xFF0000]);
+    // :host styles the host.
+    assert!(!rects(l, 0xFF0000FF).is_empty(), "the host's background");
+    assert!(!l.items.iter().any(|i| matches!(&i.paint, Paint::Text { text, .. } if text.contains("none") || text.contains("no bio"))), "slots given something don't show their own");
+}
+
+#[test]
+fn css_in_js_rules_templates_and_tree_walkers() {
+    let mut p = scripted(
+        "<body><p class=a>x</p><script>\
+         var tag = document.createElement('style'); document.head.appendChild(tag);\
+         tag.sheet.insertRule('.a { color: #0000ff }', tag.sheet.cssRules.length);\
+         tag.sheet.insertRule('.b { color: red }', 0); tag.sheet.deleteRule(0);\
+         console.log(tag.sheet.cssRules.length, tag.sheet.cssRules[0].selectorText, document.styleSheets[0] === tag.sheet);\
+         var t = document.createElement('template'); t.innerHTML = '<b><?mark></b><i>i</i>';\
+         var w = document.createTreeWalker(document, 129); w.currentNode = t.content; var seen = [];\
+         var n; while ((n = w.nextNode())) seen.push(n.nodeName + (n.data ? ':' + n.data : ''));\
+         console.log(t.content.childNodes.length, seen.join(' '));\
+         </script></body>",
+    );
+    p.run(0.0);
+    assert_eq!(p.take_console(), ["1 .a true", "2 B #comment:?mark I"]);
+    let l = laid(&mut p);
+    let blue = l.items.iter().any(|i| matches!(&i.paint, Paint::Text { text, color, .. } if text == "x" && color & 0xFF_FFFF == 0x0000FF));
+    assert!(blue, "the rule a script inserted styles the page");
+}

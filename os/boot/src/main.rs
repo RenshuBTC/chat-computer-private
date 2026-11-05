@@ -25,6 +25,23 @@ use uefi::*;
 /// The kernel, put here by build.sh.
 static KERNEL: &[u8] = include_bytes!(env!("CHATCOMPUTER_KERNEL_ELF"));
 
+/// What this program is, for shim (SBAT, https://github.com/rhboot/shim/blob/main/SBAT.md): shim, the small program
+/// Microsoft signs that starts Linux distributions' boot loaders with Secure Boot on, starts only a program that says
+/// what it is and its generation in a section of its own, so that one found to have a flaw can be refused by its
+/// generation without revoking a key. The first line is the format's; the second is Chat Computer's start-up stage,
+/// generation 1. (A PC's firmware ignores it, starting this file itself.)
+/// Not zero, so .data has bytes of its own in the file. Shim refuses a section whose bytes would start inside the
+/// file's headers ("Section 2 is inside image headers"), and with nothing but zeros in it, the linker writes .data
+/// with none, at offset 0. (Named, so the linker keeps it though nothing reads it.)
+#[used]
+#[unsafe(link_section = ".data")]
+static DATA_IN_THE_FILE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(1);
+
+#[used]
+#[unsafe(link_section = ".sbat")]
+static SBAT: [u8; 144] =
+    *b"sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\nchatcomputer,1,Chat Computer,chatcomputer,1,https://chatcomputer.ai\n";
+
 /// The firmware's table, while its services may still be used (null after ExitBootServices).
 static SYSTEM_TABLE: AtomicPtr<SystemTable> = AtomicPtr::new(null_mut());
 

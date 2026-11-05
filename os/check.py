@@ -100,6 +100,12 @@ log go to out/.
                                      checks the firmware refuses the same build unsigned
     ./check.py --signed FILE --cert CER   the same with a file someone else signed (e.g. Windows) and
                                      their certificate
+    ./check.py --shim [--signed FILE --cert CER]   Secure Boot as on a PC from a shop that hasn't approved
+                                     Chat Computer's key, the way Windows' setup starts it there: through shim
+                                     (release/shim: Microsoft signs it), which starts it once its key is in
+                                     MokList: there already; not there (refused); and asked for as setup asks
+                                     (MokNew and MokAuth), approved on MokManager's blue screen with the keys the
+                                     setup's steps say, the virtual PC restarted, and started
 
 Needs qemu-system-x86_64, OVMF (/usr/share/OVMF) and Pillow; for Secure Boot also openssl, sbsign and
 virt-fw-vars (pip install virt-firmware).
@@ -107,14 +113,17 @@ virt-fw-vars (pip install virt-firmware).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -126,6 +135,10 @@ VARS = OVMF / "OVMF_VARS_4M.fd"
 CODE_SECURE = OVMF / "OVMF_CODE_4M.secboot.fd"
 VARS_MICROSOFT = OVMF / "OVMF_VARS_4M.ms.fd"  # Microsoft's keys enrolled, Secure Boot on: like a PC from a shop
 CHATCOMPUTER_KEY_OWNER = "1dd7d236-3557-417b-b0ab-6cf839b24829"  # who added the key, as recorded in db
+SHIM = HERE / "release/shim/shimx64.efi"        # Ubuntu's shim, which Microsoft signs (release/shim/README.md)
+MOKMANAGER = HERE / "release/shim/mmx64.efi"    # its MokManager: the blue screen that approves a key
+SHIM_LOCK = "605dab50-e046-4300-abb6-3dd810dd8b23"  # shim's own GUID: MokList, MokNew and MokAuth are under it
+MOK_PASSWORD = "hello"                           # the one setup asks for (windows/lib/OwnOs.ps1), typed on the blue screen
 # The virtual PCs' processor cores (--cores), unless a check says otherwise.
 CORES = 2
 
@@ -227,14 +240,19 @@ class VirtualPC:
 
     def __init__(self, efi: Path, *, size: str, memory: str, cpu: str, secure_vars: Path | None = None,
                  extra: tuple[str, ...] = (), settings: str | None = None, disk: tuple[Path, str] | None = None,
-                 env: dict[str, str] | None = None):
+                 env: dict[str, str] | None = None, beside: dict[str, Path] | None = None, vars_in_place: bool = False,
+                 reboot: bool = False):
         """`disk`: start from this disk image instead (on an NVMe or SATA drive: "nvme" or "sata"). `env`: more of
-        QEMU's environment (for its audio's SDL, say)."""
+        QEMU's environment (for its audio's SDL, say). `beside`: more files next to it in \\EFI\\BOOT, by name (shim's
+        second stage and MokManager). `vars_in_place`: the firmware's settings kept in `secure_vars` itself, so what one
+        run enrolls the next one has. `reboot`: a restart restarts the virtual PC (else QEMU ends)."""
         self.tmp = tempfile.TemporaryDirectory()
         tmp = Path(self.tmp.name)
         esp = tmp / "esp"
         (esp / "EFI/BOOT").mkdir(parents=True)
         shutil.copy(efi, esp / "EFI/BOOT/BOOTX64.EFI")
+        for name, path in (beside or {}).items():
+            shutil.copy(path, esp / "EFI/BOOT" / name)
         if settings is not None:
             # Where the Windows setup puts it (own-os.ps1).
             (esp / "EFI/chatcomputer-own").mkdir(parents=True)
@@ -245,8 +263,11 @@ class VirtualPC:
             drive = ("-drive", f"if=none,id=d0,format=raw,file={disk[0]}", "-device", "nvme,serial=ccmemory1,drive=d0,bootindex=0")
         else:
             drive = ("-drive", f"if=none,id=d0,format=raw,file={disk[0]}", "-device", "ide-hd,drive=d0,bus=ide.0")
-        vars_fd = tmp / "vars.fd"
-        shutil.copy(secure_vars or VARS, vars_fd)
+        if vars_in_place and secure_vars:
+            vars_fd = secure_vars
+        else:
+            vars_fd = tmp / "vars.fd"
+            shutil.copy(secure_vars or VARS, vars_fd)
         self.mon = tmp / "monitor.sock"
         OUT.mkdir(exist_ok=True)
         self.log = OUT / "serial.log"
@@ -267,7 +288,7 @@ class VirtualPC:
             "-serial", f"file:{self.log}",
             "-monitor", f"unix:{self.mon},server,nowait",
             "-net", "none",
-            "-no-reboot",
+            *(() if reboot else ("-no-reboot",)),
             *(() if "-smp" in extra else ("-smp", str(CORES))),
             *extra,
         ], env={**os.environ, **(env or {})})
@@ -366,8 +387,9 @@ def box_rows(log: str) -> tuple[int, int] | None:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None = None, expect_secure: bool = False) -> list[str]:
-    pc = VirtualPC(efi, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=secure_vars)
+def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None = None, expect_secure: bool = False,
+                 beside: dict[str, Path] | None = None) -> list[str]:
+    pc = VirtualPC(efi, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=secure_vars, beside=beside)
     try:
         got = wait_for(pc.log, ("Chat Computer: ready", "stopped", "couldn't start", "Access Denied"), args.timeout)
         if got != "Chat Computer: ready":
@@ -2248,9 +2270,9 @@ def secure_vars_with(cert: Path, where: Path) -> Path:
     return out
 
 
-def refused(efi: Path, secure_vars: Path, args) -> list[str]:
-    """The firmware must not start `efi` (unsigned, or signed with a key it doesn't trust)."""
-    pc = VirtualPC(efi, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=secure_vars)
+def refused(efi: Path, secure_vars: Path, args, beside: dict[str, Path] | None = None) -> list[str]:
+    """The firmware (or shim) must not start `efi` (unsigned, or signed with a key it doesn't trust)."""
+    pc = VirtualPC(efi, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=secure_vars, beside=beside)
     try:
         got = wait_for(pc.log, ("Chat Computer kernel: started", "Access Denied", "Security Violation"), args.timeout)
     finally:
@@ -2287,6 +2309,116 @@ def signed_by_someone(args) -> list[str]:
         problems = normal_start(Path(args.signed), args, "screen-signed", vars_fd, expect_secure=True)
         problems += refused(BUILT, vars_fd, args)
     return problems
+
+
+def mok_request(cert_der: bytes, password: str = MOK_PASSWORD) -> tuple[bytes, bytes]:
+    """MokNew and MokAuth as Windows' setup (New-OwnMokRequest) and mokutil make them: the certificate in an
+    EFI_SIGNATURE_LIST (X.509, owned by shim's GUID), and the SHA-256 of that followed by the password in UTF-16, which
+    MokManager checks what's typed against."""
+    x509 = uuid.UUID("a5c059a1-94e4-4aa7-87b5-ab155c2bf072").bytes_le
+    owner = uuid.UUID(SHIM_LOCK).bytes_le
+    esl = x509 + struct.pack("<III", 28 + 16 + len(cert_der), 0, 16 + len(cert_der)) + owner + cert_der
+    return esl, hashlib.sha256(esl + password.encode("utf-16-le")).digest()
+
+
+def der_of(cert: Path) -> bytes:
+    data = cert.read_bytes()
+    if b"-----BEGIN" not in data:
+        return data
+    return subprocess.run(["openssl", "x509", "-in", str(cert), "-outform", "DER"], capture_output=True, check=True).stdout
+
+
+def shim_vars(where: Path, name: str, *, enrolled: Path | None = None, request: tuple[bytes, bytes] | None = None) -> Path:
+    """A shop PC's firmware settings (Microsoft's keys, Secure Boot on), with `enrolled` in shim's MokList, or a request
+    to enroll a key waiting for MokManager (MokNew and MokAuth, as Windows' setup writes them)."""
+    out = where / f"vars-{name}.fd"
+    cmd = ["virt-fw-vars", "-i", str(VARS_MICROSOFT), "-o", str(out)]
+    if enrolled:
+        pem = where / "mok.pem"
+        pem.write_bytes(subprocess.run(["openssl", "x509", "-inform", "DER", "-outform", "PEM"], input=der_of(enrolled),
+                                       capture_output=True, check=True).stdout)
+        cmd += ["--add-mok", SHIM_LOCK, str(pem)]
+    if request:
+        doc = where / "mok-request.json"
+        doc.write_text(json.dumps({"version": 2, "variables": [
+            {"name": "MokNew", "guid": SHIM_LOCK, "attr": 7, "data": request[0].hex()},
+            {"name": "MokAuth", "guid": SHIM_LOCK, "attr": 7, "data": request[1].hex()}]}))
+        cmd += ["--set-json", str(doc)]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def enroll_on_the_blue_screen(signed: Path, cert: Path, args) -> list[str]:
+    """Setup's request (MokNew and MokAuth) answered on MokManager's blue screen as its steps say: a key pressed, Enroll
+    MOK, Continue, Yes, the password, Reboot. The virtual PC restarts (its firmware settings kept), and shim must then
+    start Chat Computer, with Secure Boot on."""
+    with tempfile.TemporaryDirectory() as tmp:
+        vars_fd = shim_vars(Path(tmp), "request", request=mok_request(der_of(cert)))
+        pc = VirtualPC(SHIM, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=vars_fd, vars_in_place=True,
+                       reboot=True, beside={"grubx64.efi": signed, "mmx64.efi": MOKMANAGER})
+
+        def keys(*names: str, wait: float = 1.0) -> None:
+            for k in names:
+                monitor(pc.mon, f"sendkey {k}")
+                time.sleep(0.5)
+            time.sleep(wait)
+
+        try:
+            if not wait_for(pc.log, ("Press any key to perform MOK management",), args.timeout):
+                pc.picture("shim-enroll-failed")
+                return ["MokManager's blue screen didn't come up for setup's request"]
+            keys("ret")                       # "Press any key to perform MOK management"
+            keys("down", "ret")               # Perform MOK management: Enroll MOK
+            keys("down", "ret")               # [Enroll MOK]: Continue
+            keys("down", "ret")               # Enroll the key(s)?: Yes
+            keys(*MOK_PASSWORD, "ret", wait=1.5)  # Password
+            pc.picture("shim-enrolled")
+            keys("ret", wait=0)               # Reboot
+            got = wait_for(pc.log, ("Chat Computer: ready", "Verification failed", "stopped", "couldn't start"), args.timeout)
+            time.sleep(1.5)
+            pc.picture("shim-after-enrolling")
+        finally:
+            pc.stop()
+        text = pc.text()
+        enrolled = subprocess.run(["virt-fw-vars", "-i", str(vars_fd), "--output-json", "/dev/stdout"], capture_output=True,
+                                  text=True).stdout
+    problems = []
+    if got != "Chat Computer: ready":
+        problems.append("after its key was approved on the blue screen, shim didn't start it" + (f" ({got!r})" if got else ""))
+    if "Chat Computer kernel: Secure Boot on" not in text:
+        problems.append("the kernel didn't see Secure Boot on, started through shim")
+    if '"MokList"' not in enrolled:
+        problems.append("the approved key isn't in MokList")
+    return problems
+
+
+def through_shim(signed: Path, cert: Path, args) -> list[str]:
+    """Chat Computer started through shim, as Windows' setup starts it on a PC that hasn't approved its key."""
+    beside = {"grubx64.efi": signed, "mmx64.efi": MOKMANAGER}
+    with tempfile.TemporaryDirectory() as tmp:
+        print("Through shim, its key in MokList:")
+        problems = normal_start(SHIM, args, "screen-shim", shim_vars(Path(tmp), "enrolled", enrolled=cert), expect_secure=True,
+                                beside=beside)
+        print("Through shim, its key not approved:")
+        problems += refused(SHIM, shim_vars(Path(tmp), "none"), args, beside=beside)
+    print("Through shim, its key asked for as setup asks, and approved on the blue screen:")
+    return problems + enroll_on_the_blue_screen(signed, cert, args)
+
+
+def shim_check(args) -> list[str]:
+    if args.signed:
+        return through_shim(Path(args.signed), Path(args.cert), args)
+    keys = OUT / "test-key"
+    keys.mkdir(parents=True, exist_ok=True)
+    key, cert = keys / "test.key", keys / "test.crt"
+    if not key.exists():
+        subprocess.run(["openssl", "req", "-new", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "3650",
+                        "-subj", "/CN=Chat Computer test key (not for real PCs)/", "-keyout", str(key), "-out", str(cert)],
+                       check=True, stderr=subprocess.DEVNULL)
+    signed = OUT / "signed-test.efi"
+    subprocess.run(["sbsign", "--key", str(key), "--cert", str(cert), "--output", str(signed), str(BUILT)],
+                   check=True, stderr=subprocess.DEVNULL)
+    return through_shim(signed, cert, args)
 
 
 # The timer's chime (the chime crate's, the main Chat Computer's): its two notes, how long each lasts with the gap
@@ -2706,6 +2838,7 @@ def main() -> int:
     ap.add_argument("--usb", action="store_true", help="USB drives (sticks, a card reader) read as they come and go")
     ap.add_argument("--power", action="store_true", help="the firmware's programs: a battery, an AC adapter, a lid, the power button")
     ap.add_argument("--secure-boot", action="store_true")
+    ap.add_argument("--shim", action="store_true", help="Secure Boot through shim and MokManager, as setup starts it")
     ap.add_argument("--signed", help="a signed BOOTX64.EFI to start with Secure Boot on")
     ap.add_argument("--cert", help="the certificate (PEM or DER) that signed it")
     args = ap.parse_args()
@@ -2748,7 +2881,9 @@ def main() -> int:
         if not BUILT.exists():
             print("Nothing to start: run ./build.sh first.")
             return 2
-        if args.signed:
+        if args.shim:
+            problems = shim_check(args)
+        elif args.signed:
             problems = signed_by_someone(args)
         elif args.secure_boot:
             problems = secure_boot(args)

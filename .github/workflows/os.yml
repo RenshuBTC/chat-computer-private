@@ -17,7 +17,8 @@
 # - windows: signs the release file on real Windows, the way "Chat Computer Own System" does on a PC, and (when the
 #   machine starts in UEFI mode) puts it on the start-up partition and in the power-on menu and takes it off again.
 # - secure-boot-windows: starts the file Windows signed in a virtual PC whose firmware trusts only Microsoft's
-#   keys and that key, with Secure Boot enforced.
+#   keys and that key, with Secure Boot enforced; and through shim (release/shim), with that key in MokList, and
+#   asked for as setup asks and approved on MokManager's blue screen.
 # The pictures of the screen, the kernel's log and what Windows did are kept as the run's artifacts.
 name: Own OS test
 on:
@@ -76,6 +77,8 @@ jobs:
           ./check.py --crash core
       - name: Secure Boot
         run: ./check.py --no-build --secure-boot
+      - name: Secure Boot through shim, as setup starts it on a PC that hasn't approved its key
+        run: ./check.py --no-build --shim
       - name: Sound (a timer's chime, recorded, on QEMU's HD Audio controllers and codecs)
         run: ./check.py --sound
       - name: Keyboards (PS/2; USB on ports and behind a hub, with MSI-X, MSI and no interrupts; IOMMUs)
@@ -145,6 +148,8 @@ jobs:
           mkdir -p out/esp/EFI/BOOT
           cp release/chatcomputer.efi out/esp/EFI/BOOT/BOOTX64.EFI  # the unsigned one, which must be refused
           ./check.py --no-build --signed signed/chatcomputer.efi --cert signed/ChatComputer.cer
+      - name: The same file through shim, its key enrolled as setup asks
+        run: ./check.py --no-build --shim --signed signed/chatcomputer.efi --cert signed/ChatComputer.cer
       - name: Keep the pictures and the log
         if: always()
         uses: actions/upload-artifact@v6

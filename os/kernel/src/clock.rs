@@ -63,6 +63,11 @@ pub fn now() -> Option<i64> {
     CLOCK.lock().as_ref().map(|c| (c.utc_ms + time::uptime_ms() as i64).div_euclid(1000))
 }
 
+/// Milliseconds since 1970 (UTC), if the clock could be read (a page's scripts' Date.now).
+pub fn now_ms() -> Option<i64> {
+    CLOCK.lock().as_ref().map(|c| c.utc_ms + time::uptime_ms() as i64)
+}
+
 /// How far `now` may be off, in seconds.
 pub fn error() -> i64 {
     CLOCK.lock().as_ref().map_or(0, |c| c.error)

@@ -274,7 +274,7 @@ impl Builder<'_> {
                     self.tree.push(Some(c), Arc::new(style.inherit(1.0).with_display(Display::Inline)), Content::Text(t.clone()), Some(parent));
                 }
                 Data::Element(_) => self.element(c, parent),
-                Data::Document => {}
+                Data::Document | Data::Comment(_) | Data::Fragment => {}
             }
         }
         if let Some(s) = self.styles.after.get(&node) {

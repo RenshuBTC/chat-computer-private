@@ -77,6 +77,8 @@ pub struct Laid {
     pub width: f32,
     pub height: f32,
     pub background: Color,
+    /// Each box's place (its border box, device pixels from the page's top left) and its node, for scripts.
+    pub boxes: Vec<(usize, Rect)>,
 }
 
 /// What's known of the page's pictures: the `n`th's size in pixels, once it has come.
@@ -220,7 +222,7 @@ impl<'a> Layout<'a> {
     /// Lays out the whole page in a window `view_w` wide (`view_h` high, for vh and fixed boxes).
     pub fn run(mut self) -> Laid {
         if self.tree.boxes.is_empty() {
-            return Laid { items: Vec::new(), width: self.view_w, height: 0.0, background: values::WHITE };
+            return Laid { items: Vec::new(), width: self.view_w, height: 0.0, background: values::WHITE, boxes: Vec::new() };
         }
         self.metrics(0, self.view_w);
         self.block(0, 0.0, 0.0, self.view_w, Some(self.view_h), None, false);
@@ -235,7 +237,8 @@ impl<'a> Layout<'a> {
         let height = self.extent(0).max(self.view_h);
         let background = self.canvas_background();
         let items = self.paint();
-        Laid { items, width: self.view_w, height, background }
+        let boxes = self.tree.boxes.iter().filter_map(|b| b.node.map(|n| (n, Rect::new(b.x, b.y, b.w, b.h)))).collect();
+        Laid { items, width: self.view_w, height, background, boxes }
     }
 
     /// The page's background: the root's, else the body's (as CSS has the canvas take it).

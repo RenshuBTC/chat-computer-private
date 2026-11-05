@@ -2,9 +2,11 @@
 //! en.wikipedia.org/wiki/Penang") opens the site there, as the website and the app show one, in a rounded frame with
 //! its name and a close button (x) above it, the conversation put away until it's closed. The page is fetched over
 //! Chat Computer's own TCP and TLS 1.3 (web.rs), read and laid out by its own browser engine (os/browser: HTML, CSS,
-//! the layout, no scripts), its style sheets and pictures fetched as it asks for them, a few at a time, and drawn
-//! (browser::paint). It scrolls with the mouse's wheel and the keys; a click follows a link, ticks a box, or puts the
-//! caret in a field to type in; Enter in a field sends its form (GET or POST, with the site's cookies).
+//! the layout, and its scripts run by its own JavaScript engine), its style sheets, pictures and scripts fetched as it
+//! asks for them, a few at a time, and drawn (browser::paint). Its scripts get its clicks and keys first (and can
+//! cancel what they'd do), their timers run as the main loop goes round, and what they fetch is fetched here. It
+//! scrolls with the mouse's wheel and the keys; a click follows a link, ticks a box, or puts the caret in a field to
+//! type in; Enter in a field sends its form (GET or POST, with the site's cookies).
 
 use crate::web::Fetch;
 use crate::{clock, time};
@@ -18,8 +20,11 @@ use browser::{Hit, Request};
 use text::Type;
 use web::Url;
 
-/// The most fetches for a page's style sheets and pictures at once.
+/// The most fetches for a page's style sheets, pictures and scripts at once, and for what its scripts fetch.
 const AT_ONCE: usize = 4;
+const SCRIPT_FETCHES: usize = 6;
+/// The most lines of a page's console logged.
+const CONSOLE_LOGGED: usize = 200;
 /// The most <meta refresh>es followed in a row.
 const MOST_REFRESHES: u32 = 3;
 /// A picture's pixels are kept at most this big (in device pixels, each side), and at most this much memory a page.
@@ -79,6 +84,14 @@ pub struct Site {
     /// The page's size as last laid out (its width and height, in device pixels), and the panel's.
     pub page_h: f32,
     view: (f32, f32),
+    /// When the page came (uptime ms: its scripts' clock starts there), and the screen's scale.
+    started: u64,
+    dpr: f32,
+    /// What its scripts fetch: (the request's number, the fetch).
+    script_fetches: Vec<(u32, Fetch)>,
+    console_logged: usize,
+    /// Whether "has come" has been logged for the page.
+    come_logged: bool,
 }
 
 impl Site {
@@ -94,7 +107,7 @@ impl Site {
     /// any, go to the web from there).
     pub fn local(url: Url, html: &str) -> Site {
         let mut s = Site::blank(url.clone());
-        s.page_came(crate::web::Page { url, kind: String::from("text/html; charset=utf-8"), bytes: html.as_bytes().to_vec(), cut: false }, None);
+        s.page_came(crate::web::Page { url, kind: String::from("text/html; charset=utf-8"), bytes: html.as_bytes().to_vec(), cut: false, status: 200, headers: Vec::new() }, None);
         s
     }
 
@@ -118,6 +131,11 @@ impl Site {
             laid_at: 0,
             page_h: 0.0,
             view: (0.0, 0.0),
+            started: 0,
+            dpr: 1.0,
+            script_fetches: Vec::new(),
+            console_logged: 0,
+            come_logged: false,
         }
     }
 
@@ -179,6 +197,14 @@ impl Site {
         for (_, mut f) in self.fetching.drain(..) {
             f.stop();
         }
+        for (_, mut f) in self.script_fetches.drain(..) {
+            f.stop();
+        }
+    }
+
+    /// The page's clock: ms since it came.
+    fn page_now(&self) -> f64 {
+        time::uptime_ms().saturating_sub(self.started) as f64
     }
 
     /// Moves the page's fetches on (from the main loop): true when something changed that's to be drawn.
@@ -213,7 +239,11 @@ impl Site {
                         changed = true;
                     }
                     (None, Some(u)) => {
-                        let accept = if kind == Kind::Sheet { web::http::ACCEPT_CSS } else { web::http::ACCEPT_PICTURE };
+                        let accept = match kind {
+                            Kind::Sheet => web::http::ACCEPT_CSS,
+                            Kind::Script => web::http::ACCEPT_SCRIPT,
+                            Kind::Picture => web::http::ACCEPT_PICTURE,
+                        };
                         self.fetching.push((i, Fetch::request(u, accept, None, Some(page.url.clone()))));
                     }
                     (None, None) => page.failed(i),
@@ -234,13 +264,76 @@ impl Site {
                         page.sheet_came(i, css);
                     }
                     (Ok(got), Some(Kind::Picture)) => picture_came(page, &mut self.pictures, &mut self.pictures_bytes, i, &got.bytes),
+                    (Ok(got), Some(Kind::Script)) => {
+                        let js = web::page::decode(&got.bytes, &got.kind);
+                        page.script_came(i, js);
+                    }
                     _ => page.failed(i),
+                }
+            }
+            // Its scripts: those that have come run in their turn, their timers, what they fetch.
+            if page.scripting() {
+                let now = time::uptime_ms().saturating_sub(self.started) as f64;
+                if page.run(now) {
+                    changed = true;
+                }
+                for (id, address, method, headers, body) in page.take_requests() {
+                    match Url::parse(&address) {
+                        Ok(u) if self.script_fetches.len() < 64 => {
+                            self.script_fetches.push((id, Fetch::script(u, &method, headers, body, Some(page.url.clone()))));
+                        }
+                        _ => page.answer(id, Err(String::from("this address can't be fetched here"))),
+                    }
+                }
+                let mut k = 0;
+                let mut active = 0;
+                while k < self.script_fetches.len() {
+                    if active >= SCRIPT_FETCHES {
+                        break;
+                    }
+                    active += 1;
+                    let Some(result) = self.script_fetches[k].1.step() else {
+                        k += 1;
+                        continue;
+                    };
+                    let (id, _) = self.script_fetches.remove(k);
+                    let answer = result.map(|got| browser::script::Response {
+                        status: got.status,
+                        status_text: String::new(),
+                        url: format!("{}", got.url),
+                        headers: got.headers.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect(),
+                        body: got.bytes,
+                    });
+                    page.answer(id, answer);
+                    changed = true;
+                }
+                for line in page.take_console() {
+                    if self.console_logged < CONSOLE_LOGGED {
+                        self.console_logged += 1;
+                        let line: String = line.chars().take(300).collect();
+                        log!("Chat Computer kernel: site: console: {line}");
+                    }
+                }
+                if let Some(y) = page.scrolled.take() {
+                    self.scroll = y * page.scale();
+                    changed = true;
+                }
+                if page.go_back {
+                    page.go_back = false;
+                    self.go_back();
+                    return true;
+                }
+                if let Some(r) = page.navigation.take() {
+                    log!("Chat Computer kernel: site: the page's script goes to {}", r.url);
+                    self.go(r, None, true);
+                    return true;
                 }
             }
             if page.changed {
                 self.dirty = true;
             }
-            if self.fetching.is_empty() && page.resources.iter().all(|r| r.asked) && changed {
+            if self.fetching.is_empty() && page.resources.iter().all(|r| r.asked) && changed && !self.come_logged {
+                self.come_logged = true;
                 let sheets = page.resources.iter().filter(|r| r.kind == Kind::Sheet && matches!(r.state, State::Css(_))).count();
                 let pics = page.resources.iter().filter(|r| r.kind == Kind::Picture && matches!(r.state, State::Picture(..))).count();
                 let failed = page.resources.iter().filter(|r| r.state == State::Failed).count();
@@ -275,7 +368,19 @@ impl Site {
                 escape(what)
             )
         };
-        let page = Page::new(got.url.clone(), &html);
+        // (Pages run their scripts; what's shown in a page's place here, a picture or a file, doesn't.)
+        let scripting = kind.contains("html") || kind.is_empty();
+        self.started = time::uptime_ms();
+        self.console_logged = 0;
+        self.come_logged = false;
+        let page = if scripting {
+            let epoch = crate::clock::now_ms().unwrap_or(0) as f64;
+            let dpr = if self.dpr > 0.0 { self.dpr } else { 1.0 };
+            let (w, h) = if self.view.0 > 0.0 { (self.view.0 / dpr, self.view.1 / dpr) } else { (1280.0, 800.0) };
+            Page::with_scripts(got.url.clone(), &html, epoch, (w, h, dpr), crate::random::u64())
+        } else {
+            Page::new(got.url.clone(), &html)
+        };
         log!("Chat Computer kernel: site: read {} ({} bytes{}): {:?}", got.url, got.bytes.len(), if got.cut { ", cut" } else { "" }, page.title());
         // A page that sends itself on at once (<meta http-equiv=refresh>), followed.
         if let Some(to) = page.refresh()
@@ -303,7 +408,11 @@ impl Site {
         self.dirty = false;
         let (x, y, w, h) = area;
         let loading = self.loading();
+        self.dpr = dpr;
+        let page_now = self.page_now();
         let Some(page) = self.page.as_mut() else { return };
+        // (Its scripts' animation frames, before it's drawn.)
+        page.animation_frame(page_now);
         let now = time::uptime_ms();
         let size_changed = self.view != (w as f32, h as f32);
         // (While the page comes, laid out again at most every RELAYOUT_MS.)
@@ -366,14 +475,45 @@ impl Site {
         if to != self.scroll {
             self.scroll = to;
             self.dirty = true;
+            if let Some(p) = self.page.as_mut() {
+                let s = p.scale();
+                p.scrolled_by_user(to / s);
+            }
             return true;
         }
         false
     }
 
+    /// A key with no field to type in: to the page's scripts (on its body). True if they cancelled what it'd do.
+    pub fn page_key(&mut self, p: crate::keyboard::Press) -> bool {
+        let Some(page) = self.page.as_mut() else { return false };
+        if !page.scripting() {
+            return false;
+        }
+        let (key, code) = key_names(p);
+        let ok = page.key(None, &key, &code, true, (p.ctrl, false, p.alt));
+        page.key(None, &key, &code, false, (p.ctrl, false, p.alt));
+        if page.changed {
+            self.dirty = true;
+        }
+        !ok
+    }
+
     /// A click at (x, y) in the page's panel (device pixels from its top left).
     pub fn click(&mut self, x: f32, y: f32) -> Clicked {
         let Some(page) = self.page.as_mut() else { return Clicked::Nothing };
+        // The page's scripts first: a click they cancel does nothing more.
+        if page.scripting() {
+            let node = page.node_at(x, y + self.scroll);
+            let s = page.scale();
+            let proceed = page.click(node, x / s, y / s);
+            if page.changed {
+                self.dirty = true;
+            }
+            if !proceed {
+                return Clicked::Changed;
+            }
+        }
         let hit = page.at(x, y + self.scroll);
         match hit {
             Hit::Link(url, fragment) => {
@@ -398,11 +538,13 @@ impl Site {
             Hit::Field(n) => {
                 self.focus = Some(n);
                 self.caret = page.value(n).len();
+                page.focused(Some(n));
                 self.dirty = true;
                 Clicked::Changed
             }
             Hit::Check(n) => {
                 page.toggle(n);
+                page.typed(n, true);
                 self.dirty = true;
                 Clicked::Changed
             }
@@ -425,7 +567,11 @@ impl Site {
             },
             Hit::Nothing => {
                 if self.focus.take().is_some() {
+                    page.focused(None);
                     self.dirty = true;
+                    return Clicked::Changed;
+                }
+                if page.changed {
                     return Clicked::Changed;
                 }
                 Clicked::Nothing
@@ -439,7 +585,18 @@ impl Site {
         use crate::keyboard::Key;
         let Some(f) = self.focus else { return false };
         let Some(page) = self.page.as_mut() else { return false };
-        let mut value = page.value(f);
+        // (The page's scripts see the key first; one they cancel isn't typed.)
+        if page.scripting() {
+            let (key, code) = key_names(p);
+            let ok = page.key(Some(f), &key, &code, true, (p.ctrl, false, p.alt));
+            page.key(Some(f), &key, &code, false, (p.ctrl, false, p.alt));
+            if !ok {
+                self.dirty = true;
+                return true;
+            }
+        }
+        let before_value = page.value(f);
+        let mut value = before_value.clone();
         let at = self.caret.min(value.len());
         let before = |s: &str, at: usize| s[..at].chars().next_back().map_or(at, |c| at - c.len_utf8());
         let after = |s: &str, at: usize| s[at..].chars().next().map_or(at, |c| at + c.len_utf8());
@@ -485,6 +642,11 @@ impl Site {
             }
             _ => return false,
         }
+        if let Some(page) = self.page.as_mut()
+            && page.value(f) != before_value
+        {
+            page.typed(f, false);
+        }
         self.dirty = true;
         true
     }
@@ -498,6 +660,45 @@ impl Site {
         self.focus.is_some()
     }
 
+}
+
+/// A key's name and code, as a page's scripts see them (KeyboardEvent's key and code).
+fn key_names(p: crate::keyboard::Press) -> (String, String) {
+    use crate::keyboard::Key;
+    match p.key {
+        Key::Char(c) => {
+            let code = if c.is_ascii_alphabetic() {
+                format!("Key{}", c.to_ascii_uppercase())
+            } else if c.is_ascii_digit() {
+                format!("Digit{c}")
+            } else if c == ' ' {
+                String::from("Space")
+            } else {
+                String::new()
+            };
+            (String::from(c), code)
+        }
+        Key::Function(n) => (format!("F{n}"), format!("F{n}")),
+        k => {
+            let name = match k {
+                Key::Enter => "Enter",
+                Key::Backspace => "Backspace",
+                Key::Delete => "Delete",
+                Key::Tab => "Tab",
+                Key::Escape => "Escape",
+                Key::Left => "ArrowLeft",
+                Key::Right => "ArrowRight",
+                Key::Up => "ArrowUp",
+                Key::Down => "ArrowDown",
+                Key::Home => "Home",
+                Key::End => "End",
+                Key::PageUp => "PageUp",
+                Key::PageDown => "PageDown",
+                _ => "",
+            };
+            (String::from(name), String::from(name))
+        }
+    }
 }
 
 /// A picture's bytes came: decoded (at most PICTURE_SIDE a side, while the page's pictures take less than

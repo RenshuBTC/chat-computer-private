@@ -1,12 +1,13 @@
 //! HTML read into a tree as browsers read it (the WHATWG's parsing rules, the parts pages lean on): tags, their
-//! attributes (quoted or not), words with their entities read (&amp;, &#8217;...), comments and the doctype dropped,
+//! attributes (quoted or not), words with their entities read (&amp;, &#8217;...), comments kept, the doctype dropped,
 //! the insides of <script> and <style> taken whole (a "<" there starts no tag), <title> and <textarea> the same but
 //! with entities read. Pages leave much out and browsers fill it in, so this does too: <html>, <head> and <body>
 //! where they're missing (what belongs in the head going there), a <p> closed by a block starting, an <li> by the
 //! next <li>, a cell by the next cell or row, a heading by another; an end tag closes what's open inside it, and one
-//! for nothing open is dropped. Scripts don't run here, so <noscript>'s insides are the page's (as in a browser
-//! with scripting off). Elements nest at most `DEEPEST` deep: deeper ones go in the deepest (nothing here recurses
-//! that deep, and neither does what lays the page out).
+//! for nothing open is dropped. Where scripts run, <noscript>'s insides are text (it isn't shown); where they don't,
+//! they're the page's. A <template>'s insides go in its contents (a fragment), not the page. Elements nest at most
+//! `DEEPEST` deep: deeper ones go in the deepest (nothing here recurses that deep, and neither does what lays the
+//! page out). A fragment (what a script's innerHTML gives) is read the same way, inside the element it's for.
 
 use crate::dom::{Data, Document, Element, NodeId};
 use alloc::string::String;
@@ -40,9 +41,36 @@ fn heading(name: &str) -> bool {
     name.len() == 2 && name.as_bytes()[0] == b'h' && (b'1'..=b'6').contains(&name.as_bytes()[1])
 }
 
-/// A page's HTML, read.
+/// A page's HTML, read (as a browser that runs no scripts reads it).
 pub fn parse(html: &str) -> Document {
+    parse_with(html, false)
+}
+
+/// A page's HTML, read; `scripting` if its scripts will run.
+pub fn parse_with(html: &str, scripting: bool) -> Document {
     let mut b = Builder::new();
+    b.scripting = scripting;
+    read(&mut b, html);
+    b.finish()
+}
+
+/// HTML for inside an element named `context` (innerHTML's): a document whose node 1 is that element, its children
+/// what the HTML makes.
+pub fn parse_fragment(html: &str, context: &str, scripting: bool) -> Document {
+    let mut doc = Document::new();
+    let root = doc.append(0, Data::Element(Element { name: String::from(context), attrs: Vec::new() }));
+    let mut b = Builder { doc, stack: alloc::vec![root, root], html: root, head: Some(root), body: Some(root), after_head: true, scripting, fragment: true };
+    if matches!(context, "script" | "style" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext") || (scripting && context == "noscript") {
+        b.append_text(html);
+    } else if matches!(context, "title" | "textarea") {
+        b.append_text(&web::page::entities(html));
+    } else {
+        read(&mut b, html);
+    }
+    b.doc
+}
+
+fn read(b: &mut Builder, html: &str) {
     let bytes = html.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -54,7 +82,10 @@ pub fn parse(html: &str) -> Document {
         }
         let rest = &html[i..];
         if rest.starts_with("<!--") {
-            i = rest[4..].find("-->").map_or(bytes.len(), |n| i + 4 + n + 3);
+            let end = rest[4..].find("-->");
+            let inside = &rest[4..4 + end.unwrap_or(rest.len() - 4)];
+            b.comment(inside);
+            i = end.map_or(bytes.len(), |n| i + 4 + n + 3);
             continue;
         }
         if rest.starts_with("<!") || rest.starts_with("<?") {
@@ -90,7 +121,7 @@ pub fn parse(html: &str) -> Document {
             b.end(&name);
             continue;
         }
-        let raw = RAW.contains(&name.as_str());
+        let raw = RAW.contains(&name.as_str()) || (b.scripting && name == "noscript");
         let rc = RCDATA.contains(&name.as_str());
         b.start(&name, attrs, self_closing);
         if (raw || rc) && !self_closing {
@@ -112,7 +143,6 @@ pub fn parse(html: &str) -> Document {
             break;
         }
     }
-    b.finish()
 }
 
 /// Where `needle` (ASCII, lower case) first is in `hay`, whatever the case there.
@@ -208,6 +238,10 @@ struct Builder {
     body: Option<NodeId>,
     /// Whether the head is over (something for the body came).
     after_head: bool,
+    /// Whether scripts run (<noscript>'s insides are text then).
+    scripting: bool,
+    /// Reading a fragment: <html>, <head> and <body> tags are nothing.
+    fragment: bool,
 }
 
 impl Builder {
@@ -219,11 +253,23 @@ impl Builder {
     fn new() -> Builder {
         let mut doc = Document::new();
         let html = doc.append(0, Data::Element(Element { name: String::from("html"), attrs: Vec::new() }));
-        Builder { doc, stack: alloc::vec![html], html, head: None, body: None, after_head: false }
+        Builder { doc, stack: alloc::vec![html], html, head: None, body: None, after_head: false, scripting: false, fragment: false }
     }
 
-    fn current(&self) -> NodeId {
+    /// The innermost element open.
+    fn top(&self) -> NodeId {
         self.stack.last().copied().unwrap_or(self.html)
+    }
+
+    /// Where what comes next goes: the innermost element open (a <template>'s contents, for one).
+    fn current(&mut self) -> NodeId {
+        let c = self.stack.last().copied().unwrap_or(self.html);
+        if self.doc.name(c) == "template" { self.doc.template_content(c) } else { c }
+    }
+
+    fn comment(&mut self, t: &str) {
+        let parent = self.current();
+        self.doc.append(parent, Data::Comment(String::from(t)));
     }
 
     fn head(&mut self) -> NodeId {
@@ -265,7 +311,7 @@ impl Builder {
         if t.is_empty() {
             return;
         }
-        if self.in_head_part() && self.current() == self.html {
+        if self.in_head_part() && self.stack.last() == Some(&self.html) {
             // Spaces before the body are nothing; anything else starts it. (The words of the head's elements, a
             // <title>'s or a <style>'s, go in them.)
             let rest = t.trim_start_matches(|c: char| c.is_ascii_whitespace());
@@ -318,6 +364,9 @@ impl Builder {
     }
 
     fn start(&mut self, name: &str, attrs: Vec<(String, String)>, self_closing: bool) {
+        if self.fragment && matches!(name, "html" | "head" | "body") {
+            return;
+        }
         match name {
             "html" => {
                 merge(&mut self.doc, self.html, attrs);
@@ -373,20 +422,20 @@ impl Builder {
                 }
             }
             n if heading(n) => {
-                if heading(self.doc.name(self.current())) {
+                if heading(self.doc.name(self.top())) {
                     let last = self.stack.len() - 1;
                     self.pop_to(last);
                 }
             }
             "option" => {
-                if self.doc.name(self.current()) == "option" {
+                if self.doc.name(self.top()) == "option" {
                     let last = self.stack.len() - 1;
                     self.pop_to(last);
                 }
             }
             "optgroup" => {
                 for _ in 0..2 {
-                    if matches!(self.doc.name(self.current()), "option" | "optgroup") {
+                    if matches!(self.doc.name(self.top()), "option" | "optgroup") {
                         let last = self.stack.len() - 1;
                         self.pop_to(last);
                     }

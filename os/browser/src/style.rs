@@ -562,7 +562,7 @@ pub(crate) struct SiblingInfo {
 }
 
 impl SiblingInfo {
-    fn new(doc: &Document) -> SiblingInfo {
+    pub(crate) fn new(doc: &Document) -> SiblingInfo {
         let mut index = vec![0u32; doc.nodes.len()];
         let mut count = vec![0u32; doc.nodes.len()];
         for n in &doc.nodes {
@@ -1126,7 +1126,7 @@ fn pseudo(doc: &Document, sib: &SiblingInfo, id: NodeId, p: &Pseudo) -> bool {
         Pseudo::Empty => doc.children(id).iter().all(|&k| match &doc.nodes[k].data {
             Data::Element(_) => false,
             Data::Text(t) => t.is_empty(),
-            Data::Document => true,
+            Data::Document | Data::Comment(_) | Data::Fragment => true,
         }),
         Pseudo::Link => matches!(el.name.as_str(), "a" | "area") && el.has_attr("href"),
         Pseudo::Checked => (el.name == "input" && el.has_attr("checked")) || (el.name == "option" && el.has_attr("selected")),

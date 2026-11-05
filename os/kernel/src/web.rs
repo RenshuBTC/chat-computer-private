@@ -66,6 +66,9 @@ pub struct Page {
     pub kind: String,
     pub bytes: Vec<u8>,
     pub cut: bool,
+    /// Its status (200...) and headers (for a page's scripts).
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
 }
 
 enum Phase {
@@ -97,6 +100,10 @@ pub struct Fetch {
     accept: &'static str,
     form: Option<Vec<u8>>,
     referer: Option<Url>,
+    /// A page's script's request: its method and headers, and an answer of any status taken as it is (not an error).
+    method: Option<String>,
+    headers: Vec<(String, String)>,
+    raw: bool,
 }
 
 impl Fetch {
@@ -108,7 +115,17 @@ impl Fetch {
     /// A page, a style sheet or a picture (`accept` says which), for a site shown on the screen: a form's fields
     /// sent with it (POST) when `form` has them, and the page it's asked from.
     pub fn request(url: Url, accept: &'static str, form: Option<Vec<u8>>, referer: Option<Url>) -> Fetch {
-        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, accept, form, referer }
+        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, accept, form, referer, method: None, headers: Vec::new(), raw: false }
+    }
+
+    /// What a page's script fetches (fetch, XMLHttpRequest): its method, headers and body as it says, and an answer
+    /// of any status given back as it is.
+    pub fn script(url: Url, method: &str, headers: Vec<(String, String)>, body: Option<Vec<u8>>, referer: Option<Url>) -> Fetch {
+        let mut f = Fetch::request(url, web::http::ACCEPT_SCRIPT, body, referer);
+        f.method = Some(String::from(method));
+        f.headers = headers;
+        f.raw = true;
+        f
     }
 
     /// The site being fetched from now (after any redirects).
@@ -146,6 +163,9 @@ impl Fetch {
                 crate::log!("Chat Computer kernel: web: sent on to {}", to.host);
                 if !matches!(status, 307 | 308) {
                     self.form = None;
+                    if self.method.is_some() {
+                        self.method = Some(String::from("GET"));
+                    }
                 }
                 self.url = to;
                 self.phase = Phase::Network(now);
@@ -205,8 +225,16 @@ impl Fetch {
                             tls.allow_clock_error(clock::error());
                             let out = tls.outgoing();
                             let cookies = COOKIES.lock().as_ref().and_then(|j| j.header(&self.url, clock::now()));
-                            let request =
-                                web::http::request(&self.url, self.accept, cookies.as_deref(), self.form.as_deref(), self.referer.as_ref());
+                            let method = self.method.clone().unwrap_or_else(|| String::from(if self.form.is_some() { "POST" } else { "GET" }));
+                            let request = web::http::request_with(
+                                &self.url,
+                                &method,
+                                self.accept,
+                                cookies.as_deref(),
+                                &self.headers,
+                                self.form.as_deref(),
+                                self.referer.as_ref(),
+                            );
                             self.phase = Phase::Talking(Box::new(Talk {
                                 socket: s,
                                 tls,
@@ -229,7 +257,7 @@ impl Fetch {
                         _ => return None,
                     }
                 }
-                Phase::Talking(t) => return talk(now, stack, t, &self.url),
+                Phase::Talking(t) => return talk(now, stack, t, &self.url, self.raw),
             }
         }
     }
@@ -247,7 +275,7 @@ fn connect(now: u64, stack: &mut Stack, ip: Ipv4, port: u16, host: &str) -> Resu
 }
 
 /// The connection is open: TLS's set-up, the request, and the response. Some when it's over.
-fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url) -> Option<Result<Got, String>> {
+fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, raw: bool) -> Option<Result<Got, String>> {
     let mut buf = vec![0u8; 16 * 1024];
     loop {
         let n = stack.recv(t.socket, &mut buf);
@@ -284,7 +312,7 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url) -> Option<Result<G
     }
     if t.response.done() {
         stack.release(t.socket);
-        return Some(answered(&t.response, url));
+        return Some(answered(&t.response, url, raw));
     }
     t.out.extend(t.tls.outgoing());
     if !t.out.is_empty() {
@@ -304,7 +332,7 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url) -> Option<Result<G
 }
 
 /// What a whole response comes to: a redirect, the page, or why there's none.
-fn answered(r: &Response, url: &Url) -> Result<Got, String> {
+fn answered(r: &Response, url: &Url, raw: bool) -> Result<Got, String> {
     let status = r.status().unwrap_or(0);
     // The cookies it set, kept for the next request to it.
     let mut set = r.headers_named("set-cookie").peekable();
@@ -325,7 +353,7 @@ fn answered(r: &Response, url: &Url) -> Result<Got, String> {
             .map(|u| Got::Redirect(u, status))
             .map_err(|why| format!("{} sent it on to an address that can't be read: {why}", url.host));
     }
-    if status >= 400 {
+    if status >= 400 && !raw {
         return Err(match status {
             401 | 403 => format!("{} refused to show it ({status}: it's private, or the site turns away programs)", url.host),
             404 | 410 => format!("{} says there's no such page ({status})", url.host),
@@ -336,7 +364,7 @@ fn answered(r: &Response, url: &Url) -> Result<Got, String> {
     }
     let bytes = r.page().map_err(String::from)?;
     let kind = String::from(r.header("content-type").unwrap_or(""));
-    Ok(Got::Page(Page { url: url.clone(), kind, bytes, cut: r.cut() }))
+    Ok(Got::Page(Page { url: url.clone(), kind, bytes, cut: r.cut(), status, headers: r.headers().to_vec() }))
 }
 
 /// A failed secure connection, in words.

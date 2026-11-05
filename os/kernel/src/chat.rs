@@ -2151,6 +2151,11 @@ impl Chat {
             self.dirty = self.dirty.union(&frame);
             return true;
         }
+        // (The page's scripts see it; one they cancel goes no further.)
+        if s.focus.is_none() && !matches!(p.key, Key::Escape) && !(matches!(p.key, Key::Left) && p.alt) && s.page_key(p) {
+            self.dirty = self.dirty.union(&frame);
+            return true;
+        }
         let line = 3.0 * self.m.line as f32;
         let screen = (page.h as f32 * 0.85).max(line);
         let moved = match p.key {

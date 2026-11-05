@@ -1419,7 +1419,22 @@ SITE_HOME = """<!doctype html><html><head><title>Example Site</title>
 <p><img src="/sun.png" alt="The sun" width="96" height="64" class="pic"> A paragraph beside a floated picture, long
 enough to wrap round it on a few lines in the middle of the screen, as a browser lays it out.</p>
 <form action="/search"><input name="q" autofocus placeholder="Search"> <button>Search</button></form>
-<p class="note">The end of the page.</p></body></html>"""
+<p class="note">The end of the page.</p><script src="/app.js"></script></body></html>"""
+# Its script: a block it makes (purple), then (once a fetch of the stand-in's JSON has come) turns teal, a timer, and
+# the console's lines.
+SITE_JS = """document.addEventListener('DOMContentLoaded', function () {
+  var d = document.createElement('div');
+  d.id = 'made';
+  d.style.cssText = 'height: 80px; margin: 10px; background: #c040c0';
+  d.textContent = 'Made by a script';
+  document.body.insertBefore(d, document.querySelector('.row'));
+  console.log('made ' + document.querySelectorAll('.cell').length + ' cells later');
+  fetch('/data.json').then(function (r) { return r.json(); }).then(function (j) {
+    console.log('fetched ' + j.word);
+    document.getElementById('made').style.background = '#40c0c0';
+  });
+  setTimeout(function () { console.log('timer fired'); }, 200);
+});"""
 SITE_CSS = """body { margin: 0; background: #fff4e0; font-family: serif; }
 #next { display: block; height: 200px; line-height: 200px; padding-left: 20px; background: #2050c0; color: #fff; }
 .row { display: flex; gap: 10px; padding: 10px; }
@@ -1465,6 +1480,10 @@ def site_check(args) -> list[str]:
                 body, more = SITE_HOME.encode(), [("Set-Cookie", "seen=1; Path=/; Secure; HttpOnly")]
             elif url.path == "/style.css":
                 kind, body = "text/css", SITE_CSS.encode()
+            elif url.path == "/app.js":
+                kind, body = "text/javascript", SITE_JS.encode()
+            elif url.path == "/data.json":
+                kind, body = "application/json", b'{"word": "hello"}'
             elif url.path == "/sun.png":
                 kind, body = "image/png", sun.getvalue()
             elif url.path == "/second":
@@ -1565,7 +1584,8 @@ def site_check(args) -> list[str]:
             for name, colour, n in (("the page's background", (0xFF, 0xF4, 0xE0), 50000),
                                     ("the link's background", (0x20, 0x50, 0xC0), 20000),
                                     ("the flex row's cells", (0x20, 0xA0, 0x40), 6000),
-                                    ("the picture", (230, 30, 30), 4000)):
+                                    ("the picture", (230, 30, 30), 4000),
+                                    ("the block the page's script made (teal once its fetch came)", (0x40, 0xC0, 0xC0), 20000)):
                 if not area_has(home, colour, n):
                     problems.append(f"{name} isn't on the screen (at least {n} pixels of {colour})")
         if pictures.get("results") is not None and not area_has(pictures["results"], (0xF0, 0xE0, 0xFF), 50000):
@@ -1586,8 +1606,11 @@ def site_check(args) -> list[str]:
             problems.append("the picture wasn't asked for")
         if not [a for a in asked if a["path"] == "/second"]:
             problems.append("the link wasn't followed")
+        if not [a for a in asked if a["path"] == "/data.json"]:
+            problems.append("the page's script's fetch didn't reach the site")
         for note in ("site: opening https://www.example.com/", "1 style sheets, 1 pictures (0 couldn't be had)",
-                     "site: form sent to https://www.example.com/search?q=sunny+day (GET)", "Opened www.example.com"):
+                     "site: form sent to https://www.example.com/search?q=sunny+day (GET)", "Opened www.example.com",
+                     "site: console: made 3 cells later", "site: console: fetched hello", "site: console: timer fired"):
             if note not in text:
                 problems.append(f"the log doesn't say {note!r}")
     finally:

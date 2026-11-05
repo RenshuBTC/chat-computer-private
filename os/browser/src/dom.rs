@@ -1,6 +1,6 @@
-//! A page's elements and words as a tree (the DOM, without anything a script would use): the document at the root,
-//! then its elements, each with its attributes, and the words between them. Nodes are kept in one list and refer to
-//! each other by their place in it.
+//! A page's elements and words as a tree (the DOM): the document at the root, then its elements, each with its
+//! attributes, and the words and comments between them. Nodes are kept in one list and refer to each other by their
+//! place in it; a node taken out of the tree (by a script) stays in the list, with no parent, and can be put back.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -12,6 +12,12 @@ pub struct Document {
     pub nodes: Vec<Node>,
     /// The page is in quirks mode (no doctype, or an old one): laid out as browsers lay out pages made before CSS.
     pub quirks: bool,
+    /// Each <template>'s contents: (the element, the fragment its insides are in).
+    pub templates: Vec<(NodeId, NodeId)>,
+    /// Counts the tree's changes (what's worked out from the tree is kept while it stays the same).
+    pub version: u64,
+    /// Shadow roots: (their host element, the fragment holding the shadow tree).
+    pub shadows: Vec<(NodeId, NodeId)>,
 }
 
 pub struct Node {
@@ -24,6 +30,9 @@ pub enum Data {
     Document,
     Element(Element),
     Text(String),
+    Comment(String),
+    /// A document fragment (a script's, or a <template>'s contents): its children are what it holds.
+    Fragment,
 }
 
 pub struct Element {
@@ -69,7 +78,7 @@ impl Element {
 
 impl Document {
     pub fn new() -> Document {
-        Document { nodes: alloc::vec![Node { parent: None, children: Vec::new(), data: Data::Document }], quirks: true }
+        Document { nodes: alloc::vec![Node { parent: None, children: Vec::new(), data: Data::Document }], quirks: true, templates: Vec::new(), version: 0, shadows: Vec::new() }
     }
 
     pub fn element(&self, id: NodeId) -> Option<&Element> {
@@ -114,6 +123,232 @@ impl Document {
         id
     }
 
+    /// A new node, in no tree yet.
+    pub fn create(&mut self, data: Data) -> NodeId {
+        let id = self.nodes.len();
+        self.nodes.push(Node { parent: None, children: Vec::new(), data });
+        id
+    }
+
+    /// Takes a node out of its parent's children (it keeps its own).
+    pub fn detach(&mut self, id: NodeId) {
+        if let Some(p) = self.nodes.get(id).and_then(|n| n.parent) {
+            if let Some(pn) = self.nodes.get_mut(p) {
+                pn.children.retain(|&c| c != id);
+            }
+            self.nodes[id].parent = None;
+            self.version += 1;
+        }
+    }
+
+    /// Puts `child` in `parent`'s children, before `before` (at the end if that's None or isn't a child), taking it
+    /// out of where it was first.
+    pub fn insert(&mut self, parent: NodeId, child: NodeId, before: Option<NodeId>) {
+        if child >= self.nodes.len() || parent >= self.nodes.len() {
+            return;
+        }
+        self.detach(child);
+        let kids = &mut self.nodes[parent].children;
+        let at = before.and_then(|b| kids.iter().position(|&c| c == b)).unwrap_or(kids.len());
+        kids.insert(at, child);
+        self.nodes[child].parent = Some(parent);
+        self.version += 1;
+    }
+
+    /// Whether `a` is `b` or has it inside.
+    pub fn contains(&self, a: NodeId, b: NodeId) -> bool {
+        let mut at = Some(b);
+        let mut steps = 0;
+        while let Some(n) = at {
+            if n == a {
+                return true;
+            }
+            steps += 1;
+            if steps > 100_000 {
+                return false;
+            }
+            at = self.parent(n);
+        }
+        false
+    }
+
+    /// The outermost node `id` is in (the document, if it's in the page).
+    pub fn root_of(&self, id: NodeId) -> NodeId {
+        let mut at = id;
+        while let Some(p) = self.parent(at) {
+            at = p;
+        }
+        at
+    }
+
+    /// Whether the node is in the page (its root the document, or a shadow root whose host is in the page).
+    pub fn connected(&self, id: NodeId) -> bool {
+        let mut at = id;
+        for _ in 0..64 {
+            let r = self.root_of(at);
+            if r == 0 {
+                return true;
+            }
+            match self.shadows.iter().find(|(_, f)| *f == r) {
+                Some((h, _)) => at = *h,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// A shadow root's host.
+    pub fn shadow_host(&self, root: NodeId) -> Option<NodeId> {
+        self.shadows.iter().find(|(_, f)| *f == root).map(|(h, _)| *h)
+    }
+
+    /// An element's shadow root.
+    pub fn shadow_of(&self, host: NodeId) -> Option<NodeId> {
+        self.shadows.iter().find(|(h, _)| *h == host).map(|(_, f)| *f)
+    }
+
+    /// The node after and before `id` among its parent's children.
+    pub fn next_sibling(&self, id: NodeId) -> Option<NodeId> {
+        let kids = self.children(self.parent(id)?);
+        let at = kids.iter().position(|&c| c == id)?;
+        kids.get(at + 1).copied()
+    }
+
+    pub fn previous_sibling(&self, id: NodeId) -> Option<NodeId> {
+        let kids = self.children(self.parent(id)?);
+        let at = kids.iter().position(|&c| c == id)?;
+        if at == 0 { None } else { kids.get(at - 1).copied() }
+    }
+
+    /// A <template>'s contents (a fragment), made if it has none yet.
+    pub fn template_content(&mut self, id: NodeId) -> NodeId {
+        if let Some(&(_, f)) = self.templates.iter().find(|(t, _)| *t == id) {
+            return f;
+        }
+        let f = self.create(Data::Fragment);
+        self.templates.push((id, f));
+        f
+    }
+
+    /// A copy of a node (and of what's inside it, if `deep`), in no tree yet.
+    pub fn clone_node(&mut self, id: NodeId, deep: bool) -> NodeId {
+        let data = match &self.nodes[id].data {
+            Data::Document | Data::Fragment => Data::Fragment,
+            Data::Element(e) => Data::Element(Element { name: e.name.clone(), attrs: e.attrs.clone() }),
+            Data::Text(t) => Data::Text(t.clone()),
+            Data::Comment(t) => Data::Comment(t.clone()),
+        };
+        let copy = self.create(data);
+        if deep {
+            // (Without recursion: (original, its copy) pairs to do.)
+            let mut work = alloc::vec![(id, copy)];
+            while let Some((from, to)) = work.pop() {
+                let kids: Vec<NodeId> = self.children(from).to_vec();
+                for k in kids {
+                    let c = self.clone_node(k, false);
+                    self.nodes[c].parent = Some(to);
+                    self.nodes[to].children.push(c);
+                    work.push((k, c));
+                }
+                if self.name(from) == "template"
+                    && let Some(&(_, f)) = self.templates.iter().find(|(t, _)| *t == from)
+                {
+                    let fc = self.clone_node(f, true);
+                    self.templates.push((to, fc));
+                }
+            }
+        }
+        copy
+    }
+
+    /// The node's text (a text node's or a comment's words), if it has any of its own.
+    pub fn data_of(&self, id: NodeId) -> Option<&str> {
+        match &self.nodes.get(id)?.data {
+            Data::Text(t) | Data::Comment(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// The node as HTML (an element with what's inside it, as `outerHTML` gives it).
+    pub fn outer_html(&self, id: NodeId) -> String {
+        let mut out = String::new();
+        self.serialize(id, &mut out, true);
+        out
+    }
+
+    /// What's inside the node, as HTML (`innerHTML`).
+    pub fn inner_html(&self, id: NodeId) -> String {
+        let mut out = String::new();
+        self.serialize(id, &mut out, false);
+        out
+    }
+
+    fn serialize(&self, id: NodeId, out: &mut String, with_self: bool) {
+        // (Without recursion: what's left to write, a node to open or an end tag to close.)
+        enum Step {
+            Open(NodeId),
+            Close(NodeId),
+        }
+        let mut work: Vec<Step> = Vec::new();
+        if with_self {
+            work.push(Step::Open(id));
+        } else {
+            let start = if self.name(id) == "template" { self.templates.iter().find(|(t, _)| *t == id).map_or(id, |x| x.1) } else { id };
+            for &k in self.children(start).iter().rev() {
+                work.push(Step::Open(k));
+            }
+        }
+        while let Some(step) = work.pop() {
+            match step {
+                Step::Close(n) => {
+                    out.push_str("</");
+                    out.push_str(self.name(n));
+                    out.push('>');
+                }
+                Step::Open(n) => match &self.nodes[n].data {
+                    Data::Text(t) => {
+                        let raw = self.parent(n).is_some_and(|p| matches!(self.name(p), "script" | "style" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext" | "noscript"));
+                        if raw {
+                            out.push_str(t);
+                        } else {
+                            escape_into(out, t, false);
+                        }
+                    }
+                    Data::Comment(t) => {
+                        out.push_str("<!--");
+                        out.push_str(t);
+                        out.push_str("-->");
+                    }
+                    Data::Document | Data::Fragment => {
+                        for &k in self.children(n).iter().rev() {
+                            work.push(Step::Open(k));
+                        }
+                    }
+                    Data::Element(e) => {
+                        out.push('<');
+                        out.push_str(&e.name);
+                        for (k, v) in &e.attrs {
+                            out.push(' ');
+                            out.push_str(k);
+                            out.push_str("=\"");
+                            escape_into(out, v, true);
+                            out.push('"');
+                        }
+                        out.push('>');
+                        if VOID_ELEMENTS.contains(&e.name.as_str()) {
+                            continue;
+                        }
+                        work.push(Step::Close(n));
+                        let inside = if e.name == "template" { self.templates.iter().find(|(t, _)| *t == n).map_or(n, |x| x.1) } else { n };
+                        for &k in self.children(inside).iter().rev() {
+                            work.push(Step::Open(k));
+                        }
+                    }
+                },
+            }
+        }
+    }
+
     /// The first element named `name`, in the order they come.
     pub fn find(&self, name: &str) -> Option<NodeId> {
         self.descendants(0).find(|&id| self.name(id) == name)
@@ -153,6 +388,24 @@ impl Document {
             at = self.parent(n);
         }
         None
+    }
+}
+
+/// Elements with no insides and no end tag.
+pub const VOID_ELEMENTS: [&str; 15] =
+    ["area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "meta", "param", "source", "track", "wbr"];
+
+/// Text written as HTML: & < > (and " in an attribute's value) as entities, and the no-break space.
+fn escape_into(out: &mut String, t: &str, attr: bool) {
+    for c in t.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '\u{a0}' => out.push_str("&nbsp;"),
+            '"' if attr => out.push_str("&quot;"),
+            '<' if !attr => out.push_str("&lt;"),
+            '>' if !attr => out.push_str("&gt;"),
+            c => out.push(c),
+        }
     }
 }
 

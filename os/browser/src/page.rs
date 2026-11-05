@@ -1,14 +1,17 @@
-//! A page as Chat Computer's own system shows it: its address and HTML read, the style sheets and pictures it asks
-//! for (the kernel fetches them and hands them in as they come), laid out for the panel's width and ready to draw;
-//! where a click lands (a link, a field, a button), what's typed into its fields, and its forms sent (the address,
-//! and for a POST its body).
+//! A page as Chat Computer's own system shows it: its address and HTML read, the style sheets, pictures and scripts
+//! it asks for (the kernel fetches them and hands them in as they come), laid out for the panel's width and ready to
+//! draw; its scripts run in their order (script/: the page's own JavaScript engine), with its events (the click, the
+//! typing, the page loading), its timers, and what its scripts ask of the network; where a click lands (a link, a
+//! field, a button), what's typed into its fields, and its forms sent (the address, and for a POST its body).
 
 use crate::boxes::{Pictures, Tree};
 use crate::css::{self, Sheet, Viewport};
 use crate::dom::{Data, Document, NodeId};
 use crate::html;
 use crate::layout::{Item, Laid, Layout, Paint, Rect, Sizes};
+use crate::script::{EventInit, Script};
 use crate::style::{self, Sheets, Styles};
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -28,6 +31,7 @@ const MOST_PICTURES: usize = 400;
 pub enum Kind {
     Sheet,
     Picture,
+    Script,
 }
 
 /// Something the page asks for.
@@ -49,6 +53,8 @@ pub enum State {
     Css(String),
     /// A picture's size in pixels (the kernel keeps its pixels).
     Picture(u32, u32),
+    /// A script's text (taken when it runs).
+    Script(String),
     Failed,
 }
 
@@ -57,6 +63,27 @@ enum Source {
     Inline(String),
     /// A <link rel=stylesheet>'s, or an @import's: the resource.
     Linked(usize),
+}
+
+/// When a page's script runs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum When {
+    /// In the page's order, before the page is read (a plain <script>).
+    InOrder,
+    /// In the page's order, once the page is read (defer).
+    Deferred,
+    /// As soon as it has come (async, and those scripts put in the page).
+    Soon,
+}
+
+/// One of the page's scripts.
+struct PageScript {
+    node: NodeId,
+    /// Its text, for one in the page; its resource, for one with an address.
+    text: Option<String>,
+    resource: Option<usize>,
+    when: When,
+    done: bool,
 }
 
 /// What a click lands on.
@@ -102,6 +129,21 @@ pub struct Page {
     pub changed: bool,
     ua: Sheet,
     ua_for: f32,
+    /// The page's scripting (None where its scripts don't run), and its scripts in the page's order.
+    script: Option<Box<Script>>,
+    scripts: Vec<PageScript>,
+    /// Imported style sheets: (the sheet, a sheet it imports), in order.
+    imports_of: Vec<(usize, usize)>,
+    /// DOMContentLoaded and load have been fired.
+    dom_loaded: bool,
+    load_fired: bool,
+    /// Where a script sends the browser (a link it followed, a form it sent), and whether it asked to go back.
+    pub navigation: Option<Request>,
+    pub go_back: bool,
+    /// Where a script scrolled the page to (CSS pixels down), for the system to scroll.
+    pub scrolled: Option<f32>,
+    /// The page's scale (device pixels to a CSS pixel), as last laid out.
+    dpr: f32,
 }
 
 /// The pictures' sizes, for the layout.
@@ -128,9 +170,20 @@ impl Pictures for Picker<'_> {
 }
 
 impl Page {
-    /// A page from its address and HTML (already decoded to text).
+    /// A page from its address and HTML (already decoded to text), its scripts not run.
     pub fn new(url: Url, html_text: &str) -> Page {
-        let doc = html::parse(html_text);
+        Page::make(url, html_text, false, 0.0, (1024.0, 768.0, 1.0))
+    }
+
+    /// A page whose scripts run: its clock starting at `epoch` (ms since 1970), its view `view` (CSS pixels wide
+    /// and high, device pixels to one). `seed`: the system's random numbers, for crypto.getRandomValues.
+    pub fn with_scripts(url: Url, html_text: &str, epoch: f64, view: (f32, f32, f32), seed: u64) -> Page {
+        crate::script::seed(seed);
+        Page::make(url, html_text, true, epoch, view)
+    }
+
+    fn make(url: Url, html_text: &str, scripting: bool, epoch: f64, view: (f32, f32, f32)) -> Page {
+        let doc = html::parse_with(html_text, scripting);
         let mut p = Page {
             url,
             doc,
@@ -143,14 +196,29 @@ impl Page {
             changed: true,
             ua: Sheet::default(),
             ua_for: -1.0,
+            script: None,
+            scripts: Vec::new(),
+            imports_of: Vec::new(),
+            dom_loaded: false,
+            load_fired: false,
+            navigation: None,
+            go_back: false,
+            scrolled: None,
+            dpr: view.2,
         };
+        if scripting {
+            p.script = Some(Box::new(Script::new(&p.url.to_string(), epoch, view)));
+        }
         // <base href> changes where its links go.
         if let Some(b) = p.doc.find("base").and_then(|b| p.doc.element(b)).and_then(|e| e.attr("href")).map(String::from)
             && let Ok(u) = p.url.join(&b)
         {
             p.url = u;
         }
-        p.find_resources();
+        p.scan();
+        if p.script.is_some() {
+            p.find_scripts();
+        }
         p
     }
 
@@ -184,8 +252,10 @@ impl Page {
     }
 
     /// The style sheets (<style>, <link rel=stylesheet>) and pictures (<img>, <input type=image>, <video poster>)
-    /// the page has, in order.
-    fn find_resources(&mut self) {
+    /// the page has, in order (again after a script changes the page: what's been fetched kept).
+    fn scan(&mut self) {
+        self.sources.clear();
+        self.picture_of.clear();
         let nodes: Vec<NodeId> = self.doc.descendants(0).collect();
         for n in nodes {
             let Some(e) = self.doc.element(n) else { continue };
@@ -212,7 +282,15 @@ impl Page {
                     }
                     if let Ok(u) = self.url.join(href.trim()) {
                         let media = e.attr("media").map(String::from);
-                        let r = self.add(Kind::Sheet, Some(u), None);
+                        let r = match self.resources.iter().position(|r| r.kind == Kind::Sheet && r.url.as_ref() == Some(&u)) {
+                            Some(r) => r,
+                            None => self.add(Kind::Sheet, Some(u), None),
+                        };
+                        // (Its imports first.)
+                        let imports: Vec<usize> = self.imports_of.iter().filter(|(s, _)| *s == r).map(|(_, i)| *i).collect();
+                        for i in imports {
+                            self.sources.push(Source::Linked(i));
+                        }
                         // (A media attribute other than all: the sheet's rules inside it, as @media would put them.)
                         if let Some(m) = media.filter(|m| !m.trim().is_empty() && !m.trim().eq_ignore_ascii_case("all")) {
                             self.sources.push(Source::Inline(format!("@media {m} {{")));
@@ -297,6 +375,7 @@ impl Page {
         {
             for (k, r) in before.into_iter().enumerate() {
                 self.sources.insert(at + k, Source::Linked(r));
+                self.imports_of.push((i, r));
             }
         }
         // (url()s inside it are relative to it: made whole now, as the page's own are relative to the page.)
@@ -316,6 +395,10 @@ impl Page {
 
     pub fn failed(&mut self, i: usize) {
         if let Some(r) = self.resources.get_mut(i) {
+            if r.kind == Kind::Script {
+                r.state = State::Failed;
+                return;
+            }
             let was_sheet = r.kind == Kind::Sheet;
             r.state = State::Failed;
             if was_sheet {
@@ -368,8 +451,398 @@ impl Page {
             self.laid = Some(laid);
             self.laid_for = (w, h, dpr);
             self.changed = false;
+            self.dpr = dpr;
+            self.share_layout(w, h, dpr);
         }
         self.laid.as_ref().expect("laid out above")
+    }
+
+    /// Where each node's box is, and the view's size, for the page's scripts (getBoundingClientRect, offsetWidth...).
+    fn share_layout(&mut self, w: f32, h: f32, dpr: f32) {
+        let (Some(laid), Some(s)) = (&self.laid, self.script.as_mut()) else { return };
+        let n = self.doc.nodes.len();
+        let mut rects: Vec<Option<(f32, f32, f32, f32)>> = alloc::vec![None; n];
+        let grow = |rects: &mut Vec<Option<(f32, f32, f32, f32)>>, node: usize, r: Rect| {
+            if node >= rects.len() || (r.w <= 0.0 && r.h <= 0.0) {
+                return;
+            }
+            rects[node] = Some(match rects[node] {
+                None => (r.x, r.y, r.w, r.h),
+                Some((x, y, rw, rh)) => {
+                    let (x0, y0) = (x.min(r.x), y.min(r.y));
+                    (x0, y0, (x + rw).max(r.x + r.w) - x0, (y + rh).max(r.y + r.h) - y0)
+                }
+            });
+        };
+        for (node, r) in &laid.boxes {
+            grow(&mut rects, *node, *r);
+        }
+        for i in &laid.items {
+            if let Some(node) = i.node {
+                grow(&mut rects, node, bounds(i));
+            }
+        }
+        // (An element with no box of its own: as big as what's inside it.)
+        let order: Vec<NodeId> = self.doc.descendants(0).collect();
+        for &node in order.iter().rev() {
+            if let (Some(r), Some(p)) = (rects[node], self.doc.parent(node))
+                && p < n
+                && rects[p].is_none_or(|_| self.doc.element(p).is_none())
+            {
+                let (x, y, w2, h2) = r;
+                grow(&mut rects, p, Rect::new(x, y, w2, h2));
+            }
+        }
+        rects[0] = Some((0.0, 0.0, w, laid.height));
+        let scale = if dpr > 0.0 { dpr } else { 1.0 };
+        let css: Vec<Option<(f32, f32, f32, f32)>> = rects.into_iter().map(|r| r.map(|(x, y, w2, h2)| (x / scale, y / scale, w2 / scale, h2 / scale))).collect();
+        let host = s.host();
+        host.rects = css;
+        host.view = (w / scale, h / scale, scale);
+    }
+
+    // ---------------------------------------------------------------------------------------------- scripts
+
+    /// The page's scripts (those its parser found), in order.
+    fn find_scripts(&mut self) {
+        let nodes: Vec<NodeId> = self.doc.descendants(0).filter(|&n| self.doc.name(n) == "script").collect();
+        for n in nodes {
+            self.add_script(n, false);
+        }
+    }
+
+    /// A <script> to run: in the page's order, deferred, or as soon as it comes.
+    fn add_script(&mut self, n: NodeId, inserted: bool) {
+        let Some(e) = self.doc.element(n) else { return };
+        if !crate::script::runnable_type(e.attr("type")) || self.scripts.iter().any(|s| s.node == n) {
+            return;
+        }
+        let src = e.attr("src").map(|s| String::from(s.trim()));
+        let when = match &src {
+            _ if inserted || e.has_attr("async") && src.is_some() => When::Soon,
+            Some(_) if e.has_attr("defer") => When::Deferred,
+            _ => When::InOrder,
+        };
+        let (text, resource) = match src {
+            Some(s) => match self.url.join(&s) {
+                Ok(u) => (None, Some(self.add(Kind::Script, Some(u), None))),
+                Err(_) => return,
+            },
+            None => (Some(self.doc.text_of(n)), None),
+        };
+        if let Some(s) = self.script.as_mut() {
+            s.host().started.push(n);
+        }
+        self.scripts.push(PageScript { node: n, text, resource, when, done: false });
+    }
+
+    /// A script came: its text, to run in its turn.
+    pub fn script_came(&mut self, i: usize, text: String) {
+        if let Some(r) = self.resources.get_mut(i) {
+            r.state = State::Script(text);
+        }
+    }
+
+    /// Whether the page runs scripts.
+    pub fn scripting(&self) -> bool {
+        self.script.is_some()
+    }
+
+    /// Runs something with the page's scripting (its tree lent to it), then takes in what it changed.
+    fn with_script<T>(&mut self, f: impl FnOnce(&mut Script) -> T) -> Option<T> {
+        let mut s = self.script.take()?;
+        s.lend(&mut self.doc);
+        let r = f(&mut s);
+        s.give_back(&mut self.doc);
+        self.script = Some(s);
+        self.took_effect();
+        Some(r)
+    }
+
+    /// What scripts changed: the page laid out again, new style sheets, pictures and scripts asked for, where they
+    /// sent the browser.
+    fn took_effect(&mut self) {
+        let Some(s) = self.script.as_mut() else { return };
+        let h = s.host();
+        let mutated = core::mem::take(&mut h.mutated);
+        let rescan = core::mem::take(&mut h.rescan);
+        let new_scripts = core::mem::take(&mut h.new_scripts);
+        let navigate = h.navigate.take();
+        let submit = h.submit.take();
+        let back = h.history_go.take();
+        let title = core::mem::take(&mut h.title_changed);
+        let scroll = h.scroll.1;
+        let url = h.url.href();
+        if mutated || title {
+            self.styles = None;
+            self.changed = true;
+        }
+        if rescan {
+            self.scan();
+            self.styles = None;
+            self.changed = true;
+        }
+        for n in new_scripts {
+            self.add_script(n, true);
+        }
+        if let Some(u) = navigate.and_then(|u| u.to_web()) {
+            self.navigation = Some(Request { url: u, body: None });
+        }
+        if let Some((form, submitter)) = submit {
+            self.navigation = self.submit(form, submitter);
+        }
+        if back.is_some() {
+            self.go_back = true;
+        }
+        if (scroll - self.scrolled_known()).abs() > 0.5 {
+            self.scrolled = Some(scroll);
+        }
+        // (history.pushState: the page's address as its scripts set it.)
+        if let Ok(u) = Url::parse(&url)
+            && u.host == self.url.host
+        {
+            self.url = u;
+        }
+    }
+
+    fn scrolled_known(&self) -> f32 {
+        self.scrolled.unwrap_or(0.0)
+    }
+
+    /// Tells the page's scripts where the view is scrolled to (CSS pixels down).
+    pub fn set_scroll(&mut self, y: f32) {
+        if let Some(s) = self.script.as_mut() {
+            s.host().scroll.1 = y;
+        }
+        self.scrolled = Some(y);
+    }
+
+    /// Moves the page's scripts on (from the system's loop, `now` ms since the page began): the scripts that have
+    /// come run in their turn, DOMContentLoaded and load fired, timers and tasks due run. True if anything ran.
+    pub fn run(&mut self, now: f64) -> bool {
+        if self.script.is_none() {
+            return false;
+        }
+        let mut ran = false;
+        // The page's scripts, in their order.
+        loop {
+            let next = self.next_script();
+            let Some(k) = next else { break };
+            let (node, text) = {
+                let ps = &mut self.scripts[k];
+                ps.done = true;
+                let text = match ps.resource {
+                    Some(r) => match &mut self.resources[r].state {
+                        State::Script(t) => Some(core::mem::take(t)),
+                        _ => None,
+                    },
+                    None => ps.text.take(),
+                };
+                (ps.node, text)
+            };
+            if let Some(code) = text {
+                let name = String::from(if self.scripts[k].resource.is_some() { "a script" } else { "an inline script" });
+                self.with_script(|s| {
+                    s.set_now(now);
+                    s.run(&code, &name, Some(node));
+                });
+                // (A script with an address fires load on its element after it runs.)
+                if self.scripts[k].resource.is_some() {
+                    self.with_script(|s| s.fire(Some(node), &EventInit::new("load", "Event", false, false)));
+                }
+            } else if self.scripts[k].resource.is_some() {
+                self.with_script(|s| s.fire(Some(node), &EventInit::new("error", "Event", false, false)));
+            }
+            ran = true;
+        }
+        let in_order_done = self.scripts.iter().all(|s| s.done || s.when == When::Soon);
+        if in_order_done && !self.dom_loaded {
+            self.dom_loaded = true;
+            self.with_script(|s| {
+                s.set_now(now);
+                s.fire(Some(0), &EventInit::new("readystatechange", "Event", false, false));
+                s.fire(Some(0), &EventInit::new("DOMContentLoaded", "Event", true, false))
+            });
+            ran = true;
+        }
+        if self.dom_loaded && !self.load_fired && self.resources.iter().all(|r| r.asked && r.state != State::Waiting) && self.scripts.iter().all(|s| s.done) {
+            self.load_fired = true;
+            self.with_script(|s| {
+                s.set_now(now);
+                s.host().loaded = true;
+                s.fire(Some(0), &EventInit::new("readystatechange", "Event", false, false));
+                s.fire(None, &EventInit::new("load", "Event", false, false));
+                s.fire(None, &EventInit::new("pageshow", "PageTransitionEvent", false, false))
+            });
+            ran = true;
+        }
+        if self.with_script(|s| s.tick(now)).unwrap_or(false) {
+            ran = true;
+        }
+        ran
+    }
+
+    /// The next script to run: the first in-order one if it's ready (none, if it isn't); then deferred ones; any
+    /// that runs as soon as it comes, once it has.
+    fn next_script(&self) -> Option<usize> {
+        let ready = |s: &PageScript| match s.resource {
+            Some(r) => matches!(self.resources[r].state, State::Script(_) | State::Failed),
+            None => true,
+        };
+        for (k, s) in self.scripts.iter().enumerate() {
+            if s.done || s.when != When::InOrder {
+                continue;
+            }
+            return if ready(s) { Some(k) } else { None }.or_else(|| self.soon_script(&ready));
+        }
+        for (k, s) in self.scripts.iter().enumerate() {
+            if s.done || s.when != When::Deferred {
+                continue;
+            }
+            return if ready(s) { Some(k) } else { None }.or_else(|| self.soon_script(&ready));
+        }
+        self.soon_script(&ready)
+    }
+
+    fn soon_script(&self, ready: &dyn Fn(&PageScript) -> bool) -> Option<usize> {
+        self.scripts.iter().position(|s| !s.done && s.when == When::Soon && ready(s))
+    }
+
+    /// Runs requestAnimationFrame's callbacks (before the page is drawn): true if any ran.
+    pub fn animation_frame(&mut self, now: f64) -> bool {
+        self.with_script(|s| s.animation_frame(now)).unwrap_or(false)
+    }
+
+    /// When the page's scripts next want to run (ms since the page began), if they do.
+    pub fn next_due(&mut self) -> Option<f64> {
+        self.script.as_mut().and_then(|s| s.next_due())
+    }
+
+    /// What the page's scripts printed (console.log, and the exceptions nothing caught), since last asked.
+    pub fn take_console(&mut self) -> Vec<String> {
+        self.script.as_mut().map(|s| s.take_console()).unwrap_or_default()
+    }
+
+    /// What the page's scripts asked of the network (fetch, XMLHttpRequest), to send: (its number, address, method,
+    /// headers, body). Each is answered with `answer`.
+    pub fn take_requests(&mut self) -> Vec<(u32, String, String, Vec<(String, String)>, Option<Vec<u8>>)> {
+        let Some(s) = self.script.as_mut() else { return Vec::new() };
+        let h = s.host();
+        let reqs = core::mem::take(&mut h.requests);
+        let out = reqs.iter().map(|r| (r.id, r.url.clone(), r.method.clone(), r.headers.clone(), r.body.clone())).collect();
+        h.waiting.extend(reqs);
+        out
+    }
+
+    /// The network's answer to a script's request.
+    pub fn answer(&mut self, id: u32, response: Result<crate::script::Response, String>) {
+        self.with_script(|s| s.answer(id, response));
+    }
+
+    /// A click on the page (where it landed, CSS pixels in the view): the mouse's events to the element there,
+    /// and whether its default action is to happen (no script cancelled it).
+    pub fn click(&mut self, node: Option<NodeId>, x: f32, y: f32) -> bool {
+        let Some(target) = node.map(|n| self.element_at(n)) else { return true };
+        use crate::script::EvValue;
+        let mouse = |ty: &str, buttons: f64| {
+            EventInit::new(ty, "PointerEvent", true, true)
+                .with("clientX", EvValue::Num(x as f64))
+                .with("clientY", EvValue::Num(y as f64))
+                .with("screenX", EvValue::Num(x as f64))
+                .with("screenY", EvValue::Num(y as f64))
+                .with("buttons", EvValue::Num(buttons))
+                .with("detail", EvValue::Num(1.0))
+        };
+        let r = self.with_script(|s| {
+            s.fire(Some(target), &mouse("pointerdown", 1.0));
+            s.fire(Some(target), &mouse("mousedown", 1.0));
+            s.fire(Some(target), &mouse("pointerup", 0.0));
+            s.fire(Some(target), &mouse("mouseup", 0.0));
+            s.fire(Some(target), &mouse("click", 0.0))
+        });
+        r.unwrap_or(true)
+    }
+
+    /// The element a node is (a text's parent element).
+    fn element_at(&self, n: NodeId) -> NodeId {
+        if self.doc.element(n).is_some() { n } else { self.doc.parent_element(n).unwrap_or(n) }
+    }
+
+    /// A key pressed (or let go) in the page: its events to the element with the focus (or the body), and whether
+    /// its default action is to happen.
+    pub fn key(&mut self, focus: Option<NodeId>, key: &str, code: &str, down: bool, mods: (bool, bool, bool)) -> bool {
+        if self.script.is_none() {
+            return true;
+        }
+        use crate::script::EvValue;
+        let target = focus.or_else(|| self.doc.find("body"));
+        let key_code = key_code(key);
+        let init = |ty: &str| {
+            EventInit::new(ty, "KeyboardEvent", true, true)
+                .with("key", EvValue::Str(String::from(key)))
+                .with("code", EvValue::Str(String::from(code)))
+                .with("keyCode", EvValue::Num(key_code))
+                .with("which", EvValue::Num(key_code))
+                .with("ctrlKey", EvValue::Bool(mods.0))
+                .with("shiftKey", EvValue::Bool(mods.1))
+                .with("altKey", EvValue::Bool(mods.2))
+        };
+        let r = self.with_script(|s| {
+            if down {
+                let ok = s.fire(target, &init("keydown"));
+                if ok && key.chars().count() == 1 {
+                    s.fire(target, &init("keypress"));
+                }
+                ok
+            } else {
+                s.fire(target, &init("keyup"))
+            }
+        });
+        r.unwrap_or(true)
+    }
+
+    /// A field's value changed by typing: its input event (and change, when it's done).
+    pub fn typed(&mut self, node: NodeId, done: bool) {
+        use crate::script::EvValue;
+        self.with_script(|s| {
+            s.fire(Some(node), &EventInit::new("input", "InputEvent", true, false).with("inputType", EvValue::Str(String::from("insertText"))));
+            if done {
+                s.fire(Some(node), &EventInit::new("change", "Event", true, false));
+            }
+        });
+    }
+
+    /// The focus moved to a field (or away from all).
+    pub fn focused(&mut self, node: Option<NodeId>) {
+        self.with_script(|s| {
+            let old = s.host().focus;
+            if old == node {
+                return;
+            }
+            s.host().focus = node;
+            if let Some(o) = old {
+                s.fire(Some(o), &EventInit::new("blur", "FocusEvent", false, false));
+                s.fire(Some(o), &EventInit::new("focusout", "FocusEvent", true, false));
+            }
+            if let Some(n) = node {
+                s.fire(Some(n), &EventInit::new("focus", "FocusEvent", false, false));
+                s.fire(Some(n), &EventInit::new("focusin", "FocusEvent", true, false));
+            }
+        });
+    }
+
+    /// The window's size changed: its resize event.
+    pub fn resized(&mut self) {
+        self.with_script(|s| s.fire(None, &EventInit::new("resize", "UIEvent", false, false)));
+    }
+
+    /// The page scrolled (by the person): its scroll event.
+    pub fn scrolled_by_user(&mut self, y: f32) {
+        self.set_scroll(y);
+        self.scrolled = None;
+        self.with_script(|s| {
+            s.fire(Some(0), &EventInit::new("scroll", "Event", true, false));
+        });
     }
 
     /// What's laid out now (if it has been).
@@ -384,12 +857,21 @@ impl Page {
 
     /// What's at `x`, `y` (device pixels from the page's top left).
     pub fn at(&self, x: f32, y: f32) -> Hit {
-        let Some(laid) = &self.laid else { return Hit::Nothing };
-        let Some(node) = laid.items.iter().rev().find(|i| i.node.is_some() && i.clip.contains(x, y) && bounds(i).contains(x, y)).and_then(|i| i.node)
-        else {
-            return Hit::Nothing;
-        };
-        self.hit_from(node)
+        match self.node_at(x, y) {
+            Some(node) => self.hit_from(node),
+            None => Hit::Nothing,
+        }
+    }
+
+    /// The node drawn at `x`, `y` (device pixels from the page's top left), on top.
+    pub fn node_at(&self, x: f32, y: f32) -> Option<NodeId> {
+        let laid = self.laid.as_ref()?;
+        laid.items.iter().rev().find(|i| i.node.is_some() && i.clip.contains(x, y) && bounds(i).contains(x, y)).and_then(|i| i.node)
+    }
+
+    /// Device pixels to a CSS pixel, as the page was last laid out.
+    pub fn scale(&self) -> f32 {
+        if self.dpr > 0.0 { self.dpr } else { 1.0 }
     }
 
     /// What a click on `node` (or what it's in) does.
@@ -678,6 +1160,35 @@ impl Page {
             Some(Request { url, body: None })
         }
     }
+}
+
+/// The old keyCode of a key (by its name), as pages' scripts read it.
+fn key_code(key: &str) -> f64 {
+    let c = match key {
+        "Backspace" => 8,
+        "Tab" => 9,
+        "Enter" => 13,
+        "Shift" => 16,
+        "Control" => 17,
+        "Alt" => 18,
+        "Escape" => 27,
+        " " => 32,
+        "PageUp" => 33,
+        "PageDown" => 34,
+        "End" => 35,
+        "Home" => 36,
+        "ArrowLeft" => 37,
+        "ArrowUp" => 38,
+        "ArrowRight" => 39,
+        "ArrowDown" => 40,
+        "Delete" => 46,
+        k if k.chars().count() == 1 => {
+            let ch = k.chars().next().unwrap_or(' ');
+            if ch.is_ascii_alphabetic() { ch.to_ascii_uppercase() as u32 } else if ch.is_ascii_digit() { ch as u32 } else { 0 }
+        }
+        _ => 0,
+    };
+    c as f64
 }
 
 /// An item's rectangle.

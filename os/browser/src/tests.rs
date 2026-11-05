@@ -216,3 +216,60 @@ fn style_sheets_and_pictures_asked_for_in_order_and_a_picture_written_in_the_pag
         ]
     );
 }
+
+fn scripted(html: &str) -> Page {
+    Page::with_scripts(Url::parse("https://example.com/a/page").unwrap(), html, 0.0, (800.0, 600.0, 1.0), 1)
+}
+
+#[test]
+fn scripts_change_the_page() {
+    let mut p = scripted(
+        "<body><p id=a>x</p><script>document.getElementById('a').textContent = 'y';\
+         setTimeout(function () { document.body.appendChild(document.createElement('hr')); }, 10);\
+         console.log(document.querySelectorAll('p').length, location.pathname);</script></body>",
+    );
+    p.run(0.0);
+    let a = p.doc.find("p").unwrap();
+    assert_eq!(p.doc.text_of(a), "y");
+    assert!(p.doc.find("hr").is_none());
+    assert_eq!(p.take_console(), ["1 /a/page"]);
+    p.run(20.0);
+    assert!(p.doc.find("hr").is_some(), "the timer ran");
+}
+
+#[test]
+fn scripts_see_clicks_and_can_cancel_them() {
+    let mut p = scripted(
+        "<body><a id=l href=/x>link</a><script>var n = 0; document.getElementById('l').addEventListener('click', \
+         function (e) { n++; e.preventDefault(); document.title = 'clicked ' + n; });</script></body>",
+    );
+    p.run(0.0);
+    let a = p.doc.find("a").unwrap();
+    assert!(!p.click(Some(a), 5.0, 5.0), "the script cancelled the click");
+    assert_eq!(p.title(), "clicked 1");
+}
+
+#[test]
+fn scripts_run_in_order_as_they_come() {
+    let mut p = scripted("<head><script src=/one.js></script><script>console.log('two')</script></head><body></body>");
+    let (i, kind, url, _) = p.next_wanted().unwrap();
+    assert_eq!(kind, crate::page::Kind::Script);
+    assert_eq!(url.unwrap().path, "/one.js");
+    p.run(0.0);
+    assert!(p.take_console().is_empty(), "the second waits for the first");
+    p.script_came(i, String::from("console.log('one')"));
+    p.run(1.0);
+    assert_eq!(p.take_console(), ["one", "two"]);
+}
+
+#[test]
+fn scripts_fetch_through_the_page() {
+    let mut p = scripted("<body><script>fetch('/d.json').then(function (r) { return r.json(); }).then(function (j) { console.log('got ' + j.a); });</script></body>");
+    p.run(0.0);
+    let reqs = p.take_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].1, "https://example.com/d.json");
+    let r = crate::script::Response { status: 200, status_text: String::new(), url: reqs[0].1.clone(), headers: Vec::new(), body: b"{\"a\": 5}".to_vec() };
+    p.answer(reqs[0].0, Ok(r));
+    assert_eq!(p.take_console(), ["got 5"]);
+}

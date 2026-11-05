@@ -260,6 +260,9 @@ pub struct Vm {
     pub gc_threshold: usize,
     /// The embedder's (the browser's) state, for its own built-in functions.
     pub host: Option<Box<dyn core::any::Any>>,
+    /// The values the embedder's state holds (its objects, listeners, timers' functions): kept alive by the
+    /// collector.
+    pub host_trace: Option<fn(&dyn core::any::Any, &mut Vec<Value>)>,
     /// The values kept alive for the embedder (its event handlers, timers' functions).
     pub roots: Vec<Value>,
     /// Promises rejected with no handler yet (the embedder reports them).
@@ -308,6 +311,7 @@ impl Vm {
             native_depth: 0,
             gc_threshold: 100_000,
             host: None,
+            host_trace: None,
             roots: Vec::new(),
             unhandled: Vec::new(),
             random_state: (0x9E37_79B9_7F4A_7C15, 0xD1B5_4A32_D192_ED03),
@@ -2548,6 +2552,9 @@ impl Vm {
         }
         let mut roots: Vec<Value> = self.stack.clone();
         roots.extend(self.roots.iter().cloned());
+        if let (Some(trace), Some(h)) = (self.host_trace, self.host.as_deref()) {
+            trace(h, &mut roots);
+        }
         for (v, _) in self.global_lex.values() {
             roots.push(v.clone());
         }

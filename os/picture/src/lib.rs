@@ -18,9 +18,11 @@ mod gif;
 mod jpeg;
 mod png;
 mod encode;
+pub mod draw;
 pub mod svg;
 
 pub use encode::jpeg as encode_jpeg;
+pub use encode::png as encode_png;
 
 #[cfg(test)]
 mod tests;

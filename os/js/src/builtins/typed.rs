@@ -521,6 +521,31 @@ fn allocate(vm: &mut Vm, kind: ElemKind, nt: &Value, default_proto: I, len: usiz
 }
 
 /// A new typed array of a kind with a prototype, over a new buffer of `len` elements.
+/// A new Uint8ClampedArray holding `bytes` (for the embedder: a canvas's ImageData).
+pub fn clamped_array(vm: &mut Vm, bytes: Vec<u8>) -> Gc {
+    let len = bytes.len();
+    let abp = vm.proto(I::ArrayBufferProto);
+    let buf = vm.alloc(Some(abp), Class::ArrayBuffer(Some(bytes), None));
+    let p = vm.proto(I::Uint8ClampedArrayProto);
+    vm.alloc(Some(p), Class::TypedArray(Box::new(TypedArray { kind: ElemKind::Uint8Clamped, buffer: buf, offset: 0, length: Some(len) })))
+}
+
+/// The bytes a typed array (or an ArrayBuffer) holds, if it's one and they're there (not detached, in bounds).
+pub fn bytes_of(vm: &Vm, g: Gc) -> Option<&[u8]> {
+    match &vm.heap.get(g).class {
+        Class::TypedArray(t) => {
+            if vm.typed_out_of_bounds(t) {
+                return None;
+            }
+            let Class::ArrayBuffer(Some(data), _) = &vm.heap.get(t.buffer).class else { return None };
+            let len = vm.typed_length(t) * t.kind.size();
+            data.get(t.offset..t.offset + len)
+        }
+        Class::ArrayBuffer(Some(data), _) => Some(data),
+        _ => None,
+    }
+}
+
 fn make(vm: &mut Vm, kind: ElemKind, p: Gc, len: usize) -> Result<Gc, Value> {
     let bytes = (len as u64).saturating_mul(kind.size() as u64);
     let data = zeroed(vm, bytes)?;

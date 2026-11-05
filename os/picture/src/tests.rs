@@ -273,3 +273,13 @@ fn svg_pictures_are_drawn() {
     assert_eq!(&p.rgb[..3], &[0, 255, 0]);
     assert_eq!(&p.rgb[(5 * 10 + 5) * 3..][..3], &[255, 0, 0]);
 }
+
+#[test]
+fn a_png_written_reads_back() {
+    let rgba: Vec<u8> = (0..6u8).flat_map(|i| [i * 40, 255 - i * 40, 7, if i == 2 { 0 } else { 255 }]).collect();
+    let png = crate::encode_png(&rgba, 3, 2);
+    let (p, alpha) = decode_alpha(&png, 3, 2, u64::MAX).unwrap();
+    assert_eq!((p.width, p.height), (3, 2));
+    assert_eq!(&p.rgb[3..6], &[40, 215, 7]);
+    assert_eq!(alpha.unwrap()[2], 0);
+}

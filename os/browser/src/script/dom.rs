@@ -956,7 +956,8 @@ fn inserted(vm: &mut Vm, n: NodeId) {
         let name = String::from(doc(vm).name(id));
         match name.as_str() {
             "script" => script_inserted(vm, id),
-            "link" | "style" | "img" | "picture" | "source" | "iframe" | "base" => host(vm).rescan = true,
+            "link" | "style" | "img" | "picture" | "source" | "iframe" | "base" | "canvas" | "svg" | "video" => host(vm).rescan = true,
+            "input" if attr(vm, id, "type").is_some_and(|t| t.eq_ignore_ascii_case("image")) => host(vm).rescan = true,
             "title" => host(vm).title_changed = true,
             _ => {}
         }
@@ -1672,8 +1673,22 @@ fn attr_changed(vm: &mut Vm, n: NodeId, name: &str, old: Option<String>, new: Op
     host(vm).changed();
     record(vm, Change::Attribute(n, name, old.clone()));
     let el = String::from(doc(vm).name(n));
-    if doc(vm).connected(n) && (matches!((el.as_str(), name), ("link", "href" | "rel" | "media") | ("img", "src" | "srcset") | ("source", "src" | "srcset") | ("base", "href"))) {
+    if doc(vm).connected(n) && (matches!((el.as_str(), name), ("link", "href" | "rel" | "media") | ("img", "src" | "srcset") | ("source", "src" | "srcset") | ("base", "href") | ("canvas", "width" | "height"))) {
         host(vm).rescan = true;
+    }
+    if el == "canvas" && matches!(name, "width" | "height") {
+        super::canvas::resized(vm, n);
+    }
+    if el == "img" && matches!(name, "src" | "srcset") {
+        // (A new picture: not complete until it comes; one not in the page fetched all the same.)
+        let h = host(vm);
+        h.settled.remove(&n);
+        if !h.doc.connected(n) {
+            if !h.images.contains(&n) {
+                h.images.push(n);
+            }
+            h.rescan = true;
+        }
     }
     if el == "script" && name == "src" && doc(vm).connected(n) {
         script_inserted(vm, n);
@@ -3372,9 +3387,9 @@ fn element_specifics(vm: &mut Vm) {
     let ip = p(vm, "HTMLImageElement");
     attribute(vm, ip, "width", image_width, Some(set_image_width));
     attribute(vm, ip, "height", image_height, Some(set_image_height));
-    attribute(vm, ip, "naturalWidth", image_width, None);
-    attribute(vm, ip, "naturalHeight", image_height, None);
-    attribute(vm, ip, "complete", true_fn, None);
+    attribute(vm, ip, "naturalWidth", natural_width, None);
+    attribute(vm, ip, "naturalHeight", natural_height, None);
+    attribute(vm, ip, "complete", image_complete, None);
     attribute(vm, ip, "currentSrc", image_current_src, None);
     method(vm, ip, "decode", 0, resolved_fn);
     // Form controls.
@@ -3470,10 +3485,8 @@ fn element_specifics(vm: &mut Vm) {
     let fp = p(vm, "HTMLIFrameElement");
     attribute(vm, fp, "contentWindow", null_fn, None);
     attribute(vm, fp, "contentDocument", null_fn, None);
+    // (A canvas's drawing: canvas.rs.)
     let cp = p(vm, "HTMLCanvasElement");
-    method(vm, cp, "getContext", 1, null_fn);
-    method(vm, cp, "toDataURL", 0, canvas_data_url);
-    method(vm, cp, "toBlob", 1, ignore_fn);
     method(vm, cp, "captureStream", 0, null_fn);
     method(vm, cp, "transferControlToOffscreen", 0, null_fn);
     let mp = p(vm, "HTMLMediaElement");
@@ -3597,12 +3610,39 @@ fn set_anchor_part(vm: &mut Vm, this: &Value, args: &[Value], f: Gc) -> R {
     Ok(Value::Undefined)
 }
 
+/// An <img>'s width or height: its attribute's, else as it's drawn, else its picture's own.
 fn image_size(vm: &mut Vm, this: &Value, height: bool) -> R {
     let n = this_element(vm, this)?;
     if let Some(v) = attr(vm, n, if height { "height" } else { "width" }).and_then(|v| parse_int(&v)) {
         return Ok(Value::Num(v.max(0) as f64));
     }
-    Ok(Value::Num(rect(vm, n).map_or(0.0, |r| if height { r.3 } else { r.2 }) as f64))
+    if let Some(r) = rect(vm, n).filter(|r| r.2 > 0.0 || r.3 > 0.0) {
+        return Ok(Value::Num(if height { r.3 } else { r.2 } as f64));
+    }
+    natural(vm, n, height)
+}
+
+/// An <img>'s picture's own size, once it has come (0 till then).
+fn natural(vm: &mut Vm, n: NodeId, height: bool) -> R {
+    let size = host_ref(vm).settled.get(&n).copied().flatten();
+    Ok(Value::Num(size.map_or(0, |(w, h)| if height { h } else { w }) as f64))
+}
+
+fn natural_width(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    let n = this_element(vm, this)?;
+    natural(vm, n, false)
+}
+
+fn natural_height(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    let n = this_element(vm, this)?;
+    natural(vm, n, true)
+}
+
+/// Whether an <img> is done: it has no picture to show, or its picture has come (or couldn't be had).
+fn image_complete(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    let n = this_element(vm, this)?;
+    let src = attr(vm, n, "src").filter(|s| !s.trim().is_empty()).or_else(|| attr(vm, n, "srcset").filter(|s| !s.trim().is_empty()));
+    Ok(Value::Bool(src.is_none() || host_ref(vm).settled.contains_key(&n)))
 }
 
 fn image_width(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
@@ -4113,10 +4153,6 @@ fn sheet_insert_rule(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
         }
     }
     Ok(Value::Num(0.0))
-}
-
-fn canvas_data_url(_vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
-    Ok(js("data:,"))
 }
 
 fn dialog_show(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {

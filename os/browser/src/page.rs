@@ -160,6 +160,42 @@ pub struct Page {
     /// Its <svg> elements' pictures: (element, its text's hash, the resource, and the colour it was given for
     /// currentColor).
     inline_svgs: Vec<(NodeId, u64, usize, Option<u32>)>,
+    /// Its <canvas> elements' pictures (their pixels are its scripts'): (element, resource).
+    canvases: Vec<(NodeId, usize)>,
+    /// Pictures written into it (data: addresses), by their address's hash: their resources.
+    data_pictures: Vec<(u64, usize)>,
+    /// The <img>s whose load (or error) event has been fired, for the picture they show.
+    img_fired: alloc::collections::BTreeSet<(NodeId, usize)>,
+    /// Its scripts drew on a canvas: the page is to be drawn again (not laid out).
+    pub repaint: bool,
+}
+
+/// The page's pictures with its canvases' among them (for the painter).
+pub struct WithCanvases<'a> {
+    page: &'a Page,
+    inner: &'a dyn crate::paint::Shown,
+}
+
+impl crate::paint::Shown for WithCanvases<'_> {
+    fn picture(&self, n: usize) -> Option<(&[u8], u32, u32)> {
+        match self.page.canvas_of(n) {
+            Some(c) => Some((&c.rgb, c.w, c.h)),
+            None if self.page.canvases.iter().any(|(_, r)| *r == n) => None,
+            None => self.inner.picture(n),
+        }
+    }
+    fn alpha(&self, n: usize) -> Option<&[u8]> {
+        match self.page.canvas_of(n) {
+            Some(c) => Some(&c.alpha),
+            None => self.inner.alpha(n),
+        }
+    }
+    fn version(&self, n: usize) -> u64 {
+        match self.page.canvas_of(n) {
+            Some(c) => c.version,
+            None => self.inner.version(n),
+        }
+    }
 }
 
 /// The pictures' sizes, for the layout.
@@ -216,6 +252,10 @@ impl Page {
             dpr: view.2,
             module_keys: Vec::new(),
             inline_svgs: Vec::new(),
+            canvases: Vec::new(),
+            data_pictures: Vec::new(),
+            img_fired: alloc::collections::BTreeSet::new(),
+            repaint: false,
         };
         if scripting {
             p.script = Some(Box::new(Script::new(&p.url.to_string(), epoch, view)));
@@ -358,35 +398,76 @@ impl Page {
                     };
                     self.picture_of.push((n, r));
                 }
+                "canvas" => {
+                    // A picture its scripts draw (its size from its width and height).
+                    if self.picture_of.len() >= MOST_PICTURES {
+                        continue;
+                    }
+                    let size = |name: &str, d: u32| e.attr(name).and_then(non_negative).unwrap_or(d);
+                    let (w, h) = (size("width", 300), size("height", 150));
+                    let r = match self.canvases.iter().find(|(k, _)| *k == n) {
+                        Some((_, r)) => *r,
+                        None => {
+                            let r = self.add(Kind::Picture, None, None);
+                            self.resources[r].asked = true;
+                            self.canvases.push((n, r));
+                            r
+                        }
+                    };
+                    self.resources[r].state = State::Picture(w, h);
+                    self.picture_of.push((n, r));
+                }
                 "img" | "input" | "video" => {
                     if e.name == "input" && !e.attr("type").is_some_and(|t| t.eq_ignore_ascii_case("image")) {
                         continue;
                     }
-                    let address = match e.name.as_str() {
-                        "video" => e.attr("poster").map(String::from),
-                        _ => picture_address(e.attr("src"), e.attr("srcset"), e.attr("data-src")),
-                    };
-                    let Some(address) = address else { continue };
-                    if self.picture_of.len() >= MOST_PICTURES {
-                        continue;
-                    }
-                    let r = if let Some(bytes) = data_url(&address) {
-                        Some(self.add(Kind::Picture, None, Some(bytes)))
-                    } else if let Ok(u) = self.url.join(address.trim().split('#').next().unwrap_or("")) {
-                        // (The same picture twice on a page: fetched once.)
-                        match self.resources.iter().position(|r| r.kind == Kind::Picture && r.url.as_ref() == Some(&u)) {
-                            Some(i) => Some(i),
-                            None => Some(self.add(Kind::Picture, Some(u), None)),
-                        }
-                    } else {
-                        None
-                    };
-                    if let Some(r) = r {
-                        self.picture_of.push((n, r));
-                    }
+                    self.picture_element(n);
                 }
                 _ => {}
             }
+        }
+        // Pictures its scripts made that aren't in it (new Image(), its src set): fetched too.
+        let made: Vec<NodeId> = self.script.as_mut().map(|s| s.host().images.clone()).unwrap_or_default();
+        for n in made {
+            if !self.doc.connected(n) {
+                self.picture_element(n);
+            }
+        }
+    }
+
+    /// An <img> (or the like)'s picture: the resource it shows (fetched once for all that show it).
+    fn picture_element(&mut self, n: NodeId) {
+        let Some(e) = self.doc.element(n) else { return };
+        let address = match e.name.as_str() {
+            "video" => e.attr("poster").map(String::from),
+            _ => picture_address(e.attr("src"), e.attr("srcset"), e.attr("data-src")),
+        };
+        let Some(address) = address else { return };
+        if self.picture_of.len() >= MOST_PICTURES {
+            return;
+        }
+        let r = if address.trim_start().get(..5).is_some_and(|d| d.eq_ignore_ascii_case("data:")) {
+            // (A picture written into the page: made once, however often the page is read again.)
+            let hash = address.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+            match self.data_pictures.iter().find(|(h, _)| *h == hash) {
+                Some((_, r)) => Some(*r),
+                None => data_url(&address).map(|bytes| {
+                    let r = self.add(Kind::Picture, None, Some(bytes));
+                    self.data_pictures.push((hash, r));
+                    r
+                }),
+            }
+        } else if let Ok(u) = self.url.join(address.trim().split('#').next().unwrap_or("")) {
+            // (The same picture twice on a page: fetched once.)
+            match self.resources.iter().position(|r| r.kind == Kind::Picture && r.url.as_ref() == Some(&u)) {
+                Some(i) => Some(i),
+                None => Some(self.add(Kind::Picture, Some(u), None)),
+            }
+        } else {
+            None
+        };
+        if let Some(r) = r {
+            self.picture_of.push((n, r));
         }
     }
 
@@ -708,6 +789,9 @@ impl Page {
         let submit = h.submit.take();
         let back = h.history_go.take();
         let title = core::mem::take(&mut h.title_changed);
+        if core::mem::take(&mut h.canvas_drawn) {
+            self.repaint = true;
+        }
         let scroll = h.scroll.1;
         let url = h.url.href();
         if mutated || title {
@@ -817,6 +901,27 @@ impl Page {
             });
             ran = true;
         }
+        // Pictures that have come (or couldn't be had): their <img>s' load (or error) events.
+        let mut due = Vec::new();
+        for &(n, r) in &self.picture_of {
+            if self.img_fired.contains(&(n, r)) || !matches!(self.doc.name(n), "img" | "input") {
+                continue;
+            }
+            match self.resources[r].state {
+                State::Picture(w, h) => due.push((n, r, Some((w, h)))),
+                State::Failed => due.push((n, r, None)),
+                _ => {}
+            }
+        }
+        for (n, r, size) in due {
+            self.img_fired.insert((n, r));
+            self.with_script(|s| {
+                s.set_now(now);
+                s.host().settled.insert(n, size);
+                s.fire(Some(n), &EventInit::new(if size.is_some() { "load" } else { "error" }, "Event", false, false))
+            });
+            ran = true;
+        }
         if self.dom_loaded && !self.load_fired && self.resources.iter().all(|r| r.asked && r.state != State::Waiting) && self.scripts.iter().all(|s| s.done) {
             self.load_fired = true;
             self.with_script(|s| {
@@ -859,6 +964,39 @@ impl Page {
 
     fn soon_script(&self, ready: &dyn Fn(&PageScript) -> bool) -> Option<usize> {
         self.scripts.iter().position(|s| !s.done && s.when == When::Soon && ready(s))
+    }
+
+    /// A picture's pixels, decoded (for its scripts to draw on canvases).
+    pub fn picture_pixels(&mut self, i: usize, px: Arc<crate::script::Pixels>) {
+        if let Some(s) = self.script.as_mut() {
+            let h = s.host();
+            if h.pixels.len() <= i {
+                h.pixels.resize(i + 1, None);
+            }
+            h.pixels[i] = Some(px);
+        }
+    }
+
+    /// The page's pictures for the painter: `pictures` (those fetched), with its canvases'.
+    pub fn shown<'a>(&'a self, pictures: &'a dyn crate::paint::Shown) -> WithCanvases<'a> {
+        WithCanvases { page: self, inner: pictures }
+    }
+
+    /// Whether a resource is a canvas's picture (drawn by the page's scripts, not fetched).
+    pub fn is_canvas(&self, r: usize) -> bool {
+        self.canvases.iter().any(|(_, k)| *k == r)
+    }
+
+    /// A canvas's pixels, by its resource (if its scripts have drawn on it).
+    fn canvas_of(&self, r: usize) -> Option<&crate::script::Canvas> {
+        let (node, _) = self.canvases.iter().find(|(_, k)| *k == r)?;
+        let h = self.script.as_ref()?.vm.host.as_ref()?.downcast_ref::<crate::script::Host>()?;
+        h.canvases.iter().find(|c| c.node == *node && !c.alpha.is_empty())
+    }
+
+    /// Whether its scripts asked for an animation frame (requestAnimationFrame): the page is to be drawn again soon.
+    pub fn wants_frame(&mut self) -> bool {
+        self.script.as_mut().is_some_and(|s| !s.host().frames.is_empty())
     }
 
     /// Runs requestAnimationFrame's callbacks (before the page is drawn): true if any ran.
@@ -1424,6 +1562,14 @@ fn picture_address(src: Option<&str>, srcset: Option<&str>, data_src: Option<&st
 }
 
 /// A data: URL's bytes (base64 or percent-encoded).
+/// HTML's rules for a non-negative integer (a canvas's width and height).
+fn non_negative(s: &str) -> Option<u32> {
+    let s = s.trim_start_matches([' ', '\t', '\n', '\x0c', '\r']);
+    let s = s.strip_prefix('+').unwrap_or(s);
+    let digits = &s[..s.bytes().take_while(u8::is_ascii_digit).count()];
+    digits.parse::<u64>().ok().filter(|v| *v <= i32::MAX as u64).map(|v| v as u32)
+}
+
 pub fn data_url(s: &str) -> Option<Vec<u8>> {
     let rest = s.trim().strip_prefix("data:")?;
     let (head, data) = rest.split_once(',')?;

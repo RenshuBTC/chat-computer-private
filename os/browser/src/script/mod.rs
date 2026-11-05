@@ -4,6 +4,7 @@
 //! attributes (lists.rs). The engine knows nothing of pages: these are its host's objects, `Class::Host` objects
 //! whose state is here (the `Host`, in the VM's host slot), and the page's tree is moved into it while scripts run.
 
+mod canvas;
 mod dom;
 mod events;
 mod geometry;
@@ -24,6 +25,7 @@ use js::string::JsStr;
 use js::value::{Gc, Value};
 use js::vm::{I, Sym, Vm};
 
+pub use canvas::{Canvas, Pixels};
 pub use dom::{ScriptKind, runnable_type, script_kind};
 pub use events::{EvValue, EventInit};
 pub use geometry::{LayoutInputs, Picker, fresh_layout, rects_of};
@@ -164,6 +166,16 @@ pub struct Host {
     pub laid_version: u64,
     pub styles: Option<alloc::sync::Arc<crate::style::Styles>>,
     pub forced_layouts: u32,
+    /// The page's canvases (each one's pixels and its context's state), and whether one was drawn on since the
+    /// page last looked.
+    pub canvases: Vec<canvas::Canvas>,
+    pub canvas_drawn: bool,
+    /// The page's pictures' pixels as they've come (by resource), for drawing on canvases.
+    pub pixels: Vec<Option<alloc::sync::Arc<Pixels>>>,
+    /// Pictures scripts made that aren't in the page (new Image(), its src set): the page fetches them too.
+    pub images: Vec<NodeId>,
+    /// The <img>s whose picture has come (its size) or couldn't be (None): complete, naturalWidth.
+    pub settled: BTreeMap<NodeId, Option<(u32, u32)>>,
 }
 
 /// The private symbols holding objects' inner state (scripts never see these keys).
@@ -225,6 +237,11 @@ impl Host {
             laid_version: u64::MAX,
             styles: None,
             forced_layouts: 0,
+            canvases: Vec::new(),
+            canvas_drawn: false,
+            pixels: Vec::new(),
+            images: Vec::new(),
+            settled: BTreeMap::new(),
         }
     }
 
@@ -284,6 +301,7 @@ fn trace(h: &dyn core::any::Any, roots: &mut Vec<Value>) {
     for s in [h.syms.event, h.syms.data, h.syms.target].into_iter().flatten() {
         roots.push(Value::Sym(s));
     }
+    canvas::trace(h, roots);
 }
 
 /// The host, from inside a built-in function.
@@ -561,6 +579,7 @@ impl Script {
         lists::init(&mut vm);
         window::init(&mut vm);
         net::init(&mut vm);
+        canvas::init(&mut vm);
         // The document's object is node 0's.
         let d = wrap(&mut vm, 0);
         vm.put(window, "document", d, js::object::ENUMERABLE);

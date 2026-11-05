@@ -27,6 +27,11 @@ pub trait Shown {
     fn alpha(&self, _n: usize) -> Option<&[u8]> {
         None
     }
+    /// Which version of the picture it is (a canvas's changes as it's drawn on): a new one is made its drawn size
+    /// again.
+    fn version(&self, _n: usize) -> u64 {
+        0
+    }
 }
 
 /// No pictures (yet).
@@ -54,7 +59,7 @@ pub struct Painter {
     bytes: usize,
     /// Pictures at the size they're drawn (0xAARRGGBB, alpha straight), by (picture, width, height, cover), and
     /// when each was last used.
-    scaled: BTreeMap<(usize, u32, u32, bool), (Vec<u32>, u64)>,
+    scaled: BTreeMap<(usize, u32, u32, bool), (Vec<u32>, u64, u64)>,
     scaled_bytes: usize,
 }
 
@@ -122,12 +127,18 @@ impl Painter {
                         let (tw, th) = (r.w as u32, r.h as u32);
                         let key = (*n, tw, th, *cover);
                         let round = self.round;
+                        let version = pictures.version(*n);
+                        if self.scaled.get(&key).is_some_and(|(_, _, v)| *v != version)
+                            && let Some((old, _, _)) = self.scaled.remove(&key)
+                        {
+                            self.scaled_bytes -= old.len() * 4;
+                        }
                         if !self.scaled.contains_key(&key) && tw as u64 * th as u64 <= 16 << 20 {
                             let px = scaled(rgb, pictures.alpha(*n), pw, ph, tw, th, *cover);
                             self.scaled_bytes += px.len() * 4;
-                            self.scaled.insert(key, (px, round));
+                            self.scaled.insert(key, (px, round, version));
                         }
-                        if let Some((px, used)) = self.scaled.get_mut(&key) {
+                        if let Some((px, used, _)) = self.scaled.get_mut(&key) {
                             *used = round;
                             picture(surface, &r, px, tw, item_clip);
                         }
@@ -144,7 +155,7 @@ impl Painter {
         if self.scaled_bytes > MOST_SCALED_BYTES {
             let round = self.round;
             let mut freed = 0;
-            self.scaled.retain(|_, (px, used)| {
+            self.scaled.retain(|_, (px, used, _)| {
                 let keep = round - *used < 2;
                 if !keep {
                     freed += px.len() * 4;
@@ -445,6 +456,17 @@ fn scaled(rgb: &[u8], alpha: Option<&[u8]>, pw: u32, ph: u32, tw: u32, th: u32, 
             sh = pw as f32 / want;
             sy = (ph as f32 - sh) / 2.0;
         }
+    }
+    if !cover && tw == pw && th == ph {
+        // (Drawn the size it is, as a canvas mostly is: each pixel as it is.)
+        let mut out = alloc::vec![0u32; tw as usize * th as usize];
+        for (i, o) in out.iter_mut().enumerate() {
+            let a = alpha.map_or(255, |al| al[i] as u32);
+            if a > 0 {
+                *o = a << 24 | (rgb[i * 3] as u32) << 16 | (rgb[i * 3 + 1] as u32) << 8 | rgb[i * 3 + 2] as u32;
+            }
+        }
+        return out;
     }
     let (kx, ky) = (sw / tw as f32, sh / th as f32);
     // A source pixel, premultiplied: (r, g, b, a), 0 to 255.

@@ -12,9 +12,11 @@ use crate::web::Fetch;
 use crate::{clock, time};
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use browser::page::{Kind, Page, State};
 use browser::paint::{Painter, Shown, Surface};
+use browser::script::Pixels;
 pub use browser::address::name_of;
 use browser::{Hit, Request};
 use text::Type;
@@ -30,6 +32,8 @@ const MOST_REFRESHES: u32 = 3;
 /// A picture's pixels are kept at most this big (in device pixels, each side), and at most this much memory a page.
 const PICTURE_SIDE: u32 = 2400;
 const PICTURES_BYTES: usize = 160 << 20;
+/// How often a page's animation frames are drawn, at most (ms: 60 a second).
+const FRAME_MS: u64 = 16;
 /// The most pages kept to go back to.
 const MOST_BACK: usize = 50;
 /// While a page loads, it's laid out again at most this often (each style sheet or picture that comes changes it).
@@ -37,16 +41,16 @@ const RELAYOUT_MS: u64 = 250;
 /// The stack a page is laid out on (Wikipedia's longest pages take about a twentieth of it).
 const LAYOUT_STACK: usize = 4 << 20;
 
-/// The page's pictures, decoded (by their resource's place).
-/// The page's pictures: each one's colours, size, and alpha (if it has see-through parts).
-struct Pictures(Vec<Option<(Vec<u8>, u32, u32, Option<Vec<u8>>)>>);
+/// The page's pictures, decoded (by their resource's place): each one's colours, size, and alpha (if it has
+/// see-through parts); shared with the page's scripts (for drawing on its canvases).
+struct Pictures(Vec<Option<Arc<Pixels>>>);
 
 impl Shown for Pictures {
     fn picture(&self, n: usize) -> Option<(&[u8], u32, u32)> {
-        self.0.get(n)?.as_ref().map(|(p, w, h, _)| (p.as_slice(), *w, *h))
+        self.0.get(n)?.as_ref().map(|p| (p.rgb.as_slice(), p.width, p.height))
     }
     fn alpha(&self, n: usize) -> Option<&[u8]> {
-        self.0.get(n)?.as_ref()?.3.as_deref()
+        self.0.get(n)?.as_ref()?.alpha.as_deref()
     }
 }
 
@@ -96,6 +100,8 @@ pub struct Site {
     console_logged: usize,
     /// Whether "has come" has been logged for the page.
     come_logged: bool,
+    /// When its scripts' last animation frame was asked to be drawn (uptime ms).
+    frame_at: u64,
 }
 
 impl Site {
@@ -140,6 +146,7 @@ impl Site {
             script_fetches: Vec::new(),
             console_logged: 0,
             come_logged: false,
+            frame_at: 0,
         }
     }
 
@@ -336,10 +343,19 @@ impl Site {
             if page.changed {
                 self.dirty = true;
             }
+            // (Its scripts drew on a canvas, or want an animation frame: drawn again, at most FRAME_MS apart.)
+            if core::mem::take(&mut page.repaint) {
+                self.dirty = true;
+            }
+            let now = time::uptime_ms();
+            if page.wants_frame() && now.saturating_sub(self.frame_at) >= FRAME_MS {
+                self.frame_at = now;
+                self.dirty = true;
+            }
             if self.fetching.is_empty() && page.resources.iter().all(|r| r.asked) && changed && !self.come_logged {
                 self.come_logged = true;
                 let sheets = page.resources.iter().filter(|r| r.kind == Kind::Sheet && matches!(r.state, State::Css(_))).count();
-                let pics = page.resources.iter().filter(|r| r.kind == Kind::Picture && matches!(r.state, State::Picture(..))).count();
+                let pics = page.resources.iter().enumerate().filter(|(i, r)| r.kind == Kind::Picture && matches!(r.state, State::Picture(..)) && !page.is_canvas(*i)).count();
                 let failed = page.resources.iter().filter(|r| r.state == State::Failed).count();
                 log!("Chat Computer kernel: site: {} has come: {sheets} style sheets, {pics} pictures ({failed} couldn't be had)", page.url);
             }
@@ -457,7 +473,7 @@ impl Site {
             return;
         }
         surface.clip = inside;
-        self.painter.draw(ty, laid, x, y, self.scroll, &mut surface, &self.pictures, true);
+        self.painter.draw(ty, laid, x, y, self.scroll, &mut surface, &page.shown(&self.pictures), true);
         // The caret, in the field being typed in.
         if let Some(f) = self.focus
             && let Some((cx, cy, ch)) = caret_place(page, ty, f, self.caret)
@@ -719,8 +735,10 @@ fn picture_came(page: &mut Page, pictures: &mut Pictures, bytes_used: &mut usize
             if pictures.0.len() <= i {
                 pictures.0.resize(i + 1, None);
             }
-            pictures.0[i] = Some((p.rgb, p.width, p.height, alpha));
+            let px = Arc::new(Pixels { rgb: p.rgb, alpha, width: p.width, height: p.height, natural: (w, h) });
+            pictures.0[i] = Some(px.clone());
             page.picture_came(i, w, h);
+            page.picture_pixels(i, px);
         }
         Err(_) => page.failed(i),
     }

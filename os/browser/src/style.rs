@@ -1403,6 +1403,23 @@ const SERIF_WORDS: &[&str] = &[
     "literata", "new york", "tiempos", "mincho", "songti",
 ];
 
+/// What a font-family list written out asks for (a canvas's font): (monospace, sans-serif), as `family_kind`.
+pub fn kind_of_families(list: &str) -> (bool, bool) {
+    for f in list.split(',') {
+        let f = f.trim().trim_matches(['"', '\'']).to_ascii_lowercase();
+        if MONO_WORDS.iter().any(|w| f.contains(w)) {
+            return (true, false);
+        }
+        if SANS_WORDS.iter().any(|w| f.contains(w)) {
+            return (false, true);
+        }
+        if SERIF_WORDS.iter().any(|w| f.contains(w)) {
+            return (false, false);
+        }
+    }
+    (false, false)
+}
+
 /// What a font-family list asks for: (monospace, sans-serif); neither is serif. Its first family of a kind this
 /// browser can tell (the others are fonts it hasn't, which the list's later ones stand in for).
 fn family_kind(v: &[Tok]) -> (bool, bool) {

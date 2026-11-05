@@ -1435,6 +1435,18 @@ SITE_JS = """document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('made').style.background = '#40c0c0';
   });
   setTimeout(function () { console.log('timer fired'); }, 200);
+  var cv = document.createElement('canvas');
+  cv.width = 120;
+  cv.height = 40;
+  document.querySelector('form').appendChild(cv);
+  var cx = cv.getContext('2d');
+  cx.fillStyle = '#e04020';
+  cx.fillRect(0, 0, 120, 40);
+  cx.fillStyle = '#ffffff';
+  cx.font = '16px sans-serif';
+  cx.fillText('canvas', 8, 26);
+  var px = cx.getImageData(2, 2, 1, 1).data;
+  console.log('canvas drew ' + px[0] + ',' + px[1] + ',' + px[2] + ' ' + cv.toDataURL().slice(0, 15));
 });"""
 SITE_CSS = """body { margin: 0; background: #fff4e0; font-family: serif; }
 #next { display: block; height: 200px; line-height: 200px; padding-left: 20px; background: #2050c0; color: #fff; }
@@ -1589,7 +1601,8 @@ def site_check(args) -> list[str]:
                                     ("the link's background", (0x20, 0x50, 0xC0), 20000),
                                     ("the flex row's cells", (0x20, 0xA0, 0x40), 6000),
                                     ("the picture", (230, 30, 30), 4000),
-                                    ("the block the page's script made (teal once its fetch came)", (0x40, 0xC0, 0xC0), 20000)):
+                                    ("the block the page's script made (teal once its fetch came)", (0x40, 0xC0, 0xC0), 20000),
+                                    ("the canvas the page's script drew on", (0xE0, 0x40, 0x20), 2500)):
                 if not area_has(home, colour, n):
                     problems.append(f"{name} isn't on the screen (at least {n} pixels of {colour})")
         if pictures.get("results") is not None and not area_has(pictures["results"], (0xF0, 0xE0, 0xFF), 50000):
@@ -1615,7 +1628,7 @@ def site_check(args) -> list[str]:
         for note in ("site: opening https://www.example.com/", "1 style sheets, 1 pictures (0 couldn't be had)",
                      "site: form sent to https://www.example.com/search?q=sunny+day (GET)", "Opened www.example.com",
                      "site: console: made 3 cells later", "site: console: fetched hello", "site: console: timer fired",
-                     "site: console: module says hi from a module"):
+                     "site: console: module says hi from a module", "site: console: canvas drew 224,64,32 data:image/png;"):
             if note not in text:
                 problems.append(f"the log doesn't say {note!r}")
     finally:

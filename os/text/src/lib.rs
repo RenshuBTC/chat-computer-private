@@ -21,7 +21,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
 use font::raster::{Pen, Raster, ONE};
-use font::{Font, Instance, Kerning, Marks, Outline};
+use font::{Font, Instance, Kerning, Marks};
+pub use font::Outline;
 
 static LORA: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/Lora.ttf");
 static MONO: &[u8] = include_bytes!("../../../chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleMono.ttf");
@@ -102,6 +103,28 @@ impl Outline for Slant<'_> {
     }
     fn quad_to(&mut self, cx: i32, cy: i32, x: i32, y: i32) {
         self.to.quad_to(Self::x(cx, cy), cy, Self::x(x, y), y);
+    }
+    fn close(&mut self) {
+        self.to.close();
+    }
+}
+
+/// An outline moved along (a glyph to its place on the line).
+struct Shift<'a> {
+    to: &'a mut dyn Outline,
+    dx: i32,
+    dy: i32,
+}
+
+impl Outline for Shift<'_> {
+    fn move_to(&mut self, x: i32, y: i32) {
+        self.to.move_to(x + self.dx, y + self.dy);
+    }
+    fn line_to(&mut self, x: i32, y: i32) {
+        self.to.line_to(x + self.dx, y + self.dy);
+    }
+    fn quad_to(&mut self, cx: i32, cy: i32, x: i32, y: i32) {
+        self.to.quad_to(cx + self.dx, cy + self.dy, x + self.dx, y + self.dy);
     }
     fn close(&mut self) {
         self.to.close();
@@ -694,6 +717,44 @@ impl Type {
         }
         lines.push(&text[start..]);
         lines
+    }
+
+    /// The fonts' units to the em (all of them have the same).
+    pub fn units_per_em(&self) -> i32 {
+        self.font.metrics.units_per_em as i32
+    }
+
+    /// The text font's ascender and descender (both up from the baseline: the descender below 0), in font units.
+    pub fn vertical(&self) -> (i32, i32) {
+        (self.font.metrics.ascender as i32, self.font.metrics.descender as i32)
+    }
+
+    /// A line of text's glyphs as outlines in `face`, handed to `out` in 64ths of a font unit (`units_per_em` font
+    /// units to the em, y up) from the line's start on its baseline: for drawing text at any size and through any
+    /// transform (a page's canvas), filled or stroked. Its width, in font units.
+    pub fn outline_line(&self, text: &str, face: Face, out: &mut dyn Outline) -> i32 {
+        let chars: Vec<(char, Face)> = text.chars().map(|c| (c, face)).collect();
+        let placed = self.shape(&chars);
+        let width = placed.last().map_or(0, |p| p.pen + p.advance);
+        for (units, up, s) in placed.into_iter().filter_map(|p| p.drawn.map(|(s, x, y)| (x, y, s))) {
+            let font = self.font_of(s.source);
+            let bold = match s.source {
+                Source::Text => self.bold.as_ref(),
+                Source::Sans => self.sans_bold.as_ref(),
+                _ => None,
+            };
+            let mut shifted = Shift { to: out, dx: units * 64, dy: up * 64 };
+            let draw = |o: &mut dyn Outline| match bold {
+                Some(at) if face.bold() => font.outline_at(s.glyph, at, o),
+                _ => font.outline(s.glyph, o),
+            };
+            if face.slanted() {
+                draw(&mut Slant { to: &mut shifted });
+            } else {
+                draw(&mut shifted);
+            }
+        }
+        width
     }
 
     /// Draws one line of text. `top` is the fraction of a pixel (0..256) the line box starts below the

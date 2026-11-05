@@ -364,10 +364,15 @@ drivers.
   page's scripts in their order, its modules (`<script type="module">`, import maps, `import()`) fetched as they're
   imported, its clicks and keys going to them first (and doing nothing more when they cancel them), and what they
   change laid out again (on the spot when a script asks where a box is: offsetWidth, getBoundingClientRect,
-  getComputedStyle). jQuery, React and Preact pages work. `check.py --site` types an
+  getComputedStyle). Its canvases are drawn by its scripts (`script/canvas.rs`: the 2D context's paths, curves and
+  arcs, filled and stroked through its transform with dashes, caps and joins, in colours, gradients and patterns,
+  clipped, composited by every operation and blend mode, with shadows; text in the page's fonts; pictures and other
+  canvases drawn on them; their pixels read, written and saved as PNG or JPEG), with SVG's vector drawing, and
+  shown as pictures, drawn again as their animation frames come. Pictures a script makes (new Image()) are fetched,
+  and their load and error events fired. jQuery, React and Preact pages work. `check.py --site` types an
   address, and a stand-in for the site (over TLS 1.3, with a test authority) checks its style sheet, picture and
-  cookie, its script (a block it makes, turned another colour by what it fetches, a timer, its console's lines in
-  the log) and its module, a form sent with what was typed, and a link clicked.
+  cookie, its script (a block it makes, turned another colour by what it fetches, a canvas it draws on, a timer,
+  its console's lines in the log) and its module, a form sent with what was typed, and a link clicked.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
   retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
   its own with lost, repeated and reordered packets.
@@ -851,8 +856,8 @@ writes for each person, in place of Ubuntu's catalogue.
     cookies; checked in a virtual PC against a stand-in site, and on Wikipedia's, Hacker News' and Google's pages).
     ✓ Scripts: a JavaScript engine of its own (96% of Ecma's test262's language tests), the DOM, events, timers,
     fetch, modules, layout worked out when a script asks for a box's size. ✓ A sans-serif font for pages that ask
-    for one. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. To do:
-    canvas, and touchpads.
+    for one. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
+    Canvas (its 2D drawing, text, pictures and pixels; animation frames). To do: touchpads.
 16. Apps Chat Computer writes for you: when a person needs a tool (a budget, a study plan, their taxes), the model
     builds a small app of its own for it and keeps it up to date as things change, so asking again is a button, not
     another answer from scratch. Each app is one file in a form simple enough for a small model to write well (its

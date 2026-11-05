@@ -365,10 +365,10 @@ impl Builder<'_> {
             "img" => Content::Image { image: self.pictures.picture(self.doc, node), alt: String::from(el.attr("alt").unwrap_or("")) },
             "svg" | "video" | "canvas" | "iframe" | "embed" | "object" | "audio" | "math" => {
                 // (Their insides aren't drawn here: their place is kept, from their size; an <svg> is a picture, drawn
-                // from its own text.)
+                // from its own text, and a <canvas> one its scripts draw.)
                 let image = match name {
                     "video" => el.attr("poster").and(self.pictures.picture(self.doc, node)),
-                    "svg" => self.pictures.picture(self.doc, node),
+                    "svg" | "canvas" => self.pictures.picture(self.doc, node),
                     _ => None,
                 };
                 Content::Image { image, alt: String::new() }

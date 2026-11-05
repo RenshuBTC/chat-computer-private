@@ -352,3 +352,72 @@ fn an_svg_in_the_page_is_a_picture_drawn_from_its_text() {
     let pics: Vec<(f32, f32)> = l.items.iter().filter_map(|i| if let Paint::Picture { w, h, .. } = i.paint { Some((w, h)) } else { None }).collect();
     assert_eq!(pics, [(48.0, 24.0), (10.0, 10.0)]);
 }
+
+#[test]
+fn a_canvas_shows_what_its_scripts_draw() {
+    let mut p = scripted(
+        "<body style='margin:0'><canvas id=c width=40 height=20></canvas><script>\
+         var c = document.getElementById('c'), x = c.getContext('2d');\
+         x.fillStyle = 'red'; x.fillRect(0, 0, 10, 10);\
+         x.fillStyle = 'rgba(0, 0, 255, 0.5)'; x.fillRect(5, 0, 10, 10);\
+         x.beginPath(); x.arc(30, 10, 5, 0, Math.PI * 2); x.fillStyle = '#0f0'; x.fill();\
+         var d = x.getImageData(0, 0, 40, 20).data, at = function (px, py) { var i = (py * 40 + px) * 4; return [d[i], d[i+1], d[i+2], d[i+3]].join(','); };\
+         console.log(at(2, 2), at(7, 2), at(12, 2), at(30, 10), at(20, 15), x.getContext === undefined, c.getContext('2d') === x, c.getContext('webgl'));\
+         console.log(x.fillStyle, x.isPointInPath(30, 10), x.isPointInPath(20, 10), c.toDataURL().slice(0, 22));\
+         </script></body>",
+    );
+    p.run(0.0);
+    assert_eq!(
+        p.take_console(),
+        ["255,0,0,255 128,0,128,255 0,0,255,128 0,255,0,255 0,0,0,0 true true null", "#00ff00 true false data:image/png;base64,"]
+    );
+    // The page shows it: its picture, the canvas's pixels.
+    let ty = Type::builtin();
+    let l = p.lay_out(&ty, 600.0, 400.0, 1.0);
+    let n = l.items.iter().find_map(|i| if let Paint::Picture { n, w, h, .. } = i.paint { Some((n, w, h)) } else { None });
+    let (n, w, h) = n.expect("the canvas is a picture");
+    assert_eq!((w, h), (40.0, 20.0));
+    let shown = p.shown(&crate::paint::NoPictures);
+    use crate::paint::Shown;
+    let (rgb, pw, ph) = shown.picture(n).expect("its pixels");
+    assert_eq!((pw, ph, &rgb[..3]), (40, 20, &[255u8, 0, 0][..]));
+    assert_eq!(shown.alpha(n).map(|a| a[2 * 40 + 2]), Some(255));
+}
+
+#[test]
+fn a_canvas_s_paths_paints_and_pixels() {
+    let mut p = scripted(
+        "<canvas id=c width=100 height=50></canvas><canvas id=o width=4 height=4></canvas><script>\
+         var c = document.getElementById('c'), x = c.getContext('2d');\
+         var px = function (a, b) { var d = x.getImageData(a, b, 1, 1).data; return d[0] + ',' + d[1] + ',' + d[2] + ',' + d[3]; };\
+         var g = x.createLinearGradient(0, 0, 100, 0); g.addColorStop(0, '#000'); g.addColorStop(1, '#fff');\
+         x.fillStyle = g; x.fillRect(0, 0, 100, 10);\
+         var grad = px(50, 5);\
+         x.save(); x.beginPath(); x.rect(0, 20, 50, 30); x.clip(); x.fillStyle = 'blue'; x.fillRect(0, 20, 100, 30); x.restore();\
+         var clipped = px(25, 30) + ' ' + px(75, 30);\
+         x.globalCompositeOperation = 'destination-out'; x.fillRect(0, 0, 10, 10); x.globalCompositeOperation = 'source-over';\
+         var cleared = px(5, 5);\
+         x.translate(60, 30); x.scale(2, 2); x.fillStyle = 'lime'; x.fillRect(0, 0, 5, 5); x.setTransform(1, 0, 0, 1, 0, 0);\
+         var moved = px(65, 35) + ' ' + px(71, 35);\
+         var o = document.getElementById('o').getContext('2d'); o.fillStyle = '#123456'; o.fillRect(0, 0, 4, 4);\
+         x.drawImage(document.getElementById('o'), 90, 40); var drawn = px(91, 41);\
+         var id = x.createImageData(2, 1); id.data.set([1, 2, 3, 255, 4, 5, 6, 128]); x.putImageData(id, 0, 49);\
+         var put = px(0, 49) + ' ' + px(1, 49);\
+         x.font = '20px serif'; var m = x.measureText('Hello');\
+         console.log(grad, '|', clipped, '|', cleared, '|', moved, '|', drawn, '|', put, '|', m.width > 30 && m.width < 70, x.font);\
+         c.width = 100; console.log(px(25, 30), x.fillStyle, x.getTransform().e);\
+         try { x.arc(0, 0, -1, 0, 1); } catch (e) { console.log(e.name); }\
+         x.lineWidth = -5; x.globalAlpha = 2; x.lineCap = 'nope'; console.log(x.lineWidth, x.globalAlpha, x.lineCap);\
+         </script>",
+    );
+    p.run(0.0);
+    assert_eq!(
+        p.take_console(),
+        [
+            "129,129,129,255 | 0,0,255,255 0,0,0,0 | 0,0,0,0 | 0,255,0,255 0,0,0,0 | 18,52,86,255 | 1,2,3,255 4,5,6,128 | true 20px serif",
+            "0,0,0,0 #000000 0",
+            "IndexSizeError",
+            "1 1 butt"
+        ]
+    );
+}

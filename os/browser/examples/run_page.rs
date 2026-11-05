@@ -6,18 +6,20 @@
 
 use browser::page::{Kind, Page, State};
 use browser::paint::{Painter, Shown, Surface};
+use browser::script::Pixels;
+use std::sync::Arc;
 use std::io::Write;
 use text::Type;
 use web::Url;
 
-struct Pictures(Vec<Option<(Vec<u8>, u32, u32, Option<Vec<u8>>)>>);
+struct Pictures(Vec<Option<Arc<Pixels>>>);
 
 impl Shown for Pictures {
     fn picture(&self, n: usize) -> Option<(&[u8], u32, u32)> {
-        self.0.get(n)?.as_ref().map(|(p, w, h, _)| (p.as_slice(), *w, *h))
+        self.0.get(n)?.as_ref().map(|p| (p.rgb.as_slice(), p.width, p.height))
     }
     fn alpha(&self, n: usize) -> Option<&[u8]> {
-        self.0.get(n)?.as_ref()?.3.as_deref()
+        self.0.get(n)?.as_ref()?.alpha.as_deref()
     }
 }
 
@@ -130,7 +132,7 @@ fn main() {
         let mut surface = Surface { pixels: &mut pixels, width: w, height: h, clip: (0, 0, w as i32, h as i32) };
         let mut painter = Painter::new();
         let laid = page.laid().expect("laid out");
-        painter.draw(&ty, laid, 0, 0, 0.0, &mut surface, &pictures, true);
+        painter.draw(&ty, laid, 0, 0, 0.0, &mut surface, &page.shown(&pictures), true);
         let mut f = std::fs::File::create(out).expect("the picture's file");
         write!(f, "P6\n{w} {h}\n255\n").ok();
         let mut bytes = Vec::with_capacity(w * h * 3);
@@ -157,11 +159,13 @@ fn fetch(page: &mut Page, pictures: &mut Pictures, files: &Option<std::path::Pat
                 (Kind::Picture, Some(b)) => match picture::decode_alpha(&b, 4000, 4000, u64::MAX) {
                     Ok((p, alpha)) => {
                         let (w, h) = picture::size(&b).unwrap_or((p.width, p.height));
+                        let px = Arc::new(Pixels { rgb: p.rgb, alpha, width: p.width, height: p.height, natural: (w, h) });
                         page.picture_came(i, w, h);
+                        page.picture_pixels(i, px.clone());
                         if pictures.0.len() <= i {
                             pictures.0.resize(i + 1, None);
                         }
-                        pictures.0[i] = Some((p.rgb, p.width, p.height, alpha));
+                        pictures.0[i] = Some(px);
                     }
                     Err(_) => page.failed(i),
                 },

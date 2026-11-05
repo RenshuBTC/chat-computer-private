@@ -4,6 +4,7 @@
 //! then written again, a few hundred kilobytes.
 
 use crate::Picture;
+use alloc::vec;
 use alloc::vec::Vec;
 
 /// Annex K's quantization tables, in natural order: luminance's and chrominance's.
@@ -334,5 +335,52 @@ pub fn jpeg(p: &Picture, quality: u8) -> Vec<u8> {
     writer.flush();
     let mut out = writer.out;
     out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
+/// A PNG of RGBA pixels (alpha straight), as a canvas's toDataURL() gives one: its rows unfiltered, and deflate's
+/// stored blocks (no compression: quick, and what any reader reads).
+pub fn png(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let mut raw = Vec::with_capacity((w * 4 + 1) * h);
+    for y in 0..h {
+        raw.push(0);
+        raw.extend_from_slice(&rgba[y * w * 4..(y + 1) * w * 4]);
+    }
+    // zlib: its header, the stored blocks (at most 65535 bytes each), and the Adler-32 of what's in them.
+    let mut z = vec![0x78, 0x01];
+    let mut chunks = raw.chunks(65535).peekable();
+    if chunks.peek().is_none() {
+        z.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF]);
+    }
+    while let Some(c) = chunks.next() {
+        z.push(if chunks.peek().is_none() { 1 } else { 0 });
+        let n = c.len() as u16;
+        z.extend_from_slice(&n.to_le_bytes());
+        z.extend_from_slice(&(!n).to_le_bytes());
+        z.extend_from_slice(c);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in &raw {
+        a = (a + x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut out = crate::png::SIGNATURE.to_vec();
+    let mut chunk = |kind: &[u8], body: &[u8]| {
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        let crc = zip::crc32(&out[start..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+    };
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(b"IHDR", &ihdr);
+    chunk(b"IDAT", &z);
+    chunk(b"IEND", &[]);
     out
 }

@@ -31,8 +31,13 @@ fn random_u64() -> u64 {
 
 pub fn init(vm: &mut Vm) {
     let w = host_ref(vm).window;
-    for name in ["window", "self", "frames", "top", "parent"] {
+    // (window and top can't be changed; self, frames and parent can be replaced, as a script's own `let frames`
+    // does.)
+    for name in ["window", "top"] {
         vm.put(w, name, Value::Obj(w), ENUMERABLE);
+    }
+    for name in ["self", "frames", "parent"] {
+        vm.put(w, name, Value::Obj(w), ALL);
     }
     for (name, v) in [("name", js("")), ("closed", Value::Bool(false)), ("length", Value::Num(0.0)), ("opener", Value::Null), ("frameElement", Value::Null), ("isSecureContext", Value::Bool(true)), ("crossOriginIsolated", Value::Bool(false)), ("status", js(""))] {
         vm.put(w, name, v, ALL);
@@ -1938,7 +1943,7 @@ pub fn blob_parts(vm: &Vm, v: &Value) -> Option<(Vec<u8>, String)> {
     }
 }
 
-fn make_blob(vm: &mut Vm, proto: Gc, bytes: Vec<u8>, ty: &str) -> Gc {
+pub(super) fn make_blob(vm: &mut Vm, proto: Gc, bytes: Vec<u8>, ty: &str) -> Gc {
     let g = vm.alloc(Some(proto), Class::Ordinary);
     let buf = array_buffer(vm, bytes);
     set_slot(vm, g, host_ref(vm).syms.data, buf);

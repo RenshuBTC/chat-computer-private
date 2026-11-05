@@ -592,3 +592,33 @@ fn dashed_dotted_and_double_borders_are_drawn_as_their_pieces() {
     let lines: Vec<_> = rects(l, GREEN).into_iter().filter(|r| r.2 == 100.0).collect();
     assert!(lines.iter().any(|r| r.1 == 100.0 && r.3 == 2.0) && lines.iter().any(|r| r.1 == 104.0 && r.3 == 2.0), "{lines:?}");
 }
+
+#[test]
+fn tab_goes_through_links_buttons_and_fields_shown() {
+    // In the page's order: what Tab goes to, that's shown (not one in a hidden box, a hidden field, a disabled
+    // button, or one with tabindex -1); a div a script made focusable; then none after the last.
+    let mut p = page(
+        "<body><a href='/a'>A link</a> <a>no address</a><div style='display:none'><a href='/hidden'>Hidden</a></div>\
+         <input type=hidden name=h><input name=q><button disabled>Off</button><button>On</button>\
+         <span tabindex=-1>skipped</span><div tabindex=0>Made focusable</div><select><option>One</select>\
+         <input type=checkbox><textarea></textarea></body>",
+    );
+    laid(&mut p);
+    let mut order = Vec::new();
+    let mut at = None;
+    while let Some(n) = p.next_focusable(at, false) {
+        let e = p.doc.element(n).unwrap();
+        order.push(format!("{}{}", e.name, e.attr("type").map(|t| format!("[{t}]")).unwrap_or_default()));
+        at = Some(n);
+        assert!(order.len() < 20);
+    }
+    assert_eq!(order, ["a", "input", "button", "div", "select", "input[checkbox]", "textarea"]);
+    // Back from the first: none; from none, the last.
+    let first = p.next_focusable(None, false);
+    assert_eq!(p.next_focusable(first, true), None);
+    assert_eq!(p.next_focusable(None, true).map(|n| p.doc.name(n).to_string()), Some("textarea".to_string()));
+    // A link's box: round its words.
+    let b = p.box_of(first.unwrap()).unwrap();
+    assert!(b.w > 10.0 && b.h > 5.0, "{b:?}");
+    assert!(p.is_text_field(p.next_focusable(first, false).unwrap()));
+}

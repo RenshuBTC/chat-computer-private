@@ -1421,28 +1421,90 @@ impl Page {
         self.doc.descendants(0).find(|&n| self.doc.element(n).is_some_and(|e| matches!(e.name.as_str(), "input" | "textarea") && e.has_attr("autofocus")))
     }
 
-    /// The field after (or before) `from` in the page's order, for Tab.
-    pub fn next_field(&self, from: Option<NodeId>, back: bool) -> Option<NodeId> {
-        let fields: Vec<NodeId> = self
-            .doc
-            .descendants(0)
-            .filter(|&n| {
-                self.doc.element(n).is_some_and(|e| {
-                    (e.name == "textarea" || (e.name == "input" && !matches!(e.attr("type").map(|t| t.to_ascii_lowercase()).as_deref(), Some("hidden" | "submit" | "button" | "reset" | "checkbox" | "radio" | "image" | "file" | "range" | "color"))))
-                        && !e.has_attr("disabled")
-                })
-            })
-            .collect();
-        if fields.is_empty() {
-            return None;
+    /// Whether Tab goes to an element: a link, a button, a field of any kind (but a hidden one), a list to choose
+    /// from, a <summary>, or one a script gave a tabindex of 0 or more (none of them disabled; tabindex -1 takes
+    /// any out).
+    pub fn focusable(&self, n: NodeId) -> bool {
+        let Some(e) = self.doc.element(n) else { return false };
+        if e.has_attr("disabled") {
+            return false;
         }
-        let at = from.and_then(|f| fields.iter().position(|&n| n == f));
-        Some(match (at, back) {
-            (None, false) => fields[0],
-            (None, true) => fields[fields.len() - 1],
-            (Some(i), false) => fields[(i + 1) % fields.len()],
-            (Some(i), true) => fields[(i + fields.len() - 1) % fields.len()],
+        if let Some(i) = e.attr("tabindex").and_then(|t| t.trim().parse::<i32>().ok()) {
+            return i >= 0;
+        }
+        match e.name.as_str() {
+            "a" | "area" => e.has_attr("href"),
+            "button" | "select" | "textarea" | "summary" => true,
+            "input" => !e.attr("type").is_some_and(|t| t.eq_ignore_ascii_case("hidden")),
+            _ => false,
+        }
+    }
+
+    /// Whether an element is a field to type in (a text field of any kind, or a textarea).
+    pub fn is_text_field(&self, n: NodeId) -> bool {
+        self.doc.element(n).is_some_and(|e| {
+            e.name == "textarea"
+                || (e.name == "input"
+                    && !matches!(e.attr("type").map(|t| t.to_ascii_lowercase()).as_deref(), Some("hidden" | "submit" | "button" | "reset" | "checkbox" | "radio" | "image" | "file" | "range" | "color")))
         })
+    }
+
+    /// The element Tab goes to next after `from` (with none, the first), or before it (`back`), in the page's order:
+    /// those Tab goes to (`focusable`) that are laid out (shown); None past the last (or before the first).
+    pub fn next_focusable(&self, from: Option<NodeId>, back: bool) -> Option<NodeId> {
+        let laid = self.laid.as_ref()?;
+        // What's shown: each laid-out item's node and the elements it's in.
+        let mut shown = vec![false; self.doc.nodes.len()];
+        for i in &laid.items {
+            let mut at = i.node;
+            while let Some(n) = at {
+                if n >= shown.len() || shown[n] {
+                    break;
+                }
+                shown[n] = true;
+                at = self.doc.parent(n);
+            }
+        }
+        let order: Vec<NodeId> = self.doc.descendants(0).filter(|&n| shown.get(n) == Some(&true) && self.focusable(n)).collect();
+        match (from.and_then(|f| order.iter().position(|&n| n == f)), back) {
+            (None, false) => order.first().copied(),
+            (None, true) => order.last().copied(),
+            (Some(i), false) => order.get(i + 1).copied(),
+            (Some(i), true) => i.checked_sub(1).map(|j| order[j]),
+        }
+    }
+
+    /// Where an element and all that's in it are laid out (one box round them all), for a ring round it when Tab
+    /// chose it, and to scroll it into view.
+    pub fn box_of(&self, node: NodeId) -> Option<Rect> {
+        let laid = self.laid.as_ref()?;
+        let mut inside = vec![false; self.doc.nodes.len()];
+        for n in self.doc.descendants(node) {
+            if let Some(x) = inside.get_mut(n) {
+                *x = true;
+            }
+        }
+        if let Some(x) = inside.get_mut(node) {
+            *x = true;
+        }
+        let mut r: Option<Rect> = None;
+        for i in laid.items.iter().filter(|i| i.node.is_some_and(|n| inside.get(n) == Some(&true))) {
+            let b = bounds(i);
+            r = Some(match r {
+                None => b,
+                Some(a) => {
+                    let x = a.x.min(b.x);
+                    let y = a.y.min(b.y);
+                    Rect::new(x, y, a.right().max(b.right()) - x, a.bottom().max(b.bottom()) - y)
+                }
+            });
+        }
+        r
+    }
+
+    /// The element the page's scripts have given the focus (focus()), if any.
+    pub fn script_focus(&mut self) -> Option<NodeId> {
+        self.script.as_mut().and_then(|s| s.host().focus)
     }
 
     /// Where a field is laid out (its box), for its caret and to scroll it into view.

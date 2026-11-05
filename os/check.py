@@ -2164,9 +2164,11 @@ def remember(args) -> list[str]:
 
 
 # The app the test's script has the model make: its data (how often it's been opened) kept in localStorage, the
-# number big on a teal page; and whether it reaches the internet (it mustn't).
+# number big on a teal page; whether it reaches the internet (it mustn't); and a button, pressed with the keyboard.
 APP_HTML = """<!doctype html><html><head><title>Counter</title><style>body { margin: 0; background: #2a9d8f; color: #fff;
-font: 24px sans-serif } #n { font-size: 48px; padding: 40px }</style></head><body><div id="n">?</div><script>
+font: 24px sans-serif } #n { font-size: 48px; padding: 40px }</style></head><body><div id="n">?</div>
+<button id="b">Again</button><script>
+document.getElementById('b').addEventListener('click', function () { console.log('pressed'); });
 var n = Number(localStorage.getItem('opens') || 0) + 1;
 localStorage.setItem('opens', String(n));
 document.getElementById('n').textContent = 'Opened ' + n + (n == 1 ? ' time' : ' times');
@@ -2177,8 +2179,9 @@ fetch('https://www.example.com/').then(function () { console.log('the app reache
 
 
 # An app that needs a site (api.example.com): blocked until the person presses its Allow button, then fetching
-# from it twice (its cookie never sent back); another site is never reached. Then it sends two notes there, each
-# waiting for the person (the first sent, the second not), and tries to take the person to another site (it can't).
+# from it twice (its cookie never sent back); another site is never reached. Then it sends three notes there, each
+# waiting for the person (the first sent, the second not, the third sent with the keyboard), and tries to take the
+# person to another site (it can't).
 RATES_HTML = """<!doctype html><html><head><title>Rates</title><style>body { margin: 0; background: #e9c46a; color: #000;
 font: 24px sans-serif } #r { font-size: 48px; padding: 40px }</style></head><body><div id="r">...</div><script>
 function show(x) { document.getElementById('r').textContent = x; }
@@ -2194,6 +2197,8 @@ function send() {
   .then(function (r) { console.log('note sent ' + r.status); }, function () { console.log('note not sent'); })
   .then(function () { return fetch('https://api.example.com/note', { method: 'POST', body: new URLSearchParams({ note: 'a second note' }) }); })
   .then(function () { console.log('second note sent'); }, function () { console.log('second note not sent'); })
+  .then(function () { return fetch('https://api.example.com/note', { method: 'PUT', body: 'by keys' }); })
+  .then(function () { console.log('third note sent'); }, function () { console.log('third note not sent'); })
   .then(function () { console.log('leaving'); location.href = 'https://www.example.com/away'; });
 }
 </script></body></html>"""
@@ -2204,8 +2209,9 @@ def apps_check(args) -> list[str]:
     once, their scripts' data (localStorage) kept in the memory file; one that needs no site reaches none; one that
     needs a site (api.example.com, a stand-in here over TLS 1.3) reaches it only once the person presses its Allow
     button, with no cookies, and no other site at all; what it sends there waits for the person's Send each time (one
-    sent, one not), and its script can't take the person elsewhere; the Actions sidebar says so. After a restart: the
-    apps in the model's instructions (with the site allowed), opened again (open_app) with their data."""
+    sent, one not, one sent with the keyboard), and its script can't take the person elsewhere; the Actions sidebar
+    says so. After a restart: the apps in the model's instructions (with the site allowed), one opened again
+    (open_app) with its data, and its button pressed with the keyboard (Tab, then Enter)."""
     import http.server
     import re
     import ssl
@@ -2240,8 +2246,9 @@ def apps_check(args) -> list[str]:
         def do_POST(self):
             url = urlparse(self.path)
             n = int(self.headers.get("Content-Length", "0") or 0)
-            sent_site.append({"host": self.headers.get("Host", ""), "path": url.path, "cookie": self.headers.get("Cookie", ""),
-                              "type": self.headers.get("Content-Type", ""), "body": self.rfile.read(n).decode("utf-8", "replace")})
+            sent_site.append({"host": self.headers.get("Host", ""), "method": self.command, "path": url.path,
+                              "cookie": self.headers.get("Cookie", ""), "type": self.headers.get("Content-Type", ""),
+                              "body": self.rfile.read(n).decode("utf-8", "replace")})
             body = b'{"ok": true}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -2249,6 +2256,8 @@ def apps_check(args) -> list[str]:
             self.end_headers()
             self.wfile.write(body)
             self.close_connection = True
+
+        do_PUT = do_POST
 
     sent_site: list[dict] = []
     server = http.server.ThreadingHTTPServer(("127.0.0.1", SITE_PORT), Stand)
@@ -2337,6 +2346,13 @@ def apps_check(args) -> list[str]:
                                 asks = re.findall(buttons, pc.text())
                                 press(*(int(v) for v in asks[-1][4:]))
                                 wait_for(pc.log, ("site: console: second note sent", "site: console: second note not sent"), 60)
+                                # Its third: sent with the keyboard (Tab to Don't send, Tab to Send, Enter).
+                                if wait_for(pc.log, ("site: send button at",), 30, times=3) is not None:
+                                    time.sleep(1.0)
+                                    monitor_many(pc.mon, ["sendkey tab", "sendkey tab", "sendkey ret"])
+                                    wait_for(pc.log, ("site: console: third note sent", "site: console: third note not sent"), 60)
+                                else:
+                                    problems.append("start 1: the Rates app's third note wasn't asked about")
                                 wait_for(pc.log, ("site: console: leaving",), 30)
                             else:
                                 problems.append("start 1: the Rates app's second note wasn't asked about")
@@ -2351,6 +2367,10 @@ def apps_check(args) -> list[str]:
                 else:
                     monitor_many(pc.mon, [f"sendkey {k}" for k in "open"] + ["sendkey ret"])
                     wait_for(pc.log, ("site: console: the app has no internet", "site: console: the app reached"), 90)
+                    # Its button, pressed with the keyboard: Tab to it, then Enter.
+                    time.sleep(1.0)
+                    monitor_many(pc.mon, ["sendkey tab", "sendkey ret"])
+                    wait_for(pc.log, ("site: console: pressed",), 30)
                     wait_for(pc.log, ("memory: the conversation kept",), 60)
                     time.sleep(4.5)
                     if not shows(pc.settled_picture("apps-again"), teal):
@@ -2377,7 +2397,9 @@ def apps_check(args) -> list[str]:
                      "site: You let the Rates app send “{\"note\":\"SGD 1.35 today\"}” to api.example.com",
                      "site: console: note sent 200",
                      "site: You didn't let the Rates app send “note: a second note” to api.example.com",
-                     "site: console: second note not sent", "site: console: leaving",
+                     "site: console: second note not sent",
+                     "site: You let the Rates app send “by keys” to api.example.com", "site: console: third note sent",
+                     "site: console: leaving",
                      "site: the Rates app's script can't take the person to www.example.com"):
             if note not in first:
                 problems.append(f"start 1: the log doesn't say {note!r}")
@@ -2385,10 +2407,14 @@ def apps_check(args) -> list[str]:
             problems.append("start 1: the Rates app reached its site before it was allowed")
         if "site: console: note sent" in first and first.index("site: console: note sent") < first.index("site: You let the Rates app"):
             problems.append("start 1: the Rates app's note was sent before the person said so")
-        notes = [(a["host"].split(":")[0], a["path"], a["cookie"], a["type"], a["body"]) for a in sent_site]
-        if notes != [("api.example.com", "/note", "", "application/json", '{"note":"SGD 1.35 today"}')]:
-            problems.append(f"the Rates app's notes reached api.example.com as {notes!r}, not the first alone, without cookies")
-        for note in ("model: 2 apps from before", "model: uses open_app", "site: Opened the Counter app", "site: console: opens 2"):
+        notes = [(a["host"].split(":")[0], a["method"], a["path"], a["cookie"], a["body"]) for a in sent_site]
+        if notes != [("api.example.com", "POST", "/note", "", '{"note":"SGD 1.35 today"}'),
+                     ("api.example.com", "PUT", "/note", "", "by keys")]:
+            problems.append(f"the Rates app's notes reached api.example.com as {notes!r}, not the first and third, without cookies")
+        if sent_site and sent_site[0]["type"] != "application/json":
+            problems.append(f"the Rates app's first note was sent as {sent_site[0]['type']!r}, not as JSON")
+        for note in ("model: 2 apps from before", "model: uses open_app", "site: Opened the Counter app", "site: console: opens 2",
+                     "site: console: pressed"):
             if note not in second:
                 problems.append(f"start 2: the log doesn't say {note!r}")
         rates = [a for a in asked_site if a["path"] == "/rates.json"]

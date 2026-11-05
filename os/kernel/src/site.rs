@@ -7,7 +7,9 @@
 //! cancel what they'd do), their timers run as the main loop goes round, what they fetch is fetched here, and their
 //! WebSockets are kept open here (web::WebSocket) for as long as the page is shown. It
 //! scrolls with the mouse's wheel and the keys; a click follows a link, ticks a box, or puts the caret in a field to
-//! type in; Enter in a field sends its form (GET or POST, with the site's cookies). An app the model made is shown the
+//! type in; Enter in a field sends its form (GET or POST, with the site's cookies). Tab goes through its links,
+//! buttons and fields (a ring round the one chosen), and Enter or the space bar presses one as a click would, for a
+//! person without a pointer (a laptop's touchpad isn't read yet). An app the model made is shown the
 //! same way, but it reaches only the sites the person allowed it, without cookies; what it sends (any request but a
 //! GET: a message, a form's fields) waits for the person to press Send over it, each time; and its page leaves it
 //! only by the person's click on a link.
@@ -318,6 +320,8 @@ pub struct Site {
     sockets: Vec<(u32, crate::web::WebSocket)>,
     /// What its app asks to send, waiting for the person's say-so, the first asked first.
     held: Vec<Held>,
+    /// What its scripts last gave the focus to (focus()).
+    script_focused: Option<usize>,
 }
 
 impl Site {
@@ -381,6 +385,7 @@ impl Site {
             actions: Vec::new(),
             sockets: Vec::new(),
             held: Vec::new(),
+            script_focused: None,
         }
     }
 
@@ -628,6 +633,17 @@ impl Site {
                 if page.run(now) {
                     changed = true;
                 }
+                // (What they give the focus to, with focus(), is what's chosen: a field to type in gets the caret.)
+                let wanted = page.script_focus();
+                if wanted != self.script_focused {
+                    self.script_focused = wanted;
+                    let chosen = wanted.filter(|&n| page.focusable(n));
+                    if chosen != self.focus {
+                        self.focus = chosen;
+                        self.caret = chosen.map_or(0, |n| page.value(n).len());
+                        changed = true;
+                    }
+                }
                 for (id, address, method, headers, body) in page.take_requests() {
                     // An app reaches only the sites the person allowed it, over HTTPS, without cookies; what it
                     // sends (any request but a GET or a HEAD) waits for the person to say it goes.
@@ -874,6 +890,7 @@ impl Site {
             return;
         }
         self.refreshes = 0;
+        self.script_focused = None;
         self.focus = page.autofocus();
         self.caret = self.focus.map_or(0, |f| page.value(f).len());
         self.page = Some(page);
@@ -934,6 +951,23 @@ impl Site {
         }
         surface.clip = inside;
         self.painter.draw(ty, laid, x, y, self.scroll, &mut surface, &page.shown(&self.pictures), true);
+        // A ring round what Tab chose, if it isn't a field to type in (whose caret shows where it is): blue, 2 device
+        // pixels (as browsers draw theirs), just outside it.
+        if let Some(f) = self.focus
+            && !page.is_text_field(f)
+            && let Some(b) = page.box_of(f)
+        {
+            let t = ((2.0 * dpr) as i32).max(2);
+            let (bx, by) = ((x as f32 + b.x) as i32 - t, (y as f32 + b.y - self.scroll) as i32 - t);
+            let (bw, bh) = ((b.w + 0.5) as i32 + 2 * t, (b.h + 0.5) as i32 + 2 * t);
+            for (rx, ry, rw, rh) in [(bx, by, bw, t), (bx, by + bh - t, bw, t), (bx, by, t, bh), (bx + bw - t, by, t, bh)] {
+                for yy in ry.max(inside.1)..(ry + rh).min(inside.1 + inside.3) {
+                    for xx in rx.max(inside.0)..(rx + rw).min(inside.0 + inside.2) {
+                        pixels_set(surface.pixels, width, xx, yy, 0x1A73E8);
+                    }
+                }
+            }
+        }
         // The caret, in the field being typed in.
         if let Some(f) = self.focus
             && let Some((cx, cy, ch)) = caret_place(page, ty, f, self.caret)
@@ -981,6 +1015,12 @@ impl Site {
 
     /// A click at (x, y) in the page's panel (device pixels from its top left).
     pub fn click(&mut self, x: f32, y: f32) -> Clicked {
+        self.click_at(x, y, false)
+    }
+
+    /// A click, by the pointer or (`by_key`) by Enter or the space bar on what Tab chose (which a click on nothing
+    /// doesn't let go of then).
+    fn click_at(&mut self, x: f32, y: f32, by_key: bool) -> Clicked {
         let Some(page) = self.page.as_mut() else { return Clicked::Nothing };
         // The page's scripts first: a click they cancel does nothing more.
         if page.scripting() {
@@ -1050,7 +1090,7 @@ impl Site {
                 }
             },
             Hit::Nothing => {
-                if self.focus.take().is_some() {
+                if !by_key && self.focus.take().is_some() {
                     page.focused(None);
                     self.dirty = true;
                     return Clicked::Changed;
@@ -1078,6 +1118,9 @@ impl Site {
                 self.dirty = true;
                 return true;
             }
+        }
+        if !page.is_text_field(f) {
+            return self.chosen_key(f, p);
         }
         let before_value = page.value(f);
         let mut value = before_value.clone();
@@ -1108,8 +1151,8 @@ impl Site {
             Key::Home => self.caret = 0,
             Key::End => self.caret = value.len(),
             Key::Tab => {
-                self.focus = page.next_field(Some(f), false);
-                self.caret = self.focus.map_or(0, |n| page.value(n).len());
+                self.tab(false);
+                return true;
             }
             Key::Escape => self.focus = None,
             Key::Enter => {
@@ -1137,13 +1180,84 @@ impl Site {
         true
     }
 
-    /// The first field to type in (Tab with none chosen).
-    pub fn first_field(&mut self) -> bool {
-        let Some(page) = self.page.as_ref() else { return false };
-        self.focus = page.next_field(None, false);
-        self.caret = self.focus.map_or(0, |n| page.value(n).len());
+    /// Tab: the next link, button or field on the page (the first, with none chosen), or the one before (`back`),
+    /// scrolled into view, with a ring round it (a field to type in gets the caret); after the last, none (what's
+    /// typed goes to the message box again). Whether one was chosen.
+    pub fn tab(&mut self, back: bool) -> bool {
+        let Some(page) = self.page.as_mut() else { return false };
+        let next = page.next_focusable(self.focus, back);
+        self.focus = next;
+        self.caret = next.map_or(0, |n| page.value(n).len());
+        page.focused(next);
+        if let Some(n) = next
+            && let Some(b) = page.box_of(n)
+        {
+            // (Into view: its top a little below the panel's, or its bottom a little above the panel's.)
+            let margin = 24.0 * self.dpr.max(1.0);
+            if b.y < self.scroll {
+                self.scroll = (b.y - margin).max(0.0);
+            } else if b.bottom() > self.scroll + self.view.1 {
+                self.scroll = (b.bottom() - self.view.1 + margin).min(b.y - margin).max(0.0);
+            }
+        }
         self.dirty = true;
-        self.focus.is_some()
+        next.is_some()
+    }
+
+    /// A key while Tab has chosen something on the page that isn't a field to type in: Enter follows a link or
+    /// presses a button (as a click in its middle would), the space bar presses a button or ticks a box, the arrows
+    /// choose in a list, Tab goes on, Esc lets it go; other keys go where they'd have gone (the message box, or
+    /// scrolling). True if it was the page's.
+    fn chosen_key(&mut self, f: usize, p: crate::keyboard::Press) -> bool {
+        use crate::keyboard::Key;
+        let Some(page) = self.page.as_mut() else { return false };
+        let name = String::from(page.doc.name(f));
+        let kind = page.doc.element(f).and_then(|e| e.attr("type")).map(|t| t.to_ascii_lowercase()).unwrap_or_default();
+        let ticks = name == "input" && (kind == "checkbox" || kind == "radio");
+        match p.key {
+            Key::Tab => {
+                self.tab(false);
+                true
+            }
+            Key::Escape => {
+                self.focus = None;
+                page.focused(None);
+                self.dirty = true;
+                true
+            }
+            Key::Up | Key::Down if name == "select" => {
+                let (options, chosen) = page.options(f);
+                if !options.is_empty() {
+                    let to = if p.key == Key::Up { chosen.saturating_sub(1) } else { (chosen + 1).min(options.len() - 1) };
+                    page.choose(f, to);
+                    self.dirty = true;
+                }
+                true
+            }
+            Key::Enter if !ticks => self.press(f),
+            Key::Char(' ') if !p.ctrl && !p.alt && name != "a" && name != "area" => self.press(f),
+            _ => false,
+        }
+    }
+
+    /// What Tab chose, pressed as a click in its middle would press it (scrolled into view first); it stays chosen
+    /// unless the click took the page elsewhere or chose something else.
+    fn press(&mut self, f: usize) -> bool {
+        let Some(b) = self.page.as_ref().and_then(|p| p.box_of(f)) else { return true };
+        let (x, y) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
+        if y < self.scroll || y >= self.scroll + self.view.1 {
+            self.scroll = (y - self.view.1 / 2.0).max(0.0);
+        }
+        match self.click_at(x, y - self.scroll, true) {
+            Clicked::Going => {}
+            _ => {
+                if self.focus.is_none() {
+                    self.focus = Some(f);
+                }
+                self.dirty = true;
+            }
+        }
+        true
     }
 
 }

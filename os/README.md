@@ -310,12 +310,14 @@ drivers.
       is, by the browser engine. Its data is what its scripts keep in localStorage, kept in the memory file with the
       app (a few seconds after it changes, and when the app is changed). It reaches no site unless the model lists
       the ones it fetches from (`sites`, at most 8 host names), and then only once the person presses the Allow
-      button over it (only they can; a site added when the app is changed waits for them again): the kernel answers
+      button over it (only they can, with the pointer, or Tab to it and Enter; a site added when the app is changed
+      waits for them again): the kernel answers
       its scripts' requests to any other site, or before then, with an error, sends them with no cookies (and keeps
       none they set), and follows no redirect elsewhere. What it sends (any request but a GET or a HEAD: a message,
       a form's fields, something deleted) the kernel holds, and asks the person about in a box over the app: which
       app sends what (a form's fields a line each, text as it is) to which site and path, with Don't send and Send
-      buttons that only their pointer presses, and not in the first 0.6 seconds the box shows (so a click meant for
+      buttons that only they press, with the pointer or the keyboard (Tab chooses Don't send, then Send, and Enter
+      presses the one chosen; Esc is Don't send), and not in the first 0.6 seconds the box shows (so a click meant for
       the page under it can't press one); one they don't send fails for its script. Its page goes nowhere by itself:
       its forms and its script reach no page but the app's own (it sends with fetch), and only the person's click
       on a link takes them elsewhere. The Actions sidebar says when the person allowed it (and what they'd asked it
@@ -324,9 +326,10 @@ drivers.
       to open or change. At most 40 apps, 256 KB each. `check.py --apps` has a test's script make two, then checks
       them on the screen: one that needs no site reaching none; one that needs a stand-in site blocked, then, its
       Allow button clicked, fetching from it twice without cookies, and reaching no other; its two notes held, the
-      first sent when Send is clicked (just the once, without cookies) and the second not (Don't send), and its
-      script's way to another site refused; their data and sites in the memory file; and after a restart, the apps
-      in the model's instructions, one opened again with its data.
+      first sent when Send is clicked (just the once, without cookies), the second not (Don't send), the third sent
+      with the keyboard, and its script's way to another site refused; their data and sites in the memory file; and
+      after a restart, the apps in the model's instructions, one opened again with its data and its button pressed
+      with the keyboard.
 
     The model may use tools up to 8 times for one message: what its eighth round of tools says back ends by telling it
     so, and its next round is its answer, in words (a tool it calls then isn't run, and a line under the answer says it
@@ -381,7 +384,9 @@ drivers.
   they are) and laid out: blocks with their margins collapsing, lines of words wrapping round floats,
   flex, grid, tables, positioned boxes, lists; borders solid, dashed, dotted or double, rounded, inset or outset. It scrolls with the wheel, the arrows and Page Up and Down; a click
   follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter (or its button) sends its
-  form (GET or POST), its submit event first. Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
+  form (GET or POST), its submit event first. Without a pointer, Tab goes through its links, buttons and fields in
+  order (scrolled into view, a blue ring round the one chosen), and Enter or the space bar presses it as a click
+  would; what its scripts focus() is what's typed in. Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
   (`browser/src/script/`: the document's nodes and elements, events, timers and animation frames, fetch,
   XMLHttpRequest and WebSockets through the kernel's own connections, URL, cookies (the system's, but the HttpOnly ones), storage
   (localStorage kept from page to page of a site while Chat Computer runs), custom elements and their shadow trees

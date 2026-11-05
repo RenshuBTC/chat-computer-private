@@ -82,7 +82,7 @@ pub fn status() -> String {
     }
     lines.push(if keyboards.is_empty() { String::from("Keyboards: none found") } else { format!("Keyboards: {}", keyboards.join(", ")) });
     lines.push(if u.mice.is_empty() {
-        String::from("Mice: none found (a USB mouse's wheel would scroll the conversation)")
+        String::from("Mice: none found (a USB mouse's wheel would scroll the conversation; on a website or app shown, Tab goes to its links and buttons and Enter presses them)")
     } else {
         format!("Mice: {} (the pointer clicks the buttons, the lists at the sides, the apps and what's on the websites shown; the wheel scrolls)", u.mice.join(", "))
     });

@@ -324,6 +324,16 @@ pub struct Chat {
     /// (uptime ms); where its Send button was last said to be (test builds).
     send_shown: Option<(u32, u64)>,
     send_logged: Option<(u32, Rect)>,
+    /// The button over an app the keyboard has chosen (Tab), for Enter to press: drawn with a ring round it.
+    pill: Option<Pill>,
+}
+
+/// The buttons over an app the keyboard can choose: its Allow button, and its question's Don't send and Send.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pill {
+    Allow,
+    DontSend,
+    Send,
 }
 
 /// How long the start screen's word logo and greeting take to fade, as the website's (chat.css: #welcome).
@@ -570,6 +580,7 @@ impl Chat {
             allow_logged: None,
             send_shown: None,
             send_logged: None,
+            pill: None,
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -2187,8 +2198,12 @@ impl Chat {
         let ty_ = frame.y + rule + (bar_h - style.line_height / ONE) / 2;
         self.canvas.set_clip(clip.intersect(&Rect::new(frame.x, frame.y, frame.w, bar_h + rule)));
         self.canvas.ink(x - ink.left as i32, ty_, &ink, INK);
-        // An app's Allow button: its words in bold on a pill.
+        // An app's Allow button: its words in bold on a pill (a ring round it when the keyboard has chosen it).
         if let Some((r, label)) = &allow {
+            if self.pill == Some(Pill::Allow) {
+                let g = rule + 1;
+                self.canvas.round_rect(Rect::new(r.x - g, r.y - g, r.w + 2 * g, r.h + 2 * g), r.h / 2 + g, INK);
+            }
             self.canvas.round_rect(*r, r.h / 2, CHOSEN);
             let ink = self.ty.ink_in(label, Face::Bold, style, 0);
             let lw = self.ty.width_in(label, Face::Bold, style.size) / ONE;
@@ -2231,7 +2246,11 @@ impl Chat {
             }
         }
         // An app's question, over its page: what it asks to send, and where; Don't send and Send.
-        if let Some(b) = self.send_box() {
+        let asked = self.send_box();
+        if asked.is_none() && matches!(self.pill, Some(Pill::DontSend | Pill::Send)) {
+            self.pill = None;
+        }
+        if let Some(b) = asked {
             if self.send_shown.map(|(i, _)| i) != Some(b.id) {
                 self.send_shown = Some((b.id, time::uptime_ms()));
             }
@@ -2245,8 +2264,12 @@ impl Chat {
                 let ink = self.ty.ink_in(words, *face, m.body, 0);
                 self.canvas.ink(b.rect.x + pad - ink.left as i32, *y, &ink, *colour);
             }
-            for (r, label) in [(b.dont, "Don't send"), (b.send, "Send")] {
+            for (r, label, pill) in [(b.dont, "Don't send", Pill::DontSend), (b.send, "Send", Pill::Send)] {
                 self.canvas.set_clip(inside);
+                if self.pill == Some(pill) {
+                    let g = rule + 1;
+                    self.canvas.round_rect(Rect::new(r.x - g, r.y - g, r.w + 2 * g, r.h + 2 * g), r.h / 2 + g, INK);
+                }
                 self.canvas.round_rect(r, r.h / 2, CHOSEN);
                 let ink = self.ty.ink_in(label, Face::Bold, style, 0);
                 let lw = self.ty.width_in(label, Face::Bold, style.size) / ONE;
@@ -2271,6 +2294,9 @@ impl Chat {
     /// Page Up and Down, with nothing typed in the box), Alt+Left back to the page before, Tab to its first field, and
     /// Esc (with nothing typed) closing it. True if it was the site's.
     fn site_key(&mut self, p: Press) -> bool {
+        if self.pill_key(p) {
+            return true;
+        }
         let (frame, _, page) = self.site_rects();
         let empty = self.typed.is_empty();
         let Some(s) = self.site.as_mut() else { return false };
@@ -2293,9 +2319,8 @@ impl Chat {
                 return true;
             }
             Key::Tab => {
-                if s.first_field() {
-                    self.dirty = self.dirty.union(&frame);
-                }
+                s.tab(false);
+                self.dirty = self.dirty.union(&frame);
                 return true;
             }
             Key::Escape if empty => {
@@ -2377,6 +2402,7 @@ impl Chat {
         if let Some(mut s) = self.site.take() {
             s.stop();
         }
+        self.pill = None;
         let (sites, allowed, _) = assistant::app_sites(name);
         self.site = Some(Site::app(name, html, &sites, &allowed));
         self.lay_out_box();
@@ -2466,6 +2492,56 @@ impl Chat {
         Some(SendBox { id: ask.id, rect: Rect::new(x, y, w, at - y), lines, dont, send })
     }
 
+    /// The keyboard's way to the buttons over an app, for a person without a pointer (the model can't press keys, nor
+    /// can a page's scripts: they're the person's). With a question showing: Tab chooses Don't send, then Send, and
+    /// round again; Enter presses the one chosen (nothing, until one is); Esc is Don't send. With an Allow button:
+    /// Tab chooses it (when no field on the page has the caret: from it, Tab goes on to the page's first field),
+    /// Enter presses it, Esc or any other key lets it go. True if the key was the buttons'.
+    fn pill_key(&mut self, p: Press) -> bool {
+        let (frame, _, _) = self.site_rects();
+        if let Some(b) = self.send_box() {
+            match p.key {
+                Key::Tab => {
+                    self.pill = Some(if self.pill == Some(Pill::DontSend) { Pill::Send } else { Pill::DontSend });
+                    self.dirty = self.dirty.union(&frame);
+                    return true;
+                }
+                Key::Enter if matches!(self.pill, Some(Pill::DontSend | Pill::Send)) => {
+                    let send = self.pill == Some(Pill::Send);
+                    self.answer_send(b.id, send);
+                    return true;
+                }
+                Key::Escape => {
+                    self.answer_send(b.id, false);
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+        if self.allow_rect().is_none() {
+            self.pill = None;
+            return false;
+        }
+        let field = self.site.as_ref().is_some_and(|s| s.focus.is_some());
+        match (p.key, self.pill) {
+            (Key::Tab, None) if !field => self.pill = Some(Pill::Allow),
+            (Key::Enter, Some(Pill::Allow)) => {
+                self.pill = None;
+                self.allow_app();
+            }
+            (Key::Escape, Some(Pill::Allow)) => self.pill = None,
+            (_, Some(_)) => {
+                // (Tab goes on to the page's first field, and anything else where it would have gone.)
+                self.pill = None;
+                self.dirty = self.dirty.union(&frame);
+                return false;
+            }
+            _ => return false,
+        }
+        self.dirty = self.dirty.union(&frame);
+        true
+    }
+
     /// The person pressed Send or Don't send over an app that asks to send something (once its question has been
     /// shown SEND_WAIT_MS): it's sent or not, and the Actions sidebar says which.
     fn answer_send(&mut self, id: u32, send: bool) {
@@ -2476,6 +2552,7 @@ impl Chat {
         if let Some(s) = self.site.as_mut() {
             s.answer_send(send);
         }
+        self.pill = None;
         for what in self.site.as_mut().map(|s| s.take_actions()).unwrap_or_default() {
             self.action(what);
         }
@@ -2513,6 +2590,7 @@ impl Chat {
 
     /// Closes the website open: the conversation shows again.
     fn close_site(&mut self) {
+        self.pill = None;
         if let Some(mut s) = self.site.take() {
             s.stop();
             crate::log!("Chat Computer kernel: site: closed");

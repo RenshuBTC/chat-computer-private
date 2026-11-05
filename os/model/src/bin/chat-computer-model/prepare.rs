@@ -440,10 +440,45 @@ fn prepare(store: &Store, m: &Model, threads: Option<usize>) -> Result<PathBuf, 
     Ok(out)
 }
 
+/// Refusal directions found before, for the models' files as this engine makes them (each file's mark in its head):
+/// one for the same file is used as it is, rather than found again (minutes, on a PC's processor).
+const FOUND: &[(&str, &[u8])] = &[("qwen3.5-4b", include_bytes!("../../../../../chatcomputer/brain/refusals/qwen3.5-4b.refusal"))];
+
+/// A model file's mark (model::File::fingerprint), from its head and its length, without reading it all.
+pub fn mark_of(path: &Path) -> Option<u64> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 12];
+    f.read_exact(&mut head).ok()?;
+    if &head[..8] != model::file::MAGIC {
+        return None;
+    }
+    let len = u32::from_le_bytes(head[8..12].try_into().unwrap()) as usize;
+    if len > 64 << 20 {
+        return None;
+    }
+    let mut table = vec![0u8; len];
+    f.read_exact(&mut table).ok()?;
+    let size = f.metadata().ok()?.len();
+    Some(model::file::fnv(0xcbf2_9ce4_8422_2325, head.iter().chain(&table).chain(&size.to_le_bytes())))
+}
+
+/// The refusal direction found before for this very file, if there is one.
+fn found_before(name: &str, file: &Path) -> Option<&'static [u8]> {
+    let (_, bytes) = FOUND.iter().find(|(n, _)| *n == name)?;
+    let mark = u64::from_le_bytes(bytes.get(8..16)?.try_into().ok()?);
+    (bytes.starts_with(model::refusal::MAGIC) && mark_of(file) == Some(mark)).then_some(*bytes)
+}
+
 /// Its refusals found, kept in `out` (by this program, as its own process: the model file it maps is let go when
-/// it ends).
+/// it ends); or, for a file the engine has found them for before, the direction found then.
 fn uncensor(file: &Path, out: &Path, threads: Option<usize>) -> Result<(), String> {
     eprintln!("uncensoring");
+    let name = file.file_name().and_then(|n| n.to_str()).and_then(|n| n.split(".ccm").next()).unwrap_or("");
+    if let Some(bytes) = found_before(name, file) {
+        std::fs::write(out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+        eprintln!("uncensored with the direction found before for this very file");
+        return Ok(());
+    }
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(me);
     cmd.arg("find-refusal").arg(file).arg("--out").arg(out);
@@ -822,6 +857,27 @@ mod tests {
         let a = args("prepare", vec!["D".into(), "--speech".into(), "--model".into(), "whisper-small.en".into()]).unwrap();
         assert!(a.speech && a.model == "whisper-small.en" && a.dir == Path::new("D"));
         assert!(!args("prepare", vec!["D".into()]).unwrap().speech);
+    }
+
+    #[test]
+    fn a_refusal_direction_found_before_is_for_its_file_alone() {
+        let dir = std::env::temp_dir().join(format!("cc-found-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("qwen3.5-4b.ccm");
+        file_with(&file, "arch=qwen3_5\n");
+        // (Another file, of course, isn't the one the PC's direction was found for.)
+        assert!(found_before("qwen3.5-4b", &file).is_none());
+        assert!(found_before("qwen3.5-0.8b", &file).is_none());
+        // The mark is the file's own: as model::File reckons it.
+        let bytes = std::fs::read(&file).unwrap();
+        assert_eq!(mark_of(&file), Some(model::File::open(&bytes).unwrap().fingerprint()));
+        // Each shipped direction is a refusal file the engine reads.
+        for (name, b) in FOUND {
+            let mark = u64::from_le_bytes(b[8..16].try_into().unwrap());
+            let width = u32::from_le_bytes(b[20..24].try_into().unwrap()) as usize;
+            assert!(model::refusal::Found::from_bytes(b, mark, width).is_ok(), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

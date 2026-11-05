@@ -3,7 +3,8 @@
 //!     chat-computer-model convert MODEL_FOLDER OUT.ccm [--bits 8|4|16]
 //!
 //! MODEL_FOLDER has Qwen's config.json, tokenizer.json, chat template and its .safetensors weights (or a speech
-//! recognition model's: OpenAI's Whisper, as transformers publishes it, with its generation_config.json). Each weight is
+//! recognition model's: OpenAI's Whisper, as transformers publishes it, with its generation_config.json; or a voice's:
+//! Kokoro's config.json, kokoro-v1_0.pth and voices/NAME.pt, made by kokoro.rs). Each weight is
 //! read, changed and written one at a time, so a model bigger than the computer's memory converts too.
 
 use model::convert;
@@ -49,6 +50,10 @@ pub fn main_with(args: Vec<String>) -> i32 {
 }
 
 pub fn run(folder: &Path, out: &Path, bits: u32) -> Result<(), String> {
+    // (A voice: Kokoro's PyTorch checkpoint, its own way.)
+    if crate::kokoro::is_kokoro(folder) {
+        return crate::kokoro::run(folder, out, bits);
+    }
     let read = |n: &str| fs::read_to_string(folder.join(n)).map_err(|e| format!("{n}: {e}"));
     let config = model::json::parse(&read("config.json")?).ok_or("config.json isn't JSON")?;
     let whisper = config.get("model_type").and_then(model::json::Json::str) == Some("whisper");
@@ -138,7 +143,7 @@ pub fn run(folder: &Path, out: &Path, bits: u32) -> Result<(), String> {
                 h.seek(SeekFrom::Start(*offset)).map_err(|e| e.to_string())?;
                 let mut raw = vec![0u8; *len];
                 h.read_exact(&mut raw).map_err(|e| e.to_string())?;
-                convert::encode(source, &raw, p.dtype)?
+                encode_on_every_core(source, &raw, p.dtype)?
             }
         };
         if bytes.len() != p.size {
@@ -153,6 +158,60 @@ pub fn run(folder: &Path, out: &Path, bits: u32) -> Result<(), String> {
     f.flush().map_err(|e| e.to_string())?;
     eprintln!("wrote {} ({} entries, {:.2} GB)", out.display(), planned.len(), (head.len() + written) as f64 / 1e9);
     Ok(())
+}
+
+/// A weight in our type, its rows shared among the processor's cores: the blocks are each their own (the same bytes
+/// as one at a time).
+fn encode_on_every_core(source: &str, raw: &[u8], dtype: Dtype) -> Result<Vec<u8>, String> {
+    let width = match source {
+        "BF16" | "F16" => 2,
+        "F32" => 4,
+        _ => return convert::encode(source, raw, dtype),
+    };
+    let n = raw.len() / width;
+    let cores = std::thread::available_parallelism().map_or(1, |c| c.get()).min(32);
+    // (Pieces of whole blocks of 32, and not so small that sharing them out costs more than it saves.)
+    let per = (n.div_ceil(cores).div_ceil(32) * 32).max(1 << 16);
+    if cores == 1 || n <= per {
+        return convert::encode(source, raw, dtype);
+    }
+    let pieces: Vec<&[u8]> = raw.chunks(per * width).collect();
+    let done: Vec<Result<Vec<u8>, String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = pieces.iter().map(|piece| s.spawn(move || convert::encode(source, piece, dtype))).collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a core's part of the work failed".into()))).collect()
+    });
+    let mut out = Vec::new();
+    for d in done {
+        out.extend_from_slice(&d?);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_core_makes_the_same_bytes_as_one() {
+        // Numbers with some big ones among them, so Q4's and Q8's scales differ from block to block.
+        let n = 3 * (1 << 16) + 32 * 5;
+        let mut x = 0x1234_5678u32;
+        let values: Vec<f32> = (0..n)
+            .map(|i| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x as f32 / u32::MAX as f32 - 0.5) * if i % 97 == 0 { 40.0 } else { 1.0 }
+            })
+            .collect();
+        let f32s: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let bf16s: Vec<u8> = values.iter().flat_map(|v| ((v.to_bits() >> 16) as u16).to_le_bytes()).collect();
+        for (source, raw) in [("F32", &f32s), ("BF16", &bf16s)] {
+            for dtype in [Dtype::Q4, Dtype::Q8, Dtype::F16, Dtype::F32] {
+                assert_eq!(encode_on_every_core(source, raw, dtype).unwrap(), convert::encode(source, raw, dtype).unwrap(), "{source} as {dtype:?}");
+            }
+        }
+    }
 }
 
 fn blob(name: &str, bytes: Vec<u8>) -> Planned {

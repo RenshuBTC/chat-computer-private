@@ -308,6 +308,10 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         if turned != 0 {
             chat::wheel(turned);
         }
+        let (dx, dy, pressed) = mouse::take_motion();
+        if dx != 0 || dy != 0 || pressed != 0 {
+            chat::pointer(dx, dy, pressed);
+        }
         if usb::changes() != keyboards_shown {
             keyboards_shown = usb::changes();
             chat::keyboards(&usb::status(), ps2::present().then_some(ps2_name));

@@ -233,7 +233,17 @@ pub struct Chat {
     actions: Vec<(String, String)>,
     clock_shown: (String, String),
     chat_title: Option<String>,
+    /// The mouse pointer: where its tip is (None until a mouse first moves), and where it was last drawn.
+    pointer: Option<(f32, f32)>,
+    pointer_drawn: Rect,
 }
+
+/// The pointer: the arrow every PC shows, its tip at the top left; X its black edge, o its white inside, 12 by 19
+/// of the theme's pixels.
+const ARROW: [&str; 19] = [
+    "X", "XX", "XoX", "XooX", "XoooX", "XooooX", "XoooooX", "XooooooX", "XoooooooX", "XooooooooX", "XoooooooooX",
+    "XooooooXXXXX", "XoooXooX", "XooXXooX", "XoX XooX", "XX  XooX", "X    XooX", "     XooX", "      XX",
+];
 
 static CHAT: SpinLock<Option<Chat>> = SpinLock::new(None);
 
@@ -392,6 +402,8 @@ impl Chat {
             actions: Vec::new(),
             clock_shown: clock_now(),
             chat_title: None,
+            pointer: None,
+            pointer_drawn: Rect::default(),
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -531,9 +543,16 @@ impl Chat {
         }
         if self.started {
             let mut top = m.px(2.0);
+            let mut before: Option<Kind> = None;
             for b in &mut self.blocks {
+                // (A little more room before what you say after something said to you, as the app has: so pinned
+                // to the top of the screen, nothing of what came before shows.)
+                if b.kind == Kind::You && before.is_some_and(|k| k != Kind::You) {
+                    top += m.px(0.75);
+                }
                 b.top = top;
                 top += b.height + m.px(1.25);
+                before = Some(b.kind);
             }
         } else {
             // As Chat Computer's welcome screen: the first line, a quarter of its size below it, then paragraphs
@@ -650,6 +669,74 @@ impl Chat {
         if !self.stopped {
             self.canvas.set_clip(clip);
             self.render_box();
+        }
+        self.render_pointer(clip);
+    }
+
+    /// The pointer's part of the screen, at (x, y).
+    fn pointer_rect(&self, x: f32, y: f32) -> Rect {
+        let s = self.hair();
+        Rect::new(x as i32, y as i32, 12 * s, 19 * s)
+    }
+
+    /// The pointer, drawn over everything in `clip`.
+    fn render_pointer(&mut self, clip: Rect) {
+        let Some((x, y)) = self.pointer else { return };
+        let s = self.hair();
+        let r = self.pointer_rect(x, y);
+        if r.intersect(&clip).is_empty() {
+            return;
+        }
+        self.canvas.set_clip(clip);
+        for (row, line) in ARROW.iter().enumerate() {
+            let bytes = line.as_bytes();
+            let mut col = 0;
+            while col < bytes.len() {
+                let c = bytes[col];
+                let run = bytes[col..].iter().take_while(|&&b| b == c).count();
+                let rgb = match c {
+                    b'X' => 0x000000,
+                    b'o' => 0xFFFFFF,
+                    _ => {
+                        col += run;
+                        continue;
+                    }
+                };
+                self.canvas.fill(Rect::new(r.x + col as i32 * s, r.y + row as i32 * s, run as i32 * s, s), rgb);
+                col += run;
+            }
+        }
+    }
+
+    /// The mouse moved (by its counts) and its buttons were pressed: the pointer moves (a little faster the faster
+    /// it goes), and a click on the send button sends what's typed, or stops the answer coming.
+    fn pointer_moved(&mut self, dx: i32, dy: i32, pressed: u32) {
+        let (w, h) = (self.screen.width as f32, self.screen.height as f32);
+        let speed = |d: i32| -> f32 {
+            let v = d as f32;
+            v * self.layout.scale as f32 * (1.0 + (v.abs() / 12.0).min(1.5))
+        };
+        let (x, y) = self.pointer.unwrap_or((w / 2.0, h / 2.0));
+        let to = ((x + speed(dx)).clamp(0.0, w - 1.0), (y + speed(dy)).clamp(0.0, h - 1.0));
+        if self.pointer != Some(to) {
+            let area = self.pointer_drawn.union(&self.pointer_rect(to.0, to.1));
+            self.pointer = Some(to);
+            self.pointer_drawn = self.pointer_rect(to.0, to.1);
+            self.dirty = self.dirty.union(&area);
+        }
+        if pressed & 1 != 0 && !self.stopped {
+            let (cx8, cy8, r8) = self.composer.send;
+            let (px8, py8) = ((to.0 * 8.0) as i64, (to.1 * 8.0) as i64);
+            let (ddx, ddy) = (px8 - cx8 as i64, py8 - cy8 as i64);
+            // (A little beyond the circle counts too: it's small.)
+            let reach = r8 as i64 + 32 * self.hair() as i64;
+            if ddx * ddx + ddy * ddy <= reach * reach {
+                if self.asking.is_some() {
+                    assistant::stop();
+                } else if !self.typed.trim().is_empty() {
+                    self.send();
+                }
+            }
         }
     }
 
@@ -1086,7 +1173,7 @@ impl Chat {
             self.blocks.push(Block::new(Kind::Note, Live::No, String::from(note)));
             self.lay_out_box();
             self.lay_out();
-            self.anchor = self.blocks[self.blocks.len() - 1].top - self.m.px(2.0);
+            self.anchor = self.pin_top(self.blocks.len() - 1);
             self.scroll = None;
             // (On the screen before the unlocking starts, as the screen waits while it's done.)
             self.draw(true);
@@ -1109,9 +1196,20 @@ impl Chat {
         }
         self.lay_out_box();
         self.lay_out();
-        self.anchor = self.blocks[you].top - self.m.px(2.0);
+        self.anchor = self.pin_top(you);
         self.scroll = None;
         self.dirty = self.canvas.whole();
+    }
+
+    /// Where the screen's top goes for block `i` pinned to it: 2 rem above it, but never so far up that any of what
+    /// came before shows (as the app's pinTop).
+    fn pin_top(&self, i: usize) -> i32 {
+        let at = self.blocks[i].top;
+        let top = at - self.m.px(2.0);
+        match i.checked_sub(1).map(|p| &self.blocks[p]) {
+            Some(b) => top.max((b.top + b.height).min(at)),
+            None => top,
+        }
     }
 
     /// The answer is over: complete (None), or not (why).
@@ -1349,6 +1447,14 @@ pub fn wheel(notches: i32) {
     if let Some(c) = CHAT.lock().as_mut() {
         let lines = 3 * c.m.line;
         c.scroll_by(notches.saturating_mul(lines).saturating_neg());
+    }
+}
+
+/// The mouse moved (its counts, right and down) and its buttons were pressed (bit 0: the left one).
+pub fn pointer(dx: i32, dy: i32, pressed: u32) {
+    if let Some(c) = CHAT.lock().as_mut() {
+        c.pointer_moved(dx, dy, pressed);
+        c.draw(false);
     }
 }
 

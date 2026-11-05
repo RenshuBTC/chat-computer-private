@@ -784,7 +784,8 @@ def chat(args) -> list[str]:
     given the conversation so far, the answers and what the tools said, the same instructions every time, and each of
     the person's messages with when it was sent. The second question fails, which the screen must show (and which
     must be taken back out of the conversation). The third is answered in Markdown, laid out on the screen; then a USB
-    mouse's wheel scrolls the conversation back a notch and forward again. The fourth asks to restart: the model's
+    mouse's wheel scrolls the conversation back a notch and forward again, and moving it shows the pointer. The fourth
+    asks to restart: the model's
     answer, then a restart."""
     import re
 
@@ -812,6 +813,7 @@ def chat(args) -> list[str]:
         answered = None
         restarted = ended = False
         scrolled = []
+        pointed = None
         try:
             if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                 print(pc.text())
@@ -833,6 +835,9 @@ def chat(args) -> list[str]:
                 back = pc.settled_picture("chat-scrolled")
                 turn_wheel(pc.mon, [-1])
                 scrolled = [at_end, back, pc.settled_picture("chat-scrolled-forward")]
+                # The mouse moved: the pointer shows, from the middle of the screen, and nothing else changes.
+                monitor(pc.mon, "mouse_move 40 30")
+                pointed = pc.settled_picture("chat-pointer")
             # Asked to restart: the model's answer, then a restart (which ends a virtual PC started with -no-reboot).
             monitor_many(pc.mon, keys_for("restart") + ["sendkey ret"])
             third = wait_for(pc.log, ("Restarting now", "model: failed", "stopped"), 60)
@@ -865,6 +870,13 @@ def chat(args) -> list[str]:
             problems.append(f"the PC didn't restart (the kernel said so: {restarted}; the virtual PC ended: {ended})")
         if searched != "Enjoy the day" or said[1:2] != ["It's sunny.\n\n" + MARKDOWN]:
             problems.append(f"the Markdown answer didn't come whole (the log says {searched!r})")
+        if pointed is None:
+            problems.append("the mouse wasn't moved")
+        else:
+            box = ImageChops.difference(scrolled[-1], pointed).getbbox()
+            w, h = pointed.size
+            if box is None or box[2] - box[0] > 60 or box[3] - box[1] > 80 or not (w // 2 < box[0] < w // 2 + 300 and h // 2 < box[1] < h // 2 + 300):
+                problems.append(f"moving the mouse didn't show the pointer where it went, alone (what changed: {box})")
         if not scrolled:
             problems.append("QEMU has no USB mouse to scroll with")
         elif [ImageChops.difference(scrolled[0], b).getbbox() is None for b in scrolled[1:]] != [False, True]:

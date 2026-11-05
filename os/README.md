@@ -122,9 +122,10 @@ drivers.
       interfaces than its boot one: the Razer Ornata V3 X's, on the first real PC tried), from every interface that
       has keys; by the boot protocol every keyboard supports when a descriptor can't be used. With their Caps Lock
       light. The log says which interface first sent a report (never what was typed);
-    * mice, read as each one's report descriptor says (`hid/`), or by the boot protocol if it can't be used. Their
-      wheels scroll the conversation (`mouse.rs`); there is no pointer on the screen yet. A wireless receiver's
-      keyboard and mouse both work;
+    * mice, read as each one's report descriptor says (`hid/`), or by the boot protocol if it can't be used. They
+      move a pointer (the arrow every PC shows, drawn over the screen), whose left button clicks the message box's
+      send button (or its stop, while an answer comes), and their wheels scroll the conversation (`mouse.rs`). A
+      wireless receiver's keyboard and mouse both work;
     * network adapters: the configuration that offers a standard way to carry Ethernet, its bulk endpoints, and the
       way's own framing (`usb/net.rs`);
     * drives (`usb/storage.rs`): USB sticks, external SSDs and hard drives, and card readers (many laptops' SD card
@@ -156,8 +157,10 @@ drivers.
     Of these, only the virtual machines' have run so far; the others haven't been tried on a real PC, and the log
     says so when one starts. Without a card, a USB network adapter plugged in at any time takes over (USB CDC ECM and
     NCM, the USB standard's, and RNDIS, which most Android phones use to share their connection over USB);
-  * the drive the PC started from (`storage/`): an NVMe SSD (`nvme.rs`), or a SATA drive on an AHCI controller
-    (`ahci.rs`), the kinds nearly every PC starts from. On it, Chat Computer's memory file
+  * the drive the PC started from (`storage/`): an NVMe SSD (`nvme.rs`, up to 256 KiB a command through a list of
+    its buffer's pages, so the model's gigabytes come in at the drive's speed rather than a 4 KiB page a command,
+    which kept the first real PC waiting for its model), or a SATA drive on an AHCI controller (`ahci.rs`), the
+    kinds nearly every PC starts from. On it, Chat Computer's memory file
     (`\EFI\chatcomputer-own\memory.bin`, which Windows' setup makes), found through Chat Computer's own FAT reader
     (`fat/`). The conversation and the model's notes are kept there (`keep.rs`, in the format `remember/` defines,
     as JSON: `{"notes": [...], "chat": [{"you": ..., "at": ...}, {"said": ...}, ...]}`: each question, when it was
@@ -303,14 +306,21 @@ drivers.
     without one, and logs what the model would have been given.
 
   Then the screen is the conversation (`chat.rs`), drawn in memory and copied to the screen where it changed.
-  Before the first message it says what the PC is, how long Chat Computer has been running (by the kernel's own
-  timer), which keyboards it found and how its model is getting ready. Type, press Enter, and the model reads the
+  Before the first message it shows the website's start: the word logo, "Chat Computer", in the middle, and under it
+  a greeting chosen as the website chooses one (by the time of day and the day), both fading as the first message
+  goes (what the PC is, its keyboards and its model are in the computer's status, which the model gives). Under what's
+  typed, the message box has the website's four round buttons: + attaches a file (a list above the box of the
+  newest in each person's Desktop, Documents, Downloads and Pictures, chosen with the pointer or the arrows; each
+  file a chip over what's typed, named with its path in the message for the model to read), the spark lists the
+  models on the PC (the one answering ticked), the microphone listens (as Windows+H), and send sends (its stop while
+  an answer comes). Type, press Enter, and the model reads the
   message and answers, its words shown as they're written, with a pulsing dot until the first (and, when it's slow,
   what it's doing: reading your message, or a file). Its answers are Markdown, laid
   out as the main screen shows them (`rich.rs`): headings, bold, italics, lists and tasks, code in the code font,
   quotes, tables and rules. Esc stops an answer; Page Up and
-  Page Down, or a mouse's wheel, scroll. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and key repeat
-  work, in the US layout. Nothing typed or answered is written to the log.
+  Page Down, or a mouse's wheel, scroll; what you send goes to the top of the screen, as on the website, with
+  nothing of the answer before it showing above it. Shift, Caps Lock, Backspace, Delete, the arrows, Home, End and
+  key repeat work, in the US layout. Nothing typed or answered is written to the log.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
   retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
   its own with lost, repeated and reordered packets.
@@ -541,7 +551,7 @@ Boot turned off there instead; the steps say so. Updating or resetting the PC's 
 keys approved there; setup then says so, and shows the steps again.
 
 Any USB keyboard works, plugged into the PC or into a hub (a monitor's or a dock's), and so do most
-laptops' built-in keyboards. A keyboard that only connects by Bluetooth needs its cable for now:
+laptops' built-in keyboards; so does a USB mouse, for its pointer and its wheel. A keyboard that only connects by Bluetooth needs its cable for now:
 Bluetooth comes at step 10.
 
 The model needs no internet (it uses it only to look things up on the web, through a network cable, a USB network

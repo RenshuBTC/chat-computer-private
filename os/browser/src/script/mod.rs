@@ -575,6 +575,7 @@ impl Script {
         vm.host = Some(Box::new(h));
         vm.host_trace = Some(trace);
         vm.now = now_ms;
+        vm.tz_offset = ZONE_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         vm.max_nesting = 120;
         {
             let h = host(&mut vm);
@@ -793,6 +794,15 @@ pub fn report(vm: &mut Vm, e: &Value, source: &str) {
 
 // The clock scripts read (Date.now): the page's, set before each run (the engine's clock is a plain function).
 static CLOCK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+// The local time's offset from UTC (minutes): what pages' scripts take as their time zone (Date's local time,
+// Intl's zone).
+static ZONE_OFFSET: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+
+/// Sets the time zone pages made after this run in: its offset from UTC, in minutes.
+pub fn set_time_zone(offset_minutes: i32) {
+    ZONE_OFFSET.store(offset_minutes.clamp(-1440, 1440), core::sync::atomic::Ordering::Relaxed);
+}
 
 fn now_ms() -> f64 {
     f64::from_bits(CLOCK.load(core::sync::atomic::Ordering::Relaxed))

@@ -152,16 +152,18 @@ pub fn time_clip(t: f64) -> f64 {
     to_int(t) + 0.0
 }
 
-fn offset_ms(vm: &Vm) -> f64 {
-    vm.tz_offset as f64 * 60_000.0
+/// The local time's offset from UTC at time t (milliseconds since 1970), in milliseconds: the time zone's (with its
+/// summer time, if the embedder named a zone that has one).
+fn offset_ms(vm: &Vm, t: f64) -> f64 {
+    super::intl::local_offset_at(vm, t) as f64 * 60_000.0
 }
 
 fn local(vm: &Vm, t: f64) -> f64 {
-    t + offset_ms(vm)
+    t + offset_ms(vm, t)
 }
 
 fn utc(vm: &Vm, t: f64) -> f64 {
-    t - offset_ms(vm)
+    t - offset_ms(vm, t - vm.tz_offset as f64 * 60_000.0)
 }
 
 pub fn init(vm: &mut Vm) {
@@ -362,7 +364,7 @@ fn get_tz(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
     if t.is_nan() {
         return Ok(Value::Num(f64::NAN));
     }
-    Ok(Value::Num(0.0 - vm.tz_offset as f64))
+    Ok(Value::Num(0.0 - super::intl::local_offset_at(vm, t) as f64))
 }
 
 /// The arguments as numbers (undefined for those not given).
@@ -486,8 +488,10 @@ fn date_part(t: f64) -> String {
     format!("{} {} {:02} {}", DAYS[week_day(t) as usize], MONTHS[month_from_time(t) as usize], date_from_time(t) as i64, year_str(year_from_time(t)))
 }
 
-fn time_part(vm: &Vm, t: f64) -> String {
-    let off = vm.tz_offset;
+/// A time's local hours, minutes and seconds, and its zone's offset (tv: milliseconds since 1970).
+fn time_part(vm: &Vm, tv: f64) -> String {
+    let off = super::intl::local_offset_at(vm, tv);
+    let t = local(vm, tv);
     let sign = if off >= 0 { '+' } else { '-' };
     let a = off.unsigned_abs();
     format!("{:02}:{:02}:{:02} GMT{sign}{:02}{:02}", hour_from_time(t) as i64, min_from_time(t) as i64, sec_from_time(t) as i64, a / 60, a % 60)
@@ -498,8 +502,7 @@ pub fn full_string(vm: &Vm, tv: f64) -> String {
     if tv.is_nan() {
         return String::from("Invalid Date");
     }
-    let t = local(vm, tv);
-    format!("{} {}", date_part(t), time_part(vm, t))
+    format!("{} {}", date_part(local(vm, tv)), time_part(vm, tv))
 }
 
 fn to_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
@@ -520,7 +523,7 @@ fn to_time_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
     if t.is_nan() {
         return Ok(js_str("Invalid Date"));
     }
-    Ok(js_str(&time_part(vm, local(vm, t))))
+    Ok(js_str(&time_part(vm, t)))
 }
 
 fn to_utc_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
@@ -567,40 +570,19 @@ fn to_json(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
     vm.call(&f, Value::Obj(o), &[])
 }
 
-fn locale_date(vm: &Vm, t: f64) -> String {
-    let l = local(vm, t);
-    format!("{}/{}/{}", month_from_time(l) as i64 + 1, date_from_time(l) as i64, year_from_time(l) as i64)
-}
-
-fn locale_time(vm: &Vm, t: f64) -> String {
-    let l = local(vm, t);
-    let h = hour_from_time(l) as i64;
-    let (h12, ap) = (if h % 12 == 0 { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" });
-    format!("{h12}:{:02}:{:02} {ap}", min_from_time(l) as i64, sec_from_time(l) as i64)
-}
-
-fn to_locale_date_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+fn to_locale_date_string(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let t = this_time(vm, this)?;
-    if t.is_nan() {
-        return Ok(js_str("Invalid Date"));
-    }
-    Ok(js_str(&locale_date(vm, t)))
+    super::intl::date_to_locale(vm, t, &arg(args, 0), &arg(args, 1), 0, 0)
 }
 
-fn to_locale_time_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+fn to_locale_time_string(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let t = this_time(vm, this)?;
-    if t.is_nan() {
-        return Ok(js_str("Invalid Date"));
-    }
-    Ok(js_str(&locale_time(vm, t)))
+    super::intl::date_to_locale(vm, t, &arg(args, 0), &arg(args, 1), 1, 1)
 }
 
-fn to_locale_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+fn to_locale_string(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let t = this_time(vm, this)?;
-    if t.is_nan() {
-        return Ok(js_str("Invalid Date"));
-    }
-    Ok(js_str(&format!("{}, {}", locale_date(vm, t), locale_time(vm, t))))
+    super::intl::date_to_locale(vm, t, &arg(args, 0), &arg(args, 1), 2, 2)
 }
 
 fn to_primitive(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {

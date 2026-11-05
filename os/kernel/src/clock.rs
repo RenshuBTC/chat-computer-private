@@ -100,7 +100,7 @@ pub fn text(t: i64, error: i64) -> String {
 }
 
 /// The local time's offset from UTC in minutes, if known.
-fn offset() -> Option<i32> {
+pub fn offset() -> Option<i32> {
     CLOCK.lock().as_ref().and_then(|c| c.offset)
 }
 

@@ -32,7 +32,20 @@ shows: written from ECMAScript's specification (ECMA-262), with nothing from oth
   (`number.rs`, with `math.rs`: Math's functions computed with no library, correctly rounded where it matters),
   JSON, String, Map, Set and the weak ones (`collections.rs`), RegExp (`regexp.rs`, on the backtracking matcher
   of `../regexp.rs` with `unicode_gc.rs`'s General_Category for `\p{…}`), Date (`date.rs`) and ArrayBuffer,
-  DataView and the typed arrays (`typed.rs`).
+  DataView and the typed arrays (`typed.rs`). Intl (`intl.rs`, ECMA-402): NumberFormat, DateTimeFormat, Collator,
+  PluralRules, RelativeTimeFormat, ListFormat, Segmenter, DisplayNames and Locale, and what goes through them
+  (`toLocaleString`, `toLocaleDateString`, `toLocaleTimeString`, `localeCompare`). It writes American English
+  whatever locale is asked for (`resolvedOptions` says so: "en", "en-US", with the request's `-u-` keywords it
+  honours, such as `hc`, `nu` and `kn`), with all of NumberFormat's options (currencies, units, compact,
+  scientific and engineering notation, signs, rounding modes and increments, significant digits, on the number as
+  it's written in decimal, BigInts and long numeric strings exactly), numbering systems' digits, dates in their
+  styles and fields with the hour cycles, ranges as en-US's interval formats write them ("Jan 3 – 5, 2019",
+  "10:00 – 11:30 AM", "+$2.90–3.10"), time zones (UTC, the PC's own, offsets, and 70-odd zones by name with the
+  United States', Europe's, south-east Australia's and New Zealand's summer time), a collation in Unicode's
+  default order (letters, then accents, then case; numeric if asked), and graphemes, words and sentences by
+  Unicode's segmentation rules, simplified. `normalize.rs`: String.prototype.normalize and the collation's canonical
+  equivalence for Latin, Greek and Cyrillic letters with an accent, and Hangul (so `normalize('NFD')` and a
+  replace of U+0300–U+036F strips accents, as pages do).
 * **Jobs.** Promise reactions are microtasks the VM runs when the host asks (after each script, event or timer).
 * **Modules.** `module.rs`: a module is compiled into the code that makes its functions (run as it's linked) and its
   own code (an async function's, if it awaits at its top level); its top-level names live in its environment, and a
@@ -53,8 +66,9 @@ release build whose panics unwind): `cargo build --profile conformance -p js --e
 `target/conformance/examples/test262_run PATH/TO/test262 test/language` (or `test/built-ins`, or a folder or file in
 them; `--failures N` lists N failures, `--strict` runs each test in strict mode too; a module test's modules are
 read from their files). Tests of features the engine doesn't have yet are skipped (the list is at the top of the
-runner): deferred and source-phase imports, Intl, Temporal, SharedArrayBuffer and Atomics, and the newest
+runner): deferred and source-phase imports, Temporal, SharedArrayBuffer and Atomics, and the newest
 additions. On test262 of 4 November 2026 it passes 96.1% of test/language (22,077 of 22,972 run; all of
-module-code, import and dynamic-import) and 94.5% of test/built-ins (16,199 of 17,147). What's left most: early errors
+module-code, import and dynamic-import), 94.5% of test/built-ins (16,199 of 17,147) and 87.2% of test/intl402 (944
+of 1,082; most of the rest want other languages' ways of writing, which it doesn't have). What's left most: early errors
 (programs it runs that it should refuse), `super` and `new.target` in `eval`'s code, the newest Unicode's
 properties in regular expressions, and the Iterator helpers. `examples/test262.rs` checks the parser alone on the same tests.

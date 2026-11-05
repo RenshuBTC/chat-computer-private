@@ -45,8 +45,8 @@ pub fn init(vm: &mut Vm) {
         ("startsWith", 1, starts_with),
         ("substring", 2, substring),
         ("substr", 2, substr),
-        ("toLocaleLowerCase", 0, to_lower),
-        ("toLocaleUpperCase", 0, to_upper),
+        ("toLocaleLowerCase", 0, to_locale_lower),
+        ("toLocaleUpperCase", 0, to_locale_upper),
         ("toLowerCase", 0, to_lower),
         ("toUpperCase", 0, to_upper),
         ("toString", 0, value_of),
@@ -328,26 +328,7 @@ fn to_well_formed(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
 fn locale_compare(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let s = this_str(vm, this)?;
     let t = vm.to_string(&arg(args, 0))?;
-    // A simple collation: letters compared without case first, then by case, then by code unit.
-    let fold = |x: &JsStr| -> Vec<u32> {
-        let mut out = Vec::new();
-        let u = x.units();
-        let mut i = 0;
-        while i < u.len() {
-            let (cp, l) = code_point_at_units(u, i);
-            let c = char::from_u32(cp).map_or(cp, |c| c.to_lowercase().next().map_or(cp, |l| l as u32));
-            out.push(c);
-            i += l;
-        }
-        out
-    };
-    let (a, b) = (fold(&s), fold(&t));
-    let ord = a.cmp(&b).then_with(|| t.units().cmp(s.units()));
-    Ok(Value::Num(match ord {
-        core::cmp::Ordering::Less => -1.0,
-        core::cmp::Ordering::Equal => 0.0,
-        core::cmp::Ordering::Greater => 1.0,
-    }))
+    super::intl::locale_compare(vm, &s.to_rust(), &t.to_rust(), &arg(args, 1), &arg(args, 2))
 }
 
 /// A pattern method: the pattern's own Symbol method if it has one, else `fallback` with the strings.
@@ -422,13 +403,18 @@ fn search(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
 fn normalize(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let s = this_str(vm, this)?;
     let f = arg(args, 0);
-    if !f.is_undefined() {
-        let form = vm.to_string(&f)?.to_rust();
-        if !matches!(form.as_str(), "NFC" | "NFD" | "NFKC" | "NFKD") {
-            return Err(vm.range_error("The normalization form should be one of NFC, NFD, NFKC, NFKD."));
-        }
+    let form = if f.is_undefined() { String::from("NFC") } else { vm.to_string(&f)?.to_rust() };
+    if !matches!(form.as_str(), "NFC" | "NFD" | "NFKC" | "NFKD") {
+        return Err(vm.range_error("The normalization form should be one of NFC, NFD, NFKC, NFKD."));
     }
-    Ok(Value::Str(s))
+    // (Nothing to do for text that's all ASCII.)
+    if s.units().iter().all(|u| *u < 0x80) {
+        return Ok(Value::Str(s));
+    }
+    let text = s.to_rust();
+    let compat = form.starts_with("NFK");
+    let out = if form.ends_with('D') { crate::normalize::nfd(&text, compat) } else { crate::normalize::nfc(&text, compat) };
+    Ok(Value::Str(JsStr::from_str(&out)))
 }
 
 fn pad(vm: &mut Vm, this: &Value, args: &[Value], start: bool) -> R {
@@ -737,6 +723,33 @@ fn to_lower(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
 fn to_upper(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
     let s = this_str(vm, this)?;
     Ok(Value::Str(map_case(&s, true)))
+}
+
+/// toLocaleLowerCase and toLocaleUpperCase: as toLowerCase and toUpperCase, but for Turkish and Azeri, whose i has a
+/// dot in capitals (İ) and whose I has none in small letters (ı).
+fn to_locale_case(vm: &mut Vm, this: &Value, args: &[Value], upper: bool) -> R {
+    let s = this_str(vm, this)?;
+    if super::intl::case_language(vm, &arg(args, 0))?.is_none() {
+        return Ok(Value::Str(map_case(&s, upper)));
+    }
+    let turned: Vec<u16> = if upper {
+        s.units().iter().map(|&c| if c == 0x69 { 0x130 } else { c }).collect()
+    } else {
+        s.units().iter().map(|&c| match c {
+            0x49 => 0x131,
+            0x130 => 0x69,
+            c => c,
+        }).collect()
+    };
+    Ok(Value::Str(map_case(&JsStr::from_units(turned), upper)))
+}
+
+fn to_locale_lower(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    to_locale_case(vm, this, args, false)
+}
+
+fn to_locale_upper(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    to_locale_case(vm, this, args, true)
 }
 
 fn value_of(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {

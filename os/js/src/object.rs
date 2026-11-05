@@ -376,6 +376,8 @@ pub enum Class {
     ImportCell(Gc, u16),
     /// An async-from-sync iterator (for await over a sync iterator): the iterator, and its next method.
     AsyncFromSync(Value, Value),
+    /// An Intl object (a NumberFormat, a DateTimeFormat...): its settings.
+    Intl(Box<crate::builtins::intl::Intl>),
 }
 
 pub struct Object {
@@ -610,6 +612,7 @@ fn trace(o: &Object, work: &mut Vec<Gc>) {
         }
         Class::Arguments(Some(m)) => work.push(m.env),
         Class::ImportCell(e, _) => work.push(*e),
+        Class::Intl(i) => g(i.bound),
         Class::Env(e) => {
             g(e.parent);
             g(e.with);

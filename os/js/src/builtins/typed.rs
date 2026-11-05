@@ -1012,7 +1012,7 @@ fn ta_join(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     Ok(Value::Str(crate::string::JsStr::from_units(units)))
 }
 
-fn ta_to_locale_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+fn ta_to_locale_string(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let (g, _, len) = validate(vm, this, "%TypedArray%.prototype.toLocaleString")?;
     let mut units: Vec<u16> = Vec::new();
     for k in 0..len {
@@ -1023,7 +1023,7 @@ fn ta_to_locale_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R 
         if !v.is_nullish() {
             let a = vm.atom("toLocaleString");
             let m = vm.get_value(&v, Key::Str(a))?;
-            let r = vm.call(&m, v, &[])?;
+            let r = vm.call(&m, v, &[arg(args, 0), arg(args, 1)])?;
             units.extend_from_slice(vm.to_string(&r)?.units());
         }
     }

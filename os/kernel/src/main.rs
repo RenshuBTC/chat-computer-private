@@ -133,6 +133,8 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
         if settings.not_understood > 0 { alloc::format!(", {} lines not understood", settings.not_understood) } else { String::new() }
     );
     log!("Chat Computer kernel: clock: {}", clock::init(info.time, info.time_zone, settings.clock_offset_minutes));
+    // (Pages' scripts keep the PC's time zone: their Date's local time, and Intl's.)
+    browser::script::set_time_zone(clock::offset().unwrap_or(0));
 
     // The screen comes next, so that if anything after this stops the kernel, the screen says so.
     let brand = cpu::brand();

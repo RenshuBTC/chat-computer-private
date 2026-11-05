@@ -101,6 +101,18 @@ pub enum I {
     Float64ArrayCtor,
     BigInt64ArrayCtor,
     BigUint64ArrayCtor,
+    // Intl's prototypes (builtins/intl.rs).
+    IntlNumberFormatProto,
+    IntlDateTimeFormatProto,
+    IntlCollatorProto,
+    IntlPluralRulesProto,
+    IntlRelativeTimeFormatProto,
+    IntlListFormatProto,
+    IntlSegmenterProto,
+    IntlDisplayNamesProto,
+    IntlLocaleProto,
+    IntlSegmentsProto,
+    IntlSegmentIterProto,
     Count,
 }
 
@@ -276,6 +288,9 @@ pub struct Vm {
     /// Where the clock reads (the embedder's: milliseconds since 1970), and the time zone's offset in minutes.
     pub now: fn() -> f64,
     pub tz_offset: i32,
+    /// The time zone's name (IANA's: "Asia/Singapore"), if the embedder knows it: what Intl says the zone is, and
+    /// its daylight saving rule if it has one.
+    pub tz_name: Option<alloc::string::String>,
     /// Whether an element (an index's property) was ever put on Array.prototype or Object.prototype: arrays' fast
     /// paths then go the long way, through the prototypes' setters.
     pub proto_indexes: bool,
@@ -322,6 +337,7 @@ impl Vm {
             step_limit: u64::MAX,
             now: no_clock,
             tz_offset: 0,
+            tz_name: None,
             modules: crate::module::Modules::default(),
         };
         crate::builtins::init(&mut vm);

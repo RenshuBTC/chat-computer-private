@@ -53,7 +53,7 @@ pub fn init(vm: &mut Vm) {
     vm.method(b, "asIntN", 2, bigint_as_int_n);
     vm.method(b, "asUintN", 2, bigint_as_uint_n);
     vm.method(bp, "toString", 0, bigint_to_string);
-    vm.method(bp, "toLocaleString", 0, bigint_to_string);
+    vm.method(bp, "toLocaleString", 0, bigint_to_locale_string);
     vm.method(bp, "valueOf", 0, bigint_value_of);
     tag(vm, bp, "BigInt");
 
@@ -258,9 +258,14 @@ pub fn grouped(x: f64, max_fraction: usize) -> String {
     out
 }
 
-fn number_to_locale_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+fn number_to_locale_string(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let x = this_number(vm, this)?;
-    Ok(js_str(&grouped(x, 3)))
+    super::intl::number_to_locale(vm, &Value::Num(x), &arg(args, 0), &arg(args, 1))
+}
+
+fn bigint_to_locale_string(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    let b = this_bigint(vm, this)?;
+    super::intl::number_to_locale(vm, &Value::Big(b), &arg(args, 0), &arg(args, 1))
 }
 
 fn number_value_of(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {

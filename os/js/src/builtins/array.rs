@@ -624,7 +624,7 @@ fn to_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
     Ok(super::js_str(&s))
 }
 
-fn to_locale_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+fn to_locale_string(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let (o, len) = obj_len(vm, this)?;
     let mut units: Vec<u16> = Vec::new();
     for k in 0..len {
@@ -635,7 +635,7 @@ fn to_locale_string(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
         if !v.is_nullish() {
             let a = vm.atom("toLocaleString");
             let m = vm.get_value(&v, Key::Str(a))?;
-            let r = vm.call(&m, v, &[])?;
+            let r = vm.call(&m, v, &[arg(args, 0), arg(args, 1)])?;
             let s = vm.to_string(&r)?;
             units.extend_from_slice(s.units());
         }

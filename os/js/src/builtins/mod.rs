@@ -5,6 +5,7 @@ pub mod array;
 pub mod collections;
 pub mod core;
 pub mod date;
+pub mod intl;
 pub mod iter;
 pub mod json;
 pub mod number;
@@ -112,6 +113,7 @@ pub fn init(vm: &mut Vm) {
     regexp::init(vm);
     date::init(vm);
     typed::init(vm);
+    intl::init(vm);
 }
 
 /// A constructor: its function, prototype linked both ways, and a global of its name.

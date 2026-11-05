@@ -370,7 +370,8 @@ drivers.
   XMLHttpRequest through the kernel's own connections, URL, cookies (the system's, but the HttpOnly ones), storage
   (localStorage kept from page to page of a site while Chat Computer runs), custom elements and their shadow trees
   (shown in their hosts, with their own style sheets, :host, slots and ::slotted()), style sheets' rules as
-  CSS-in-JS libraries add them (insertRule), templates and tree walkers as lit-html uses them, mutation observers): the
+  CSS-in-JS libraries add them (insertRule), templates and tree walkers as lit-html uses them, mutation observers;
+  the engine's Intl writing numbers, money, dates and times in American English, in the PC's time zone): the
   page's scripts in their order, its modules (`<script type="module">`, import maps, `import()`) fetched as they're
   imported, its clicks and keys going to them first (and doing nothing more when they cancel them), and what they
   change laid out again (on the spot when a script asks where a box is: offsetWidth, getBoundingClientRect,
@@ -868,7 +869,9 @@ writes for each person, in place of Ubuntu's catalogue.
     ✓ Scripts: a JavaScript engine of its own (96% of Ecma's test262's language tests), the DOM, events, timers,
     fetch, modules, layout worked out when a script asks for a box's size. ✓ A sans-serif font for pages that ask
     for one. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
-    Canvas (its 2D drawing, text, pictures and pixels; animation frames). To do: touchpads.
+    Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
+    plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time
+    zone. To do: touchpads.
 16. Apps Chat Computer writes for you: when a person needs a tool (a budget, a study plan, their taxes), the model
     builds a small app of its own for it and keeps it up to date as things change, so asking again is a button, not
     another answer from scratch. Each app is one file in a form simple enough for a small model to write well (its

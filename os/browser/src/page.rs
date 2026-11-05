@@ -12,6 +12,7 @@ use crate::layout::{Item, Laid, Layout, Paint, Rect, Sizes};
 use crate::script::{EventInit, Picker, Script, ScriptKind};
 use crate::style::{self, Sheets, Styles};
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -964,6 +965,49 @@ impl Page {
 
     fn soon_script(&self, ready: &dyn Fn(&PageScript) -> bool) -> Option<usize> {
         self.scripts.iter().position(|s| !s.done && s.when == When::Soon && ready(s))
+    }
+
+    /// The cookies its scripts see (document.cookie): the system's for the page's address, the HttpOnly ones left
+    /// out ("a=1; b=2").
+    pub fn set_cookies(&mut self, cookies: &str) {
+        if let Some(s) = self.script.as_mut() {
+            s.host().cookies = cookies
+                .split(';')
+                .filter(|c| !c.trim().is_empty())
+                .map(|c| match c.split_once('=') {
+                    Some((k, v)) => (String::from(k.trim()), String::from(v.trim())),
+                    None => (String::new(), String::from(c.trim())),
+                })
+                .collect();
+        }
+    }
+
+    /// The cookies its scripts set since last asked (as they wrote them), for the system's cookies.
+    pub fn take_cookies_set(&mut self) -> Vec<String> {
+        self.script.as_mut().map(|s| core::mem::take(&mut s.host().cookies_set)).unwrap_or_default()
+    }
+
+    /// Its scripts' storage (localStorage, sessionStorage), as kept for its origin.
+    pub fn set_storage(&mut self, local: BTreeMap<String, String>, session: BTreeMap<String, String>) {
+        if let Some(s) = self.script.as_mut() {
+            let h = s.host();
+            h.local = local;
+            h.session = session;
+        }
+    }
+
+    /// Its scripts' storage, if they changed it since last asked (for the system to keep for the origin).
+    pub fn take_storage(&mut self) -> Option<(BTreeMap<String, String>, BTreeMap<String, String>)> {
+        let h = self.script.as_mut()?.host();
+        if !core::mem::take(&mut h.storage_changed) {
+            return None;
+        }
+        Some((h.local.clone(), h.session.clone()))
+    }
+
+    /// The page's origin, as its scripts have it (where its storage is kept).
+    pub fn origin(&self) -> String {
+        if self.url.port == 443 { format!("https://{}", self.url.host) } else { format!("https://{}:{}", self.url.host, self.url.port) }
     }
 
     /// A picture's pixels, decoded (for its scripts to draw on canvases).

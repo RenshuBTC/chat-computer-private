@@ -10,6 +10,7 @@
 
 use crate::web::Fetch;
 use crate::{clock, time};
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -34,6 +35,11 @@ const PICTURE_SIDE: u32 = 2400;
 const PICTURES_BYTES: usize = 160 << 20;
 /// How often a page's animation frames are drawn, at most (ms: 60 a second).
 const FRAME_MS: u64 = 16;
+/// The most sites whose scripts' storage (localStorage) is kept while Chat Computer runs.
+const MOST_STORED: usize = 64;
+
+/// Sites' scripts' storage (localStorage), by origin: kept from page to page, while Chat Computer runs.
+static STORED: crate::sync::SpinLock<BTreeMap<String, BTreeMap<String, String>>> = crate::sync::SpinLock::new(BTreeMap::new());
 /// The most pages kept to go back to.
 const MOST_BACK: usize = 50;
 /// While a page loads, it's laid out again at most this often (each style sheet or picture that comes changes it).
@@ -102,6 +108,8 @@ pub struct Site {
     come_logged: bool,
     /// When its scripts' last animation frame was asked to be drawn (uptime ms).
     frame_at: u64,
+    /// Its pages' scripts' sessionStorage, by origin (for as long as the site is open).
+    session: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Site {
@@ -147,6 +155,7 @@ impl Site {
             console_logged: 0,
             come_logged: false,
             frame_at: 0,
+            session: BTreeMap::new(),
         }
     }
 
@@ -316,7 +325,26 @@ impl Site {
                         body: got.bytes,
                     });
                     page.answer(id, answer);
+                    // (What came may have set cookies its scripts see.)
+                    let url = page.url.clone();
+                    page.set_cookies(&crate::web::script_cookies(&url));
                     changed = true;
+                }
+                // What its scripts set: cookies, and storage, kept for the site.
+                let url = page.url.clone();
+                for c in page.take_cookies_set() {
+                    crate::web::script_set_cookie(&url, &c);
+                }
+                if let Some((local, session)) = page.take_storage() {
+                    let origin = page.origin();
+                    let mut stored = STORED.lock();
+                    if !stored.contains_key(&origin) && stored.len() >= MOST_STORED
+                        && let Some(k) = stored.keys().next().cloned()
+                    {
+                        stored.remove(&k);
+                    }
+                    stored.insert(origin.clone(), local);
+                    self.session.insert(origin, session);
                 }
                 for line in page.take_console() {
                     if self.console_logged < CONSOLE_LOGGED {
@@ -397,7 +425,13 @@ impl Site {
             let epoch = crate::clock::now_ms().unwrap_or(0) as f64;
             let dpr = if self.dpr > 0.0 { self.dpr } else { 1.0 };
             let (w, h) = if self.view.0 > 0.0 { (self.view.0 / dpr, self.view.1 / dpr) } else { (1280.0, 800.0) };
-            Page::with_scripts(got.url.clone(), &html, epoch, (w, h, dpr), crate::random::u64())
+            let mut p = Page::with_scripts(got.url.clone(), &html, epoch, (w, h, dpr), crate::random::u64());
+            // (What its scripts kept before, on this site, and its cookies they may see.)
+            let origin = p.origin();
+            let local = STORED.lock().get(&origin).cloned().unwrap_or_default();
+            p.set_storage(local, self.session.get(&origin).cloned().unwrap_or_default());
+            p.set_cookies(&crate::web::script_cookies(&got.url));
+            p
         } else {
             Page::new(got.url.clone(), &html)
         };

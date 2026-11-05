@@ -2793,10 +2793,17 @@ fn set_document_cookie(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R 
         let p = p.trim().to_ascii_lowercase();
         p.strip_prefix("max-age=").is_some_and(|a| a.trim().parse::<i64>().is_ok_and(|a| a <= 0)) || (p.starts_with("expires=") && (p.contains("1970") || p.contains("thu, 01 jan")))
     });
+    // (Scripts can't make a cookie only the site sees.)
+    if s.split(';').skip(1).any(|p| p.trim().eq_ignore_ascii_case("httponly")) {
+        return Ok(Value::Undefined);
+    }
     let h = host(vm);
     h.cookies.retain(|(name, _)| name != k);
     if !gone {
         h.cookies.push((String::from(k), String::from(v)));
+    }
+    if h.cookies_set.len() < 256 {
+        h.cookies_set.push(s);
     }
     Ok(Value::Undefined)
 }

@@ -176,6 +176,8 @@ pub struct Host {
     pub images: Vec<NodeId>,
     /// The <img>s whose picture has come (its size) or couldn't be (None): complete, naturalWidth.
     pub settled: BTreeMap<NodeId, Option<(u32, u32)>>,
+    /// Cookies its scripts set (document.cookie = ...: as they wrote them), for the system's cookies.
+    pub cookies_set: Vec<String>,
 }
 
 /// The private symbols holding objects' inner state (scripts never see these keys).
@@ -242,6 +244,7 @@ impl Host {
             pixels: Vec::new(),
             images: Vec::new(),
             settled: BTreeMap::new(),
+            cookies_set: Vec::new(),
         }
     }
 

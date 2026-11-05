@@ -1447,6 +1447,10 @@ SITE_JS = """document.addEventListener('DOMContentLoaded', function () {
   cx.fillText('canvas', 8, 26);
   var px = cx.getImageData(2, 2, 1, 1).data;
   console.log('canvas drew ' + px[0] + ',' + px[1] + ',' + px[2] + ' ' + cv.toDataURL().slice(0, 15));
+  var visits = Number(localStorage.getItem('visits') || 0) + 1;
+  localStorage.setItem('visits', visits);
+  document.cookie = 'fromscript=' + visits + '; path=/';
+  console.log('visit ' + visits + ', cookies: ' + document.cookie);
 });"""
 SITE_CSS = """body { margin: 0; background: #fff4e0; font-family: serif; }
 #next { display: block; height: 200px; line-height: 200px; padding-left: 20px; background: #2050c0; color: #fff; }
@@ -1614,8 +1618,8 @@ def site_check(args) -> list[str]:
         searches = [a for a in asked if a["path"] == "/search"]
         if not searches or parse_qs(searches[0]["query"]).get("q") != ["sunny day"]:
             problems.append(f"the form wasn't sent with what was typed: {asked!r}"[:2000])
-        elif searches[0]["cookie"] != "seen=1":
-            problems.append(f"the site's cookie didn't go back to it: {searches[0]!r}")
+        elif searches[0]["cookie"] != "seen=1; fromscript=1":
+            problems.append(f"the site's cookie (and the one its script set) didn't go back to it: {searches[0]!r}")
         sheet = [a for a in asked if a["path"] == "/style.css"]
         if not sheet or not sheet[0]["referer"].startswith("https://www.example.com/") or "text/css" not in sheet[0]["accept"]:
             problems.append(f"the style sheet wasn't asked for as a page's: {sheet!r}")
@@ -1628,7 +1632,8 @@ def site_check(args) -> list[str]:
         for note in ("site: opening https://www.example.com/", "1 style sheets, 1 pictures (0 couldn't be had)",
                      "site: form sent to https://www.example.com/search?q=sunny+day (GET)", "Opened www.example.com",
                      "site: console: made 3 cells later", "site: console: fetched hello", "site: console: timer fired",
-                     "site: console: module says hi from a module", "site: console: canvas drew 224,64,32 data:image/png;"):
+                     "site: console: module says hi from a module", "site: console: canvas drew 224,64,32 data:image/png;",
+                     "site: console: visit 1, cookies: fromscript=1", "site: console: visit 2, cookies: fromscript=2"):
             if note not in text:
                 problems.append(f"the log doesn't say {note!r}")
     finally:

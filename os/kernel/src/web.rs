@@ -37,6 +37,17 @@ const MOST_REDIRECTS: u32 = 5;
 pub(crate) static TEST_CA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test_ca.der"));
 pub(crate) const TEST_SERVER: Ipv4 = Ipv4([10, 0, 2, 2]);
 
+/// The cookies a page's scripts see on the page at `url` (document.cookie: the HttpOnly ones left out).
+pub(crate) fn script_cookies(url: &Url) -> String {
+    COOKIES.lock().as_ref().map(|j| j.for_script(url, clock::now())).unwrap_or_default()
+}
+
+/// A cookie a page's script set (document.cookie = ...), on the page at `url`.
+pub(crate) fn script_set_cookie(url: &Url, cookie: &str) {
+    let mut jar = COOKIES.lock();
+    jar.get_or_insert_with(Jar::new).set_by_script(url, cookie, clock::now());
+}
+
 pub(crate) fn test_build() -> bool {
     !TEST_CA.is_empty()
 }

@@ -24,6 +24,8 @@ struct Cookie {
     path: String,
     /// When it ends (seconds since 1970), if it said.
     expires: Option<i64>,
+    /// HttpOnly: sent to its site, never shown to the site's scripts (document.cookie).
+    http_only: bool,
 }
 
 #[derive(Default)]
@@ -38,6 +40,16 @@ impl Jar {
 
     /// What a response from `url` set (its Set-Cookie headers' values), `now` seconds since 1970 (if known).
     pub fn set(&mut self, url: &Url, set_cookie: &str, now: Option<i64>) {
+        self.set_as(url, set_cookie, now, false);
+    }
+
+    /// What a page's script set (document.cookie = ...), on the page at `url`: as a site sets one, except that it
+    /// can't be HttpOnly, nor replace one that is.
+    pub fn set_by_script(&mut self, url: &Url, cookie: &str, now: Option<i64>) {
+        self.set_as(url, cookie, now, true);
+    }
+
+    fn set_as(&mut self, url: &Url, set_cookie: &str, now: Option<i64>, script: bool) {
         let mut parts = set_cookie.split(';');
         let Some((name, value)) = parts.next().and_then(|p| p.split_once('=')) else { return };
         let (name, value) = (name.trim(), value.trim().trim_matches('"'));
@@ -52,6 +64,7 @@ impl Jar {
             subdomains: false,
             path: default_path(&url.path),
             expires: None,
+            http_only: false,
         };
         let mut gone = false;
         for attr in parts {
@@ -75,6 +88,11 @@ impl Jar {
                     Ok(s) => c.expires = now.map(|n| n.saturating_add(s)),
                     Err(_) => {}
                 }
+            } else if k.eq_ignore_ascii_case("httponly") {
+                if script {
+                    return;
+                }
+                c.http_only = true;
             } else if k.eq_ignore_ascii_case("expires") && c.expires.is_none() {
                 if let (Some(t), Some(n)) = (http_date(v), now)
                     && t <= n
@@ -83,6 +101,9 @@ impl Jar {
                 }
                 c.expires = http_date(v);
             }
+        }
+        if script && self.cookies.iter().any(|o| o.http_only && o.name == c.name && o.domain == c.domain && o.path == c.path) {
+            return;
         }
         self.cookies.retain(|o| !(o.name == c.name && o.domain == c.domain && o.path == c.path));
         if gone {
@@ -102,6 +123,16 @@ impl Jar {
 
     /// The Cookie header's value for a request to `url`, if it has any.
     pub fn header(&self, url: &Url, now: Option<i64>) -> Option<String> {
+        self.header_for(url, now, false)
+    }
+
+    /// What a script on the page at `url` sees as its cookies (document.cookie): the header's, without the HttpOnly
+    /// ones.
+    pub fn for_script(&self, url: &Url, now: Option<i64>) -> String {
+        self.header_for(url, now, true).unwrap_or_default()
+    }
+
+    fn header_for(&self, url: &Url, now: Option<i64>, script: bool) -> Option<String> {
         let host = url.host.to_ascii_lowercase();
         let path = url.path.split('?').next().unwrap_or("/");
         let mut out = String::new();
@@ -116,7 +147,7 @@ impl Jar {
                     (Some(e), Some(n)) => e > n,
                     _ => true,
                 };
-                domain_ok && path_ok && alive
+                domain_ok && path_ok && alive && !(script && c.http_only)
             })
             .collect();
         found.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
@@ -189,6 +220,20 @@ mod tests {
 
     fn url(s: &str) -> Url {
         Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn scripts_see_and_set_cookies_but_not_http_only_ones() {
+        let mut j = Jar::new();
+        let u = url("https://www.example.com/a");
+        j.set(&u, "SID=1; Path=/; HttpOnly", None);
+        j.set(&u, "lang=en; Path=/", None);
+        assert_eq!(j.for_script(&u, None), "lang=en");
+        j.set_by_script(&u, "consent=yes; path=/; max-age=3600", Some(0));
+        j.set_by_script(&u, "SID=stolen; path=/", None);
+        j.set_by_script(&u, "sneaky=1; path=/; HttpOnly", None);
+        assert_eq!(j.for_script(&u, Some(10)), "lang=en; consent=yes");
+        assert_eq!(j.header(&u, Some(10)).as_deref(), Some("SID=1; lang=en; consent=yes"));
     }
 
     #[test]

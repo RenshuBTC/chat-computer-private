@@ -360,7 +360,8 @@ drivers.
   follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter sends its form (GET or
   POST). Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
   (`browser/src/script/`: the document's nodes and elements, events, timers and animation frames, fetch and
-  XMLHttpRequest through the kernel's own connections, URL, storage, custom elements, mutation observers): the
+  XMLHttpRequest through the kernel's own connections, URL, cookies (the system's, but the HttpOnly ones), storage
+  (localStorage kept from page to page of a site while Chat Computer runs), custom elements, mutation observers): the
   page's scripts in their order, its modules (`<script type="module">`, import maps, `import()`) fetched as they're
   imported, its clicks and keys going to them first (and doing nothing more when they cancel them), and what they
   change laid out again (on the spot when a script asks where a box is: offsetWidth, getBoundingClientRect,
@@ -371,8 +372,9 @@ drivers.
   shown as pictures, drawn again as their animation frames come. Pictures a script makes (new Image()) are fetched,
   and their load and error events fired. jQuery, React and Preact pages work. `check.py --site` types an
   address, and a stand-in for the site (over TLS 1.3, with a test authority) checks its style sheet, picture and
-  cookie, its script (a block it makes, turned another colour by what it fetches, a canvas it draws on, a timer,
-  its console's lines in the log) and its module, a form sent with what was typed, and a link clicked.
+  cookie, its script (a block it makes, turned another colour by what it fetches, a canvas it draws on, a cookie
+  it sets and what it keeps in localStorage, seen again when the page comes back, a timer, its console's lines in
+  the log) and its module, a form sent with what was typed, and a link clicked.
 * `net/` is Chat Computer's own network stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS and TCP (with
   retransmission timed as RFC 6298 says, slow start, fast retransmit and out-of-order segments kept). Tested on
   its own with lost, repeated and reordered packets.

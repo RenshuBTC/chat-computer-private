@@ -1,0 +1,56 @@
+Chat Computer
+Copyright 2026 Chat Computer contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository also contains material made by others, each under its own licence:
+
+Fonts (SIL Open Font License 1.1)
+- Lora: chatcomputer/ui/assets/fonts/Lora*.ttf and docs/demo/fonts/Lora*.ttf.
+  Copyright 2011 The Lora Project Authors (https://github.com/cyrealtype/Lora-Cyrillic),
+  with Reserved Font Name "Lora". Licence: chatcomputer/ui/assets/fonts/OFL-Lora.txt.
+- Atkinson Hyperlegible Mono: chatcomputer/ui/assets/fonts/AtkinsonHyperlegibleMono*.ttf and
+  docs/demo/fonts/AtkinsonHyperlegibleMono*.ttf.
+  Copyright 2020-2024 The Atkinson Hyperlegible Mono Project Authors
+  (https://github.com/googlefonts/atkinson-hyperlegible-next-mono).
+  Licence: chatcomputer/ui/assets/fonts/OFL-AtkinsonHyperlegibleMono.txt.
+- Atkinson Hyperlegible Next (test data): os/font/testdata/AtkinsonHyperlegibleNext.ttf.
+  Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors
+  (https://github.com/googlefonts/atkinson-hyperlegible-next).
+  Licence: os/font/testdata/OFL-AtkinsonHyperlegibleNext.txt.
+- Chat Computer Fallback, Fallback Mono and CJK: os/fonts/*.ttf, made from Google's Noto fonts
+  (Noto Sans SC and KR from Adobe's Source Han Sans).
+  Copyright 2022 The Noto Project Authors; Copyright 2013 Google LLC;
+  Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+  Licence: os/fonts/OFL.txt.
+Lora, Atkinson Hyperlegible Mono and the os/fonts fonts are also built into os/release/chatcomputer.efi.
+
+Root certificates (Mozilla Public License 2.0)
+- os/tls/roots.txt and os/tls/src/roots.der (also built into os/release/chatcomputer.efi): the
+  certificate authorities Mozilla trusts, from Mozilla's NSS root store as the ca-certificates
+  package carries it. Licence: https://mozilla.org/MPL/2.0/
+
+Unicode data (Unicode License v3)
+- os/text/src/compose.rs, os/model/src/unicode.rs and os/model/src/nfc_table.rs are generated from
+  the Unicode Character Database (through Python's unicodedata module). Copyright Unicode, Inc.
+  Licence: https://www.unicode.org/license.txt
+
+shim and MokManager (BSD 2-Clause License)
+- os/release/shim/shimx64.efi and os/release/shim/mmx64.efi: shim 15.8, unchanged from Ubuntu 24.04's package
+  shim-signed (1.58+15.8-0ubuntu1), signed by Microsoft (shimx64.efi) and Canonical (mmx64.efi).
+  Copyright 2012 Red Hat, Inc. and Intel Corporation. Licence: os/release/shim/LICENSE.
+
+Test data
+- windows/tests/data/ubuntu-24.04.5-grub.cfg and windows/tests/data/SHA256SUMS: copied from
+  Ubuntu's release files (Canonical Ltd.).
+- os/tls/src/testdata/api.anthropic.com/: that site's public TLS certificate chain.
+
+Built programs
+The prebuilt programs in docs/get/, chatcomputer/brain/bin/, windows/bin/, os/release/ (but for
+os/release/shim, above) and docs/demo/engine/ are built from this repository's code together with
+open-source components under their own licences: the Rust standard library (MIT or Apache-2.0); in
+the Windows and Mac apps, Tauri and the other crates listed in apps/desktop/src-tauri/Cargo.lock
+(mostly MIT or Apache-2.0), and NSIS in the Windows installer (zlib licence).
+
+The AI models Chat Computer runs (for example Qwen's, under the Apache License 2.0) are downloaded
+when needed and are not part of this repository.

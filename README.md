@@ -575,3 +575,8 @@ Chat Computer:
   (`--model web`, and `--engine native:PORT` to have the engine's program answer the page's requests, a few times
   faster). `evals/tools` prints traces to read (`show_web.py`, `show_os.py`) and `review.html` opens them to label
   each one pass or fail, with why.
+
+## Licence
+
+Chat Computer is licensed under the Apache License 2.0 (`LICENSE`). The fonts, Mozilla's root certificates, shim and
+the other material by others that the repository carries keep their own licences, listed in `NOTICE`.

@@ -115,6 +115,8 @@ pub struct Fetch {
     method: Option<String>,
     headers: Vec<(String, String)>,
     raw: bool,
+    /// An app's request: the sites it may reach (a redirect elsewhere fails), with no cookies sent or kept.
+    only: Option<Vec<String>>,
 }
 
 impl Fetch {
@@ -126,7 +128,7 @@ impl Fetch {
     /// A page, a style sheet or a picture (`accept` says which), for a site shown on the screen: a form's fields
     /// sent with it (POST) when `form` has them, and the page it's asked from.
     pub fn request(url: Url, accept: &'static str, form: Option<Vec<u8>>, referer: Option<Url>) -> Fetch {
-        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, accept, form, referer, method: None, headers: Vec::new(), raw: false }
+        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, accept, form, referer, method: None, headers: Vec::new(), raw: false, only: None }
     }
 
     /// What a page's script fetches (fetch, XMLHttpRequest): its method, headers and body as it says, and an answer
@@ -136,6 +138,14 @@ impl Fetch {
         f.method = Some(String::from(method));
         f.headers = headers;
         f.raw = true;
+        f
+    }
+
+    /// What an app made here fetches (fetch, XMLHttpRequest): as a page's script's request, but only from the sites the
+    /// person let it reach (`only`), and with no cookies, sent or kept: an app never acts as the person on a site.
+    pub fn app(url: Url, method: &str, headers: Vec<(String, String)>, body: Option<Vec<u8>>, only: Vec<String>) -> Fetch {
+        let mut f = Fetch::script(url, method, headers, body, None);
+        f.only = Some(only);
         f
     }
 
@@ -170,6 +180,11 @@ impl Fetch {
                 self.redirects += 1;
                 if self.redirects > MOST_REDIRECTS {
                     return Some(Err(String::from("the site sent it on too many times (more than five redirects)")));
+                }
+                if let Some(only) = &self.only
+                    && !only.iter().any(|h| h.eq_ignore_ascii_case(&to.host))
+                {
+                    return Some(Err(format!("{} sent it on to {}, which this app may not reach", self.url.host, to.host)));
                 }
                 crate::log!("Chat Computer kernel: web: sent on to {}", to.host);
                 if !matches!(status, 307 | 308) {
@@ -235,7 +250,7 @@ impl Fetch {
                             let mut tls = Box::new(tls::Client::new(&self.url.host, when, roots(), &mut random::fill));
                             tls.allow_clock_error(clock::error());
                             let out = tls.outgoing();
-                            let cookies = COOKIES.lock().as_ref().and_then(|j| j.header(&self.url, clock::now()));
+                            let cookies = if self.only.is_some() { None } else { COOKIES.lock().as_ref().and_then(|j| j.header(&self.url, clock::now())) };
                             let method = self.method.clone().unwrap_or_else(|| String::from(if self.form.is_some() { "POST" } else { "GET" }));
                             let request = web::http::request_with(
                                 &self.url,
@@ -268,7 +283,7 @@ impl Fetch {
                         _ => return None,
                     }
                 }
-                Phase::Talking(t) => return talk(now, stack, t, &self.url, self.raw),
+                Phase::Talking(t) => return talk(now, stack, t, &self.url, self.raw, self.only.is_none()),
             }
         }
     }
@@ -286,7 +301,7 @@ fn connect(now: u64, stack: &mut Stack, ip: Ipv4, port: u16, host: &str) -> Resu
 }
 
 /// The connection is open: TLS's set-up, the request, and the response. Some when it's over.
-fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, raw: bool) -> Option<Result<Got, String>> {
+fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, raw: bool, keep_cookies: bool) -> Option<Result<Got, String>> {
     let mut buf = vec![0u8; 16 * 1024];
     loop {
         let n = stack.recv(t.socket, &mut buf);
@@ -323,7 +338,7 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, raw: bool) -> Opti
     }
     if t.response.done() {
         stack.release(t.socket);
-        return Some(answered(&t.response, url, raw));
+        return Some(answered(&t.response, url, raw, keep_cookies));
     }
     t.out.extend(t.tls.outgoing());
     if !t.out.is_empty() {
@@ -343,11 +358,11 @@ fn talk(now: u64, stack: &mut Stack, t: &mut Talk, url: &Url, raw: bool) -> Opti
 }
 
 /// What a whole response comes to: a redirect, the page, or why there's none.
-fn answered(r: &Response, url: &Url, raw: bool) -> Result<Got, String> {
+fn answered(r: &Response, url: &Url, raw: bool, keep_cookies: bool) -> Result<Got, String> {
     let status = r.status().unwrap_or(0);
     // The cookies it set, kept for the next request to it.
     let mut set = r.headers_named("set-cookie").peekable();
-    if set.peek().is_some() {
+    if keep_cookies && set.peek().is_some() {
         let mut jar = COOKIES.lock();
         let jar = jar.get_or_insert_with(Jar::new);
         for c in set {

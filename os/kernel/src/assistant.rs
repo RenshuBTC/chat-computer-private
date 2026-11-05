@@ -84,11 +84,31 @@ pub enum Event {
     Apps(Vec<String>),
 }
 
-/// An app the model made for the person (make_app): its name and its page (one HTML file).
+/// An app the model made for the person (make_app): its name and its page (one HTML file); the sites it says it
+/// needs, and those of them the person let it reach (it reaches no others); and what the person asked that it was
+/// made (or last changed) for, which its actions are traced to.
 #[derive(Clone, PartialEq)]
 pub struct App {
     pub name: String,
     pub html: String,
+    pub sites: Vec<String>,
+    pub allowed: Vec<String>,
+    pub because: String,
+}
+
+/// The most sites an app may say it needs.
+const MOST_APP_SITES: usize = 8;
+
+/// A site an app says it needs, as a host name ("api.example.com", from "https://api.example.com/v1" too), if
+/// it's one.
+fn app_site(s: &str) -> Option<String> {
+    let s = s.trim();
+    let s = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")).unwrap_or(s);
+    let host = s.split(['/', '?', '#']).next().unwrap_or("").trim_end_matches('.').to_ascii_lowercase();
+    let ok = host.len() <= 253
+        && host.contains('.')
+        && host.split('.').all(|l| !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') && !l.starts_with('-') && !l.ends_with('-'));
+    ok.then_some(host)
 }
 
 /// Whether the model can be asked now.
@@ -645,7 +665,16 @@ pub fn init(setting: Option<String>, settings_key: Option<String>, ai: Option<St
                 let map = data.iter().filter_map(|(k, v)| Some((k.clone(), String::from(v.str()?)))).collect();
                 crate::site::restore_storage(&crate::site::app_origin(name), map);
             }
-            a.apps.push(App { name: String::from(name), html: String::from(html) });
+            let list = |key: &str| -> Vec<String> {
+                match app.get(key) {
+                    Some(Json::Array(v)) => v.iter().filter_map(|x| x.str().and_then(app_site)).take(MOST_APP_SITES).collect(),
+                    _ => Vec::new(),
+                }
+            };
+            let sites = list("sites");
+            let allowed = list("allowed").into_iter().filter(|h| sites.contains(h)).collect();
+            let because = String::from(app.get("because").and_then(Json::str).unwrap_or(""));
+            a.apps.push(App { name: String::from(name), html: String::from(html), sites, allowed, because });
         }
         crate::log!("Chat Computer kernel: model: {} app{} from before", a.apps.len(), if a.apps.len() == 1 { "" } else { "s" });
     }
@@ -1120,7 +1149,15 @@ impl Assistant {
         if self.apps.is_empty() {
             return String::new();
         }
-        let names: Vec<&str> = self.apps.iter().map(|a| a.name.as_str()).collect();
+        let names: Vec<String> = self
+            .apps
+            .iter()
+            .map(|a| match (a.sites.is_empty(), a.allowed.len() == a.sites.len()) {
+                (true, _) => a.name.clone(),
+                (false, true) => format!("{} (reaches {})", a.name, a.sites.join(", ")),
+                (false, false) => format!("{} (needs {}; the person hasn't allowed it all yet)", a.name, a.sites.join(", ")),
+            })
+            .collect();
         format!("\n\nThe apps you've made for the person (make_app; open_app opens one): {}.", names.join(", "))
     }
 
@@ -1712,7 +1749,11 @@ impl Assistant {
             let notes = self.notes.clone();
             let (sight, blind) = (self.sight(), self.blind());
             let apps = self.apps.len();
-            let (said, error, picture) = run_tool(&call.name, &input, job, &mut self.notes, &mut self.apps, events, sight, blind);
+            let because = match self.parts.get(job.base) {
+                Some(Part::You { text, .. }) => text.chars().take(300).collect(),
+                _ => String::new(),
+            };
+            let (said, error, picture) = run_tool(&call.name, &input, job, &mut self.notes, &mut self.apps, &because, events, sight, blind);
             self.unkept |= self.notes != notes || matches!(call.name.as_str(), "make_app") || self.apps.len() != apps;
             self.tool_said(&call.name, said, error, picture);
         }
@@ -2397,10 +2438,14 @@ fn kept_apps(apps: &[App]) -> Json {
         apps.iter()
             .map(|app| {
                 let data = crate::site::storage_of(&crate::site::app_origin(&app.name)).unwrap_or_default();
+                let list = |v: &[String]| Json::Array(v.iter().map(|h| Json::Str(h.clone())).collect());
                 Json::Object(vec![
                     (String::from("name"), Json::Str(app.name.clone())),
                     (String::from("html"), Json::Str(app.html.clone())),
                     (String::from("data"), Json::Object(data.into_iter().map(|(k, v)| (k, Json::Str(v))).collect())),
+                    (String::from("sites"), list(&app.sites)),
+                    (String::from("allowed"), list(&app.allowed)),
+                    (String::from("because"), Json::Str(app.because.clone())),
                 ])
             })
             .collect(),
@@ -2508,6 +2553,7 @@ fn run_tool(
     job: &mut Job,
     notes: &mut Vec<String>,
     apps: &mut Vec<App>,
+    because: &str,
     events: &mut Vec<Event>,
     sight: Option<Sight>,
     blind: &str,
@@ -2525,7 +2571,7 @@ fn run_tool(
         };
     }
     if matches!(name, "make_app" | "open_app") {
-        let (said, error) = app_tool(name, input, apps, events);
+        let (said, error) = app_tool(name, input, apps, because, events);
         return (said, error, None);
     }
     let (said, error) = run_other_tool(name, input, job, notes, events);
@@ -2533,7 +2579,7 @@ fn run_tool(
 }
 
 /// make_app and open_app: an app made (or changed) and opened, or one made before opened.
-fn app_tool(name: &str, input: &Json, apps: &mut Vec<App>, events: &mut Vec<Event>) -> (String, bool) {
+fn app_tool(name: &str, input: &Json, apps: &mut Vec<App>, because: &str, events: &mut Vec<Event>) -> (String, bool) {
     crate::log!("Chat Computer kernel: model: uses {name}");
     let text = |key: &str| input.get(key).and_then(Json::str).unwrap_or("");
     let app_name: String = text("name").trim().chars().take(40).collect();
@@ -2559,17 +2605,50 @@ fn app_tool(name: &str, input: &Json, apps: &mut Vec<App>, events: &mut Vec<Even
     if html.len() > APP_BYTES {
         return (format!("An app's page can be at most {} KB: make it smaller.", APP_BYTES >> 10), true);
     }
+    // The sites it needs (none: it reaches no site).
+    let mut sites: Vec<String> = Vec::new();
+    match input.get("sites") {
+        None | Some(Json::Null) => {}
+        Some(Json::Array(list)) => {
+            for x in list {
+                match x.str().and_then(app_site) {
+                    Some(h) if !sites.contains(&h) => sites.push(h),
+                    Some(_) => {}
+                    None => return (format!("sites must be the host names the app fetches from (\"api.example.com\"); {x:?} isn't one"), true),
+                }
+            }
+            if sites.len() > MOST_APP_SITES {
+                return (format!("An app can reach at most {MOST_APP_SITES} sites."), true);
+            }
+        }
+        Some(_) => return (String::from("sites must be a list of host names (\"api.example.com\")"), true),
+    }
+    let ask = if sites.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " It can't reach {} until the person allows it, with the Allow button over it (only they can): tell them \
+             what it fetches from there, and why.",
+            sites.join(", ")
+        )
+    };
     let said = match found {
         Some(i) => {
-            apps[i].html = String::from(html);
-            format!("The {} app is changed (its data kept), and open in the middle of the screen.", apps[i].name)
+            let app = &mut apps[i];
+            app.html = String::from(html);
+            // (Sites it already had stay allowed; new ones wait for the person.)
+            app.allowed.retain(|h| sites.contains(h));
+            let pending = sites.iter().any(|h| !app.allowed.contains(h));
+            app.sites = sites;
+            app.because = String::from(because);
+            format!("The {} app is changed (its data kept), and open in the middle of the screen.{}", app.name, if pending { &ask } else { "" })
         }
         None if apps.len() >= MOST_APPS => return (format!("There's no room for more apps ({MOST_APPS} at most): change one of them instead."), true),
         None => {
-            apps.push(App { name: app_name.clone(), html: String::from(html) });
+            apps.push(App { name: app_name.clone(), html: String::from(html), sites, allowed: Vec::new(), because: String::from(because) });
             format!(
                 "The {app_name} app is made, and open in the middle of the screen; it stays in the Apps list at the \
-                 left, for the person to open again."
+                 left, for the person to open again.{ask}"
             )
         }
     };
@@ -2587,6 +2666,26 @@ pub fn apps() -> Vec<String> {
 
 pub fn app(name: &str) -> Option<String> {
     ASSISTANT.lock().as_ref().and_then(|a| a.apps.iter().find(|app| app.name == name).map(|app| app.html.clone()))
+}
+
+/// The sites an app says it needs, those the person allowed, and what it was made for.
+pub fn app_sites(name: &str) -> (Vec<String>, Vec<String>, String) {
+    ASSISTANT
+        .lock()
+        .as_ref()
+        .and_then(|a| a.apps.iter().find(|app| app.name == name).map(|app| (app.sites.clone(), app.allowed.clone(), app.because.clone())))
+        .unwrap_or_default()
+}
+
+/// The person allowed an app to reach the sites it needs (they pressed its Allow button): kept, and given back.
+pub fn allow_app(name: &str) -> Vec<String> {
+    let mut guard = ASSISTANT.lock();
+    let Some(a) = guard.as_mut() else { return Vec::new() };
+    let Some(app) = a.apps.iter_mut().find(|app| app.name == name) else { return Vec::new() };
+    app.allowed = app.sites.clone();
+    let allowed = app.allowed.clone();
+    a.unkept = true;
+    allowed
 }
 
 /// An app's data changed (its scripts' localStorage): kept again soon.

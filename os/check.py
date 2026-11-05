@@ -2080,39 +2080,136 @@ fetch('https://www.example.com/').then(function () { console.log('the app reache
 </script></body></html>"""
 
 
+# An app that needs a site (api.example.com): blocked until the person presses its Allow button, then fetching
+# from it twice (its cookie never sent back); another site is never reached.
+RATES_HTML = """<!doctype html><html><head><title>Rates</title><style>body { margin: 0; background: #e9c46a; color: #000;
+font: 24px sans-serif } #r { font-size: 48px; padding: 40px }</style></head><body><div id="r">...</div><script>
+function show(x) { document.getElementById('r').textContent = x; }
+fetch('https://api.example.com/rates.json').then(function (r) { return r.json(); }).then(function (j) {
+  show('SGD ' + j.sgd); console.log('rates ' + j.sgd);
+  return fetch('https://api.example.com/rates.json');
+}).then(function () { console.log('rates again'); }, function () { show('Not allowed yet'); console.log('rates blocked'); });
+fetch('https://www.example.com/').then(function () { console.log('the rates app reached another site'); },
+  function () { console.log('the rates app reached no other site'); });
+</script></body></html>"""
+
+
 def apps_check(args) -> list[str]:
-    """An app the model makes for the person (make_app; a test's script in place of the model): shown in the middle
-    at once, its script's data (localStorage) kept in the memory file; after a restart, the app in the model's
-    instructions, opened again (open_app) with its data, the Apps list beside it; and no internet for it."""
+    """Apps the model makes for the person (make_app; a test's script in place of the model): shown in the middle at
+    once, their scripts' data (localStorage) kept in the memory file; one that needs no site reaches none; one that
+    needs a site (api.example.com, a stand-in here over TLS 1.3) reaches it only once the person presses its Allow
+    button, with no cookies, and no other site at all; the Actions sidebar says so. After a restart: the apps in the
+    model's instructions (with the site allowed), opened again (open_app) with their data."""
+    import http.server
+    import re
+    import ssl
+    import threading
+    from urllib.parse import urlparse
+
     tmp = Path(tempfile.mkdtemp(prefix="cc-apps-"))
+    test_authority(tmp, ["www.example.com", "api.example.com"])
+    asked_site: list[dict] = []
+
+    class Stand(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            url = urlparse(self.path)
+            asked_site.append({"host": self.headers.get("Host", ""), "path": url.path, "cookie": self.headers.get("Cookie", "")})
+            if url.path == "/rates.json":
+                body, kind = b'{"sgd": 1.35}', "application/json"
+            else:
+                body, kind = b"<html><body>a site</body></html>", "text/html"
+            self.send_response(200)
+            self.send_header("Content-Type", kind)
+            self.send_header("Set-Cookie", "visitor=1; Path=/; Secure")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", SITE_PORT), Stand)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.load_cert_chain(tmp / "leaf.pem", tmp / "leaf.key")
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     script = {
         "app": [{"calls": [["make_app", {"name": "Counter", "html": APP_HTML}]]}, {"text": "Here's your counter."}],
+        "rates": [{"calls": [["make_app", {"name": "Rates", "html": RATES_HTML, "sites": ["https://api.example.com/rates.json"]}]]},
+                  {"text": "It shows the rate from api.example.com once you allow it."}],
         "open": [{"calls": [["open_app", {"name": "counter"}]]}, {"text": "It's open."}],
         "else": [{"text": "OK."}],
     }
-    script_build(script, tmp)
+    (tmp / "script.json").write_text(json.dumps(script, ensure_ascii=False))
+    build("chat", {"CHATCOMPUTER_TEST_SCRIPT": str(tmp / "script.json"), "CHATCOMPUTER_TEST_CA": str(tmp / "ca.der"),
+                   "CHATCOMPUTER_TEST_PORT": str(SITE_PORT)})
     problems: list[str] = []
-    teal = (0x2A, 0x9D, 0x8F)
+    teal, gold = (0x2A, 0x9D, 0x8F), (0xE9, 0xC4, 0x6A)
+
+    def shows(picture, colour) -> bool:
+        return picture is not None and sum(1 for p in picture.getdata() if all(abs(a - b) <= 6 for a, b in zip(p, colour))) >= 50000
+
     try:
         disk = tmp / "nvme.img"
         settings = SETTINGS_HEAD + f"clock-offset-minutes = 0\r\nmemory-id = {MEMORY_ID:08x}\r\nlog-id = {LOG_ID:08x}\r\n"
         files = memory_disk(disk, BUILT, settings, MEMORY_ID)
+        extra = ("-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
+                 "-device", "qemu-xhci,id=xhci", "-device", "usb-mouse,bus=xhci.0")
         texts, held = [], []
-        for start, question in ((1, "app"), (2, "open")):
-            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, "nvme"))
-            picture = None
+        for start in (1, 2):
+            pc = VirtualPC(BUILT, size=args.size, memory=args.memory, cpu=args.cpu, disk=(disk, "nvme"), extra=extra)
             try:
                 if wait_for(pc.log, ("Chat Computer: ready", "stopped"), args.timeout) != "Chat Computer: ready":
                     print(pc.text())
                     return problems + [f"start {start}: the kernel didn't say it was ready"]
+                wait_for(pc.log, ("network: address",), 60)
                 time.sleep(1)
-                monitor_many(pc.mon, [f"sendkey {k}" for k in question] + ["sendkey ret"])
-                wait_for(pc.log, ("site: console: the app has no internet", "site: console: the app reached"), 90)
-                # (The conversation kept when the answer's over, and the app's data with it, or a few seconds after
-                # it changed if that was later.)
-                wait_for(pc.log, ("memory: the conversation kept",), 60)
-                time.sleep(4.5)
-                picture = pc.settled_picture(f"apps-{start}")
+                if start == 1:
+                    monitor_many(pc.mon, [f"sendkey {k}" for k in "app"] + ["sendkey ret"])
+                    wait_for(pc.log, ("site: console: the app has no internet", "site: console: the app reached"), 90)
+                    wait_for(pc.log, ("memory: the conversation kept",), 60)
+                    time.sleep(4.5)
+                    if not shows(pc.settled_picture("apps-counter"), teal):
+                        problems.append("start 1: the Counter app isn't on the screen")
+                    # The app that needs a site: blocked, until its Allow button is pressed.
+                    monitor_many(pc.mon, [f"sendkey {k}" for k in "rates"] + ["sendkey ret"])
+                    wait_for(pc.log, ("site: console: rates blocked", "site: console: rates 1.35"), 90)
+                    wait_for(pc.log, ("site: console: the rates app reached",), 30)
+                    time.sleep(1.5)
+                    pc.settled_picture("apps-allow")
+                    m = re.findall(r"site: allow button at (\d+),(\d+) (\d+)x(\d+)", pc.text())
+                    if m and use_mouse(pc.mon, "QEMU HID Mouse"):
+                        x, y, w, h = (int(v) for v in m[-1])
+                        sw, sh = (int(v) for v in args.size.split("x"))
+                        # (From the middle of the screen, a pixel a count up to 24 a move: past that, the pointer
+                        # goes faster.)
+                        moves = []
+                        for d, axis in ((x + w // 2 - sw // 2, 0), (y + h // 2 - sh // 2, 1)):
+                            while d != 0:
+                                step = max(-24, min(24, d))
+                                moves.append(f"mouse_move {step} 0" if axis == 0 else f"mouse_move 0 {step}")
+                                d -= step
+                        monitor_many(pc.mon, moves, gap=0.05)
+                        time.sleep(0.5)
+                        monitor_many(pc.mon, ["mouse_button 1", "mouse_button 0"])
+                        wait_for(pc.log, ("site: console: rates again",), 60)
+                    else:
+                        problems.append("start 1: the Allow button's place wasn't logged, or there's no mouse")
+                    wait_for(pc.log, ("memory: the conversation kept",), 60, times=3)
+                    time.sleep(4.5)
+                    if not shows(pc.settled_picture("apps-rates"), gold):
+                        problems.append("start 1: the Rates app isn't on the screen")
+                else:
+                    monitor_many(pc.mon, [f"sendkey {k}" for k in "open"] + ["sendkey ret"])
+                    wait_for(pc.log, ("site: console: the app has no internet", "site: console: the app reached"), 90)
+                    wait_for(pc.log, ("memory: the conversation kept",), 60)
+                    time.sleep(4.5)
+                    if not shows(pc.settled_picture("apps-again"), teal):
+                        problems.append("start 2: the Counter app isn't on the screen")
             finally:
                 pc.stop()
             texts.append(pc.text())
@@ -2125,25 +2222,38 @@ def apps_check(args) -> list[str]:
                 problems.append(f"start {start}: {e}")
                 kept = None
             held.append(json.loads(kept[1]) if kept else {})
-            if picture is None or sum(1 for p in picture.getdata() if all(abs(a - b) <= 6 for a, b in zip(p, teal))) < 50000:
-                problems.append(f"start {start}: the app isn't on the screen")
         first, second = texts
         for note in ("model: uses make_app", "model: the Counter app", "site: Opened the Counter app", "site: console: opens 1",
-                     "site: console: the app has no internet"):
+                     "site: console: the app has no internet", "model: the Rates app", "site: console: rates blocked",
+                     "site: console: the rates app reached no other site",
+                     "site: You allowed the Rates app (for “rates”) to reach api.example.com",
+                     "site: The Rates app fetched from api.example.com", "site: console: rates 1.35", "site: console: rates again"):
             if note not in first:
                 problems.append(f"start 1: the log doesn't say {note!r}")
-        for note in ("model: 1 app from before", "model: uses open_app", "site: Opened the Counter app", "site: console: opens 2"):
+        if "site: console: rates 1.35" in first and first.index("site: console: rates 1.35") < first.index("site: You allowed"):
+            problems.append("start 1: the Rates app reached its site before it was allowed")
+        for note in ("model: 2 apps from before", "model: uses open_app", "site: Opened the Counter app", "site: console: opens 2"):
             if note not in second:
                 problems.append(f"start 2: the log doesn't say {note!r}")
+        rates = [a for a in asked_site if a["path"] == "/rates.json"]
+        if len(rates) != 2 or any(a["host"].split(":")[0] != "api.example.com" for a in rates):
+            problems.append(f"api.example.com was asked for its rates {len(rates)} times, not twice: {asked_site!r}")
+        if any(a["cookie"] for a in rates):
+            problems.append(f"the Rates app sent a cookie: {rates!r}")
+        if any(a["host"].split(":")[0] != "api.example.com" for a in asked_site):
+            problems.append(f"an app reached a site it wasn't allowed: {asked_site!r}")
         for start, kept in ((1, held[0]), (2, held[1])):
-            want = [{"name": "Counter", "html": APP_HTML, "data": {"opens": str(start)}}]
+            want = [{"name": "Counter", "html": APP_HTML, "data": {"opens": str(start)}, "sites": [], "allowed": [], "because": "app"},
+                    {"name": "Rates", "html": RATES_HTML, "data": {}, "sites": ["api.example.com"], "allowed": ["api.example.com"],
+                     "because": "rates"}]
             if kept.get("apps") != want:
                 problems.append(f"start {start}: the memory file's apps are {kept.get('apps')!r}"[:2000])
         asked = [plain(r) for r in logged(second, "asked")]
-        line = "The apps you've made for the person (make_app; open_app opens one): Counter."
+        line = "The apps you've made for the person (make_app; open_app opens one): Counter, Rates (reaches api.example.com)."
         if not asked or line not in asked[0][0]["content"]:
-            problems.append("after the restart, the app wasn't in the model's instructions")
+            problems.append("after the restart, the apps weren't in the model's instructions")
     finally:
+        server.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
         build()  # never leave a test build in out/
     return problems

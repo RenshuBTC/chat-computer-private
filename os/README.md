@@ -304,13 +304,20 @@ drivers.
       file with the conversation and in its instructions in every conversation after, new ones and restarts included
       (each conversation's instructions stay as they began, so they're read once). The screen says when the model
       notes or forgets something. At most 40 notes, 8,000 characters in all;
-    * `make_app` and `open_app`: an app the model makes for the person (a budget, a log, a planner: a tool they'll
-      come back to), one HTML page with its CSS and JavaScript, shown in the middle at once as a website is, by the
-      browser engine. Its data is what its scripts keep in localStorage, kept in the memory file with the app (a few
-      seconds after it changes, and when the app is changed); it can't reach the internet. The apps are listed at the
-      left, under Messages, to open with a click, and named in the model's instructions, to open or change. At most
-      40 apps, 256 KB each. `check.py --apps` has a test's script make one, then checks it on the screen, its data in
-      the memory file, and after a restart, the app opened again with its data.
+    * `make_app` and `open_app`: an app the model makes for the person (a budget, a log, a planner, a rates board: a
+      tool they'll come back to), one HTML page with its CSS and JavaScript, shown in the middle at once as a website
+      is, by the browser engine. Its data is what its scripts keep in localStorage, kept in the memory file with the
+      app (a few seconds after it changes, and when the app is changed). It reaches no site unless the model lists
+      the ones it fetches from (`sites`, at most 8 host names), and then only once the person presses the Allow
+      button over it (only they can; a site added when the app is changed waits for them again): the kernel answers
+      its scripts' requests to any other site, or before then, with an error, sends them with no cookies (and keeps
+      none they set), and follows no redirect elsewhere. The Actions sidebar says when the person allowed it (and
+      what they'd asked it for) and when it fetched from each site. The apps are listed at the left, under Messages,
+      to open with a click, and named in the model's instructions (with the sites they reach), to open or change. At
+      most 40 apps, 256 KB each. `check.py --apps` has a test's script make two, then checks them on the screen: one
+      that needs no site reaching none; one that needs a stand-in site blocked, then, its Allow button clicked,
+      fetching from it twice without cookies, and reaching no other; their data and sites in the memory file; and
+      after a restart, the apps in the model's instructions, one opened again with its data.
 
     The model may use tools up to 8 times for one message: what its eighth round of tools says back ends by telling it
     so, and its next round is its answer, in words (a tool it calls then isn't run, and a line under the answer says it
@@ -880,8 +887,10 @@ writes for each person, in place of Ubuntu's catalogue.
     traced to the person's request that allowed it, never a page's or a file's. The person watches it work through
     the app's own screen. Chat Computer's answer to the thousands of apps Ubuntu has. ✓ The first of it: apps the
     model makes (`make_app`: one HTML page, run by the browser engine), shown at once, listed to open with a click,
-    their data kept across restarts and when they change, with no internet. To do: what an app may do declared and
-    checked (the sites it may reach), and its actions traced to the person's requests.
+    their data kept across restarts and when they change; ✓ the sites an app needs, declared by the model and reached
+    only once the person allows it (checked in the kernel, with no cookies), its fetches and the person's say-so in
+    the Actions sidebar, traced to what they asked for. To do: actions beyond reading public data (an app sending a
+    message or filling in a form as the person), each asked for and confirmed.
 17. Updates: signed, with a way back.
 
 ## Reaching everybody's PC

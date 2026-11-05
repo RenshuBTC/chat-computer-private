@@ -152,8 +152,13 @@ pub struct Site {
     frame_at: u64,
     /// Its pages' scripts' sessionStorage, by origin (for as long as the site is open).
     session: BTreeMap<String, BTreeMap<String, String>>,
-    /// The app it shows, if it's one the model made (its name): it can't reach the internet.
+    /// The app it shows, if it's one the model made (its name), and the sites it reaches: those it says it needs and
+    /// the person allowed (none else, and no cookies); and those it needs that the person hasn't allowed yet.
     app: Option<String>,
+    app_allowed: Vec<String>,
+    app_pending: Vec<String>,
+    /// What its app did that the person should see (in the Actions sidebar), not yet taken.
+    actions: Vec<String>,
 }
 
 impl Site {
@@ -173,10 +178,13 @@ impl Site {
         s
     }
 
-    /// An app the model made: its page shown as a site's is, at its own address.
-    pub fn app(name: &str, html: &str) -> Site {
+    /// An app the model made: its page shown as a site's is, at its own address, reaching only the sites it needs
+    /// that the person allowed (`sites`, `allowed`).
+    pub fn app(name: &str, html: &str, sites: &[String], allowed: &[String]) -> Site {
         let mut s = Site::blank(app_url(name));
         s.app = Some(String::from(name));
+        s.app_allowed = sites.iter().filter(|h| allowed.contains(h)).cloned().collect();
+        s.app_pending = sites.iter().filter(|h| !allowed.contains(h)).cloned().collect();
         s.page_came(crate::web::Page { url: app_url(name), kind: String::from("text/html; charset=utf-8"), bytes: html.as_bytes().to_vec(), cut: false, status: 200, headers: Vec::new() }, None);
         s
     }
@@ -209,7 +217,25 @@ impl Site {
             frame_at: 0,
             session: BTreeMap::new(),
             app: None,
+            app_allowed: Vec::new(),
+            app_pending: Vec::new(),
+            actions: Vec::new(),
         }
+    }
+
+    /// The app it shows, if it's one the model made: its name.
+    pub fn app_name(&self) -> Option<&str> {
+        self.app.as_deref()
+    }
+
+    /// The sites the app shown needs that the person hasn't allowed it yet.
+    pub fn app_pending(&self) -> &[String] {
+        if self.app.is_some() { &self.app_pending } else { &[] }
+    }
+
+    /// What its app did that the person should see, for the Actions sidebar.
+    pub fn take_actions(&mut self) -> Vec<String> {
+        core::mem::take(&mut self.actions)
     }
 
     /// Whether a page has come to show.
@@ -359,9 +385,24 @@ impl Site {
                     changed = true;
                 }
                 for (id, address, method, headers, body) in page.take_requests() {
-                    // (An app can't reach the internet.)
-                    if self.app.is_some() {
-                        page.answer(id, Err(String::from("an app made here can't reach the internet")));
+                    // An app reaches only the sites the person allowed it, over HTTPS, without cookies.
+                    if let Some(app) = &self.app {
+                        let to = Url::parse(&address).ok().filter(|u| u.port == 443 && address.starts_with("https:"));
+                        match to {
+                            Some(u) if self.app_allowed.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) && self.script_fetches.len() < 64 => {
+                                let what = format!("The {app} app fetched from {}", u.host);
+                                if !self.actions.contains(&what) {
+                                    log!("Chat Computer kernel: site: {what}");
+                                    self.actions.push(what);
+                                }
+                                self.script_fetches.push((id, Fetch::app(u, &method, headers, body, self.app_allowed.clone())));
+                            }
+                            Some(u) if self.app_pending.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) => {
+                                page.answer(id, Err(format!("the person hasn't allowed the {app} app to reach {} yet", u.host)));
+                            }
+                            Some(u) => page.answer(id, Err(format!("the {app} app may reach only the sites the person allowed it, not {}", u.host))),
+                            None => page.answer(id, Err(format!("the {app} app may reach only sites over HTTPS that the person allowed it"))),
+                        }
                         continue;
                     }
                     match Url::parse(&address) {

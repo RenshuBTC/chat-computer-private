@@ -318,6 +318,8 @@ pub struct Chat {
     site: Option<Site>,
     /// The page's place on the screen as last logged (a test build logs it, for the test to click in it).
     site_logged: Option<Rect>,
+    /// Where an app's Allow button was last said to be (test builds).
+    allow_logged: Option<Rect>,
 }
 
 /// How long the start screen's word logo and greeting take to fade, as the website's (chat.css: #welcome).
@@ -546,6 +548,7 @@ impl Chat {
             send_later: false,
             site: None,
             site_logged: None,
+            allow_logged: None,
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -994,6 +997,11 @@ impl Chat {
             let inside = |r: Rect| px >= r.x && px < r.right() && py >= r.y && py < r.bottom();
             if inside(close) {
                 return self.close_site();
+            }
+            if let Some((allow, _)) = self.allow_rect()
+                && inside(allow)
+            {
+                return self.allow_app();
             }
             if inside(page) {
                 if let Some(s) = self.site.as_mut() {
@@ -1728,6 +1736,9 @@ impl Chat {
             let (frame, _, _) = self.site_rects();
             self.dirty = self.dirty.union(&frame);
         }
+        for what in self.site.as_mut().map(|s| s.take_actions()).unwrap_or_default() {
+            self.action(what);
+        }
         let shown = clock_now();
         if shown != self.clock_shown {
             self.clock_shown = shown;
@@ -2110,6 +2121,7 @@ impl Chat {
     /// bar and its close button at the right, and the page under them (or, until it comes, what's happening).
     fn render_site(&mut self, clip: Rect) {
         let (frame, close, page) = self.site_rects();
+        let allow = self.allow_rect();
         let m = self.m;
         let rule = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
         let radius = m.px(1.1);
@@ -2123,7 +2135,7 @@ impl Chat {
         let style = Style { size: fx(size), line_height: ((size * 1.2 + 0.5) as i32) * ONE };
         let bar_h = page.y - frame.y - rule;
         let x = frame.x + rule + m.px(1.1);
-        let room = (close.x - m.px(0.75) - x).max(0);
+        let room = (allow.as_ref().map_or(close.x, |(r, _)| r.x) - m.px(0.75) - x).max(0);
         let mut shown = title.clone();
         while !shown.is_empty() && self.ty.width_in(&shown, Face::Bold, style.size) / ONE > room {
             shown.pop();
@@ -2144,6 +2156,20 @@ impl Chat {
         let ty_ = frame.y + rule + (bar_h - style.line_height / ONE) / 2;
         self.canvas.set_clip(clip.intersect(&Rect::new(frame.x, frame.y, frame.w, bar_h + rule)));
         self.canvas.ink(x - ink.left as i32, ty_, &ink, INK);
+        // An app's Allow button: its words in bold on a pill.
+        if let Some((r, label)) = &allow {
+            self.canvas.round_rect(*r, r.h / 2, CHOSEN);
+            let ink = self.ty.ink_in(label, Face::Bold, style, 0);
+            let lw = self.ty.width_in(label, Face::Bold, style.size) / ONE;
+            self.canvas.set_clip(clip.intersect(r));
+            self.canvas.ink(r.x + (r.w - lw) / 2 - ink.left as i32, r.y + (r.h - style.line_height / ONE) / 2, &ink, INK);
+            self.canvas.set_clip(clip.intersect(&Rect::new(frame.x, frame.y, frame.w, bar_h + rule)));
+            // (A test build says where it is, for the test to press it.)
+            if option_env!("CHATCOMPUTER_TEST").is_some() && self.allow_logged != Some(*r) {
+                self.allow_logged = Some(*r);
+                crate::log!("Chat Computer kernel: site: allow button at {},{} {}x{}", r.x, r.y, r.w, r.h);
+            }
+        }
         // The x: two strokes across the button's middle.
         let (cx, cy) = ((close.x * 2 + close.w) * 4, (close.y * 2 + close.h) * 4);
         let half = m.px(0.32) * 8;
@@ -2282,12 +2308,52 @@ impl Chat {
         let what = format!("Opened the {name} app");
         crate::log!("Chat Computer kernel: site: {what}");
         self.action(what);
+        self.show_app(&name, &html);
+    }
+
+    /// An app shown in the middle, reaching the sites it needs that the person allowed it.
+    fn show_app(&mut self, name: &str, html: &str) {
         if let Some(mut s) = self.site.take() {
             s.stop();
         }
-        self.site = Some(Site::app(&name, &html));
+        let (sites, allowed, _) = assistant::app_sites(name);
+        self.site = Some(Site::app(name, html, &sites, &allowed));
         self.lay_out_box();
         self.dirty = self.canvas.whole();
+    }
+
+    /// The Allow button over an app that needs sites the person hasn't allowed it yet: before the close button and as
+    /// tall, "Allow api.example.com" (or "Allow 3 sites").
+    fn allow_rect(&self) -> Option<(Rect, String)> {
+        let pending = self.site.as_ref()?.app_pending();
+        let label = match pending {
+            [] => return None,
+            [one] => format!("Allow {one}"),
+            more => format!("Allow {} sites", more.len()),
+        };
+        let (frame, close, _) = self.site_rects();
+        let size = fx(self.m.rem * 0.8);
+        let w = (self.ty.width_in(&label, Face::Bold, size) / ONE + self.m.px(1.6)).min((close.x - frame.x) / 2);
+        Some((Rect::new(close.x - self.m.px(0.6) - w, close.y, w, close.h), label))
+    }
+
+    /// The person pressed an app's Allow button: it reaches the sites it needs from now on (opened again, so what it
+    /// fetches as it starts comes). The Actions sidebar says so, with what they'd asked it for.
+    fn allow_app(&mut self) {
+        let Some(name) = self.site.as_ref().and_then(|s| s.app_name()).map(String::from) else { return };
+        let allowed = assistant::allow_app(&name);
+        let (_, _, because) = assistant::app_sites(&name);
+        let asked: String = because.chars().take(80).collect();
+        let what = if asked.is_empty() {
+            format!("You allowed the {name} app to reach {}", allowed.join(", "))
+        } else {
+            format!("You allowed the {name} app (for \u{201c}{asked}\u{201d}) to reach {}", allowed.join(", "))
+        };
+        crate::log!("Chat Computer kernel: site: {what}");
+        self.action(what);
+        if let Some(html) = assistant::app(&name) {
+            self.show_app(&name, &html);
+        }
     }
 
     /// The apps there are (their names), for the Apps list.

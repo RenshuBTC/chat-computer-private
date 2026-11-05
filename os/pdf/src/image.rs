@@ -2,13 +2,15 @@
 //! one): the images its contents draw (image XObjects, in forms too, and inline images), each where the page's
 //! matrices put it, on white, at the size the caller chooses (from the page's own size at its pictures' resolution).
 //! JPEG's pictures, raw samples' (through any of the stream filters; any depth; gray, RGB, CMYK, indexed, ICC-based,
-//! calibrated), fax's (CCITT: ccitt.rs) and stencil masks' (in the colour they're filled with), a soft mask's
-//! transparency. Each picture is made the size it's drawn at with Pillow's bicubic resampling (picture::resample), as
-//! Qwen's processor resizes a picture. Not drawn: the page's text and drawings (a scanned page has none to see), and
-//! JPEG 2000's and JBIG2's pictures (said to be missing).
+//! calibrated), fax's (CCITT: ccitt.rs), JBIG2's (jbig2.rs), JPEG 2000's (jpx.rs) and stencil masks' (in the colour
+//! they're filled with), a soft mask's transparency. Each picture is made the size it's drawn at with Pillow's bicubic
+//! resampling (picture::resample), as Qwen's processor resizes a picture. Not drawn: the page's text and drawings (a
+//! scanned page has none to see).
 
 use crate::ccitt;
 use crate::file::File;
+use crate::jbig2;
+use crate::jpx;
 use crate::filter::Codec;
 use crate::lex::{Dict, Lexer, Obj};
 use alloc::rc::Rc;
@@ -16,7 +18,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 /// A page's pictures, made one: its pixels (RGB, row after row), how many pictures were drawn, and the kinds of
-/// those that couldn't be ("JPEG 2000", "JBIG2").
+/// those that couldn't be ("JPEG 2000"; "JBIG2" for one that couldn't be read).
 pub struct PagePicture {
     pub width: usize,
     pub height: usize,
@@ -555,6 +557,8 @@ fn samples(
     }
     let mask = get("ImageMask") == Obj::Bool(true);
     let mut data = data;
+    let mut jpx_space: Option<Space> = None;
+    let mut jpx_alpha: Option<Vec<u8>> = None;
     let mut bpc = if mask { 1 } else { get("BitsPerComponent").int().unwrap_or(8) };
     match codec.as_ref().map(|(name, _)| name.as_slice()) {
         Some(b"DCTDecode" | b"DCT") => {
@@ -563,8 +567,48 @@ fn samples(
             let p = picture::decode_stored(&data, bw, bh, [255, 255, 255], memory).map_err(|_| None)?;
             return Ok(Decoded { width: p.width as usize, height: p.height as usize, rgb: p.rgb, alpha: None });
         }
-        Some(b"JPXDecode") => return Err(Some("JPEG 2000")),
-        Some(b"JBIG2Decode") => return Err(Some("JBIG2")),
+        Some(b"JPXDecode") => {
+            let j = jpx::decode(&data, memory as usize).ok_or(Some("JPEG 2000"))?;
+            // Its colour: the PDF's ColorSpace if it says, else as many components as the picture has.
+            let declared = if mask { None } else { space(f, &get("ColorSpace"), resources, 0) };
+            let n = declared.as_ref().map_or(match j.components.len() { 1 | 2 => 1, 3 => 3, _ => 4 }, |s| s.components());
+            if j.components.len() < n {
+                return Err(Some("JPEG 2000"));
+            }
+            jpx_space = Some(declared.unwrap_or(match n {
+                1 => Space::Gray,
+                3 => Space::Rgb,
+                _ => Space::Cmyk,
+            }));
+            // (Its alpha, if SMaskInData says it has one, and it does: the component after its colour's.)
+            if get("SMaskInData").int().unwrap_or(0) != 0 && j.components.len() > n {
+                let a = &j.components[n];
+                jpx_alpha = Some(if (j.width, j.height) == (width, height) {
+                    a.clone()
+                } else {
+                    (0..width * height).map(|i| a.get((i / width * j.height / height) * j.width + (i % width) * j.width / width).copied().unwrap_or(255)).collect()
+                });
+            }
+            // Its samples, interleaved, at the size the PDF says (fitted if the picture's own differs).
+            let mut out = vec![0u8; width * height * n];
+            for y in 0..height {
+                let sy = y * j.height / height;
+                for x in 0..width {
+                    let sx = x * j.width / width;
+                    for k in 0..n {
+                        out[(y * width + x) * n + k] = j.components[k].get(sy * j.width + sx).copied().unwrap_or(0);
+                    }
+                }
+            }
+            data = out;
+            bpc = 8;
+        }
+        Some(b"JBIG2Decode") => {
+            let parms = codec.as_ref().and_then(|(_, p)| p.clone()).unwrap_or_default();
+            let globals = parms.get("JBIG2Globals").and_then(|g| f.stream(g));
+            data = jbig2::decode(&data, globals.as_deref(), width, height).ok_or(Some("JBIG2"))?;
+            bpc = 1;
+        }
         Some(b"CCITTFaxDecode" | b"CCF") => {
             let parms = codec.as_ref().and_then(|(_, p)| p.clone()).unwrap_or_default();
             let n = |k: &str, default: i64| f.get_in(&parms, k).int().unwrap_or(default);
@@ -599,7 +643,13 @@ fn samples(
         1 | 2 | 4 | 8 | 16 => bpc as usize,
         _ => return Err(None),
     };
-    let space = if mask { Space::Gray } else { space(f, &get("ColorSpace"), resources, 0).unwrap_or(Space::Gray) };
+    let space = if mask {
+        Space::Gray
+    } else if let Some(s) = jpx_space {
+        s
+    } else {
+        space(f, &get("ColorSpace"), resources, 0).unwrap_or(Space::Gray)
+    };
     let n = space.components();
     let stride = (width * n * bpc).div_ceil(8);
     if data.len() < stride * height {
@@ -664,7 +714,7 @@ fn samples(
             rgb[at..at + 3].copy_from_slice(&to_rgb(&space, &c));
         }
     }
-    Ok(Decoded { width, height, rgb, alpha })
+    Ok(Decoded { width, height, rgb, alpha: alpha.or(jpx_alpha) })
 }
 
 /// A decoded picture drawn on the page's picture, where `px` takes its pixels (x along its rows, y down them).

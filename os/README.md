@@ -507,12 +507,20 @@ drivers.
   are each drawn where the page's matrices put it, the page turned as it says, on white, at its pictures'
   resolution: JPEGs (`picture/`), raw samples (any depth; gray, RGB, CMYK, indexed, ICC-based, calibrated; their
   Decode arrays), fax's compression as office scanners write it (CCITT's Group 4, and Group 3's lines, its own
-  decoder), stencil masks in their colour, soft masks' transparency; each made the size it's drawn at by Pillow's
-  bicubic resampling. JPEG 2000's and JBIG2's pictures aren't read yet (said to be missing). Tested against PDFs
-  made by ReportLab, LibreOffice, pdfTeX, Chrome and qpdf (seven kinds of encryption), and by hand with what programs
-  write less often (`pdf/tests/make.py`): scanned pages against Pillow's own decoding and resampling of the same
-  scan, fax's against libtiff's encoding of the same pixels (exactly), and every kind of picture's sample; damaged
-  ones and tens of thousands with bytes changed at random, which never crash it.
+  decoder), JBIG2's as scanners and Acrobat write black-and-white scans (`pdf/src/jbig2.rs`, its own decoder: the MQ
+  arithmetic coder, generic regions of every template with typical prediction, MMR, symbol dictionaries, text
+  regions placed every way, refinements, aggregate symbols, JBIG2Globals, striped pages; not yet its Huffman-coded
+  symbols and halftones), JPEG 2000's as archives and some scanners keep pages (`pdf/src/jpx.rs`, its own decoder:
+  tiles and tile-parts, every progression order and POC's changes, precincts, layers, each code-block style,
+  regions of interest, the 5/3 and 9/7 wavelets, RCT and ICT, subsampled YCbCr, JP2 files' palettes; not yet packed
+  packet headers), stencil masks in their colour, soft masks' transparency (SMaskInData's too); each made the size
+  it's drawn at by Pillow's bicubic resampling. Tested against PDFs made by ReportLab, LibreOffice, pdfTeX, Chrome
+  and qpdf (seven kinds of encryption), and by hand with what programs write less often (`pdf/tests/make.py`):
+  scanned pages against Pillow's own decoding and resampling of the same scan, fax's against libtiff's encoding of
+  the same pixels (exactly), JBIG2's against a page coded ten ways (`pdf/tests/jbig2.py`, each checked against
+  Poppler's and jbig2dec's decoding; exactly), JPEG 2000's against a page OpenJPEG coded twenty-one ways
+  (`pdf/tests/jpx.py`: as opj_decompress decodes them, exactly but for the lossy ones' rounding), and every kind of
+  picture's sample; damaged ones and tens of thousands with bytes changed at random, which never crash it.
 * `picture/` decodes pictures for the screen: JPEG (baseline and progressive, any sampling, restart markers,
   Adobe's CMYK, EXIF's orientation) as libjpeg decodes it (its accurate integer inverse DCT, its "fancy" upsampling,
   its YCbCr arithmetic), a big one at a half, a quarter or an eighth of its size when that's enough, so a phone's
@@ -853,7 +861,7 @@ writes for each person, in place of Ubuntu's catalogue.
    the web, encrypted ones that open without a password too); ✓ pictures seen (photos, screenshots, scanned pages:
    Qwen 3.5's vision part, run by the engine, checked against the reference implementation; in the kernel, checked
    in a virtual PC against the engine on Linux). To do: trying the web and pictures on a real PC (and how long a
-   picture takes there to be seen), and JPEG 2000's and JBIG2's scans.
+   picture takes there to be seen). ✓ JBIG2's and JPEG 2000's scans.
 9. The conversation screen: ✓ the conversation, wrapping and scrolling, ✓ the app's sidebars where the screen is
    wide enough (messages on the left; what it did for you, with the date and time, and the chats on the right),
    ✓ the formatting the model's answers use (Markdown, with bold from the variable font), ✓ kerning, as a browser

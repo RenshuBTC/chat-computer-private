@@ -1,5 +1,6 @@
 //! Against PDFs written by ReportLab, LibreOffice, pdfTeX, Chrome and qpdf (encrypted seven ways among them), and by
-//! hand with what programs write less often (tests/make.py): their words, read back. Damaged ones (offsets wrong, the
+//! hand with what programs write less often (tests/make.py), and a scan in JBIG2 ten ways (tests/jbig2.py) and in
+//! JPEG 2000 twenty-one (tests/jpx.py): their words and pictures, read back. Damaged ones (offsets wrong, the
 //! cross-reference gone, cut short, bytes changed at random, objects that lead back to themselves) give errors or what
 //! could be read, never a crash or a hang.
 
@@ -268,6 +269,8 @@ fn changed_bytes_never_crash_it() {
         "scan-jpeg.pdf",
         "scan-fax.pdf",
         "scan-kinds.pdf",
+        "scan-jbig2.pdf",
+        "scan-jpx.pdf",
     ];
     for name in names {
         let data = file(name);
@@ -472,6 +475,37 @@ fn a_fax_scan_is_its_pixels_exactly() {
         let (p, asked) = page_of("scan-fax.pdf", page, (864, 1100));
         assert_eq!(asked, (864, 1100));
         assert!(p.rgb == want.rgb, "page {}: {:?}", page + 1, apart(&p.rgb, &want.rgb));
+    }
+}
+
+#[test]
+fn a_jbig2_scan_is_its_pixels_exactly() {
+    // Each of the ten ways tests/jbig2.py codes the page (generic regions of each template, MMR, symbols and text
+    // regions placed every way, refined, dictionaries in JBIG2Globals and made of others' symbols, refinement
+    // regions, a striped page).
+    let want = png("scan-jbig2.png");
+    for page in 0..10 {
+        let (p, asked) = page_of("scan-jbig2.pdf", page, (480, 320));
+        assert_eq!(asked, (480, 320));
+        assert!(p.missing.is_empty(), "page {}: {:?}", page + 1, p.missing);
+        assert!(p.rgb == want.rgb, "page {}: {:?}", page + 1, apart(&p.rgb, &want.rgb));
+    }
+}
+
+#[test]
+fn a_jpeg_2000_scan_is_its_pixels_as_openjpeg_decodes_them() {
+    // The 21 ways tests/jpx.py has OpenJPEG code the picture: exactly what opj_decompress makes of each, but for
+    // the lossy ones (9/7's arithmetic in floating point), within 2 of it.
+    let sheet = png("scan-jpx.png");
+    let (w, h) = (80usize, 56usize);
+    for page in 0..21 {
+        let (p, asked) = page_of("scan-jpx.pdf", page, (w, h));
+        assert_eq!(asked, (w, h));
+        assert!(p.missing.is_empty(), "page {}: {:?}", page + 1, p.missing);
+        let want = &sheet.rgb[page * w * h * 3..(page + 1) * w * h * 3];
+        let (most, mean) = apart(&p.rgb, want);
+        let lossy = matches!(page + 1, 2 | 21);
+        assert!(if lossy { most <= 2 } else { most == 0 }, "page {}: {:?}", page + 1, (most, mean));
     }
 }
 

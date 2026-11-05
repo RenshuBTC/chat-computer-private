@@ -19,6 +19,8 @@ mod filter;
 mod font;
 mod glyphs;
 mod image;
+mod jbig2;
+mod jpx;
 mod lex;
 mod text;
 #[cfg(test)]

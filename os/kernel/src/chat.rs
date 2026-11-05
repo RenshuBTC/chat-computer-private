@@ -19,7 +19,7 @@
 //! conversation and the message box are in the middle between them.
 
 use crate::assistant::{self, Event, Ready};
-use crate::draw::{Canvas, Rect, BOX_GROUND, BOX_INK, BOX_LINE, BUBBLE, CHOSEN, DIM, GROUND, INK, LINE, MUTED, PAPER, SIDE};
+use crate::draw::{Canvas, Point, Rect, BOX_CHOSEN, BOX_GROUND, BOX_INK, BOX_LINE, BUBBLE, CHOSEN, DIM, GROUND, INK, KNOB, LINE, MUTED, PAPER, SIDE};
 use crate::keyboard::{Key, Press};
 use crate::layout::{self, Layout};
 use crate::screen::Screen;
@@ -192,9 +192,46 @@ struct BoxLayout {
     /// The first line shown (when there are more than fit), and how many are shown.
     first: usize,
     shown: usize,
-    /// The send button's centre and radius, in 1/8 pixel.
-    send: (i32, i32, i32),
+    /// The round buttons under what's typed, each's centre and radius in 1/8 pixel: +, the spark, the microphone and
+    /// send (TOOL_*).
+    tools: [(i32, i32, i32); 4],
+    /// The files attached, as chips over what's typed: each one's place (and its x's), on the screen.
+    chips: Vec<(Rect, Rect)>,
 }
+
+/// The message box's buttons, in `BoxLayout::tools`.
+const TOOL_ADD: usize = 0;
+const TOOL_AI: usize = 1;
+const TOOL_MIC: usize = 2;
+const TOOL_SEND: usize = 3;
+
+/// A list above the message box: the files + attaches, or the models the spark chooses among.
+struct Menu {
+    kind: MenuKind,
+    title: String,
+    items: Vec<MenuItem>,
+    chosen: usize,
+    /// Its first item shown (when there are more than fit).
+    first: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MenuKind {
+    Files,
+    Ai,
+}
+
+struct MenuItem {
+    label: String,
+    detail: String,
+    /// A file's path (Files), or a model's (Ai).
+    path: String,
+    ticked: bool,
+}
+
+/// The most items a list above the box shows at once, and the most files + offers.
+const MENU_ROWS: usize = 9;
+const MENU_FILES: usize = 60;
 
 pub struct Chat {
     screen: Screen,
@@ -236,6 +273,65 @@ pub struct Chat {
     /// The mouse pointer: where its tip is (None until a mouse first moves), and where it was last drawn.
     pointer: Option<(f32, f32)>,
     pointer_drawn: Rect,
+    /// The start screen's greeting (as the website's: by the time of day and the day), and when it began to fade
+    /// (the first message sent).
+    greeting: String,
+    welcome_fading: Option<u64>,
+    /// The list open above the message box, if one is; the files attached to the next message.
+    menu: Option<Menu>,
+    attached: Vec<(String, String)>,
+}
+
+/// How long the start screen's word logo and greeting take to fade, as the website's (chat.css: #welcome).
+const WELCOME_FADE_MS: u64 = 500;
+
+/// The website's greetings (chat.js: GREETINGS, without a name): what, from and until which hour, and on which days
+/// (0 Sunday; empty: any).
+const GREETINGS: &[(&str, u32, u32, &[u32])] = &[
+    ("Good morning", 6, 12, &[]),
+    ("Welcome", 6, 12, &[]),
+    ("Hey there", 6, 12, &[]),
+    ("Happy Monday", 6, 12, &[1]),
+    ("Happy Tuesday", 6, 12, &[2]),
+    ("Happy Wednesday", 6, 12, &[3]),
+    ("Happy Thursday", 6, 12, &[4]),
+    ("Happy Friday", 6, 12, &[5]),
+    ("Hello to that Friday feeling", 6, 12, &[5]),
+    ("Welcome to the weekend", 6, 12, &[6, 0]),
+    ("Happy Saturday", 6, 12, &[6]),
+    ("What's on your mind?", 6, 12, &[6, 0]),
+    ("Sunday session?", 6, 12, &[0]),
+    ("Happy Sunday", 6, 12, &[0]),
+    ("Coffee and computer time?", 6, 12, &[]),
+    ("Good afternoon", 12, 17, &[]),
+    ("Hi, how are you?", 12, 17, &[]),
+    ("What's new?", 12, 17, &[]),
+    ("Back at it?", 12, 17, &[]),
+    ("Good evening", 17, 21, &[]),
+    ("How was your day?", 17, 21, &[]),
+    ("How's it going?", 21, 6, &[]),
+    ("What's on your mind tonight?", 21, 6, &[]),
+    ("Hello, night owl", 21, 6, &[]),
+    ("Greetings, whoever you are", 0, 24, &[]),
+];
+
+/// A greeting for now (by the PC's clock; the first in the list for the time of day while the clock's unknown),
+/// a different one from start to start.
+fn greeting_now() -> String {
+    let Some(t) = crate::clock::local_now().or_else(crate::clock::now) else { return String::from("Hello") };
+    let (_, _, _, h, _) = crate::clock::civil(t);
+    // (1970-01-01 was a Thursday.)
+    let day = (t.div_euclid(86_400) + 4).rem_euclid(7) as u32;
+    let fits: Vec<&str> = GREETINGS
+        .iter()
+        .filter(|(_, from, until, days)| {
+            let hour = if from < until { h >= *from && h < *until } else { h >= *from || h < *until };
+            hour && (days.is_empty() || days.contains(&day))
+        })
+        .map(|(g, ..)| *g)
+        .collect();
+    let pick = (crate::time::now_us() ^ (t as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)) as usize % fits.len().max(1);
+    String::from(fits.get(pick).copied().unwrap_or("Hello"))
 }
 
 /// The pointer: the arrow every PC shows, its tip at the top left; X its black edge, o its white inside, 12 by 19
@@ -404,6 +500,10 @@ impl Chat {
             chat_title: None,
             pointer: None,
             pointer_drawn: Rect::default(),
+            greeting: greeting_now(),
+            welcome_fading: None,
+            menu: None,
+            attached: Vec::new(),
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -424,30 +524,69 @@ impl Chat {
         ((self.layout.scale + 0.5) as i32).max(1)
     }
 
-    /// The message box for what's typed now. Changes `dirty` if its size changed.
+    /// The message box for what's typed now, as the website's (chat.css: #box, #row): its padding, what's typed across
+    /// the top (the files attached as chips over it), and under that a row of round buttons 2 em across, + and the
+    /// spark at the left, the microphone and send at the right. Changes `dirty` if its size changed.
     fn lay_out_box(&mut self) {
         let m = self.m;
         let border = self.hair();
-        let (pad_top, pad_left, pad_right, gap) = (m.px(0.6875), m.px(0.9375), m.px(0.75), m.px(0.5));
-        let send_d = m.line;
-        let text_w = m.box_w - 2 * border - pad_left - pad_right - gap - send_d;
-        let lines = self.ty.breaks(&self.typed, m.body.size, text_w * ONE);
+        let (pad_top, pad_left, pad_right, pad_bottom) = (m.px(0.6875), m.px(0.9375), m.px(0.75), m.px(0.6875));
+        let tool = m.px(2.0);
+        let row_gap = m.px(0.55);
+        let text_w = m.box_w - 2 * border - pad_left - pad_right;
+        let lines = self.ty.breaks(&self.typed, m.body.size, text_w.max(1) * ONE);
         let shown = lines.len().clamp(1, BOX_LINES);
         let caret_line = self.caret_line(&lines);
         let first = (caret_line + 1).saturating_sub(shown).min(lines.len().saturating_sub(shown));
-        let h = 2 * border + 2 * pad_top + shown as i32 * m.line;
+        // The chips: a row of them (as many as fit; the rest on more rows).
+        let chip_h = (m.small_line as f32 + m.rem as f32 * 0.875 * 0.5) as i32;
+        let chip_gap = m.px(0.4);
+        let mut chip_rows = 0;
+        let mut chip_places: Vec<(i32, i32, i32)> = Vec::new(); // (row, x within the row, width)
+        {
+            let mut x = 0;
+            for (_, name) in &self.attached {
+                let w = ((self.ty.width(name, m.small.size) + ONE - 1) / ONE + m.px(0.65) + m.px(1.75)).min(text_w);
+                if x > 0 && x + w > text_w {
+                    chip_rows += 1;
+                    x = 0;
+                }
+                chip_places.push((chip_rows, x, w));
+                x += w + chip_gap;
+            }
+            if !self.attached.is_empty() {
+                chip_rows += 1;
+            }
+        }
+        let chips_h = if chip_rows > 0 { chip_rows * chip_h + (chip_rows - 1) * chip_gap + m.px(0.55) } else { 0 };
+        let h = 2 * border + pad_top + chips_h + shown as i32 * m.line + row_gap + tool + pad_bottom;
         let y = self.screen.height as i32 - m.px(2.4375) - h;
         let card = Rect::new(m.box_x, y, m.box_w, h);
-        let row_bottom = y + border + pad_top + shown as i32 * m.line;
-        let send = (
-            (card.right() - border - pad_right) * 8 - send_d * 4,
-            row_bottom * 8 - send_d * 4,
-            send_d * 4,
-        );
+        let left = m.box_x + border + pad_left;
+        let right = card.right() - border - pad_right;
+        let chips_y = y + border + pad_top;
+        let chips = chip_places
+            .iter()
+            .map(|&(row, x, w)| {
+                let r = Rect::new(left + x, chips_y + row * (chip_h + chip_gap), w, chip_h);
+                let xd = m.px(1.4).min(chip_h);
+                (r, Rect::new(r.right() - xd - m.px(0.15), r.y + (chip_h - xd) / 2, xd, xd))
+            })
+            .collect();
+        let text_y = chips_y + chips_h;
+        let row_cy = text_y + shown as i32 * m.line + row_gap + tool / 2;
+        let r8 = tool * 4;
+        let at = |x: i32| (x * 8 + tool * 4, row_cy * 8, r8);
+        let tools = [
+            at(left - m.px(0.35)),
+            at(left + tool + m.px(0.1)),
+            at(right - 2 * tool - m.px(0.45)),
+            at(right - tool),
+        ];
         if card != self.composer.card && self.composer.card != Rect::default() {
             self.relayout = true; // the conversation's room changed
         }
-        self.composer = BoxLayout { card, text_x: m.box_x + border + pad_left, text_y: y + border + pad_top, lines, first, shown, send };
+        self.composer = BoxLayout { card, text_x: left, text_y, lines, first, shown, tools, chips };
     }
 
     /// Which line of the box the caret is on.
@@ -618,11 +757,28 @@ impl Chat {
         if m.side_w > 0 && !self.stopped {
             self.render_sides(clip);
         }
+        // The start screen: the word logo and the greeting (fading as the first message goes).
+        let welcome = if self.stopped {
+            None
+        } else if !self.started {
+            Some(1.0f32)
+        } else {
+            self.welcome_fading.map(|at| 1.0 - (now.saturating_sub(at) as f32 / WELCOME_FADE_MS as f32).min(1.0)).filter(|a| *a > 0.0)
+        };
+        if let Some(alpha) = welcome {
+            self.canvas.set_clip(clip.intersect(&log));
+            self.render_welcome(alpha);
+        }
+        // (The start screen's own facts aren't drawn under the word logo: the computer's status has them.)
+        let facts_hidden = !self.started && !self.stopped;
         let Chat { canvas, blocks, ty, .. } = self;
         canvas.set_clip(clip.intersect(&log));
         let area = canvas.clip();
         let screen_h = canvas.height as i32;
         for b in blocks.iter_mut() {
+            if facts_hidden {
+                break;
+            }
             let y = b.top - view_top;
             if y + b.height < -screen_h || y > 2 * screen_h {
                 // Far off the screen: its lines' ink can go (it's drawn again if it comes back).
@@ -671,6 +827,40 @@ impl Chat {
             self.render_box();
         }
         self.render_pointer(clip);
+    }
+
+    /// The word logo and the greeting under it, in the middle of the room above the message box (as the website's
+    /// #welcome), at `alpha` of their colours (1: shown, 0: gone).
+    fn render_welcome(&mut self, alpha: f32) {
+        let m = self.m;
+        let mix = |rgb: u32| -> u32 {
+            let ch = |c: u32, shift: u32| -> u32 {
+                let (a, b) = ((c >> shift) & 0xFF, (GROUND >> shift) & 0xFF);
+                ((b as f32 + (a as f32 - b as f32) * alpha) + 0.5) as u32 & 0xFF
+            };
+            ch(rgb, 16) << 16 | ch(rgb, 8) << 8 | ch(rgb, 0)
+        };
+        let big = Style { size: fx(m.rem * 3.0), line_height: ((m.rem * 3.0 * 1.05) as i32) * ONE };
+        let mark = "Chat Computer";
+        let mark_h = big.line_height / ONE;
+        let width = m.mid_w - m.px(2.0);
+        let lines = self.ty.breaks(&self.greeting, m.body.size, width.max(1) * ONE);
+        let gap = m.px(0.7);
+        let total = mark_h + gap + lines.len() as i32 * m.line;
+        let room = self.log_bottom();
+        let mut y = ((room - total) / 2).max(0);
+        let center = m.mid_x + m.mid_w / 2;
+        let ink = self.ty.ink_in(mark, Face::Bold, big, 0);
+        let w = (self.ty.width_in(mark, Face::Bold, big.size) + ONE - 1) / ONE;
+        self.canvas.ink(center - w / 2 - ink.left as i32, y, &ink, mix(INK));
+        y += mark_h + gap;
+        for r in lines {
+            let part = String::from(self.greeting[r].trim_end());
+            let ink = self.ty.ink_in(&part, Face::Regular, m.body, 0);
+            let w = (self.ty.width(&part, m.body.size) + ONE - 1) / ONE;
+            self.canvas.ink(center - w / 2 - ink.left as i32, y, &ink, mix(MUTED));
+            y += m.line;
+        }
     }
 
     /// The pointer's part of the screen, at (x, y).
@@ -724,19 +914,62 @@ impl Chat {
             self.pointer_drawn = self.pointer_rect(to.0, to.1);
             self.dirty = self.dirty.union(&area);
         }
-        if pressed & 1 != 0 && !self.stopped {
-            let (cx8, cy8, r8) = self.composer.send;
-            let (px8, py8) = ((to.0 * 8.0) as i64, (to.1 * 8.0) as i64);
-            let (ddx, ddy) = (px8 - cx8 as i64, py8 - cy8 as i64);
-            // (A little beyond the circle counts too: it's small.)
-            let reach = r8 as i64 + 32 * self.hair() as i64;
-            if ddx * ddx + ddy * ddy <= reach * reach {
+        // Under the pointer: a list's item is chosen; a button lights up.
+        if let (Some(r), Some(menu)) = (self.menu_rect(), self.menu.as_ref()) {
+            let row_h = self.m.line + self.m.px(0.5);
+            let top = r.y + self.m.px(0.5) + self.m.small_line + self.m.px(0.35);
+            let (px, py) = (to.0 as i32, to.1 as i32);
+            if px >= r.x && px < r.right() && py >= top {
+                let k = menu.first + ((py - top) / row_h) as usize;
+                if k < menu.items.len() && k < menu.first + MENU_ROWS && self.menu.as_ref().is_some_and(|m| m.chosen != k) {
+                    if let Some(m) = self.menu.as_mut() {
+                        m.chosen = k;
+                    }
+                    self.dirty = self.dirty.union(&r);
+                }
+            }
+        }
+        let card = self.composer.card;
+        self.dirty = self.dirty.union(&card);
+        if pressed & 1 == 0 || self.stopped {
+            return;
+        }
+        let (px8, py8) = ((to.0 * 8.0) as i64, (to.1 * 8.0) as i64);
+        let (px, py) = (to.0 as i32, to.1 as i32);
+        // In the list: its item picked (elsewhere, the list closes).
+        if let Some(r) = self.menu_rect() {
+            if px >= r.x && px < r.right() && py >= r.y && py < r.bottom() {
+                let k = self.menu.as_ref().map_or(0, |m| m.chosen);
+                return self.pick(k);
+            }
+            self.close_menu();
+        }
+        // A chip's x: the file taken off.
+        if let Some(i) = self.composer.chips.iter().position(|(_, x)| px >= x.x && px < x.right() && py >= x.y && py < x.bottom()) {
+            self.attached.remove(i);
+            self.lay_out_box();
+            self.dirty = self.dirty.union(&self.box_area());
+            return;
+        }
+        // (A little beyond each circle counts too: they're small.)
+        let slack = 16 * self.hair() as i64;
+        let hit = self.composer.tools.iter().position(|&(cx, cy, r)| {
+            let (dx, dy) = (px8 - cx as i64, py8 - cy as i64);
+            dx * dx + dy * dy <= (r as i64 + slack).pow(2)
+        });
+        match hit {
+            Some(TOOL_ADD) => self.open_menu(MenuKind::Files),
+            Some(TOOL_AI) => self.open_menu(MenuKind::Ai),
+            Some(TOOL_MIC) => self.talk(),
+            Some(_) => {
                 if self.asking.is_some() {
                     assistant::stop();
-                } else if !self.typed.trim().is_empty() {
+                    self.answer_over(Some(String::from("Stopped.")));
+                } else if !self.typed.trim().is_empty() || !self.attached.is_empty() {
                     self.send();
                 }
             }
+            None => {}
         }
     }
 
@@ -921,14 +1154,220 @@ impl Chat {
             let y = b.text_y + (li - b.first) as i32 * m.line;
             canvas.fill(Rect::new(x, y + m.line * 18 / 100, caret_w, m.line * 64 / 100), BOX_INK);
         }
-        // The send button: a circle with an arrow up (chat.html's arrow), drawn at 62% of the button.
-        let (cx, cy, r) = b.send;
-        let ready = !self.typed.trim().is_empty() && !assistant::busy();
-        canvas.circle(cx, cy, r, if ready { BOX_INK } else { DIM }, 255);
-        let unit = r * 2 * 62 / 100; // the icon's size, in 1/8 pixel; its drawing is 24 units across
+        // The chips: each file attached, its name, and an x to take it off.
+        for (i, (r, x)) in b.chips.iter().enumerate() {
+            let Some((_, name)) = self.attached.get(i) else { continue };
+            canvas.round_rect(*r, m.px(0.6), BOX_LINE);
+            canvas.round_rect(Rect::new(r.x + hair, r.y + hair, r.w - 2 * hair, r.h - 2 * hair), m.px(0.6) - hair, BOX_GROUND);
+            let ink = self.ty.ink(name, m.small, 0);
+            canvas.ink(r.x + m.px(0.65) - ink.left as i32, r.y + (r.h - m.small_line) / 2, &ink, BOX_INK);
+            let (cx, cy, u) = ((x.x * 2 + x.w) * 4, (x.y * 2 + x.h) * 4, x.w * 8 * 7 / 10);
+            let p = |a: i32, b: i32| -> Point { (cx - u / 2 + a * u / 24, cy - u / 2 + b * u / 24) };
+            canvas.strokes(&[(p(6, 6), p(18, 18)), (p(18, 6), p(6, 18))], u * 2 / 24, BOX_INK);
+        }
+        // The round buttons: +, the spark, the microphone (each in its own circle, lighter under the pointer), then
+        // send (bright once there's something to send; its stop while an answer comes).
+        let hover = self.pointer.map(|(x, y)| ((x * 8.0) as i32, (y * 8.0) as i32));
+        let over = |&(cx, cy, r): &(i32, i32, i32)| hover.is_some_and(|(x, y)| ((x - cx) as i64).pow(2) + ((y - cy) as i64).pow(2) <= (r as i64).pow(2));
+        let listening = crate::listening::state().is_some();
+        for (i, t) in b.tools.iter().enumerate().take(TOOL_SEND) {
+            let ground = if i == TOOL_MIC && listening { mix(KNOB, BOX_INK, 0.25) } else if over(t) { mix(KNOB, BOX_INK, 0.12) } else { KNOB };
+            canvas.circle(t.0, t.1, t.2, ground, 255);
+            let unit = t.2 * 2 * 115 / 200; // (1.15 em: the icon's 24 units, in 1/8 pixel)
+            let p = |a: f32, b: f32| -> Point { (t.0 - unit / 2 + (a * unit as f32 / 24.0) as i32, t.1 - unit / 2 + (b * unit as f32 / 24.0) as i32) };
+            let width = unit * 2 / 24;
+            let mut segs: Vec<(Point, Point)> = Vec::new();
+            let poly = |pts: &[(f32, f32)], closed: bool, segs: &mut Vec<(Point, Point)>| {
+                for w in pts.windows(2) {
+                    segs.push((p(w[0].0, w[0].1), p(w[1].0, w[1].1)));
+                }
+                if closed && pts.len() > 2 {
+                    segs.push((p(pts[pts.len() - 1].0, pts[pts.len() - 1].1), p(pts[0].0, pts[0].1)));
+                }
+            };
+            match i {
+                TOOL_ADD => {
+                    poly(&[(12.0, 5.0), (12.0, 19.0)], false, &mut segs);
+                    poly(&[(5.0, 12.0), (19.0, 12.0)], false, &mut segs);
+                }
+                TOOL_AI => {
+                    // (chat.html's i-spark: a four-pointed star, and a little one.)
+                    poly(&[(12.0, 3.0), (13.8, 8.2), (19.0, 10.0), (13.8, 11.8), (12.0, 17.0), (10.2, 11.8), (5.0, 10.0), (10.2, 8.2)], true, &mut segs);
+                    poly(&[(19.0, 15.0), (19.8, 17.2), (22.0, 18.0), (19.8, 18.8), (19.0, 21.0), (18.2, 18.8), (16.0, 18.0), (18.2, 17.2)], true, &mut segs);
+                }
+                _ => {
+                    // The microphone: its head (a rounded bar), the arc under it, and its stand.
+                    let arc = |cx: f32, cy: f32, r: f32, from: f32, to: f32| -> Vec<(f32, f32)> {
+                        (0..=12).map(|k| {
+                            let a = (from + (to - from) * k as f32 / 12.0) as f64;
+                            let (sn, cs) = model::math::sin_cos(a);
+                            (cx + r * cs as f32, cy + r * sn as f32)
+                        }).collect()
+                    };
+                    use core::f32::consts::PI;
+                    let mut head = arc(12.0, 6.5, 3.0, PI, 2.0 * PI);
+                    head.extend(arc(12.0, 11.5, 3.0, 0.0, PI));
+                    poly(&head, true, &mut segs);
+                    poly(&arc(12.0, 11.5, 6.5, PI, 0.0), false, &mut segs);
+                    poly(&[(12.0, 18.0), (12.0, 20.5)], false, &mut segs);
+                }
+            }
+            canvas.strokes(&segs, width, BOX_INK);
+        }
+        let (cx, cy, r) = b.tools[TOOL_SEND];
+        let busy = assistant::busy();
+        let ready = !self.typed.trim().is_empty() && !busy;
+        canvas.circle(cx, cy, r, if ready || busy { BOX_INK } else { DIM }, 255);
+        let unit = r * 2 * 55 / 100; // the icon's size, in 1/8 pixel; its drawing is 24 units across
         let at = |u: i32, v: i32| (cx - unit / 2 + u * unit / 240, cy - unit / 2 + v * unit / 240);
-        let segments = [(at(120, 190), at(120, 50)), (at(55, 115), at(120, 50)), (at(120, 50), at(185, 115))];
-        canvas.strokes(&segments, unit * 26 / 240, BOX_GROUND);
+        if busy {
+            // (While an answer comes: a square, its stop.)
+            let s = unit * 7 / 24;
+            canvas.round_rect(Rect::new((cx - s) / 8, (cy - s) / 8, s / 4, s / 4), (s / 16).max(1), BOX_GROUND);
+        } else {
+            let segments = [(at(120, 190), at(120, 50)), (at(55, 115), at(120, 50)), (at(120, 50), at(185, 115))];
+            canvas.strokes(&segments, unit * 26 / 240, BOX_GROUND);
+        }
+        self.render_menu();
+    }
+
+    /// The list above the message box (+'s files, or the spark's models), if it's open.
+    fn render_menu(&mut self) {
+        let Some(r) = self.menu_rect() else { return };
+        let m = self.m;
+        let hair = self.hair();
+        let Some(menu) = self.menu.as_ref() else { return };
+        let canvas = &mut self.canvas;
+        canvas.shadow(r, m.px(0.25), m.px(1.25), SHADOW);
+        canvas.round_rect(r, m.px(0.75), BOX_LINE);
+        canvas.round_rect(Rect::new(r.x + hair, r.y + hair, r.w - 2 * hair, r.h - 2 * hair), m.px(0.75) - hair, PAPER);
+        let pad = m.px(0.5);
+        let row_h = m.line + m.px(0.5);
+        let title = self.ty.ink_in(&menu.title, Face::Bold, m.small, 0);
+        canvas.ink(r.x + pad + m.px(0.5) - title.left as i32, r.y + pad, &title, MUTED);
+        let top = r.y + pad + m.small_line + m.px(0.35);
+        if menu.items.is_empty() {
+            let ink = self.ty.ink("Nothing here yet.", m.body, 0);
+            canvas.ink(r.x + pad + m.px(0.5) - ink.left as i32, top + m.px(0.25), &ink, DIM);
+            return;
+        }
+        for (k, item) in menu.items.iter().enumerate().skip(menu.first).take(MENU_ROWS) {
+            let y = top + (k - menu.first) as i32 * row_h;
+            let row = Rect::new(r.x + pad, y, r.w - 2 * pad, row_h);
+            if k == menu.chosen {
+                canvas.round_rect(row, m.px(0.5), BOX_CHOSEN);
+            }
+            let ty_y = y + (row_h - m.line) / 2;
+            let detail_w = (self.ty.width(&item.detail, m.small.size) + ONE - 1) / ONE;
+            let label_room = row.w - m.px(1.0) - detail_w - m.px(1.5);
+            let mut label = item.label.clone();
+            if (self.ty.width(&label, m.body.size) + ONE - 1) / ONE > label_room {
+                while !label.is_empty() && (self.ty.width(&format!("{label}\u{2026}"), m.body.size) + ONE - 1) / ONE > label_room {
+                    label.pop();
+                }
+                label.push('\u{2026}');
+            }
+            if item.ticked {
+                label = format!("{label}  \u{2713}");
+            }
+            let ink = self.ty.ink(&label, m.body, 0);
+            canvas.ink(row.x + m.px(0.5) - ink.left as i32, ty_y, &ink, BOX_INK);
+            let ink = self.ty.ink(&item.detail, m.small, 0);
+            canvas.ink(row.right() - m.px(0.5) - detail_w - ink.left as i32, ty_y + (m.line - m.small_line) / 2, &ink, MUTED);
+        }
+    }
+
+    /// The list's place: above the message box, as wide as it.
+    fn menu_rect(&self) -> Option<Rect> {
+        let menu = self.menu.as_ref()?;
+        let m = self.m;
+        let rows = menu.items.len().clamp(1, MENU_ROWS) as i32;
+        let h = 2 * m.px(0.5) + m.small_line + m.px(0.35) + rows * (m.line + m.px(0.5));
+        let card = self.composer.card;
+        Some(Rect::new(card.x, card.y - m.px(0.5) - h, card.w, h))
+    }
+
+    /// Opens a list above the box: + 's files (the newest in each person's Desktop, Documents, Downloads and Pictures),
+    /// or the spark's models (those on this PC, the one answering ticked).
+    fn open_menu(&mut self, kind: MenuKind) {
+        if self.menu.as_ref().is_some_and(|m| m.kind == kind) {
+            return self.close_menu();
+        }
+        let (title, items) = match kind {
+            MenuKind::Files => (
+                String::from("Attach a file (from Desktop, Documents, Downloads and Pictures)"),
+                crate::files::recent(MENU_FILES)
+                    .into_iter()
+                    .map(|f| MenuItem { detail: size_text(f.size), label: f.name, path: f.path, ticked: false })
+                    .collect(),
+            ),
+            MenuKind::Ai => {
+                let answering = assistant::model_path();
+                let mut items: Vec<MenuItem> = crate::files::app_models()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(path, size)| MenuItem {
+                        label: model_label(&path),
+                        detail: format!("on this PC, {}", size_text(size)),
+                        ticked: answering.as_deref() == Some(path.as_str()),
+                        path,
+                    })
+                    .collect();
+                if items.is_empty() {
+                    items.push(MenuItem { label: String::from("No model on this PC yet"), detail: String::from("setup gets one on Windows"), path: String::new(), ticked: false });
+                }
+                (String::from("Which AI answers (on this PC itself: nothing you type leaves it)"), items)
+            }
+        };
+        let chosen = items.iter().position(|i| i.ticked).unwrap_or(0);
+        self.menu = Some(Menu { kind, title, items, chosen, first: chosen.saturating_sub(MENU_ROWS - 1) });
+        self.dirty = self.dirty.union(&self.canvas.whole());
+    }
+
+    fn close_menu(&mut self) {
+        if let Some(r) = self.menu_rect() {
+            self.menu = None;
+            self.dirty = self.dirty.union(&Rect::new(r.x - self.m.px(3.0), r.y - self.m.px(3.0), r.w + self.m.px(6.0), r.h + self.m.px(6.0)));
+        }
+        self.menu = None;
+    }
+
+    /// The list's item picked: a file attached, or a model chosen.
+    fn pick(&mut self, k: usize) {
+        let Some(menu) = self.menu.take() else { return };
+        self.dirty = self.dirty.union(&self.canvas.whole());
+        let Some(item) = menu.items.get(k) else { return };
+        match menu.kind {
+            MenuKind::Files => {
+                if !self.attached.iter().any(|(p, _)| *p == item.path) {
+                    self.attached.push((item.path.clone(), item.label.clone()));
+                }
+                self.lay_out_box();
+            }
+            MenuKind::Ai => {
+                if !item.ticked && !item.path.is_empty() {
+                    let note = format!(
+                        "{} is on this PC too. Chat Computer's own system answers with one model each time it starts \
+                         (the biggest that answers quickly here); choosing it here comes soon.",
+                        item.label
+                    );
+                    self.note_now(note);
+                }
+            }
+        }
+    }
+
+    /// A note in the conversation now (the start screen's word logo fading, if it's still there).
+    fn note_now(&mut self, note: String) {
+        if !self.started {
+            self.started = true;
+            self.blocks.clear();
+            self.welcome_fading = Some(time::uptime_ms());
+        }
+        self.blocks.push(Block::new(Kind::Note, Live::No, note));
+        self.relayout = true;
+        self.scroll = None;
+        self.dirty = self.dirty.union(&self.canvas.whole());
     }
 
     /// Draws what changed (everything if `all`) and puts it on the screen.
@@ -984,6 +1423,13 @@ impl Chat {
             self.dirty = self.dirty.union(&area);
         }
         let now = time::uptime_ms();
+        if let Some(at) = self.welcome_fading {
+            if now.saturating_sub(at) > WELCOME_FADE_MS + 50 {
+                self.welcome_fading = None;
+            }
+            let log = Rect::new(self.m.mid_x, 0, self.m.mid_w, self.log_bottom());
+            self.dirty = self.dirty.union(&log);
+        }
         if !self.started {
             let seconds = now / 1000;
             if self.uptime_shown != Some(seconds) {
@@ -1050,6 +1496,37 @@ impl Chat {
     }
 
     fn edit(&mut self, p: Press) {
+        // A list open above the box: the arrows choose in it, Enter picks, Esc closes it; anything else closes it and
+        // goes to the box.
+        if let Some(menu) = self.menu.as_mut() {
+            let n = menu.items.len();
+            match p.key {
+                Key::Up | Key::Down if n > 0 => {
+                    menu.chosen = if p.key == Key::Up { menu.chosen.saturating_sub(1) } else { (menu.chosen + 1).min(n - 1) };
+                    if menu.chosen < menu.first {
+                        menu.first = menu.chosen;
+                    } else if menu.chosen >= menu.first + MENU_ROWS {
+                        menu.first = menu.chosen + 1 - MENU_ROWS;
+                    }
+                    let r = self.menu_rect().unwrap_or_default();
+                    self.dirty = self.dirty.union(&r);
+                    return;
+                }
+                Key::Enter => {
+                    let k = menu.chosen;
+                    return self.pick(k);
+                }
+                Key::Escape => return self.close_menu(),
+                _ => self.close_menu(),
+            }
+        }
+        // (Backspace in an empty box takes off the last file attached.)
+        if matches!(p.key, Key::Backspace) && self.cursor == 0 && self.typed.is_empty() && !self.attached.is_empty() {
+            self.attached.pop();
+            self.lay_out_box();
+            self.dirty = self.dirty.union(&self.canvas.whole());
+            return;
+        }
         let before = |s: &str, at: usize| s[..at].chars().next_back().map_or(at, |c| at - c.len_utf8());
         let after = |s: &str, at: usize| s[at..].chars().next().map_or(at, |c| at + c.len_utf8());
         let page = (self.view_bottom() * 8 / 10).max(self.m.line);
@@ -1098,8 +1575,7 @@ impl Chat {
     /// The talk key: listening starts (or, while it records, what was said so far is heard).
     fn talk(&mut self) {
         if let Err(why) = crate::listening::talk() {
-            self.blocks.push(Block::new(Kind::Note, Live::No, why));
-            self.relayout = true;
+            self.note_now(why);
         }
         self.box_changed();
     }
@@ -1149,12 +1625,13 @@ impl Chat {
             self.dirty = self.dirty.union(&area);
             return;
         }
-        if self.typed.trim().is_empty() || self.asking.is_some() {
+        if (self.typed.trim().is_empty() && self.attached.is_empty()) || self.asking.is_some() {
             return;
         }
         if !self.started {
             self.started = true;
             self.blocks.clear();
+            self.welcome_fading = Some(time::uptime_ms());
         }
         // A BitLocker recovery key unlocks Windows' drive here (files::work): it isn't shown, given to the model or
         // kept, nor is anything typed with it.
@@ -1179,9 +1656,17 @@ impl Chat {
             self.draw(true);
             return;
         }
-        let text = String::from(self.typed.trim());
+        let mut text = String::from(self.typed.trim());
         self.typed.clear();
         self.cursor = 0;
+        // The files attached: named with their paths after what's typed, for the model to read (read_file).
+        if !self.attached.is_empty() {
+            let paths: Vec<String> = core::mem::take(&mut self.attached).into_iter().map(|(p, _)| p).collect();
+            if text.is_empty() {
+                text = String::from("Have a look at this.");
+            }
+            text = format!("{text}\n\nAttached: {}", paths.join(", "));
+        }
         if self.chat_title.is_none() {
             self.set_chat_title(Some(text.clone()));
         }
@@ -1526,4 +2011,39 @@ pub fn show_stop(what: &str, details: fmt::Arguments) {
     {
         c.stop(what, &details);
     }
+}
+
+/// "2.5 MB", "12 KB": a size, for the lists above the box.
+fn size_text(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1_000_000_000 => format!("{:.1} GB", b as f64 / 1e9),
+        b if b >= 1_000_000 => format!("{:.1} MB", b as f64 / 1e6),
+        b if b >= 1_000 => format!("{} KB", b / 1_000),
+        b => format!("{b} bytes"),
+    }
+}
+
+/// A model's name from its file's: "...\\qwen3.5-4b.ccm" is "Qwen3.5 4B".
+fn model_label(path: &str) -> String {
+    let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    let stem = file.strip_suffix(".ccm").unwrap_or(file);
+    match stem.split_once('-') {
+        Some((family, size)) => {
+            let family = match family.strip_prefix("qwen") {
+                Some(rest) => format!("Qwen{rest}"),
+                None => String::from(family),
+            };
+            format!("{family} {}", size.to_ascii_uppercase())
+        }
+        None => String::from(stem),
+    }
+}
+
+/// The colour `a` mixed with `b`: `t` of b.
+fn mix(a: u32, b: u32, t: f32) -> u32 {
+    let ch = |shift: u32| -> u32 {
+        let (x, y) = (((a >> shift) & 0xFF) as f32, ((b >> shift) & 0xFF) as f32);
+        ((x + (y - x) * t) + 0.5) as u32 & 0xFF
+    };
+    ch(16) << 16 | ch(8) << 8 | ch(0)
 }

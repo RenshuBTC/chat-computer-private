@@ -423,6 +423,16 @@ pub fn init(setting: Option<String>) {
     *ASSISTANT.lock() = Some(a);
 }
 
+/// The file of the model answering (or being read now), if there is one.
+pub fn model_path() -> Option<String> {
+    let a = ASSISTANT.lock();
+    match &a.as_ref()?.brain {
+        Brain::Ready(l) => Some(l.path.clone()),
+        Brain::Reading(r) => Some(r.file.path.clone()),
+        _ => None,
+    }
+}
+
 /// Whether the model can be asked now.
 pub fn ready() -> Ready {
     SHOWN.lock().as_ref().map_or_else(|| Ready::No(String::from(NO_MODEL)), |s| s.ready.clone())

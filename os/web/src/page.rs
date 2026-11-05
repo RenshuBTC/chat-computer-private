@@ -39,7 +39,7 @@ pub fn words(bytes: &[u8], kind: &str) -> Result<Page, String> {
 
 /// The bytes as text: Latin-1 / Windows-1252 if the Content-Type (`kind`, in lower case) or a <meta> near the start
 /// says so, else UTF-8 (anything that isn't, as U+FFFD).
-fn decode(bytes: &[u8], kind: &str) -> String {
+pub fn decode(bytes: &[u8], kind: &str) -> String {
     let head = &bytes[..bytes.len().min(2048)];
     let head = String::from_utf8_lossy(head).to_ascii_lowercase();
     let says = |s: &str| ["iso-8859-1", "windows-1252", "latin1", "latin-1", "us-ascii", "cp1252"].iter().any(|c| s.contains(&alloc::format!("charset={c}")) || s.contains(&alloc::format!("charset=\"{c}\"")));

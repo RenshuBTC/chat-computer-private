@@ -1644,6 +1644,52 @@ pub fn windows_locked() -> bool {
 /// Where Chat Computer's app keeps the models it gets ready on Windows, under each person's folder.
 const APP_MODELS: [&str; 4] = ["AppData", "Local", "ai.chatcomputer.desktop", "models"];
 
+/// A file to attach to a message (the message box's +): its path, its name, its size and when it was last changed.
+pub struct Recent {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub modified: i64,
+}
+
+/// The files in each person's Desktop, Documents, Downloads and Pictures folders on this PC's drives (Windows'
+/// first), newest first, `most` of them at most: what the message box's + offers to attach.
+pub fn recent(most: usize) -> Vec<Recent> {
+    const FOLDERS: [&str; 4] = ["Desktop", "Documents", "Downloads", "Pictures"];
+    const NOT_PEOPLE: [&str; 4] = ["public", "default", "default user", "all users"];
+    let mut letters: Vec<(bool, char)> = VOLUMES
+        .lock()
+        .iter()
+        .filter(|v| matches!(v.state, State::Open { .. }))
+        .map(|v| (!v.windows, v.letter))
+        .collect();
+    letters.sort();
+    let mut out: Vec<Recent> = Vec::new();
+    for (_, letter) in letters {
+        let _ = with(letter, |fs, p| {
+            let root = fs.root();
+            let Ok(users) = fs.child(p, &root, "Users") else { return };
+            let Ok(people) = fs.list(p, &users) else { return };
+            for person in people.iter().filter(|e| e.folder && !e.link && !NOT_PEOPLE.contains(&e.name.to_ascii_lowercase().as_str())) {
+                for folder in FOLDERS {
+                    let Ok(f) = fs.child(p, person, folder) else { continue };
+                    if !f.folder || f.link {
+                        continue;
+                    }
+                    let Ok(entries) = fs.list(p, &f) else { continue };
+                    for e in entries.into_iter().filter(|e| !e.folder && !e.hidden && !e.system && !left_out(e)) {
+                        let path = shown(letter, &format!("{}\\{}\\{}\\{}", users.name, person.name, f.name, e.name));
+                        out.push(Recent { path, name: e.name.clone(), size: e.size, modified: e.modified });
+                    }
+                }
+            }
+        });
+    }
+    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out.truncate(most);
+    out
+}
+
 /// The models Chat Computer's app has got ready on this PC (Users\NAME\AppData\Local\ai.chatcomputer.desktop\models\
 /// MODEL.ccm, for each person, on Windows' drive and any other with people's folders): their paths and sizes. Where
 /// the own system looks for a model when its settings name none. Err: why no drive can be read.

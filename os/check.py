@@ -2,8 +2,8 @@
 """Starts Chat Computer in a virtual PC (QEMU with OVMF, the open-source UEFI firmware) without a window,
 waits until the kernel says it is ready, takes two pictures of the screen a few seconds apart, and
 checks them: the screen is in Chat Computer's colours (light words on its dark, its message box), and the
-"Up for" line moved on (so the kernel's own timer interrupts work). Pictures and the kernel's
-log go to out/.
+clock in Actions moved on to the next minute (so the kernel's own timer interrupts work: the virtual PC's clock
+starts 20 seconds before a minute ends). Pictures and the kernel's log go to out/.
 
     ./check.py                       build, start, check
     ./check.py --size 2560x1440 --memory 1024 --cpu qemu64
@@ -116,6 +116,7 @@ virt-fw-vars (pip install virt-firmware).
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -375,7 +376,7 @@ def check_screen(a, b, size: str) -> list[str]:
 
     problems = check_colours(a, size)
     if ImageChops.difference(a, b).getbbox() is None:
-        problems.append("the screen didn't change in 3 seconds: are timer interrupts working?")
+        problems.append("the clock on the screen didn't move on to the next minute: are timer interrupts working?")
     return problems
 
 
@@ -401,7 +402,13 @@ def box_rows(log: str) -> tuple[int, int] | None:
 
 def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None = None, expect_secure: bool = False,
                  beside: dict[str, Path] | None = None) -> list[str]:
-    pc = VirtualPC(efi, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=secure_vars, beside=beside)
+    # The start screen holds still (the wordmark and a greeting), but for the clock in Actions, which the kernel's own
+    # timer redraws when the minute changes: the virtual PC's clock starts 20 seconds before a minute ends, and the
+    # second picture is taken once it's into the next.
+    base = datetime.datetime.now(datetime.timezone.utc).replace(second=40, microsecond=0)
+    pc = VirtualPC(efi, size=args.size, memory=args.memory, cpu=args.cpu, secure_vars=secure_vars, beside=beside,
+                   extra=("-rtc", f"base={base:%Y-%m-%dT%H:%M:%S}"))
+    started = time.monotonic()
     try:
         got = wait_for(pc.log, ("Chat Computer: ready", "stopped", "couldn't start", "Access Denied"), args.timeout)
         if got != "Chat Computer: ready":
@@ -411,7 +418,8 @@ def normal_start(efi: Path, args, name: str = "screen", secure_vars: Path | None
             return ["the kernel didn't say it was ready" + (f" (the log says {got!r})" if got else " in time")]
         time.sleep(1.5)
         a = pc.picture(f"{name}-1")
-        time.sleep(3.0)
+        # (3 seconds into the next minute: the kernel counts whole seconds from when it read the clock.)
+        time.sleep(60 - (40 + time.monotonic() - started) % 60 + 3)
         b = pc.picture(f"{name}-2")
     finally:
         pc.stop()

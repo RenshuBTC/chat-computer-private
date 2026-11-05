@@ -30,6 +30,10 @@ pub const SHADE: u32 = 0x000000;
 /// them (--chosen).
 pub const SIDE: u32 = 0x1F1F1F;
 pub const CHOSEN: u32 = 0x404040;
+/// The message box's round buttons (+, the spark, the microphone: theme.css --knob), and what's pointed at in its lists
+/// (--box-chosen).
+pub const KNOB: u32 = 0x414141;
+pub const BOX_CHOSEN: u32 = 0x2C2C2A;
 
 /// A point, (x, y).
 pub type Point = (i32, i32);

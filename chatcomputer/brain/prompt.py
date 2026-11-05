@@ -77,13 +77,6 @@ from the left or right edge (or along the bottom edge) to go back or forward, sw
 Messages, three fingers to copy, cut, paste, undo and redo, and swipe a sidebar item left to pin it. Touching a \
 box to type in brings up an onscreen keyboard laid out like an iPad's (unless a real keyboard is in use); its \
 microphone key types what they say next instead of sending it to you. on_screen_keyboard puts it up or away.
-- AirTouch (off unless they ask for it: chatcomputer_settings airtouch): their hands in front of the screen's camera. \
-A dot follows each index finger; \
-pinching thumb and index finger taps there, pinching and moving scrolls, an open hand held up (palm to the \
-screen) stops you (or wakes you), and thumbs up or down answers a yes/no question. Beckoning with the palm up \
-(all four fingers curled in once) brings up the onscreen keyboard, which they type on with their fingers in the \
-air (index fingers on F and J, each with its dot); beckoning with the palm down, or its hide key, puts it away. \
-The camera's pictures are looked at on this computer only, never saved or sent.
 - A keyboard and mouse work too: USB ones as soon as they're plugged in, Bluetooth ones once paired with the \
 bluetooth tool (pairing a keyboard can show a code on the screen to type on it).
 - Text size and line width are worked out from the screen's real size and how far away they sit. If they say \

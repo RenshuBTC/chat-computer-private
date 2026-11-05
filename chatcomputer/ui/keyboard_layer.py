@@ -1,11 +1,11 @@
-"""What AirTouch puts over the screen: a dot for each index finger, and the keyboard.
+"""The onscreen keyboard, drawn over the screen.
 
 Drawn with cairo on the window's top layer (a drawing area that lets clicks through to what's under it), in
-Chat Computer's look: black on white. The keyboard is the iPad's (airtouch/keyboard.py has its measurements): its
+Chat Computer's look: black on white. The keyboard is the iPad's (ui/keyboard.py has its measurements): its
 keys where the iPad's are, as big as the iPad's are to one another, the letter under the small second character,
 and the keys that do things marked in their bottom corners, as on the iPad, with symbols drawn here (so they
 look the same whatever fonts the system has). It is drawn once into a picture of its own and copied from
-there, so the dots moving over it (30 times a second) redraw only the small squares they leave and enter.
+there, so a key pressed or touched redraws only its own small square.
 """
 from __future__ import annotations
 
@@ -24,22 +24,20 @@ gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
 from gi.repository import GLib, Pango, PangoCairo  # noqa: E402
 
-from ..airtouch.keyboard import CORNER, ROWS, UNITS, Keyboard  # noqa: E402
+from .keyboard import CORNER, ROWS, UNITS, Keyboard  # noqa: E402
 
 FONT = "Lora"
 FLASH_MS = 160
 WHITE, BLACK = (1.0, 1.0, 1.0), (0.0, 0.0, 0.0)
 
 
-class AirLayer:
+class KeyboardLayer:
     def __init__(self, area: Any, rem: Callable[[], float]) -> None:
         self.area = area                       # the Gtk.DrawingArea over everything
         self.rem = rem                         # the screen's text size (pixels)
-        self.dots: list[tuple[float, float, str]] = []      # window pixels
         self.kb = Keyboard()
         self.up = False
         self.panel = (0.0, 0.0, 0.0, 0.0)     # the keyboard: x, y, width, height (window pixels)
-        self.hover: set[int] = set()           # keys with a finger's dot on them
         self.touched: set[int] = set()         # the key a finger is on, on a touchscreen
         self.flash: int | None = None          # the key just pressed
         self._flash_id = 0
@@ -54,14 +52,14 @@ class AirLayer:
         ph = round(Keyboard.size_for(width, 0.42 * height)[1])
         self.panel = (0.0, float(height - ph), float(width), float(ph))
         self.kb.layout(width, ph)
-        self.up, self.hover, self.flash, self.touched = True, set(), None, set()
+        self.up, self.flash, self.touched = True, None, set()
         self._cache = None
         self.area.queue_draw()
         ax, ay, aw, ah = self.kb.area()
         return (ax, self.panel[1] + ay, aw, ah)
 
     def hide_keyboard(self) -> None:
-        self.up, self.hover, self.flash, self._cache, self.touched = False, set(), None, None, set()
+        self.up, self.flash, self._cache, self.touched = False, None, None, set()
         self.area.queue_draw()
 
     def touch_key(self, at: tuple[float, float] | None) -> None:
@@ -92,7 +90,7 @@ class AirLayer:
         action = self.kb.press(key, time.monotonic())
         if (self.kb.page, self.kb.shift) != state:       # new labels (the keys stay where they were)
             self.kb.layout(self.panel[2], self.panel[3])
-            self._cache, self.hover = None, set()
+            self._cache = None
             self.area.queue_draw_area(*self._int_rect(self.panel))
         self._flash(i)
         return action
@@ -120,38 +118,6 @@ class AirLayer:
             self.area.queue_draw_area(*self._int_rect((self.panel[0] + k.x - pad, self.panel[1] + k.y - pad,
                                                        k.w + 2 * pad, k.h + 2 * pad)))
 
-    # ---------------------------------------------------------------- the dots
-    def set_dots(self, dots: list[tuple[float, float, str]]) -> None:
-        old, self.dots = self.dots, list(dots)
-        for x, y, kind in old + self.dots:
-            r = self._reach(kind) + 2                  # (and the edge's smoothing)
-            self.area.queue_draw_area(*self._int_rect((x - r, y - r, 2 * r, 2 * r)))
-        if self.up:
-            hover = set()
-            for x, y, kind in self.dots:
-                if kind in ("key", "press"):
-                    k = self.kb.hit(x - self.panel[0], y - self.panel[1])
-                    if k is not None:
-                        hover.add(self.kb.keys.index(k))
-            for i in hover ^ self.hover:
-                self._redraw_key(i)
-            self.hover = hover
-
-    def _radius(self, kind: str) -> float:
-        rem = self.rem() or 24.0
-        # The typing dots are small: they sit on the keys' letters.
-        return {"key": 0.15, "press": 0.3, "pinch": 0.42, "scroll": 0.42}.get(kind, 0.32) * rem
-
-    @staticmethod
-    def _edge(r: float) -> float:
-        return max(2.0, r * 0.28)
-
-    def _reach(self, kind: str) -> float:
-        """How far from its middle a dot is drawn: its white rim, or its ring's white edge (see _draw_dot). What's
-        drawn again when it moves must reach that far, or a ring leaves bits of itself behind."""
-        r = self._radius(kind)
-        return r + (self._edge(r) if kind in ("point", "key") else 1.5 * self._edge(r))
-
     def _line(self) -> float:
         return max(1.5, round((self.rem() or 24.0) * 0.07, 1))
 
@@ -164,32 +130,7 @@ class AirLayer:
     def draw(self, _widget: Any, cr: Any) -> bool:
         if self.up:
             self._draw_keyboard(cr)
-        for x, y, kind in self.dots:
-            self._draw_dot(cr, x, y, kind)
         return False
-
-    def _draw_dot(self, cr: Any, x: float, y: float, kind: str) -> None:
-        r = self._radius(kind)
-        edge = self._edge(r)
-        if kind in ("point", "key"):
-            # A black dot with a white rim, so it shows on any picture.
-            cr.set_source_rgb(*WHITE)
-            cr.arc(x, y, r + edge, 0, 2 * math.pi)
-            cr.fill()
-            cr.set_source_rgb(*BLACK)
-            cr.arc(x, y, r, 0, 2 * math.pi)
-            cr.fill()
-            return
-        # Pinching, scrolling, pressing: a ring (white-edged), with the dot inside when pinched or pressed.
-        for colour, extra in ((WHITE, edge * 2), (BLACK, 0.0)):
-            cr.set_source_rgb(*colour)
-            cr.set_line_width(edge + extra)
-            cr.arc(x, y, r, 0, 2 * math.pi)
-            cr.stroke()
-        if kind in ("pinch", "press"):
-            cr.set_source_rgb(*BLACK)
-            cr.arc(x, y, r * 0.5, 0, 2 * math.pi)
-            cr.fill()
 
     def _draw_keyboard(self, cr: Any) -> None:
         px, py, pw, ph = self.panel
@@ -213,15 +154,15 @@ class AirLayer:
             cr.rectangle(px, py, pw, ph)
             cr.fill()
             cr.restore()
-        for i in sorted(self.hover | self.touched | ({self.flash} if self.flash is not None else set())):
+        for i in sorted(self.touched | ({self.flash} if self.flash is not None else set())):
             if 0 <= i < len(self.kb.keys):
                 cr.save()
                 cr.translate(px, py)
-                self._draw_key(cr, self.kb.keys[i], hover=i in self.hover, pressed=i == self.flash or i in self.touched)
+                self._draw_key(cr, self.kb.keys[i], pressed=True)
                 cr.restore()
 
     def render_panel(self, cr: Any) -> None:
-        """The keyboard as it rests (no fingers on it), in its own pixels."""
+        """The keyboard as it rests (no finger on it), in its own pixels."""
         _px, _py, pw, ph = self.panel
         cr.set_source_rgb(*WHITE)
         cr.rectangle(0, 0, pw, ph)
@@ -234,7 +175,7 @@ class AirLayer:
         for k in self.kb.keys:
             self._draw_key(cr, k)
 
-    def _draw_key(self, cr: Any, k: Any, hover: bool = False, pressed: bool = False) -> None:
+    def _draw_key(self, cr: Any, k: Any, pressed: bool = False) -> None:
         line = self._line()
         lit = (k.action == ("caps",) and self.kb.shift == "lock")
         inverted = pressed or lit
@@ -243,7 +184,7 @@ class AirLayer:
         cr.set_source_rgb(*paper)
         cr.fill_preserve()
         cr.set_source_rgb(*BLACK)
-        cr.set_line_width(line * (2.5 if hover else 1.0))
+        cr.set_line_width(line)
         cr.stroke()
         cr.set_source_rgb(*ink)
         h = k.h

@@ -222,34 +222,6 @@ WhatsApp or social media conversation opens on the site's own page, which may ma
   automated reading, so they could restrict an account that's read this way. (X's own API, which allows it,
   charges per message read.)
 
-## AirTouch: your hands in the air
-
-AirTouch is off unless you ask for it: say or type "turn on AirTouch". If your screen has a camera (an Apple
-Studio Display's, a laptop's, or any webcam), you can then use Chat Computer with your hands, without touching
-anything:
-
-* **A dot follows each index finger.** Point at the screen with one hand or both.
-* **Tap:** pinch your thumb and index finger together and let go. **Scroll:** pinch and move your hand
-  up or down, as if dragging the page.
-* **Stop:** hold up an open hand, palm to the screen, for a moment. Chat Computer stops talking and a video
-  pauses. When Chat Computer is asleep, this wakes it.
-* **Yes or no:** a thumbs up or thumbs down, held a moment, answers a question Chat Computer asked.
-* **Keyboard:** hold a hand out palm up and curl all four fingers towards you once, as if beckoning
-  someone: the keyboard comes up along the bottom of the screen. Do the same with your palm facing down to
-  put it away (or tap its hide key, or say "hide the keyboard"; "show the keyboard" brings it up too).
-* **Typing in the air:** the keyboard is laid out exactly like an iPad's, every key in the same place and
-  the same size. Your hands arrive on it the way they rest on a keyboard: index fingers on F and J, the
-  other fingers on the keys beside them. Each index finger keeps its dot; move a hand to move its fingers
-  across the keys, and tap any finger down to type the key it's on. As on an iPad, tap Shift twice for
-  Caps Lock, and Space twice for a full stop. The microphone key types what you say next instead of
-  sending it to Chat Computer, and the smiley key has emoji.
-* The camera's pictures are looked at on the computer only, never kept or sent anywhere. Say "turn off
-  AirTouch" to switch it off again.
-
-An Apple Studio Display's camera works with Chat Computer on a PC connected with a Thunderbolt or USB-C cable.
-Center Stage is part of macOS, so the picture doesn't follow you around. On a Mac, Chat Computer can't use a
-Studio Display yet (see [Chat Computer on a Mac](#chat-computer-on-a-mac)).
-
 ## A keyboard and a mouse
 
 A USB keyboard and mouse work as soon as they're plugged in. For Bluetooth ones, put them in pairing mode

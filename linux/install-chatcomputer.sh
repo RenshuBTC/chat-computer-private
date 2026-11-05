@@ -518,7 +518,7 @@ PACKAGES=(
   python3-gi                 # GObject introspection for GTK/WebKit from Python
   gir1.2-webkit2-4.1         # WebKitGTK 4.1 typelib (the web view)
   gir1.2-gtk-3.0             # GTK 3 typelib (the Chat Computer window)
-  python3-gi-cairo           # cairo from Python: AirTouch's dots and keyboard are drawn with it
+  python3-gi-cairo           # cairo from Python: the onscreen keyboard is drawn with it
   # Web media codecs so pages/video render inside the web view:
   gstreamer1.0-plugins-good
   gstreamer1.0-plugins-bad
@@ -537,7 +537,7 @@ PACKAGES=(
   libspa-0.2-bluetooth       # Bluetooth audio (A2DP/HFP, mSBC) for PipeWire
   bluez                      # the Bluetooth stack (bluetoothd)
   dbus-user-session          # per-user D-Bus (PipeWire/WirePlumber user services)
-  bolt                       # Thunderbolt: lets in an Apple Studio Display's camera (AirTouch), microphones, speakers
+  bolt                       # Thunderbolt: lets in an Apple Studio Display's camera, microphones, speakers
 
   # --- Networking (no admin; NM owns everything). ---
   network-manager            # Wi-Fi/Ethernet management
@@ -672,7 +672,7 @@ fi
 # 3) User groups + home layout.
 # ===========================================================================
 # The autologin session user needs hardware access: audio (PipeWire/ALSA),
-# video (DRM/GPU for X, and the camera AirTouch watches), input (libinput devices under rootless X), bluetooth
+# video (DRM/GPU for X), input (libinput devices under rootless X), bluetooth
 # (bluetoothd control), netdev (NM) and render (DRI). Groups that do not exist
 # on this release are skipped.
 for grp in audio video input bluetooth netdev render plugdev; do

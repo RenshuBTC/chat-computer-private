@@ -77,7 +77,7 @@ def test_the_conversation_reads_and_scrolls_like_a_chat():
 def test_whats_done_takes_you_back_to_where_it_was_asked():
     import re
     # The sidebars from the start. A panel at the right, a sixth of the screen as in the Claude
-    # app, grouped by day. Clicking an item (a real click: the AirTouch layer over everything used to take every
+    # app, grouped by day. Clicking an item (a real click: the keyboard's layer over everything used to take every
     # click) scrolls back to the message that asked for it; one from yesterday puts yesterday's messages back first.
     # Typing stays in the message box.
     import json

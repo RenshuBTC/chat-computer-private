@@ -131,34 +131,34 @@ def home(w, h) -> None:
 
 
 def key_centre(label):
-    k = next(k for k in screen.air.kb.keys if k.label == label)
-    px, py = screen.air.panel[:2]
+    k = next(k for k in screen.keyboard_layer.kb.keys if k.label == label)
+    px, py = screen.keyboard_layer.panel[:2]
     return px + k.x + k.w / 2, py + k.y + k.h / 2
 
 
 def keyboard_tests(w, h) -> None:
     screen.touch_keyboard(True)
-    out["keyboard_up"] = screen.air.up
+    out["keyboard_up"] = screen.keyboard_layer.up
     out["keyboard_spec"] = keyboards[-1] is not None if keyboards else False
     q = key_centre("q")
     out["key_q"] = finger(20, [q])
     finger(21, [key_centre("w"), key_centre("e")])       # slid from w to e before lifting: e
-    out["still_up"] = screen.air.up
-    hide = next(k for k in screen.air.kb.keys if k.action == ("hide",))
-    px, py = screen.air.panel[:2]
+    out["still_up"] = screen.keyboard_layer.up
+    hide = next(k for k in screen.keyboard_layer.kb.keys if k.action == ("hide",))
+    px, py = screen.keyboard_layer.panel[:2]
     finger(22, [(px + hide.x + hide.w / 2, py + hide.y + hide.h / 2)])
-    out["hidden_by_key"] = not screen.air.up
+    out["hidden_by_key"] = not screen.keyboard_layer.up
     # A real keyboard's key puts it away; one Chat Computer typed (XTEST) doesn't.
     screen.touch_keyboard(True)
 
     def key_event(name):
         return SimpleNamespace(get_source_device=lambda: SimpleNamespace(get_name=lambda: name))
     screen._note_key(key_event("Virtual core XTEST keyboard"))
-    out["up_after_xtest"] = screen.air.up
+    out["up_after_xtest"] = screen.keyboard_layer.up
     screen._note_key(key_event("AT Translated Set 2 keyboard"))
-    out["up_after_real_key"] = screen.air.up
+    out["up_after_real_key"] = screen.keyboard_layer.up
     screen.touch_keyboard(True)
-    out["refused_with_real_keyboard"] = not screen.air.up
+    out["refused_with_real_keyboard"] = not screen.keyboard_layer.up
     screen._real_key_at = -1e9
     GLib.timeout_add(300, lambda: page_tests() and False)
 
@@ -255,7 +255,7 @@ def js(script, then):
 
 def page_tests() -> None:
     def after_box(_):
-        out["box_touch_keyboard"] = screen.air.up
+        out["box_touch_keyboard"] = screen.keyboard_layer.up
         js(PINCH_JS, after_pinch)
 
     def after_pinch(res):
@@ -264,7 +264,7 @@ def page_tests() -> None:
 
     def after_swipe(res):
         out["swipe"] = json.loads(res)
-        out["keyboard_after_touch_elsewhere"] = screen.air.up      # a finger on a sidebar item put it away
+        out["keyboard_after_touch_elsewhere"] = screen.keyboard_layer.up      # a finger on a sidebar item put it away
         js(HOLD_START_JS, lambda _: GLib.timeout_add(800, lambda: js(HOLD_END_JS, after_hold) and False))
 
     def after_hold(res):

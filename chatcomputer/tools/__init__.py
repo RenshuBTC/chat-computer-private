@@ -36,7 +36,7 @@ ConfirmFn = Callable[[str], Awaitable[tuple[str, str]]]
 
 SETTABLE = {"voice", "speech_speed", "text_size", "text_scale", "viewing_distance_cm", "screen_inches", "web_zoom",
             "auto_sleep_minutes", "barge_in", "release_mic_during_media", "show_activity", "wake_words",
-            "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours", "airtouch",
+            "model", "effort", "stt_model", "user_name", "fresh_session_after_idle_hours",
             "left_panel", "right_panel", "keyboard_layout", "home_place"}
 # Windows' own folders, at the top of its drive (a folder of the person's own called Recovery or Boot is theirs).
 WINDOWS_SYSTEM = re.compile(r"^/(Windows|Program Files( \(x86\))?|ProgramData|\$Recycle\.Bin|Recovery|Boot|EFI)(/|$)", re.I)
@@ -63,8 +63,7 @@ class ToolContext:
     on_settings_changed: Callable[[list[str]], None] | None = None
     on_mic_changed: Callable[[], None] | None = None   # another microphone was chosen: listen with it now
     model_status: Callable[[], dict[str, Any]] | None = None   # the model that thinks: which, and whether it's ready
-    airtouch_status: Callable[[], dict[str, Any]] | None = None
-    keyboard: Callable[[bool], Awaitable[str]] | None = None       # AirTouch's on-screen keyboard up or down
+    keyboard: Callable[[bool], Awaitable[str]] | None = None       # the on-screen keyboard up or down
     announce: Callable[[str], None] | None = None     # show and say something now, mid-tool (any thread)
     before_power: Callable[[], Awaitable[None]] | None = None   # just before the computer restarts or turns off
     airpods: Callable[[], Awaitable[str]] | None = None   # connect the AirPods in one step (Controller.connect_airpods)
@@ -314,7 +313,7 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
         return _text(f"Pressed {a['keys']}.")
 
     @reg("on_screen_keyboard", "Put the on-screen keyboard (laid out like an iPad's) up (show true) or away "
-         "(false): the user taps its keys on the touchscreen (or, with AirTouch on, types in the air). It also comes "
+         "(false): the user taps its keys on the touchscreen. It also comes "
          "up by itself when they touch a box to type in.", obj({"show": B}, ["show"]))
     async def on_screen_keyboard(a):
         if ctx.keyboard is None:
@@ -739,8 +738,6 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
                 d["free_percent"] = round(100 * d["free_gb"] / d["total_gb"])
         if ctx.index:
             st["file_index"] = {**ctx.index.status, "files": ctx.index.status.get("files")}
-        if ctx.airtouch_status:
-            st["airtouch"] = ctx.airtouch_status()
         if ctx.model_status:
             st["thinking_model"] = ctx.model_status()
         return _text(_json(st))
@@ -1628,8 +1625,8 @@ def build(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Callable[[d
          "'get' shows the result. To make all text bigger or smaller set text_scale (1.0 = automatic; e.g. 1.15 "
          "bigger, 0.87 smaller). When the user says how far they sit from the screen, set viewing_distance_cm. "
          "If the screen's size is wrong (some TVs don't report it), set screen_inches (the diagonal). web_zoom "
-         "zooms websites (0 = automatic). text_size forces a fixed pixel size (0 = automatic). airtouch (true/false) turns AirTouch, the hand gestures seen by the screen's camera, on or "
-         "off. left_panel and right_panel (true/false) show or hide Messages (left) and Actions (right), as their "
+         "zooms websites (0 = automatic). text_size forces a fixed pixel size (0 = automatic). "
+         "left_panel and right_panel (true/false) show or hide Messages (left) and Actions (right), as their "
          "switches on the screen do.",
          obj({"action": {"type": "string", "enum": ["get", "set"]}, "key": S, "value": {}}, ["action"]),
          _settings_policy)

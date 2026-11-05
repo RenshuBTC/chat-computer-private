@@ -1170,7 +1170,7 @@ class LinuxPlatform(Platform):
                     if not os.readlink(f"/proc/{pid}/fd/{fd}").startswith("/dev/video"):
                         continue
                     if int(pid) == me:
-                        name = "Chat Computer (AirTouch)"
+                        name = "Chat Computer"
                     else:
                         with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as f:
                             name = friendly_name(f.read().strip(), [])

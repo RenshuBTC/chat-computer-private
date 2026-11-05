@@ -6,7 +6,8 @@ Chat Computer is an operating system written from scratch in Rust. It has its ow
 TLS 1.3, file systems and model engine, and its whole interface is one conversation. You type or speak, and the
 computer answers and acts. This is our entry to the **Meta Global AI Developer Hackathon**.
 
-**Demo video:** [media/chat-computer-demo.mp4](media/chat-computer-demo.mp4) (3 minutes)
+**Demo video (2:36):** [watch it](https://renshubtc.github.io/chat-computer/media/), or download
+[media/chat-computer-demo.mp4](media/chat-computer-demo.mp4).
 
 ## How it uses Meta's Muse Spark
 
@@ -44,6 +45,11 @@ META_API_KEY=your-key os/try-muse-spark.sh
 ```
 
 Type a message and press Enter. To make it read your files, attach a disk image with QEMU.
+
+Chat Computer's full screen is also on [chatcomputer.ai](https://chatcomputer.ai), in the browser. It shows your
+messages from every app on the left and Actions on the right, where what was changed can be reverted. Websites open
+when you type their address. Press the spark beside the message box and sign in with your Meta key, and Meta's
+models (Muse Wonder or Muse Spark) answer there too.
 
 On a PC with Chat Computer's own system installed, add this line to `\EFI\chatcomputer-own\settings.txt`:
 

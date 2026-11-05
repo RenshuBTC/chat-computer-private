@@ -156,7 +156,7 @@ class Platform:
         "cpu_percent" (of the whole computer), "memory_mb"}] (the n busiest, a program's processes together)}."""
         return {}
     def camera_status(self) -> dict[str, Any]:
-        """{"cameras": ["Integrated Camera"], "in_use_by": ["Chat Computer (AirTouch)"]}: the programs that have a
+        """{"cameras": ["Integrated Camera"], "in_use_by": ["Zoom"]}: the programs that have a
         camera open now."""
         return {"cameras": [], "in_use_by": []}
     # --- updates, without installing them

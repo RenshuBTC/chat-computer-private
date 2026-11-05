@@ -171,7 +171,7 @@
      "expect": "Sets up a password/PIN lock, or honest that it can't (nothing made up)."},
     {"id": "camera-on", "area": "security", "phrasing": "direct", "modality": "said",
      "query": "Is the camera on right now?",
-     "expect": "Answers from AirTouch's state (off, so the camera isn't used)."},
+     "expect": "Answers from system_status's camera (no program has it open, so it isn't on)."},
 
     {"id": "backup-usb", "area": "backup", "phrasing": "multi-step", "modality": "typed",
      "state": {"usb": {"label": "SANDISK", "size_gb": 32}},

@@ -14,8 +14,6 @@ of Ubuntu, chosen with the Mac's own start-up volume instead of a boot menu (see
 ```
 chat-computer/
   chatcomputer/             Python package: the Chat Computer runtime (brain, tools, voice, screen)
-    airtouch/               Hands seen by the screen's camera: camera, model reader + numpy engine, hand
-                            tracking, gestures, keyboard layout, pointer (its own process)
   linux/                    The thin Linux base (installed into the target system)
     install-chatcomputer.sh  Runs INSIDE the target (curtin in-target) or later by hand; idempotent
     system/                 Files copied into the target root (/etc, /usr/local/...)
@@ -579,7 +577,7 @@ retrying with backoff, then starts listening.
   demo's saved file can be reverted the same way; the app keeps the marks with its Actions.
 * Logs on Windows' drive (`chatcomputer/logcopy.py`): Chat Computer's own drive can't be opened from Windows, so the end
   of `chatcomputer.log` and `session.log` (1.5 MB each, CRLF line endings, anything like a sign-in, password or key
-  blanked) and `info.json` (voice, microphone, AirTouch) are copied to
+  blanked) and `info.json` (model, voice, microphone) are copied to
   `C:\Users\<you>\AppData\Local\ChatComputer\from-chatcomputer\`, only when Chat Computer Setup's folder is there: a
   minute after the start, every 10 minutes, just before a restart or shutdown, and when Chat Computer stops. The log
   also says, at the start, which graphics chips and drivers there are and the screens' sizes, and once a minute
@@ -625,8 +623,8 @@ retrying with backoff, then starts listening.
   searches, its list (`#results`) is in front: the frame ends above it, since the window lays the content layer
   over the page (in the browser demo, which draws what's open in the page itself, `CO.openInPage`, the list just
   overlaps it). The sites Messages reads have views of their own (kept in a `Gtk.OffscreenWindow`,
-  moved into the hole when shown). The AirTouch layer (a `DrawingArea` with an empty input shape, so clicks go
-  through) is on top. A conversation starts with the word logo alone in the middle (`#wordmark`: Lora at
+  moved into the hole when shown). The onscreen keyboard's layer (a `DrawingArea` with an empty input shape, so
+  clicks go through) is on top. A conversation starts with the word logo alone in the middle (`#wordmark`: Lora at
   700, the words alone: there's no icon anywhere; shown while `body.intro`, which the page
   has from its first moment; after a second it fades away over 0.5 s, at once if something's said first) and
   then Chat Computer's first words come in as its answers do, as if just typed (`greet()` in chat.js: an
@@ -689,7 +687,7 @@ retrying with backoff, then starts listening.
   right undo and redo (WebKit's editing commands on the focused view); four or five fingers pinched or swiped up
   are Home, swiped sideways back and forward. A touch starting at an edge is held back (its events copied) until
   it's clearly a swipe or not, then taken or replayed to GTK; a third finger cancels the first two on the page
-  (a copy of each one's last event, as TOUCH_CANCEL). The onscreen keyboard (AirTouch's, the iPad's layout) comes
+  (a copy of each one's last event, as TOUCH_CANCEL). The onscreen keyboard (the iPad's layout) comes
   up for a finger on a box to type in (chat.js and content.js post `keyboard`), unless a key on a real keyboard
   (not XTEST, which is Chat Computer typing) was pressed in the last 5 minutes; such a key puts it away. Its touches
   never reach the page: the key under the finger shows pressed and is typed on lift (`on_keyboard_action`, the
@@ -748,53 +746,20 @@ retrying with backoff, then starts listening.
   Everything is recomputed when the window, monitor or settings change. Settings: `text_size` (0 = auto), `text_scale`, `viewing_distance_cm`, `screen_inches`
   (0 = reported), `web_zoom` (0 = auto).
 * Voice: PipeWire/AirPods, Silero VAD, faster-whisper (local), Kokoro TTS (local), barge-in.
-* Input, in the order the person uses it: the touchscreen, a keyboard, the AirPods. AirTouch is off unless asked for (`airtouch: false`; `Controller._settings_moved_on` turned it off once
-  for those who had it on).
-* AirTouch (`chatcomputer/airtouch`): the hands, seen by the screen's camera, in a process of its own at nice 5
-  (`worker.py`). All of it is Chat Computer's own code except the two networks: Google MediaPipe's palm detector
-  and hand landmark model ("lite", Apache 2.0), downloaded with the voice models and checked against the
-  SHA-256 that MediaPipe's own build pins.
-  * Camera (`camera.py`): Video4Linux2 through ioctl, with mmap buffers. YUYV when the camera gives it at
-    15 fps or more, otherwise MJPEG (the Huffman tables are added when a camera leaves them out). The Apple
-    Studio Display's camera is chosen first; a camera plugged in later is found within 5 s.
-  * Networks: `tflite.py` reads the model files (FlatBuffers); `nn.py` runs them in numpy (NHWC float32),
-    within about 1e-6 of LiteRT. Tracking (`hands.py`) is MediaPipe's published method: palm detection on
-    the letterboxed picture, landmarks on a rotated crop, then the joints place the next crop. Up to two
-    hands, each keeping its number; a palm detected inside a hand already followed is that hand. With the
-    same models the joints are within 0.5 px of MediaPipe's.
-  * Pacing: with no hand, palm detection runs only when the picture changed (at most 4 times a second) and
-    every 2 s; hands are followed with half a processor core (0.8 with the keyboard up), at 8 pictures a
-    second when they rest; with one hand followed, palm detection looks for the other twice a second.
-  * Gestures (`gestures.py`), from the joints in 3D: a hand's size is wrist to middle knuckle; which way the
-    palm faces comes from the knuckles seen from the wrist and which hand it is (the landmark network says).
-    Positions are absolute: the working space is 5 hand sizes across the screen, placed so the first dot
-    starts where the pointer was, and moved along when a hand passes its edge; dots are smoothed with the
-    1-euro filter. A dot per index finger; a pinch (two pictures running) taps where the dot was held while
-    the fingers met; pinching and moving scrolls; an open palm towards the camera held 0.6 s is "stop"; a
-    thumb held up or down is yes or no. Open fingers, then all four curled within 0.8 s with the hand still,
-    is a beckon: palm up, the keyboard comes up; palm down, it goes away. With the keyboard up the working
-    space is the keyboard, a row per 0.2 hand sizes and a key per 0.21 (a real keyboard's 19 mm), or, when
-    both hands are in view as it comes up, whatever puts each index finger on its home key (F, J), within
-    0.15 to 0.35. A hand's four fingers are on four keys side by side along its knuckles (which don't move
-    when a finger taps); only the index finger's is drawn. A finger bending 18 degrees past where it rests,
-    6 more than the hand's other fingers, types the key it was on a tenth of a second before.
-  * Keyboard (`airtouch/keyboard.py`): the iPad's (iPadOS, 11-inch iPads), every key's edges and every row's
-    measured from the three pictures of it in Apple's iPad User Guide ("Type with the onscreen keyboard on
-    iPad" and two more pages; 587 by 180 pixels of keys, the pictures agreeing within 1.4 px). It's scaled as
-    a whole, as big as fits 42% of the screen's height, in the middle. As in the guide: a double tap on
-    Shift is Caps Lock, a double tap on Space a full stop and a space. The .?123 page has the letter keys'
-    second characters in their places (not in Apple's pictures, so not measured); the microphone key types
-    the next thing said (`Controller.dictate_until`), and the emoji key has a page of emoji.
-  * Screen: the dots and the keyboard (`ui/airtouch_layer.py`) are drawn with cairo on a layer over
-    everything that lets clicks through, black on white; the keys' symbols are drawn there, not taken from
-    fonts. The keyboard is drawn once into a picture of its own, so dots moving over it redraw only their
-    squares; pages get the room above it. Keys are typed with xdotool, so they go wherever typing goes: the
-    conversation, or a page's box.
-  * Pointer: moved with XTEST. Its arrow is hidden with XFIXES while AirTouch moves it, and comes back when
-    something else moves the pointer (a mouse, or a click the model made); AirTouch then leaves the pointer
-    alone until it has been still for 3 s.
+* Input, in the order the person uses it: the touchscreen, a keyboard, the AirPods.
+* Onscreen keyboard (`ui/keyboard.py`): the iPad's (iPadOS, 11-inch iPads), every key's edges and every row's
+  measured from the three pictures of it in Apple's iPad User Guide ("Type with the onscreen keyboard on
+  iPad" and two more pages; 587 by 180 pixels of keys, the pictures agreeing within 1.4 px). It's scaled as
+  a whole, as big as fits 42% of the screen's height, in the middle. As in the guide: a double tap on
+  Shift is Caps Lock, a double tap on Space a full stop and a space. The .?123 page has the letter keys'
+  second characters in their places (not in Apple's pictures, so not measured); the microphone key types
+  the next thing said (`Controller.dictate_until`), and the emoji key has a page of emoji. It's drawn
+  (`ui/keyboard_layer.py`) with cairo on a layer over everything that lets clicks through, black on white;
+  the keys' symbols are drawn there, not taken from fonts. The keyboard is drawn once into a picture of its
+  own, so a key pressed redraws only its square; pages get the room above it. Keys are typed with xdotool,
+  so they go wherever typing goes: the conversation, or a page's box.
 * Keyboard and mouse: USB ones just work. The arrow shows when the mouse moves (unclutter hides it after 3 s
-  still). Clicks reach the page: AirTouch's layer over the window (a GtkDrawingArea in a GtkOverlay) took them
+  still). Clicks reach the page: the keyboard's layer over the window (a GtkDrawingArea in a GtkOverlay) took them
   all, pass-through or not (GTK 3.24), until it was given an empty input shape. Keys go to the page too: on the
   conversation, into the message box (the page puts the focus back there after a click elsewhere); GTK keeps
   only the media keys and Ctrl+Shift+Q. `linux/session/chatcomputer-refresh` sets each connected screen to the

@@ -98,19 +98,9 @@ class Screen:
     # The onscreen keyboard: it came up, moved or went (where its keys are, or None); a key tapped on it.
     on_keyboard: Any = None
     on_keyboard_action: Any = None
-    def dots(self, dots: list[tuple[float, float, str]]) -> None:
-        """AirTouch's dots, one per finger it follows (x, y in the display's pixels, and what the finger is
-        doing: "point", "pinch", "scroll"; with the keyboard up "key", "press"). None left: none drawn."""
     async def show_keyboard(self, show: bool) -> tuple | None:
-        """Put AirTouch's keyboard up: returns where its keys are (x, y, width, height in the display's pixels,
+        """Put the onscreen keyboard up: returns where its keys are (x, y, width, height in the display's pixels,
         and how many keys across and rows down); or take it down (None)."""
-        return None
-    async def keyboard_press(self, x: float, y: float) -> tuple | None:
-        """A finger pressed the keyboard at x, y (the display's pixels): what to type (("text", "a") or
-        ("key", "Return")), ("hide",), or None (shift, another page of keys, or no key there)."""
-        return None
-    def screen_bounds(self) -> tuple[int, int, int, int] | None:
-        """Where Chat Computer's screen is (x, y, width, height in the display's pixels), for AirTouch's pointer."""
         return None
     def lock_screen(self, info: dict[str, Any] | None) -> None:
         """The lock screen over everything ({"error": what to say about the last PIN, "note": the line under
@@ -276,9 +266,6 @@ class RecordingScreen(Screen):
         else:
             self.redirects[prefix] = then
 
-    def dots(self, dots: list[tuple[float, float, str]]) -> None:
-        self.events.append(("dots", [(round(x), round(y), kind) for x, y, kind in dots]))
-
     def quit(self) -> None:
         self.events.append(("quit", None))
 
@@ -290,7 +277,7 @@ class RecordingScreen(Screen):
     KEYBOARD_TOP, KEYBOARD_SIZE = 648, (1920, 432)
 
     async def show_keyboard(self, show: bool) -> tuple | None:
-        from .airtouch.keyboard import ROWS, UNITS, Keyboard
+        from .ui.keyboard import ROWS, UNITS, Keyboard
         self.events.append(("keyboard", show))
         if not show:
             self.keyboard = None
@@ -299,19 +286,6 @@ class RecordingScreen(Screen):
         self.keyboard.layout(*self.KEYBOARD_SIZE)
         x, y, w, h = self.keyboard.area()
         return (x, self.KEYBOARD_TOP + y, w, h, UNITS, ROWS)
-
-    async def keyboard_press(self, x: float, y: float) -> tuple | None:
-        import time
-        kb = getattr(self, "keyboard", None)
-        key = kb.hit(x, y - self.KEYBOARD_TOP) if kb else None
-        if key is None:
-            return None
-        state = (kb.page, kb.shift)
-        action = kb.press(key, time.monotonic())
-        if (kb.page, kb.shift) != state:
-            kb.layout(*self.KEYBOARD_SIZE)
-        self.events.append(("key", key.label))
-        return action
 
     # test helpers
     def ai_text(self) -> str:

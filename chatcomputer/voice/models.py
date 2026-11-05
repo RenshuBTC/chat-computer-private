@@ -18,15 +18,6 @@ KOKORO_FILES = {
     "kokoro-v1.0.int8.onnx": "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb",
     "voices-v1.0.bin": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
 }
-# AirTouch's two networks (chatcomputer/airtouch): Google MediaPipe's palm detector and hand landmark model, "lite"
-# versions (Apache 2.0), at the addresses and SHA-256 that MediaPipe's own build pins (third_party/external_files.bzl).
-AIRTOUCH_BASE = "https://storage.googleapis.com/mediapipe-assets/modules/"
-AIRTOUCH_FILES = {
-    "palm_detection_lite.tflite": ("palm_detection/palm_detection_lite.tflite?generation=1782183643309056",
-                                   "e9a4aaddf90dda56a87235303cf00e4c2d3fb28725f68fd88772997dac905c18"),
-    "hand_landmark_lite.tflite": ("hand_landmark/hand_landmark_lite.tflite?generation=1782183538030829",
-                                  "d7fde8ac11f8ce03f8663775bfc323f4fc9f2a38062b4f4efa142874ef5b2a48"),
-}
 WHISPER_MODELS = ("tiny.en", "base.en", "small.en", "medium.en", "tiny", "base", "small", "medium",
                   "large-v3", "distil-large-v3", "distil-small.en", "distil-medium.en")
 
@@ -38,12 +29,6 @@ def whisper_dir(paths: Paths, name: str) -> Path:
 def kokoro_files(paths: Paths) -> tuple[Path, Path]:
     d = paths.models / "kokoro"
     return d / "kokoro-v1.0.int8.onnx", d / "voices-v1.0.bin"
-
-
-def airtouch_files(paths: Paths) -> tuple[Path, Path]:
-    """The palm detector and the hand landmark model."""
-    d = paths.models / "airtouch"
-    return d / "palm_detection_lite.tflite", d / "hand_landmark_lite.tflite"
 
 
 def vad_model() -> Path:
@@ -62,7 +47,6 @@ def status(paths: Paths, settings: Settings) -> dict[str, Any]:
         "speech_recognition": {"model": settings.stt_model, "ready": (wdir / "model.bin").exists(), "path": str(wdir)},
         "voice": {"ready": onnx.exists() and voices.exists(), "path": str(onnx.parent)},
         "fallback_voice": bool(shutil.which("espeak-ng")),
-        "airtouch": {"ready": all(f.exists() for f in airtouch_files(paths)), "path": str(airtouch_files(paths)[0].parent)},
     }
 
 
@@ -102,9 +86,6 @@ def download(paths: Paths, settings: Settings, progress: Callable[[str], None] =
     onnx, voices = kokoro_files(paths)
     for name, sha in KOKORO_FILES.items():
         _fetch(KOKORO_BASE + name, onnx.parent / name, sha, progress)
-    adir = airtouch_files(paths)[0].parent
-    for name, (where, sha) in AIRTOUCH_FILES.items():
-        _fetch(AIRTOUCH_BASE + where, adir / name, sha, progress)
     download_stt(paths, settings.stt_model, progress)
     progress("voice models ready")
 

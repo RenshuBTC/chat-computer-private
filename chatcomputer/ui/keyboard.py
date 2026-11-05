@@ -1,4 +1,4 @@
-"""The AirTouch keyboard: the iPad's, key for key, and what pressing a key types.
+"""The onscreen keyboard: the iPad's, key for key, and what pressing a key types.
 
 Every key's place and size is the iPad's own (iPadOS on 11-inch iPads), measured from the three pictures of
 the onscreen keyboard in Apple's iPad User Guide (support.apple.com, "Type with the onscreen keyboard on
@@ -14,8 +14,8 @@ the next letter a capital, a double tap on Shift is Caps Lock, a double tap on S
 full stop and a space. The .?123 and #+= pages aren't in Apple's pictures: .?123 has the letter keys' second
 characters in their places, and #+= the further symbols an iPad has.
 
-The screen draws it (ui/airtouch_layer.py) and AirTouch's fingers press it (gestures.py measures its working
-space in these keys); this file is the arithmetic.
+The screen draws it (ui/keyboard_layer.py) and a finger on the touchscreen presses it; this file is the
+arithmetic.
 """
 from __future__ import annotations
 
@@ -35,8 +35,6 @@ KEY_EDGES = (
 PITCH = 47.545                        # one letter key to the next (pixels in the pictures)
 UNITS = REF_W / PITCH                 # letter keys across the whole keyboard: 12.35
 ROWS = 4
-HOME = (3.474, 9.472)                 # where the hands rest, in letter keys from the left: the middle of a s d f,
-HOME_ROW = 0.3713                     # and of j k l and the next key; and the a s d f row's middle (of the height)
 # Round the keys a little, as the iPad's; the gaps and the margin around the keys (the iPad's sides and bottom).
 CORNER = 0.2                          # of a key's height
 MARGIN = (5.6, 7.0, 5.6, 18.0)        # left, top, right, bottom (picture pixels)
@@ -48,7 +46,7 @@ def _letters(chars: str, subs: str) -> list[tuple]:
 
 
 # Each page: per row, (label, action, second character, symbol drawn instead of the label, where it sits). The
-# symbols are drawn (ui/airtouch_layer.py); "bl"/"br" put them at the key's bottom left or right, as the iPad does.
+# symbols are drawn (ui/keyboard_layer.py); "bl"/"br" put them at the key's bottom left or right, as the iPad does.
 _TAB = ("tab", ("key", "Tab"), "", "tab", "bl")
 _DEL = ("delete", ("key", "BackSpace"), "", "delete", "br")
 _CAPS = ("caps lock", ("caps",), "", "caps", "bl")
@@ -166,7 +164,7 @@ class Keyboard:
         return keys
 
     def area(self) -> tuple[float, float, float, float]:
-        """Where the keys are (x, y, width, height in the keyboard's pixels): what the fingers work over."""
+        """Where the keys are (x, y, width, height in the keyboard's pixels)."""
         return (self.origin[0], self.origin[1], REF_W * self.scale, REF_H * self.scale)
 
     def hit(self, x: float, y: float) -> Key | None:

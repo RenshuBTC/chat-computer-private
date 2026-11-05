@@ -34,7 +34,7 @@ from gi.repository import Gdk, GLib, Gtk, WebKit2  # noqa: E402
 from ..brain.permissions import is_private  # noqa: E402
 from ..config import Paths, Settings  # noqa: E402
 from ..screen import Screen  # noqa: E402
-from .airtouch_layer import AirLayer  # noqa: E402
+from .keyboard_layer import KeyboardLayer  # noqa: E402
 from .layout import Layout, compute, css_vars, screen_from_monitor  # noqa: E402
 from .touch import HOLD, KEY, PASS, RELEASE, TouchGestures  # noqa: E402
 from .render import ASSETS, FONTS, NATIVE, asset  # noqa: E402
@@ -60,7 +60,7 @@ def private_file_uri(paths: Paths, uri: str) -> bool:
 MEDIA_KEYS = {"XF86AudioPlay", "XF86AudioPause", "XF86AudioPlayPause", "XF86AudioMedia", "XF86AudioNext",
               "XF86AudioPrev", "XF86AudioStop"}
 # The window behind the pages is the conversation's dark (theme.css). register_fonts() makes Chat Computer's own copy
-# of its font known to GTK, for AirTouch's keyboard.
+# of its font known to GTK, for the onscreen keyboard.
 COLORS = {"bg": "#191919", "ink": "#F0F0F0"}
 
 CSS_TEMPLATE = """
@@ -72,7 +72,7 @@ _fonts_registered: bool | None = None
 
 
 def register_fonts(folder: Path = FONTS) -> bool:
-    """Make Chat Computer's fonts (assets/fonts) known to GTK in this process, for AirTouch's keyboard. Pages load them
+    """Make Chat Computer's fonts (assets/fonts) known to GTK in this process, for the onscreen keyboard. Pages load them
     themselves (theme.css). Without them the keyboard uses the system's standard font. Call it before the
     window is built."""
     global _fonts_registered
@@ -84,7 +84,7 @@ def register_fonts(folder: Path = FONTS) -> bool:
             fc.FcConfigAppFontAddDir.restype = ctypes.c_int
             _fonts_registered = bool(fc.FcConfigAppFontAddDir(None, os.fsencode(folder)))
         except Exception:
-            log.warning("Chat Computer's fonts couldn't be given to GTK; AirTouch's keyboard uses the standard font",
+            log.warning("Chat Computer's fonts couldn't be given to GTK; the onscreen keyboard uses the standard font",
                         exc_info=True)
             _fonts_registered = False
     return _fonts_registered
@@ -225,8 +225,6 @@ class GtkScreen(Screen):
         self._replay_last: dict[str, str] = {}
         self._reloading = False
         self._renderer_stops: list[float] = []
-        self._bounds: tuple[int, int, int, int] | None = None
-        self.on_bounds: Callable[[tuple[int, int, int, int]], None] | None = None
         self.on_keyboard: Callable[[tuple | None], None] | None = None      # the keyboard moved, came or went
         # The touchscreen: the system's gestures (ui/touch.py) and the onscreen keyboard for a finger.
         self.touch = TouchGestures(self._touch_gesture)
@@ -275,8 +273,8 @@ class GtkScreen(Screen):
 
         # The conversation page fills the window: the sidebars, the conversation and the message box. What's open (a
         # website, a video, a document) is a second view laid over it, in the conversation's place between the
-        # sidebars, above the message box, in the frame the page draws for it (see _place). AirTouch's dots and
-        # keyboard are drawn over everything.
+        # sidebars, above the message box, in the frame the page draws for it (see _place). The onscreen keyboard is
+        # drawn over everything.
         self.root = Gtk.Overlay()
         self.win.add(self.root)
 
@@ -338,15 +336,15 @@ class GtkScreen(Screen):
         self.content.connect("notify::title", lambda v, p: self._retitle(v))
         self._add_in_hole(self.content)
 
-        self.pointer_area = Gtk.DrawingArea()
-        self.air = AirLayer(self.pointer_area, lambda: self.layout.font_px if self.layout else 16.0)
-        self.pointer_area.connect("draw", self.air.draw)
-        self.root.add_overlay(self.pointer_area)
-        self.root.set_overlay_pass_through(self.pointer_area, True)
-        # "Pass through" alone isn't enough: the layer has a window of its own, which took every click (a mouse's,
-        # and AirTouch's taps) before the conversation or the website under it saw it (GTK 3.24). With no area
+        self.keyboard_area = Gtk.DrawingArea()
+        self.keyboard_layer = KeyboardLayer(self.keyboard_area, lambda: self.layout.font_px if self.layout else 16.0)
+        self.keyboard_area.connect("draw", self.keyboard_layer.draw)
+        self.root.add_overlay(self.keyboard_area)
+        self.root.set_overlay_pass_through(self.keyboard_area, True)
+        # "Pass through" alone isn't enough: the layer has a window of its own, which took every click (a mouse's)
+        # before the conversation or the website under it saw it (GTK 3.24). With no area
         # that takes input, they all go through.
-        self.pointer_area.connect("realize", lambda w: w.input_shape_combine_region(cairo.Region()))
+        self.keyboard_area.connect("realize", lambda w: w.input_shape_combine_region(cairo.Region()))
 
         self._apply_layout()
         self.win.show_all()
@@ -384,7 +382,6 @@ class GtkScreen(Screen):
                        text_scale=s.text_scale, web_zoom=s.web_zoom)
 
     def _apply_layout(self) -> None:
-        self._note_bounds()
         self._replace_keyboard()
         lay = self._compute_layout()
         changed = self.layout is None or lay.to_dict() != self.layout.to_dict()
@@ -428,35 +425,7 @@ class GtkScreen(Screen):
             return False
         self._relayout_id = GLib.timeout_add(150, run)
 
-    # ================================================================ AirTouch: the dots and the keyboard
-    def _note_bounds(self) -> None:
-        """Where this screen is on the display, in its pixels (for AirTouch, which moves the display's pointer)."""
-        try:
-            mon = self._monitor()
-            g, f = mon.get_geometry(), mon.get_scale_factor() or 1
-            bounds = (g.x * f, g.y * f, g.width * f, g.height * f)
-        except Exception:
-            return
-        if bounds != self._bounds:
-            self._bounds = bounds
-            if self.on_bounds:
-                try:
-                    self.on_bounds(bounds)
-                except Exception:
-                    log.exception("on_bounds")
-
-    def screen_bounds(self) -> tuple[int, int, int, int] | None:
-        return self._bounds
-
-    def _to_window(self, x: float, y: float) -> tuple[float, float]:
-        """Display pixels (AirTouch's) to this window's."""
-        gw = self.win.get_window()
-        if gw is None:
-            return x, y
-        origin = gw.get_origin()
-        f = gw.get_scale_factor() or 1
-        return x / f - origin[-2], y / f - origin[-1]
-
+    # ================================================================ the onscreen keyboard
     def _to_display(self, x: float, y: float) -> tuple[float, float]:
         gw = self.win.get_window()
         if gw is None:
@@ -465,43 +434,31 @@ class GtkScreen(Screen):
         f = gw.get_scale_factor() or 1
         return (x + origin[-2]) * f, (y + origin[-1]) * f
 
-    def dots(self, dots: list[tuple[float, float, str]]) -> None:
-        self._ui(self._dots_now, list(dots))
-
-    def _dots_now(self, dots: list[tuple[float, float, str]]) -> None:
-        self.air.set_dots([self._to_window(x, y) + (kind,) for x, y, kind in dots])
-
     async def show_keyboard(self, show: bool) -> tuple | None:
         return await self._ui_call(self._show_keyboard_now, show)
 
     def _show_keyboard_now(self, show: bool) -> tuple | None:
         if not show:
-            if self.air.up:
-                self.air.hide_keyboard()
+            if self.keyboard_layer.up:
+                self.keyboard_layer.hide_keyboard()
                 self.chat.set_margin_bottom(0)
             self.touch.keyboard = None
             return None
         w, h = self.win.get_allocated_width(), self.win.get_allocated_height()
         if w <= 1 or h <= 1:
             w, h = self.win.get_default_size()
-        x, y, aw, ah = self.air.show_keyboard(w, h)
-        self.touch.keyboard = self.air.panel
+        x, y, aw, ah = self.keyboard_layer.show_keyboard(w, h)
+        self.touch.keyboard = self.keyboard_layer.panel
         # Pages get the room above it, the way a tablet's do, so what's being typed into stays in view (the
         # conversation keeps its newest words at the bottom).
-        self.chat.set_margin_bottom(int(self.air.panel[3]))
+        self.chat.set_margin_bottom(int(self.keyboard_layer.panel[3]))
         f = (self.win.get_window().get_scale_factor() if self.win.get_window() else 1) or 1
         dx, dy = self._to_display(x, y)
-        return self.air.spec((dx, dy, aw * f, ah * f))
-
-    async def keyboard_press(self, x: float, y: float) -> tuple | None:
-        return await self._ui_call(self._keyboard_press_now, x, y)
-
-    def _keyboard_press_now(self, x: float, y: float) -> tuple | None:
-        return self.air.press(*self._to_window(x, y))
+        return self.keyboard_layer.spec((dx, dy, aw * f, ah * f))
 
     def _replace_keyboard(self) -> None:
-        """The window changed size with the keyboard up: put it along the new bottom, and tell AirTouch."""
-        if self.air.up:
+        """The window changed size with the keyboard up: put it along the new bottom, and say where it is now."""
+        if self.keyboard_layer.up:
             spec = self._show_keyboard_now(True)
             if self.on_keyboard:
                 try:
@@ -749,7 +706,7 @@ class GtkScreen(Screen):
         def run() -> None:
             was, self._locked = self._locked, info is not None
             if self._locked and not was:
-                if self.air.up:
+                if self.keyboard_layer.up:
                     self.touch_keyboard(False)
                 if self.shown is not None:
                     self._put_away(self.shown)          # stays open, off the screen, until unlocked
@@ -877,7 +834,7 @@ class GtkScreen(Screen):
         view.set_size_request(-1, -1)
         if view.get_parent() is None:
             self.root.add_overlay(view)
-            self.root.reorder_overlay(view, 1)       # under AirTouch's dots, which stay on top
+            self.root.reorder_overlay(view, 1)       # under the onscreen keyboard, which stays on top
         view.set_no_show_all(False)
 
     def source_open(self, provider: str, url: str, reload: bool = False) -> None:
@@ -1457,7 +1414,7 @@ class GtkScreen(Screen):
         self._held.pop(seq, None)
         self._given.pop(seq, None)
         if verdict == KEY:
-            self.air.touch_key(None)
+            self.keyboard_layer.touch_key(None)
         return verdict != PASS
 
     def _route(self, seq: Any, verdict: str, ev: Any, x: float, y: float, begin: bool = False,
@@ -1490,10 +1447,10 @@ class GtkScreen(Screen):
         """A finger on the onscreen keyboard: the key under it shows pressed; lifted, it's typed (as on an iPad,
         sliding to another key before lifting types that one)."""
         if not end:
-            self.air.touch_key((x, y))
+            self.keyboard_layer.touch_key((x, y))
             return
-        self.air.touch_key(None)
-        action = self.air.press(x, y)
+        self.keyboard_layer.touch_key(None)
+        action = self.keyboard_layer.press(x, y)
         if not action:
             return
         if action[0] == "hide":
@@ -1509,7 +1466,7 @@ class GtkScreen(Screen):
         if name == "home":
             if self.mode == "content":
                 self.close_content()
-            elif self.air.up:
+            elif self.keyboard_layer.up:
                 self.touch_keyboard(False)
         elif name in ("back", "forward"):
             v = self.shown if self.mode == "content" else None
@@ -1525,7 +1482,7 @@ class GtkScreen(Screen):
     def touch_keyboard(self, show: bool) -> None:
         """The onscreen keyboard for a finger on a box to type in, or away (its hide key, a key typed on a real
         keyboard, Home, or a touch somewhere else). Not while a real keyboard is in use, as on an iPad."""
-        if show == self.air.up or (show and time.monotonic() - self._real_key_at < REAL_KEYBOARD_S):
+        if show == self.keyboard_layer.up or (show and time.monotonic() - self._real_key_at < REAL_KEYBOARD_S):
             return
         spec = self._show_keyboard_now(show)
         if self.on_keyboard:
@@ -1535,14 +1492,14 @@ class GtkScreen(Screen):
                 log.exception("on_keyboard")
 
     def _note_key(self, ev: Any) -> None:
-        """A key: from a real keyboard (not one Chat Computer typed itself, for the onscreen keyboard or AirTouch's), it
+        """A key: from a real keyboard (not one Chat Computer typed itself, for the onscreen keyboard), it
         puts the onscreen keyboard away."""
         dev = ev.get_source_device()
         name = (dev.get_name() if dev is not None else "") or ""
         if "XTEST" in name.upper():
             return
         self._real_key_at = time.monotonic()
-        if self.air.up:
+        if self.keyboard_layer.up:
             self.touch_keyboard(False)
 
     # ================================================================ keys

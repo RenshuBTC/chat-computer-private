@@ -39,10 +39,10 @@ def _doctor(paths: Paths, settings: Settings) -> int:
         ok = False
     try:
         import gi
-        gi.require_foreign("cairo")       # AirTouch's dots and keyboard are drawn with it (python3-gi-cairo)
+        gi.require_foreign("cairo")       # the onscreen keyboard is drawn with it (python3-gi-cairo)
         mods["cairo"] = "ok"
     except Exception as exc:
-        mods["cairo"] = f"missing ({exc.__class__.__name__}): AirTouch's dots and keyboard can't be drawn"
+        mods["cairo"] = f"missing ({exc.__class__.__name__}): the onscreen keyboard can't be drawn"
     report["modules"] = mods
     from .brain import models as llm
     program = llm.engine_program()
@@ -62,11 +62,6 @@ def _doctor(paths: Paths, settings: Settings) -> int:
         report["audio"] = {"input": di.get("name"), "output": do.get("name")}
     except Exception as exc:
         report["audio"] = f"unavailable ({exc.__class__.__name__}: {exc})"
-    try:
-        from .airtouch import camera
-        report["cameras"] = [d.name for d in camera.devices()] or "none (AirTouch needs one)"
-    except Exception as exc:
-        report["cameras"] = f"unknown ({exc.__class__.__name__})"
     try:
         with socket.create_connection(("huggingface.co", 443), timeout=4):
             report["internet"] = "ok"
@@ -92,7 +87,6 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--windowed", action="store_true")
     r.add_argument("--no-voice", action="store_true")
     r.add_argument("--fake", action="store_true", help="pretend machine (for previews and tests)")
-    r.add_argument("--no-airtouch", action="store_true", help="don't use the camera for hand gestures")
     r.add_argument("-v", "--verbose", action="store_true")
     sub.add_parser("doctor")
     m = sub.add_parser("models")
@@ -149,7 +143,6 @@ def main(argv: list[str] | None = None) -> int:
             # Loaded once the window shows (run_app), so the window comes up first.
             from .controller import Controller
             return Controller(paths, settings, platform, screen, voice=voice,
-                              airtouch=not (getattr(args, "no_airtouch", False) or getattr(args, "fake", False)),
                               offer_headphones=not getattr(args, "fake", False),
                               offer_updates=not getattr(args, "fake", False),
                               # The weather, for the greeting under the word logo (chat.js: GREETING).

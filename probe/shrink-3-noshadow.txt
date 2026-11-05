@@ -1,0 +1,22 @@
+﻿C: size 160939621888, can shrink to 156197666304 (4.4 GB), free 33450741760
+asked at 2026-11-05T08:10:32.1219041+00:00
+event 259 from Microsoft-Windows-Defrag at 2026-11-05T08:10:48.7905762+00:00
+  [0] Windows (C:)
+  [1] \\?\Volume{51199064-2a58-498e-81e0-1bdfd593eced}
+  [2] \$Mft::$BITMAP
+  [3] 0x245afb2
+  [4] 0x1daef45
+  [5] -S--S
+  [6] <analysis>
+  [7] 0 0 0 0 5 1 0 0 241 0 0 0 0 0 0 0 34 54 121 98 83 114 178 185 99 123 113 54 14 0 0 0 0 0 0 0
+  message: A volume shrink analysis was initiated on volume Windows (C:). This event log entry details information about the last unmovable file that could limit the maximum number of reclaimable bytes. |   |  Diagnostic details: |  - The last unmovable file appears to be: \$Mft::$BITMAP |  - The last cluster of the file is: 0x245afb2 |  - Shrink potential target (LCN address): 0x1daef45 |  - The NTFS file flags are: -S--S |  - Shrink phase: <analysis> |   |  To find more details about this file please use the "fsutil volume querycluster \\?\Volume{51199064-2a58-498e-81e0-1bdfd593eced} 0x245afb2" command.
+event 259 from Microsoft-Windows-Defrag at 2026-11-05T08:10:31.6949609+00:00
+  [0] Windows (C:)
+  [1] \\?\Volume{51199064-2a58-498e-81e0-1bdfd593eced}
+  [2] \$Mft::$BITMAP
+  [3] 0x245afb2
+  [4] 0x1ddce1d
+  [5] -S--S
+  [6] <analysis>
+  [7] 0 0 0 0 5 1 0 0 241 0 0 0 0 0 0 0 34 54 121 98 83 114 178 185 99 123 113 54 14 0 0 0 0 0 0 0
+  message: A volume shrink analysis was initiated on volume Windows (C:). This event log entry details information about the last unmovable file that could limit the maximum number of reclaimable bytes. |   |  Diagnostic details: |  - The last unmovable file appears to be: \$Mft::$BITMAP |  - The last cluster of the file is: 0x245afb2 |  - Shrink potential target (LCN address): 0x1ddce1d |  - The NTFS file flags are: -S--S |  - Shrink phase: <analysis> |   |  To find more details about this file please use the "fsutil volume querycluster \\?\Volume{51199064-2a58-498e-81e0-1bdfd593eced} 0x245afb2" command.

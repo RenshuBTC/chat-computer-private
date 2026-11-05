@@ -688,7 +688,8 @@ Some things are made by others but are not software between the hardware and Cha
 ## Roadmap
 
 The steps come in the order Chat Computer needs them. Each is tested in a virtual PC first, then on the real
-PC.
+PC. Step 2 is the exception: it's every step tried on a real PC, so it stays open while the others are built (in
+virtual PCs, one after another), and is finished once Chat Computer starts and runs on a real PC.
 
 The goal: a better computer for everyday people than Ubuntu, the most established system that is free and open.
 Chat Computer is already ahead where it matters most: its assistant is built in from the first start (Ubuntu has
@@ -743,7 +744,9 @@ writes for each person, in place of Ubuntu's catalogue.
     to come; checked with QEMU's codecs fed tones), ✓ USB sound cards (class 1's: the chimes play on one while it's
     plugged in; checked with QEMU's). To do: trying it on real PCs, USB sound cards' microphones and class 2's, then
     Bluetooth (HCI over USB, the controllers' firmware, L2CAP, A2DP and HFP, SBC and mSBC) for AirPods.
-11. Speech: Chat Computer's own speech recognition and voice, running the models itself.
+11. Speech: ✓ listening (Windows+H: the microphone recorded and heard by the engine's Whisper, a step at a time,
+    and the words sent as the person's message; checked in a virtual PC against the engine on Linux). To do: its own
+    voice, running the model itself.
 12. Power: ✓ restart, ✓ turning off (ACPI's S5, with the firmware's _TTS and _PTS), ✓ the firmware's own programs
     (AML) run by Chat Computer's own interpreter: ✓ the power button, ✓ laptops' batteries, AC adapters and lids, ✓
     the firmware's events (GPEs, the embedded controller's queries), ✓ its critical temperature. Checked against

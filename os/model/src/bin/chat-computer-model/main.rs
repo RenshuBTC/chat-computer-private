@@ -26,8 +26,10 @@ mod api;
 mod convert;
 mod fetch;
 mod http;
+mod kokoro;
 mod map;
 mod prepare;
+mod pth;
 mod sys;
 
 use model::chat::Style;

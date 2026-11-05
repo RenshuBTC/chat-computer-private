@@ -9,13 +9,15 @@ license.workspace = true
 [features]
 # Threads for the arithmetic, and the program that serves the model (where there's an operating system: Chat
 # Computer on Linux, the desktop app), which also gets a model ready over Chat Computer's own HTTPS.
-std = ["dep:tls", "dep:crypto"]
+std = ["dep:tls", "dep:crypto", "dep:zip"]
 
 [dependencies]
 # (Its resampling: a picture resized as Qwen's processor resizes it.)
 picture = { path = "../picture" }
 tls = { path = "../tls", optional = true }
 crypto = { path = "../crypto", optional = true }
+# (The converter: a voice's weights, published as PyTorch's checkpoints, which are zips.)
+zip = { path = "../zip", optional = true }
 
 [dev-dependencies]
 # (kernel_check: a scanned PDF's page made a picture as the kernel makes it.)
@@ -68,4 +70,8 @@ required-features = ["std"]
 
 [[example]]
 name = "listen_check"
+required-features = ["std"]
+
+[[example]]
+name = "voice_check"
 required-features = ["std"]

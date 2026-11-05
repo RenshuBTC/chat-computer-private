@@ -87,6 +87,7 @@ dependencies = [
  "pdf",
  "picture",
  "tls",
+ "zip",
 ]
 
 [[package]]

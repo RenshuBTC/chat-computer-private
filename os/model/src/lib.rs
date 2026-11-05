@@ -10,7 +10,8 @@
 //! - sample: the next token; session: a conversation kept going, reading only what's new;
 //! - refusal: the direction the model refuses along, found, measured and taken out as it runs, so it answers what
 //!   it's asked;
-//! - whisper: speech recognition (OpenAI's Whisper), the words in a recording.
+//! - whisper: speech recognition (OpenAI's Whisper), the words in a recording;
+//! - voice: speaking (Kokoro-82M), phonemes made sound.
 //!
 //! It needs no standard library (Chat Computer's own kernel runs it), only memory; where there is one, a
 //! processor pool runs its arithmetic on every core (threads), and the program in src/bin serves it. See README.md.
@@ -40,6 +41,7 @@ pub mod token;
 mod unicode;
 pub mod vector;
 pub mod vision;
+pub mod voice;
 pub mod whisper;
 
 #[cfg(test)]

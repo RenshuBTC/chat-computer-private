@@ -157,6 +157,9 @@ pub struct Page {
     dpr: f32,
     /// The modules being fetched for its scripts: their resources, and their keys in the module loader's map.
     module_keys: Vec<(usize, String)>,
+    /// Its <svg> elements' pictures: (element, its text's hash, the resource, and the colour it was given for
+    /// currentColor).
+    inline_svgs: Vec<(NodeId, u64, usize, Option<u32>)>,
 }
 
 /// The pictures' sizes, for the layout.
@@ -212,6 +215,7 @@ impl Page {
             scrolled: None,
             dpr: view.2,
             module_keys: Vec::new(),
+            inline_svgs: Vec::new(),
         };
         if scripting {
             p.script = Some(Box::new(Script::new(&p.url.to_string(), epoch, view)));
@@ -309,6 +313,50 @@ impl Page {
                             self.sources.push(Source::Linked(r));
                         }
                     }
+                }
+                "svg" => {
+                    // A picture drawn from its own text (unless it's inside another: that one's the picture).
+                    let mut inside = false;
+                    let mut p = self.doc.parent(n);
+                    while let Some(a) = p {
+                        if self.doc.name(a) == "svg" {
+                            inside = true;
+                            break;
+                        }
+                        p = self.doc.parent(a);
+                    }
+                    if inside || self.picture_of.len() >= MOST_PICTURES {
+                        continue;
+                    }
+                    let mut text = self.doc.outer_html(n);
+                    // (currentColor: the colour the page gives the element, unless it says its own.)
+                    let color = self.color_of(n);
+                    if !e.has_attr("color")
+                        && let Some(c) = color
+                    {
+                        text = format!("<svg color=\"#{c:06x}\"{}", &text[4..]);
+                    }
+                    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+                    let r = match self.inline_svgs.iter().find(|(k, h, _, _)| *k == n && *h == hash) {
+                        Some((_, _, r, _)) => *r,
+                        None => {
+                            // (Its size is known from its text at once: the page is laid out right before it's drawn.)
+                            let size = picture::size(text.as_bytes());
+                            let r = self.add(Kind::Picture, None, Some(text.into_bytes()));
+                            if let Some((w, h)) = size {
+                                self.resources[r].state = State::Picture(w, h);
+                            }
+                            // (The one it had before: not wanted now.)
+                            for (_, _, old, _) in self.inline_svgs.iter().filter(|(k, _, _, _)| *k == n) {
+                                self.resources[*old].asked = true;
+                                self.resources[*old].inline = None;
+                            }
+                            self.inline_svgs.retain(|(k, _, _, _)| *k != n);
+                            self.inline_svgs.push((n, hash, r, color));
+                            r
+                        }
+                    };
+                    self.picture_of.push((n, r));
                 }
                 "img" | "input" | "video" => {
                     if e.name == "input" && !e.attr("type").is_some_and(|t| t.eq_ignore_ascii_case("image")) {
@@ -439,6 +487,11 @@ impl Page {
             if self.styles.is_none() {
                 self.parse_sheets(view);
                 self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author }, view, dpr)));
+                // (An <svg> made before the colour it's drawn in was known: made again.)
+                if self.inline_svgs.iter().any(|(n, _, _, c)| self.color_of(*n) != *c) {
+                    self.scan();
+                    self.sheets_stale = false;
+                }
             }
             let styles = self.styles.as_ref().expect("worked out above");
             let mut tree = Tree::build(&self.doc, styles, &mut Picker { of: &self.picture_of });
@@ -600,6 +653,11 @@ impl Page {
             }
             r.state = State::Script(text);
         }
+    }
+
+    /// An element's colour (RGB) as the page's styles give it, if they've been worked out.
+    fn color_of(&self, n: NodeId) -> Option<u32> {
+        self.styles.as_ref().and_then(|st| st.of.get(n).cloned().flatten()).map(|st| st.color & 0x00FF_FFFF)
     }
 
     /// The modules the module loader wants fetched, asked for.

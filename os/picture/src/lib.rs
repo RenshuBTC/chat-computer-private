@@ -1,6 +1,6 @@
 //! Pictures, read: JPEG (baseline and progressive, as cameras, phones and the web make them), PNG (every colour type
-//! and depth, interlaced or not) and GIF (its first frame), as RGB pixels on a background (where they're
-//! transparent), made to fit a box: shrunk by averaging (never enlarged), and a photo turned the way its camera says
+//! and depth, interlaced or not), GIF (its first frame) and SVG (drawn: svg.rs), as RGB pixels on a background (where
+//! they're transparent; or with their alpha, `decode_alpha`, to be drawn over what's behind them), made to fit a box: shrunk by averaging (never enlarged), and a photo turned the way its camera says
 //! (its EXIF orientation). A big JPEG is decoded at a half, a quarter or an eighth of its size when that's still
 //! enough for the box, which takes a fraction of the memory and time. Decoding keeps to the memory it's given.
 //!
@@ -18,6 +18,7 @@ mod gif;
 mod jpeg;
 mod png;
 mod encode;
+pub mod svg;
 
 pub use encode::jpeg as encode_jpeg;
 
@@ -52,6 +53,9 @@ pub enum Format {
     Jpeg,
     Png,
     Gif,
+    /// Drawn (svg.rs) rather than decoded: at twice its own size, if that fits the box (sharper on a screen of more
+    /// than one pixel to a CSS pixel).
+    Svg,
 }
 
 /// What `data` is, from its first bytes.
@@ -62,6 +66,8 @@ pub fn format(data: &[u8]) -> Option<Format> {
         Some(Format::Png)
     } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
         Some(Format::Gif)
+    } else if svg::is_svg(data) {
+        Some(Format::Svg)
     } else {
         None
     }
@@ -77,6 +83,7 @@ fn per_pixel(f: Format) -> u64 {
         Format::Jpeg => 8,
         Format::Png => 12,
         Format::Gif => 5,
+        Format::Svg => 24,
     }
 }
 
@@ -99,34 +106,88 @@ pub fn decode_stored(data: &[u8], width: u32, height: u32, background: [u8; 3], 
 }
 
 fn decode_turned(data: &[u8], width: u32, height: u32, background: [u8; 3], memory: u64, upright: bool) -> Result<Picture, Error> {
+    let (mut p, alpha) = decode_planes(data, width, height, memory, upright)?;
+    if let Some(a) = alpha {
+        for (px, &a) in p.rgb.chunks_exact_mut(3).zip(&a) {
+            let c = blend([px[0], px[1], px[2]], a, background);
+            px.copy_from_slice(&c);
+        }
+    }
+    Ok(p)
+}
+
+/// A picture with its transparency (for drawing it over what's behind it): its colours, as they are (not mixed with
+/// a background), and its alpha (a byte a pixel, 0 clear), None where it's opaque throughout; turned as its camera
+/// says, and shrunk (if need be) to fit `width` × `height`, as `decode_within` does.
+pub fn decode_alpha(data: &[u8], width: u32, height: u32, memory: u64) -> Result<(Picture, Option<Vec<u8>>), Error> {
+    decode_planes(data, width, height, memory, true)
+}
+
+fn decode_planes(data: &[u8], width: u32, height: u32, memory: u64, upright: bool) -> Result<(Picture, Option<Vec<u8>>), Error> {
     let kind = format(data).ok_or(Error::NotAPicture)?;
     let most = (memory / per_pixel(kind)).min(MOST_PIXELS);
-    let (p, full) = match kind {
+    let (p, alpha, full) = match kind {
         Format::Png => {
-            let p = png::decode(data, background, most)?;
+            let (p, a) = png::decode(data, most)?;
             let full = (p.width, p.height);
-            (p, full)
+            (p, a, full)
         }
         Format::Gif => {
-            let p = gif::decode(data, background, most)?;
+            let (p, a) = gif::decode(data, most)?;
             let full = (p.width, p.height);
-            (p, full)
+            (p, a, full)
+        }
+        Format::Svg => {
+            let (w0, h0) = svg::size(data).ok_or(Error::Damaged)?;
+            let (mut w, mut h) = fitted(w0.saturating_mul(2), h0.saturating_mul(2), width, height);
+            while w as u64 * h as u64 > most && w > 1 && h > 1 {
+                (w, h) = ((w / 2).max(1), (h / 2).max(1));
+            }
+            let (rgba, w, h) = svg::render(data, w, h).ok_or(Error::Damaged)?;
+            let mut rgb = Vec::with_capacity(w as usize * h as usize * 3);
+            let mut a = Vec::with_capacity(w as usize * h as usize);
+            for px in rgba.chunks_exact(4) {
+                rgb.extend_from_slice(&px[..3]);
+                a.push(px[3]);
+            }
+            (Picture { width: w, height: h, rgb }, Some(a), (w, h))
         }
         Format::Jpeg if upright => {
             // (Decoded perhaps at a fraction of its size: the size it fits is worked out from its whole size.)
             let (p, orientation, (w, h)) = jpeg::decode(data, width, height, most, memory)?;
-            (orient(p, orientation), if orientation >= 5 { (h, w) } else { (w, h) })
+            (orient(p, orientation), None, if orientation >= 5 { (h, w) } else { (w, h) })
         }
         Format::Jpeg => {
             // (The box as the decoder takes it, for a picture it would turn: it turns the box back.)
             let turns = jpeg::orientation(data) >= 5;
             let (bw, bh) = if turns { (height, width) } else { (width, height) };
             let (p, _, full) = jpeg::decode(data, bw, bh, most, memory)?;
-            (p, full)
+            (p, None, full)
         }
     };
     let (w, h) = fitted(full.0, full.1, width, height);
-    Ok(shrink_to(&p, w, h))
+    let Some(alpha) = alpha else { return Ok((shrink_to(&p, w, h), None)) };
+    if (w, h) == (p.width, p.height) {
+        return Ok((p, Some(alpha)));
+    }
+    // Shrunk with its colours weighted by their alpha (a clear pixel's colour counts for nothing), then as they are.
+    let mut pre = p.rgb.clone();
+    for (px, &a) in pre.chunks_exact_mut(3).zip(&alpha) {
+        for c in px.iter_mut() {
+            *c = ((*c as u32 * a as u32 + 127) / 255) as u8;
+        }
+    }
+    let shrunk = shrink_to(&Picture { width: p.width, height: p.height, rgb: pre }, w, h);
+    let grey: Vec<u8> = alpha.iter().flat_map(|&a| [a, a, a]).collect();
+    let a = shrink_to(&Picture { width: p.width, height: p.height, rgb: grey }, w, h);
+    let a: Vec<u8> = a.rgb.chunks_exact(3).map(|c| c[0]).collect();
+    let mut rgb = shrunk.rgb;
+    for (px, &a) in rgb.chunks_exact_mut(3).zip(&a) {
+        for c in px.iter_mut() {
+            *c = if a == 0 { 0 } else { ((*c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8 };
+        }
+    }
+    Ok((Picture { width: shrunk.width, height: shrunk.height, rgb }, Some(a)))
 }
 
 /// A picture as a model that sees it reads it, `size` saying at what size it reads a picture of a given size (width,
@@ -266,6 +327,7 @@ pub fn size(data: &[u8]) -> Option<(u32, u32)> {
         Format::Png => png::size(data),
         Format::Gif => gif::size(data),
         Format::Jpeg => jpeg::size(data),
+        Format::Svg => svg::size(data),
     }
 }
 

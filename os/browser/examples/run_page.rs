@@ -10,11 +10,14 @@ use std::io::Write;
 use text::Type;
 use web::Url;
 
-struct Pictures(Vec<Option<(Vec<u8>, u32, u32)>>);
+struct Pictures(Vec<Option<(Vec<u8>, u32, u32, Option<Vec<u8>>)>>);
 
 impl Shown for Pictures {
     fn picture(&self, n: usize) -> Option<(&[u8], u32, u32)> {
-        self.0.get(n)?.as_ref().map(|(p, w, h)| (p.as_slice(), *w, *h))
+        self.0.get(n)?.as_ref().map(|(p, w, h, _)| (p.as_slice(), *w, *h))
+    }
+    fn alpha(&self, n: usize) -> Option<&[u8]> {
+        self.0.get(n)?.as_ref()?.3.as_deref()
     }
 }
 
@@ -77,29 +80,7 @@ fn main() {
     let mut laid_once = false;
     loop {
         // What the page asks for.
-        while let Some((i, kind, url, inline)) = page.next_wanted() {
-            let bytes = match (inline, &url) {
-                (Some(b), _) => Some(b),
-                (None, Some(u)) => read(&files, &index, &u.to_string()),
-                _ => None,
-            };
-            match (kind, bytes) {
-                (Kind::Sheet, Some(b)) => page.sheet_came(i, String::from_utf8_lossy(&b).into_owned()),
-                (Kind::Script | Kind::Module, Some(b)) => page.script_came(i, String::from_utf8_lossy(&b).into_owned()),
-                (Kind::Picture, Some(b)) => match picture::decode(&b, 4000, 4000, [255, 255, 255]) {
-                    Ok(p) => {
-                        let (w, h) = picture::size(&b).unwrap_or((p.width, p.height));
-                        page.picture_came(i, w, h);
-                        if pictures.0.len() <= i {
-                            pictures.0.resize(i + 1, None);
-                        }
-                        pictures.0[i] = Some((p.rgb, p.width, p.height));
-                    }
-                    Err(_) => page.failed(i),
-                },
-                _ => page.failed(i),
-            }
-        }
+        fetch(&mut page, &mut pictures, &files, &index);
         // What its scripts fetch.
         for (id, u, method, _headers, _body) in page.take_requests() {
             let r = match read(&files, &index, &u) {
@@ -139,6 +120,9 @@ fn main() {
     if let Some(i) = flag("--ppm") {
         let out = &args[i + 1];
         let width: f32 = args[i + 2].parse().expect("a width");
+        // (Laid out at this width, and what that asks for fetched: an <svg>'s picture made in its colours.)
+        page.lay_out(&ty, width, 900.0, 1.0);
+        fetch(&mut page, &mut pictures, &files, &index);
         let laid = page.lay_out(&ty, width, 900.0, 1.0);
         let w = width as usize;
         let h = (laid.height.ceil() as usize).clamp(1, 6000);
@@ -156,4 +140,33 @@ fn main() {
         f.write_all(&bytes).ok();
     }
     let _ = State::Waiting;
+}
+
+/// What the page asks for (its sheets, pictures, scripts and modules), read from the folder.
+fn fetch(page: &mut Page, pictures: &mut Pictures, files: &Option<std::path::PathBuf>, index: &std::collections::HashMap<String, std::path::PathBuf>) {
+    {
+        while let Some((i, kind, url, inline)) = page.next_wanted() {
+            let bytes = match (inline, &url) {
+                (Some(b), _) => Some(b),
+                (None, Some(u)) => read(files, index, &u.to_string()),
+                _ => None,
+            };
+            match (kind, bytes) {
+                (Kind::Sheet, Some(b)) => page.sheet_came(i, String::from_utf8_lossy(&b).into_owned()),
+                (Kind::Script | Kind::Module, Some(b)) => page.script_came(i, String::from_utf8_lossy(&b).into_owned()),
+                (Kind::Picture, Some(b)) => match picture::decode_alpha(&b, 4000, 4000, u64::MAX) {
+                    Ok((p, alpha)) => {
+                        let (w, h) = picture::size(&b).unwrap_or((p.width, p.height));
+                        page.picture_came(i, w, h);
+                        if pictures.0.len() <= i {
+                            pictures.0.resize(i + 1, None);
+                        }
+                        pictures.0[i] = Some((p.rgb, p.width, p.height, alpha));
+                    }
+                    Err(_) => page.failed(i),
+                },
+                _ => page.failed(i),
+            }
+        }
+    }
 }

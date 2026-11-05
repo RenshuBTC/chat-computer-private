@@ -331,3 +331,24 @@ fn a_family_list_gets_the_kind_of_font_it_asks_for() {
         [Face::Sans, Face::Bold, Face::Regular, Face::SansBold, Face::Mono]
     );
 }
+
+#[test]
+fn an_svg_in_the_page_is_a_picture_drawn_from_its_text() {
+    let mut p = page(
+        "<body style='margin:0; color: #00ff00'><svg viewBox='0 0 24 12' width='48'><path fill='currentColor' d='M0 0h24v12H0z'/></svg>\
+         <svg width='10' height='10'><svg width='5' height='5'></svg></svg></body>",
+    );
+    // (Laid out once: its colour is known, and its picture made again in it.)
+    let ty = Type::builtin();
+    p.lay_out(&ty, 600.0, 400.0, 1.0);
+    let mut svgs = Vec::new();
+    while let Some((_, kind, url, inline)) = p.next_wanted() {
+        assert_eq!((kind, url), (crate::page::Kind::Picture, None));
+        svgs.push(String::from_utf8(inline.unwrap()).unwrap());
+    }
+    assert!(svgs.iter().any(|s| s.starts_with("<svg color=\"#00ff00\" viewbox=\"0 0 24 12\" width=\"48\">")), "{svgs:?}");
+    assert_eq!(svgs.iter().filter(|s| s.contains("width=\"5\"")).count(), 1, "the inner one is part of the outer one's picture");
+    let l = p.lay_out(&ty, 600.0, 400.0, 1.0);
+    let pics: Vec<(f32, f32)> = l.items.iter().filter_map(|i| if let Paint::Picture { w, h, .. } = i.paint { Some((w, h)) } else { None }).collect();
+    assert_eq!(pics, [(48.0, 24.0), (10.0, 10.0)]);
+}

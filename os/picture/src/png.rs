@@ -3,7 +3,7 @@
 //! Paeth), interlaced images' seven passes put in place (Adam7); every colour type and depth, 16-bit samples by their
 //! high byte, onto the background where they're transparent.
 
-use crate::{Error, Picture, blend};
+use crate::{Error, Picture};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -28,7 +28,8 @@ pub fn size(data: &[u8]) -> Option<(u32, u32)> {
     Some((u32::from_be_bytes(data.get(16..20)?.try_into().ok()?), u32::from_be_bytes(data.get(20..24)?.try_into().ok()?)))
 }
 
-pub fn decode(data: &[u8], background: [u8; 3], most: u64) -> Result<Picture, Error> {
+/// Its colours (as they are: not mixed with a background) and, if it can have transparent pixels, its alpha.
+pub fn decode(data: &[u8], most: u64) -> Result<(Picture, Option<Vec<u8>>), Error> {
     if !data.starts_with(SIGNATURE) {
         return Err(Error::NotAPicture);
     }
@@ -107,6 +108,8 @@ pub fn decode(data: &[u8], background: [u8; 3], most: u64) -> Result<Picture, Er
         return Err(Error::Damaged);
     }
     let mut rgb = vec![0u8; h.width * h.height * 3];
+    let clear = matches!(h.color, 4 | 6) || !alphas.is_empty() || transparent.is_some();
+    let mut alpha = if clear { vec![255u8; h.width * h.height] } else { Vec::new() };
     let mut at = 0;
     for (&(x0, y0, dx, dy), &(pw, ph)) in passes.iter().zip(&sizes) {
         if pw == 0 || ph == 0 {
@@ -121,14 +124,18 @@ pub fn decode(data: &[u8], background: [u8; 3], most: u64) -> Result<Picture, Er
             at += 1 + row_len;
             unfilter(filter, &mut row, &prev, step)?;
             for i in 0..pw {
-                let pixel = sample(&h, &row, i, &palette, &alphas, transparent, background);
+                let (pixel, a) = sample(&h, &row, i, &palette, &alphas, transparent);
                 let (x, y) = (x0 + i * dx, y0 + j * dy);
                 rgb[(y * h.width + x) * 3..][..3].copy_from_slice(&pixel);
+                if clear {
+                    alpha[y * h.width + x] = a;
+                }
             }
             core::mem::swap(&mut prev, &mut row);
         }
     }
-    Ok(Picture { width: h.width as u32, height: h.height as u32, rgb })
+    let alpha = (clear && alpha.iter().any(|&a| a != 255)).then_some(alpha);
+    Ok((Picture { width: h.width as u32, height: h.height as u32, rgb }, alpha))
 }
 
 /// A row's bytes, unfiltered in place, from the row above's (`step`: bytes a pixel, at least 1).
@@ -174,8 +181,8 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
     }
 }
 
-/// Pixel `i` of an unfiltered row, as RGB on the background.
-fn sample(h: &Header, row: &[u8], i: usize, palette: &[[u8; 3]], alphas: &[u8], transparent: Option<[u16; 3]>, background: [u8; 3]) -> [u8; 3] {
+/// Pixel `i` of an unfiltered row: RGB, and its alpha.
+fn sample(h: &Header, row: &[u8], i: usize, palette: &[[u8; 3]], alphas: &[u8], transparent: Option<[u16; 3]>) -> ([u8; 3], u8) {
     let d = h.depth as usize;
     // A sample's full value (for comparing with tRNS), and as 8 bits.
     let get = |k: usize| -> (u16, u8) {
@@ -195,21 +202,21 @@ fn sample(h: &Header, row: &[u8], i: usize, palette: &[[u8; 3]], alphas: &[u8], 
     match h.color {
         0 => {
             let (full, g) = get(i);
-            if transparent.is_some_and(|t| t[0] == full) { background } else { [g, g, g] }
+            ([g, g, g], if transparent.is_some_and(|t| t[0] == full) { 0 } else { 255 })
         }
         2 => {
             let (r, g, b) = (get(3 * i), get(3 * i + 1), get(3 * i + 2));
-            if transparent.is_some_and(|t| t == [r.0, g.0, b.0]) { background } else { [r.1, g.1, b.1] }
+            ([r.1, g.1, b.1], if transparent.is_some_and(|t| t == [r.0, g.0, b.0]) { 0 } else { 255 })
         }
         3 => {
             let index = get(i).0 as usize;
             let c = palette.get(index).copied().unwrap_or([0, 0, 0]);
-            blend(c, alphas.get(index).copied().unwrap_or(255), background)
+            (c, alphas.get(index).copied().unwrap_or(255))
         }
         4 => {
             let (g, a) = (get(2 * i).1, get(2 * i + 1).1);
-            blend([g, g, g], a, background)
+            ([g, g, g], a)
         }
-        _ => blend([get(4 * i).1, get(4 * i + 1).1, get(4 * i + 2).1], get(4 * i + 3).1, background),
+        _ => ([get(4 * i).1, get(4 * i + 1).1, get(4 * i + 2).1], get(4 * i + 3).1),
     }
 }

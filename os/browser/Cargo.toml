@@ -10,6 +10,4 @@ license.workspace = true
 web = { path = "../web" }
 text = { path = "../text" }
 js = { path = "../js" }
-
-[dev-dependencies]
 picture = { path = "../picture" }

@@ -11,7 +11,9 @@ pub fn size(data: &[u8]) -> Option<(u32, u32)> {
     Some((u16::from_le_bytes(data.get(6..8)?.try_into().ok()?) as u32, u16::from_le_bytes(data.get(8..10)?.try_into().ok()?) as u32))
 }
 
-pub fn decode(data: &[u8], background: [u8; 3], most: u64) -> Result<Picture, Error> {
+/// Its colours and, where its first frame leaves the screen clear (its transparent colour, and outside it), its
+/// alpha.
+pub fn decode(data: &[u8], most: u64) -> Result<(Picture, Option<Vec<u8>>), Error> {
     let (w, h) = size(data).ok_or(Error::Damaged)?;
     let (w, h) = (w as usize, h as usize);
     if w == 0 || h == 0 {
@@ -75,10 +77,8 @@ pub fn decode(data: &[u8], background: [u8; 3], most: u64) -> Result<Picture, Er
         return Err(Error::TooBig);
     }
     let indexes = decompress(&lzw, min_code, frame_pixels as usize)?;
-    let mut rgb = Vec::with_capacity(w * h * 3);
-    for _ in 0..w * h {
-        rgb.extend_from_slice(&background);
-    }
+    let mut rgb = vec![0u8; w * h * 3];
+    let mut alpha = vec![0u8; w * h];
     // Interlaced: rows 0, 8, 16... then 4, 12... then 2, 6... then 1, 3...
     let rows: Vec<usize> = if frame_flags & 0x40 != 0 {
         [(0, 8), (4, 8), (2, 4), (1, 2)].iter().flat_map(|&(start, step)| (start..fh).step_by(step)).collect()
@@ -98,10 +98,12 @@ pub fn decode(data: &[u8], background: [u8; 3], most: u64) -> Result<Picture, Er
             }
             if let Some(c) = colors.get(index as usize * 3..index as usize * 3 + 3) {
                 rgb[(y * w + x) * 3..][..3].copy_from_slice(c);
+                alpha[y * w + x] = 255;
             }
         }
     }
-    Ok(Picture { width: w as u32, height: h as u32, rgb })
+    let alpha = alpha.iter().any(|&a| a != 255).then_some(alpha);
+    Ok((Picture { width: w as u32, height: h as u32, rgb }, alpha))
 }
 
 /// Past a run of data sub-blocks (each its length, then its bytes), to after the empty one that ends them.

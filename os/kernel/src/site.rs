@@ -38,11 +38,15 @@ const RELAYOUT_MS: u64 = 250;
 const LAYOUT_STACK: usize = 4 << 20;
 
 /// The page's pictures, decoded (by their resource's place).
-struct Pictures(Vec<Option<(Vec<u8>, u32, u32)>>);
+/// The page's pictures: each one's colours, size, and alpha (if it has see-through parts).
+struct Pictures(Vec<Option<(Vec<u8>, u32, u32, Option<Vec<u8>>)>>);
 
 impl Shown for Pictures {
     fn picture(&self, n: usize) -> Option<(&[u8], u32, u32)> {
-        self.0.get(n)?.as_ref().map(|(p, w, h)| (p.as_slice(), *w, *h))
+        self.0.get(n)?.as_ref().map(|(p, w, h, _)| (p.as_slice(), *w, *h))
+    }
+    fn alpha(&self, n: usize) -> Option<&[u8]> {
+        self.0.get(n)?.as_ref()?.3.as_deref()
     }
 }
 
@@ -709,13 +713,13 @@ fn picture_came(page: &mut Page, pictures: &mut Pictures, bytes_used: &mut usize
         return;
     };
     let left = PICTURES_BYTES.saturating_sub(*bytes_used) as u64;
-    match picture::decode_within(bytes, PICTURE_SIDE, PICTURE_SIDE, [255, 255, 255], left.min(256 << 20)) {
-        Ok(p) => {
-            *bytes_used += p.rgb.len();
+    match picture::decode_alpha(bytes, PICTURE_SIDE, PICTURE_SIDE, left.min(256 << 20)) {
+        Ok((p, alpha)) => {
+            *bytes_used += p.rgb.len() + alpha.as_ref().map_or(0, |a| a.len());
             if pictures.0.len() <= i {
                 pictures.0.resize(i + 1, None);
             }
-            pictures.0[i] = Some((p.rgb, p.width, p.height));
+            pictures.0[i] = Some((p.rgb, p.width, p.height, alpha));
             page.picture_came(i, w, h);
         }
         Err(_) => page.failed(i),

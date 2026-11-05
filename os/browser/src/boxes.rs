@@ -214,6 +214,59 @@ impl Tree {
                 flush(self, &mut run, &mut out);
                 self.boxes[b].children = out;
             }
+            // A flex or grid container's runs of text: each an anonymous block, an item of its own (its elements are
+            // items already, made blocks).
+            let items = matches!(self.boxes[b].content, Content::Children)
+                && matches!(self.boxes[b].style.display, Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid);
+            let kids = self.boxes[b].children.clone();
+            let texty = |tree: &Tree, k: BoxId| matches!(tree.boxes[k].content, Content::Text(_) | Content::Break);
+            if items && kids.iter().any(|&k| texty(self, k) && !self.is_blank(k)) {
+                let anon_style = Arc::new(self.boxes[b].style.inherit(1.0).with_display(Display::Block));
+                let mut out: Vec<BoxId> = Vec::new();
+                let mut run: Vec<BoxId> = Vec::new();
+                let wrap = |tree: &mut Tree, run: &mut Vec<BoxId>, out: &mut Vec<BoxId>| {
+                    if run.is_empty() {
+                        return;
+                    }
+                    if run.iter().all(|&k| tree.is_blank(k)) {
+                        // (Spaces between items are nothing.)
+                        run.clear();
+                        return;
+                    }
+                    let a = tree.boxes.len();
+                    tree.boxes.push(LBox {
+                        node: None,
+                        style: anon_style.clone(),
+                        content: Content::Children,
+                        children: core::mem::take(run),
+                        parent: Some(b),
+                        x: 0.0,
+                        y: 0.0,
+                        w: 0.0,
+                        h: 0.0,
+                        margin: [0.0; 4],
+                        border: [0.0; 4],
+                        padding: [0.0; 4],
+                        baseline: None,
+                        done: false,
+                    });
+                    let kids: Vec<BoxId> = tree.boxes[a].children.clone();
+                    for k in kids {
+                        tree.boxes[k].parent = Some(a);
+                    }
+                    out.push(a);
+                };
+                for k in kids {
+                    if texty(self, k) {
+                        run.push(k);
+                    } else {
+                        wrap(self, &mut run, &mut out);
+                        out.push(k);
+                    }
+                }
+                wrap(self, &mut run, &mut out);
+                self.boxes[b].children = out;
+            }
             for &k in self.boxes[b].children.iter().rev() {
                 stack.push(k);
             }
@@ -311,8 +364,13 @@ impl Builder<'_> {
         let content = match name {
             "img" => Content::Image { image: self.pictures.picture(self.doc, node), alt: String::from(el.attr("alt").unwrap_or("")) },
             "svg" | "video" | "canvas" | "iframe" | "embed" | "object" | "audio" | "math" => {
-                // (Their insides aren't drawn here: their place is kept, from their size.)
-                let image = if name == "video" { el.attr("poster").and(self.pictures.picture(self.doc, node)) } else { None };
+                // (Their insides aren't drawn here: their place is kept, from their size; an <svg> is a picture, drawn
+                // from its own text.)
+                let image = match name {
+                    "video" => el.attr("poster").and(self.pictures.picture(self.doc, node)),
+                    "svg" => self.pictures.picture(self.doc, node),
+                    _ => None,
+                };
                 Content::Image { image, alt: String::new() }
             }
             "br" => Content::Break,

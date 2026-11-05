@@ -19,9 +19,14 @@ pub struct Surface<'a> {
     pub clip: (i32, i32, i32, i32),
 }
 
-/// The page's pictures, decoded: the `n`th's pixels (RGB, row after row), width and height, once it has come.
+/// The page's pictures, decoded: the `n`th's pixels (RGB, row after row), width and height, once it has come; and
+/// its alpha (a byte a pixel), if it has transparent parts (its colours then are as they are, not mixed with a
+/// background).
 pub trait Shown {
     fn picture(&self, n: usize) -> Option<(&[u8], u32, u32)>;
+    fn alpha(&self, _n: usize) -> Option<&[u8]> {
+        None
+    }
 }
 
 /// No pictures (yet).
@@ -41,16 +46,21 @@ struct InkKey {
     line: i32,
 }
 
-/// Draws pages, keeping their words' ink.
+/// Draws pages, keeping their words' ink, and their pictures made the size they're drawn.
 pub struct Painter {
     inks: BTreeMap<InkKey, (Ink, u64)>,
     /// How many drawings there have been (to let go of ink unused for a while).
     round: u64,
     bytes: usize,
+    /// Pictures at the size they're drawn (0xAARRGGBB, alpha straight), by (picture, width, height, cover), and
+    /// when each was last used.
+    scaled: BTreeMap<(usize, u32, u32, bool), (Vec<u32>, u64)>,
+    scaled_bytes: usize,
 }
 
-/// The most of words' ink kept.
+/// The most of words' ink kept, and of pictures made their drawn size.
 const MOST_INK_BYTES: usize = 48 << 20;
+const MOST_SCALED_BYTES: usize = 64 << 20;
 
 impl Default for Painter {
     fn default() -> Self {
@@ -60,7 +70,7 @@ impl Default for Painter {
 
 impl Painter {
     pub fn new() -> Painter {
-        Painter { inks: BTreeMap::new(), round: 0, bytes: 0 }
+        Painter { inks: BTreeMap::new(), round: 0, bytes: 0, scaled: BTreeMap::new(), scaled_bytes: 0 }
     }
 
     /// Draws `laid` with the page's point (0, `scroll`) at (`x`, `y`) of the surface: its background first (when
@@ -108,8 +118,19 @@ impl Painter {
                 }
                 Paint::Picture { x, y, w, h, n, cover, radius } => {
                     if let Some((rgb, pw, ph)) = pictures.picture(*n) {
-                        let r = Shape::new(x + ox as f32, y + oy as f32, *w, *h, *radius);
-                        picture(surface, &r, rgb, pw, ph, *cover, item_clip);
+                        let r = Shape::new(num::round(x + ox as f32), num::round(y + oy as f32), num::round(*w).max(1.0), num::round(*h).max(1.0), *radius);
+                        let (tw, th) = (r.w as u32, r.h as u32);
+                        let key = (*n, tw, th, *cover);
+                        let round = self.round;
+                        if !self.scaled.contains_key(&key) && tw as u64 * th as u64 <= 16 << 20 {
+                            let px = scaled(rgb, pictures.alpha(*n), pw, ph, tw, th, *cover);
+                            self.scaled_bytes += px.len() * 4;
+                            self.scaled.insert(key, (px, round));
+                        }
+                        if let Some((px, used)) = self.scaled.get_mut(&key) {
+                            *used = round;
+                            picture(surface, &r, px, tw, item_clip);
+                        }
                     }
                 }
                 Paint::Text { x, y, text, face, size, line, color, .. } => {
@@ -118,6 +139,19 @@ impl Painter {
                     words(surface, ink, tx, ty_, *color, item_clip);
                 }
             }
+        }
+        // (Pictures not drawn for a while, let go when there are a lot.)
+        if self.scaled_bytes > MOST_SCALED_BYTES {
+            let round = self.round;
+            let mut freed = 0;
+            self.scaled.retain(|_, (px, used)| {
+                let keep = round - *used < 2;
+                if !keep {
+                    freed += px.len() * 4;
+                }
+                keep
+            });
+            self.scaled_bytes -= freed;
         }
         // (Ink not used for many drawings, let go when there's a lot.)
         if self.bytes > MOST_INK_BYTES {
@@ -391,18 +425,18 @@ fn lerp(a: Color, b: Color, f: f32) -> Color {
 }
 
 /// A picture made to fill a shape: stretched to it, or (`cover`) as big as it takes to cover it, its middle shown.
-fn picture(s: &mut Surface, r: &Shape, rgb: &[u8], pw: u32, ph: u32, cover: bool, clip: Area) {
-    if pw == 0 || ph == 0 || r.w <= 0.0 || r.h <= 0.0 || rgb.len() < pw as usize * ph as usize * 3 {
-        return;
+/// A picture made `tw` × `th` pixels (0xAARRGGBB, alpha straight): all of it, or (cover) the middle that has those
+/// proportions. Shrinking, each pixel is the average of those it covers (up to 8 by 8 of them, spread over it);
+/// enlarging, it's between the four nearest (bilinear). Colours are averaged by their alpha.
+fn scaled(rgb: &[u8], alpha: Option<&[u8]>, pw: u32, ph: u32, tw: u32, th: u32, cover: bool) -> Vec<u32> {
+    let (pw_, ph_) = (pw as usize, ph as usize);
+    if pw == 0 || ph == 0 || tw == 0 || th == 0 || rgb.len() < pw_ * ph_ * 3 {
+        return alloc::vec![0; tw as usize * th as usize];
     }
-    let a = r.area().intersect(&clip);
-    if a.empty() {
-        return;
-    }
-    // Which part of the picture shows: all of it, or (cover) the middle that has the shape's proportions.
+    let alpha = alpha.filter(|a| a.len() >= pw_ * ph_);
     let (mut sx, mut sy, mut sw, mut sh) = (0.0f32, 0.0f32, pw as f32, ph as f32);
     if cover {
-        let want = r.w / r.h;
+        let want = tw as f32 / th as f32;
         let have = pw as f32 / ph as f32;
         if have > want {
             sw = ph as f32 * want;
@@ -412,18 +446,76 @@ fn picture(s: &mut Surface, r: &Shape, rgb: &[u8], pw: u32, ph: u32, cover: bool
             sy = (ph as f32 - sh) / 2.0;
         }
     }
-    let (kx, ky) = (sw / r.w, sh / r.h);
+    let (kx, ky) = (sw / tw as f32, sh / th as f32);
+    // A source pixel, premultiplied: (r, g, b, a), 0 to 255.
+    let get = |u: usize, v: usize| -> [u32; 4] {
+        let i = v * pw_ + u;
+        let a = alpha.map_or(255, |al| al[i] as u32);
+        [rgb[i * 3] as u32 * a, rgb[i * 3 + 1] as u32 * a, rgb[i * 3 + 2] as u32 * a, a]
+    };
+    let pack = |sum: [f32; 4]| -> u32 {
+        let a = sum[3];
+        if a <= 0.0 {
+            return 0;
+        }
+        let c = |v: f32| ((v / a) + 0.5).clamp(0.0, 255.0) as u32;
+        ((a + 0.5).clamp(0.0, 255.0) as u32) << 24 | c(sum[0]) << 16 | c(sum[1]) << 8 | c(sum[2])
+    };
+    let mut out = alloc::vec![0u32; tw as usize * th as usize];
+    let (nx, ny) = ((num::ceil(kx) as usize).clamp(1, 8), (num::ceil(ky) as usize).clamp(1, 8));
+    for ty in 0..th as usize {
+        for tx in 0..tw as usize {
+            let mut sum = [0.0f32; 4];
+            if kx >= 1.0 || ky >= 1.0 {
+                // The footprint's samples, each weighted alike.
+                for j in 0..ny {
+                    let v = (sy + (ty as f32 + (j as f32 + 0.5) / ny as f32) * ky) as usize;
+                    let v = v.min(ph_ - 1);
+                    for i in 0..nx {
+                        let u = (sx + (tx as f32 + (i as f32 + 0.5) / nx as f32) * kx) as usize;
+                        let p = get(u.min(pw_ - 1), v);
+                        for k in 0..4 {
+                            sum[k] += p[k] as f32;
+                        }
+                    }
+                }
+                let n = (nx * ny) as f32;
+                out[ty * tw as usize + tx] = pack([sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n]);
+            } else {
+                let fu = (sx + (tx as f32 + 0.5) * kx - 0.5).clamp(0.0, pw as f32 - 1.0);
+                let fv = (sy + (ty as f32 + 0.5) * ky - 0.5).clamp(0.0, ph as f32 - 1.0);
+                let (u0, v0) = (fu as usize, fv as usize);
+                let (u1, v1) = ((u0 + 1).min(pw_ - 1), (v0 + 1).min(ph_ - 1));
+                let (du, dv) = (fu - u0 as f32, fv - v0 as f32);
+                for (u, v, w) in [(u0, v0, (1.0 - du) * (1.0 - dv)), (u1, v0, du * (1.0 - dv)), (u0, v1, (1.0 - du) * dv), (u1, v1, du * dv)] {
+                    let p = get(u, v);
+                    for k in 0..4 {
+                        sum[k] += p[k] as f32 * w;
+                    }
+                }
+                out[ty * tw as usize + tx] = pack(sum);
+            }
+        }
+    }
+    out
+}
+
+/// A picture made its drawn size (`scaled`), drawn into its shape (its rounded corners left out).
+fn picture(s: &mut Surface, r: &Shape, px: &[u32], tw: u32, clip: Area) {
+    let a = r.area().intersect(&clip);
+    if a.empty() || tw == 0 {
+        return;
+    }
+    let (rx, ry) = (r.x as i32, r.y as i32);
     for y in a.y..a.b {
-        let v = ((sy + (y as f32 + 0.5 - r.y) * ky) as i64).clamp(0, ph as i64 - 1) as usize;
         let row = y as usize * s.width;
-        let src = &rgb[v * pw as usize * 3..];
+        let src = (y - ry) as usize * tw as usize;
         for x in a.x..a.r {
             let c = if r.radius > 0.0 { r.cover(x, y) } else { 255 };
             if c == 0 {
                 continue;
             }
-            let u = ((sx + (x as f32 + 0.5 - r.x) * kx) as i64).clamp(0, pw as i64 - 1) as usize;
-            let color = 0xFF00_0000 | (src[u * 3] as u32) << 16 | (src[u * 3 + 1] as u32) << 8 | src[u * 3 + 2] as u32;
+            let Some(&color) = px.get(src + (x - rx) as usize) else { continue };
             let p = &mut s.pixels[row + x as usize];
             *p = over(*p, color, c);
         }

@@ -232,3 +232,44 @@ fn a_frames_size_is_bounded_by_the_memory_budget() {
     assert_eq!(gif.len(), 25);
     assert_eq!(decode_within(&gif, 1, 1, BACKGROUND, 1000).err(), Some(Error::TooBig));
 }
+
+/// A pixel of an SVG drawn `w` × `h`: (r, g, b, a).
+fn svg_pixel(svg: &str, w: u32, h: u32, x: usize, y: usize) -> [u8; 4] {
+    let (rgba, rw, _) = crate::svg::render(svg.as_bytes(), w, h).expect("an SVG picture");
+    let i = (y * rw as usize + x) * 4;
+    [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+}
+
+#[test]
+fn svg_pictures_are_drawn() {
+    // Its size: width and height, else its viewBox's.
+    assert_eq!(size(br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"/>"##), Some((20, 10)));
+    assert_eq!(size(br##"<?xml version="1.0"?><!-- a comment --><svg viewBox="0 0 24 12"></svg>"##), Some((24, 12)));
+    assert_eq!(format(b"<svg></svg>"), Some(Format::Svg));
+    assert_eq!(format(b"<html><svg></svg></html>"), None);
+    // A rect in its viewBox's units, drawn at twice the size; outside it, clear.
+    let rect = r##"<svg viewBox="0 0 10 10"><rect x="2" y="2" width="6" height="6" fill="#f00"/></svg>"##;
+    assert_eq!(svg_pixel(rect, 20, 20, 10, 10), [255, 0, 0, 255]);
+    assert_eq!(svg_pixel(rect, 20, 20, 1, 1)[3], 0);
+    // An even-odd path's hole, and a non-zero one's (the same way round: filled).
+    let ring = |rule: &str| format!(r##"<svg width="10" height="10"><path fill-rule="{rule}" d="M0 0H10V10H0Z M3 3H7V7H3Z"/></svg>"##);
+    assert_eq!(svg_pixel(&ring("evenodd"), 10, 10, 5, 5)[3], 0);
+    assert_eq!(svg_pixel(&ring("nonzero"), 10, 10, 5, 5), [0, 0, 0, 255]);
+    // A stroke in currentColor, from a style rule; half a pixel's edge is half covered.
+    let line = r##"<svg width="10" height="10" color="blue"><style>.a { stroke: currentColor; stroke-width: 2 }</style><line class="a" x1="0" y1="5" x2="10" y2="5"/></svg>"##;
+    assert_eq!(svg_pixel(line, 10, 10, 5, 4), [0, 0, 255, 255]);
+    assert_eq!(svg_pixel(line, 10, 10, 5, 2)[3], 0);
+    let edge = r##"<svg width="4" height="4"><rect x="1.5" y="0" width="2" height="4" fill="black"/></svg>"##;
+    assert_eq!(svg_pixel(edge, 4, 4, 1, 1)[3], 128);
+    // A linear gradient, left to right.
+    let grad = r##"<svg width="100" height="2"><defs><linearGradient id="g"><stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#fff"/></linearGradient></defs><rect width="100" height="2" fill="url(#g)"/></svg>"##;
+    let mid = svg_pixel(grad, 100, 2, 50, 1);
+    assert!((125..=131).contains(&mid[0]), "{mid:?}");
+    // Its transparency kept, with decode_alpha; and on a background, with decode.
+    let (p, alpha) = decode_alpha(rect.as_bytes(), 10, 10, u64::MAX).unwrap();
+    assert_eq!((p.width, p.height), (10, 10));
+    assert_eq!(alpha.unwrap()[0], 0);
+    let p = decode(rect.as_bytes(), 10, 10, [0, 255, 0]).unwrap();
+    assert_eq!(&p.rgb[..3], &[0, 255, 0]);
+    assert_eq!(&p.rgb[(5 * 10 + 5) * 3..][..3], &[255, 0, 0]);
+}

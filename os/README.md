@@ -354,7 +354,8 @@ drivers.
   the site's cookies, kept while it runs), its HTML read as browsers read it (quirks mode too), its style sheets and
   pictures fetched a few at a time as it asks for them, its CSS cascaded (selectors, @media, custom properties,
   calc(), modern colours; its text in Lora, or Atkinson Hyperlegible Next where it asks for a sans-serif family, or
-  the code font) and laid out: blocks with their margins collapsing, lines of words wrapping round floats,
+  the code font; its pictures JPEG, PNG, GIF or SVG, an <svg> in the page drawn as a picture too, see-through where
+  they are) and laid out: blocks with their margins collapsing, lines of words wrapping round floats,
   flex, grid, tables, positioned boxes, lists. It scrolls with the wheel, the arrows and Page Up and Down; a click
   follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter sends its form (GET or
   POST). Its scripts run with Chat Computer's own JavaScript engine (`js/`) and the DOM the browser engine gives them
@@ -850,7 +851,8 @@ writes for each person, in place of Ubuntu's catalogue.
     cookies; checked in a virtual PC against a stand-in site, and on Wikipedia's, Hacker News' and Google's pages).
     ✓ Scripts: a JavaScript engine of its own (96% of Ecma's test262's language tests), the DOM, events, timers,
     fetch, modules, layout worked out when a script asks for a box's size. ✓ A sans-serif font for pages that ask
-    for one. To do: canvas, SVG pictures, and touchpads.
+    for one. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. To do:
+    canvas, and touchpads.
 16. Apps Chat Computer writes for you: when a person needs a tool (a budget, a study plan, their taxes), the model
     builds a small app of its own for it and keeps it up to date as things change, so asking again is a button, not
     another answer from scratch. Each app is one file in a form simple enough for a small model to write well (its

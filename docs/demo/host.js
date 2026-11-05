@@ -20,26 +20,16 @@
    search, Google Maps' directions) and Wikipedia's show
    in the middle when asked for: of the sites that might be asked for, they're the ones that let another page show
    them.
-   In Chrome's side panel (the Chat Computer extension, apps/chrome: this page in its frame, ?app=chrome), sites
-   open in real Chrome tabs instead, which the extension opens. In the Chat Computer app for Windows and Mac
+   In the Chat Computer app for Windows and Mac
    (apps/desktop: this page, bundled into the app), the model comes with the app and answers once the app has it
    ready, any site opens right here, in the app's own browser view laid over the middle, "/" finds the computer's
-   real files, Messages has your own accounts', and nothing here is made up: SHELL, below. Where Chat Computer is your
-   browser (the app's first page asks how you want it), the sites opened stay open, in tabs above the middle. */
+   real files, Messages has your own accounts', and nothing here is made up: SHELL, below. */
 (function () {
   "use strict";
   var START = Date.now() / 1000;
-  // Inside the Chrome extension's side panel: any site asked for opens in a new Chrome tab (the extension's
-  // panel.js opens it, for this page, without a click), and the text is the size of a side panel's.
   // Inside the app (Tauri's window.__TAURI__ is there, given only to the app's own page): what the app does for it
   // (apps/desktop/src-tauri/src/lib.rs), asked with app(command, arguments), a promise.
   var SHELL = (function () {
-    var app = "";
-    try { app = new URLSearchParams(location.search).get("app") || ""; } catch (e) {}
-    if (app === "chrome" && window.parent !== window) {
-      return { kind: "chrome", textPx: 16, name: "Chrome's side panel",
-               openTab: function (url) { window.parent.postMessage({ chatcomputer: "open_tab", url: url }, "*"); } };
-    }
     var tauri = window.__TAURI__ && window.__TAURI__.core;
     if (tauri && typeof tauri.invoke === "function") {
       var mac = /Mac/i.test(navigator.platform || "") || /Macintosh/.test(navigator.userAgent || "");
@@ -49,7 +39,7 @@
     }
     return null;
   })();
-  var TABS = !!(SHELL && SHELL.openTab), APP = SHELL && SHELL.kind === "app" ? SHELL : null;
+  var APP = SHELL && SHELL.kind === "app" ? SHELL : null;
   function noop() {}
   function now() { return Date.now() / 1000; }
   function call(name) {
@@ -57,7 +47,6 @@
     if (name === "accountForm") sheetNow = args[0] && args[0].id || "";
     keepInChat(name, args);
     if (window.CO && typeof window.CO[name] === "function") window.CO[name].apply(null, args);
-    if (name === "mode" && browser.on) tabsSoon();     // (the row of tabs shows which has the middle)
   }
 
   // ------------------------------------------------------------------ chats
@@ -308,8 +297,8 @@
     return v;
   }
   function show(page) {
-    if (APP && page.src && /^https?:/i.test(page.src)) { if (browser.on) tabOpen(page); else showSite(page); return; }
-    if (site.on) { if (onTab()) tabAside(); else closeSite(); }
+    if (APP && page.src && /^https?:/i.test(page.src)) { showSite(page); return; }
+    if (site.on) closeSite();
     var v = frame();
     v.dataset.undo = "";                     // (no longer what an action opened: shown() marks it, for Revert)
     acted++;
@@ -346,7 +335,6 @@
   }
   // Closed (its x, "close", a swipe up from the bottom edge): gone, and what played stops.
   function close() {
-    if (onTab()) { acted++; tabClose(+site.view.slice(TAB.length), false); return; }
     if (site.on) { var on = open; acted++; closeSite(); if (on) call("mode", "chat"); return; }
     if (!view) return;
     var was = open;
@@ -423,200 +411,12 @@
     if (!APP || !m || typeof m !== "object") return;
     if (m.messages && typeof m.messages === "object") { serviceMessages(m.messages); return; }
     if (m.model && typeof m.model === "object") { localFrom(m.model); return; }
-    if (browser.on && typeof m.view === "string" && m.view.indexOf(TAB) === 0) tabHeard(m);
     var mine = !m.view || m.view === site.view;        // (what a view out of sight says isn't for the frame)
     if (typeof m.title === "string" && mine && site.on && open && m.title.trim()) call("mode", "content", clip(m.title, 80));
     if (typeof m.url === "string" && mine && site.on) site.url = m.url;
     if (typeof m.downloaded === "string") did((m.ok ? "Downloaded " : "Couldn't download ") + clip(m.downloaded, 60) + (m.ok ? " to Downloads" : ""));
     if (typeof m.open === "string" && /^https?:/i.test(m.open)) show({ src: m.open, title: hostOf(m.open), tab: "new" });
   };
-  // ------------------------------------------------------------------ the app as your browser: tabs
-  // Where Chat Computer is your browser (chosen on the app's first page, apps/desktop/start: the app says so, about's
-  // way), the sites opened stay open, each in a tab: a view of the web of its own in the app (open_tab: "tab-" and its
-  // number), shown in the middle in turn. The tabs are in a row above the middle, between the sidebars: back and
-  // forward (in the tab shown), the conversation's own tab first (Chat Computer: it can't be closed), the sites', each
-  // with its x, and + (a new tab: the conversation, its box ready for an address to be typed). What you open (an
-  // address typed, a link, a link for a new window, one clicked in another app) opens in a new tab; what Chat
-  // Computer opens goes in the tab it opened the last one in, if that's still open (so the music it plays replaces the
-  // music it played), else in a new one. The page starting again starts with no tabs (the app closes them).
-  var TAB = "tab-", TABS_MAX = 500;
-  var browser = { on: false, tabs: [], mine: 0, next: 1, strip: null, drawing: false };
-  function tabFind(n) { return browser.tabs.filter(function (t) { return t.n === n; })[0] || null; }
-  // Whether the site in the middle (shown, or put away for the conversation) is a tab; and the tab shown, if one is.
-  function onTab() { return site.on && site.view.indexOf(TAB) === 0; }
-  function tabShown() { return onTab() && open ? tabFind(+site.view.slice(TAB.length)) : null; }
-  function browserOn() {
-    if (browser.on || !APP) return;
-    browser.on = true;
-    var nav = document.createElement("nav");
-    function button(id, label, path) {
-      return '<button id="' + id + '" class="icon-button" type="button" tabindex="-1" aria-label="' + label + '" title="' + label +
-        '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + path + '"/></svg></button>';
-    }
-    nav.id = "tabs";
-    nav.setAttribute("aria-label", "Tabs");
-    nav.innerHTML = button("tab-back", "Back", "M15 5l-7 7 7 7") + button("tab-forward", "Forward", "M9 5l7 7-7 7") +
-      '<div id="tab-list" role="tablist"></div>' + button("tab-new", "New tab", "M12 5v14M5 12h14");
-    nav.addEventListener("click", function (e) {
-      var b = e.target.closest ? e.target.closest("button, .tab") : null;
-      if (!b) return;
-      if (b.id === "tab-new") { tabHome(true); return; }
-      if (b.id === "tab-back" || b.id === "tab-forward") {
-        var t = tabShown();
-        if (t) APP.app("tab_back", { tab: t.n, forward: b.id === "tab-forward" }).catch(noop);
-        return;
-      }
-      var n = +(b.closest(".tab") || b).getAttribute("data-tab");
-      if (b.classList.contains("tab-close")) { tabClose(n, true); return; }
-      if (n) tabPick(n); else tabHome(false);
-    });
-    browser.strip = nav;
-    document.body.insertBefore(nav, document.body.firstChild);
-    document.body.classList.add("tabbed");
-    tabsDraw();
-    window.dispatchEvent(new Event("resize"));            // (the middle laid out again, under the tabs: chat.js)
-  }
-  // The row of tabs, as things are: which has the middle (the conversation's, unless a tab is shown), each tab's name.
-  function tabsDraw() {
-    browser.drawing = false;
-    if (!browser.strip) return;
-    var shown = tabShown(), list = browser.strip.querySelector("#tab-list"), was = document.body.classList.contains("on-tab");
-    var html = '<div class="tab home' + (shown ? "" : " on") + '" role="tab" data-tab="0" aria-selected="' + !shown +
-      '" title="Chat Computer"><span class="tab-title">Chat Computer</span></div>';
-    browser.tabs.forEach(function (t) {
-      var on = shown === t, name = t.title || hostOf(t.url) || "New tab";
-      html += '<div class="tab' + (on ? " on" : "") + '" role="tab" data-tab="' + t.n + '" aria-selected="' + on + '" title="' +
-        esc(name) + '"><span class="tab-title">' + esc(name) + '</span><button class="icon-button tab-close" type="button" ' +
-        'tabindex="-1" aria-label="Close tab" title="Close tab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/>' +
-        '</svg></button></div>';
-    });
-    list.innerHTML = html;
-    browser.strip.querySelector("#tab-back").disabled = !shown;
-    browser.strip.querySelector("#tab-forward").disabled = !shown;
-    document.body.classList.toggle("on-tab", !!shown);
-    // (A tab shown has no bar of its own in its frame, the row of tabs naming it: the frame laid out again.)
-    if (was !== !!shown && open) window.dispatchEvent(new Event("resize"));
-  }
-  function tabsSoon() {
-    if (browser.drawing) return;
-    browser.drawing = true;
-    Promise.resolve().then(tabsDraw);
-  }
-  // A site in a tab: a new one (the person's: page.tab "new"), or the one Chat Computer opened the last in.
-  function tabOpen(page) {
-    var t = page.tab === "new" ? null : tabFind(browser.mine);
-    if (!t) {
-      // (A number not used before on this page, while there are: the app may still be closing a tab's view.)
-      var n = browser.next <= TABS_MAX ? browser.next++ : 1;
-      while (tabFind(n) && n < TABS_MAX) n++;
-      if (tabFind(n)) { call("notice", "That's as many tabs as there can be: close one first.", "warn"); return; }
-      t = { n: n, url: page.src, title: "" };
-      browser.tabs.push(t);
-      if (page.tab !== "new") browser.mine = n;
-    }
-    t.url = page.src;
-    t.title = page.title || hostOf(page.src);
-    tabTake(t, page);
-    var h = hole || { x: 0, y: 0, w: 1, h: 1 };
-    APP.app("open_tab", { tab: t.n, url: page.src, x: h.x, y: h.y, w: h.w, h: h.h }).then(function () {
-      place();
-      covered();
-    }, function (e) { tabGone(t.n); call("notice", "That didn't open: " + e, "warn"); });
-  }
-  // A tab given the middle (by the page; the app's view follows): what was there goes (a page of Chat Computer's own),
-  // or is put aside (a tab, a service).
-  function tabTake(t, page) {
-    if (view) { viewGone(view); view.remove(); view = null; }
-    acted++;
-    player.token = {};
-    player.id = (page && page.youtube) || "";
-    site.on = true;
-    site.hidden = false;
-    site.url = t.url;
-    site.view = TAB + t.n;
-    open = true;
-    tabsDraw();                                          // (before the frame is laid out: it has no bar of its own)
-    call("mode", "content", t.title || hostOf(t.url));
-  }
-  // A tab chosen in the row: shown again, where it was.
-  function tabPick(n) {
-    var t = tabFind(n);
-    if (!t || tabShown() === t) return;
-    tabTake(t, null);
-    var h = hole || { x: 0, y: 0, w: 1, h: 1 };
-    APP.app("show_tab", { tab: t.n, x: h.x, y: h.y, w: h.w, h: h.h }).then(function () {
-      place();
-      covered();
-    }, function () { tabGone(t.n); });
-  }
-  // The conversation's tab: the tab shown is put away (still open); a new tab (+) leaves the box ready for an address.
-  function tabHome(fresh) {
-    if (open) putAway();
-    tabsDraw();
-    if (fresh) {
-      var box = document.getElementById("input");
-      if (box) { box.focus(); call("hint", "Type a web address, or ask anything"); setTimeout(function () { status(); }, 8000); }
-    }
-  }
-  // Out of the middle for a page of Chat Computer's own (it stays open in its tab).
-  function tabAside() {
-    APP.app("hide_site").catch(noop);
-    site.on = false;
-    site.hidden = false;
-    site.url = "";
-    site.view = "";
-    tabsDraw();
-  }
-  // Closed: its view goes. Its x shows the tab beside it (as a browser does), or the conversation; closed by asking
-  // (the model's close), the conversation.
-  function tabClose(n, next) {
-    var t = tabFind(n);
-    if (!t) return;
-    var i = browser.tabs.indexOf(t), shown = tabShown() === t;
-    APP.app("close_tab", { tab: n }).catch(noop);
-    browser.tabs.splice(i, 1);
-    if (browser.mine === n) browser.mine = 0;
-    if (onTab() && site.view === TAB + n) {
-      site.on = false;
-      site.url = "";
-      site.view = "";
-      player.token = {};
-      player.id = "";
-    }
-    var beside = browser.tabs[i] || browser.tabs[i - 1];
-    if (shown && next && beside) { tabPick(beside.n); return; }
-    if (shown) { open = false; call("mode", "chat"); }
-    tabsDraw();
-  }
-  function tabGone(n) {
-    browser.tabs = browser.tabs.filter(function (t) { return t.n !== n; });
-    if (browser.mine === n) browser.mine = 0;
-    if (onTab() && site.view === TAB + n) { site.on = false; site.view = ""; if (open) { open = false; call("mode", "chat"); } }
-    tabsDraw();
-  }
-  // What a tab's page says (the app tells): its title, where it is.
-  function tabHeard(m) {
-    var t = tabFind(+m.view.slice(TAB.length));
-    if (!t) return;
-    if (typeof m.title === "string" && m.title.trim()) t.title = clip(m.title, 80);
-    if (typeof m.url === "string" && /^https?:/i.test(m.url)) t.url = m.url;
-    tabsSoon();
-  }
-  // Keys, while the conversation's page has them (a site has its own): Ctrl+T (Command-T) a new tab, Ctrl+W the tab
-  // shown closed (not Command-W: on a Mac that closes the window), Ctrl+Tab the next tab (with Shift, the one before).
-  document.addEventListener("keydown", function (e) {
-    if (!browser.on || e.altKey || e.defaultPrevented) return;
-    var key = (e.key || "").toLowerCase(), mod = e.ctrlKey || e.metaKey;
-    if (mod && !e.shiftKey && key === "t") { e.preventDefault(); tabHome(true); return; }
-    if (e.ctrlKey && !e.metaKey && !e.shiftKey && key === "w") { var t = tabShown(); if (t) { e.preventDefault(); tabClose(t.n, true); } return; }
-    if (e.ctrlKey && key === "tab") {
-      e.preventDefault();
-      var all = [0].concat(browser.tabs.map(function (x) { return x.n; })), now = tabShown();
-      var at = all.indexOf(now ? now.n : 0), to = all[(at + (e.shiftKey ? all.length - 1 : 1)) % all.length];
-      if (to) tabPick(to); else tabHome(false);
-    }
-  }, true);
-
   // ------------------------------------------------------------------ the app: messages from your own accounts
   // In the app, Gmail, Outlook, Telegram, WhatsApp, WeChat and Discord connect: each opens in the middle, in a view of
   // its own, for you to sign in on its own page; then it's kept open out of sight (signed in, as a browser keeps
@@ -1045,7 +845,6 @@
   // The address to show, or null.
   function framed(url) {
     var u;
-    if (TABS) return null;                              // (in the extension, every site in a real tab)
     try { u = new URL(url); } catch (e) { return null; }
     if (!/^https?:$/.test(u.protocol)) return null;
     if (APP) return u.href;                             // (in the app, every site right here, as it is)
@@ -1115,7 +914,6 @@
   // A new tab with the site (without a way back to this page), or null where the browser stops it (it lets a page
   // open one only straight after a click, a tap or a key).
   function newTab(url) {
-    if (SHELL && SHELL.openTab) { SHELL.openTab(url); return {}; }
     try {
       if (navigator.userActivation && !navigator.userActivation.isActive) return null;
       var tab = window.open("", "_blank");
@@ -1130,12 +928,12 @@
   function siteAnswer(u) {
     var url = u.href, host = u.hostname.toLowerCase().replace(/^www\./, "");
     var name = SITE_NAMES[host] || (/(^|\.)wikipedia\.org$/.test(host) ? "Wikipedia" : host);
-    var video = browser.on ? null : videoOf(u), here = video ? null : framed(url), tab = video || here ? null : newTab(url);
+    var video = videoOf(u), here = video ? null : framed(url), tab = video || here ? null : newTab(url);
     if (video) return { text: "Here's the video, in YouTube's player.", done: ["Played a video on YouTube"],
                         act: function () { youtube(video.id, video.start, "YouTube"); } };
     if (here) return { text: "Here's " + name + ". Click in it to type, and scroll it as you'd scroll any page.", done: ["Opened " + host],
                        act: function () { show({ src: here, title: name, tab: "new" }); } };
-    if (tab) return { text: TABS ? "Opened " + name + " in a new tab." : "Opened " + name + " in a new tab. Most sites, " + name +
+    if (tab) return { text: "Opened " + name + " in a new tab. Most sites, " + name +
                         " among them, don't let another page show them, so here they open beside this one; on a Chat Computer " +
                         "they open right here.",
                       done: ["Opened " + host + " in a new tab"] };
@@ -2452,14 +2250,11 @@
   }
   function systemPrompt() {
     var where = APP ? "Right now you're in " + APP.name + " (Chat Computer's screen in a window of its own)." :
-      TABS ? "Right now you're in the Chat Computer extension: Chat Computer's website (chatcomputer.ai) in " + SHELL.name + "." :
       "Right now you're in Chat Computer's website (chatcomputer.ai), in the person's web browser.";
     var sites = APP ? "any site, right here in the middle, in the app's own browser view, for them to use: you can't see or use " +
         "it from here), find their files by name and open them with their own apps (find_files, then open_file: " +
         "documents, pictures, music, videos and folders; never programs or scripts), read and open their messages (read_messages, " +
         "open_message), " :
-      TABS ? "any site, in a new Chrome tab; on a Chat Computer any site opens right here and you use it), open their " +
-        "messages and files (open_message, open_file), " :
       "Google, its searches and Google Maps' places and directions, and Wikipedia open right here, for them to scroll and type in; " +
         "most other sites can't show inside the page, so it's a link; on a Chat Computer any site opens right here and you use it), " +
         "open their messages and files (open_message, open_file), ";
@@ -2512,7 +2307,6 @@
     { name: "show_page", description: "Show a page you write between the sidebars, in Markdown (headings, lists, tables), when " +
       "they ask for something on the screen; answers go in the conversation.", input_schema: obj({ title: { type: "string" }, markdown: { type: "string" } }, ["title", "markdown"]) },
     { name: "open_website", description: APP ? "Open a website, any site, in the middle of the screen, for them to use." :
-      TABS ? "Open a website, in a new Chrome tab beside the side panel." :
       "Open a website. Google (google.com, its searches, Google Maps' places and directions) and " +
       "Wikipedia open in the middle of the screen, for them to scroll and type in; most other sites can't show inside the demo, so " +
       "this shows a link to them there.",
@@ -2595,8 +2389,7 @@
       }
       if (newTab(url)) {                // only while the click or key that asked still lets a page open a tab
         did("Opened " + host + " in a new tab", you, uts);
-        return TABS ? host + " opened in a new Chrome tab: they're looking at it there." :
-          host + " opened in a new tab beside this page (most sites can't show inside it): they're looking at it there.";
+        return host + " opened in a new tab beside this page (most sites can't show inside it): they're looking at it there.";
       }
       show({ html: page(host, '<article><h1 class="title">' + esc(a.title || host) + '</h1><p class="demo-note">On Chat Computer, ' + esc(host) +
         " opens right here, and Chat Computer uses it for you. Most sites can't show inside this demo, so here's the link.</p><p><a href=\"" + esc(url) +
@@ -3284,7 +3077,7 @@
       if (!own.models) ownList();                // (kept before its models were: listed now, and shown)
       return;
     }
-    var signIn = APP && APP.channel ? "chatgpt" : TABS ? "" : "openrouter";
+    var signIn = APP && APP.channel ? "chatgpt" : "openrouter";
     var choices = signIn ? [{ label: "Continue with " + AIS[signIn].name, value: "ai:" + signIn, icon: logo(AIS[signIn].site) }] : [];
     choices.push({ note: signIn ? "Or with your key from:" : "With your key from:" });
     KEYED.concat(signIn === "openrouter" ? [] : ["openrouter"]).forEach(function (p) {
@@ -4297,7 +4090,7 @@
     }
     // (In the app: how you have Chat Computer, to change it on the app's page that asks, apps/desktop/start.)
     if (APP) list.push({ command: "way", icon: "i-chat", name: "How you have Chat Computer",
-                         where: (browser.on ? "As your browser now" : "As this app now") + ": or as a Chrome extension, or its own system" });
+                         where: "As this app now: or as its own system" });
     return list;
   }
   function matching(list, q) {
@@ -4344,15 +4137,10 @@
         openRouterBack();                      // (back from OpenRouter's sign-in: its code, for a key)
         greetWith();                           // for the greeting: the name you go by, which model answers,
         sayHere();                             // and where you are, with its weather
-        if (APP) {                             // (in the app, the name this computer knows you by, where you've given none;
-          APP.app("about").then(function (a) {  // whether it's your browser: then sites open in tabs)
+        if (APP) {                             // (in the app, the name this computer knows you by, where you've given none)
+          APP.app("about").then(function (a) {
             computerName = cleanName(a && a.name).split(" ")[0];
             if (computerName && !person()) greetWith();
-            if (a && a.way === "browser") browserOn();
-          }, noop).then(function () {
-            return APP.app("take_opening");     // (and the links from other apps that came before the page was here)
-          }).then(function (urls) {
-            (urls || []).forEach(function (u) { if (/^https?:/i.test(u)) show({ src: u, title: hostOf(u), tab: "new" }); });
           }, noop);
         }
         if (store("chatcomputer-demo-panels")) call("panels", store("chatcomputer-demo-panels"));
@@ -4393,7 +4181,7 @@
       case "files_picked": pickedFiles(); break;
       case "mic_toggle": talkButton(); break;
       case "hole": hole = { x: msg.x, y: msg.y, w: msg.w, h: msg.h }; place(); break;
-      case "close_content": if (onTab()) tabHome(false); else close(); break;     // (Escape: a tab stays open)
+      case "close_content": close(); break;
       case "scroll_open": scrollOpen(msg.how); break;
       case "open_message": openMessage(msg.id); break;
       case "pin": {

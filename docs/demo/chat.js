@@ -500,9 +500,8 @@
     // a Chat Computer), nothing of the page can show over it, so it ends above the list instead.
     var list = $("results").getBoundingClientRect();
     if (searching && !openInPage && list.height) bottom = Math.min(bottom, Math.round(list.top) - gap);
-    // From the top of the screen, or under the row of tabs where there is one (the Chat Computer app as a browser
-    // puts it there: #tabs).
-    var tabs = $("tabs"), top = tabs && tabs.offsetHeight ? Math.round(tabs.getBoundingClientRect().bottom) + Math.round(0.25 * rem) : gap;
+    // From the top of the screen.
+    var top = gap;
     var f = $("frame").style, bar = $("frame-bar").offsetHeight;
     f.left = left + "px"; f.top = top + "px";
     f.width = Math.max(0, right - left) + "px"; f.height = Math.max(0, bottom - top) + "px";

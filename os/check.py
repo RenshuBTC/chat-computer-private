@@ -151,6 +151,7 @@ CHATCOMPUTER_KEY_OWNER = "1dd7d236-3557-417b-b0ab-6cf839b24829"  # who added the
 SHIM = HERE / "release/shim/shimx64.efi"        # Ubuntu's shim, which Microsoft signs (release/shim/README.md)
 MOKMANAGER = HERE / "release/shim/mmx64.efi"    # its MokManager: the blue screen that approves a key
 SHIM_LOCK = "605dab50-e046-4300-abb6-3dd810dd8b23"  # shim's own GUID: MokList, MokNew and MokAuth are under it
+GLOBAL_VARIABLE = "8be4df61-93ca-11d2-aa0d-00e098032b8c"  # the UEFI spec's own variables' (BootNext, BootCurrent)
 MOK_PASSWORD = "hello"                           # the one setup asks for (windows/lib/OwnOs.ps1), typed on the blue screen
 # The virtual PCs' processor cores (--cores), unless a check says otherwise.
 CORES = 2
@@ -1659,6 +1660,7 @@ def site_check(args) -> list[str]:
     problems: list[str] = []
     pictures = {}
     restarted = ended = False
+    boot_next = None
     try:
         (tmp / "script.json").write_text(json.dumps({"site": [{"text": "Nothing to say."}]}))
         build("chat", {"CHATCOMPUTER_TEST_SCRIPT": str(tmp / "script.json"), "CHATCOMPUTER_TEST_CA": str(tmp / "ca.der"),
@@ -1711,9 +1713,10 @@ def site_check(args) -> list[str]:
             monitor_many(pc.mon, ["sendkey esc"])
             time.sleep(1.5)
             pictures["closed"] = pc.settled_picture("site-closed")
-            # Asked plainly to restart: Chat Computer does it itself (the model isn't asked), 5 seconds on, which ends
-            # a virtual PC started with -no-reboot.
-            monitor_many(pc.mon, keys_for("restart the computer please") + ["sendkey ret"])
+            # Asked plainly to restart into Chat Computer: Chat Computer does it itself (the model isn't asked), 5
+            # seconds on, which ends a virtual PC started with -no-reboot; first it asks the firmware to start the
+            # power-on entry it started from next (BootNext), through the firmware's runtime services.
+            monitor_many(pc.mon, keys_for("restart into chat computer please") + ["sendkey ret"])
             time.sleep(1.5)
             pc.picture("site-restart")
             restarted = wait_for(pc.log, ("kernel: restarting",), 30) is not None
@@ -1722,15 +1725,22 @@ def site_check(args) -> list[str]:
                 ended = True
             except subprocess.TimeoutExpired:
                 ended = False
+            boot_next = firmware_variable(Path(pc.tmp.name) / "vars.fd", "BootNext", GLOBAL_VARIABLE) if ended else None
         finally:
             pc.stop()
         text = pc.text()
         print(text)
         problems += stack_problems(text)
-        if "chat: asked to restart: Restarting in 5 seconds" not in text or not restarted or not ended:
+        if "chat: asked to restart: Restarting in 5 seconds\u2026 Then Chat Computer starts again." not in text or not restarted or not ended:
             problems.append(f"asked plainly, the PC didn't restart (the kernel said so: {restarted}; the virtual PC ended: {ended})")
-        if "restart the computer please" in text or "model: uses restart_computer" in text:
+        if "restart into chat computer please" in text or "model: uses restart_computer" in text:
             problems.append("asking plainly to restart went to the model")
+        import re
+        current = re.search(r"started from the power-on menu's entry Boot([0-9A-F]{4})", text)
+        if current is None or f"the firmware was asked to start Boot{current.group(1)} next" not in text \
+                or boot_next != int(current.group(1), 16).to_bytes(2, "little"):
+            problems.append(f"the firmware wasn't asked to start Chat Computer next (BootNext: {boot_next!r}, the entry it "
+                            f"started from: {current.group(1) if current else None})")
 
         def area_has(picture, colour, at_least: int) -> bool:
             want = sum(1 for p in picture.getdata() if all(abs(a - b) <= 6 for a, b in zip(p, colour)))

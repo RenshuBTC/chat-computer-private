@@ -261,6 +261,26 @@ pub fn map_stack(pages: u64) -> u64 {
     STACK_TOP
 }
 
+/// Maps `len` bytes at physical address `phys` at that same address: the firmware's runtime services' code and data,
+/// which run where the firmware put them (power.rs). Code may run there (and is writable too: firmware keeps data
+/// among its code); a device's registers are uncached.
+pub fn map_identity(phys: u64, len: u64, code: bool, device: bool) {
+    let mut guard = TABLES.lock();
+    let t = guard.as_mut().expect("paging::init first");
+    let mut flags = PRESENT | WRITABLE;
+    if !code {
+        flags |= t.no_execute;
+    }
+    if device {
+        flags |= CACHE_DISABLE;
+    }
+    let start = phys & !(PAGE_SIZE - 1);
+    let end = phys.saturating_add(len).div_ceil(PAGE_SIZE) * PAGE_SIZE;
+    if end > start && end <= 1 << 47 {
+        t.map(start, start, end - start, flags, false);
+    }
+}
+
 /// Maps `pages` zeroed frames as the stack of processor core `core` (1 to MOST_CORES - 1: not the first, whose stack
 /// is the kernel's own), and returns its top.
 pub fn map_core_stack(core: usize, pages: u64) -> u64 {

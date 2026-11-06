@@ -180,6 +180,7 @@ extern "C" fn go_on(info: *const BootInfo) -> ! {
 
     let acpi = acpi::Acpi::read(info.rsdp);
     power::init(&acpi);
+    power::init_firmware(info);
     log!(
         "Chat Computer kernel: ACPI {} from {}: {} processor cores, {} I/O APICs, timer {:?}",
         acpi.revision,

@@ -297,6 +297,14 @@ fn machine_check_banks() {
 }
 
 fn exception(f: &Frame) -> ! {
+    // (A fault in the firmware's own code, asked to start Chat Computer next as the PC restarts: the restart goes on.)
+    if crate::power::in_firmware() {
+        crate::serial::write_anyway(format_args!(
+            "Chat Computer kernel: the firmware faulted (vector {}, at {:#x}): restarting anyway\n",
+            f.vector, f.rip
+        ));
+        crate::power::reset();
+    }
     if f.vector == 18 {
         machine_check_banks();
     }

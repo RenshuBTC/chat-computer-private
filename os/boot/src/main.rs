@@ -207,6 +207,8 @@ unsafe fn prepare(image: Handle, st: *mut SystemTable) -> Result<Never, &'static
         info.time_tsc = core::arch::x86_64::_rdtsc();
         info.settings_len = settings(bs, image, &mut info.settings) as u32;
         info.start_disk = start_disk(bs, image);
+        info.runtime_services = (*st).runtime_services as u64;
+        info.boot_current = boot_current(st);
     }
 
     // Last call: the final memory map, then ExitBootServices. If something (a timer event, say) changed
@@ -613,6 +615,22 @@ unsafe fn secure_boot(st: *mut SystemTable) -> u32 {
         (SUCCESS, 0) => bootinfo::SECURE_BOOT_OFF,
         _ => bootinfo::SECURE_BOOT_UNKNOWN,
     }
+}
+
+/// The power-on menu's entry the PC started from (UEFI's BootCurrent variable), read while it can still be: the
+/// kernel asks the firmware to start it again next, for a restart into Chat Computer.
+unsafe fn boot_current(st: *mut SystemTable) -> u32 {
+    let rt = unsafe { (*st).runtime_services };
+    if rt.is_null() {
+        return bootinfo::NO_BOOT_ENTRY;
+    }
+    let name: [u16; 12] = wide(b"BootCurrent\0");
+    let mut value = [0u8; 2];
+    let mut size = value.len();
+    let status = unsafe {
+        ((*rt).get_variable)(name.as_ptr(), &GLOBAL_VARIABLE, null_mut(), &mut size, value.as_mut_ptr() as *mut c_void)
+    };
+    if status == SUCCESS && size == 2 { u16::from_le_bytes(value) as u32 } else { bootinfo::NO_BOOT_ENTRY }
 }
 
 /// The firmware variable `mark_started` writes, under Chat Computer's GUID.

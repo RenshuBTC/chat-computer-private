@@ -7,7 +7,7 @@ pub mod edid;
 /// "ChatComp" in ASCII: the first field of [`BootInfo`], so the kernel can tell it got the real thing.
 pub const MAGIC: u64 = u64::from_le_bytes(*b"ChatComp");
 /// Raised whenever [`BootInfo`] changes shape.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// All of physical memory is visible to the kernel at this virtual address: physical address `p` is at
 /// `PHYS_OFFSET + p`. It is the start of the upper half of the address space (page-map slot 256).
@@ -174,7 +174,18 @@ pub struct BootInfo {
     /// The processor's time-stamp counter when the start-up stage read the clock (so the kernel can add the time
     /// from then to when its own timer started).
     pub time_tsc: u64,
+    /// The firmware's runtime services (EFI_RUNTIME_SERVICES): its physical address, in the firmware's own memory,
+    /// which stays its own; 0 if it gave none. The kernel asks it to start this entry next (BootNext) with them.
+    pub runtime_services: u64,
+    /// The power-on menu's entry the PC started from (UEFI's BootCurrent: Boot####), or NO_BOOT_ENTRY.
+    pub boot_current: u32,
+    pub _reserved2: u32,
 }
+
+/// No power-on entry known (`BootInfo::boot_current`).
+pub const NO_BOOT_ENTRY: u32 = u32::MAX;
+/// A memory map entry's attribute (EFI_MEMORY_RUNTIME): the firmware's runtime services use it.
+pub const MEMORY_RUNTIME: u64 = 1 << 63;
 
 /// The most of the settings file that's passed on.
 pub const SETTINGS_MAX: usize = 2048;

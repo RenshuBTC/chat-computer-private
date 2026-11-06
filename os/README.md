@@ -295,12 +295,16 @@ drivers.
     * `show_picture`: a photo, a screenshot or a drawing on one of Windows' drives (JPEG, PNG or GIF), shown to the
       person in the conversation where the model's answer is, as wide as the column at most (and two thirds of its
       height), its corners rounded, turned the way the camera says (`picture/`). The last 12 shown keep their pixels;
-    * `restart_computer`: a restart a few seconds after the model's answer, which goes back to Windows. It uses the
-      reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
-      keyboard controller's reset line (`power.rs`). A message that only asks to restart or turn off ("restart",
-      "go back to Windows", "shut down please") isn't left to the model, which can say it did without calling the
-      tool: Chat Computer does it itself, 5 seconds on, and says so; a message asking more ("restart in 5 minutes",
-      "how do I restart?") goes to the model;
+    * `restart_computer`: a restart a few seconds after the model's answer, which goes back to Windows, or (asked
+      for, `chat_computer`) into Chat Computer again: first the firmware is asked to start the power-on entry it
+      started from next (`BootNext` set to `BootCurrent`, which the start-up stage passes on), through its runtime
+      services' SetVariable, their code and data mapped where they are, called with interrupts off (a fault in the
+      firmware's code resets the PC anyway). The restart uses the reset register the firmware names (ACPI's FADT),
+      else the chipset's reset control (port 0xCF9), else the keyboard controller's reset line (`power.rs`). A
+      message that only asks to restart or turn off ("restart", "go back to Windows", "restart into Chat Computer",
+      "shut down please") isn't left to the model, which can say it did without calling the tool: Chat Computer
+      does it itself, 5 seconds on, and says so; a message asking more ("restart in 5 minutes", "how do I
+      restart?") goes to the model;
     * `turn_off_computer`: the PC turned off a few seconds after the model's answer, by ACPI's S5 ("soft off"). First
       the firmware's own preparation for it runs (its `_TTS` and `_PTS` methods). S5's sleep type, which the
       firmware's `\_S5` gives (or the DSDT's bytes, where it is plain data, when its programs aren't run), is written

@@ -1,5 +1,9 @@
 //! Restarting and turning off the PC. Chat Computer's own system is started once from Windows' power-on menu, so a
 //! restart brings the PC back to what it normally starts (Windows), and so does turning it on again after it's off.
+//! A restart into Chat Computer again asks the firmware first to start the power-on entry it started from next
+//! (BootNext = BootCurrent), through the firmware's runtime services: their code and data mapped where they are (at
+//! their physical addresses: Chat Computer never moves them), the call made with interrupts off, just before the
+//! reset. If the firmware faults in it, the PC is reset anyway (to what it normally starts).
 //!
 //! Ways to restart, tried in turn until one works: the register the firmware names for it (ACPI's FADT), the
 //! chipset's reset control register (port 0xCF9, on every PC chipset since the 1990s), the keyboard controller's old
@@ -15,13 +19,27 @@ use crate::cpu;
 use crate::paging::{self, Cache};
 use crate::sync::SpinLock;
 use crate::time;
-use core::sync::atomic::{AtomicU64, Ordering};
+use bootinfo::{BootInfo, MemoryRegion, MEMORY_RUNTIME, NO_BOOT_ENTRY};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 static RESET: SpinLock<Option<ResetRegister>> = SpinLock::new(None);
 static SOFT_OFF: SpinLock<Option<SoftOff>> = SpinLock::new(None);
 /// When to restart, and when to turn off (uptime in ms; 0: not asked).
 static RESTART_AT: AtomicU64 = AtomicU64::new(0);
 static OFF_AT: AtomicU64 = AtomicU64::new(0);
+/// The firmware's runtime services table (physical address; 0: none), the power-on entry the PC started from, the
+/// firmware's memory its runtime services use ((start, bytes, code or device or data)), and whether the restart
+/// asked for starts that entry again.
+static RUNTIME: AtomicU64 = AtomicU64::new(0);
+static BOOT_CURRENT: AtomicU32 = AtomicU32::new(NO_BOOT_ENTRY);
+const MOST_RUNTIME_REGIONS: usize = 64;
+static RUNTIME_REGIONS: SpinLock<[(u64, u64, u8); MOST_RUNTIME_REGIONS]> = SpinLock::new([(0, 0, 0); MOST_RUNTIME_REGIONS]);
+const REGION_DATA: u8 = 1;
+const REGION_CODE: u8 = 2;
+const REGION_DEVICE: u8 = 3;
+static HERE_NEXT: AtomicBool = AtomicBool::new(false);
+/// The firmware's runtime code is running (a fault in it resets the PC: `in_firmware`).
+static IN_FIRMWARE: AtomicBool = AtomicBool::new(false);
 
 pub fn init(acpi: &Acpi) {
     *RESET.lock() = acpi.reset;
@@ -39,6 +57,82 @@ pub fn init(acpi: &Acpi) {
 /// Whether this PC can be turned off (the firmware said how).
 pub fn can_turn_off() -> bool {
     SOFT_OFF.lock().is_some()
+}
+
+/// What the start-up stage found of the firmware: its runtime services, the power-on entry the PC started from, and
+/// the memory the runtime services use (from the firmware's memory map).
+pub fn init_firmware(info: &BootInfo) {
+    let mut regions = RUNTIME_REGIONS.lock();
+    let mut n = 0;
+    let map: &[MemoryRegion] = unsafe { info.memory_map() };
+    for r in map.iter().filter(|r| r.attribute & MEMORY_RUNTIME != 0 && r.pages > 0) {
+        if n == MOST_RUNTIME_REGIONS {
+            break;
+        }
+        let kind = match r.kind {
+            bootinfo::memtype::RUNTIME_SERVICES_CODE => REGION_CODE,
+            bootinfo::memtype::MMIO | bootinfo::memtype::MMIO_PORT_SPACE => REGION_DEVICE,
+            _ => REGION_DATA,
+        };
+        regions[n] = (r.start, r.pages * bootinfo::PAGE_SIZE, kind);
+        n += 1;
+    }
+    drop(regions);
+    RUNTIME.store(info.runtime_services, Ordering::Relaxed);
+    BOOT_CURRENT.store(info.boot_current, Ordering::Relaxed);
+    if info.boot_current != NO_BOOT_ENTRY {
+        crate::log!(
+            "Chat Computer kernel: started from the power-on menu's entry Boot{:04X}; the firmware's runtime services: {}",
+            info.boot_current,
+            if info.runtime_services != 0 && n > 0 { "there" } else { "none" }
+        );
+    }
+}
+
+/// Whether a restart can start Chat Computer again (the firmware said which entry started it, and has runtime
+/// services to ask with).
+pub fn can_restart_here() -> bool {
+    RUNTIME.load(Ordering::Relaxed) != 0 && BOOT_CURRENT.load(Ordering::Relaxed) != NO_BOOT_ENTRY
+}
+
+/// Restarts the PC in `ms` milliseconds into Chat Computer again (if it can: `can_restart_here`).
+pub fn restart_here_in(ms: u64) {
+    HERE_NEXT.store(can_restart_here(), Ordering::Relaxed);
+    restart_in(ms);
+}
+
+/// Whether the firmware's runtime code is running now: a fault then is the firmware's, and the PC is reset.
+pub fn in_firmware() -> bool {
+    IN_FIRMWARE.load(Ordering::Relaxed)
+}
+
+/// Asks the firmware to start the power-on entry Chat Computer started from, next time (BootNext): through its runtime
+/// services' SetVariable, their code and data mapped where they are. Returns its status (0: done).
+fn start_here_next() -> u64 {
+    let (rt, entry) = (RUNTIME.load(Ordering::Relaxed), BOOT_CURRENT.load(Ordering::Relaxed));
+    if rt == 0 || entry == NO_BOOT_ENTRY {
+        return u64::MAX;
+    }
+    let regions = *RUNTIME_REGIONS.lock();
+    for &(start, bytes, kind) in regions.iter().filter(|r| r.1 > 0) {
+        paging::map_identity(start, bytes, kind == REGION_CODE, kind == REGION_DEVICE);
+    }
+    // EFI_RUNTIME_SERVICES: SetVariable is at 88 (its header, then nine functions before it).
+    let set_variable = unsafe { core::ptr::read_volatile((rt + 88) as *const u64) };
+    if set_variable == 0 {
+        return u64::MAX;
+    }
+    type SetVariable = unsafe extern "efiapi" fn(*const u16, *const [u8; 16], u32, usize, *const u8) -> u64;
+    let f: SetVariable = unsafe { core::mem::transmute::<u64, SetVariable>(set_variable) };
+    const NAME: [u16; 9] = [b'B' as u16, b'o' as u16, b'o' as u16, b't' as u16, b'N' as u16, b'e' as u16, b'x' as u16, b't' as u16, 0];
+    // EFI_GLOBAL_VARIABLE (8be4df61-93ca-11d2-aa0d-00e098032b8c), as an EFI_GUID lies in memory.
+    const GLOBAL: [u8; 16] = [0x61, 0xdf, 0xe4, 0x8b, 0xca, 0x93, 0xd2, 0x11, 0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c];
+    let value = (entry as u16).to_le_bytes();
+    IN_FIRMWARE.store(true, Ordering::SeqCst);
+    // (Non-volatile, and seen at boot and at runtime: 7, as the firmware keeps BootNext.)
+    let status = unsafe { f(NAME.as_ptr(), &GLOBAL, 7, value.len(), value.as_ptr()) };
+    IN_FIRMWARE.store(false, Ordering::SeqCst);
+    status
 }
 
 /// Once the firmware's programs have run: S5's sleep types as its \_S5 gives them (when the DSDT's bytes didn't say,
@@ -168,11 +262,27 @@ unsafe fn enter_s5(s: &SoftOff) {
 }
 
 pub fn restart() -> ! {
-    crate::log!("Chat Computer kernel: restarting");
+    let here = HERE_NEXT.load(Ordering::Relaxed);
+    crate::log!("Chat Computer kernel: restarting{}", if here { ", into Chat Computer again" } else { "" });
     crate::journal::save();
     cpu::disable_interrupts();
     crate::cores::park();
     crate::keep::shut_down();
+    if here {
+        let status = start_here_next();
+        crate::serial::write_anyway(format_args!(
+            "Chat Computer kernel: the firmware {} to start Boot{:04X} next{}\n",
+            if status == 0 { "was asked" } else { "couldn't be asked" },
+            BOOT_CURRENT.load(Ordering::Relaxed),
+            if status == 0 { alloc::string::String::new() } else { alloc::format!(" (status {status:#x})") }
+        ));
+    }
+    reset()
+}
+
+/// The PC reset: by the reset register the firmware names, else the chipset's reset control, else the keyboard
+/// controller's reset line, else a fault the processor can't handle.
+pub fn reset() -> ! {
     let reset = *RESET.lock();
     if let Some(r) = reset {
         match r.space {

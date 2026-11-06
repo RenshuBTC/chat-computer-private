@@ -2347,6 +2347,10 @@ impl Chat {
                 crate::power::turn_off_in(5000);
                 String::from("Turning off in 5 seconds\u{2026}")
             }
+            PowerAsked::Restart { here: true } if crate::power::can_restart_here() => {
+                crate::power::restart_here_in(5000);
+                String::from("Restarting in 5 seconds\u{2026} Then Chat Computer starts again.")
+            }
             PowerAsked::Restart { here } => {
                 crate::power::restart_in(5000);
                 let mut s = String::from("Restarting in 5 seconds\u{2026} The PC then starts what it normally does (Windows, usually)");
@@ -2918,8 +2922,9 @@ impl Chat {
             Event::Picture(p) => self.show_picture(p),
             Event::App(name, html) => self.open_app(name, html),
             Event::Apps(names) => self.set_apps(names),
-            Event::Restarting(seconds) => {
-                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Restarting in {seconds} seconds\u{2026}")));
+            Event::Restarting(seconds, here) => {
+                let then = if here { " Then Chat Computer starts again." } else { "" };
+                self.blocks.push(Block::new(Kind::Note, Live::No, format!("Restarting in {seconds} seconds\u{2026}{then}")));
                 self.relayout = true;
             }
             Event::TurningOff(seconds) => {

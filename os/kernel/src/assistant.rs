@@ -59,8 +59,8 @@ pub enum Event {
     Failed(String),
     /// The model set the text size (percent of the size chosen for this screen).
     TextSize(u32),
-    /// The PC restarts in this many seconds.
-    Restarting(u64),
+    /// The PC restarts in this many seconds (into Chat Computer again: true).
+    Restarting(u64, bool),
     /// The PC turns off in this many seconds.
     TurningOff(u64),
     /// The model noted something about the person (its words), or forgot this many notes.
@@ -142,8 +142,8 @@ With your tools you can see how this computer is doing, change the text size, se
 how loud they ring), read the files on its drives (Windows' C: and the others, USB sticks and memory cards included; \
 nothing can be changed){sees}, search the web and read web pages (when this computer is connected), show the person a \
 picture, note things about them to remember in later conversations, make them small apps they'll use again (a budget, \
-a log, a planner) and open those, start a new conversation, and restart this computer (to go back to Windows) or turn \
-it off. Use a tool rather than saying \
+a log, a planner) and open those, start a new conversation, and restart this computer (to go back to Windows, or into \
+Chat Computer again) or turn it off. Use a tool rather than saying \
 how; don't say you're about to use one, just use it. Only a tool does these things: never say you did one (restarted, \
 set a timer) unless you called its tool.
 
@@ -378,8 +378,9 @@ struct Job {
     /// Whether any words have been shown, and whether the next ones start a new paragraph (after tools ran).
     said: bool,
     separate: bool,
-    /// Restart the PC, or turn it off, once the answer is over.
+    /// Restart the PC (into Chat Computer again: `restart_here`), or turn it off, once the answer is over.
     restart: bool,
+    restart_here: bool,
     turn_off: bool,
     /// Start a new conversation once the answer is over.
     new_conversation: bool,
@@ -447,6 +448,7 @@ impl Job {
             said: false,
             separate: false,
             restart: false,
+            restart_here: false,
             turn_off: false,
             new_conversation: false,
             turn: None,
@@ -1981,8 +1983,11 @@ impl Assistant {
         if job.new_conversation {
             events.push(Event::NewConversation);
         }
-        if job.restart {
-            events.push(Event::Restarting(5));
+        if job.restart && job.restart_here {
+            events.push(Event::Restarting(5, true));
+            crate::power::restart_here_in(5000);
+        } else if job.restart {
+            events.push(Event::Restarting(5, false));
             crate::power::restart_in(5000);
         } else if job.turn_off {
             events.push(Event::TurningOff(5));
@@ -2712,7 +2717,10 @@ fn run_other_tool(name: &str, input: &Json, job: &mut Job, notes: &mut Vec<Strin
         },
         "restart_computer" => {
             job.restart = true;
-            (String::from("The PC restarts a few seconds after your answer: tell the person."), false)
+            // (Into Chat Computer again, when the firmware can be asked to start it next.)
+            job.restart_here = input.get("chat_computer").is_some_and(|v| matches!(v, Json::Bool(true))) && crate::power::can_restart_here();
+            let then = if job.restart_here { "then Chat Computer starts again" } else { "then it starts what it normally does (Windows, usually)" };
+            (format!("The PC restarts a few seconds after your answer, {then}: tell the person."), false)
         }
         "turn_off_computer" if crate::power::can_turn_off() => {
             job.turn_off = true;

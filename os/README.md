@@ -993,10 +993,17 @@ writes for each person, in place of Ubuntu's catalogue.
     squares and disclosure triangles; ::marker; list-style-image), quotes in each language's marks, generated
     content's attr() and pictures, tab stops, text placed to a quarter of a pixel and kerned across inline boxes as
     Chrome sets it, a word that runs on through several boxes wrapped whole, underlines and line-throughs where Chrome
-    draws them, and align-content in blocks.
+    draws them, align-content in blocks, letter-spacing and word-spacing, CSS's painting order (blocks' backgrounds,
+    then floats, then lines), tables as CSS Tables lays them out (anonymous table boxes, cells over several rows and
+    columns, percentages, table-layout: fixed, collapsed borders, cells lined up on their baselines, captions outside
+    the table's border), lines broken where Chrome breaks them (the Unicode line breaking algorithm with Chrome's own
+    rules: after hyphens and "?", between ideographs but not before their closing punctuation, around pictures;
+    line-break, word-break, overflow-wrap, hyphens and soft hyphens, white-space: break-spaces), justified lines,
+    glyphs drawn whole past a short line's box, and all of HTML's character references (&nbsp; a space that doesn't
+    break).
     Measured by the Web Platform Tests every browser runs (each test and its reference
     drawn by Chat Computer and compared; the scripted tests run in it): to do there is what they and comparing sites
-    with Chrome turn up, first letter-spacing, CSS's painting order for floats, writing modes and CSS transitions.
+    with Chrome turn up, first writing modes, CSS transitions and hyphenation by dictionary.
     ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
     plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time

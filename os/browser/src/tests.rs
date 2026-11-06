@@ -1746,3 +1746,84 @@ fn a_word_in_two_boxes_goes_to_the_next_line_whole() {
     assert!(y("wor") > y("aaaa"), "{at:?}");
     assert_eq!(y("wor"), y("ds"), "{at:?}");
 }
+
+#[test]
+fn letters_and_words_are_spaced_out() {
+    // (Times New Roman at 16px: "ab" is 15.11 pixels; 2 more after each letter, and 5 more after the space.)
+    let mut p = page("<body style='margin:0;font:16px serif'><span id=a style='letter-spacing:2px'>ab</span><br><span id=b style='word-spacing:5px'>a b</span></body>");
+    let id = |p: &Page, name: &str| p.doc.descendants(0).find(|&n| p.doc.element(n).is_some_and(|e| e.id() == Some(name))).unwrap();
+    let (a, b) = (id(&p, "a"), id(&p, "b"));
+    let l = laid(&mut p);
+    let texts: Vec<(String, f32, (f32, f32))> = l.items.iter().filter_map(|i| if let Paint::Text { text, w, spacing, .. } = &i.paint { Some((text.clone(), *w, *spacing)) } else { None }).collect();
+    let ab = texts.iter().find(|t| t.0 == "ab").unwrap();
+    assert!((ab.1 - (15.11 + 4.0)).abs() < 0.05 && ab.2 == (2.0, 0.0), "{texts:?}");
+    let spaced = texts.iter().find(|t| t.0 == "a b").unwrap();
+    assert!((spaced.1 - (15.11 + 4.0 + 5.0)).abs() < 0.05, "{texts:?}");
+    let _ = (a, b);
+}
+
+#[test]
+fn blocks_backgrounds_then_floats_then_words_are_painted() {
+    // (A block after a float, under it: its background first, the float on it, then its words over both.)
+    let mut p = page("<body style='margin:0'><div style='float:left;width:50px;height:50px;background:red'></div>\
+                      <div style='background:blue;height:20px'>words</div></body>");
+    let l = laid(&mut p);
+    let at = |pred: &dyn Fn(&Paint) -> bool| l.items.iter().position(|i| pred(&i.paint)).unwrap();
+    let blue = at(&|p| matches!(p, Paint::Rect { color: BLUE, .. }));
+    let red = at(&|p| matches!(p, Paint::Rect { color: RED, .. }));
+    let words = at(&|p| matches!(p, Paint::Text { text, .. } if text == "words"));
+    assert!(blue < red && red < words, "{blue} {red} {words}");
+}
+
+#[test]
+fn a_table_s_captions_are_outside_its_background_and_it_s_as_wide_as_they_need() {
+    // (Chrome: the caption above the table's border box, its background round the rows only; the table as wide as the
+    // caption's longest word, the extra shared among its columns.)
+    let mut p = page("<!doctype html><body style='margin:0;font:16px serif'><table style='border-spacing:0;background:red'>\
+                      <caption>Captioned</caption><tr><td style='padding:0'>xyz</td></tr></table></body>");
+    let l = laid(&mut p);
+    let red = rects(l, RED);
+    let (_, cap_y) = words(l, "Captioned");
+    let (_, a_y) = words(l, "xyz");
+    assert_eq!(red.len(), 1, "{red:?}");
+    assert!(red[0].1 >= cap_y + 15.0 && (red[0].1 - a_y).abs() < 1.0, "the background starts below the caption: {red:?} {cap_y} {a_y}");
+    assert!(red[0].2 > 60.0, "as wide as \"Captioned\": {red:?}");
+}
+
+#[test]
+fn a_long_word_goes_past_its_line_unless_it_may_be_broken() {
+    // (overflow-wrap: normal, as Chrome has it: the word on one line, past the box's end; break-word: broken.)
+    let mut p = page("<!doctype html><body style='margin:0;font:16px serif'><div style='width:40px'>abcdefghijklmnop</div>\
+                      <div style='width:40px;overflow-wrap:break-word'>qrstuvwxyzqrstuvwxyz</div>\
+                      <div style='width:60px;word-break:break-all'>ab cdefghijklmnopqrstuvwxyz</div></body>");
+    let l = laid(&mut p);
+    let texts: Vec<(String, f32, f32)> = l.items.iter().filter_map(|i| if let Paint::Text { text, x, y, .. } = &i.paint { Some((text.clone(), *x, *y)) } else { None }).collect();
+    assert!(texts.iter().any(|t| t.0 == "abcdefghijklmnop"), "unbroken: {texts:?}");
+    assert!(texts.iter().filter(|t| t.0.starts_with("qrst") || t.0.chars().all(|c| "qrstuvwxyz".contains(c))).count() > 2, "broken: {texts:?}");
+    // (break-all: the first line filled, "ab c..." with the word's start after "ab ".)
+    let first = texts.iter().find(|t| t.0.starts_with("ab")).unwrap();
+    assert!(first.0.len() > 3, "the line filled: {texts:?}");
+}
+
+#[test]
+fn character_references_are_read_as_html_reads_them() {
+    use crate::entities::decode;
+    assert_eq!(decode("a&nbsp;b &amp; c&#8217;s &#x2014; &#150;", false), "a\u{a0}b & c\u{2019}s \u{2014} \u{2013}");
+    // (Names without a ";": the old ones only, the longest that fits; not in an attribute before "=" or a letter.)
+    assert_eq!(decode("I'm &notit; I tell you &ampx &NotEqualTilde; &bogus;", false), "I'm \u{ac}it; I tell you &x \u{2242}\u{338} &bogus;");
+    assert_eq!(decode("?a=1&copy=2&amp=3&lt", true), "?a=1&copy=2&amp=3<");
+    // (Soft hyphens and zero-width spaces kept: places a line may break.)
+    assert_eq!(decode("a&shy;b&#8203;c&#0;", false), "a\u{ad}b\u{200b}c\u{fffd}");
+}
+
+#[test]
+fn lines_break_after_hyphens_and_between_ideographs_but_not_before_closing_punctuation() {
+    // (A box too narrow for "well-known": broken after its hyphen, as Chrome breaks it; "日本語。" between
+    // ideographs, the full stop kept with the last.)
+    let mut p = page("<!doctype html><body style='margin:0;font:16px serif'><div style='width:50px'>well-known</div>\
+                      <div style='width:20px'>日本語。</div></body>");
+    let l = laid(&mut p);
+    let texts: Vec<String> = l.items.iter().filter_map(|i| if let Paint::Text { text, .. } = &i.paint { Some(text.clone()) } else { None }).collect();
+    assert!(texts.iter().any(|t| t == "well-") && texts.iter().any(|t| t == "known"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "語。") && !texts.iter().any(|t| t == "。"), "{texts:?}");
+}

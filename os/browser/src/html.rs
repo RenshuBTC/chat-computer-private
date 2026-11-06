@@ -63,7 +63,7 @@ pub fn parse_fragment(html: &str, context: &str, scripting: bool) -> Document {
     if matches!(context, "script" | "style" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext") || (scripting && context == "noscript") {
         b.append_text(html);
     } else if matches!(context, "title" | "textarea") {
-        b.append_text(&web::page::entities(html));
+        b.append_text(&crate::entities::decode_text(html));
     } else {
         read(&mut b, html);
     }
@@ -76,7 +76,7 @@ fn read(b: &mut Builder, html: &str) {
     while i < bytes.len() {
         if bytes[i] != b'<' {
             let end = bytes[i..].iter().position(|&c| c == b'<').map_or(bytes.len(), |n| i + n);
-            b.text(&web::page::entities(&html[i..end]));
+            b.text(&crate::entities::decode_text(&html[i..end]));
             i = end;
             continue;
         }
@@ -136,7 +136,7 @@ fn read(b: &mut Builder, html: &str) {
             let inside = &html[i..stop];
             if !inside.is_empty() {
                 if rc {
-                    b.text(&web::page::entities(inside));
+                    b.text(&crate::entities::decode_text(inside));
                 } else {
                     b.text(inside);
                 }
@@ -218,14 +218,14 @@ fn attributes(html: &str, from: usize) -> (Vec<(String, String)>, bool, usize) {
                 let q = b[i];
                 let vs = i + 1;
                 let ve = b[vs..].iter().position(|&c| c == q).map_or(b.len(), |n| vs + n);
-                value = web::page::entities(&html[vs..ve]);
+                value = crate::entities::decode(&html[vs..ve], true);
                 i = (ve + 1).min(b.len());
             } else {
                 let vs = i;
                 while i < b.len() && !(b[i].is_ascii_whitespace() || b[i] == b'>') {
                     i += 1;
                 }
-                value = web::page::entities(&html[vs..i]);
+                value = crate::entities::decode(&html[vs..i], true);
             }
         }
         if !name.is_empty() && !attrs.iter().any(|(k, _)| *k == name) {

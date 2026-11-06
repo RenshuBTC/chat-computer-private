@@ -58,6 +58,8 @@ struct InkKey {
     line: i32,
     /// The quarter of a pixel it starts at (0 to 3).
     quarter: u8,
+    /// Its letter-spacing and word-spacing (1/256 pixel).
+    spacing: (i32, i32),
 }
 
 /// Draws pages, keeping their words' ink, and their pictures made the size they're drawn.
@@ -368,13 +370,13 @@ impl Painter {
                     }
                 }
             }
-            Paint::Text { x, y, text, face, size, line, color, .. } => {
+            Paint::Text { x, y, text, face, size, line, color, spacing, .. } => {
                 // (Placed to a quarter of a pixel, as Chrome places text: the whole pixel here, the quarter in its ink.)
                 let quarters = num::floor(m.x(*x) * 4.0 + 0.5);
                 let whole = num::floor(quarters / 4.0);
                 let quarter = (quarters - whole * 4.0).clamp(0.0, 3.0) as u8;
-                let ink = self.ink(ty, text, *face, m.len(*size), m.len(*line), quarter);
-                let (tx, ty_) = (whole as i32 - ink.left as i32, num::round(m.y(*y)) as i32);
+                let ink = self.ink(ty, text, *face, m.len(*size), m.len(*line), quarter, (m.len(spacing.0), m.len(spacing.1)));
+                let (tx, ty_) = (whole as i32 - ink.left as i32, num::round(m.y(*y)) as i32 - ink.above as i32);
                 words(c, ink, tx, ty_, *color, clip);
             }
             Paint::Slice { x, y, w, h, image, whole, src, tile, step, repeat } => {
@@ -460,11 +462,13 @@ impl Painter {
         Some(px)
     }
 
-    fn ink(&mut self, ty: &Type, text: &str, face: Face, size: f32, line: f32, quarter: u8) -> &Ink {
-        let key = InkKey { text: String::from(text), face: face.key(), size: (size * 256.0) as i32, line: (line * 256.0) as i32, quarter };
+    fn ink(&mut self, ty: &Type, text: &str, face: Face, size: f32, line: f32, quarter: u8, spacing: (f32, f32)) -> &Ink {
+        let spacing = ((spacing.0 * 256.0) as i32, (spacing.1 * 256.0) as i32);
+        let key = InkKey { text: String::from(text), face: face.key(), size: (size * 256.0) as i32, line: (line * 256.0) as i32, quarter, spacing };
         let round = self.round;
         if !self.inks.contains_key(&key) {
-            let ink = ty.ink_at(text, face, text::Style { size: key.size, line_height: key.line }, 0, quarter as i32 * 64);
+            let style = text::Style { size: key.size, line_height: key.line };
+            let ink = ty.ink_overflowing(text, face, style, 0, quarter as i32 * 64, text::Spacing { letter: spacing.0, word: spacing.1 });
             self.bytes += ink.coverage.len();
             self.inks.insert(key.clone(), (ink, round));
         }

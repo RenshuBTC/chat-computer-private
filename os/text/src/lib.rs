@@ -15,6 +15,8 @@
 
 extern crate alloc;
 
+pub mod breaks;
+mod breaks_data;
 mod compose;
 pub mod loaded;
 
@@ -102,6 +104,23 @@ fn libm_round(x: f32) -> f32 {
 /// Some letters reach a little past their own width (an italic f, an accent); the drawn line keeps
 /// this much room on each side, in pixels.
 const PAD: usize = 2;
+
+/// Room added between letters and after spaces (CSS's letter-spacing and word-spacing), in 1/256 pixel.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Spacing {
+    pub letter: i32,
+    pub word: i32,
+}
+
+impl Spacing {
+    /// What it adds to a line of characters `chars` (shaped into `placed`): after each letter (a mark goes with its
+    /// letter) and after each space.
+    fn added(self, chars: &[(char, Face)], placed: &[Placed]) -> i32 {
+        let letters = placed.iter().filter(|p| !p.mark).count() as i32;
+        let spaces = chars.iter().filter(|c| matches!(c.0, ' ' | '\u{a0}')).count() as i32;
+        self.letter * letters + self.word * spaces
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Style {
@@ -445,6 +464,8 @@ pub struct Ink {
     pub coverage: Vec<u8>,
     /// How far left of the text's own start the coverage begins, in pixels.
     pub left: usize,
+    /// How far above the line box's top it begins, in pixels (glyphs taller than the line: `ink_overflowing`).
+    pub above: usize,
 }
 
 impl Type {
@@ -864,6 +885,7 @@ impl Type {
 
     /// Each glyph of `text` in `face` as it's drawn along the line: where (font units from its start, and up from
     /// the baseline), and how it's set.
+    #[cfg(test)]
     fn line(&self, text: &str, face: Face) -> Vec<(i32, i32, Set)> {
         let chars: Vec<(char, Face)> = text.chars().map(|c| (c, face)).collect();
         self.shape(&chars).into_iter().filter_map(|p| p.drawn.map(|(s, x, y)| (x, y, s))).collect()
@@ -1087,8 +1109,33 @@ impl Type {
     /// As `ink_in`, the line starting `left` (in 1/256 pixel, under a pixel) right of the ink's own left: its glyphs
     /// drawn where a fraction of a pixel puts them, as Chrome places text a quarter of a pixel at a time.
     pub fn ink_at(&self, text: &str, face: Face, style: Style, top: i32, left: i32) -> Ink {
+        self.ink_spaced(text, face, style, top, left, Spacing::default())
+    }
+
+    /// The width of `text` in `face` at `size`, spaced out (CSS's letter-spacing and word-spacing).
+    pub fn width_spaced(&self, text: &str, face: Face, size: i32, spacing: Spacing) -> i32 {
+        let chars: Vec<(char, Face)> = text.chars().map(|c| (c, face)).collect();
+        let placed = self.shape(&chars);
+        let width = self.scale(placed.last().map_or(0, |p| p.pen + p.advance), size);
+        width + spacing.added(&chars, &placed)
+    }
+
+    /// As `ink_at`, spaced out: `spacing.letter` more after each letter (with its marks) and `spacing.word` more after
+    /// each space, as CSS's letter-spacing and word-spacing space it.
+    pub fn ink_spaced(&self, text: &str, face: Face, style: Style, top: i32, left: i32, spacing: Spacing) -> Ink {
+        self.ink_made(text, face, style, top, left, spacing, false)
+    }
+
+    /// As `ink_spaced`, its glyphs whole where they're taller than the line (a descender, an accent, a line height
+    /// less than the font's), as a browser draws them: the coverage starts `above` the line box and goes on below it.
+    pub fn ink_overflowing(&self, text: &str, face: Face, style: Style, top: i32, left: i32, spacing: Spacing) -> Ink {
+        self.ink_made(text, face, style, top, left, spacing, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn ink_made(&self, text: &str, face: Face, style: Style, top: i32, left: i32, spacing: Spacing, overflow: bool) -> Ink {
         let m = self.font.metrics;
-        let width = (self.width_in(text, face, style.size) + ONE - 1) / ONE;
+        let width = (self.width_spaced(text, face, style.size, spacing) + ONE - 1) / ONE;
         // (A slanted line's tops lean past its last letter: about a fifth of the size.)
         let lean = if face.slanted() { (style.size / 5 + ONE - 1) / ONE } else { 0 } as usize;
         let w = width as usize + 2 * PAD + lean;
@@ -1100,16 +1147,51 @@ impl Type {
                 Face::Web(..) | Face::Loaded(..) => self.baseline_in(face, style),
                 _ => (style.line_height - content) / 2 + self.scale(m.ascender as i32, style.size),
             };
+        let chars: Vec<(char, Face)> = text.chars().map(|c| (c, face)).collect();
+        let placed = self.shape(&chars);
+        // (Rows above and below the line box for glyphs that reach past it: from their outlines' bounds, and a row to
+        // spare for a bold instance's.)
+        let (mut above, mut below) = (0usize, 0usize);
+        if overflow {
+            let (mut hi, mut lo) = (0i32, h as i32 * ONE);
+            for p in &placed {
+                if let Some((s, _, up)) = p.drawn
+                    && let Some((_, y0, _, y1)) = self.bounds_of(s.source, s.glyph)
+                {
+                    hi = hi.min(baseline - self.scale(up + y1, style.size));
+                    lo = lo.max(baseline - self.scale(up + y0, style.size));
+                }
+            }
+            if hi < 0 {
+                above = ((-hi + ONE - 1) / ONE) as usize + 1;
+            }
+            if lo > h as i32 * ONE {
+                below = ((lo - h as i32 * ONE + ONE - 1) / ONE) as usize + 1;
+            }
+        }
+        let baseline = baseline + above as i32 * ONE;
+        let h = h + above + below;
         let mut raster = Raster::new(w, h);
         let mut pen = Pen::new(&mut raster, style.size, m.units_per_em);
         pen.y = baseline;
         let apart = made_up_bold(style.size);
-        for (units, up, s) in self.line(text, face) {
+        // (Each glyph moved on by the spacing of the letters and spaces before it; a mark's by its letter's.)
+        let (mut letters, mut spaces) = (0i32, 0i32);
+        for (i, p) in placed.iter().enumerate() {
+            let own = if p.mark && letters > 0 { letters - 1 } else { letters };
+            let spaced = spacing.letter * own + spacing.word * spaces;
+            if !p.mark {
+                letters += 1;
+            }
+            if matches!(chars[i].0, ' ' | '\u{a0}') {
+                spaces += 1;
+            }
+            let Some((s, units, up)) = p.drawn else { continue };
             let draw = |out: &mut dyn Outline| self.draw_glyph(s.source, s.glyph, face, out);
             // (In bold, a fallback font's glyph drawn twice, a little apart, as browsers make a bold up: it has none.)
             let strikes: &[i32] = if self.made_bold(s.source, face) { &[0, apart] } else { &[0] };
             for &dx in strikes {
-                pen.x = PAD as i32 * ONE + left + self.scale(units, style.size) + dx;
+                pen.x = PAD as i32 * ONE + left + spaced + self.scale(units, style.size) + dx;
                 pen.y = baseline - self.scale(up, style.size);
                 if face.slanted() {
                     draw(&mut Slant { to: &mut pen });
@@ -1120,7 +1202,7 @@ impl Type {
         }
         let mut coverage = vec![0; w * h];
         raster.coverage(&mut coverage);
-        Ink { width: w, height: h, coverage, left: PAD }
+        Ink { width: w, height: h, coverage, left: PAD, above }
     }
 }
 

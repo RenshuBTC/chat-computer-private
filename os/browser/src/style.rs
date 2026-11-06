@@ -110,15 +110,17 @@ pub enum WhiteSpace {
     Pre,
     PreWrap,
     PreLine,
+    /// break-spaces: as pre-wrap, but spaces at a line's end don't hang past it: they take room, and wrap.
+    BreakSpaces,
 }
 
 impl WhiteSpace {
     /// Whether spaces and line breaks are kept as they are.
     pub fn keeps_spaces(self) -> bool {
-        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap)
+        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces)
     }
     pub fn keeps_breaks(self) -> bool {
-        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::PreLine)
+        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::BreakSpaces)
     }
     pub fn wraps(self) -> bool {
         !matches!(self, WhiteSpace::NoWrap | WhiteSpace::Pre)
@@ -322,6 +324,25 @@ pub struct Style {
     pub white_space: WhiteSpace,
     /// tab-size: a tab's width, in spaces (or, `.1`, in pixels).
     pub tab_size: (f32, bool),
+    /// letter-spacing and word-spacing (pixels; normal: 0).
+    pub letter_spacing: f32,
+    pub word_spacing: f32,
+    /// overflow-wrap (word-wrap): 0 normal (a word too long for its line goes past it), 1 break-word (broken where
+    /// it must be), 2 anywhere (and its letters counted apart for its narrowest).
+    pub overflow_wrap: u8,
+    /// word-break: 0 normal, 1 break-all (lines break between any letters), 2 keep-all (not between Chinese,
+    /// Japanese and Korean ones either), 3 break-word (as overflow-wrap: anywhere), 4 manual (not inside Thai and
+    /// such words).
+    pub word_break: u8,
+    /// line-break: 0 auto or normal, 1 strict, 2 loose, 3 anywhere.
+    pub line_break: u8,
+    /// hyphens: none (soft hyphens aren't places to break); else manual (or auto: as manual), a line broken at a soft
+    /// hyphen ending in a hyphen.
+    pub hyphens_none: bool,
+    /// hyphenate-character: what a line broken at a soft hyphen ends in (None: auto, a hyphen).
+    pub hyphen_text: Option<Arc<str>>,
+    /// Its language (lang) is Chinese or Japanese: lines break by their rules.
+    pub cjk_lang: bool,
     /// unicode-bidi: isolate (or isolate-override, or plaintext): its text isn't shaped with the text round it.
     pub bidi_isolate: bool,
     /// image-rendering: pixelated (or crisp-edges): its pictures made bigger pixel by pixel, not smoothly.
@@ -371,7 +392,11 @@ pub struct Style {
     pub grid_row: GridPlace,
     pub grid_auto_columns: bool,
     pub border_collapse: bool,
+    /// border-spacing: across, and up and down.
     pub border_spacing: f32,
+    pub border_spacing_v: f32,
+    /// table-layout: fixed.
+    pub table_fixed: bool,
     /// ::before's and ::after's content (None: none or normal, no box); and whether it's none (a ::marker's none: no
     /// marker; its normal: the list's own).
     pub content: Option<Arc<Vec<ContentPart>>>,
@@ -769,6 +794,14 @@ impl Style {
             transform_text: Transform::None,
             white_space: WhiteSpace::Normal,
             tab_size: (8.0, false),
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            overflow_wrap: 0,
+            word_break: 0,
+            line_break: 0,
+            hyphens_none: false,
+            hyphen_text: None,
+            cjk_lang: false,
             bidi_isolate: false,
             ellipsis: false,
             pixelated: false,
@@ -811,6 +844,8 @@ impl Style {
             grid_auto_columns: false,
             border_collapse: false,
             border_spacing: 0.0,
+            border_spacing_v: 0.0,
+            table_fixed: false,
             content: None,
             content_none: false,
             counter_reset: None,
@@ -892,6 +927,14 @@ impl Style {
         s.transform_text = self.transform_text;
         s.white_space = self.white_space;
         s.tab_size = self.tab_size;
+        s.letter_spacing = self.letter_spacing;
+        s.word_spacing = self.word_spacing;
+        s.overflow_wrap = self.overflow_wrap;
+        s.word_break = self.word_break;
+        s.line_break = self.line_break;
+        s.hyphens_none = self.hyphens_none;
+        s.hyphen_text = self.hyphen_text.clone();
+        s.cjk_lang = self.cjk_lang;
         s.pixelated = self.pixelated;
         s.list_style = self.list_style.clone();
         s.quotes = self.quotes.clone();
@@ -901,6 +944,7 @@ impl Style {
         s.border_collapse = self.border_collapse;
         s.caption_bottom = self.caption_bottom;
         s.border_spacing = self.border_spacing;
+        s.border_spacing_v = self.border_spacing_v;
         s.justify_items = Align::Normal;
         s.custom = self.custom.clone();
         // (Text decorations are drawn through the boxes inside, as if inherited.)
@@ -1527,6 +1571,17 @@ impl Cascade<'_> {
 
     fn apply_with(&self, id: NodeId, parent: &Style, found: &[(Rank, &Decl)], pseudo: bool) -> Style {
         let mut s = parent.inherit(self.dpr);
+        // (Its language, from its lang: Chinese and Japanese lines break by their own rules.)
+        if !pseudo
+            && let Some(el) = self.doc.element(id)
+            && let Some(l) = el.attr("lang").or(el.attr("xml:lang"))
+        {
+            // (Chinese or Japanese by its language, or by its script: "en-Hrkt" is written in kana.)
+            let l = l.to_ascii_lowercase();
+            let mut tags = l.split(['-', '_']);
+            let first = tags.next().unwrap_or("");
+            s.cjk_lang = matches!(first, "ja" | "zh" | "yue") || tags.any(|t| matches!(t, "hrkt" | "jpan" | "hira" | "kana" | "hani" | "hans" | "hant"));
+        }
         // Custom properties first (var() needs them), then font-size (em needs it), then color (currentColor), then
         // the rest, each in cascade order.
         let customs: Vec<&Decl> = found.iter().filter(|(_, d)| d.name.starts_with("--")).map(|(_, d)| *d).collect();
@@ -2250,7 +2305,10 @@ fn border_width(v: &[Tok], c: &Ctx) -> Option<f32> {
         Some("thin") => Some(1.0 * c.units.dpr),
         Some("medium") => Some(3.0 * c.units.dpr),
         Some("thick") => Some(5.0 * c.units.dpr),
-        // (Whole CSS pixels, as Chrome makes them: down, but one under a pixel up to one.)
+        // (A negative length or a percentage isn't a border's width: the declaration's dropped. Whole CSS pixels, as
+        // Chrome makes them: down, but one under a pixel up to one.)
+        _ if matches!(values::trim(v), [Tok::Dimension(n, _)] | [Tok::Number(n)] if *n < 0.0) => None,
+        _ if matches!(values::trim(v), [Tok::Percent(_)]) => None,
         _ => values::length(v, &c.units, 0.0).map(|l| {
             let css = l.px.max(0.0) / c.units.dpr;
             let whole = if css > 0.0 && css < 1.0 { 1.0 } else { crate::num::floor(css + 1e-4) };
@@ -2867,7 +2925,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
             "initial" | "unset" | "revert" | "revert-layer" => {
                 let init = Style::initial(c.units.dpr);
-                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "tab-size" | "visibility" | "list-style-type" | "list-style" | "quotes" | "text-transform" | "font-family" | "font" | "fill" | "stroke" | "image-rendering");
+                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "tab-size" | "letter-spacing" | "word-spacing" | "overflow-wrap" | "word-wrap" | "word-break" | "line-break" | "hyphens" | "-webkit-hyphens" | "hyphenate-character" | "visibility" | "list-style-type" | "list-style" | "quotes" | "text-transform" | "font-family" | "font" | "fill" | "stroke" | "image-rendering");
                 if kw == "initial" || !inherited {
                     inherit_one(s, &init, name);
                 } else {
@@ -3533,6 +3591,64 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 };
             }
         }
+        // (A length, normal for none; Chrome takes no percentage.)
+        "letter-spacing" | "word-spacing" => {
+            let px = if ident(v).as_deref() == Some("normal") {
+                Some(0.0)
+            } else {
+                values::length(v, units, 0.0).filter(|l| !l.has_pct()).map(|l| l.px)
+            };
+            if let Some(px) = px {
+                if name == "letter-spacing" { s.letter_spacing = px } else { s.word_spacing = px }
+            }
+        }
+        "overflow-wrap" | "word-wrap" => {
+            if let Some(i) = ident(v) {
+                match i.as_str() {
+                    "normal" => s.overflow_wrap = 0,
+                    "break-word" => s.overflow_wrap = 1,
+                    "anywhere" => s.overflow_wrap = 2,
+                    _ => {}
+                }
+            }
+        }
+        "hyphenate-character" | "-webkit-hyphenate-character" => match values::trim(v) {
+            [Tok::Str(t)] => s.hyphen_text = Some(Arc::from(t.as_str())),
+            [Tok::Ident(i)] if i == "auto" => s.hyphen_text = None,
+            _ => {}
+        },
+        "hyphens" | "-webkit-hyphens" => {
+            if let Some(i) = ident(v) {
+                match i.as_str() {
+                    "none" => s.hyphens_none = true,
+                    "manual" | "auto" => s.hyphens_none = false,
+                    _ => {}
+                }
+            }
+        }
+        "line-break" => {
+            if let Some(i) = ident(v) {
+                match i.as_str() {
+                    "auto" | "normal" => s.line_break = 0,
+                    "strict" => s.line_break = 1,
+                    "loose" => s.line_break = 2,
+                    "anywhere" => s.line_break = 3,
+                    _ => {}
+                }
+            }
+        }
+        "word-break" => {
+            if let Some(i) = ident(v) {
+                match i.as_str() {
+                    "normal" | "auto-phrase" => s.word_break = 0,
+                    "break-all" => s.word_break = 1,
+                    "keep-all" => s.word_break = 2,
+                    "break-word" => s.word_break = 3,
+                    "manual" => s.word_break = 4,
+                    _ => {}
+                }
+            }
+        }
         "tab-size" | "-moz-tab-size" => match values::trim(v) {
             [Tok::Number(n)] if *n >= 0.0 => s.tab_size = (*n, false),
             t => {
@@ -3551,7 +3667,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 "text-wrap-mode" | "text-wrap" => {
                     if has("nowrap") {
                         match s.white_space {
-                            WhiteSpace::PreWrap | WhiteSpace::Pre => WhiteSpace::Pre,
+                            WhiteSpace::PreWrap | WhiteSpace::Pre | WhiteSpace::BreakSpaces => WhiteSpace::Pre,
                             _ => WhiteSpace::NoWrap,
                         }
                     } else if has("wrap") || has("balance") || has("pretty") || has("stable") {
@@ -3565,7 +3681,9 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                     }
                 }
                 "white-space-collapse" => {
-                    if has("preserve") || has("break-spaces") {
+                    if has("break-spaces") && s.white_space.wraps() {
+                        WhiteSpace::BreakSpaces
+                    } else if has("preserve") || has("break-spaces") {
                         if s.white_space.wraps() { WhiteSpace::PreWrap } else { WhiteSpace::Pre }
                     } else if has("preserve-breaks") {
                         WhiteSpace::PreLine
@@ -3582,7 +3700,9 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                         WhiteSpace::NoWrap
                     } else if has("pre") {
                         WhiteSpace::Pre
-                    } else if has("pre-wrap") || has("break-spaces") {
+                    } else if has("break-spaces") {
+                        WhiteSpace::BreakSpaces
+                    } else if has("pre-wrap") {
                         WhiteSpace::PreWrap
                     } else if has("pre-line") {
                         WhiteSpace::PreLine
@@ -3960,10 +4080,13 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
         "border-collapse" => s.border_collapse = ident(v).as_deref() == Some("collapse"),
         "caption-side" => s.caption_bottom = ident(v).as_deref() == Some("bottom"),
         "border-spacing" => {
-            if let Some(l) = parts(v).first().and_then(|t| values::length(t, units, 0.0)) {
-                s.border_spacing = l.px.max(0.0);
+            let ls: Vec<f32> = parts(v).iter().filter_map(|t| values::length(t, units, 0.0)).map(|l| l.px.max(0.0)).collect();
+            if let Some(&h) = ls.first() {
+                s.border_spacing = h;
+                s.border_spacing_v = ls.get(1).copied().unwrap_or(h);
             }
         }
+        "table-layout" => s.table_fixed = ident(v).as_deref() == Some("fixed"),
         "content" => {
             if let Some(x) = content(v, c.el) {
                 s.content_none = x.is_none() && ident(v).as_deref() == Some("none");
@@ -4033,6 +4156,13 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "text-align" => s.text_align = from.text_align,
         "white-space" => s.white_space = from.white_space,
         "tab-size" | "-moz-tab-size" => s.tab_size = from.tab_size,
+        "letter-spacing" => s.letter_spacing = from.letter_spacing,
+        "word-spacing" => s.word_spacing = from.word_spacing,
+        "overflow-wrap" | "word-wrap" => s.overflow_wrap = from.overflow_wrap,
+        "word-break" => s.word_break = from.word_break,
+        "line-break" => s.line_break = from.line_break,
+        "hyphens" | "-webkit-hyphens" => s.hyphens_none = from.hyphens_none,
+        "hyphenate-character" | "-webkit-hyphenate-character" => s.hyphen_text = from.hyphen_text.clone(),
         "unicode-bidi" => s.bidi_isolate = from.bidi_isolate,
         "image-rendering" => s.pixelated = from.pixelated,
         "visibility" => s.visible = from.visible,

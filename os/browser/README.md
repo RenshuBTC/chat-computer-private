@@ -63,3 +63,8 @@ accessibility tree) for a range of values, small, large, zero and negative. The 
 `quotes: auto` (`src/counters.rs`) are those Chrome uses, read the same way. Where Chrome draws a list's discs,
 circles, squares, disclosure triangles and pictures, and where it puts tab stops and text decorations, are
 measurements of Chromium's own drawing.
+
+`src/entities_data.rs`, HTML's named character references (`&nbsp;`, `&mdash;`...), is made by `entgen.py` from the
+list in the WHATWG HTML Living Standard (as Python's `html.entities.html5` has it). The HTML Standard is © WHATWG
+(Apple, Google, Mozilla, Microsoft), licensed under a Creative Commons Attribution 4.0 International License
+(https://creativecommons.org/licenses/by/4.0/).

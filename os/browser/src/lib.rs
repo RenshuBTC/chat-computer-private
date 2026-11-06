@@ -15,6 +15,8 @@ pub mod counters;
 pub mod css;
 pub mod dom;
 pub mod effects;
+pub mod entities;
+mod entities_data;
 pub mod first_letter;
 pub mod html;
 pub mod layout;

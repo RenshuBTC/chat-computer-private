@@ -176,6 +176,7 @@ impl Tree {
             s.scrolls = false;
             t.boxes[body].style = Arc::new(s);
         }
+        t.fix_tables(0);
         t.fix_mixed(0);
         t
     }
@@ -208,6 +209,115 @@ impl Tree {
             self.boxes[p].children.push(id);
         }
         id
+    }
+
+    /// An anonymous box (one no element makes) in `parent`, in a style its own display inherits from the parent's,
+    /// round `children` (taken out of the parent's: the caller puts it in their place).
+    fn anonymous(&mut self, parent: BoxId, display: Display, children: Vec<BoxId>) -> BoxId {
+        let style = Arc::new(self.boxes[parent].style.inherit(1.0).with_display(display));
+        let a = self.boxes.len();
+        self.boxes.push(LBox {
+            node: None,
+            style,
+            content: Content::Children,
+            children: Vec::new(),
+            parent: Some(parent),
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+            margin: [0.0; 4],
+            border: [0.0; 4],
+            padding: [0.0; 4],
+            baseline: None,
+            done: false,
+            centered: false,
+            frame: false,
+            default_size: (0.0, 0.0),
+            marker: None,
+            marker_box: None,
+            marker_style: None,
+        });
+        for &k in &children {
+            self.boxes[k].parent = Some(a);
+        }
+        self.boxes[a].children = children;
+        a
+    }
+
+    /// CSS's anonymous table boxes (CSS 2.1, 17.2.1), as Chrome makes them: spaces between a table's parts go; what's
+    /// in a table that isn't one of its parts goes in an anonymous row, what's in a row group that isn't a row in an
+    /// anonymous row, and what's in a row that isn't a cell in an anonymous cell; cells not in a row are put in an
+    /// anonymous row, and rows, row groups and captions not in a table in an anonymous table (an inline-table, in an
+    /// inline box): <div style="display: table-cell"> side by side are a table's row.
+    fn fix_tables(&mut self, root: BoxId) {
+        let internal = |d: Display| matches!(d, Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup | Display::TableRow | Display::TableCell | Display::TableColumn | Display::TableColumnGroup);
+        let proper = |d: Display| matches!(d, Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup | Display::TableRow | Display::TableColumn | Display::TableColumnGroup | Display::TableCaption);
+        let mut stack = alloc::vec![root];
+        while let Some(b) = stack.pop() {
+            if !matches!(self.boxes[b].content, Content::Children) || self.boxes[b].children.is_empty() {
+                continue;
+            }
+            let d = self.boxes[b].style.display;
+            let table = matches!(d, Display::Table | Display::InlineTable);
+            let group = matches!(d, Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup);
+            let row = d == Display::TableRow;
+            let shown = |tree: &Tree, k: BoxId| tree.boxes[k].style.display;
+            let part = |tree: &Tree, k: BoxId| !tree.boxes[k].style.out_of_flow() && (internal(shown(tree, k)) || shown(tree, k) == Display::TableCaption);
+            // Spaces that go: all in a table, a row group or a row; elsewhere, those between two of a table's parts.
+            let kids = self.boxes[b].children.clone();
+            let mut kept: Vec<BoxId> = Vec::with_capacity(kids.len());
+            for (i, &k) in kids.iter().enumerate() {
+                if self.is_blank(k) && matches!(self.boxes[k].content, Content::Text(_)) {
+                    if table || group || row {
+                        continue;
+                    }
+                    let before = kept.last().is_some_and(|&p| part(self, p));
+                    let after = kids[i + 1..].iter().find(|&&n| !self.is_blank(n)).is_some_and(|&n| part(self, n));
+                    if before && after {
+                        continue;
+                    }
+                }
+                kept.push(k);
+            }
+            // Runs of children wrapped: `wrap(k)` for those that go in one, made `display`.
+            let regroup = |tree: &mut Tree, kids: Vec<BoxId>, wrap: &dyn Fn(&Tree, BoxId) -> bool, display: Display| -> Vec<BoxId> {
+                let mut out: Vec<BoxId> = Vec::with_capacity(kids.len());
+                let mut run: Vec<BoxId> = Vec::new();
+                for k in kids {
+                    if wrap(tree, k) {
+                        run.push(k);
+                    } else {
+                        if !run.is_empty() {
+                            out.push(tree.anonymous(b, display, core::mem::take(&mut run)));
+                        }
+                        out.push(k);
+                    }
+                }
+                if !run.is_empty() {
+                    out.push(tree.anonymous(b, display, run));
+                }
+                out
+            };
+            let in_flow = |tree: &Tree, k: BoxId| !tree.boxes[k].style.out_of_flow();
+            let kids = if table {
+                regroup(self, kept, &|t: &Tree, k| in_flow(t, k) && !proper(shown(t, k)), Display::TableRow)
+            } else if group {
+                regroup(self, kept, &|t: &Tree, k| in_flow(t, k) && shown(t, k) != Display::TableRow, Display::TableRow)
+            } else if row {
+                regroup(self, kept, &|t: &Tree, k| in_flow(t, k) && shown(t, k) != Display::TableCell, Display::TableCell)
+            } else {
+                // Cells not in a row: an anonymous row round each run of them; then rows, row groups and captions
+                // not in a table: an anonymous table round each run of them.
+                let kids = regroup(self, kept, &|t: &Tree, k| in_flow(t, k) && shown(t, k) == Display::TableCell, Display::TableRow);
+                let around = if d == Display::Inline { Display::InlineTable } else { Display::Table };
+                regroup(self, kids, &|t: &Tree, k| in_flow(t, k) && proper(shown(t, k)), around)
+            };
+            self.boxes[b].children = kids;
+            for &k in self.boxes[b].children.iter().rev() {
+                stack.push(k);
+            }
+        }
     }
 
     /// Blocks whose children are some blocks and some inline: each run of inline ones wrapped in an anonymous block,
@@ -729,11 +839,18 @@ impl Builder<'_> {
             _ => Content::Children,
         };
         let walk = matches!(content, Content::Children);
-        // A table cell's colspan, kept for the layout in its style's grid_column span.
-        let style = match (name, el.attr("colspan").and_then(|c| c.trim().parse::<u32>().ok())) {
-            ("td" | "th", Some(span)) if span > 1 => {
+        // A table cell's colspan and rowspan, kept for the layout in its style's grid_column and grid_row spans (a
+        // rowspan of 0: to the end of its row group, kept as u32::MAX).
+        let span = |a: &str| el.attr(a).and_then(|c| counters::html_integer(c)).filter(|&n| n >= 0);
+        let style = match (name, span("colspan"), span("rowspan")) {
+            ("td" | "th", cols, rows) if cols.is_some_and(|c| c > 1) || rows.is_some_and(|r| r != 1) => {
                 let mut s = (*style).clone();
-                s.grid_column.span = span.min(1000);
+                if let Some(c) = cols.filter(|&c| c > 1) {
+                    s.grid_column.span = (c as u32).min(1000);
+                }
+                if let Some(r) = rows.filter(|&r| r != 1) {
+                    s.grid_row.span = if r == 0 { u32::MAX } else { (r as u32).min(65534) };
+                }
                 Arc::new(s)
             }
             _ => style,
@@ -771,7 +888,7 @@ impl Builder<'_> {
             }
             match &bx.content {
                 Content::Text(t) => {
-                    let keep = matches!(bx.style.white_space, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::PreLine);
+                    let keep = matches!(bx.style.white_space, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::BreakSpaces);
                     if !keep && t.chars().all(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C')) {
                         continue;
                     }
@@ -820,6 +937,6 @@ impl Style {
 
     /// Whether its words are kept as they're written (pre and the like).
     pub fn pre(&self) -> bool {
-        matches!(self.white_space, WhiteSpace::Pre | WhiteSpace::PreWrap)
+        matches!(self.white_space, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces)
     }
 }

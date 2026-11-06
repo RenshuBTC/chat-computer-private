@@ -66,11 +66,16 @@ if ($fw -eq 'UEFI') {
     $own = Join-Path $Win 'own-os.ps1'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $own -Unattended -NoRestart
     Check ($LASTEXITCODE -eq 0) 'own-os.ps1 ran'
-    $entries = Get-OwnBootEntries
-    Check ($entries.Count -eq 1) 'one "Chat Computer (own system)" entry in the power-on menu'
+    $entries = Get-OwnFirmwareEntries
+    Check ($entries.Count -eq 1) 'one "Chat Computer (own system)" entry in the firmware''s power-on menu'
+    # (Nothing after its path: Windows' own data there, "WINDOWS" and its BCD object, is what shim takes for the name
+    # of a file to start, "Failed to open \EFI\chatcomputer-own\...", with a wait of 2 seconds.)
+    Check ($entries.Count -eq 1 -and $entries[0].Option.Optional.Length -eq 0) 'with nothing after its path for shim to misread'
+    $listed = Get-OwnBootEntries
+    Check ($listed.Count -le 1) ('Windows lists it at most once (' + $listed.Count + ')')
     # (Through shim when Secure Boot is on and its own list doesn't have the key, and the firmware starts shim.)
     $throughShim = $entries.Count -eq 1 -and [string]$entries[0].Path -match '(?i)\\shimx64\.efi$'
-    Write-Host ('The entry starts: ' + $(if ($entries.Count -eq 1) { $entries[0].Path } else { '?' }))
+    Write-Host ('The entry starts: ' + $(if ($entries.Count -eq 1) { $entries[0].Path + ' (Boot{0:X4})' -f $entries[0].Number } else { '?' }))
     if ($sb -ne $true) { Check (-not $throughShim) 'with Secure Boot off, not through shim' }
     (& bcdedit.exe /enum firmware) | Out-File -FilePath (Join-Path $Out 'bcdedit-after.txt') -Encoding utf8
     $esp = Get-WindowsEsp
@@ -114,11 +119,12 @@ if ($fw -eq 'UEFI') {
         } finally {
             Dismount-EspPartition $m
         }
-        Check ((Get-OwnBootEntries).Count -eq 1) 'still one entry in the power-on menu'
+        Check ((Get-OwnFirmwareEntries).Count -eq 1) 'still one entry in the power-on menu'
     }
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $own -Remove -Unattended
     Check ($LASTEXITCODE -eq 0) 'own-os.ps1 -Remove ran'
-    Check ((Get-OwnBootEntries).Count -eq 0) 'the entry is gone'
+    Check ((Get-OwnFirmwareEntries).Count -eq 0) 'the entry is gone'
+    Check ((Get-OwnBootEntries).Count -eq 0) 'and Windows lists none'
     Check ($null -eq (Get-OwnKey)) 'the key is gone'
     $m = Mount-EspPartition $esp
     try {

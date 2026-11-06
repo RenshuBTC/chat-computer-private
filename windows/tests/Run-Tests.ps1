@@ -563,9 +563,81 @@ Assert-True (-not (Test-BytesContain ([byte[]](0, 1, 2, 3, 4)) ([byte[]](3, 2)))
 Assert-True (-not (Test-BytesContain ([byte[]](0x12, 0x34)) ([byte[]](0x23)))) 'own system: half of one byte and half of the next are not a byte'
 Assert-True (-not (Test-BytesContain $null ([byte[]](1)))) 'own system: nothing to look in'
 Assert-True (-not (Test-BytesContain ([byte[]](1)) ([byte[]](1, 2)))) 'own system: longer than what it is looked for in'
-# Its power-on entry (with the bcdedit stand-in from above).
-$Script:BcdCalls = New-Object System.Collections.ArrayList
-$Script:BcdFail = ''
+# Its power-on entry, read from and written to the firmware's own list (with stand-ins for its variables and for
+# bcdedit, which make the copy of Windows Boot Manager's entry Windows makes: on the same partition, with Windows' own
+# data after its path, "WINDOWS" and its BCD object, which shim would take for the name of a file to start).
+function New-TestOption([string]$Description, [string]$Path, [byte[]]$Optional) {
+    # (GPT partition 1, from sector 2048, 204800 sectors.)
+    $hd = New-Object byte[] 38
+    [Array]::Copy([BitConverter]::GetBytes([uint32]1), 0, $hd, 0, 4)
+    [Array]::Copy([BitConverter]::GetBytes([uint64]2048), 0, $hd, 4, 8)
+    [Array]::Copy([BitConverter]::GetBytes([uint64]204800), 0, $hd, 12, 8)
+    [Array]::Copy(([guid]'5c8b2b1e-91f4-4c4e-8d2a-6f3e0b7a1c22').ToByteArray(), 0, $hd, 20, 16)
+    $hd[36] = 2
+    $hd[37] = 2
+    $nodes = New-Object System.Collections.ArrayList
+    [void]$nodes.Add([pscustomobject]@{ Type = 4; SubType = 1; Data = $hd })
+    [void]$nodes.Add([pscustomobject]@{ Type = 4; SubType = 4; Data = [Text.Encoding]::Unicode.GetBytes($Path + [char]0) })
+    if ($null -eq $Optional) { $Optional = New-Object byte[] 0 }
+    return , (Write-EfiLoadOption ([pscustomobject]@{ Attributes = [uint32]1; Description = $Description; Nodes = $nodes; Optional = $Optional }))
+}
+function New-WindowsTag([string]$Id) {
+    $head = [byte[]](0x57, 0x49, 0x4E, 0x44, 0x4F, 0x57, 0x53, 0, 1, 0, 0, 0, 0x88, 0, 0, 0, 0x78, 0, 0, 0)
+    return , [byte[]]($head + [Text.Encoding]::Unicode.GetBytes('BCDOBJECT=' + $Id + [char]0))
+}
+$wbm = New-TestOption 'Windows Boot Manager' '\EFI\Microsoft\Boot\bootmgfw.efi' (New-WindowsTag '{9dea862c-5cdd-4e70-acc1-f32b344d4795}')
+$o = Read-EfiLoadOption $wbm
+Assert-Equal 'Windows Boot Manager' $o.Description 'load option: its description'
+Assert-Equal '\EFI\Microsoft\Boot\bootmgfw.efi' (Get-EfiOptionPath $o) 'load option: the file it starts'
+Assert-Equal '{9dea862c-5cdd-4e70-acc1-f32b344d4795}' (Get-WindowsBcdObject $o.Optional) 'load option: the BCD object Windows tied it to'
+Assert-Equal ([BitConverter]::ToString($wbm)) ([BitConverter]::ToString((Write-EfiLoadOption $o))) 'load option: written back the same'
+Assert-Equal $null (Read-EfiLoadOption ([byte[]](1, 0, 0, 0, 0xFF, 0x7F, 0x41, 0))) 'load option: its description unended: not one'
+Assert-Equal $null (Read-EfiLoadOption ([byte[]](1, 0, 0, 0, 0x40, 0, 0x41, 0, 0, 0, 4, 4))) 'load option: a path longer than its bytes: not one'
+Assert-Equal $null (Get-WindowsBcdObject (New-Object byte[] 0)) 'load option: no optional data: not Windows'' own'
+Assert-Equal $null (Get-WindowsBcdObject ([Text.Encoding]::Unicode.GetBytes('\EFI\x\grubx64.efi'))) 'load option: a file named after its path: not Windows'' own'
+Set-EfiOptionPath -Option $o -Path '\EFI\chatcomputer-own\shimx64.efi'
+Assert-Equal '\EFI\chatcomputer-own\shimx64.efi' (Get-EfiOptionPath (Read-EfiLoadOption (Write-EfiLoadOption $o))) 'load option: pointed at another file'
+Assert-Equal 2 $o.Nodes.Count 'load option: its partition kept'
+$Script:Fw = @{}
+$Script:FwWrites = New-Object System.Collections.ArrayList
+$realGetVar = ${function:Get-OwnUefiVariable}
+$realSetVar = ${function:Set-OwnUefiVariable}
+function Get-OwnUefiVariable {
+    param([Parameter(Mandatory = $true)][string]$Name, [string]$Guid = $Script:ShimLockGuid)
+    if ($Script:Fw.ContainsKey($Guid + '/' + $Name)) { return , [byte[]]$Script:Fw[$Guid + '/' + $Name] }
+    return $null
+}
+function Set-OwnUefiVariable {
+    param([Parameter(Mandatory = $true)][string]$Name, [AllowNull()][byte[]]$Value, [string]$Guid = $Script:ShimLockGuid)
+    [void]$Script:FwWrites.Add($Name)
+    if ($null -eq $Value) { $Script:Fw.Remove($Guid + '/' + $Name) } else { $Script:Fw[$Guid + '/' + $Name] = $Value }
+}
+function Set-TestVar([string]$Name, [byte[]]$Value) { $Script:Fw[$Script:EfiGlobalGuid + '/' + $Name] = $Value }
+function Get-TestVar([string]$Name) {
+    $k = $Script:EfiGlobalGuid + '/' + $Name
+    if ($Script:Fw.ContainsKey($k)) { return , [byte[]]$Script:Fw[$k] }
+    return $null
+}
+function Get-TestOrder {
+    $b = Get-TestVar 'BootOrder'
+    $order = @()
+    if ($null -ne $b) { for ($i = 0; $i + 1 -lt $b.Length; $i += 2) { $order += [int][BitConverter]::ToUInt16($b, $i) } }
+    return ($order -join ',')
+}
+function Set-TestOrder([int[]]$Order) {
+    $b = New-Object byte[] (2 * $Order.Count)
+    for ($k = 0; $k -lt $Order.Count; $k++) { [Array]::Copy([BitConverter]::GetBytes([uint16]$Order[$k]), 0, $b, 2 * $k, 2) }
+    Set-TestVar 'BootOrder' $b
+}
+function Find-TestTagged([string]$Id) {
+    foreach ($k in @($Script:Fw.Keys)) {
+        if ($k -notmatch '/Boot([0-9A-F]{4})$') { continue }
+        $number = [Convert]::ToInt32($Matches[1], 16)
+        $option = Read-EfiLoadOption $Script:Fw[$k]
+        if ($null -ne $option -and (Get-WindowsBcdObject $option.Optional) -eq $Id) { return $number }
+    }
+    return $null
+}
 function bcdedit.exe {
     $a = @($args)
     $global:LASTEXITCODE = 0
@@ -573,23 +645,74 @@ function bcdedit.exe {
     [void]$Script:BcdCalls.Add($a -join ' ')
     if ($a[0] -eq '/copy') {
         $Script:Bcd += (New-BcdBlock $Script:BcdNewId '\EFI\Microsoft\Boot\bootmgfw.efi')
+        Set-TestVar 'Boot0001' (New-TestOption $a[3] '\EFI\Microsoft\Boot\bootmgfw.efi' (New-WindowsTag $Script:BcdNewId))
         return ('The entry was successfully copied to ' + $Script:BcdNewId + '.')
     }
+    if ($a[0] -eq '/set' -and $a[2] -eq 'path') {
+        $name = 'Boot{0:X4}' -f (Find-TestTagged $a[1])
+        $option = Read-EfiLoadOption (Get-TestVar $name)
+        Set-EfiOptionPath -Option $option -Path $a[3]
+        Set-TestVar $name (Write-EfiLoadOption $option)
+    } elseif ($a[0] -eq '/set' -and $a[2] -eq 'displayorder') {
+        $order = @((Get-TestOrder) -split ',' | Where-Object { $_ } | ForEach-Object { [int]$_ })
+        Set-TestOrder (@($order) + @(Find-TestTagged $a[3]))
+    } elseif ($a[0] -eq '/delete') {
+        # (Windows deletes the entry's variable with its BCD object, and takes it out of the menu.)
+        $n = Find-TestTagged $a[1]
+        if ($null -ne $n) {
+            $Script:Fw.Remove($Script:EfiGlobalGuid + '/' + ('Boot{0:X4}' -f $n))
+            Set-TestOrder @((Get-TestOrder) -split ',' | Where-Object { $_ } | ForEach-Object { [int]$_ } | Where-Object { $_ -ne $n })
+        }
+    }
 }
+$Script:BcdCalls = New-Object System.Collections.ArrayList
+$Script:BcdFail = ''
 $Script:Bcd = $bcdEnglish
-Assert-Equal $Script:BcdNewId (Get-OwnBootEntry) 'own entry: made when it is not there'
-Assert-Equal '/copy {bootmgr} /d Chat Computer (own system)' $Script:BcdCalls[0] 'own entry: a copy of Windows Boot Manager''s'
-Assert-Equal ('/set ' + $Script:BcdNewId + ' path \EFI\chatcomputer-own\chatcomputer.efi') $Script:BcdCalls[1] 'own entry: starts Chat Computer''s own system'
-Assert-Equal ('/set {fwbootmgr} displayorder ' + $Script:BcdNewId + ' /addlast') $Script:BcdCalls[2] 'own entry: last in the menu'
-$Script:Bcd = $bcdEnglish + (New-BcdBlock '{bbbbbbbb-0000-4000-8000-000000000001}' '\EFI\ChatComputer-Own\chatcomputer.efi')
+Set-TestVar 'Boot0000' $wbm
+Set-TestVar 'Boot0002' (New-TestOption 'UEFI: PXE IPv4' '' $null)
+Set-TestOrder @(0, 2)
+Assert-Equal 1 (Get-OwnBootEntry) 'own entry: made when it is not there'
+Assert-Equal ('/copy {bootmgr} /d Chat Computer (own system)|/set ' + $Script:BcdNewId + ' path \EFI\chatcomputer-own\chatcomputer.efi|' +
+              '/set {fwbootmgr} displayorder ' + $Script:BcdNewId + ' /addlast|/delete ' + $Script:BcdNewId) ($Script:BcdCalls -join '|') 'own entry: Windows makes it, then lets go of it'
+$own = Read-EfiLoadOption (Get-TestVar 'Boot0001')
+Assert-Equal 0 $own.Optional.Length 'own entry: without Windows'' data, which shim takes for a file to start'
+Assert-Equal '\EFI\chatcomputer-own\chatcomputer.efi' (Get-EfiOptionPath $own) 'own entry: starts Chat Computer''s own system'
+Assert-Equal 'Chat Computer (own system)' $own.Description 'own entry: its name'
+Assert-Equal ([BitConverter]::ToString([byte[]]$o.Nodes[0].Data)) ([BitConverter]::ToString([byte[]]$own.Nodes[0].Data)) 'own entry: on Windows Boot Manager''s partition'
+Assert-Equal '0,2,1' (Get-TestOrder) 'own entry: last in the menu, once'
 $Script:BcdCalls.Clear()
-Assert-Equal '{bbbbbbbb-0000-4000-8000-000000000001}' (Get-OwnBootEntry) 'own entry: the one already there'
-Assert-Equal 0 $Script:BcdCalls.Count 'own entry: nothing added when it is there'
-Assert-Equal '{bbbbbbbb-0000-4000-8000-000000000001}' (Get-OwnBootEntry -Path '\EFI\chatcomputer-own\shimx64.efi') 'own entry: the same one, through shim'
-Assert-Equal '/set {bbbbbbbb-0000-4000-8000-000000000001} path \EFI\chatcomputer-own\shimx64.efi' ($Script:BcdCalls -join ' | ') 'own entry: pointed at shim'
+$Script:FwWrites.Clear()
+Assert-Equal 1 (Get-OwnBootEntry) 'own entry: the one already there'
+Assert-Equal 0 ($Script:BcdCalls.Count + $Script:FwWrites.Count) 'own entry: nothing changed when it is as it should be'
+Assert-Equal 1 (Get-OwnBootEntry -Path '\EFI\chatcomputer-own\shimx64.efi') 'own entry: the same one, through shim'
+Assert-Equal '\EFI\chatcomputer-own\shimx64.efi' (Get-EfiOptionPath (Read-EfiLoadOption (Get-TestVar 'Boot0001'))) 'own entry: pointed at shim'
+Assert-Equal 'Boot0001' ($Script:FwWrites -join '|') 'own entry: only its own variable written'
+Assert-Equal 0 $Script:BcdCalls.Count 'own entry: Windows not asked'
+# One made before (Windows' own, which shim misread), and one too many: mended, and the other deleted.
+$Script:Fw = @{}
+Set-TestVar 'Boot0000' $wbm
+Set-TestVar 'Boot0004' (New-TestOption 'Chat Computer (own system)' '\EFI\chatcomputer-own\shimx64.efi' (New-WindowsTag '{bbbbbbbb-0000-4000-8000-000000000001}'))
+Set-TestVar 'Boot0007' (New-TestOption 'Chat Computer (own system)' '\EFI\ChatComputer-Own\chatcomputer.efi' $null)
+Set-TestOrder @(0, 4, 7)
+$Script:BcdCalls.Clear()
+Assert-Equal 4 (Get-OwnBootEntry -Path '\EFI\chatcomputer-own\shimx64.efi') 'own entry: the one made before'
+Assert-Equal '/delete {bbbbbbbb-0000-4000-8000-000000000001}' ($Script:BcdCalls -join '|') 'own entry: Windows lets go of it'
+Assert-Equal 0 (Read-EfiLoadOption (Get-TestVar 'Boot0004')).Optional.Length 'own entry: mended'
+Assert-Equal '\EFI\chatcomputer-own\shimx64.efi' (Get-EfiOptionPath (Read-EfiLoadOption (Get-TestVar 'Boot0004'))) 'own entry: still through shim'
+Assert-Equal $null (Get-TestVar 'Boot0007') 'own entry: the one too many deleted'
+Assert-Equal '0,4' (Get-TestOrder) 'own entry: and taken out of the menu'
+Set-OwnBootNext 4
+Assert-Equal '04-00' ([BitConverter]::ToString((Get-TestVar 'BootNext'))) 'own entry: started once, the next time'
+$entries = Get-OwnFirmwareEntries
+Assert-Equal 1 $entries.Count 'own entry: one in the menu'
+Remove-OwnFirmwareEntry $entries[0]
+Assert-Equal $null (Get-TestVar 'Boot0004') 'own entry: removed'
+Assert-Equal '0' (Get-TestOrder) 'own entry: out of the menu'
 Assert-Equal 0 (Get-SetupBootEntries).Count 'own entry: not the installer''s entry'
 Assert-Equal 1 (Get-ChatComputerBootEntries).Count 'own entry: not Linux Chat Computer''s entry'
 Remove-Item Function:\bcdedit.exe
+Set-Item Function:\Get-OwnUefiVariable $realGetVar
+Set-Item Function:\Set-OwnUefiVariable $realSetVar
 # The key it signs with: one the PC's Secure Boot already trusts (ClaudeOS's, made before the name changed, too: a PC
 # that approved it starts Chat Computer with nothing to approve), else Chat Computer's own, else a new one.
 $kNew = [pscustomobject]@{ FriendlyName = 'Chat Computer Secure Boot key'; Thumbprint = 'NEW' }

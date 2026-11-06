@@ -19,6 +19,7 @@ $Script:ShimLockGuid = '605dab50-e046-4300-abb6-3dd810dd8b23'  # shim's GUID: Mo
 $Script:OwnMokPassword = 'hello'                 # typed on the blue screen (its keys are the same on QWERTY, QWERTZ and AZERTY)
 $Script:OwnMokMark = 'mok.txt'                   # in the work folder: where the key's approval on the blue screen is
 $Script:OwnVarGuid = '1dd7d236-3557-417b-b0ab-6cf839b24829'  # Chat Computer's own firmware variables' (os/boot/src/uefi.rs)
+$Script:EfiGlobalGuid = '8be4df61-93ca-11d2-aa0d-00e098032b8c'  # the UEFI spec's own variables' (BootOrder, Boot####, BootNext)
 $Script:OwnStartedVar = 'ChatComputerStarted'    # its start-up stage's mark that it started (os/boot/src/main.rs)
 $Script:OwnSettings = 'settings.txt'            # read by the kernel at start-up (os/kernel/src/settings.rs)
 $Script:OwnMemory = 'memory.bin'                # the conversation, kept across restarts (os/remember)
@@ -1032,16 +1033,180 @@ function Get-OwnBootEntries {
     return , @(Get-FirmwareBootEntries | Where-Object { $_.Path -match ('(?i)^\\EFI\\' + $Script:OwnDir + '\\') -and $_.Id -ne '{fwbootmgr}' })
 }
 
-function Get-OwnBootEntry {
-    # Chat Computer's own system's entry in the power-on menu, starting $Path (\EFI\...): made if it isn't there, its
-    # path set if it starts another file (shim, or the start-up file itself). Returns its {id}.
-    param([string]$Path = ('\EFI\' + $Script:OwnDir + '\' + $Script:OwnFile))
-    $entries = Get-OwnBootEntries
-    if ($entries.Count -gt 0) {
-        if ([string]$entries[0].Path -ne $Path) { Invoke-Bcdedit @('/set', $entries[0].Id, 'path', $Path) }
-        return $entries[0].Id
+function Read-EfiLoadOption {
+    # A Boot#### variable's bytes (an EFI_LOAD_OPTION, UEFI spec 3.1.3), read: its attributes, its description, the
+    # nodes of its device path (each one's type, subtype and data, up to the path's end) and its optional data
+    # ($null if it isn't one).
+    param([AllowNull()][byte[]]$Bytes)
+    if ($null -eq $Bytes -or $Bytes.Length -lt 6) { return $null }
+    $attributes = [BitConverter]::ToUInt32($Bytes, 0)
+    $listLength = [int][BitConverter]::ToUInt16($Bytes, 4)
+    $i = 6
+    $description = New-Object System.Text.StringBuilder
+    while ($true) {
+        if ($i + 1 -ge $Bytes.Length) { return $null }
+        $c = [BitConverter]::ToUInt16($Bytes, $i)
+        $i += 2
+        if ($c -eq 0) { break }
+        [void]$description.Append([char]$c)
     }
-    return (New-FirmwareBootEntry -Name $Script:OwnEntryName -Path $Path)
+    $end = $i + $listLength
+    if ($end -gt $Bytes.Length) { return $null }
+    $nodes = New-Object System.Collections.ArrayList
+    while ($i + 4 -le $end) {
+        $type = [int]$Bytes[$i]
+        $subType = [int]$Bytes[$i + 1]
+        $length = [int][BitConverter]::ToUInt16($Bytes, $i + 2)
+        if ($length -lt 4 -or $i + $length -gt $end) { return $null }
+        if ($type -eq 0x7F -and $subType -eq 0xFF) { break }
+        $data = New-Object byte[] ($length - 4)
+        [Array]::Copy($Bytes, $i + 4, $data, 0, $data.Length)
+        [void]$nodes.Add([pscustomobject]@{ Type = $type; SubType = $subType; Data = $data })
+        $i += $length
+    }
+    $optional = New-Object byte[] ($Bytes.Length - $end)
+    [Array]::Copy($Bytes, $end, $optional, 0, $optional.Length)
+    return [pscustomobject]@{ Attributes = $attributes; Description = $description.ToString(); Nodes = $nodes; Optional = $optional }
+}
+
+function Write-EfiLoadOption {
+    # A load option's bytes again (Read-EfiLoadOption's object), its device path ended.
+    param([Parameter(Mandatory = $true)]$Option)
+    $path = New-Object IO.MemoryStream
+    foreach ($n in $Option.Nodes) {
+        $length = 4 + $n.Data.Length
+        $path.Write([byte[]]([byte]$n.Type, [byte]$n.SubType, [byte]($length -band 0xFF), [byte]($length -shr 8)), 0, 4)
+        $path.Write([byte[]]$n.Data, 0, $n.Data.Length)
+    }
+    $path.Write([byte[]](0x7F, 0xFF, 4, 0), 0, 4)
+    $out = New-Object IO.MemoryStream
+    $out.Write([BitConverter]::GetBytes([uint32]$Option.Attributes), 0, 4)
+    $out.Write([BitConverter]::GetBytes([uint16]$path.Length), 0, 2)
+    $description = [Text.Encoding]::Unicode.GetBytes([string]$Option.Description + [char]0)
+    $out.Write($description, 0, $description.Length)
+    $out.Write($path.ToArray(), 0, [int]$path.Length)
+    if ($Option.Optional.Length -gt 0) { $out.Write([byte[]]$Option.Optional, 0, $Option.Optional.Length) }
+    return , $out.ToArray()
+}
+
+function Get-EfiOptionPath {
+    # The file a load option starts (its file path nodes, joined: \EFI\...), or '' when it names none.
+    param([Parameter(Mandatory = $true)]$Option)
+    $parts = @($Option.Nodes | Where-Object { $_.Type -eq 4 -and $_.SubType -eq 4 } |
+        ForEach-Object { [Text.Encoding]::Unicode.GetString([byte[]]$_.Data).TrimEnd([char]0) })
+    return (($parts -join '\') -replace '\\{2,}', '\')
+}
+
+function Set-EfiOptionPath {
+    # The load option made to start $Path: its file path nodes replaced by one that names it, where the first was (or
+    # after the device's nodes, if it named no file).
+    param([Parameter(Mandatory = $true)]$Option, [Parameter(Mandatory = $true)][string]$Path)
+    $file = [pscustomobject]@{ Type = 4; SubType = 4; Data = [Text.Encoding]::Unicode.GetBytes($Path + [char]0) }
+    $nodes = New-Object System.Collections.ArrayList
+    $placed = $false
+    foreach ($n in $Option.Nodes) {
+        if ($n.Type -eq 4 -and $n.SubType -eq 4) {
+            if (-not $placed) { [void]$nodes.Add($file); $placed = $true }
+        } else {
+            [void]$nodes.Add($n)
+        }
+    }
+    if (-not $placed) { [void]$nodes.Add($file) }
+    $Option.Nodes = $nodes
+}
+
+function Get-WindowsBcdObject {
+    # The BCD object Windows tied a power-on entry to, from what it adds to its own entries' optional data
+    # ("WINDOWS", then "BCDOBJECT={...}"): its {id}, or $null when it's someone else's entry.
+    param([AllowNull()][byte[]]$Optional)
+    if ($null -eq $Optional -or $Optional.Length -lt 8) { return $null }
+    if ([Text.Encoding]::ASCII.GetString($Optional, 0, 8) -ne ('WINDOWS' + [char]0)) { return $null }
+    $m = [regex]::Match([Text.Encoding]::Unicode.GetString($Optional, 8, ($Optional.Length - 8) -band -2), 'BCDOBJECT=(\{[0-9A-Fa-f-]{36}\})')
+    if ($m.Success) { return $m.Groups[1].Value.ToLowerInvariant() }
+    return $null
+}
+
+function Get-OwnBootOrder {
+    # The firmware's power-on menu, in its order: the Boot#### numbers in BootOrder.
+    $b = Get-OwnUefiVariable -Name 'BootOrder' -Guid $Script:EfiGlobalGuid
+    $order = New-Object System.Collections.ArrayList
+    if ($null -ne $b) {
+        for ($i = 0; $i + 1 -lt $b.Length; $i += 2) { [void]$order.Add([int][BitConverter]::ToUInt16($b, $i)) }
+    }
+    return , @($order)
+}
+
+function Set-OwnBootOrder {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][int[]]$Order)
+    $b = New-Object byte[] (2 * $Order.Count)
+    for ($k = 0; $k -lt $Order.Count; $k++) { [Array]::Copy([BitConverter]::GetBytes([uint16]$Order[$k]), 0, $b, 2 * $k, 2) }
+    Set-OwnUefiVariable -Name 'BootOrder' -Value $b -Guid $Script:EfiGlobalGuid
+}
+
+function Get-OwnFirmwareEntries {
+    # Chat Computer's own entries in the power-on menu, as the firmware has them (the menu's entries that start a file
+    # in \EFI\chatcomputer-own): each one's number (Boot####), what it is (Read-EfiLoadOption), the file it starts, and
+    # the BCD object Windows tied it to, if Windows made it its own.
+    $found = New-Object System.Collections.ArrayList
+    $order = Get-OwnBootOrder
+    foreach ($n in $order) {
+        $option = Read-EfiLoadOption (Get-OwnUefiVariable -Name ('Boot{0:X4}' -f $n) -Guid $Script:EfiGlobalGuid)
+        if ($null -eq $option) { continue }
+        $path = Get-EfiOptionPath $option
+        if ($path -notmatch ('(?i)^\\EFI\\' + [regex]::Escape($Script:OwnDir) + '\\')) { continue }
+        [void]$found.Add([pscustomobject]@{ Number = $n; Option = $option; Path = $path; Windows = (Get-WindowsBcdObject $option.Optional) })
+    }
+    return , @($found)
+}
+
+function Remove-OwnFirmwareEntry {
+    # One of Chat Computer's entries taken out of the power-on menu: by Windows, when Windows made it its own; its
+    # variable deleted, and its number taken out of the menu's order.
+    param([Parameter(Mandatory = $true)]$Entry)
+    if ($Entry.Windows) { Invoke-Bcdedit @('/delete', $Entry.Windows) }
+    Set-OwnUefiVariable -Name ('Boot{0:X4}' -f $Entry.Number) -Value $null -Guid $Script:EfiGlobalGuid
+    $order = Get-OwnBootOrder
+    if ($order -contains $Entry.Number) { Set-OwnBootOrder @($order | Where-Object { $_ -ne $Entry.Number }) }
+    Write-SetupLog ('Power-on entry Boot{0:X4} deleted' -f $Entry.Number)
+}
+
+function Get-OwnBootEntry {
+    # Chat Computer's own system's entry in the power-on menu, starting $Path (\EFI\...). Returns its number
+    # (Boot####). Windows makes it (a copy of Windows Boot Manager's entry, so the firmware finds it on the same
+    # partition); then it's written again without what Windows adds to its own entries ("WINDOWS" and its BCD
+    # object), which shim takes for the name of the file to start: "Failed to open \EFI\chatcomputer-own\...", and a
+    # wait of 2 seconds, before every start. Windows lets go of it (its BCD object is deleted), as it does a Linux's
+    # entry. An entry made before is mended the same way, one that starts another file (shim, or the start-up file
+    # itself) is pointed at $Path, and any more than one are deleted.
+    param([string]$Path = ('\EFI\' + $Script:OwnDir + '\' + $Script:OwnFile))
+    $entries = Get-OwnFirmwareEntries
+    if ($entries.Count -eq 0) {
+        $null = New-FirmwareBootEntry -Name $Script:OwnEntryName -Path $Path
+        $entries = Get-OwnFirmwareEntries
+        if ($entries.Count -eq 0) { throw 'Windows added Chat Computer to the power-on menu, but setup could not find it in the firmware''s list.' }
+    }
+    $keep = $entries[0]
+    for ($k = 1; $k -lt $entries.Count; $k++) { Remove-OwnFirmwareEntry $entries[$k] }
+    if ($keep.Option.Optional.Length -gt 0 -or $keep.Path -ne $Path) {
+        $option = $keep.Option
+        Set-EfiOptionPath -Option $option -Path $Path
+        $option.Optional = New-Object byte[] 0
+        $bytes = Write-EfiLoadOption $option
+        # (Windows first: deleting its BCD object deletes the entry's variable too.)
+        if ($keep.Windows) { Invoke-Bcdedit @('/delete', $keep.Windows) }
+        Set-OwnUefiVariable -Name ('Boot{0:X4}' -f $keep.Number) -Value $bytes -Guid $Script:EfiGlobalGuid
+        $order = Get-OwnBootOrder
+        if ($order -notcontains $keep.Number) { Set-OwnBootOrder (@($order) + @($keep.Number)) }
+        Write-SetupLog ('Power-on entry Boot{0:X4} written: {1}' -f $keep.Number, $Path)
+    }
+    return $keep.Number
+}
+
+function Set-OwnBootNext {
+    # The PC starts power-on entry $Number when it next starts, once (as bcdedit's bootsequence does).
+    param([Parameter(Mandatory = $true)][int]$Number)
+    Set-OwnUefiVariable -Name 'BootNext' -Value ([BitConverter]::GetBytes([uint16]$Number)) -Guid $Script:EfiGlobalGuid
+    Write-SetupLog ('Next start: Boot{0:X4}' -f $Number)
 }
 
 function Assert-OwnRoom {
@@ -1406,7 +1571,7 @@ function Start-OwnSystem {
                 return
             }
         }
-        Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
+        Set-OwnBootNext $id
         Write-SetupLog 'Restarting into Chat Computer'
         & shutdown.exe /r /t 0
         return
@@ -1445,7 +1610,7 @@ function Start-OwnSystem {
             return
         }
         Set-OwnMokState -WorkDir $WorkDir -Thumbprint $cert.Thumbprint -State 'shown'
-        Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
+        Set-OwnBootNext $id
         Write-SetupLog 'Restarting to the blue screen'
         & shutdown.exe /r /t 0
         return
@@ -1487,7 +1652,7 @@ function Start-OwnSystem {
         }
     }
     # (After the setup screen, the PC starts Chat Computer, once: the next start is Windows again.)
-    Invoke-Bcdedit @('/set', '{fwbootmgr}', 'bootsequence', $id)
+    Set-OwnBootNext $id
     Write-SetupLog 'Restarting into the setup screen'
     $out = & shutdown.exe /r /fw /t 0 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -1500,7 +1665,7 @@ function Start-OwnSystem {
 function Remove-OwnSystem {
     param([switch]$Unattended, [string]$WorkDir)
     Write-Step 'Remove Chat Computer''s own system from this PC'
-    $entries = Get-OwnBootEntries
+    $entries = Get-OwnFirmwareEntries
     $cert = Get-OwnKey
     Write-Line ('This takes "' + $Script:OwnEntryName + '" out of the power-on menu and deletes its files from the start-up')
     Write-Line 'partition. Windows stays as it is.'
@@ -1509,7 +1674,12 @@ function Remove-OwnSystem {
         Write-Line 'Nothing was changed.'
         return
     }
-    foreach ($e in $entries) { Invoke-Bcdedit @('/delete', $e.Id) }
+    foreach ($e in $entries) { Remove-OwnFirmwareEntry $e }
+    # (And any Windows still lists as its own, from before.)
+    $left = Get-OwnBootEntries
+    foreach ($e in $left) {
+        try { Invoke-Bcdedit @('/delete', $e.Id) } catch { Write-SetupLog ('Deleting ' + $e.Id + ': ' + $_.Exception.Message) }
+    }
     if ($WorkDir) {
         # (Its last run's log, kept here before its files go.)
         $last = Read-OwnLastRun -WorkDir $WorkDir

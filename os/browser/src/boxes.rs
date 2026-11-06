@@ -142,6 +142,7 @@ impl Tree {
         {
             let mut s = (*t.boxes[body].style).clone();
             s.clip = false;
+            s.scrolls = false;
             t.boxes[body].style = Arc::new(s);
         }
         t.fix_mixed(0);
@@ -511,6 +512,60 @@ impl Builder<'_> {
         }
         if walk && !matches!(name, "select" | "textarea" | "template") {
             self.children_of(node, b);
+            if let Some(fl) = self.styles.first_letter.get(&node).cloned() {
+                self.first_letter(b, fl);
+            }
+        }
+    }
+
+    /// A block's ::first-letter: the first letter of its first line (in the boxes in it, in flow, ::before's too),
+    /// with the punctuation round it, made a box of its own in the first letter's style (inline, or floated). None if
+    /// its first line starts with something else (a picture, an inline-block, a line break).
+    fn first_letter(&mut self, root: BoxId, style: Arc<Style>) {
+        let mut stack: Vec<BoxId> = self.tree.boxes[root].children.iter().rev().copied().collect();
+        while let Some(k) = stack.pop() {
+            let bx = &self.tree.boxes[k];
+            if bx.style.float != Float::None || bx.style.out_of_flow() {
+                continue;
+            }
+            match &bx.content {
+                Content::Text(t) => {
+                    let keep = matches!(bx.style.white_space, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::PreLine);
+                    if !keep && t.chars().all(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C')) {
+                        continue;
+                    }
+                    let n = crate::first_letter::length(t, keep);
+                    if n > 0 {
+                        let (head, tail) = (String::from(&t[..n]), String::from(&t[n..]));
+                        self.split_first_letter(k, head, tail, style);
+                    }
+                    return;
+                }
+                Content::Children if bx.style.display.is_inline_level() && bx.style.display != Display::Inline => return,
+                // (A block in it: its first line is the first, if it has one; what's after it isn't on it.)
+                Content::Children if bx.style.display != Display::Inline => {
+                    stack.clear();
+                    stack.extend(bx.children.iter().rev().copied());
+                }
+                Content::Children => stack.extend(bx.children.iter().rev().copied()),
+                Content::Break | Content::Image { .. } | Content::Control(_) => return,
+            }
+        }
+    }
+
+    /// The text box `k` made two: its first letter (`head`) in a box of the first letter's style, then the rest.
+    fn split_first_letter(&mut self, k: BoxId, head: String, tail: String, style: Arc<Style>) {
+        let Some(parent) = self.tree.boxes[k].parent else { return };
+        let node = self.tree.boxes[k].node;
+        let letter = self.tree.push(node, style.clone(), Content::Children, None);
+        self.tree.push(node, Arc::new(style.inherit(1.0).with_display(Display::Inline)), Content::Text(head), Some(letter));
+        let at = self.tree.boxes[parent].children.iter().position(|&c| c == k).unwrap_or(0);
+        self.tree.boxes[letter].parent = Some(parent);
+        self.tree.boxes[parent].children.insert(at, letter);
+        if tail.is_empty() {
+            self.tree.boxes[parent].children.retain(|&c| c != k);
+        } else {
+            self.tree.boxes[k].content = Content::Text(tail);
         }
     }
 }

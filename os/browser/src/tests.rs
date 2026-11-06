@@ -1652,3 +1652,29 @@ fn ex_and_ch_are_the_font_s_own() {
     let (w, _) = rect(b);
     assert!((w - 20.0 * 10.0 * 1229.0 / 2048.0).abs() < 0.01, "Courier New's 0 (its size the body's: monospace's 13px is only for the size that isn't said): {w}");
 }
+
+#[test]
+fn a_block_s_first_letter_takes_its_own_style_with_the_punctuation_round_it() {
+    let mut p = page("<style>p::first-letter { color: red; font-size: 32px } div::first-letter { color: red }</style>\
+                      <body style='margin:0'><p style='font-size:16px'>\u{201C}Hello,\u{201D} she said.</p><div><div></div>No first letter here</div></body>");
+    let l = laid(&mut p);
+    let texts: Vec<(String, f32, u32)> = l.items.iter().filter_map(|i| if let Paint::Text { text, size, color, .. } = &i.paint { Some((text.clone(), *size, *color)) } else { None }).collect();
+    assert_eq!(texts[0], (String::from("\u{201C}H"), 32.0, RED), "the opening quote and the letter: {texts:?}");
+    assert!(texts[1].0.starts_with("ello") && texts[1].2 != RED, "then the rest in the paragraph's own style: {texts:?}");
+    assert!(texts.iter().any(|(t, _, c)| t.starts_with("No first") && *c != RED), "a block before the words: they aren't on the first line");
+    assert!(crate::first_letter::punctuation(')') && !crate::first_letter::punctuation('a') && !crate::first_letter::punctuation('-'));
+    assert_eq!(crate::first_letter::length(" (T)est", false), 4, "the space, the brackets and the letter");
+    assert_eq!(crate::first_letter::length("\nThe", true), 0, "a kept line break first: the first line has no letter");
+}
+
+#[test]
+fn an_outline_is_drawn_round_the_border_box_over_what_comes_after() {
+    let mut p = page("<body style='margin:0'><div style='margin:10px;width:20px;height:20px;outline:2px solid red;outline-offset:3px'></div>\
+                      <div style='margin:-30px 0 0 0;height:50px;background:blue'></div><div style='outline:2px solid red;outline-offset:inset;width:10px;height:10px'></div></body>");
+    let l = laid(&mut p);
+    let rings: Vec<(usize, f32, f32, f32, f32)> = l.items.iter().enumerate().filter_map(|(k, i)| if let Paint::Border { x, y, w, h, color: RED, .. } = i.paint { Some((k, x, y, w, h)) } else { None }).collect();
+    assert_eq!((rings[0].1, rings[0].2, rings[0].3, rings[0].4), (5.0, 5.0, 30.0, 30.0), "outside its border box by its offset and width");
+    let blue = l.items.iter().position(|i| matches!(i.paint, Paint::Rect { color: BLUE, .. })).unwrap();
+    assert!(rings[0].0 > blue, "over the block after it");
+    assert_eq!((rings[1].3, rings[1].4), (10.0, 10.0), "inset: inside its edge");
+}

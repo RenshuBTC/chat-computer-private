@@ -291,22 +291,25 @@ impl Painter {
                 if alpha(*color) == 0 {
                     return;
                 }
-                let r = Shape::new(m.x(*x), m.y(*y), m.len(*w), m.len(*h), radius.map(|v| m.len(v)));
+                let (sx, sy, sw, sh) = snapped(&m, *x, *y, *w, *h);
+                let r = Shape::new(sx, sy, sw, sh, radius.map(|v| m.len(v)));
                 shape(c, &r, None, clip, *color);
             }
             Paint::Border { x, y, w, h, widths, color, radius } => {
-                let [t, r, b, l] = widths.map(|v| m.len(v));
+                let [t, r, b, l] = widths.map(|v| snapped_width(m.len(v)));
                 let rad = radius.map(|v| m.len(v));
-                let outer = Shape::new(m.x(*x), m.y(*y), m.len(*w), m.len(*h), rad);
+                let (sx, sy, sw, sh) = snapped(&m, *x, *y, *w, *h);
+                let outer = Shape::new(sx, sy, sw, sh, rad);
                 // (Each inner corner rounded less by the wider of the two sides it's between.)
                 let inner_radii = [(rad[0] - t.max(l)).max(0.0), (rad[1] - t.max(r)).max(0.0), (rad[2] - b.max(r)).max(0.0), (rad[3] - b.max(l)).max(0.0)];
                 let inner = Shape::new(outer.x + l, outer.y + t, outer.w - l - r, outer.h - t - b, inner_radii);
                 shape(c, &outer, Some(&inner), clip, *color);
             }
             Paint::SidedBorder { x, y, w, h, widths, colors, radius } => {
-                let [t, r, b, l] = widths.map(|v| m.len(v));
+                let [t, r, b, l] = widths.map(|v| snapped_width(m.len(v)));
                 let rad = radius.map(|v| m.len(v));
-                let outer = Shape::new(m.x(*x), m.y(*y), m.len(*w), m.len(*h), rad);
+                let (sx, sy, sw, sh) = snapped(&m, *x, *y, *w, *h);
+                let outer = Shape::new(sx, sy, sw, sh, rad);
                 let inner_radii = [(rad[0] - t.max(l)).max(0.0), (rad[1] - t.max(r)).max(0.0), (rad[2] - b.max(r)).max(0.0), (rad[3] - b.max(l)).max(0.0)];
                 let inner = Shape::new(outer.x + l, outer.y + t, outer.w - l - r, outer.h - t - b, inner_radii);
                 sided_border(c, &outer, &inner, [t, r, b, l], *colors, clip);
@@ -314,7 +317,8 @@ impl Painter {
             Paint::Shadow { x, y, w, h, radius, dx, dy, blur, spread, color, inset } => {
                 let rad = radius.map(|v| m.len(v));
                 let spread = m.len(*spread);
-                let own = Shape::new(m.x(*x), m.y(*y), m.len(*w), m.len(*h), rad);
+                let (sx, sy, sw, sh) = snapped(&m, *x, *y, *w, *h);
+                let own = Shape::new(sx, sy, sw, sh, rad);
                 if *inset {
                     // (The hole the shadow's cast round: the padding box moved, shrunk by the spread.)
                     let shrink = |r: f32| (r - spread).max(0.0);
@@ -327,15 +331,18 @@ impl Painter {
                 }
             }
             Paint::Picture { x, y, w, h, n, at, radius, pixelated } => {
-                let bx = Shape::new(m.x(*x), m.y(*y), m.len(*w), m.len(*h), radius.map(|v| m.len(v)));
-                let (ax, ay) = (num::round(m.x(at.x)) as i32, num::round(m.y(at.y)) as i32);
-                let (tw, th) = (num::round(m.len(at.w)).max(1.0) as u32, num::round(m.len(at.h)).max(1.0) as u32);
+                let (sx, sy, sw, sh) = snapped(&m, *x, *y, *w, *h);
+                let bx = Shape::new(sx, sy, sw, sh, radius.map(|v| m.len(v)));
+                let (ax, ay, aw, ah) = snapped(&m, at.x, at.y, at.w, at.h);
+                let (ax, ay) = (ax as i32, ay as i32);
+                let (tw, th) = (aw.max(1.0) as u32, ah.max(1.0) as u32);
                 if let Some(px) = self.scaled_picture(*n, tw, th, *pixelated, pictures) {
                     picture(c, &bx, px, ax, ay, tw, th, clip);
                 }
             }
             Paint::Tiles { x, y, w, h, radius, tile, step, repeat, image, pixelated } => {
-                let area = Shape::new(m.x(*x), m.y(*y), m.len(*w), m.len(*h), radius.map(|v| m.len(v)));
+                let (sx, sy, sw, sh) = snapped(&m, *x, *y, *w, *h);
+                let area = Shape::new(sx, sy, sw, sh, radius.map(|v| m.len(v)));
                 let t = Rect::new(m.x(tile.x), m.y(tile.y), m.len(tile.w), m.len(tile.h));
                 let st = (m.len(step.0), m.len(step.1));
                 match image {
@@ -1166,6 +1173,25 @@ impl Shape {
             }
         }
         (n * 255 + 8) / 16
+    }
+}
+
+/// A box's rectangle at whole device pixels, its edges rounded (as Chrome snaps the boxes it paints: backgrounds,
+/// borders, shadows and pictures have sharp edges, wherever layout put them).
+fn snapped(m: &Map, x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    let (x0, y0) = (num::round(m.x(x)), num::round(m.y(y)));
+    let (x1, y1) = (num::round(m.x(x + w)), num::round(m.y(y + h)));
+    (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+}
+
+/// A border's width at whole device pixels (a thinner one than a pixel, a pixel).
+fn snapped_width(w: f32) -> f32 {
+    if w <= 0.0 {
+        0.0
+    } else if w < 1.0 {
+        1.0
+    } else {
+        num::round(w)
     }
 }
 

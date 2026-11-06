@@ -1120,7 +1120,7 @@ impl Page {
     fn fetch_style_pictures(&mut self) {
         let Some(styles) = self.styles.clone() else { return };
         let mut wanted: Vec<String> = Vec::new();
-        let all = styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values());
+        let all = styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values()).chain(styles.first_letter.values());
         for st in all {
             let border = st.border_image.as_ref().and_then(|b| b.source.as_ref());
             for img in [&st.bg, &st.mask].into_iter().flatten().flat_map(|l| l.images.iter().flatten()).chain(border) {

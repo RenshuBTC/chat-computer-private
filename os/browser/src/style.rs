@@ -252,6 +252,13 @@ pub struct Style {
     /// Each side's colour is currentcolor (its initial value): a 3D border (inset, outset, groove, ridge) is then
     /// shaded from Chrome's light grey, not the text's colour.
     pub border_current: [bool; 4],
+    /// The outline: its width (device pixels), style (auto: as a solid one), colour (and whether it's currentcolor)
+    /// and offset.
+    pub outline_width: f32,
+    pub outline_style: BorderStyle,
+    pub outline_color: Color,
+    pub outline_current: bool,
+    pub outline_offset: f32,
     /// Its corners' rounding: top left, top right, bottom right, bottom left (circular: a percentage of its smaller
     /// side, so 50% rounds a square into a circle).
     pub radius: [Len; 4],
@@ -305,6 +312,8 @@ pub struct Style {
     pub visible: bool,
     pub opacity: f32,
     pub clip: bool,
+    /// It's a scroll container (overflow hidden, auto or scroll; not clip): a new formatting context.
+    pub scrolls: bool,
     pub z_index: Option<i32>,
     pub aspect_ratio: Option<f32>,
     /// aspect-ratio: auto <ratio>: a picture's own ratio first, where it has one.
@@ -692,6 +701,11 @@ impl Style {
             border_style: [BorderStyle::None; 4],
             border_color: [values::BLACK; 4],
             border_current: [true; 4],
+            outline_width: 3.0 * dpr,
+            outline_style: BorderStyle::None,
+            outline_color: values::BLACK,
+            outline_current: true,
+            outline_offset: 0.0,
             radius: [Len::ZERO; 4],
             shadows: None,
             border_box: false,
@@ -729,6 +743,7 @@ impl Style {
             visible: true,
             opacity: 1.0,
             clip: false,
+            scrolls: false,
             z_index: None,
             aspect_ratio: None,
             aspect_auto: false,
@@ -888,7 +903,7 @@ impl Style {
 
     /// Whether it starts a new block formatting context (its floats and margins kept inside).
     pub fn new_context(&self) -> bool {
-        self.clip
+        self.scrolls
             || self.float != Float::None
             || self.out_of_flow()
             || matches!(self.display, Display::FlowRoot | Display::InlineBlock | Display::Flex | Display::Grid
@@ -903,6 +918,8 @@ pub struct Styles {
     pub of: Vec<Option<Arc<Style>>>,
     pub before: BTreeMap<NodeId, Arc<Style>>,
     pub after: BTreeMap<NodeId, Arc<Style>>,
+    /// Block containers' ::first-letter styles.
+    pub first_letter: BTreeMap<NodeId, Arc<Style>>,
     /// The web fonts (by their place in Sheets' fonts) some element's words are to be set in: to be fetched, if they
     /// haven't been.
     pub wanted_fonts: alloc::collections::BTreeSet<usize>,
@@ -996,7 +1013,7 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
         dpr,
         rem: units_root.rem,
         root_font: text::Family::Serif.units(),
-        out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new(), wanted_fonts: alloc::collections::BTreeSet::new() },
+        out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new(), first_letter: BTreeMap::new(), wanted_fonts: alloc::collections::BTreeSet::new() },
         fonts: sheets.fonts,
         now: sheets.now,
         scripted: sheets.scripted,
@@ -1265,7 +1282,11 @@ impl Cascade<'_> {
         self.with_font(&mut s);
         // ::before and ::after.
         let pseudo: Vec<usize> = self.index.pseudo.clone();
-        for which in [PseudoElement::Before, PseudoElement::After] {
+        for which in [PseudoElement::Before, PseudoElement::After, PseudoElement::FirstLetter] {
+            // (::first-letter is a block container's.)
+            if which == PseudoElement::FirstLetter && !matches!(s.display, Display::Block | Display::FlowRoot | Display::InlineBlock | Display::ListItem | Display::TableCell | Display::TableCaption) {
+                continue;
+            }
             let mut pf: Vec<(Rank, &Decl)> = Vec::new();
             for &e in &pseudo {
                 let entry = &self.entries[e];
@@ -1285,6 +1306,18 @@ impl Cascade<'_> {
                 continue;
             }
             pf.sort_by(|a, b| a.0.cmp(&b.0));
+            if which == PseudoElement::FirstLetter {
+                // (Inline, unless it floats; never positioned.)
+                let mut fl = self.apply_with(id, &s, &pf, true);
+                if fl.float == Float::None {
+                    fl.display = Display::Inline;
+                }
+                fl.position = Position::Static;
+                fl.content = None;
+                self.with_font(&mut fl);
+                self.out.first_letter.insert(id, Arc::new(fl));
+                continue;
+            }
             let ps = self.apply_pseudo(id, &s, &pf);
             if let Some(mut ps) = ps {
                 self.with_font(&mut ps);
@@ -1432,9 +1465,12 @@ impl Cascade<'_> {
         let important: Vec<&str> = if animated { found.iter().filter(|(_, d)| d.important).map(|(_, d)| d.name.as_str()).collect() } else { Vec::new() };
         for pass in 0..3 {
             if pass == 2 {
-                // (A border's colour is currentcolor unless it's said: the text's, now that it's known.)
+                // (A border's colour, and an outline's, is currentcolor unless it's said: the text's, now that it's
+                // known.)
                 s.border_color = [s.color; 4];
                 s.border_current = [true; 4];
+                s.outline_color = s.color;
+                s.outline_current = true;
             }
             for (_, d) in found {
                 if d.name.starts_with("--") {
@@ -2105,7 +2141,12 @@ fn border_width(v: &[Tok], c: &Ctx) -> Option<f32> {
         Some("thin") => Some(1.0 * c.units.dpr),
         Some("medium") => Some(3.0 * c.units.dpr),
         Some("thick") => Some(5.0 * c.units.dpr),
-        _ => values::length(v, &c.units, 0.0).map(|l| l.px.max(0.0)),
+        // (Whole CSS pixels, as Chrome makes them: down, but one under a pixel up to one.)
+        _ => values::length(v, &c.units, 0.0).map(|l| {
+            let css = l.px.max(0.0) / c.units.dpr;
+            let whole = if css > 0.0 && css < 1.0 { 1.0 } else { crate::num::floor(css + 1e-4) };
+            whole * c.units.dpr
+        }),
     }
 }
 
@@ -2882,6 +2923,56 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 s.border_current[side(name)] = is_current_color(v);
             }
         }
+        "outline" => {
+            // (Its width, style and colour in any order; what it leaves out as they start. auto: as solid.)
+            let (mut w, mut st, mut col, mut ok) = (None, None, None, true);
+            for p in parts(v) {
+                if let Some(i) = ident(p)
+                    && (i == "auto" || border_style(&i).is_some())
+                {
+                    st = Some(if i == "auto" { BorderStyle::Solid } else { border_style(&i).unwrap_or(BorderStyle::None) });
+                } else if let Some(x) = border_width(p, c) {
+                    w = Some(x);
+                } else if let Some(x) = values::color(p, cur) {
+                    col = Some((x, is_current_color(p)));
+                } else {
+                    ok = false;
+                }
+            }
+            if ok {
+                s.outline_width = w.unwrap_or(3.0 * c.units.dpr);
+                s.outline_style = st.unwrap_or(BorderStyle::None);
+                (s.outline_color, s.outline_current) = col.unwrap_or((cur, true));
+            }
+        }
+        "outline-width" => {
+            if let Some(x) = border_width(v, c) {
+                s.outline_width = x;
+            }
+        }
+        "outline-style" => {
+            if let Some(i) = ident(v) {
+                if i == "auto" {
+                    s.outline_style = BorderStyle::Solid;
+                } else if let Some(x) = border_style(&i) {
+                    s.outline_style = x;
+                }
+            }
+        }
+        "outline-color" => {
+            if let Some(x) = values::color(v, cur) {
+                s.outline_color = x;
+                s.outline_current = is_current_color(v);
+            }
+        }
+        "outline-offset" => {
+            // (inset: its width in, so it's drawn inside the border box's edge.)
+            if ident(v).as_deref() == Some("inset") {
+                s.outline_offset = f32::NEG_INFINITY;
+            } else if let Some(l) = values::length(v, &c.units, 0.0) {
+                s.outline_offset = l.px;
+            }
+        }
         "border-radius" | "-webkit-border-radius" => {
             // Up to four: the corners' (horizontal) radii, from the top left round; what's after a "/" (their vertical
             // ones, for ellipses) is left out.
@@ -3302,6 +3393,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             let words: Vec<String> = parts(v).iter().filter_map(|x| ident(x)).collect();
             if name == "overflow" || name == "overflow-x" || words.iter().any(|w| w != "visible") {
                 s.clip = words.iter().any(|w| matches!(w.as_str(), "hidden" | "clip" | "auto" | "scroll" | "overlay"));
+                s.scrolls = words.iter().any(|w| matches!(w.as_str(), "hidden" | "auto" | "scroll" | "overlay"));
             }
         }
         "clip" => {
@@ -3697,6 +3789,20 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
             s.border_color = from.border_color;
             s.border_current = from.border_current;
         }
+        "outline" => {
+            s.outline_width = from.outline_width;
+            s.outline_style = from.outline_style;
+            s.outline_color = from.outline_color;
+            s.outline_current = from.outline_current;
+            s.outline_offset = from.outline_offset;
+        }
+        "outline-width" => s.outline_width = from.outline_width,
+        "outline-style" => s.outline_style = from.outline_style,
+        "outline-color" => {
+            s.outline_color = from.outline_color;
+            s.outline_current = from.outline_current;
+        }
+        "outline-offset" => s.outline_offset = from.outline_offset,
         "float" => s.float = from.float,
         "opacity" => s.opacity = from.opacity,
         "text-decoration" | "text-decoration-line" => {
@@ -3706,7 +3812,10 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         }
         "list-style-type" | "list-style" => s.list_style = from.list_style,
         "text-transform" => s.transform_text = from.transform_text,
-        "overflow" => s.clip = from.clip,
+        "overflow" => {
+            s.clip = from.clip;
+            s.scrolls = from.scrolls;
+        }
         "flex-direction" => s.flex_direction = from.flex_direction,
         "justify-content" => s.justify_content = from.justify_content,
         "align-items" => s.align_items = from.align_items,

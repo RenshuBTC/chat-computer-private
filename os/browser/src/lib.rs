@@ -13,6 +13,7 @@ pub mod boxes;
 pub mod css;
 pub mod dom;
 pub mod effects;
+pub mod first_letter;
 pub mod html;
 pub mod layout;
 pub mod num;

@@ -1301,6 +1301,7 @@ pub struct Compound {
 pub enum PseudoElement {
     Before,
     After,
+    FirstLetter,
 }
 
 #[derive(Clone, Debug)]
@@ -1478,6 +1479,7 @@ fn simple(t: &[Tok], c: &mut Compound, spec: &mut (u32, u32, u32), pe: &mut Opti
                 match name.as_str() {
                     "before" => *pe = Some(PseudoElement::Before),
                     "after" => *pe = Some(PseudoElement::After),
+                    "first-letter" => *pe = Some(PseudoElement::FirstLetter),
                     "slotted" => {
                         // (What's slotted; what the compound before it says of the slot isn't checked.)
                         let end = block_end(t, 2);
@@ -1521,7 +1523,13 @@ fn simple(t: &[Tok], c: &mut Compound, spec: &mut (u32, u32, u32), pe: &mut Opti
                             *pe = Some(if n == "before" { PseudoElement::Before } else { PseudoElement::After });
                             return Some(2);
                         }
-                        "first-line" | "first-letter" => Pseudo::Never,
+                        "first-letter" => {
+                            spec.1 -= 1;
+                            spec.2 += 1;
+                            *pe = Some(PseudoElement::FirstLetter);
+                            return Some(2);
+                        }
+                        "first-line" => Pseudo::Never,
                         "defined" | "scope" | "read-write" | "in-range" | "valid" => {
                             if n == "scope" {
                                 Pseudo::Root

@@ -317,6 +317,81 @@ pub trait Sizes {
     }
 }
 
+/// A border's (or an outline's) paints round `rect`: one all round when its sides are the same (rounded, if the
+/// box is), else each side its own (inset and outset with their top and left, or bottom and right, darker, as Chrome
+/// shades them; a groove's and a ridge's outer half as an inset's or an outset's, and the inner half the other way;
+/// dashes and dots each a rectangle).
+fn edge_paints(rect: Rect, border: [f32; 4], styles: [BorderStyle; 4], colors: [Color; 4], current: [bool; 4], radius: [f32; 4]) -> Vec<Paint> {
+    let (bx, by, bw, bh) = (rect.x, rect.y, rect.w, rect.h);
+    let mut out: Vec<Paint> = Vec::new();
+    // Borders: one all round when its sides are the same (rounded, if the box is), else each side a rectangle
+    // (inset and outset with their top and left, or bottom and right, darker, as Chrome shades them; a groove's
+    // and a ridge's outer half as an inset's or an outset's, and the inner half the other way).
+    let sides: Vec<usize> = (0..4).filter(|&k| border[k] > 0.0 && styles[k] != BorderStyle::None).collect();
+    let shade_as = |k: usize, inner: bool| -> Color {
+        let three = matches!(styles[k], BorderStyle::Inset | BorderStyle::Outset | BorderStyle::Groove | BorderStyle::Ridge);
+        // (Chrome shades a 3D border whose colour is currentcolor from its light grey.)
+        let c = if three && current[k] { 0xFFEE_EEEE } else { colors[k] };
+        let top_left = k == 0 || k == 3;
+        match styles[k] {
+            BorderStyle::Inset => three_d(c, top_left),
+            BorderStyle::Outset => three_d(c, !top_left),
+            BorderStyle::Groove => three_d(c, top_left != inner),
+            BorderStyle::Ridge => three_d(c, top_left == inner),
+            _ => c,
+        }
+    };
+    let shade = |k: usize| shade_as(k, false);
+    if sides.iter().any(|&k| matches!(styles[k], BorderStyle::Groove | BorderStyle::Ridge)) && sides.iter().all(|&k| !matches!(styles[k], BorderStyle::Dashed | BorderStyle::Dotted | BorderStyle::Double)) {
+        // (The whole border as its outer half is, then its inner half: what's inside its sides' halves, in CSS
+        // pixels rounded down, from the outside.)
+        let widths: [f32; 4] = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
+        out.push(Paint::SidedBorder { x: bx, y: by, w: bw, h: bh, widths, colors: core::array::from_fn(|k| shade_as(k, false)), radius });
+        // (Its inner half: inside the box made half its sides' widths smaller all round, its edges at whole
+        // device pixels, as Chrome snaps them.)
+        let edge = [by, bx + bw, by + bh, bx];
+        let inward = [1.0, -1.0, -1.0, 1.0];
+        let half: [f32; 4] = core::array::from_fn(|k| {
+            if !matches!(styles[k], BorderStyle::Groove | BorderStyle::Ridge) {
+                return widths[k];
+            }
+            let at = num::round(edge[k] + inward[k] * widths[k] / 2.0);
+            (at - edge[k]).abs().min(widths[k])
+        });
+        let inner: [f32; 4] = core::array::from_fn(|k| widths[k] - half[k]);
+        let shrink = |r: f32, a: f32, b: f32| (r - a.max(b)).max(0.0);
+        let rad = [shrink(radius[0], half[0], half[3]), shrink(radius[1], half[0], half[1]), shrink(radius[2], half[2], half[1]), shrink(radius[3], half[2], half[3])];
+        out.push(Paint::SidedBorder { x: bx + half[3], y: by + half[0], w: bw - half[1] - half[3], h: bh - half[0] - half[2], widths: inner, colors: core::array::from_fn(|k| shade_as(k, true)), radius: rad });
+        return out;
+    }
+    let patterned = |k: usize| matches!(styles[k], BorderStyle::Dashed | BorderStyle::Dotted | BorderStyle::Double);
+    let uniform = sides.len() == 4 && border.iter().all(|&w| (w - border[0]).abs() < 0.01) && (0..4).all(|k| shade(k) == shade(0) && !patterned(k));
+    // (Sides of one colour, solid: one border (its corners rounded, if the box's are), whatever each side's
+    // width, as YouTube's search box has it with no right side: no seam where its sides meet.)
+    let one_colour = !sides.is_empty() && sides.iter().all(|&k| shade(k) == shade(sides[0]) && !patterned(k));
+    if uniform || one_colour {
+        let widths = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
+        out.push(Paint::Border { x: bx, y: by, w: bw, h: bh, widths, color: shade(sides[0]), radius });
+    } else if !sides.is_empty() && sides.iter().all(|&k| !patterned(k)) {
+        // Sides of different colours: each its own, meeting on the diagonals at the corners.
+        let widths = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
+        out.push(Paint::SidedBorder { x: bx, y: by, w: bw, h: bh, widths, colors: core::array::from_fn(shade), radius });
+    } else {
+        for &k in &sides {
+            let r = match k {
+                0 => Rect::new(bx, by, bw, border[0]),
+                1 => Rect::new(bx + bw - border[1], by, border[1], bh),
+                2 => Rect::new(bx, by + bh - border[2], bw, border[2]),
+                _ => Rect::new(bx, by, border[3], bh),
+            };
+            for (piece, round) in border_pieces(r, k, styles[k]) {
+                out.push(Paint::Rect { x: piece.x, y: piece.y, w: piece.w, h: piece.h, color: shade(k), radius: [round; 4] });
+            }
+        }
+    }
+    out
+}
+
 /// A 3D border side's colour (inset, outset, groove, ridge) as Chrome works it out (`darken`: the side's shaded
 /// darker, else lighter): darker unless it's nearly black already, lighter unless it's nearly white (Blink's
 /// Color::Dark and Color::Light, as WebKit had them).
@@ -407,6 +482,8 @@ pub struct Layout<'a> {
     order: Vec<usize>,
     /// The box whose background the canvas takes (the root, or the body), if either has one.
     canvas_from: Option<BoxId>,
+    /// The outlines of the stacking context being painted: drawn over all of it.
+    outlines: Vec<Item>,
     /// The lines a clamped box (-webkit-line-clamp) being laid out has left to show.
     clamp: Option<usize>,
 }
@@ -517,6 +594,7 @@ impl<'a> Layout<'a> {
             definite_h: None,
             order: Vec::new(),
             canvas_from: None,
+            outlines: Vec::new(),
             clamp: None,
         }
     }
@@ -1117,9 +1195,9 @@ impl<'a> Layout<'a> {
                     at = below;
                 }
             }
-            // A new formatting context (overflow: hidden, flow-root, a table...) goes beside the floats, in the room
-            // they leave (or below them, where it doesn't fit).
-            if ks.new_context() && !matches!(ks.display, Display::Table | Display::InlineTable) && self.floats_here(at)
+            // A new formatting context (overflow: hidden, flow-root, a table...), or a picture, goes beside the floats,
+            // in the room they leave (or below them, where it doesn't fit).
+            if (ks.new_context() || self.replaced_box(k)) && !matches!(ks.display, Display::Table | Display::InlineTable) && self.floats_here(at)
             {
                 let (bx, bw) = self.beside_floats(k, x, w, &mut at);
                 self.block(k, bx, at, bw, h, None, false);
@@ -2141,7 +2219,7 @@ impl<'a> Layout<'a> {
             // (Its automatic least: its min-content, unless it's clipped or its least is given.)
             let least = match ks.min_width {
                 Size::Len(l) => self.content_from(k, l, w, true),
-                _ if ks.clip => 0.0,
+                _ if ks.scrolls || (ks.clip && self.replaced_box(k)) => 0.0,
                 _ => (mn - frame).max(0.0).min(match ks.width {
                     Size::Len(l) => self.content_from(k, l, w, true),
                     _ => f32::MAX,
@@ -2463,7 +2541,7 @@ impl<'a> Layout<'a> {
             let minimum = match ks.min_width {
                 Size::Len(l) if !l.has_pct() => self.content_from(k, l, w, true) + self.frame_w(k) + m,
                 // (One that clips what's in it can be as narrow as it likes.)
-                _ if ks.clip => m,
+                _ if ks.scrolls || (ks.clip && self.replaced_box(k)) => m,
                 _ => mn + m,
             };
             col_items.push(Contrib { from: c0, to: c1, min_c: mn + m, max_c: mx + m, minimum });
@@ -2484,7 +2562,7 @@ impl<'a> Layout<'a> {
             self.block(k, x + col_x[c0], y, area_w, None, None, shrink);
             let (mt, mb) = (self.tree.boxes[k].margin[0], self.tree.boxes[k].margin[2]);
             let mh = self.tree.boxes[k].h + mt + mb;
-            row_items.push(Contrib { from: r0, to: r1, min_c: mh, max_c: mh, minimum: if ks.clip { mt + mb } else { mh } });
+            row_items.push(Contrib { from: r0, to: r1, min_c: mh, max_c: mh, minimum: if ks.scrolls || (ks.clip && self.replaced_box(k)) { mt + mb } else { mh } });
         }
         let mut row_tr: Vec<Tr> = (0..rows).map(|r| Tr::of(row_list.get(r), h)).collect();
         size_tracks(&mut row_tr, &row_items, h, row_gap, matches!(s.align_content, Align::Normal | Align::Stretch));
@@ -3006,6 +3084,7 @@ impl<'a> Layout<'a> {
         };
         let (mut own, mut neg, mut flow, mut pos) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let mut later: Vec<Later> = Vec::new();
+        let outer_outlines = core::mem::take(&mut self.outlines);
         if self.tree.boxes[root].style.visible {
             self.paint_box(root, &inside.own, &mut own);
         }
@@ -3040,6 +3119,7 @@ impl<'a> Layout<'a> {
         items.extend(neg);
         items.extend(flow);
         items.extend(pos);
+        items.extend(core::mem::replace(&mut self.outlines, outer_outlines));
         if grouped {
             items.push(Item::end());
         }
@@ -3529,73 +3609,16 @@ impl<'a> Layout<'a> {
             self.paint_content(b, &s, node, clip, items);
             return;
         }
-        let mut out: Vec<Paint> = Vec::new();
-        // Borders: one all round when its sides are the same (rounded, if the box is), else each side a rectangle
-        // (inset and outset with their top and left, or bottom and right, darker, as Chrome shades them; a groove's
-        // and a ridge's outer half as an inset's or an outset's, and the inner half the other way).
-        let sides: Vec<usize> = (0..4).filter(|&k| border[k] > 0.0 && s.border_style[k] != BorderStyle::None).collect();
-        let shade_as = |k: usize, inner: bool| -> Color {
-            let three = matches!(s.border_style[k], BorderStyle::Inset | BorderStyle::Outset | BorderStyle::Groove | BorderStyle::Ridge);
-            // (Chrome shades a 3D border whose colour is currentcolor from its light grey.)
-            let c = if three && s.border_current[k] { 0xFFEE_EEEE } else { s.border_color[k] };
-            let top_left = k == 0 || k == 3;
-            match s.border_style[k] {
-                BorderStyle::Inset => three_d(c, top_left),
-                BorderStyle::Outset => three_d(c, !top_left),
-                BorderStyle::Groove => three_d(c, top_left != inner),
-                BorderStyle::Ridge => three_d(c, top_left == inner),
-                _ => c,
-            }
-        };
-        let shade = |k: usize| shade_as(k, false);
-        if sides.iter().any(|&k| matches!(s.border_style[k], BorderStyle::Groove | BorderStyle::Ridge)) && sides.iter().all(|&k| !matches!(s.border_style[k], BorderStyle::Dashed | BorderStyle::Dotted | BorderStyle::Double)) {
-            // (The whole border as its outer half is, then its inner half: what's inside its sides' halves, in CSS
-            // pixels rounded down, from the outside.)
-            let widths: [f32; 4] = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
-            out.push(Paint::SidedBorder { x: bx, y: by, w: bw, h: bh, widths, colors: core::array::from_fn(|k| shade_as(k, false)), radius });
-            // (Its inner half: inside the box made half its sides' widths smaller all round, its edges at whole
-            // device pixels, as Chrome snaps them.)
-            let edge = [by, bx + bw, by + bh, bx];
-            let inward = [1.0, -1.0, -1.0, 1.0];
-            let half: [f32; 4] = core::array::from_fn(|k| {
-                if !matches!(s.border_style[k], BorderStyle::Groove | BorderStyle::Ridge) {
-                    return widths[k];
-                }
-                let at = num::round(edge[k] + inward[k] * widths[k] / 2.0);
-                (at - edge[k]).abs().min(widths[k])
-            });
-            let inner: [f32; 4] = core::array::from_fn(|k| widths[k] - half[k]);
-            let shrink = |r: f32, a: f32, b: f32| (r - a.max(b)).max(0.0);
-            let rad = [shrink(radius[0], half[0], half[3]), shrink(radius[1], half[0], half[1]), shrink(radius[2], half[2], half[1]), shrink(radius[3], half[2], half[3])];
-            out.push(Paint::SidedBorder { x: bx + half[3], y: by + half[0], w: bw - half[1] - half[3], h: bh - half[0] - half[2], widths: inner, colors: core::array::from_fn(|k| shade_as(k, true)), radius: rad });
-            for paint in out {
-                items.push(Item { paint, clip, node });
-            }
-            self.paint_content(b, &s, node, clip, items);
-            return;
-        }
-        let patterned = |k: usize| matches!(s.border_style[k], BorderStyle::Dashed | BorderStyle::Dotted | BorderStyle::Double);
-        let uniform = sides.len() == 4 && border.iter().all(|&w| (w - border[0]).abs() < 0.01) && (0..4).all(|k| shade(k) == shade(0) && !patterned(k));
-        // (Sides of one colour, solid: one border (its corners rounded, if the box's are), whatever each side's
-        // width, as YouTube's search box has it with no right side: no seam where its sides meet.)
-        let one_colour = !sides.is_empty() && sides.iter().all(|&k| shade(k) == shade(sides[0]) && !patterned(k));
-        if uniform || one_colour {
-            let widths = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
-            out.push(Paint::Border { x: bx, y: by, w: bw, h: bh, widths, color: shade(sides[0]), radius });
-        } else if !sides.is_empty() && sides.iter().all(|&k| !patterned(k)) {
-            // Sides of different colours: each its own, meeting on the diagonals at the corners.
-            let widths = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
-            out.push(Paint::SidedBorder { x: bx, y: by, w: bw, h: bh, widths, colors: core::array::from_fn(shade), radius });
-        } else {
-            for &k in &sides {
-                let r = match k {
-                    0 => Rect::new(bx, by, bw, border[0]),
-                    1 => Rect::new(bx + bw - border[1], by, border[1], bh),
-                    2 => Rect::new(bx, by + bh - border[2], bw, border[2]),
-                    _ => Rect::new(bx, by, border[3], bh),
-                };
-                for (piece, round) in border_pieces(r, k, s.border_style[k]) {
-                    out.push(Paint::Rect { x: piece.x, y: piece.y, w: piece.w, h: piece.h, color: shade(k), radius: [round; 4] });
+        let out = edge_paints(Rect::new(bx, by, bw, bh), border, s.border_style, s.border_color, s.border_current, radius);
+        // Its outline, round its border box (past its outline-offset), drawn when all of its stacking context is.
+        if s.outline_style != BorderStyle::None && s.outline_width > 0.0 {
+            let w = s.outline_width;
+            let o = if s.outline_offset == f32::NEG_INFINITY { -w } else { s.outline_offset };
+            let grow = |r: f32| if r > 0.0 { (r + o + w).max(0.0) } else { 0.0 };
+            let ring = Rect::new(bx - o - w, by - o - w, bw + 2.0 * (o + w), bh + 2.0 * (o + w));
+            if ring.w > 0.0 && ring.h > 0.0 {
+                for paint in edge_paints(ring, [w; 4], [s.outline_style; 4], [s.outline_color; 4], [s.outline_current; 4], radius.map(grow)) {
+                    self.outlines.push(Item { paint, clip, node });
                 }
             }
         }
@@ -3603,6 +3626,11 @@ impl<'a> Layout<'a> {
             items.push(Item { paint, clip, node });
         }
         self.paint_content(b, &s, node, clip, items);
+    }
+
+    /// Whether a box is a replaced element's (a picture, a frame, a field).
+    fn replaced_box(&self, b: BoxId) -> bool {
+        matches!(self.tree.boxes[b].content, Content::Image { .. } | Content::Control(_))
     }
 
     /// A box's border-image (CSS Backgrounds 3, section 6): its source cut in nine by its slices; its corners drawn in

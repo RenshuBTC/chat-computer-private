@@ -410,8 +410,8 @@ pub fn init(vm: &mut Vm) {
     method(vm, ep, "hasPointerCapture", 1, false_fn);
     method(vm, ep, "requestFullscreen", 0, rejected_fn);
     method(vm, ep, "requestPointerLock", 0, ignore_fn);
-    method(vm, ep, "animate", 2, animate);
-    method(vm, ep, "getAnimations", 0, empty_array);
+    method(vm, ep, "animate", 2, super::animations::animate);
+    method(vm, ep, "getAnimations", 0, super::animations::element_animations);
     method(vm, ep, "checkVisibility", 0, true_fn);
     parent_node_methods(vm, ep);
     child_node_methods(vm, ep);
@@ -2476,24 +2476,6 @@ fn blur(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
         super::events::fire(vm, this, &EventInit::new("focusout", "FocusEvent", true, false));
     }
     Ok(Value::Undefined)
-}
-
-fn animate(vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
-    // An animation that's already over (this browser doesn't animate): its promises resolved.
-    let a = vm.new_object();
-    for name in ["cancel", "finish", "play", "pause", "reverse", "commitStyles", "persist", "updatePlaybackRate"] {
-        method(vm, a, name, 0, ignore_fn);
-    }
-    let p = vm.new_promise();
-    vm.fulfill_promise(p, Value::Obj(a));
-    vm.put(a, "finished", Value::Obj(p), ALL);
-    let p2 = vm.new_promise();
-    vm.fulfill_promise(p2, Value::Obj(a));
-    vm.put(a, "ready", Value::Obj(p2), ALL);
-    vm.put(a, "playState", js("finished"), ALL);
-    vm.put(a, "onfinish", Value::Null, ALL);
-    vm.put(a, "currentTime", Value::Num(0.0), ALL);
-    Ok(Value::Obj(a))
 }
 
 // ----------------------------------------------------------------------------------------- shadow roots

@@ -932,6 +932,18 @@ pub struct Sheets<'a> {
     /// The page's time (seconds since it began), for its animations as they run; None: as they rest, some time
     /// after it has come.
     pub now: Option<f32>,
+    /// Its scripts' animations (element.animate), where each is.
+    pub scripted: &'a [ScriptedAnimation],
+}
+
+/// A script's animation (element.animate) as the page's styles take it: its element, its keyframes (each one's
+/// easing as an animation-timing-function in it), and where it is in them (0 to 1, its own easing applied), or
+/// None where it has no effect.
+#[derive(Clone, Debug)]
+pub struct ScriptedAnimation {
+    pub node: NodeId,
+    pub keyframes: css::Keyframes,
+    pub progress: Option<f32>,
 }
 
 pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Styles {
@@ -979,6 +991,7 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
         out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new(), wanted_fonts: alloc::collections::BTreeSet::new() },
         fonts: sheets.fonts,
         now: sheets.now,
+        scripted: sheets.scripted,
         sibling: SiblingInfo::new(doc),
     };
     // In the order they come, parents before children (no recursion: a page's elements can be deep).
@@ -1054,6 +1067,7 @@ impl SiblingInfo {
 struct Cascade<'a> {
     fonts: &'a [WebFont],
     now: Option<f32>,
+    scripted: &'a [ScriptedAnimation],
     doc: &'a Document,
     sheets: Vec<&'a Sheet>,
     entries: Vec<Entry>,
@@ -1069,6 +1083,63 @@ struct Cascade<'a> {
 type Rank = (u8, u32, u32);
 
 impl Cascade<'_> {
+    /// Keyframes run on a box at `at` (0 to 1 through them): each property they name, between the two keyframes round
+    /// `at` (where 0% or 100% leaves it out, the box's own value), eased between them by the keyframe's own timing
+    /// function, else `easing`; a property an important declaration gives left as it is.
+    #[allow(clippy::too_many_arguments)]
+    fn run_keyframes(&self, s: &mut Style, k: &css::Keyframes, at: f32, easing: &crate::animate::Easing, declared: &[(&str, Vec<Tok>)], important: &[&str], ctx: &Ctx) {
+        // Each property's keyframes: (place, value, the timing function on from there).
+        let mut props: Vec<(&str, Vec<(f32, &[Tok], Option<crate::animate::Easing>)>)> = Vec::new();
+        for (places, decls) in &k.frames {
+            let from_here = decls.iter().rev().find(|d| d.name == "animation-timing-function").and_then(|d| crate::animate::Easing::parse(&d.value));
+            for dcl in decls {
+                if dcl.name.starts_with("--") || dcl.name.starts_with("animation") {
+                    continue;
+                }
+                let at_ = match props.iter().position(|(n, _)| *n == dcl.name) {
+                    Some(ix) => ix,
+                    None => {
+                        props.push((dcl.name.as_str(), Vec::new()));
+                        props.len() - 1
+                    }
+                };
+                for &pl in places {
+                    props[at_].1.push((pl, dcl.value.as_slice(), from_here.clone()));
+                }
+            }
+        }
+        for (prop, mut frames) in props {
+            if important.contains(&prop) {
+                continue;
+            }
+            frames.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+            let own: Option<Vec<Tok>> = declared.iter().find(|(n, _)| *n == prop).map(|(_, v)| v.clone()).or_else(|| computed_tokens(s, prop));
+            let resolve = |v: &[Tok]| -> Option<Vec<Tok>> { if has_var(v) { substitute(v, &s.custom, 0) } else { Some(v.to_vec()) } };
+            let before = frames.iter().rposition(|f| f.0 <= at);
+            let after = frames.iter().position(|f| f.0 > at);
+            let (o0, v0, e0) = match before {
+                Some(ix) => (frames[ix].0, resolve(frames[ix].1), frames[ix].2.clone()),
+                None => (0.0, own.clone(), None),
+            };
+            let (o1, v1) = match after {
+                Some(ix) => (frames[ix].0, resolve(frames[ix].1)),
+                None => (1.0, own.clone()),
+            };
+            let q = if o1 > o0 { (at - o0) / (o1 - o0) } else { 0.0 };
+            let q = e0.unwrap_or_else(|| easing.clone()).at(q);
+            let value = match (v0.map(|v| full_value(prop, v)), v1.map(|v| full_value(prop, v))) {
+                (Some(a), Some(b)) => crate::animate::interpolate(&a, &b, q).or(Some(if q < 0.5 { a } else { b })),
+                // (One side the box's own value, not known: the keyframe's from halfway.)
+                (Some(a), None) => (q < 0.5).then_some(a),
+                (None, Some(b)) => (q >= 0.5).then_some(b),
+                (None, None) => None,
+            };
+            if let Some(v) = value {
+                apply_one(s, prop, &v, ctx);
+            }
+        }
+    }
+
     /// An SVG <clipPath>'s shapes (path, rect, circle, ellipse, polygon, polyline) as one path's data, its clip rule
     /// (its first shape's), and whether it's in fractions of the box (clipPathUnits="objectBoundingBox").
     fn svg_clip(&self, id: &str) -> Option<effects::Shape> {
@@ -1334,65 +1405,19 @@ impl Cascade<'_> {
                     }
                 }
             }
-            if pass == 2
-                && let Some(anims) = s.animations.clone()
-            {
-                // Its animations, at the page's time (or as they rest): each property their keyframes name, between
-                // the two keyframes round where the animation is (where 0% or 100% leaves it out, the box's own
-                // value), over the page's declarations, the last named on top.
-                for (i, name) in anims.names.iter().enumerate() {
-                    let Some(at) = anims.at(i, self.now) else { continue };
-                    let Some(k) = self.sheets.iter().rev().flat_map(|sh| sh.keyframes.iter().rev()).find(|k| k.name == *name) else { continue };
-                    let easing = anims.easing(i);
-                    // Each property's keyframes: (place, value, the timing function on from there).
-                    let mut props: Vec<(&str, Vec<(f32, &[Tok], Option<crate::animate::Easing>)>)> = Vec::new();
-                    for (places, decls) in &k.frames {
-                        let from_here = decls.iter().rev().find(|d| d.name == "animation-timing-function").and_then(|d| crate::animate::Easing::parse(&d.value));
-                        for dcl in decls {
-                            if dcl.name.starts_with("--") || dcl.name.starts_with("animation") {
-                                continue;
-                            }
-                            let at_ = match props.iter().position(|(n, _)| *n == dcl.name) {
-                                Some(ix) => ix,
-                                None => {
-                                    props.push((dcl.name.as_str(), Vec::new()));
-                                    props.len() - 1
-                                }
-                            };
-                            for &pl in places {
-                                props[at_].1.push((pl, dcl.value.as_slice(), from_here.clone()));
-                            }
-                        }
+            if pass == 2 {
+                // Its animations, at the page's time (or as they rest), over the page's declarations, the last named
+                // on top; then its scripts' (element.animate's), over those.
+                if let Some(anims) = s.animations.clone() {
+                    for (i, name) in anims.names.iter().enumerate() {
+                        let Some(at) = anims.at(i, self.now) else { continue };
+                        let Some(k) = self.sheets.iter().rev().flat_map(|sh| sh.keyframes.iter().rev()).find(|k| k.name == *name) else { continue };
+                        self.run_keyframes(&mut s, k, at, &anims.easing(i), &declared, &important, &ctx);
                     }
-                    for (prop, mut frames) in props {
-                        if important.contains(&prop) {
-                            continue;
-                        }
-                        frames.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
-                        let own: Option<Vec<Tok>> = declared.iter().find(|(n, _)| *n == prop).map(|(_, v)| v.clone()).or_else(|| computed_tokens(&s, prop));
-                        let resolve = |v: &[Tok]| -> Option<Vec<Tok>> { if has_var(v) { substitute(v, &s.custom, 0) } else { Some(v.to_vec()) } };
-                        let before = frames.iter().rposition(|f| f.0 <= at);
-                        let after = frames.iter().position(|f| f.0 > at);
-                        let (o0, v0, e0) = match before {
-                            Some(ix) => (frames[ix].0, resolve(frames[ix].1), frames[ix].2.clone()),
-                            None => (0.0, own.clone(), None),
-                        };
-                        let (o1, v1) = match after {
-                            Some(ix) => (frames[ix].0, resolve(frames[ix].1)),
-                            None => (1.0, own.clone()),
-                        };
-                        let q = if o1 > o0 { (at - o0) / (o1 - o0) } else { 0.0 };
-                        let q = e0.unwrap_or_else(|| easing.clone()).at(q);
-                        let value = match (v0.map(|v| full_value(prop, v)), v1.map(|v| full_value(prop, v))) {
-                            (Some(a), Some(b)) => crate::animate::interpolate(&a, &b, q).or(Some(if q < 0.5 { a } else { b })),
-                            // (One side the box's own value, not known: the keyframe's from halfway.)
-                            (Some(a), None) => (q < 0.5).then_some(a),
-                            (None, Some(b)) => (q >= 0.5).then_some(b),
-                            (None, None) => None,
-                        };
-                        if let Some(v) = value {
-                            apply_one(&mut s, prop, &v, &ctx);
-                        }
+                }
+                for x in self.scripted.iter().filter(|x| x.node == id) {
+                    if let Some(at) = x.progress {
+                        self.run_keyframes(&mut s, &x.keyframes, at, &crate::animate::Easing::Linear, &declared, &important, &ctx);
                     }
                 }
             }

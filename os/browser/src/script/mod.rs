@@ -4,6 +4,7 @@
 //! class lists, styles and data attributes (lists.rs). The engine knows nothing of pages: these are its host's objects, `Class::Host` objects
 //! whose state is here (the `Host`, in the VM's host slot), and the page's tree is moved into it while scripts run.
 
+pub mod animations;
 mod canvas;
 mod dom;
 mod events;
@@ -189,6 +190,8 @@ pub struct Host {
     /// <style> sheets scripts changed through their rules (insertRule, deleteRule): the text each was read from,
     /// and its rules now.
     pub cssom: BTreeMap<NodeId, (String, Vec<String>)>,
+    /// The animations its scripts made (element.animate).
+    pub animations: Vec<animations::ScriptAnimation>,
 }
 
 /// The private symbols holding objects' inner state (scripts never see these keys).
@@ -260,6 +263,7 @@ impl Host {
             settled: BTreeMap::new(),
             cookies_set: Vec::new(),
             cssom: BTreeMap::new(),
+            animations: Vec::new(),
         }
     }
 
@@ -612,6 +616,7 @@ impl Script {
         dom::init(&mut vm);
         lists::init(&mut vm);
         window::init(&mut vm);
+        animations::install(&mut vm);
         net::init(&mut vm);
         socket::init(&mut vm);
         canvas::init(&mut vm);

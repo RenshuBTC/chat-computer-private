@@ -449,6 +449,39 @@ fn scripted(html: &str) -> Page {
 }
 
 #[test]
+fn a_script_s_animation_runs_on_the_page_s_clock_and_holds_its_end() {
+    let mut p = scripted(
+        "<div id=a style='opacity:0'>x</div><div id=b>y</div><script>\
+         var an = a.animate([{opacity: 0}, {opacity: 1}], {duration: 1000, fill: 'forwards'});\
+         var log = [];\
+         an.finished.then(function (x) { log.push('finished ' + (x === an)); });\
+         an.onfinish = function () { log.push('onfinish ' + an.playState); };\
+         var bn = b.animate({transform: ['translateX(0px)', 'translateX(100px)']}, 1000);\
+         bn.pause(); bn.currentTime = 250;\
+         setTimeout(function () { console.log(log.join(', '), an.playState); }, 1250);\
+         console.log(an.playState, document.getAnimations().length, typeof document.timeline.currentTime);</script>",
+    );
+    let ty = Type::builtin();
+    let style = |p: &Page, id: &str| {
+        let n = p.doc.descendants(0).find(|&n| p.doc.element(n).and_then(|e| e.id()) == Some(id)).unwrap();
+        p.style_of(n).unwrap()
+    };
+    p.run(0.0);
+    assert_eq!(p.take_console(), ["running 2 number"]);
+    p.run(500.0);
+    p.lay_out(&ty, 600.0, 400.0, 1.0);
+    assert!((style(&p, "a").opacity - 0.5).abs() < 1e-3, "halfway");
+    assert!(p.animations_running());
+    // The paused one: a quarter of the way, held there.
+    assert_eq!(style(&p, "b").translate, (crate::values::Len::px(25.0), crate::values::Len::ZERO));
+    p.run(1200.0);
+    p.lay_out(&ty, 600.0, 400.0, 1.0);
+    assert_eq!(style(&p, "a").opacity, 1.0, "its end held (fill: forwards), though its own style says 0");
+    p.run(1300.0);
+    assert_eq!(p.take_console(), ["onfinish finished, finished true finished"]);
+}
+
+#[test]
 fn weak_maps_and_maps_keep_working_as_the_collector_frees_and_entries_go() {
     // (YouTube's scripts: a WeakMap whose keys mostly went once the collector ran, which stopped the engine.)
     let mut p = scripted(

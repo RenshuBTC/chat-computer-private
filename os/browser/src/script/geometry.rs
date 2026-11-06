@@ -30,8 +30,9 @@ pub struct LayoutInputs {
     pub sizes: Vec<Option<(u32, u32)>>,
     /// Each picture's own size as CSS sizes it, where it isn't simply its pixels' (an SVG's).
     pub own: Vec<Option<picture::Intrinsic>>,
-    /// The page's time for its animations (seconds), as the page's own layout has it.
+    /// The page's time for its animations (seconds), as the page's own layout has it, and its scripts' animations.
     pub now: Option<f32>,
+    pub scripted: Vec<crate::style::ScriptedAnimation>,
 }
 
 /// A page's pictures by element, for the box tree.
@@ -117,7 +118,7 @@ pub fn fresh_layout(vm: &mut Vm) {
     let (w, ht, dpr) = h.view;
     let dpr = if dpr > 0.0 { dpr } else { 1.0 };
     let view = Viewport { width: w, height: ht };
-    let styles = style::compute(&h.doc, &Sheets { ua: &inputs.ua, author: &inputs.author, fonts: &inputs.fonts, now: inputs.now }, view, dpr);
+    let styles = style::compute(&h.doc, &Sheets { ua: &inputs.ua, author: &inputs.author, fonts: &inputs.fonts, now: inputs.now, scripted: &inputs.scripted }, view, dpr);
     let mut tree = Tree::build(&h.doc, &styles, &mut Picker { of: &inputs.picture_of, densities: &inputs.densities });
     let laid = Layout::new(&mut tree, text::Type::shared(), &SizesOf(&inputs.sizes, &inputs.own), w * dpr, ht * dpr, dpr).run();
     h.rects = rects_of(&laid, &h.doc, w * dpr, dpr);

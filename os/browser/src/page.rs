@@ -857,7 +857,8 @@ impl Page {
             let view = Viewport { width: w / dpr, height: h / dpr };
             if self.styles.is_none() {
                 self.parse_sheets(view);
-                self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author, fonts: &self.web_fonts, now: self.animate.then_some((self.clock_ms / 1000.0) as f32) }, view, dpr)));
+                let scripted = self.scripted_animations();
+                self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author, fonts: &self.web_fonts, now: self.animate.then_some((self.clock_ms / 1000.0) as f32), scripted: &scripted }, view, dpr)));
                 self.fetch_fonts();
                 self.fetch_style_pictures();
                 // (An <svg> made before the colours it's drawn in were known: made again.)
@@ -964,7 +965,8 @@ impl Page {
         self.parse_sheets(Viewport { width: w, height: ht });
         let sizes = self.resources.iter().map(|r| if let State::Picture(w, h) = r.state { Some((w, h)) } else { None }).collect();
         let own = self.resources.iter().map(|r| r.own).collect();
-        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), fonts: self.web_fonts.clone(), picture_of: self.picture_of.clone(), densities: self.densities.clone(), sizes, own, now: self.animate.then_some((self.clock_ms / 1000.0) as f32) };
+        let scripted = self.scripted_animations();
+        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), fonts: self.web_fonts.clone(), picture_of: self.picture_of.clone(), densities: self.densities.clone(), sizes, own, now: self.animate.then_some((self.clock_ms / 1000.0) as f32), scripted };
         if let Some(s) = self.script.as_mut() {
             s.host().layout_inputs = Some(alloc::rc::Rc::new(inputs));
         }
@@ -1454,12 +1456,28 @@ impl Page {
         let now = (self.clock_ms / 1000.0) as f32;
         // (Only those whose keyframes the page has: one it doesn't do anything.)
         let named: alloc::collections::BTreeSet<&str> = core::iter::once(&*self.ua).chain(self.author.iter()).flat_map(|sh| sh.keyframes.iter().map(|k| k.name.as_str())).collect();
-        if named.is_empty() {
-            return false;
-        }
-        styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values()).any(|s| {
-            s.animations.as_ref().is_some_and(|a| (0..a.names.len()).any(|i| named.contains(a.names[i].as_str()) && a.timing(i).running(now)))
-        })
+        let scripts = self.script.as_ref().and_then(|s| s.vm.host.as_ref()?.downcast_ref::<crate::script::Host>()).is_some_and(|h| h.animations.iter().any(|a| a.running(self.clock_ms)));
+        scripts
+            || (!named.is_empty()
+                && styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values()).any(|s| {
+                    s.animations.as_ref().is_some_and(|a| (0..a.names.len()).any(|i| named.contains(a.names[i].as_str()) && a.timing(i).running(now)))
+                }))
+    }
+
+    /// Its scripts' animations (element.animate) as its styles take them, where each is at its time (or, if its
+    /// animations aren't drawn as they run, where each ends).
+    fn scripted_animations(&mut self) -> Vec<style::ScriptedAnimation> {
+        let now = if self.animate { self.clock_ms } else { f64::INFINITY };
+        let Some(s) = self.script.as_mut() else { return Vec::new() };
+        s.host()
+            .animations
+            .iter()
+            .filter(|a| a.state != crate::script::animations::State::Idle)
+            .map(|a| {
+                let progress = if now.is_finite() { a.progress(now) } else { a.progress(a.start + a.end() / a.rate.abs().max(1e-6)) };
+                style::ScriptedAnimation { node: a.node, keyframes: a.keyframes(), progress }
+            })
+            .collect()
     }
 
     /// Its styles worked out again, and it laid out again (as after `animate` is changed).

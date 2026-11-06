@@ -117,6 +117,12 @@ fn responses() {
         r.feed(&big);
     }
     assert_eq!((r.done(), r.cut(), r.body().len()), (true, true, MOST_BYTES));
+    // A site's file shown on the screen keeps more (a big site's script: YouTube's is 10.7 MB).
+    let mut r = Response::with_most(crate::SITE_MOST_BYTES);
+    r.feed(b"HTTP/1.1 200 OK\r\nContent-Length: 11534336\r\n\r\n");
+    let big = vec![b'x'; 11 << 20];
+    r.feed(&big);
+    assert_eq!((r.done(), r.cut(), r.body().len(), r.page().map(|p| p.len())), (true, false, 11 << 20, Ok(11 << 20)));
 }
 
 #[test]

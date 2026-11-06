@@ -59,17 +59,21 @@ drivers.
     * nothing at address 0, so a null pointer faults;
     * device memory uncached, and the framebuffer write-combined;
     * room for the heap to grow into, at `0xFFFFE00000000000`, RAM mapped there as it's needed;
-  * its own stack, 256 KiB, at the end of a range with nothing else in it, moved onto from the start-up stage's
-    (which is in the map of all RAM, with other memory right below it): running past its end faults at once, and the
-    screen says the kernel's stack ran out, where the memory below would have been written over unseen. How deep it
-    has gone is measured (its pages start zeroed) and in the log as it goes deeper;
+  * its own stack, 16 MiB (a website's scripts run on it, and each call between the JavaScript engine and its
+    built-in functions takes about 2 KiB of it: a page's may go 1000 deep, YouTube's go 164), at the top of a 64 MiB range with nothing
+    else in it, moved onto from the start-up stage's (which is in the map of all RAM, with other memory right below
+    it): running past its end faults at once, and the screen says the kernel's stack ran out, where the memory below
+    would have been written over unseen. How deep it has gone is measured (its pages start zeroed) and in the log as
+    it goes deeper;
   * a heap: 16 to 256 MiB to start with, then growing as it's needed into its own range of addresses (in 2 MiB pages
     where whole blocks of RAM are free), so the model's file, gigabytes, is one piece in memory however scattered the
     RAM behind it, while 64 MiB is always left for everything else;
   * the first screen, early, so that if anything after it stops the kernel, the screen says so. From the start-up
     drive on, it also says which step comes next ("Starting the network…"), as the log does (with when), so a PC that
-    stops in the middle of one shows which. Once the keyboards are set up, what's typed shows between the steps that
-    are left, and the message box says it's starting: a message sent then goes once the start is done;
+    stops in the middle of one shows which. The message box isn't there while it starts: it rises into its place,
+    fading in, once Chat Computer is ready (at once, saying it's starting, if a key is typed before then: a message
+    sent then goes once the start is done). Its caret blinks while nothing's typed (530 ms on, 530 off, as Windows'
+    does), and a website's field's caret does too;
   * the ACPI tables: processor cores, interrupt controllers and timers;
   * the local APIC. The old 8259 controllers and all I/O APIC inputs are masked;
   * a timer ticking 100 times a second. Its speed is measured against the ACPI power-management timer,
@@ -293,7 +297,10 @@ drivers.
       height), its corners rounded, turned the way the camera says (`picture/`). The last 12 shown keep their pixels;
     * `restart_computer`: a restart a few seconds after the model's answer, which goes back to Windows. It uses the
       reset register the firmware names (ACPI's FADT), else the chipset's reset control (port 0xCF9), else the
-      keyboard controller's reset line (`power.rs`);
+      keyboard controller's reset line (`power.rs`). A message that only asks to restart or turn off ("restart",
+      "go back to Windows", "shut down please") isn't left to the model, which can say it did without calling the
+      tool: Chat Computer does it itself, 5 seconds on, and says so; a message asking more ("restart in 5 minutes",
+      "how do I restart?") goes to the model;
     * `turn_off_computer`: the PC turned off a few seconds after the model's answer, by ACPI's S5 ("soft off"). First
       the firmware's own preparation for it runs (its `_TTS` and `_PTS` methods). S5's sleep type, which the
       firmware's `\_S5` gives (or the DSDT's bytes, where it is plain data, when its programs aren't run), is written
@@ -377,7 +384,8 @@ drivers.
   en.wikipedia.org/wiki/Penang") opens it in the middle, as the website and the app show one: in a rounded frame with
   its name and a close button (x) above it, the conversation put away until it's closed (the x, or Esc with nothing
   typed). Chat Computer's own browser engine shows it: the page fetched over the kernel's own TCP and TLS 1.3 (with
-  the site's cookies, kept while it runs), its HTML read as browsers read it (quirks mode too), its style sheets and
+  the site's cookies, kept while it runs; each of its files up to 32 MB, as a big site's script is: YouTube's is
+  10.7 MB, which it sends uncompressed to a browser it doesn't know), its HTML read as browsers read it (quirks mode too), its style sheets and
   pictures fetched a few at a time as it asks for them, its CSS cascaded (selectors, @media, custom properties,
   calc(), modern colours; its text in Lora, or Atkinson Hyperlegible Next where it asks for a sans-serif family, or
   the code font; its pictures JPEG, PNG, GIF or SVG, an <svg> in the page drawn as a picture too, see-through where
@@ -636,8 +644,12 @@ system. Nothing else is asked, and no USB stick is needed.
    in `%LOCALAPPDATA%\ChatComputer\own-os`, and says in a line how that run went: why it stopped, if it did, or the
    last step of a start that didn't finish.
 5. It keeps "Chat Computer (own system)" in the power-on menu (the PC's boot menu, often F12, F11, F8 or Esc as
-   it starts), to choose whenever you like, and restarts into it when Enter is pressed (closing the window stays in
-   Windows). A key for Claude pasted there first (it isn't shown as it's pasted) goes in `settings.txt` as
+   it starts), to choose whenever you like, and restarts into it when Enter is pressed (`BootNext`; closing the
+   window stays in Windows). Windows makes the entry (a copy of Windows Boot Manager's, so it's on the same
+   partition), then setup writes it again (its `Boot####` variable) without what Windows adds to its own entries,
+   "WINDOWS" and its BCD object: shim takes that for the name of a file to start ("Failed to open
+   \EFI\chatcomputer-own\…", then a 2-second wait, before every start). An entry made before is mended the same
+   way. A key for Claude pasted there first (it isn't shown as it's pasted) goes in `settings.txt` as
    `claude-api-key`, kept when setup runs again, so the spark in the message box can choose Claude without typing
    the key; Chat Computer's own model stays the default. The restart after that starts Windows. Double-clicking it again puts the newest version from the folder
    there and starts it. ClaudeOS's old entries (Chat Computer's name until 2026-10-19) leave the menu, with Windows

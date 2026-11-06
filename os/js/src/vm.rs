@@ -268,6 +268,8 @@ pub struct Vm {
     pub jobs: VecDeque<Job>,
     /// How deep the interpreter is in itself (built-in functions calling JavaScript back), and the most it may be.
     pub nesting: usize,
+    /// The deepest `nesting` has gone.
+    pub deepest: usize,
     pub max_nesting: usize,
     pub max_frames: usize,
     /// Built-in functions running (the collector runs only when none is: their values aren't roots).
@@ -328,6 +330,7 @@ impl Vm {
             jobs: VecDeque::new(),
             nesting: 0,
             max_nesting: 300,
+            deepest: 0,
             max_frames: 10_000,
             native_depth: 0,
             gc_threshold: 100_000,
@@ -409,6 +412,11 @@ impl Vm {
             let fname = self.atoms.get(f.code.name).to_rust();
             s.push_str("\n    at ");
             s.push_str(if fname.is_empty() { "<anonymous>" } else { &fname });
+            // (Its line, as it runs, and where the function starts in its script: a minified script is one line.)
+            if f.code.source.is_some() {
+                let line = f.code.lines.iter().take_while(|(pc, _)| *pc as usize <= f.pc).last().map_or(1, |(_, l)| *l + 1);
+                s.push_str(&format!(" (line {line}, from {})", f.code.start));
+            }
         }
         JsStr::from_str(&s)
     }
@@ -657,6 +665,7 @@ impl Vm {
         }
         self.native_depth += 1;
         self.nesting += 1;
+        self.deepest = self.deepest.max(self.nesting);
         let r = f(self, &this, args, g);
         self.nesting -= 1;
         self.native_depth -= 1;
@@ -674,6 +683,7 @@ impl Vm {
         }
         let depth = self.frames.len() - 1;
         self.nesting += 1;
+        self.deepest = self.deepest.max(self.nesting);
         let r = self.execute(depth, Resume::Normal);
         self.nesting -= 1;
         match r? {

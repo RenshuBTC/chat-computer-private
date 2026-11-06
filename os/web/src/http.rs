@@ -1,7 +1,7 @@
 //! HTTP/1.1 (RFC 9112), the client's side: a GET written out, and a response read as it arrives: its status, its
 //! headers, and its body, whether its length is given, it comes in chunks, or it lasts until the connection closes;
 //! then its body as the page's bytes, gzip's or DEFLATE's taken off. One request a connection (it asks the server to
-//! close after it), and at most `MOST_BYTES` of a body kept.
+//! close after it), and at most `MOST_BYTES` of a body kept (or as many as the response is made for).
 
 use crate::url::Url;
 use crate::{MOST_BYTES, USER_AGENT};
@@ -97,13 +97,25 @@ pub struct Response {
     ready: Vec<u8>,
     done: bool,
     broken: bool,
-    /// More came than `MOST_BYTES`: what's kept is cut there.
+    /// More came than `most`: what's kept is cut there.
     cut: bool,
+    /// The most of its body kept (0: MOST_BYTES).
+    most: usize,
 }
 
 impl Response {
     pub fn new() -> Response {
         Response::default()
+    }
+
+    /// A response that keeps at most `most` bytes of its body (as it came: compressed, if it was), and gives at most
+    /// that many (or four times MOST_BYTES, if that's more) once decompressed.
+    pub fn with_most(most: usize) -> Response {
+        Response { most, ..Response::default() }
+    }
+
+    fn most(&self) -> usize {
+        if self.most == 0 { MOST_BYTES } else { self.most }
     }
 
     pub fn status(&self) -> Option<u16> {
@@ -134,7 +146,7 @@ impl Response {
         self.broken
     }
 
-    /// Whether the body was cut at `MOST_BYTES`.
+    /// Whether the body was cut at the most it keeps.
     pub fn cut(&self) -> bool {
         self.cut
     }
@@ -216,9 +228,9 @@ impl Response {
         }
     }
 
-    /// `n` bytes of the body from `buf`, kept up to `MOST_BYTES` (past it, the response counts as done, cut).
+    /// `n` bytes of the body from `buf`, kept up to the most it keeps (past it, the response counts as done, cut).
     fn keep_from_buf(&mut self, n: usize) {
-        let room = MOST_BYTES.saturating_sub(self.ready.len());
+        let room = self.most().saturating_sub(self.ready.len());
         let kept = n.min(room);
         self.ready.extend(self.buf.drain(..kept));
         if kept < n {
@@ -281,10 +293,10 @@ impl Response {
     }
 
     /// The page's bytes: the body, gzip's or DEFLATE's compression taken off (as the response says it has), at most
-    /// four times `MOST_BYTES` of them. Err: why they couldn't be.
+    /// four times `MOST_BYTES` of them (or the most the response keeps, if that's more). Err: why they couldn't be.
     pub fn page(&self) -> Result<Vec<u8>, &'static str> {
         let encoding = self.header("content-encoding").map(|e| e.trim().to_ascii_lowercase()).unwrap_or_default();
-        let most = 4 * MOST_BYTES;
+        let most = (4 * MOST_BYTES).max(self.most());
         let tidy = |e: zip::Error| match e {
             zip::Error::TooBig => "the page is too big to read",
             _ => "the page came compressed in a way that didn't add up",

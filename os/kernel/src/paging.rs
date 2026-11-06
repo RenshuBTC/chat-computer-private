@@ -39,8 +39,10 @@ pub const HEAP_END: u64 = 0xFFFF_F000_0000_0000;
 const STACK_TOP: u64 = 0xFFFF_F080_0000_0000;
 /// Where its pages start (0 until it's mapped).
 static STACK_BOTTOM: AtomicU64 = AtomicU64::new(0);
-/// The other processor cores' stacks: below the first's, in the same page-map slot, each in 2 MiB of its own with
-/// nothing mapped below it, and where each one's pages start (0: not mapped).
+/// The room the kernel's own stack has in that slot (its pages at the top of it, nothing mapped below them).
+const STACK_ROOM: u64 = 64 << 20;
+/// The other processor cores' stacks: below the first's room, in the same page-map slot, each in 2 MiB of its own
+/// with nothing mapped below it, and where each one's pages start (0: not mapped).
 const CORE_STACK_ROOM: u64 = 2 << 20;
 pub const MOST_CORES: usize = 64;
 static CORE_STACK_BOTTOMS: [AtomicU64; MOST_CORES] = [const { AtomicU64::new(0) }; MOST_CORES];
@@ -246,6 +248,7 @@ pub fn map_heap(virt: u64, len: u64) {
 
 /// Maps `pages` zeroed frames as the kernel's own stack, and returns its top (a stack grows down from there).
 pub fn map_stack(pages: u64) -> u64 {
+    assert!(pages * PAGE_SIZE <= STACK_ROOM / 2);
     let mut guard = TABLES.lock();
     let t = guard.as_mut().expect("paging::init first");
     let flags = PRESENT | WRITABLE | t.no_execute;
@@ -265,7 +268,7 @@ pub fn map_core_stack(core: usize, pages: u64) -> u64 {
     let mut guard = TABLES.lock();
     let t = guard.as_mut().expect("paging::init first");
     let flags = PRESENT | WRITABLE | t.no_execute;
-    let top = STACK_TOP - core as u64 * CORE_STACK_ROOM;
+    let top = STACK_TOP - STACK_ROOM - (core as u64 - 1) * CORE_STACK_ROOM;
     let bottom = top - pages * PAGE_SIZE;
     for page in (bottom..top).step_by(PAGE_SIZE as usize) {
         let phys = memory::alloc_zeroed().expect("no memory for a processor core's stack");
@@ -275,19 +278,32 @@ pub fn map_core_stack(core: usize, pages: u64) -> u64 {
     top
 }
 
+/// The deepest word of the kernel's own stack found written so far (STACK_TOP: none).
+static STACK_DEEPEST: AtomicU64 = AtomicU64::new(STACK_TOP);
+
 /// How deep the kernel's own stack has gone, at most, and how big it is, in bytes. Its pages started zeroed, so the
 /// lowest word that isn't zero is as deep as anything has written (a little short if the deepest words written were
-/// zeros); measured, where a count of nested calls would be only a guess at it.
+/// zeros); measured, where a count of nested calls would be only a guess at it. Looked for down from the deepest found
+/// before, until 1 MiB of zeros below it (a stack grows a frame at a time, and every frame writes its return address),
+/// so a big stack that's hardly used isn't read through each time.
 pub fn stack_used() -> (u64, u64) {
     let bottom = STACK_BOTTOM.load(Ordering::Relaxed);
     if bottom == 0 {
         return (0, 0);
     }
-    let mut at = bottom;
-    while at < STACK_TOP && unsafe { core::ptr::read_volatile(at as *const u64) } == 0 {
-        at += 8;
+    let mut deepest = STACK_DEEPEST.load(Ordering::Relaxed);
+    let (mut at, mut zeros) = (deepest, 0);
+    while at > bottom && zeros < (1 << 20) {
+        at -= 8;
+        if unsafe { core::ptr::read_volatile(at as *const u64) } != 0 {
+            deepest = at;
+            zeros = 0;
+        } else {
+            zeros += 8;
+        }
     }
-    (STACK_TOP - at, STACK_TOP - bottom)
+    STACK_DEEPEST.store(deepest, Ordering::Relaxed);
+    (STACK_TOP - deepest, STACK_TOP - bottom)
 }
 
 /// Whether `address` is just past the end of the kernel's own stack, or another core's: where a fault means it ran

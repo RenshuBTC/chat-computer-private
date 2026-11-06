@@ -549,46 +549,67 @@ impl Vm {
     /// Runs the jobs waiting (and those they queue), until there are none.
     pub fn run_jobs(&mut self) {
         while let Some(job) = self.jobs.pop_front() {
-            match job {
-                Job::Reaction { handler, arg, rejected, derived, resolve, reject } => {
-                    if let Value::Obj(h) = handler
-                        && matches!(self.heap.get(h).class, Class::Generator(_))
-                    {
-                        self.async_continue(h, rejected, arg);
-                        continue;
-                    }
-                    let r = if self.is_callable(&handler) {
-                        self.call(&handler, Value::Undefined, &[arg])
-                    } else if rejected {
-                        Err(arg)
-                    } else {
-                        Ok(arg)
-                    };
-                    if resolve.is_undefined() {
-                        if let Value::Obj(d) = derived {
-                            match r {
-                                Ok(v) => {
-                                    let _ = self.resolve_promise(d, v);
-                                }
-                                Err(e) => self.reject_promise(d, e),
-                            }
-                        }
-                    } else {
-                        let _ = match r {
-                            Ok(v) => self.call(&resolve, Value::Undefined, &[v]),
-                            Err(e) => self.call(&reject, Value::Undefined, &[e]),
-                        };
-                    }
+            // What the job holds is kept from the collector while it runs: its code can run the collector, and
+            // nothing else may hold the promise it settles, or the functions that settle it (a `then` whose
+            // promise isn't kept).
+            let mark = self.roots.len();
+            match &job {
+                Job::Reaction { handler, arg, derived, resolve, reject, .. } => {
+                    self.roots.extend([handler.clone(), arg.clone(), derived.clone(), resolve.clone(), reject.clone()])
                 }
-                Job::Thenable { promise, thenable, then } => {
-                    let (res, rej) = self.resolving_functions(promise);
-                    if let Err(e) = self.call(&then, thenable, &[res, rej.clone()]) {
-                        let _ = self.call(&rej, Value::Undefined, &[e]);
-                    }
-                }
+                Job::Thenable { promise, thenable, then } => self.roots.extend([Value::Obj(*promise), thenable.clone(), then.clone()]),
                 Job::Call { f, args } => {
-                    let _ = self.call(&f, Value::Undefined, &args);
+                    self.roots.push(f.clone());
+                    self.roots.extend(args.iter().cloned());
                 }
+            }
+            self.run_job(job);
+            self.roots.truncate(mark);
+        }
+    }
+
+    /// One job, run.
+    fn run_job(&mut self, job: Job) {
+        match job {
+            Job::Reaction { handler, arg, rejected, derived, resolve, reject } => {
+                if let Value::Obj(h) = handler
+                    && matches!(self.heap.get(h).class, Class::Generator(_))
+                {
+                    self.async_continue(h, rejected, arg);
+                    return;
+                }
+                let r = if self.is_callable(&handler) {
+                    self.call(&handler, Value::Undefined, &[arg])
+                } else if rejected {
+                    Err(arg)
+                } else {
+                    Ok(arg)
+                };
+                if resolve.is_undefined() {
+                    if let Value::Obj(d) = derived {
+                        match r {
+                            Ok(v) => {
+                                let _ = self.resolve_promise(d, v);
+                            }
+                            Err(e) => self.reject_promise(d, e),
+                        }
+                    }
+                } else {
+                    let _ = match r {
+                        Ok(v) => self.call(&resolve, Value::Undefined, &[v]),
+                        Err(e) => self.call(&reject, Value::Undefined, &[e]),
+                    };
+                }
+            }
+            Job::Thenable { promise, thenable, then } => {
+                let (res, rej) = self.resolving_functions(promise);
+                self.roots.extend([res.clone(), rej.clone()]);
+                if let Err(e) = self.call(&then, thenable, &[res, rej.clone()]) {
+                    let _ = self.call(&rej, Value::Undefined, &[e]);
+                }
+            }
+            Job::Call { f, args } => {
+                let _ = self.call(&f, Value::Undefined, &args);
             }
         }
     }

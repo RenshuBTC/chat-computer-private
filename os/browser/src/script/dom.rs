@@ -593,17 +593,9 @@ pub fn proto_for(vm: &mut Vm, id: NodeId) -> Gc {
         Some(Data::Fragment) => {
             if h.doc.shadows.iter().any(|(_, f)| *f == id) { "ShadowRoot" } else { "DocumentFragment" }
         }
-        Some(Data::Element(e)) => {
-            if let Some((_, c)) = h.custom.iter().find(|(n, _)| *n == e.name) {
-                let c = c.clone();
-                if let Value::Obj(cg) = c
-                    && let Some(Prop { slot: Slot::Data(Value::Obj(p)), .. }) = vm.heap.get(cg).props.get(&Key::Str(js::names::PROTOTYPE)).cloned()
-                {
-                    return p;
-                }
-            }
-            interface_name(&h.doc, id, &e.name)
-        }
+        // (A custom element's own prototype comes when it's upgraded, with its constructor run: until then, it's a plain
+        // element's.)
+        Some(Data::Element(e)) => interface_name(&h.doc, id, &e.name),
         None => "Node",
     };
     host_ref(vm).proto(name).unwrap_or_else(|| vm.proto(I::ObjectProto))
@@ -1109,10 +1101,34 @@ fn clone_node(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     let deep = arg(args, 0).truthy();
     let c = host(vm).doc.clone_node(n, deep);
     let w = wrap(vm, c);
-    if doc(vm).name(c).contains('-') {
-        upgrade(vm, c);
+    // (A copy of what's in a <template> stays in the template's own inert document, where nothing is upgraded.)
+    if !in_template(doc(vm), n) {
+        upgrade_tree(vm, c);
     }
     Ok(w)
+}
+
+/// Whether a node is in a <template>'s contents.
+fn in_template(d: &Document, n: NodeId) -> bool {
+    let mut top = n;
+    while let Some(p) = d.parent(top) {
+        top = p;
+    }
+    d.templates.iter().any(|(_, f)| *f == top)
+}
+
+/// The custom elements just made in a copy (`root`, and what's in it, in order) upgraded, as a clone's or an import's
+/// are before it's given back: their constructors run.
+fn upgrade_tree(vm: &mut Vm, root: NodeId) {
+    if host_ref(vm).custom.is_empty() {
+        return;
+    }
+    let all: Vec<NodeId> = doc(vm).descendants(root).collect();
+    for id in all {
+        if doc(vm).name(id).contains('-') {
+            upgrade(vm, id);
+        }
+    }
 }
 
 fn contains(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
@@ -3436,7 +3452,9 @@ fn import_node(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
     let n = node_arg(vm, args, 0, "importNode")?;
     let deep = arg(args, 1).truthy();
     let c = host(vm).doc.clone_node(n, deep);
-    Ok(wrap(vm, c))
+    let w = wrap(vm, c);
+    upgrade_tree(vm, c);
+    Ok(w)
 }
 
 fn adopt_node(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {

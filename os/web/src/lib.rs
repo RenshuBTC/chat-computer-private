@@ -23,5 +23,8 @@ pub use url::Url;
 
 /// How Chat Computer says who it is to the sites it reads (as the main Chat Computer does).
 pub const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) ChatComputer/1.0";
-/// The most of a page's bytes read (as the main Chat Computer reads).
+/// The most of a page's bytes read (as the main Chat Computer reads), for the model to read.
 pub const MOST_BYTES: usize = 3 << 20;
+/// The most of each of a site's files shown on the screen (its pages, scripts, style sheets, pictures): a big site's
+/// script is several times MOST_BYTES (YouTube's: 10.7 MB, sent uncompressed to a browser it doesn't know).
+pub const SITE_MOST_BYTES: usize = 32 << 20;

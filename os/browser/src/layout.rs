@@ -888,22 +888,30 @@ impl<'a> Layout<'a> {
             && !matches!(x.style.display, Display::Flex | Display::Grid | Display::Table | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::TableCell)
     }
 
-    /// A box's top margin with those it collapses with (its first in-flow child's, through it).
+    /// A box's top margin with those it collapses with: its first in-flow child's, through it (and through empty
+    /// blocks before that child, whose margins collapse through them; white space between blocks is nothing).
     fn margin_top(&mut self, b: BoxId, cb_w: f32) -> Collapse {
         let mut c = Collapse::default().with(self.tree.boxes[b].margin[0]);
         let mut at = b;
-        for _ in 0..64 {
+        'down: for _ in 0..64 {
             if !self.collapses_top(at) {
                 break;
             }
-            let w = cb_w;
-            let Some(first) = self.tree.boxes[at].children.iter().copied().find(|&k| !self.tree.boxes[k].style.out_of_flow()) else { break };
-            if self.tree.boxes[first].inline_level() {
-                break;
+            let kids: Vec<BoxId> = self.tree.boxes[at].children.iter().copied().filter(|&k| !self.tree.is_blank(k) && !self.tree.boxes[k].style.out_of_flow()).collect();
+            for k in kids {
+                if self.tree.boxes[k].inline_level() || self.tree.boxes[k].style.float != crate::style::Float::None {
+                    break 'down;
+                }
+                self.metrics(k, cb_w);
+                c = c.with(self.tree.boxes[k].margin[0]);
+                if self.is_empty_block(k) {
+                    c = c.with(self.tree.boxes[k].margin[2]);
+                    continue;
+                }
+                at = k;
+                continue 'down;
             }
-            self.metrics(first, w);
-            c = c.with(self.tree.boxes[first].margin[0]);
-            at = first;
+            break;
         }
         c
     }
@@ -911,17 +919,25 @@ impl<'a> Layout<'a> {
     fn margin_bottom(&mut self, b: BoxId, cb_w: f32) -> Collapse {
         let mut c = Collapse::default().with(self.tree.boxes[b].margin[2]);
         let mut at = b;
-        for _ in 0..64 {
+        'down: for _ in 0..64 {
             if !self.collapses_bottom(at) {
                 break;
             }
-            let Some(last) = self.tree.boxes[at].children.iter().rev().copied().find(|&k| !self.tree.boxes[k].style.out_of_flow()) else { break };
-            if self.tree.boxes[last].inline_level() {
-                break;
+            let kids: Vec<BoxId> = self.tree.boxes[at].children.iter().rev().copied().filter(|&k| !self.tree.is_blank(k) && !self.tree.boxes[k].style.out_of_flow()).collect();
+            for k in kids {
+                if self.tree.boxes[k].inline_level() || self.tree.boxes[k].style.float != crate::style::Float::None {
+                    break 'down;
+                }
+                self.metrics(k, cb_w);
+                c = c.with(self.tree.boxes[k].margin[2]);
+                if self.is_empty_block(k) {
+                    c = c.with(self.tree.boxes[k].margin[0]);
+                    continue;
+                }
+                at = k;
+                continue 'down;
             }
-            self.metrics(last, cb_w);
-            c = c.with(self.tree.boxes[last].margin[2]);
-            at = last;
+            break;
         }
         c
     }

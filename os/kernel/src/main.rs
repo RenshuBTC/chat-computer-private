@@ -62,8 +62,10 @@ use alloc::string::String;
 use bootinfo::BootInfo;
 use core::arch::asm;
 
-/// The kernel's own stack: 256 KiB, as the start-up stage's, with nothing mapped below it (paging.rs).
-const STACK_PAGES: u64 = 64;
+/// The kernel's own stack: 16 MiB, with nothing mapped below it (paging.rs). (A website's scripts run on it: each
+/// call between the JavaScript engine and its built-in functions takes about 2 KiB of it, as measured (check.py
+/// --site), and a page's scripts may go 1000 deep: YouTube's go 164.)
+const STACK_PAGES: u64 = 4096;
 
 /// # Safety
 /// Only the start-up stage calls this, once, with what it prepared.

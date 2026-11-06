@@ -252,6 +252,80 @@ fn scripted(html: &str) -> Page {
 }
 
 #[test]
+fn weak_maps_and_maps_keep_working_as_the_collector_frees_and_entries_go() {
+    // (YouTube's scripts: a WeakMap whose keys mostly went once the collector ran, which stopped the engine.)
+    let mut p = scripted(
+        "<body><script>var w = new WeakMap(), s = new WeakSet(), kept = [];\
+         for (var i = 0; i < 5000; i++) { var k = {i: i}; w.set(k, i); s.add(k); if (i % 100 === 0) kept.push(k); }\
+         var junk = []; for (var j = 0; j < 300000; j++) junk.push({j: j}); junk = null;\
+         for (var j = 0; j < 300000; j++) ({j: j});\
+         var ok = kept.every(function (k) { return w.get(k) === k.i && w.has(k) && s.has(k); });\
+         var fresh = {}; w.set(fresh, 'new'); w.delete(kept[0]);\
+         var m = new Map(); for (var i = 0; i < 100; i++) m.set('k' + i, i); for (var i = 0; i < 100; i++) m.delete('k' + i);\
+         m.set('k5', 'again'); m.set('other', 1);\
+         console.log(ok, w.get(fresh), w.has(kept[0]), w.get(kept[1]), m.get('k5'), m.get('k6'), m.size, m.has('other'));</script></body>",
+    );
+    p.run(0.0);
+    assert_eq!(p.take_console(), ["true new false 100 again undefined 2 true"]);
+}
+
+#[test]
+fn a_first_blocks_top_margin_collapses_through_white_space_and_empty_blocks_without_being_lost() {
+    // (YouTube's page under its masthead: its margin-top came after an empty block, and was lost.)
+    for (inside, top) in [
+        ("\n  <div class=m>x</div>", 56.0),
+        ("\n<div></div>\n<div class=m>x</div>", 56.0),
+        ("<div style='margin-bottom: 30px'></div><div class=m>x</div>", 56.0),
+        ("<div style='margin-bottom: 70px'></div> <div class=m>x</div>", 70.0),
+    ] {
+        let mut p = page(&format!(
+            "<style>body {{ margin: 0 }} #app {{ position: absolute; top: 0; left: 0; width: 400px }} .m {{ margin-top: 56px; \
+             height: 10px; background: #123456 }}</style><body><div id=app><div>{inside}</div></div></body>"
+        ));
+        let l = laid(&mut p);
+        let r = rects(l, 0xFF12_3456);
+        assert_eq!(r.first().map(|r| r.1), Some(top), "{inside:?}");
+    }
+}
+
+#[test]
+fn the_bodys_overflow_is_the_pages_so_a_body_of_no_height_doesnt_hide_it() {
+    // (YouTube's body: overflow-y: scroll, its app positioned in it, so the body itself has no height.)
+    let mut p = page(
+        "<style>body { margin: 0; overflow-y: scroll } #app { position: absolute; top: 0; left: 0; width: 200px; height: 100px; \
+         background: #123456 } #in { overflow: hidden; height: 0 } #in div { height: 50px; background: #654321 }</style>\
+         <body><div id=app></div><div id=in><div></div></div></body>",
+    );
+    let l = laid(&mut p);
+    let clip_of = |color: u32| {
+        l.items.iter().find(|i| matches!(i.paint, Paint::Rect { color: c, .. } if c == color)).map(|i| (i.clip.w, i.clip.h))
+    };
+    let (w, h) = clip_of(0xFF12_3456).expect("the app's box");
+    assert!(w >= 200.0 && h >= 100.0, "the app is drawn whole, not clipped by the body: {w}x{h}");
+    let (w, h) = clip_of(0xFF65_4321).expect("the box in the one of no height");
+    assert!(w * h < 1.0, "a box of no height that hides its overflow still hides it: {w}x{h}");
+}
+
+#[test]
+fn custom_elements_in_an_import_or_a_clone_are_upgraded_before_it_comes_back() {
+    // (Polymer stamps its templates with importNode, then sets the properties of the custom elements in the copy:
+    // YouTube's dom-if needed its constructor run by then. In a template's own contents, nothing is upgraded.)
+    let mut p = scripted(
+        "<body><template id=t><div><x-box></x-box></div></template><script>\
+         class XBox extends HTMLElement { constructor() { super(); this.made = true; } get v() { return this.made ? 'ok' : 'none'; } }\
+         customElements.define('x-box', XBox);\
+         var t = document.getElementById('t');\
+         var a = document.importNode(t.content, true).querySelector('x-box');\
+         var b = t.content.cloneNode(true).querySelector('x-box');\
+         var c = document.createElement('div'); c.appendChild(document.createElement('x-box')); var d = c.cloneNode(true).firstChild;\
+         var e = document.createElement('div'); e.innerHTML = '<x-box></x-box>'; var f = e.firstChild;\
+         console.log(a instanceof XBox, a.v, b instanceof XBox, b.made, d instanceof XBox, d.v, f instanceof XBox, f.made);</script></body>",
+    );
+    p.run(0.0);
+    assert_eq!(p.take_console(), ["true ok false undefined true ok false undefined"]);
+}
+
+#[test]
 fn scripts_change_the_page() {
     let mut p = scripted(
         "<body><p id=a>x</p><script>document.getElementById('a').textContent = 'y';\

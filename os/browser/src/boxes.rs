@@ -119,6 +119,17 @@ impl Tree {
             let mut b = Builder { doc, styles, pictures, tree: &mut t, depth: 0 };
             b.children_of(h, root);
         }
+        // Overflow goes to the page's view: the root's, or, when the root's is visible, its <body>'s, which then
+        // doesn't clip what's in it itself (CSS 2.1, 11.1.1: a body of no height with overflow-y: scroll, as
+        // YouTube's, holds a whole page).
+        if !t.boxes[root].style.clip
+            && let Some(body) = t.boxes[root].children.iter().copied().find(|&k| t.boxes[k].node.is_some_and(|n| doc.name(n) == "body"))
+            && t.boxes[body].style.clip
+        {
+            let mut s = (*t.boxes[body].style).clone();
+            s.clip = false;
+            t.boxes[body].style = Arc::new(s);
+        }
         t.fix_mixed(0);
         t
     }

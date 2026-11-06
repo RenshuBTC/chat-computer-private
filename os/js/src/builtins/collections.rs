@@ -72,7 +72,8 @@ impl MapData {
         }
     }
 
-    fn rebuild(&mut self) {
+    /// The index made again, for where the entries are now.
+    pub(crate) fn rebuild(&mut self) {
         let size = ((self.entries.len() + 1) * 2).next_power_of_two().max(8);
         self.index = vec![(0, 0); size];
         for (pos, e) in self.entries.iter().enumerate() {
@@ -104,7 +105,9 @@ impl MapData {
             return;
         }
         if self.size == 0 && !self.entries.is_empty() && self.entries.len() > 64 {
+            // (Its index goes with them: its places name entries that are no longer there.)
             self.entries.clear();
+            self.index.clear();
         }
         self.entries.push(Some((key, v)));
         self.size += 1;

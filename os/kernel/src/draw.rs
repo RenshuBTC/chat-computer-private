@@ -69,6 +69,11 @@ impl Rect {
         if r <= x || b <= y { Rect::default() } else { Rect::new(x, y, r - x, b - y) }
     }
 
+    /// Whether all of `o` is inside this.
+    pub fn contains(&self, o: &Rect) -> bool {
+        o.is_empty() || (o.x >= self.x && o.y >= self.y && o.right() <= self.right() && o.bottom() <= self.bottom())
+    }
+
     pub fn union(&self, o: &Rect) -> Rect {
         if self.is_empty() {
             return *o;
@@ -177,6 +182,44 @@ impl Canvas {
         for y in r.y..r.bottom() {
             let row = y as usize * self.width;
             self.pixels[row + r.x as usize..row + r.right() as usize].fill(rgb);
+        }
+    }
+
+    /// The pixels of `r` (inside the canvas), row by row.
+    pub fn copy(&self, r: Rect) -> Vec<u32> {
+        let r = r.intersect(&self.whole());
+        let mut out = Vec::with_capacity((r.w.max(0) * r.h.max(0)) as usize);
+        for y in r.y..r.bottom() {
+            let row = y as usize * self.width;
+            out.extend_from_slice(&self.pixels[row + r.x as usize..row + r.right() as usize]);
+        }
+        out
+    }
+
+    /// Something coming into view in `r` (inside the canvas): `before` is what `r` held before it was drawn, and
+    /// `after` what it held once it was (both as `copy` gives them). What was drawn is moved down `drop` pixels and
+    /// laid over what was there at `alpha` (of 255).
+    pub fn emerge(&mut self, r: Rect, before: &[u32], after: &[u32], drop: i32, alpha: u32) {
+        let r = r.intersect(&self.whole());
+        let w = r.w.max(0) as usize;
+        if w == 0 || before.len() != after.len() || before.len() != w * r.h.max(0) as usize {
+            return;
+        }
+        for y in 0..r.h {
+            let row = (r.y + y) as usize * self.width + r.x as usize;
+            let from = y - drop;
+            for x in 0..w {
+                let under = before[y as usize * w + x];
+                // (What was drawn at the place it comes from: where that held what was there anyway, nothing.)
+                let drawn = (from >= 0 && from < r.h)
+                    .then(|| (before[from as usize * w + x], after[from as usize * w + x]))
+                    .filter(|(b, a)| b != a)
+                    .map(|(_, a)| a);
+                self.pixels[row + x] = match drawn {
+                    Some(rgb) => mix(under, rgb, alpha),
+                    None => under,
+                };
+            }
         }
     }
 

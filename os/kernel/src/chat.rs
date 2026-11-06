@@ -326,6 +326,68 @@ pub struct Chat {
     send_logged: Option<(u32, Rect)>,
     /// The button over an app the keyboard has chosen (Tab), for Enter to press: drawn with a ring round it.
     pill: Option<Pill>,
+    /// When the message box began to come into view (uptime ms). While Chat Computer starts it isn't there: it comes
+    /// up once Chat Computer is ready (at once, for a key typed before then). And whether it's been drawn in its
+    /// place since (whole: until it has, it's drawn again each time).
+    box_from: Option<u64>,
+    box_settled: bool,
+    /// The caret's blink: when it last moved or a key came (it shows then, and blinks from there), and whether it
+    /// shows now.
+    caret_at: u64,
+    caret_on: bool,
+}
+
+/// What a message asks of the PC's power, when that's all it asks (`power_asked`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PowerAsked {
+    /// A restart: the PC then starts what it normally does (Windows, usually). `here`: Chat Computer was asked for.
+    Restart { here: bool },
+    TurnOff,
+}
+
+/// A message that only asks to restart the PC or turn it off ("restart", "reboot the computer please", "go back to
+/// Windows", "shut down"), which Chat Computer does itself rather than leave to the model: a small model can say it
+/// did without doing it. A message that asks anything more ("restart in 5 minutes", "how do I restart?", "don't
+/// turn it off") goes to the model.
+fn power_asked(text: &str) -> Option<PowerAsked> {
+    // (The words such a message has besides its command.)
+    const ALSO: &[&str] = &[
+        "please", "pls", "plz", "can", "could", "would", "will", "you", "u", "now", "the", "my", "this", "that", "it",
+        "computer", "pc", "laptop", "machine", "system", "os", "again", "into", "to", "in", "back", "chat", "windows",
+        "go", "boot", "start", "return", "take", "switch", "exit", "just", "ok", "okay", "hey", "kindly", "for", "me",
+        "i", "want", "wanna", "need", "let's", "lets", "a", "do", "and", "then", "thanks", "thank", "thx", "right",
+        "away", "immediately", "quickly", "restart", "reboot", "shutdown", "poweroff", "shut", "down", "turn", "off",
+        "power",
+    ];
+    // (Read where it is, not copied: what's typed could be a BitLocker recovery key, which is wiped where it's typed.)
+    let same = |w: &str, a: &str| {
+        let mut w = w.chars().map(|c| if c == '\u{2019}' { '\'' } else { c.to_ascii_lowercase() });
+        let mut a = a.chars();
+        loop {
+            match (w.next(), a.next()) {
+                (None, None) => return true,
+                (Some(x), Some(y)) if x == y => {}
+                _ => return false,
+            }
+        }
+    };
+    let mut words: Vec<&str> = Vec::new();
+    for w in text.split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '\u{2019}')).filter(|w| !w.is_empty()) {
+        words.push(ALSO.iter().find(|a| same(w, a))?);
+        if words.len() > 16 {
+            return None;
+        }
+    }
+    let has = |w: &str| words.contains(&w);
+    let windows = has("windows") && ["go", "back", "return", "switch", "boot", "start", "take", "exit"].iter().any(|w| has(w));
+    let restart = has("restart") || has("reboot") || windows;
+    let off = has("shutdown") || has("poweroff") || (has("shut") && has("down")) || (has("power") && (has("off") || has("down")))
+        || ((has("turn") || has("switch")) && has("off"));
+    match (restart, off) {
+        (true, false) => Some(PowerAsked::Restart { here: has("chat") && !has("windows") }),
+        (false, true) => Some(PowerAsked::TurnOff),
+        _ => None,
+    }
 }
 
 /// The buttons over an app the keyboard can choose: its Allow button, and its question's Don't send and Send.
@@ -338,6 +400,11 @@ enum Pill {
 
 /// How long the start screen's word logo and greeting take to fade, as the website's (chat.css: #welcome).
 const WELCOME_FADE_MS: u64 = 500;
+/// The message box coming into view once Chat Computer is ready: how long it takes, and how far (rem) it rises.
+const BOX_RISE_MS: u64 = 450;
+const BOX_RISE_REM: f64 = 0.8;
+/// The caret's blink: shown this long, then hidden as long (Windows' own default).
+const BLINK_MS: u64 = 530;
 
 /// The question over an app that asks to send something: its buttons press only once it's been shown this long (ms),
 /// so a click meant for the page under it can't press one; and at most this many lines of what it sends.
@@ -581,6 +648,10 @@ impl Chat {
             send_shown: None,
             send_logged: None,
             pill: None,
+            box_from: None,
+            box_settled: false,
+            caret_at: 0,
+            caret_on: true,
         };
         c.lay_out_box();
         let card = c.composer.card;
@@ -842,7 +913,7 @@ impl Chat {
         if self.site.is_some() && !self.stopped {
             self.render_site(clip.intersect(&log));
             self.canvas.set_clip(clip);
-            self.render_box();
+            self.render_box_shown();
             return;
         }
         // The start screen: the word logo and the greeting (fading as the first message goes).
@@ -912,8 +983,103 @@ impl Chat {
         }
         if !self.stopped {
             self.canvas.set_clip(clip);
-            self.render_box();
+            self.render_box_shown();
         }
+    }
+
+    /// Whether the message box is there (it isn't while Chat Computer starts).
+    fn box_shown(&self) -> bool {
+        self.box_from.is_some()
+    }
+
+    /// The message box comes into view (once): rising, as Chat Computer becomes ready; or at once (`at_once`), for a
+    /// key typed while it starts.
+    fn show_box(&mut self, at_once: bool) {
+        if self.box_from.is_none() {
+            let now = time::uptime_ms();
+            self.box_from = Some(if at_once { now.saturating_sub(BOX_RISE_MS) } else { now });
+            self.box_changed();
+        }
+    }
+
+    /// The message box, as far as it's come into view: rising into its place as it fades in (easing out).
+    fn render_box_shown(&mut self) {
+        let Some(from) = self.box_from else { return };
+        let t = time::uptime_ms().saturating_sub(from);
+        if t >= BOX_RISE_MS {
+            if self.canvas.clip().contains(&self.box_area().intersect(&self.canvas.whole())) {
+                self.box_settled = true;
+            }
+            return self.render_box();
+        }
+        let area = self.box_area().intersect(&self.canvas.clip());
+        if area.is_empty() {
+            return;
+        }
+        let before = self.canvas.copy(area);
+        self.render_box();
+        let after = self.canvas.copy(area);
+        let k = t as f32 / BOX_RISE_MS as f32;
+        let eased = 1.0 - (1.0 - k) * (1.0 - k) * (1.0 - k);
+        let drop = ((1.0 - eased) as f64 * self.m.rem * BOX_RISE_REM + 0.5) as i32;
+        self.canvas.emerge(area, &before, &after, drop, (eased * 255.0 + 0.5) as u32);
+    }
+
+    /// Whether the caret shows now: it blinks (BLINK_MS shown, as long hidden) from when it last moved. (Not in the
+    /// test builds whose checks compare pictures of the screen; the keyboard's check sees it blink.)
+    fn caret_lit(&self, now: u64) -> bool {
+        let blinks = option_env!("CHATCOMPUTER_TEST").is_none_or(|t| t == "keyboard");
+        !blinks || (now.saturating_sub(self.caret_at) / BLINK_MS).is_multiple_of(2)
+    }
+
+    /// The caret moved, or a key came: it shows at once, and blinks from now.
+    fn caret_moved(&mut self) {
+        self.caret_at = time::uptime_ms();
+        if !self.caret_on {
+            self.caret_on = true;
+            self.caret_changed();
+        }
+    }
+
+    /// The caret shows or hides: where it is is drawn again.
+    fn caret_changed(&mut self) {
+        for r in [self.box_caret(), self.site_caret()].into_iter().flatten() {
+            self.dirty = self.dirty.union(&r);
+        }
+    }
+
+    /// Where the message box's caret is: on the line of what's typed it's on, when that line shows, and while what's
+    /// typed goes into the box.
+    fn box_caret(&self) -> Option<Rect> {
+        if !self.box_shown() || self.typing_in_site() {
+            return None;
+        }
+        let (m, b) = (self.m, &self.composer);
+        let li = b.lines.iter().rposition(|l| l.start <= self.cursor).unwrap_or(0);
+        if !(b.first..b.first + b.shown).contains(&li) {
+            return None;
+        }
+        let start = b.lines.get(li).map_or(0, |l| l.start);
+        let line_end = b.lines.get(li).map_or(0, |l| l.end).max(start);
+        let end = self.cursor.min(line_end).max(start);
+        // (Where the next letter starts: kerned closer to the one before, the caret is too.)
+        let x = b.text_x + self.ty.x_at(&self.typed[start..line_end], end - start, m.body.size) / ONE;
+        let y = b.text_y + (li - b.first) as i32 * m.line;
+        let w = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
+        Some(Rect::new(x, y + m.line * 18 / 100, w, m.line * 64 / 100))
+    }
+
+    /// Where the caret of a website's field is, when a field has it and it's in view.
+    fn site_caret(&self) -> Option<Rect> {
+        let (_, _, page) = self.site_rects();
+        let (x, y, w, h) = self.site.as_ref()?.caret_area(&self.ty, (page.x, page.y))?;
+        let r = Rect::new(x, y, w, h).intersect(&page);
+        (!r.is_empty()).then_some(r)
+    }
+
+    /// Whether what's typed goes into a website's field (its caret is there, not in the message box).
+    fn typing_in_site(&self) -> bool {
+        self.site.as_ref().is_some_and(|s| s.typing_in_field())
     }
 
     /// The word logo and the greeting under it, in the middle of the room above the message box (as the website's
@@ -952,6 +1118,9 @@ impl Chat {
 
     /// Which of the message box's round buttons is at (x, y) (a little beyond each circle counts too: they're small).
     fn tool_at(&self, x: f32, y: f32, slack: i64) -> Option<usize> {
+        if !self.box_shown() {
+            return None;
+        }
         let (px8, py8) = ((x * 8.0) as i64, (y * 8.0) as i64);
         self.composer.tools.iter().position(|&(cx, cy, r)| {
             let (dx, dy) = (px8 - cx as i64, py8 - cy as i64);
@@ -1293,6 +1462,7 @@ impl Chat {
     /// The message box: its shadow, the card, what's typed (or the hint) and the caret, the send button.
     fn render_box(&mut self) {
         let m = self.m;
+        let caret = if self.caret_on { self.box_caret() } else { None };
         let b = &self.composer;
         let canvas = &mut self.canvas;
         canvas.shadow(b.card, m.px(0.25), m.px(1.25), SHADOW);
@@ -1300,7 +1470,6 @@ impl Chat {
         let hair = ((self.layout.scale + 0.5) as i32).max(1);
         canvas.round_rect(b.card, m.px(1.0), BOX_LINE);
         canvas.round_rect(Rect::new(b.card.x + hair, b.card.y + hair, b.card.w - 2 * hair, b.card.h - 2 * hair), m.px(1.0) - hair, PAPER);
-        let caret_w = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
         if self.typed.is_empty() {
             let hint = match crate::listening::state() {
                 _ if self.key_typed.is_some() => "Your key for Claude (made at platform.claude.com/settings/keys), then Enter",
@@ -1322,16 +1491,9 @@ impl Chat {
             let ink = self.ty.ink(text, m.body, 0);
             canvas.ink(b.text_x - ink.left as i32, b.text_y + (i - b.first) as i32 * m.line, &ink, BOX_INK);
         }
-        // The caret.
-        let li = b.lines.iter().rposition(|l| l.start <= self.cursor).unwrap_or(0);
-        if (b.first..b.first + b.shown).contains(&li) {
-            let start = b.lines.get(li).map_or(0, |l| l.start);
-            let line_end = b.lines.get(li).map_or(0, |l| l.end).max(start);
-            let end = self.cursor.min(line_end).max(start);
-            // (Where the next letter starts: kerned closer to the one before, the caret is too.)
-            let x = b.text_x + self.ty.x_at(&self.typed[start..line_end], end - start, m.body.size) / ONE;
-            let y = b.text_y + (li - b.first) as i32 * m.line;
-            canvas.fill(Rect::new(x, y + m.line * 18 / 100, caret_w, m.line * 64 / 100), BOX_INK);
+        // The caret (blinking: `caret_on`), unless what's typed goes into a website's field.
+        if let Some(r) = caret {
+            canvas.fill(r, BOX_INK);
         }
         // The chips: each file attached, its name, and an x to take it off.
         for (i, (r, x)) in b.chips.iter().enumerate() {
@@ -1788,6 +1950,16 @@ impl Chat {
             self.dirty = self.dirty.union(&area);
         }
         let now = time::uptime_ms();
+        // The message box coming into view: drawn again each time, until it's been drawn whole in its place.
+        if self.box_from.is_some() && !self.box_settled {
+            self.box_changed();
+        }
+        // The caret blinks while nothing's typed.
+        let lit = self.caret_lit(now);
+        if lit != self.caret_on {
+            self.caret_on = lit;
+            self.caret_changed();
+        }
         if let Some(at) = self.welcome_fading {
             if now.saturating_sub(at) > WELCOME_FADE_MS + 50 {
                 self.welcome_fading = None;
@@ -2062,13 +2234,24 @@ impl Chat {
             self.dirty = self.dirty.union(&area);
             return;
         }
-        if (self.typed.trim().is_empty() && self.attached.is_empty()) || self.asking.is_some() {
+        if self.typed.trim().is_empty() && self.attached.is_empty() {
             return;
         }
         // (Still starting: sent once the main loop has.)
         if !self.looping {
             self.send_later = true;
             return;
+        }
+        // "Restart", "go back to Windows", "turn off" alone: done here, at once (an answer coming stops).
+        let power = if self.attached.is_empty() { power_asked(&self.typed) } else { None };
+        if self.asking.is_some() && power.is_none() {
+            return;
+        }
+        if let Some(asked) = power {
+            let text = String::from(self.typed.trim());
+            self.typed.clear();
+            self.cursor = 0;
+            return self.power(text, asked);
         }
         if !self.started {
             self.started = true;
@@ -2139,6 +2322,57 @@ impl Chat {
         self.dirty = self.canvas.whole();
     }
 
+    /// The PC restarted, or turned off, as the person asked (`text`, which `power_asked` read): what they typed and
+    /// what happens go in the conversation, and it happens 5 seconds on, as when the model's tools do it.
+    fn power(&mut self, text: String, asked: PowerAsked) {
+        if self.asking.is_some() {
+            assistant::stop();
+            self.answer_over(Some(String::from("Stopped.")));
+        }
+        if !self.started {
+            self.started = true;
+            self.blocks.clear();
+            self.welcome_fading = Some(time::uptime_ms());
+        }
+        self.close_site();
+        if self.chat_title.is_none() {
+            self.set_chat_title(Some(text.clone()));
+        }
+        let note = match asked {
+            PowerAsked::TurnOff if !crate::power::can_turn_off() => String::from(
+                "Chat Computer can't turn this PC off: its firmware doesn't say how. Hold its power button down for a few \
+                 seconds instead.",
+            ),
+            PowerAsked::TurnOff => {
+                crate::power::turn_off_in(5000);
+                String::from("Turning off in 5 seconds\u{2026}")
+            }
+            PowerAsked::Restart { here } => {
+                crate::power::restart_in(5000);
+                let mut s = String::from("Restarting in 5 seconds\u{2026} The PC then starts what it normally does (Windows, usually)");
+                if here {
+                    s.push_str(
+                        ": Chat Computer can't choose what it starts yet. To come back here, choose \u{201C}Chat Computer \
+                         (own system)\u{201D} in its boot menu as it starts (F12 on many PCs), or double-click Chat \
+                         Computer Own System in Windows.",
+                    );
+                } else {
+                    s.push('.');
+                }
+                s
+            }
+        };
+        crate::log!("Chat Computer kernel: chat: asked to {}: {note}", if asked == PowerAsked::TurnOff { "turn off" } else { "restart" });
+        self.blocks.push(Block::new(Kind::You, Live::No, text));
+        let you = self.blocks.len() - 1;
+        self.blocks.push(Block::new(Kind::Note, Live::No, note));
+        self.lay_out_box();
+        self.lay_out();
+        self.anchor = self.pin_top(you);
+        self.scroll = None;
+        self.dirty = self.canvas.whole();
+    }
+
     // ---------------------------------------------------------------------------------------------- websites
 
     /// A website's frame (as chat.css's #frame: from the top of the screen down to the message box, between the
@@ -2165,6 +2399,7 @@ impl Chat {
         let (frame, close, page) = self.site_rects();
         let allow = self.allow_rect();
         let m = self.m;
+        let caret_on = self.caret_on;
         let rule = ((2.0 * self.layout.scale + 0.5) as i32).max(1);
         let radius = m.px(1.1);
         self.canvas.set_clip(clip);
@@ -2230,6 +2465,7 @@ impl Chat {
         let (w, h) = (self.canvas.width, self.canvas.height);
         if site.has_page() {
             let (pixels, ty) = (self.canvas.pixels_mut(), &self.ty);
+            site.caret_on = caret_on;
             site.draw(ty, pixels, w, h, (page.x, page.y, page.w, page.h), (inside.x, inside.y, inside.w, inside.h), dpr);
         } else {
             site.dirty = false;
@@ -2829,6 +3065,7 @@ pub fn looping() {
     if let Some(c) = CHAT.lock().as_mut() {
         c.looping = true;
         c.apps = apps;
+        c.show_box(false);
         if core::mem::take(&mut c.send_later) {
             c.send();
         }
@@ -2876,6 +3113,8 @@ pub fn wheel(notches: i32) {
 pub fn pointer(at: (f32, f32), click: Option<(f32, f32)>) {
     if let Some(c) = CHAT.lock().as_mut() {
         if let Some(p) = click {
+            // (A click can put the caret somewhere: it shows there at once.)
+            c.caret_moved();
             c.pointer_at(p, true);
         }
         c.pointer_at(at, false);
@@ -2886,6 +3125,9 @@ pub fn pointer(at: (f32, f32), click: Option<(f32, f32)>) {
 /// A key was typed.
 pub fn typed(p: Press) {
     if let Some(c) = CHAT.lock().as_mut() {
+        // (Typed while Chat Computer starts: the box shows at once, for what's typed to show in it.)
+        c.show_box(true);
+        c.caret_moved();
         if talk_key(p) {
             c.talk();
         } else if matches!(p.key, Key::Escape) && crate::listening::state().is_some() {

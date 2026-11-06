@@ -35,6 +35,12 @@ fn read(files: &Option<std::path::PathBuf>, index: &std::collections::HashMap<St
 }
 
 fn main() {
+    // (On a thread with a big stack: a page's scripts can go deep, as on Chat Computer's own system, where they run on
+    // a stack of their own.)
+    std::thread::Builder::new().stack_size(std::env::var("RUN_PAGE_STACK_KB").ok().and_then(|v| v.parse::<usize>().ok()).map_or(256 << 20, |k| k << 10)).spawn(run).expect("a thread").join().ok();
+}
+
+fn run() {
     let args: Vec<String> = std::env::args().collect();
     let flag = |name: &str| args.iter().position(|a| a == name);
     let positional: Vec<&String> = {
@@ -46,9 +52,9 @@ fn main() {
                 continue;
             }
             match a.as_str() {
-                "--ms" => skip = 1,
+                "--ms" | "--why" => skip = 1,
                 "--ppm" => skip = 2,
-                "--html" => {}
+                "--html" | "--items" => {}
                 _ => out.push(a),
             }
         }
@@ -115,7 +121,39 @@ fn main() {
             page.lay_out(&ty, 1280.0, 800.0, 1.0);
         }
     }
-    eprintln!("({:.0} ms, {} ms of the page's time)", started.elapsed().as_secs_f64() * 1000.0, now as u64);
+    eprintln!("({:.0} ms, {} ms of the page's time; its scripts {} deep)", started.elapsed().as_secs_f64() * 1000.0, now as u64, page.script_depth());
+    if flag("--items").is_some() {
+        // What's drawn, item by item (text and rectangles): where, and in what colour.
+        let laid = page.lay_out(&ty, 1280.0, 800.0, 1.0);
+        println!("(laid out: {} items, {} px tall, background {:?})", laid.items.len(), laid.height, laid.background);
+        for it in laid.items.iter().take(400) {
+            match &it.paint {
+                browser::layout::Paint::Text { x, y, text, color, size, .. } => println!("text {x:.0},{y:.0} {size}px {color:?} {:?} clip {:?}", text.chars().take(60).collect::<String>(), it.clip),
+                browser::layout::Paint::Rect { x, y, w, h, color, .. } => println!("rect {x:.0},{y:.0} {w:.0}x{h:.0} {color:?}"),
+                browser::layout::Paint::Picture { x, y, w, h, n, .. } => println!("picture {n} {x:.0},{y:.0} {w:.0}x{h:.0}"),
+                _ => {}
+            }
+        }
+    }
+    if let Some(i) = flag("--why") {
+        // Where some words are drawn from: each element they're in, outwards, with its box.
+        let want = args[i + 1].clone();
+        let laid = page.lay_out(&ty, 1280.0, 800.0, 1.0);
+        let found = laid.items.iter().find(|it| matches!(&it.paint, browser::layout::Paint::Text { text, .. } if text.contains(want.as_str()))).map(|it| it.node);
+        let boxes = laid.boxes.clone();
+        if let Some(node) = found {
+            let mut at = node;
+            while let Some(n) = at {
+                let rect = boxes.iter().filter(|(b, _)| *b == n).map(|(_, r)| *r).collect::<Vec<_>>();
+                let d = &page.doc;
+                let e = d.element(n);
+                let desc = e.map(|e| format!("<{} id={:?} class={:?} style={:?}>", e.name, e.attr("id").unwrap_or(""), e.attr("class").unwrap_or("").chars().take(60).collect::<String>(), e.attr("style").unwrap_or("").chars().take(80).collect::<String>())).unwrap_or_else(|| String::from("(not an element)"));
+                let st = page.style_of(n).map(|s| format!("display {:?} position {:?} margin {:?} clip {}", s.display, s.position, s.margin, s.clip)).unwrap_or_default();
+                println!("why: {desc} {rect:?} {st}");
+                at = d.parent(n);
+            }
+        }
+    }
     if flag("--html").is_some() {
         println!("{}", page.doc.outer_html(0));
     }

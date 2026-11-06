@@ -279,9 +279,11 @@ pub struct Site {
     pictures_bytes: usize,
     /// How far down the page is scrolled (device pixels).
     pub scroll: f32,
-    /// The field typed in, and where its caret is (a byte in its value).
+    /// The field typed in, and where its caret is (a byte in its value); whether the caret shows now (it blinks:
+    /// chat.rs says when).
     pub focus: Option<usize>,
     pub caret: usize,
+    pub caret_on: bool,
     back: Vec<Url>,
     /// Where the page is (the one shown, or the one coming).
     pub url: Url,
@@ -362,6 +364,7 @@ impl Site {
             scroll: 0.0,
             focus: None,
             caret: 0,
+            caret_on: true,
             back: Vec::new(),
             url: url.clone(),
             note: None,
@@ -968,18 +971,31 @@ impl Site {
                 }
             }
         }
-        // The caret, in the field being typed in.
-        if let Some(f) = self.focus
-            && let Some((cx, cy, ch)) = caret_place(page, ty, f, self.caret)
+        // The caret, in the field being typed in (while it shows: it blinks).
+        if self.caret_on
+            && let Some((px, py, thick, ch)) = self.caret_area(ty, (x, y))
         {
-            let (px, py) = ((x as f32 + cx + 0.5) as i32, (y as f32 + cy - self.scroll + 0.5) as i32);
-            let thick = ((dpr + 0.5) as i32).max(1);
-            for yy in py.max(inside.1)..(py + (ch + 0.5) as i32).min(inside.1 + inside.3) {
+            for yy in py.max(inside.1)..(py + ch).min(inside.1 + inside.3) {
                 for xx in px.max(inside.0)..(px + thick).min(inside.0 + inside.2) {
                     pixels_set(surface.pixels, width, xx, yy, 0x000000);
                 }
             }
         }
+    }
+
+    /// Whether what's typed goes into a field of the page (one to type in has the focus).
+    pub fn typing_in_field(&self) -> bool {
+        self.focus.is_some_and(|f| self.page.as_ref().is_some_and(|p| p.is_text_field(f)))
+    }
+
+    /// Where the caret of the field being typed in is (x, y, width, height on the screen, the page's top left corner
+    /// at `at`), when one is.
+    pub fn caret_area(&self, ty: &Type, at: (i32, i32)) -> Option<(i32, i32, i32, i32)> {
+        let page = self.page.as_ref()?;
+        let f = self.focus.filter(|&f| page.is_text_field(f))?;
+        let (cx, cy, ch) = caret_place(page, ty, f, self.caret)?;
+        let (px, py) = ((at.0 as f32 + cx + 0.5) as i32, (at.1 as f32 + cy - self.scroll + 0.5) as i32);
+        Some((px, py, ((self.dpr + 0.5) as i32).max(1), (ch + 0.5) as i32))
     }
 
     /// Scrolls by `dy` device pixels (down for more than 0); true if it moved.

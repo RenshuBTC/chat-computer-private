@@ -1086,6 +1086,17 @@ impl Page {
         self.script.as_mut().and_then(|s| s.next_due())
     }
 
+    /// An element's style, as the page's last layout worked it out.
+    pub fn style_of(&self, n: NodeId) -> Option<Arc<crate::style::Style>> {
+        self.styles.as_ref()?.of.get(n).cloned().flatten()
+    }
+
+    /// How deep its scripts have gone in calls between the engine and its built-in functions (each takes room on the
+    /// stack they run on).
+    pub fn script_depth(&self) -> usize {
+        self.script.as_ref().map_or(0, |s| s.vm.deepest)
+    }
+
     /// What the page's scripts printed (console.log, and the exceptions nothing caught), since last asked.
     pub fn take_console(&mut self) -> Vec<String> {
         self.script.as_mut().map(|s| s.take_console()).unwrap_or_default()

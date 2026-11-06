@@ -1,7 +1,8 @@
 //! The web, for the model's tools (search_web, read_web_page): a page fetched over Chat Computer's own network stack
 //! (net) and TLS 1.3 (tls): the site's address found with DNS, a TCP connection to it, its certificate checked
 //! against Mozilla's authorities for the site's name, a GET (web::http), its response read; redirects followed (to
-//! HTTPS addresses only, at most five), at most web::MOST_BYTES of a page kept, and given up on after 20 seconds with
+//! HTTPS addresses only, at most five), at most web::MOST_BYTES of a page kept for the model (web::SITE_MOST_BYTES of
+//! each of a site's files shown on the screen), and given up on after 20 seconds with
 //! nothing from the site. A fetch is moved on from the main loop (`Fetch::step`), never waiting, so the screen and the
 //! keyboard go on meanwhile.
 //!
@@ -88,7 +89,7 @@ pub(crate) fn roots() -> &'static [Cert<'static>] {
 }
 
 /// A page, fetched: where it ended up (after redirects), its Content-Type, its bytes (decompressed), and whether
-/// they were cut at web::MOST_BYTES.
+/// they were cut at the most its fetch keeps.
 pub struct Page {
     pub url: Url,
     pub kind: String,
@@ -134,18 +135,22 @@ pub struct Fetch {
     raw: bool,
     /// An app's request: the sites it may reach (a redirect elsewhere fails), with no cookies sent or kept.
     only: Option<Vec<String>>,
+    /// The most of its answer kept: web::MOST_BYTES for the model's reading, web::SITE_MOST_BYTES for a site shown.
+    most: usize,
 }
 
 impl Fetch {
     /// A page (GET), as the model's tools read one.
     pub fn new(url: Url) -> Fetch {
-        Fetch::request(url, web::http::ACCEPT_PAGE, None, None)
+        let mut f = Fetch::request(url, web::http::ACCEPT_PAGE, None, None);
+        f.most = web::MOST_BYTES;
+        f
     }
 
     /// A page, a style sheet or a picture (`accept` says which), for a site shown on the screen: a form's fields
     /// sent with it (POST) when `form` has them, and the page it's asked from.
     pub fn request(url: Url, accept: &'static str, form: Option<Vec<u8>>, referer: Option<Url>) -> Fetch {
-        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, accept, form, referer, method: None, headers: Vec::new(), raw: false, only: None }
+        Fetch { url, phase: Phase::Network(time::uptime_ms()), redirects: 0, accept, form, referer, method: None, headers: Vec::new(), raw: false, only: None, most: web::SITE_MOST_BYTES }
     }
 
     /// What a page's script fetches (fetch, XMLHttpRequest): its method, headers and body as it says, and an answer
@@ -284,7 +289,7 @@ impl Fetch {
                                 out,
                                 request,
                                 sent: false,
-                                response: Response::new(),
+                                response: Response::with_most(self.most),
                                 heard: now,
                             }));
                         }

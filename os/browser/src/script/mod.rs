@@ -596,7 +596,10 @@ impl Script {
         vm.host_trace = Some(trace);
         vm.now = now_ms;
         vm.tz_offset = ZONE_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-        vm.max_nesting = 120;
+        // (Each call between the engine and a built-in function, nested, takes about 2 KiB of the stack the page runs
+        // on in Chat Computer's own system, whose stack is 16 MiB; 4 KiB in a build for Linux. YouTube's scripts go
+        // 164 deep.)
+        vm.max_nesting = 1000;
         {
             let h = host(&mut vm);
             h.syms.event = None;

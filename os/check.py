@@ -604,6 +604,17 @@ def keyboard_ps2(args) -> list[str]:
         if not wait_for(pc.log, (f"typed {TYPED!r}".replace("'", '"'),), 10):
             problems.append(f"PS/2: {TYPED!r} didn't come out")
         pc.picture("keyboard-ps2")
+        # Nothing typed for a while: the caret blinks (530 ms shown, as long hidden), so the box changes by itself.
+        rows = box_rows(pc.text())
+        seen = set()
+        for i in range(8):
+            if rows is None or len(seen) > 1:
+                break
+            shot = pc.picture("keyboard-ps2-blink")
+            seen.add(shot.crop((0, rows[0], shot.size[0], rows[1])).tobytes())
+            time.sleep(0.1 * i)
+        if len(seen) < 2:
+            problems.append("PS/2: the caret doesn't blink in the message box")
     finally:
         pc.stop()
     print(pc.text())
@@ -843,7 +854,8 @@ def chat(args) -> list[str]:
                {"text": final}],
         "again": [{"fail": "Chat Computer's model stopped (a test of a failure)."}],
         "weather": [{"text": "It's sunny.\n\n" + MARKDOWN}],
-        "restart": [{"calls": [["restart_computer", {}]]}, {"text": "Restarting now: see you in Windows."}],
+        # (Not a plain "restart", which Chat Computer does itself: the site check's.)
+        "all done: back to windows": [{"calls": [["restart_computer", {}]]}, {"text": "Restarting now: see you in Windows."}],
     }
     script_build(script, tmp)
     problems: list[str] = []
@@ -883,7 +895,7 @@ def chat(args) -> list[str]:
                 monitor(pc.mon, "mouse_move 40 30")
                 pointed = pc.settled_picture("chat-pointer")
             # Asked to restart: the model's answer, then a restart (which ends a virtual PC started with -no-reboot).
-            monitor_many(pc.mon, keys_for("restart") + ["sendkey ret"])
+            monitor_many(pc.mon, keys_for("all done: back to windows") + ["sendkey ret"])
             third = wait_for(pc.log, ("Restarting now", "model: failed", "stopped"), 60)
             pc.settled_picture("chat-3")
             restarted = wait_for(pc.log, ("kernel: restarting",), 30) is not None
@@ -940,7 +952,7 @@ def chat(args) -> list[str]:
             if words not in str(system.get("content")):
                 problems.append(f"the instructions don't say {words!r}")
         convo = [r[1:] for r in rounds]
-        for r, question in ((0, "hi"), (3, "again"), (4, "weather"), (5, "restart")):
+        for r, question in ((0, "hi"), (3, "again"), (4, "weather"), (5, "all done: back to windows")):
             if not re.fullmatch(NOTE_TIME + question, convo[r][-1].get("content", "")):
                 problems.append(f"{question!r} wasn't given with when it was sent: {convo[r][-1]!r}")
         convo = [plain(c) for c in convo]
@@ -966,7 +978,7 @@ def chat(args) -> list[str]:
         # (The question that failed is taken back out.)
         if convo[4] != convo[3][:-1] + [user("weather")]:
             problems.append(f"the third question was given as {convo[4][5:]!r}")
-        if convo[5] != convo[4] + [answer("It's sunny.\n\n" + MARKDOWN), user("restart")]:
+        if convo[5] != convo[4] + [answer("It's sunny.\n\n" + MARKDOWN), user("all done: back to windows")]:
             problems.append(f"the fourth question was given as {convo[5][7:]!r}")
         if convo[6][:-1] != convo[5] + [answer("", {"name": "restart_computer", "args": {}})] or convo[6][-1].get("role") != "tool":
             problems.append(f"the restart's round was given as {convo[6][9:]!r}")
@@ -1466,6 +1478,10 @@ SITE_JS = """document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('made').style.background = '#40c0c0';
   });
   setTimeout(function () { console.log('timer fired'); }, 200);
+  // Calls nested deep through a built-in function (each level two of the engine's: YouTube's scripts go 164 deep, on
+  // the kernel's own stack, which must stay at most half used).
+  function deep(n) { return n === 0 ? 0 : 1 + [n - 1].map(deep)[0]; }
+  try { console.log('deep ' + deep(400)); } catch (e) { console.log('deep failed: ' + e); }
   var ws = new WebSocket('wss://www.example.com/socket', ['chat', 'echo']);
   ws.binaryType = 'arraybuffer';
   var heard = 0;
@@ -1642,6 +1658,7 @@ def site_check(args) -> list[str]:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     problems: list[str] = []
     pictures = {}
+    restarted = ended = False
     try:
         (tmp / "script.json").write_text(json.dumps({"site": [{"text": "Nothing to say."}]}))
         build("chat", {"CHATCOMPUTER_TEST_SCRIPT": str(tmp / "script.json"), "CHATCOMPUTER_TEST_CA": str(tmp / "ca.der"),
@@ -1694,11 +1711,26 @@ def site_check(args) -> list[str]:
             monitor_many(pc.mon, ["sendkey esc"])
             time.sleep(1.5)
             pictures["closed"] = pc.settled_picture("site-closed")
+            # Asked plainly to restart: Chat Computer does it itself (the model isn't asked), 5 seconds on, which ends
+            # a virtual PC started with -no-reboot.
+            monitor_many(pc.mon, keys_for("restart the computer please") + ["sendkey ret"])
+            time.sleep(1.5)
+            pc.picture("site-restart")
+            restarted = wait_for(pc.log, ("kernel: restarting",), 30) is not None
+            try:
+                pc.qemu.wait(timeout=20)
+                ended = True
+            except subprocess.TimeoutExpired:
+                ended = False
         finally:
             pc.stop()
         text = pc.text()
         print(text)
         problems += stack_problems(text)
+        if "chat: asked to restart: Restarting in 5 seconds" not in text or not restarted or not ended:
+            problems.append(f"asked plainly, the PC didn't restart (the kernel said so: {restarted}; the virtual PC ended: {ended})")
+        if "restart the computer please" in text or "model: uses restart_computer" in text:
+            problems.append("asking plainly to restart went to the model")
 
         def area_has(picture, colour, at_least: int) -> bool:
             want = sum(1 for p in picture.getdata() if all(abs(a - b) <= 6 for a, b in zip(p, colour)))
@@ -1756,6 +1788,7 @@ def site_check(args) -> list[str]:
         for note in ("site: opening https://www.example.com/", "1 style sheets, 1 pictures (0 couldn't be had)",
                      "site: form sent to https://www.example.com/search?q=sunny+day (GET)", "Opened www.example.com",
                      "site: console: made 3 cells later", "site: console: fetched hello", "site: console: timer fired",
+                     "site: console: deep 400",
                      "site: console: module says hi from a module", "site: console: canvas drew 224,64,32 data:image/png;",
                      "site: console: visit 1, cookies: fromscript=1", "site: console: visit 2, cookies: fromscript=2",
                      "web: a WebSocket to www.example.com is open", "site: console: socket open: echo",

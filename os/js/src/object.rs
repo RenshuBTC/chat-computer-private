@@ -471,7 +471,13 @@ impl Heap {
                                 m.size -= 1;
                             }
                         }
-                        m.index.retain(|(_, at)| m.entries[*at as usize].is_some());
+                        // (Its index still finds the entries left: its places for those gone hold nothing, as a
+                        // delete leaves them. Nothing goes over a weak map's entries in order, so once most of them
+                        // are gone, those left move up, and the index is made again for their places.)
+                        if m.entries.len() > 2 * m.size + 16 {
+                            m.entries.retain(|e| e.is_some());
+                            m.rebuild();
+                        }
                     }
                     Class::WeakRef(v) if dead.first() == Some(&true) => *v = Value::Undefined,
                     _ => {}

@@ -981,10 +981,14 @@ writes for each person, in place of Ubuntu's catalogue.
     custom properties worked out as CSS says (cycles, inherit, initial), web fonts (@font-face, WOFF and WOFF2), a
     compositor (backgrounds' pictures and gradients, stacking contexts, transforms, opacity, masks, clip-path,
     filters, backdrop-filter, blending, rounded clipping, fixed and sticky boxes), text-overflow and line clamps,
-    animations' resting states, WebP pictures (lossy and lossless, decoded exactly as libwebp decodes them).
+    animations' resting states, WebP pictures (lossy and lossless, decoded exactly as libwebp decodes them),
+    pictures chosen as Chrome chooses them (srcset and sizes, <picture>'s sources, image-set()), SVGs sized by their
+    own width, height and ratio (in <img> and as backgrounds), CSS animations as they run (each frame's values
+    between keyframes, with their timing functions), the Web Animations API (element.animate), and SVG clip paths.
     Measured by the Web Platform Tests every browser runs (each test and its reference
     drawn by Chat Computer and compared; the scripted tests run in it): to do there is what they and comparing sites
-    with Chrome turn up, first animations as they run (each frame's values between keyframes), iframes, writing modes, border-image, and SVG backgrounds of no size of their own. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
+    with Chrome turn up, first iframes, writing modes, border-image and CSS transitions. ✓ SVG pictures (in <img>,
+    and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
     plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time
     zone. To do: touchpads.

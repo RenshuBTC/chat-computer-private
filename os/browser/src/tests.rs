@@ -367,6 +367,83 @@ fn an_icon_s_use_of_a_sprite_elsewhere_in_the_page_carries_what_it_uses() {
     assert!(!lost.contains("<defs>"), "{lost}");
 }
 
+#[test]
+fn timing_functions_and_an_animation_s_progress_as_css_has_them() {
+    use crate::animate::{Easing, Timing};
+    use crate::css::tokens;
+    let e = |v: &str| Easing::parse(&tokens(v)).unwrap();
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    assert!(near(e("linear").at(0.3), 0.3));
+    assert!(near(e("ease").at(0.5), 0.8024));
+    assert!(near(e("cubic-bezier(0, 1, 1, 0)").at(0.5), 0.5));
+    assert_eq!([0.0, 0.49, 0.5, 0.99, 1.0].map(|p| e("steps(2, jump-end)").at(p)), [0.0, 0.0, 0.5, 0.5, 1.0]);
+    assert_eq!([0.0, 0.5, 1.0].map(|p| e("steps(2, start)").at(p)), [0.5, 1.0, 1.0]);
+    assert_eq!([0.0, 0.5, 1.0].map(|p| e("steps(3, jump-none)").at(p)), [0.0, 0.5, 1.0]);
+    assert!(near(e("linear(0, 0.25 75%, 1)").at(0.375), 0.125) && near(e("linear(0, 0.25 75%, 1)").at(0.875), 0.625));
+    let t = |delay: f32, count: f32, direction: u8, fill: u8, paused: bool| Timing { duration: 4.0, delay, count, direction, fill, paused };
+    // Running: a second into a 4s animation; delayed, with no fill backwards: no effect yet.
+    assert_eq!(t(0.0, 1.0, 0, 0, false).progress(1.0), Some(0.25));
+    assert_eq!(t(2.0, 1.0, 0, 0, false).progress(1.0), None);
+    assert_eq!(t(2.0, 1.0, 0, 2, false).progress(1.0), Some(0.0));
+    // Over: its end with fill forwards (two and a half iterations alternating: halfway, going back); else none.
+    assert_eq!(t(0.0, 1.0, 0, 1, false).progress(9.0), Some(1.0));
+    assert_eq!(t(0.0, 1.0, 0, 0, false).progress(9.0), None);
+    assert_eq!(t(0.0, 2.5, 2, 1, false).progress(99.0), Some(0.5));
+    assert_eq!(t(0.0, 2.0, 2, 1, false).progress(99.0), Some(0.0));
+    // Paused, at a negative delay: as far in as the delay says, whatever the page's time.
+    assert_eq!(t(-1.0, 1.0, 0, 0, true).progress(30.0), Some(0.25));
+    assert_eq!(t(-1.0, f32::INFINITY, 1, 0, false).progress(2.0), Some(0.25));
+}
+
+#[test]
+fn values_between_keyframes_mixed_part_by_part() {
+    use crate::animate::interpolate;
+    use crate::css::tokens;
+    let mix = |a: &str, b: &str, p: f32| interpolate(&tokens(a), &tokens(b), p).map(|t| crate::css::serialize(&t));
+    assert_eq!(mix("0", "1", 0.25).as_deref(), Some("0.25"));
+    assert_eq!(mix("10px 20px", "30px 40px", 0.5).as_deref(), Some("20px 30px"));
+    assert_eq!(mix("rotate(0deg) translateX(10px)", "rotate(90deg) translateX(30px)", 0.5).as_deref(), Some("rotate(45deg) translatex(20px)"));
+    assert_eq!(mix("none", "translate(10px, 20px) scale(3)", 0.5).as_deref(), Some("translate(5px, 10px) scale(2)"));
+    assert_eq!(mix("brightness(0%)", "none", 0.5).as_deref(), Some("brightness(0.5)"));
+    assert_eq!(mix("circle(50% at 50% 50%)", "circle(20% at 20% 20%)", 0.5).as_deref(), Some("circle(35% at 35% 35%)"));
+    assert_eq!(mix("red", "rgba(0, 0, 255, 0)", 0.5).as_deref(), Some("rgba(255,0,0,0.5)"));
+    assert_eq!(mix("path('M0 0 L10 10')", "path('M10 10 L30 30')", 0.5).as_deref(), Some("path(\"M5 5 L20 20\")"));
+    // Different units: calc(); what can't be mixed: None (changed halfway by the caller).
+    assert!(mix("10px", "50%", 0.5).is_some_and(|v| v.starts_with("calc(")));
+    assert_eq!(mix("block", "none", 0.5), None);
+    assert_eq!(mix("rotate(10deg)", "scale(2)", 0.5), None);
+}
+
+#[test]
+fn an_animation_drawn_at_the_page_s_time() {
+    let html = "<style>@keyframes fade { from { opacity: 0 } to { opacity: 1 } } \
+                @keyframes slide { to { transform: translateX(100px) } }</style>\
+                <div id=a style='animation: fade 4s linear'>a</div>\
+                <div id=b style='animation: fade 4s linear -1s paused'>b</div>\
+                <div id=c style='animation: slide 2s linear forwards'>c</div>\
+                <div id=d style='animation: fade 4s linear; opacity: 0.2 !important'>d</div>";
+    let ty = Type::builtin();
+    let mut p = page(html);
+    p.run(1000.0);
+    p.lay_out(&ty, 600.0, 400.0, 1.0);
+    let style = |p: &Page, id: &str| {
+        let n = p.doc.descendants(0).find(|&n| p.doc.element(n).and_then(|e| e.id()) == Some(id)).unwrap();
+        p.style_of(n).unwrap()
+    };
+    // A second in: a quarter of the way; the paused one where its delay put it; important declarations stand.
+    assert!((style(&p, "a").opacity - 0.25).abs() < 1e-3);
+    assert!((style(&p, "b").opacity - 0.25).abs() < 1e-3);
+    assert!((style(&p, "d").opacity - 0.2).abs() < 1e-3);
+    assert!(p.animations_running());
+    // Later: over; the one that fills forwards where it ended, the others as they are.
+    p.run(5000.0);
+    p.lay_out(&ty, 600.0, 400.0, 1.0);
+    assert_eq!(style(&p, "a").opacity, 1.0);
+    assert!(style(&p, "c").transform.is_some());
+    assert!((style(&p, "b").opacity - 0.25).abs() < 1e-3);
+    assert!(!p.animations_running());
+}
+
 fn scripted(html: &str) -> Page {
     Page::with_scripts(Url::parse("https://example.com/a/page").unwrap(), html, 0.0, (800.0, 600.0, 1.0), 1)
 }
@@ -1364,6 +1441,8 @@ fn an_animation_leaves_its_box_as_its_last_keyframe_says() {
     let mut p = page("<style>@keyframes in { from { opacity: 0 } to { opacity: 1; background: #00f } }</style>\
                       <body style='margin:0'><div style='opacity:0;height:10px;animation:in 1s ease forwards'></div>\
                       <div style='height:10px;background:#f00;animation:in 1s'></div></body>");
+    // (Two seconds in: both over.)
+    p.run(2000.0);
     let l = laid(&mut p);
     assert_eq!(rects(l, BLUE).len(), 1, "forwards: its last frame stays");
     assert_eq!(rects(l, RED).len(), 1, "without: it's as it was once it's over");

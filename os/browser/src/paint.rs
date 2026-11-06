@@ -1192,6 +1192,15 @@ fn sided_border(c: &mut Canvas, outer: &Shape, inner: &Shape, widths: [f32; 4], 
                     }
                 }
             }
+            // (Sides of the same colour as one: their samples added, so no seam shows where they meet.)
+            for i in 0..4 {
+                for j in 0..i {
+                    if counts[i] > 0 && colors[j] == colors[i] {
+                        counts[j] += counts[i];
+                        counts[i] = 0;
+                    }
+                }
+            }
             for (i, &n) in counts.iter().enumerate() {
                 if n > 0 && alpha(colors[i]) > 0 {
                     c.put(x, y, colors[i], (n * 255 + 8) / 16);

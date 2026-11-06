@@ -197,6 +197,10 @@ pub enum Shape {
     Path(bool, String),
     /// The box itself (clip-path: border-box and the like).
     Box,
+    /// An SVG <clipPath> in the page, by its id (url(#id)), until it's found; then its shapes as one path's data,
+    /// filled even-odd or non-zero, in CSS pixels from the box's top left (or, `bounding`, fractions of its size).
+    Ref(String),
+    Svg { d: String, even_odd: bool, bounding: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1286,6 +1290,15 @@ pub fn clip_path(v: &[Tok], u: &Units) -> Option<ClipPath> {
     }
     let mut shape = None;
     let mut area = BoxArea::Border;
+    // url(#id): an SVG <clipPath> of the page's (one in another file isn't read).
+    let reference = match trim(v) {
+        [Tok::Url(a)] => Some(a.clone()),
+        [Tok::Function(f), Tok::Str(a), Tok::CloseParen] if f == "url" => Some(a.clone()),
+        _ => None,
+    };
+    if let Some(r) = reference {
+        return r.strip_prefix('#').filter(|id| !id.is_empty()).map(|id| ClipPath { shape: Shape::Ref(String::from(id)), area });
+    }
     for p in parts(v) {
         if let Some(w) = ident(p) {
             area = box_word(&w)?;

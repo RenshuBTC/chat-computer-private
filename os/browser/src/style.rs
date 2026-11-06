@@ -377,17 +377,53 @@ pub struct Style {
 }
 
 /// A box's animations' lists (animation-name's, and the others' for each name, repeated where shorter): their
-/// iteration counts (infinity for infinite), directions (0 normal, 1 reverse, 2 alternate, 3 alternate-reverse) and
-/// fill modes (0 none, 1 forwards, 2 backwards, 3 both).
+/// iteration counts (infinity for infinite), directions (0 normal, 1 reverse, 2 alternate, 3 alternate-reverse),
+/// fill modes (0 none, 1 forwards, 2 backwards, 3 both), durations and delays (seconds), timing functions, and
+/// whether each is paused.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Animations {
     pub names: Vec<String>,
     pub counts: Vec<f32>,
     pub directions: Vec<u8>,
     pub fills: Vec<u8>,
+    pub durations: Vec<f32>,
+    pub delays: Vec<f32>,
+    pub easings: Vec<crate::animate::Easing>,
+    pub paused: Vec<bool>,
 }
 
 impl Animations {
+    /// The `i`th's timing.
+    pub fn timing(&self, i: usize) -> crate::animate::Timing {
+        crate::animate::Timing {
+            duration: effects::nth(&self.durations, i, 0.0),
+            delay: effects::nth(&self.delays, i, 0.0),
+            count: effects::nth(&self.counts, i, 1.0),
+            direction: effects::nth(&self.directions, i, 0),
+            fill: effects::nth(&self.fills, i, 0),
+            paused: effects::nth(&self.paused, i, false),
+        }
+    }
+
+    /// The `i`th's timing function (repeated where the list is shorter).
+    pub fn easing(&self, i: usize) -> crate::animate::Easing {
+        if self.easings.is_empty() { crate::animate::EASE } else { self.easings[i % self.easings.len()].clone() }
+    }
+
+    /// Where in its keyframes the `i`th has the box at `now` (seconds since the page began; None: as it rests,
+    /// some time after the page has come), or None where it leaves it as it is.
+    pub fn at(&self, i: usize, now: Option<f32>) -> Option<f32> {
+        match now {
+            Some(t) => self.timing(i).progress(t),
+            None => self.resting(i),
+        }
+    }
+
+    /// Whether any is still running at `now`.
+    pub fn running(&self, now: f32) -> bool {
+        (0..self.names.len()).any(|i| self.names[i] != "none" && self.timing(i).running(now))
+    }
+
     /// Where in its keyframes (0 to 1) each named animation leaves the box drawn some time after the page has come
     /// (its animations over, but those that go on for ever): the `i`th's, or None where it leaves it as it is.
     pub fn resting(&self, i: usize) -> Option<f32> {
@@ -421,10 +457,14 @@ fn animation_shorthand(v: &[Tok]) -> Option<Animations> {
     for one in css::split_commas(v) {
         let mut name = String::from("none");
         let (mut count, mut dir, mut fill) = (1.0f32, 0u8, 0u8);
+        let mut times: Vec<f32> = Vec::new();
+        let mut easing = crate::animate::EASE;
+        let mut paused = false;
         for p in parts(one) {
             match values::trim(p) {
                 [Tok::Number(n)] => count = n.max(0.0),
-                [Tok::Dimension(..)] | [Tok::Function(_), ..] => {}
+                [Tok::Dimension(n, u)] => times.push(seconds(*n, u)?),
+                t @ [Tok::Function(_), ..] => easing = crate::animate::Easing::parse(t)?,
                 [Tok::Str(s)] => name = s.clone(),
                 [Tok::Ident(w)] => match w.to_ascii_lowercase().as_str() {
                     "infinite" => count = f32::INFINITY,
@@ -435,9 +475,14 @@ fn animation_shorthand(v: &[Tok]) -> Option<Animations> {
                     "forwards" => fill = 1,
                     "backwards" => fill = 2,
                     "both" => fill = 3,
-                    "ease" | "linear" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end" | "running" | "paused" | "initial" => {}
+                    "running" => paused = false,
+                    "paused" => paused = true,
+                    "initial" => {}
                     "none" => name = String::from("none"),
-                    _ => name = w.clone(),
+                    _ => match crate::animate::Easing::parse(p) {
+                        Some(e) => easing = e,
+                        None => name = w.clone(),
+                    },
                 },
                 _ => return None,
             }
@@ -446,8 +491,65 @@ fn animation_shorthand(v: &[Tok]) -> Option<Animations> {
         a.counts.push(count);
         a.directions.push(dir);
         a.fills.push(fill);
+        a.durations.push(times.first().copied().unwrap_or(0.0));
+        a.delays.push(times.get(1).copied().unwrap_or(0.0));
+        a.easings.push(easing);
+        a.paused.push(paused);
     }
     Some(a)
+}
+
+/// A property's value as the box has it, written as tokens (for an animation whose keyframes leave it out at one
+/// end): those animations most often move.
+fn computed_tokens(s: &Style, prop: &str) -> Option<Vec<Tok>> {
+    let colour = |c: Color| {
+        let ch = |k: u32| ((c >> k) & 0xFF) as f32;
+        alloc::vec![Tok::Function(String::from("rgba")), Tok::Number(ch(16)), Tok::Comma, Tok::Number(ch(8)), Tok::Comma, Tok::Number(ch(0)), Tok::Comma, Tok::Number(ch(24) / 255.0), Tok::CloseParen]
+    };
+    let none = || alloc::vec![Tok::Ident(String::from("none"))];
+    Some(match prop {
+        "opacity" => alloc::vec![Tok::Number(s.opacity)],
+        "background-color" => colour(s.background),
+        "color" => colour(s.color),
+        "visibility" => alloc::vec![Tok::Ident(String::from(if s.visible { "visible" } else { "hidden" }))],
+        "transform" if s.transform.is_none() => none(),
+        "filter" if s.filter.is_none() => none(),
+        "backdrop-filter" if s.backdrop.is_none() => none(),
+        "clip-path" if s.clip_path.is_none() => none(),
+        "box-shadow" if s.shadows.is_none() => none(),
+        // (The individual transforms' none, as the value that does nothing.)
+        "translate" if s.transform_parts[0].is_none() => alloc::vec![Tok::Dimension(0.0, String::from("px"))],
+        "rotate" if s.transform_parts[1].is_none() => alloc::vec![Tok::Dimension(0.0, String::from("deg"))],
+        "scale" if s.transform_parts[2].is_none() => alloc::vec![Tok::Number(1.0)],
+        _ => return None,
+    })
+}
+
+/// A value written out in full, for mixing with another (translate's y and z, 0 where they're left out; scale's
+/// y as its x, and z 1).
+fn full_value(prop: &str, v: Vec<Tok>) -> Vec<Tok> {
+    let n = crate::animate::parts(&v).len();
+    let fill: alloc::vec::Vec<Tok> = match (prop, n) {
+        ("translate", 1) => alloc::vec![Tok::Ws, Tok::Dimension(0.0, String::from("px"))],
+        ("scale", 1) if !matches!(values::trim(&v), [Tok::Ident(_)]) => {
+            let mut x = alloc::vec![Tok::Ws];
+            x.extend(values::trim(&v).iter().cloned());
+            x
+        }
+        _ => return v,
+    };
+    let mut out = values::trim(&v).to_vec();
+    out.extend(fill);
+    out
+}
+
+/// A time in seconds (s or ms).
+fn seconds(n: f32, unit: &str) -> Option<f32> {
+    match unit {
+        "s" => Some(n),
+        "ms" => Some(n / 1000.0),
+        _ => None,
+    }
 }
 
 /// A web font a page names (@font-face): its face, and its number in text::loaded once it has come.
@@ -827,6 +929,9 @@ pub struct Sheets<'a> {
     pub author: &'a [Sheet],
     /// The page's web fonts (its @font-face rules', as they've come).
     pub fonts: &'a [WebFont],
+    /// The page's time (seconds since it began), for its animations as they run; None: as they rest, some time
+    /// after it has come.
+    pub now: Option<f32>,
 }
 
 pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Styles {
@@ -873,6 +978,7 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
         rem: units_root.rem,
         out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new(), wanted_fonts: alloc::collections::BTreeSet::new() },
         fonts: sheets.fonts,
+        now: sheets.now,
         sibling: SiblingInfo::new(doc),
     };
     // In the order they come, parents before children (no recursion: a page's elements can be deep).
@@ -947,6 +1053,7 @@ impl SiblingInfo {
 
 struct Cascade<'a> {
     fonts: &'a [WebFont],
+    now: Option<f32>,
     doc: &'a Document,
     sheets: Vec<&'a Sheet>,
     entries: Vec<Entry>,
@@ -962,6 +1069,55 @@ struct Cascade<'a> {
 type Rank = (u8, u32, u32);
 
 impl Cascade<'_> {
+    /// An SVG <clipPath>'s shapes (path, rect, circle, ellipse, polygon, polyline) as one path's data, its clip rule
+    /// (its first shape's), and whether it's in fractions of the box (clipPathUnits="objectBoundingBox").
+    fn svg_clip(&self, id: &str) -> Option<effects::Shape> {
+        let n = self.doc.descendants(0).find(|&m| self.doc.element(m).and_then(|e| e.id()) == Some(id))?;
+        let e = self.doc.element(n)?;
+        if e.name != "clippath" {
+            return None;
+        }
+        let bounding = e.attr("clippathunits").is_some_and(|u| u.trim().eq_ignore_ascii_case("objectBoundingBox"));
+        let num = |e: &crate::dom::Element, a: &str| -> f32 { e.attr(a).map(|v| v.trim().trim_end_matches("px")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) };
+        let mut d = String::new();
+        let mut even_odd = None;
+        for m in self.doc.descendants(n).skip(1) {
+            let Some(c) = self.doc.element(m) else { continue };
+            let part = match c.name.as_str() {
+                "path" => String::from(c.attr("d").unwrap_or("")),
+                "rect" => {
+                    let (x, y, w, h) = (num(c, "x"), num(c, "y"), num(c, "width"), num(c, "height"));
+                    alloc::format!("M{x} {y}h{w}v{h}h{}z", -w)
+                }
+                "circle" | "ellipse" => {
+                    let (cx, cy) = (num(c, "cx"), num(c, "cy"));
+                    let (rx, ry) = if c.name == "circle" { (num(c, "r"), num(c, "r")) } else { (num(c, "rx"), num(c, "ry")) };
+                    alloc::format!("M{} {cy}A{rx} {ry} 0 1 0 {} {cy}A{rx} {ry} 0 1 0 {} {cy}z", cx - rx, cx + rx, cx - rx)
+                }
+                "polygon" | "polyline" => {
+                    let pts: Vec<&str> = c.attr("points").unwrap_or("").split([' ', ',', '\n', '\t']).filter(|v| !v.is_empty()).collect();
+                    let mut p = String::new();
+                    for (k, xy) in pts.chunks(2).enumerate() {
+                        if xy.len() == 2 {
+                            p.push_str(&alloc::format!("{}{} {}", if k == 0 { "M" } else { "L" }, xy[0], xy[1]));
+                        }
+                    }
+                    if !p.is_empty() {
+                        p.push('z');
+                    }
+                    p
+                }
+                _ => continue,
+            };
+            if even_odd.is_none() {
+                even_odd = Some(c.attr("clip-rule").is_some_and(|r| r.trim() == "evenodd"));
+            }
+            d.push_str(&part);
+            d.push(' ');
+        }
+        Some(effects::Shape::Svg { d, even_odd: even_odd.unwrap_or(false), bounding })
+    }
+
     fn decl(&self, e: &Entry) -> &[Decl] {
         &self.sheets[e.sheet].rules[e.rule].decls
     }
@@ -1137,6 +1293,12 @@ impl Cascade<'_> {
         }
         let is_root = self.doc.parent(id) == Some(0);
         let mut ctx = Ctx { parent, units: Units { em: parent.font_size, rem: self.rem, vw: self.view.width * self.dpr, vh: self.view.height * self.dpr, dpr: self.dpr } };
+        // (Each property's winning value, for animations whose keyframes leave it out at their start or end.)
+        let animated = s.animations.is_some() || found.iter().any(|(_, d)| d.name.starts_with("animation") || d.name.starts_with("-webkit-animation"));
+        let mut declared: Vec<(&str, Vec<Tok>)> = Vec::new();
+        // (Properties an important declaration gives: animations don't change them, as the cascade puts those over
+        // animations.)
+        let important: Vec<&str> = if animated { found.iter().filter(|(_, d)| d.important).map(|(_, d)| d.name.as_str()).collect() } else { Vec::new() };
         for pass in 0..3 {
             for (_, d) in found {
                 if d.name.starts_with("--") {
@@ -1165,36 +1327,71 @@ impl Cascade<'_> {
                     &d.value
                 };
                 apply_one(&mut s, &d.name, v, &ctx);
+                if animated {
+                    match declared.iter_mut().find(|(n, _)| *n == d.name) {
+                        Some(e) => e.1 = v.to_vec(),
+                        None => declared.push((d.name.as_str(), v.to_vec())),
+                    }
+                }
             }
             if pass == 2
                 && let Some(anims) = s.animations.clone()
             {
-                // Its animations, as they leave it: their keyframe's declarations over its own (as animations
-                // override the page's declarations), the last named on top.
+                // Its animations, at the page's time (or as they rest): each property their keyframes name, between
+                // the two keyframes round where the animation is (where 0% or 100% leaves it out, the box's own
+                // value), over the page's declarations, the last named on top.
                 for (i, name) in anims.names.iter().enumerate() {
-                    let Some(at) = anims.resting(i) else { continue };
+                    let Some(at) = anims.at(i, self.now) else { continue };
                     let Some(k) = self.sheets.iter().rev().flat_map(|sh| sh.keyframes.iter().rev()).find(|k| k.name == *name) else { continue };
+                    let easing = anims.easing(i);
+                    // Each property's keyframes: (place, value, the timing function on from there).
+                    let mut props: Vec<(&str, Vec<(f32, &[Tok], Option<crate::animate::Easing>)>)> = Vec::new();
                     for (places, decls) in &k.frames {
-                        if !places.iter().any(|p| (p - at).abs() < 1e-4) {
-                            continue;
-                        }
+                        let from_here = decls.iter().rev().find(|d| d.name == "animation-timing-function").and_then(|d| crate::animate::Easing::parse(&d.value));
                         for dcl in decls {
                             if dcl.name.starts_with("--") || dcl.name.starts_with("animation") {
                                 continue;
                             }
-                            let value: Vec<Tok>;
-                            let v: &[Tok] = if has_var(&dcl.value) {
-                                match substitute(&dcl.value, &s.custom, 0) {
-                                    Some(x) => {
-                                        value = x;
-                                        &value
-                                    }
-                                    None => continue,
+                            let at_ = match props.iter().position(|(n, _)| *n == dcl.name) {
+                                Some(ix) => ix,
+                                None => {
+                                    props.push((dcl.name.as_str(), Vec::new()));
+                                    props.len() - 1
                                 }
-                            } else {
-                                &dcl.value
                             };
-                            apply_one(&mut s, &dcl.name, v, &ctx);
+                            for &pl in places {
+                                props[at_].1.push((pl, dcl.value.as_slice(), from_here.clone()));
+                            }
+                        }
+                    }
+                    for (prop, mut frames) in props {
+                        if important.contains(&prop) {
+                            continue;
+                        }
+                        frames.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+                        let own: Option<Vec<Tok>> = declared.iter().find(|(n, _)| *n == prop).map(|(_, v)| v.clone()).or_else(|| computed_tokens(&s, prop));
+                        let resolve = |v: &[Tok]| -> Option<Vec<Tok>> { if has_var(v) { substitute(v, &s.custom, 0) } else { Some(v.to_vec()) } };
+                        let before = frames.iter().rposition(|f| f.0 <= at);
+                        let after = frames.iter().position(|f| f.0 > at);
+                        let (o0, v0, e0) = match before {
+                            Some(ix) => (frames[ix].0, resolve(frames[ix].1), frames[ix].2.clone()),
+                            None => (0.0, own.clone(), None),
+                        };
+                        let (o1, v1) = match after {
+                            Some(ix) => (frames[ix].0, resolve(frames[ix].1)),
+                            None => (1.0, own.clone()),
+                        };
+                        let q = if o1 > o0 { (at - o0) / (o1 - o0) } else { 0.0 };
+                        let q = e0.unwrap_or_else(|| easing.clone()).at(q);
+                        let value = match (v0.map(|v| full_value(prop, v)), v1.map(|v| full_value(prop, v))) {
+                            (Some(a), Some(b)) => crate::animate::interpolate(&a, &b, q).or(Some(if q < 0.5 { a } else { b })),
+                            // (One side the box's own value, not known: the keyframe's from halfway.)
+                            (Some(a), None) => (q < 0.5).then_some(a),
+                            (None, Some(b)) => (q >= 0.5).then_some(b),
+                            (None, None) => None,
+                        };
+                        if let Some(v) = value {
+                            apply_one(&mut s, prop, &v, &ctx);
                         }
                     }
                 }
@@ -1212,6 +1409,12 @@ impl Cascade<'_> {
             }
         }
         let _ = pseudo;
+        // clip-path: url(#id): the page's SVG <clipPath> of that id, its shapes as one path (none found: not clipped).
+        if let Some(cp) = s.clip_path.clone()
+            && let effects::Shape::Ref(id) = &cp.shape
+        {
+            s.clip_path = self.svg_clip(id).map(|shape| Arc::new(effects::ClipPath { shape, area: cp.area }));
+        }
         // A clamped -webkit-box (display: -webkit-box, -webkit-box-orient: vertical, -webkit-line-clamp): laid out as
         // a block, its lines after the clamp's left out, as Chrome lays one out.
         if s.line_clamp > 0 && s.webkit_box && s.box_vertical {
@@ -2261,10 +2464,13 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
         }
         "animation" | "-webkit-animation" => {
             if let Some(a) = animation_shorthand(v) {
-                s.animations = if a.names.iter().all(|n| n == "none") { None } else { Some(Arc::new(a)) };
+                // (Kept with a name of none: animation-name may give it one after.)
+                s.animations = Some(Arc::new(a));
             }
         }
-        "animation-name" | "-webkit-animation-name" | "animation-iteration-count" | "-webkit-animation-iteration-count" | "animation-direction" | "-webkit-animation-direction" | "animation-fill-mode" | "-webkit-animation-fill-mode" => {
+        "animation-name" | "-webkit-animation-name" | "animation-iteration-count" | "-webkit-animation-iteration-count" | "animation-direction" | "-webkit-animation-direction" | "animation-fill-mode" | "-webkit-animation-fill-mode"
+        | "animation-duration" | "-webkit-animation-duration" | "animation-delay" | "-webkit-animation-delay" | "animation-timing-function" | "-webkit-animation-timing-function"
+        | "animation-play-state" | "-webkit-animation-play-state" => {
             let mut a = s.animations.as_deref().cloned().unwrap_or_default();
             let items = css::split_commas(v);
             let word = |t: &[Tok]| ident(t).unwrap_or_default();
@@ -2289,6 +2495,22 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                         })
                         .collect()
                 }
+                "animation-duration" | "animation-delay" => {
+                    let times: Vec<f32> = items
+                        .iter()
+                        .map(|t| match values::trim(t) {
+                            [Tok::Dimension(n, u)] => seconds(*n, u).unwrap_or(0.0),
+                            _ => 0.0,
+                        })
+                        .collect();
+                    if name.ends_with("duration") {
+                        a.durations = times;
+                    } else {
+                        a.delays = times;
+                    }
+                }
+                "animation-timing-function" => a.easings = items.iter().map(|t| crate::animate::Easing::parse(t).unwrap_or(crate::animate::EASE)).collect(),
+                "animation-play-state" => a.paused = items.iter().map(|t| word(t) == "paused").collect(),
                 "animation-direction" => {
                     a.directions = items
                         .iter()
@@ -2312,7 +2534,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                         .collect()
                 }
             }
-            s.animations = if a.names.is_empty() || a.names.iter().all(|n| n == "none") { None } else { Some(Arc::new(a)) };
+            s.animations = Some(Arc::new(a));
         }
         "-webkit-line-clamp" | "line-clamp" => {
             s.line_clamp = match values::trim(v) {

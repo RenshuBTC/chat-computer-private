@@ -2861,17 +2861,24 @@ impl<'a> Layout<'a> {
         }
         self.canvas_from = self.canvas_source();
         let mut items = Vec::new();
-        // (The root's effects, opacity and the like, are on all of it: its background too, the canvas's.)
+        // (The root's effects, opacity and the like, are on all of it: its background too, the canvas's; but not its
+        // transform, which leaves the canvas as it is.)
         let root_group = self.group_of(0);
+        let turned = root_group.as_ref().is_some_and(|g| g.transform.is_some());
+        if turned {
+            self.paint_canvas(height, &mut items);
+        }
         if let Some(g) = &root_group {
             items.push(Item { paint: Paint::Begin(Box::new(g.clone())), clip: Clips::all().rect, node: None });
-            if self.canvas_from.is_some() {
+            if self.canvas_from.is_some() && !turned {
                 let page = Rect::new(0.0, 0.0, self.view_w.max(self.tree.boxes[0].w), height.max(self.view_h));
                 let c = self.tree.boxes[self.canvas_from.unwrap_or(0)].style.background;
                 items.push(Item { paint: Paint::Rect { x: page.x, y: page.y, w: page.w, h: page.h, color: c, radius: [0.0; 4] }, clip: page, node: None });
             }
         }
-        self.paint_canvas(height, &mut items);
+        if !turned {
+            self.paint_canvas(height, &mut items);
+        }
         self.paint_context(0, &Within::all(), &mut items);
         if root_group.is_some() {
             items.push(Item::end());
@@ -3393,6 +3400,12 @@ impl<'a> Layout<'a> {
                 (vec![ellipse_outline(c, a, bb)], false)
             }
             Shape::Polygon(even_odd, pts) => (vec![pts.iter().map(|(px, py)| (r.x + px.resolve(r.w), r.y + py.resolve(r.h))).collect()], *even_odd),
+            Shape::Svg { d, even_odd, bounding } => {
+                let m = if *bounding { picture::draw::Matrix([r.w, 0.0, 0.0, r.h, r.x, r.y]) } else { picture::draw::Matrix([self.dpr, 0.0, 0.0, self.dpr, r.x, r.y]) };
+                (picture::svg::path_polygons(d, m), *even_odd)
+            }
+            // (One not found: not clipped, as if it hadn't been said.)
+            Shape::Ref(_) => (vec![rounded_outline(r, rad)], false),
             Shape::Path(even_odd, d) => {
                 let m = picture::draw::Matrix([self.dpr, 0.0, 0.0, self.dpr, r.x, r.y]);
                 (picture::svg::path_polygons(d, m), *even_odd)
@@ -3445,9 +3458,9 @@ impl<'a> Layout<'a> {
         };
         let patterned = |k: usize| matches!(s.border_style[k], BorderStyle::Dashed | BorderStyle::Dotted | BorderStyle::Double);
         let uniform = sides.len() == 4 && border.iter().all(|&w| (w - border[0]).abs() < 0.01) && (0..4).all(|k| shade(k) == shade(0) && !patterned(k));
-        // (Sides of one colour, solid, round a rounded box: one border, its corners rounded, whatever each side's
-        // width, as YouTube's search box has it with no right side.)
-        let one_colour = !sides.is_empty() && radius.iter().any(|&r| r > 0.0) && sides.iter().all(|&k| shade(k) == shade(sides[0]) && !patterned(k));
+        // (Sides of one colour, solid: one border (its corners rounded, if the box's are), whatever each side's
+        // width, as YouTube's search box has it with no right side: no seam where its sides meet.)
+        let one_colour = !sides.is_empty() && sides.iter().all(|&k| shade(k) == shade(sides[0]) && !patterned(k));
         if uniform || one_colour {
             let widths = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
             out.push(Paint::Border { x: bx, y: by, w: bw, h: bh, widths, color: shade(sides[0]), radius });

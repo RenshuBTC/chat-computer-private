@@ -194,6 +194,11 @@ pub struct Page {
     style_pictures: BTreeMap<String, usize>,
     /// How far down the view is scrolled (CSS pixels), for what's fixed to the window.
     view_scroll: f32,
+    /// The page's time (ms since it began), as last given (run, animation_frame).
+    clock_ms: f64,
+    /// Whether its CSS animations are drawn as they run (at its time), or as they rest (some time after it has come:
+    /// for a system that can't draw it again often enough).
+    pub animate: bool,
 }
 
 /// The page's pictures with its canvases' among them (for the painter).
@@ -311,6 +316,8 @@ impl Page {
             repaint: false,
             style_pictures: BTreeMap::new(),
             view_scroll: 0.0,
+            clock_ms: 0.0,
+            animate: true,
         };
         if scripting {
             p.script = Some(Box::new(Script::new(&p.url.to_string(), epoch, view)));
@@ -850,7 +857,7 @@ impl Page {
             let view = Viewport { width: w / dpr, height: h / dpr };
             if self.styles.is_none() {
                 self.parse_sheets(view);
-                self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author, fonts: &self.web_fonts }, view, dpr)));
+                self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author, fonts: &self.web_fonts, now: self.animate.then_some((self.clock_ms / 1000.0) as f32) }, view, dpr)));
                 self.fetch_fonts();
                 self.fetch_style_pictures();
                 // (An <svg> made before the colours it's drawn in were known: made again.)
@@ -957,7 +964,7 @@ impl Page {
         self.parse_sheets(Viewport { width: w, height: ht });
         let sizes = self.resources.iter().map(|r| if let State::Picture(w, h) = r.state { Some((w, h)) } else { None }).collect();
         let own = self.resources.iter().map(|r| r.own).collect();
-        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), fonts: self.web_fonts.clone(), picture_of: self.picture_of.clone(), densities: self.densities.clone(), sizes, own };
+        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), fonts: self.web_fonts.clone(), picture_of: self.picture_of.clone(), densities: self.densities.clone(), sizes, own, now: self.animate.then_some((self.clock_ms / 1000.0) as f32) };
         if let Some(s) = self.script.as_mut() {
             s.host().layout_inputs = Some(alloc::rc::Rc::new(inputs));
         }
@@ -1236,6 +1243,7 @@ impl Page {
     }
 
     pub fn run(&mut self, now: f64) -> bool {
+        self.tick(now);
         if self.script.is_none() {
             return false;
         }
@@ -1431,13 +1439,50 @@ impl Page {
         h.canvases.iter().find(|c| c.node == *node && !c.alpha.is_empty())
     }
 
-    /// Whether its scripts asked for an animation frame (requestAnimationFrame): the page is to be drawn again soon.
+    /// Whether the page is to be drawn again soon: its scripts asked for an animation frame (requestAnimationFrame),
+    /// or its CSS animations are running.
     pub fn wants_frame(&mut self) -> bool {
-        self.script.as_mut().is_some_and(|s| !s.host().frames.is_empty())
+        self.script.as_mut().is_some_and(|s| !s.host().frames.is_empty()) || self.animations_running()
+    }
+
+    /// Whether any of its CSS animations is running at its time (drawn as they run): each frame different.
+    pub fn animations_running(&self) -> bool {
+        if !self.animate {
+            return false;
+        }
+        let Some(styles) = self.styles.as_ref() else { return false };
+        let now = (self.clock_ms / 1000.0) as f32;
+        // (Only those whose keyframes the page has: one it doesn't do anything.)
+        let named: alloc::collections::BTreeSet<&str> = core::iter::once(&*self.ua).chain(self.author.iter()).flat_map(|sh| sh.keyframes.iter().map(|k| k.name.as_str())).collect();
+        if named.is_empty() {
+            return false;
+        }
+        styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values()).any(|s| {
+            s.animations.as_ref().is_some_and(|a| (0..a.names.len()).any(|i| named.contains(a.names[i].as_str()) && a.timing(i).running(now)))
+        })
+    }
+
+    /// Its styles worked out again, and it laid out again (as after `animate` is changed).
+    pub fn restyle(&mut self) {
+        self.styles = None;
+        self.changed = true;
+    }
+
+    /// The page's time moves on (ms since it began): its styles worked out again if its animations are running.
+    fn tick(&mut self, now: f64) {
+        if now != self.clock_ms {
+            let running = self.animations_running();
+            self.clock_ms = now;
+            if running {
+                self.styles = None;
+                self.changed = true;
+            }
+        }
     }
 
     /// Runs requestAnimationFrame's callbacks (before the page is drawn): true if any ran.
     pub fn animation_frame(&mut self, now: f64) -> bool {
+        self.tick(now);
         self.with_script(|s| s.animation_frame(now)).unwrap_or(false)
     }
 

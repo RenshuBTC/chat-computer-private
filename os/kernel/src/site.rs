@@ -43,6 +43,8 @@ const PICTURE_SIDE: u32 = 2400;
 const PICTURES_BYTES: usize = 160 << 20;
 /// How often a page's animation frames are drawn, at most (ms: 60 a second).
 const FRAME_MS: u64 = 16;
+/// The longest a page's layout may take for its CSS animations to be drawn as they run.
+const ANIMATED_LAYOUT_MS: u64 = 60;
 /// The most sites whose scripts' storage (localStorage) is kept while Chat Computer runs.
 const MOST_STORED: usize = 64;
 
@@ -941,6 +943,13 @@ impl Site {
                 && let Some(top) = page.fragment_top(&f)
             {
                 self.scroll = top;
+            }
+            // (Its CSS animations drawn as they run only while each frame is laid out quickly enough: else as they
+            // rest, so a page that takes long to lay out isn't laid out again and again.)
+            if page.animate && page.animations_running() && time::uptime_ms().saturating_sub(started) > ANIMATED_LAYOUT_MS {
+                log!("Chat Computer kernel: site: {}'s animations shown as they end ({} ms a frame)", page.url, time::uptime_ms().saturating_sub(started));
+                page.animate = false;
+                page.restyle();
             }
             if page.changed {
                 // (More came while it was laid out: again soon.)

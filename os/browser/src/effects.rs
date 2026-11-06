@@ -20,6 +20,209 @@ pub enum Image {
     Gradient(Arc<Gradient>),
 }
 
+/// border-image: a picture (or gradient) cut in nine, its corners drawn at the box's corners, its sides along its
+/// sides (stretched, or repeated), and its middle in the middle if it's to be filled, in place of the border's own
+/// styles (CSS Backgrounds 3, section 6).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BorderImage {
+    pub source: Option<Image>,
+    /// Where it's cut, in from its top, right, bottom and left: its own pixels, or percentages of its size.
+    pub slice: [Slice; 4],
+    pub fill: bool,
+    /// How wide its sides are drawn: lengths (or percentages of where it's drawn), multiples of the border's own
+    /// widths, or auto (the slices' own sizes).
+    pub width: [BorderImageWidth; 4],
+    /// How far past the border box it's drawn: lengths, or multiples of the border's widths.
+    pub outset: [Outset; 4],
+    /// How its sides' and middle's pieces fill their places, across and down.
+    pub repeat: (BorderRepeat, BorderRepeat),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Slice {
+    Number(f32),
+    Percent(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BorderImageWidth {
+    Len(Len),
+    Number(f32),
+    Auto,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Outset {
+    Px(f32),
+    Number(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BorderRepeat {
+    Stretch,
+    Repeat,
+    Round,
+    Space,
+}
+
+impl Default for BorderImage {
+    fn default() -> BorderImage {
+        BorderImage {
+            source: None,
+            slice: [Slice::Percent(100.0); 4],
+            fill: false,
+            width: [BorderImageWidth::Number(1.0); 4],
+            outset: [Outset::Number(0.0); 4],
+            repeat: (BorderRepeat::Stretch, BorderRepeat::Stretch),
+        }
+    }
+}
+
+/// One to four values, for the top, right, bottom and left, as CSS repeats them.
+fn sides4<T: Copy>(v: &[T]) -> Option<[T; 4]> {
+    Some(match v.len() {
+        1 => [v[0]; 4],
+        2 => [v[0], v[1], v[0], v[1]],
+        3 => [v[0], v[1], v[2], v[1]],
+        4 => [v[0], v[1], v[2], v[3]],
+        _ => return None,
+    })
+}
+
+fn slice_value(p: &[Tok]) -> Option<Slice> {
+    match trim(p) {
+        [Tok::Number(n)] if *n >= 0.0 => Some(Slice::Number(*n)),
+        [Tok::Percent(n)] if *n >= 0.0 => Some(Slice::Percent(*n)),
+        _ => None,
+    }
+}
+
+fn border_image_width(p: &[Tok], u: &Units) -> Option<BorderImageWidth> {
+    match trim(p) {
+        [Tok::Ident(i)] if i.eq_ignore_ascii_case("auto") => Some(BorderImageWidth::Auto),
+        [Tok::Number(n)] if *n >= 0.0 => Some(BorderImageWidth::Number(*n)),
+        _ => values::length(p, u, 0.0).filter(|l| l.px >= 0.0 && l.pct >= 0.0).map(BorderImageWidth::Len),
+    }
+}
+
+fn outset_value(p: &[Tok], u: &Units) -> Option<Outset> {
+    match trim(p) {
+        [Tok::Number(n)] if *n >= 0.0 => Some(Outset::Number(*n)),
+        _ => values::length(p, u, 0.0).filter(|l| !l.has_pct() && l.px >= 0.0).map(|l| Outset::Px(l.px)),
+    }
+}
+
+fn border_repeat(i: &str) -> Option<BorderRepeat> {
+    Some(match i {
+        "stretch" => BorderRepeat::Stretch,
+        "repeat" => BorderRepeat::Repeat,
+        "round" => BorderRepeat::Round,
+        "space" => BorderRepeat::Space,
+        _ => return None,
+    })
+}
+
+/// border-image-slice's value: one to four numbers or percentages, and fill (before or after them).
+pub fn border_image_slice(v: &[Tok]) -> Option<([Slice; 4], bool)> {
+    let mut fill = false;
+    let mut vals = Vec::new();
+    for p in parts(v) {
+        if ident(p).as_deref() == Some("fill") && !fill {
+            fill = true;
+        } else {
+            vals.push(slice_value(p)?);
+        }
+    }
+    Some((sides4(&vals)?, fill))
+}
+
+pub fn border_image_widths(v: &[Tok], u: &Units) -> Option<[BorderImageWidth; 4]> {
+    let vals: Vec<BorderImageWidth> = parts(v).iter().map(|p| border_image_width(p, u)).collect::<Option<_>>()?;
+    sides4(&vals)
+}
+
+pub fn border_image_outsets(v: &[Tok], u: &Units) -> Option<[Outset; 4]> {
+    let vals: Vec<Outset> = parts(v).iter().map(|p| outset_value(p, u)).collect::<Option<_>>()?;
+    sides4(&vals)
+}
+
+pub fn border_image_repeat(v: &[Tok]) -> Option<(BorderRepeat, BorderRepeat)> {
+    let vals: Vec<BorderRepeat> = parts(v).iter().map(|p| ident(p).and_then(|i| border_repeat(&i))).collect::<Option<_>>()?;
+    match vals[..] {
+        [a] => Some((a, a)),
+        [a, b] => Some((a, b)),
+        _ => None,
+    }
+}
+
+/// The border-image shorthand: its source, its slice (and fill) with its width and outset after "/"s, and its repeat,
+/// the source and the repeat before or after the rest. What it leaves out is as it starts.
+pub fn border_image(v: &[Tok], current: Color, u: &Units) -> Option<BorderImage> {
+    let mut b = BorderImage::default();
+    let (mut source, mut repeat): (Option<Option<Image>>, Vec<BorderRepeat>) = (None, Vec::new());
+    // (The slice, width and outset, one group after another, "/" between them.)
+    let mut groups: [Vec<&[Tok]>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let mut group = 0;
+    let mut slashes = 0;
+    let mut fill = false;
+    for p in parts(v) {
+        if matches!(trim(p), [Tok::Delim('/')]) {
+            slashes += 1;
+            if slashes > 2 || groups[0].is_empty() {
+                return None;
+            }
+            group = slashes;
+            continue;
+        }
+        if let Some(i) = ident(p) {
+            if let Some(r) = border_repeat(&i) {
+                if repeat.len() >= 2 {
+                    return None;
+                }
+                repeat.push(r);
+                continue;
+            }
+            if i == "fill" && group == 0 && !fill {
+                fill = true;
+                continue;
+            }
+        }
+        if source.is_none()
+            && let Some(img) = image(p, current, u)
+        {
+            source = Some(img);
+            continue;
+        }
+        if group == 0 && !repeat.is_empty() && !groups[0].is_empty() {
+            return None;
+        }
+        groups[group].push(p);
+    }
+    if !groups[0].is_empty() || fill {
+        let vals: Vec<Slice> = groups[0].iter().map(|p| slice_value(p)).collect::<Option<_>>()?;
+        if !vals.is_empty() {
+            b.slice = sides4(&vals)?;
+        }
+        b.fill = fill;
+    }
+    if !groups[1].is_empty() {
+        let vals: Vec<BorderImageWidth> = groups[1].iter().map(|p| border_image_width(p, u)).collect::<Option<_>>()?;
+        b.width = sides4(&vals)?;
+    }
+    if !groups[2].is_empty() {
+        let vals: Vec<Outset> = groups[2].iter().map(|p| outset_value(p, u)).collect::<Option<_>>()?;
+        b.outset = sides4(&vals)?;
+    }
+    match repeat[..] {
+        [] => {}
+        [a] => b.repeat = (a, a),
+        [a, c] => b.repeat = (a, c),
+        _ => return None,
+    }
+    b.source = source.flatten();
+    Some(b)
+}
+
 /// A CSS gradient: its kind, whether it repeats, and its colour stops.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gradient {

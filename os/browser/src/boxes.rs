@@ -64,6 +64,11 @@ pub struct LBox {
     pub done: bool,
     /// Its insides are centred in its height (a <button>'s, as Chrome centres them).
     pub centered: bool,
+    /// An <iframe>'s: its document is drawn in its content box.
+    pub frame: bool,
+    /// Its size (CSS pixels) where it has none of its own and CSS gives none: a frame's and a video's 300 by 150, as
+    /// Chrome makes them; nothing for a picture that hasn't come.
+    pub default_size: (f32, f32),
 }
 
 impl LBox {
@@ -161,6 +166,8 @@ impl Tree {
             baseline: None,
             done: false,
             centered: false,
+            frame: false,
+            default_size: (0.0, 0.0),
         });
         if let Some(p) = parent {
             self.boxes[p].children.push(id);
@@ -217,6 +224,8 @@ impl Tree {
                         baseline: None,
                         done: false,
             centered: false,
+            frame: false,
+            default_size: (0.0, 0.0),
                     });
                     let kids: Vec<BoxId> = tree.boxes[a].children.clone();
                     for k in kids {
@@ -272,6 +281,8 @@ impl Tree {
                         baseline: None,
                         done: false,
             centered: false,
+            frame: false,
+            default_size: (0.0, 0.0),
                     });
                     let kids: Vec<BoxId> = tree.boxes[a].children.clone();
                     for k in kids {
@@ -406,6 +417,14 @@ impl Builder<'_> {
                 alt: String::from(el.attr("alt").unwrap_or("")),
                 density: self.pictures.density(node),
             },
+            // (An <object> that shows neither a document nor a picture shows its fallback, its children: one with
+            // nothing to show at all is an empty box.)
+            "object" if crate::page::embedded(el) == crate::page::Embedded::Neither && el.attr("data").is_some_and(|d| !d.trim().is_empty()) => Content::Children,
+            "object" | "embed" if crate::page::embedded(el) == crate::page::Embedded::Picture => Content::Image {
+                image: self.pictures.picture(self.doc, node),
+                alt: String::new(),
+                density: 1.0,
+            },
             "svg" | "video" | "canvas" | "iframe" | "embed" | "object" | "audio" | "math" => {
                 // (Their insides aren't drawn here: their place is kept, from their size; an <svg> is a picture, drawn
                 // from its own text, and a <canvas> one its scripts draw.)
@@ -485,6 +504,11 @@ impl Builder<'_> {
         };
         let b = self.tree.push(Some(node), style, content, Some(parent));
         self.tree.boxes[b].centered = name == "button";
+        let frame = name == "iframe" || (matches!(name, "object" | "embed") && crate::page::embedded(el) == crate::page::Embedded::Document);
+        self.tree.boxes[b].frame = frame;
+        if frame || matches!(name, "video" | "object") {
+            self.tree.boxes[b].default_size = (300.0, 150.0);
+        }
         if walk && !matches!(name, "select" | "textarea" | "template") {
             self.children_of(node, b);
         }

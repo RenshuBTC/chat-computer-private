@@ -53,6 +53,18 @@ pub struct Units {
     pub vw: f32,
     pub vh: f32,
     pub dpr: f32,
+    /// The font's x-height, the width of its "0", its cap height and the width of its ideographs, as parts of the
+    /// em (ex, ch, cap, ic); and the root's (rex, rch, rcap, ric, as parts of rem).
+    pub font: [f32; 4],
+    pub root: [f32; 4],
+}
+
+impl Units {
+    /// Units with a font's proportions as Times New Roman's (Chrome's default font).
+    pub fn new(em: f32, rem: f32, vw: f32, vh: f32, dpr: f32) -> Units {
+        let font = text::Family::Serif.units();
+        Units { em, rem, vw, vh, dpr, font, root: font }
+    }
 }
 
 /// A number with what it is: a length, a percentage (of the length's base), or a plain number.
@@ -77,8 +89,16 @@ fn unit_px(n: f32, unit: &str, u: &Units) -> Option<f32> {
         "px" => n * u.dpr,
         "em" => n * u.em,
         "rem" => n * u.rem,
-        "ex" | "ch" | "cap" | "ic" => n * u.em * 0.5,
-        "rex" | "rch" => n * u.rem * 0.5,
+        "ex" => n * u.em * u.font[0],
+        "ch" => n * u.em * u.font[1],
+        "cap" => n * u.em * u.font[2],
+        // (The width of 水, a CJK ideograph: an em in nearly every font that has one.)
+        "ic" => n * u.em * u.font[3],
+        "rex" => n * u.rem * u.root[0],
+        "rch" => n * u.rem * u.root[1],
+        "rcap" => n * u.rem * u.root[2],
+        "ric" => n * u.rem * u.root[3],
+
         "lh" => n * u.em * 1.2,
         "rlh" => n * u.rem * 1.2,
         "vw" | "svw" | "lvw" | "dvw" | "cqw" | "cqi" => n * u.vw / 100.0,
@@ -620,7 +640,7 @@ mod tests {
 
     #[test]
     fn lengths_and_calc() {
-        let u = Units { em: 16.0, rem: 16.0, vw: 1000.0, vh: 800.0, dpr: 1.0 };
+        let u = Units::new(16.0, 16.0, 1000.0, 800.0, 1.0);
         let l = |s: &str| length(&tokens(s), &u, 500.0);
         assert_eq!(l("10px"), Some(Len::px(10.0)));
         assert_eq!(l("2em"), Some(Len::px(32.0)));

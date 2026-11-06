@@ -249,6 +249,9 @@ pub struct Style {
     pub border_width: [f32; 4],
     pub border_style: [BorderStyle; 4],
     pub border_color: [Color; 4],
+    /// Each side's colour is currentcolor (its initial value): a 3D border (inset, outset, groove, ridge) is then
+    /// shaded from Chrome's light grey, not the text's colour.
+    pub border_current: [bool; 4],
     /// Its corners' rounding: top left, top right, bottom right, bottom left (circular: a percentage of its smaller
     /// side, so 50% rounds a square into a circle).
     pub radius: [Len; 4],
@@ -261,6 +264,8 @@ pub struct Style {
     pub bg: Option<Arc<Layers>>,
     /// Its mask's layers: what of it shows (None, or none with a picture: all of it).
     pub mask: Option<Arc<Layers>>,
+    /// border-image (None: as it starts, no picture).
+    pub border_image: Option<Arc<effects::BorderImage>>,
     pub font_size: f32,
     /// How many times "medium" its font size is, when it comes from a keyword (medium, small...: the page's own,
     /// or none it inherited unchanged, or em and % of one): 0 when it doesn't. Chrome's medium is 13px rather than 16
@@ -686,6 +691,7 @@ impl Style {
             border_width: [0.0; 4],
             border_style: [BorderStyle::None; 4],
             border_color: [values::BLACK; 4],
+            border_current: [true; 4],
             radius: [Len::ZERO; 4],
             shadows: None,
             border_box: false,
@@ -693,6 +699,7 @@ impl Style {
             background: values::TRANSPARENT,
             bg: None,
             mask: None,
+            border_image: None,
             font_size: 16.0 * dpr,
             keyword_size: 1.0,
             generic_mono: false,
@@ -979,7 +986,7 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
             }
         }
     }
-    let units_root = Units { em: 16.0 * dpr, rem: 16.0 * dpr, vw: view.width * dpr, vh: view.height * dpr, dpr };
+    let units_root = Units::new(16.0 * dpr, 16.0 * dpr, view.width * dpr, view.height * dpr, dpr);
     let mut c = Cascade {
         doc,
         sheets: all,
@@ -988,6 +995,7 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
         view,
         dpr,
         rem: units_root.rem,
+        root_font: text::Family::Serif.units(),
         out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new(), wanted_fonts: alloc::collections::BTreeSet::new() },
         fonts: sheets.fonts,
         now: sheets.now,
@@ -1003,6 +1011,7 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
             // (Every other element's rem is the root's font size: 10px on a page that sets it so, as many do.)
             if c.doc.parent(id) == Some(0) {
                 c.rem = s.font_size;
+                c.root_font = c.font_units(&s);
             }
             c.out.of[id] = Some(s.clone());
             s
@@ -1075,6 +1084,8 @@ struct Cascade<'a> {
     view: Viewport,
     dpr: f32,
     rem: f32,
+    /// The root's font's proportions (its ex, ch, cap and ic as parts of its em), for rex, rch, rcap and ric.
+    root_font: [f32; 4],
     out: Styles,
     sibling: SiblingInfo,
 }
@@ -1287,6 +1298,53 @@ impl Cascade<'_> {
         s
     }
 
+    /// The proportions of a style's first available font (its ex, ch, cap and ic, as parts of its em), as CSS Fonts
+    /// has it: the first of its families that has a font here with a space in it, a web font's (once it has come,
+    /// the face its weight, style and width choose), else a family this system's fonts stand in for.
+    fn font_units(&self, s: &Style) -> [f32; 4] {
+        let mut units = s.family().units();
+        // (ic is of the first font with 水 in it: the one it would be set in.)
+        units[3] = 1.0;
+        let mut found = (false, false);
+        for name in s.families.iter() {
+            if found.0 && found.1 {
+                break;
+            }
+            let web = self.fonts.iter().any(|f| f.face.family == *name);
+            for (which, c) in [(0usize, 0x20u32), (1, 0x6C34)] {
+                let done = if which == 0 { found.0 } else { found.1 };
+                if done {
+                    continue;
+                }
+                let own: Option<[Option<f32>; 4]> = if web {
+                    let faces: Vec<WebFont> = self.fonts.iter().filter(|f| f.face.family == *name && f.face.covers(c)).cloned().collect();
+                    pick_font(&faces, core::slice::from_ref(name), s.font_weight, s.italic, s.font_stretch)
+                        .and_then(|(i, _, _)| faces[i].loaded)
+                        .and_then(text::loaded::units)
+                        .filter(|u| which == 0 || u[3].is_some())
+                } else {
+                    known_kind(name).map(|k| {
+                        let u = k.units();
+                        [Some(u[0]), Some(u[1]), Some(u[2]), Some(u[3])]
+                    })
+                };
+                let Some(own) = own else { continue };
+                if which == 0 {
+                    let kind = kind_of_families(name);
+                    let base = family_of(kind.0, kind.1).units();
+                    for k in 0..3 {
+                        units[k] = own[k].unwrap_or(base[k]);
+                    }
+                    found.0 = true;
+                } else {
+                    units[3] = own[3].unwrap_or(1.0);
+                    found.1 = true;
+                }
+            }
+        }
+        units
+    }
+
     /// The web font a style's words are set in, if one of its families is one (noted as wanted, to be fetched).
     fn with_font(&mut self, s: &mut Style) {
         s.web_face = None;
@@ -1363,7 +1421,9 @@ impl Cascade<'_> {
             s.custom = Arc::new(map);
         }
         let is_root = self.doc.parent(id) == Some(0);
-        let mut ctx = Ctx { parent, units: Units { em: parent.font_size, rem: self.rem, vw: self.view.width * self.dpr, vh: self.view.height * self.dpr, dpr: self.dpr } };
+        let mut ctx = Ctx { parent, units: Units::new(parent.font_size, self.rem, self.view.width * self.dpr, self.view.height * self.dpr, self.dpr) };
+        ctx.units.font = self.font_units(parent);
+        ctx.units.root = self.root_font;
         // (Each property's winning value, for animations whose keyframes leave it out at their start or end.)
         let animated = s.animations.is_some() || found.iter().any(|(_, d)| d.name.starts_with("animation") || d.name.starts_with("-webkit-animation"));
         let mut declared: Vec<(&str, Vec<Tok>)> = Vec::new();
@@ -1371,11 +1431,16 @@ impl Cascade<'_> {
         // animations.)
         let important: Vec<&str> = if animated { found.iter().filter(|(_, d)| d.important).map(|(_, d)| d.name.as_str()).collect() } else { Vec::new() };
         for pass in 0..3 {
+            if pass == 2 {
+                // (A border's colour is currentcolor unless it's said: the text's, now that it's known.)
+                s.border_color = [s.color; 4];
+                s.border_current = [true; 4];
+            }
             for (_, d) in found {
                 if d.name.starts_with("--") {
                     continue;
                 }
-                let early = matches!(d.name.as_str(), "font-size" | "font" | "font-family");
+                let early = matches!(d.name.as_str(), "font-size" | "font" | "font-family" | "font-weight" | "font-style" | "font-stretch");
                 let colour = d.name == "color";
                 let wanted = match pass {
                     0 => early,
@@ -1427,7 +1492,9 @@ impl Cascade<'_> {
                     s.font_size = s.keyword_size * if s.generic_mono { 13.0 } else { 16.0 } * self.dpr;
                 }
                 ctx.units.em = s.font_size;
+                ctx.units.font = self.font_units(&s);
                 if is_root {
+                    ctx.units.root = ctx.units.font;
                     // (rem is the root's font size.)
                     ctx.units.rem = s.font_size;
                 }
@@ -1623,6 +1690,41 @@ fn hints(doc: &Document, id: NodeId) -> Vec<Decl> {
     }
     if name == "hr" && let Some(w) = el.attr("width").and_then(dim) {
         add("width", w);
+    }
+    // An <hr>'s colour, shade and size, as HTML's rendering section has them: a colour or noshade makes it solid (and
+    // its size, then, its border's widths, halved); a size without them its height (1: no bottom border).
+    if name == "hr" {
+        let shaded = el.has_attr("color") || el.has_attr("noshade");
+        if let Some(c) = el.attr("color").map(str::trim).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("transparent")) {
+            add("color", legacy_color(c));
+        }
+        if shaded {
+            add("border-style", String::from("solid"));
+        }
+        if let Some(n) = el.attr("size").and_then(|v| v.trim().parse::<u32>().ok()) {
+            if shaded {
+                add("border-width", alloc::format!("{}px", n as f32 / 2.0));
+            } else if n == 1 {
+                add("border-bottom-width", String::from("0"));
+            } else if n > 1 {
+                add("height", alloc::format!("{}px", n - 2));
+            }
+        }
+        match el.attr("align").map(|a| a.trim().to_ascii_lowercase()).as_deref() {
+            Some("left") => {
+                add("margin-left", String::from("0"));
+                add("margin-right", String::from("auto"));
+            }
+            Some("right") => {
+                add("margin-left", String::from("auto"));
+                add("margin-right", String::from("0"));
+            }
+            Some("center") => {
+                add("margin-left", String::from("auto"));
+                add("margin-right", String::from("auto"));
+            }
+            _ => {}
+        }
     }
     // (An input's size and a textarea's cols and rows make their natural size: layout.rs.)
     out
@@ -2008,6 +2110,11 @@ fn border_width(v: &[Tok], c: &Ctx) -> Option<f32> {
 }
 
 /// "1px solid red" in any order: (width, style, colour).
+/// Whether a colour's value is the currentcolor keyword.
+fn is_current_color(v: &[Tok]) -> bool {
+    ident(values::trim(v)).is_some_and(|i| i == "currentcolor")
+}
+
 fn border_parts(v: &[Tok], c: &Ctx, current: Color) -> Option<(Option<f32>, Option<BorderStyle>, Option<Color>)> {
     let (mut w, mut st, mut col) = (None, None, None);
     for p in parts(v) {
@@ -2231,6 +2338,21 @@ const SERIF_WORDS: &[&str] = &[
     "book", "charter", "iowan", "crimson", "caslon", "didot", "bodoni", "minion", "constantia", "spectral",
     "literata", "new york", "tiempos", "mincho", "songti",
 ];
+
+/// The system's font a family's name stands for, if it's a name it knows (a generic family, or one of the fonts it
+/// has a stand-in for).
+fn known_kind(name: &str) -> Option<text::Family> {
+    let n = name.trim().to_ascii_lowercase();
+    if MONO_WORDS.iter().any(|w| n.contains(w)) {
+        Some(text::Family::Mono)
+    } else if SANS_WORDS.iter().any(|w| n.contains(w)) {
+        Some(text::Family::Sans)
+    } else if SERIF_WORDS.iter().any(|w| n.contains(w)) || matches!(n.as_str(), "cursive" | "fantasy" | "math" | "emoji" | "fangsong" | "ui-serif") {
+        Some(text::Family::Serif)
+    } else {
+        None
+    }
+}
 
 /// The kind of font for what `family_kind` found: monospace, sans-serif, or (else) serif.
 pub fn family_of(mono: bool, sans: bool) -> text::Family {
@@ -2718,10 +2840,12 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                         _ => &[3],
                     },
                 };
+                let current = col.is_none() || parts(v).iter().any(|p| is_current_color(p));
                 for &k in sides {
                     s.border_width[k] = w.unwrap_or(3.0 * c.units.dpr);
                     s.border_style[k] = st.unwrap_or(BorderStyle::None);
                     s.border_color[k] = col.unwrap_or(cur);
+                    s.border_current[k] = current;
                 }
             }
         }
@@ -2738,6 +2862,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
         "border-color" => {
             if let Some(x) = four(v, |t| values::color(t, cur)) {
                 s.border_color = x;
+                s.border_current = four(v, |t| Some(is_current_color(t))).unwrap_or([false; 4]);
             }
         }
         "border-top-width" | "border-right-width" | "border-bottom-width" | "border-left-width" | "border-block-start-width"
@@ -2754,6 +2879,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
         "border-top-color" | "border-right-color" | "border-bottom-color" | "border-left-color" => {
             if let Some(x) = values::color(v, cur) {
                 s.border_color[side(name)] = x;
+                s.border_current[side(name)] = is_current_color(v);
             }
         }
         "border-radius" | "-webkit-border-radius" => {
@@ -2836,6 +2962,28 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             let mut l = s.bg.as_deref().cloned().unwrap_or_default();
             if effects::set_layer_prop(&mut l, prop, v, cur, units) {
                 s.bg = Some(Arc::new(l));
+            }
+        }
+        "border-image" | "-webkit-border-image" => {
+            if let Some(mut b) = effects::border_image(v, cur, units) {
+                // (-webkit-border-image always fills its middle.)
+                if name == "-webkit-border-image" {
+                    b.fill = true;
+                }
+                s.border_image = Some(Arc::new(b));
+            }
+        }
+        "border-image-source" | "border-image-slice" | "border-image-width" | "border-image-outset" | "border-image-repeat" => {
+            let mut b = s.border_image.as_deref().cloned().unwrap_or_default();
+            let ok = match name {
+                "border-image-source" => effects::image(v, cur, units).map(|i| b.source = i).is_some(),
+                "border-image-slice" => effects::border_image_slice(v).map(|(sl, f)| (b.slice, b.fill) = (sl, f)).is_some(),
+                "border-image-width" => effects::border_image_widths(v, units).map(|w| b.width = w).is_some(),
+                "border-image-outset" => effects::border_image_outsets(v, units).map(|o| b.outset = o).is_some(),
+                _ => effects::border_image_repeat(v).map(|r| b.repeat = r).is_some(),
+            };
+            if ok {
+                s.border_image = Some(Arc::new(b));
             }
         }
         "mask" | "-webkit-mask" => {
@@ -3528,6 +3676,9 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
             s.bg = with_layer_prop(&s.bg, &from.bg, prop);
         }
         "mask" | "-webkit-mask" => s.mask = from.mask.clone(),
+        "border-image" | "-webkit-border-image" | "border-image-source" | "border-image-slice" | "border-image-width" | "border-image-outset" | "border-image-repeat" => {
+            s.border_image = from.border_image.clone()
+        }
         "mask-image" | "-webkit-mask-image" | "mask-position" | "-webkit-mask-position" | "mask-size" | "-webkit-mask-size" | "mask-repeat" | "-webkit-mask-repeat" | "mask-origin" | "-webkit-mask-origin" | "mask-clip" | "-webkit-mask-clip" | "mask-mode" | "mask-composite" | "-webkit-mask-composite" => {
             let prop = layer_prop(name.trim_start_matches("-webkit-").trim_start_matches("mask-"));
             s.mask = with_layer_prop(&s.mask, &from.mask, prop);
@@ -3544,6 +3695,7 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
             s.border_width = from.border_width;
             s.border_style = from.border_style;
             s.border_color = from.border_color;
+            s.border_current = from.border_current;
         }
         "float" => s.float = from.float,
         "opacity" => s.opacity = from.opacity,

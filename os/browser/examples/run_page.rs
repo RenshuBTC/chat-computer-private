@@ -24,7 +24,8 @@ impl Shown for Pictures {
     }
 }
 
-/// The bytes at an address, from the folder.
+/// The bytes at an address, from the folder (a .sub. file's {{...}} filled in, as the Web Platform Tests' server
+/// fills them).
 fn read(files: &Option<std::path::PathBuf>, index: &std::collections::HashMap<String, std::path::PathBuf>, u: &str) -> Option<Vec<u8>> {
     let dir = files.as_ref()?;
     if let Some(f) = index.get(u) {
@@ -32,7 +33,60 @@ fn read(files: &Option<std::path::PathBuf>, index: &std::collections::HashMap<St
     }
     let path = u.split("://").nth(1).and_then(|r| r.find('/').map(|i| &r[i..])).unwrap_or("/");
     let path = path.split(['?', '#']).next().unwrap_or("/").trim_start_matches('/');
-    std::fs::read(dir.join(path)).ok()
+    let bytes = std::fs::read(dir.join(path)).ok()?;
+    Some(if path.contains(".sub.") { substituted(&String::from_utf8_lossy(&bytes)).into_bytes() } else { bytes })
+}
+
+/// The Web Platform Tests' server's {{...}} in a .sub. file: its hosts, domains and ports (anything else, nothing).
+fn substituted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("{{") {
+        out.push_str(&rest[..at]);
+        let Some(end) = rest[at..].find("}}") else {
+            out.push_str(&rest[at..]);
+            return out;
+        };
+        let what = rest[at + 2..at + end].trim();
+        let sub = |name: &str| -> Option<String> {
+            let inner = what.strip_prefix(name)?.strip_prefix('[')?;
+            Some(String::from(inner.split(']').next().unwrap_or("")))
+        };
+        let domain = |sub: &str, alt: bool| {
+            let base = if alt { "not-web-platform.test" } else { "web-platform.test" };
+            if sub.is_empty() { String::from(base) } else { format!("{sub}.{base}") }
+        };
+        let value = if what == "host" || what == "location[hostname]" {
+            String::from("web-platform.test")
+        } else if let Some(d) = sub("domains") {
+            domain(&d, false)
+        } else if let Some(h) = what.strip_prefix("hosts[") {
+            let (which, rest2) = h.split_once(']').unwrap_or(("", ""));
+            let d = rest2.trim_start_matches('[').split(']').next().unwrap_or("");
+            domain(d, which == "alt")
+        } else if let Some(p) = what.strip_prefix("ports[") {
+            let (kind, n) = p.split_once(']').unwrap_or(("http", "[0]"));
+            let n: u16 = n.trim_matches(['[', ']']).parse().unwrap_or(0);
+            let base = match kind {
+                "https" => 8443,
+                "ws" => 8888,
+                "wss" => 8889,
+                "h2" => 9000,
+                _ => 8000,
+            };
+            format!("{}", base + n)
+        } else if what == "location[port]" {
+            String::from("8000")
+        } else if what == "location[scheme]" {
+            String::from("http")
+        } else {
+            String::new()
+        };
+        out.push_str(&value);
+        rest = &rest[at + end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn main() {
@@ -65,7 +119,10 @@ fn run() {
         eprintln!("usage: run_page PAGE.html [ADDRESS] [FILES] [--ms N] [--html] [--ppm OUT WIDTH]");
         std::process::exit(2);
     }
-    let html = std::fs::read(positional[0]).expect("the page");
+    let mut html = std::fs::read(positional[0]).expect("the page");
+    if positional[0].contains(".sub.") {
+        html = substituted(&String::from_utf8_lossy(&html)).into_bytes();
+    }
     let address = positional.get(1).map(|s| s.as_str()).unwrap_or("https://example.com/");
     let files = positional.get(2).map(std::path::PathBuf::from);
     let total_ms: f64 = flag("--ms").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(2000.0);
@@ -224,6 +281,7 @@ fn run() {
                 State::Failed => String::from("failed"),
                 State::Waiting => String::from("waiting"),
                 State::Script(_) => String::from("script"),
+                State::Document => String::from("a frame's document"),
             };
             eprintln!("resource {i}: {:?} {} {state}", r.kind, r.url.as_ref().map_or(String::from("(inline)"), |u| u.to_string()));
         }
@@ -244,6 +302,36 @@ fn fetch(page: &mut Page, pictures: &mut Pictures, files: &Option<std::path::Pat
                 (Kind::Sheet, Some(b)) => page.sheet_came(i, String::from_utf8_lossy(&b).into_owned()),
                 (Kind::Script | Kind::Module, Some(b)) => page.script_came(i, String::from_utf8_lossy(&b).into_owned()),
                 (Kind::Font, Some(b)) => page.font_came(i, &b),
+                (Kind::Frame, Some(b)) => {
+                    // (Its type from its name, and its headers from a .headers file beside it, as the Web Platform
+                    // Tests' server gives them.)
+                    let u = url.clone().expect("a frame's document has an address");
+                    let path = u.path.split(['?', '#']).next().unwrap_or("/").to_ascii_lowercase();
+                    let mut kind = String::from(match path.rsplit('.').next().unwrap_or("") {
+                        "xht" | "xhtml" | "xml" => "application/xhtml+xml",
+                        "svg" => "image/svg+xml",
+                        "png" => "image/png",
+                        "jpg" | "jpeg" => "image/jpeg",
+                        "gif" => "image/gif",
+                        "webp" => "image/webp",
+                        "txt" => "text/plain",
+                        _ => "text/html",
+                    });
+                    let mut headers: Vec<(String, String)> = Vec::new();
+                    let mut beside = u.clone();
+                    beside.path = format!("{}.headers", u.path.split(['?', '#']).next().unwrap_or("/"));
+                    if let Some(h) = read(files, index, &beside.to_string()) {
+                        for line in String::from_utf8_lossy(&h).lines() {
+                            if let Some((k, v)) = line.split_once(':') {
+                                if k.trim().eq_ignore_ascii_case("content-type") {
+                                    kind = String::from(v.trim());
+                                }
+                                headers.push((k.trim().to_ascii_lowercase(), String::from(v.trim())));
+                            }
+                        }
+                    }
+                    page.frame_came(i, u, &b, &kind, &headers);
+                }
                 (Kind::Picture, Some(b)) => match picture::decode_alpha(&b, 4000, 4000, u64::MAX) {
                     Ok((p, alpha)) => {
                         let (w, h) = picture::shown_size(&b).unwrap_or((p.width, p.height));

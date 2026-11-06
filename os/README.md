@@ -984,11 +984,14 @@ writes for each person, in place of Ubuntu's catalogue.
     animations' resting states, WebP pictures (lossy and lossless, decoded exactly as libwebp decodes them),
     pictures chosen as Chrome chooses them (srcset and sizes, <picture>'s sources, image-set()), SVGs sized by their
     own width, height and ratio (in <img> and as backgrounds), CSS animations as they run (each frame's values
-    between keyframes, with their timing functions), the Web Animations API (element.animate), and SVG clip paths.
+    between keyframes, with their timing functions), the Web Animations API (element.animate), SVG clip paths,
+    iframes (each frame's document a page of its own, its scripts run, laid out in the frame's box and drawn there,
+    unless it says another site may not show it), border-image, inset, outset, groove and ridge borders shaded as
+    Chrome shades them, and ex, ch and cap measured in the element's own font.
     Measured by the Web Platform Tests every browser runs (each test and its reference
     drawn by Chat Computer and compared; the scripted tests run in it): to do there is what they and comparing sites
-    with Chrome turn up, first iframes, writing modes, border-image and CSS transitions. ✓ SVG pictures (in <img>,
-    and <svg> in the page), and see-through pictures drawn over the page. ✓
+    with Chrome turn up, first writing modes, CSS transitions, and CSS's painting order for floats. ✓ SVG pictures
+    (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
     plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time
     zone. To do: touchpads.

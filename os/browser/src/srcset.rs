@@ -110,7 +110,7 @@ pub fn parse(input: &str) -> Vec<Candidate> {
 /// The size (CSS pixels) a sizes attribute gives the picture in this window: the first of its sizes whose media
 /// condition matches (or that has none), else 100vw. Font-relative units are of the initial font size, 16px.
 pub fn source_size(sizes: Option<&str>, view: Viewport) -> f32 {
-    let u = Units { em: 16.0, rem: 16.0, vw: view.width, vh: view.height, dpr: 1.0 };
+    let u = Units::new(16.0, 16.0, view.width, view.height, 1.0);
     if let Some(sizes) = sizes {
         let toks = css::tokens(sizes);
         for part in split_commas(&toks) {

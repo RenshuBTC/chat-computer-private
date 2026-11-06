@@ -83,6 +83,20 @@ pub fn rounded(id: u16, size: f32) -> Option<(f32, f32, f32)> {
     Some((px(m.ascender as i32), px(-(m.descender as i32)), px(m.line_gap as i32)))
 }
 
+/// A loaded font's ex, ch, cap and ic as parts of its em: its OS/2's x-height and cap height (where it gives them),
+/// its "0"'s width, and its 水's (the CJK water ideograph's).
+pub fn units(id: u16) -> Option<[Option<f32>; 4]> {
+    let f = get(id)?;
+    let m = f.font.metrics;
+    let em = f.upem.max(1) as f32;
+    let part = |v: i16| (v > 0).then_some(v as f32 / em);
+    let advance = |c: char| {
+        let g = f.font.glyph_index(c);
+        (g != 0).then(|| f.font.advance(g) as f32 / em)
+    };
+    Some([part(m.x_height), advance('0'), part(m.cap_height), advance('\u{6C34}')])
+}
+
 /// A line's height in `normal` line height at `size` pixels in a loaded font, as Chrome works it out.
 pub fn normal_line(id: u16, size: f32) -> Option<f32> {
     let (a, d, g) = rounded(id, size)?;

@@ -52,6 +52,9 @@ static WEB: [&[u8]; 10] = [
 /// Their ascent, descent and line gap as the originals have them, in 2048ths of the em (exactly Times New Roman's,
 /// Arial's and Courier New's, whose metric twins they are): a line's height is worked out from these as Chrome does.
 const WEB_METRICS: [(i32, i32, i32); 3] = [(1825, 443, 87), (1854, 434, 67), (1705, 615, 0)];
+/// Their x-height, the width of their "0" and their cap height, in 2048ths of the em: CSS's ex, ch and cap, as Chrome
+/// on Windows measures them in Times New Roman, Arial and Courier New.
+const WEB_UNITS: [(i32, i32, i32); 3] = [(916, 1024, 1356), (1062, 1139, 1467), (866, 1229, 1170)];
 
 /// A web page's kind of font: Chrome's default serif (Times New Roman), sans-serif (Arial) or monospace (Courier New).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -67,6 +70,12 @@ impl Family {
     pub fn normal_line(self, size: f32) -> f32 {
         let (a, d, g) = self.rounded(size);
         a + d + g
+    }
+
+    /// Its ex, ch, cap and ic, as parts of the em (ic: the CJK fallback font's ideographs, an em wide).
+    pub fn units(self) -> [f32; 4] {
+        let (x, ch, cap) = WEB_UNITS[self as usize];
+        [x as f32 / 2048.0, ch as f32 / 2048.0, cap as f32 / 2048.0, 1.0]
     }
 
     /// Its ascent, descent and line gap at `size` pixels, each rounded to a whole pixel (as Chrome's font metrics are).

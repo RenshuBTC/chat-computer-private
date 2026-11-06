@@ -601,11 +601,22 @@ impl Site {
                         }
                         changed = true;
                     }
+                    // (An app's frames show only the sites the person allowed it, over HTTPS, without cookies, as
+                    // its scripts reach them.)
+                    (None, Some(u)) if kind == Kind::Frame && self.app.is_some() => {
+                        if u.port == 443 && self.app_allowed.iter().any(|h| h.eq_ignore_ascii_case(&u.host)) {
+                            self.fetching.push((i, Fetch::app(u, "GET", Vec::new(), None, self.app_allowed.clone())));
+                        } else {
+                            log!("Chat Computer kernel: site: an app's frame wasn't shown: {} isn't a site the person allowed it", u.host);
+                            page.failed(i);
+                        }
+                    }
                     (None, Some(u)) => {
                         let accept = match kind {
                             Kind::Sheet => web::http::ACCEPT_CSS,
                             Kind::Script | Kind::Module | Kind::Font => web::http::ACCEPT_SCRIPT,
                             Kind::Picture => web::http::ACCEPT_PICTURE,
+                            Kind::Frame => web::http::ACCEPT_PAGE,
                         };
                         self.fetching.push((i, Fetch::request(u, accept, None, Some(page.url.clone()))));
                     }
@@ -632,6 +643,9 @@ impl Site {
                         let js = web::page::decode(&got.bytes, &got.kind);
                         page.script_came(i, js);
                     }
+                    // (A frame's document: shown in its frame, unless it says it isn't to be shown in another
+                    // site's.)
+                    (Ok(got), Some(Kind::Frame)) => page.frame_came(i, got.url.clone(), &got.bytes, &got.kind, &got.headers),
                     _ => page.failed(i),
                 }
             }

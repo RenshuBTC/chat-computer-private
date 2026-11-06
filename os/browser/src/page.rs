@@ -31,6 +31,13 @@ const MOST_SHEETS: usize = 64;
 const MOST_PICTURES: usize = 400;
 /// At most this many web fonts fetched for a page.
 const MOST_FONTS: usize = 64;
+/// The most frames (<iframe>s with documents of their own) a page shows at once, how many it may have had in all
+/// (scripts put them in and take them out), and how deep frames go in frames.
+const MOST_FRAMES: usize = 16;
+const MOST_FRAMES_EVER: usize = 64;
+const MOST_FRAME_DEPTH: u8 = 3;
+/// Where the numbers the page gives its frames' requests and WebSockets start (its own scripts' are far below).
+const FRAME_IDS: u32 = 1 << 30;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -41,6 +48,8 @@ pub enum Kind {
     Module,
     /// A web font an @font-face rule names (TrueType, WOFF or WOFF2).
     Font,
+    /// A frame's document (an <iframe>'s src): its HTML, or a picture or text, shown in its box (`frame_came`).
+    Frame,
 }
 
 /// Something the page asks for.
@@ -68,6 +77,8 @@ pub enum State {
     Script(String),
     /// A web font that's come (kept in text::loaded: its number).
     Font(u16),
+    /// A frame's document that's come (its frame's page now).
+    Document,
     Failed,
 }
 
@@ -101,6 +112,76 @@ struct PageScript {
     module: Option<(u32, bool)>,
     when: When,
     done: bool,
+}
+
+/// What an <iframe> shows: a document from an address, one written into it (its srcdoc, or a data: address's), or
+/// none (about:blank).
+#[derive(Clone, Debug, PartialEq)]
+enum FrameSource {
+    Address(Url),
+    Written(String),
+    Blank,
+}
+
+/// One of the page's <iframe>s: its document, a page of its own, laid out in the frame's box and drawn there.
+struct Frame {
+    node: NodeId,
+    source: FrameSource,
+    /// The resource its document is fetched as (Kind::Frame), once it's asked for (for what it shows now).
+    resource: Option<usize>,
+    page: Option<Box<Page>>,
+    /// Its content box as last laid out (device pixels, the page's coordinates), and whether it's shown (laid out,
+    /// of some size): a frame that isn't (display: none) isn't fetched.
+    rect: Rect,
+    shown: bool,
+    /// The page's time (ms) when its document came: its own clock starts there.
+    started: f64,
+    /// Its <iframe>'s load event has been fired, for the document it shows now.
+    loaded: bool,
+    /// Its <iframe> isn't in the page any more (kept, so its number isn't another's).
+    gone: bool,
+}
+
+/// What an <object> or <embed> shows, by its type (or, where it gives none, its address's ending): a document (HTML,
+/// or an SVG drawn as one) in a frame of its own, a picture, or neither (what a plugin would have shown: an
+/// <object>'s fallback, its children, shows instead, as in Chrome, which has no plugins).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Embedded {
+    Document,
+    Picture,
+    Neither,
+}
+
+pub(crate) fn embedded(e: &crate::dom::Element) -> Embedded {
+    let address = match e.name.as_str() {
+        "object" => e.attr("data"),
+        "embed" => e.attr("src"),
+        _ => None,
+    };
+    let Some(address) = address.map(str::trim).filter(|a| !a.is_empty()) else { return Embedded::Neither };
+    let lower = address.to_ascii_lowercase();
+    let ty = match e.attr("type").map(|t| t.trim().to_ascii_lowercase()).filter(|t| !t.is_empty()) {
+        Some(t) => t,
+        None if lower.starts_with("data:") => String::from(lower[5..].split([',', ';']).next().unwrap_or("")),
+        None => {
+            let path = lower.split(['?', '#']).next().unwrap_or("");
+            let ending = path.rsplit('/').next().unwrap_or("").rsplit_once('.').map_or("", |(_, x)| x);
+            String::from(match ending {
+                "html" | "htm" | "shtml" | "xhtml" | "xht" => "text/html",
+                "svg" => "image/svg+xml",
+                "png" | "jpg" | "jpeg" | "gif" | "webp" => "image/png",
+                _ => "",
+            })
+        }
+    };
+    let ty = ty.split(';').next().unwrap_or("").trim();
+    if ty.contains("html") || ty.contains("svg") || ty == "text/xml" || ty == "application/xml" || ty == "text/plain" {
+        Embedded::Document
+    } else if matches!(ty, "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/webp" | "image/apng") {
+        Embedded::Picture
+    } else {
+        Embedded::Neither
+    }
 }
 
 /// What a click lands on.
@@ -199,6 +280,28 @@ pub struct Page {
     /// Whether its CSS animations are drawn as they run (at its time), or as they rest (some time after it has come:
     /// for a system that can't draw it again often enough).
     pub animate: bool,
+    /// Its own layout is out of date (as against its frames': theirs changing only puts them in their places again).
+    relayout: bool,
+    /// Its <iframe>s, each with its own document.
+    frames: Vec<Frame>,
+    /// A frame's document changed: laid out again in its place.
+    frames_changed: bool,
+    /// What's laid out, before its frames' documents are put in their places (kept while it has frames).
+    own: Option<Laid>,
+    /// The resources its frames' documents ask for, fetched as the page's own (the system knows only the page's
+    /// numbers): the page's number for each, its frame and the frame's own number, and back.
+    frame_resources: BTreeMap<usize, (usize, usize)>,
+    frame_numbers: BTreeMap<(usize, usize), usize>,
+    /// Its frames' scripts' requests and WebSockets, by the page's numbers for them: their frames and their own.
+    frame_requests: BTreeMap<u32, (usize, u32)>,
+    frame_sockets: BTreeMap<u32, (usize, u32)>,
+    next_frame_id: u32,
+    /// How deep in frames the page is (0: in a window of its own), and the addresses of the pages it's in, outermost
+    /// first (for a document's say on which sites may show it in a frame).
+    depth: u8,
+    ancestors: Vec<Url>,
+    /// When its clock began (ms since 1970).
+    epoch: f64,
 }
 
 /// The page's pictures with its canvases' among them (for the painter).
@@ -211,7 +314,7 @@ impl crate::paint::Shown for WithCanvases<'_> {
     fn picture(&self, n: usize) -> Option<(&[u8], u32, u32)> {
         match self.page.canvas_of(n) {
             Some(c) => Some((&c.rgb, c.w, c.h)),
-            None if self.page.canvases.iter().any(|(_, r)| *r == n) => None,
+            None if self.page.is_canvas(n) => None,
             None => self.inner.picture(n),
         }
     }
@@ -257,17 +360,22 @@ impl Sizes for Known<'_> {
 impl Page {
     /// A page from its address and HTML (already decoded to text), its scripts not run.
     pub fn new(url: Url, html_text: &str) -> Page {
-        Page::make(url, html_text, false, 0.0, (1024.0, 768.0, 1.0))
+        Page::make(url, html_text, false, 0.0, (1024.0, 768.0, 1.0), 0)
     }
 
     /// A page whose scripts run: its clock starting at `epoch` (ms since 1970), its view `view` (CSS pixels wide
     /// and high, device pixels to one). `seed`: the system's random numbers, for crypto.getRandomValues.
     pub fn with_scripts(url: Url, html_text: &str, epoch: f64, view: (f32, f32, f32), seed: u64) -> Page {
         crate::script::seed(seed);
-        Page::make(url, html_text, true, epoch, view)
+        Page::make(url, html_text, true, epoch, view, 0)
     }
 
-    fn make(url: Url, html_text: &str, scripting: bool, epoch: f64, view: (f32, f32, f32)) -> Page {
+    /// A frame's document: a page `depth` frames deep.
+    fn make_in_frame(url: Url, html_text: &str, scripting: bool, epoch: f64, view: (f32, f32, f32), depth: u8) -> Page {
+        Page::make(url, html_text, scripting, epoch, view, depth)
+    }
+
+    fn make(url: Url, html_text: &str, scripting: bool, epoch: f64, view: (f32, f32, f32), depth: u8) -> Page {
         // (An XHTML document, .xht or .xhtml, is XML: its CDATA sections are just their text, as in its style sheets'
         // "<![CDATA[ ... ]]>".)
         let path = url.path.to_ascii_lowercase();
@@ -318,6 +426,18 @@ impl Page {
             view_scroll: 0.0,
             clock_ms: 0.0,
             animate: true,
+            relayout: true,
+            frames: Vec::new(),
+            frames_changed: false,
+            own: None,
+            frame_resources: BTreeMap::new(),
+            frame_numbers: BTreeMap::new(),
+            frame_requests: BTreeMap::new(),
+            frame_sockets: BTreeMap::new(),
+            next_frame_id: FRAME_IDS,
+            depth,
+            ancestors: Vec::new(),
+            epoch,
         };
         if scripting {
             p.script = Some(Box::new(Script::new(&p.url.to_string(), epoch, view)));
@@ -386,6 +506,7 @@ impl Page {
     fn scan_nodes(&mut self) {
         // (The page's elements by id, made when an <svg> first needs them.)
         let mut ids: Option<BTreeMap<String, NodeId>> = None;
+        let mut iframes: Vec<NodeId> = Vec::new();
         self.sources.clear();
         self.picture_of.clear();
         self.densities.clear();
@@ -543,9 +664,16 @@ impl Page {
                     }
                     self.picture_element(n);
                 }
+                "iframe" => iframes.push(n),
+                "object" | "embed" => match embedded(e) {
+                    Embedded::Document => iframes.push(n),
+                    Embedded::Picture => self.picture_element(n),
+                    Embedded::Neither => {}
+                },
                 _ => {}
             }
         }
+        self.frames_found(&iframes);
         // Pictures its scripts made that aren't in it (new Image(), its src set): fetched too.
         let made: Vec<NodeId> = self.script.as_mut().map(|s| s.host().images.clone()).unwrap_or_default();
         for n in made {
@@ -555,11 +683,255 @@ impl Page {
         }
     }
 
+    /// The page's <iframe>s, in its order: each one's frame (a new one's made; one whose src or srcdoc changed shows
+    /// that now), and those no longer in the page let go. (None in a page that's in frames already as deep as they
+    /// go, nor in a <template>'s contents.)
+    fn frames_found(&mut self, iframes: &[NodeId]) {
+        let mut seen: Vec<usize> = Vec::new();
+        for &n in iframes {
+            if self.depth >= MOST_FRAME_DEPTH || self.in_template(n) {
+                continue;
+            }
+            let Some(e) = self.doc.element(n) else { continue };
+            // (An <object>'s document is its data's, an <embed>'s its src's.)
+            let (doc, src) = match e.name.as_str() {
+                "object" => (None, e.attr("data")),
+                "embed" => (None, e.attr("src")),
+                _ => (e.attr("srcdoc"), e.attr("src")),
+            };
+            let source = match (doc, src.map(str::trim).filter(|s| !s.is_empty())) {
+                (Some(doc), _) => FrameSource::Written(String::from(doc)),
+                (None, None) => FrameSource::Blank,
+                (None, Some(src)) if src.eq_ignore_ascii_case("about:blank") || src.get(..12).is_some_and(|a| a.eq_ignore_ascii_case("about:blank#")) => FrameSource::Blank,
+                (None, Some(src)) if src.get(..5).is_some_and(|d| d.eq_ignore_ascii_case("data:")) => match data_document(src) {
+                    Some(html) => FrameSource::Written(html),
+                    None => FrameSource::Blank,
+                },
+                (None, Some(src)) => match self.url.join(src) {
+                    Ok(u) => FrameSource::Address(u),
+                    Err(_) => FrameSource::Blank,
+                },
+            };
+            match self.frames.iter().position(|f| f.node == n && !f.gone) {
+                Some(k) => {
+                    seen.push(k);
+                    if self.frames[k].source != source {
+                        self.frames[k].source = source;
+                        self.reset_frame(k);
+                    }
+                }
+                None if self.frames.len() < MOST_FRAMES_EVER && self.frames.iter().filter(|f| !f.gone).count() < MOST_FRAMES => {
+                    self.frames.push(Frame { node: n, source, resource: None, page: None, rect: Rect::default(), shown: false, started: 0.0, loaded: false, gone: false });
+                    seen.push(self.frames.len() - 1);
+                }
+                None => {}
+            }
+        }
+        for k in 0..self.frames.len() {
+            if !self.frames[k].gone && !seen.contains(&k) {
+                self.frames[k].gone = true;
+                self.reset_frame(k);
+            }
+        }
+    }
+
+    fn in_template(&self, n: NodeId) -> bool {
+        let mut at = self.doc.parent(n);
+        while let Some(p) = at {
+            if self.doc.name(p) == "template" {
+                return true;
+            }
+            at = self.doc.parent(p);
+        }
+        false
+    }
+
+    /// A frame's document let go (it shows another now, or none): what was asked for it, and of it, forgotten.
+    fn reset_frame(&mut self, k: usize) {
+        let f = &mut self.frames[k];
+        f.page = None;
+        f.resource = None;
+        f.loaded = false;
+        self.frame_resources.retain(|_, (g, _)| *g != k);
+        self.frame_numbers.retain(|(g, _), _| *g != k);
+        self.frame_requests.retain(|_, (g, _)| *g != k);
+        self.frame_sockets.retain(|_, (g, _)| *g != k);
+        self.frames_changed = true;
+        self.changed = true;
+        self.want_frame(k);
+    }
+
+    /// A frame that's shown, its document asked for: fetched (an address's), or made at once (one written into it).
+    fn want_frame(&mut self, k: usize) {
+        let f = &self.frames[k];
+        if f.gone || !f.shown || f.page.is_some() || f.resource.is_some() {
+            return;
+        }
+        match f.source.clone() {
+            FrameSource::Address(u) => {
+                let r = self.add(Kind::Frame, Some(u), None);
+                self.frames[k].resource = Some(r);
+            }
+            FrameSource::Written(html) => {
+                let base = self.url.clone();
+                self.open_frame(k, base, &html);
+            }
+            FrameSource::Blank => {}
+        }
+    }
+
+    /// A frame's document, made: a page of its own, as wide and high as the frame's box, its scripts run if the
+    /// page's are (and the frame's sandbox, if it has one, allows them).
+    fn open_frame(&mut self, k: usize, url: Url, html: &str) {
+        let dpr = if self.dpr > 0.0 { self.dpr } else { 1.0 };
+        let rect = self.frames[k].rect;
+        let view = ((rect.w / dpr).max(1.0), (rect.h / dpr).max(1.0), dpr);
+        let sandboxed = self.doc.element(self.frames[k].node).and_then(|e| e.attr("sandbox")).is_some_and(|s| !s.split_ascii_whitespace().any(|t| t.eq_ignore_ascii_case("allow-scripts")));
+        let scripting = self.script.is_some() && !sandboxed;
+        let mut p = Page::make_in_frame(url, html, scripting, self.epoch + self.clock_ms, view, self.depth + 1);
+        // (The frame's marginwidth and marginheight: its document's body's margins, unless the body says its own.)
+        let margins = self.doc.element(self.frames[k].node).map(|e| (e.attr("marginwidth").map(String::from), e.attr("marginheight").map(String::from)));
+        if let (Some((mw, mh)), Some(body)) = (margins, p.doc.find("body")) {
+            for (name, own, value) in [("marginwidth", "leftmargin", mw), ("marginheight", "topmargin", mh)] {
+                if let Some(v) = value
+                    && let Some(e) = p.doc.element_mut(body)
+                    && !e.has_attr(name)
+                    && !e.has_attr(own)
+                {
+                    e.set_attr(name, &v);
+                }
+            }
+        }
+        p.animate = self.animate;
+        p.ancestors = self.ancestors.clone();
+        p.ancestors.push(self.url.clone());
+        let f = &mut self.frames[k];
+        f.page = Some(Box::new(p));
+        f.started = self.clock_ms;
+        f.loaded = false;
+        self.frames_changed = true;
+        self.changed = true;
+    }
+
+    /// The frame an <iframe> element's document is shown in, if it has one.
+    fn frame_of(&self, node: NodeId) -> Option<usize> {
+        self.frames.iter().position(|f| f.node == node && !f.gone)
+    }
+
+    /// Something done to a frame's document: the page laid out again (its frames in their places) if it changed it,
+    /// drawn again if it drew on a canvas.
+    fn with_frame<T>(&mut self, k: usize, go: impl FnOnce(&mut Page) -> T) -> Option<T> {
+        let p = self.frames.get_mut(k)?.page.as_mut()?;
+        let r = go(p);
+        let (changed, repaint) = (p.changed, core::mem::take(&mut p.repaint));
+        if changed {
+            self.frames_changed = true;
+            self.changed = true;
+        }
+        if repaint {
+            self.repaint = true;
+        }
+        Some(r)
+    }
+
+    /// The frame (and its own number) one of the page's resources was fetched for.
+    fn frame_resource(&self, i: usize) -> Option<(usize, usize)> {
+        self.frame_resources.get(&i).copied()
+    }
+
+    /// The page's number for one of a frame's resources (a picture it shows that the page hasn't fetched for it, a
+    /// canvas's: numbered now).
+    fn frame_number(&mut self, k: usize, n: usize) -> usize {
+        if let Some(&i) = self.frame_numbers.get(&(k, n)) {
+            return i;
+        }
+        let (kind, state, own) = self.frames[k].page.as_ref().and_then(|p| p.resources.get(n)).map_or((Kind::Picture, State::Failed, None), |r| {
+            (r.kind, if matches!(r.state, State::Picture(..)) { r.state.clone() } else { State::Failed }, r.own)
+        });
+        let i = self.add(kind, None, None);
+        self.resources[i].asked = true;
+        self.resources[i].state = state;
+        self.resources[i].own = own;
+        self.frame_resources.insert(i, (k, n));
+        self.frame_numbers.insert((k, n), i);
+        i
+    }
+
+    /// A frame's document came (its address, after any redirects; its bytes and their type; and the response's
+    /// headers): shown in its frame, unless it says it isn't to be shown in this page (X-Frame-Options, CSP's
+    /// frame-ancestors), when what Chrome says in its place is.
+    pub fn frame_came(&mut self, i: usize, url: Url, bytes: &[u8], kind: &str, headers: &[(String, String)]) {
+        if let Some((k, n)) = self.frame_resource(i) {
+            self.resources[i].state = State::Document;
+            self.with_frame(k, |p| p.frame_came(n, url, bytes, kind, headers));
+            return;
+        }
+        let Some(r) = self.resources.get_mut(i) else { return };
+        r.state = State::Document;
+        let Some(k) = self.frames.iter().position(|f| f.resource == Some(i) && !f.gone) else { return };
+        let html = if self.may_frame(&url, headers) {
+            frame_document(bytes, kind, &url.to_string())
+        } else {
+            format!(
+                "<!DOCTYPE html><style>html {{ height: 100%; }} body {{ margin: 0; height: 100%; display: flex; align-items: center; justify-content: center; font: 15px sans-serif; color: #5f6368; }}</style><p>{} refused to connect.</p>",
+                escape_html(&url.host)
+            )
+        };
+        self.open_frame(k, url, &html);
+    }
+
+    /// Whether a document from `framed` may be shown in this page (and in those it's in): its CSP's frame-ancestors
+    /// say which pages may show it, else its X-Frame-Options (DENY: none; SAMEORIGIN: only its own site's), as
+    /// Chrome reads them.
+    fn may_frame(&self, framed: &Url, headers: &[(String, String)]) -> bool {
+        let ancestors: Vec<&Url> = self.ancestors.iter().chain(core::iter::once(&self.url)).collect();
+        let mut said = false;
+        for (name, value) in headers {
+            if !name.eq_ignore_ascii_case("content-security-policy") {
+                continue;
+            }
+            for policy in value.split(',') {
+                let Some(sources) = policy.split(';').find_map(|d| {
+                    let mut words = d.split_ascii_whitespace();
+                    words.next().filter(|w| w.eq_ignore_ascii_case("frame-ancestors")).map(|_| words.collect::<Vec<&str>>())
+                }) else {
+                    continue;
+                };
+                said = true;
+                if !ancestors.iter().all(|a| sources.iter().any(|s| frame_source_matches(s, a, framed))) {
+                    return false;
+                }
+            }
+        }
+        if said {
+            return true;
+        }
+        let mut options: Vec<String> = Vec::new();
+        for (_, value) in headers.iter().filter(|(n, _)| n.eq_ignore_ascii_case("x-frame-options")) {
+            for v in value.split(',') {
+                let v = v.trim().to_ascii_lowercase();
+                if !options.contains(&v) {
+                    options.push(v);
+                }
+            }
+        }
+        if options.len() > 1 && options.iter().any(|o| matches!(o.as_str(), "deny" | "sameorigin" | "allowall")) {
+            return false;
+        }
+        match options.first().map(String::as_str) {
+            Some("deny") => false,
+            Some("sameorigin") => ancestors.iter().all(|a| a.host == framed.host && a.port == framed.port),
+            _ => true,
+        }
+    }
+
     /// An <img> (or the like)'s picture: the resource it shows (fetched once for all that show it).
     fn picture_element(&mut self, n: NodeId) {
         let Some(e) = self.doc.element(n) else { return };
         let chosen = match e.name.as_str() {
             "video" => e.attr("poster").map(|p| (String::from(p), 1.0)),
+            "object" => e.attr("data").map(|p| (String::from(p), 1.0)),
+            "embed" => e.attr("src").map(|p| (String::from(p), 1.0)),
             _ => self.choose_picture(n),
         };
         let Some((address, density)) = chosen else { return };
@@ -660,24 +1032,38 @@ impl Page {
     }
 
     /// The next thing to fetch (marked asked): style sheets first, then pictures in the page's order.
+    /// Then what its frames' documents ask for, numbered as the page's own.
     pub fn next_wanted(&mut self) -> Option<(usize, Kind, Option<Url>, Option<Vec<u8>>)> {
-        let i = self
-            .resources
-            .iter()
-            .position(|r| !r.asked && r.kind == Kind::Sheet)
-            .or_else(|| self.resources.iter().position(|r| !r.asked))?;
-        let r = &mut self.resources[i];
-        r.asked = true;
-        Some((i, r.kind, r.url.clone(), r.inline.take()))
+        let own = self.resources.iter().position(|r| !r.asked && r.kind == Kind::Sheet).or_else(|| self.resources.iter().position(|r| !r.asked));
+        if let Some(i) = own {
+            let r = &mut self.resources[i];
+            r.asked = true;
+            return Some((i, r.kind, r.url.clone(), r.inline.take()));
+        }
+        for k in 0..self.frames.len() {
+            let Some((n, kind, url, inline)) = self.frames[k].page.as_mut().and_then(|p| p.next_wanted()) else { continue };
+            // (Its address isn't the page's: the page's own pictures and sheets aren't found among its frames'.)
+            let i = self.add(kind, None, None);
+            self.resources[i].asked = true;
+            self.frame_resources.insert(i, (k, n));
+            self.frame_numbers.insert((k, n), i);
+            return Some((i, kind, url, inline));
+        }
+        None
     }
 
     /// Whether the style sheets have all come (or failed): the page can be shown as it's meant to look.
     pub fn sheets_done(&self) -> bool {
-        self.resources.iter().all(|r| r.kind != Kind::Sheet || matches!(r.state, State::Css(_) | State::Failed))
+        self.resources.iter().enumerate().all(|(i, r)| r.kind != Kind::Sheet || matches!(r.state, State::Css(_) | State::Failed) || self.frame_resources.contains_key(&i))
     }
 
     /// A style sheet came: its text (its @imports asked for in turn).
     pub fn sheet_came(&mut self, i: usize, css_text: String) {
+        if let Some((k, n)) = self.frame_resource(i) {
+            self.resources[i].state = State::Css(String::new());
+            self.with_frame(k, |p| p.sheet_came(n, css_text));
+            return;
+        }
         let Some(r) = self.resources.get(i) else { return };
         let base = r.url.clone().unwrap_or_else(|| self.url.clone());
         // Its @imports, before it.
@@ -703,7 +1089,7 @@ impl Page {
         let css_text = absolute_urls(&css_text, &base);
         self.resources[i].state = State::Css(css_text);
         self.sheets_changed();
-        self.changed = true;
+        self.dirty();
     }
 
     /// The web fonts the page's styles want that haven't been asked for: asked for, from the first of each one's
@@ -736,15 +1122,14 @@ impl Page {
         let mut wanted: Vec<String> = Vec::new();
         let all = styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values());
         for st in all {
-            for layers in [&st.bg, &st.mask].into_iter().flatten() {
-                for img in layers.images.iter().flatten() {
-                    if let crate::effects::Image::Url(u, _) = img
-                        && !u.starts_with('#')
-                        && !self.style_pictures.contains_key(u)
-                        && !wanted.contains(u)
-                    {
-                        wanted.push(u.clone());
-                    }
+            let border = st.border_image.as_ref().and_then(|b| b.source.as_ref());
+            for img in [&st.bg, &st.mask].into_iter().flatten().flat_map(|l| l.images.iter().flatten()).chain(border) {
+                if let crate::effects::Image::Url(u, _) = img
+                    && !u.starts_with('#')
+                    && !self.style_pictures.contains_key(u)
+                    && !wanted.contains(u)
+                {
+                    wanted.push(u.clone());
                 }
             }
         }
@@ -777,6 +1162,11 @@ impl Page {
 
     /// A web font came: kept (text::loaded), and the page laid out again in it.
     pub fn font_came(&mut self, i: usize, bytes: &[u8]) {
+        if let Some((k, n)) = self.frame_resource(i) {
+            self.resources[i].state = State::Font(0);
+            self.with_frame(k, |p| p.font_came(n, bytes));
+            return;
+        }
         let id = text::loaded::load(bytes);
         if let Some(r) = self.resources.get_mut(i) {
             r.state = id.map_or(State::Failed, State::Font);
@@ -791,16 +1181,21 @@ impl Page {
             }
             self.web_fonts = Arc::new(fonts);
             self.styles = None;
-            self.changed = true;
+            self.dirty();
             self.inputs_stale = true;
         }
     }
 
     /// A picture came (decoded by the kernel): its size in pixels.
     pub fn picture_came(&mut self, i: usize, w: u32, h: u32) {
+        if let Some((k, n)) = self.frame_resource(i) {
+            self.resources[i].state = State::Picture(w, h);
+            self.with_frame(k, |p| p.picture_came(n, w, h));
+            return;
+        }
         if let Some(r) = self.resources.get_mut(i) {
             r.state = State::Picture(w, h);
-            self.changed = true;
+            self.dirty();
             self.inputs_stale = true;
         }
     }
@@ -808,17 +1203,33 @@ impl Page {
     /// A picture's own size as CSS sizes it (an SVG's: its width and height only where they're lengths, its ratio
     /// perhaps from its viewBox), after picture_came.
     pub fn picture_own(&mut self, i: usize, own: picture::Intrinsic) {
+        if let Some((k, n)) = self.frame_resource(i) {
+            self.resources[i].own = Some(own);
+            self.with_frame(k, |p| p.picture_own(n, own));
+            return;
+        }
         if let Some(r) = self.resources.get_mut(i)
             && r.own != Some(own)
         {
             r.own = Some(own);
-            self.changed = true;
+            self.dirty();
             self.inputs_stale = true;
         }
     }
 
     pub fn failed(&mut self, i: usize) {
+        if let Some((k, n)) = self.frame_resource(i) {
+            self.resources[i].state = State::Failed;
+            self.with_frame(k, |p| p.failed(n));
+            return;
+        }
         if let Some(r) = self.resources.get_mut(i) {
+            if r.kind == Kind::Frame {
+                // (A frame whose document couldn't be had shows nothing; its <iframe>'s load event is fired all the
+                // same, as Chrome fires it for the error it shows.)
+                r.state = State::Failed;
+                return;
+            }
             if r.kind == Kind::Script {
                 r.state = State::Failed;
                 return;
@@ -837,7 +1248,7 @@ impl Page {
             if was_sheet {
                 self.sheets_changed();
             }
-            self.changed = true;
+            self.dirty();
         }
     }
 
@@ -853,7 +1264,8 @@ impl Page {
         if size_changed {
             self.styles = None;
         }
-        if self.laid.is_none() || self.changed || size_changed {
+        let fresh = self.laid.is_none() || self.relayout || size_changed;
+        if fresh {
             let view = Viewport { width: w / dpr, height: h / dpr };
             if self.styles.is_none() {
                 self.parse_sheets(view);
@@ -873,13 +1285,93 @@ impl Page {
             let styles = self.styles.as_ref().expect("worked out above");
             let mut tree = Tree::build(&self.doc, styles, &mut Picker { of: &self.picture_of, densities: &self.densities });
             let laid = Layout::new(&mut tree, ty, &Known { resources: &self.resources, images: &self.style_pictures }, w, h, dpr).run();
-            self.laid = Some(laid);
+            // (With frames, kept as it is: their documents are put in their places in a copy.)
+            if laid.items.iter().any(|i| matches!(i.paint, Paint::Frame { .. })) {
+                self.own = Some(laid);
+            } else {
+                self.own = None;
+                self.laid = Some(laid);
+                for f in self.frames.iter_mut() {
+                    f.shown = false;
+                }
+            }
             self.laid_for = (w, h, dpr);
-            self.changed = false;
+            self.relayout = false;
             self.dpr = dpr;
             self.share_layout(w, h, dpr);
         }
+        if self.own.is_some() && (fresh || self.frames_changed) {
+            self.compose(ty, dpr);
+        }
+        self.frames_changed = false;
+        self.changed = false;
         self.laid.as_ref().expect("laid out above")
+    }
+
+    /// What's laid out, with its frames' documents in their places: each laid out as wide and high as its frame's
+    /// box (at the page's scale), what it draws moved there and cut to the box (its corners rounded, if the frame's
+    /// are), over its background where it gives one (else what's under the frame shows through, as in Chrome).
+    fn compose(&mut self, ty: &Type, dpr: f32) {
+        let Some(own) = self.own.take() else { return };
+        for f in self.frames.iter_mut() {
+            f.shown = false;
+        }
+        let mut items: Vec<Item> = Vec::with_capacity(own.items.len() + 64);
+        for it in &own.items {
+            let Paint::Frame { x, y, w, h, radius } = it.paint else {
+                items.push(it.clone());
+                continue;
+            };
+            // (Its place, for clicks: what's drawn in it is its document's.)
+            items.push(Item { paint: Paint::Rect { x, y, w, h, color: 0, radius }, clip: it.clip, node: it.node });
+            let Some(k) = it.node.and_then(|n| self.frame_of(n)) else { continue };
+            let rect = Rect::new(x, y, w, h);
+            self.frames[k].rect = rect;
+            self.frames[k].shown = w >= 1.0 && h >= 1.0;
+            if !self.frames[k].shown {
+                continue;
+            }
+            self.want_frame(k);
+            let animate = self.animate;
+            let Some(child) = self.frames[k].page.as_mut() else { continue };
+            if child.animate != animate {
+                child.animate = animate;
+                child.restyle();
+            }
+            let laid = child.lay_out(ty, w, h, dpr);
+            let background = laid.given.then_some(laid.background);
+            let inner = laid.items.clone();
+            items.push(Item { paint: Paint::Begin(Box::new(crate::layout::Group { clip: Some((rect, radius)), ..crate::layout::Group::none() })), clip: it.clip, node: None });
+            if let Some(color) = background {
+                items.push(Item { paint: Paint::Rect { x, y, w, h, color, radius: [0.0; 4] }, clip: it.clip, node: None });
+            }
+            let mut depth = 0usize;
+            for mut c in inner {
+                let top = depth == 0;
+                match c.paint {
+                    Paint::Begin(_) => depth += 1,
+                    Paint::End => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                moved(&mut c.paint, x, y, &mut |n| self.frame_number(k, n));
+                if c.clip.w < 1.0e6 {
+                    c.clip.x += x;
+                    c.clip.y += y;
+                }
+                // (Cut to the frame: those not in a group of the document's own are in the page's coordinates.)
+                if top {
+                    c.clip = if c.clip.w < 1.0e6 { c.clip.intersect(&rect) } else { rect };
+                }
+                c.node = None;
+                items.push(c);
+            }
+            for _ in 0..depth {
+                items.push(Item::end_of_group());
+            }
+            items.push(Item::end_of_group());
+        }
+        self.laid = Some(Laid { items, width: own.width, height: own.height, background: own.background, given: own.given, boxes: own.boxes.clone() });
+        self.own = Some(own);
     }
 
     /// The page's style sheets parsed for a view (again only if they or the view changed).
@@ -943,7 +1435,8 @@ impl Page {
     /// Where each node's box is, the styles, and the view's size, for the page's scripts (getBoundingClientRect,
     /// offsetWidth, getComputedStyle...).
     fn share_layout(&mut self, w: f32, h: f32, dpr: f32) {
-        let (Some(laid), Some(s)) = (&self.laid, self.script.as_mut()) else { return };
+        let laid = if self.own.is_some() { &self.own } else { &self.laid };
+        let (Some(laid), Some(s)) = (laid, self.script.as_mut()) else { return };
         let scale = if dpr > 0.0 { dpr } else { 1.0 };
         let host = s.host();
         host.rects = crate::script::rects_of(laid, &self.doc, w, dpr);
@@ -1037,6 +1530,11 @@ impl Page {
 
     /// A script came: its text, to run in its turn (a module's, to the module loader).
     pub fn script_came(&mut self, i: usize, text: String) {
+        if let Some((k, n)) = self.frame_resource(i) {
+            self.resources[i].state = State::Script(String::new());
+            self.with_frame(k, |p| p.script_came(n, text));
+            return;
+        }
         if let Some(r) = self.resources.get_mut(i) {
             if r.kind == Kind::Module {
                 // (Its text is the module loader's now.)
@@ -1193,12 +1691,12 @@ impl Page {
         let url = h.url.href();
         if mutated || title {
             self.styles = None;
-            self.changed = true;
+            self.dirty();
         }
         if rescan {
             self.scan();
             self.sheets_changed();
-            self.changed = true;
+            self.dirty();
         }
         for n in new_scripts {
             self.add_script(n, true);
@@ -1246,10 +1744,10 @@ impl Page {
 
     pub fn run(&mut self, now: f64) -> bool {
         self.tick(now);
+        let mut ran = self.run_frames(now);
         if self.script.is_none() {
-            return false;
+            return ran;
         }
-        let mut ran = false;
         // The page's scripts, in their order.
         loop {
             let next = self.next_script();
@@ -1326,7 +1824,7 @@ impl Page {
             });
             ran = true;
         }
-        if self.dom_loaded && !self.load_fired && self.resources.iter().all(|r| r.asked && r.state != State::Waiting) && self.scripts.iter().all(|s| s.done) {
+        if self.dom_loaded && !self.load_fired && self.resources.iter().all(|r| r.asked && r.state != State::Waiting) && self.scripts.iter().all(|s| s.done) && self.frames_finished() {
             self.load_fired = true;
             self.with_script(|s| {
                 s.set_now(now);
@@ -1341,6 +1839,69 @@ impl Page {
             ran = true;
         }
         ran
+    }
+
+    /// Its frames' documents moved on (each at its own time): their scripts run, their timers; where their scripts
+    /// send them, they go (in their frames); each that has come, its <iframe>'s load event. True if anything ran.
+    fn run_frames(&mut self, now: f64) -> bool {
+        let mut ran = false;
+        for k in 0..self.frames.len() {
+            if self.frames[k].gone {
+                continue;
+            }
+            let started = self.frames[k].started;
+            if self.with_frame(k, |p| p.run(now - started)) == Some(true) {
+                ran = true;
+            }
+            let went = self.frames[k].page.as_mut().and_then(|p| {
+                p.go_back = false;
+                p.scrolled = None;
+                p.navigation.take()
+            });
+            if let Some(r) = went {
+                self.frames[k].source = FrameSource::Address(r.url);
+                self.reset_frame(k);
+                ran = true;
+            }
+            // (Its load event: once its document has, or once it couldn't be had; at once for one that shows none.)
+            let f = &self.frames[k];
+            let failed = f.resource.is_some_and(|r| self.resources.get(r).is_some_and(|r| r.state == State::Failed));
+            let done = match &f.source {
+                FrameSource::Blank => true,
+                _ => failed || f.page.as_ref().is_some_and(|p| p.finished()),
+            };
+            if done && !f.loaded {
+                let node = f.node;
+                self.frames[k].loaded = true;
+                self.with_script(|s| {
+                    s.set_now(now);
+                    s.fire(Some(node), &EventInit::new("load", "Event", false, false))
+                });
+                ran = true;
+            }
+        }
+        ran
+    }
+
+    /// Whether the page has come, all it asked for with it: its load event fired (its resources and its frames' all
+    /// in, for a page whose scripts don't run).
+    fn finished(&self) -> bool {
+        if self.script.is_some() {
+            return self.load_fired;
+        }
+        self.resources.iter().all(|r| r.asked && r.state != State::Waiting) && self.frames_finished()
+    }
+
+    /// Whether its frames that are shown have all come (or couldn't be had): the page's load event waits for them,
+    /// as for its pictures. (Before it's first laid out, it isn't known which are shown.)
+    fn frames_finished(&self) -> bool {
+        if self.frames.iter().all(|f| f.gone) {
+            return true;
+        }
+        if self.laid.is_none() {
+            return false;
+        }
+        self.frames.iter().all(|f| f.gone || !f.shown || f.loaded)
     }
 
     /// The next script to run: the first in-order one if it's ready (none, if it isn't); then deferred ones; any
@@ -1415,6 +1976,10 @@ impl Page {
 
     /// A picture's pixels, decoded (for its scripts to draw on canvases).
     pub fn picture_pixels(&mut self, i: usize, px: Arc<crate::script::Pixels>) {
+        if let Some((k, n)) = self.frame_resource(i) {
+            self.with_frame(k, |p| p.picture_pixels(n, px));
+            return;
+        }
         if let Some(s) = self.script.as_mut() {
             let h = s.host();
             if h.pixels.len() <= i {
@@ -1431,11 +1996,17 @@ impl Page {
 
     /// Whether a resource is a canvas's picture (drawn by the page's scripts, not fetched).
     pub fn is_canvas(&self, r: usize) -> bool {
+        if let Some((k, n)) = self.frame_resource(r) {
+            return self.frames[k].page.as_ref().is_some_and(|p| p.is_canvas(n));
+        }
         self.canvases.iter().any(|(_, k)| *k == r)
     }
 
     /// A canvas's pixels, by its resource (if its scripts have drawn on it).
     fn canvas_of(&self, r: usize) -> Option<&crate::script::Canvas> {
+        if let Some((k, n)) = self.frame_resource(r) {
+            return self.frames[k].page.as_ref()?.canvas_of(n);
+        }
         let (node, _) = self.canvases.iter().find(|(_, k)| *k == r)?;
         let h = self.script.as_ref()?.vm.host.as_ref()?.downcast_ref::<crate::script::Host>()?;
         h.canvases.iter().find(|c| c.node == *node && !c.alpha.is_empty())
@@ -1444,7 +2015,7 @@ impl Page {
     /// Whether the page is to be drawn again soon: its scripts asked for an animation frame (requestAnimationFrame),
     /// or its CSS animations are running.
     pub fn wants_frame(&mut self) -> bool {
-        self.script.as_mut().is_some_and(|s| !s.host().frames.is_empty()) || self.animations_running()
+        self.script.as_mut().is_some_and(|s| !s.host().frames.is_empty()) || self.animations_running() || self.frames.iter_mut().any(|f| f.page.as_mut().is_some_and(|p| p.wants_frame()))
     }
 
     /// Whether any of its CSS animations is running at its time (drawn as they run): each frame different.
@@ -1457,7 +2028,9 @@ impl Page {
         // (Only those whose keyframes the page has: one it doesn't do anything.)
         let named: alloc::collections::BTreeSet<&str> = core::iter::once(&*self.ua).chain(self.author.iter()).flat_map(|sh| sh.keyframes.iter().map(|k| k.name.as_str())).collect();
         let scripts = self.script.as_ref().and_then(|s| s.vm.host.as_ref()?.downcast_ref::<crate::script::Host>()).is_some_and(|h| h.animations.iter().any(|a| a.running(self.clock_ms)));
+        let frames = self.frames.iter().any(|f| f.page.as_ref().is_some_and(|p| p.animations_running()));
         scripts
+            || frames
             || (!named.is_empty()
                 && styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values()).any(|s| {
                     s.animations.as_ref().is_some_and(|a| (0..a.names.len()).any(|i| named.contains(a.names[i].as_str()) && a.timing(i).running(now)))
@@ -1483,7 +2056,18 @@ impl Page {
     /// Its styles worked out again, and it laid out again (as after `animate` is changed).
     pub fn restyle(&mut self) {
         self.styles = None;
+        self.dirty();
+        for f in self.frames.iter_mut() {
+            if let Some(p) = f.page.as_mut() {
+                p.restyle();
+            }
+        }
+    }
+
+    /// Something of its own changed: laid out again.
+    fn dirty(&mut self) {
         self.changed = true;
+        self.relayout = true;
     }
 
     /// The page's time moves on (ms since it began): its styles worked out again if its animations are running.
@@ -1493,7 +2077,7 @@ impl Page {
             self.clock_ms = now;
             if running {
                 self.styles = None;
-                self.changed = true;
+                self.dirty();
             }
         }
     }
@@ -1501,12 +2085,27 @@ impl Page {
     /// Runs requestAnimationFrame's callbacks (before the page is drawn): true if any ran.
     pub fn animation_frame(&mut self, now: f64) -> bool {
         self.tick(now);
-        self.with_script(|s| s.animation_frame(now)).unwrap_or(false)
+        let mut ran = self.with_script(|s| s.animation_frame(now)).unwrap_or(false);
+        for k in 0..self.frames.len() {
+            let started = self.frames[k].started;
+            if self.with_frame(k, |p| p.animation_frame(now - started)) == Some(true) {
+                ran = true;
+            }
+        }
+        ran
     }
 
-    /// When the page's scripts next want to run (ms since the page began), if they do.
+    /// When the page's scripts next want to run (ms since the page began), if they do (its frames' documents'
+    /// too).
     pub fn next_due(&mut self) -> Option<f64> {
-        self.script.as_mut().and_then(|s| s.next_due())
+        let mut due = self.script.as_mut().and_then(|s| s.next_due());
+        for f in self.frames.iter_mut() {
+            if let Some(d) = f.page.as_mut().and_then(|p| p.next_due()) {
+                let d = d + f.started;
+                due = Some(due.map_or(d, |e: f64| e.min(d)));
+            }
+        }
+        due
     }
 
     /// An element's style, as the page's last layout worked it out.
@@ -1522,39 +2121,108 @@ impl Page {
 
     /// What the page's scripts printed (console.log, and the exceptions nothing caught), since last asked.
     pub fn take_console(&mut self) -> Vec<String> {
-        self.script.as_mut().map(|s| s.take_console()).unwrap_or_default()
+        let mut out = self.script.as_mut().map(|s| s.take_console()).unwrap_or_default();
+        for f in self.frames.iter_mut() {
+            if let Some(p) = f.page.as_mut() {
+                out.extend(p.take_console().into_iter().map(|l| format!("(in a frame, {}) {l}", p.url.host)));
+            }
+        }
+        out
     }
 
     /// What the page's scripts asked of the network (fetch, XMLHttpRequest), to send: (its number, address, method,
     /// headers, body). Each is answered with `answer`.
+    /// Its frames' documents' scripts' requests among them, numbered as the page's.
     pub fn take_requests(&mut self) -> Vec<(u32, String, String, Vec<(String, String)>, Option<Vec<u8>>)> {
-        let Some(s) = self.script.as_mut() else { return Vec::new() };
-        let h = s.host();
-        let reqs = core::mem::take(&mut h.requests);
-        let out = reqs.iter().map(|r| (r.id, r.url.clone(), r.method.clone(), r.headers.clone(), r.body.clone())).collect();
-        h.waiting.extend(reqs);
+        let mut out: Vec<(u32, String, String, Vec<(String, String)>, Option<Vec<u8>>)> = Vec::new();
+        if let Some(s) = self.script.as_mut() {
+            let h = s.host();
+            let reqs = core::mem::take(&mut h.requests);
+            out.extend(reqs.iter().map(|r| (r.id, r.url.clone(), r.method.clone(), r.headers.clone(), r.body.clone())));
+            h.waiting.extend(reqs);
+        }
+        for k in 0..self.frames.len() {
+            let Some(p) = self.frames[k].page.as_mut() else { continue };
+            for (id, url, method, headers, body) in p.take_requests() {
+                let mine = self.next_frame_id;
+                self.next_frame_id = self.next_frame_id.wrapping_add(1).max(FRAME_IDS);
+                self.frame_requests.insert(mine, (k, id));
+                out.push((mine, url, method, headers, body));
+            }
+        }
         out
     }
 
     /// The network's answer to a script's request.
     pub fn answer(&mut self, id: u32, response: Result<crate::script::Response, String>) {
+        if id >= FRAME_IDS {
+            if let Some((k, n)) = self.frame_requests.remove(&id) {
+                self.with_frame(k, |p| p.answer(n, response));
+            }
+            return;
+        }
         self.with_script(|s| s.answer(id, response));
     }
 
     /// What the page's scripts asked of their WebSockets (to open one, to send a message, to close it), for the
-    /// system to do. What comes of each is told with `socket_event`.
+    /// system to do. What comes of each is told with `socket_event`. (Its frames' documents' among them, numbered as
+    /// the page's.)
     pub fn take_socket_ops(&mut self) -> Vec<crate::script::SocketOp> {
-        self.script.as_mut().map(|s| s.take_socket_ops()).unwrap_or_default()
+        use crate::script::SocketOp;
+        let mut out = self.script.as_mut().map(|s| s.take_socket_ops()).unwrap_or_default();
+        for k in 0..self.frames.len() {
+            let Some(p) = self.frames[k].page.as_mut() else { continue };
+            for op in p.take_socket_ops() {
+                let theirs = match &op {
+                    SocketOp::Open { id, .. } | SocketOp::Send { id, .. } | SocketOp::Close { id, .. } => *id,
+                };
+                let mine = match self.frame_sockets.iter().find(|(_, v)| **v == (k, theirs)).map(|(m, _)| *m) {
+                    Some(m) => m,
+                    None => {
+                        let m = self.next_frame_id;
+                        self.next_frame_id = self.next_frame_id.wrapping_add(1).max(FRAME_IDS);
+                        self.frame_sockets.insert(m, (k, theirs));
+                        m
+                    }
+                };
+                out.push(match op {
+                    SocketOp::Open { url, protocols, .. } => SocketOp::Open { id: mine, url, protocols },
+                    SocketOp::Send { binary, data, .. } => SocketOp::Send { id: mine, binary, data },
+                    SocketOp::Close { code, reason, .. } => SocketOp::Close { id: mine, code, reason },
+                });
+            }
+        }
+        out
     }
 
     /// What came of one of the page's WebSockets: it opened, a message came, it closed.
     pub fn socket_event(&mut self, id: u32, ev: crate::script::SocketEvent) {
+        if id >= FRAME_IDS {
+            if let Some(&(k, n)) = self.frame_sockets.get(&id) {
+                if matches!(ev, crate::script::SocketEvent::Closed(..)) {
+                    self.frame_sockets.remove(&id);
+                }
+                self.with_frame(k, |p| p.socket_event(n, ev));
+            }
+            return;
+        }
         self.with_script(|s| s.socket_event(id, ev));
     }
 
     /// A click on the page (where it landed, CSS pixels in the view): the mouse's events to the element there,
     /// and whether its default action is to happen (no script cancelled it).
     pub fn click(&mut self, node: Option<NodeId>, x: f32, y: f32) -> bool {
+        // (One in a frame is its document's: where it lands there, in its own view.)
+        if let Some(k) = node.and_then(|n| self.frame_of(n)).filter(|&k| self.frames[k].page.is_some()) {
+            let s = self.scale();
+            let r = self.frames[k].rect;
+            let (fx, fy) = (x - r.x / s, y + self.view_scroll - r.y / s);
+            return self.with_frame(k, |p| {
+                let target = p.node_at(fx * s, fy * s);
+                p.click(target, fx, fy)
+            })
+            .unwrap_or(true);
+        }
         let Some(target) = node.map(|n| self.element_at(n)) else { return true };
         use crate::script::EvValue;
         let mouse = |ty: &str, buttons: f64| {
@@ -1672,6 +2340,15 @@ impl Page {
     /// What's at `x`, `y` (device pixels from the page's top left).
     pub fn at(&self, x: f32, y: f32) -> Hit {
         match self.node_at(x, y) {
+            // (In a frame: what's there in its document. A link there is followed in the window, as one whose
+            // target is _top; its fields aren't typed in yet.)
+            Some(node) if self.frame_of(node).is_some_and(|k| self.frames[k].page.is_some()) => {
+                let f = &self.frames[self.frame_of(node).expect("found above")];
+                match f.page.as_ref().map(|p| p.at(x - f.rect.x, y - f.rect.y)) {
+                    Some(Hit::Link(u, fragment)) => Hit::Link(u, fragment),
+                    _ => Hit::Nothing,
+                }
+            }
             Some(node) => self.hit_from(node),
             None => Hit::Nothing,
         }
@@ -1790,7 +2467,7 @@ impl Page {
     pub fn set_value(&mut self, node: NodeId, value: &str) {
         if let Some(e) = self.doc.element_mut(node) {
             e.set_attr("value", value);
-            self.changed = true;
+            self.dirty();
         }
     }
 
@@ -1827,7 +2504,7 @@ impl Page {
                 x.set_attr("checked", "");
             }
         }
-        self.changed = true;
+        self.dirty();
     }
 
     /// A drop-down list's options (their words), and which is chosen.
@@ -1849,7 +2526,7 @@ impl Page {
                 }
             }
         }
-        self.changed = true;
+        self.dirty();
     }
 
     /// The fields a page asks to be typed in first (autofocus), else none.
@@ -2080,10 +2757,168 @@ fn key_code(key: &str) -> f64 {
     c as f64
 }
 
+/// A frame's document as HTML, from what came (`kind`: its type; `address`: where it came from): HTML as it is; an
+/// SVG as it's drawn as a document of its own (filling the frame where it has no size of its own); a picture as
+/// Chrome shows one by itself; text as it does text; anything else, nothing.
+fn frame_document(bytes: &[u8], kind: &str, address: &str) -> String {
+    let kind = kind.to_ascii_lowercase();
+    let mime = kind.split(';').next().unwrap_or("").trim();
+    if mime.contains("svg") {
+        let (w, h, _) = picture::svg::intrinsic(bytes).unwrap_or((None, None, None));
+        let text = web::page::decode(bytes, &kind);
+        return format!(
+            "<!DOCTYPE html><style>html, body {{ margin: 0; overflow: hidden; }} body > svg {{ display: block;{}{} }}</style>{text}",
+            if w.is_none() { " width: 100vw;" } else { "" },
+            if h.is_none() { " height: 100vh;" } else { "" }
+        );
+    }
+    if mime.is_empty() || mime.contains("html") || mime.contains("xml") {
+        return web::page::decode(bytes, &kind);
+    }
+    if mime.starts_with("image/") {
+        return format!("<!DOCTYPE html><body style=\"margin: 0\"><img src=\"{}\"></body>", escape_html(address));
+    }
+    if mime.starts_with("text/") {
+        return format!("<!DOCTYPE html><pre style=\"word-wrap: break-word; white-space: pre-wrap;\">{}</pre>", escape_html(&web::page::decode(bytes, &kind)));
+    }
+    String::new()
+}
+
+/// A data: address's document (an <iframe>'s src), as HTML (its type text/plain if it says none, as data: has it).
+fn data_document(src: &str) -> Option<String> {
+    let src = src.trim();
+    let head = src.get(5..)?.split(',').next()?.to_ascii_lowercase();
+    let bytes = data_url(src)?;
+    let kind = if head.split(';').next().unwrap_or("").trim().is_empty() { format!("text/plain{head}") } else { head.replace(";base64", "") };
+    Some(frame_document(&bytes, &kind, src))
+}
+
+/// Text with what HTML would read as markup escaped.
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Whether a page at `at` is one a source in a CSP frame-ancestors directive names (`framed`: the address of the
+/// document that says it, for 'self'), as CSP matches sources: *, 'self', a scheme, or a host (*.example.com for
+/// its subdomains) with a port and a path, if it gives them.
+fn frame_source_matches(source: &str, at: &Url, framed: &Url) -> bool {
+    let s = source.trim().to_ascii_lowercase();
+    match s.as_str() {
+        "*" | "https:" | "http:" => return true,
+        "'self'" => return at.host == framed.host && at.port == framed.port,
+        _ => {}
+    }
+    if s.starts_with('\'') {
+        return false;
+    }
+    let (scheme, rest) = match s.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, s.as_str()),
+    };
+    if scheme.is_some_and(|sc| sc != "https" && sc != "http") || (scheme.is_none() && rest.ends_with(':')) {
+        return false;
+    }
+    let (place, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], Some(&rest[i..])),
+        None => (rest, None),
+    };
+    let (host, port) = match place.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (place, None),
+    };
+    let host_ok = match host.strip_prefix("*.") {
+        Some(base) => at.host.ends_with(&format!(".{base}")),
+        None => host == "*" || at.host == host,
+    };
+    let port_ok = match port {
+        Some("*") => true,
+        Some(p) => p.parse::<u16>().is_ok_and(|p| p == at.port || (p == 80 && at.port == 443)),
+        None => at.port == 443,
+    };
+    let here = at.path.split('?').next().unwrap_or("/");
+    let path_ok = match path {
+        None => true,
+        Some(p) if p.ends_with('/') => here.starts_with(p),
+        Some(p) => here == p,
+    };
+    host_ok && port_ok && path_ok
+}
+
+/// One of a frame's document's items moved by (`dx`, `dy`) into the page's coordinates (its groups' transforms,
+/// clips, masks and backdrops with it), its pictures numbered as the page's (`picture`); none fixed to the window
+/// (the frame's document doesn't scroll in it here).
+fn moved(paint: &mut Paint, dx: f32, dy: f32, picture: &mut dyn FnMut(usize) -> usize) {
+    match paint {
+        Paint::Rect { x, y, .. } | Paint::Border { x, y, .. } | Paint::SidedBorder { x, y, .. } | Paint::Text { x, y, .. } | Paint::Shadow { x, y, .. } | Paint::Frame { x, y, .. } => {
+            *x += dx;
+            *y += dy;
+        }
+        Paint::Picture { x, y, n, at, .. } => {
+            *x += dx;
+            *y += dy;
+            at.x += dx;
+            at.y += dy;
+            *n = picture(*n);
+        }
+        Paint::Tiles { x, y, tile, image, .. } | Paint::Slice { x, y, tile, image, .. } => {
+            *x += dx;
+            *y += dy;
+            tile.x += dx;
+            tile.y += dy;
+            if let crate::layout::Tile::Picture(n) = image {
+                *n = picture(*n);
+            }
+        }
+        Paint::Begin(g) => {
+            // (A transform from its coordinates to those round it, both moved: the same transform moved.)
+            if let Some(t) = g.transform.as_mut() {
+                t[4] += dx - t[0] * dx - t[2] * dy;
+                t[5] += dy - t[1] * dx - t[3] * dy;
+            }
+            if let Some((r, _)) = g.clip.as_mut() {
+                r.x += dx;
+                r.y += dy;
+            }
+            if let Some((polygons, _)) = g.clip_path.as_mut() {
+                for p in polygons.iter_mut() {
+                    for pt in p.iter_mut() {
+                        pt.0 += dx;
+                        pt.1 += dy;
+                    }
+                }
+            }
+            if let Some(layers) = g.mask.as_mut() {
+                for l in layers.iter_mut() {
+                    for p in l.paints.iter_mut() {
+                        moved(p, dx, dy, picture);
+                    }
+                }
+            }
+            if let Some((_, r, _)) = g.backdrop.as_mut() {
+                r.x += dx;
+                r.y += dy;
+            }
+            g.scroll = None;
+        }
+        Paint::End => {}
+    }
+}
+
 /// An item's rectangle.
 pub fn bounds(i: &Item) -> Rect {
     match &i.paint {
-        Paint::Rect { x, y, w, h, .. } | Paint::Border { x, y, w, h, .. } | Paint::SidedBorder { x, y, w, h, .. } | Paint::Tiles { x, y, w, h, .. } | Paint::Picture { x, y, w, h, .. } => {
+        Paint::Rect { x, y, w, h, .. } | Paint::Border { x, y, w, h, .. } | Paint::SidedBorder { x, y, w, h, .. } | Paint::Tiles { x, y, w, h, .. } | Paint::Picture { x, y, w, h, .. } | Paint::Frame { x, y, w, h, .. } | Paint::Slice { x, y, w, h, .. } => {
             Rect::new(*x, *y, *w, *h)
         }
         Paint::Text { x, y, w, line, .. } => Rect::new(*x, *y, *w, *line),

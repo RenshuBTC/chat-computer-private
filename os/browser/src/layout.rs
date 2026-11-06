@@ -40,6 +40,13 @@ pub enum Paint {
     /// A background's (or mask's) layer: its picture or gradient in tiles the size of `tile`, one at `tile`'s place
     /// and more every `step` across and down where it repeats, within a rectangle (its corners rounded).
     Tiles { x: f32, y: f32, w: f32, h: f32, radius: [f32; 4], tile: Rect, step: (f32, f32), repeat: (bool, bool), image: Tile, pixelated: bool },
+    /// A piece of a picture or gradient (its part `src`: fractions of its width and height, left, top, right,
+    /// bottom) in tiles the size of `tile`, one at `tile`'s place and more every `step` across and down where it
+    /// repeats, within a rectangle: a border-image's corner, side or middle. `whole`: a gradient's whole size.
+    Slice { x: f32, y: f32, w: f32, h: f32, image: Tile, whole: (f32, f32), src: [f32; 4], tile: Rect, step: (f32, f32), repeat: (bool, bool) },
+    /// An <iframe>'s place (its content box, its corners rounded): its document is drawn there (page.rs puts what
+    /// it draws in its place; drawn as nothing).
+    Frame { x: f32, y: f32, w: f32, h: f32, radius: [f32; 4] },
     /// What's drawn after it, up to its End, is drawn as one, then put on what's under it through its effects.
     Begin(Box<Group>),
     End,
@@ -61,6 +68,11 @@ pub struct Item {
 impl Item {
     fn end() -> Item {
         Item { paint: Paint::End, clip: Rect::default(), node: None }
+    }
+
+    /// What closes a group.
+    pub fn end_of_group() -> Item {
+        Item::end()
     }
 }
 
@@ -285,6 +297,9 @@ pub struct Laid {
     pub width: f32,
     pub height: f32,
     pub background: Color,
+    /// Whether the page gives its background (its root's or body's colour): one that doesn't is white in a window of
+    /// its own, and see-through in a frame.
+    pub given: bool,
     /// Each box's place (its border box, device pixels from the page's top left) and its node, for scripts.
     pub boxes: Vec<(usize, Rect)>,
 }
@@ -300,6 +315,45 @@ pub trait Sizes {
     fn image(&self, _url: &str) -> Option<usize> {
         None
     }
+}
+
+/// A 3D border side's colour (inset, outset, groove, ridge) as Chrome works it out (`darken`: the side's shaded
+/// darker, else lighter): darker unless it's nearly black already, lighter unless it's nearly white (Blink's
+/// Color::Dark and Color::Light, as WebKit had them).
+fn three_d(c: Color, darken: bool) -> Color {
+    let (a, r, g, b) = (c >> 24, (c >> 16) & 255, (c >> 8) & 255, c & 255);
+    let f = |x: u32| x as f32 / 255.0;
+    let v = f(r.max(g).max(b));
+    // (Each channel scaled, then made a byte as Chrome makes it: times just under 256, cut down.)
+    let scaled = |m: f32| a << 24 | ((m * f(r) * 255.999_98) as u32).min(255) << 16 | ((m * f(g) * 255.999_98) as u32).min(255) << 8 | ((m * f(b) * 255.999_98) as u32).min(255);
+    // The darker side: the colour 0.33 darker (its brightest channel; the others in proportion).
+    let dark = if v == 0.0 { c } else { scaled(((v - 0.33) / v).max(0.0)) };
+    if darken {
+        return dark;
+    }
+    // The lighter side: the colour itself, unless it's too near its darker side to be told from it (a contrast
+    // under 1.75, as with black), when it's 0.33 lighter.
+    if contrast(c, dark) >= 1.75 {
+        return c;
+    }
+    if v == 0.0 {
+        return a << 24 | 0x54_5454;
+    }
+    scaled((v + 0.33).min(1.0) / v)
+}
+
+/// The contrast between two colours (WCAG's: their relative luminances, the lighter's over the darker's, each plus
+/// 0.05).
+fn contrast(x: Color, y: Color) -> f32 {
+    let lum = |c: Color| {
+        let lin = |v: u32| {
+            let v = v as f32 / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { crate::num::pow((v + 0.055) / 1.055, 2.4) }
+        };
+        0.2126 * lin((c >> 16) & 255) + 0.7152 * lin((c >> 8) & 255) + 0.0722 * lin(c & 255)
+    };
+    let (a, b) = (lum(x), lum(y));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
 /// A piece of a line, laid out: words (from a text box), an atomic inline box, or an inline box's background.
@@ -470,10 +524,12 @@ impl<'a> Layout<'a> {
     /// Lays out the whole page in a window `view_w` wide (`view_h` high, for vh and fixed boxes).
     pub fn run(mut self) -> Laid {
         if self.tree.boxes.is_empty() {
-            return Laid { items: Vec::new(), width: self.view_w, height: 0.0, background: values::WHITE, boxes: Vec::new() };
+            return Laid { items: Vec::new(), width: self.view_w, height: 0.0, background: values::WHITE, given: false, boxes: Vec::new() };
         }
         self.metrics(0, self.view_w);
-        self.block(0, 0.0, 0.0, self.view_w, Some(self.view_h), None, false);
+        // (The root's top margin is below the canvas's top: nothing collapses with it.)
+        let top = self.tree.boxes[0].margin[0];
+        self.block(0, 0.0, top, self.view_w, Some(self.view_h), None, false);
         // Out-of-flow boxes, as their containing blocks are laid out (each may find more).
         let mut k = 0;
         while k < self.pending.len() && k < 10_000 {
@@ -487,18 +543,18 @@ impl<'a> Layout<'a> {
         let background = self.canvas_background();
         let items = self.paint(height);
         let boxes = self.tree.boxes.iter().filter_map(|b| b.node.map(|n| (n, Rect::new(b.x, b.y, b.w, b.h)))).collect();
-        Laid { items, width: self.view_w, height, background, boxes }
+        Laid { items, width: self.view_w, height, background: background.unwrap_or(values::WHITE), given: background.is_some(), boxes }
     }
 
-    /// The page's background: the root's, else the body's (as CSS has the canvas take it).
-    fn canvas_background(&self) -> Color {
+    /// The page's background: the root's, else the body's (as CSS has the canvas take it); None if neither has one.
+    fn canvas_background(&self) -> Option<Color> {
         // (A root with effects has its background drawn in their group: the page under it is white.)
         if self.group_of(0).is_some() {
-            return values::WHITE;
+            return None;
         }
         match self.canvas_source() {
-            Some(b) if values::alpha(self.tree.boxes[b].style.background) > 0 => self.tree.boxes[b].style.background,
-            _ => values::WHITE,
+            Some(b) if values::alpha(self.tree.boxes[b].style.background) > 0 => Some(self.tree.boxes[b].style.background),
+            _ => None,
         }
     }
 
@@ -632,7 +688,10 @@ impl<'a> Layout<'a> {
                         (w, s.line_px())
                     }
                     Content::Image { image: Some(_), .. } => (0.0, 0.0),
-                    _ => (0.0, 0.0),
+                    _ => {
+                        let (w, h) = self.tree.boxes[b].default_size;
+                        (w * dpr, h * dpr)
+                    }
                 },
             },
         };
@@ -1651,6 +1710,9 @@ impl<'a> Layout<'a> {
             // Heights: each piece's ascent and descent about the baseline (the strut's first).
             let (mut asc, mut desc) = (strut_base, strut_line - strut_base);
             let mut metrics: Vec<(f32, f32, f32)> = Vec::new(); // (ascent, descent, baseline shift) per piece
+            // (Boxes aligned to the line's top or bottom: placed once the rest have made the line, which they make
+            // taller downwards or upwards if they're taller than it, as CSS and Chrome have them.)
+            let mut ends: Vec<(usize, bool, f32)> = Vec::new(); // (piece, at the top, its height with its margins)
             for p in line {
                 let m = match p {
                     Piece::Word { owner, .. } => {
@@ -1663,10 +1725,15 @@ impl<'a> Layout<'a> {
                         let kb = &self.tree.boxes[*k];
                         let mh = kb.h + kb.margin[0] + kb.margin[2];
                         let field = matches!(kb.content, Content::Control(Control::Text { .. } | Control::Button(_) | Control::Select(..)));
+                        if matches!(kb.style.vertical_align, VAlign::Top | VAlign::Bottom) {
+                            ends.push((metrics.len(), kb.style.vertical_align == VAlign::Top, mh));
+                            metrics.push((0.0, 0.0, 0.0));
+                            continue;
+                        }
                         let a = match (kb.style.vertical_align, kb.baseline) {
                             (VAlign::Middle, _) => mh / 2.0 + s.font_size * 0.25,
-                            (VAlign::Top | VAlign::TextTop, _) => strut_base,
-                            (VAlign::Bottom | VAlign::TextBottom, _) => mh - (strut_line - strut_base),
+                            (VAlign::TextTop, _) => strut_base,
+                            (VAlign::TextBottom, _) => mh - (strut_line - strut_base),
                             (_, Some(bl)) if matches!(kb.content, Content::Children) => kb.margin[0] + bl,
                             // A field's: its words' (centred in it, as they're drawn).
                             _ if field => {
@@ -1686,6 +1753,17 @@ impl<'a> Layout<'a> {
                 asc = asc.max(m.0 - m.2);
                 desc = desc.max(m.1 + m.2);
                 metrics.push(m);
+            }
+            for &(_, top, mh) in &ends {
+                if top {
+                    desc = desc.max(mh - asc);
+                } else {
+                    asc = asc.max(mh - desc);
+                }
+            }
+            for &(k, top, mh) in &ends {
+                let a = if top { asc } else { mh - desc };
+                metrics[k] = (a, mh - a, 0.0);
             }
             let baseline_y = at + asc;
             let line_h = asc + desc;
@@ -3425,7 +3503,6 @@ impl<'a> Layout<'a> {
         let (bx, by, bw, bh) = (x.x, x.y, x.w, x.h);
         let radius = radii(&s, bw, bh);
         let border = x.border;
-        let padding = x.padding;
         // (The root's background, and the body's when the canvas takes it, are the canvas's: drawn under all.)
         let canvas = b == 0 || self.canvas_from == Some(b);
         // Its shadows outside it (the first on top), its background, then its shadows inside it.
@@ -3442,20 +3519,61 @@ impl<'a> Layout<'a> {
                 items.push(Item { paint: Paint::Shadow { x: p.x, y: p.y, w: p.w, h: p.h, radius: prad, dx: sh.x, dy: sh.y, blur: sh.blur, spread: sh.spread, color: sh.color, inset: true }, clip, node });
             }
         }
+        // A border-image, once its picture has come, in place of the border's styles.
+        if let Some(bi) = s.border_image.clone().filter(|bi| bi.source.is_some())
+            && let Some(paints) = self.border_image_paints(b, &bi)
+        {
+            for paint in paints {
+                items.push(Item { paint, clip, node });
+            }
+            self.paint_content(b, &s, node, clip, items);
+            return;
+        }
         let mut out: Vec<Paint> = Vec::new();
         // Borders: one all round when its sides are the same (rounded, if the box is), else each side a rectangle
-        // (inset and outset with their top and left, or bottom and right, darker).
+        // (inset and outset with their top and left, or bottom and right, darker, as Chrome shades them; a groove's
+        // and a ridge's outer half as an inset's or an outset's, and the inner half the other way).
         let sides: Vec<usize> = (0..4).filter(|&k| border[k] > 0.0 && s.border_style[k] != BorderStyle::None).collect();
-        let shade = |k: usize| -> Color {
-            let mut c = s.border_color[k];
-            if matches!(s.border_style[k], BorderStyle::Inset | BorderStyle::Groove) && (k == 0 || k == 3) {
-                c = values::mix(c, values::BLACK, 0.6);
+        let shade_as = |k: usize, inner: bool| -> Color {
+            let three = matches!(s.border_style[k], BorderStyle::Inset | BorderStyle::Outset | BorderStyle::Groove | BorderStyle::Ridge);
+            // (Chrome shades a 3D border whose colour is currentcolor from its light grey.)
+            let c = if three && s.border_current[k] { 0xFFEE_EEEE } else { s.border_color[k] };
+            let top_left = k == 0 || k == 3;
+            match s.border_style[k] {
+                BorderStyle::Inset => three_d(c, top_left),
+                BorderStyle::Outset => three_d(c, !top_left),
+                BorderStyle::Groove => three_d(c, top_left != inner),
+                BorderStyle::Ridge => three_d(c, top_left == inner),
+                _ => c,
             }
-            if matches!(s.border_style[k], BorderStyle::Outset | BorderStyle::Ridge) && (k == 1 || k == 2) {
-                c = values::mix(c, values::BLACK, 0.6);
-            }
-            c
         };
+        let shade = |k: usize| shade_as(k, false);
+        if sides.iter().any(|&k| matches!(s.border_style[k], BorderStyle::Groove | BorderStyle::Ridge)) && sides.iter().all(|&k| !matches!(s.border_style[k], BorderStyle::Dashed | BorderStyle::Dotted | BorderStyle::Double)) {
+            // (The whole border as its outer half is, then its inner half: what's inside its sides' halves, in CSS
+            // pixels rounded down, from the outside.)
+            let widths: [f32; 4] = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
+            out.push(Paint::SidedBorder { x: bx, y: by, w: bw, h: bh, widths, colors: core::array::from_fn(|k| shade_as(k, false)), radius });
+            // (Its inner half: inside the box made half its sides' widths smaller all round, its edges at whole
+            // device pixels, as Chrome snaps them.)
+            let edge = [by, bx + bw, by + bh, bx];
+            let inward = [1.0, -1.0, -1.0, 1.0];
+            let half: [f32; 4] = core::array::from_fn(|k| {
+                if !matches!(s.border_style[k], BorderStyle::Groove | BorderStyle::Ridge) {
+                    return widths[k];
+                }
+                let at = num::round(edge[k] + inward[k] * widths[k] / 2.0);
+                (at - edge[k]).abs().min(widths[k])
+            });
+            let inner: [f32; 4] = core::array::from_fn(|k| widths[k] - half[k]);
+            let shrink = |r: f32, a: f32, b: f32| (r - a.max(b)).max(0.0);
+            let rad = [shrink(radius[0], half[0], half[3]), shrink(radius[1], half[0], half[1]), shrink(radius[2], half[2], half[1]), shrink(radius[3], half[2], half[3])];
+            out.push(Paint::SidedBorder { x: bx + half[3], y: by + half[0], w: bw - half[1] - half[3], h: bh - half[0] - half[2], widths: inner, colors: core::array::from_fn(|k| shade_as(k, true)), radius: rad });
+            for paint in out {
+                items.push(Item { paint, clip, node });
+            }
+            self.paint_content(b, &s, node, clip, items);
+            return;
+        }
         let patterned = |k: usize| matches!(s.border_style[k], BorderStyle::Dashed | BorderStyle::Dotted | BorderStyle::Double);
         let uniform = sides.len() == 4 && border.iter().all(|&w| (w - border[0]).abs() < 0.01) && (0..4).all(|k| shade(k) == shade(0) && !patterned(k));
         // (Sides of one colour, solid: one border (its corners rounded, if the box's are), whatever each side's
@@ -3484,6 +3602,129 @@ impl<'a> Layout<'a> {
         for paint in out {
             items.push(Item { paint, clip, node });
         }
+        self.paint_content(b, &s, node, clip, items);
+    }
+
+    /// A box's border-image (CSS Backgrounds 3, section 6): its source cut in nine by its slices; its corners drawn in
+    /// the border image area's corners (the border box grown by its outsets), as wide and high as its widths say;
+    /// its sides between them, and its middle if it's filled, stretched or in tiles as its repeat says. None if its
+    /// picture hasn't come (or can't be shown): the border is drawn as its styles say.
+    fn border_image_paints(&self, b: BoxId, bi: &effects::BorderImage) -> Option<Vec<Paint>> {
+        use effects::{BorderImageWidth, BorderRepeat, Outset, Slice};
+        let x = &self.tree.boxes[b];
+        let dpr = self.dpr;
+        let border = x.border;
+        let out: [f32; 4] = core::array::from_fn(|k| match bi.outset[k] {
+            Outset::Px(p) => p,
+            Outset::Number(n) => n * border[k],
+        });
+        let area = Rect::new(x.x - out[3], x.y - out[0], x.w + out[1] + out[3], x.h + out[0] + out[2]);
+        // The source, and its size: a picture's own (its pixels; an SVG with no size of its own takes the area's, in
+        // CSS pixels, its slices' numbers being of that, as Chrome has them), a gradient's the area's.
+        let (image, iw, ih) = match bi.source.as_ref()? {
+            Image::Url(u, _) => {
+                let n = self.sizes.image(u)?;
+                let (pw, ph) = self.sizes.size(n)?;
+                if pw == 0 || ph == 0 {
+                    return None;
+                }
+                let own = self.sizes.intrinsic(n);
+                let iw = own.and_then(|o| o.width).unwrap_or(area.w / dpr);
+                let ih = own.and_then(|o| o.height).unwrap_or(area.h / dpr);
+                (Tile::Picture(n), iw, ih)
+            }
+            Image::Gradient(g) => (Tile::Gradient(g.clone()), area.w / dpr, area.h / dpr),
+        };
+        let mut paints = Vec::new();
+        if area.w <= 0.0 || area.h <= 0.0 || iw <= 0.0 || ih <= 0.0 {
+            return Some(paints);
+        }
+        // Where it's cut (its own units), each no more than its size.
+        let sl: [f32; 4] = core::array::from_fn(|k| {
+            let size = if k % 2 == 0 { ih } else { iw };
+            let v = match bi.slice[k] {
+                Slice::Number(n) => n,
+                Slice::Percent(p) => p * size / 100.0,
+            };
+            v.clamp(0.0, size)
+        });
+        // Its sides' widths (device pixels); too wide together for the area, all made smaller in proportion.
+        let mut wd: [f32; 4] = core::array::from_fn(|k| match bi.width[k] {
+            BorderImageWidth::Len(l) => l.resolve(if k % 2 == 0 { area.h } else { area.w }),
+            BorderImageWidth::Number(n) => n * border[k],
+            BorderImageWidth::Auto => sl[k] * dpr,
+        });
+        let f = (area.w / (wd[1] + wd[3]).max(1e-6)).min(area.h / (wd[0] + wd[2]).max(1e-6));
+        if f < 1.0 {
+            for w in wd.iter_mut() {
+                *w *= f;
+            }
+        }
+        let xs = [area.x, area.x + wd[3], area.right() - wd[1], area.right()];
+        let ys = [area.y, area.y + wd[0], area.bottom() - wd[2], area.bottom()];
+        let us = [0.0, sl[3] / iw, 1.0 - sl[1] / iw, 1.0];
+        let vs = [0.0, sl[0] / ih, 1.0 - sl[2] / ih, 1.0];
+        let whole = (iw * dpr, ih * dpr);
+        // (How one way of a piece is tiled: its tiles' size and first place, and the step between them, in a place
+        // `room` long from `at`, the tile `natural` long at its scale.)
+        let tiling = |mode: BorderRepeat, at: f32, room: f32, natural: f32| -> Option<(f32, f32, f32, bool)> {
+            if natural <= 0.0 || room <= 0.0 {
+                return None;
+            }
+            Some(match mode {
+                BorderRepeat::Stretch => (room, at, room, false),
+                BorderRepeat::Repeat => (natural, at + (room - natural) / 2.0, natural, true),
+                BorderRepeat::Round => {
+                    let n = num::round(room / natural).max(1.0);
+                    (room / n, at, room / n, true)
+                }
+                BorderRepeat::Space => {
+                    let n = num::floor(room / natural);
+                    if n < 1.0 {
+                        return None;
+                    }
+                    let gap = (room - n * natural) / (n + 1.0);
+                    (natural, at + gap, natural + gap, true)
+                }
+            })
+        };
+        // Each of the nine: its place (column i, row j), its scale across and down (device pixels to its own units).
+        let scale_of = |k: usize| if sl[k] > 0.0 { wd[k] / sl[k] } else { 0.0 };
+        let pick = |a: f32, c: f32| if a > 0.0 && a.is_finite() { a } else if c > 0.0 && c.is_finite() { c } else { dpr };
+        for j in 0..3 {
+            for i in 0..3 {
+                if i == 1 && j == 1 && !bi.fill {
+                    continue;
+                }
+                let (dx, dw) = (xs[i], xs[i + 1] - xs[i]);
+                let (dy, dh) = (ys[j], ys[j + 1] - ys[j]);
+                let src = [us[i], vs[j], us[i + 1], vs[j + 1]];
+                if dw <= 0.0 || dh <= 0.0 || src[2] <= src[0] || src[3] <= src[1] {
+                    continue;
+                }
+                let (sw, sh) = ((src[2] - src[0]) * iw, (src[3] - src[1]) * ih);
+                // (A corner fills its place; a side is scaled to its width across it and tiled along it; the middle
+                // is scaled as the sides beside it are.)
+                let (kx, ky) = match (i, j) {
+                    (1, 1) => (pick(scale_of(0), scale_of(2)), pick(scale_of(3), scale_of(1))),
+                    (1, _) => (dh / sh, dh / sh),
+                    (_, 1) => (dw / sw, dw / sw),
+                    _ => (dw / sw, dh / sh),
+                };
+                let across = if i == 1 { tiling(bi.repeat.0, dx, dw, sw * kx) } else { Some((dw, dx, dw, false)) };
+                let down = if j == 1 { tiling(bi.repeat.1, dy, dh, sh * ky) } else { Some((dh, dy, dh, false)) };
+                let (Some((tw, tx, stx, rx)), Some((th, ty, sty, ry))) = (across, down) else { continue };
+                paints.push(Paint::Slice { x: dx, y: dy, w: dw, h: dh, image: image.clone(), whole, src, tile: Rect::new(tx, ty, tw, th), step: (stx, sty), repeat: (rx, ry) });
+            }
+        }
+        Some(paints)
+    }
+
+    /// What a box shows inside it (its picture, its field, its frame), if it's a replaced element.
+    fn paint_content(&mut self, b: BoxId, s: &Style, node: Option<usize>, clip: Rect, items: &mut Vec<Item>) {
+        let x = &self.tree.boxes[b];
+        let (bx, by, bw, bh) = (x.x, x.y, x.w, x.h);
+        let (border, padding) = (x.border, x.padding);
         let content = self.tree.boxes[b].content.clone();
         let (cx, cy) = (bx + border[3] + padding[3], by + border[0] + padding[0]);
         let (cw, ch) = ((bw - border[1] - border[3] - padding[1] - padding[3]).max(0.0), (bh - border[0] - border[2] - padding[0] - padding[2]).max(0.0));
@@ -3503,6 +3744,11 @@ impl<'a> Layout<'a> {
                 let at = Rect::new(cx + s.object_position.0.resolve(cw - dw), cy + s.object_position.1.resolve(ch - dh), dw, dh);
                 let (_, rad) = self.area(b, BoxArea::Content);
                 items.push(Item { paint: Paint::Picture { x: cx, y: cy, w: cw, h: ch, n, at, radius: rad, pixelated: s.pixelated }, clip, node });
+            }
+            Content::Image { .. } if self.tree.boxes[b].frame => {
+                // (An <iframe>: its document's place.)
+                let (_, rad) = self.area(b, BoxArea::Content);
+                items.push(Item { paint: Paint::Frame { x: cx, y: cy, w: cw, h: ch, radius: rad }, clip, node });
             }
             Content::Image { alt, .. } if !alt.is_empty() && cw > 0.0 => {
                 let (_, lh) = self.baseline(&s);

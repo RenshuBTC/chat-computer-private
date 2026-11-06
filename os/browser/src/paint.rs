@@ -68,7 +68,7 @@ pub struct Painter {
     bytes: usize,
     /// Pictures at the size they're drawn (0xAARRGGBB, alpha straight), by (picture, width, height), and when each
     /// was last used, and its version.
-    scaled: BTreeMap<(usize, u32, u32, bool), (Vec<u32>, u64, u64)>,
+    scaled: BTreeMap<(usize, u32, u32, bool, [u32; 4]), (Vec<u32>, u64, u64)>,
     scaled_bytes: usize,
 }
 
@@ -364,14 +364,72 @@ impl Painter {
                 let (tx, ty_) = (num::round(m.x(*x)) as i32 - ink.left as i32, num::round(m.y(*y)) as i32);
                 words(c, ink, tx, ty_, *color, clip);
             }
-            Paint::Begin(_) | Paint::End => {}
+            Paint::Slice { x, y, w, h, image, whole, src, tile, step, repeat } => {
+                let area = Shape::new(m.x(*x), m.y(*y), m.len(*w), m.len(*h), [0.0; 4]);
+                let t = Rect::new(m.x(tile.x), m.y(tile.y), m.len(tile.w), m.len(tile.h));
+                let st = (m.len(step.0), m.len(step.1));
+                match image {
+                    Tile::Picture(n) => {
+                        let (tw, th) = (num::round(t.w).max(1.0) as u32, num::round(t.h).max(1.0) as u32);
+                        if (tw as u64) * (th as u64) <= 16 << 20
+                            && let Some(px) = self.scaled_slice(*n, *src, tw, th, pictures)
+                        {
+                            picture_tiles(c, &area, px, t, (tw, th), st, *repeat, clip);
+                        }
+                    }
+                    Tile::Gradient(g) => {
+                        let whole = (m.len(whole.0), m.len(whole.1));
+                        let s = Sampler::new(g, whole.0, whole.1, m.k);
+                        gradient_slice(c, &area, &s, t, st, *repeat, clip, *src, whole);
+                    }
+                }
+            }
+            Paint::Frame { .. } | Paint::Begin(_) | Paint::End => {}
         }
+    }
+
+    /// Part of a picture (`src`: fractions of its width and height) made `tw` × `th` (kept while it's drawn so).
+    fn scaled_slice(&mut self, n: usize, src: [f32; 4], tw: u32, th: u32, pictures: &dyn Shown) -> Option<&Vec<u32>> {
+        let (rgb, pw, ph) = pictures.picture(n)?;
+        let edge = |f: f32, size: u32| (num::round(f * size as f32).max(0.0) as u32).min(size);
+        let (x0, y0) = (edge(src[0], pw), edge(src[1], ph));
+        let (x1, y1) = (edge(src[2], pw).max(x0), edge(src[3], ph).max(y0));
+        if x1 == x0 || y1 == y0 || rgb.len() < (pw as usize) * (ph as usize) * 3 {
+            return None;
+        }
+        let key = (n, tw, th, false, [x0, y0, x1, y1]);
+        let round = self.round;
+        let version = pictures.version(n);
+        if self.scaled.get(&key).is_some_and(|(_, _, v)| *v != version)
+            && let Some((old, _, _)) = self.scaled.remove(&key)
+        {
+            self.scaled_bytes -= old.len() * 4;
+        }
+        if !self.scaled.contains_key(&key) {
+            let (cw, ch) = ((x1 - x0) as usize, (y1 - y0) as usize);
+            let alpha = pictures.alpha(n).filter(|a| a.len() >= (pw as usize) * (ph as usize));
+            let mut part = Vec::with_capacity(cw * ch * 3);
+            let mut part_alpha = alpha.map(|_| Vec::with_capacity(cw * ch));
+            for y in y0 as usize..y1 as usize {
+                let row = y * pw as usize;
+                part.extend_from_slice(&rgb[(row + x0 as usize) * 3..(row + x1 as usize) * 3]);
+                if let (Some(a), Some(pa)) = (alpha, part_alpha.as_mut()) {
+                    pa.extend_from_slice(&a[row + x0 as usize..row + x1 as usize]);
+                }
+            }
+            let px = scaled(&part, part_alpha.as_deref(), cw as u32, ch as u32, tw, th);
+            self.scaled_bytes += px.len() * 4;
+            self.scaled.insert(key, (px, round, version));
+        }
+        let (px, used, _) = self.scaled.get_mut(&key)?;
+        *used = round;
+        Some(px)
     }
 
     /// A picture made `tw` × `th` (kept while it's drawn at that size).
     fn scaled_picture(&mut self, n: usize, tw: u32, th: u32, pixelated: bool, pictures: &dyn Shown) -> Option<&Vec<u32>> {
         let (rgb, pw, ph) = pictures.picture(n)?;
-        let key = (n, tw, th, pixelated);
+        let key = (n, tw, th, pixelated, [0u32; 4]);
         let round = self.round;
         let version = pictures.version(n);
         if self.scaled.get(&key).is_some_and(|(_, _, v)| *v != version)
@@ -660,7 +718,7 @@ fn item_clip(item: &Item, st: &State) -> Area {
 /// group's layer's size.
 fn extent(p: &Paint) -> Option<Rect> {
     Some(match p {
-        Paint::Rect { x, y, w, h, .. } | Paint::Border { x, y, w, h, .. } | Paint::SidedBorder { x, y, w, h, .. } | Paint::Picture { x, y, w, h, .. } | Paint::Tiles { x, y, w, h, .. } => {
+        Paint::Rect { x, y, w, h, .. } | Paint::Border { x, y, w, h, .. } | Paint::SidedBorder { x, y, w, h, .. } | Paint::Picture { x, y, w, h, .. } | Paint::Tiles { x, y, w, h, .. } | Paint::Frame { x, y, w, h, .. } | Paint::Slice { x, y, w, h, .. } => {
             Rect::new(*x, *y, *w, *h)
         }
         // (Words reach a little past their box: slanted letters, accents.)
@@ -1162,15 +1220,17 @@ fn sided_border(c: &mut Canvas, outer: &Shape, inner: &Shape, widths: [f32; 4], 
     let per = |w: f32| if w > 0.0 { 1.0 / w } else { f32::INFINITY };
     let k = [per(widths[0]), per(widths[1]), per(widths[2]), per(widths[3])];
     let (x1, y1) = (outer.x + outer.w, outer.y + outer.h);
-    let side = |px: f32, py: f32| -> usize {
+    // (The sides a point is nearest, as a part of its width: one, or two sharing it where it's on their diagonal.)
+    let sides = |px: f32, py: f32, counts: &mut [f32; 4]| {
         let d = [(py - outer.y) * k[0], (x1 - px) * k[1], (y1 - py) * k[2], (px - outer.x) * k[3]];
-        let mut best = 0;
-        for i in 1..4 {
-            if d[i] < d[best] {
-                best = i;
+        let least = d.iter().copied().fold(f32::INFINITY, f32::min);
+        let near: [bool; 4] = core::array::from_fn(|i| (d[i] - least).abs() <= 1e-4 * least.abs().max(1.0));
+        let n = near.iter().filter(|&&b| b).count() as f32;
+        for i in 0..4 {
+            if near[i] {
+                counts[i] += 1.0 / n;
             }
         }
-        best
     };
     let r = inner.radius.max(1.0);
     for y in a.y..a.b {
@@ -1183,28 +1243,31 @@ fn sided_border(c: &mut Canvas, outer: &Shape, inner: &Shape, widths: [f32; 4], 
                 x = (num::floor(inner.x + inner.w - 1.0) as i32).max(x + 1);
                 continue;
             }
-            let mut counts = [0u32; 4];
+            let mut counts = [0f32; 4];
             for sy in 0..4 {
                 for sx in 0..4 {
                     let (px, py) = (fx + (sx as f32 + 0.5) / 4.0, fy + (sy as f32 + 0.5) / 4.0);
                     if outer.inside(px, py) && !inner.inside(px, py) {
-                        counts[side(px, py)] += 1;
+                        sides(px, py, &mut counts);
                     }
                 }
             }
-            // (Sides of the same colour as one: their samples added, so no seam shows where they meet.)
+            // (Where sides meet, their colours mixed by how much of the pixel each has, and put on as one: nothing
+            // under them shows through the seam, as in Chrome.)
+            let (mut a, mut r, mut g, mut b) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
             for i in 0..4 {
-                for j in 0..i {
-                    if counts[i] > 0 && colors[j] == colors[i] {
-                        counts[j] += counts[i];
-                        counts[i] = 0;
-                    }
+                if counts[i] > 0.0 {
+                    let w = counts[i] * alpha(colors[i]) as f32;
+                    a += w;
+                    r += w * ((colors[i] >> 16) & 0xFF) as f32;
+                    g += w * ((colors[i] >> 8) & 0xFF) as f32;
+                    b += w * (colors[i] & 0xFF) as f32;
                 }
             }
-            for (i, &n) in counts.iter().enumerate() {
-                if n > 0 && alpha(colors[i]) > 0 {
-                    c.put(x, y, colors[i], (n * 255 + 8) / 16);
-                }
+            if a > 0.0 {
+                let ch = |v: f32| (num::round(v / a) as u32).min(255);
+                let mixed = 0xFF00_0000 | ch(r) << 16 | ch(g) << 8 | ch(b);
+                c.put(x, y, mixed, (num::round(a / 16.0) as u32).min(255));
             }
             x += 1;
         }
@@ -1492,6 +1555,42 @@ impl Sampler {
 }
 
 /// A gradient's tiles over a shape: each pixel's place in its tile (every `step` across and down, where it repeats).
+/// Part of a gradient (`src`: fractions of its `whole` size) in tiles, as gradient_tiles draws a whole one.
+#[allow(clippy::too_many_arguments)]
+fn gradient_slice(c: &mut Canvas, area: &Shape, s: &Sampler, t: Rect, step: (f32, f32), repeat: (bool, bool), clip: Area, src: [f32; 4], whole: (f32, f32)) {
+    let a = area.area().intersect(&clip);
+    if a.empty() || t.w <= 0.0 || t.h <= 0.0 {
+        return;
+    }
+    let (kx, ky) = ((src[2] - src[0]) * whole.0 / t.w, (src[3] - src[1]) * whole.1 / t.h);
+    for y in a.y..a.b {
+        let mut v = y as f32 + 0.5 - t.y;
+        if repeat.1 {
+            v -= num::floor(v / step.1) * step.1;
+        }
+        if v < 0.0 || v >= t.h {
+            continue;
+        }
+        for x in a.x..a.r {
+            let mut u = x as f32 + 0.5 - t.x;
+            if repeat.0 {
+                u -= num::floor(u / step.0) * step.0;
+            }
+            if u < 0.0 || u >= t.w {
+                continue;
+            }
+            let cover = area.cover(x, y);
+            if cover == 0 {
+                continue;
+            }
+            let color = s.colour(s.place(src[0] * whole.0 + u * kx, src[1] * whole.1 + v * ky));
+            if alpha(color) > 0 {
+                c.put(x, y, color, cover);
+            }
+        }
+    }
+}
+
 fn gradient_tiles(c: &mut Canvas, area: &Shape, s: &Sampler, t: Rect, step: (f32, f32), repeat: (bool, bool), clip: Area) {
     let a = area.area().intersect(&clip);
     if a.empty() || t.w <= 0.0 || t.h <= 0.0 {

@@ -1516,3 +1516,139 @@ fn a_font_is_chosen_by_its_width_before_its_style_and_weight() {
     let faces = crate::css::font_faces("@font-face { font-family: f; src: url(a.woff); font-stretch: 75% 125% }");
     assert_eq!(faces[0].stretch, (75, 125));
 }
+
+/// What a page asks for, given: each frame's document from `docs` (by its address's path), each picture 100 × 50.
+fn fetch_with_frames(p: &mut Page, docs: &[(&str, &str, &[(String, String)])]) -> Vec<(usize, crate::page::Kind, String)> {
+    let mut asked = Vec::new();
+    let ty = Type::builtin();
+    for _ in 0..6 {
+        p.lay_out(&ty, 600.0, 400.0, 1.0);
+        while let Some((i, kind, url, _)) = p.next_wanted() {
+            let path = url.as_ref().map(|u| u.path.clone()).unwrap_or_default();
+            asked.push((i, kind, path.clone()));
+            match kind {
+                crate::page::Kind::Frame => match docs.iter().find(|(d, _, _)| *d == path) {
+                    Some((_, html, headers)) => p.frame_came(i, url.unwrap(), html.as_bytes(), "text/html; charset=utf-8", headers),
+                    None => p.failed(i),
+                },
+                crate::page::Kind::Picture => p.picture_came(i, 100, 50),
+                _ => p.failed(i),
+            }
+        }
+    }
+    asked
+}
+
+#[test]
+fn a_frame_s_document_is_laid_out_in_its_box_and_drawn_there() {
+    let mut p = page("<body style='margin:0'><p style='margin:0;height:20px'>before</p><iframe src='inner.html'></iframe></body>");
+    let asked = fetch_with_frames(&mut p, &[("/a/inner.html", "<body style='margin:0;background:#00f'><img src='pic.png'><p style='margin:0'>inside</p></body>", &[])]);
+    assert!(asked.iter().any(|(_, k, path)| *k == crate::page::Kind::Frame && path == "/a/inner.html"), "its document fetched: {asked:?}");
+    // (Its picture fetched as the page's own: a number of the page's.)
+    let (pic, _, _) = asked.iter().find(|(_, k, path)| *k == crate::page::Kind::Picture && path == "/a/pic.png").expect("its picture asked for");
+    let ty = Type::builtin();
+    let l = p.lay_out(&ty, 600.0, 400.0, 1.0);
+    // The frame: 300 × 150 inside its 2px border, under the paragraph; its document's background fills it.
+    assert_eq!(rects(l, BLUE), vec![(2.0, 22.0, 300.0, 150.0)]);
+    let (x, y) = words(l, "inside");
+    assert!(x == 2.0 && y >= 72.0 && y < 100.0, "its words where its document puts them (under its picture), moved to the frame: {x}, {y}");
+    let drawn = l.items.iter().find_map(|i| if let Paint::Picture { n, x, y, .. } = i.paint { Some((n, x, y)) } else { None });
+    assert_eq!(drawn, Some((*pic, 2.0, 22.0)), "its picture by the page's number for it, in the frame");
+}
+
+#[test]
+fn a_frame_written_into_its_element_and_one_that_says_no() {
+    let refuse: [(String, String); 1] = [(String::from("x-frame-options"), String::from("DENY"))];
+    let others: [(String, String); 1] = [(String::from("content-security-policy"), String::from("default-src 'self'; frame-ancestors https://*.example.com"))];
+    let mut p = page("<body style='margin:0'><iframe srcdoc='<p>written</p>'></iframe><iframe src='/no.html'></iframe><iframe src='/csp.html'></iframe></body>");
+    fetch_with_frames(&mut p, &[("/no.html", "<p>secret</p>", &refuse), ("/csp.html", "<p>allowed</p>", &others)]);
+    let ty = Type::builtin();
+    let l = p.lay_out(&ty, 1200.0, 400.0, 1.0);
+    let (x, _) = words(l, "written");
+    assert!(x > 2.0 && x < 20.0, "in the first frame: {x}");
+    assert!(!l.items.iter().any(|i| matches!(&i.paint, Paint::Text { text, .. } if text.contains("secret"))), "a document that says DENY isn't shown");
+    words(l, "example.com refused to connect.");
+    // (www.example.com isn't *.example.com's: example.com itself isn't a subdomain of it.)
+    assert!(!l.items.iter().any(|i| matches!(&i.paint, Paint::Text { text, .. } if text.contains("allowed"))), "frame-ancestors that don't name the page");
+    let mut q = Page::new(Url::parse("https://www.example.com/").unwrap(), "<iframe src='/csp.html'></iframe>");
+    fetch_with_frames(&mut q, &[("/csp.html", "<p>allowed</p>", &others)]);
+    words(q.lay_out(&ty, 600.0, 400.0, 1.0), "allowed");
+}
+
+#[test]
+fn a_frame_s_scripts_run_its_requests_numbered_as_the_page_s_and_its_load_fired() {
+    let mut p = scripted("<iframe id=f src='inner.html' onload='console.log(\"frame loaded\")'></iframe>");
+    let ty = Type::builtin();
+    p.lay_out(&ty, 800.0, 600.0, 1.0);
+    let (i, kind, _, _) = p.next_wanted().expect("its document");
+    assert_eq!(kind, crate::page::Kind::Frame);
+    p.frame_came(i, Url::parse("https://example.com/a/inner.html").unwrap(), b"<script>fetch('/data').then(r => r.text()).then(t => console.log('got ' + t + ' ' + innerWidth))</script>", "text/html", &[]);
+    p.run(10.0);
+    let reqs = p.take_requests();
+    assert_eq!(reqs.len(), 1, "its fetch");
+    assert!(reqs[0].0 >= 1 << 30, "numbered apart from the page's own");
+    p.answer(reqs[0].0, Ok(crate::script::Response { status: 200, status_text: String::new(), url: String::from("https://example.com/data"), headers: Vec::new(), body: b"hi".to_vec() }));
+    for t in [20.0, 30.0, 40.0] {
+        p.run(t);
+    }
+    let console = p.take_console();
+    assert!(console.iter().any(|l| l == "frame loaded"), "the <iframe>'s load: {console:?}");
+    assert!(console.iter().any(|l| l.ends_with("got hi 300")), "its script, in a window as wide as the frame: {console:?}");
+}
+
+#[test]
+fn three_d_borders_are_shaded_as_chrome_shades_them() {
+    let mut p = page("<body style='margin:0'><div style='border:3px inset black;height:10px'></div><div style='border:3px inset;height:10px'></div>\
+                      <div style='border:3px outset #4080c0;height:10px'></div><div style='color:red;border-style:solid;border-width:2px;height:10px'></div></body>");
+    let l = laid(&mut p);
+    let sided: Vec<[u32; 4]> = l.items.iter().filter_map(|i| if let Paint::SidedBorder { colors, .. } = i.paint { Some(colors) } else { None }).collect();
+    assert_eq!(sided[0], [0xFF00_0000, 0xFF54_5454, 0xFF54_5454, 0xFF00_0000], "black: its darker sides black, its lighter ones lightened");
+    assert_eq!(sided[1], [0xFF9A_9A9A, 0xFFEE_EEEE, 0xFFEE_EEEE, 0xFF9A_9A9A], "currentcolor: from Chrome's light grey");
+    assert_eq!(sided[2], [0xFF40_80C0, 0xFF24_486C, 0xFF24_486C, 0xFF40_80C0], "a colour: darkened where it's shaded");
+    let red = l.items.iter().any(|i| matches!(i.paint, Paint::Border { color: 0xFFFF_0000, .. }));
+    assert!(red, "a border's colour is the text's where it isn't said");
+}
+
+#[test]
+fn a_box_aligned_to_the_line_s_top_is_at_its_top_beside_a_tall_picture() {
+    let mut p = page("<body style='margin:0'><div id=a style='display:inline-block;vertical-align:top;width:40px;height:30px;margin:10px'></div><img src='p.png' style='width:300px;height:150px'>\
+                      <div id=b style='display:inline-block;vertical-align:bottom;width:40px;height:30px'></div></body>");
+    let id = |p: &Page, name: &str| p.doc.descendants(0).find(|&n| p.doc.element(n).is_some_and(|e| e.id() == Some(name))).unwrap();
+    let (a, b) = (id(&p, "a"), id(&p, "b"));
+    let l = laid(&mut p);
+    let place = |n: usize| l.boxes.iter().find(|(k, _)| *k == n).map(|(_, r)| (r.x, r.y)).unwrap();
+    assert_eq!(place(a).1, 10.0, "at the line's top (and its margin)");
+    assert!((place(b).1 + 30.0 - 154.0).abs() < 4.0, "at its bottom: {:?}", place(b));
+}
+
+#[test]
+fn a_border_image_is_cut_in_nine_and_drawn_round_the_box() {
+    let mut p = page("<body style='margin:0'><div style='width:100px;height:60px;border:30px solid red;border-image:url(nine.png) 20 round'></div></body>");
+    // (Its picture is asked for once its styles are worked out.)
+    laid(&mut p);
+    let l = laid(&mut p);
+    let slices: Vec<(f32, f32, f32, f32, [f32; 4], bool)> = l
+        .items
+        .iter()
+        .filter_map(|i| if let Paint::Slice { x, y, w, h, src, repeat, .. } = i.paint { Some((x, y, w, h, src, repeat.0 || repeat.1)) } else { None })
+        .collect();
+    // (The picture is 100 × 50 here: its slices are 20 of it in from each side, its middle not filled.)
+    assert_eq!(slices.len(), 8, "four corners and four sides: {slices:?}");
+    assert_eq!((slices[0].0, slices[0].1, slices[0].2, slices[0].3), (0.0, 0.0, 30.0, 30.0), "its top left corner");
+    assert_eq!(slices[0].4, [0.0, 0.0, 0.2, 0.4]);
+    assert!(slices[1].5, "its top side in tiles (round)");
+    assert!(!l.items.iter().any(|i| matches!(i.paint, Paint::Border { .. } | Paint::SidedBorder { .. })), "the border's own style isn't drawn");
+}
+
+#[test]
+fn ex_and_ch_are_the_font_s_own() {
+    let mut p = page("<body style='margin:0;font:20px Arial'><div id=a style='width:10ch;height:10ex'></div><div id=b style='font-family:monospace;width:10ch'></div></body>");
+    let id = |p: &Page, name: &str| p.doc.descendants(0).find(|&n| p.doc.element(n).is_some_and(|e| e.id() == Some(name))).unwrap();
+    let (a, b) = (id(&p, "a"), id(&p, "b"));
+    let l = laid(&mut p);
+    let rect = |n: usize| l.boxes.iter().find(|(k, _)| *k == n).map(|(_, r)| (r.w, r.h)).unwrap();
+    let (w, h) = rect(a);
+    assert!((w - 20.0 * 10.0 * 1139.0 / 2048.0).abs() < 0.01 && (h - 20.0 * 10.0 * 1062.0 / 2048.0).abs() < 0.01, "Arial's 0 and x-height: {w} {h}");
+    let (w, _) = rect(b);
+    assert!((w - 20.0 * 10.0 * 1229.0 / 2048.0).abs() < 0.01, "Courier New's 0 (its size the body's: monospace's 13px is only for the size that isn't said): {w}");
+}

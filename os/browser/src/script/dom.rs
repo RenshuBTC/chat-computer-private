@@ -1736,7 +1736,19 @@ fn attr_changed(vm: &mut Vm, n: NodeId, name: &str, old: Option<String>, new: Op
     host(vm).changed();
     record(vm, Change::Attribute(n, name, old.clone()));
     let el = String::from(doc(vm).name(n));
-    if doc(vm).connected(n) && (matches!((el.as_str(), name), ("link", "href" | "rel" | "media") | ("img", "src" | "srcset") | ("source", "src" | "srcset") | ("base", "href") | ("canvas", "width" | "height"))) {
+    if doc(vm).connected(n)
+        && (matches!(
+            (el.as_str(), name),
+            ("link", "href" | "rel" | "media")
+                | ("img", "src" | "srcset")
+                | ("source", "src" | "srcset")
+                | ("base", "href")
+                | ("canvas", "width" | "height")
+                | ("iframe", "src" | "srcdoc" | "sandbox")
+                | ("embed", "src" | "type")
+                | ("object", "data" | "type")
+        ))
+    {
         host(vm).rescan = true;
     }
     if el == "canvas" && matches!(name, "width" | "height") {

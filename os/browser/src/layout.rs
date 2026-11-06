@@ -8,7 +8,7 @@
 //! blocks. Everything in device pixels, from the page's top left.
 
 use crate::boxes::{BoxId, Content, Control, LBox, Tree};
-use crate::style::{Align, BorderStyle, Display, FlexDirection, Image, ListStyle, Position, Size, Style, TextAlign, Track, Transform, VAlign};
+use crate::style::{Align, BorderStyle, Display, FlexDirection, GridPlace, Image, ListStyle, Position, Size, Style, TextAlign, Track, Transform, VAlign};
 use crate::values::{self, Color, Len};
 use alloc::collections::BTreeSet;
 use alloc::string::String;
@@ -121,6 +121,11 @@ pub struct Layout<'a> {
     frags: Vec<Vec<Frag>>,
     /// Out-of-flow boxes waiting for their containing block: the box, and where it would have been (static place).
     pending: Vec<(BoxId, f32, f32)>,
+    /// How many of those are placed (those after it wait still: moved with the boxes they're in).
+    pending_next: usize,
+    /// A flex container's absolutely positioned children: the room each would be placed in as its only item (width,
+    /// height), and where in it (0 at the start, 1 at the end, each way).
+    static_room: alloc::collections::BTreeMap<BoxId, (f32, f32, f32, f32)>,
     /// List items whose marker is placed.
     markers: BTreeSet<BoxId>,
     /// The floats placed in each block formatting context being laid out (the innermost last).
@@ -211,6 +216,8 @@ enum Piece {
     Close { b: BoxId, w: f32 },
     /// A float among the words: placed where the line it comes on is.
     Float { b: BoxId },
+    /// An absolutely positioned box among them: where it would have been is where it comes on its line.
+    Out { b: BoxId },
 }
 
 impl<'a> Layout<'a> {
@@ -225,6 +232,8 @@ impl<'a> Layout<'a> {
             dpr,
             frags: vec![Vec::new(); n],
             pending: Vec::new(),
+            pending_next: 0,
+            static_room: alloc::collections::BTreeMap::new(),
             markers: BTreeSet::new(),
             scopes: Vec::new(),
             intrinsic: vec![None; n],
@@ -244,6 +253,7 @@ impl<'a> Layout<'a> {
         let mut k = 0;
         while k < self.pending.len() && k < 10_000 {
             let (b, sx, sy) = self.pending[k];
+            self.pending_next = k + 1;
             self.absolute(b, sx, sy);
             k += 1;
         }
@@ -558,9 +568,12 @@ impl<'a> Layout<'a> {
         let pieces = self.pieces(b, None);
         let nowrap = !self.tree.boxes[b].style.white_space.wraps();
         let (mut mn, mut mx, mut line, mut word) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        // (A collapsible space at a line's end isn't part of it: the space after the last word.)
+        let mut trailing = 0.0f32;
         for p in &pieces {
             match p {
-                Piece::Word { w, space, breaks, .. } => {
+                Piece::Word { w, space, breaks, owner, .. } => {
+                    trailing = if self.tree.boxes[*owner].style.white_space.keeps_spaces() { 0.0 } else { *space };
                     word += w;
                     line += w + space;
                     if *breaks && !nowrap {
@@ -575,6 +588,7 @@ impl<'a> Layout<'a> {
                     let least = self.intrinsic(*k).0 + self.margin_px(*k);
                     word += least;
                     line += w;
+                    trailing = 0.0;
                     if !nowrap {
                         mn = mn.max(word);
                         word = 0.0;
@@ -585,10 +599,11 @@ impl<'a> Layout<'a> {
                     line += w;
                 }
                 Piece::Break => {
-                    mx = mx.max(line);
+                    mx = mx.max(line - trailing);
                     mn = mn.max(word);
                     line = 0.0;
                     word = 0.0;
+                    trailing = 0.0;
                 }
                 Piece::Float { b: k } => {
                     let (a, z) = self.intrinsic(*k);
@@ -596,9 +611,10 @@ impl<'a> Layout<'a> {
                     mn = mn.max(a + m);
                     line += z + m;
                 }
+                Piece::Out { .. } => {}
             }
         }
-        mx = mx.max(line);
+        mx = mx.max(line - trailing);
         mn = mn.max(word);
         if nowrap {
             mn = mx;
@@ -1015,8 +1031,8 @@ impl<'a> Layout<'a> {
             }
             let s = self.tree.boxes[k].style.clone();
             if s.out_of_flow() {
-                if let Some((x, y)) = out_of_flow_at {
-                    self.pending.push((k, x, y));
+                if out_of_flow_at.is_some() {
+                    out.push(Piece::Out { b: k });
                 }
                 continue;
             }
@@ -1229,6 +1245,7 @@ impl<'a> Layout<'a> {
                     }
                 }
                 Piece::Open { .. } => pending_open.push(p),
+                Piece::Out { .. } => line.push(p),
                 Piece::Close { w: cw, .. } => {
                     line.append(&mut pending_open);
                     used += cw;
@@ -1318,9 +1335,15 @@ impl<'a> Layout<'a> {
                 Piece::Word { text, .. } => !text.is_empty(),
                 Piece::Atomic { .. } | Piece::Break => true,
                 Piece::Open { w, .. } | Piece::Close { w, .. } => *w > 0.0,
-                Piece::Float { .. } => false,
+                Piece::Float { .. } | Piece::Out { .. } => false,
             });
             if !visible {
+                // (What's absolutely positioned on it: at its start.)
+                for p in line {
+                    if let Piece::Out { b: ob } = p {
+                        self.pending.push((*ob, x + band_x, at));
+                    }
+                }
                 continue;
             }
             // Its width, without the space after its last word.
@@ -1337,7 +1360,7 @@ impl<'a> Layout<'a> {
                         last_space = 0.0;
                     }
                     Piece::Open { w: ow, .. } | Piece::Close { w: ow, .. } => content_w += ow,
-                    Piece::Break | Piece::Float { .. } => {}
+                    Piece::Break | Piece::Float { .. } | Piece::Out { .. } => {}
                 }
             }
             content_w -= last_space;
@@ -1443,6 +1466,21 @@ impl<'a> Layout<'a> {
                         self.close_back(&mut frags, *cb, end, baseline_y, true);
                         open_now.retain(|&o| o != *cb);
                         pen += cw;
+                    }
+                    Piece::Out { b: ob } => {
+                        // Where it would have been: here on the line (one that was inline), or under the line if
+                        // anything's before it on it (one that was a block), as Chrome places them.
+                        let before = line[..k].iter().any(|q| match q {
+                            Piece::Word { text, .. } => !text.is_empty(),
+                            Piece::Atomic { .. } => true,
+                            _ => false,
+                        });
+                        let (sx, sy) = if self.tree.boxes[*ob].style.inline_origin {
+                            (pen, at)
+                        } else {
+                            (x, if before { at + line_h } else { at })
+                        };
+                        self.pending.push((*ob, sx, sy));
                     }
                     Piece::Break | Piece::Float { .. } => {}
                 }
@@ -1604,9 +1642,10 @@ impl<'a> Layout<'a> {
     fn flex(&mut self, b: BoxId, x: f32, y: f32, w: f32, h: Option<f32>) -> f32 {
         let s = self.tree.boxes[b].style.clone();
         let mut items: Vec<BoxId> = Vec::new();
+        let mut outside: Vec<BoxId> = Vec::new();
         for &k in &self.tree.boxes[b].children.clone() {
             if self.tree.boxes[k].style.out_of_flow() {
-                self.pending.push((k, x, y));
+                outside.push(k);
                 continue;
             }
             if self.tree.is_blank(k) {
@@ -1617,11 +1656,33 @@ impl<'a> Layout<'a> {
         items.sort_by_key(|&k| self.tree.boxes[k].style.order);
         let row = matches!(s.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
         let reverse = matches!(s.flex_direction, FlexDirection::RowReverse | FlexDirection::ColumnReverse);
-        if row {
+        let inner_h = if row {
             self.flex_row(b, &items, x, y, w, h, reverse)
         } else {
             self.flex_column(b, &items, x, y, w, h, reverse)
+        };
+        // Absolutely positioned children: where each would be as the container's only item (its justify-content
+        // along it, align-self across it), as CSS places them when they've no insets of their own.
+        for k in outside {
+            let ks = &self.tree.boxes[k].style;
+            let along = match s.justify_content {
+                Align::Center | Align::SpaceAround | Align::SpaceEvenly => 0.5,
+                Align::End => 1.0,
+                _ => 0.0,
+            };
+            let along = if reverse { 1.0 - along } else { along };
+            let across = match if ks.align_self != Align::Normal { ks.align_self } else { s.align_items } {
+                Align::Center => 0.5,
+                Align::End => 1.0,
+                _ => 0.0,
+            };
+            let (fx, fy) = if row { (along, across) } else { (across, along) };
+            self.pending.push((k, x, y));
+            if fx != 0.0 || fy != 0.0 {
+                self.static_room.insert(k, (w, h.unwrap_or(inner_h), fx, fy));
+            }
         }
+        inner_h
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1780,6 +1841,19 @@ impl<'a> Layout<'a> {
             }
             if let Some(hh) = definite_line {
                 line_h = hh;
+            } else if single {
+                // (A single line in a container of no height of its own: as high as its min-height and max-height let
+                // it be, its items aligned in that, as a button's icon is centred in its min-height.)
+                if let Size::Len(l) = s.max_height
+                    && !l.has_pct()
+                {
+                    line_h = line_h.min(self.content_from(b, l, 0.0, false));
+                }
+                if let Size::Len(l) = s.min_height
+                    && !l.has_pct()
+                {
+                    line_h = line_h.max(self.content_from(b, l, 0.0, false));
+                }
             }
             // Aligned across the line (stretched where the item's height is auto).
             for (k, mh) in placed {
@@ -1811,11 +1885,10 @@ impl<'a> Layout<'a> {
                 self.shift(k, mirrored - bx, 0.0);
             }
         }
-        // The container's baseline: its first item's.
-        if let Some(first) = its.first()
-            && let Some(bl) = self.tree.boxes[first.b].baseline
-        {
-            let by = self.tree.boxes[first.b].y + bl;
+        // The container's baseline: its first item's (one that has none: its border box's bottom, as CSS makes one up).
+        if let Some(first) = its.first() {
+            let fb = &self.tree.boxes[first.b];
+            let by = fb.y + fb.baseline.unwrap_or(fb.h);
             self.tree.boxes[b].baseline = Some(by - self.tree.boxes[b].y);
         }
         (at - y).max(0.0)
@@ -1908,10 +1981,10 @@ impl<'a> Layout<'a> {
                 self.shift(k, 0.0, mirrored - by);
             }
         }
-        if let Some(&first) = placed.first()
-            && let Some(bl) = self.tree.boxes[first].baseline
-        {
-            let by = self.tree.boxes[first].y + bl;
+        // (Its first item's baseline, or one made up from its border box's bottom.)
+        if let Some(&first) = placed.first() {
+            let fb = &self.tree.boxes[first];
+            let by = fb.y + fb.baseline.unwrap_or(fb.h);
             self.tree.boxes[b].baseline = Some(by - self.tree.boxes[b].y);
         }
         used.max(0.0)
@@ -1919,7 +1992,8 @@ impl<'a> Layout<'a> {
 
     // ------------------------------------------------------------------------------------------------ grid
 
-    /// A grid container's insides. Returns their height.
+    /// A grid container's insides (CSS Grid): its items placed in their areas, by name, by line or flowing into the
+    /// cells free, and its tracks sized to them as CSS's track sizing algorithm sizes them. Returns their height.
     fn grid(&mut self, b: BoxId, x: f32, y: f32, w: f32, h: Option<f32>) -> f32 {
         let s = self.tree.boxes[b].style.clone();
         let gap = s.column_gap.resolve(w);
@@ -1933,223 +2007,117 @@ impl<'a> Layout<'a> {
             }
         }
         items.sort_by_key(|&k| self.tree.boxes[k].style.order);
-        // The columns' tracks, repeat(auto-fill, ...) as many as fit.
-        let mut tracks: Vec<Track> = Vec::new();
-        for t in &s.grid_columns {
-            match t {
-                Track::AutoRepeat(inner) => {
-                    let one: f32 = inner.iter().map(|t| track_least(t, w)).sum::<f32>().max(1.0);
-                    let per = inner.len().max(1) as f32;
-                    let n = (((w + gap) / (one + gap * per)).max(1.0)) as usize;
-                    for _ in 0..n.min(64) {
-                        tracks.extend(inner.iter().cloned());
-                    }
-                }
-                t => tracks.push(t.clone()),
-            }
-        }
-        // Named areas: the columns they make, when there are no tracks.
-        let area_cols = s.grid_areas.iter().map(|r| r.len()).max().unwrap_or(0);
-        if tracks.is_empty() {
-            tracks = vec![Track::Fr(1.0); area_cols.max(1)];
-        }
-        let cols = tracks.len();
-        // Where each item goes: (row, column, column span).
-        let mut cells: Vec<(BoxId, usize, usize, usize)> = Vec::new();
-        let mut taken: Vec<Vec<bool>> = Vec::new();
-        let mut cursor = (0usize, 0usize);
-        for &k in &items {
+        let col_list = repeat_tracks(&s.grid_columns, Some(w), gap);
+        let row_list = repeat_tracks(&s.grid_rows, h, row_gap);
+        let explicit_cols = col_list.len().max(s.grid_areas.iter().map(|r| r.len()).max().unwrap_or(0));
+        let explicit_rows = row_list.len().max(s.grid_areas.len());
+        // Where each item goes: rows r0..r1, columns c0..c1 (grid-auto-flow: column fills the columns first).
+        let by_column = s.grid_auto_columns;
+        let specs: Vec<GridSpec> = items
+            .iter()
+            .map(|&k| {
+                let ks = &self.tree.boxes[k].style;
+                let area = ks.grid_area.as_ref().and_then(|name| named_area(&s.grid_areas, name));
+                let (row, col) = (placement(ks.grid_row, explicit_rows), placement(ks.grid_column, explicit_cols));
+                if by_column { (area.map(|[r0, r1, c0, c1]| [c0, c1, r0, r1]), col, row) } else { (area, row, col) }
+            })
+            .collect();
+        let placed = place_grid(&specs, if by_column { explicit_rows } else { explicit_cols });
+        let cells: Vec<(BoxId, usize, usize, usize, usize)> =
+            items.iter().zip(placed).map(|(&k, p)| if by_column { (k, p[2], p[3], p[0], p[1]) } else { (k, p[0], p[1], p[2], p[3]) }).collect();
+        let cols = cells.iter().map(|c| c.4).max().unwrap_or(0).max(explicit_cols).max(1);
+        let rows = cells.iter().map(|c| c.2).max().unwrap_or(0).max(explicit_rows);
+        // The columns, sized to what's in them.
+        let mut col_items = Vec::with_capacity(cells.len());
+        for &(k, _, _, c0, c1) in &cells {
+            self.metrics(k, w);
+            let (mn, mx) = self.intrinsic(k);
+            let m = self.margin_px(k);
             let ks = self.tree.boxes[k].style.clone();
-            // A named area.
-            if let Some(name) = &ks.grid_area {
-                let mut found: Option<(usize, usize, usize)> = None;
-                for (r, row) in s.grid_areas.iter().enumerate() {
-                    for (c, cell) in row.iter().enumerate() {
-                        if cell == name {
-                            found = Some(match found {
-                                None => (r, c, 1),
-                                Some((fr, fc, span)) if fr == r => (fr, fc, span.max(c + 1 - fc)),
-                                Some(f) => f,
-                            });
-                        }
-                    }
-                }
-                if let Some((r, c, span)) = found {
-                    mark(&mut taken, r, c, span, cols);
-                    cells.push((k, r, c, span.min(cols)));
-                    continue;
-                }
-            }
-            let place = ks.grid_column;
-            let mut span = place.span.max(1) as usize;
-            let start = if place.start > 0 {
-                Some((place.start as usize - 1).min(cols - 1))
-            } else if place.start < 0 {
-                Some(cols.saturating_sub((-place.start) as usize - 1).min(cols - 1))
-            } else {
-                None
+            let minimum = match ks.min_width {
+                Size::Len(l) if !l.has_pct() => self.content_from(k, l, w, true) + self.frame_w(k) + m,
+                // (One that clips what's in it can be as narrow as it likes.)
+                _ if ks.clip => m,
+                _ => mn + m,
             };
-            if place.end != 0 && place.start != 0 {
-                // A start line and an end line ("1 / 3"; "1 / -1": to the last line).
-                let end_line = if place.end < 0 { cols as i32 + 2 + place.end } else { place.end };
-                let start_line = start.unwrap_or(0) as i32 + 1;
-                span = (end_line - start_line).max(1) as usize;
-            }
-            let span = span.min(cols);
-            let row_start = if ks.grid_row.start > 0 { Some(ks.grid_row.start as usize - 1) } else { None };
-            let (r, c) = match (row_start, start) {
-                (Some(r), Some(c)) => (r, c),
-                (Some(r), None) => (r, first_free(&taken, r, 0, span, cols).unwrap_or(0)),
-                (None, Some(c)) => {
-                    let mut r = cursor.0;
-                    while is_taken(&taken, r, c, span) {
-                        r += 1;
-                    }
-                    (r, c)
-                }
-                (None, None) => {
-                    let (mut r, mut c) = cursor;
-                    loop {
-                        if c + span > cols {
-                            r += 1;
-                            c = 0;
-                            continue;
-                        }
-                        if !is_taken(&taken, r, c, span) {
-                            break;
-                        }
-                        c += 1;
-                        if r > 10_000 {
-                            break;
-                        }
-                    }
-                    (r, c)
-                }
-            };
-            mark(&mut taken, r, c, span, cols);
-            cells.push((k, r, c, span));
-            if row_start.is_none() {
-                cursor = (r, c + span);
-            }
+            col_items.push(Contrib { from: c0, to: c1, min_c: mn + m, max_c: mx + m, minimum });
         }
-        // Column widths: lengths as they are, auto to their items' widest, fractions share what's left.
-        let mut widths = vec![0.0f32; cols];
-        let mut fr = vec![0.0f32; cols];
-        for (c, t) in tracks.iter().enumerate() {
-            match t {
-                Track::Len(l) => widths[c] = l.resolve(w),
-                Track::Fr(f) => fr[c] = *f,
-                Track::MinMax(mm) => {
-                    widths[c] = track_least(&mm.0, w);
-                    match &mm.1 {
-                        Track::Fr(f) => fr[c] = *f,
-                        Track::Len(l) => widths[c] = widths[c].max(l.resolve(w)),
-                        _ => fr[c] = 1.0,
-                    }
-                }
-                Track::Auto | Track::MinContent | Track::MaxContent | Track::AutoRepeat(_) => {
-                    let mut most = 0.0f32;
-                    for &(k, _, cc, span) in &cells {
-                        if cc == c && span == 1 {
-                            let (mn, mx) = self.intrinsic(k);
-                            let m = self.margin_px(k);
-                            most = most.max(if matches!(t, Track::MinContent) { mn + m } else { mx + m });
-                        }
-                    }
-                    widths[c] = most;
-                }
-            }
-        }
-        let gaps = gap * (cols.max(1) - 1) as f32;
-        let fixed: f32 = widths.iter().zip(&fr).filter(|(_, f)| **f == 0.0).map(|(w, _)| *w).sum();
-        let fr_sum: f32 = fr.iter().sum();
-        let left = (w - gaps - fixed).max(0.0);
-        if fr_sum > 0.0 {
-            for c in 0..cols {
-                if fr[c] > 0.0 {
-                    widths[c] = widths[c].max(left * fr[c] / fr_sum.max(1.0).max(fr_sum));
-                }
-            }
-        } else {
-            // (Auto columns share the room left over, as a stretch.)
-            let autos: Vec<usize> = (0..cols).filter(|&c| matches!(tracks[c], Track::Auto)).collect();
-            let total: f32 = widths.iter().sum::<f32>() + gaps;
-            if !autos.is_empty() && total < w {
-                let add = (w - total) / autos.len() as f32;
-                for c in autos {
-                    widths[c] += add;
-                }
-            } else if total > w && total > 0.0 {
-                let scale = ((w - gaps) / (total - gaps)).max(0.0);
-                for v in &mut widths {
-                    *v *= scale;
-                }
-            }
-        }
-        let col_x: Vec<f32> = {
-            let mut xs = Vec::with_capacity(cols);
-            let mut at = 0.0;
-            for c in 0..cols {
-                xs.push(at);
-                at += widths[c] + gap;
-            }
-            xs
-        };
-        // Lay out each item in its cell's width; rows as tall as their tallest.
-        let rows = cells.iter().map(|c| c.1 + 1).max().unwrap_or(0);
-        let mut row_h = vec![0.0f32; rows];
-        for (r, t) in s.grid_rows.iter().enumerate().take(rows) {
-            if let Track::Len(l) = t {
-                row_h[r] = l.resolve(h.unwrap_or(0.0));
-            }
-        }
-        for &(k, r, c, span) in &cells {
-            let cw = widths[c..(c + span).min(cols)].iter().sum::<f32>() + gap * (span.max(1) - 1) as f32;
-            self.metrics(k, cw);
+        let mut col_tr: Vec<Tr> = (0..cols).map(|c| Tr::of(col_list.get(c), Some(w))).collect();
+        size_tracks(&mut col_tr, &col_items, Some(w), gap, matches!(s.justify_content, Align::Normal | Align::Stretch));
+        let widths: Vec<f32> = col_tr.iter().map(|t| t.base).collect();
+        let col_x = track_starts(&widths, gap, w, s.justify_content);
+        let span_w = |c0: usize, c1: usize| widths[c0..c1].iter().sum::<f32>() + gap * (c1 - c0).saturating_sub(1) as f32;
+        // Each item laid out in its columns, its height what it gives its rows.
+        let mut row_items = Vec::with_capacity(cells.len());
+        for &(k, r0, r1, c0, c1) in &cells {
+            let area_w = span_w(c0, c1);
+            self.metrics(k, area_w);
             let ks = self.tree.boxes[k].style.clone();
             let justify = if ks.justify_self != Align::Normal { ks.justify_self } else { s.justify_items };
             let shrink = matches!(justify, Align::Start | Align::End | Align::Center);
-            self.block(k, x + col_x[c], y, cw, None, None, shrink);
+            self.block(k, x + col_x[c0], y, area_w, None, None, shrink);
+            let (mt, mb) = (self.tree.boxes[k].margin[0], self.tree.boxes[k].margin[2]);
+            let mh = self.tree.boxes[k].h + mt + mb;
+            row_items.push(Contrib { from: r0, to: r1, min_c: mh, max_c: mh, minimum: if ks.clip { mt + mb } else { mh } });
+        }
+        let mut row_tr: Vec<Tr> = (0..rows).map(|r| Tr::of(row_list.get(r), h)).collect();
+        size_tracks(&mut row_tr, &row_items, h, row_gap, matches!(s.align_content, Align::Normal | Align::Stretch));
+        let heights: Vec<f32> = row_tr.iter().map(|t| t.base).collect();
+        let row_y = track_starts(&heights, row_gap, h.unwrap_or(0.0), if h.is_some() { s.align_content } else { Align::Normal });
+        let span_h = |r0: usize, r1: usize| heights[r0..r1].iter().sum::<f32>() + row_gap * (r1 - r0).saturating_sub(1) as f32;
+        // Each in its area: aligned in it, or stretched to fill it (laid out again at that height, if it's taller).
+        for &(k, r0, r1, c0, c1) in &cells {
+            let (area_x, area_w) = (x + col_x[c0], span_w(c0, c1));
+            let (area_y, area_h) = (y + row_y.get(r0).copied().unwrap_or(0.0), span_h(r0, r1.min(rows)));
+            let ks = self.tree.boxes[k].style.clone();
+            let replaced = matches!(self.tree.boxes[k].content, Content::Image { .. } | Content::Control(_));
+            let justify = if ks.justify_self != Align::Normal { ks.justify_self } else { s.justify_items };
+            let shrink = matches!(justify, Align::Start | Align::End | Align::Center);
+            let align = if ks.align_self != Align::Normal { ks.align_self } else { s.align_items };
+            let (mt, mb) = (self.tree.boxes[k].margin[0], self.tree.boxes[k].margin[2]);
+            let stretch = match align {
+                Align::Stretch => ks.height == Size::Auto,
+                Align::Normal => ks.height == Size::Auto && !replaced,
+                _ => false,
+            };
+            let target = (area_h - mt - mb).max(0.0);
+            if stretch && target > self.tree.boxes[k].h + 0.5 {
+                let inner = self.clamp_h(k, (target - self.frame_h(k)).max(0.0), Some(area_h));
+                self.definite_h = Some((k, inner));
+                self.block(k, area_x, area_y + mt, area_w, Some(area_h), None, shrink);
+            } else {
+                let mh = self.tree.boxes[k].h + mt + mb;
+                let dy = match align {
+                    Align::Center => (area_h - mh) / 2.0,
+                    Align::End => area_h - mh,
+                    _ => 0.0,
+                };
+                let oy = self.tree.boxes[k].y;
+                self.shift(k, 0.0, area_y + mt + dy - oy);
+            }
             if shrink {
                 let (bw, ml, mr) = (self.tree.boxes[k].w, self.tree.boxes[k].margin[3], self.tree.boxes[k].margin[1]);
-                let free = (cw - bw - ml - mr).max(0.0);
+                let free = (area_w - bw - ml - mr).max(0.0);
                 let dx = match justify {
                     Align::Center => free / 2.0,
                     Align::End => free,
                     _ => 0.0,
                 };
-                self.shift(k, dx, 0.0);
-            }
-            let mh = self.tree.boxes[k].h + self.tree.boxes[k].margin[0] + self.tree.boxes[k].margin[2];
-            if r < rows {
-                row_h[r] = row_h[r].max(mh);
+                let ox = self.tree.boxes[k].x;
+                self.shift(k, area_x + ml + dx - ox, 0.0);
             }
         }
-        let mut row_y = Vec::with_capacity(rows);
-        let mut at = 0.0;
-        for r in 0..rows {
-            row_y.push(at);
-            at += row_h[r] + if r + 1 < rows { row_gap } else { 0.0 };
+        // The container's baseline: its first item's in its first row (or one made up from that item's border box).
+        if let Some(&(first, ..)) = cells.iter().filter(|c| c.1 == 0).min_by_key(|c| c.3) {
+            let fb = &self.tree.boxes[first];
+            let by = fb.y + fb.baseline.unwrap_or(fb.h);
+            self.tree.boxes[b].baseline = Some(by - self.tree.boxes[b].y);
         }
-        for &(k, r, _, _) in &cells {
-            let ks = self.tree.boxes[k].style.clone();
-            let align = if ks.align_self != Align::Normal { ks.align_self } else { s.align_items };
-            let mt = self.tree.boxes[k].margin[0];
-            let mh = self.tree.boxes[k].h + mt + self.tree.boxes[k].margin[2];
-            let top = y + row_y[r] + mt;
-            let oy = self.tree.boxes[k].y;
-            match align {
-                Align::Center => self.shift(k, 0.0, top + (row_h[r] - mh) / 2.0 - oy),
-                Align::End => self.shift(k, 0.0, top + row_h[r] - mh - oy),
-                Align::Normal | Align::Stretch if ks.height == Size::Auto => {
-                    self.shift(k, 0.0, top - oy);
-                    let stretched = row_h[r] - mt - self.tree.boxes[k].margin[2];
-                    self.tree.boxes[k].h = self.tree.boxes[k].h.max(stretched);
-                }
-                _ => self.shift(k, 0.0, top - oy),
-            }
+        let total = heights.iter().sum::<f32>() + row_gap * rows.saturating_sub(1) as f32;
+        match h {
+            Some(hh) => hh.max(0.0),
+            None => total.max(0.0),
         }
-        at.max(0.0)
     }
 
     // ------------------------------------------------------------------------------------------------ tables
@@ -2449,7 +2417,7 @@ impl<'a> Layout<'a> {
             }
             (Some(l), _) => cx + l + ml,
             (None, Some(r)) => cx + cw - r - mr - bw,
-            _ => static_x + ml,
+            _ => static_x + ml + self.static_room.get(&b).map_or(0.0, |&(rw, _, fx, _)| (rw - bw - ml - mr) * fx),
         };
         let ny = match (top, bottom) {
             (Some(t), Some(bo)) if s.height != Size::Auto && (auto(0) || auto(2)) => {
@@ -2462,7 +2430,7 @@ impl<'a> Layout<'a> {
             }
             (Some(t), _) => cy + t + mt,
             (None, Some(bo)) => cy + ch - bo - mb - bh,
-            _ => static_y + mt,
+            _ => static_y + mt + self.static_room.get(&b).map_or(0.0, |&(_, rh, _, fy)| (rh - bh - mt - mb) * fy),
         };
         let (ox, oy) = (self.tree.boxes[b].x, self.tree.boxes[b].y);
         self.shift(b, nx - ox, ny - oy);
@@ -2506,6 +2474,14 @@ impl<'a> Layout<'a> {
         }
         let mut stack = vec![b];
         while let Some(k) = stack.pop() {
+            // (One still waiting to be placed: where it would have been moves with what it's in.)
+            if self.tree.boxes[k].style.out_of_flow() {
+                let next = self.pending_next.min(self.pending.len());
+                for p in self.pending[next..].iter_mut().filter(|p| p.0 == k) {
+                    p.1 += dx;
+                    p.2 += dy;
+                }
+            }
             let x = &mut self.tree.boxes[k];
             x.x += dx;
             x.y += dy;
@@ -2827,6 +2803,426 @@ fn content_kind(b: &LBox) -> u8 {
 }
 
 /// The least a track takes: a length's, else nothing.
+/// One grid item's placement as place_grid takes it: an area it's in already (major from, to, minor from, to), and
+/// along each axis its tracks from its lines (Ok) or the span it takes, placed automatically (Err).
+type GridSpec = (Option<[usize; 4]>, Result<(i64, i64), usize>, Result<(i64, i64), usize>);
+
+/// A named grid area's rows and columns (from, to; to not included), as grid-template-areas draws it.
+fn named_area(areas: &[Vec<String>], name: &str) -> Option<[usize; 4]> {
+    let mut found: Option<[usize; 4]> = None;
+    for (r, row) in areas.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            if cell == name {
+                found = Some(match found {
+                    None => [r, r + 1, c, c + 1],
+                    Some([r0, r1, c0, c1]) => [r0.min(r), r1.max(r + 1), c0.min(c), c1.max(c + 1)],
+                });
+            }
+        }
+    }
+    found
+}
+
+/// The tracks grid-row or grid-column puts an item in (lines counted from 1, negative from the explicit grid's end),
+/// or, with no line given, the span it's placed with automatically.
+fn placement(p: GridPlace, n: usize) -> Result<(i64, i64), usize> {
+    let line = |l: i32| -> i64 { if l > 0 { l as i64 - 1 } else { n as i64 + 1 + l as i64 } };
+    let span = p.span.max(1) as i64;
+    match (p.start, p.end) {
+        (0, 0) => Err(span as usize),
+        (a, 0) => {
+            let a = line(a);
+            Ok((a, a + span))
+        }
+        (0, e) => {
+            let e = line(e);
+            Ok((e - span, e))
+        }
+        (a, e) => {
+            let (a, e) = (line(a), line(e));
+            Ok(if e > a { (a, e) } else if e < a { (e, a) } else { (a, a + 1) })
+        }
+    }
+}
+
+/// Grid items placed, as CSS's auto-placement ("sparse") places them: those with an area or both lines where they
+/// say, those locked to a major track (a row, when the flow is by row) at the first place along it they fit, and the
+/// rest on from a cursor, along the minor axis (`n_minor` tracks: wider when an item's span is) and on to the next.
+fn place_grid(items: &[GridSpec], n_minor: usize) -> Vec<[usize; 4]> {
+    let mut out = vec![[0usize; 4]; items.len()];
+    let mut done = vec![false; items.len()];
+    let mut taken: Vec<Vec<bool>> = Vec::new();
+    let fits = |taken: &Vec<Vec<bool>>, m0: usize, m1: usize, n0: usize, n1: usize| -> bool {
+        (m0..m1).all(|m| taken.get(m).is_none_or(|row| (n0..n1).all(|n| !row.get(n).copied().unwrap_or(false))))
+    };
+    let occupy = |taken: &mut Vec<Vec<bool>>, p: [usize; 4]| {
+        while taken.len() < p[1] {
+            taken.push(Vec::new());
+        }
+        for row in &mut taken[p[0]..p[1]] {
+            if row.len() < p[3] {
+                row.resize(p[3], false);
+            }
+            for cell in &mut row[p[2]..p[3]] {
+                *cell = true;
+            }
+        }
+    };
+    let range = |(a, b): (i64, i64)| -> (usize, usize) {
+        let a0 = a.clamp(0, 10_000) as usize;
+        (a0, (b.clamp(a0 as i64 + 1, 10_001)) as usize)
+    };
+    let mut minor_n = n_minor.max(1);
+    for (_, _, minor) in items {
+        minor_n = minor_n.max(match minor {
+            Err(span) => (*span).min(10_000),
+            Ok(r) => range(*r).1,
+        });
+    }
+    for (i, (area, major, minor)) in items.iter().enumerate() {
+        let p = match (area, major, minor) {
+            (Some(a), _, _) => Some(*a),
+            (None, Ok(ma), Ok(mi)) => {
+                let ((m0, m1), (n0, n1)) = (range(*ma), range(*mi));
+                Some([m0, m1, n0, n1])
+            }
+            _ => None,
+        };
+        if let Some(p) = p {
+            out[i] = p;
+            done[i] = true;
+            occupy(&mut taken, p);
+        }
+    }
+    for (i, (_, major, minor)) in items.iter().enumerate() {
+        if let (false, Ok(ma), Err(span)) = (done[i], major, minor) {
+            let (m0, m1) = range(*ma);
+            let mut n0 = 0;
+            while !fits(&taken, m0, m1, n0, n0 + span) && n0 < 10_000 {
+                n0 += 1;
+            }
+            out[i] = [m0, m1, n0, n0 + span];
+            done[i] = true;
+            occupy(&mut taken, out[i]);
+        }
+    }
+    let (mut cm, mut cn) = (0usize, 0usize);
+    for (i, (_, major, minor)) in items.iter().enumerate() {
+        if done[i] {
+            continue;
+        }
+        let mspan = match major {
+            Err(span) => (*span).min(10_000),
+            Ok(r) => {
+                let (a, b) = range(*r);
+                b - a
+            }
+        };
+        match minor {
+            Ok(mi) => {
+                let (n0, n1) = range(*mi);
+                if n0 < cn {
+                    cm += 1;
+                }
+                cn = n0;
+                while !fits(&taken, cm, cm + mspan, n0, n1) && cm < 100_000 {
+                    cm += 1;
+                }
+                out[i] = [cm, cm + mspan, n0, n1];
+            }
+            Err(span) => {
+                let span = (*span).clamp(1, minor_n);
+                loop {
+                    if cn + span > minor_n {
+                        cm += 1;
+                        cn = 0;
+                        continue;
+                    }
+                    if fits(&taken, cm, cm + mspan, cn, cn + span) || cm > 100_000 {
+                        break;
+                    }
+                    cn += 1;
+                }
+                out[i] = [cm, cm + mspan, cn, cn + span];
+                cn += span;
+            }
+        }
+        occupy(&mut taken, out[i]);
+    }
+    out
+}
+
+/// A track sizing function (CSS Grid's): a length, min-content, max-content, auto, or a flexible fraction.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Sizing {
+    Fixed(f32),
+    MinContent,
+    MaxContent,
+    Auto,
+    Flex(f32),
+}
+
+/// A grid track as it's sized: its min and max sizing functions, its base size and its growth limit.
+struct Tr {
+    min: Sizing,
+    max: Sizing,
+    base: f32,
+    limit: f32,
+}
+
+impl Tr {
+    /// A track from its definition (an implicit one's: auto), percentages of `room` when it's known.
+    fn of(t: Option<&Track>, room: Option<f32>) -> Tr {
+        let one = |t: &Track, as_min: bool| -> Sizing {
+            match t {
+                Track::Len(l) if l.has_pct() => room.map_or(Sizing::Auto, |r| Sizing::Fixed(l.resolve(r))),
+                Track::Len(l) => Sizing::Fixed(l.resolve(0.0)),
+                Track::Fr(f) if !as_min => Sizing::Flex(*f),
+                Track::MinContent => Sizing::MinContent,
+                Track::MaxContent => Sizing::MaxContent,
+                _ => Sizing::Auto,
+            }
+        };
+        let (min, max) = match t {
+            None => (Sizing::Auto, Sizing::Auto),
+            Some(Track::MinMax(mm)) => (one(&mm.0, true), one(&mm.1, false)),
+            Some(t) => (one(t, true), one(t, false)),
+        };
+        Tr { min, max, base: 0.0, limit: 0.0 }
+    }
+
+    fn flex(&self) -> Option<f32> {
+        if let Sizing::Flex(f) = self.max { Some(f) } else { None }
+    }
+}
+
+/// A grid item's contributions along an axis: the tracks it spans (from, to), and its min-content, max-content and
+/// minimum contributions (margin box).
+struct Contrib {
+    from: usize,
+    to: usize,
+    min_c: f32,
+    max_c: f32,
+    minimum: f32,
+}
+
+/// CSS Grid's track sizing algorithm, a little simplified: base sizes and growth limits from the tracks' sizing
+/// functions and the items in them (one track first, then those spanning several, then those spanning flexible
+/// ones), the free space given to the tracks up to their limits, flexible tracks their share of what's left by their
+/// factors, and auto tracks stretched over the rest. `room`: the axis's size, if it's known.
+fn size_tracks(tr: &mut [Tr], items: &[Contrib], room: Option<f32>, gap: f32, stretch: bool) {
+    let n = tr.len();
+    if n == 0 {
+        return;
+    }
+    let intrinsic = |s: Sizing| matches!(s, Sizing::MinContent | Sizing::MaxContent | Sizing::Auto);
+    for t in tr.iter_mut() {
+        t.base = if let Sizing::Fixed(v) = t.min { v } else { 0.0 };
+        t.limit = if let Sizing::Fixed(v) = t.max { v } else { f32::INFINITY };
+        if t.limit < t.base {
+            t.limit = t.base;
+        }
+    }
+    // Items in one track (not a flexible one).
+    for it in items.iter().filter(|it| it.to == it.from + 1 && it.from < n) {
+        let t = &mut tr[it.from];
+        if t.flex().is_some() {
+            continue;
+        }
+        match t.min {
+            Sizing::MinContent => t.base = t.base.max(it.min_c),
+            Sizing::MaxContent => t.base = t.base.max(it.max_c),
+            Sizing::Auto => t.base = t.base.max(it.minimum),
+            _ => {}
+        }
+        let grow = match t.max {
+            Sizing::MinContent => Some(it.min_c),
+            Sizing::MaxContent | Sizing::Auto => Some(it.max_c),
+            _ => None,
+        };
+        if let Some(g) = grow {
+            t.limit = if t.limit.is_infinite() { g } else { t.limit.max(g) };
+        }
+        if t.limit < t.base {
+            t.limit = t.base;
+        }
+    }
+    // Items spanning several tracks, none flexible (the fewest first): what they need beyond those tracks' sizes,
+    // shared among the ones sized by their content.
+    let mut spanning: Vec<&Contrib> = items.iter().filter(|it| it.to > it.from + 1 && it.to <= n && !(it.from..it.to).any(|c| tr[c].flex().is_some())).collect();
+    spanning.sort_by_key(|it| it.to - it.from);
+    for it in spanning {
+        let gaps = gap * (it.to - it.from - 1) as f32;
+        let want = if (it.from..it.to).any(|c| tr[c].min == Sizing::MaxContent) { it.max_c } else { it.minimum };
+        let have: f32 = (it.from..it.to).map(|c| tr[c].base).sum::<f32>() + gaps;
+        let eligible: Vec<usize> = (it.from..it.to).filter(|&c| intrinsic(tr[c].min)).collect();
+        if want > have && !eligible.is_empty() {
+            let share = (want - have) / eligible.len() as f32;
+            for c in eligible {
+                tr[c].base += share;
+                if tr[c].limit < tr[c].base {
+                    tr[c].limit = tr[c].base;
+                }
+            }
+        }
+        let have: f32 = (it.from..it.to).map(|c| if tr[c].limit.is_infinite() { tr[c].base } else { tr[c].limit }).sum::<f32>() + gaps;
+        let eligible: Vec<usize> = (it.from..it.to).filter(|&c| intrinsic(tr[c].max)).collect();
+        if it.max_c > have && !eligible.is_empty() {
+            let share = (it.max_c - have) / eligible.len() as f32;
+            for c in eligible {
+                let now = if tr[c].limit.is_infinite() { tr[c].base } else { tr[c].limit };
+                tr[c].limit = now + share;
+            }
+        }
+    }
+    // Items spanning flexible tracks: their minimum shared among those flexible tracks sized by their content at least.
+    let over_flex: Vec<&Contrib> = items.iter().filter(|it| it.to <= n && (it.from..it.to).any(|c| tr[c].flex().is_some())).collect();
+    for it in over_flex {
+        let gaps = gap * (it.to - it.from).saturating_sub(1) as f32;
+        let have: f32 = (it.from..it.to).map(|c| tr[c].base).sum::<f32>() + gaps;
+        let eligible: Vec<usize> = (it.from..it.to).filter(|&c| tr[c].flex().is_some() && intrinsic(tr[c].min)).collect();
+        if it.minimum > have && !eligible.is_empty() {
+            let share = (it.minimum - have) / eligible.len() as f32;
+            for c in eligible {
+                tr[c].base += share;
+            }
+        }
+    }
+    for t in tr.iter_mut() {
+        if t.limit.is_infinite() || t.limit < t.base {
+            t.limit = t.base;
+        }
+    }
+    let gaps = gap * (n - 1) as f32;
+    // The free space, to each track up to its limit (with no room known: each at its limit).
+    match room {
+        Some(r) => {
+            let mut free = r - gaps - tr.iter().map(|t| t.base).sum::<f32>();
+            for _ in 0..16 {
+                let open: Vec<usize> = (0..n).filter(|&c| tr[c].base < tr[c].limit - 0.001).collect();
+                if free <= 0.01 || open.is_empty() {
+                    break;
+                }
+                let share = free / open.len() as f32;
+                for c in open {
+                    let add = share.min(tr[c].limit - tr[c].base);
+                    tr[c].base += add;
+                    free -= add;
+                }
+            }
+        }
+        None => {
+            for t in tr.iter_mut() {
+                t.base = t.limit;
+            }
+        }
+    }
+    // Flexible tracks: an fr's size, from the room left (or, with none known, from what their items need).
+    if tr.iter().any(|t| t.flex().is_some()) {
+        let fr = match room {
+            Some(r) => {
+                let mut fixed_flex = vec![false; n];
+                let mut fr = 0.0;
+                for _ in 0..8 {
+                    let used: f32 = (0..n).filter(|&c| tr[c].flex().is_none() || fixed_flex[c]).map(|c| tr[c].base).sum::<f32>() + gaps;
+                    let sum: f32 = (0..n).filter(|&c| !fixed_flex[c]).filter_map(|c| tr[c].flex()).sum();
+                    fr = (r - used).max(0.0) / sum.max(1.0);
+                    let mut changed = false;
+                    for c in 0..n {
+                        if let Some(f) = tr[c].flex()
+                            && !fixed_flex[c]
+                            && tr[c].base > f * fr
+                        {
+                            fixed_flex[c] = true;
+                            changed = true;
+                        }
+                    }
+                    if !changed {
+                        break;
+                    }
+                }
+                fr
+            }
+            None => {
+                let mut fr = 0.0f32;
+                for t in tr.iter() {
+                    if let Some(f) = t.flex() {
+                        fr = fr.max(if f > 1.0 { t.base / f } else { t.base });
+                    }
+                }
+                for it in items.iter().filter(|it| it.to <= n && (it.from..it.to).any(|c| tr[c].flex().is_some())) {
+                    let fixed: f32 = (it.from..it.to).filter(|&c| tr[c].flex().is_none()).map(|c| tr[c].base).sum::<f32>() + gap * (it.to - it.from).saturating_sub(1) as f32;
+                    let sum: f32 = (it.from..it.to).filter_map(|c| tr[c].flex()).sum();
+                    fr = fr.max((it.max_c - fixed).max(0.0) / sum.max(1.0));
+                }
+                fr
+            }
+        };
+        for t in tr.iter_mut() {
+            if let Some(f) = t.flex() {
+                t.base = t.base.max(f * fr);
+            }
+        }
+    }
+    // Auto tracks stretched over what's left.
+    if stretch && let Some(r) = room {
+        let free = r - gaps - tr.iter().map(|t| t.base).sum::<f32>();
+        let autos: Vec<usize> = (0..n).filter(|&c| tr[c].max == Sizing::Auto).collect();
+        if free > 0.0 && !autos.is_empty() {
+            let share = free / autos.len() as f32;
+            for c in autos {
+                tr[c].base += share;
+            }
+        }
+    }
+}
+
+/// Where each track starts, with what's left of `room` placed as justify-content (or align-content) says.
+fn track_starts(sizes: &[f32], gap: f32, room: f32, how: Align) -> Vec<f32> {
+    let n = sizes.len();
+    let used = sizes.iter().sum::<f32>() + gap * n.saturating_sub(1) as f32;
+    let free = (room - used).max(0.0);
+    let (start, between) = match how {
+        Align::Center => (free / 2.0, 0.0),
+        Align::End => (free, 0.0),
+        Align::SpaceBetween if n > 1 => (0.0, free / (n - 1) as f32),
+        Align::SpaceAround if n > 0 => (free / n as f32 / 2.0, free / n as f32),
+        Align::SpaceEvenly => (free / (n + 1) as f32, free / (n + 1) as f32),
+        _ => (0.0, 0.0),
+    };
+    let mut out = Vec::with_capacity(n);
+    let mut at = start;
+    for &size in sizes {
+        out.push(at);
+        at += size + gap + between;
+    }
+    out
+}
+
+/// A track list with its repeat(auto-fill, ...) repeated as many times as fit in `room` (once, when that's unknown).
+fn repeat_tracks(list: &[Track], room: Option<f32>, gap: f32) -> Vec<Track> {
+    let mut out = Vec::new();
+    for t in list {
+        match t {
+            Track::AutoRepeat(inner) => {
+                let times = match room {
+                    Some(w) => {
+                        let one: f32 = inner.iter().map(|t| track_least(t, w)).sum::<f32>().max(1.0);
+                        let per = inner.len().max(1) as f32;
+                        (((w + gap) / (one + gap * per)).max(1.0)) as usize
+                    }
+                    None => 1,
+                };
+                for _ in 0..times.min(64) {
+                    out.extend(inner.iter().cloned());
+                }
+            }
+            t => out.push(t.clone()),
+        }
+    }
+    out
+}
+
 fn track_least(t: &Track, w: f32) -> f32 {
     match t {
         Track::Len(l) => l.resolve(w),
@@ -2835,23 +3231,6 @@ fn track_least(t: &Track, w: f32) -> f32 {
             _ => 0.0,
         }),
         _ => 0.0,
-    }
-}
-
-fn is_taken(taken: &[Vec<bool>], r: usize, c: usize, span: usize) -> bool {
-    taken.get(r).is_some_and(|row| (c..c + span).any(|k| row.get(k).copied().unwrap_or(false)))
-}
-
-fn first_free(taken: &[Vec<bool>], r: usize, from: usize, span: usize, cols: usize) -> Option<usize> {
-    (from..cols).find(|&c| c + span <= cols && !is_taken(taken, r, c, span))
-}
-
-fn mark(taken: &mut Vec<Vec<bool>>, r: usize, c: usize, span: usize, cols: usize) {
-    while taken.len() <= r {
-        taken.push(vec![false; cols]);
-    }
-    for k in c..(c + span).min(cols) {
-        taken[r][k] = true;
     }
 }
 

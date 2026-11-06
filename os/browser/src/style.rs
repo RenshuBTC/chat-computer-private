@@ -332,6 +332,9 @@ pub struct Style {
     /// picture's own text says).
     pub fill: Option<SvgPaint>,
     pub stroke: Option<SvgPaint>,
+    /// It's absolutely positioned and its display was inline-level before that made it block-level: where it would
+    /// have been is on its line, not under it.
+    pub inline_origin: bool,
 }
 
 /// An SVG paint (a fill or a stroke) a style sheet gives: none, currentColor or a colour.
@@ -438,6 +441,7 @@ impl Style {
             caption_bottom: false,
             fill: None,
             stroke: None,
+            inline_origin: false,
         }
     }
 
@@ -821,10 +825,23 @@ impl Cascade<'_> {
         // the rest, each in cascade order.
         let customs: Vec<&Decl> = found.iter().filter(|(_, d)| d.name.starts_with("--")).map(|(_, d)| *d).collect();
         if !customs.is_empty() {
-            let mut map = (*s.custom).clone();
-            for d in customs {
-                let value = substitute(&d.value, &map, 0).unwrap_or_default();
-                map.insert(d.name.clone(), Arc::new(value));
+            // (Each name's winning declaration: the last, in cascade order.)
+            let mut declared: BTreeMap<&str, &[Tok]> = BTreeMap::new();
+            for d in &customs {
+                declared.insert(d.name.as_str(), d.value.as_slice());
+            }
+            let inherited = s.custom.clone();
+            let (mut done, mut active, mut cyclic) = (BTreeMap::new(), Vec::new(), Vec::new());
+            let mut map = (*inherited).clone();
+            for &name in declared.keys() {
+                match custom_value(name, &declared, &inherited, &mut done, &mut active, &mut cyclic) {
+                    Some(v) => {
+                        map.insert(String::from(name), v);
+                    }
+                    None => {
+                        map.remove(name);
+                    }
+                }
             }
             s.custom = Arc::new(map);
         }
@@ -875,6 +892,9 @@ impl Cascade<'_> {
         // Blockified: floats, absolutely positioned boxes, the root, and flex and grid items.
         let parent_display = self.doc.parent_element(id).and_then(|p| self.out.of.get(p).and_then(|x| x.as_ref())).map(|p| p.display);
         let in_flex = matches!(parent_display, Some(Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid));
+        if s.out_of_flow() {
+            s.inline_origin = s.display.is_inline_level();
+        }
         if (s.float != Float::None || s.out_of_flow() || is_root || in_flex) && !pseudo {
             s.display = s.display.blockified();
         }
@@ -1053,8 +1073,60 @@ fn has_var(t: &[Tok]) -> bool {
     t.iter().any(|x| matches!(x, Tok::Function(f) if f == "var" || f == "env"))
 }
 
+/// A custom property's value on an element: its declaration's, with the var()s in it replaced (the element's other
+/// custom properties worked out first; those it doesn't declare, as it inherits them). None if it's invalid: a cycle
+/// among them (--x: var(--x, 1rem) included) makes all in it so, as CSS says, and a var() in one then takes its
+/// fallback.
+fn custom_value<'a>(
+    name: &'a str,
+    declared: &BTreeMap<&'a str, &'a [Tok]>,
+    inherited: &BTreeMap<String, Arc<Vec<Tok>>>,
+    done: &mut BTreeMap<&'a str, Option<Arc<Vec<Tok>>>>,
+    active: &mut Vec<&'a str>,
+    cyclic: &mut Vec<&'a str>,
+) -> Option<Arc<Vec<Tok>>> {
+    if let Some(v) = done.get(name) {
+        return v.clone();
+    }
+    if let Some(at) = active.iter().position(|n| *n == name) {
+        for &n in &active[at..] {
+            if !cyclic.contains(&n) {
+                cyclic.push(n);
+            }
+        }
+        return None;
+    }
+    let raw = *declared.get(name)?;
+    let value = match ident(raw).as_deref() {
+        Some("initial") => None,
+        Some("inherit" | "unset" | "revert" | "revert-layer") => inherited.get(name).cloned(),
+        _ if has_var(raw) => {
+            active.push(name);
+            let v = substitute_with(
+                raw,
+                &mut |other: &str| match declared.get_key_value(other) {
+                    Some((&k, _)) => custom_value(k, declared, inherited, done, active, cyclic),
+                    None => inherited.get(other).cloned(),
+                },
+                0,
+            );
+            active.pop();
+            v.map(Arc::new)
+        }
+        _ => Some(Arc::new(raw.to_vec())),
+    };
+    let value = if cyclic.contains(&name) { None } else { value };
+    done.insert(name, value.clone());
+    value
+}
+
 /// var(--x, fallback) (and env(), as its fallback) replaced by what it stands for: None if one can't be.
 fn substitute(t: &[Tok], custom: &BTreeMap<String, Arc<Vec<Tok>>>, depth: u32) -> Option<Vec<Tok>> {
+    substitute_with(t, &mut |name: &str| custom.get(name).cloned(), depth)
+}
+
+/// var() replaced as substitute does, a custom property's value from `lookup`.
+fn substitute_with(t: &[Tok], lookup: &mut dyn FnMut(&str) -> Option<Arc<Vec<Tok>>>, depth: u32) -> Option<Vec<Tok>> {
     if depth > 8 {
         return None;
     }
@@ -1085,12 +1157,12 @@ fn substitute(t: &[Tok], custom: &BTreeMap<String, Arc<Vec<Tok>>>, depth: u32) -
             let name_part = values::trim(&inner[..comma.unwrap_or(inner.len())]);
             let fallback = comma.map(|c| &inner[c + 1..]);
             let value = match (f.as_str(), name_part) {
-                ("var", [Tok::Ident(name)]) => custom.get(name.as_str()).map(|v| v.as_slice()).filter(|v| !v.is_empty() && !(v.len() == 1 && matches!(&v[0], Tok::Ident(i) if i == "initial"))),
+                ("var", [Tok::Ident(name)]) => lookup(name.as_str()).filter(|v| !v.is_empty() && !(v.len() == 1 && matches!(&v[0], Tok::Ident(i) if i == "initial"))),
                 _ => None,
             };
             match (value, fallback) {
-                (Some(v), _) => out.extend(substitute(v, custom, depth + 1)?),
-                (None, Some(fb)) => out.extend(substitute(values::trim(fb), custom, depth + 1)?),
+                (Some(v), _) => out.extend(substitute_with(&v, lookup, depth + 1)?),
+                (None, Some(fb)) => out.extend(substitute_with(values::trim(fb), lookup, depth + 1)?),
                 (None, None) => return None,
             }
             i = end + 1;
@@ -2583,12 +2655,31 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             s.grid_areas = v.iter().filter_map(|t| if let Tok::Str(row) = t { Some(row.split_ascii_whitespace().map(String::from).collect()) } else { None }).collect();
         }
         "grid-template" => {
-            // "areas / columns" or "rows / columns".
-            let areas: Vec<Vec<String>> = v.iter().filter_map(|t| if let Tok::Str(row) = t { Some(row.split_ascii_whitespace().map(String::from).collect()) } else { None }).collect();
-            if !areas.is_empty() {
+            // "rows / columns", or areas with each row's size after its string: "a a" 40px "b c" 1fr / auto 1fr.
+            let slash = v.iter().position(|t| *t == Tok::Delim('/'));
+            let before = &v[..slash.unwrap_or(v.len())];
+            let areas: Vec<Vec<String>> = before.iter().filter_map(|t| if let Tok::Str(row) = t { Some(row.split_ascii_whitespace().map(String::from).collect()) } else { None }).collect();
+            if areas.is_empty() {
+                s.grid_rows = tracks(before, c);
+            } else {
                 s.grid_areas = areas;
+                let mut rows = Vec::new();
+                let mut i = 0;
+                while i < before.len() {
+                    if matches!(before[i], Tok::Str(_)) {
+                        let mut j = i + 1;
+                        while j < before.len() && !matches!(before[j], Tok::Str(_)) {
+                            j += 1;
+                        }
+                        rows.push(tracks(&before[i + 1..j], c).into_iter().next().unwrap_or(Track::Auto));
+                        i = j;
+                    } else {
+                        i += 1;
+                    }
+                }
+                s.grid_rows = rows;
             }
-            if let Some(slash) = v.iter().position(|t| *t == Tok::Delim('/')) {
+            if let Some(slash) = slash {
                 s.grid_columns = tracks(&v[slash + 1..], c);
             }
         }

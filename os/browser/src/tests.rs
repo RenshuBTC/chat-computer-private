@@ -907,3 +907,99 @@ fn an_svg_is_filled_as_the_page_s_style_sheets_say() {
     // (An <svg> the page's style sheets say nothing of: as its own text says.)
     assert!(svgs.iter().any(|s| s.contains("width=\"10\" fill=\"yellow\"")), "{svgs:?}");
 }
+
+#[test]
+fn custom_properties_in_a_cycle_are_invalid_and_order_doesnt_matter() {
+    // (Wikipedia's icons: --size: var(--size, 1rem) on the element itself is a cycle, so var() there takes its
+    // fallback, 1rem, not what the element inherits.)
+    let mut p = page(
+        "<html><head><style>:root { --m: .875rem } body { margin: 0 }\
+         .i { --m: var(--m, 1rem); width: calc(var(--m, 1rem) + 4px); height: 5px }\
+         .j { --a: var(--b); --b: 10px; width: var(--a); height: 5px }\
+         .k { --p: var(--q, 3px); --q: var(--p); width: var(--p, 7px); height: 5px }\
+         .l { --z: 30px } .l > div { width: var(--z, 1px); height: 5px }\
+         .n { --z: initial; width: var(--z, 9px); height: 5px }</style></head>\
+         <body><div class=i id=i></div><div class=j id=j></div><div class=k id=k></div>\
+         <div class=l><div id=l></div></div><div class=n id=n></div></body></html>",
+    );
+    assert_eq!(box_of(&mut p, "i", 600.0).w, 20.0);
+    assert_eq!(box_of(&mut p, "j", 600.0).w, 10.0);
+    assert_eq!(box_of(&mut p, "k", 600.0).w, 7.0);
+    assert_eq!(box_of(&mut p, "l", 600.0).w, 30.0);
+    assert_eq!(box_of(&mut p, "n", 600.0).w, 9.0);
+}
+
+#[test]
+fn grid_tracks_sized_as_css_says_and_areas_across_rows() {
+    // (Wikipedia's page: a 59.25rem-at-most column and a min-content one, a column at the end across three rows that
+    // doesn't make the title's row taller; Chrome's numbers.)
+    let mut p = page(
+        "<html><head><style>body { margin: 0 }\
+         .w { display: grid; grid-template: min-content min-content min-content 1fr / minmax(0, 59.25rem) min-content;\
+         grid-template-areas: 'tcx .' 'title end' 'tool end' 'content end'; column-gap: 24px; width: 1012px }\
+         .t { grid-area: title; height: 40px } .o { grid-area: tool; height: 33px } .c { grid-area: content; height: 300px }\
+         .e { grid-area: end; width: 196px; margin-top: 44.8px; height: 80px }\
+         .g2 { display: grid; grid-template-columns: 100px 1fr 2fr; gap: 10px; width: 600px }\
+         .g4 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; width: 400px }</style></head>\
+         <body><div class=w><div class=t id=t></div><div class=o id=o></div><div class=c id=c></div><div class=e id=e></div></div>\
+         <div class=g2 id=g2><div id=a>a</div><div id=b>b</div><div id=c2>c</div><div>d</div><div id=e2 style='grid-column: 2 / 4'>e</div></div>\
+         <div class=g4><div id=tall style='grid-row: span 2; height: 50px'>t</div><div id=b4>b</div><div>c</div><div>d</div>\
+         <div id=e4 style='grid-column: span 2'>e</div><div id=f4>f</div></div></body></html>",
+    );
+    let (t, o, c, e) = (box_of(&mut p, "t", 1100.0), box_of(&mut p, "o", 1100.0), box_of(&mut p, "c", 1100.0), box_of(&mut p, "e", 1100.0));
+    assert_eq!((t.x, t.y, t.w, t.h), (0.0, 0.0, 792.0, 40.0));
+    assert_eq!((o.y, o.h), (40.0, 33.0));
+    assert_eq!(c.y, 73.0);
+    assert_eq!((e.x, e.y, e.w), (816.0, 44.8, 196.0));
+    // (Fractions of what's left after the fixed column and the gaps: 160 and 320.)
+    let (a, b, c2, e2) = (box_of(&mut p, "a", 1100.0), box_of(&mut p, "b", 1100.0), box_of(&mut p, "c2", 1100.0), box_of(&mut p, "e2", 1100.0));
+    assert_eq!((a.w, b.x, b.w, c2.x, c2.w), (100.0, 110.0, 160.0, 280.0, 320.0));
+    assert_eq!((e2.x, e2.w), (110.0, 490.0));
+    // (An item two rows tall; one two columns wide that doesn't fit after the item before it goes on to the next
+    // row's start, as Chrome places it, and the next after it.)
+    let (tall, b4, e4, f4) = (box_of(&mut p, "tall", 1100.0), box_of(&mut p, "b4", 1100.0), box_of(&mut p, "e4", 1100.0), box_of(&mut p, "f4", 1100.0));
+    assert_eq!(tall.h, 50.0);
+    assert!((b4.x - 135.0).abs() < 0.01, "{b4:?}");
+    assert!(e4.x == 0.0 && (e4.w - 265.0).abs() < 0.01, "{e4:?}");
+    assert!((f4.x - 270.0).abs() < 0.01 && f4.y == e4.y, "{f4:?}");
+}
+
+#[test]
+fn a_positioned_box_among_words_is_where_it_would_have_been() {
+    // (One that was inline: where it comes on its line; one that was a block: under the line, if the line has
+    // something before it.)
+    let mut p = page(
+        "<html><head><style>body { margin: 0; font: 16px Arial; line-height: 30px } p { margin: 0; width: 300px }\
+         .a { position: absolute; width: 10px; height: 10px }</style></head><body>\
+         <p>Hello <span id=s class=a></span>world</p>\
+         <div style='width:300px'>Text then <div id=d class=a></div> more</div>\
+         <div style='width:300px'><div id=f class=a></div>first</div></body></html>",
+    );
+    let s = box_of(&mut p, "s", 800.0);
+    assert!(s.x > 30.0 && s.y == 0.0, "{s:?}");
+    let d = box_of(&mut p, "d", 800.0);
+    assert_eq!((d.x, d.y), (0.0, 60.0));
+    let f = box_of(&mut p, "f", 800.0);
+    assert_eq!((f.x, f.y), (0.0, 60.0));
+}
+
+#[test]
+fn an_inline_flex_button_sits_on_its_line_as_chrome_puts_it() {
+    // (Wikipedia's menu button: a 32px inline-flex label, its icon centred in its min-height; the line no taller
+    // than it, as its baseline is made up from its icon's bottom; no space after it counted in its box's width.)
+    let mut p = page(
+        "<html><head><style>body { margin: 0; font: 16px Arial }\
+         .l { display: inline-flex; box-sizing: border-box; min-width: 32px; min-height: 32px; border: 1px solid;\
+         justify-content: center; align-items: center } .i { display: block; width: 20px; height: 20px }\
+         .d { position: relative; display: inline-block } .c { position: absolute; width: 100%; height: 100%; margin: 0 }\
+         </style></head><body><div id=a><label class=l><span id=i class=i></span></label></div>\
+         <div><div id=d class=d>\n <input type=checkbox id=c class=c>\n <label class=l><span class=i></span></label>\n</div></div></body></html>",
+    );
+    assert_eq!(box_of(&mut p, "a", 800.0).h, 32.0);
+    let i = box_of(&mut p, "i", 800.0);
+    assert_eq!((i.x, i.y), (6.0, 6.0));
+    let d = box_of(&mut p, "d", 800.0);
+    assert_eq!((d.y, d.w, d.h), (32.0, 32.0, 32.0));
+    let c = box_of(&mut p, "c", 800.0);
+    assert_eq!((c.x, c.y, c.w), (0.0, 32.0, 32.0));
+}
